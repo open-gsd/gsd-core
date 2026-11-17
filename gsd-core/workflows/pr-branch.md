@@ -118,13 +118,14 @@ The preconditions below read the filter projections above, so they come first.
 ```bash
 # TARGET comes from config: refuse an option-like name; git gets only its sha.
 case $TARGET in -*) echo "Refusing target $TARGET: it starts with -." >&2; exit 1 ;; esac
+[ -n "$CURRENT_BRANCH" ] || { echo "Detached HEAD: check out a branch." >&2; exit 1; }
 TARGET_SHA=$(git rev-parse -q --verify "refs/heads/$TARGET^{commit}" || git rev-parse -q --verify "$TARGET^{commit}") || { echo "Unknown target: $TARGET" >&2; exit 1; }
 PR_BRANCH="${CURRENT_BRANCH}-pr"
 CUR=refs/heads/$CURRENT_BRANCH
 TIP=$(git rev-parse "$CUR")
 # Keyed by mode (strict skips what default publishes). refkey STR: one valid ref component, injective, never a
-# key prefix: %, /, control, non-ASCII and git-forbidden bytes become %XX.
-refkey() { printf %s "$1" | od -An -v -tu1 | LC_ALL=C awk 'BEGIN{ORS=""}{for(i=1;i<=NF;i++){b=$i;c=sprintf("%c",b);if(b<32||b>126||index("%/ ~^:?*[\\.@",c))printf "%%%02X",b;else printf "%s",c}}'; }
+# key prefix: %, /, control, non-ASCII and git-forbidden bytes become %XX; over 200 chars it is %H and the blob sha.
+refkey() { _k=$(printf %s "$1" | od -An -v -tu1 | LC_ALL=C awk 'BEGIN{ORS=""}{for(i=1;i<=NF;i++){b=$i;c=sprintf("%c",b);if(b<32||b>126||index("%/ ~^:?*[\\.@",c))printf "%%%02X",b;else printf "%s",c}}'); [ ${#_k} -gt 200 ] && _k=%H$(printf %s "$1" | git hash-object --stdin); printf %s "$_k"; }
 REF_KEY="$PR_MODE/$(refkey "$TARGET")/$(refkey "$CURRENT_BRANCH")"
 MARKER_REF="refs/gsd/pr-published/$REF_KEY"
 PENDING_REF="refs/gsd/pr-built/$REF_KEY"
@@ -134,7 +135,7 @@ PR_BRANCH_TIP=$(git rev-parse -q --verify "refs/heads/$PR_BRANCH")
 PR_BASE=$TARGET
 for _r in $(git remote); do [ "${TARGET#"$_r"/}" != "$TARGET" ] && PR_BASE=${TARGET#"$_r"/}; done
 
-# shq STR — STR shell-quoted for printed commands (a branch name may hold ; $ ( ) & `).
+# shq STR — STR shell-quoted for printed commands.
 shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1" | sed "s/'/'\\\\''/g")" ;; *) printf %s "$1" ;; esac; }
 
 # _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout; walks and checkout use TO=60.
@@ -154,7 +155,7 @@ pr_merged() {
     ( set -o pipefail; _to git -C "$_top" diff --name-only --no-renames -z "$_fork" "$_sha" | _to xargs -0 git -C "$_top" --literal-pathspecs diff --quiet "$_sha" "$TARGET_SHA" -- ); then
     return 0
   fi
-  # Last proof: gh, only as an executable (a function or alias cannot be bounded). No answer means not merged.
+  # Last proof: gh, only as an executable (a function or alias cannot be bounded); no answer: not merged
   _g=$(command -v gh) || return 1
   case $_g in /*) ;; *) return 1 ;; esac
   _to gh pr list --state merged --head "$PR_BRANCH" --base "$PR_BASE" --json headRefOid --jq '.[].headRefOid' 2>/dev/null | grep -qx "$_sha"
@@ -162,7 +163,7 @@ pr_merged() {
 
 # The last build counts as published once its -pr tip (PR_TIP_REF) is merged, even with the -pr deleted.
 PENDING_TIP=$(git rev-parse -q --verify "$PENDING_REF")
-# One verdict for the leftover -pr branch (each lookup may call gh); the refusal below reads it.
+# One verdict for the leftover -pr branch; the refusal below reads it.
 PR_BRANCH_MERGED=
 PENDING_VERDICT=
 KEEP=
@@ -176,7 +177,7 @@ if [ -n "$PENDING_TIP" ]; then
   BUILT_MERGED=
   if pr_merged "$PR_TIP_REF"; then BUILT_MERGED=1
   elif [ -n "$PR_BRANCH_TIP" ] && _to git merge-base --is-ancestor "$PR_BUILT_TIP" "$PR_BRANCH_TIP" 2>/dev/null; then BUILT_MERGED=$PR_BRANCH_MERGED; fi
-  # settle_pending applies the verdict once no refusal can follow; an unproven build is dropped.
+  # settle_pending applies the verdict once no refusal can follow.
   if [ -n "$BUILT_MERGED" ]; then PENDING_VERDICT=promote
   elif [ -n "$PR_BRANCH_MERGED" ] && [ "$(_to git rev-list --count "$PR_BRANCH_TIP" --not "$PR_BUILT_TIP" 2>/dev/null)" != 0 ]; then PENDING_VERDICT=unproven
   else PENDING_VERDICT=drop
@@ -201,11 +202,11 @@ if [ -n "$MARKER_TIP" ]; then
   if [ $_a = 0 ]; then
     BASE="$MARKER_TIP"
   else
-    # History rewritten: match by patch-id over kept paths. A published commit with no equal patch counts when its
-    # files are unchanged from the published tip to $TARGET (squash, then rebase). BASE ends the leading run of
-    # published or unpicked (N) commits. Warn on an unmatched published commit, a matched one above an unpublished
-    # one, a picked one with no patch-id, or a failed lookup.
-    # rw_git GIT-ARGS... — git with its output config pinned, bounded, limited to the kept paths.
+    # History rewritten: match patch-ids over kept paths, each published patch once. A published commit with no
+    # equal patch counts when its files are unchanged from the published tip to $TARGET (squash, then rebase).
+    # BASE ends the leading run of published or unpicked (N) commits. Warn on an unmatched published commit, a
+    # matched one above an unpublished one, a picked one with no patch-id, or a failed lookup.
+    # rw_git GIT-ARGS... — pinned, bounded git over the kept paths.
     rw_git() {
       set -- "$@" --no-color --no-ext-diff -- ':/'
       while IFS= read -r _p; do [ -n "$_p" ] && set -- "$@" ":(exclude)$_p"; done <<RW_PATHS_EOF
@@ -219,7 +220,7 @@ RW_PATHS_EOF
       RW_R=$(TO=60 _to git rev-list --no-merges --topo-order --right-only "$MARKER_TIP...$CUR" --not "$TARGET_SHA" 2>/dev/null) &&
       RW_N=$(for H in $(printf '%s\n%s' "$RW_L" "$RW_R"); do picked "$H" || echo "$H"; done) &&
       RW_D=$(rw_git diff --name-only --no-renames "$MARKER_TIP" "$TARGET_SHA" 2>/dev/null) &&
-      RW_F=$(rw_git log --full-history --name-only --format='%x09%H' "$MARKER_TIP...$CUR" 2>/dev/null) &&
+      RW_F=$(rw_git log --full-history --name-only --no-renames --format='%x09%H' "$MARKER_TIP...$CUR" 2>/dev/null) &&
       RW_P=$(set -o pipefail; rw_git log -p --full-history --no-merges --format='commit %H' "$MARKER_TIP...$CUR" | TO=60 _to git patch-id --stable); then
       REWRITE=$(printf '\tL\n%s\n\tR\n%s\n\tD\n%s\n\tF\n%s\n\tP\n%s\n\tN\n%s\n' "$RW_L" "$RW_R" "$RW_D" "$RW_F" "$RW_P" "$RW_N" |
         awk '/^\t[LRDFPN]$/{s=index("LRDFPN",substr($0,2));next}
@@ -227,12 +228,12 @@ RW_PATHS_EOF
           s==4&&/^\t/{cur=substr($0,2);next} s==4&&$0!=""{nf[cur]++; if($0 in dif)nd[cur]++}
           s==5&&NF{pid[$2]=$1} s==6&&NF{np[$1]=1}
           END{ if(!nl){print "WARN";exit}
-            for(c in pid){ if(c in L) lp[pid[c]]=1; else here[pid[c]]=1 }
+            for(c in pid){ if(c in L) lp[pid[c]]++; else here[pid[c]]=1 }
             for(c in L) if(!(c in np)&&((c in pid)?(!(pid[c] in here)&&nd[c]>0):nf[c]>0)){print "WARN";exit}
             for(i=n;i>=1;i--){ c=R[i]
               if(!(c in np)&&!(c in pid)){print "WARN";exit}
-              if(!stop && (c in np || (pid[c] in lp))){tip=c;continue}
-              stop=1; if(pid[c] in lp){print "WARN";exit} }
+              if(!stop && (c in np || lp[pid[c]]>0)){if(!(c in np))lp[pid[c]]--;tip=c;continue}
+              stop=1; if(lp[pid[c]]>0){print "WARN";exit} }
             print "OK", (tip==""?"-":tip) }')
     fi
     case $REWRITE in
@@ -270,7 +271,7 @@ if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDIC
   exit 1
 fi
 settle_pending
-AHEAD=$(_to git rev-list --count "$CUR" --not "$BASE" "$TARGET_SHA")
+AHEAD=$(_to git rev-list --count "$CUR" --not "$BASE" "$TARGET_SHA") || { echo "Cannot count the commits; re-run." >&2; exit 1; }
 if [ "$AHEAD" = "0" ]; then
   echo "No commits ahead of the last published tip (or $TARGET) — nothing to filter."
   exit 0
@@ -596,12 +597,11 @@ FILTER_PATHS_EOF
 $UNMERGED_PATHS
 UNMERGED_PATHS_EOF
 
-  # Anything still unmerged is a REAL conflict, outside the filter. Halt — do not
-  # improvise a resolution and do not continue, which would drop the rest of the queue.
-  # Unwind first: this loop runs in the user's own checkout, so exiting mid-sequence
-  # would strand them on a half-built branch with cherry-pick state still live.
-  if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
-    echo "Conflict outside the .planning/ filter while picking $HASH:" >&2
+  # A REAL conflict (unmerged paths outside the filter) or a failed commit: halt, never continue,
+  # which would drop the queue. Unwind first, or the user's checkout is stranded mid-pick. Nothing
+  # staged (a planning-only pick) skips the commit.
+  if [ -n "$(git diff --name-only --diff-filter=U)" ] || { ! git diff --cached --quiet && ! git commit -q -C "$HASH"; }; then
+    echo "Conflict outside the .planning/ filter, or a failed commit, while picking $HASH:" >&2
     git diff --name-only --diff-filter=U >&2
     # Order matters. `--quit` drops the sequencer state but leaves the unmerged index
     # in place, and an unmerged index makes `git checkout` refuse — so reset first.
@@ -622,14 +622,7 @@ UNMERGED_PATHS_EOF
     exit 1
   fi
 
-  # Nothing left after filtering (possible when a pick's only surviving content was
-  # planning state): clear the sequencer rather than failing on an empty commit.
-  if git diff --cached --quiet; then
-    git cherry-pick --quit 2>/dev/null || true
-    continue
-  fi
-
-  git commit -q -C "$HASH"
+  git cherry-pick --quit 2>/dev/null || true
 done
 ```
 
@@ -681,7 +674,7 @@ When both gates pass, record the built tip as pending (`$TIP`, never HEAD) and t
 beside it; the next run promotes pending to published once that tip is merged. A failed write warns; it never aborts:
 
 ```bash
-if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ] && [ -z "${KEEP:-}" ]; then
+if [ "$FORBIDDEN" = 0 ] && [ "$PLANNING_DELETIONS" = 0 ] && [ -z "${KEEP:-}" ] && [ "${PR_COMMITS:-0}" -gt 0 ]; then
   git update-ref "$PR_TIP_REF" "$(TO=60 _to git rev-parse "refs/heads/$PR_BRANCH")" && git update-ref "$PENDING_REF" "$TIP" || echo "WARNING: could not record $PR_TIP_REF or $PENDING_REF; next run will replay commits." >&2
 fi
 ```

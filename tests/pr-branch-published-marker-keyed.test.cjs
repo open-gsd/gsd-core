@@ -14,7 +14,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { refOf } = require('./helpers/isolated-env.cjs');
 const { readWorkflowText, extractDeclarationLines } = require('./helpers/pr-branch-filter.cjs');
-const { MARKER, git, refkeyFn, commitAll, write, commitRound, publish, runSh, mergePr, probePrMerged, markerOf, builtOf, replayed, squashMerge, onlyRound2, ghPrelude, useRepos } = require('./helpers/pr-branch-published-fixture.cjs');
+const { MARKER, git, refkeyFn, refKeys, commitAll, write, commitRound, publish, runSh, mergePr, probePrMerged, markerOf, builtOf, replayed, squashMerge, onlyRound2, ghPrelude, useRepos } = require('./helpers/pr-branch-published-fixture.cjs');
 
 describe('#5469 pr-branch published marker (real git): keyed', () => {
   const repo = useRepos();
@@ -194,6 +194,28 @@ describe('#5469 pr-branch published marker (real git): keyed', () => {
       const r = runSh(`${fn}\nrefkey '${s.replace(/'/g, "'\\''")}'`, dir);
       git(dir, 'check-ref-format', `refs/gsd/pr-built/strict/${r.stdout.trim()}/feature`);
     }
+  });
+
+  // A ref file name over 255 bytes fails on ext4, APFS and NTFS: an encoded name over 200 characters becomes %H and its blob sha.
+  test('refkey keeps a name of 200 encoded characters and hashes a longer one into a short, distinct component', () => {
+    const dir = repo();
+    const [keep, hashed, other] = refKeys(refkeyFn(), ['a'.repeat(200), 'a'.repeat(201), 'a'.repeat(202)]);
+    assert.equal(keep, 'a'.repeat(200));
+    assert.match(hashed, /^%H[0-9a-f]{40}$/);
+    assert.notEqual(hashed, other);
+    for (const k of [keep, hashed]) git(dir, 'check-ref-format', `refs/gsd/pr-built/strict/${k}/feature`);
+  });
+
+  test('a branch name whose encoding is over 255 characters still records the pending build', () => {
+    const dir = repo();
+    const name = '界'.repeat(29); // 87 bytes, 261 encoded characters
+    git(dir, 'branch', '-m', 'feature', name);
+    commitRound(dir, 1);
+    const r = publish(dir, 'main', { branch: name });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.stderr, /WARNING: could not record/);
+    const [key] = refKeys(refkeyFn(), [name]);
+    assert.equal(refOf(dir, `refs/gsd/pr-built/strict/main/${key}`), git(dir, 'rev-parse', name));
   });
 
   test('shq round-trips any string through eval (property)', () => {

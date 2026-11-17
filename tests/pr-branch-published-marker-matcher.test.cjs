@@ -33,6 +33,27 @@ describe('#5469 pr-branch published marker (real git): matcher', () => {
     }
   });
 
+  // Without --no-renames the F walk lists only the destination of a rename, so a changed source path never counts.
+  test('an amended rename whose source path was re-added on the target warns: the source path counts as changed', () => {
+    const dir = repo();
+    write(dir, 'old.txt', 'one\ntwo\nthree\nfour\nfive\n');
+    commitAll(dir, 'feat: add old');
+    git(dir, 'mv', 'old.txt', 'new.txt');
+    commitAll(dir, 'feat: rename old to new');
+    assert.equal(publish(dir).status, 0);
+    mergePr(dir);
+    git(dir, 'checkout', '-q', 'main');
+    write(dir, 'old.txt', 'one\ntwo\nthree\nfour\nfive\n');
+    commitAll(dir, 'chore: old.txt again');
+    git(dir, 'checkout', '-q', 'feature');
+    write(dir, 'extra.txt', 'x\n'); // the amended rename has a new patch, so it matches no published commit
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '--amend', '--no-edit');
+    const r = publish(dir);
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, WARNED);
+  });
+
   test('default mode: published code-only commits rebase-merged, then `git rebase main`: no warning, only round 2 is replayed', () => {
     const dir = repo();
     write(dir, 'x1.txt', '1\n');
