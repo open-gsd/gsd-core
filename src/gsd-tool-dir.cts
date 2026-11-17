@@ -32,6 +32,9 @@ export interface ToolOwnedGsdDirOptions {
 
 const SYMLINK_IGNORE_MESSAGE = '.gsd/.gitignore is a symlink';
 
+/** Rules the owner needs for the files it creates itself (#5856), appended for every caller. */
+const OWNER_RULES: readonly string[] = ['/.gitignore.tmp-*'];
+
 /** Stable `code` values on the refusal errors; callers translate by code, never by message. */
 export const GSD_DIR_UNSAFE = 'GSD_DIR_UNSAFE';
 export const GSD_IGNORE_SYMLINK = 'GSD_IGNORE_SYMLINK';
@@ -51,7 +54,10 @@ function hasLine(text: string, line: string): boolean {
  */
 export function ignoreAdditions(current: string, { marker, rules }: ToolOwnedGsdDirOptions): string {
   if (hasLine(current, '*')) return '';
-  const missing = rules.filter((rule) => !hasLine(current, rule));
+  // #5856: the owner's own staging name is covered for every caller, whatever
+  // rules the caller passes.
+  const wanted = [...rules, ...OWNER_RULES.filter((rule) => !rules.includes(rule))];
+  const missing = wanted.filter((rule) => !hasLine(current, rule));
   if (missing.length === 0) return '';
   const lead = current === '' || current.endsWith('\n') ? '' : '\n';
   const markerLine = current.includes(marker) ? '' : `${marker}\n`;
@@ -66,6 +72,7 @@ function isLinkError(err: unknown): boolean {
 function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions): void {
   let fd: number | undefined;
   let tmpPath: string | null = null;
+  let stageDir: string | null = null;
   try {
     if (fs.lstatSync(ignorePath).isSymbolicLink()) throw new Error(SYMLINK_IGNORE_MESSAGE);
     // Read through an fd opened without following links where supported
@@ -79,16 +86,21 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     fd = undefined;
     const additions = ignoreAdditions(current, options);
     if (additions === '') return;
-    // `tmpPath` is assigned only once the exclusive create succeeded, so an
-    // EEXIST never unlinks an entry this process did not create.
-    const candidateTmp = `${ignorePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-    const tmpFd = fs.openSync(candidateTmp, 'wx');
-    tmpPath = candidateTmp;
-    try {
-      fs.writeFileSync(tmpFd, current + additions);
-    } finally {
-      fs.closeSync(tmpFd);
-    }
+    // #5856: the live ignore file does not carry a rule for its own temp until the
+    // rename below lands, so a temp file beside it would show as untracked after a
+    // hard kill (no `finally` runs on SIGKILL or power loss). Stage the content in
+    // a directory whose own `.gitignore` ignores everything, itself included, so
+    // git sees nothing at any point of the window. `mkdir` without `recursive`
+    // and `wx` creates fail closed on a planted entry, and `stageDir` is assigned
+    // only after this process created the directory, so cleanup never touches an
+    // entry it did not create.
+    const candidateStage = `${ignorePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+    fs.mkdirSync(candidateStage);
+    stageDir = candidateStage;
+    fs.writeFileSync(path.join(stageDir, '.gitignore'), '*\n', { flag: 'wx' });
+    const stagedContent = path.join(stageDir, 'content');
+    fs.writeFileSync(stagedContent, current + additions, { flag: 'wx' });
+    tmpPath = stagedContent;
     if (fs.lstatSync(ignorePath).isSymbolicLink()) throw new Error(SYMLINK_IGNORE_MESSAGE);
     retryRenameSync(tmpPath, ignorePath);
     tmpPath = null;
@@ -98,8 +110,13 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     // this path cannot be read or updated.
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
-    if (tmpPath) {
-      try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+    if (stageDir) {
+      for (const leftover of [tmpPath, path.join(stageDir, '.gitignore')]) {
+        if (leftover) {
+          try { fs.unlinkSync(leftover); } catch { /* best-effort cleanup */ }
+        }
+      }
+      try { fs.rmdirSync(stageDir); } catch { /* best-effort cleanup */ }
     }
   }
 }
