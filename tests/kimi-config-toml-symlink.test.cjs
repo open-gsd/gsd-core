@@ -17,7 +17,7 @@ const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { resolveKimiHooksTomlDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
+const { resolveKimiHooksTomlDir, getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 
 const INSTALL = path.join(__dirname, '..', 'bin', 'install.js');
 const USER_KEYS = 'default_model = "my-own-model"\n\n[providers.mine]\ntype = "custom"\n';
@@ -86,6 +86,9 @@ for (const runtime of ['kimi', 'kimi-code']) {
       dotfile = path.join(home, 'dotfiles', 'config.toml');
       fs.mkdirSync(path.dirname(configToml), { recursive: true });
       fs.mkdirSync(path.dirname(dotfile), { recursive: true });
+      // A real install leaves the runtime's own config dir behind; uninstall returns early when it is
+      // missing, before it reaches Kimi's native config.toml.
+      fs.mkdirSync(getGlobalConfigDir(runtime), { recursive: true });
     });
     afterEach(() => {
       process.env.HOME = savedHome;
