@@ -22,6 +22,11 @@ const { resolveKimiHooksTomlDir } = require('../gsd-core/bin/lib/runtime-homes.c
 const INSTALL = path.join(__dirname, '..', 'bin', 'install.js');
 const USER_KEYS = 'default_model = "my-own-model"\n\n[providers.mine]\ntype = "custom"\n';
 const OPT_IN = 'GSD_ALLOW_SYMLINKED_DEST=1';
+// Everything that can point Kimi's config home away from the temp HOME, plus the policy switch and
+// the test-mode switch that makes bin/install.js skip its CLI block.
+const ISOLATED_ENV = [
+  'GSD_ALLOW_SYMLINKED_DEST', 'GSD_TEST_MODE', 'KIMI_CONFIG_DIR', 'KIMI_CODE_CONFIG_DIR', 'KIMI_SHARE_DIR', 'KIMI_CODE_HOME',
+];
 
 for (const runtime of ['kimi', 'kimi-code']) {
   describe(`${runtime}: a symlinked config.toml (#5949)`, () => {
@@ -33,7 +38,7 @@ for (const runtime of ['kimi', 'kimi-code']) {
 
     function run(args, { optIn = false } = {}) {
       const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: home };
-      for (const key of ['GSD_ALLOW_SYMLINKED_DEST', 'GSD_TEST_MODE', 'KIMI_CONFIG_DIR', 'KIMI_CODE_CONFIG_DIR']) delete env[key];
+      for (const key of ISOLATED_ENV) delete env[key];
       if (optIn) env.GSD_ALLOW_SYMLINKED_DEST = '1';
       const result = runNode([INSTALL, `--${runtime}`, '--global', ...args], { cwd: home, env });
       return { ...result, output: `${result.stdout}\n${result.stderr}` };
@@ -45,6 +50,8 @@ for (const runtime of ['kimi', 'kimi-code']) {
       const savedProfile = process.env.USERPROFILE;
       process.env.HOME = seedHome;
       process.env.USERPROFILE = seedHome;
+      const savedKimi = Object.fromEntries(ISOLATED_ENV.map((key) => [key, process.env[key]]));
+      for (const key of ISOLATED_ENV) delete process.env[key];
       try {
         home = seedHome;
         configToml = path.join(resolveKimiHooksTomlDir({ runtime }), 'config.toml');
@@ -56,16 +63,23 @@ for (const runtime of ['kimi', 'kimi-code']) {
       } finally {
         process.env.HOME = savedHome;
         process.env.USERPROFILE = savedProfile;
+        for (const [key, value] of Object.entries(savedKimi)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
         cleanup(seedHome);
       }
     });
 
     let savedHome;
     let savedProfile;
+    let savedKimi;
     beforeEach(() => {
       home = createTempDir('gsd-5949-home-');
       savedHome = process.env.HOME;
       savedProfile = process.env.USERPROFILE;
+      savedKimi = Object.fromEntries(ISOLATED_ENV.map((key) => [key, process.env[key]]));
+      for (const key of ISOLATED_ENV) delete process.env[key];
       process.env.HOME = home;
       process.env.USERPROFILE = home;
       configToml = path.join(resolveKimiHooksTomlDir({ runtime }), 'config.toml');
@@ -76,6 +90,10 @@ for (const runtime of ['kimi', 'kimi-code']) {
     afterEach(() => {
       process.env.HOME = savedHome;
       process.env.USERPROFILE = savedProfile;
+      for (const [key, value] of Object.entries(savedKimi)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
       cleanup(home);
     });
 
@@ -104,6 +122,7 @@ for (const runtime of ['kimi', 'kimi-code']) {
         assert.ok(isLink(), 'the link must still be a symlink');
         assert.strictEqual(fs.readFileSync(dotfile, 'utf8'), body, 'the target must be byte-identical');
         assert.ok(result.output.includes(OPT_IN), `the refusal must name the opt-in:\n${result.output}`);
+        assert.ok(result.exitCode !== 0 && result.exitCode !== null, 'a refused uninstall must exit non-zero');
       });
     }
 
@@ -129,6 +148,8 @@ for (const runtime of ['kimi', 'kimi-code']) {
       assert.ok(isLink(), 'the link must still be a symlink');
       assert.strictEqual(fs.readFileSync(dotfile, 'utf8'), USER_KEYS, 'the target must be byte-identical');
       assert.ok(result.output.includes(OPT_IN), `the refusal must name the opt-in:\n${result.output}`);
+      assert.ok(result.exitCode !== 0 && result.exitCode !== null, 'a refused install must exit non-zero');
+      assert.strictEqual(fs.existsSync(path.join(path.dirname(configToml), 'hooks')), false, 'nothing else may be installed before the refusal');
     });
 
     test('install over a link to a user-owned file: with the opt-in the block lands in the target and the link is kept', (t) => {
@@ -139,6 +160,30 @@ for (const runtime of ['kimi', 'kimi-code']) {
       const after = fs.readFileSync(dotfile, 'utf8');
       assert.ok(after.includes('my-own-model'), 'user keys must stay');
       assert.ok(after.includes('[[hooks]]') && after.includes(beginMarker), 'the managed block must be in the target');
+    });
+
+    test('a link chain is followed to its final file and every link is kept (opt-in set)', (t) => {
+      const middle = path.join(home, 'dotfiles', 'middle.toml');
+      fs.writeFileSync(dotfile, `${USER_KEYS}\n${gsdOnly}`);
+      try {
+        fs.symlinkSync(dotfile, middle, 'file');
+        fs.symlinkSync(middle, configToml, 'file');
+      } catch (error) {
+        if (error && ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) { t.skip('symlink creation is not available'); return; }
+        throw error;
+      }
+      run(['--uninstall'], { optIn: true });
+      assert.ok(isLink() && fs.lstatSync(middle).isSymbolicLink(), 'both links must be kept');
+      const after = fs.readFileSync(dotfile, 'utf8');
+      assert.ok(after.includes('my-own-model') && !after.includes(beginMarker), 'the final file is edited');
+    });
+
+    test('uninstall leaves a symlinked config.toml that holds no GSD block alone and does not refuse', (t) => {
+      if (!linked(t, USER_KEYS)) return;
+      const result = run(['--uninstall']);
+      assert.ok(isLink(), 'the link must be kept');
+      assert.strictEqual(fs.readFileSync(dotfile, 'utf8'), USER_KEYS, 'the target must be byte-identical');
+      assert.ok(!result.output.includes(OPT_IN), `there was nothing to strip, so nothing to refuse:\n${result.output}`);
     });
 
     for (const optIn of [false, true]) {
