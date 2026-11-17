@@ -11461,6 +11461,20 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // core's agent roles follow #5503's profile-derived selection too.
   preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, options.installerMigrations);
 
+  // #5949: Kimi's native config.toml lives outside the install root (~/.kimi, ~/.kimi-code), so a
+  // symlinked one is refused HERE, before this install writes its shared hooks and skills, when
+  // the install would have to write the managed block into a file that does not hold it yet. A
+  // link whose target already carries the block proceeds: the writer refuses only if it changes.
+  if (plan.hooksSurface === 'kimi-hooks-toml') {
+    const kimiConfigToml = path.join(resolveKimiHooksTomlDir({ runtime }), 'config.toml');
+    let current = '';
+    try { current = fs.readFileSync(kimiConfigToml, 'utf8'); } catch (_) { /* absent or dangling */ }
+    // Throws for a symlink without the opt-in (and for a dangling one), returns otherwise.
+    if (!current.includes(hooksSurface.KIMI_HOOKS_TOML_MARKER_BEGIN)) {
+      hooksSurface.resolveKimiConfigDestination(kimiConfigToml);
+    }
+  }
+
   // #5946: the Copilot instructions destinations sit outside the install-root symlink
   // preflight above (AGENTS.md is at the repo root), so refuse a symlinked one HERE, before
   // the first file of this install is written, rather than mid-install at the merge.
