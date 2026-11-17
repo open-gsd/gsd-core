@@ -50,7 +50,8 @@ const ENV_CONTEXT_KEYS = Object.freeze({ GSD_PHASE_NUMBER: 'phaseNumber', GSD_PH
 const INTERPOLATION_VAR_NAMES = Object.freeze(Object.keys(ENV_CONTEXT_KEYS));
 
 /** The pre-#5482 spellings. They collide with ordinary shell variables, so a command that uses one is refused. */
-const LEGACY_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
+const ENV_PREFIX = 'GSD_';
+const LEGACY_VAR_NAMES = Object.freeze(INTERPOLATION_VAR_NAMES.map((name) => name.slice(ENV_PREFIX.length)));
 
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
 
@@ -98,7 +99,7 @@ const LEGACY_PLACEHOLDER_RE = new RegExp(`\\$\\{(${LEGACY_VAR_NAMES.map(escapeRe
 function assertNoLegacyPlaceholder(command: string): void {
   const name = LEGACY_PLACEHOLDER_RE.exec(command)?.[1];
   if (name !== undefined) {
-    throw new Error(`gate command uses \${${name}}, which GSD no longer sets: write "\${GSD_${name}}" (double-quoted); sh expands it from the environment`);
+    throw new Error(`gate command uses \${${name}}, which GSD no longer sets: write "\${${ENV_PREFIX}${name}}" (double-quoted); sh expands it from the environment`);
   }
 }
 
@@ -106,7 +107,7 @@ function assertNoLegacyPlaceholder(command: string): void {
  * Throw when a placeholder sits in the single-quote state of the command: `sh` never expands inside single
  * quotes, so the gate would test the literal text `${GSD_PHASE_DIR}` and pass on a path that does not exist. The
  * throw is the gate's existing "unevaluable" path (a `usage` failure). The walk follows the POSIX quote states
- * (single, double, backslash), so an apostrophe inside double quotes pairs with nothing.
+ * (single, double, backslash, comment), so an apostrophe inside double quotes or a `#` comment pairs with nothing.
  */
 function assertNoSingleQuotedPlaceholder(command: string): void {
   let state: 'none' | 'single' | 'double' = 'none';
@@ -124,6 +125,10 @@ function assertNoSingleQuotedPlaceholder(command: string): void {
       }
     } else if (c === '\\') {
       i++;
+    } else if (c === '#' && state === 'none' && (i === 0 || /[\s;&|()]/.test(command[i - 1] ?? ''))) {
+      const eol = command.indexOf('\n', i);
+      if (eol === -1) return;
+      i = eol;
     } else if (c === "'" && state === 'none') {
       state = 'single';
     } else if (c === '"') {

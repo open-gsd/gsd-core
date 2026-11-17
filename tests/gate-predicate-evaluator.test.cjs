@@ -232,6 +232,14 @@ describe('evaluatePredicate — interpolation', () => {
     test('a backslash-escaped apostrophe opens no single-quote span', () => {
       assert.doesNotThrow(() => run(`echo \\' "\${GSD_PHASE_DIR}" \\'`));
     });
+    test('an apostrophe in a comment opens no single-quote span', () => {
+      assert.doesNotThrow(() => run(`# don't skip\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.doesNotThrow(() => run(`true # don't\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.throws(() => run(`# fine\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+    });
+    test('a # inside a word starts no comment', () => {
+      assert.throws(() => run(`echo a#b; test -d '\${GSD_PHASE_DIR}'`), quoted);
+    });
   });
 
   test('a double-quoted gate run by the real shell sees the phase values, even with shell syntax in them', () => {
