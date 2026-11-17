@@ -31,6 +31,7 @@ const path = require('node:path');
 
 const { runGsdTools, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { gitOrThrow, throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
@@ -2769,7 +2770,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
       'echo "GATE_COMMITS=${PR_COMMITS:-unset}"',
     ].join('\n');
     const r = runBashFile(script, { prefix: 'gsd-verify-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
-    assert.ok(r.stdout.split(/\r?\n/).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
+    assert.ok(splitLines(r.stdout).includes(`PENDING_REF=${PENDING_REF}`), 'the shipped ref name is the one these tests read');
     return { out: r.stdout + r.stderr, exitCode: r.exitCode };
   }
   const pendingRef = (repo) => refOf(repo, PENDING_REF);
@@ -2795,6 +2796,17 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     const { out } = runVerify(repo);
     assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
     assert.equal(pendingRef(repo), '', 'a failed gate records no pending build');
+  });
+
+  // BSD tr stops on a byte its locale rejects (a non-UTF-8 path under a UTF-8 locale); GNU tr never does, so stand in for it:
+  // the shipped path split must run under LC_ALL=C or this `tr` fails and verify stops on a good branch.
+  test('verify splits its NUL path lists under LC_ALL=C, so a locale-strict tr does not stop it', (t) => {
+    const { repo } = leakedPhaseRepo(t, 'gsd-3679-verify-tr-locale-');
+    const strictTr = `tr() { [ "$1" != '\\0' ] || [ "\${LC_ALL:-}" = C ] || { echo 'tr: Illegal byte sequence' >&2; return 1; }; command tr "$@"; }`;
+    const { out, exitCode } = runVerify(repo, `_to() { "$@"; }\n${strictTr}`);
+    assert.doesNotMatch(out, /Cannot read/, out.slice(0, 400));
+    assert.match(out, /GATE_FORBIDDEN=1/, out.slice(0, 400));
+    assert.notEqual(exitCode, 1, 'the run was not stopped by the path read');
   });
 
   test('verify passes a clean diff with zero deletions', (t) => {
@@ -2903,7 +2915,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['tag', 'pr', 'other']); // a tag on two commits that delete a planning file
     g(['checkout', '-q', 'main']);
     const { out } = runVerify(repo);
-    const lines = out.split(/\r?\n/);
+    const lines = splitLines(out);
     assert.ok(lines.includes('GATE_FORBIDDEN=1'), `the branch's leaked file is counted: ${out}`);
     assert.ok(lines.includes('GATE_PLANNING_DELETIONS=0'), `the tag's deletion is not read: ${out}`);
     assert.ok(lines.includes('GATE_COMMITS=1'), `the branch's commit count, not the tag's: ${out}`);
@@ -2917,7 +2929,7 @@ describe('#3679 — pr-branch pre-existing planning content + verify deletion ga
     g(['branch', branch]);
     const { out, exitCode } = runVerify(repo, '_to() { [ "${TO:-}" = 60 ] && return 124; "$@"; }\ngit() { [ "$1" = branch ] && return 1; command git "$@"; }', branch);
     assert.equal(exitCode, 1, 'the run stops with exit 1');
-    const cmd = out.split(/\r?\n/).map((l) => l.match(/run (git branch -D .*) first/)).find(Boolean)[1];
+    const cmd = splitLines(out).map((l) => l.match(/run (git branch -D .*) first/)).find(Boolean)[1];
     const run = runBashFile(cmd, { prefix: 'gsd-verify-hostile-cmd-', cwd: repo, env: () => gitChildEnv(repo), timeoutMs: HOOK_FANOUT_TIMEOUT_MS });
     assert.equal(run.exitCode, 0, run.stderr);
     assert.equal(refOf(repo, `refs/heads/${branch}`), '', 'the printed command deleted the branch');

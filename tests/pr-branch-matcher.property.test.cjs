@@ -24,6 +24,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { readWorkflowText, extractBashBlockContaining, extractDeclarationLines, PRECONDITIONS_MARKER, runBashFile, classifyCommit, readWorkflow } = require('./helpers/pr-branch-filter.cjs');
 
 // Reads of the workflow are lazy, so a moved marker fails the named test that needs it, not the file load.
@@ -181,19 +182,22 @@ function verdicts(lists, strict) {
   const { structuralRe } = readWorkflow();
   // NUL-terminated, as `git -z --name-only` prints: the shipped `| tr '\0' '\n'` must split it.
   const files = Object.fromEntries(lists.map((l, i) => [`${i}.txt`, l.map((p) => `${p}\0`).join('')]));
-  return runBash('gsd-prpicked-', files, [
+  return splitLines(runBash('gsd-prpicked-', files, [
     `PR_STRICT=${strict}`,
     `STRUCTURAL_RE='${structuralRe}'`,
+    // BSD tr stops on a byte its locale rejects (a non-UTF-8 path under a UTF-8 locale); GNU tr never does, so stand in for it:
+    // the shipped path split must run under LC_ALL=C or this `tr` fails and picked picks the commit.
+    `tr() { [ "\${LC_ALL:-}" = C ] || { echo 'tr: Illegal byte sequence' >&2; return 1; }; command tr "$@"; }`,
     pickedFn(),
     `for i in $(seq 0 ${lists.length - 1}); do`,
     // A read without -z prints each name quoted, as git does for a non-ASCII path, so dropping -z from a shipped read fails.
-    `  fake() { case " $* " in *" -z "*) cat "$i.txt" ;; *) tr '\\0' '\\n' < "$i.txt" | sed 's/.*/"&"/' ;; esac; }; _to() { fake "$@"; }; git() { fake "$@"; }; HASH=x`,
+    `  fake() { case " $* " in *" -z "*) cat "$i.txt" ;; *) command tr '\\0' '\\n' < "$i.txt" | sed 's/.*/"&"/' ;; esac; }; _to() { fake "$@"; }; git() { fake "$@"; }; HASH=x`,
     '  P=$(picked x && echo 1 || echo 0)',
     countsBlock(),
     '  echo "$P $NON_PLANNING $STRUCTURAL $PLANNING_COUNT"',
     'done',
     '_to() { return 124; }; picked x && echo 1 || echo 0', // a failed lookup picks the commit
-  ].join('\n')).split(/\r?\n/);
+  ].join('\n')));
 }
 
 const PATHS = ['-n', 'src/a.js', 'src/é.js', 'README.md', '.planningX/a', '.planning/STATE.md', '.planning/STATEX.md', '.planning/ROADMAP.md',

@@ -123,8 +123,8 @@ TARGET_SHA=$(git rev-parse -q --verify "refs/heads/$TARGET^{commit}" || git rev-
 PR_BRANCH="${CURRENT_BRANCH}-pr"
 CUR=refs/heads/$CURRENT_BRANCH
 TIP=$(git rev-parse "$CUR")
-# Keyed by mode (strict skips what default publishes). refkey STR: one valid ref component, injective, never a
-# key prefix: %, /, control, non-ASCII and git-forbidden bytes become %XX; over 200 chars it is %H and the blob sha.
+# Keyed by mode (strict skips more). refkey STR: one valid ref component, injective, never a
+# key prefix: %, /, controls, non-ASCII and git-forbidden bytes become %XX; over 200 chars: %H, then the blob sha.
 refkey() { _k=$(printf %s "$1" | od -An -v -tu1 | LC_ALL=C awk 'BEGIN{ORS=""}{for(i=1;i<=NF;i++){b=$i;c=sprintf("%c",b);if(b<32||b>126||index("%/ ~^:?*[\\.@",c))printf "%%%02X",b;else printf "%s",c}}'); [ ${#_k} -gt 200 ] && _k=%H$(printf %s "$1" | git hash-object --stdin); printf %s "$_k"; }
 REF_KEY="$PR_MODE/$(refkey "$TARGET")/$(refkey "$CURRENT_BRANCH")"
 MARKER_REF="refs/gsd/pr-published/$REF_KEY"
@@ -141,7 +141,7 @@ shq() { case "$1" in ''|*[!A-Za-z0-9._/@%+=:,-]*) printf "'%s'" "$(printf %s "$1
 # _to CMD... — CMD capped at ${TO:-10}s by gsd_run run-with-timeout; walks and checkout use TO=60.
 _to() { gsd_run run-with-timeout "${TO:-10}" -- "$@"; }
 # picked SHA — rc 0 when the pick step would pick SHA, or its lookup fails.
-picked() { local F; F=$(set -o pipefail; _to git diff-tree -z --no-commit-id --name-only -r "$1" | tr '\0' '\n') || return 0; [ -n "$F" ] && { grep -qv '^\.planning/' <<<"$F" || { [ "$PR_STRICT" != true ] && grep -Eq "$STRUCTURAL_RE" <<<"$F"; }; }; }
+picked() { local F; F=$(set -o pipefail; _to git diff-tree -z --no-commit-id --name-only -r "$1" | LC_ALL=C tr '\0' '\n') || return 0; [ -n "$F" ] && { grep -qv '^\.planning/' <<<"$F" || { [ "$PR_STRICT" != true ] && grep -Eq "$STRUCTURAL_RE" <<<"$F"; }; }; }
 
 # pr_merged TIP — TIP is in $TARGET: an ancestor, or $TARGET holds TIP's content for each path TIP changed
 # since their fork (squash/rebase), or gh reports $PR_BRANCH merged into it with head TIP.
@@ -461,7 +461,7 @@ For each commit, check what it touches:
 
 ```bash
 # For each commit hash
-FILES=$(git diff-tree -z --no-commit-id --name-only -r $HASH | tr '\0' '\n')
+FILES=$(git diff-tree -z --no-commit-id --name-only -r $HASH | LC_ALL=C tr '\0' '\n')
 NON_PLANNING=$(grep -Ecv '^(\.planning/|$)' <<<"$FILES" || true)
 STRUCTURAL=$(grep -Ec "$STRUCTURAL_RE" <<<"$FILES" || true)
 PLANNING_COUNT=$(grep -c "^\.planning/" <<<"$FILES" || true)
@@ -597,8 +597,8 @@ FILTER_PATHS_EOF
 $UNMERGED_PATHS
 UNMERGED_PATHS_EOF
 
-  # A real conflict, a failed pick or a failed commit: unwind and halt, or the user's checkout is
-  # stranded mid-pick. Nothing staged (a planning-only pick) skips the commit.
+  # A conflict, failed pick or failed commit: unwind and halt, or the checkout is stranded
+  # mid-pick. Nothing staged (a planning-only pick) skips the commit.
   if [ -n "${PICK_FAILED:-}" ] || [ -n "$(git diff --name-only --diff-filter=U)" ] || { ! git diff --cached --quiet && ! git commit -q -C "$HASH"; }; then
     echo "Conflict outside the .planning/ filter, or a failed pick or commit, while picking $HASH:" >&2
     git diff --name-only --diff-filter=U >&2
@@ -639,8 +639,8 @@ would report itself as failed on every phase that touched STATE.md, which is eve
 
 ```bash
 # Fail closed: empty lists pass both gates.
-{ DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA"..refs/heads/"$PR_BRANCH" | tr '\0' '\n') &&
-  DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA"..refs/heads/"$PR_BRANCH" | tr '\0' '\n'); } ||
+{ DIFF_PATHS=$(set -o pipefail; TO=60 _to git diff -z --name-only "$TARGET_SHA"..refs/heads/"$PR_BRANCH" | LC_ALL=C tr '\0' '\n') &&
+  DELETED=$(set -o pipefail; TO=60 _to git diff -z --name-only --no-renames --diff-filter=D "$TARGET_SHA"..refs/heads/"$PR_BRANCH" | LC_ALL=C tr '\0' '\n'); } ||
   { git branch -qD "$PR_BRANCH" && D=deleted || D="not deleted; run git branch -D $(shq "$PR_BRANCH") first"; echo "Cannot read $PR_BRANCH ($D); re-run." >&2; exit 1; }
 FORBIDDEN=$(grep -Ec "$FORBIDDEN_RE" <<<"$DIFF_PATHS" || true)
 PLANNING_TOTAL=$(grep -c "^\.planning/" <<<"$DIFF_PATHS" || true)
