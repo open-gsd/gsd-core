@@ -290,13 +290,15 @@ function toRel(file) {
 }
 
 /**
- * The site count of every file under tests/: the rule runs with an empty
- * allowlist, so it reports every site rather than counting listed files
- * silently. The exempt helper stays out, as it does in eslint.config.mjs.
+ * The ESLint that counts sites: the rule runs with an empty allowlist, so it
+ * reports every site rather than counting listed files silently, and with
+ * inline config off, so an `eslint-disable` comment cannot hide a site from
+ * the count. The exempt helper stays out, as it does in eslint.config.mjs.
  */
-async function measureSiteCounts() {
-  const eslint = new ESLint({
+function siteCountEslint() {
+  return new ESLint({
     cwd: REPO_ROOT,
+    allowInlineConfig: false,
     overrideConfig: {
       files: ['tests/**/*.cjs'],
       ignores: [EXEMPT_FILE],
@@ -304,7 +306,10 @@ async function measureSiteCounts() {
     },
     ruleFilter: ({ ruleId }) => ruleId === RULE_ID,
   });
-  const results = await eslint.lintFiles(['tests/**/*.cjs']);
+}
+
+/** Per-file site counts from lint results, plus the files ESLint could not parse. */
+function countSites(results) {
   const unparsed = results.filter((r) => r.fatalErrorCount > 0).map((r) => toRel(r.filePath));
   const counts = {};
   for (const r of results) {
@@ -312,6 +317,11 @@ async function measureSiteCounts() {
     if (n > 0) counts[toRel(r.filePath)] = n;
   }
   return { counts, unparsed };
+}
+
+/** The site count of every file under tests/. */
+async function measureSiteCounts() {
+  return countSites(await siteCountEslint().lintFiles(['tests/**/*.cjs']));
 }
 
 /** The four ways measured counts can differ from the recorded ones (#597's per-file form). */
@@ -382,6 +392,25 @@ describe('no-adhoc-env-isolation allowlist: structure', () => {
 });
 
 describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
+  test('an eslint-disable comment for the rule does not hide a copy from the count', async () => {
+    const rel = 'tests/adhoc-env-isolation-disabled-6035.test.cjs';
+    const text = [
+      '/* eslint-disable local/no-adhoc-env-isolation */',
+      "'use strict';",
+      "const dirs = (process.env.PATH ?? '').split(':');",
+      'module.exports = { env: { ...process.env, HOME: dirs[0] } };',
+      '',
+    ].join('\n');
+    const filePath = path.join(REPO_ROOT, rel);
+    // Control: through the repository's config the comment does suppress the rule.
+    const [linted] = await new ESLint({ cwd: REPO_ROOT }).lintText(text, { filePath });
+    assert.deepStrictEqual(linted.messages.filter((m) => m.ruleId === RULE_ID), []);
+    const { counts } = countSites(await siteCountEslint().lintText(text, { filePath }));
+    assert.deepStrictEqual(counts, { [rel]: 2 });
+    const recorded = readAllowlist();
+    assert.deepStrictEqual(ratchetDiff({ ...recorded, ...counts }, recorded), { ...CLEAN_DIFF, added: [rel] });
+  });
+
   test('every file under tests/ carries exactly the sites the allowlist records', async () => {
     const { counts, unparsed } = await measureSiteCounts();
     assert.deepStrictEqual(unparsed, [], 'a file ESLint cannot parse has no measured count');

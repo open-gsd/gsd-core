@@ -715,8 +715,9 @@ A count may only fall. A new copy in a file the list does not name fails lint, a
 `tests/no-adhoc-env-isolation.rule.test.cjs` counts every file under `tests/`: it fails when a
 listed file holds more copies than its count, or fewer. When you migrate copies, lower the count,
 and delete the entry when it reaches zero (lint then reports the entry as stale). Never add a file
-to the list or raise a count. Build the env with the helper instead. Entries are
-repository-relative, so run lint from the repository root, as `npm run lint` does.
+to the list or raise a count. Build the env with the helper instead. An `eslint-disable` comment
+for this rule does not exempt a copy: the count runs with inline config off and still sees it.
+Entries are repository-relative, so run lint from the repository root, as `npm run lint` does.
 
 ### Test Structure
 
