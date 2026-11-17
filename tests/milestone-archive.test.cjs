@@ -1558,7 +1558,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { command: 'printf "%s|%s" "${GSD_PHASE_NUMBER}" "${GSD_PHASE_DIR}" > "${GSD_PHASE_DIR}/seen"; exit 3' });
     assert.deepEqual(wouldRefuse().map((b) => b.phase), ['01', '02']);
     for (const [num, dir] of [['01', '01-foundation'], ['02', '02-build']]) {
-      assert.equal(fs.readFileSync(path.join(phaseDir(dir), 'seen'), 'utf-8'), `${num}|${phaseDir(dir)}`);
+      assert.equal(fs.readFileSync(path.join(phaseDir(dir), 'seen'), 'utf-8'), `${num}|${fs.realpathSync(phaseDir(dir))}`);
     }
   });
 

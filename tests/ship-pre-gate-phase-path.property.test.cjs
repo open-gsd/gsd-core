@@ -5,10 +5,10 @@
  *
  * A command-exit-zero ship:pre gate sees ${GSD_PHASE_DIR} as data. Whatever characters the phase directory
  * name holds, the double-quoted placeholder must name that directory: the gate finds the OPEN_WORK file
- * inside it, exits 3, and no command hidden in the name runs.
+ * inside it and exits 3.
  *
  * Property: for a phase dir `01-<s>` holding OPEN_WORK, the dry-run's would_refuse entry for phase 01 has
- * reason `predicate_blocked` and details.exitCode 3, and no file appears in the project root.
+ * reason `predicate_blocked` and details.exitCode 3. G22 and G22b of milestone-archive.test.cjs pin that no hidden command runs.
  */
 
 const { describe, test, before, after } = require('node:test');
@@ -54,7 +54,7 @@ describe('ship:pre command gate treats the phase directory name as data (#5482)'
     }
   }
 
-  test('property: any phase directory name is data, so the gate runs on it and nothing else runs', () => {
+  test('property: any phase directory name is data, so the gate runs on it', () => {
     fc.assert(
       fc.property(fc.string({ unit: fc.constantFrom(...ORDINARY, ...SHELL_SYNTAX), minLength: 1, maxLength: 12 }), (s) => {
         const entry = entryFor(`01-${s}`);

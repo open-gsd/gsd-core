@@ -85,10 +85,11 @@ interface PredicateResult {
 
 const namesPattern = (names: readonly string[]): string => `\\$\\{?(${names.map(escapeRegex).join('|')})\\b`;
 const PLACEHOLDER_AT_RE = new RegExp(namesPattern(INTERPOLATION_VAR_NAMES), 'y');
-const LEGACY_PLACEHOLDER_RE = new RegExp(namesPattern(LEGACY_VAR_NAMES));
+// Only the braced spelling was ever a GSD placeholder; a bare `$PHASE_DIR` is the gate's own shell variable.
+const LEGACY_PLACEHOLDER_RE = new RegExp(`\\$\\{(${LEGACY_VAR_NAMES.map(escapeRegex).join('|')})\\}`);
 
 /**
- * Throw when the command uses a pre-#5482 name (`${PHASE_DIR}` or `$PHASE_DIR`), in any quoting form: GSD no
+ * Throw when the command uses a pre-#5482 placeholder (`${PHASE_DIR}`), in any quoting form: GSD no
  * longer sets it, so the shell would expand an empty or foreign value. The message names the replacement.
  */
 function assertNoLegacyPlaceholder(command: string): void {

@@ -197,11 +197,12 @@ describe('evaluatePredicate — interpolation', () => {
     const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
     for (const name of ['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']) {
       const named = { message: new RegExp(`uses \\$\\{${escapeRegex(name)}\\}.*write "\\$\\{GSD_${escapeRegex(name)}\\}"`) };
-      for (const form of [`'\${${name}}'`, `"\${${name}}"`, `\${${name}}`, `"$${name}"`]) {
+      for (const form of [`'\${${name}}'`, `"\${${name}}"`, `\${${name}}`]) {
         assert.throws(() => run(`test -n ${form}`), named, form);
       }
     }
     assert.doesNotThrow(() => run('test -n "${PHASE_DIR_OTHER}"'));
+    assert.doesNotThrow(() => run('PHASE_DIR=build; test -d "$PHASE_DIR"'));
   });
 
   test('every placeholder single-quoted throws, whatever its value; double-quoted does not', () => {

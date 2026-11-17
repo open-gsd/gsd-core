@@ -78,7 +78,7 @@ A use inside single quotes makes the evaluator throw (`unevaluable`), because `s
 does not expand inside single quotes.
 
 **Breaking change (#5482).** The names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS`
-(written `${PHASE_DIR}` or `$PHASE_DIR`) are no longer set. The evaluator refuses a
+(written `${PHASE_DIR}`) are no longer set. The evaluator refuses a
 command that uses one, in any quoting form, and the message names the replacement.
 Migration: `test -n '${PHASE_NUMBER}'` becomes `test -n "${GSD_PHASE_NUMBER}"`.
 
