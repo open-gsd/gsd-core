@@ -729,7 +729,8 @@ describe('auto-update', () => {
   describe('hook — the onboarding commit as the workflow issues it (#5935)', {
     skip: isWindows ? 'POSIX-only: harness spawns bash to invoke the .sh hook under test' : false,
   }, () => {
-    // allow-test-rule: source-text-is-the-product the onboarding workflow's commit step is runtime-loaded text (#5935)
+    // The onboarding workflow's commit step is runtime-loaded text: the command the orchestrator runs is
+    // read from it, so the test follows the workflow instead of restating the command (#5935).
     const onboard = fs.readFileSync(path.join(__dirname, '..', 'gsd-core/workflows/onboard.md'), 'utf8');
     /** The commit command the onboarding workflow tells the orchestrator to run, with its root substituted. */
     const onboardingCommit = (root) => {
