@@ -166,6 +166,7 @@ module.exports = {
   "tests/isolation-sentinel.test.cjs",
   "tests/kilo-upgrades.test.cjs",
   "tests/kimi-agent-converter.test.cjs",
+  "tests/kimi-config-toml-symlink.test.cjs",
   "tests/kimi-upgrades.test.cjs",
   "tests/kimi-variant-disambiguation.test.cjs",
   "tests/launcher-homes-derivation.test.cjs",
