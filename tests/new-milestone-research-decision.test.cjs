@@ -144,6 +144,8 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
       'the clearing must be conditional on the spawn actually going ahead');
     assert.match(body, /do not remove anything on that path — the earlier research files stay on disk/,
       'the agents_installed=false path must leave the earlier research files on disk');
+    assert.match(body, /research did not run: leave `\{research_summary_line\}` empty and take Step 9's "research was skipped" branch/,
+      'the agents_installed=false path must state that research did not run, so Step 9 takes the skipped branch and the roadmapper gets no SUMMARY.md');
     const noticeStart = body.indexOf('Replacing research files:');
     const notice = body.slice(noticeStart, body.indexOf('`', noticeStart));
     for (const file of ['SUMMARY.md', 'STACK.md', 'FEATURES.md', 'ARCHITECTURE.md', 'PITFALLS.md']) {
@@ -173,7 +175,7 @@ describe('new-milestone Step 9 requirements use research from this run (#5148)',
     const line = body.split('\n').find((l) => l.includes('FEATURES.md'));
     assert.ok(line, 'Step 9 must say when FEATURES.md is read');
     assert.match(line, /^\*\*If research ran in Step 8:\*\*/);
-    assert.match(line, /`\{dimensions kept\}` includes features, read FEATURES\.md/);
+    assert.match(line, /`\{dimensions kept\}` includes features, read `\{research_dir\}\/FEATURES\.md`/);
     assert.match(line, /otherwise derive them from the milestone goals and SUMMARY\.md/);
     assert.match(line, /Never read research files left from earlier runs/);
   });
