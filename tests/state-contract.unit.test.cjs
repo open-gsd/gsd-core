@@ -1244,7 +1244,7 @@ describe('state contract — exclude and untrack branches, git faked (#5505)', (
       if (args[0] === 'rev-parse') return answer('../.git/info/exclude\n.planning/\n');
       if (args[0] === 'ls-files') return answer(tracked);
       if (args.includes('rm')) return answer('', rm);
-      return answer('', args[0] === 'add' ? 0 : 1); // check-ignore: no rule speaks, nothing is ignored
+      return answer('', args.includes('add') ? 0 : 1); // check-ignore: no rule speaks, nothing is ignored
     });
     return { tmpDir, calls, exclude: path.join(tmpDir, '.git', 'info', 'exclude') };
   };

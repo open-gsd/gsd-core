@@ -473,6 +473,8 @@ describe('state.json never dirties the tree (#5505)', () => {
   function boundary(t, { wsName, preTracked, commitDocs, priorIgnore } = {}) {
     const tmpDir = createTempGitProject();
     t.after(() => cleanup(tmpDir));
+    // autocrlf=true would stage a CRLF rule file as LF and change what the carry check sees
+    git(tmpDir, 'config', 'core.autocrlf', 'false');
     // commit_docs false keeps GSD from touching the index, so a tracked copy stays tracked (what W031 reports)
     if (commitDocs === false) fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{"commit_docs": false}\n');
     const dir = wsName ? path.join(tmpDir, '.planning', 'workstreams', wsName) : path.join(tmpDir, '.planning');
