@@ -175,6 +175,20 @@ type ScopedConfigValue = { present: boolean; value: unknown };
 
 const CONFIG_VALUE_ABSENT: ScopedConfigValue = Object.freeze({ present: false, value: undefined });
 
+/** One config file's parsed top-level object; null when it is absent, unreadable, unparseable, or not a plain object. */
+function readConfigObject(configPath: string): Record<string, unknown> | null {
+  try {
+    // Bounded read (#5759): null (absent) and any throw (FIFO, device, directory, oversized,
+    // errno) both mean this file sets nothing — never a block.
+    const raw = readConfigFileBounded(configPath);
+    if (raw === null) return null;
+    const node: unknown = JSON.parse(raw);
+    return node !== null && typeof node === 'object' && !Array.isArray(node) ? (node as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The value one config file sets at `keyPath`, if it sets one at all. Every
  * segment must be an OWN property of a plain (non-null, non-array) object, so
@@ -182,16 +196,7 @@ const CONFIG_VALUE_ABSENT: ScopedConfigValue = Object.freeze({ present: false, v
  * path — does not set the key.
  */
 function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedConfigValue {
-  let node: unknown;
-  try {
-    // Bounded read (#5759): null (absent) and any throw (FIFO, device, directory, oversized,
-    // errno) both mean this file sets nothing — never a block.
-    const raw = readConfigFileBounded(configPath);
-    if (raw === null) return CONFIG_VALUE_ABSENT;
-    node = JSON.parse(raw);
-  } catch {
-    return CONFIG_VALUE_ABSENT;
-  }
+  let node: unknown = readConfigObject(configPath);
   for (const key of keyPath) {
     if (node === null || typeof node !== 'object' || Array.isArray(node)) return CONFIG_VALUE_ABSENT;
     if (!Object.prototype.hasOwnProperty.call(node, key)) return CONFIG_VALUE_ABSENT;
@@ -213,14 +218,15 @@ function ownConfigValue(configPath: string, keyPath: readonly string[]): ScopedC
  * That is the one place this read and config-get part ways — for a scoped
  * config.json that exists but cannot be read or parsed, config-get fails
  * with CONFIG_PARSE_FAILED instead of reporting a value.
+ * `project` names the scope when the caller reads a scope other than the env's (omitted: the env's `GSD_PROJECT`).
  * The value is returned uncoerced; each caller applies its own strict
  * comparison. Never throws: planningDir/planningRoot reject a
  * GSD_PROJECT/GSD_WORKSTREAM value containing path separators or `..`, and
  * that shape resolves to "not present".
  */
-function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null): ScopedConfigValue {
+function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string[]], workstream?: string | null, project?: string | null): ScopedConfigValue {
   try {
-    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream), 'config.json'), keyPath);
+    const scoped = ownConfigValue(path.join(planningDir(cwd, workstream, project), 'config.json'), keyPath);
     if (scoped.present) return scoped;
     if ((workstream === undefined ? resolveEnvWorkstream() : workstream) !== null) {
       return ownConfigValue(path.join(planningRoot(cwd), 'config.json'), keyPath);
@@ -229,6 +235,47 @@ function readScopedConfigValue(cwd: string, keyPath: readonly [string, ...string
     // Degrade to "not present" — see the contract above.
   }
   return CONFIG_VALUE_ABSENT;
+}
+
+/**
+ * #5505: the ONE flat-then-nested `commit_docs` lookup for a named scope: true when that scope's effective config sets
+ * the key (`commit_docs`, else `planning.commit_docs`) to a falsy value. Falsy is the same off test as
+ * `resolveCommitDocsTiers` (src/config-loader.cts, which this module cannot import: it imports us); a parity test
+ * pins the two against `loadConfig`. An absent key never opts out.
+ *
+ * "Effective config" is loadConfig's file ladder, not readScopedConfigValue's per-key one: under a workstream the
+ * workstream file is merged over `.planning/config.json`; with no workstream file the project's config stands alone
+ * (the root's is dropped); with neither file nothing is set. The merge is `_deepMergeConfig`'s: a later own
+ * `commit_docs` wins, and a later `planning` that is not a plain object (null, string, array) discards the earlier
+ * `planning.commit_docs`.
+ */
+function commitDocsOptedOut(cwd: string, workstream: string | null, project: string | null): boolean {
+  let chain: Array<Record<string, unknown> | null>;
+  try {
+    const own = (dir: string): Record<string, unknown> | null => readConfigObject(path.join(dir, 'config.json'));
+    if (workstream === null) {
+      chain = [own(planningDir(cwd, null, project))];
+    } else {
+      const root = own(planningRoot(cwd));
+      const scoped = own(planningDir(cwd, workstream, project));
+      chain = scoped ? [root, scoped] : root ? [own(planningDir(cwd, null, project))] : [];
+    }
+  } catch {
+    return false; // planningDir rejects a traversal-shaped name: no config, no opt-out
+  }
+  const has = (o: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key);
+  let flat: ScopedConfigValue = CONFIG_VALUE_ABSENT;
+  let nested: ScopedConfigValue = CONFIG_VALUE_ABSENT;
+  for (const config of chain) {
+    if (!config) continue;
+    if (has(config, 'commit_docs')) flat = { present: true, value: config['commit_docs'] };
+    if (!has(config, 'planning')) continue;
+    const planning = config['planning'];
+    if (planning === null || typeof planning !== 'object' || Array.isArray(planning)) nested = CONFIG_VALUE_ABSENT;
+    else if (has(planning as Record<string, unknown>, 'commit_docs')) nested = { present: true, value: (planning as Record<string, unknown>)['commit_docs'] };
+  }
+  const found = flat.present ? flat : nested;
+  return found.present && !found.value;
 }
 
 /**
@@ -734,6 +781,7 @@ function findPhaseSpecIn(files: readonly string[]): string | null {
 
 export = {
   worktreesOptedOut,
+  commitDocsOptedOut,
   readScopedConfigValue,
   createPlanningWorkspace,
   createSharedPointerAdapter,

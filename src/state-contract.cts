@@ -40,7 +40,10 @@
  * contract/40-design.md`): a `--watch` mode, a reader API inside gsd-core, a
  * diff/event stream, a config toggle, milestone-scoping of `phases[]`. This
  * module answers "where is this project right now" and nothing else — a
- * request for document *contents* belongs to `planning.inspect`.
+ * request for document *contents* belongs to `planning.inspect`. (Its one side
+ * effect beyond the snapshot: `excludeFromGit` (git-info-exclude.cts) keeps
+ * state.json out of git via `.git/info/exclude`, REQ-SC-05, and a copy that is already
+ * tracked is untracked once, staged, with a committed `.gitignore` rule, #5505.)
  *
  * REQUIRE-CYCLE HAZARD (the single most important implementation
  * constraint). `src/state.cts` imports THIS module, and `src/smart-entry.cts`
@@ -132,8 +135,17 @@ export interface StateContractV1 {
 
 interface Owners {
   planningPaths: typeof import('./planning-workspace.cjs')['planningPaths'];
+  commitDocsOptedOut: typeof import('./planning-workspace.cjs')['commitDocsOptedOut'];
   platformReadSync: typeof import('./shell-command-projection.cjs')['platformReadSync'];
   platformWriteSync: typeof import('./shell-command-projection.cjs')['platformWriteSync'];
+  excludeFromGit: typeof import('./git-info-exclude.cjs')['excludeFromGit'];
+  ignoreInTree: typeof import('./git-info-exclude.cjs')['ignoreInTree'];
+  GIT_PROBE_TIMEOUT_MS: number;
+  buildStateJsonTracked: typeof import('./planning-snapshot.cjs')['buildStateJsonTracked'];
+  loadConfig: typeof import('./config-loader.cjs')['loadConfig'];
+  isGitIgnored: typeof import('./config-loader.cjs')['isGitIgnored'];
+  resolveCommitDocsTiers: typeof import('./config-loader.cjs')['resolveCommitDocsTiers'];
+  execGit: typeof import('./shell-command-projection.cjs')['execGit'];
   locateRoadmapProgress: typeof import('./roadmap-progress.cjs')['locateRoadmapProgress'];
   isSentinelPhaseId: typeof import('./phase-id.cjs')['isSentinelPhaseId'];
   parsePhaseFromProse: typeof import('./phase-id.cjs')['parsePhaseFromProse'];
@@ -166,12 +178,24 @@ function owners(): Owners {
   const markdownSectionizerMod = require('./markdown-sectionizer.cjs') as typeof import('./markdown-sectionizer.cjs');
   const stateDocumentMod = require('./state-document.cjs') as typeof import('./state-document.cjs');
   const frontmatterMod = require('./frontmatter.cjs') as typeof import('./frontmatter.cjs');
+  const configLoaderMod = require('./config-loader.cjs') as typeof import('./config-loader.cjs');
+  const gitInfoExcludeMod = require('./git-info-exclude.cjs') as typeof import('./git-info-exclude.cjs');
   const smartEntryMod = require('./smart-entry.cjs') as typeof import('./smart-entry.cjs');
+  const planningSnapshotMod = require('./planning-snapshot.cjs') as typeof import('./planning-snapshot.cjs');
   /* eslint-enable @typescript-eslint/no-require-imports */
   _owners = {
     planningPaths: planningWorkspaceMod.planningPaths,
+    commitDocsOptedOut: planningWorkspaceMod.commitDocsOptedOut,
     platformReadSync: shellCommandProjectionMod.platformReadSync,
     platformWriteSync: shellCommandProjectionMod.platformWriteSync,
+    excludeFromGit: gitInfoExcludeMod.excludeFromGit,
+    ignoreInTree: gitInfoExcludeMod.ignoreInTree,
+    GIT_PROBE_TIMEOUT_MS: gitInfoExcludeMod.GIT_PROBE_TIMEOUT_MS,
+    buildStateJsonTracked: planningSnapshotMod.buildStateJsonTracked,
+    loadConfig: configLoaderMod.loadConfig,
+    isGitIgnored: configLoaderMod.isGitIgnored,
+    resolveCommitDocsTiers: configLoaderMod.resolveCommitDocsTiers,
+    execGit: shellCommandProjectionMod.execGit,
     locateRoadmapProgress: roadmapProgressMod.locateRoadmapProgress,
     isSentinelPhaseId: phaseIdMod.isSentinelPhaseId,
     parsePhaseFromProse: phaseIdMod.parsePhaseFromProse,
@@ -395,6 +419,45 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
 }
 
 /**
+ * #5505: untrack every tracked publish path (the set W031 lists), staged and with the file kept on
+ * disk, and write the committed `.gitignore` rule beside each. `--ignore-unmatch` and the rule
+ * writer are idempotent, so rerunning is a no-op. `cmdCommit` carries the staged removals and
+ * rules into the next scoped commit. A listing git cannot answer is empty here: nothing to do.
+ */
+function untrackTrackedStateJson(cwd: string): void {
+  const tracked = owners().buildStateJsonTracked(cwd, owners().GIT_PROBE_TIMEOUT_MS).value;
+  // Each tracked copy answers for its own scope: a sibling workstream/project whose `commit_docs` is false, or whose
+  // `.gitignore` carries a `!` line for the file (`ignoreInTree` refuses to write over it), keeps its copy tracked.
+  const untrack = tracked.filter((f) => {
+    const dir = path.dirname(path.resolve(cwd, f));
+    return !scopeOptsOutOfCommitDocs(cwd, dir) && owners().ignoreInTree(dir, 'state.json');
+  });
+  if (untrack.length === 0) return;
+  const rm = owners().execGit(['--literal-pathspecs', 'rm', '--cached', '--ignore-unmatch', '-q', '--', ...untrack], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
+  if (rm.exitCode !== 0) return;
+  const rules = [...new Set(untrack.map((f) => path.join(path.dirname(path.resolve(cwd, f)), '.gitignore')))];
+  owners().execGit(['--literal-pathspecs', 'add', '--', ...rules], { cwd, timeout: owners().GIT_PROBE_TIMEOUT_MS });
+}
+
+/**
+ * True when the commit policy turns `commit_docs` off for the scope whose copy sits in `dir`: the scope (workstream,
+ * project) comes from the path, the lookup is planning-workspace's `commitDocsOptedOut`.
+ */
+function scopeOptsOutOfCommitDocs(cwd: string, dir: string): boolean {
+  const parts = path.relative(path.resolve(cwd, '.planning'), dir).split(path.sep).filter(Boolean);
+  const ws = parts.length >= 2 && parts[parts.length - 2] === 'workstreams' ? parts[parts.length - 1] : null;
+  const project = (ws === null ? parts : parts.slice(0, -2))[0] ?? null;
+  return owners().commitDocsOptedOut(cwd, ws, project);
+}
+
+/** Hide the derived file when the commit policy keeps planning in git: append the per-clone exclude entry (the owner applies the repo-ownership gate), then migrate a tracked copy (the publisher passes no phase override: it has no phase context, D13). */
+function excludeWhenGitOwns(cwd: string, stateDir: string): void {
+  const commitDocs = owners().loadConfig(cwd, { persist: false, quiet: true })['commit_docs'];
+  if (!owners().resolveCommitDocsTiers(undefined, commitDocs, () => owners().isGitIgnored(cwd, '.planning')).resolved) return;
+  if (owners().excludeFromGit(cwd, stateDir, 'state.json')) untrackTrackedStateJson(cwd);
+}
+
+/**
  * Publish the state-contract snapshot to `<planning>/state.json`. NEVER
  * throws — for any input, ever (acceptance criterion 3: the parent boundary
  * command's exit code and stdout must be unchanged whatever happens here).
@@ -403,6 +466,10 @@ export function buildStateContract(cwd: string, deps?: StateContractDeps): State
  * guard is essential — `platformWriteSync` does `mkdirSync(dirname,
  * {recursive:true})`, so without it the publisher would conjure a
  * `.planning/` tree inside a non-GSD directory.
+ *
+ * Side effect (#5505): after a successful write it may append `/<prefix>state.json` to the
+ * enclosing repo's `.git/info/exclude` (best-effort, see `excludeFromGit`), gated on the commit
+ * policy and on that repo owning the project, and then untrack a copy git already tracks.
  *
  * `withPlanningLock` is deliberately NOT taken here — see the module-doc
  * "REQUIRE-CYCLE HAZARD" section's sibling note: it is not re-entrant and
@@ -436,6 +503,12 @@ export function publishStateContract(cwd: string, deps?: StateContractDeps): { p
       platformWriteSync(statePath, JSON.stringify(snapshot, null, 2) + '\n');
     } catch {
       return { published: false, reason: PUBLISH_REASON.WRITE_FAILED };
+    }
+
+    try {
+      excludeWhenGitOwns(cwd, path.dirname(statePath));
+    } catch {
+      // REQ-SC-04: ignoring is optional; never perturb the publish result.
     }
 
     return { published: true, reason: PUBLISH_REASON.PUBLISHED };

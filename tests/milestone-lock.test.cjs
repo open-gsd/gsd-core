@@ -30,6 +30,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { excludeFile, readExclude } = require('./helpers/git-fixture.cjs');
 const helpers = require('./helpers.cjs');
 const { runGsdTools, createTempProject, cleanup, TOOLS_PATH, captureFdSync } = helpers;
 const processSeam = require('./helpers/process-seam.cjs');
@@ -661,9 +662,8 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
   const git = (cwd, ...args) =>
     execFileSync('git', args, { cwd, encoding: 'utf-8', timeout: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
   const status = (cwd) => git(cwd, 'status', '--porcelain', '--untracked-files=all');
-  const excludeFile = (cwd) => path.resolve(cwd, git(cwd, 'rev-parse', '--git-path', 'info/exclude').trim());
   const entries = (cwd) =>
-    splitLines(fs.existsSync(excludeFile(cwd)) ? fs.readFileSync(excludeFile(cwd), 'utf-8') : '').filter(
+    splitLines(readExclude(cwd)).filter(
       (l) => l === ENTRY,
     );
   const begin = (cwd, phase = '1') =>
@@ -698,7 +698,6 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
   });
 
   test('an exclude file without a trailing newline keeps its last line intact', () => {
-    fs.mkdirSync(path.dirname(excludeFile(tmpDir)), { recursive: true });
     fs.writeFileSync(excludeFile(tmpDir), '*.keep-me');
     assert.ok(begin(tmpDir).success);
     const lines = splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8'));
@@ -744,10 +743,26 @@ describe('regressions: #5551 milestone.lock stays out of git status', () => {
     const sub = path.join(tmpDir, 'we[ir]d#dir');
     fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+    // The enclosing repo owns the project only when it tracks a file under it outside `.planning/` (#5505, one gate for both callers).
+    fs.writeFileSync(path.join(sub, 'app.txt'), 'x');
+    git(tmpDir, 'add', '--', 'we[ir]d#dir/app.txt');
     assert.ok(begin(sub).success);
     assert.doesNotMatch(status(tmpDir), /milestone\.lock/);
     assert.ok(
       splitLines(fs.readFileSync(excludeFile(tmpDir), 'utf-8')).includes('/we\\[ir]d#dir/.planning/milestone.lock'),
+    );
+  });
+
+  test('a planning directory the enclosing repo does not own leaves that repo\'s exclude untouched (#5505)', () => {
+    const sub = path.join(tmpDir, 'unowned');
+    fs.mkdirSync(path.join(sub, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(sub, '.planning', 'STATE.md'), BEGIN_PHASE_STATE_MD);
+    assert.ok(begin(sub).success);
+    assert.deepEqual(
+      splitLines(readExclude(tmpDir)).filter((l) =>
+        l.includes('unowned'),
+      ),
+      [],
     );
   });
 });

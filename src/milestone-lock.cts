@@ -139,7 +139,7 @@ function writeClaim(cwd: string, claim: MilestoneClaim): void {
   // of `git status` (the ship preflight refuses a dirty tree). Every write, not
   // only the first, so a claim file that predates this fix is covered too; the
   // helper is idempotent and best-effort.
-  excludeFromGit(path.dirname(lockPath), MILESTONE_LOCK_FILENAME);
+  excludeFromGit(cwd, path.dirname(lockPath), MILESTONE_LOCK_FILENAME);
 }
 
 // planningWorkspace.planningDir targets .planning (or the workstream-scoped

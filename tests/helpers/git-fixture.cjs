@@ -37,6 +37,8 @@
  * underneath.
  */
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { runGit, OUTCOME } = require('./process-seam.cjs');
 
 /**
@@ -172,8 +174,69 @@ function toLegacyResult(result) {
   return { status: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 
+/**
+ * True when `name` can be a directory name on this platform: Windows rejects
+ * `< > : " | ? * \` and control characters and strips a trailing space or dot;
+ * POSIX filesystems accept them.
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isFsLegalName(name) {
+  return process.platform !== 'win32'
+    || (!/[<>:"|?*\\]|[ .]$/.test(name) && [...name].every((c) => c.charCodeAt(0) > 0x1f));
+}
+
+/**
+ * Watch (and optionally fake) every `git` child the code under test spawns, through the
+ * `child_process` module object, restored by the test context. `intercept(args, opts, fn)`
+ * returns a fake `spawnSync` result to replace the call, or `undefined` to run it for real.
+ * `childProcess` defaults to the real module; a file that has Windows-sensitive branches passes
+ * its own `require('node:child_process')`, so the conformance-tier classifier still sees it spawn git.
+ * @param {{mock: {method: Function}}} t - the node:test context
+ * @param {(args: string[], opts: object|undefined, fn: string) => (object|undefined)} intercept
+ * @param {typeof import('node:child_process')} [childProcess]
+ */
+function interceptGit(t, intercept, childProcess = require('node:child_process')) {
+  for (const fn of ['spawnSync', 'execFileSync']) {
+    const real = childProcess[fn];
+    t.mock.method(childProcess, fn, function (cmd, args, opts, ...rest) {
+      if (path.basename(String(cmd)).replace(/\.exe$/, '') === 'git') {
+        const fake = intercept(args, opts, fn);
+        if (fake !== undefined) return fake;
+      }
+      return real.call(this, cmd, args, opts, ...rest);
+    });
+  }
+}
+
+/**
+ * The repo's `info/exclude` path, as git resolves it (worktrees and `GIT_DIR` included), with its
+ * directory created: a repo made without template files has no `info/`, and an append would throw.
+ * @param {string} cwd
+ * @returns {string}
+ */
+function excludeFile(cwd) {
+  const file = path.resolve(cwd, gitOrThrow(['rev-parse', '--git-path', 'info/exclude'], { cwd }).trim());
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  return file;
+}
+
+/**
+ * The text of `info/exclude`, or '' when the file does not exist.
+ * @param {string} cwd
+ * @returns {string}
+ */
+function readExclude(cwd) {
+  const file = excludeFile(cwd);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+}
+
 module.exports = {
+  excludeFile,
   gitOrThrow,
+  interceptGit,
+  readExclude,
+  isFsLegalName,
   throwIfFailed,
   toLegacyResult,
   DEFAULT_GIT_TIMEOUT_MS,

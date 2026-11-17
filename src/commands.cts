@@ -25,10 +25,11 @@ const { output, ERROR_REASON } = ioMod;
 const error: typeof ioMod.error = ioMod.error;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
-const { loadConfig, isGitIgnored } = configLoaderMod;
+const { loadConfig, isGitIgnored, resolveCommitDocsTiers } = configLoaderMod;
+import { GIT_PROBE_TIMEOUT_MS, ignoreRuleLine } from './git-info-exclude.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
-const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtilsMod;
+const { toPosixPath, generateSlugInternal, extractOneLinerFromBody, isStateJsonPublishPath, isStateJsonRuleFile, STATE_JSON_PATHSPECS, STATE_JSON_IGNORE_PATHSPECS } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
@@ -1609,11 +1610,9 @@ function detectPhaseNumberFromFiles(files: string[] | undefined): string | null 
   return null;
 }
 
-type CommitDocsSource = 'phase' | 'config' | 'gitignore' | 'default';
-interface CommitDocsResolution {
-  resolved: boolean;
-  source: CommitDocsSource;
-}
+// The tier resolver (config-loader) owns the shape; the source union is read off it, never restated.
+type CommitDocsResolution = ReturnType<typeof resolveCommitDocsTiers>;
+type CommitDocsSource = CommitDocsResolution['source'];
 
 /**
  * #3587: resolve the `phase_commit_docs.<phase-id>` override for `phaseNum`
@@ -1640,7 +1639,8 @@ function resolvePhaseCommitDocsOverride(config: Record<string, unknown>, phaseNu
 }
 
 /**
- * #3587: the four-tier `commit_docs` precedence chain for a single commit —
+ * #3587: the four-tier `commit_docs` precedence chain for a single commit — the tiers live in
+ * `resolveCommitDocsTiers` (src/config-loader.cts); this is `cmdCommit`'s caller of it —
  * `phase_commit_docs.<phase-id>` (tier 1, resolved HERE because this call site
  * is the one place that knows the phase — see 40-design.md "Rejected" §1: NOT
  * inside `loadConfig`, which has no phase context and is called by nearly every
@@ -1663,11 +1663,7 @@ function resolveCommitDocsPolicy(
   phaseNum: string | null,
   isPlanningGitIgnored: () => boolean,
 ): CommitDocsResolution {
-  const phaseOverride = resolvePhaseCommitDocsOverride(config, phaseNum);
-  if (phaseOverride !== undefined) return { resolved: phaseOverride, source: 'phase' };
-  if (!config['commit_docs']) return { resolved: false, source: 'config' };
-  if (isPlanningGitIgnored()) return { resolved: false, source: 'gitignore' };
-  return { resolved: true, source: 'default' };
+  return resolveCommitDocsTiers(resolvePhaseCommitDocsOverride(config, phaseNum), config['commit_docs'], isPlanningGitIgnored);
 }
 
 // Reason string per commit_docs-resolution source, for the tier-1/tier-2 skip
@@ -1681,6 +1677,28 @@ const COMMIT_DOCS_SKIP_REASON: Record<Exclude<CommitDocsSource, 'default'>, stri
   config: 'skipped_commit_docs_false',
   gitignore: 'skipped_gitignored',
 };
+
+/**
+ * Canonical form of an absolute path: realpath of the longest EXISTING prefix,
+ * with the absent tail re-appended (macOS /var <-> /private/var, Windows 8.3
+ * short names like RUNNER~1). `followLeaf: false` keeps the last component
+ * lexical, because git adds a symlink itself, not its target. One owner for
+ * the three commit-path comparisons below. It is not `security.cts`'s
+ * resolution engine on purpose: that engine is unexported and answers
+ * containment (null outside the root), while these comparisons need the
+ * canonical spelling of a path that may lie outside the project (the refusal
+ * message names it) and of a leaf that is a symlink.
+ */
+function canonicalPath(abs: string, followLeaf = true): string {
+  let cur = followLeaf ? abs : path.dirname(abs);
+  const tail: string[] = followLeaf ? [] : [path.basename(abs)];
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(cur), ...tail); } catch { /* absent: climb */ }
+    const parent = path.dirname(cur);
+    if (parent === cur) return path.join(cur, ...tail);
+    tail.unshift(path.basename(cur)); cur = parent;
+  }
+}
 
 type DeclaredRemoval = { path: string; mode: string; sha: string };
 type StagingFailure = { file: string; error: string; timed_out: boolean };
@@ -1876,15 +1894,7 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
     // hold a symlinked spelling — macOS `/var` → `/private/var` is the live
     // instance (CI, this PR's own test) — so a resolve-only compare still
     // took the directory polarity there.
-    const canon = (p: string): string => {
-      let cur = path.resolve(cwd, p); const tail: string[] = [];
-      for (;;) {
-        try { return path.join(fs.realpathSync.native(cur), ...tail); } catch { /* absent: climb */ }
-        const parent = path.dirname(cur);
-        if (parent === cur) return path.join(cur, ...tail);
-        tail.unshift(path.basename(cur)); cur = parent;
-      }
-    };
+    const canon = (p: string): string => canonicalPath(path.resolve(cwd, p));
     const namesItself = (p: string): boolean => p === entryRel || path.resolve(cwd, p) === entryAbs || canon(p) === canon(entry);
     const inHeadPaths = new Set<string>();
     if (headExists) {
@@ -2052,23 +2062,6 @@ function commitRefusal(
       return p;
     }
   };
-  // Nearest existing ancestor directory of an absolute path, realpath'd, with
-  // the not-yet-existing remainder re-appended (macOS /var <-> /private/var,
-  // Windows 8.3 short names like RUNNER~1).
-  const canonicalAbsolute = (abs: string): string => {
-    const rest: string[] = [path.basename(abs)];
-    let ancestor = path.dirname(abs);
-    for (;;) {
-      try {
-        return path.join(fs.realpathSync.native(ancestor), ...rest);
-      } catch {
-        const parent = path.dirname(ancestor);
-        if (parent === ancestor) return abs;
-        rest.unshift(path.basename(ancestor));
-        ancestor = parent;
-      }
-    }
-  };
   const norm = (p: string): string => {
     const slashed = p.replace(/\\/g, '/');
     return process.platform === 'win32' ? slashed.toLowerCase() : slashed;
@@ -2080,7 +2073,7 @@ function commitRefusal(
   const targets = declared.length > 0 ? declared : ['.planning/'];
   // Lexical against the canonical cwd: a `.planning` symlink component is not followed.
   const resolveTarget = (t: string): string =>
-    path.isAbsolute(t) ? canonicalAbsolute(path.resolve(t)) : path.resolve(realCwd, t);
+    path.isAbsolute(t) ? canonicalPath(path.resolve(t), false) : path.resolve(realCwd, t);
   const escaping = !inside(realCwd, worktreeRoot)
     ? realCwd
     : targets.map(resolveTarget).find((abs) => !inside(abs, worktreeRoot));
@@ -2381,6 +2374,17 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // cmdCommitToSubrepo's exitCode-gated push.
       if (addResult.exitCode === 0) {
         stagedPaths.push(file);
+      } else if (
+        explicitFiles &&
+        // Any publish path (`.planning[/<project>][/workstreams/<ws>]/state.json`), whichever scope the env selects.
+        // Both sides are canonical (git resolves the path the same way): an absolute spelling through a symlink or a Windows 8.3 name stays inside the project.
+        isStateJsonPublishPath(cwd, path.relative(canonicalPath(cwd), canonicalPath(fullPath, false))) &&
+        execGit(['check-ignore', '-q', '--', file], { cwd, timeout: GIT_PROBE_TIMEOUT_MS }).exitCode === 0
+      ) {
+        // #5505: the derived state.json, untracked and ignored, cannot stage; like a missing
+        // file it is skipped and recorded, not a failure. Any other ignored path still fails
+        // (naming it is a user error), and check-ignore exits 0 only for UNTRACKED paths.
+        skippedFiles.push(file);
       } else {
         stagingFailures.push({
           file,
@@ -2393,6 +2397,47 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       }
     }
   }
+
+  // #5505: the state.json migration (publishStateContract) stages a removal and a `.gitignore` rule (new, or an edit of a tracked one).
+  // A scoped commit (`git commit -- <paths>`) would leave them staged and the tree dirty, and a path
+  // list cannot carry the removal: git re-adds a listed path from the work tree, where the file stays.
+  // So when nothing but those paths was staged before this call, the commit takes the index as it is.
+  // The git call runs only when something was pre-staged. Names come from git's own output and may
+  // hold glob characters, so they are literal pathspecs downstream.
+  const migrationStaged = explicitFiles && preStaged.size > 0
+    ? execGit(
+        ['diff', '--cached', '--name-status', '-z', '--no-renames', '--diff-filter=ADM', '--relative', '--', ...STATE_JSON_PATHSPECS, ...STATE_JSON_IGNORE_PATHSPECS],
+        { cwd, timeout: GIT_PROBE_TIMEOUT_MS },
+      ).stdout.split('\0').filter(Boolean)
+        // status, path pairs: the migration only removes a state.json, so a staged edit of one (a copy a `!` rule keeps tracked) is the user's
+        .flatMap((x, i, all) => (i % 2 === 1 && (all[i - 1] === 'D') === !isStateJsonRuleFile(cwd, x) ? [x] : []))
+        // the ignore-rule pathspecs also match `.planning/<dir>/.gitignore` of a non-project dir: keep the rule file of a publish path only
+        .filter((p) => isStateJsonRuleFile(cwd, p) || isStateJsonPublishPath(cwd, p))
+        // a rule file counts as the migration's only when its staged change is exactly the added `/state.json` line:
+        // any other staged line in it is the user's own edit and stays out of this commit. The diff, unlike `git show`
+        // output, survives execGit's trimming of a trailing blank line and an empty file. Whitespace edits stay visible. `--no-color --no-ext-diff --no-textconv`: the text is parsed,
+        // so the user's color.ui=always, diff.external or textconv driver must not reach it.
+        .filter((p) => {
+          if (!isStateJsonRuleFile(cwd, p)) return true;
+          const diff = execGit(['--literal-pathspecs', 'diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv', '-U0', '--', p], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+          const body = diff.stdout.split('\n');
+          const changed = body.slice(body.findIndex((l) => l.startsWith('@@'))).filter((l) => /^[+-]/.test(l));
+          // a last line without its newline shows as the same line removed and added: that pair is the migration's own append, not an edit
+          if (changed.length === 3 && changed[0].slice(1) === changed[1].slice(1) && changed[0][0] === '-' && changed[1][0] === '+') changed.splice(0, 2);
+          return diff.exitCode === 0 && changed.length === 1 && changed[0] === `+${ignoreRuleLine('state.json')}`;
+        })
+    : [];
+  // `preStaged` is `--relative`: it never lists a path staged outside `cwd` (a project nested in its repo), and the carry makes the commit
+  // unscoped, so it also needs the index to hold no path outside `cwd` (the whole index lists those, the `--relative` one does not).
+  // `-c diff.relative=false` keeps the whole-index count whole under a user's `diff.relative=true` (and git before 2.28 lacks `--no-relative`);
+  // a failed probe counts as "paths outside" (NaN never equals).
+  const stagedCount = (relative: '--relative' | ''): number => {
+    const r = execGit(['-c', 'diff.relative=false', 'diff', '--cached', '--name-only', '-z', ...(relative ? [relative] : [])], { cwd, timeout: GIT_PROBE_TIMEOUT_MS });
+    return r.exitCode === 0 ? r.stdout.split('\0').filter(Boolean).length : Number.NaN;
+  };
+  const nothingOutsideCwd = migrationStaged.length === 0 || stagedCount('') === stagedCount('--relative');
+  const carried = nothingOutsideCwd && [...preStaged].every((p) => migrationStaged.includes(p)) ? migrationStaged : [];
+  stagedPaths.push(...carried.filter((p) => !stagedPaths.includes(p)));
 
   // #4208: caller-declared removals -- see stageDeclaredRemovals.
   const declaredRemovals = stageDeclaredRemovals(cwd, removedDeclared);
@@ -2407,7 +2452,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // later. Driven. Only the removal-derived entries are literalised: `--files`
   // entries keep whatever pathspec behaviour they have today, which is not this
   // change's to alter.
-  const removalPathspecs = new Set(declaredRemovals.removedPathspec);
+  const removalPathspecs = new Set([...declaredRemovals.removedPathspec, ...carried]);
   const asPathspec = (p: string): string => (removalPathspecs.has(p) ? `:(literal)${p}` : p);
 
   // Put every entry this call removed back, exactly — mode and blob. Called
@@ -2791,7 +2836,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
     return;
   }
   const canScope = explicitFiles && stagedPaths.length > 0 && !amend
-    && !isMergeInProgress;
+    && !isMergeInProgress && carried.length === 0;
   const commitArgs = amend
     ? ['commit', '--amend', '--no-edit']
     : ['commit', '-m', sanitizedMessage as string];
@@ -4228,8 +4273,8 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
  *
  * The phase is derived from the STAGED `.planning/` paths via the single-
  * owner `detectPhaseNumberFromFiles` (the same helper `cmdCommit` uses), and
- * the policy itself is resolved via the single-owner `resolveCommitDocsPolicy`
- * (also shared with `cmdCommit`) — this function never re-derives phase
+ * the policy itself is resolved via `resolveCommitDocsPolicy`, `cmdCommit`'s caller of the
+ * single-owner `resolveCommitDocsTiers` (src/config-loader.cts) — this function never re-derives phase
  * detection or precedence, so it cannot diverge from `cmdCommit`'s decision
  * for the same staged tree (#3588 Part 1: this guard was previously
  * phase-blind, reading only project-level `commit_docs` and directly

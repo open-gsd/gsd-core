@@ -8,6 +8,7 @@ const { cleanup, toPosixPath } = require('./helpers.cjs');
 const { makeFakeClock } = require('./helpers/clock.cjs');
 
 const planningWorkspaceDirect = require('../gsd-core/bin/lib/planning-workspace.cjs');
+const { resolveCommitDocsTiers, loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 const {
   createPlanningWorkspace,
@@ -984,5 +985,95 @@ describe('planning-workspace: the phase SPEC predicate (#5629)', () => {
     assert.deepEqual(files, ['03-UI-SPEC.md', '03-CONTEXT.md', '03-b-SPEC.md', '03-AI-SPEC.md', '03-a-SPEC.md'], 'the input is not reordered');
     assert.equal(findPhaseSpecIn(['03-UI-SPEC.md', '03-AI-SPEC.md']), null);
     assert.equal(findPhaseSpecIn([]), null);
+  });
+});
+
+// #5505: commitDocsOptedOut is the ONE flat-then-nested `commit_docs` lookup for a named scope. It must read a value
+// as off exactly when the commit policy's own resolver (resolveCommitDocsTiers) does, for every value shape and scope.
+describe('#5505: commitDocsOptedOut agrees with the commit policy resolver', () => {
+  const { commitDocsOptedOut } = planningWorkspaceDirect;
+  const VALUES = [false, 0, null, '', true, 1, 'no', 'false'];
+  const SCOPES = [
+    { ws: null, project: null, dir: [] },
+    { ws: 'alpha', project: null, dir: ['workstreams', 'alpha'] },
+    { ws: null, project: 'second-product', dir: ['second-product'] },
+    { ws: 'alpha', project: 'second-product', dir: ['second-product', 'workstreams', 'alpha'] },
+  ];
+  for (const scope of SCOPES) {
+    for (const nested of [false, true]) {
+      test(`${nested ? 'planning.commit_docs' : 'commit_docs'} in ${scope.dir.join('/') || 'the root'}`, (t) => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5505-optout-'));
+        t.after(() => cleanup(tmp));
+        const dir = path.join(tmp, '.planning', ...scope.dir);
+        fs.mkdirSync(dir, { recursive: true });
+        for (const value of VALUES) {
+          fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(nested ? { planning: { commit_docs: value } } : { commit_docs: value }));
+          assert.equal(
+            commitDocsOptedOut(tmp, scope.ws, scope.project),
+            !resolveCommitDocsTiers(undefined, value, () => false).resolved,
+            `commit_docs ${JSON.stringify(value)}`,
+          );
+        }
+        fs.writeFileSync(path.join(dir, 'config.json'), '{}');
+        assert.equal(commitDocsOptedOut(tmp, scope.ws, scope.project), false, 'an absent key never opts out');
+      });
+    }
+  }
+
+  // Hostile and layered shapes (CONTRIBUTING.md:830): the answer must equal `!loadConfig(...).commit_docs` for the
+  // same scope, whatever the files hold. Each file is a raw string so an unparseable body is a fixture too.
+  const OFF = '{"commit_docs":false}';
+  const ON = '{"commit_docs":true}';
+  const LAYERS = {
+    'scoped planning null': { root: ON, scoped: '{"planning":null}' },
+    'scoped planning string': { root: '{"planning":{"commit_docs":false}}', scoped: '{"planning":"x"}' },
+    'scoped planning array': { root: '{"planning":{"commit_docs":false}}', scoped: '{"planning":[]}' },
+    'scoped planning null over root flat off': { root: OFF, scoped: '{"planning":null}' },
+    'unparseable scoped file': { root: OFF, scoped: '{not json' },
+    'unparseable root file': { root: '{not json', scoped: OFF },
+    'nested scoped over flat root': { root: ON, scoped: '{"planning":{"commit_docs":false}}' },
+    'flat scoped over nested root': { root: '{"planning":{"commit_docs":false}}', scoped: ON },
+    'scoped empty falls to the root value': { root: OFF, scoped: '{}' },
+    'scoped file absent': { root: OFF, scoped: null },
+    'both absent': { root: null, scoped: null },
+    'scoped file absent, project config off over root on': { root: ON, scoped: null, project: OFF },
+    'scoped file absent, project config on over root off': { root: OFF, scoped: null, project: ON },
+  };
+  for (const [name, layer] of Object.entries(LAYERS)) {
+    for (const scope of SCOPES) {
+      test(`${name} in ${scope.dir.join('/') || 'the root'} agrees with loadConfig`, (t) => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5505-ladder-'));
+        const saved = { ws: process.env.GSD_WORKSTREAM, project: process.env.GSD_PROJECT };
+        t.after(() => {
+          for (const [key, value] of [['GSD_WORKSTREAM', saved.ws], ['GSD_PROJECT', saved.project]]) {
+            if (value === undefined) delete process.env[key]; else process.env[key] = value;
+          }
+          cleanup(tmp);
+        });
+        const put = (dir, body) => {
+          if (body === null) return;
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, 'config.json'), body);
+        };
+        put(path.join(tmp, '.planning'), layer.root);
+        if (scope.project) put(path.join(tmp, '.planning', scope.project), layer.project ?? null);
+        put(path.join(tmp, '.planning', ...scope.dir), layer.scoped);
+        fs.mkdirSync(path.join(tmp, '.planning', ...scope.dir), { recursive: true });
+        if (scope.ws) process.env.GSD_WORKSTREAM = scope.ws; else delete process.env.GSD_WORKSTREAM;
+        if (scope.project) process.env.GSD_PROJECT = scope.project; else delete process.env.GSD_PROJECT;
+        assert.equal(
+          commitDocsOptedOut(tmp, scope.ws, scope.project),
+          !loadConfig(tmp, { persist: false, quiet: true }).commit_docs,
+        );
+      });
+    }
+  }
+
+  test('a traversal-shaped workstream name opts out of nothing', (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5505-traversal-'));
+    t.after(() => cleanup(tmp));
+    fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '.planning', 'config.json'), OFF);
+    assert.equal(commitDocsOptedOut(tmp, '../x', null), false);
   });
 });
