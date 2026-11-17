@@ -472,6 +472,12 @@ const _diskScanCache = new Map<string, {
   totalPlans: number | null;
   completedPlans: number | null;
   milestoneBounded: boolean;
+  // #6279: false when the milestone-scoped walk found NO phase directory at
+  // all (an existing-but-empty `.planning/phases/`, the shape `milestone
+  // complete` leaves behind). A walk over nothing has not measured the plan
+  // counters, so the caller keeps the stored total_plans / completed_plans —
+  // the same answer an ABSENT phases directory already gets (no scan at all).
+  plansMeasured: boolean;
   // #3217 (ADR-3180 §7.6 rule 4, finding 1): the real `listMilestonePhaseDirs`
   // scope for `allMatchingDirs` below, threaded through the cache so the
   // percent computation at the bottom of buildStateFrontmatter can gate on it
@@ -3591,6 +3597,7 @@ function buildStateFrontmatter(
               completedPhases: diskCountsWithheld ? null : flooredCompletedPhases,
               totalPlans: diskCountsWithheld ? null : diskTotalPlans,
               completedPlans: diskCountsWithheld ? null : diskTotalSummaries,
+              plansMeasured: phaseDirs.length > 0,
               phaseDirScope,
             };
           })();
@@ -3619,14 +3626,22 @@ function buildStateFrontmatter(
         } else if (storedCompletedPhases !== null && storedCompletedPhases !== undefined) {
           completedPhases = storedCompletedPhases;
         }
-        if (cached.totalPlans !== null) {
+        // #6279: an empty walk (no phase directory under an existing
+        // `.planning/phases/`) measured no plans, so a stored plan counter
+        // wins over its disk 0 — exactly what an absent phases directory gets.
+        // Without a stored value the disk 0 stands (a fresh project still
+        // reports zeros). total_phases is unaffected: it comes from the
+        // ROADMAP headings, which an empty directory does not change.
+        const hasStoredTotalPlans = storedTotalPlans !== null && storedTotalPlans !== undefined;
+        const hasStoredCompletedPlans = storedCompletedPlans !== null && storedCompletedPlans !== undefined;
+        if (cached.totalPlans !== null && (cached.plansMeasured || !hasStoredTotalPlans)) {
           totalPlans = cached.totalPlans;
-        } else if (storedTotalPlans !== null && storedTotalPlans !== undefined) {
+        } else if (hasStoredTotalPlans) {
           totalPlans = storedTotalPlans;
         }
-        if (cached.completedPlans !== null) {
+        if (cached.completedPlans !== null && (cached.plansMeasured || !hasStoredCompletedPlans)) {
           completedPlans = cached.completedPlans;
-        } else if (storedCompletedPlans !== null && storedCompletedPlans !== undefined) {
+        } else if (hasStoredCompletedPlans) {
           completedPlans = storedCompletedPlans;
         }
         milestoneUnbounded = cached.milestoneBounded === false;
