@@ -19628,6 +19628,37 @@ describe('#3871 / #3756: curated progress must survive a write on an archived mi
     assert.strictEqual(Number(fm.progress.total_plans), 2, 'total_plans must follow the disk count down when a real phase dir was scanned');
   });
 
+  // #6279 guard: an empty `.planning/phases/` alone is not an archived
+  // milestone. STATE asserts v2.0 and only v1.0 was archived, so the empty
+  // walk is a real measurement and the stored plan total drops to the disk 0.
+  test('emptyPhasesDirWithoutThisMilestonesArchiveTakesDiskZero', (t) => {
+    const cwd = createTempDir('gsd-6279-no-archive-');
+    t.after(() => cleanup(cwd));
+    const planningDir = path.join(cwd, '.planning');
+    fs.mkdirSync(path.join(planningDir, 'phases'), { recursive: true });
+    fs.mkdirSync(path.join(planningDir, 'milestones', 'v1.0-phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      ['## v2.0 Current 🚧', '', '### Phase 2: Bar', '### Phase 3: Baz', ''].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(planningDir, 'STATE.md'),
+      [
+        '---', 'gsd_state_version: 1.0', 'milestone: v2.0', 'status: executing',
+        'progress:', '  total_phases: 2', '  completed_phases: 0', '  total_plans: 3', '  completed_plans: 0', '  percent: 0',
+        '---', '', '# Project State', '', '## Session Continuity', '',
+        '**Last session:** 2024-01-10', '**Stopped at:** None', '**Resume file:** None', '',
+      ].join('\n'),
+    );
+
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'Plans dropped'], cwd);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const fm = frontmatterLib.extractFrontmatter(fs.readFileSync(path.join(planningDir, 'STATE.md'), 'utf-8'));
+    assert.ok(fm && fm.progress, 'STATE.md frontmatter must still carry a progress block');
+    assert.strictEqual(Number(fm.progress.total_plans), 0, 'without this milestone\'s archive the empty walk is a measurement: total_plans takes the disk 0');
+  });
+
   // The over-preservation guard: a genuinely empty project (no phases
   // anywhere, no curated progress block at all) must still report zeros
   // after the same verb — the fix for #3756 must not make
