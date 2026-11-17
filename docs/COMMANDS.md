@@ -1995,6 +1995,8 @@ Its frontmatter records the model each reviewer resolved to, as `models:` (the m
 
 **Plan coverage manifest (#3301):** the assembled prompt tells every prompt-fed reviewer exactly which plan ids exist in this review and the total count, and asks for one heading-verbatim section per id before any cross-plan or overall-risk content — so a review that silently stops partway through a multi-plan phase is no longer indistinguishable from one that covered every plan. A mechanical check grades each reviewer's output against that same id list and records an optional `plan_coverage:` frontmatter block, present only when a reviewer's output does not mention every id (diagnostic only — it never blocks the run). CodeRabbit is not graded — it is a diff-only reviewer that never receives the prompt carrying the manifest.
 
+**Antigravity read check (#5491):** `agy` can exit 0 with a normal-looking review after reading only part of its prompt, or after compacting its context and reviewing from its own summary. The Antigravity lane is therefore asked to open each plan's section with a `READ-CHECK <plan id>: requirements=[…]; wave=<n>; depends_on=[…]; tasks=<n>` line, which is compared with the plan files. A missing or wrong line, a `<truncated N bytes>` marker in the output, or a compaction recorded in agy's session transcript stamps that review `[incomplete-read]` (down-weighted in the Consensus Summary) and adds a `read_check:` frontmatter block. Diagnostic only — the lane still counts as having run. Other reviewers are not checked.
+
 ```bash
 # set project default reviewers for no-flag /gsd-review runs
 gsd config-set review.default_reviewers '["codex","claude"]'

@@ -34,6 +34,7 @@ import {
   fileRefPrompt as fileRefPromptText,
   configString,
 } from './review-lane-invocation.cjs';
+import { readCheckInstruction, runReadCheck, stampIncompleteRead, type ReadCheck } from './review-read-check.cjs';
 
 /* ------------------------------------------------------------------ *
  * Injected seams
@@ -79,6 +80,8 @@ export interface LaneRunResult {
   stubbed: boolean;
   /** The model this lane actually ran under, and how that was determined (#2295). */
   model: ResolvedModel;
+  /** Proof-of-reading result (#5491); antigravity lanes only, and only when there was something to check. */
+  readCheck?: ReadCheck;
 }
 
 /* ------------------------------------------------------------------ *
@@ -736,30 +739,8 @@ export function antigravityTranscriptFallback(
   mark: { convId: string; lines: number; unreadable?: boolean },
   deps: RunnerDeps,
 ): string {
-  const convId = resolveWorkspaceConvId(workspace, deps);
-  if (!convId) return '';
-  // #3118: the watermark could not read this conversation's transcript, so there is no trustworthy
-  // skip for it. Declining is the fail-closed answer; skipping 0 would replay a prior run's review.
-  if (mark.unreadable === true && convId === mark.convId) return '';
-  const tx = transcriptPath(deps.homeDir, convId);
-  if (!deps.exists(tx)) return '';
-  let lines: string[];
-  try {
-    lines = deps.readFile(tx).split(/\r?\n/).filter((l) => l.trim());
-  } catch {
-    return '';
-  }
-  // Same conv-id ⇒ only lines beyond the watermark are this run's. Different id ⇒ fresh session,
-  // so every line is new.
-  const skip = convId === mark.convId ? mark.lines : 0;
   let latest = '';
-  for (const line of lines.slice(skip)) {
-    let entry: TranscriptEntry;
-    try {
-      entry = JSON.parse(line) as TranscriptEntry;
-    } catch {
-      continue;
-    }
+  for (const entry of transcriptEntriesSinceMark(workspace, mark, deps)) {
     if (
       entry.source === 'MODEL' &&
       entry.status === 'DONE' &&
@@ -770,6 +751,54 @@ export function antigravityTranscriptFallback(
     }
   }
   return latest;
+}
+
+/**
+ * True when this run's session compacted its context (#5491): a `CHECKPOINT` entry after the
+ * watermark. agy then works from its own summary, so the review may rest on text it no longer
+ * holds — and it still exits 0. Same watermark rule as the fallback: a prior run's checkpoint
+ * must not flag this one.
+ */
+export function antigravityCompacted(
+  workspace: string,
+  mark: { convId: string; lines: number; unreadable?: boolean },
+  deps: RunnerDeps,
+): boolean {
+  return transcriptEntriesSinceMark(workspace, mark, deps).some((e) => e.type === 'CHECKPOINT');
+}
+
+/** This run's transcript entries (those after the watermark), or `[]` when none can be trusted. */
+function transcriptEntriesSinceMark(
+  workspace: string,
+  mark: { convId: string; lines: number; unreadable?: boolean },
+  deps: RunnerDeps,
+): TranscriptEntry[] {
+  const convId = resolveWorkspaceConvId(workspace, deps);
+  if (!convId) return [];
+  // #3118: the watermark could not read this conversation's transcript, so there is no trustworthy
+  // skip for it. Declining is the fail-closed answer; skipping 0 would replay a prior run's review.
+  if (mark.unreadable === true && convId === mark.convId) return [];
+  const tx = transcriptPath(deps.homeDir, convId);
+  if (!deps.exists(tx)) return [];
+  let lines: string[];
+  try {
+    lines = deps.readFile(tx).split(/\r?\n/).filter((l) => l.trim());
+  } catch {
+    return [];
+  }
+  // Same conv-id ⇒ only lines beyond the watermark are this run's. Different id ⇒ fresh session,
+  // so every line is new.
+  const skip = convId === mark.convId ? mark.lines : 0;
+  const entries: TranscriptEntry[] = [];
+  for (const line of lines.slice(skip)) {
+    try {
+      const entry: unknown = JSON.parse(line);
+      if (entry && typeof entry === 'object') entries.push(entry);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
 }
 
 /**
@@ -881,6 +910,9 @@ export function resolveSpawnModel(
  * is indistinguishable from a grounded one — the reviewer happily reviews the plan text in
  * isolation and its verdict is counted at full weight in the consensus. `stampBlindReview` reads
  * this self-report back out.
+ *
+ * The trailing READ-CHECK sentence (#5491) asks for a per-plan restatement that `runReadCheck`
+ * compares with the plan files, so a partial read stops looking like a complete review.
  */
 export function antigravityPrompt(promptPath: string, repoRoot: string): string {
   return (
@@ -889,7 +921,7 @@ export function antigravityPrompt(promptPath: string, repoRoot: string): string 
     `review request against that absolute root and verify claims against those files. ` +
     `If you cannot read files under ${repoRoot}, begin your output with the exact line ` +
     `REVIEWED-WITHOUT-REPO-ACCESS before the review. Output only the resulting markdown review. ` +
-    `Do not edit any files.`
+    `Do not edit any files. ${readCheckInstruction()}`
   );
 }
 
@@ -1267,6 +1299,7 @@ function runSpawnLane(plan: SpawnPlan, deps: RunnerDeps, repoRoot: string): Lane
       : (out.stdout ?? '');
 
   let extra: string | undefined;
+  let readCheck: ReadCheck | undefined;
 
   if (plan.handler === 'opencode') {
     const rebuilt = handleOpencodeOutput(review);
@@ -1300,6 +1333,11 @@ function runSpawnLane(plan: SpawnPlan, deps: RunnerDeps, repoRoot: string): Lane
       );
       return { slug: plan.slug, ok: true, stubbed: true, model };
     }
+    // #5491: a real review only — the stub above has nothing to prove.
+    readCheck = runReadCheck(review, plan.promptPath, repoRoot, deps, {
+      compacted: antigravityCompacted(repoRoot, mark, deps),
+    });
+    if (readCheck) review = stampIncompleteRead(review, readCheck);
   }
 
   // #3194: verify the declared evidence class against the review's actual output. A
@@ -1310,7 +1348,7 @@ function runSpawnLane(plan: SpawnPlan, deps: RunnerDeps, repoRoot: string): Lane
   if (plan.evidenceClass !== 'diff-only') review = stampUngroundedReview(review);
 
   const { stubbed } = writeReviewOrStub(plan, review, deps, extra, out);
-  return { slug: plan.slug, ok: true, stubbed, model };
+  return { slug: plan.slug, ok: true, stubbed, model, ...(readCheck ? { readCheck } : {}) };
 }
 
 async function runHttpLane(plan: HttpPlan, deps: RunnerDeps): Promise<LaneRunResult> {

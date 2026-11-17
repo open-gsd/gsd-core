@@ -635,6 +635,8 @@ output: reviewers do not own blocking state. Restore the captured bytes at the e
 
 After all reviewers complete, collect the lanes that were refused for their prompt cap (#4559): each dispatched lane whose `${RUN_DIR}/gsd-review-lane-result-<slug>.json` has `"reason": "prompt_exceeds_context"`. For each, include a `refused_reviewers` entry in the frontmatter with `estimated_tokens`, `cap` and `cap_source` copied from that file's `refusal` object (`estimatedTokens`, `cap`, `capSource`). Omit the key entirely if no lane was refused. A refused lane's section in the body renders its `review did not run: prompt exceeds` stub, never an empty section.
 
+Collect the proof-of-reading results (#5491): each lane whose result file has a `readCheck` object with `"complete": false` (antigravity only today) gets a `read_check` frontmatter entry copying its `truncated`, `compacted`, `missing` and `mismatched`. Omit the key entirely if no lane failed the check.
+
 **Reviewer instances (#1517, optional):** when instances ran, frontmatter records their
 names, each gets its own `## <Adapter> Review (<instance>)` section, and ≥2 same-cli
 instances print a one-line shared-adapter caveat. Format in
@@ -674,6 +676,12 @@ plan_coverage:            # only present if at least one graded lane is incomple
   ollama:
     total: 7
     missing: ["12.6-07"]
+read_check:               # only present if a lane failed its proof-of-reading check (#5491)
+  antigravity:
+    truncated: false
+    compacted: true
+    missing: ["12.6-03"]
+    mismatched: {"12.6-01": [wave, tasks]}
 ---
 
 # Cross-AI Plan Review — Phase {N}
@@ -706,7 +714,7 @@ plan_coverage:            # only present if at least one graded lane is incomple
 
 ## Consensus Summary
 
-{synthesize common concerns across all reviewers. CodeRabbit is a diff-only reviewer (it never received the source-grounding prompt), so do not weight its verdict as a grounded plan review — fold in its diff findings, but base plan-level consensus on the prompt-fed reviewers. A reviewer output carrying the `[reviewed-without-repo-access]` marker (or beginning with `REVIEWED-WITHOUT-REPO-ACCESS`) ran without repo access (#2176) — treat it the same way: note its concerns, but do not count its verdict at full consensus weight. A reviewer output carrying the `[reviewed-without-source-citations]` marker (#3194) declared source-grounded evidence but cited no `file:line` evidence, so it reviewed the plan text only — treat it the same way: note its concerns, but do not count its verdict at full consensus weight.}
+{synthesize common concerns across all reviewers. CodeRabbit is a diff-only reviewer (it never received the source-grounding prompt), so do not weight its verdict as a grounded plan review — fold in its diff findings, but base plan-level consensus on the prompt-fed reviewers. A reviewer output carrying the `[reviewed-without-repo-access]` marker (or beginning with `REVIEWED-WITHOUT-REPO-ACCESS`) ran without repo access (#2176) — treat it the same way: note its concerns, but do not count its verdict at full consensus weight. A reviewer output carrying the `[reviewed-without-source-citations]` marker (#3194) declared source-grounded evidence but cited no `file:line` evidence, so it reviewed the plan text only — treat it the same way: note its concerns, but do not count its verdict at full consensus weight. A reviewer output carrying the `[incomplete-read]` marker (#5491) may not rest on a full read of the plans (a missing or wrong READ-CHECK line, truncated input, or a compacted session) — treat it the same way.}
 
 ### Agreed Strengths
 {strengths mentioned by 2+ reviewers}
