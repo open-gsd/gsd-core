@@ -174,6 +174,8 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
   // READ, whether or not it yielded an item. `results` only holds files with
   // something to report, so `total_files` is 0 both for a tree of clean files
   // and for a tree the scan never reached; this counter tells them apart.
+  // A file that is read and then skipped as acknowledged still counts (it was
+  // examined); a file refused by the containment check is neither read nor counted.
   let filesScanned = 0;
 
   // Active dirs are milestone-filtered; archived dirs deliberately are NOT.
