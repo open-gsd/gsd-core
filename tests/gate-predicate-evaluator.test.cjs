@@ -272,6 +272,24 @@ describe('evaluatePredicate — interpolation', () => {
       assert.throws(() => run(`echo $(echo "it's" '\${GSD_PHASE_DIR}')`), quoted);
       assert.doesNotThrow(() => run("echo `echo 'x'`; test -d \"${GSD_PHASE_DIR}\""));
       assert.doesNotThrow(() => run(`(echo 'x'); test -d "\${GSD_PHASE_DIR}"`));
+      assert.throws(() => run("echo \"a `echo \"b'c\"` d\"; test -d '${GSD_PHASE_DIR}'"), quoted);
+    });
+    test('a quoted here-document delimiter in any spelling makes the body literal', () => {
+      for (const opener of [`<<"EOF"`, `<<\\EOF`, `<<E"O"F`]) {
+        assert.throws(() => run(`cat ${opener}\n\${GSD_PHASE_DIR}\nEOF`), quoted, opener);
+      }
+      assert.throws(() => run(`cat <<'END-1'\n\${GSD_PHASE_DIR}\nEND-1`), quoted);
+      assert.doesNotThrow(() => run(`cat <<END-1\nit's\nEND-1\ntest -d "\${GSD_PHASE_DIR}"`));
+    });
+    test('two here-documents on one line end in order; a here-document opens inside $(...)', () => {
+      assert.throws(() => run(`cat <<A <<'B'\nx\nA\n\${GSD_PHASE_DIR}\nB`), quoted);
+      assert.doesNotThrow(() => run(`cat <<A <<B\nit's\nA\nit's\nB\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.throws(() => run(`echo $(cat <<'EOF'\n\${GSD_PHASE_DIR}\nEOF\n)`), quoted);
+    });
+    test('a << inside $((...)) or ((...)) is a shift, not a here-document', () => {
+      assert.throws(() => run(`echo $((1<<n))\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`((x = 1<<n))\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`echo "$((1<<n))"\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
     });
   });
 

@@ -66,3 +66,94 @@ export function indentWidth(line: string): number {
   const match = line.match(/^[ \t]*/);
   return match ? match[0].length : 0;
 }
+
+// A here-document opener: `<<`, optional `-`, then the delimiter word. A word that holds a quote or a backslash
+// makes the body literal; the delimiter is the word with those removed.
+const HEREDOC_OPEN_RE = /<<(-?)[ \t]*((?:\\[^\n]|'[^'\n]*'|"[^"\n]*"|[^\s;&|<>()'"\\])+)/y;
+
+interface QuoteCtx {
+  kind: 'none' | 'sub' | 'arith' | 'tick' | 'double' | 'single' | 'ansi' | 'heredoc' | 'literal-heredoc';
+  delimiter?: string;
+  stripTabs?: boolean;
+}
+
+/** The end index of the line starting at `i` when it is the delimiter line of here-document `top`; -1 otherwise. */
+function endsHeredoc(command: string, i: number, top: QuoteCtx): number {
+  const eol = command.indexOf('\n', i);
+  const end = eol === -1 ? command.length : eol;
+  const line = command.slice(i, end);
+  return (top.stripTabs ? line.replace(/^\t+/, '') : line) === top.delimiter ? end : -1;
+}
+
+/**
+ * The index of every `$` that `sh` reads literally: inside single quotes, `$'...'` and a quoted here-document
+ * body (`<<'EOF'`, `<<"EOF"`, `<<\EOF`). One walk follows every shell quoting state with a stack: single and
+ * double quotes, `$'...'`, backslash, `#` comments, `$(...)`, `$((...))`, `(...)`, backticks and here-documents.
+ * A quote character pairs only inside its own state, so an apostrophe in a comment, a double-quoted string or
+ * an unquoted here-document body pairs with nothing; a `<<` inside `$((...))` is a shift, not a here-document.
+ */
+export function literalDollarIndexes(command: string): number[] {
+  const found: number[] = [];
+  const stack: QuoteCtx[] = [{ kind: 'none' }];
+  const pending: QuoteCtx[] = [];
+  let dollarAt = -2;
+  for (let i = 0; i < command.length; i++) {
+    const top = stack[stack.length - 1];
+    const c = command[i];
+    const prev = command[i - 1] ?? '';
+    if ((top.kind === 'heredoc' || top.kind === 'literal-heredoc') && prev === '\n') {
+      const end = endsHeredoc(command, i, top);
+      if (end !== -1) {
+        stack.pop();
+        i = end - 1;
+        continue;
+      }
+    }
+    if (top.kind === 'single' || top.kind === 'ansi' || top.kind === 'literal-heredoc') {
+      if (c === "'" && top.kind !== 'literal-heredoc') stack.pop();
+      else if (c === '\\' && top.kind === 'ansi') i++;
+      else if (c === '$') found.push(i);
+    } else if (c === '\\') {
+      i++;
+    } else if (c === '`') {
+      if (top.kind === 'tick') stack.pop();
+      else stack.push({ kind: 'tick' });
+    } else if (c === '$' && command[i + 1] === '(') {
+      const arith = command[i + 2] === '(';
+      stack.push({ kind: arith ? 'arith' : 'sub' });
+      i += arith ? 2 : 1;
+    } else if (top.kind === 'double' || top.kind === 'heredoc') {
+      if (c === '"' && top.kind === 'double') stack.pop();
+    } else if (c === '$') {
+      dollarAt = i;
+    } else if (c === '#' && (i === 0 || /[\s;&|()]/.test(prev))) {
+      const eol = command.indexOf('\n', i);
+      if (eol === -1) return found;
+      i = eol - 1;
+    } else if (c === "'") {
+      stack.push({ kind: dollarAt === i - 1 ? 'ansi' : 'single' });
+    } else if (c === '"') {
+      stack.push({ kind: 'double' });
+    } else if (c === '(') {
+      const arith = command[i + 1] === '(';
+      stack.push({ kind: arith ? 'arith' : 'sub' });
+      i += arith ? 1 : 0;
+    } else if (c === ')') {
+      if (top.kind === 'arith') {
+        stack.pop();
+        if (command[i + 1] === ')') i++;
+      } else if (top.kind === 'sub') stack.pop();
+    } else if (c === '<' && command[i + 1] === '<' && prev !== '<' && top.kind !== 'arith') {
+      HEREDOC_OPEN_RE.lastIndex = i;
+      const m = HEREDOC_OPEN_RE.exec(command);
+      if (m) {
+        const literal = /['"\\]/.test(m[2]);
+        pending.push({ kind: literal ? 'literal-heredoc' : 'heredoc', delimiter: m[2].replace(/\\([^\n])|['"]/g, '$1'), stripTabs: m[1] === '-' });
+        i += m[0].length - 1;
+      }
+    } else if (c === '\n' && pending.length > 0) {
+      stack.push(pending.shift() as QuoteCtx);
+    }
+  }
+  return found;
+}

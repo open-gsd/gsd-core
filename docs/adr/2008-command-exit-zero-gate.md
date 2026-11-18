@@ -162,6 +162,6 @@ GSD pastes no value into the command text; the command reaches `sh` unchanged, s
 
 The old names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS` are no longer set. The evaluator throws for a command that uses one (`${PHASE_DIR}`), in single, double or no quotes, and the gate takes its `onError` path (`unevaluable`). The message names the replacement. Migration: `test -n '${PHASE_NUMBER}'` becomes `test -n "${GSD_PHASE_NUMBER}"`. The beads ship gate (gsd-beads-i7e7) migrates to `$GSD_PHASE_NUMBER`.
 
-`sh` cannot expand a variable inside single quotes. The evaluator also throws for a `GSD_PHASE_*` variable inside single quotes (`unevaluable`).
+`sh` cannot expand a variable inside single quotes, `$'...'` or a quoted here-document (`<<'EOF'`). The evaluator also throws for a `GSD_PHASE_*` variable in such a span (`unevaluable`).
 
 A fifth dispatch site joins the three generic workflow sites listed under Evaluation path: the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase.

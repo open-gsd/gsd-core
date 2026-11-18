@@ -74,8 +74,8 @@ contract.
 context; all other variables stay for `sh` to interpret. GSD pastes no value into
 the command text: `sh` expands `"${GSD_PHASE_DIR}"` to the exact value, even when
 it holds shell syntax. Double-quote every use: an unquoted value splits at spaces.
-A use inside single quotes makes the evaluator throw (`unevaluable`), because `sh`
-does not expand inside single quotes.
+A use inside single quotes, `$'...'` or a quoted here-document (`<<'EOF'`) makes the evaluator throw (`unevaluable`), because `sh`
+does not expand in those spans.
 
 **Breaking change (#5482).** The names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS`
 (written `${PHASE_DIR}`) are no longer set. The evaluator refuses a
@@ -121,7 +121,7 @@ model".
 - Missing, non-string, empty, or whitespace-only `command`.
 - `command` longer than 4096 chars.
 - `timeout` present but not a positive finite number.
-- A phase variable inside single quotes.
+- A phase variable inside single quotes, `$'...'` or a quoted here-document.
 - A pre-#5482 name (`PHASE_NUMBER`, `PHASE_DIR`, `PHASE_REQ_IDS`) in the braced form (`${PHASE_DIR}`), in any quoting. A bare `$PHASE_DIR` is the gate's own shell variable.
 - Unknown `kind`.
 

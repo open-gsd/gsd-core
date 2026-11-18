@@ -29,7 +29,7 @@ const path = require('node:path');
 // missed on first pass; both invariants below are added in response to it.
 const fc = require('./helpers/fast-check-setup.cjs');
 
-const { tokenizeShellLike, indentWidth } = require('../gsd-core/bin/lib/token-scanner.cjs');
+const { tokenizeShellLike, indentWidth, literalDollarIndexes } = require('../gsd-core/bin/lib/token-scanner.cjs');
 const { tokenize: gitCmdTokenize } = require(path.join(__dirname, '..', 'hooks', 'lib', 'git-cmd.js'));
 
 // ─── tokenizeShellLike — rows 1-5 ──────────────────────────────────────────
@@ -148,6 +148,40 @@ describe('property: tokenizeShellLike is the inverse of joining whitespace-free 
     fc.assert(
       fc.property(fc.array(wordArb, { minLength: 0, maxLength: 10 }), (words) => {
         assert.deepStrictEqual(tokenizeShellLike(words.join(' ')), words);
+      }),
+    );
+  });
+});
+
+// ─── literalDollarIndexes — shell quote-state walk ─────────────────────────
+
+describe('property: literalDollarIndexes names exactly the markers in spans sh never expands', () => {
+  // Each fragment holds one marker `@`; `literal` says whether sh reads that `$Z` verbatim. The quoting
+  // characters in the other fragments (apostrophes in comments, double quotes, unquoted here-documents)
+  // must pair with nothing, so no fragment changes how its neighbours are read.
+  const FRAGMENTS = [
+    { text: "echo '@'", literal: true },
+    { text: "echo $'a\\'b @'", literal: true },
+    { text: "cat <<'EOF'\n@\nEOF", literal: true },
+    { text: 'cat <<"EOF"\n@\nEOF', literal: true },
+    { text: 'cat <<\\EOF\n@\nEOF', literal: true },
+    { text: "echo $(echo '@')", literal: true },
+    { text: 'echo "it\'s @"', literal: false },
+    { text: "# it's @", literal: false },
+    { text: "cat <<EOF\nit's @\nEOF", literal: false },
+    { text: "echo `echo \"it's @\"`", literal: false },
+    { text: 'echo $((1<<n)) "@"', literal: false },
+  ];
+  test('the indexes equal the positions of the literal markers', () => {
+    fc.assert(
+      fc.property(fc.array(fc.constantFrom(...FRAGMENTS), { minLength: 1, maxLength: 6 }), (picked) => {
+        let command = '';
+        const expected = [];
+        for (const { text, literal } of picked) {
+          if (literal) expected.push(command.length + text.indexOf('@'));
+          command += `${text.replace('@', '$Z')}\n`;
+        }
+        assert.deepStrictEqual(literalDollarIndexes(command), expected);
       }),
     );
   });
