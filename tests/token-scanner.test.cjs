@@ -223,6 +223,24 @@ describe('firstUnprovenMarker', () => {
     const at = String.fromCharCode(64);
     for (const text of [`bash -c${at} "echo \${GSD_MARK}"`, `bash -${at}c "echo \${GSD_MARK}"`]) assert.equal(firstUnprovenMarker(text, MARKER), undefined, text);
   });
+  test('a single-quoted marker is proven only as the script text of sh -c, eval or trap, and that text is checked on its own', () => {
+    for (const ok of [
+      "sh -c 'test -d \"@\"'", "bash -c 'test -d \"$GSD_MARK\"'", "sh -ec 'test -d \"@\"'", "eval 'test -d \"@\"'", "trap 'rm \"@\"' EXIT", "A=1 eval 'echo \"@\"'",
+      "find . -exec sh -c 'test -d \"@\"' \\;", "printf x | xargs -0 sh -c 'test -d \"@\"'", "sh -c 'echo \"@\"; echo \"@\"'", "sh -c 'echo a' 'b'; sh -c 'echo \"@\"'",
+    ]) {
+      assert.equal(first(ok), undefined, ok);
+    }
+    for (const bad of [
+      // The inner shell reads the text, so an unquoted or nested use in it is refused like one outside.
+      "sh -c 'test -d @'", "eval 'test -d @'", "trap 'rm @' EXIT", "sh -c 'echo \"$(ls \"@\")\"'", "sh -c 'echo \"@\" | xargs ls'", "sh -c 'echo \"@\"' | xargs ls", "xargs sh -c 'test -d \"@\"'",
+      // Not the script word, or not a consumer: the marker is dead text.
+      "sh -c 'x' sh '@'", "sh script.sh '@'", "echo '@'", "eval true; echo '@'", "sh -c 'x'; echo '@'", "grep -q trap '@'",
+      // Dead text is refused even when the quoted text itself double-quotes the marker.
+      "echo '\"@\"'", "sh -c 'x' sh '\"@\"'", "sh script.sh '\"@\"'", "eval true; echo '\"@\"'",
+    ]) {
+      assert.equal(first(bad), 'GSD_MARK', bad);
+    }
+  });
   test('a double-quoted marker that no consumer parses again is proven, whatever the command', () => {
     const ok = [
       'echo -c x "@"', 'grep -c x "@"', 'test -d "@" -a -c "@"', 'sh script.sh "@"', 'sh -x "@"', 'echo eval; echo "@"', 'echo eval; test -d "@"',

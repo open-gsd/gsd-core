@@ -242,7 +242,6 @@ describe('evaluatePredicate — interpolation', () => {
       "echo \"${GSD_PHASE_DIR#'@'}\"",
       'for id in %; do :; done',
       'test -d "@" && for id in @; do :; done',
-      "sh -c 'test -d \"%\"'",
       // A double-quoted placeholder in the text a consumer parses again: the value would run as code.
       'sh -c "test -e @"',
       'sh -ec "test -e @"',
@@ -312,6 +311,10 @@ describe('evaluatePredicate — interpolation', () => {
       'if true; then xargs ls "@"; fi',
       'A="x y" xargs ls "@"',
       "sh -c 'echo \"$1\" | xargs ls' sh \"@\"",
+      // Single-quoted script text is read on its own: an unquoted or `$(`-nested use in it splits or runs, and a marker in dead text is no variable.
+      "sh -c 'test -d @'", "sh -c 'test -d %'", "eval 'echo @'", "trap 'rm @' EXIT", "sh -c 'echo \"$(ls \"@\")\"'", "sh -c 'echo \"@\" | xargs ls'", "sh -c 'echo \"@\"' | xargs ls",
+      "sh -c 'x' sh '@'", "sh script.sh '@'", "eval true; echo '@'", "echo '@' | sh -c 'cat'", "sh -c 'x'; echo '@'",
+      "echo '\"@\"'", "sh -c 'x' sh '\"@\"'", "sh script.sh '\"@\"'",
       'echo "$\\\n(echo \'@\')"',
       "cat <\\\n<'EOF'\n\"@\"\nEOF",
     ];
@@ -330,6 +333,8 @@ describe('evaluatePredicate — interpolation', () => {
       'ids="@"; for id in $ids; do echo "$id"; done',
       "sh -c 'echo \"$1\"' sh \"@\"",
       'd="@"; eval \'echo "$d"\'',
+      // A single-quoted script word, or an argument of eval or trap, reads the variable from the environment of the inner shell.
+      "sh -c 'echo \"@\"'", "sh -c 'echo \"%\"'", "bash -ec 'echo \"@\"'", "eval 'echo \"@\"'", "trap 'echo \"@\"' EXIT", "find . -prune -exec sh -c 'echo \"@\"' \\;",
       'echo "@" | tr "\\n" "\\0" | xargs -0 echo',
       'echo "@" | xargs -0r echo',
       'echo "@" | xargs -r0 echo',
@@ -404,7 +409,7 @@ describe('evaluatePredicate — interpolation', () => {
       const PAIRS = [
         ['test -z "$(ls -A "${GSD_PHASE_DIR}")"', 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"'],
         ['for id in $GSD_PHASE_REQ_IDS; do :; done', 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done'],
-        ['sh -c \'test -d "$GSD_PHASE_DIR"\'', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
+        ['sh -c \'test -d $GSD_PHASE_DIR\'', 'sh -c \'test -d "$GSD_PHASE_DIR"\''],
         ['sh -c "test -d ${GSD_PHASE_DIR}"', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
         ['eval "test -d \\"${GSD_PHASE_DIR}\\""', 'd="${GSD_PHASE_DIR}"; eval \'test -d "$d"\''],
         ['trap "rm ${GSD_PHASE_DIR}" EXIT', 'd="${GSD_PHASE_DIR}"; trap \'rm "$d"\' EXIT'],
@@ -479,6 +484,15 @@ describe('evaluatePredicate — interpolation', () => {
     let guarded;
     beforeEach(() => { control = createTempDir(); guarded = createTempDir(); });
     afterEach(() => { cleanup(control); cleanup(guarded); });
+
+    test('the variable read from the environment in single-quoted text is data for each consumer, and the real shell finds it set', () => {
+      const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, { cwd: guarded, phaseNumber: '01', phaseDir: PAYLOAD_DIR, phaseReqIds: 'R-1' }, buildPredicateDeps());
+      for (const template of ['eval \'test -n "@"\'', 'sh -c \'test -n "@"\'', 'bash -c \'test -n "@"\'', 'trap \'test -n "@"\' EXIT']) {
+        assert.equal(run(spell(template)).block, false, template);
+        assert.equal(marker(guarded), false, template);
+      }
+      assert.equal(run(spell('sh -c \'test -z "@"\'')).block, true, 'the inner shell reads the value from its environment');
+    });
 
     for (const [consumer, refused, supported] of CONSUMERS) {
       test(`${consumer}: the real shell runs the payload from the refused spelling, the evaluator refuses it and creates nothing`, () => {

@@ -12,7 +12,8 @@
  * the character-level tokenizer moves here.
  *
  * `firstUnprovenMarker(command, marker)` is the conservative shell check the gate evaluator uses (#5482): it
- * names the first marker the walk cannot prove sits in plain double quotes.
+ * names the first marker the walk cannot prove sits in plain double quotes. `splitsWithXargs(command)` is its second
+ * export: true when a command word runs `xargs` without a delimiter option (the evaluator names the xargs spelling then).
  *
  * `indentWidth` is the primitive `src/decisions.cts`'s #3169 fix needs: a
  * decision-bullet list can NEST (a bullet elaborating on an already-open
@@ -75,7 +76,10 @@ export function indentWidth(line: string): number {
  * prove `sh` expands, or `undefined` when every marker sits in plain double quotes. A conservative refusal,
  * not a shell parser (ADR-3212 §4: a quoting context needs a scanner). The walk follows only `'`, `"`, a
  * backslash and `${...}` depth. It refuses:
- * - a marker outside plain double quotes (unquoted, single-quoted, escaped by `\`, or after `$` as in `$$name`);
+ * - a marker outside plain double quotes (unquoted, single-quoted, escaped by `\`, or after `$` as in `$$name`). One
+ *   single-quoted text is read instead: the script word of `sh -c` and the argument of `eval` or `trap` (`sh -c 'test -d "$name"'`).
+ *   The inner shell inherits the variable, so the value never becomes script text. The walk checks that text on its own,
+ *   which refuses `sh -c 'test -d $name'` and the like; a single-quoted marker anywhere else is dead text and refused;
  * - a marker after a construct whose quoting the walk does not follow: `$(`, a backtick, `<<`, `$'`, a quote
  *   inside `${...}`, or a `#` that starts a word (a comment);
  * - a double-quoted marker in a word that a consumer parses again, in the same command (up to the last `;`, `&`,
@@ -125,6 +129,11 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
       depth--;
     } else if (quote === '"') {
       if (c === '"') quote = '';
+    } else if (c === "'" && !splitsArgs && isReparsedWord(command.slice(commandStart, wordStart))) {
+      const end = command.indexOf("'", i + 1);
+      const unproven = firstUnprovenMarker(command.slice(i + 1, end < 0 ? undefined : end), marker);
+      if (unproven) return unproven;
+      i = end < 0 ? command.length : end;
     } else if (c === "'" || c === '"') {
       quote = c;
     } else if (depth === 0 && /[\s;&|()]/.test(c)) {
