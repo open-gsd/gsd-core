@@ -134,6 +134,7 @@ const TARGETS = Object.freeze([
   Object.freeze({ file: 'gsd-core/workflows/edit-phase.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/eval-review.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase.md', kind: 'workflow' }),
+  Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/checkpoint-heartbeats.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/code-review-disposition.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/completion-reconciliation.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', kind: 'workflow' }),
