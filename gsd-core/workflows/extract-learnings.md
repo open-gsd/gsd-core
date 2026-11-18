@@ -46,7 +46,7 @@ If PLAN.md or SUMMARY.md files are not found or missing, exit with error: "Requi
 **Optional artifacts (read if available, skip if not found):**
 - `${PHASE_DIR}/*-VERIFICATION.md` — verification results
 - `${PHASE_DIR}/*-UAT.md` — user acceptance test results
-- `.planning/STATE.md` — project state with decisions and blockers
+- `{planning_root}/STATE.md` — project state (`{planning_root}`: the active scope's root, from `planning.inspect`) with decisions and blockers
 
 Track which optional artifacts are missing for the `missing_artifacts` frontmatter field.
 </step>
@@ -219,7 +219,7 @@ steer every future estimate.
 Update STATE.md to reflect the learning extraction:
 
 ```bash
-gsd_run query state.update "Last Activity" "$(date +%Y-%m-%d)"
+gsd_run query state.update ${GSD_WS:+--ws=${GSD_WS##* }} "Last Activity" "$(date +%Y-%m-%d)"
 ```
 </step>
 

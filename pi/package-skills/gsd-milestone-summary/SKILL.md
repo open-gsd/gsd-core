@@ -27,13 +27,13 @@ Output: MILESTONE_SUMMARY written to `.planning/reports/`, presented inline, opt
 
 <context>
 **Project files:**
-- `.planning/ROADMAP.md`
+- `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`)
 - `.planning/PROJECT.md`
-- `.planning/STATE.md`
+- `{planning_root}/STATE.md`
 - `.planning/RETROSPECTIVE.md`
 - `.planning/milestones/v{version}-ROADMAP.md` (if archived)
 - `.planning/milestones/v{version}-REQUIREMENTS.md` (if archived)
-- `.planning/phases/*-*/` (SUMMARY.md, VERIFICATION.md, CONTEXT.md, RESEARCH.md)
+- `{planning_root}/phases/*-*/` (SUMMARY.md, VERIFICATION.md, CONTEXT.md, RESEARCH.md)
 
 **User input:**
 - Version: the `<arguments>` block (optional — defaults to current/latest milestone)

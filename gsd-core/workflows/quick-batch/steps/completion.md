@@ -19,6 +19,9 @@ gsd_run quick-batch complete \
   --raw
 ```
 
+The result's `warnings` is non-empty when the description was over 240 characters: the row is
+still written in full (#5830). Show each warning under that item in the final report.
+
 Items NOT reaching this call — `human_needed`, `failed` (planner/checker/
 merge/verification failure), or still `blocked`/`pending` (a dependency
 failed, row 32) — are left exactly as their respective routing step set
@@ -27,7 +30,7 @@ applicable.
 
 **Final commit.** Stage every artifact produced this run (PLAN.md, SUMMARY.md,
 `--research` RESEARCH.md, `--validate` VERIFICATION.md, per item, plus
-`.planning/STATE.md`) and commit:
+`{planning_root}/STATE.md` (`{planning_root}`: the active scope's root, from `planning.inspect`)) and commit:
 `$BATCH_ARTIFACT_FILES` is a bash ARRAY (not a plain string — a plain
 space-joined string re-splits unpredictably under `set -f`/globbing and
 diverges between bash and zsh, the #4109 word-splitting bug class):

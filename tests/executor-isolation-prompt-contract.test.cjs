@@ -40,7 +40,11 @@ test('#3637: the executor prompt carries the required-reading contract with the 
   const body = promptBody();
   assert.match(body, /<required_reading>/, 'the prompt must carry the required-reading contract');
   assert.match(body, /\{phase_dir\}\/\{plan_file\}/, 'the prompt must name the explicit plan path');
-  assert.match(body, /PROJECT\.md/, 'project context is required reading');
+  // #5861: required reading names the scope-resolved placeholders, not root `.planning/` literals
+  assert.match(body, /\{project_rel\}/, 'project context is required reading');
+  assert.match(body, /\{state_rel\}/, 'state is required reading');
+  assert.match(body, /\{config_rel\}/, 'config is required reading');
+  assert.doesNotMatch(body, /\.planning\/(?:PROJECT|STATE)\.md|\.planning\/config\.json/, 'no root .planning/ literal in required reading');
 });
 
 test('#3637: the executor prompt carries the execution-context build-time embeds', () => {

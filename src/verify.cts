@@ -1397,6 +1397,28 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean, opt
     errors.push('Has checkpoint tasks but autonomous is not false');
   }
 
+  // #6302 (ADR-3711 D1/D4): a plan naming a foreign executor must be one that executor can run to the
+  // end. A spawned process cannot raise a checkpoint back to the host, and `agent_hint` names a host
+  // subagent where `executor_runtime` names a foreign process, so the two never share a plan.
+  // Independent of `workflow.cross_runtime_execution`: the refusal is about the plan, not the gate.
+  const declaredExecutorRuntime = typeof fm['executor_runtime'] === 'string' ? fm['executor_runtime'].trim() : '';
+  if (declaredExecutorRuntime !== '') {
+    // The value later becomes a registry lookup key and part of a spawned command's identity (ADR-3711 D2),
+    // so it is held to a bare id: the segment rule of `execute.models.<runtime>`, and never a leading dash
+    // (a flag-shaped value is the hazard resolveOrchestratorExec's own leading-dash guards exist for).
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(declaredExecutorRuntime)) {
+      errors.push('executor_runtime must be a runtime id (letters, digits, underscore and dash only, not starting with a dash)');
+    }
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue comparison
+    if (hasCheckpoints || String(fm['autonomous']) === 'false') {
+      errors.push('executor_runtime cannot be set on a plan with checkpoint tasks or autonomous: false — a foreign executor cannot raise a checkpoint back to the host');
+    }
+    const declaredAgentHint = typeof fm['agent_hint'] === 'string' ? fm['agent_hint'].trim() : '';
+    if (declaredAgentHint !== '') {
+      errors.push('executor_runtime and agent_hint cannot both be set — agent_hint names a host subagent, executor_runtime names a foreign process');
+    }
+  }
+
   // #1951: a decision rated one-way is supposed to be confirmed before it is
   // walked through. Warn (never error — <reversibility> stays additive) when a
   // one-way rating has no checkpoint:decision anywhere ahead of it in the plan,

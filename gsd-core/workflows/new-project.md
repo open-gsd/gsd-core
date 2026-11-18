@@ -146,7 +146,7 @@ Ask inline (freeform, NOT AskUserQuestion):
 
 Wait for their response. This gives you the context needed to ask intelligent follow-up questions.
 
-**Research-before-questions mode:** Check if `workflow.research_before_questions` is enabled in `.planning/config.json` (or the config from init context). When enabled, before asking follow-up questions about a topic area:
+**Research-before-questions mode:** Check if `workflow.research_before_questions` is enabled in `{config_path}` (or the config from init context). When enabled, before asking follow-up questions about a topic area:
 
 1. Do a brief web search for best practices related to what the user described
 2. Mention key findings naturally as you ask questions (e.g., "Most projects like this use X — is that what you're thinking, or something different?")
@@ -296,7 +296,7 @@ Do not compress. Capture everything gathered.
 
 ```bash
 mkdir -p .planning
-gsd_run query commit "docs: initialize project" --files .planning/PROJECT.md
+gsd_run query commit "docs: initialize project" --files "{project_path}"
 ```
 
 ## 5. Workflow Preferences
@@ -649,7 +649,7 @@ Recommended options:
 - `Success Metrics & Release Criteria`
 - `Stakeholder Review & Approval`
 
-Create `.planning/config.json` with all settings (CLI fills in remaining defaults automatically):
+Create `{config_path}` with all settings (CLI fills in remaining defaults automatically):
 
 ```bash
 mkdir -p .planning
@@ -670,7 +670,7 @@ gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[s
 **Commit config.json:**
 
 ```bash
-gsd_run query commit "chore: add project config" --files .planning/config.json
+gsd_run query commit "chore: add project config" --files "{config_path}"
 ```
 
 ## 5.1. Sub-Repo Detection
@@ -737,7 +737,7 @@ Researching [domain] ecosystem...
 Create research directory:
 
 ```bash
-mkdir -p .planning/research
+mkdir -p "{research_dir}"
 ```
 
 **Determine milestone context:**
@@ -916,7 +916,7 @@ Cross-check requirements against Core Value from PROJECT.md. If gaps detected, s
 
 **Generate REQUIREMENTS.md:**
 
-Create `.planning/REQUIREMENTS.md` with:
+Create `{requirements_path}` with:
 
 - v1 Requirements grouped by category (checkboxes, REQ-IDs)
 - v2 Requirements (deferred)
@@ -967,7 +967,7 @@ If "adjust": Return to scoping.
 **Commit requirements:**
 
 ```bash
-gsd_run query commit "docs: define v1 requirements" --files .planning/REQUIREMENTS.md
+gsd_run query commit "docs: define v1 requirements" --files "{requirements_path}"
 ```
 
 ## 7.5. Project Structure Mode
@@ -1176,10 +1176,10 @@ Present completion summary:
 | Artifact       | Location                    |
 |----------------|-----------------------------|
 | Project        | `.planning/PROJECT.md`      |
-| Config         | `.planning/config.json`     |
+| Config         | `{config_path}`             |
 | Research       | `.planning/research/`       |
-| Requirements   | `.planning/REQUIREMENTS.md` |
-| Roadmap        | `.planning/ROADMAP.md`      |
+| Requirements   | `{requirements_path}`       |
+| Roadmap        | `{roadmap_path}`            |
 | Project guide  | `$INSTRUCTION_FILE`         |
 
 **[N] phases** | **[X] requirements** | Ready to build ✓
@@ -1198,7 +1198,7 @@ Exit skill and invoke SlashCommand("/gsd:discuss-phase 1 --auto")
 Check if Phase 1 has UI indicators (look for `**UI hint**: yes` in Phase 1 detail section of ROADMAP.md):
 
 ```bash
-PHASE1_SECTION=$(gsd_run query roadmap.get-phase 1 2>/dev/null)
+PHASE1_SECTION=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} 1 2>/dev/null)
 PHASE1_HAS_UI=$(echo "$PHASE1_SECTION" | grep -qi "UI hint.*yes" && echo "true" || echo "false")
 ```
 
@@ -1250,16 +1250,16 @@ PHASE1_HAS_UI=$(echo "$PHASE1_SECTION" | grep -qi "UI hint.*yes" && echo "true" 
 <output>
 
 - `.planning/PROJECT.md`
-- `.planning/config.json`
+- `{config_path}`
 - `.planning/research/` (if research selected)
   - `STACK.md`
   - `FEATURES.md`
   - `ARCHITECTURE.md`
   - `PITFALLS.md`
   - `SUMMARY.md`
-- `.planning/REQUIREMENTS.md`
-- `.planning/ROADMAP.md`
-- `.planning/STATE.md`
+- `{requirements_path}`
+- `{roadmap_path}`
+- `{state_path}`
 - `$INSTRUCTION_FILE` (runtime-derived via the shared `getProjectInstructionFile` policy: `AGENTS.md` for codex/opencode/kilo/kimi, `.github/copilot-instructions.md` for copilot, `GEMINI.md` for antigravity, `.claude/CLAUDE.md` for claude)
 
 </output>
