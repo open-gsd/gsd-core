@@ -28,7 +28,7 @@
 
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
-import { literalDollarIndexes } from './token-scanner.cjs';
+import { firstUnprovenMarker } from './token-scanner.cjs';
 
 // ─── Public constants ─────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ interface PredicateResult {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const namesPattern = (names: readonly string[]): string => `\\$\\{?(${names.map(escapeRegex).join('|')})\\b`;
-const PLACEHOLDER_AT_RE = new RegExp(namesPattern(INTERPOLATION_VAR_NAMES), 'y');
+const PLACEHOLDER_RE = new RegExp(namesPattern(INTERPOLATION_VAR_NAMES));
 // Only the braced spelling was ever a GSD placeholder; a bare `$PHASE_DIR` is the gate's own shell variable.
 const LEGACY_PLACEHOLDER_RE = new RegExp(`\\$\\{(${LEGACY_VAR_NAMES.map(escapeRegex).join('|')})\\}`);
 
@@ -107,17 +107,16 @@ function assertNoLegacyPlaceholder(command: string): void {
 }
 
 /**
- * Throw when a placeholder sits where `sh` never expands it: the gate would test the literal text
- * `${GSD_PHASE_DIR}` and pass on a path that does not exist. The throw is the gate's existing "unevaluable"
- * path (a `usage` failure). `literalDollarIndexes` (the shared shell scanner) names the literal `$` positions.
+ * Throw unless every placeholder is provably in plain double quotes. Where `sh` does not expand it, the gate
+ * would test the literal text `${GSD_PHASE_DIR}` and pass on a path that does not exist; unquoted, the value
+ * splits into words. The throw is the gate's existing "unevaluable" path (a `usage` failure). The check is a
+ * conservative refusal (`firstUnprovenMarker`, the shared shell scanner), so it also refuses a placeholder
+ * inside `$(...)`, backticks, a here-document or after a `#` comment word: assign it to a variable first.
  */
-function assertNoSingleQuotedPlaceholder(command: string): void {
-  for (const i of literalDollarIndexes(command)) {
-    PLACEHOLDER_AT_RE.lastIndex = i;
-    const name = PLACEHOLDER_AT_RE.exec(command)?.[1];
-    if (name !== undefined) {
-      throw new Error(`gate command single-quotes \${${name}}, which sh never expands: write "\${${name}}" in double quotes`);
-    }
+function assertEveryPlaceholderDoubleQuoted(command: string): void {
+  const name = firstUnprovenMarker(command, PLACEHOLDER_RE);
+  if (name !== undefined) {
+    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it: write "\${${name}}" in plain double quotes, not unquoted, single-quoted, in $(...), backticks, a here-document or after a # comment word`);
   }
 }
 
@@ -157,7 +156,7 @@ function evaluateCommandExitZero(
   // GSD pastes nothing into the command text: every value reaches `sh` as an environment value (unset => '').
   const env = Object.fromEntries(Object.entries(ENV_CONTEXT_KEYS).map(([name, key]) => [name, ctx[key] ?? '']));
   assertNoLegacyPlaceholder(command);
-  assertNoSingleQuotedPlaceholder(command);
+  assertEveryPlaceholderDoubleQuoted(command);
   const res = deps.runBoundedShell({ command, cwd: ctx.cwd, timeoutMs, env });
 
   if (res.timedOut) {

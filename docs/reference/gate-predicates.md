@@ -73,9 +73,18 @@ contract.
 **Phase environment values.** Three environment variables come from the gate
 context; all other variables stay for `sh` to interpret. GSD pastes no value into
 the command text: `sh` expands `"${GSD_PHASE_DIR}"` to the exact value, even when
-it holds shell syntax. Double-quote every use: an unquoted value splits at spaces.
-A use inside single quotes, `$'...'` or a quoted here-document (`<<'EOF'`) makes the evaluator throw (`unevaluable`), because `sh`
-does not expand in those spans.
+it holds shell syntax. The evaluator throws (`unevaluable`) unless every use is
+provably in plain double quotes. It refuses a variable that is unquoted, single-quoted,
+escaped by a backslash or written `$$GSD_PHASE_DIR`, and a variable after `$(`, a
+backtick, `<<`, `$'`, a quote inside `${...}` or a `#` that starts a word. The check is
+conservative, so it also refuses some correct commands. Assign the variable first, in
+plain double quotes, then use the shell variable where the refused construct needs it:
+
+| Refused | Accepted |
+|---|---|
+| `test -z "$(ls -A "${GSD_PHASE_DIR}")"` | `d="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"` |
+| `for id in $GSD_PHASE_REQ_IDS; do ...; done` | `ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do ...; done` |
+| `sh -c 'test -d "$GSD_PHASE_DIR"'` | `sh -c 'test -d "$1"' sh "${GSD_PHASE_DIR}"` |
 
 **Breaking change (#5482).** The names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS`
 (written `${PHASE_DIR}`) are no longer set. The evaluator refuses a

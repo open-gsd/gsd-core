@@ -20,6 +20,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   evaluatePredicate,
@@ -168,11 +169,11 @@ describe('evaluatePredicate — interpolation', () => {
   test('${GSD_PHASE_DIR}, ${GSD_PHASE_NUMBER}, ${GSD_PHASE_REQ_IDS} reach the shell as environment values and the text is not rewritten', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${GSD_PHASE_DIR} ${GSD_PHASE_NUMBER} ${GSD_PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}" "${GSD_PHASE_REQ_IDS}"' },
       baseCtx,
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check ${GSD_PHASE_DIR} ${GSD_PHASE_NUMBER} ${GSD_PHASE_REQ_IDS}');
+    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}" "${GSD_PHASE_REQ_IDS}"');
     assert.deepEqual(shell.calls[0].env, {
       GSD_PHASE_DIR: '/proj/.planning/phases/03-x',
       GSD_PHASE_NUMBER: '03',
@@ -184,11 +185,11 @@ describe('evaluatePredicate — interpolation', () => {
     const shell = fakeShell({ exitCode: 0 });
     const phaseDir = '/proj/.planning/phases/01-$(touch pwned) x';
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_DIR}" ${GSD_PHASE_NUMBER}' },
+      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}"' },
       { ...baseCtx, phaseDir },
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_DIR}" ${GSD_PHASE_NUMBER}');
+    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}"');
     assert.equal(shell.calls[0].env.GSD_PHASE_DIR, phaseDir);
   });
 
@@ -205,97 +206,107 @@ describe('evaluatePredicate — interpolation', () => {
     assert.doesNotThrow(() => run('PHASE_DIR=build; test -d "$PHASE_DIR"'));
   });
 
-  test('every placeholder single-quoted throws, whatever its value; double-quoted does not', () => {
-    for (const name of INTERPOLATION_VAR_NAMES) {
-      const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a', phaseReqIds: 'R-1' };
-      const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
-      const single = { message: new RegExp(`single-quotes \\$\\{${escapeRegex(name)}\\}.*write "\\$\\{${escapeRegex(name)}\\}" in double quotes`) };
-      assert.throws(() => run(`test -n '\${${name}}'`), single);
-      assert.throws(() => run(`test -n '$${name}'`), single);
-      assert.doesNotThrow(() => run(`test -n '\${${name}_X}'`));
-      assert.doesNotThrow(() => run(`test -n '$${name}X'`));
-      assert.doesNotThrow(() => run(`test -n "\${${name}}"`));
-    }
-  });
-
-  describe('quote states: an apostrophe outside a single-quoted span pairs with nothing', () => {
-    const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a b', phaseReqIds: '' };
+  describe('every placeholder must be provably in plain double quotes (a conservative refusal)', () => {
+    const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a b', phaseReqIds: 'R-1' };
     const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
-    const quoted = { message: /single-quotes/ };
+    // `@` is the braced placeholder `${NAME}`, `%` the bare `$NAME`; each row runs once per placeholder name.
+    const spell = (template, name) => template.replaceAll('@', `\${${name}}`).replaceAll('%', `$${name}`);
+    const REFUSED = [
+      'echo @',
+      'echo %',
+      "echo '@'",
+      "echo '%'",
+      "echo $'@'",
+      'echo \\@',
+      'echo "\\@"',
+      'echo "$$@"',
+      'echo "$%"',
+      'echo a\\\n#\'@\'',
+      'echo "$(ls -A "@")"',
+      'echo "`ls "@"`"',
+      'echo "`echo \'@\'`"',
+      'cat <<EOF\n@\nEOF',
+      "cat <<'EOF'\n@\nEOF",
+      'cat <<<"@"',
+      '# it\'s\ntest -d "@"',
+      'echo ok # it\'s\ntest -d "@"',
+      'echo ok;# it\'s\ntest -d "@"',
+      'echo "${x:-\'@\'}"',
+      'echo "${x:-"@"}"',
+      "echo \"${GSD_PHASE_DIR#'@'}\"",
+      "echo \"${GSD_PHASE_DIR%'@'}\"",
+      'for id in %; do :; done',
+      'test -d "@" && for id in @; do :; done',
+      "sh -c 'test -d \"%\"'",
+      "eval 'test -d \"@\"'",
+    ];
+    // Each row makes `sh` print its placeholder in plain double quotes, so the real shell proves the check keeps them.
+    const ALLOWED = [
+      'echo "@"',
+      'echo "%"',
+      'echo "@/x" "@"',
+      'echo "it\'s" "@"',
+      'echo "a # b" "@"',
+      'echo \\" "@"',
+      'echo "${x:-@}"',
+      'echo "@"; echo \'single\' "it\'s"',
+      'd="@"; echo "$d"',
+      'd="@"; echo "$(echo "$d")"',
+      'ids="@"; for id in $ids; do echo "$id"; done',
+      "sh -c 'echo \"$1\"' sh \"@\"",
+    ];
+    const unprovable = (name) => new RegExp(`uses \\$\\{${escapeRegex(name)}\\} where this check cannot prove sh expands it: write "\\$\\{${escapeRegex(name)}\\}" in plain double quotes`);
 
-    test('a single-quoted placeholder after an apostrophe in double quotes still throws', () => {
-      assert.throws(() => run(`echo "it's"; test ! -f '\${GSD_PHASE_DIR}/x'`), quoted);
-    });
-    test('a double-quoted placeholder between an apostrophe and a later single-quoted word does not throw', () => {
-      assert.doesNotThrow(() => run(`echo "it's"; test -f "\${GSD_PHASE_DIR}/x"; echo 'y'`));
-    });
-    test('a backslash-escaped apostrophe opens no single-quote span', () => {
-      assert.doesNotThrow(() => run(`echo \\' "\${GSD_PHASE_DIR}" \\'`));
-    });
-    test('an apostrophe in a comment opens no single-quote span', () => {
-      assert.doesNotThrow(() => run(`# don't skip\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.doesNotThrow(() => run(`true # don't\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.throws(() => run(`# fine\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
-    });
-    test('a # inside a word starts no comment', () => {
-      assert.throws(() => run(`echo a#b; test -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`echo $# "\${GSD_PHASE_DIR}" '\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`echo 'a'#b '\${GSD_PHASE_DIR}'`), quoted);
-    });
-    test('a # after ; & | ( starts a comment; a # inside double quotes does not', () => {
-      for (const lead of ['echo ok;', 'echo ok &', 'echo ok |', '(']) {
-        assert.doesNotThrow(() => run(`${lead}# don't\ntest -d "\${GSD_PHASE_DIR}"`), lead);
+    test('a placeholder outside plain double quotes, or after a construct the check does not read, throws and names it', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        for (const template of REFUSED) {
+          assert.throws(() => run(spell(template, name)), unprovable(name), JSON.stringify(template));
+        }
       }
-      assert.throws(() => run(`echo "a # b"; test -d '\${GSD_PHASE_DIR}'`), quoted);
     });
-    test('a backslash-escaped double quote inside double quotes does not end the string', () => {
-      assert.throws(() => run(`echo "a\\"b'c"; test -d '\${GSD_PHASE_DIR}'`), quoted);
-    });
-    test('an ANSI-C $\'...\' span: an escaped apostrophe pairs with nothing, its body is literal', () => {
-      assert.doesNotThrow(() => run(`echo $'it\\'s'; test -d "\${GSD_PHASE_DIR}"`));
-      assert.throws(() => run(`test -d $'\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`echo $'x'; test -d '\${GSD_PHASE_DIR}'`), quoted);
-    });
-    test('here-documents: an unquoted body pairs no apostrophe, a quoted body is literal, <<< is no here-document', () => {
-      assert.doesNotThrow(() => run(`cat <<EOF\nit's \${GSD_PHASE_DIR}\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.doesNotThrow(() => run(`cat <<-EOF\n\tit's\n\tEOF\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.doesNotThrow(() => run(`cat <<EOF\nEOFX it's\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.throws(() => run(`cat <<'EOF'\n\${GSD_PHASE_DIR}\nEOF`), quoted);
-      assert.throws(() => run(`cat <<EOF\nit's\nEOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`cat <<<EOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`echo $(( (1<<2) ))\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.doesNotThrow(() => run(`test -d "\${x:-'\${GSD_PHASE_DIR}'}"`));
-      assert.throws(() => run(`cat <<-EOF\n\tx\n\tEOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.doesNotThrow(() => run(`cat <<EOF\nsay "hi it's\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.doesNotThrow(() => run(`cat <<EOF\n\${NAME:-it's}\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.doesNotThrow(() => run(`test -d "\${x:-\${y:-it's}}"; test -d "\${GSD_PHASE_DIR}"`));
-      assert.throws(() => run(`cat << 'EOF'\n\${GSD_PHASE_DIR}\nEOF`), quoted);
-      assert.throws(() => run(`cat <<- "EOF"\n\t\${GSD_PHASE_DIR}\n\tEOF`), quoted);
-    });
-    test('quotes inside $(...), (...) and backticks follow the same states', () => {
-      assert.throws(() => run(`echo "$(test -d '\${GSD_PHASE_DIR}')"`), quoted);
-      assert.throws(() => run(`echo "$(echo "it's")"; test -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`echo $(echo "it's" '\${GSD_PHASE_DIR}')`), quoted);
-      assert.doesNotThrow(() => run("echo `echo 'x'`; test -d \"${GSD_PHASE_DIR}\""));
-      assert.doesNotThrow(() => run(`(echo 'x'); test -d "\${GSD_PHASE_DIR}"`));
-      assert.throws(() => run("echo \"a `echo \"b'c\"` d\"; test -d '${GSD_PHASE_DIR}'"), quoted);
-    });
-    test('a quoted here-document delimiter in any spelling makes the body literal', () => {
-      for (const opener of [`<<"EOF"`, `<<\\EOF`, `<<E"O"F`]) {
-        assert.throws(() => run(`cat ${opener}\n\${GSD_PHASE_DIR}\nEOF`), quoted, opener);
+    test('a similar name, a construct without a placeholder and a non-GSD variable throw nothing', () => {
+      for (const command of [
+        "echo '${GSD_PHASE_DIR_X}' '$GSD_PHASE_DIRX' '${HOME}'",
+        'echo "$(date)" `date` $HOME ${HOME}',
+        "cat <<'EOF'\nx\nEOF",
+        '# a comment\necho ok',
+        "echo \"${GSD_PHASE_DIR_X}\" $'x'",
+      ]) {
+        assert.doesNotThrow(() => run(command), JSON.stringify(command));
       }
-      assert.throws(() => run(`cat <<'END-1'\n\${GSD_PHASE_DIR}\nEND-1`), quoted);
-      assert.doesNotThrow(() => run(`cat <<END-1\nit's\nEND-1\ntest -d "\${GSD_PHASE_DIR}"`));
     });
-    test('two here-documents on one line end in order; a here-document opens inside $(...)', () => {
-      assert.throws(() => run(`cat <<A <<'B'\nx\nA\n\${GSD_PHASE_DIR}\nB`), quoted);
-      assert.doesNotThrow(() => run(`cat <<A <<B\nit's\nA\nit's\nB\ntest -d "\${GSD_PHASE_DIR}"`));
-      assert.throws(() => run(`echo $(cat <<'EOF'\n\${GSD_PHASE_DIR}\nEOF\n)`), quoted);
+    test('each rewrite that ADR-2008 and gate-predicates.md give for a refused command passes, and the original throws', () => {
+      const PAIRS = [
+        ['test -z "$(ls -A "${GSD_PHASE_DIR}")"', 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"'],
+        ['for id in $GSD_PHASE_REQ_IDS; do :; done', 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done'],
+        ['sh -c \'test -d "$GSD_PHASE_DIR"\'', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
+      ];
+      for (const [refused, rewrite] of PAIRS) {
+        assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
+        assert.doesNotThrow(() => run(rewrite), rewrite);
+      }
     });
-    test('a << inside $((...)) or ((...)) is a shift, not a here-document', () => {
-      assert.throws(() => run(`echo $((1<<n))\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`((x = 1<<n))\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
-      assert.throws(() => run(`echo "$((1<<n))"\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+    test('the beads ship gate (gsd-beads-i7e7) in its migrated spelling passes the check', () => {
+      const beads = '_B="${GSD_HOME:-${HOME:-}}"; case "$_B" in /?*) ;; *) echo "gsd-beads: no absolute GSD_HOME or HOME" >&2; exit 1;; esac; exec python3 -I "$_B/.gsd/capabilities/beads/scripts/sync.py" ship-gate "${GSD_PHASE_NUMBER}"';
+      assert.doesNotThrow(() => run(beads));
+    });
+    test('a double-quoted placeholder after a double-quoted apostrophe, a quoted # or an escaped quote throws nothing', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        for (const template of ALLOWED) {
+          assert.doesNotThrow(() => run(spell(template, name)), JSON.stringify(template));
+        }
+      }
+    });
+    test('the real shell expands every allowed row and prints no literal placeholder', () => {
+      const { spawnSync } = require('node:child_process');
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        const env = { ...process.env, GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' };
+        for (const template of ALLOWED) {
+          const { stdout } = spawnSync('sh', ['-c', spell(template, name)], { env, encoding: 'utf8', input: '', timeout: PROBE_TIMEOUT_MS });
+          assert.match(stdout, /SENT-(NUM|DIR|REQ)/, JSON.stringify(template));
+          assert.doesNotMatch(stdout, /GSD_PHASE_/, JSON.stringify(template));
+        }
+      }
     });
   });
 
@@ -311,11 +322,11 @@ describe('evaluatePredicate — interpolation', () => {
   test('undefined context var => empty string, in the text and in the environment', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${GSD_PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_REQ_IDS}"' },
       { cwd: '/proj' },
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check ${GSD_PHASE_REQ_IDS}');
+    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_REQ_IDS}"');
     assert.deepEqual(shell.calls[0].env, { GSD_PHASE_DIR: '', GSD_PHASE_NUMBER: '', GSD_PHASE_REQ_IDS: '' });
   });
 

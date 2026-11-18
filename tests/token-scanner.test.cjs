@@ -12,8 +12,8 @@
  * the implementing phase adds it (mirrors tests/pattern.test.cjs / tests/text-lines.test.cjs's
  * RED convention from Phases 1-2).
  *
- * Covers test-matrix rows 1-10: tokenizeShellLike (1-5), indentWidth (6-10); literalDollarIndexes
- * (the `$` positions `sh` reads literally) by the property at the end of the file.
+ * Covers test-matrix rows 1-10: tokenizeShellLike (1-5), indentWidth (6-10); firstUnprovenMarker
+ * (the conservative double-quote check of the gate evaluator) at the end of the file.
  * extractBranchArgument (rows 11-17) lives in git-cmd.js, tested in
  * tests/worktree-safety.test.cjs's folded bug-3129 block, not here.
  */
@@ -21,6 +21,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Seeded fast-check convention: require the shared setup helper (NOT
 // 'fast-check' directly) so numRuns/seed are configured globally before any
 // fc.assert() call — mirrors tests/pattern.test.cjs / tests/text-lines.test.cjs.
@@ -30,7 +31,7 @@ const path = require('node:path');
 // missed on first pass; both invariants below are added in response to it.
 const fc = require('./helpers/fast-check-setup.cjs');
 
-const { tokenizeShellLike, indentWidth, literalDollarIndexes } = require('../gsd-core/bin/lib/token-scanner.cjs');
+const { tokenizeShellLike, indentWidth, firstUnprovenMarker } = require('../gsd-core/bin/lib/token-scanner.cjs');
 const { tokenize: gitCmdTokenize } = require(path.join(__dirname, '..', 'hooks', 'lib', 'git-cmd.js'));
 
 // ─── tokenizeShellLike — rows 1-5 ──────────────────────────────────────────
@@ -154,145 +155,85 @@ describe('property: tokenizeShellLike is the inverse of joining whitespace-free 
   });
 });
 
-// ─── literalDollarIndexes — shell quote-state walk ─────────────────────────
+// ─── firstUnprovenMarker — conservative double-quote check ─────────────────
 
-describe('property: literalDollarIndexes names exactly the markers in spans sh never expands', () => {
-  // Each fragment holds one marker `@`; `literal` says whether sh reads that `$Z` verbatim. The quoting
-  // characters in the other fragments (apostrophes in comments, double quotes, unquoted here-documents)
-  // must pair with nothing, so no fragment changes how its neighbours are read.
-  const FRAGMENTS = [
-    { text: "echo '@'", literal: true },
-    { text: "echo $'a\\'b @'", literal: true },
-    { text: "cat <<'EOF'\n@\nEOF", literal: true },
-    { text: 'cat <<"EOF"\n@\nEOF', literal: true },
-    { text: 'cat <<\\EOF\n@\nEOF', literal: true },
-    { text: "echo $(echo '@')", literal: true },
-    { text: 'echo "it\'s @"', literal: false },
-    { text: "# it's @", literal: false },
-    { text: "cat <<EOF\nit's @\nEOF", literal: false },
-    { text: "echo `echo \"it's @\"`", literal: false },
-    { text: 'echo $((1<<n)) "@"', literal: false },
-    { text: 'echo "${x:-"it\'s"}" \'@\'', literal: true },
-    { text: 'echo "${x:-"it\'s"}" "@"', literal: false },
-    { text: 'echo "$(case $v in a) echo "it\'s";; esac)" \'@\'', literal: true },
-    { text: 'echo "$(case $v in (a|b) echo "it\'s";; esac)" "@"', literal: false },
-    { text: 'echo "$(echo case) it\'s" "@"', literal: false },
-    { text: 'echo $(( (1<<2) ))\necho \'@\'', literal: true },
-    { text: '(( (x<<n) ))\necho \'@\'', literal: true },
-    { text: 'echo "${x:-\'@\'}"', literal: false },
-    { text: "cat <<-EOF\n\tit's @\n\tEOF", literal: false },
-    { text: 'echo "$(esac) it\'s" \'@\'', literal: true },
-    { text: 'echo "$(case $v in\na) echo "it\'s"\nesac)" \'@\'', literal: true },
-    { text: 'echo "$(if t; then case $v in a) echo "it\'s";; esac; fi)" \'@\'', literal: true },
-    { text: 'echo "$( { case $v in a) echo "it\'s";; esac; })" \'@\'', literal: true },
-    { text: "cat <<EOF\n${x:-it's @}\nEOF", literal: false },
-    { text: 'echo "${x:-${y:-\'}}" "@"', literal: false },
-    { text: "cat << 'EOF'\n@\nEOF", literal: true },
-    { text: 'cat <<- "EOF"\n\t@\n\tEOF', literal: true },
-    { text: "cat <<<'@'", literal: true },
-    { text: 'cat <<<"@"', literal: false },
-    { text: 'echo it\\\'s "@"', literal: false },
-    { text: 'echo "a\\"b @"', literal: false },
-    { text: "echo a#b '@'", literal: true },
-    { text: "echo x;# it's @", literal: false },
-    { text: 'echo "$(case $v in a) case $w in b) echo x;; esac;; c) echo "it\'s";; esac)" \'@\'', literal: true },
-    { text: "cat <<'a\\b'\n@\na\\b", literal: true },
-    { text: "cat <<-\\E\n\t@\n\tE", literal: true },
-    { text: "cat <<\t'EOF'\n@\nEOF", literal: true },
-    { text: "cat <<a\\\nb\nit's @\nab", literal: false },
-    { text: "cat <<'ab\n@'", literal: true },
-    { text: "cat <<EOF\n\tEOF\nit's @\nEOF", literal: false },
-    { text: "cat <<-EOF\n\t\tit's @\n\t\tEOF", literal: false },
-    { text: "cat <<EOF\nxEOF\nit's @\nEOF", literal: false },
-    { text: 'cat <<\\\'\nx\n\'\necho "@"', literal: false },
-    { text: "cat <<'EOF'\nit's @\nEOF", literal: true },
-    { text: "cat <<EOF # it's\nbody it's @\nEOF", literal: false },
-    { text: "echo '\\' '@'", literal: true },
-    { text: "echo ${x:-'@'}", literal: true },
-    { text: 'echo "${x%% #*}" \'@\'', literal: true },
-    { text: "echo $(:)#'@'", literal: true },
-    { text: "echo $((1))#'@'", literal: true },
-    { text: "(:)# it's @", literal: false },
-    { text: "((1))# it's @", literal: false },
-    { text: 'echo "$(echo $((1)))" \'@\'', literal: true },
-    { text: 'echo "$( ((1)))" \'@\'', literal: true },
-    { text: 'echo "$(echo $((1)) "it\'s")" \'@\'', literal: true },
-    { text: 'echo "$(cd x) it\'s" \'@\'', literal: true },
-    { text: 'echo "$(true && case $v in a) echo "it\'s";; esac)" \'@\'', literal: true },
-    { text: 'echo "$(x | case $v in a) echo "it\'s";; esac)" \'@\'', literal: true },
-    { text: 'echo "$(x;thencase) it\'s" \'@\'', literal: true },
-    { text: 'echo "$(echo do b case; echo "it\'s")" \'@\'', literal: true },
-    { text: 'echo "$(echo xthen case; echo "it\'s")" \'@\'', literal: true },
-  ];
-  test('the indexes equal the positions of the literal markers', () => {
-    fc.assert(
-      fc.property(fc.array(fc.constantFrom(...FRAGMENTS), { minLength: 1, maxLength: 6 }), (picked) => {
-        let command = '';
-        const expected = [];
-        for (const { text, literal } of picked) {
-          if (literal) expected.push(command.length + text.indexOf('@'));
-          command += `${text.replace('@', '$Z')}\n`;
-        }
-        assert.deepStrictEqual(literalDollarIndexes(command), expected);
-      }),
-    );
-  });
-  test('every compound-command keyword puts a following case word at command position', () => {
-    for (const kw of ['then', 'do', 'else', 'elif', 'if', 'while', 'until']) {
-      const command = `echo "$(${kw} case $v in a) echo "it's";; esac)" '$Z'`;
-      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')], kw);
+describe('firstUnprovenMarker', () => {
+  const MARKER = /\$\{?(GSD_MARK)\b/;
+  const first = (template) => firstUnprovenMarker(template.replaceAll('@', '${GSD_MARK}'), MARKER);
+
+  test('a marker in plain double quotes is proven, with any other quote or word around it', () => {
+    for (const ok of ['echo "@"', 'echo "a@b" "@"', 'echo "it\'s" "@"', 'echo "a # b" "@"', 'echo \\" "@"', 'echo "${x:-@}"', 'echo "@" \'q\' "r"', 'echo "$GSD_MARK"', 'echo "@${x}"']) {
+      assert.equal(first(ok), undefined, ok);
     }
   });
-  test('a here-document opener ends at each word terminator', () => {
-    for (const t of ';&|<>()') {
-      const command = `cat <<E${t}echo\nE\necho '$Z'\n`;
-      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')], t);
+  test('a command without a marker is never refused, whatever it holds', () => {
+    for (const none of ["echo '${GSD_MARKX}' '$GSD_MARK_X'", 'echo $(date) `date` <<EOF', "# it's\necho $'x' ${y:-'z'}", 'echo ${GSD_MARKX}', 'echo "a" \'b']) {
+      assert.equal(first(none), undefined, none);
     }
   });
-  test('a single < opens no here-document', () => {
-    const command = "cat <file\necho '$Z'\n";
-    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
-  });
-  test('the delimiter word of a here-document is skipped whole and several openers on a line queue in order', () => {
-    assert.deepStrictEqual(literalDollarIndexes("cat <<'$Z'\nx\n$Z\n"), []);
-    const command = "cat <<A <<'B'\nx $Z\nA\ny $Z\nB\n";
-    assert.deepStrictEqual(literalDollarIndexes(command), [command.lastIndexOf('$Z')]);
-  });
-  test('a comment on the last line with no newline ends the walk', () => {
-    assert.deepStrictEqual(literalDollarIndexes("echo '$Z' # it's"), [6]);
-  });
-  test('<<- with no word opens no here-document', () => {
-    for (const rest of ['\n', ';']) {
-      const command = `cat <<-${rest}'$Z'\n-\n`;
-      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')], JSON.stringify(rest));
+  test('a marker outside double quotes is refused: unquoted, single-quoted, bare', () => {
+    for (const bad of ['echo @', "echo '@'", "echo 'a' @", 'echo "a"@', "echo '$GSD_MARK'", 'echo $GSD_MARK', "echo '\\' @", 'echo "a" \'@\'']) {
+      assert.equal(first(bad), 'GSD_MARK', bad);
     }
   });
-  test('an empty quoted delimiter ends its here-document at the first empty line', () => {
-    for (const q of ["''", '""']) {
-      const command = `cat <<${q}\n$Z\n\necho '$Z'\n`;
-      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z'), command.lastIndexOf('$Z')], q);
+  test('a backslash before a marker makes it literal, and `$$` makes it the pid plus text', () => {
+    for (const bad of ['echo \\@', 'echo "\\@"', 'echo "$$GSD_MARK"', 'echo "$${GSD_MARK}"']) {
+      assert.equal(first(bad), 'GSD_MARK', bad);
+    }
+    assert.equal(first('echo \\\\ "@"'), undefined);
+  });
+  test('a marker after $(, a backtick, <<, $\' or inside a quote in ${...} is refused', () => {
+    for (const bad of ['echo "$(ls "@")"', 'echo "`ls "@"`"', 'echo "`echo \'@\'`"', 'cat <<EOF\n@\nEOF', 'cat <<<"@"', "echo $'a' \"@\"", 'echo "${x:-\'a\'}" "@"', 'echo "${x:-"a"}" "@"', "echo \"${GSD_MARK#'@'}\""]) {
+      assert.equal(first(bad), 'GSD_MARK', bad);
     }
   });
-  test('a # at index 0 starts a comment, and a # inside ${...} does not', () => {
-    assert.deepStrictEqual(literalDollarIndexes("# it's $Z"), []);
-    const command = "echo ${x%% #*} '$Z'";
-    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
+  test('a # that starts a word is refused; a # inside a word, in quotes or in ${...} is not', () => {
+    for (const lead of ['', 'echo ok ', 'echo ok;', 'echo ok&', 'echo ok|', '(', 'echo ok)', 'echo >', 'echo <', 'echo ok\n']) {
+      // The comment holds a lone `"`: read as code it would open a span that proves the later single-quoted marker.
+      assert.equal(first(`${lead}# "\necho '@'`), 'GSD_MARK', JSON.stringify(lead));
+    }
+    assert.equal(first('echo a#b "@"'), undefined);
+    assert.equal(first('echo $# "@"'), undefined);
+    assert.equal(first('echo "a # b" "@"'), undefined);
+    assert.equal(first('echo "${#x}" "@"'), undefined);
+    assert.equal(first('echo a\\\n#b "@"'), 'GSD_MARK');
   });
-  test('a backslash-newline continues the delimiter word', () => {
-    const command = "cat <<a\\\nb\nx\nab\necho '$Z'\n";
-    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
+  test('the refusal names the first marker after the construct, not an earlier proven one', () => {
+    const marker = /\$\{?(A|B)\b/;
+    assert.equal(firstUnprovenMarker('echo "${A}" $(echo "${B}")', marker), 'B');
+    assert.equal(firstUnprovenMarker('echo "${A}" "${B}" \'${A}\'', marker), 'A');
+    assert.equal(firstUnprovenMarker('echo "${A}" $(true)', marker), undefined);
   });
-  test('a lone ) closes an arithmetic span and leaves the next character alone', () => {
-    const command = "echo $((1)'$Z')";
-    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
+  test('a ${...} closes at its brace: a quote after it opens a normal span', () => {
+    assert.equal(first('echo "${x}" \'a\' "@"'), undefined);
+    assert.equal(first('echo } ${x:-\'a\'} "@"'), 'GSD_MARK');
+    assert.equal(first('echo ${x} \'@\''), 'GSD_MARK');
+    assert.equal(first('echo "${x:-${y}}" "@" \'@\''), 'GSD_MARK');
   });
-  test('input that ends inside a here-document line or an unclosed delimiter quote ends the walk', () => {
-    assert.deepStrictEqual(literalDollarIndexes("cat <<'E'\n$Z\nE"), [10]);
-    assert.deepStrictEqual(literalDollarIndexes("cat <<'abc"), []);
-  });
-  test('a very long here-document delimiter is read in one pass', () => {
-    const word = 'a'.repeat(200000);
-    const command = `cat <<'${word}'\n$Z\n${word}\necho '$Z'\n`;
-    assert.deepStrictEqual(literalDollarIndexes(command), [word.length + 9, command.length - 4]);
+
+  describe('property: no marker that the real shell leaves literal is accepted', () => {
+    // `@` is the marker. Each fragment prints it; a hand-written label would repeat the reasoning under test,
+    // so the oracle is the real `sh`: a literal marker shows its name in stdout.
+    const FRAGMENTS = [
+      'echo @', "echo '@'", "echo $'a\\'b @'", "cat <<'EOF'\n@\nEOF", 'cat <<"EOF"\n@\nEOF', 'cat <<\\EOF\n@\nEOF',
+      "echo $(echo '@')", 'echo "it\'s @"', "# it's @", "cat <<EOF\nit's @\nEOF", "echo `echo \"it's @\"`", 'echo $((1<<2)) "@"',
+      'echo "${x:-"it\'s"}" \'@\'', 'echo "${x:-"it\'s"}" "@"', 'echo "$(case $v in a) echo "it\'s";; esac)" \'@\'',
+      'echo "$(echo case) it\'s" "@"', 'echo $(( (1<<2) ))\necho \'@\'', 'echo "${x:-\'@\'}"', "cat <<-EOF\n\tit's @\n\tEOF",
+      "cat <<EOF\n${x:-it's @}\nEOF", 'echo "${x:-${y:-\'}}" "@"', "cat << 'EOF'\n@\nEOF", "cat <<<'@'", 'cat <<<"@"',
+      'echo it\\\'s "@"', 'echo "a\\"b @"', "echo a#b '@'", "echo x;# it's @", "cat <<'a\\b'\n@\na\\b", "cat <<'ab\n@'",
+      "cat <<EOF\n\tEOF\nit's @\nEOF", "cat <<EOF # it's\nbody it's @\nEOF", "echo '\\' '@'", 'echo ${x:-\'@\'}', 'echo "${x%% #*}" \'@\'',
+      "echo $(:)#'@'", "(:)# it's @", 'echo "$(echo $((1)))" \'@\'',
+      'echo \\@', 'echo "\\@"', 'echo "$$@"', "echo a\\\n#'@'", 'echo "${GSD_MARK#\'@\'}"', 'echo ">#@"', "echo >#x; echo '@'", 'echo "a"\'@\'', 'echo "$(echo "@")"',
+    ];
+    test('every combination with a literal marker is refused', () => {
+      const { spawnSync } = require('node:child_process');
+      fc.assert(
+        fc.property(fc.array(fc.constantFrom(...FRAGMENTS), { minLength: 1, maxLength: 5 }), (picked) => {
+          const command = picked.map((text) => text.replaceAll('@', '${GSD_MARK}')).join('\n');
+          const { stdout } = spawnSync('sh', ['-c', command], { env: { ...process.env, GSD_MARK: 'SENT' }, encoding: 'utf8', input: '', timeout: PROBE_TIMEOUT_MS });
+          if (stdout.includes('GSD_MARK')) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
+        }),
+      );
+    });
   });
 });
