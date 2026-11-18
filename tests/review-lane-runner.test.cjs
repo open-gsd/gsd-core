@@ -2198,7 +2198,7 @@ describe('#2295 — properties (pinned seed, bounded runs)', () => {
 });
 
 describe('#5963 — readCappedBody bounds a probe body read', () => {
-  const { readCappedBody } = require('../gsd-core/bin/lib/http-body-cap.cjs');
+  const { readCappedBody, probeBody } = require('../gsd-core/bin/lib/http-body-cap.cjs');
   const CAP = 16;
   const respond = (text) => new Response(text);
 
@@ -2226,6 +2226,24 @@ describe('#5963 — readCappedBody bounds a probe body read', () => {
     await new Promise((r) => setImmediate(r));
     assert.equal(cancelled, true);
     assert.ok(pulls < 10, `stream pulled ${pulls} times`);
+  });
+
+  test('multi-chunk bodies: a chunk straddling the cap is trimmed to it', async () => {
+    const enc = new TextEncoder();
+    const chunked = (parts) => new Response(new ReadableStream({
+      start(c) { for (const p of parts) c.enqueue(enc.encode(p)); c.close(); },
+    }));
+    assert.equal(await readCappedBody(chunked(['a'.repeat(10), 'b'.repeat(10)]), CAP), 'a'.repeat(10) + 'b'.repeat(6));
+    assert.equal(await readCappedBody(chunked(['a'.repeat(8), 'b'.repeat(8), 'c']), CAP), 'a'.repeat(8) + 'b'.repeat(8));
+  });
+
+  test('probeBody: a 2xx body is read only when readBody is set; non-2xx and status-only return empty', async () => {
+    const ok = () => new Response('hello', { status: 200 });
+    assert.equal(await probeBody(ok(), true), 'hello');
+    assert.equal(await probeBody(ok(), false), '');
+    assert.equal(await probeBody(new Response('nope', { status: 404 }), true), '');
+    assert.equal(await probeBody(new Response('x', { status: 500 }), true), '');
+    assert.equal(await probeBody(new Response(null, { status: 204 }), true), '');
   });
 
   test('a response with no body reads as empty', async () => {

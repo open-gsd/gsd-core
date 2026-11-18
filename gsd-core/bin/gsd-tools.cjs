@@ -1789,12 +1789,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // probe:true marks a reachability probe: the status line is the answer (body '', so a stalled
           // body cannot turn a replying server into `missing`), except readBody:true on a 2xx.
           if (opts.probe) {
-            if (opts.readBody && res.ok) {
-              // #5963: a default-host probe judges the answer's shape; the read is size-capped.
-              return { ok: true, status: res.status, body: await require('./lib/http-body-cap.cjs').readCappedBody(res) };
-            }
-            res.body?.cancel().catch(() => {});
-            return { ok: res.ok, status: res.status, body: '' };
+            // #5963: a default-host probe may judge a 2xx body's shape (size-capped); see probeBody.
+            const body = await require('./lib/http-body-cap.cjs').probeBody(res, opts.readBody === true);
+            return { ok: res.ok, status: res.status, body };
           }
           if (res.status >= 300 && res.status < 400) {
             res.body?.cancel().catch(() => {});

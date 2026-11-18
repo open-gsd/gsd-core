@@ -24,6 +24,24 @@ export async function readCappedBody(
     chunks.push(Buffer.from(value));
     size += value.length;
   }
+  // Best-effort release of the connection: the body is already judged, a failing cancel changes nothing.
   reader.cancel().catch(() => {});
   return Buffer.concat(chunks).subarray(0, cap).toString('utf8');
+}
+
+interface ProbeResponse {
+  ok: boolean;
+  status: number;
+  body: { getReader: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }>; cancel: () => Promise<unknown> }; cancel: () => Promise<unknown> } | null;
+}
+
+/**
+ * The body a reachability probe returns for `res`: '' (status-only, the body is cancelled so a stalled
+ * stream cannot turn a replying server into `missing`) unless `readBody` is set AND the answer is 2xx,
+ * in which case the capped body is returned.
+ */
+export async function probeBody(res: ProbeResponse, readBody: boolean): Promise<string> {
+  if (readBody && res.ok) return readCappedBody(res);
+  res.body?.cancel().catch(() => {});
+  return '';
 }
