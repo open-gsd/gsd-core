@@ -186,8 +186,10 @@ else
   # the session's permission scope; an absolute /tmp path prompts on every
   # read and breaks short-path handling on Windows). $$-PID + epoch suffix
   # keeps concurrent runs for the same phase from colliding.
-  main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"
-  wt="$main_repo/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"
+  # $session_root: toplevel of this session's checkout (the worktree that has $branch
+  # checked out; the first `git worktree list` entry is the main checkout, #5876).
+  session_root="$(git rev-parse --show-toplevel)"
+  wt="$session_root/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"
   mkdir -p "$wt"
 
   # Attach to a NEW branch (git refuses to check out the same branch in two
@@ -223,16 +225,21 @@ if [ "$USE_WORKTREES" = "false" ]; then
 fi
 
 # Step 1: fast-forward $branch to capture commits made on $reviewfix_branch.
-# Run from main_repo (the user's checkout owns $branch). --ff-only means we
-# never silently drop/rewrite history on divergence — on failure this fails
-# loudly and leaves the temp branch for manual merge.
-main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"
+# Run it in the worktree that has $branch checked out (#5876), found by the
+# `branch refs/heads/$branch` porcelain line (substr($0, 10) skips "worktree " and
+# keeps spaces) — not the first entry (the main checkout); `branch --show-current`
+# re-confirms the path has $branch checked out. --ff-only means we never silently drop/rewrite history on
+# divergence — on failure this fails loudly and leaves the temp branch.
+owner_wt="$(git worktree list --porcelain | awk -v ref="refs/heads/$branch" '
+  /^worktree / { path = substr($0, 10) }
+  $0 == "branch " ref { print path; exit }')"
 ff_status=0
-if git -C "$main_repo" merge --ff-only "$reviewfix_branch" 2>&1; then
+if [ -n "$owner_wt" ] && [ "$(git -C "$owner_wt" branch --show-current 2>/dev/null)" = "$branch" ] \
+   && git -C "$owner_wt" merge --ff-only "$reviewfix_branch" 2>&1; then
   ff_status=0
 else
   ff_status=$?
-  echo "WARN: could not fast-forward $branch to $reviewfix_branch (exit $ff_status)."
+  echo "WARN: could not fast-forward $branch to $reviewfix_branch in ${owner_wt:-<no worktree has it checked out>} (exit $ff_status)."
   echo "      The temp branch $reviewfix_branch is preserved for manual merge."
 fi
 
@@ -241,7 +248,7 @@ git worktree remove "$wt" --force
 
 # Step 3: delete the temp branch ONLY if the fast-forward succeeded.
 if [ "$ff_status" -eq 0 ]; then
-  git -C "$main_repo" branch -D "$reviewfix_branch" || true
+  git -C "$owner_wt" branch -D "$reviewfix_branch" || true
 fi
 
 # Step 4: drop the recovery sentinel ONLY after worktree remove succeeds —
