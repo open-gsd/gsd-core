@@ -18,9 +18,13 @@ function openWorkStep() {
 
 // The entry field names step 5.6 reports: the parenthesised code-span list right before `gaps.open_work`.
 function openWorkStepFields() {
-  const text = splitLines(openWorkStep()).join(' ');
-  const before = text.slice(0, text.indexOf('`gaps.open_work`'));
-  return scanInlineCodeSpans(before.slice(before.lastIndexOf('(') + 1, before.lastIndexOf(')'))).map((span) => span.content);
+  const spans = scanInlineCodeSpans(splitLines(openWorkStep()).join(' '));
+  const target = spans.findIndex((span) => span.content === 'gaps.open_work');
+  if (target < 1) throw new Error('audit-milestone.md step 5.6 lacks a `gaps.open_work` span');
+  // The list is the run of spans separated by ', ' (a 2-char gap, by offset) that ends right before the target.
+  let first = target - 1;
+  while (first > 0 && spans[first].start - spans[first - 1].end === ', '.length) first--;
+  return spans.slice(first, target).map((span) => span.content);
 }
 
 // The lines between <success_criteria> and </success_criteria> of the workflow.
