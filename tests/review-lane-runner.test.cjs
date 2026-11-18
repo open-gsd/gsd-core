@@ -1161,7 +1161,7 @@ describe('#2605 local OpenAI-compatible lanes produce diagnosable output', () =>
   function reachableThen(chatResponse) {
     return async (url, opts) =>
       opts.method === 'GET'
-        ? { ok: true, status: 200, body: JSON.stringify({ data: [{ id: 'stub-model' }] }) }
+        ? { ok: true, status: 200, body: JSON.stringify({ object: 'list', data: [{ id: 'stub-model' }] }) }
         : (typeof chatResponse === 'function' ? chatResponse(url, opts) : chatResponse);
   }
 
@@ -1447,7 +1447,7 @@ describe('#3194 — evidence grounding is verified from review output, not decla
       const laneDeps = (content) => deps({
         httpJson: async (url, opts) =>
           opts.method === 'GET'
-            ? { ok: true, status: 200, body: JSON.stringify({ data: [{ id: 'stub-model' }] }) }
+            ? { ok: true, status: 200, body: JSON.stringify({ object: 'list', data: [{ id: 'stub-model' }] }) }
             : {
                 ok: true, status: 200,
                 body: JSON.stringify({ choices: [{ message: { content } }] }),
