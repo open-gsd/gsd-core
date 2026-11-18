@@ -80,13 +80,13 @@ export function indentWidth(line: string): number {
  *   inside `${...}`, or a `#` that starts a word (a comment);
  * - a double-quoted marker in a word that a consumer parses again, in the same command (up to the last `;`, `&`,
  *   `|`, parenthesis or newline): after `eval` or `trap`, or the script word of `sh -c` (also `bash`, `dash`, `ksh`,
- *   `zsh`, `ash`; `find -exec` and `xargs` run them too). `eval` and `trap` count only as the command word, the first
- *   word after leading `NAME=value` words. The outer shell has expanded the value into that text, so
+ *   `zsh`, `ash`; `find -exec` and `xargs` run them too). `eval` and `trap` count only as the command word: the first
+ *   word that is no `NAME=value` and no reserved word (`if`, `then`, `do`, `{`, `!` ...). The outer shell has expanded the value into that text, so
  *   a value such as `x$(cmd)` runs. `sh -c '...' sh "$name"`, where the value is a later argument, is proven.
  *   A `&`, `|` or `(` of a redirection (`2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`) does not end the command, nor does the
  *   `)` that closes `<(` or `>(`.
- * - any marker in a command line that runs `xargs` without `-0` or `-d` among its options: `xargs` splits and
- *   unquotes what it reads, and it reads pipe input, so the marker may sit before it.
+ * - any marker in a command line that runs `xargs` (as the command word of a command) without `-0` or `-d` among its
+ *   options: `xargs` splits and unquotes what it reads, and it reads pipe input, so the marker may sit before it.
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(raw: string, marker: RegExp): string | undefined {
@@ -162,10 +162,48 @@ const XARGS_ATTACHED_OPTIONS = 'eil';
 /** `xargs` long options that take their argument as the next word (`--max-args 1`) unless it follows `=`. */
 const XARGS_LONG_ARG_OPTIONS = new Set(['--max-args', '--max-procs', '--max-lines', '--max-chars', '--arg-file', '--process-slot-var']);
 
-/** The words of a shell text, split at blanks and command separators, with quotes and backslashes dropped (`"eval"`, `\sh`). */
-function shellWords(text: string): string[] {
-  return text.split(/[\s;&|()]+/).map((word) => word.replace(/['"\\]/g, ''));
+/**
+ * The commands of a shell text, each as its words: split at command separators (`;`, `&`, `|`, parentheses, newline)
+ * and at blanks outside quotes, with quotes and backslashes dropped (`"eval"`, `\sh`, `A="x y"` is the word `A=x y`).
+ */
+function shellCommands(text: string): string[][] {
+  const commands: string[][] = [[]];
+  let word = '';
+  let inWord = false;
+  let quote = '';
+  const endWord = (): void => {
+    if (inWord) commands[commands.length - 1].push(word);
+    word = '';
+    inWord = false;
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote === "'" || (c !== '\\' && quote === '"')) {
+      if (c === quote) quote = '';
+      else word += c;
+    } else if (c === '\\') {
+      word += text[++i] ?? '';
+      inWord = true;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      inWord = true;
+    } else if (/[\s;&|()]/.test(c)) {
+      endWord();
+      if (c !== ' ' && c !== '\t') commands.push([]);
+    } else {
+      word += c;
+      inWord = true;
+    }
+  }
+  endWord();
+  return commands;
 }
+
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** Words that start a command without being its command word: `if true; then eval ...`, `{ trap ...; }`, `! eval ...`. */
+const RESERVED_WORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '{', '!', 'time']);
+/** The index of the command word of a command's words: the first word that is no `NAME=value`, no empty word and no reserved word; -1 when none. */
+const commandWordIndex = (words: string[]): number => words.findIndex((w) => w !== '' && !ASSIGNMENT.test(w) && !RESERVED_WORDS.has(w));
 
 /**
  * True when the word that starts right after `head` (the text of its command up to that word) is text a consumer
@@ -173,8 +211,9 @@ function shellWords(text: string): string[] {
  * trailing option words, one of which holds `c`).
  */
 function isReparsedWord(head: string): boolean {
-  const words = shellWords(head);
-  const commandWord = words.find((w) => w !== '' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+  const commands = shellCommands(head);
+  const words = commands.flat();
+  const commandWord = commands[0][commandWordIndex(commands[0])];
   if (commandWord === 'eval' || commandWord === 'trap') return true;
   let k = words.length;
   while (k > 0) {
@@ -201,11 +240,14 @@ function xargsOption(words: string[], j: number): { delimited: boolean; skip: nu
   return { delimited: false, skip: 0 };
 }
 
-/** True when the command runs an `xargs` with no delimiter option among its option words: `xargs` then splits and unquotes its input. */
+/**
+ * True when a command of the text runs `xargs` (as its command word) with no delimiter option among its option words:
+ * `xargs` then splits and unquotes its input. A word that holds blanks or separators (the script of `sh -c '... | xargs ls'`) is read as a text too.
+ */
 function splitsWithXargs(command: string): boolean {
-  const words = shellWords(command);
-  return words.some((word, i) => {
-    if (!XARGS_WORD.test(word)) return false;
+  return shellCommands(command).some((words) => {
+    const i = commandWordIndex(words);
+    if (i < 0 || !XARGS_WORD.test(words[i])) return words.some((word) => /[\s;&|()]/.test(word) && splitsWithXargs(word));
     let j = i + 1;
     while (j < words.length && words[j].startsWith('-') && words[j] !== '--') {
       const option = xargsOption(words, j);
