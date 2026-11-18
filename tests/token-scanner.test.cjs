@@ -259,7 +259,7 @@ describe('firstUnprovenMarker', () => {
       'grep -q "xargs rm" "@"', 'sh -c; echo "@"',
       // An empty word is a word: the empty script of `sh -c "" "@"` makes the value `$0`, and `"" eval "@"` runs the command `""`, not `eval`.
       'sh -c "" "@"', '"" eval "@"', "sh -c '' \"@\"",
-      // A value passed as a later argument is never parsed again.
+      // A value passed as a later argument or a variable is never parsed again.
       "sh -c 'echo \"$1\"' sh \"@\"", "sh -ec 'echo \"$1\"' sh \"@\"", "bash -c 'echo \"$1\"' bash \"@\" \"@\"",
       "find . -exec sh -c 'echo \"$1\"' sh \"@\" \\;", "printf x | xargs -0 sh -c 'echo \"$1\"' sh \"@\"", "d=\"@\"; eval 'echo \"$d\"'", "d=\"@\"; trap 'echo \"$d\"' EXIT",
     ];
