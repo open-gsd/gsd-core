@@ -2562,6 +2562,46 @@ describe('frontmatter commands and reader seam (in-process)', () => {
     });
   });
 
+  // #6278: --field is one literal key. A dotted name whose prefix is an existing map is refused
+  // with a code; any other dotted name, and a key of that exact spelling that already exists,
+  // is written as before.
+  describe('cmdFrontmatterSet: dotted field over an existing map (#6278)', () => {
+    const DOTTED_MSG = (field, prefix) =>
+      `frontmatter set refused — "${field}" is not an existing key, and "${prefix}" is a map: ` +
+      `--field names one top-level key, so this would add a separate "${field}" key and leave ` +
+      `"${prefix}" unchanged. To change a value inside "${prefix}", set the whole map: ` +
+      `--field ${prefix} --value '{...}'.`;
+    const DOTTED = (field, prefix) => ({ error: DOTTED_MSG(field, prefix), code: 'FRONTMATTER_DOTTED_FIELD_OVER_MAP', field });
+    const REPORTED_DOC = '---\nprogress:\n  total_phases: 2\n  completed_phases: 1\n  percent: 50\n---\n# body\n';
+
+    for (const [label, doc, field, prefix] of [
+      ['the reporter\'s progress.percent', REPORTED_DOC, 'progress.percent', 'progress'],
+      ['a deeper name under the map', REPORTED_DOC, 'progress.detail.percent', 'progress'],
+      ['a map found at the second dot (first prefix absent)', '---\n"a.b":\n  c: 1\n---\n', 'a.b.c', 'a.b'],
+      ['a map found at the second dot (first prefix a scalar)', '---\na: 1\n"a.b":\n  c: 1\n---\n', 'a.b.c', 'a.b'],
+    ]) {
+      test(`${label} is refused with its code and nothing is written`, () => {
+        const name = file(doc);
+        assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, field, '100', false)), DOTTED(field, prefix));
+        assert.equal(read(name), doc);
+      });
+    }
+
+    for (const [label, doc, field, written] of [
+      ['no key named by the prefix', '---\nwave: 2\n---\n', 'release.notes', '---\nwave: 2\nrelease.notes: v\n---\n'],
+      ['a scalar prefix', '---\nwave: 2\n---\n', 'wave.x', '---\nwave: 2\nwave.x: v\n---\n'],
+      ['a list prefix', '---\ntags:\n  - a\n---\n', 'tags.x', '---\ntags:\n  - a\ntags.x: v\n---\n'],
+      ['an existing top-level key of that spelling beside the map', '---\na:\n  b: 1\na.b: 3\n---\n', 'a.b', '---\na:\n  b: 1\na.b: v\n---\n'],
+      ['a __proto__ prefix the file does not hold', '---\nwave: 2\n---\n', '__proto__.x', '---\nwave: 2\n__proto__.x: v\n---\n'],
+    ]) {
+      test(`a dotted field with ${label} is written as a literal key`, () => {
+        const name = file(doc);
+        assert.deepEqual(json(() => cmdFrontmatterSet(dir, name, field, 'v', false)), { updated: true, field, value: 'v' });
+        assert.equal(read(name), written);
+      });
+    }
+  });
+
   // ─── cmdFrontmatterMerge ──────────────────────────────────────────────────────
 
   describe('cmdFrontmatterMerge', () => {
@@ -2600,6 +2640,21 @@ describe('frontmatter commands and reader seam (in-process)', () => {
         error: LOSSY_MSG('artifacts'), field: 'artifacts',
       });
       assert.equal(read(name), LOSSY_DOC);
+    });
+
+    test('a dotted key over an existing map is refused before any key is written (#6278)', () => {
+      const doc = '---\nprogress:\n  percent: 50\n---\n';
+      const name = file(doc);
+      assert.deepEqual(json(() => cmdFrontmatterMerge(dir, name, '{"note":"n","progress.percent":100}', false)), {
+        error:
+          'frontmatter set refused — "progress.percent" is not an existing key, and "progress" is a map: ' +
+          '--field names one top-level key, so this would add a separate "progress.percent" key and leave ' +
+          '"progress" unchanged. To change a value inside "progress", set the whole map: ' +
+          "--field progress --value '{...}'.",
+        code: 'FRONTMATTER_DOTTED_FIELD_OVER_MAP',
+        field: 'progress.percent',
+      });
+      assert.equal(read(name), doc);
     });
 
     test('an unparseable block is a write refusal reported with its code', () => {
