@@ -403,10 +403,19 @@ const AUTO_COMPACT_WINDOW_MAX = 1_000_000;
 const AUTO_COMPACT_OUTPUT_RESERVE = 20_000;
 const AUTO_COMPACT_SUMMARY_BUFFER = 13_000;
 
+// #6131: Claude Code reads a case-insensitive `k` (x1,000) or `M` (x1,000,000)
+// suffix on an integer or decimal (`500k`, `1.5M`); the meter must resolve the
+// window the same way or its 100% lands far too early (`500k` read as 500,
+// clamped to 100k, put 100% at 67,000 tokens).
+const AUTO_COMPACT_SUFFIX_RE = /^(\d+(?:\.\d+)?)([kKmM])$/;
+
 function parseAutoCompactWindowEnv(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') return null;
   const s = raw.trim();
-  const n = /^\d[\d_,]*$/.test(s) ? parseInt(s.replace(/[_,]/g, ''), 10) : parseInt(s, 10);
+  const suffixed = AUTO_COMPACT_SUFFIX_RE.exec(s);
+  const n = suffixed
+    ? Math.round(parseFloat(suffixed[1]) * (suffixed[2].toLowerCase() === 'k' ? 1_000 : 1_000_000))
+    : (/^\d[\d_,]*$/.test(s) ? parseInt(s.replace(/[_,]/g, ''), 10) : parseInt(s, 10));
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.max(AUTO_COMPACT_WINDOW_MIN, Math.min(AUTO_COMPACT_WINDOW_MAX, n));
 }
