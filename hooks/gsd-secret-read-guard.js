@@ -182,7 +182,14 @@
 //   program-path keys and options
 //   (`difftool.<tool>.path`, `core.hooksPath`, `--exec-path`, a merge
 //   strategy) whose program the hook cannot see, or a command inside the
-//   quoted argument of a program other than ssh's `-o` (`vim -c`). `core.pager`
+//   quoted argument of a program other than ssh's `-o` (`vim -c`). Two more
+//   come from the scan underneath: a git or ssh directly behind `if`, `then`,
+//   `else`, `elif`, `while`, `until`, `do` or `!` is not resolved as the
+//   command, so scanGitInvocation never runs on it
+//   (`if true; then git -c core.editor='cat .env #' log; fi`, #6138), and a
+//   value that arrives through a shell variable is not expanded
+//   (`E='cat .env #'; git -c core.editor="$E" log`), the `$VAR` gap above.
+//   The tests pin both as allowed. `core.pager`
 //   / `pager.*` / `GIT_PAGER` / `PAGER` are allowed on purpose (no TTY,
 //   nothing printed), a value naming a secret file included, except for a
 //   bare `git grep -O`, which runs the pager regardless: its command is
