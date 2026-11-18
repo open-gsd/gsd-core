@@ -118,7 +118,10 @@ export function buildPredicateDeps() {
   };
 }
 
-export function evaluateCheckPredicate(input: { projectDir: string; args: readonly string[] }): GateResult {
+export function evaluateCheckPredicate(
+  input: { projectDir: string; args: readonly string[] },
+  deps: ReturnType<typeof buildPredicateDeps> = buildPredicateDeps(),
+): GateResult {
   const { projectDir } = input;
   const flags = parsePredicateFlags(input.args);
   const predicateJson = flags['predicate'];
@@ -149,7 +152,7 @@ export function evaluateCheckPredicate(input: { projectDir: string; args: readon
   };
   let result;
   try {
-    result = evaluatePredicate(predicate, ctx, buildPredicateDeps());
+    result = evaluatePredicate(predicate, ctx, deps);
   } catch (e) {
     return gateUsageFailure(GATE_FAILURE_CODE.USAGE, `gate predicate evaluation failed: ${(e as Error).message}`);
   }

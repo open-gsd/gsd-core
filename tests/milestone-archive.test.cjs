@@ -28,6 +28,7 @@ const { openWorkStepFields } = require('./helpers/audit-milestone-step.cjs');
 const { seedWorkstream } = require('./fixtures/index.cjs');
 const { findTableBySchema } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { buildQuickArchiveIndex } = require('../gsd-core/bin/lib/milestone.cjs');
+const { evaluateCheckPredicate, buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
 
 function runSdkQuery(args, cwd) {
   const result = runGsdTools(args, cwd);
@@ -1388,8 +1389,6 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EXIT3 = { kind: 'command-exit-zero', exitCode: 3, signal: null };
-// Preload for the CLI child: every `sh -c` gate command returns the spawnSync timeout result and never runs.
-const TIMED_OUT_SHELL_PRELOAD = path.join(__dirname, 'helpers', 'timed-out-shell-preload.cjs');
 
 describe('milestone complete re-checks blocking ship:pre predicate gates per milestone phase (#5482)', () => {
   let tmpDir;
@@ -1479,8 +1478,9 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
 
   test('G4 --dry-run with failing gate exits 0, mutates nothing, and previews the refusal', () => {
     writeGateCap(home, { command: 'exit 3' });
+    const before = snapshot();
     const preview = wouldRefuse();
-    assert.equal(archived(), false);
+    assert.deepEqual(snapshot(), before, 'a dry-run must leave the project tree byte-identical');
     assert.deepEqual(preview.map(typed), [
       { cap_id: 'open-work', phase: '01', reason: 'predicate_blocked', details: EXIT3 },
       { cap_id: 'open-work', phase: '02', reason: 'predicate_blocked', details: EXIT3 },
@@ -1685,14 +1685,16 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     ]);
   });
 
-  test('G19b a gate that outlives its predicate timeout refuses the close with timedOut details', () => {
-    writeGateCap(home, { command: 'exit 0' });
-    const r = runNode(
-      ['--require', TIMED_OUT_SHELL_PRELOAD, TOOLS_PATH, '--json-errors', 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
-      { cwd: tmpDir, env: childEnv(), timeoutMs: PROBE_TIMEOUT_MS },
-    );
-    const blocked = refusal({ success: r.exitCode === 0, output: r.stdout, error: r.stderr }).blocked;
-    assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.timedOut]), [['01', 'predicate_blocked', true], ['02', 'predicate_blocked', true]]);
+  test('G19b a gate that outlives its predicate timeout blocks with timedOut details', () => {
+    // In-process fault injection through the `deps` parameter (CONTRIBUTING.md): the stub is the bounded shell seam.
+    const timedOut = { exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', timedOut: true };
+    const deps = { ...buildPredicateDeps(), runBoundedShell: () => timedOut };
+    const result = evaluateCheckPredicate({
+      projectDir: tmpDir,
+      args: ['--predicate', JSON.stringify({ kind: 'command-exit-zero', command: 'exit 0' }), '--phase-dir', phaseDir('01-foundation'), '--phase-number', '01'],
+    }, deps);
+    assert.equal(result.block, true);
+    assert.equal(result.payload.details.timedOut, true);
   });
 
   test('G21 a decimal phase dir yields the token init hands ship.md', () => {
