@@ -85,17 +85,19 @@ export function indentWidth(line: string): number {
  * - a double-quoted marker in a word that a consumer parses again, in the same command (up to the last `;`, `&`,
  *   `|`, parenthesis or newline): after `eval` or `trap`, or the script word of `sh -c` (also `bash`, `dash`, `ksh`,
  *   `zsh`, `ash`; `find -exec` and `xargs` run them too). `eval` and `trap` count only as the command word: the first
- *   word that is no `NAME=value` and no reserved word (`if`, `then`, `do`, `{`, `!` ...). The outer shell has expanded the value into that text, so
- *   a value such as `x$(cmd)` runs. `sh -c '...' sh "$name"`, where the value is a later argument, is proven.
- *   A `&`, `|` or `(` of a redirection (`2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`) does not end the command, nor does the
- *   `)` that closes `<(` or `>(`.
- * - any marker in a command line that runs `xargs` (as the command word of a command) without a delimiter option (`-0`, `-d`,
- *   `--null` or `--delimiter`) among its options: `xargs` splits and unquotes what it reads, and it reads pipe input, so the marker may sit before it.
+ *   word that is no `NAME=value` and no reserved word (`if`, `then`, `do`, `{`, `!` ...). The outer shell has expanded
+ *   the value into that text, so a value such as `x$(cmd)` runs. `sh -c '...' sh "$name"`, where the value is a later
+ *   argument, is proven.
+ * - any marker in a command line that runs `xargs` (as the command word of a command) without a delimiter option
+ *   (`-0`, `-d`, `--null` or `--delimiter`) among its options: `xargs` splits and unquotes what it reads, and it reads
+ *   pipe input, so the marker may sit before it.
+ * A `&`, `|` or `(` of a redirection (`2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`) does not end the command, nor does the
+ * `)` that closes `<(` or `>(`.
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(raw: string, marker: RegExp): string | undefined {
   // `sh` deletes an unescaped backslash-newline pair before it tokenizes, so `$\<nl>(` is `$(` and `$\<nl>NAME` is a marker.
-  const command = raw.replace(/(?<!\\)((?:\\\\)*)\\\n/g, '$1');
+  const command = withoutLineContinuations(raw);
   const at = new RegExp(marker.source, 'y');
   const markerAt = (i: number): string | undefined => {
     at.lastIndex = i;
@@ -143,6 +145,21 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
     }
   }
   return undefined;
+}
+
+/**
+ * `raw` without its line continuations: `sh` deletes a backslash-newline pair, unless the backslash is itself escaped
+ * (an even run of backslashes before the newline keeps the newline). A scan, not a regex: no quantifier reads the text.
+ */
+function withoutLineContinuations(raw: string): string {
+  const out: string[] = [];
+  let run = 0;
+  for (const c of raw) {
+    if (c === '\n' && run % 2 === 1) out.pop();
+    else out.push(c);
+    run = c === '\\' ? run + 1 : 0;
+  }
+  return out.join('');
 }
 
 /**

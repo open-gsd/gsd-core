@@ -313,6 +313,21 @@ describe('firstUnprovenMarker', () => {
     assert.equal(first('echo a\\\n#b "@"'), undefined);
     assert.equal(first('echo a \\\n#b "@"'), 'GSD_MARK');
   });
+  test('a backslash-newline pair is deleted after an odd run of backslashes only: the real shell and the scan agree', () => {
+    // 0 to 3 backslashes before the newline, then one row where a deleted pair is followed by an even run.
+    const ROWS = [
+      ['a\n#b', ['a', ''], 'GSD_MARK'],
+      ['a\\\n#b', ['a#b', ''], undefined],
+      ['a\\\\\n#b', ['a\\', ''], 'GSD_MARK'],
+      ['a\\\\\\\n#b', ['a\\#b', ''], undefined],
+      ['a\\\n\\\\\n#b', ['a\\', ''], 'GSD_MARK'],
+    ];
+    const env = isolatedEnv({ home: os.tmpdir() });
+    for (const [text, printed, refused] of ROWS) {
+      assert.deepStrictEqual(oracleLines(`printf '%s\\n' ${text}`, { interpreter: 'bash', env }), printed, JSON.stringify(text));
+      assert.equal(first(`echo ${text} "@"`), refused, JSON.stringify(text));
+    }
+  });
   test('the refusal names the first marker after the construct, not an earlier proven one', () => {
     const marker = /\$\{?(A|B)\b/;
     assert.equal(firstUnprovenMarker('echo "${A}" $(echo "${B}")', marker), 'B');

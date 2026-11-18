@@ -24,6 +24,7 @@ const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
@@ -415,41 +416,92 @@ describe('evaluatePredicate — interpolation', () => {
         assert.doesNotThrow(() => run(command), JSON.stringify(command));
       }
     });
+    // The rows come from the docs (ADR-2008, gate-predicates.md). `hazard` says what a real shell does with the refused
+    // spelling when the value is hostile: `words` (the value splits or globs) or `code` (the value runs as a command). The
+    // two tests after the parity test show it in a shell, so each row guards a hazard that the shell makes. The two
+    // refusals that guard none (nested quotes in `$(...)`, a comment line before the command) are in CONSERVATIVE below.
+    const PAIRS = [
+      { hazard: 'words', refused: 'for id in $GSD_PHASE_REQ_IDS; do :; done', rewrite: 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done' },
+      { hazard: 'words', refused: 'sh -c \'test -d $GSD_PHASE_DIR\'', rewrite: 'sh -c \'test -d "$GSD_PHASE_DIR"\'' },
+      { hazard: 'code', refused: 'sh -c "test -d ${GSD_PHASE_DIR}"', rewrite: 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"' },
+      { hazard: 'code', refused: 'eval "test -d \\"${GSD_PHASE_DIR}\\""', rewrite: 'd="${GSD_PHASE_DIR}"; eval \'test -d "$d"\'' },
+      { hazard: 'code', refused: 'trap "rm ${GSD_PHASE_DIR}" EXIT', rewrite: 'd="${GSD_PHASE_DIR}"; trap \'rm "$d"\' EXIT' },
+      { hazard: 'words', refused: 'echo "${GSD_PHASE_DIR}" | xargs ls', rewrite: 'printf \'%s\\0\' "${GSD_PHASE_DIR}" | xargs -0 ls' },
+    ];
+    const CONSERVATIVE = [
+      { refused: 'test -z "$(ls -A "${GSD_PHASE_DIR}")"', rewrite: 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"' },
+      { refused: '# note\ntest -d "${GSD_PHASE_DIR}"', rewrite: 'test -d "${GSD_PHASE_DIR}" # note' },
+    ];
     test('each rewrite that ADR-2008 and gate-predicates.md give for a refused command passes, and the original throws', () => {
-      const PAIRS = [
-        ['test -z "$(ls -A "${GSD_PHASE_DIR}")"', 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"'],
-        ['for id in $GSD_PHASE_REQ_IDS; do :; done', 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done'],
-        ['sh -c \'test -d $GSD_PHASE_DIR\'', 'sh -c \'test -d "$GSD_PHASE_DIR"\''],
-        ['sh -c "test -d ${GSD_PHASE_DIR}"', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
-        ['eval "test -d \\"${GSD_PHASE_DIR}\\""', 'd="${GSD_PHASE_DIR}"; eval \'test -d "$d"\''],
-        ['trap "rm ${GSD_PHASE_DIR}" EXIT', 'd="${GSD_PHASE_DIR}"; trap \'rm "$d"\' EXIT'],
-        ['echo "${GSD_PHASE_DIR}" | xargs ls', 'printf \'%s\\0\' "${GSD_PHASE_DIR}" | xargs -0 ls'],
-        ['# note\ntest -d "${GSD_PHASE_DIR}"', 'test -d "${GSD_PHASE_DIR}" # note'],
-      ];
-      for (const [refused, rewrite] of PAIRS) {
+      for (const { refused, rewrite } of [...PAIRS, ...CONSERVATIVE]) {
         assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
         assert.doesNotThrow(() => run(rewrite), rewrite);
       }
     });
-    // The PAIRS rows above come from the docs. The shell is the source of the hazard here: a value with a space reaches
-    // each refused spelling as two words (or a glob-capable list) and each rewrite as one value. Rows 1 and 8 of PAIRS
-    // (nested quotes in `$(...)`, a leading comment) split nothing in a real shell, so they have no row here. Rows 4 to 6
-    // (`sh -c`, `eval`, `trap`) run the value as code, not as words: the consumer test below shows that in a real shell.
-    test('the real shell splits the hostile value in each refused spelling that reads it unquoted, and in none of the rewrites', () => {
-      const ROWS = [
-        { name: 'GSD_PHASE_REQ_IDS', value: 'R-1 R-2', refused: String.raw`for id in $GSD_PHASE_REQ_IDS; do echo "[$id]"; done`, pieces: ['[R-1]', '[R-2]', ''] },
-        { name: 'GSD_PHASE_DIR', value: 'a b', refused: String.raw`sh -c 'printf "%s\n" $GSD_PHASE_DIR'`, rewrite: String.raw`sh -c 'printf "%s\n" "$GSD_PHASE_DIR"'`, pieces: ['a', 'b', ''] },
-        { name: 'GSD_PHASE_DIR', value: 'a b', refused: String.raw`echo "${'$'}{GSD_PHASE_DIR}" | xargs printf '%s\n'`, rewrite: String.raw`printf '%s\0' "${'$'}{GSD_PHASE_DIR}" | xargs -0 printf '%s\n'`, pieces: ['a', 'b', ''] },
-      ];
-      for (const { name, value, refused, rewrite, pieces } of ROWS) {
+    // A `words` row reaches the shell as a probe that prints each word: the docs spelling with a printing body.
+    const SPLITS = {
+      [PAIRS[0].refused]: { name: 'GSD_PHASE_REQ_IDS', value: 'R-1 R-2', probe: String.raw`for id in $GSD_PHASE_REQ_IDS; do echo "[$id]"; done`, pieces: ['[R-1]', '[R-2]', ''] },
+      [PAIRS[1].refused]: { name: 'GSD_PHASE_DIR', value: 'a b', probe: String.raw`sh -c 'printf "%s\n" $GSD_PHASE_DIR'`, rewriteProbe: String.raw`sh -c 'printf "%s\n" "$GSD_PHASE_DIR"'`, pieces: ['a', 'b', ''] },
+      [PAIRS[5].refused]: { name: 'GSD_PHASE_DIR', value: 'a b', probe: String.raw`echo "${'$'}{GSD_PHASE_DIR}" | xargs printf '%s\n'`, rewriteProbe: String.raw`printf '%s\0' "${'$'}{GSD_PHASE_DIR}" | xargs -0 printf '%s\n'`, pieces: ['a', 'b', ''] },
+    };
+    test('the real shell splits the hostile value in each docs spelling that reads it as words, and in none of the rewrites', () => {
+      for (const { refused } of PAIRS.filter((pair) => pair.hazard === 'words')) {
+        assert.ok(SPLITS[refused], `a real-shell probe for ${refused}`);
+        const { name, value, probe, rewriteProbe, pieces } = SPLITS[refused];
         const env = isolatedEnv({ home: os.tmpdir(), override: { [name]: value } });
-        assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
-        assert.deepEqual(oracleLines(refused, { interpreter: 'sh', env }), pieces, refused);
-        if (rewrite) {
-          assert.doesNotThrow(() => run(rewrite), rewrite);
-          assert.deepEqual(oracleLines(rewrite, { interpreter: 'sh', env }), [value, ''], rewrite);
+        assert.throws(() => run(probe), /cannot prove sh expands it/, probe);
+        assert.deepEqual(oracleLines(probe, { interpreter: 'sh', env }), pieces, probe);
+        if (rewriteProbe) {
+          assert.doesNotThrow(() => run(rewriteProbe), rewriteProbe);
+          assert.deepEqual(oracleLines(rewriteProbe, { interpreter: 'sh', env }), [value, ''], rewriteProbe);
         }
       }
+    });
+    describe('a docs spelling that the shell parses again', () => {
+      let dir;
+      beforeEach(() => { dir = createTempDir(); });
+      afterEach(() => { cleanup(dir); });
+      test('the real shell runs the hostile value as a command in each, and in none of the rewrites', () => {
+        const env = isolatedEnv({ home: dir, override: { GSD_PHASE_DIR: 'x$(touch PWNED)' } });
+        const ran = (command) => {
+          runHook('-c', [command], { interpreter: 'sh', env, cwd: dir, input: '', timeoutMs: PROBE_TIMEOUT_MS });
+          const created = fs.existsSync(path.join(dir, 'PWNED'));
+          cleanup(path.join(dir, 'PWNED'));
+          return created;
+        };
+        for (const { refused, rewrite } of PAIRS.filter((pair) => pair.hazard === 'code')) {
+          assert.equal(ran(refused), true, `positive control: the shell runs the value in ${refused}`);
+          assert.equal(ran(rewrite), false, rewrite);
+        }
+      });
+    });
+    describe('a conservative refusal is documented with its rewrite', () => {
+      let dir;
+      beforeEach(() => { dir = createTempDir(); });
+      afterEach(() => { cleanup(dir); });
+      // The phase directory is `a b` in three states. The exit status of a spelling depends on the state, so equal
+      // statuses for the refused text and its rewrite show that the shell reads both the same way.
+      const STATES = [
+        (phaseDir) => fs.mkdirSync(phaseDir),
+        (phaseDir) => { fs.mkdirSync(phaseDir); fs.writeFileSync(path.join(phaseDir, 'f'), ''); },
+        () => {},
+      ];
+      test('the evaluator refuses each, a real shell runs it with the status of its rewrite, and the docs say the check refuses some correct commands', () => {
+        const env = isolatedEnv({ home: dir, override: { GSD_PHASE_DIR: 'a b' } });
+        const status = (command, state) => {
+          cleanup(path.join(dir, 'a b'));
+          state(path.join(dir, 'a b'));
+          return runHook('-c', [command], { interpreter: 'sh', env, cwd: dir, input: '', timeoutMs: PROBE_TIMEOUT_MS }).exitCode;
+        };
+        for (const { refused, rewrite } of CONSERVATIVE) {
+          assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
+          const statuses = STATES.map((state) => status(refused, state));
+          assert.deepEqual(statuses, STATES.map((state) => status(rewrite, state)), refused);
+          assert.ok(new Set(statuses).size > 1, `positive control: the status of ${refused} depends on the directory`);
+        }
+        const docs = splitLines(fs.readFileSync(path.join(__dirname, '..', 'docs', 'reference', 'gate-predicates.md'), 'utf8'));
+        assert.ok(docs.includes('The check is conservative, so it also refuses some correct commands. Assign the'));
+      });
     });
     test('only the refusal of a gate that runs xargs names the xargs -0 spelling, and a path-spelled xargs is refused too', () => {
       for (const refused of ['echo "${GSD_PHASE_DIR}" | xargs ls', 'echo "${GSD_PHASE_DIR}" | /usr/bin/xargs ls']) {
@@ -475,6 +527,15 @@ describe('evaluatePredicate — interpolation', () => {
       // `@` is the placeholder of the rows above, so these texts are written with the char code.
       const at = String.fromCharCode(64);
       for (const command of [`bash -c${at} "echo \${GSD_PHASE_DIR}"`, `bash -${at}c "echo \${GSD_PHASE_DIR}"`]) assert.doesNotThrow(() => run(command), command);
+    });
+    test('a backslash-newline pair joins its lines after an odd run of backslashes only (0 to 3), so a `#` after it is a comment only after an even run', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        for (const backslashes of [0, 1, 2, 3]) {
+          const command = spell(`echo a${'\\'.repeat(backslashes)}\n#b "@"`, name);
+          if (backslashes % 2 === 1) assert.doesNotThrow(() => run(command), JSON.stringify(command));
+          else assert.throws(() => run(command), unprovable(name), JSON.stringify(command));
+        }
+      }
     });
     test('the real shell expands every allowed row: it prints what the same row prints with the value written out', () => {
       const VALUES = { GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' };
