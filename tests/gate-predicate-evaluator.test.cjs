@@ -20,7 +20,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const fc = require('fast-check');
+const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const os = require('node:os');
@@ -319,6 +319,12 @@ describe('evaluatePredicate — interpolation', () => {
         assert.doesNotThrow(() => run(rewrite), rewrite);
       }
     });
+    test('the refusal of a gate that runs xargs names the xargs -0 spelling and a path-spelled xargs is refused too', () => {
+      for (const refused of ['echo "${GSD_PHASE_DIR}" | xargs ls', 'echo "${GSD_PHASE_DIR}" | /usr/bin/xargs ls']) {
+        assert.throws(() => run(refused), /xargs -0/, refused);
+      }
+      assert.doesNotThrow(() => run('echo "${GSD_PHASE_DIR}" | /usr/bin/xargs --delimiter=x ls'));
+    });
     test('the beads ship gate (gsd-beads-i7e7) in its migrated spelling passes the check', () => {
       const beads = '_B="${GSD_HOME:-${HOME:-}}"; case "$_B" in /?*) ;; *) echo "gsd-beads: no absolute GSD_HOME or HOME" >&2; exit 1;; esac; exec python3 -I "$_B/.gsd/capabilities/beads/scripts/sync.py" ship-gate "${GSD_PHASE_NUMBER}"';
       assert.doesNotThrow(() => run(beads));
@@ -561,7 +567,6 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
           assert.equal(shell.calls[0].env[name], value);
           assert.equal(shell.calls[0].command, `x "\${${name}}"`);
         }),
-        { numRuns: 100 },
       );
     });
   }

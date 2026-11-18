@@ -133,7 +133,8 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
 
 const SHELL_WORD = /(?:^|\/)(?:ba|da|k|z|a)?sh$/;
 const C_OPTION = /^-[A-Za-z]*c[A-Za-z]*$/;
-const DELIMITER_OPTION = /^(?:-0|-d\S?|--null|--delimiter\b.*)$/;
+const XARGS_WORD = /(?:^|\/)xargs$/;
+const DELIMITER_OPTION = /^(?:(?:-0|-d\S?|--null)$|--delimiter\b)/;
 
 /** The words of a shell text, split at blanks and command separators, with quotes and backslashes dropped (`"eval"`, `\sh`). */
 function shellWords(text: string): string[] {
@@ -157,7 +158,7 @@ function isReparsedWord(head: string): boolean {
 function splitsWithXargs(command: string): boolean {
   const words = shellWords(command);
   return words.some((word, i) => {
-    if (word !== 'xargs') return false;
+    if (!XARGS_WORD.test(word)) return false;
     let j = i + 1;
     while (j < words.length && words[j].startsWith('-')) {
       if (DELIMITER_OPTION.test(words[j])) return false;

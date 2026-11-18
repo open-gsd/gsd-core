@@ -218,10 +218,12 @@ describe('firstUnprovenMarker', () => {
       'echo "@" | xargs ls', 'xargs ls < "@"', 'xargs -n1 echo "@"', 'echo "@" | xargs -I{} ls {}',
       // `-d` of `test` and `-0` of another command are no delimiter option of xargs.
       'test -d "@" && echo "@" | xargs ls', 'echo "@" | xargs ls -0', 'echo "@" | sort -d | xargs ls', '"xargs" ls "@"', 'echo "@" | xargs ls; echo "@" | xargs -0 ls',
+      // A path spells the command word as it does for `sh -c`.
+      'echo "@" | /usr/bin/xargs ls',
     ]) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
-    for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@"; find . -delete', 'echo "@" xargsx']) {
+    for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@" | /usr/bin/xargs -0 ls', 'echo "@"; find . -delete', 'echo "@" xargsx']) {
       assert.equal(first(ok), undefined, ok);
     }
   });
