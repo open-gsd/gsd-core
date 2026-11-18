@@ -3,28 +3,37 @@
 // The audit-milestone workflow text and its step 5.6 (Open Work, #5482), shared by the tests that pin it.
 const fs = require('node:fs');
 const path = require('node:path');
+const yaml = require('js-yaml');
 const { collectSection, scanInlineCodeSpans } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../../gsd-core/bin/lib/text-lines.cjs');
 
-const AUDIT_MD = path.join(__dirname, '..', '..', 'gsd-core', 'workflows', 'audit-milestone.md');
+const WORKFLOWS = path.join(__dirname, '..', '..', 'gsd-core', 'workflows');
+
+function workflowMd(name) {
+  return fs.readFileSync(path.join(WORKFLOWS, name), 'utf-8');
+}
 
 function auditMilestoneMd() {
-  return fs.readFileSync(AUDIT_MD, 'utf-8');
+  return workflowMd('audit-milestone.md');
 }
 
 function openWorkStep() {
   return collectSection(auditMilestoneMd(), (h) => h.text.startsWith('5.6.'))?.body;
 }
 
-// The entry field names step 5.6 reports: the parenthesised code-span list right before `gaps.open_work`.
-function openWorkStepFields() {
-  const spans = scanInlineCodeSpans(splitLines(openWorkStep()).join(' '));
-  const target = spans.findIndex((span) => span.content === 'gaps.open_work');
-  if (target < 1) throw new Error('audit-milestone.md step 5.6 lacks a `gaps.open_work` span');
-  // The list is the run of spans separated by ', ' (a 2-char gap, by offset) that ends right before the target.
-  let first = target - 1;
-  while (first > 0 && spans[first].start - spans[first - 1].end === ', '.length) first--;
-  return spans.slice(first, target).map((span) => span.content);
+// The contents of the inline code spans of a text: the typed tokens (field, reason and command names) it names.
+function codeSpans(text) {
+  return scanInlineCodeSpans(text).map((span) => span.content);
+}
+
+// The entry fields of the report schema: the keys of the `open_work` item in the step-6 YAML example, read by a YAML parser.
+function openWorkYamlFields() {
+  const lines = splitLines(collectSection(auditMilestoneMd(), (h) => h.text.startsWith('6.'))?.body ?? '');
+  const slot = lines.findIndex((l) => l.startsWith('  open_work:'));
+  if (slot < 0) throw new Error('audit-milestone.md step 6 lacks an open_work list in its YAML example');
+  const entry = [];
+  for (let i = slot + 1; i < lines.length && lines[i].startsWith('    '); i++) entry.push(lines[i].slice('    '.length));
+  return Object.keys(yaml.load(entry.join('\n'))[0]);
 }
 
 // The lines between <success_criteria> and </success_criteria> of the workflow.
@@ -36,4 +45,4 @@ function successCriteria() {
   return lines.slice(open + 1, close);
 }
 
-module.exports = { auditMilestoneMd, openWorkStep, openWorkStepFields, successCriteria };
+module.exports = { workflowMd, auditMilestoneMd, openWorkStep, codeSpans, openWorkYamlFields, successCriteria };

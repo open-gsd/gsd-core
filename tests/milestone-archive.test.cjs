@@ -24,7 +24,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { openWorkStepFields } = require('./helpers/audit-milestone-step.cjs');
+const { openWorkYamlFields } = require('./helpers/audit-milestone-step.cjs');
 const { seedWorkstream } = require('./fixtures/index.cjs');
 const { findTableBySchema } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { buildQuickArchiveIndex } = require('../gsd-core/bin/lib/milestone.cjs');
@@ -1562,10 +1562,10 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(err.blocked.map(typed), expected);
   });
 
-  // The audit-milestone step 5.6 prose consumes this JSON; it cannot be executed, so pin the
-  // contract it reads: its named entry fields must be exactly the CLI's would_refuse entry keys.
-  test('G13b audit-milestone step 5.6 names exactly the fields would_refuse entries carry', () => {
-    const named = openWorkStepFields();
+  // The audit-milestone report consumes this JSON; the workflow cannot be executed, so pin the contract it
+  // reads: the `open_work` item of its YAML schema (parsed) must have exactly the CLI's would_refuse entry keys.
+  test('G13b the audit-milestone report schema has exactly the fields would_refuse entries carry', () => {
+    const named = openWorkYamlFields();
     assert.deepEqual(wouldRefuse(), []);
     writeGateCap(home, { command: 'exit 3' });
     const entries = wouldRefuse();
@@ -1706,7 +1706,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(wouldRefuse().map((b) => b.phase), ['01', '01.1']);
   });
 
-  test('G22 a shell-hostile phase dir name is data: the gate runs on it and no command in the name executes', () => {
+  test('G22 a double-quoted placeholder in a plain gate command reaches the shell as data: the hostile phase dir name runs no command', () => {
     // relative marker: a path separator or ':' in a dir name is invalid on Windows
     fs.mkdirSync(phaseDir('03-$(touch pwned)'), { recursive: true });
     fs.writeFileSync(path.join(phaseDir('03-$(touch pwned)'), 'OPEN_WORK'), '');
@@ -1715,6 +1715,24 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(wouldRefuse().map((b) => [b.phase, b.reason, b.details.exitCode]), [['03', 'predicate_blocked', 3]]);
     assert.equal(fs.existsSync(path.join(tmpDir, 'pwned')), false);
   });
+
+  // One row per consumer that parses its argument as shell again: the gate is unevaluable and the dir name runs nothing.
+  for (const [consumer, command] of [
+    ['eval', 'eval "test -e \\"${GSD_PHASE_DIR}/BLOCKER\\""'],
+    ['sh -c', 'sh -c "test -e ${GSD_PHASE_DIR}/BLOCKER"'],
+    ['bash -c', 'bash -c "test -e ${GSD_PHASE_DIR}/BLOCKER"'],
+    ['trap', 'trap "test -e ${GSD_PHASE_DIR}/BLOCKER" EXIT'],
+    ['xargs sh -c', 'echo x | xargs sh -c "test -e ${GSD_PHASE_DIR}/BLOCKER"'],
+    ['find -exec sh -c', 'find . -prune -exec sh -c "test -e ${GSD_PHASE_DIR}/BLOCKER" \\;'],
+  ]) {
+    test(`G22d ${consumer} re-parses the placeholder: the gate is unevaluable and a $(...) phase dir name creates nothing`, () => {
+      fs.mkdirSync(phaseDir('03-$(touch pwned)'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `${GATE_ROADMAP}\n### Phase 3: Hostile\n**Goal:** c\n`);
+      writeGateCap(home, { command });
+      assert.deepEqual(wouldRefuse().map((b) => [b.phase, b.reason]), [['01', 'unevaluable'], ['02', 'unevaluable'], ['03', 'unevaluable']]);
+      assert.equal(fs.existsSync(path.join(tmpDir, 'pwned')), false);
+    });
+  }
 
   test('G21b each gated dir carries the phase_number init.phase-op reports for its roadmap phase', () => {
     const scenarios = [
@@ -1759,7 +1777,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     return root;
   };
 
-  test('G22b a shell-hostile project root is data: every phase runs the gate and no command in the root executes', (t) => {
+  test('G22b a double-quoted placeholder in a plain gate command: every phase runs the gate and a hostile project root runs no command', (t) => {
     const root = projectAt(t, 'r$(touch pwned)');
     for (const d of ['01-foundation', '02-build']) fs.writeFileSync(path.join(root, '.planning', 'phases', d, 'OPEN_WORK'), '');
     writeGateCap(home, { command: 'test ! -f "${GSD_PHASE_DIR}/OPEN_WORK" || exit 3' });
