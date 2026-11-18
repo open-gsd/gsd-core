@@ -213,6 +213,10 @@ describe('firstUnprovenMarker', () => {
     assert.equal(firstUnprovenMarker('echo "${A}" $(echo "${B}")', marker), 'B');
     assert.equal(firstUnprovenMarker('echo "${A}" "${B}" \'${A}\'', marker), 'A');
     assert.equal(firstUnprovenMarker('echo "${A}" $(true)', marker), undefined);
+    // Two markers after one unread construct: the first one is named.
+    assert.equal(firstUnprovenMarker('echo $(echo "${A}" "${B}")', marker), 'A');
+    assert.equal(firstUnprovenMarker('# ${A} ${B}', marker), 'A');
+    assert.equal(firstUnprovenMarker("cat <<'EOF'\n${A} ${B}\nEOF", marker), 'A');
   });
   test('a ${...} closes at its brace: a quote after it opens a normal span', () => {
     assert.equal(first('echo "${x}" \'a\' "@"'), undefined);
@@ -243,6 +247,10 @@ describe('firstUnprovenMarker', () => {
     test('each fragment runs clean in the oracle shell, so no combination is silenced by a syntax error', () => {
       const failed = FRAGMENTS.filter((text) => probe(text.replaceAll('@', '${GSD_MARK}')).exitCode !== 0);
       assert.deepStrictEqual(failed, []);
+    });
+    test('the oracle prints a literal marker by name and an expanded one by value', () => {
+      assert.match(probe("echo '${GSD_MARK}'").stdout, /GSD_MARK/);
+      assert.match(probe('echo "${GSD_MARK}"').stdout, /SENT/);
     });
     test('every combination with a literal marker is refused', () => {
       fc.assert(
