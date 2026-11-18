@@ -119,7 +119,8 @@ for (const [name, output] of [
   ['cancelled target', tap("not ok 1 - rejects empty email\n  ---\n  failureType: cancelledByParent\n  ...\n1..1")],
 ]) {
   test(`#4692: ${name} cannot authorize GREEN`, () => {
-    assert.equal(classifyRedEvidence(input(output)).verdict, 'INVALID_RED');
+    assert.equal(classifyRedEvidence(input(output)).verdict,
+      name === 'unknown report format' ? 'UNSUPPORTED_REPORT' : 'INVALID_RED');
   });
 }
 
