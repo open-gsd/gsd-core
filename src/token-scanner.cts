@@ -107,12 +107,11 @@ function readHeredocWord(command: string, start: number): Omit<HeredocOpener, 's
   return j === from ? null : { end: j, delimiter, literal };
 }
 
-/** A here-document opener at `i`: `<<`, optional `-` (strips leading tabs of the body), then the delimiter word. A `-` with no word after it is itself the delimiter. */
+/** A here-document opener at `i`: `<<`, optional `-` (strips leading tabs of the body), then the delimiter word. `<<-` with no word opens nothing, as in `sh`. */
 function readHeredocOpener(command: string, i: number): HeredocOpener | null {
-  const stripped = command[i + 2] === '-' ? readHeredocWord(command, i + 3) : null;
-  if (stripped) return { ...stripped, stripTabs: true };
-  const plain = readHeredocWord(command, i + 2);
-  return plain && { ...plain, stripTabs: false };
+  const stripTabs = command[i + 2] === '-';
+  const word = readHeredocWord(command, stripTabs ? i + 3 : i + 2);
+  return word && { ...word, stripTabs };
 }
 
 interface QuoteCtx {
@@ -123,6 +122,8 @@ interface QuoteCtx {
   cases?: number;
   /** A `${...}` inside double quotes, an unquoted here-document body or another quoted `${...}`: a single quote there is an ordinary character. */
   quoted?: boolean;
+  /** A `$(...)` or `$((...))`: its closing `)` ends inside a word, so a `#` right after it is no comment. */
+  expansion?: boolean;
 }
 
 // `case` or `esac` as a command word: after a separator, a compound-command keyword or the start of the command.
@@ -159,6 +160,7 @@ export function literalDollarIndexes(command: string): number[] {
   const stack: QuoteCtx[] = [{ kind: 'none' }];
   const pending: QuoteCtx[] = [];
   let dollarAt = -2;
+  let expansionEnd = -2;
   for (let i = 0; i < command.length; i++) {
     const top = stack[stack.length - 1];
     const c = command[i];
@@ -182,7 +184,7 @@ export function literalDollarIndexes(command: string): number[] {
       else stack.push({ kind: 'tick' });
     } else if (c === '$' && command[i + 1] === '(') {
       const arith = command[i + 2] === '(';
-      stack.push({ kind: arith ? 'arith' : 'sub' });
+      stack.push({ kind: arith ? 'arith' : 'sub', expansion: true });
       i += arith ? 2 : 1;
     } else if (c === '$' && command[i + 1] === '{') {
       stack.push({ kind: 'param', quoted: top.kind === 'double' || top.kind === 'heredoc' || top.quoted });
@@ -194,7 +196,7 @@ export function literalDollarIndexes(command: string): number[] {
       top.cases = Math.max(0, (top.cases ?? 0) + (c === 'c' ? 1 : -1));
     } else if (c === '$') {
       dollarAt = i;
-    } else if (c === '#' && (i === 0 || /[\s;&|()]/.test(prev))) {
+    } else if (c === '#' && (i === 0 || (/[\s;&|()]/.test(prev) && expansionEnd !== i - 1))) {
       const eol = command.indexOf('\n', i);
       if (eol === -1) return found;
       i = eol - 1;
@@ -210,7 +212,11 @@ export function literalDollarIndexes(command: string): number[] {
       if (top.kind === 'arith') {
         stack.pop();
         if (command[i + 1] === ')') i++;
-      } else if (top.kind === 'sub' && !top.cases) stack.pop();
+        if (top.expansion) expansionEnd = i;
+      } else if (top.kind === 'sub' && !top.cases) {
+        stack.pop();
+        if (top.expansion) expansionEnd = i;
+      }
     } else if (c === '<' && command[i + 1] === '<' && prev !== '<' && !stack.some((q) => q.kind === 'arith')) {
       const opener = readHeredocOpener(command, i);
       if (opener) {

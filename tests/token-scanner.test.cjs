@@ -209,7 +209,10 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
     { text: "cat <<EOF # it's\nbody it's @\nEOF", literal: false },
     { text: "echo '\\' '@'", literal: true },
     { text: "echo ${x:-'@'}", literal: true },
-    { text: "echo $(:)# it's @", literal: false },
+    { text: "echo $(:)#'@'", literal: true },
+    { text: "echo $((1))#'@'", literal: true },
+    { text: "(:)# it's @", literal: false },
+    { text: "((1))# it's @", literal: false },
     { text: 'echo "$(echo $((1)))" \'@\'', literal: true },
     { text: 'echo "$( ((1)))" \'@\'', literal: true },
     { text: 'echo "$(echo $((1)) "it\'s")" \'@\'', literal: true },
@@ -253,6 +256,15 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
     assert.deepStrictEqual(literalDollarIndexes("cat <<'$Z'\nx\n$Z\n"), []);
     const command = "cat <<A <<'B'\nx $Z\nA\ny $Z\nB\n";
     assert.deepStrictEqual(literalDollarIndexes(command), [command.lastIndexOf('$Z')]);
+  });
+  test('a comment on the last line with no newline ends the walk', () => {
+    assert.deepStrictEqual(literalDollarIndexes("echo '$Z' # it's"), [6]);
+  });
+  test('<<- with no word opens no here-document', () => {
+    for (const rest of ['\n', ';']) {
+      const command = `cat <<-${rest}'$Z'\n-\n`;
+      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')], JSON.stringify(rest));
+    }
   });
   test('a backslash-newline continues the delimiter word', () => {
     const command = "cat <<a\\\nb\nx\nab\necho '$Z'\n";
