@@ -18,6 +18,11 @@ const EXCLUDED_USER_OUTPUT = Object.freeze([
   'gsd-core/workflows/help/modes/default.md',
   'gsd-core/workflows/help/modes/full.md',
 ]);
+// worktree-dispatch maps each phase executor placeholder to a quick value or
+// marks it not applicable (#5934), so every mention there is a quick identity.
+const EXCLUDED_QUICK_FORWARDERS = Object.freeze([
+  'gsd-core/workflows/quick-batch/steps/worktree-dispatch.md',
+]);
 const EXCLUDED_ARTIFACTS = Object.freeze([
   'gsd-core/workflows/autonomous/templates/minimal-context.md',
   'gsd-core/templates/AI-SPEC.md',
@@ -134,7 +139,9 @@ const TARGETS = Object.freeze([
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/gap-closure-artifacts.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/partial-wave.md', kind: 'workflow' }),
+  Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md', kind: 'workflow' }),
+  Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/pre-execute-gate-hooks.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/regression-gate.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md', kind: 'workflow' }),
   Object.freeze({ file: 'gsd-core/workflows/execute-phase/steps/threat-id-gate.md', kind: 'workflow' }),
@@ -383,10 +390,11 @@ function checkEvidence(root) {
     if (listed.has(file)) continue;
     const lines = fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n').split('\n');
     const marker = lines.findIndex(text => text.includes('PHASE-ID-CONVENTION:'));
-    if ((EXCLUDED_USER_OUTPUT.includes(file) || EXCLUDED_ARTIFACTS.includes(file)) && marker < 0) continue;
+    if ((EXCLUDED_USER_OUTPUT.includes(file) || EXCLUDED_ARTIFACTS.includes(file)
+      || EXCLUDED_QUICK_FORWARDERS.includes(file)) && marker < 0) continue;
     const line = marker >= 0 ? marker : lines.findIndex(text => {
       if (historical(text)) return false;
-      if (/Quick plans live under.*not|^\s*`\{plan_number\}`\/`\{phase_dir\}`\/`\{plan_file\}` placeholders\./.test(text)) return false;
+      if (/Quick plans live under.*not/.test(text)) return false;
       return EMITTER.test(text) || DISPATCH.test(text) || DISPATCH_COMMAND.test(text)
         || EXTERNAL.some(pattern => pattern.test(text));
     });

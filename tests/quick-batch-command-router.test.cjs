@@ -121,6 +121,88 @@ describe('quick-batch-command-router: argument shaping (mocked modules)', () => 
     assert.equal(called, false);
   });
 
+  // #6203: the batch records the HEAD it left behind; `--updates` is optional then.
+  test('update --head-revision records a head with no --updates', () => {
+    const calls = [];
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--head-revision', 'bbbb222'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { throw new Error(`unexpected error: ${msg}`); },
+      _quickBatch: {
+        updateBatchItems: (...args) => {
+          calls.push(args);
+          return { ok: true, value: { manifest: {} } };
+        },
+      },
+      _quickBatchDispatch: {},
+    });
+    assert.deepEqual(calls, [['/tmp/proj', 'b1', [], { headRevision: 'bbbb222' }]]);
+  });
+
+  test('update --head-revision with --updates forwards both', () => {
+    const calls = [];
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--updates', '[{"quickId":"260101-abc"}]', '--head-revision', 'bbbb222'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { throw new Error(`unexpected error: ${msg}`); },
+      _quickBatch: {
+        updateBatchItems: (...args) => {
+          calls.push(args);
+          return { ok: true, value: { manifest: {} } };
+        },
+      },
+      _quickBatchDispatch: {},
+    });
+    assert.deepEqual(calls, [['/tmp/proj', 'b1', [{ quickId: '260101-abc' }], { headRevision: 'bbbb222' }]]);
+  });
+
+  test('update without --head-revision keeps the three-argument call; a bare flag is a usage error', () => {
+    const calls = [];
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--updates', '[]'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { throw new Error(`unexpected error: ${msg}`); },
+      _quickBatch: {
+        updateBatchItems: (...args) => {
+          calls.push(args);
+          return { ok: true, value: { manifest: {} } };
+        },
+      },
+      _quickBatchDispatch: {},
+    });
+    assert.deepEqual(calls, [['/tmp/proj', 'b1', []]]);
+
+    let message = null;
+    let called = false;
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--head-revision'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { message = msg; },
+      _quickBatch: { updateBatchItems: () => { called = true; return { ok: true, value: {} }; } },
+      _quickBatchDispatch: {},
+    });
+    assert.match(message, /--head-revision/);
+    assert.equal(called, false);
+
+    // a following flag is not a revision: `--head-revision --updates []` must not record "--updates"
+    message = null;
+    called = false;
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--head-revision', '--updates', '[]'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { message = msg; },
+      _quickBatch: { updateBatchItems: () => { called = true; return { ok: true, value: {} }; } },
+      _quickBatchDispatch: {},
+    });
+    assert.match(message, /--head-revision/);
+    assert.equal(called, false);
+  });
+
   test('resume requires --batch', () => {
     let message = null;
     routeQuickBatchCommand({

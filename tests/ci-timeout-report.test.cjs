@@ -845,3 +845,80 @@ test('shard balance (#5101)', async (t) => {
     assert.equal(result.runs, SHARD_BALANCE.windowRuns);
   });
 });
+
+// #6177: a job cancelled while it still waited for a runner never ran. GitHub's
+// jobs API gives it a started_at (queued) and a later completed_at (cancelled),
+// so the queue wait read as run time. Its shape is `cancelled` + an empty
+// `steps` + `runner_id` 0 + `runner_name` ''. The rule lives in jobSpanMs, so
+// both consumers (the near-cap record parser and the shard-sample extractor)
+// inherit it; an ABSENT field is not evidence the job never ran.
+test('a job cancelled before it got a runner has no duration (#6177)', async (t) => {
+  const yamlText = 'jobs:\n  test:\n    timeout-minutes: 45\n';
+  const start = '2026-09-29T10:00:00Z';
+  const NEVER_RAN = { steps: [], runner_id: 0, runner_name: '' };
+  const ubuntu = (extra) => ({
+    name: 'test (ubuntu-latest, 24, shard 4/6)',
+    run_id: 7,
+    head_sha: 'abc',
+    runEvent: 'push',
+    conclusion: 'cancelled',
+    started_at: start,
+    completed_at: addMs(start, 48 * 60000),
+    ...extra,
+  });
+  const parse = (job) => parseJobRecord({ job, workflowFile: 'test.yml', workflowYamlText: yamlText, covered: null });
+  const winShard = (extra) => ({ ...winJob(4, 6, 48, { start, conclusion: 'cancelled' }), ...extra });
+  const samplesOf = (job) => extractShardSamples([runAt(1, start, [job])], SHARD_BALANCE);
+
+  await t.test('a queue-cancelled job has no span and no history record', () => {
+    const job = ubuntu(NEVER_RAN);
+    assert.equal(jobSpanMs(job), null);
+    assert.equal(parse(job), null);
+  });
+
+  await t.test('a queue-cancelled shard yields no shard sample', () => {
+    assert.equal(samplesOf(winShard(NEVER_RAN)).length, 0);
+  });
+
+  await t.test('step-count boundary: 0 steps never ran, 1 step ran', () => {
+    assert.equal(jobSpanMs(ubuntu({ ...NEVER_RAN, steps: [] })), null);
+    assert.equal(jobSpanMs(ubuntu({ ...NEVER_RAN, steps: [{ name: 'Set up job' }] })), 48 * 60000);
+    assert.equal(samplesOf(winShard({ ...NEVER_RAN, steps: [{ name: 'Set up job' }] })).length, 1);
+  });
+
+  await t.test('runner boundaries: id 0 and empty name never ran, id 1 and a named runner ran', () => {
+    assert.equal(jobSpanMs(ubuntu({ ...NEVER_RAN, runner_id: 1 })), 48 * 60000);
+    assert.equal(jobSpanMs(ubuntu({ ...NEVER_RAN, runner_name: 'GitHub Actions 5' })), 48 * 60000);
+    assert.equal(jobSpanMs(ubuntu({ ...NEVER_RAN, runner_id: 0, runner_name: '' })), null);
+  });
+
+  await t.test('a cancelled record without steps, runner id and runner name is still counted', () => {
+    const job = ubuntu({});
+    assert.equal(jobSpanMs(job), 48 * 60000);
+    assert.ok(parse(job));
+    assert.equal(samplesOf(winShard({})).length, 1);
+  });
+
+  await t.test('a cancelled record missing any one of the three signals is still counted', () => {
+    for (const dropped of ['steps', 'runner_id', 'runner_name']) {
+      const partial = { ...NEVER_RAN };
+      delete partial[dropped];
+      assert.equal(jobSpanMs(ubuntu(partial)), 48 * 60000, `missing ${dropped}`);
+    }
+  });
+
+  await t.test('the rule keys on a cancelled conclusion', () => {
+    for (const conclusion of ['failure', 'success']) {
+      assert.equal(jobSpanMs(ubuntu({ ...NEVER_RAN, conclusion })), 48 * 60000, conclusion);
+    }
+  });
+
+  await t.test('a cancelled job that ran to its cap is still counted by every consumer', () => {
+    const ran = { steps: [{ name: 'Run tests' }], runner_id: 77, runner_name: 'GitHub Actions 77' };
+    const capped = ubuntu({ ...ran, completed_at: addMs(start, 45 * 60000) });
+    const rec = parse(capped);
+    assert.ok(rec);
+    assert.equal(rec.pct, 1);
+    assert.equal(samplesOf(winShard({ ...ran, completed_at: addMs(start, 45 * 60000) })).length, 1);
+  });
+});
