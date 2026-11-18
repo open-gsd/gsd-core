@@ -214,6 +214,16 @@ Files: `.github/actions/`, `.github/workflows/test.yml`, `tests/ci-*.test.cjs`.
 
 Every item starts now. The phases are a priority order, not a queue: when agents are scarce, lower phase numbers go first.
 
+| Item | Issue | Item | Issue |
+|---|---|---|---|
+| 1 | [#6317](https://github.com/open-gsd/gsd-core/issues/6317) | 7 | [#5807](https://github.com/open-gsd/gsd-core/issues/5807) |
+| 2 | [#6318](https://github.com/open-gsd/gsd-core/issues/6318) | 8 | [#6323](https://github.com/open-gsd/gsd-core/issues/6323) |
+| 3 | [#6319](https://github.com/open-gsd/gsd-core/issues/6319) | 9 | [#6324](https://github.com/open-gsd/gsd-core/issues/6324) |
+| 4 | [#6320](https://github.com/open-gsd/gsd-core/issues/6320) | 10 | [#6325](https://github.com/open-gsd/gsd-core/issues/6325) |
+| 5a | PR [#5053](https://github.com/open-gsd/gsd-core/pull/5053) | 11 | [#6326](https://github.com/open-gsd/gsd-core/issues/6326) |
+| 5b | [#6321](https://github.com/open-gsd/gsd-core/issues/6321) | 12 | [#6327](https://github.com/open-gsd/gsd-core/issues/6327) |
+| 6 | [#6322](https://github.com/open-gsd/gsd-core/issues/6322) | 13 | [#6328](https://github.com/open-gsd/gsd-core/issues/6328) |
+
 - **One real wait:** the macOS concurrency measurement in item 5b needs the sharded lane from item 5a.
 - **One blocker to clear first:** item 5a is an open contributor PR that needs a maintainer review. Reviewing it is the first action of the epic.
 - **Shared file:** PR #5053 and items 3, 8, 10 and 13 all edit `.github/workflows/test.yml`. They do not wait for each other. Each one rebases on `next` before it is enqueued, and the merge queue serialises them. Items 5b and 7 both edit `scripts/run-tests.cjs` and follow the same rule.
