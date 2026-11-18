@@ -254,7 +254,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     });
     const hasRow = statusProbe.ok;
     const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
-    const doneTable = Boolean(hasRow && /^complete$/i.test(currentStatusCell.trim()));
+    const doneTable = Boolean(hasRow && leadingRequirementStatus(currentStatusCell, ['complete']) !== null);
 
     // #2788 defect 2: when a traceability table exists AND this ID has a row in
     // it, `updated`/`marked_complete` must reflect the ROW moving, not a
@@ -485,7 +485,7 @@ function cmdRequirementsRevertPhase(cwd: string, reqIdsRaw: string[], raw: boole
       (Object.values(row)[0] ?? '').trim().toLowerCase() === reqId.toLowerCase();
     let tableHit = false;
     const tableUpdate = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
-      if (/^complete$/i.test(current.trim())) {
+      if (leadingRequirementStatus(current, ['complete']) !== null) {
         tableHit = true;
         return ' Gaps Found ';
       }
