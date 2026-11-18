@@ -74,21 +74,28 @@ contract.
 context; all other variables stay for `sh` to interpret. GSD pastes no value into
 the command text: `sh` expands `"${GSD_PHASE_DIR}"` to the exact value, even when
 it holds shell syntax. The evaluator throws (`unevaluable`) unless every use is
-provably in plain double quotes, outside any text that a consumer parses again. It
-refuses a variable that is unquoted, single-quoted (except as below), escaped by a backslash or written
-`$$GSD_PHASE_DIR`, and a variable after `$(`, a backtick, `<<`, `$'`, a quote inside
-`${...}` or a `#` that starts a word. It also refuses a double-quoted variable in the
-text that `eval`, `trap` or `sh -c` parses again (`bash`, `dash`, `ksh`, `zsh` and `ash`
-too, also under `xargs` and `find -exec`): the value would run as shell, so a phase
-directory named `x$(touch PWNED)` would create `PWNED`. A single-quoted variable is accepted
-as the script word of `sh -c` or the argument of `eval` or `trap`: the inner shell reads it from the
-environment, so the value never becomes script text. The check reads that text on its own, so
-the same rules apply inside it (`sh -c 'test -d $GSD_PHASE_DIR'` splits the value and is refused). A command that runs `xargs`
-without a delimiter option is refused for any variable, because `xargs` splits and unquotes
-what it reads. The delimiter options are `-0`, `-d`, `--null` and `--delimiter`; a short
-group such as `-0r` or `-r0` counts. The check is conservative, so it also refuses some
-correct commands.
-Assign the variable first, in plain double quotes, then use the shell variable where the
+provably in plain double quotes, outside any text that a consumer parses again.
+
+It refuses a variable that is unquoted, single-quoted (except as below), escaped
+by a backslash or written `$$GSD_PHASE_DIR`. It also refuses a variable after
+`$(`, a backtick, `<<`, `$'`, a quote inside `${...}` or a `#` that starts a word.
+
+It also refuses a double-quoted variable in the text that `eval`, `trap` or
+`sh -c` parses again (`bash`, `dash`, `ksh`, `zsh` and `ash` too, also under
+`xargs` and `find -exec`): the value would run as shell, so a phase directory
+named `x$(touch PWNED)` would create `PWNED`. A command that runs `xargs`
+without a delimiter option is refused for any variable, because `xargs` splits
+and unquotes what it reads. The delimiter options are `-0`, `-d`, `--null` and
+`--delimiter`; a short group such as `-0r` or `-r0` counts.
+
+A single-quoted variable is accepted as the script word of `sh -c` or the
+argument of `eval` or `trap`: the inner shell reads it from the environment, so
+the value never becomes script text. The check reads that text on its own, so the
+same rules apply inside it (`sh -c 'test -d $GSD_PHASE_DIR'` splits the value and
+is refused).
+
+The check is conservative, so it also refuses some correct commands. Assign the
+variable first, in plain double quotes, then use the shell variable where the
 refused construct needs it. Every later use of the copy is double-quoted too:
 `d="${GSD_PHASE_DIR}"; ... $d` splits the value again. Each row below is tested:
 

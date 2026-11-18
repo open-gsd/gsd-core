@@ -89,8 +89,8 @@ export function indentWidth(line: string): number {
  *   a value such as `x$(cmd)` runs. `sh -c '...' sh "$name"`, where the value is a later argument, is proven.
  *   A `&`, `|` or `(` of a redirection (`2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`) does not end the command, nor does the
  *   `)` that closes `<(` or `>(`.
- * - any marker in a command line that runs `xargs` (as the command word of a command) without `-0` or `-d` among its
- *   options: `xargs` splits and unquotes what it reads, and it reads pipe input, so the marker may sit before it.
+ * - any marker in a command line that runs `xargs` (as the command word of a command) without a delimiter option (`-0`, `-d`,
+ *   `--null` or `--delimiter`) among its options: `xargs` splits and unquotes what it reads, and it reads pipe input, so the marker may sit before it.
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(raw: string, marker: RegExp): string | undefined {
@@ -170,8 +170,15 @@ const isAsciiLetter = (ch: string): boolean => (ch >= 'a' && ch <= 'z') || (ch >
  */
 const isCOption = (word: string): boolean =>
   word.length > 1 && word.startsWith('-') && [...word.slice(1)].every(isAsciiLetter) && word.includes('c');
-/** A shell option whose next word is its argument (`-o pipefail`, `+o errexit`, `-O extglob`). */
-const SET_OPTION_WITH_ARG = /^[-+][oO]$/;
+/**
+ * How many following words the option word `word` takes as arguments: one per `o` or `O` of a `-`/`+` group of letters
+ * (`-o pipefail`, `+o errexit`, `-O extglob`, `-eo pipefail`, `-oo pipefail errexit`), as the shell reads the group letter by letter.
+ * A long option (`--noprofile`) has no such letter.
+ */
+function optionArgCount(word: string): number {
+  const letters = [...word.slice(1)];
+  return (word[0] === '-' || word[0] === '+') && letters.every(isAsciiLetter) ? letters.filter((ch) => ch === 'o' || ch === 'O').length : 0;
+}
 const XARGS_WORD = /(?:^|\/)xargs$/;
 /** `xargs` short options whose argument is the rest of the group (`-n1`) or, when the group ends there, the next word (`-n 1`). */
 const XARGS_ARG_OPTIONS = 'nPILsEa';
@@ -228,7 +235,7 @@ const commandWordIndex = (words: string[]): number => words.findIndex((w) => !AS
 const REDIRECTION_WORD = /^(?:\d*|&)[<>]/;
 /**
  * The index of the script word of a shell `-c` command (`sh -c '<script>' ...`): the first word after the first shell word
- * that is no option word (`-x`, `+x`, `-o name`, a redirection), provided a `-c` option stands before it. The script word
+ * that is no option word (`-x`, `+x`, `-o name`, `-eo name`, a redirection), provided a `-c` option stands before it. The script word
  * is the text the shell parses again; `bash scripts/check.sh -c "$x"` has none (the `-c` belongs to the script). Returns
  * `words.length` when the option words run to the end (the next word is the script word) and -1 when there is no `-c` shell.
  */
@@ -237,7 +244,7 @@ function scriptWordIndex(words: string[]): number {
   if (shell < 0) return -1;
   let k = shell + 1;
   while (k < words.length && (/^[-+]/.test(words[k]) || REDIRECTION_WORD.test(words[k]))) {
-    k += SET_OPTION_WITH_ARG.test(words[k]) || (REDIRECTION_WORD.test(words[k]) && /[<>|]$/.test(words[k])) ? 2 : 1;
+    k += 1 + (REDIRECTION_WORD.test(words[k]) ? Number(/[<>|]$/.test(words[k])) : optionArgCount(words[k]));
   }
   return words.slice(shell + 1, k).some(isCOption) ? Math.min(k, words.length) : -1;
 }

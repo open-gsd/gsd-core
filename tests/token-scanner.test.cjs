@@ -195,6 +195,9 @@ describe('firstUnprovenMarker', () => {
       'eval "@"', 'eval "test -e \\"@\\""', 'eval echo "@"', 'echo ok; eval "@"', 'trap "rm @" EXIT',
       'sh -c "echo @"', 'bash -c "echo @"', 'dash -c "echo @"', '/bin/sh -c "echo @"', 'sh -ec "echo @"', 'sh -ce "echo @"',
       'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c -o pipefail "echo @"', 'sh -c +e "echo @"', 'bash -ec +o errexit -O extglob "echo @"', 'sh -c "a-@"',
+      // A group with an `o` or `O` takes one word per such letter (`-eo pipefail`, `-oe pipefail`, `-oo a b`); a long option (`--noprofile`) has none.
+      'bash -eo pipefail -c "echo @"', 'bash -euo pipefail -c "echo @"', 'bash -xeuo pipefail -c "echo @"', 'bash -c -eo pipefail "echo @"', 'bash -oe pipefail -c "echo @"',
+      'bash -oo pipefail errexit -c "echo @"', 'bash -ceo pipefail "echo @"', 'bash -Oe extglob -c "echo @"', 'bash --noprofile -c "echo @"', 'bash --noprofile -eo pipefail -c "echo @"',
       // The cluster has no length cap: 15, 16, 17 and 40 letters before the `c` are read alike.
       `sh -${'e'.repeat(15)}c "echo @"`, `sh -${'e'.repeat(16)}c "echo @"`, `sh -${'e'.repeat(17)}c "echo @"`, `sh -${'e'.repeat(40)}c "echo @"`, `sh -c${'e'.repeat(40)} "echo @"`,
       'printf x | xargs sh -c "echo @"', 'find . -exec sh -c "echo @" \\;', 'echo ok;sh -c "@"', '(sh -c "@")',
@@ -251,7 +254,7 @@ describe('firstUnprovenMarker', () => {
       // `eval` and `trap` are consumers only as the command word: as an argument they are plain words.
       'grep -q trap "@"', 'echo eval "@"', 'FOO=1 echo trap "@"', 'A="eval x" echo "@"', 'if true; then echo eval "@"; fi',
       // A `-c` after the script word belongs to the script; a neighbour of a letter in the cluster (`@`, `[`, backtick, `{`) is no letter, so no `-c` stands.
-      'sh -c "a" -c "@"', 'bash scripts/check.sh -c "@"', 'bash -c[ "echo @"', "bash '-c`' \"echo @\"", 'bash -c{ "echo @"', 'bash -[c "echo @"', "bash '-`c' \"echo @\"", 'bash -{c "echo @"',
+      'sh -c "a" -c "@"', 'bash scripts/check.sh -c "@"', 'bash -eo pipefail check.sh "@"', 'bash -oo pipefail errexit check.sh -c "@"', 'bash --noprofile -c "a" "@"','bash -c[ "echo @"', "bash '-c`' \"echo @\"", 'bash -c{ "echo @"', 'bash -[c "echo @"', "bash '-`c' \"echo @\"", 'bash -{c "echo @"',
       // `xargs` inside a word of a command that is no shell is no command word.
       'grep -q "xargs rm" "@"', 'sh -c; echo "@"',
       // An empty word is a word: the empty script of `sh -c "" "@"` makes the value `$0`, and `"" eval "@"` runs the command `""`, not `eval`.
@@ -371,6 +374,7 @@ describe('firstUnprovenMarker', () => {
     // again runs the substitution and prints `aRAN`. The real shell is the oracle, as in the property above.
     const CONSUMERS = [
       'eval "echo @"', 'eval "echo \\"@\\""', 'sh -c "echo @"', 'bash -c "echo @"', 'sh -ec "echo @"', 'sh -o pipefail -c "echo @"',
+      'bash -eo pipefail -c "echo @"', 'bash -c -eo pipefail "echo @"', 'bash -oo pipefail errexit -c "echo @"',
       'trap "echo @" EXIT', 'echo x | xargs sh -c "echo @"', 'find . -prune -exec sh -c "echo @" \\;', 'echo x | xargs -0 sh -c "echo @"',
     ];
     const SAFE = ['echo "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'd="@"; eval \'echo "$d"\'', 'd="@"; trap \'echo "$d"\' EXIT', 'echo "@" | xargs -0 echo', "find . -prune -exec sh -c 'echo \"$1\"' sh \"@\" \\;"];
