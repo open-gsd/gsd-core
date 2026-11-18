@@ -375,7 +375,7 @@ describe('firstUnprovenMarker', () => {
           const written = command.replaceAll('${GSD_MARK}', 'SENT');
           if (!isDeepStrictEqual(oracleLines(command, { interpreter: 'bash', env }), oracleLines(written, { interpreter: 'bash', env }))) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
-        // One bash spawn per run: a small count, as the other process-spawning properties use.
+        // Two oracle shells per run (the command and its written-out form), each a bash and a node encoder: a small count.
         { numRuns: 30 },
       );
     });
