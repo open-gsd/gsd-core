@@ -472,6 +472,12 @@ const _diskScanCache = new Map<string, {
   totalPlans: number | null;
   completedPlans: number | null;
   milestoneBounded: boolean;
+  // #6279: false only when the milestone-scoped walk found no phase dir AND
+  // `.planning/milestones/<asserted milestone>-phases/` exists (the shape
+  // `milestone complete` leaves: an empty `.planning/phases/`). The plans
+  // were moved, not measured, so the caller keeps stored total_plans /
+  // completed_plans when it has them, as an absent phases directory does.
+  plansMeasured: boolean;
   // #3217 (ADR-3180 §7.6 rule 4, finding 1): the real `listMilestonePhaseDirs`
   // scope for `allMatchingDirs` below, threaded through the cache so the
   // percent computation at the bottom of buildStateFrontmatter can gate on it
@@ -3584,6 +3590,16 @@ function buildStateFrontmatter(
             const flooredCompletedPhases = roadmapCompletedPhases !== null
               ? Math.max(diskCompletedPhases, roadmapCompletedPhases)
               : diskCompletedPhases;
+            // #6279: the walk found no phase dir AND the asserted milestone's
+            // phases sit in its `milestone complete` archive, so its plans
+            // were moved, not deleted. Gated on that archive so a milestone
+            // that has no archive (a later one, or never closed) still takes
+            // the disk count, zero included.
+            const archiveVersion = String(assertedMilestoneVersion ?? (milestoneExplicitlyNull ? '' : storedMilestone ?? '')).trim();
+            const archivedPhasesExist = phaseDirs.length === 0
+              && archiveVersion !== ''
+              && path.basename(archiveVersion) === archiveVersion
+              && fs.existsSync(path.join(planningPaths(cwd).planning, 'milestones', `${archiveVersion}-phases`));
             return {
               // The two WITHHOLD shapes (#3354 milestoned-but-unbounded, #3573
               // roadmap-absent-with-asserted-milestone) must be evaluated BEFORE
@@ -3597,6 +3613,7 @@ function buildStateFrontmatter(
               completedPhases: diskCountsWithheld ? null : flooredCompletedPhases,
               totalPlans: diskCountsWithheld ? null : diskTotalPlans,
               completedPlans: diskCountsWithheld ? null : diskTotalSummaries,
+              plansMeasured: phaseDirs.length > 0 || !archivedPhasesExist,
               phaseDirScope,
             };
           })();
@@ -3625,14 +3642,20 @@ function buildStateFrontmatter(
         } else if (storedCompletedPhases !== null && storedCompletedPhases !== undefined) {
           completedPhases = storedCompletedPhases;
         }
-        if (cached.totalPlans !== null) {
+        // #6279: when the asserted milestone's phases were archived and the
+        // walk found none (plansMeasured false), a stored plan counter wins
+        // over the disk 0. Without a stored value the disk 0 stands.
+        // total_phases is unaffected: it comes from the ROADMAP headings.
+        const hasStoredTotalPlans = storedTotalPlans !== null && storedTotalPlans !== undefined;
+        const hasStoredCompletedPlans = storedCompletedPlans !== null && storedCompletedPlans !== undefined;
+        if (cached.totalPlans !== null && (cached.plansMeasured || !hasStoredTotalPlans)) {
           totalPlans = cached.totalPlans;
-        } else if (storedTotalPlans !== null && storedTotalPlans !== undefined) {
+        } else if (hasStoredTotalPlans) {
           totalPlans = storedTotalPlans;
         }
-        if (cached.completedPlans !== null) {
+        if (cached.completedPlans !== null && (cached.plansMeasured || !hasStoredCompletedPlans)) {
           completedPlans = cached.completedPlans;
-        } else if (storedCompletedPlans !== null && storedCompletedPlans !== undefined) {
+        } else if (hasStoredCompletedPlans) {
           completedPlans = storedCompletedPlans;
         }
         milestoneUnbounded = cached.milestoneBounded === false;

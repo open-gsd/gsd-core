@@ -124,6 +124,43 @@ describe('tdd-red-evidence record path containment', () => {
     });
   });
 
+  // #5879: dispatch remaps projectDir to the main checkout when a linked worktree has no .planning/ of
+  // its own; the executor's record lives in that worktree, which is part of the project.
+  test('#5879: a record inside the executor\'s linked worktree is accepted; the worktree widens nothing else', () => {
+    withDirs((project, worktree) => {
+      const record = path.join(worktree, '.gsd', 'tdd-evidence', '01-01', 'red.json');
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify(RED_OK));
+      const inWorktree = evaluateTddRedEvidence({ projectDir: project, worktreeDir: worktree, args: [record] });
+      assert.equal(inWorktree.outcome, 'pass');
+      assert.equal(inWorktree.payload.verdict, 'RED_EVIDENCE_OK');
+      // without the worktree root the same record is outside the project (the pre-fix behavior)
+      assert.deepStrictEqual(
+        evaluateTddRedEvidence({ projectDir: project, worktreeDir: null, args: [record] }),
+        { failure: { code: 'usage', message: `path escapes its allowed directory: ${record}` } },
+      );
+      // a path outside BOTH roots is still an escape
+      const elsewhere = path.join(path.dirname(worktree), 'not-a-root.json');
+      assert.equal(isGateUsageFailure(evaluateTddRedEvidence({ projectDir: project, worktreeDir: worktree, args: [elsewhere] })), true);
+    });
+  });
+
+  test('#5879: a symlink inside the worktree that points outside both roots is refused', { skip: process.platform === 'win32' }, () => {
+    withDirs((project, worktree) => {
+      const outside = createTempProject('gate-red-contain-third-');
+      try {
+        const target = path.join(outside, 'red.json');
+        fs.writeFileSync(target, JSON.stringify(RED_OK));
+        const link = path.join(worktree, 'link.json');
+        fs.symlinkSync(target, link);
+        const result = evaluateTddRedEvidence({ projectDir: project, worktreeDir: worktree, args: [link] });
+        assert.deepStrictEqual(result, { failure: { code: 'usage', message: `path escapes its allowed directory: ${link}` } });
+      } finally {
+        cleanup(outside);
+      }
+    });
+  });
+
   test('an absent record inside the project is still the INVALID_RED unreadable_record arm, echoing the resolved path', () => {
     withDirs((project) => {
       const record = path.join(project, 'nope.json');

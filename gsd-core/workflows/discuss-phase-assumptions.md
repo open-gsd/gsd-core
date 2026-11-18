@@ -166,9 +166,13 @@ Read project-level and prior phase context to avoid re-asking decided questions.
 
 **Step 1: Read project-level files**
 ```bash
-cat .planning/PROJECT.md 2>/dev/null || true
-cat .planning/REQUIREMENTS.md 2>/dev/null || true
-cat .planning/STATE.md 2>/dev/null || true
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+GSD_WS="${GSD_WS:-}"
+PROJECT_PATH=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)
+cat "${PROJECT_PATH}" 2>/dev/null || true
+cat "${PLANNING_ROOT}/REQUIREMENTS.md" 2>/dev/null || true
+cat "${PLANNING_ROOT}/STATE.md" 2>/dev/null || true
 ```
 
 Extract from these:
@@ -178,7 +182,9 @@ Extract from these:
 
 **Step 2: Read all prior CONTEXT.md files**
 ```bash
-(find .planning/phases -name "*-CONTEXT.md" 2>/dev/null || true) | sort
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+(find "${PLANNING_ROOT}/phases" -name "*-CONTEXT.md" 2>/dev/null || true) | sort
 ```
 
 For each CONTEXT.md where phase number < current phase:
@@ -612,7 +618,9 @@ Confirm: "Committed: docs(${padded_phase}): capture phase context (assumptions m
 Update STATE.md with session info:
 
 ```bash
-gsd_run query state.record-session \
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query state.record-session ${GSD_WS:+--ws=${GSD_WS##* }} \
   --stopped-at "Phase ${PHASE} context gathered (assumptions mode)" \
   --resume-file "${phase_dir}/${padded_phase}-CONTEXT.md"
 ```
@@ -620,7 +628,7 @@ gsd_run query state.record-session \
 Commit STATE.md:
 
 ```bash
-gsd_run query commit "docs(state): record phase ${PHASE} context session" --files .planning/STATE.md
+gsd_run query commit "docs(state): record phase ${PHASE} context session" --files "${PLANNING_ROOT}/STATE.md"
 ```
 </step>
 

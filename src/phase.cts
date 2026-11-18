@@ -785,6 +785,8 @@ interface RawPlan {
   halted: boolean;
   /** #1689: optional per-plan specialist executor hint (frontmatter `agent_hint:`). null when unset. */
   agentHint: string | null;
+  /** #6302: optional foreign executor runtime id (frontmatter `executor_runtime:`). null when unset. */
+  executorRuntime: string | null;
   /** #4924: frontmatter `gap_closure: true` — the field execute-phase `--gaps-only` selects on. */
   gapClosure: boolean;
 }
@@ -1200,6 +1202,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       filesModified: planDoc.filesModified,
       filesDeleted: planDoc.filesDeleted,
       agentHint: planDoc.agentHint,
+      executorRuntime: planDoc.executorRuntime,
       gapClosure: planDoc.gapClosure,
       taskCount: planDoc.taskCount,
       hasSummary,
@@ -1369,6 +1372,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       files_modified: rawPlan.filesModified,
       files_deleted: rawPlan.filesDeleted,
       agent_hint: rawPlan.agentHint,
+      executor_runtime: rawPlan.executorRuntime,
       task_count: rawPlan.taskCount,
       has_summary: rawPlan.hasSummary,
       // #2830: additive fields — halted is this plan's OWN status; blocked_by
