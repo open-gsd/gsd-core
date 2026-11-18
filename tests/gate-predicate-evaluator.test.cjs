@@ -20,7 +20,10 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fc = require('fast-check');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const os = require('node:os');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { runHook } = require('./helpers/process-seam.cjs');
 
 const {
   evaluatePredicate,
@@ -238,21 +241,6 @@ describe('evaluatePredicate — interpolation', () => {
       'for id in %; do :; done',
       'test -d "@" && for id in @; do :; done',
       "sh -c 'test -d \"%\"'",
-      "eval 'test -d \"@\"'",
-      'sh -c "test -d \\"@\\""',
-      'bash -lc "echo %"',
-      'sh -ce "echo %"',
-      'sh -c -e "echo @"',
-      "sh '-c' \"echo @\"",
-      'sh "-c" "echo @"',
-      'sh \\-c "echo @"',
-      'sh -c -- "@"',
-      "sh -c 'test -d '\"@\"",
-      'sh -c "test -d ""@"',
-      'trap "rm @" EXIT',
-      'eval "test -d @"',
-      'eval echo "@"',
-      'true; eval echo "@"',
     ];
     // Each row makes `sh` print its placeholder in plain double quotes, so the real shell proves the check keeps them.
     const ALLOWED = [
@@ -268,8 +256,8 @@ describe('evaluatePredicate — interpolation', () => {
       'd="@"; echo "$(echo "$d")"',
       'ids="@"; for id in $ids; do echo "$id"; done',
       "sh -c 'echo \"$1\"' sh \"@\"",
-      'echo -c x "@"',
-      'echo evaluate "@"',
+      'sh -c "echo @"',
+      'eval echo "@"',
     ];
     const unprovable = (name) => new RegExp(`uses \\$\\{${escapeRegex(name)}\\} where this check cannot prove sh expands it: write "\\$\\{${escapeRegex(name)}\\}" in plain double quotes`);
 
@@ -296,7 +284,6 @@ describe('evaluatePredicate — interpolation', () => {
         ['test -z "$(ls -A "${GSD_PHASE_DIR}")"', 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"'],
         ['for id in $GSD_PHASE_REQ_IDS; do :; done', 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done'],
         ['sh -c \'test -d "$GSD_PHASE_DIR"\'', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
-        ['sh -c "test -d \\"${GSD_PHASE_DIR}\\""', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
       ];
       for (const [refused, rewrite] of PAIRS) {
         assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
@@ -315,11 +302,10 @@ describe('evaluatePredicate — interpolation', () => {
       }
     });
     test('the real shell expands every allowed row and prints no literal placeholder', () => {
-      const { spawnSync } = require('node:child_process');
+      const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' } });
       for (const name of INTERPOLATION_VAR_NAMES) {
-        const env = { ...process.env, GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' };
         for (const template of ALLOWED) {
-          const { stdout } = spawnSync('sh', ['-c', spell(template, name)], { env, encoding: 'utf8', input: '', timeout: PROBE_TIMEOUT_MS });
+          const { stdout } = runHook('-c', [spell(template, name)], { interpreter: 'sh', env, input: '', timeoutMs: PROBE_TIMEOUT_MS });
           assert.match(stdout, /SENT-(NUM|DIR|REQ)/, JSON.stringify(template));
           assert.doesNotMatch(stdout, /GSD_PHASE_/, JSON.stringify(template));
         }

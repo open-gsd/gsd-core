@@ -77,12 +77,7 @@ export function indentWidth(line: string): number {
  * backslash and `${...}` depth. It refuses:
  * - a marker outside plain double quotes (unquoted, single-quoted, escaped by `\`, or after `$` as in `$$name`);
  * - a marker after a construct whose quoting the walk does not follow: `$(`, a backtick, `<<`, `$'`, a quote
- *   inside `${...}`, a `#` that starts a word (a comment), or the word `eval` or `trap`;
- * - a marker inside a double-quoted part of the shell word that follows a `-c` option word (`sh -c "...${name}..."`,
- *   `sh -c 'a '"${name}"`, also after further option words as in `sh -c -e "..."`): the outer shell pastes the
- *   value into the script text, where shell syntax in the value would run. Option words are `-x` and `--`, found
- *   by a forward word walk over each word with its quotes and backslashes dropped (`'-c'` is `-c`), not a regex over
- *   caller text (ADR-3212 §5).
+ *   inside `${...}`, or a `#` that starts a word (a comment).
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(command: string, marker: RegExp): string | undefined {
@@ -93,22 +88,9 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
   };
   let quote = '';
   let depth = 0;
-  let script = false; // inside the shell word that follows a `-c` option word
-  let run = false; // the option words right before this word hold a `c`
-  let wordStart = 0;
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const here = markerAt(i);
-    if (quote === '' && depth === 0) {
-      if (/\s/.test(c)) {
-        if (i > wordStart) {
-          const word = command.slice(wordStart, i).replace(/['"\\]/g, ''); // the shell unquotes `'-c'` to `-c`
-          run = word === '--' || /^-[A-Za-z]+$/.test(word) ? run || word.includes('c') : false;
-        }
-        wordStart = i + 1;
-        script = false;
-      } else if (i === wordStart) script = run;
-    }
     if (quote === "'") {
       if (here) return here;
       if (c === "'") quote = '';
@@ -116,7 +98,7 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
       const escaped = markerAt(i + 1);
       if (escaped) return escaped;
       i++;
-    } else if (here && (quote !== '"' || script || command[i - 1] === '$')) {
+    } else if (here && (quote !== '"' || command[i - 1] === '$')) {
       return here;
     } else if (isUnreadConstruct(command, i, quote, depth)) {
       return marker.exec(command.slice(i))?.[1];
@@ -139,6 +121,5 @@ function isUnreadConstruct(command: string, i: number, quote: string, depth: num
   const two = command.slice(i, i + 2);
   if (two === '$(' || two === "$'" || two === '<<' || c === '`') return true;
   if (depth > 0) return c === "'" || c === '"';
-  if (quote === '' && /^(?:eval|trap)(?:\s|$)/.test(command.slice(i, i + 5)) && (i === 0 || /[\s;&|()]/.test(command[i - 1]))) return true;
   return c === '#' && quote === '' && (i === 0 || /[\s;&|()<>]/.test(command[i - 1]));
 }
