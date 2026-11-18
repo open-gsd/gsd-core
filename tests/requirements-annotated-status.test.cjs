@@ -35,6 +35,9 @@ const CELLS = [
   ['In Progress', false, true],
   ['In Progress (note)', false, true],
   ['Pendingx', false, false],
+  ['Pendin', false, false],
+  ['In Progres', false, false],
+  ['Gaps Foun', false, false],
   ['Blocked (pending)', false, false],
   ['Not Pending', false, false],
   ['Complete', false, false],
@@ -64,7 +67,7 @@ function requirementsText(cells) {
 }
 
 function rowOf(text, id) {
-  const line = text.split('\n').find((l) => l.startsWith(`| ${id} |`));
+  const line = splitLines(text).find((l) => l.startsWith(`| ${id} |`));
   assert.ok(line, `no traceability row for ${id}`);
   return line.split('|')[3].trim();
 }

@@ -1113,7 +1113,9 @@ const REQUIREMENT_STATUS_WORD_RE = /^(pending|in\s+progress|gaps\s+found|complet
  * #6238: the status word a traceability Status cell leads with, lower-cased and
  * single-spaced, when it is one of `accepted`; null otherwise. Operator prose
  * after the word (`Pending (blocked on an upstream decision)`) does not change
- * the status, the same rule the ROADMAP Status reader applies (#4925). The ONE
+ * the status, the leading-token convention the ROADMAP Status reader follows
+ * (#4925) over this vocabulary (requirement rows say `Pending`, not
+ * `Not started`; the two vocabularies are deliberately separate). The ONE
  * reader behind every requirement-Status gate (`requirements mark-complete`,
  * `requirements revert-phase`, `phase complete`), so they cannot disagree on
  * what a cell says; each caller passes the words it acts on.
