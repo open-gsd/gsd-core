@@ -21,6 +21,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const FRONTMATTER = `---
 status: testing
@@ -360,6 +361,19 @@ describe('audit-uat reports how many files it scanned (#6231)', () => {
     fs.writeFileSync(path.join(phaseDirOf('01-login'), '01-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phaseDirOf('02-billing'), '02-01-PLAN.md'), '# Plan\n');
     assert.equal(auditSummary().files_scanned, 0);
+  });
+
+  test('the audit workflows gate their all-clear on files_scanned (#6231)', () => {
+    const workflow = (name) => splitLines(
+      fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', name), 'utf-8'),
+    ).join('\n');
+    const uat = workflow('audit-uat.md');
+    const nothing = uat.indexOf('## Nothing Scanned');
+    const clear = uat.indexOf('## All Clear');
+    assert.ok(nothing !== -1 && clear !== -1 && nothing < clear,
+      'audit-uat.md must test the empty scan before it can print All Clear');
+    assert.match(uat, /`summary\.files_scanned` is 0/);
+    assert.match(workflow('audit-fix.md'), /`summary\.files_scanned` in `\$INIT` is 0/);
   });
 
   test('files_scanned counts every scanned file, not just those with items', () => {
