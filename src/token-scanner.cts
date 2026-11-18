@@ -86,7 +86,14 @@ interface QuoteCtx {
 
 // `case` or `esac` as a command word: after a separator, a compound-command keyword or the start of the command.
 const CASE_WORD_RE = /(case|esac)(?![\w])/y;
-const COMMAND_POSITION_RE = /(?:^|[\n;&|(`{]|\b(?:then|do|else|elif|if|while|until)\s)\s*$/;
+const KEYWORD_TAIL_RE = /(?:^|\W)(?:then|do|else|elif|if|while|until)$/;
+
+/** Whether the word at `i` starts a command: only whitespace back to a separator, a keyword or the start. Linear: each call reads back over its own whitespace run and at most six more characters. */
+function atCommandPosition(command: string, i: number): boolean {
+  let j = i;
+  while (j > 0 && /\s/.test(command[j - 1])) j--;
+  return j === 0 || j < i && command.slice(j, i).includes('\n') || /[;&|(`{]/.test(command[j - 1]) || (j < i && KEYWORD_TAIL_RE.test(command.slice(Math.max(0, j - 6), j)));
+}
 
 /** The end index of the line starting at `i` when it is the delimiter line of here-document `top`; -1 otherwise. */
 function endsHeredoc(command: string, i: number, top: QuoteCtx): number {
@@ -141,7 +148,7 @@ export function literalDollarIndexes(command: string): number[] {
       if (c === '"' && top.kind === 'double') stack.pop();
     } else if (c === '}' && top.kind === 'param') {
       stack.pop();
-    } else if ((c === 'c' || c === 'e') && (CASE_WORD_RE.lastIndex = i, CASE_WORD_RE.test(command)) && COMMAND_POSITION_RE.test(command.slice(0, i))) {
+    } else if ((c === 'c' || c === 'e') && (CASE_WORD_RE.lastIndex = i, CASE_WORD_RE.test(command)) && atCommandPosition(command, i)) {
       top.cases = Math.max(0, (top.cases ?? 0) + (c === 'c' ? 1 : -1));
       i += 3;
     } else if (c === '$') {
