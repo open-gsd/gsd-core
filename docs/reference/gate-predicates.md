@@ -76,9 +76,9 @@ the command text: `sh` expands `"${GSD_PHASE_DIR}"` to the exact value, even whe
 it holds shell syntax. The evaluator throws (`unevaluable`) unless every use is
 provably in plain double quotes. It refuses a variable that is unquoted, single-quoted,
 escaped by a backslash or written `$$GSD_PHASE_DIR`, and a variable after `$(`, a
-backtick, `<<`, `$'`, a quote inside `${...}`, a `#` that starts a word or the word `eval`.
-It also refuses a variable inside the double-quoted script string of `-c`
-(`sh -c "test -d \"${GSD_PHASE_DIR}\""`): the outer shell pastes the value into the script,
+backtick, `<<`, `$'`, a quote inside `${...}`, a `#` that starts a word or the word `eval` or `trap`.
+It also refuses a variable inside the double-quoted script string of `-c`, also after further option words
+(`sh -c "test -d \"${GSD_PHASE_DIR}\""`, `sh -c -e "..."`): the outer shell pastes the value into the script,
 where shell syntax in the value would run. The check is conservative, so it also refuses
 some correct commands (`grep -c "${GSD_PHASE_DIR}" f` too). Assign the variable first, in
 plain double quotes, then use the shell variable where the refused construct needs it:

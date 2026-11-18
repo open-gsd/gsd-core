@@ -187,13 +187,19 @@ describe('firstUnprovenMarker', () => {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
   });
-  test('a marker in the double-quoted script of -c, or after the word eval, is refused', () => {
-    for (const bad of ['sh -c "test -d \\"@\\""', 'bash -lc "echo @"', 'sh -ec  "echo $GSD_MARK"', 'sh -ce "echo @"', 'bash -ceu "echo @"', 'eval "@"', 'eval echo "@"', 'true;eval echo "@"', '(eval "@")']) {
+  test('a marker in the double-quoted script of -c (also after further options), or after the word eval or trap, is refused', () => {
+    for (const bad of ['sh -c "test -d \\"@\\""', 'bash -lc "echo @"', 'sh -ec  "echo $GSD_MARK"', 'sh -ce "echo @"', 'bash -ceu "echo @"', 'sh -c -e "echo @"', 'sh -c -- "@"', 'bash -c -l -x "echo @"', 'sh -e -c -u "echo @"', 'eval "@"', 'eval echo "@"', 'true;eval echo "@"', '(eval "@")', 'trap "rm @" EXIT', 'true;trap "@" EXIT']) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
-    for (const ok of ['echo -c x "@"', 'echo "-c" "@"', 'echo evaluate "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'sh -c "echo a" sh "@"', 'echo "a" -c "b" "@"']) {
+    for (const ok of ['echo -c x "@"', 'echo "-c" "@"', 'echo evaluate "@"', 'echo trapped "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'sh -c "echo a" sh "@"', 'echo "a" -c "b" "@"', 'echo -e "@"', 'echo -- "@"']) {
       assert.equal(first(ok), undefined, ok);
     }
+  });
+  test('an option word of thousands of letters before many quotes is scanned in linear time', () => {
+    const command = `-${'c'.repeat(2000)}x ${'"" '.repeat(600)}"@"`;
+    const start = process.hrtime.bigint();
+    assert.equal(first(command), undefined);
+    assert.ok(Number(process.hrtime.bigint() - start) / 1e6 < 500, 'the scan must not backtrack over the option word');
   });
   test('a # that starts a word is refused; a # inside a word, in quotes or in ${...} is not', () => {
     for (const lead of ['', 'echo ok ', 'echo ok;', 'echo ok&', 'echo ok|', '(', 'echo ok)', 'echo >', 'echo <', 'echo ok\n']) {
