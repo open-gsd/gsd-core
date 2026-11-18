@@ -209,6 +209,7 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
     { text: "cat <<EOF # it's\nbody it's @\nEOF", literal: false },
     { text: "echo '\\' '@'", literal: true },
     { text: "echo ${x:-'@'}", literal: true },
+    { text: 'echo "${x%% #*}" \'@\'', literal: true },
     { text: "echo $(:)#'@'", literal: true },
     { text: "echo $((1))#'@'", literal: true },
     { text: "(:)# it's @", literal: false },
@@ -265,6 +266,17 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
       const command = `cat <<-${rest}'$Z'\n-\n`;
       assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')], JSON.stringify(rest));
     }
+  });
+  test('an empty quoted delimiter ends its here-document at the first empty line', () => {
+    for (const q of ["''", '""']) {
+      const command = `cat <<${q}\n$Z\n\necho '$Z'\n`;
+      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z'), command.lastIndexOf('$Z')], q);
+    }
+  });
+  test('a # at index 0 starts a comment, and a # inside ${...} does not', () => {
+    assert.deepStrictEqual(literalDollarIndexes("# it's $Z"), []);
+    const command = "echo ${x%% #*} '$Z'";
+    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
   });
   test('a backslash-newline continues the delimiter word', () => {
     const command = "cat <<a\\\nb\nx\nab\necho '$Z'\n";

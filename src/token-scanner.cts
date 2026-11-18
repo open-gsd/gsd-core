@@ -126,7 +126,7 @@ interface QuoteCtx {
   expansion?: boolean;
 }
 
-// `case` or `esac` as a command word: after a separator, a compound-command keyword or the start of the command.
+// `case` or `esac` as a command word: after a separator, a newline or a compound-command keyword.
 const CASE_WORD_RE = /(case|esac)(?![\w])/y;
 const KEYWORD_TAIL_RE = /\W(?:then|do|else|elif|if|while|until)$/;
 
@@ -196,7 +196,7 @@ export function literalDollarIndexes(command: string): number[] {
       top.cases = Math.max(0, (top.cases ?? 0) + (c === 'c' ? 1 : -1));
     } else if (c === '$') {
       dollarAt = i;
-    } else if (c === '#' && (i === 0 || (/[\s;&|()]/.test(prev) && expansionEnd !== i - 1))) {
+    } else if (c === '#' && top.kind !== 'param' && (i === 0 || (/[\s;&|()]/.test(prev) && expansionEnd !== i - 1))) {
       const eol = command.indexOf('\n', i);
       if (eol === -1) return found;
       i = eol - 1;
