@@ -42,11 +42,27 @@ const REVIEW_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md
 const RUN = '/run';
 const ROOT = '/repo';
 
-function plan(slug, config = {}) {
+/**
+ * A plan with the lane's built-in default host and NO host configured (#5963): the availability
+ * probe holds such a host to the stricter models-listing rule.
+ */
+function defaultHostPlan(slug, config = {}) {
   const lane = REVIEWER_LANES.find((l) => l.slug === slug);
   const r = resolveLanePlan({ lane, configGet: (k) => config[k], runDir: RUN, repoRoot: ROOT });
   assert.equal(r.ok, true, `${slug} failed to resolve`);
   return r.plan;
+}
+
+/**
+ * A plan for the lane. An openai-http lane gets its host CONFIGURED (set to the descriptor default
+ * unless the test names one), so tests of run-time behavior — model discovery, completions, stubs —
+ * reach the host through D7's any-answer probe, as they did before #5963 split the two cases.
+ */
+function plan(slug, config = {}) {
+  const lane = REVIEWER_LANES.find((l) => l.slug === slug);
+  const hostKey = lane && lane.transport === 'openai-http' ? lane.invoke.hostConfigKey : null;
+  const withHost = hostKey && config[hostKey] === undefined ? { ...config, [hostKey]: lane.invoke.defaultHost } : config;
+  return defaultHostPlan(slug, withHost);
 }
 
 /** An in-memory dependency set. Overrides replace individual seams per test. */
@@ -236,7 +252,7 @@ describe('runner — probe (ADR-2782 D7)', () => {
           { status: 500, body: LISTING },
         ];
         for (const c of cases) {
-          const r = await probeLane(plan(slug), deps({ httpJson: async () => ({ ok: c.status < 300, ...c }) }));
+          const r = await probeLane(defaultHostPlan(slug), deps({ httpJson: async () => ({ ok: c.status < 300, ...c }) }));
           assert.equal(r.available, false, `${slug} ${c.status} ${c.body}`);
           assert.equal(r.reason, LANE_UNAVAILABLE.HOST_UNREACHABLE);
           assert.ok(r.detail.includes(host), 'the detail names the default host');
@@ -245,7 +261,7 @@ describe('runner — probe (ADR-2782 D7)', () => {
 
       test(`${slug}: a 200 OpenAI-style models listing on the default host is available`, async () => {
         const calls = [];
-        const r = await probeLane(plan(slug), deps({
+        const r = await probeLane(defaultHostPlan(slug), deps({
           httpJson: async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, body: LISTING }; },
         }));
         assert.equal(r.available, true);
@@ -256,7 +272,7 @@ describe('runner — probe (ADR-2782 D7)', () => {
       });
 
       test(`${slug}: a transport failure on the default host is still unreachable`, async () => {
-        const r = await probeLane(plan(slug), deps({ httpJson: async () => ({ ok: false, status: 0, body: '', error: 'ECONNREFUSED' }) }));
+        const r = await probeLane(defaultHostPlan(slug), deps({ httpJson: async () => ({ ok: false, status: 0, body: '', error: 'ECONNREFUSED' }) }));
         assert.equal(r.available, false);
         assert.equal(r.reason, LANE_UNAVAILABLE.HOST_UNREACHABLE);
         assert.ok(r.detail.includes('ECONNREFUSED'));
@@ -273,7 +289,7 @@ describe('runner — probe (ADR-2782 D7)', () => {
       });
 
       test(`${slug}: an unavailable default host never receives the review prompt`, async () => {
-        const p = plan(slug);
+        const p = defaultHostPlan(slug);
         const posts = [];
         const d = deps({
           files: { [p.promptPath]: 'review this' },
