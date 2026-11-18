@@ -4035,6 +4035,12 @@ describe('CLAUDE_CODE_AUTO_COMPACT_WINDOW k/M suffix (#6131)', () => {
     assert.equal(threshold('101k'), 68000);
   });
 
+  test('k suffix around the 1M maximum (limit-1, limit, limit+1)', () => {
+    assert.equal(threshold('999k'), 966000);
+    assert.equal(threshold('1000k'), 967000);
+    assert.equal(threshold('1001k'), 967000);
+  });
+
   test('plain and grouped digits are unchanged', () => {
     for (const value of ['500000', '500_000', '500,000']) assert.equal(threshold(value), 467000, value);
   });
