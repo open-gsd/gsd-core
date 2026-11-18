@@ -1789,6 +1789,23 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           // probe:true marks a reachability probe (returns status only, body ''): the status line is the answer, so do not
           // let a stalled body turn a replying server into `missing`.
           if (opts.probe) {
+            if (opts.readBody && res.ok) {
+              // #5963: a default-host probe judges the answer's shape. The read is capped so an
+              // unrelated service streaming a large 2xx body cannot cost memory; an over-cap body is
+              // truncated and fails the shape check.
+              const MODELS_BODY_CAP = 1 << 20;
+              const reader = res.body ? res.body.getReader() : null;
+              const chunks = [];
+              let size = 0;
+              while (reader && size < MODELS_BODY_CAP) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                size += value.length;
+              }
+              if (reader) reader.cancel().catch(() => {});
+              return { ok: true, status: res.status, body: Buffer.concat(chunks).subarray(0, MODELS_BODY_CAP).toString('utf8') };
+            }
             res.body?.cancel().catch(() => {});
             return { ok: res.ok, status: res.status, body: '' };
           }
