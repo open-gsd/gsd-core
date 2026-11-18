@@ -38,8 +38,9 @@ cancelled before they started, with `completed_at` one second before `started_at
 while it still waited for a runner never ran either, but GitHub gives it a `started_at` (when it was
 queued) and a later `completed_at` (when it was cancelled), so its span is queue wait, not run time.
 That shape is a `cancelled` conclusion with an empty `steps` list, `runner_id` 0 and an empty
-`runner_name`; it has no row (#6177). All three must be present: a record that lacks any of them is
-not treated as never-run. A cancelled job that did run, such as one killed at its `timeout-minutes`
+`runner_name`; it has no row (#6177). All three must be present with exactly those values (`steps`
+an empty list, `runner_id` the number 0, `runner_name` the empty string): a record that lacks any of
+them, or carries another value, is not treated as never-run. A cancelled job that did run, such as one killed at its `timeout-minutes`
 cap (it has steps and a runner), is still recorded (#5088).
 
 Each run's new rows land in `tests/ci-timeout-budget-history.jsonl`, one JSON object per line:
