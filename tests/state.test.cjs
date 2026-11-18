@@ -19424,9 +19424,13 @@ describe('#3871 / #3756: curated progress must survive a write on an archived mi
   // for the current milestone, exactly as it is right after `milestone
   // complete --archive-phases` runs while STATE.md has not yet been
   // advanced to a new milestone.
-  function buildArchivedMilestoneFixture(cwd) {
+  function buildArchivedMilestoneFixture(cwd, { emptyPhasesDir = false } = {}) {
     const planningDir = path.join(cwd, '.planning');
     fs.mkdirSync(planningDir, { recursive: true });
+    // #6279: `milestone complete` moves the phase dirs out but KEEPS the
+    // parent `.planning/phases/`, so the real post-close shape is an
+    // existing-but-empty directory, not an absent one.
+    if (emptyPhasesDir) fs.mkdirSync(path.join(planningDir, 'phases'), { recursive: true });
 
     fs.writeFileSync(
       path.join(planningDir, 'ROADMAP.md'),
@@ -19460,8 +19464,9 @@ describe('#3871 / #3756: curated progress must survive a write on an archived mi
       }
     });
 
-    // Deliberately NO .planning/phases/ directory at all for the current
-    // milestone — the archived-milestone shape this issue is about.
+    // By default NO .planning/phases/ directory at all for the current
+    // milestone — the archived-milestone shape #3756 is about. The #6279
+    // tests below pass emptyPhasesDir to add the empty directory instead.
 
     fs.writeFileSync(
       path.join(planningDir, 'STATE.md'),
@@ -19542,6 +19547,116 @@ describe('#3871 / #3756: curated progress must survive a write on an archived mi
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     assertCuratedProgressSurvived(cwd);
+  });
+
+  // #6279: the same two verbs with an EXISTING-but-empty `.planning/phases/`
+  // (what `milestone complete` actually leaves). The empty walk derived
+  // total_plans 0 while total_phases still came from the ROADMAP headings,
+  // so the resync merge took the 0 and left 32 of 0 plans complete.
+  test('recordSessionOnArchivedMilestoneWithEmptyPhasesDirKeepsTotalPlans', (t) => {
+    const cwd = createTempDir('gsd-6279-record-session-');
+    t.after(() => cleanup(cwd));
+    buildArchivedMilestoneFixture(cwd, { emptyPhasesDir: true });
+
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'Milestone closed'], cwd);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assertCuratedProgressSurvived(cwd);
+  });
+
+  test('addDecisionOnArchivedMilestoneWithEmptyPhasesDirKeepsTotalPlans', (t) => {
+    const cwd = createTempDir('gsd-6279-add-decision-');
+    t.after(() => cleanup(cwd));
+    buildArchivedMilestoneFixture(cwd, { emptyPhasesDir: true });
+
+    const result = runGsdTools(
+      ['state', 'add-decision', '--phase', '05-01', '--summary', 'Ship v1.0', '--rationale', 'milestone complete'],
+      cwd,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assertCuratedProgressSurvived(cwd);
+  });
+
+  // #6279 guard: the fix must not freeze totals on an ACTIVE milestone. With
+  // a real phase directory on disk the walk measured something, so a plan
+  // that was deleted still lowers total_plans below the stored value.
+  test('activeMilestonePlanDeletionStillLowersTotalPlans', (t) => {
+    const cwd = createTempDir('gsd-6279-active-');
+    t.after(() => cleanup(cwd));
+    const planningDir = path.join(cwd, '.planning');
+    const phaseDir = path.join(planningDir, 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      ['## v1.0 Current 🚧', '', '### Phase 1: Foo', '### Phase 2: Bar', ''].join('\n'),
+    );
+    // Three plans were stored; one was deleted from disk, two remain.
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(
+      path.join(planningDir, 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0',
+        'status: executing',
+        'progress:',
+        '  total_phases: 2',
+        '  completed_phases: 0',
+        '  total_plans: 3',
+        '  completed_plans: 0',
+        '  percent: 0',
+        '---',
+        '',
+        '# Project State',
+        '',
+        '## Session Continuity',
+        '',
+        '**Last session:** 2024-01-10',
+        '**Stopped at:** Phase 1, Plan 2',
+        '**Resume file:** None',
+        '',
+      ].join('\n'),
+    );
+
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'Plan 3 dropped'], cwd);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const fm = frontmatterLib.extractFrontmatter(fs.readFileSync(path.join(planningDir, 'STATE.md'), 'utf-8'));
+    assert.ok(fm && fm.progress, 'STATE.md frontmatter must still carry a progress block');
+    assert.strictEqual(Number(fm.progress.total_plans), 2, 'total_plans must follow the disk count down when a real phase dir was scanned');
+  });
+
+  // #6279 guard: an empty `.planning/phases/` alone is not an archived
+  // milestone. STATE asserts v2.0 and only v1.0 was archived, so the empty
+  // walk is a real measurement and the stored plan total drops to the disk 0.
+  test('emptyPhasesDirWithoutThisMilestonesArchiveTakesDiskZero', (t) => {
+    const cwd = createTempDir('gsd-6279-no-archive-');
+    t.after(() => cleanup(cwd));
+    const planningDir = path.join(cwd, '.planning');
+    fs.mkdirSync(path.join(planningDir, 'phases'), { recursive: true });
+    fs.mkdirSync(path.join(planningDir, 'milestones', 'v1.0-phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      ['## v2.0 Current 🚧', '', '### Phase 2: Bar', '### Phase 3: Baz', ''].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(planningDir, 'STATE.md'),
+      [
+        '---', 'gsd_state_version: 1.0', 'milestone: v2.0', 'status: executing',
+        'progress:', '  total_phases: 2', '  completed_phases: 0', '  total_plans: 3', '  completed_plans: 0', '  percent: 0',
+        '---', '', '# Project State', '', '## Session Continuity', '',
+        '**Last session:** 2024-01-10', '**Stopped at:** None', '**Resume file:** None', '',
+      ].join('\n'),
+    );
+
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'Plans dropped'], cwd);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const fm = frontmatterLib.extractFrontmatter(fs.readFileSync(path.join(planningDir, 'STATE.md'), 'utf-8'));
+    assert.ok(fm && fm.progress, 'STATE.md frontmatter must still carry a progress block');
+    assert.strictEqual(Number(fm.progress.total_plans), 0, 'without this milestone\'s archive the empty walk is a measurement: total_plans takes the disk 0');
   });
 
   // The over-preservation guard: a genuinely empty project (no phases
