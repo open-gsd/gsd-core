@@ -154,6 +154,11 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
    **`isolation == "none"`:** no worktree. Dispatch the executor inline on the
    primary checkout (same prompt, minus the worktree-only framing), one item
    at a time — `EXEC_CONCURRENCY` is already forced to 1 in this mode.
+   **Record the HEAD the executor left behind (#6203):** the executor's commits
+   move the primary checkout's HEAD, which is the batch's own movement, not a
+   divergence. After each inline executor returns, run
+   `gsd_run quick-batch update --batch "$BATCH_ID" --head-revision "$(git rev-parse HEAD)"`
+   so `/gsd:quick-batch --resume` expects that HEAD.
 
    **Durable worktree-recovery persistence (#3677 — `harness-worktree`/
    `orchestrator-worktree` only, skip for `none`):** immediately after
