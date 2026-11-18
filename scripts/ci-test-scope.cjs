@@ -47,6 +47,7 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/mutation-workflow-base-ref.test.cjs',
   'tests/policy-release-no-npm-self-upgrade.test.cjs',
   'tests/policy-shell-pinning.test.cjs',
+  'tests/registry-docs-approved-issue-parity.test.cjs',
   'tests/release-backmerge-invariants.test.cjs',
   'tests/release-coverage-scope.test.cjs',
   'tests/release-finalize-notes-5922.test.cjs',
