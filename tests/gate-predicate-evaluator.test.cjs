@@ -468,19 +468,20 @@ describe('evaluatePredicate — interpolation', () => {
     });
   });
 
-  test('a double-quoted gate run by the real shell sees the phase values, even with shell syntax in them', () => {
-    const phaseDir = '/tmp/x $(touch PWNED) `id` y';
-    const dir = createTempDir();
-    try {
+  describe('a gate run by the real shell', () => {
+    let dir;
+    beforeEach(() => { dir = createTempDir(); });
+    afterEach(() => { cleanup(dir); });
+
+    test('a double-quoted gate sees the phase values, even with shell syntax in them', () => {
+      const phaseDir = '/tmp/x $(touch PWNED) `id` y';
       const ctx = { cwd: dir, phaseNumber: '07', phaseDir, phaseReqIds: 'R-1' };
       const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
       assert.equal(run(`test "\${GSD_PHASE_NUMBER}" = 07 && test "\${GSD_PHASE_DIR}" = '${phaseDir}'`).block, false);
       assert.equal(run('test "${GSD_PHASE_NUMBER}" = 08').block, true);
       // Negative proof: the `$(touch PWNED)` in the value ran as no command in the gate's working directory.
       assert.equal(fs.existsSync(path.join(dir, 'PWNED')), false);
-    } finally {
-      cleanup(dir);
-    }
+    });
   });
 
   // One row per consumer that parses its argument as shell again. `@` is the placeholder. The refused spelling pastes
@@ -493,7 +494,8 @@ describe('evaluatePredicate — interpolation', () => {
       ['bash -c', 'bash -c "test -e @/BLOCKER"', 'bash -c \'test -n "$1"\' bash "@"'],
       ['bash -eo pipefail -c', 'bash -eo pipefail -c "test -e @/BLOCKER"', 'bash -eo pipefail -c \'test -n "$1"\' bash "@"'],
       ['bash -c -eo pipefail', 'bash -c -eo pipefail "test -e @/BLOCKER"', 'bash -c -eo pipefail \'test -n "$1"\' bash "@"'],
-      ['trap', 'trap "test -e @/BLOCKER" EXIT', 'd="@"; trap \'test -n "$d"\' EXIT'],
+      // An EXIT trap's status never changes the shell's, so the supported trap bodies write TRAPPED when they read the value.
+      ['trap', 'trap "test -e @/BLOCKER" EXIT', 'd="@"; trap \'test -n "$d" && touch TRAPPED\' EXIT'],
       ['xargs sh -c', 'echo x | xargs sh -c "test -e @/BLOCKER"', 'printf "x\\0" | xargs -0 sh -c \'test -n "$1"\' sh "@"'],
       ['find -exec sh -c', 'find . -prune -exec sh -c "test -e @/BLOCKER" \\;', 'find . -prune -exec sh -c \'test -n "$1"\' sh "@" \\;'],
     ];
@@ -506,11 +508,20 @@ describe('evaluatePredicate — interpolation', () => {
 
     test('the variable read from the environment in single-quoted text is data for each consumer, and the real shell finds it set', () => {
       const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, { cwd: guarded, phaseNumber: '01', phaseDir: PAYLOAD_DIR, phaseReqIds: 'R-1' }, buildPredicateDeps());
-      for (const template of ['eval \'test -n "@"\'', 'sh -c \'test -n "@"\'', 'bash -c \'test -n "@"\'', 'trap \'test -n "@"\' EXIT']) {
+      for (const template of ['eval \'test -n "@"\'', 'sh -c \'test -n "@"\'', 'bash -c \'test -n "@"\'']) {
         assert.equal(run(spell(template)).block, false, template);
         assert.equal(marker(guarded), false, template);
       }
       assert.equal(run(spell('sh -c \'test -z "@"\'')).block, true, 'the inner shell reads the value from its environment');
+    });
+
+    test('trap: the trap body reads the value from the environment (an unset variable writes no TRAPPED)', () => {
+      const run = (phaseDir) => evaluatePredicate({ kind: 'command-exit-zero', command: spell('trap \'test -n "@" && touch TRAPPED\' EXIT') }, { cwd: guarded, phaseNumber: '01', phaseDir, phaseReqIds: 'R-1' }, buildPredicateDeps());
+      assert.equal(run('').block, false);
+      assert.equal(fs.existsSync(path.join(guarded, 'TRAPPED')), false, 'with an empty value the body writes nothing');
+      assert.equal(run(PAYLOAD_DIR).block, false);
+      assert.equal(fs.existsSync(path.join(guarded, 'TRAPPED')), true);
+      assert.equal(marker(guarded), false);
     });
 
     for (const [consumer, refused, supported] of CONSUMERS) {
@@ -523,6 +534,7 @@ describe('evaluatePredicate — interpolation', () => {
         assert.throws(() => run(spell(refused)), /cannot prove sh expands it as one plain value/);
         assert.equal(marker(guarded), false);
         assert.equal(run(spell(supported)).block, false, 'the supported spelling runs and passes');
+        assert.equal(fs.existsSync(path.join(guarded, 'TRAPPED')), consumer === 'trap', 'only the trap row writes TRAPPED, and only when it read the value');
         assert.equal(marker(guarded), false);
       });
     }
