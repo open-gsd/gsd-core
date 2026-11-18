@@ -74,19 +74,29 @@ contract.
 context; all other variables stay for `sh` to interpret. GSD pastes no value into
 the command text: `sh` expands `"${GSD_PHASE_DIR}"` to the exact value, even when
 it holds shell syntax. The evaluator throws (`unevaluable`) unless every use is
-provably in plain double quotes. It refuses a variable that is unquoted, single-quoted,
-escaped by a backslash or written `$$GSD_PHASE_DIR`, and a variable after `$(`, a
-backtick, `<<`, `$'`, a quote inside `${...}` or a `#` that starts a word.
-The check is conservative, so it also refuses some correct commands. The
-evaluator does not police a command that parses the value as code. Assign the
-variable first, in plain double quotes, then use the shell variable where the
-refused construct needs it:
+provably in plain double quotes, outside any text that a consumer parses again. It
+refuses a variable that is unquoted, single-quoted, escaped by a backslash or written
+`$$GSD_PHASE_DIR`, and a variable after `$(`, a backtick, `<<`, `$'`, a quote inside
+`${...}` or a `#` that starts a word. It also refuses a double-quoted variable in the
+text that `eval`, `trap` or `sh -c` parses again (`bash`, `dash`, `ksh`, `zsh` and `ash`
+too, also under `xargs` and `find -exec`): the value would run as shell, so a phase
+directory named `x$(touch PWNED)` would create `PWNED`. A command that runs `xargs`
+without `-0` or `-d` is refused for any variable, because `xargs` splits and unquotes
+what it reads. The check is conservative, so it also refuses some correct commands.
+Assign the variable first, in plain double quotes, then use the shell variable where the
+refused construct needs it. Every later use of the copy is double-quoted too:
+`d="${GSD_PHASE_DIR}"; ... $d` splits the value again. Each row below is tested:
 
 | Refused | Accepted |
 |---|---|
 | `test -z "$(ls -A "${GSD_PHASE_DIR}")"` | `d="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"` |
 | `for id in $GSD_PHASE_REQ_IDS; do ...; done` | `ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do ...; done` |
 | `sh -c 'test -d "$GSD_PHASE_DIR"'` | `sh -c 'test -d "$1"' sh "${GSD_PHASE_DIR}"` |
+| `sh -c "test -d ${GSD_PHASE_DIR}"` | `sh -c 'test -d "$1"' sh "${GSD_PHASE_DIR}"` |
+| `eval "test -d \"${GSD_PHASE_DIR}\""` | `d="${GSD_PHASE_DIR}"; eval 'test -d "$d"'` |
+| `trap "rm ${GSD_PHASE_DIR}" EXIT` | `d="${GSD_PHASE_DIR}"; trap 'rm "$d"' EXIT` |
+| `echo "${GSD_PHASE_DIR}" \| xargs ls` | `printf '%s\0' "${GSD_PHASE_DIR}" \| xargs -0 ls` |
+| a comment line before the variable | `test -d "${GSD_PHASE_DIR}" # note` |
 
 **Breaking change (#5482).** The names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS`
 (written `${PHASE_DIR}`) are no longer set. The evaluator refuses a

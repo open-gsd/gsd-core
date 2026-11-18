@@ -190,8 +190,29 @@ describe('firstUnprovenMarker', () => {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
   });
-  test('a marker in double quotes is proven whatever command consumes the word: the scan reads quoting, not commands', () => {
-    for (const ok of ['sh -c "echo @"', 'eval "@"', 'trap "rm @" EXIT', 'echo -c x "@"', "sh -c 'echo \"$1\"' sh \"@\""]) {
+  test('a double-quoted marker in the text eval, trap or sh -c parses again is refused, in each spelling of the consumer', () => {
+    for (const bad of [
+      'eval "@"', 'eval "test -e \\"@\\""', 'eval echo "@"', 'echo ok; eval "@"', 'trap "rm @" EXIT',
+      'sh -c "echo @"', 'bash -c "echo @"', 'dash -c "echo @"', '/bin/sh -c "echo @"', 'sh -ec "echo @"', 'sh -ce "echo @"',
+      'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c "a" -c "@"', 'sh -c "a-@"',
+      'printf x | xargs sh -c "echo @"', 'find . -exec sh -c "echo @" \\;', 'echo ok;sh -c "@"', '(sh -c "@")',
+    ]) {
+      assert.equal(first(bad), 'GSD_MARK', bad);
+    }
+  });
+  test('a double-quoted marker that no consumer parses again is proven, whatever the command', () => {
+    const ok = [
+      'echo -c x "@"', 'grep -c x "@"', 'test -d "@" -a -c "@"', 'sh script.sh "@"', 'sh -x "@"', 'echo "@"; echo eval',
+      "sh -c 'echo \"$1\"' sh \"@\"", "sh -ec 'echo \"$1\"' sh \"@\"", "bash -c 'echo \"$1\"' bash \"@\" \"@\"",
+      "find . -exec sh -c 'echo \"$1\"' sh \"@\" \\;", "printf x | xargs -0 sh -c 'echo \"$1\"' sh \"@\"", "d=\"@\"; eval 'echo \"$d\"'", "d=\"@\"; trap 'echo \"$d\"' EXIT",
+    ];
+    for (const text of ok) assert.equal(first(text), undefined, text);
+  });
+  test('a command that runs xargs without -0 or -d is refused for any marker, before or after it', () => {
+    for (const bad of ['echo "@" | xargs ls', 'xargs ls < "@"', 'xargs -n1 echo "@"', 'echo "@" | xargs -I{} ls {}']) {
+      assert.equal(first(bad), 'GSD_MARK', bad);
+    }
+    for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@"; find . -delete', 'echo "@" xargsx']) {
       assert.equal(first(ok), undefined, ok);
     }
   });
@@ -261,6 +282,39 @@ describe('firstUnprovenMarker', () => {
           if (stdout.includes('GSD_MARK')) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
         // One bash spawn per run: a small count, as the other process-spawning properties use.
+        { numRuns: 30 },
+      );
+    });
+  });
+
+  describe('property: no marker that a consumer runs as code is accepted', () => {
+    // The marker's value is `a$(echo RAN)`. A shell that only expands it prints that text; one that parses it
+    // again runs the substitution and prints `aRAN`. The real shell is the oracle, as in the property above.
+    const CONSUMERS = [
+      'eval "echo @"', 'eval "echo \\"@\\""', 'sh -c "echo @"', 'bash -c "echo @"', 'sh -ec "echo @"', 'sh -o pipefail -c "echo @"',
+      'trap "echo @" EXIT', 'echo x | xargs sh -c "echo @"', 'find . -prune -exec sh -c "echo @" \\;', 'echo x | xargs -0 sh -c "echo @"',
+    ];
+    const SAFE = ['echo "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'd="@"; eval \'echo "$d"\'', 'd="@"; trap \'echo "$d"\' EXIT', 'echo "@" | xargs -0 echo', "find . -prune -exec sh -c 'echo \"$1\"' sh \"@\" \\;"];
+    const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_MARK: 'a$(echo RAN)' } });
+    const probe = (command) => runHook('-c', [command], { interpreter: 'bash', env, input: '', timeoutMs: PROBE_TIMEOUT_MS });
+    const spell = (text) => text.replaceAll('@', '${GSD_MARK}');
+
+    test('the oracle runs the value from each consumer row and only expands it from each safe row', () => {
+      for (const text of CONSUMERS) assert.match(probe(spell(text)).stdout, /aRAN/, text);
+      for (const text of SAFE) assert.doesNotMatch(probe(spell(text)).stdout, /aRAN/, text);
+    });
+    test('each consumer row is refused and each safe row is accepted', () => {
+      for (const text of CONSUMERS) assert.notEqual(firstUnprovenMarker(spell(text), MARKER), undefined, text);
+      for (const text of SAFE) assert.equal(firstUnprovenMarker(spell(text), MARKER), undefined, text);
+    });
+    test('every combination whose run executes the value is refused', () => {
+      fc.assert(
+        fc.property(fc.array(fc.constantFrom(...CONSUMERS, ...SAFE), { minLength: 1, maxLength: 4 }), (picked) => {
+          const command = picked.map(spell).join('\n');
+          const { stdout, outcome } = probe(command);
+          assert.equal(outcome, OUTCOME.EXITED, command);
+          if (/aRAN/.test(stdout)) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
+        }),
         { numRuns: 30 },
       );
     });

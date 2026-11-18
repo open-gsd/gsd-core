@@ -16,9 +16,12 @@
  * Per RULESET.TESTS.property-based: interpolation bijection property (fast-check).
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const fc = require('fast-check');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const os = require('node:os');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -240,6 +243,17 @@ describe('evaluatePredicate — interpolation', () => {
       'for id in %; do :; done',
       'test -d "@" && for id in @; do :; done',
       "sh -c 'test -d \"%\"'",
+      // A double-quoted placeholder in the text a consumer parses again: the value would run as code.
+      'sh -c "test -e @"',
+      'sh -ec "test -e @"',
+      'bash -o pipefail -c "test -e @"',
+      '/bin/sh -c -e "test -e @"',
+      'eval "test -e @"',
+      'eval echo "@"',
+      'trap "rm @" EXIT',
+      'printf x | xargs sh -c "test -e @"',
+      'find . -exec sh -c "test -e @" \\;',
+      'echo "@" | xargs ls',
       'echo "$\\\n(echo \'@\')"',
       "cat <\\\n<'EOF'\n\"@\"\nEOF",
     ];
@@ -257,12 +271,13 @@ describe('evaluatePredicate — interpolation', () => {
       'd="@"; echo "$(echo "$d")"',
       'ids="@"; for id in $ids; do echo "$id"; done',
       "sh -c 'echo \"$1\"' sh \"@\"",
-      'sh -c "echo @"',
-      'eval echo "@"',
+      'd="@"; eval \'echo "$d"\'',
+      'echo "@" | tr "\\n" "\\0" | xargs -0 echo',
+      'grep -c x /dev/null; echo "@"',
       'echo \\\n"@"',
       'echo "$\\\nd" "@"',
     ];
-    const unprovable = (name) => new RegExp(`uses \\$\\{${escapeRegex(name)}\\} where this check cannot prove sh expands it: write "\\$\\{${escapeRegex(name)}\\}" in plain double quotes`);
+    const unprovable = (name) => new RegExp(`uses \\$\\{${escapeRegex(name)}\\} where this check cannot prove sh expands it as one plain value: write "\\$\\{${escapeRegex(name)}\\}" in plain double quotes`);
 
     test('a placeholder outside plain double quotes, or after a construct the check does not read, throws and names it', () => {
       for (const name of INTERPOLATION_VAR_NAMES) {
@@ -287,6 +302,11 @@ describe('evaluatePredicate — interpolation', () => {
         ['test -z "$(ls -A "${GSD_PHASE_DIR}")"', 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"'],
         ['for id in $GSD_PHASE_REQ_IDS; do :; done', 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done'],
         ['sh -c \'test -d "$GSD_PHASE_DIR"\'', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
+        ['sh -c "test -d ${GSD_PHASE_DIR}"', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
+        ['eval "test -d \\"${GSD_PHASE_DIR}\\""', 'd="${GSD_PHASE_DIR}"; eval \'test -d "$d"\''],
+        ['trap "rm ${GSD_PHASE_DIR}" EXIT', 'd="${GSD_PHASE_DIR}"; trap \'rm "$d"\' EXIT'],
+        ['echo "${GSD_PHASE_DIR}" | xargs ls', 'printf "%s\\0" "${GSD_PHASE_DIR}" | xargs -0 ls'],
+        ['# note\ntest -d "${GSD_PHASE_DIR}"', 'test -d "${GSD_PHASE_DIR}" # note'],
       ];
       for (const [refused, rewrite] of PAIRS) {
         assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
@@ -323,6 +343,41 @@ describe('evaluatePredicate — interpolation', () => {
     const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
     assert.equal(run(`test "\${GSD_PHASE_NUMBER}" = 07 && test "\${GSD_PHASE_DIR}" = '${phaseDir}'`).block, false);
     assert.equal(run('test "${GSD_PHASE_NUMBER}" = 08').block, true);
+  });
+
+  // One row per consumer that parses its argument as shell again. `@` is the placeholder. The refused spelling pastes
+  // the value into that text; the supported one hands it over as a later argument or a variable.
+  describe('a consumer that re-parses its argument never runs the phase directory name', () => {
+    const PAYLOAD_DIR = 'x$(touch PWNED)';
+    const CONSUMERS = [
+      ['eval', 'eval "test -e \\"@/BLOCKER\\""', 'd="@"; eval \'test -n "$d"\''],
+      ['sh -c', 'sh -c "test -e @/BLOCKER"', 'sh -c \'test -n "$1"\' sh "@"'],
+      ['bash -c', 'bash -c "test -e @/BLOCKER"', 'bash -c \'test -n "$1"\' bash "@"'],
+      ['trap', 'trap "test -e @/BLOCKER" EXIT', 'd="@"; trap \'test -n "$d"\' EXIT'],
+      ['xargs sh -c', 'echo x | xargs sh -c "test -e @/BLOCKER"', 'printf "x\\0" | xargs -0 sh -c \'test -n "$1"\' sh "@"'],
+      ['find -exec sh -c', 'find . -prune -exec sh -c "test -e @/BLOCKER" \\;', 'find . -prune -exec sh -c \'test -n "$1"\' sh "@" \\;'],
+    ];
+    const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
+    const spell = (template) => template.replaceAll('@', '${GSD_PHASE_DIR}');
+    const marker = (dir) => fs.existsSync(path.join(dir, 'PWNED'));
+    let control;
+    let guarded;
+    beforeEach(() => { control = createTempDir(); guarded = createTempDir(); });
+    afterEach(() => { cleanup(control); cleanup(guarded); });
+
+    for (const [consumer, refused, supported] of CONSUMERS) {
+      test(`${consumer}: the real shell runs the payload from the refused spelling, the evaluator refuses it and creates nothing`, () => {
+        const env = isolatedEnv({ home: control, override: { GSD_PHASE_DIR: PAYLOAD_DIR } });
+        runHook('-c', [spell(refused)], { interpreter: 'sh', env, cwd: control, input: '', timeoutMs: PROBE_TIMEOUT_MS });
+        assert.equal(marker(control), true, 'positive control: this spelling executes the directory name');
+
+        const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, { cwd: guarded, phaseNumber: '01', phaseDir: PAYLOAD_DIR, phaseReqIds: 'R-1' }, buildPredicateDeps());
+        assert.throws(() => run(spell(refused)), /cannot prove sh expands it as one plain value/);
+        assert.equal(marker(guarded), false);
+        assert.equal(run(spell(supported)).block, false, 'the supported spelling runs and passes');
+        assert.equal(marker(guarded), false);
+      });
+    }
   });
 
   test('undefined context var => empty string, in the text and in the environment', () => {

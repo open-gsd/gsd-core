@@ -111,12 +111,13 @@ function assertNoLegacyPlaceholder(command: string): void {
  * would test the literal text `${GSD_PHASE_DIR}` and pass on a path that does not exist; unquoted, the value
  * splits into words. The throw is the gate's existing "unevaluable" path (a `usage` failure). The check is a
  * conservative refusal (`firstUnprovenMarker`, the shared shell scanner, which lists the refused forms), so it
- * also refuses some correct commands: assign the placeholder to a variable first.
+ * also refuses some correct commands: assign the placeholder to a variable first. A double-quoted placeholder in
+ * the text that `eval`, `trap` or `sh -c` parses again is refused too: the value would run as code.
  */
 function assertEveryPlaceholderDoubleQuoted(command: string): void {
   const name = firstUnprovenMarker(command, PLACEHOLDER_RE);
   if (name !== undefined) {
-    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it: write "\${${name}}" in plain double quotes; docs/reference/gate-predicates.md ("Phase environment values") lists the refused forms and the rewrites`);
+    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it as one plain value: write "\${${name}}" in plain double quotes, outside the text that eval, trap or sh -c parses again (pass it as an argument: sh -c 'test -d "$1"' sh "\${${name}}"); docs/reference/gate-predicates.md ("Phase environment values") lists the refused forms and the rewrites`);
   }
 }
 

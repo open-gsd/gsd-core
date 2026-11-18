@@ -77,7 +77,12 @@ export function indentWidth(line: string): number {
  * backslash and `${...}` depth. It refuses:
  * - a marker outside plain double quotes (unquoted, single-quoted, escaped by `\`, or after `$` as in `$$name`);
  * - a marker after a construct whose quoting the walk does not follow: `$(`, a backtick, `<<`, `$'`, a quote
- *   inside `${...}`, or a `#` that starts a word (a comment).
+ *   inside `${...}`, or a `#` that starts a word (a comment);
+ * - a double-quoted marker in a word that a consumer parses again: after `eval` or `trap`, or the script word of
+ *   `sh -c` (also `bash`, `dash`, `ksh`, `zsh`, `ash`; `find -exec` and `xargs` run them too). The outer shell has
+ *   expanded the value into that text, so a value such as `x$(cmd)` runs. `sh -c '...' sh "$name"`, where the value
+ *   is a later argument, is proven. A marker in a command that runs `xargs` without `-0` or `-d` is refused too:
+ *   `xargs` splits and unquotes what it reads.
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(raw: string, marker: RegExp): string | undefined {
@@ -88,8 +93,10 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
     at.lastIndex = i;
     return at.exec(command)?.[1];
   };
+  const splitsArgs = splitsWithXargs(command);
   let quote = '';
   let depth = 0;
+  let wordStart = 0;
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const here = markerAt(i);
@@ -102,6 +109,8 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
       i++;
     } else if (here && (quote !== '"' || command[i - 1] === '$')) {
       return here;
+    } else if (here && quote === '"' && (splitsArgs || isReparsedWord(command.slice(0, wordStart)))) {
+      return here;
     } else if (isUnreadConstruct(command, i, quote, depth)) {
       return marker.exec(command.slice(i))?.[1];
     } else if (command.startsWith('${', i)) {
@@ -112,9 +121,33 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
       if (c === '"') quote = '';
     } else if (c === "'" || c === '"') {
       quote = c;
+    } else if (depth === 0 && /[\s;&|()]/.test(c)) {
+      wordStart = i + 1;
     }
   }
   return undefined;
+}
+
+const COMMAND_SEPARATORS = /[\s;&|()]+/;
+const SHELL_WORD = /(?:^|\/)(?:ba|da|k|z|a)?sh$/;
+const C_OPTION = /^-[A-Za-z]*c[A-Za-z]*$/;
+
+/**
+ * True when the word that starts right after `head` is text a consumer parses as shell again: any word after
+ * `eval` or `trap`, or the script word of `sh -c` (the word after the trailing option words, one of which holds `c`).
+ */
+function isReparsedWord(head: string): boolean {
+  const words = head.split(COMMAND_SEPARATORS);
+  if (words.includes('eval') || words.includes('trap')) return true;
+  let k = words.length;
+  while (k > 0 && (words[k - 1] === '' || words[k - 1].startsWith('-'))) k--;
+  return words.slice(k).some((w) => C_OPTION.test(w)) && words.slice(0, k).some((w) => SHELL_WORD.test(w));
+}
+
+/** True when the command runs `xargs` without a delimiter option: `xargs` then splits and unquotes its input. */
+function splitsWithXargs(command: string): boolean {
+  const words = command.split(COMMAND_SEPARATORS);
+  return words.includes('xargs') && !words.some((w) => /^(?:-0|-d\S?|--null|--delimiter\b.*)$/.test(w));
 }
 
 /** A construct at `i` whose quoting `firstUnprovenMarker` does not follow: a marker after it is unprovable. */
