@@ -1405,6 +1405,8 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     [TOOLS_PATH, 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
     { cwd, env: childEnv(), timeoutMs: PROBE_TIMEOUT_MS },
   );
+  // Structure only, no rendered text: a close that proceeds writes one stderr line per gate warning.
+  const stderrWarningLines = (r) => splitLines(r.stderr.trim()).filter((line) => line !== '').length;
   const phaseDir = (name) => path.join(tmpDir, '.planning', 'phases', name);
   // Public boundary: the dry-run JSON carries the blocks (would_refuse) and the typed warnings (gate_warnings).
   const gateResult = (extra = '', cwd = tmpDir) => {
@@ -1460,6 +1462,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(warnings.map((w) => [w.kind, w.cap_id, w.phase]), [['skipped_phase', 'open-work', '01'], ['skipped_phase', 'open-work', '02']]);
     const skipped = completeRaw();
     assert.equal(skipped.exitCode, 0, skipped.stderr);
+    assert.equal(stderrWarningLines(skipped), warnings.length, 'one stderr line per gate warning');
     assert.equal(archived(), true);
   });
 
@@ -1498,6 +1501,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'not_check_predicate', cap_id: 'open-work' }] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(stderrWarningLines(r), 1, 'one stderr line for the one gate warning');
     assert.equal(archived(), true);
   });
 
