@@ -80,6 +80,8 @@ interface QuoteCtx {
   stripTabs?: boolean;
   /** Open `case` words: a `)` closes a pattern, not the enclosing `(...)`, while this is above zero. */
   cases?: number;
+  /** A `${...}` inside double quotes: a single quote there is an ordinary character. */
+  quoted?: boolean;
 }
 
 // `case` or `esac` as a command word: after a separator, a compound-command keyword or the start of the command.
@@ -100,7 +102,7 @@ function endsHeredoc(command: string, i: number, top: QuoteCtx): number {
  * double quotes, `$'...'`, backslash, `#` comments, `$(...)`, `$((...))`, `(...)`, `${...}`, backticks,
  * `case` patterns (their `)` closes no `(...)`) and here-documents.
  * A quote character pairs only inside its own state, so an apostrophe in a comment, a double-quoted string or
- * an unquoted here-document body pairs with nothing; a `<<` inside `$((...))` is a shift, not a here-document.
+ * an unquoted here-document body pairs with nothing; a `<<` anywhere inside `$((...))` is a shift, not a here-document.
  */
 export function literalDollarIndexes(command: string): number[] {
   const found: number[] = [];
@@ -133,7 +135,7 @@ export function literalDollarIndexes(command: string): number[] {
       stack.push({ kind: arith ? 'arith' : 'sub' });
       i += arith ? 2 : 1;
     } else if (c === '$' && command[i + 1] === '{') {
-      stack.push({ kind: 'param' });
+      stack.push({ kind: 'param', quoted: top.kind === 'double' });
       i++;
     } else if (top.kind === 'double' || top.kind === 'heredoc') {
       if (c === '"' && top.kind === 'double') stack.pop();
@@ -148,7 +150,7 @@ export function literalDollarIndexes(command: string): number[] {
       const eol = command.indexOf('\n', i);
       if (eol === -1) return found;
       i = eol - 1;
-    } else if (c === "'") {
+    } else if (c === "'" && !(top.kind === 'param' && top.quoted)) {
       stack.push({ kind: dollarAt === i - 1 ? 'ansi' : 'single' });
     } else if (c === '"') {
       stack.push({ kind: 'double' });
@@ -161,7 +163,7 @@ export function literalDollarIndexes(command: string): number[] {
         stack.pop();
         if (command[i + 1] === ')') i++;
       } else if (top.kind === 'sub' && !top.cases) stack.pop();
-    } else if (c === '<' && command[i + 1] === '<' && prev !== '<' && top.kind !== 'arith') {
+    } else if (c === '<' && command[i + 1] === '<' && prev !== '<' && !stack.some((q) => q.kind === 'arith')) {
       HEREDOC_OPEN_RE.lastIndex = i;
       const m = HEREDOC_OPEN_RE.exec(command);
       if (m) {

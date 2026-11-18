@@ -263,6 +263,8 @@ describe('evaluatePredicate — interpolation', () => {
       assert.throws(() => run(`cat <<'EOF'\n\${GSD_PHASE_DIR}\nEOF`), quoted);
       assert.throws(() => run(`cat <<EOF\nit's\nEOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
       assert.throws(() => run(`cat <<<EOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.throws(() => run(`echo $(( (1<<2) ))\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
+      assert.doesNotThrow(() => run(`test -d "\${x:-'\${GSD_PHASE_DIR}'}"`));
       assert.throws(() => run(`cat <<-EOF\n\tx\n\tEOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
       assert.doesNotThrow(() => run(`cat <<EOF\nsay "hi it's\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
     });

@@ -177,6 +177,11 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
     { text: 'echo "$(case $v in a) echo "it\'s";; esac)" \'@\'', literal: true },
     { text: 'echo "$(case $v in (a|b) echo "it\'s";; esac)" "@"', literal: false },
     { text: 'echo "$(echo case) it\'s" "@"', literal: false },
+    { text: 'echo $(( (1<<2) ))\necho \'@\'', literal: true },
+    { text: '(( (x<<n) ))\necho \'@\'', literal: true },
+    { text: 'echo "${x:-\'@\'}"', literal: false },
+    { text: "cat <<-EOF\n\tit's @\n\tEOF", literal: false },
+    { text: 'echo "$(esac) it\'s" \'@\'', literal: true },
   ];
   test('the indexes equal the positions of the literal markers', () => {
     fc.assert(
