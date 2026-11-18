@@ -24,7 +24,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 // Seeded fast-check convention: require the shared setup helper (NOT
 // 'fast-check' directly) so numRuns/seed are configured globally before any
 // fc.assert() call — mirrors tests/pattern.test.cjs / tests/text-lines.test.cjs.
@@ -256,9 +256,12 @@ describe('firstUnprovenMarker', () => {
       fc.assert(
         fc.property(fc.array(fc.constantFrom(...FRAGMENTS), { minLength: 1, maxLength: 5 }), (picked) => {
           const command = picked.map((text) => text.replaceAll('@', '${GSD_MARK}')).join('\n');
-          const { stdout } = probe(command);
+          const { stdout, outcome } = probe(command);
+          assert.equal(outcome, OUTCOME.EXITED, command);
           if (stdout.includes('GSD_MARK')) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
+        // One bash spawn per run: a small count, as the other process-spawning properties use.
+        { numRuns: 30 },
       );
     });
   });
