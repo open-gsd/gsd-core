@@ -2542,6 +2542,31 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     assert.match(on.stdout, /NULLGLOB=on/, 'nullglob that started on must stay on');
   });
 
+  for (const shell of ['bash', 'zsh']) {
+    for (const option of ['nounset', 'noclobber']) test(`matching plan completes with caller ${option} in ${shell} (#4944)`, (t) => {
+      const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+      if (shell === 'zsh' && skipIfNoZsh(t)) return;
+      const interpreter = shell === 'bash' && process.platform === 'darwin' ? '/bin/bash' : shell;
+      writeRequirements(tmpDir, REQUIREMENTS);
+      const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-feature');
+      fs.mkdirSync(phaseDir, { recursive: true });
+      const plan = path.join(phaseDir, '05-01-PLAN.md');
+      fs.writeFileSync(plan, '---\nphase: 5\nplan: 1\nrequirements: [SOLO-01]\n---\nPlan\n');
+      fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), 'done\n');
+
+      const result = runExtractedExecutorBash(tmpDir, {
+        PHASE_DIR: phaseDir,
+        PHASE: '5',
+        PLAN: '1',
+        REQ_IDS: 'SOLO-01',
+      }, `set -o ${option}`, interpreter, `if [[ -o ${option} ]]; then echo CALLER_OPTION=on; else echo CALLER_OPTION=off; fi`);
+      assertShellExit(result, result.stderr || result.stdout);
+      assert.match(result.stdout, /RESOLVED_PLAN_PATH=.*05-01-PLAN\.md/);
+      assert.match(result.stdout, /CALLER_OPTION=on/, 'the caller option must stay enabled');
+      assert.ok(readRequirements(tmpDir).includes('- [x] **SOLO-01**'), `ready requirement must complete: ${result.stderr}`);
+    });
+  }
+
   test('caller failglob survives the gate and plan resolves under bash (#4944)', (t) => {
     const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
     writeRequirements(tmpDir, REQUIREMENTS);

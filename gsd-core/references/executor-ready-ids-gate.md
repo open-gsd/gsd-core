@@ -81,7 +81,7 @@ else
       C=()
       for pfx in "${PHASE:-}" "$PH"; do for pl in "$P" "${PLAN:-}"; do
         for f in "$D/plans/PLAN-${pl}.md" "$D/plans/PLAN-${pl}-"*.md "$D/${pfx}-${pl}-PLAN.md" "$D/${pfx}-${pl}-"*-PLAN.md; do
-          [ -f "$f" ] && { case " ${C[*]} " in *" $f "*) ;; *) _in "$f" "$D" && _mp "$f" && C+=("$f");; esac; }
+          [ -f "$f" ] && { case " ${C[*]-} " in *" $f "*) ;; *) _in "$f" "$D" && _mp "$f" && C+=("$f");; esac; }
         done
       done; done
       if [ -n "${ZSH_VERSION:-}" ]; then [ "$_ng" = 1 ] || unsetopt NULL_GLOB; else [ "$_ng" = 1 ] || shopt -u nullglob; [ "$_fg" = 1 ] && shopt -s failglob; fi
@@ -94,7 +94,7 @@ if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && [ -n "$(printf '%s' "${REQ_IDS:
   _ef=$(mktemp 2>/dev/null || mktemp -t gsd.XXXXXX 2>/dev/null || echo "/tmp/gsd.$$.$RANDOM")
   # zsh set -f is NO_RCS, not noglob. Bracketed IDs need noglob on both shells.
   if [ -n "${ZSH_VERSION:-}" ]; then setopt SH_WORD_SPLIT; setopt noglob; else set -f; fi
-  READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS} 2>"$_ef" || true)
+  READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS} 2>|"$_ef" || true)
   READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>>"$_ef" | tr '\n' ' ' || true)
   _mc=0
   if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
