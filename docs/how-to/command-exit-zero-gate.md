@@ -33,7 +33,7 @@ the project root as its cwd and the inherited process environment.
 node "${GSD_CAP_DIR}/checks/pre-ship.js"
 ```
 
-The command can read three loop-context environment variables. Write each one in plain double quotes (`"${GSD_PHASE_DIR}"`). An unquoted, single-quoted or escaped use reports `unevaluable`, and so does a use inside `$(...)`, a backtick, a here-document or after a `#` comment word; assign the value to a variable first, as [gate-predicates](../reference/gate-predicates.md) shows. The old names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS` are no longer set. A command that writes one in the braced form (`${PHASE_DIR}`) is refused, and the message names the replacement. A bare `$PHASE_DIR` is the gate's own shell variable and runs. Migration: `'${PHASE_NUMBER}'` becomes `"${GSD_PHASE_NUMBER}"`.
+The command can read three loop-context environment variables. Write each one in plain double quotes (`"${GSD_PHASE_DIR}"`). A use that is not provably in plain double quotes reports `unevaluable`; assign the value to a variable first. [gate-predicates](../reference/gate-predicates.md) lists the refused forms and shows the rewrites. The old names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS` are no longer set. A command that writes one in the braced form (`${PHASE_DIR}`) is refused, and the message names the replacement. A bare `$PHASE_DIR` is the gate's own shell variable and runs. Migration: `'${PHASE_NUMBER}'` becomes `"${GSD_PHASE_NUMBER}"`.
 
 | Variable | Meaning |
 |---|---|

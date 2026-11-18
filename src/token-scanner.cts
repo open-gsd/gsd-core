@@ -77,7 +77,9 @@ export function indentWidth(line: string): number {
  * backslash and `${...}` depth. It refuses:
  * - a marker outside plain double quotes (unquoted, single-quoted, escaped by `\`, or after `$` as in `$$name`);
  * - a marker after a construct whose quoting the walk does not follow: `$(`, a backtick, `<<`, `$'`, a quote
- *   inside `${...}`, or a `#` that starts a word (a comment).
+ *   inside `${...}`, a `#` that starts a word (a comment), or the word `eval`;
+ * - a marker inside the double-quoted script string of `-c` (`sh -c "...${name}..."`): the outer shell pastes
+ *   the value into the script text, where shell syntax in the value would run.
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(command: string, marker: RegExp): string | undefined {
@@ -88,6 +90,7 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
   };
   let quote = '';
   let depth = 0;
+  let script = false; // inside the double-quoted argument that follows a `-c` option word
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const here = markerAt(i);
@@ -98,7 +101,7 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
       const escaped = markerAt(i + 1);
       if (escaped) return escaped;
       i++;
-    } else if (here && (quote !== '"' || command[i - 1] === '$')) {
+    } else if (here && (quote !== '"' || script || command[i - 1] === '$')) {
       return here;
     } else if (isUnreadConstruct(command, i, quote, depth)) {
       return marker.exec(command.slice(i))?.[1];
@@ -107,9 +110,13 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
     } else if (c === '}' && depth > 0) {
       depth--;
     } else if (quote === '"') {
-      if (c === '"') quote = '';
+      if (c === '"') {
+        quote = '';
+        script = false;
+      }
     } else if (c === "'" || c === '"') {
       quote = c;
+      script = c === '"' && /(?:^|\s)-[A-Za-z]*c\s+$/.test(command.slice(0, i));
     }
   }
   return undefined;
@@ -121,5 +128,6 @@ function isUnreadConstruct(command: string, i: number, quote: string, depth: num
   const two = command.slice(i, i + 2);
   if (two === '$(' || two === "$'" || two === '<<' || c === '`') return true;
   if (depth > 0) return c === "'" || c === '"';
+  if (quote === '' && command.startsWith('eval', i) && /^eval(?:\s|$)/.test(command.slice(i)) && (i === 0 || /[\s;&|()]/.test(command[i - 1]))) return true;
   return c === '#' && quote === '' && (i === 0 || /[\s;&|()<>]/.test(command[i - 1]));
 }

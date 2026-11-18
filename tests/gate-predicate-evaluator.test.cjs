@@ -239,6 +239,11 @@ describe('evaluatePredicate — interpolation', () => {
       'test -d "@" && for id in @; do :; done',
       "sh -c 'test -d \"%\"'",
       "eval 'test -d \"@\"'",
+      'sh -c "test -d \\"@\\""',
+      'bash -lc "echo %"',
+      'eval "test -d @"',
+      'eval echo "@"',
+      'true; eval echo "@"',
     ];
     // Each row makes `sh` print its placeholder in plain double quotes, so the real shell proves the check keeps them.
     const ALLOWED = [
@@ -254,6 +259,8 @@ describe('evaluatePredicate — interpolation', () => {
       'd="@"; echo "$(echo "$d")"',
       'ids="@"; for id in $ids; do echo "$id"; done',
       "sh -c 'echo \"$1\"' sh \"@\"",
+      'echo -c x "@"',
+      'echo evaluate "@"',
     ];
     const unprovable = (name) => new RegExp(`uses \\$\\{${escapeRegex(name)}\\} where this check cannot prove sh expands it: write "\\$\\{${escapeRegex(name)}\\}" in plain double quotes`);
 
@@ -280,6 +287,7 @@ describe('evaluatePredicate — interpolation', () => {
         ['test -z "$(ls -A "${GSD_PHASE_DIR}")"', 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"'],
         ['for id in $GSD_PHASE_REQ_IDS; do :; done', 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done'],
         ['sh -c \'test -d "$GSD_PHASE_DIR"\'', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
+        ['sh -c "test -d \\"${GSD_PHASE_DIR}\\""', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
       ];
       for (const [refused, rewrite] of PAIRS) {
         assert.throws(() => run(refused), /cannot prove sh expands it/, refused);

@@ -187,6 +187,14 @@ describe('firstUnprovenMarker', () => {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
   });
+  test('a marker in the double-quoted script of -c, or after the word eval, is refused', () => {
+    for (const bad of ['sh -c "test -d \\"@\\""', 'bash -lc "echo @"', 'sh -ec  "echo $GSD_MARK"', 'eval "@"', 'eval echo "@"', 'true;eval echo "@"', '(eval "@")']) {
+      assert.equal(first(bad), 'GSD_MARK', bad);
+    }
+    for (const ok of ['echo -c x "@"', 'echo "-c" "@"', 'echo evaluate "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'sh -c "echo a" sh "@"', 'echo "a" -c "b" "@"']) {
+      assert.equal(first(ok), undefined, ok);
+    }
+  });
   test('a # that starts a word is refused; a # inside a word, in quotes or in ${...} is not', () => {
     for (const lead of ['', 'echo ok ', 'echo ok;', 'echo ok&', 'echo ok|', '(', 'echo ok)', 'echo >', 'echo <', 'echo ok\n']) {
       // The comment holds a lone `"`: read as code it would open a span that proves the later single-quoted marker.
@@ -213,24 +221,31 @@ describe('firstUnprovenMarker', () => {
 
   describe('property: no marker that the real shell leaves literal is accepted', () => {
     // `@` is the marker. Each fragment prints it; a hand-written label would repeat the reasoning under test,
-    // so the oracle is the real `sh`: a literal marker shows its name in stdout.
+    // so the oracle is the real shell: a literal marker shows its name in stdout. The fragments use bash syntax
+    // (`$'..'`, `<<<`), which dash rejects, so the oracle is `bash` and each fragment must run clean on its own:
+    // a syntax error would print nothing and skip the assertion below.
     const FRAGMENTS = [
       'echo @', "echo '@'", "echo $'a\\'b @'", "cat <<'EOF'\n@\nEOF", 'cat <<"EOF"\n@\nEOF', 'cat <<\\EOF\n@\nEOF',
       "echo $(echo '@')", 'echo "it\'s @"', "# it's @", "cat <<EOF\nit's @\nEOF", "echo `echo \"it's @\"`", 'echo $((1<<2)) "@"',
       'echo "${x:-"it\'s"}" \'@\'', 'echo "${x:-"it\'s"}" "@"', 'echo "$(case $v in a) echo "it\'s";; esac)" \'@\'',
       'echo "$(echo case) it\'s" "@"', 'echo $(( (1<<2) ))\necho \'@\'', 'echo "${x:-\'@\'}"', "cat <<-EOF\n\tit's @\n\tEOF",
-      "cat <<EOF\n${x:-it's @}\nEOF", 'echo "${x:-${y:-\'}}" "@"', "cat << 'EOF'\n@\nEOF", "cat <<<'@'", 'cat <<<"@"',
+"cat << 'EOF'\n@\nEOF", "cat <<<'@'", 'cat <<<"@"',
       'echo it\\\'s "@"', 'echo "a\\"b @"', "echo a#b '@'", "echo x;# it's @", "cat <<'a\\b'\n@\na\\b", "cat <<'ab\n@'",
       "cat <<EOF\n\tEOF\nit's @\nEOF", "cat <<EOF # it's\nbody it's @\nEOF", "echo '\\' '@'", 'echo ${x:-\'@\'}', 'echo "${x%% #*}" \'@\'',
       "echo $(:)#'@'", "(:)# it's @", 'echo "$(echo $((1)))" \'@\'',
-      'echo \\@', 'echo "\\@"', 'echo "$$@"', "echo a\\\n#'@'", 'echo "${GSD_MARK#\'@\'}"', 'echo ">#@"', "echo >#x; echo '@'", 'echo "a"\'@\'', 'echo "$(echo "@")"',
+      'echo \\@', 'echo "\\@"', 'echo "$$@"', "echo a\\\n#'@'", 'echo "${GSD_MARK#\'@\'}"', 'echo ">#@"', 'echo "a"\'@\'', 'echo "$(echo "@")"',
     ];
+    const { spawnSync } = require('node:child_process');
+    const probe = (command) => spawnSync('bash', ['-c', command], { env: { ...process.env, GSD_MARK: 'SENT' }, encoding: 'utf8', input: '', timeout: PROBE_TIMEOUT_MS });
+    test('each fragment runs clean in the oracle shell, so no combination is silenced by a syntax error', () => {
+      const failed = FRAGMENTS.filter((text) => probe(text.replaceAll('@', '${GSD_MARK}')).status !== 0);
+      assert.deepStrictEqual(failed, []);
+    });
     test('every combination with a literal marker is refused', () => {
-      const { spawnSync } = require('node:child_process');
       fc.assert(
         fc.property(fc.array(fc.constantFrom(...FRAGMENTS), { minLength: 1, maxLength: 5 }), (picked) => {
           const command = picked.map((text) => text.replaceAll('@', '${GSD_MARK}')).join('\n');
-          const { stdout } = spawnSync('sh', ['-c', command], { env: { ...process.env, GSD_MARK: 'SENT' }, encoding: 'utf8', input: '', timeout: PROBE_TIMEOUT_MS });
+          const { stdout } = probe(command);
           if (stdout.includes('GSD_MARK')) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
       );
