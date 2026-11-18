@@ -408,14 +408,20 @@ const AUTO_COMPACT_SUMMARY_BUFFER = 13_000;
 // window the same way or its 100% lands far too early (`500k` read as 500,
 // clamped to 100k, put 100% at 67,000 tokens).
 const AUTO_COMPACT_SUFFIX_RE = /^(\d+(?:\.\d+)?)([kKmM])$/;
+const AUTO_COMPACT_SUFFIX_MULTIPLIER = { k: 1_000, m: 1_000_000 };
+
+/** The window an env value spells, before the clamp: a suffixed number, grouped digits, or a numeric prefix. */
+function parseAutoCompactWindowNumber(s) {
+  const suffixed = AUTO_COMPACT_SUFFIX_RE.exec(s);
+  if (suffixed) {
+    return Math.round(parseFloat(suffixed[1]) * AUTO_COMPACT_SUFFIX_MULTIPLIER[suffixed[2].toLowerCase()]);
+  }
+  return /^\d[\d_,]*$/.test(s) ? parseInt(s.replace(/[_,]/g, ''), 10) : parseInt(s, 10);
+}
 
 function parseAutoCompactWindowEnv(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') return null;
-  const s = raw.trim();
-  const suffixed = AUTO_COMPACT_SUFFIX_RE.exec(s);
-  const n = suffixed
-    ? Math.round(parseFloat(suffixed[1]) * (suffixed[2].toLowerCase() === 'k' ? 1_000 : 1_000_000))
-    : (/^\d[\d_,]*$/.test(s) ? parseInt(s.replace(/[_,]/g, ''), 10) : parseInt(s, 10));
+  const n = parseAutoCompactWindowNumber(raw.trim());
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.max(AUTO_COMPACT_WINDOW_MIN, Math.min(AUTO_COMPACT_WINDOW_MAX, n));
 }
