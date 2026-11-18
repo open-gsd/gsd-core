@@ -526,14 +526,19 @@ for (const [label, content, expected] of [
   test(`frontmatter parser preserves argv for ${label}`, () => assert.deepEqual(frontmatterCalls(content), [expected]));
 }
 
-test('a spaced positional frontmatter field reaches the runtime argument validator', (t) => {
+test('a spaced positional frontmatter field reads the same value as --field at runtime (#6087)', (t) => {
   const calls = frontmatterCalls('gsd_run query frontmatter get "$P" must_haves');
   assert.equal(calls.length, 1);
   const dir = createTempProject('agent-query-spaced-');
   t.after(() => cleanup(dir));
   const fixture = path.join(dir, 'PLAN.md');
-  fs.writeFileSync(fixture, '---\nmust_haves: {}\n---\n');
-  assert.equal(runGsdTools(['query', 'frontmatter.get', fixture, ...calls[0].args], dir).success, false);
+  fs.writeFileSync(fixture, '---\nmust_haves:\n  truths: [a]\n---\n');
+  const positional = runGsdTools(['query', 'frontmatter.get', fixture, ...calls[0].args], dir);
+  const flagged = runGsdTools(['query', 'frontmatter.get', fixture, '--field', calls[0].field], dir);
+  assert.equal(positional.success, true, positional.error);
+  assert.equal(flagged.success, true, flagged.error);
+  assert.deepEqual(JSON.parse(positional.output), JSON.parse(flagged.output));
+  assert.deepEqual(JSON.parse(positional.output), { must_haves: { truths: ['a'] } });
 });
 
 test('quoted heredoc content is data rather than executable query calls', () => {
