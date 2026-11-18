@@ -40,14 +40,14 @@ function recordPath() {
 }
 
 /** Run `query dispatch-isolation --json` for the fixture plan; `present` says whether the foreign binaries are on PATH. */
-function dispatch(host, { present = true } = {}) {
+function dispatch(host, { present = true, argv = null } = {}) {
   const env = {
     HOME: project, USERPROFILE: project, GSD_HOME: project, GSD_RUNTIME: host, GSD_OPENCODE_GENERATION: '1',
     PATH: present ? `${binWithRuntimes}${path.delimiter}${process.env.PATH}` : binEmpty,
   };
   cleanup(recordPath());
   const result = runGsdTools(
-    ['query', 'dispatch-isolation', '--phase', PHASE, '--plan', PLAN, '--cwd-target', worktreeTarget, '--prompt', 'go', '--json'],
+    argv || ['query', 'dispatch-isolation', '--phase', PHASE, '--plan', PLAN, '--cwd-target', worktreeTarget, '--prompt', 'go', '--json'],
     project,
     env,
   );
@@ -260,6 +260,85 @@ describe('#6303 every unhappy case degrades to the host dispatch with one reason
       { numRuns: 12, seed: 6303 },
     );
   });
+});
+
+describe('#6303 review hardening: forced isolation, no worktree yet, validation, model rules', () => {
+  const gateOn = { runtime: 'claude', workflow: { cross_runtime_execution: true } };
+
+  test('--force-isolation wins: the foreign dispatch never overrides a forced decision', () => {
+    writeConfig(gateOn);
+    writePlan({ executor_runtime: 'codex' });
+    const { output, record } = dispatch('claude', { argv: ['query', 'dispatch-isolation', '--phase', PHASE, '--plan', PLAN, '--force-isolation', 'none', '--cwd-target', worktreeTarget, '--prompt', 'go', '--json'] });
+    assert.equal(output.fallback, 'forced_isolation');
+    assert.equal(output.isolation, 'none');
+    assert.equal(output.exec, null);
+    assert.equal('producer' in record, false);
+  });
+
+  test('before the worktree exists the plan decision is orchestrator-worktree with no exec', () => {
+    writeConfig(gateOn);
+    writePlan({ executor_runtime: 'codex' });
+    const { output, record } = dispatch('claude', { argv: ['query', 'dispatch-isolation', '--phase', PHASE, '--plan', PLAN, '--json'] });
+    assert.equal(output.executorRuntime, 'codex');
+    assert.equal(output.fallback, null);
+    assert.equal(output.isolation, 'orchestrator-worktree');
+    assert.equal(output.exec, null);
+    assert.equal(record.producer, 'dispatch-isolation');
+  });
+
+  test('without --plan nothing is declared', () => {
+    writeConfig(gateOn);
+    writePlan({ executor_runtime: 'codex' });
+    const { output } = dispatch('claude', { argv: ['query', 'dispatch-isolation', '--phase', PHASE, '--cwd-target', worktreeTarget, '--prompt', 'go', '--json'] });
+    assert.equal(output.executorRuntime, null);
+    assert.equal(output.fallback, null);
+    assert.equal(output.isolation, 'harness-worktree');
+  });
+
+  test('a padded id is trimmed to the registry key', () => {
+    writeConfig(gateOn);
+    writePlan({ executor_runtime: '"  codex  "' });
+    const { output } = dispatch('claude');
+    assert.equal(output.executorRuntime, 'codex');
+    assert.equal(output.fallback, null);
+  });
+
+  for (const bad of ['"codex; echo pwned"', '"-codex"', '"co dex"']) {
+    test(`a non-id value (${bad}) is unknown_runtime and its text is not echoed`, () => {
+      writeConfig(gateOn);
+      writePlan({ executor_runtime: bad });
+      const { output } = dispatch('claude');
+      assert.equal(output.fallback, 'unknown_runtime');
+      assert.equal(output.executorRuntime, null);
+      assert.equal(output.exec, null);
+    });
+  }
+
+  test('argv order and cwd are pinned: exec, model, cd, prompt', () => {
+    writeConfig({ ...gateOn, execute: { models: { codex: TARGET_MODEL } } });
+    writePlan({ executor_runtime: 'codex' });
+    const { output } = dispatch('claude');
+    assert.deepEqual(output.exec.args, ['exec', '--model', TARGET_MODEL, '--cd', worktreeTarget, 'go']);
+    assert.equal(output.exec.cwd, worktreeTarget);
+  });
+
+  test('an Anthropic-flavored model for a foreign target is kept (the Codex-host rule does not apply)', () => {
+    writeConfig({ ...gateOn, execute: { models: { codex: 'anthropic/claude-sonnet-4' } } });
+    writePlan({ executor_runtime: 'codex' });
+    const { output } = dispatch('claude');
+    assert.ok(output.exec.args.includes('anthropic/claude-sonnet-4'));
+  });
+
+  for (const [label, length, kept] of [['limit-1', 199, true], ['limit', 200, true], ['limit+1', 201, false]]) {
+    test(`model id length ${label} (${length}) is ${kept ? 'passed' : 'dropped'}`, () => {
+      const model = 'm'.repeat(length);
+      writeConfig({ ...gateOn, execute: { models: { codex: model } } });
+      writePlan({ executor_runtime: 'codex' });
+      const { output } = dispatch('claude');
+      assert.equal(output.fallback, null);
+      assert.equal(output.exec.args.includes(model), kept);
+    });
+  }
 });
 
 describe('#6303 the foreign worker gets a lifecycle record naming its runtime', () => {

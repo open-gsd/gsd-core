@@ -2484,7 +2484,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       exec = cross.exec;
       harnessFlag = null;
     } else if (cross.fallback) {
-      process.stderr.write(`note: plan ${planArg} declares executor_runtime '${cross.executorRuntime}' but is dispatched on the host (${cross.fallback}).\n`);
+      process.stderr.write(`note: plan ${planArg} declares executor_runtime${cross.executorRuntime ? ` '${cross.executorRuntime}'` : ''} but is dispatched on the host (${cross.fallback}).\n`);
     }
 
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
@@ -2746,13 +2746,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * documented desired behavior of falling back to the session model rather
    * than aborting the wave.
    */
-  function resolveDispatchModelPin(agentName, rawValue) {
+  function resolveDispatchModelPin(agentName, rawValue, { foreignTarget = false } = {}) {
     if (typeof rawValue !== 'string') return undefined; // not a string -> no model
     const trimmed = rawValue.trim();
     if (trimmed === '') return undefined; // whitespace-only -> no model, no warning (#3241)
     if (trimmed.toLowerCase() === 'inherit') return undefined; // sentinel -> no model, no warning
     const { isAnthropicFlavoredModel } = require('./lib/model-catalog.cjs');
-    if (isAnthropicFlavoredModel(trimmed)) {
+    // #6303: the Anthropic-flavored rule guards a Codex host's passive model posture. A foreign target
+    // is chosen by the operator under `execute.models.<runtime>`, and a runtime such as opencode
+    // legitimately takes `anthropic/claude-...`, so only the charset, length and leading-dash rules apply.
+    if (!foreignTarget && isAnthropicFlavoredModel(trimmed)) {
       _warnDispatchModelPinDropped(agentName, rawValue, 'is an Anthropic-flavored model/alias, not a valid Codex model');
       return undefined;
     }
@@ -2949,32 +2952,43 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const declared = require('./lib/phase.cjs').resolvePlanExecutorRuntime(cwd, parsed.phase || null, parsed.plan);
       if (declared === null) return none;
       const target = declared.trim();
-      const degrade = (fallback) => ({ executorRuntime: target, fallback, isolation: null, exec: null });
+      // The value is plan text. Only a bare runtime id is ever echoed or looked up (verify plan-structure
+      // holds the same grammar); anything else is an unknown runtime reported without its text.
+      const isId = /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(target);
+      const degrade = (fallback) => ({ executorRuntime: isId ? target : null, fallback, isolation: null, exec: null });
+      if (!isId) return degrade('unknown_runtime');
       const { readScopedConfigValue } = require('./lib/planning-workspace.cjs');
       const gate = readScopedConfigValue(cwd, ['workflow', 'cross_runtime_execution']);
       if (!gate.present || gate.value !== true) return degrade('gate_off');
       if (projectWorktreesOptedOut(cwd)) return degrade('worktrees_off');
+      // A caller that forced this plan's isolation (the #2474 submodule gate, the #683 base-check
+      // degrade) has decided it with context this resolver cannot see; the foreign dispatch never overrides it.
+      if (parsed['force-isolation'] && DISPATCH_ISOLATION_VOCABULARY.has(parsed['force-isolation'])) return degrade('forced_isolation');
       const runtimes = require('./lib/capability-registry.cjs').runtimes;
       if (!runtimes || !Object.hasOwn(runtimes, target)) return degrade('unknown_runtime');
       if (target === hostRuntimeId) return degrade('same_runtime');
       const entry = runtimes[target];
       const declaredIsolation = entry?.runtime?.hostIntegration?.dispatch?.isolation;
-      const cwdTarget = parsed['cwd-target'];
-      if (declaredIsolation !== 'orchestrator-worktree' || !cwdTarget) return degrade('descriptor_unresolved');
+      const descriptor = entry?.runtime?.orchestratorExec;
+      if (declaredIsolation !== 'orchestrator-worktree' || !descriptor || typeof descriptor.command !== 'string') return degrade('descriptor_unresolved');
+      // Probe PATH before anything that may spawn (the opencode generation probe runs `opencode --version`).
+      if (!commandOnPath(descriptor.command)) return degrade('binary_absent');
       // Model: the target runtime's own key only, applied only when its descriptor declares a modelFlag.
       let model;
-      if (typeof entry.runtime.orchestratorExec?.modelFlag === 'string' && entry.runtime.orchestratorExec.modelFlag.length > 0) {
+      if (typeof descriptor.modelFlag === 'string' && descriptor.modelFlag.length > 0) {
         const pin = readScopedConfigValue(cwd, ['execute', 'models', target]);
-        model = resolveDispatchModelPin('gsd-executor', pin.present ? pin.value : null);
+        model = resolveDispatchModelPin('gsd-executor', pin.present ? pin.value : null, { foreignTarget: true });
       }
+      // Without a worktree yet (the per-plan decision is taken before it is created) the descriptor is
+      // proven resolvable against the project directory and no exec is returned.
+      const cwdTarget = parsed['cwd-target'] || cwd;
       const resolution = resolveRuntimeOrchestratorExec(target, entry, cwdTarget, parsed.prompt ?? undefined, model);
       if (!resolution.ok) return degrade('descriptor_unresolved');
-      if (!commandOnPath(resolution.command)) return degrade('binary_absent');
       return {
         executorRuntime: target,
         fallback: null,
         isolation: 'orchestrator-worktree',
-        exec: { command: resolution.command, args: resolution.args, cwd: resolution.cwd },
+        exec: parsed['cwd-target'] ? { command: resolution.command, args: resolution.args, cwd: resolution.cwd } : null,
       };
     } catch {
       return none;

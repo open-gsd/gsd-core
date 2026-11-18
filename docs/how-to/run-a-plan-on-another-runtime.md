@@ -34,6 +34,8 @@ The model is read only from `execute.models.<runtime>`. Your host's model and `m
 
 ## 4. Check what will happen
 
+Without `--cwd-target` the route answers the per-plan decision (no worktree exists yet) and `exec` is `null`; with it, `exec` is the command to spawn.
+
 ```bash
 gsd-tools query dispatch-isolation --json --phase <phase> --plan <plan-id> --cwd-target <worktree> --prompt go
 ```
@@ -55,6 +57,7 @@ When a precondition fails the plan runs on the host as if the field were absent,
 | `gate_off` | `workflow.cross_runtime_execution` is not `true` |
 | `worktrees_off` | `workflow.use_worktrees` is `false` |
 | `unknown_runtime` | The id is not a registered runtime |
+| `forced_isolation` | The caller forced this plan's isolation (`--force-isolation`, for example the submodule gate), and a forced decision is never overridden |
 | `same_runtime` | The target is the host |
 | `descriptor_unresolved` | The target does not support process-spawn execution, or its command cannot be built |
 | `binary_absent` | The target command is not on `PATH` |
