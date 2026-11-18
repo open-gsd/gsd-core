@@ -361,3 +361,71 @@ describe('#3727 — code-review.md structural dispatch contract', () => {
 });
   });
 }
+
+// ---------------------------------------------------------------------------
+// #6251 review Minor 1 — the fix has two halves: the parser throws on a
+// refused flag, and the shipped workflow block (`FLAGS_JSON=$(node -e …)
+// || exit 1`) turns that into a halted workflow instead of an empty IR (the
+// old `2>/dev/null` hid any parser failure, so the review silently re-scoped).
+// These rows execute the SHIPPED block, extracted from the workflow text, so a
+// later edit that drops the `|| exit 1` or the `catch` fails here instead of
+// silently re-scoping reviews.
+// ---------------------------------------------------------------------------
+
+describe('#6251 — the shipped code-review.md flag block halts on a refused flag', () => {
+  const { execFileSync } = require('node:child_process');
+  const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const reviewFs = require('node:fs');
+  const reviewPath = require('node:path');
+  const reviewRoot = reviewPath.resolve(__dirname, '..');
+  const reviewWorkflowPath = reviewPath.join(reviewRoot, 'gsd-core', 'workflows', 'code-review.md');
+
+  const workflowSrc = reviewFs.readFileSync(reviewWorkflowPath, 'utf8');
+  const blockStart = workflowSrc.indexOf('FLAGS_JSON=$(node -e "');
+  const blockEndMarker = '" -- "$@") || exit 1';
+  const blockEnd = workflowSrc.indexOf(blockEndMarker, blockStart);
+  assert.ok(blockStart !== -1, 'code-review.md must contain the FLAGS_JSON=$(node -e …) block');
+  assert.ok(blockEnd !== -1, 'code-review.md FLAGS_JSON block must end with " -- "$@") || exit 1');
+  const flagsBlock = workflowSrc.slice(blockStart, blockEnd + blockEndMarker.length);
+
+  const runBlock = (args) => {
+    // The shipped block only ASSIGNS FLAGS_JSON (the workflow's next lines read
+    // the variable), so the harness prints it in the same shell afterwards —
+    // `|| exit 1` still halts before the printf when the parser refuses.
+    const harness = flagsBlock + `; printf '%s' "$FLAGS_JSON"`;
+    try {
+      // The block ends with `-- "$@"`, so the argv must arrive as real bash -c
+      // positional arguments (argv[0] is the $0 placeholder).
+      const stdout = execFileSync('bash', ['-c', harness, 'code-review', ...args], {
+        encoding: 'utf8',
+        timeout: QUICK_SPAWN_TIMEOUT_MS,
+        env: { ...process.env, GSD_LIB_DIR: reviewPath.join(reviewRoot, 'gsd-core', 'bin', 'lib') },
+      });
+      return { exitCode: 0, stdout, stderr: '' };
+    } catch (err) {
+      return { exitCode: err.status, stdout: err.stdout || '', stderr: err.stderr || '' };
+    }
+  };
+
+  test('the extracted block is the shipped one (sanity)', () => {
+    assert.ok(flagsBlock.includes('parseCodeReviewFlags'), 'block must call parseCodeReviewFlags');
+    assert.ok(flagsBlock.includes('|| exit 1'), 'block must halt via || exit 1');
+    assert.ok(flagsBlock.includes('catch'), 'block must catch the parser error');
+  });
+
+  test('bare --files: non-zero exit, ERROR: on stderr, no JSON on stdout', { skip: process.platform === 'win32' }, () => {
+    const r = runBlock(['184', '--files']);
+    assert.notStrictEqual(r.exitCode, 0, `the workflow must halt on a refused flag, got stdout: ${r.stdout}`);
+    assert.ok(r.stderr.includes('ERROR: Missing value for --files'),
+      `stderr must carry the ERROR: line, got: ${r.stderr}`);
+    assert.strictEqual(r.stdout.trim(), '',
+      `no IR JSON may reach stdout when the parser refused the flags, got: ${r.stdout}`);
+  });
+
+  test('space-separated --files a.py: exit 0 and the IR JSON on stdout', { skip: process.platform === 'win32' }, () => {
+    const r = runBlock(['184', '--files', 'a.py']);
+    assert.strictEqual(r.exitCode, 0, `exit 0 expected, stderr: ${r.stderr}`);
+    const ir = JSON.parse(r.stdout);
+    assert.strictEqual(ir.files, 'a.py', `the IR must carry the files override, got: ${r.stdout}`);
+  });
+});
