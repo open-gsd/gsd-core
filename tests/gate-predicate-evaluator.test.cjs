@@ -431,6 +431,25 @@ describe('evaluatePredicate — interpolation', () => {
         assert.doesNotThrow(() => run(rewrite), rewrite);
       }
     });
+    // The PAIRS rows above come from the docs. The shell is the source of the hazard here: a value with a space reaches
+    // each refused spelling as two words (or a glob-capable list) and each rewrite as one value. Rows 1 and 7 of PAIRS
+    // (nested quotes in `$(...)`, a leading comment) split nothing in a real shell, so they have no row here.
+    test('the real shell splits the hostile value in each refused spelling that reads it unquoted, and in none of the rewrites', () => {
+      const ROWS = [
+        { name: 'GSD_PHASE_REQ_IDS', value: 'R-1 R-2', refused: String.raw`for id in $GSD_PHASE_REQ_IDS; do echo "[$id]"; done`, pieces: ['[R-1]', '[R-2]', ''] },
+        { name: 'GSD_PHASE_DIR', value: 'a b', refused: String.raw`sh -c 'printf "%s\n" $GSD_PHASE_DIR'`, rewrite: String.raw`sh -c 'printf "%s\n" "$GSD_PHASE_DIR"'`, pieces: ['a', 'b', ''] },
+        { name: 'GSD_PHASE_DIR', value: 'a b', refused: String.raw`echo "${'$'}{GSD_PHASE_DIR}" | xargs printf '%s\n'`, rewrite: String.raw`printf '%s\0' "${'$'}{GSD_PHASE_DIR}" | xargs -0 printf '%s\n'`, pieces: ['a', 'b', ''] },
+      ];
+      for (const { name, value, refused, rewrite, pieces } of ROWS) {
+        const env = isolatedEnv({ home: os.tmpdir(), override: { [name]: value } });
+        assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
+        assert.deepEqual(oracleLines(refused, { interpreter: 'sh', env }), pieces, refused);
+        if (rewrite) {
+          assert.doesNotThrow(() => run(rewrite), rewrite);
+          assert.deepEqual(oracleLines(rewrite, { interpreter: 'sh', env }), [value, ''], rewrite);
+        }
+      }
+    });
     test('only the refusal of a gate that runs xargs names the xargs -0 spelling, and a path-spelled xargs is refused too', () => {
       for (const refused of ['echo "${GSD_PHASE_DIR}" | xargs ls', 'echo "${GSD_PHASE_DIR}" | /usr/bin/xargs ls']) {
         assert.throws(() => run(refused), /xargs -0/, refused);
