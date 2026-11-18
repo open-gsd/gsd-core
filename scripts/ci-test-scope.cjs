@@ -483,6 +483,8 @@ function changedFiles(args) {
   // so the merge-base is always available.
   // --no-renames lists both the deleted source and the added destination of a
   // rename, so renaming product code onto an exempt path cannot hide the deletion.
+  // Side effect: the deleted src/ path is unreadable, so reachesConformanceTierOrSeam
+  // fails safe to true and a src/ move escalates to full_matrix (more CI, never less).
   const stdout = execFileSync('git', ['diff', '--name-only', '--no-renames', `${args.base}...${args.head}`], {
     encoding: 'utf8',
   });

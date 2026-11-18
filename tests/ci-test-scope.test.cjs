@@ -295,6 +295,14 @@ describe('ci-test-scope.cjs', () => {
     }
   });
 
+  test('a src/ file listed as deleted by a rename escalates to full_matrix (fail-safe, --no-renames side effect)', () => {
+    // reachesConformanceTierOrSeam cannot read a path that no longer exists and
+    // fails safe to true, so every src/ move runs the conformance matrix.
+    const result = scopeFor(['src/does-not-exist-after-rename.cts']);
+    assert.strictEqual(result.full_matrix, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+  });
+
   test('rename of product code onto the data-log path still reports the deleted source', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-scope-norename-'));
     try {
@@ -305,13 +313,15 @@ describe('ci-test-scope.cjs', () => {
       git('config', 'commit.gpgsign', 'false');
       fs.mkdirSync(path.join(tmp, 'tests'), { recursive: true });
       fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
-      const body = 'x'.repeat(400) + '\n';
+      const body = Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n') + '\n';
       fs.writeFileSync(path.join(tmp, 'src', 'x.cts'), body);
       git('add', '-A');
       git('commit', '-qm', 'base');
       const base = git('rev-parse', 'HEAD');
       git('checkout', '-q', '-b', 'feature');
+      // Modified rename (~90% similar): git would report it as a rename, not add+delete.
       fs.renameSync(path.join(tmp, 'src', 'x.cts'), path.join(tmp, 'tests', 'ci-timeout-budget-history.jsonl'));
+      fs.appendFileSync(path.join(tmp, 'tests', 'ci-timeout-budget-history.jsonl'), 'extra line\n');
       git('add', '-A');
       git('commit', '-qm', 'rename');
       const head = git('rev-parse', 'HEAD');
@@ -321,6 +331,7 @@ describe('ci-test-scope.cjs', () => {
       const result = JSON.parse(r.stdout);
       assert.ok(result.changed_files.includes('src/x.cts'), JSON.stringify(result.changed_files));
       assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+      assert.strictEqual(result.code_changed, true, JSON.stringify(result));
     } finally {
       cleanup(tmp);
     }
