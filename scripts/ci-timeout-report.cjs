@@ -669,12 +669,27 @@ const WINDOWS_SHARD_JOB_RE = /^conformance test \(windows-latest, [^,)]+, shard 
  * skipped because resolveJobTimeoutMinutes would throw on it and lose the
  * whole report.
  *
- * @param {{name?: string, conclusion?: string, started_at?: ?string, completed_at?: ?string}} job
+ * #6177: a job cancelled while still waiting for a runner never ran either, yet
+ * GitHub gives it a `started_at` (when it was queued), a later `completed_at`
+ * (when it was cancelled) and a positive span that is queue wait, not run time.
+ * That shape is `conclusion: 'cancelled'` with a PRESENT empty `steps` array,
+ * `runner_id` 0 and `runner_name` ''. The rule needs all three signals present:
+ * an absent field is not evidence the job never ran (records without them are
+ * the common test shape and jobs that did run), and a cancelled job killed at
+ * its timeout cap has steps and a runner, so it stays counted.
+ *
+ * @param {{name?: string, conclusion?: string, started_at?: ?string, completed_at?: ?string, steps?: Array, runner_id?: number, runner_name?: string}} job
  * @returns {?number}
  */
 function jobSpanMs(job) {
   if (typeof job.name !== 'string') return null;
   if (job.conclusion === 'skipped') return null;
+  if (
+    job.conclusion === 'cancelled'
+    && Array.isArray(job.steps) && job.steps.length === 0
+    && job.runner_id === 0
+    && job.runner_name === ''
+  ) return null;
 
   const started = Date.parse(job.started_at);
   const completed = Date.parse(job.completed_at);

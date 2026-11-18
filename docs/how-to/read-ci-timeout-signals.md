@@ -34,8 +34,13 @@ near-cap step ran — so it also catches jobs that were actually cancelled by a 
 
 A job that never ran has no row. That covers a `skipped` job, and any job whose `completed_at` is
 missing, unparseable, or not later than its `started_at`. GitHub reports skipped jobs, and jobs
-cancelled before they started, with `completed_at` one second before `started_at`. A cancelled job
-that did run, such as one killed at its `timeout-minutes` cap, is still recorded (#5088).
+cancelled before they started, with `completed_at` one second before `started_at`. A job cancelled
+while it still waited for a runner never ran either, but GitHub gives it a `started_at` (when it was
+queued) and a later `completed_at` (when it was cancelled), so its span is queue wait, not run time.
+That shape is a `cancelled` conclusion with an empty `steps` list, `runner_id` 0 and an empty
+`runner_name`; it has no row (#6177). All three must be present: a record that lacks any of them is
+not treated as never-run. A cancelled job that did run, such as one killed at its `timeout-minutes`
+cap (it has steps and a runner), is still recorded (#5088).
 
 Each run's new rows land in `tests/ci-timeout-budget-history.jsonl`, one JSON object per line:
 
