@@ -254,12 +254,12 @@ describe('firstUnprovenMarker', () => {
       // `eval` and `trap` are consumers only as the command word: as an argument they are plain words.
       'grep -q trap "@"', 'echo eval "@"', 'FOO=1 echo trap "@"', 'A="eval x" echo "@"', 'if true; then echo eval "@"; fi',
       // A `-c` after the script word belongs to the script; a neighbour of a letter in the cluster (`@`, `[`, backtick, `{`) is no letter, so no `-c` stands.
-      'sh -c "a" -c "@"', 'bash scripts/check.sh -c "@"', 'bash -eo pipefail check.sh "@"', 'bash -oo pipefail errexit check.sh -c "@"', 'bash --noprofile -c "a" "@"','bash -c[ "echo @"', "bash '-c`' \"echo @\"", 'bash -c{ "echo @"', 'bash -[c "echo @"', "bash '-`c' \"echo @\"", 'bash -{c "echo @"',
+      'sh -c "a" -c "@"', 'bash scripts/check.sh -c "@"', 'bash -eo pipefail check.sh "@"', 'bash -oo pipefail errexit check.sh -c "@"', 'bash --noprofile -c "a" "@"', 'bash -c[ "echo @"', "bash '-c`' \"echo @\"", 'bash -c{ "echo @"', 'bash -[c "echo @"', "bash '-`c' \"echo @\"", 'bash -{c "echo @"',
       // `xargs` inside a word of a command that is no shell is no command word.
       'grep -q "xargs rm" "@"', 'sh -c; echo "@"',
       // An empty word is a word: the empty script of `sh -c "" "@"` makes the value `$0`, and `"" eval "@"` runs the command `""`, not `eval`.
       'sh -c "" "@"', '"" eval "@"', "sh -c '' \"@\"",
-
+      // A value passed as a later argument is never parsed again.
       "sh -c 'echo \"$1\"' sh \"@\"", "sh -ec 'echo \"$1\"' sh \"@\"", "bash -c 'echo \"$1\"' bash \"@\" \"@\"",
       "find . -exec sh -c 'echo \"$1\"' sh \"@\" \\;", "printf x | xargs -0 sh -c 'echo \"$1\"' sh \"@\"", "d=\"@\"; eval 'echo \"$d\"'", "d=\"@\"; trap 'echo \"$d\"' EXIT",
     ];

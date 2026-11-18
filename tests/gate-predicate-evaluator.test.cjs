@@ -483,7 +483,7 @@ describe('evaluatePredicate — interpolation', () => {
         (phaseDir) => { fs.mkdirSync(phaseDir); fs.writeFileSync(path.join(phaseDir, 'f'), ''); },
         () => {},
       ];
-      test('the evaluator refuses each, a real shell runs it with the status of its rewrite',() => {
+      test('the evaluator refuses each, a real shell runs it with the status of its rewrite', () => {
         const env = isolatedEnv({ home: dir, override: { GSD_PHASE_DIR: 'a b' } });
         const status = (command, state) => {
           cleanup(path.join(dir, 'a b'));
