@@ -17,7 +17,7 @@ file and run for every mode.
 
 For each selected area, conduct a focused discussion loop.
 
-**Research-before-questions mode:** Check if `workflow.research_before_questions` is enabled in config (from init context or `.planning/config.json`). When enabled, before presenting questions for each area:
+**Research-before-questions mode:** Check if `workflow.research_before_questions` is enabled in config (from init context or `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`)). When enabled, before presenting questions for each area:
 1. Do a brief web search for best practices related to the area topic
 2. Summarize the top findings in 2-3 bullet points
 3. Present the research alongside the question so the user can make a more informed decision
