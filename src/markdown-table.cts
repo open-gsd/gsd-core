@@ -1104,6 +1104,27 @@ export function resetQuickTaskRows(
   return { ok: true, value: { content, cleared, variant: match.label } };
 }
 
+// The status words a requirement traceability Status cell can lead with. A word
+// is followed by a non-word character or the end of the cell, so `Pendingx` and
+// `Completed` are not statuses; the two-word forms allow any whitespace run.
+const REQUIREMENT_STATUS_WORD_RE = /^(pending|in\s+progress|gaps\s+found)(?!\w)/i;
+
+/**
+ * #6238: the status word a traceability Status cell leads with, lower-cased and
+ * single-spaced, when it is one of `accepted`; null otherwise. Operator prose
+ * after the word (`Pending (blocked on an upstream decision)`) does not change
+ * the status, the same rule the ROADMAP Status reader applies (#4925). The ONE
+ * reader behind the `requirements mark-complete` and `phase complete` gates,
+ * so the two cannot disagree on what a cell says; each caller passes the words
+ * it advances.
+ */
+export function leadingRequirementStatus(cell: string, accepted: readonly string[]): string | null {
+  const m = REQUIREMENT_STATUS_WORD_RE.exec(String(cell).trim());
+  if (m === null) return null;
+  const word = m[1].toLowerCase().replace(/\s+/g, ' ');
+  return accepted.includes(word) ? word : null;
+}
+
 /** The one Traceability heading rule shared by the write and the existence read. */
 const TRACEABILITY_HEADING_RE = /^Traceability(?:[ \t]+Status)?\b/i;
 

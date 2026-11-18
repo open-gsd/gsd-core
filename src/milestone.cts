@@ -20,7 +20,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
-import { updateTraceabilityCell, resetQuickTaskRows, traceabilityRowExists, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
+import { updateTraceabilityCell, leadingRequirementStatus, resetQuickTaskRows, traceabilityRowExists, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
 import { requireSafePath, PathAcceptance, type ContainedPath } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- audit.cjs is an export= CommonJS module
 import auditMod = require('./audit.cjs');
@@ -206,7 +206,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       // documented gaps_found response) leaves a row stranded at Gaps Found with
       // no inverse; a genuinely-satisfied requirement must be able to reach
       // Complete again via mark-complete, or the milestone is blocked forever.
-      if (/^(pending|gaps found)$/i.test(current.trim())) {
+      // #6238: read the status word, so `Pending (note)` advances like `Pending`.
+      if (leadingRequirementStatus(current, ['pending', 'gaps found']) !== null) {
         tableHit = true;
         return ' Complete ';
       }
