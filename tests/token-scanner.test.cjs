@@ -233,7 +233,7 @@ describe('firstUnprovenMarker', () => {
     const FRAGMENTS = [
       'echo @', "echo '@'", "echo $'a\\'b @'", "cat <<'EOF'\n@\nEOF", 'cat <<"EOF"\n@\nEOF', 'cat <<\\EOF\n@\nEOF',
       "echo $(echo '@')", 'echo "it\'s @"', "# it's @", "cat <<EOF\nit's @\nEOF", "echo `echo \"it's @\"`", 'echo $((1<<2)) "@"',
-      'echo "${x:-"it\'s"}" \'@\'', 'echo "${x:-"it\'s"}" "@"', 'echo "$(case $v in a) echo "it\'s";; esac)" \'@\'',
+      'echo "${x:-"it\'s"}" \'@\'', 'echo "${x:-"it\'s"}" "@"', 'echo "$(case $v in (a) echo "it\'s";; esac)" \'@\'',
       'echo "$(echo case) it\'s" "@"', 'echo $(( (1<<2) ))\necho \'@\'', 'echo "${x:-\'@\'}"', "cat <<-EOF\n\tit's @\n\tEOF",
       "cat << 'EOF'\n@\nEOF", "cat <<<'@'", 'cat <<<"@"',
       'echo it\\\'s "@"', 'echo "a\\"b @"', "echo a#b '@'", "echo x;# it's @", "cat <<'a\\b'\n@\na\\b", "cat <<'ab\n@'",
