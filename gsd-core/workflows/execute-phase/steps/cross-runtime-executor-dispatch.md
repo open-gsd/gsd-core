@@ -1,3 +1,5 @@
+Apply response_language to all user-facing prose — narration between tool calls, status updates, progress notes, and findings included; preserve code, paths, and identifiers.
+
 # Cross-runtime executor dispatch (#6303, ADR-3711)
 
 For a plan that declares `executor_runtime: <id>`. The decision is the plan's own `dispatch-isolation`

@@ -2918,24 +2918,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     return hostIntegration.resolveOrchestratorExec(orchestratorExec, cwdTarget, promptArg, model);
   }
 
-  /** True when `command` resolves to an executable file on PATH (PATHEXT on Windows). Pure fs, no spawn. */
+  /** True when `command` is a bare name that resolves to an executable file on PATH, through the shared binary-resolution seam. */
   function commandOnPath(command) {
-    const nodeFs = require('fs');
-    const nodePath = require('path');
     if (typeof command !== 'string' || command.length === 0 || command.includes('/') || command.includes('\\')) return false;
-    const exts = process.platform === 'win32' ? ['', ...(process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';')] : [''];
-    for (const dir of (process.env.PATH || '').split(nodePath.delimiter)) {
-      if (!dir) continue;
-      for (const ext of exts) {
-        try {
-          const candidate = nodePath.join(dir, command + ext);
-          if (!nodeFs.statSync(candidate).isFile()) continue;
-          if (process.platform !== 'win32') nodeFs.accessSync(candidate, nodeFs.constants.X_OK);
-          return true;
-        } catch { /* not here */ }
-      }
-    }
-    return false;
+    return require('./lib/shell-command-projection.cjs').resolveExecutableBinary(command, { requireExecutable: true }) !== null;
   }
 
   /**
