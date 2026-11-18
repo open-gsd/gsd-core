@@ -40,6 +40,25 @@ describe('ci-test-scope.cjs', () => {
     );
   });
 
+  test('data-log only (ci-timeout-budget-history.jsonl): matrix skipped like docs-only', () => {
+    const result = scopeFor(['tests/ci-timeout-budget-history.jsonl']);
+    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false);
+    assert.deepStrictEqual(result.targeted_tests, []);
+  });
+
+  test('data-log mixed with product code: product files still decide scope', () => {
+    const result = scopeFor(['tests/ci-timeout-budget-history.jsonl', 'src/init.cts']);
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+  });
+
+  test('a different tests/ .jsonl is not exempt', () => {
+    const result = scopeFor(['tests/other-history.jsonl']);
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+  });
+
   test('root markdown only: code_changed is false, product_changed false', () => {
     const result = scopeFor(['README.md']);
     assert.strictEqual(result.code_changed, false,

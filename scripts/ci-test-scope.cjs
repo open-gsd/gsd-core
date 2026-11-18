@@ -80,6 +80,12 @@ const PROTECTED_WORKFLOWS = new Set([
   'pr-mergeable-preflight.yml',
 ]);
 
+// Data-only logs committed by automation (ci-timeout-report.yml rolling PR).
+// A PR touching only these runs no test matrix.
+const DATA_LOG_FILES = new Set([
+  'tests/ci-timeout-budget-history.jsonl',
+]);
+
 const RULES = [
   {
     name: 'workflow automation',
@@ -573,6 +579,9 @@ function classify(files, reachabilityDeps = {}) {
     // (found while verifying the #2267 golden-parity rule against skills/**: the
     // rule fired in `reasons` but classify()'s codeChanged gate zeroed out every
     // targeted test because 'skills/' was absent from this list).
+    // DATA_LOG_FILES are append-only records written by automation; nothing
+    // executes them, so like docs they never count as product/pipeline code.
+    if (DATA_LOG_FILES.has(file)) continue;
     if (
       ['bin/', 'src/', 'gsd-core/', 'agents/', 'commands/', 'hooks/', 'skills/', 'tests/', 'scripts/', 'eslint-rules/'].some(p => file.startsWith(p)) ||
       file === 'package.json' || file === 'package-lock.json' ||
