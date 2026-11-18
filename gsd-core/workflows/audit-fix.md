@@ -39,6 +39,8 @@ INIT=$(gsd_run query audit-uat 2>/dev/null || echo "{}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
+If `summary.files_scanned` in `$INIT` is 0 (the field is present and zero), the audit read no UAT, VERIFICATION or deferred-items file, so there are no findings to classify and none to report as "zero findings". Report `Nothing Scanned: the audit reached no UAT or verification files` and stop; do not continue to the globs below.
+
 Read existing UAT and verification files to extract findings:
 - Glob: `.planning/phases/*/*-UAT.md`
 - Glob: `.planning/phases/*/*-VERIFICATION.md`
