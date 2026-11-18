@@ -20,7 +20,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
-import { updateTraceabilityCell, resetQuickTaskRows, traceabilityRowExists, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
+import { updateTraceabilityCell, leadingRequirementStatus, resetQuickTaskRows, traceabilityRowExists, QUICK_TASKS_SECTION_ABSENT } from './markdown-table.cjs';
 import { requireSafePath, PathAcceptance, type ContainedPath } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- audit.cjs is an export= CommonJS module
 import auditMod = require('./audit.cjs');
@@ -206,7 +206,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       // documented gaps_found response) leaves a row stranded at Gaps Found with
       // no inverse; a genuinely-satisfied requirement must be able to reach
       // Complete again via mark-complete, or the milestone is blocked forever.
-      if (/^(pending|gaps found)$/i.test(current.trim())) {
+      // #6238: read the status word, so `Pending (note)` advances like `Pending`.
+      if (leadingRequirementStatus(current, ['pending', 'gaps found']) !== null) {
         tableHit = true;
         return ' Complete ';
       }
@@ -253,7 +254,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     });
     const hasRow = statusProbe.ok;
     const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
-    const doneTable = Boolean(hasRow && /^complete$/i.test(currentStatusCell.trim()));
+    const doneTable = Boolean(hasRow && leadingRequirementStatus(currentStatusCell, ['complete']) !== null);
 
     // #2788 defect 2: when a traceability table exists AND this ID has a row in
     // it, `updated`/`marked_complete` must reflect the ROW moving, not a
@@ -484,7 +485,7 @@ function cmdRequirementsRevertPhase(cwd: string, reqIdsRaw: string[], raw: boole
       (Object.values(row)[0] ?? '').trim().toLowerCase() === reqId.toLowerCase();
     let tableHit = false;
     const tableUpdate = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
-      if (/^complete$/i.test(current.trim())) {
+      if (leadingRequirementStatus(current, ['complete']) !== null) {
         tableHit = true;
         return ' Gaps Found ';
       }

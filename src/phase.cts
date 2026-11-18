@@ -150,7 +150,7 @@ import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from 
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore, isStatePastPhase } from './state-transition.cjs';
-import { updateTableCell, updateTraceabilityCell, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
+import { updateTableCell, updateTraceabilityCell, leadingRequirementStatus, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
@@ -7450,7 +7450,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               const reqUpdate = updateTraceabilityCell(reqContent, reqRowMatch, 'Status', (current) => {
                 // #2788: accept `Gaps Found` too so a phase stranded by revert-phase (the
                 // gaps_found response) can complete without hand-editing the table.
-                if (/^(?:pending|in progress|gaps found)$/i.test(current.trim())) {
+                // #6238: read the status word, so `Pending (note)` advances like `Pending`.
+                if (leadingRequirementStatus(current, ['pending', 'in progress', 'gaps found']) !== null) {
                   tableHit = true;
                   return ' Complete ';
                 }

@@ -83,8 +83,13 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     // Read through an fd opened without following links where supported
     // (O_NOFOLLOW is absent on Windows, hence `|| 0`), then replace by rename
     // rather than append through the path, so a link swapped in after the
-    // check cannot redirect a write elsewhere.
-    fd = fs.openSync(ignorePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    // check cannot redirect a write elsewhere. O_NONBLOCK (#5857, also absent
+    // on Windows) makes the open of a FIFO with no writer return at once; the
+    // `isFile()` check below then skips it instead of the open blocking forever.
+    fd = fs.openSync(
+      ignorePath,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOCTTY || 0),
+    );
     if (!fs.fstatSync(fd).isFile()) throw new Error('.gsd/.gitignore is not a regular file');
     const current = fs.readFileSync(fd, 'utf8');
     fs.closeSync(fd);
