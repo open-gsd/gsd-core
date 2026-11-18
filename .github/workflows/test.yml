@@ -312,7 +312,10 @@ jobs:
       # #4196: pin the npm-audit baseline the SAME way GSD_EMITTED_BASE pins
       # its own baseline (see the comment above) -- origin/next is live under
       # fetch-depth: 0 and can advance mid-run; base.sha is fixed for the life
-      # of the run. For a push event, github.event.before is git's own record
+      # of the run. base.sha is only a FLOOR, not the tree's base (#5897): the
+      # merge ref can contain newer `next` commits, so resolveBaselineRef()
+      # advances a pull_request pin to merge-base(origin/<GITHUB_BASE_REF>,
+      # HEAD) when that descends from the pin. For a push event, github.event.before is git's own record
       # of the ref's state immediately before this push landed -- correct
       # even when a rebase-merged PR lands as multiple discrete commits in
       # one push (HEAD~1 would be wrong there: it could already contain an
@@ -576,7 +579,10 @@ jobs:
       # #4196: pin the npm-audit baseline the SAME way GSD_EMITTED_BASE pins
       # its own baseline (see the comment above) -- origin/next is live under
       # fetch-depth: 0 and can advance mid-run; base.sha is fixed for the life
-      # of the run. For a push event, github.event.before is git's own record
+      # of the run. base.sha is only a FLOOR, not the tree's base (#5897): the
+      # merge ref can contain newer `next` commits, so resolveBaselineRef()
+      # advances a pull_request pin to merge-base(origin/<GITHUB_BASE_REF>,
+      # HEAD) when that descends from the pin. For a push event, github.event.before is git's own record
       # of the ref's state immediately before this push landed -- correct
       # even when a rebase-merged PR lands as multiple discrete commits in
       # one push (HEAD~1 would be wrong there: it could already contain an

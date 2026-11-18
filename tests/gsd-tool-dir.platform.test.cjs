@@ -11,6 +11,7 @@
  * - "#5757: throws when .gsd is a symlink" - creates a real directory symlink; creation needs privilege on Windows (symlink-keyword)
  * - "#5757: throws when .gsd/.gitignore is a symlink" - creates a real file symlink (symlink-keyword)
  * - "#5757 case 13: parity" - both writers refuse a symlinked .gsd and run real git (symlink-keyword, raw-child-process)
+ * - "#5857: a FIFO at .gsd/.gitignore" and "#5857: a FIFO at the fork-probe cache path" - create a real FIFO with mkfifo, which does not exist on Windows (skipped there) (raw-child-process)
  * - "observeHarnessForkFromHead default cache writer" - the fork-probe cache rows (1-6): real symlinks (symlink-keyword) and a real git repo with a linked worktree (raw-child-process); kept in this one platform file so the conformance tier grows by one file, not two
  */
 
@@ -23,6 +24,7 @@ const { execFileSync } = require('node:child_process');
 
 const { cleanup, runGsdTools } = require('./helpers.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runHook, runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 
 const { ensureToolOwnedGsdDir } = require(
   path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'gsd-tool-dir.cjs'),
@@ -46,6 +48,13 @@ function git(cwd, args) {
     '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false',
     ...args,
   ], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: GIT_TIMEOUT_MS }).trim();
+}
+
+/** Create a FIFO through the process seam (a bounded spawn), failing the test on any error. */
+function makeFifo(file) {
+  const made = runHook(file, [], { interpreter: 'mkfifo' });
+  assert.strictEqual(made.outcome, OUTCOME.EXITED, `mkfifo did not run: ${made.outcome}`);
+  assert.strictEqual(made.exitCode, 0, made.stderr);
 }
 
 function freshRepo() {
@@ -197,6 +206,22 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
     assert.match(sentinel(ignoreRoot).error, /sentinel ignore file is a symlink/);
     assert.strictEqual(fs.readFileSync(target, 'utf8'), 'precious\n');
   });
+
+  test('#5857: a FIFO at .gsd/.gitignore does not hang the sentinel writer and is left alone', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on win32');
+      return;
+    }
+    const root = freshRepo();
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.gsd'));
+    const fifo = path.join(root, '.gsd', '.gitignore');
+    makeFifo(fifo);
+    const result = sentinel(root);
+    assert.strictEqual(result.recorded, true);
+    assert.ok(fs.existsSync(path.join(root, '.gsd', 'dispatch-isolation-sentinel.json')));
+    assert.ok(fs.lstatSync(fifo).isFIFO(), 'the FIFO is neither replaced nor read');
+  });
 });
 
 describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
@@ -221,6 +246,27 @@ describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
     assert.ok(fs.existsSync(path.join(root, '.gsd', 'harness-fork-probe.json')));
     assert.ok(fs.existsSync(path.join(root, '.gsd', '.gitignore')));
     assert.deepStrictEqual(gsdStatusLines(root), []);
+  });
+
+  test('#5857: a FIFO at the fork-probe cache path does not hang the probe and counts as no cache', (t) => {
+    if (process.platform === 'win32') {
+      t.skip('no FIFOs on win32');
+      return;
+    }
+    const { root, head } = makeProject();
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.gsd'));
+    makeFifo(path.join(root, '.gsd', 'harness-fork-probe.json'));
+    // A child process: with the bug present the cache read blocks forever, and an in-process call would hang the runner.
+    const script = [
+      `const { observeHarnessForkFromHead } = require(${JSON.stringify(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'worktree-base-ref.cjs'))});`,
+      `process.stdout.write(JSON.stringify(observeHarnessForkFromHead({ cwd: ${JSON.stringify(root)}, headSha: ${JSON.stringify(head)} })));`,
+    ].join('\n');
+    const ran = runNode(['-e', script], { cwd: root });
+    assert.strictEqual(ran.outcome, OUTCOME.EXITED, `the probe did not return: ${ran.outcome}`);
+    const verdict = JSON.parse(ran.stdout);
+    assert.strictEqual(verdict.confirmed, true);
+    assert.strictEqual(verdict.source, 'probe');
   });
 
   test('#5757: a symlinked .gsd is never written through; the verdict still returns (case 2)', (t) => {
@@ -298,5 +344,75 @@ describe('observeHarnessForkFromHead default cache writer (#5757)', () => {
     assert.strictEqual(writes[0][0], cacheFile);
     assert.strictEqual(JSON.parse(writes[0][1]).headSha, head);
     assert.strictEqual(fs.existsSync(path.join(root, '.gsd')), false);
+  });
+});
+
+describe('#5856: the ignore-file owner leaves nothing untracked when it dies mid-merge', () => {
+  const MERGE_OPTIONS = { marker: '# gsd-core test owner', rules: ['/thing.json', '/.gitignore'] };
+
+  function gsdStatusLines(root) {
+    return git(root, ['status', '--porcelain', '-uall']).split('\n').filter((l) => l.includes('.gsd'));
+  }
+
+  // A SIGKILL runs no `finally`: each row fails one step of the staged merge and
+  // makes every cleanup primitive a no-op until the mocks are restored right
+  // after the call, so the residue a real kill would leave stays on disk.
+  const KILL_POINTS = [
+    {
+      name: 'right after the staging directory is created',
+      patch: (t, real) => t.mock.method(fs, 'writeFileSync', function writeFileSync(file) {
+        if (String(file).includes(`${path.sep}.gitignore.tmp-`) && String(file).endsWith(`${path.sep}.gitignore`)) {
+          throw new Error('simulated kill');
+        }
+        return real.writeFileSync.apply(this, arguments);
+      }),
+    },
+    {
+      name: 'after the staged ignore file is written',
+      patch: (t, real) => t.mock.method(fs, 'openSync', function openSync(file) {
+        if (String(file).endsWith(`${path.sep}content`)) throw new Error('simulated kill');
+        return real.openSync.apply(this, arguments);
+      }),
+    },
+    {
+      name: 'at the ignore-file rename',
+      patch: (t, real) => t.mock.method(fs, 'renameSync', function renameSync(from, to) {
+        if (String(to).endsWith(`${path.sep}.gitignore`)) throw new Error('simulated kill');
+        return real.renameSync.apply(this, arguments);
+      }),
+    },
+  ];
+
+  for (const point of KILL_POINTS) {
+    test(`#5856: a kill ${point.name} leaves no untracked file in git status`, (t) => {
+      const root = freshRepo();
+      t.after(() => cleanup(root));
+      fs.mkdirSync(path.join(root, '.gsd'));
+      fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), 'user-rule/\n');
+      const real = { writeFileSync: fs.writeFileSync, openSync: fs.openSync, renameSync: fs.renameSync };
+      const mocks = [
+        point.patch(t, real),
+        t.mock.method(fs, 'unlinkSync', () => {}),
+        t.mock.method(fs, 'rmdirSync', () => {}),
+        t.mock.method(fs, 'rmSync', () => {}),
+      ];
+      ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
+      for (const m of mocks) m.mock.restore();
+      const residue = fs.readdirSync(path.join(root, '.gsd')).filter((n) => n.startsWith('.gitignore.tmp-'));
+      assert.strictEqual(residue.length, 1, 'the killed merge left its staging directory behind');
+      assert.deepStrictEqual(gsdStatusLines(root).filter((l) => l.includes('.gitignore.tmp')), []);
+      assert.strictEqual(fs.readFileSync(path.join(root, '.gsd', '.gitignore'), 'utf8'), 'user-rule/\n');
+    });
+  }
+
+  test('#5856: the merged ignore file ignores the owner temp name', (t) => {
+    const root = freshRepo();
+    t.after(() => cleanup(root));
+    fs.mkdirSync(path.join(root, '.gsd'));
+    fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), 'user-rule/\n');
+    ensureToolOwnedGsdDir(root, MERGE_OPTIONS);
+    const probe = '.gsd/.gitignore.tmp-4242-abcdef012345';
+    fs.writeFileSync(path.join(root, probe), 'x');
+    assert.strictEqual(git(root, ['check-ignore', probe]), probe);
   });
 });

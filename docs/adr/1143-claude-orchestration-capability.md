@@ -116,8 +116,9 @@ scope agreed in the Decision, refined to the lowest-risk first slice:
 - **Loop registration** is at the two **wired** points the loop host contract
   actually renders: `execute:wave:post into:executor` (Workflow-backend guidance)
   and `plan:post into:planner` (ultraplan ownership declaration). `execute:wave:pre`
-  and `execute:pre` are declared in the contract but **not wired** today, so the
-  capability registers at `wave:post` (the constraint `external-job` also documents).
+  and `execute:pre` were declared in the contract but **not wired** when this ADR was
+  written, so the capability registered at `wave:post` (the constraint `external-job`
+  also documents); both are wired now (#2285, #5848) and the registration is unchanged.
 - **Config** is federated (`claude_orchestration.enabled` default false /
   `activationKey`, `execution_backend` enum `auto|workflow|inline` default `auto`,
   `min_agent_sdk_version`); the keys live only in the registry, so uninstall

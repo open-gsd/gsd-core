@@ -409,6 +409,8 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
       // #5029: holds the SHARD_BALANCE <-> test.yml layout-parity test, which
       // must fail in the re-shard PR (a test.yml-only diff), not on `next`.
       'tests/ci-timeout-report.test.cjs',
+      // #5299: reads APPROVAL_LABELS from auto-close-unsolicited-prs.yml
+      'tests/registry-docs-approved-issue-parity.test.cjs',
     ];
     for (const file of ['.github/workflows/test.yml', '.github/workflows/release.yml', '.github/actions/x/action.yml']) {
       const result = assertInert([file]);
