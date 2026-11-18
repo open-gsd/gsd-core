@@ -398,3 +398,93 @@ describe('#3504: global-flag spellings of git add -f reach the shared classifier
     assert.equal(r.stdout, '');
   });
 });
+
+// #6242 — a shell operator TOUCHING a neighbouring word (`hi;`, `true&&git`,
+// `a|git`) never becomes a standalone separator token, so forceGitAddCwds's
+// token-level segment split never fired for glued operators: the whole line
+// stayed one segment anchored on the first word (`echo`), and the `git add -f`
+// in the second statement was never examined. Only the SPACED spellings
+// (`echo hi ; git …`, `true && git …`) blocked. The fix splits the command
+// STRING at unquoted `;`, `&&`, `||`, `|` before tokenizing, so every
+// statement is examined regardless of operator spacing — while an operator
+// inside quotes stays part of its word (`echo "a;b"; git …` must still split
+// only after the closing quote).
+describe('#6242: every statement of a compound command is examined', () => {
+  let agentRepo;
+  let mainRepo;
+
+  before(() => {
+    const mk = (branch) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-workflow-guard-compound-'));
+      // Bash FAN-OUT: three chained git commands under one `bash`
+      // interpreter — the HOOK_FANOUT_TIMEOUT_MS class, same as the #3504
+      // fixtures above.
+      const initResult = runHookSeam(
+        '-c',
+        [`git init -q -b ${branch} && git config user.email t@t && git config user.name t`],
+        { interpreter: 'bash', cwd: dir, timeoutMs: HOOK_FANOUT_TIMEOUT_MS },
+      );
+      throwIfFailed(initResult, `bash -c <git init/config for ${branch} compound fixture>`);
+      return dir;
+    };
+    agentRepo = mk('worktree-agent-test');
+    mainRepo = mk('main');
+    for (const repo of [agentRepo, mainRepo]) {
+      fs.mkdirSync(path.join(repo, '.planning'));
+      fs.writeFileSync(
+        path.join(repo, '.planning', 'config.json'),
+        JSON.stringify({ hooks: { workflow_guard: true } })
+      );
+    }
+  });
+
+  after(() => {
+    cleanup(agentRepo);
+    cleanup(mainRepo);
+  });
+
+  function runGuard(command, cwd) {
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd }),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    return { exitCode: r.exitCode ?? 1, stdout: r.stdout.trim(), stderr: r.stderr.trim() };
+  }
+
+  // Each glued form exited 0 pre-fix (the unexamined second statement); each
+  // must exit 2 like its spaced spelling.
+  for (const [label, command] of [
+    ['glued ; (the #6242 report)', 'echo hi; git add -f secrets.env'],
+    ['glued &&', 'true&&git add -f secrets.env'],
+    ['glued ||', 'false||git add -f secrets.env'],
+    ['glued |', 'a|git add -f secrets.env'],
+    ['quoted operator then glued separator', 'echo "a;b"; git add -f secrets.env'],
+    ['leading separator (empty first statement)', '; git add -f secrets.env'],
+    ['spaced ; (control — already blocked)', 'echo hi ; git add -f secrets.env'],
+    ['spaced && (control — already blocked)', 'true && git add -f secrets.env'],
+    ['single statement (control — the original block)', 'git add -f secrets.env'],
+  ]) {
+    test(`force-add in a compound command is blocked (${label})`, () => {
+      const r = runGuard(command, agentRepo);
+      assert.equal(r.exitCode, 2, `must block. stderr: ${r.stderr}`);
+      const output = JSON.parse(r.stdout);
+      assert.equal(output.code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
+      assert.equal(output.origin, 'force-add-detected');
+    });
+  }
+
+  for (const [label, command] of [
+    ['plain non-git compound', 'echo hi; ls -la'],
+    ['quoted operator is part of its word, not a separator', 'echo "a;b" hi'],
+    ['trailing operator (empty last statement)', 'echo hi &&'],
+    ['trailing separator (empty last statement)', 'echo hi; git status;'],
+    ['compound glued force-add on a non-agent branch', 'echo hi; git add -f secrets.env'],
+  ]) {
+    test(`benign command stays allowed (${label})`, () => {
+      const cwd = label === 'compound glued force-add on a non-agent branch' ? mainRepo : agentRepo;
+      const r = runGuard(command, cwd);
+      assert.equal(r.exitCode, 0, `must stay allowed. stderr: ${r.stderr}`);
+      assert.equal(r.stdout, '');
+    });
+  }
+});
