@@ -6,7 +6,7 @@
  * runServer, and a full injectable-stream round-trip.
  */
 
-const { test } = require('node:test');
+const { test, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const { Readable } = require('node:stream');
 const fs = require('node:fs');
@@ -138,6 +138,33 @@ test('tools/call gsd_read_state + gsd_write_state: round-trip through the stateI
   } finally {
     cleanup(dir);
   }
+});
+
+// #5120: gsd_write_state reaches the filesystem stateIO adapter, which wrote
+// STATE.md raw and outside the STATE.md lock. The tool's STATE.md write now
+// holds the lock and goes through the write seam (ADR-4629 guard roster).
+test('tools/call gsd_write_state: a STATE.md destination is written under the STATE.md lock, through the seam (#5120)', (t) => {
+  const dir = createTempDir('mcp-5120-');
+  t.after(() => cleanup(dir));
+  const file = path.join(dir, 'STATE.md');
+  const writes = [];
+  const record = (destination) => {
+    if (path.resolve(String(destination)) === path.resolve(file)) writes.push({ lockHeld: fs.existsSync(`${file}.lock`) });
+  };
+  const realWrite = fs.writeFileSync;
+  const realRename = fs.renameSync;
+  mock.method(fs, 'writeFileSync', function (target, ...rest) { record(target); return realWrite.call(this, target, ...rest); });
+  mock.method(fs, 'renameSync', function (from, to) { record(to); return realRename.call(this, from, to); });
+  t.after(() => mock.restoreAll());
+
+  const res = handleMessage({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'gsd_write_state', arguments: { path: file, content: '# State\r\nline\r\n' } } });
+  mock.restoreAll();
+
+  assert.strictEqual(res.result.isError, undefined, 'write must succeed');
+  assert.deepStrictEqual(JSON.parse(res.result.content[0].text), { ok: true, path: file });
+  assert.deepStrictEqual(writes, [{ lockHeld: true }], 'the one write onto STATE.md holds the STATE.md lock');
+  assert.strictEqual(fs.readFileSync(file, 'utf-8'), '# State\n\nline\n', 'STATE.md holds the content as the seam writes it (LF, a blank after the heading)');
+  assert.strictEqual(fs.existsSync(`${file}.lock`), false, 'the lock is released');
 });
 
 test('tools/call gsd_invoke_command: dispatches to the command hub (point 1); unknown family returns a hub error, not a crash', () => {

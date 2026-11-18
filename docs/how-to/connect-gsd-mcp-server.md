@@ -180,6 +180,28 @@ rather than a real marker.
 | `gsd_read_state` | `{path: string}` | the file contents as text |
 | `gsd_write_state` | `{path: string, content: string}` | `{ok: true, path}` as JSON text |
 
+A `gsd_write_state` whose `path` names a file called `STATE.md` holds the
+STATE.md lock for the write and writes through GSD's STATE.md write seam, so
+it cannot interleave with another STATE.md writer (#5120). The bytes on disk
+are the seam's rather than the exact `content`: line endings become LF and
+the file ends in one newline; the seam's other spacing rules (a blank line
+after a heading, a list or a closing fence that text follows; blank-line runs
+collapsed) apply only where the write changed the document relative to the
+file it replaces, and to the whole document when the file is new; the
+frontmatter block is kept exactly. The write is the host's content as given:
+no sync or preservation pipeline runs. A STATE.md held by another live writer
+makes the write wait for the lock (up to 30 seconds), and the server answers
+no other request while it waits, since each tool call is handled
+synchronously; a lock that cannot be taken returns a tool error and writes
+nothing. An existing `STATE.md` that is not a regular file with a single
+name (a symlink, live or dangling, a FIFO, a device, a socket, a directory,
+or a hard link) is refused with a tool error and nothing is written, neither
+through it nor over it (the raw write followed a symlink, wrote into a hard
+link or a device, blocked on a FIFO, and failed on a directory or a socket). A
+`STATE.md` path whose directory is missing or is not a directory, or that
+ends in a path separator, returns a tool error at once, before any lock
+wait. Every other `path` is written exactly as given.
+
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.
 

@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, retryRenameSync } from './shell-command-projection.cjs';
+import { execGit, retryRenameSync, platformRestoreFileSync } from './shell-command-projection.cjs';
 import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
@@ -81,7 +81,7 @@ const { scanFencedBlocks, updateBullet, updateHeading } = markdownSectionizerMod
 // ADR-5057 §6 (Phase 13, #5217): every mutation of a planning artifact goes
 // through its seam — headings/bullets through the sectionizer, PROJECT.md
 // prose through PlanningDoc, STATE.md through its own write seam.
-const { readModifyWriteStateMd } = stateMod;
+const { readModifyWriteStateMd, withStateLock } = stateMod;
 // #4144 round 5 follow-up (lint-plan-count-drift): the plan-scan owner's own
 // root-plan-file predicate (src/plan-scan.cts) — reused in
 // computeDependsOnRewrites instead of a private `/-PLAN\.md$/i` filename
@@ -2332,13 +2332,21 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   // rewriting it, then undo precisely those on failure — correct whether
   // `.planning/` is git-tracked or ignored.
   const performedRenames: Array<{ oldPath: string; newPath: string }> = [];
-  const fileBackups = new Map<string, { existed: boolean; content: string }>();
+  // #5120 review: a snapshot of a file read with readFileSync(path) (STATE.md and the
+  // other files snapshotted that way) is held as bytes, so a restore puts back the
+  // bytes the file had, including a sequence that is not valid UTF-8. The snapshot
+  // of a depends_on phase file is the decoded text, re-encoded as UTF-8.
+  const fileBackups = new Map<string, { existed: boolean; content: Buffer }>();
+  const stateMdPath = path.join(pDir, 'STATE.md');
+  // #5120: the STATE.md content this migration wrote, read back after the write,
+  // so the rollback restores STATE.md only while it still holds that content.
+  let stateMdWrittenContent: string | null = null;
   const snapshotFile = (filePath: string): void => {
     if (fileBackups.has(filePath)) return;
     try {
-      fileBackups.set(filePath, { existed: true, content: fs.readFileSync(filePath, 'utf8') });
+      fileBackups.set(filePath, { existed: true, content: fs.readFileSync(filePath) });
     } catch {
-      fileBackups.set(filePath, { existed: false, content: '' });
+      fileBackups.set(filePath, { existed: false, content: Buffer.alloc(0) });
     }
   };
 
@@ -2399,7 +2407,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
               );
             }
             if (!fileBackups.has(originalPath)) {
-              fileBackups.set(originalPath, { existed: true, content: rewrite.from });
+              fileBackups.set(originalPath, { existed: true, content: Buffer.from(rewrite.from, 'utf8') });
             }
             fs.writeFileSync(currentPath, rewrite.to, 'utf8');
             editedFiles.push(path.join('phases', phaseEntry.newDir, rewrite.finalName));
@@ -2438,18 +2446,47 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     }
 
     const stateEdits = crossRefsFor('STATE.md');
-    const stateMdPath = path.join(pDir, 'STATE.md');
     if (stateEdits.length > 0 && fs.existsSync(stateMdPath)) {
       const original = fs.readFileSync(stateMdPath, 'utf8');
       if (substituteCrossRefs(original, 'STATE.md', stateEdits) !== original) {
-        snapshotFile(stateMdPath);
-        readModifyWriteStateMd(
-          stateMdPath,
-          (current) => substituteCrossRefs(current, 'STATE.md', stateEdits),
-          cwd,
-          { resync: false },
-        );
-        editedFiles.push('STATE.md');
+        let stateWritten = false;
+        try {
+          stateWritten = readModifyWriteStateMd(
+            stateMdPath,
+            (current) => {
+              // #5120 re-review: snapshotted under the STATE.md lock, from the file
+              // this transform rewrites. A snapshot taken before the lock missed a
+              // writer that landed during the lock wait, and the rollback then put
+              // the older bytes back over that writer's content.
+              snapshotFile(stateMdPath);
+              return substituteCrossRefs(current, 'STATE.md', stateEdits);
+            },
+            cwd,
+            // #5120 review: the seam's atomic mode (temp file + rename, no
+            // truncating direct-write fallback; the prune precedent, #5831), so a
+            // write that fails leaves STATE.md's previous bytes in place.
+            { resync: false, atomicWrite: true },
+          );
+        } finally {
+          // #5120: the snapshot is kept only for a STATE.md this step wrote. A step
+          // that wrote nothing (a no-op under the lock, a lock it never acquired, or
+          // a write that failed: atomicWrite publishes by temp file and rename only,
+          // never by an in-place write, so a failed write leaves the target's prior
+          // bytes) has nothing to roll back, and the rollback must never put the
+          // snapshot over another writer's content.
+          if (!stateWritten) fileBackups.delete(stateMdPath);
+        }
+        // Read back right after the write. The STATE.md lock is already released
+        // here, so a writer landing in the gap between that release and this read
+        // is not told apart from this migration's own write; the gap is a few
+        // microseconds and the read is the only post-write view available
+        // without re-deriving the pipeline (ADR-3408 section 8.3).
+        // #5120 review: read back and listed only when this migration wrote it; a
+        // transform that was a no-op under the lock wrote nothing.
+        if (stateWritten) {
+          try { stateMdWrittenContent = fs.readFileSync(stateMdPath, 'utf8'); } catch { stateMdWrittenContent = null; }
+          editedFiles.push('STATE.md');
+        }
       }
     }
 
@@ -2505,11 +2542,44 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
         if (fs.existsSync(newPath)) retryRenameSync(newPath, oldPath);
       } catch { /* best-effort */ }
     }
+    const notRestored: string[] = [];
+    let stateLeftAsFound = false;
     for (const [filePath, backup] of fileBackups) {
       try {
-        if (backup.existed) fs.writeFileSync(filePath, backup.content, 'utf8');
+        // #5120: STATE.md is restored under the STATE.md lock through the seam's
+        // byte-exact restore primitive (platformRestoreFileSync, #5831), so the
+        // backup comes back as the bytes it had (ADR-4629 guard roster: no raw
+        // STATE.md write outside the seam). It is an exact-content write that
+        // runs no sync or preservation pipeline, so it sits outside ADR-3408
+        // section 8.3's closed exception list; listing it there, or amending the
+        // list, is the maintainer's call and is recorded in the PR, not here.
+        // The restore happens only while STATE.md still holds what this
+        // migration wrote: another writer's content, landed since, is left as
+        // found and named in the error.
+        if (backup.existed && filePath === stateMdPath) {
+          withStateLock(stateMdPath, () => {
+            let now: string | null = null;
+            try { now = fs.readFileSync(stateMdPath, 'utf8'); } catch { now = null; }
+            if (stateMdWrittenContent !== null && now !== stateMdWrittenContent) {
+              stateLeftAsFound = true;
+              return;
+            }
+            platformRestoreFileSync(stateMdPath, backup.content);
+          });
+        }
+        else if (backup.existed) fs.writeFileSync(filePath, backup.content);
         else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      } catch { /* best-effort */ }
+      } catch {
+        // Best-effort, but named: the STATE.md lock wait can time out, and a
+        // skipped restore must not be reported as "rolled back" (#1542, #5120).
+        if (filePath === stateMdPath) notRestored.push(filePath);
+      }
+    }
+    if (notRestored.length > 0) {
+      throw new Error(`Migration failed and was NOT fully rolled back (not restored: ${notRestored.join(', ')}): ${(err as Error).message}`);
+    }
+    if (stateLeftAsFound) {
+      throw new Error(`Migration failed and rolled back, except STATE.md: another writer changed it after this migration wrote it, so it is left as found: ${(err as Error).message}`);
     }
     throw new Error(`Migration failed and rolled back: ${(err as Error).message}`);
   }
