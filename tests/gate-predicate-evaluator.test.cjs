@@ -470,10 +470,17 @@ describe('evaluatePredicate — interpolation', () => {
 
   test('a double-quoted gate run by the real shell sees the phase values, even with shell syntax in them', () => {
     const phaseDir = '/tmp/x $(touch PWNED) `id` y';
-    const ctx = { cwd: process.cwd(), phaseNumber: '07', phaseDir, phaseReqIds: 'R-1' };
-    const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
-    assert.equal(run(`test "\${GSD_PHASE_NUMBER}" = 07 && test "\${GSD_PHASE_DIR}" = '${phaseDir}'`).block, false);
-    assert.equal(run('test "${GSD_PHASE_NUMBER}" = 08').block, true);
+    const dir = createTempDir();
+    try {
+      const ctx = { cwd: dir, phaseNumber: '07', phaseDir, phaseReqIds: 'R-1' };
+      const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
+      assert.equal(run(`test "\${GSD_PHASE_NUMBER}" = 07 && test "\${GSD_PHASE_DIR}" = '${phaseDir}'`).block, false);
+      assert.equal(run('test "${GSD_PHASE_NUMBER}" = 08').block, true);
+      // Negative proof: the `$(touch PWNED)` in the value ran as no command in the gate's working directory.
+      assert.equal(fs.existsSync(path.join(dir, 'PWNED')), false);
+    } finally {
+      cleanup(dir);
+    }
   });
 
   // One row per consumer that parses its argument as shell again. `@` is the placeholder. The refused spelling pastes

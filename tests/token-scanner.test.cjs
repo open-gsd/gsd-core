@@ -187,7 +187,7 @@ describe('firstUnprovenMarker', () => {
     assert.equal(first('echo \\\\ "@"'), undefined);
   });
   test('a marker after $(, a backtick, <<, $\' or inside a quote in ${...} is refused', () => {
-    for (const bad of ['echo "$(ls "@")"', 'echo "`ls "@"`"', 'echo "`echo \'@\'`"', 'cat <<EOF\n@\nEOF', 'cat <<<"@"', "echo $'a' \"@\"", 'echo "${x:-\'a\'}" "@"', 'echo "${x:-"a"}" "@"', "echo \"${GSD_MARK#'@'}\""]) {
+    for (const bad of ['echo "$(ls "@")"', 'echo "`ls "@"`"', 'echo "`echo \'@\'`"', 'cat <<EOF\n@\nEOF', 'cat <<<"@"', "cat <<'ab\n@'", "echo $'a' \"@\"", 'echo "${x:-\'a\'}" "@"', 'echo "${x:-"a"}" "@"', "echo \"${GSD_MARK#'@'}\""]) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
   });
@@ -340,7 +340,7 @@ describe('firstUnprovenMarker', () => {
       'echo "${x:-"it\'s"}" \'@\'', 'echo "${x:-"it\'s"}" "@"', 'echo "$(case $v in (a) echo "it\'s";; esac)" \'@\'',
       'echo "$(echo case) it\'s" "@"', 'echo $(( (1<<2) ))\necho \'@\'', 'echo "${x:-\'@\'}"', "cat <<-EOF\n\tit's @\n\tEOF",
       "cat << 'EOF'\n@\nEOF", "cat <<<'@'", 'cat <<<"@"',
-      'echo it\\\'s "@"', 'echo "a\\"b @"', "echo a#b '@'", "echo x;# it's @", "cat <<'a\\b'\n@\na\\b", "cat <<'ab\n@'",
+      'echo it\\\'s "@"', 'echo "a\\"b @"', "echo a#b '@'", "echo x;# it's @", "cat <<'a\\b'\n@\na\\b",
       "cat <<EOF\n\tEOF\nit's @\nEOF", "cat <<EOF # it's\nbody it's @\nEOF", "echo '\\' '@'", 'echo ${x:-\'@\'}', 'echo "${x%% #*}" \'@\'',
       "echo $(:)#'@'", "(:)# it's @", 'echo "$(echo $((1)))" \'@\'',
       'echo \\@', 'echo "\\@"', 'echo "$$@"', 'echo "${GSD_MARK#\'@\'}"', 'echo ">#@"', 'echo "a"\'@\'', 'echo "$(echo "@")"',
@@ -351,6 +351,16 @@ describe('firstUnprovenMarker', () => {
     test('each fragment runs clean in the oracle shell, so no combination is silenced by a syntax error', () => {
       const failed = FRAGMENTS.filter((text) => probe(text.replaceAll('@', '${GSD_MARK}')).exitCode !== 0);
       assert.deepStrictEqual(failed, []);
+    });
+    test('each fragment also runs inside the oracle wrapper, so no draw of the property throws', () => {
+      // A here-document that never ends would swallow the wrapper's closing brace; that is a failed oracle shell.
+      const broken = FRAGMENTS.filter((text) => {
+        try { oracleLines(text.replaceAll('@', '${GSD_MARK}'), { interpreter: 'bash', env }); return false; } catch { return true; }
+      });
+      assert.deepStrictEqual(broken, []);
+    });
+    test('a fragment that breaks the wrapper is a failed oracle shell, not a JSON error', () => {
+      assert.throws(() => oracleLines("cat <<'ab\n${GSD_MARK}'", { interpreter: 'bash', env }), /oracle shell failed/);
     });
     test('the oracle prints a literal marker by name and an expanded one by value', () => {
       assert.deepStrictEqual(oracleLines("echo '${GSD_MARK}'", { interpreter: 'bash', env }), ['${GSD_MARK}', '']);
