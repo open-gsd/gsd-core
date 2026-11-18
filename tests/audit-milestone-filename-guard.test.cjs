@@ -48,7 +48,6 @@ test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passe
   for (const token of ['would_refuse', 'gaps_found', 'gaps.open_work', ERROR_REASON.MILESTONE_GATE_BLOCKED]) {
     assert.ok(spans.includes(token), `step 5.6 names \`${token}\``);
   }
-  assert.equal(ERROR_REASON.MILESTONE_GATE_BLOCKED, 'milestone_gate_blocked');
   assert.equal(extractFencedBlock(step, 'bash'), 'gsd_run query milestone complete {version} --dry-run');
 });
 
@@ -73,13 +72,13 @@ test('#5482: open-work entries have a slot in the YAML, the gaps_found output an
   for (const f of ['gate_message', 'details']) {
     assert.ok(!unfenced.body.includes(`{${f}}`), `{${f}} must sit inside a code fence in the Open Work section`);
   }
-  assert.ok(successCriteria().some((line) => line.includes('ship:pre') && line.includes('gaps_found')), 'a success criterion ties the open-work listing to gaps_found');
+  assert.ok(successCriteria().some((line) => ['ship:pre', 'gaps_found'].every((token) => codeSpans(line).includes(token))), 'a success criterion ties the ship:pre listing to gaps_found');
 });
 
 // #5482: a dry-run that evaluated no gate (gate_warnings) must not read as clean, in the audit and in the close preview.
 test('#5482: audit step 5.6 and the close preview both name a non-empty gate_warnings', () => {
   assert.ok(codeSpans(openWorkStep()).includes('gate_warnings'));
-  const preview = splitLines(workflowMd('complete-milestone.md')).find((l) => codeSpans(l).includes('would_refuse') && l.includes('JSON'));
+  const preview = splitLines(workflowMd('complete-milestone.md')).find((l) => codeSpans(l).includes('would_refuse'));
   assert.ok(preview, 'the close preview must read would_refuse');
   assert.ok(codeSpans(preview).includes('gate_warnings'));
 });

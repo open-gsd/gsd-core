@@ -408,7 +408,7 @@ or `5.2` if `5.1` exists), never `<after-phase>`.
 - [ ] Integration checker spawned with milestone requirement IDs
 - [ ] v{version}-MILESTONE-AUDIT.md created with structured requirement gap objects
 - [ ] FAIL gate enforced — any unsatisfied requirement forces gaps_found status
-- [ ] Open work (blocking ship:pre gates) listed; any entry forces gaps_found
+- [ ] Open work (blocking `ship:pre` gates) listed; any entry forces `gaps_found`
 - [ ] Nyquist compliance scanned for all milestone phases (if enabled)
 - [ ] Missing VALIDATION.md phases flagged with validate-phase suggestion
 - [ ] Results presented with actionable next steps

@@ -196,20 +196,29 @@ describe('firstUnprovenMarker', () => {
       'sh -c "echo @"', 'bash -c "echo @"', 'dash -c "echo @"', '/bin/sh -c "echo @"', 'sh -ec "echo @"', 'sh -ce "echo @"',
       'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c "a" -c "@"', 'sh -c "a-@"',
       'printf x | xargs sh -c "echo @"', 'find . -exec sh -c "echo @" \\;', 'echo ok;sh -c "@"', '(sh -c "@")',
+      // A quoted or escaped command name is still the command; `;` inside quotes does not end it.
+      '"eval" "echo @"', "'eval' \"echo @\"", '\\eval "echo @"', '\\sh -c "echo @"', "'bash' -c \"echo @\"", '"sh" "-c" "echo @"', 'eval "a" "b;c" "@"',
+      'echo ok\nsh -c "@"', 'FOO=1 eval "@"', 'sudo -n sh -c "@"',
     ]) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
   });
   test('a double-quoted marker that no consumer parses again is proven, whatever the command', () => {
     const ok = [
-      'echo -c x "@"', 'grep -c x "@"', 'test -d "@" -a -c "@"', 'sh script.sh "@"', 'sh -x "@"', 'echo "@"; echo eval',
+      'echo -c x "@"', 'grep -c x "@"', 'test -d "@" -a -c "@"', 'sh script.sh "@"', 'sh -x "@"', 'echo eval; echo "@"', 'echo eval; test -d "@"',
+      // The consumer ends at the command separator: a later command is read on its own.
+      "trap 'rm -f tmp' EXIT; test -d \"@\"", 'sh build.sh && wc -c "@"', 'sh -c true; echo "@"', 'sh -c true\necho "@"', 'echo "@" | wc -c',
       "sh -c 'echo \"$1\"' sh \"@\"", "sh -ec 'echo \"$1\"' sh \"@\"", "bash -c 'echo \"$1\"' bash \"@\" \"@\"",
       "find . -exec sh -c 'echo \"$1\"' sh \"@\" \\;", "printf x | xargs -0 sh -c 'echo \"$1\"' sh \"@\"", "d=\"@\"; eval 'echo \"$d\"'", "d=\"@\"; trap 'echo \"$d\"' EXIT",
     ];
     for (const text of ok) assert.equal(first(text), undefined, text);
   });
   test('a command that runs xargs without -0 or -d is refused for any marker, before or after it', () => {
-    for (const bad of ['echo "@" | xargs ls', 'xargs ls < "@"', 'xargs -n1 echo "@"', 'echo "@" | xargs -I{} ls {}']) {
+    for (const bad of [
+      'echo "@" | xargs ls', 'xargs ls < "@"', 'xargs -n1 echo "@"', 'echo "@" | xargs -I{} ls {}',
+      // `-d` of `test` and `-0` of another command are no delimiter option of xargs.
+      'test -d "@" && echo "@" | xargs ls', 'echo "@" | xargs ls -0', 'echo "@" | sort -d | xargs ls', '"xargs" ls "@"', 'echo "@" | xargs ls; echo "@" | xargs -0 ls',
+    ]) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
     for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@"; find . -delete', 'echo "@" xargsx']) {

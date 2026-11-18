@@ -254,6 +254,10 @@ describe('evaluatePredicate — interpolation', () => {
       'printf x | xargs sh -c "test -e @"',
       'find . -exec sh -c "test -e @" \\;',
       'echo "@" | xargs ls',
+      'test -d "@" && echo "@" | xargs ls',
+      '"eval" "test -e @"',
+      '\\sh -c "test -e @"',
+      "'bash' -c \"test -e @\"",
       'echo "$\\\n(echo \'@\')"',
       "cat <\\\n<'EOF'\n\"@\"\nEOF",
     ];
@@ -274,6 +278,8 @@ describe('evaluatePredicate — interpolation', () => {
       'd="@"; eval \'echo "$d"\'',
       'echo "@" | tr "\\n" "\\0" | xargs -0 echo',
       'grep -c x /dev/null; echo "@"',
+      "trap 'rm -f tmp' EXIT; echo \"@\"",
+      'sh -c true; echo "@"',
       'echo \\\n"@"',
       'echo "$\\\nd" "@"',
     ];

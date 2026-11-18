@@ -117,7 +117,7 @@ function assertNoLegacyPlaceholder(command: string): void {
 function assertEveryPlaceholderDoubleQuoted(command: string): void {
   const name = firstUnprovenMarker(command, PLACEHOLDER_RE);
   if (name !== undefined) {
-    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it as one plain value: write "\${${name}}" in plain double quotes, outside the text that eval, trap or sh -c parses again (pass it as an argument: sh -c 'test -d "$1"' sh "\${${name}}"); docs/reference/gate-predicates.md ("Phase environment values") lists the refused forms and the rewrites`);
+    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it as one plain value: write "\${${name}}" in plain double quotes, outside the text that eval, trap or sh -c parses again (pass it as an argument: sh -c 'test -d "$1"' sh "\${${name}}"; for eval or trap assign d="\${${name}}" first and write "$d" in single-quoted text); docs/reference/gate-predicates.md ("Phase environment values") lists the refused forms and the rewrites`);
   }
 }
 
