@@ -3113,11 +3113,17 @@ function countRoadmapPhaseHeadings(
     }
     return count;
   }
-  // LEGACY stays on the pre-round-4 raw exec loop. #3185 owns the read-path
-  // sentinel predicate; sync deliberately preserves its prior behavior.
-  const phaseHeadingPattern = new RegExp(`#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, true)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'gi');
-  let m: RegExpExecArray | null;
-  while ((m = phaseHeadingPattern.exec(scope)) !== null) {
+  // LEGACY keeps its own sentinel rules (#3185 owns the read-path sentinel
+  // predicate; sync deliberately preserves its prior behavior). #5880: the
+  // headings themselves come from the one tokenizer the bracket branch uses, so
+  // only real ATX headings (levels 2-4, outside fences, at line start) count.
+  // A raw scan over the scope text also counted a heading quoted in a code span,
+  // a blockquote, a sentence, or the tail of a `#####` line.
+  const phaseHeadingPattern = new RegExp(`^${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, true)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'i');
+  for (const h of tokenizeHeadings(scope)) {
+    if (h.level < 2 || h.level > 4) continue;
+    const m = phaseHeadingPattern.exec(h.text);
+    if (!m) continue;
     const token = m[1];
     if (!/\d/.test(token)) continue;
     if (applyConventionTokenSentinelRules && isSentinelPhaseId(token)) continue;
