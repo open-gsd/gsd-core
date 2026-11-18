@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 5456
+---
+**Carry external lane evidence into `--fix --auto` re-reviews** — re-reviews now receive the external reviewer lane evidence the first review saw, instead of silently dropping it after iteration 1. A later `--auto` run for the same phase reads that evidence while it has been idle under 6 hours. Each read restarts that window. Nothing is written into the project or its git metadata. (#5019)

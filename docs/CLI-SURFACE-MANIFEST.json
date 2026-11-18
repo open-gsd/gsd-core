@@ -350,6 +350,32 @@
       "workstreamScoped": false
     },
     {
+      "verb": "lane-evidence-clear",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {
+        "keep-auto": "boolean"
+      },
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "lane-evidence-persist",
+      "aliases": [],
+      "positionals": 4,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
+      "verb": "lane-evidence-read",
+      "aliases": [],
+      "positionals": 2,
+      "flags": {},
+      "required": [],
+      "workstreamScoped": false
+    },
+    {
       "verb": "learnings.copy",
       "aliases": [
         "learnings copy"

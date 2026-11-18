@@ -757,7 +757,10 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
         'echo "CODE_REVIEW_POINT=[$CODE_REVIEW_POINT]"',
         'echo "EXPLICIT_JOINED=[$EXPLICIT_JOINED]"',
       ].join('\n');
-      const result = runHook('-c', [driver], { interpreter: 'bash', cwd: tmpDir, timeoutMs: PROBE_TIMEOUT_MS });
+      // Run from a file, not `bash -c`: the driver outgrew the Windows command-line limit (~8K), which
+      // surfaced as `syntax error: unexpected end of file`. stdin stays free for the stubbed `cat >/dev/null`.
+      fs.writeFileSync(path.join(tmpDir, 'driver.sh'), driver);
+      const result = runHook('driver.sh', [], { interpreter: 'bash', cwd: tmpDir, timeoutMs: PROBE_TIMEOUT_MS });
       assertSeamExit(assert, result, 0, `driver failed: stdout=${result.stdout}`);
       assert.match(result.stdout, /CODE_REVIEW_POINT=\[execute:post\]/,
         `CODE_REVIEW_POINT must be computed and survive within the SAME fence that later uses it for --point, got: ${result.stdout}`);
