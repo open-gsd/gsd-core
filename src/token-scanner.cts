@@ -11,6 +11,9 @@
  * (ADR §6); its own env-prefix/flag/subcommand walk logic stays put — only
  * the character-level tokenizer moves here.
  *
+ * `literalDollarIndexes(command) → number[]` returns the index of every `$` that `sh` reads literally
+ * (single quotes, `$'...'`, a quoted here-document body); the gate evaluator refuses a placeholder there.
+ *
  * `indentWidth` is the primitive `src/decisions.cts`'s #3169 fix needs: a
  * decision-bullet list can NEST (a bullet elaborating on an already-open
  * decision, indented deeper than it), and a per-line regex cannot see that
@@ -72,10 +75,16 @@ export function indentWidth(line: string): number {
 const HEREDOC_OPEN_RE = /<<(-?)[ \t]*((?:\\[^\n]|'[^'\n]*'|"[^"\n]*"|[^\s;&|<>()'"\\])+)/y;
 
 interface QuoteCtx {
-  kind: 'none' | 'sub' | 'arith' | 'tick' | 'double' | 'single' | 'ansi' | 'heredoc' | 'literal-heredoc';
+  kind: 'none' | 'sub' | 'arith' | 'tick' | 'param' | 'double' | 'single' | 'ansi' | 'heredoc' | 'literal-heredoc';
   delimiter?: string;
   stripTabs?: boolean;
+  /** Open `case` words: a `)` closes a pattern, not the enclosing `(...)`, while this is above zero. */
+  cases?: number;
 }
+
+// `case` or `esac` as a command word: after a separator, a compound-command keyword or the start of the command.
+const CASE_WORD_RE = /(case|esac)(?![\w])/y;
+const COMMAND_POSITION_RE = /(?:^|[\n;&|(`{]|\b(?:then|do|else|elif|if|while|until)\s)\s*$/;
 
 /** The end index of the line starting at `i` when it is the delimiter line of here-document `top`; -1 otherwise. */
 function endsHeredoc(command: string, i: number, top: QuoteCtx): number {
@@ -88,7 +97,8 @@ function endsHeredoc(command: string, i: number, top: QuoteCtx): number {
 /**
  * The index of every `$` that `sh` reads literally: inside single quotes, `$'...'` and a quoted here-document
  * body (`<<'EOF'`, `<<"EOF"`, `<<\EOF`). One walk follows every shell quoting state with a stack: single and
- * double quotes, `$'...'`, backslash, `#` comments, `$(...)`, `$((...))`, `(...)`, backticks and here-documents.
+ * double quotes, `$'...'`, backslash, `#` comments, `$(...)`, `$((...))`, `(...)`, `${...}`, backticks,
+ * `case` patterns (their `)` closes no `(...)`) and here-documents.
  * A quote character pairs only inside its own state, so an apostrophe in a comment, a double-quoted string or
  * an unquoted here-document body pairs with nothing; a `<<` inside `$((...))` is a shift, not a here-document.
  */
@@ -122,8 +132,16 @@ export function literalDollarIndexes(command: string): number[] {
       const arith = command[i + 2] === '(';
       stack.push({ kind: arith ? 'arith' : 'sub' });
       i += arith ? 2 : 1;
+    } else if (c === '$' && command[i + 1] === '{') {
+      stack.push({ kind: 'param' });
+      i++;
     } else if (top.kind === 'double' || top.kind === 'heredoc') {
       if (c === '"' && top.kind === 'double') stack.pop();
+    } else if (c === '}' && top.kind === 'param') {
+      stack.pop();
+    } else if ((c === 'c' || c === 'e') && (CASE_WORD_RE.lastIndex = i, CASE_WORD_RE.test(command)) && COMMAND_POSITION_RE.test(command.slice(0, i))) {
+      top.cases = Math.max(0, (top.cases ?? 0) + (c === 'c' ? 1 : -1));
+      i += 3;
     } else if (c === '$') {
       dollarAt = i;
     } else if (c === '#' && (i === 0 || /[\s;&|()]/.test(prev))) {
@@ -142,7 +160,7 @@ export function literalDollarIndexes(command: string): number[] {
       if (top.kind === 'arith') {
         stack.pop();
         if (command[i + 1] === ')') i++;
-      } else if (top.kind === 'sub') stack.pop();
+      } else if (top.kind === 'sub' && !top.cases) stack.pop();
     } else if (c === '<' && command[i + 1] === '<' && prev !== '<' && top.kind !== 'arith') {
       HEREDOC_OPEN_RE.lastIndex = i;
       const m = HEREDOC_OPEN_RE.exec(command);

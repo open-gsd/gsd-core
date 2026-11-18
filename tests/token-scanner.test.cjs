@@ -12,7 +12,8 @@
  * the implementing phase adds it (mirrors tests/pattern.test.cjs / tests/text-lines.test.cjs's
  * RED convention from Phases 1-2).
  *
- * Covers test-matrix rows 1-10: tokenizeShellLike (1-5), indentWidth (6-10).
+ * Covers test-matrix rows 1-10: tokenizeShellLike (1-5), indentWidth (6-10); literalDollarIndexes
+ * (the `$` positions `sh` reads literally) by the property at the end of the file.
  * extractBranchArgument (rows 11-17) lives in git-cmd.js, tested in
  * tests/worktree-safety.test.cjs's folded bug-3129 block, not here.
  */
@@ -171,6 +172,11 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
     { text: "cat <<EOF\nit's @\nEOF", literal: false },
     { text: "echo `echo \"it's @\"`", literal: false },
     { text: 'echo $((1<<n)) "@"', literal: false },
+    { text: 'echo "${x:-"it\'s"}" \'@\'', literal: true },
+    { text: 'echo "${x:-"it\'s"}" "@"', literal: false },
+    { text: 'echo "$(case $v in a) echo "it\'s";; esac)" \'@\'', literal: true },
+    { text: 'echo "$(case $v in (a|b) echo "it\'s";; esac)" "@"', literal: false },
+    { text: 'echo "$(echo case) it\'s" "@"', literal: false },
   ];
   test('the indexes equal the positions of the literal markers', () => {
     fc.assert(
