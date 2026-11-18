@@ -102,7 +102,7 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
   let depth = 0;
   let wordStart = 0;
   let commandStart = 0;
-  let procSubst = 0;
+  const isRedirectionChar = redirectionTracker();
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const here = markerAt(i);
@@ -129,19 +129,28 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
       quote = c;
     } else if (depth === 0 && /[\s;&|()]/.test(c)) {
       wordStart = i + 1;
-      // A `&`, `|` or `(` of a redirection (`2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`) does not end the command; nor does the `)` closing `<(` or `>(`.
-      const prev = command[i - 1] ?? '';
-      const redirects =
-        (c === '&' && (/[<>]/.test(prev) || command[i + 1] === '>')) ||
-        (c === '|' && prev === '>') ||
-        (c === '(' && /[<>]/.test(prev)) ||
-        (c === ')' && procSubst > 0);
-      if (redirects && c === '(') procSubst++;
-      else if (redirects && c === ')') procSubst--;
+      const redirects = isRedirectionChar(command, i);
       if (/[;&|()\n]/.test(c) && !redirects) commandStart = i + 1;
     }
   }
   return undefined;
+}
+
+/**
+ * A walk's test for a separator character that is part of a redirection, not the end of a command: the `&`, `|` or `(` of
+ * `2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`, and the `)` that closes `<(` or `>(`. Call it for each separator of one text, in order.
+ */
+function redirectionTracker(): (text: string, i: number) => boolean {
+  let procSubst = 0;
+  return (text, i) => {
+    const c = text[i];
+    const prev = text[i - 1] ?? '';
+    const opens = c === '(' && /[<>]/.test(prev);
+    const redirects = (c === '&' && (/[<>]/.test(prev) || text[i + 1] === '>')) || (c === '|' && prev === '>') || opens || (c === ')' && procSubst > 0);
+    if (opens) procSubst++;
+    else if (redirects && c === ')') procSubst--;
+    return redirects;
+  };
 }
 
 const SHELL_WORD = /(?:^|\/)(?:ba|da|k|z|a)?sh$/;
@@ -163,14 +172,15 @@ const XARGS_ATTACHED_OPTIONS = 'eil';
 const XARGS_LONG_ARG_OPTIONS = new Set(['--max-args', '--max-procs', '--max-lines', '--max-chars', '--arg-file', '--process-slot-var']);
 
 /**
- * The commands of a shell text, each as its words: split at command separators (`;`, `&`, `|`, parentheses, newline)
- * and at blanks outside quotes, with quotes and backslashes dropped (`"eval"`, `\sh`, `A="x y"` is the word `A=x y`).
+ * The commands of a shell text, each as its words: split at command separators (`;`, `&`, `|`, parentheses, newline;
+ * not the ones of a redirection) and at blanks outside quotes, with quotes and backslashes dropped (`"eval"`, `\sh`, `A="x y"` is the word `A=x y`).
  */
 function shellCommands(text: string): string[][] {
   const commands: string[][] = [[]];
   let word = '';
   let inWord = false;
   let quote = '';
+  const isRedirectionChar = redirectionTracker();
   const endWord = (): void => {
     if (inWord) commands[commands.length - 1].push(word);
     word = '';
@@ -187,7 +197,7 @@ function shellCommands(text: string): string[][] {
     } else if (c === "'" || c === '"') {
       quote = c;
       inWord = true;
-    } else if (/[\s;&|()]/.test(c)) {
+    } else if (/[\s;&|()]/.test(c) && !isRedirectionChar(text, i)) {
       endWord();
       if (c !== ' ' && c !== '\t') commands.push([]);
     } else {
@@ -205,23 +215,33 @@ const RESERVED_WORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 
 /** The index of the command word of a command's words: the first word that is no `NAME=value`, no empty word and no reserved word; -1 when none. */
 const commandWordIndex = (words: string[]): number => words.findIndex((w) => w !== '' && !ASSIGNMENT.test(w) && !RESERVED_WORDS.has(w));
 
+/** A redirection word (`2>&1`, `>out`, `&>`): not an argument of the command; one that ends in its operator (`>`, `2>`, `>|`) takes the next word as its target. */
+const REDIRECTION_WORD = /^(?:\d*|&)[<>]/;
+/**
+ * The index of the script word of a shell `-c` command (`sh -c '<script>' ...`): the first word after the first shell word
+ * that is no option word (`-x`, `+x`, `-o name`, an empty word), provided a `-c` option stands before it. The script word
+ * is the text the shell parses again; `bash scripts/check.sh -c "$x"` has none (the `-c` belongs to the script). Returns
+ * `words.length` when the option words run to the end (the next word is the script word) and -1 when there is no `-c` shell.
+ */
+function scriptWordIndex(words: string[]): number {
+  const shell = words.findIndex((w) => SHELL_WORD.test(w));
+  if (shell < 0) return -1;
+  let k = shell + 1;
+  while (k < words.length && (words[k] === '' || /^[-+]/.test(words[k]) || REDIRECTION_WORD.test(words[k]))) {
+    k += SET_OPTION_WITH_ARG.test(words[k]) || (REDIRECTION_WORD.test(words[k]) && /[<>|]$/.test(words[k])) ? 2 : 1;
+  }
+  return words.slice(shell + 1, k).some(isCOption) ? Math.min(k, words.length) : -1;
+}
+
 /**
  * True when the word that starts right after `head` (the text of its command up to that word) is text a consumer
- * parses as shell again: any word of a command whose command word is `eval` or `trap`, or the script word of `sh -c` (the word after the
- * trailing option words, one of which holds `c`).
+ * parses as shell again: any word of a command whose command word is `eval` or `trap`, or the script word of `sh -c`.
  */
 function isReparsedWord(head: string): boolean {
   const commands = shellCommands(head);
   const words = commands.flat();
   const commandWord = commands[0][commandWordIndex(commands[0])];
-  if (commandWord === 'eval' || commandWord === 'trap') return true;
-  let k = words.length;
-  while (k > 0) {
-    if (words[k - 1] === '' || /^[-+]/.test(words[k - 1])) k--;
-    else if (k > 1 && SET_OPTION_WITH_ARG.test(words[k - 2])) k -= 2;
-    else break;
-  }
-  return words.slice(k).some(isCOption) && words.slice(0, k).some((w) => SHELL_WORD.test(w));
+  return commandWord === 'eval' || commandWord === 'trap' || scriptWordIndex(words) === words.length;
 }
 
 /**
@@ -242,12 +262,15 @@ function xargsOption(words: string[], j: number): { delimited: boolean; skip: nu
 
 /**
  * True when a command of the text runs `xargs` (as its command word) with no delimiter option among its option words:
- * `xargs` then splits and unquotes its input. A word that holds blanks or separators (the script of `sh -c '... | xargs ls'`) is read as a text too.
+ * `xargs` then splits and unquotes its input. The script word of a shell `-c` (`sh -c '... | xargs ls'`) is read as a text too.
  */
 function splitsWithXargs(command: string): boolean {
   return shellCommands(command).some((words) => {
     const i = commandWordIndex(words);
-    if (i < 0 || !XARGS_WORD.test(words[i])) return words.some((word) => /[\s;&|()]/.test(word) && splitsWithXargs(word));
+    if (i < 0 || !XARGS_WORD.test(words[i])) {
+      const script = scriptWordIndex(words);
+      return script >= 0 && script < words.length && splitsWithXargs(words[script]);
+    }
     let j = i + 1;
     while (j < words.length && words[j].startsWith('-') && words[j] !== '--') {
       const option = xargsOption(words, j);

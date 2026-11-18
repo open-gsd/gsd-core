@@ -194,7 +194,7 @@ describe('firstUnprovenMarker', () => {
     for (const bad of [
       'eval "@"', 'eval "test -e \\"@\\""', 'eval echo "@"', 'echo ok; eval "@"', 'trap "rm @" EXIT',
       'sh -c "echo @"', 'bash -c "echo @"', 'dash -c "echo @"', '/bin/sh -c "echo @"', 'sh -ec "echo @"', 'sh -ce "echo @"',
-      'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c -o pipefail "echo @"', 'sh -c +e "echo @"', 'bash -ec +o errexit -O extglob "echo @"', 'sh -c "a" -c "@"', 'sh -c "a-@"',
+      'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c -o pipefail "echo @"', 'sh -c +e "echo @"', 'bash -ec +o errexit -O extglob "echo @"', 'sh -c "a-@"',
       // The cluster has no length cap: 15, 16, 17 and 40 letters before the `c` are read alike.
       `sh -${'e'.repeat(15)}c "echo @"`, `sh -${'e'.repeat(16)}c "echo @"`, `sh -${'e'.repeat(17)}c "echo @"`, `sh -${'e'.repeat(40)}c "echo @"`, `sh -c${'e'.repeat(40)} "echo @"`,
       'printf x | xargs sh -c "echo @"', 'find . -exec sh -c "echo @" \\;', 'echo ok;sh -c "@"', '(sh -c "@")',
@@ -205,6 +205,8 @@ describe('firstUnprovenMarker', () => {
       'eval echo 2>&1 "@"', 'sh 2>&1 -c "test -e @"', 'trap 2>&1 "rm @" EXIT', 'eval echo >&2 "@"', 'eval echo &> /dev/null "@"', 'echo x >&2; eval "@"',
       // `>|`, `<(`, `>(` and `<&` are redirections too: the command goes on after them.
       'eval echo >| out "@"', 'eval echo <(true) "@"', 'eval echo >(cat) "@"', 'eval echo 0<&3 "@"', 'eval cat <&3 "@"',
+      // The bounds of a letter in the cluster: `a`, `z`, `A` and `Z` are letters, so the `c` is read.
+      'sh -ac "test -e @"', 'sh -zc "test -e @"', 'sh -Ac "test -e @"', 'sh -Zc "test -e @"', 'sh -Cc "test -e @"',
       // Each shell prefix of SHELL_WORD (`ksh`, `zsh`, `ash`) is a consumer too.
       'ksh -c "echo @"', 'zsh -c "echo @"', 'ash -c "echo @"',
       // The command word follows `NAME=value` words (quoted value included) and the reserved words that start a command.
@@ -213,6 +215,11 @@ describe('firstUnprovenMarker', () => {
     ]) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
+  });
+  test('a cluster whose neighbour of a letter is `@` (the char before `A`) is no -c cluster', () => {
+    // `@` is the placeholder of the other rows, so these two texts are written with the char code.
+    const at = String.fromCharCode(64);
+    for (const text of [`bash -c${at} "echo \${GSD_MARK}"`, `bash -${at}c "echo \${GSD_MARK}"`]) assert.equal(firstUnprovenMarker(text, MARKER), undefined, text);
   });
   test('a double-quoted marker that no consumer parses again is proven, whatever the command', () => {
     const ok = [
@@ -223,6 +230,10 @@ describe('firstUnprovenMarker', () => {
       'eval true && echo "@"', 'eval true & echo "@"', 'eval true 2>&1; echo "@"', 'echo x >&2; eval true; echo "@"', 'eval true <&3; echo "@"',
       // `eval` and `trap` are consumers only as the command word: as an argument they are plain words.
       'grep -q trap "@"', 'echo eval "@"', 'FOO=1 echo trap "@"', 'A="eval x" echo "@"', 'if true; then echo eval "@"; fi',
+      // A `-c` after the script word belongs to the script; a neighbour of a letter in the cluster (`@`, `[`, backtick, `{`) is no letter, so no `-c` stands.
+      'sh -c "a" -c "@"', 'bash scripts/check.sh -c "@"', 'bash -c[ "echo @"', "bash '-c`' \"echo @\"", 'bash -c{ "echo @"', 'bash -[c "echo @"', "bash '-`c' \"echo @\"", 'bash -{c "echo @"',
+      // `xargs` inside a word of a command that is no shell is no command word.
+      'grep -q "xargs rm" "@"', 'sh -c; echo "@"',
       "sh -c 'echo \"$1\"' sh \"@\"", "sh -ec 'echo \"$1\"' sh \"@\"", "bash -c 'echo \"$1\"' bash \"@\" \"@\"",
       "find . -exec sh -c 'echo \"$1\"' sh \"@\" \\;", "printf x | xargs -0 sh -c 'echo \"$1\"' sh \"@\"", "d=\"@\"; eval 'echo \"$d\"'", "d=\"@\"; trap 'echo \"$d\"' EXIT",
     ];

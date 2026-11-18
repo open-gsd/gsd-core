@@ -272,6 +272,11 @@ describe('evaluatePredicate — interpolation', () => {
       'eval echo <(true) "@"',
       'eval echo 0<&3 "@"',
       'eval cat <&3 "@"',
+      'sh -ac "test -e @"',
+      'sh -zc "test -e @"',
+      'sh -Ac "test -e @"',
+      'sh -Zc "test -e @"',
+      'sh -Cc "test -e @"',
       'ksh -c "test -e @"',
       'zsh -c "test -e @"',
       'ash -c "test -e @"',
@@ -342,6 +347,16 @@ describe('evaluatePredicate — interpolation', () => {
       'echo x >&2; eval true; echo "@"',
       "trap 'rm -f tmp' EXIT; echo \"@\"",
       'sh -c true; echo "@"',
+      'echo "@"; bash scripts/check.sh -c "@"',
+      'echo "@"; sh -c "a" -c "@"',
+      'echo "@"; bash -c[ "echo @"',
+      'echo "@"; bash \'-c`\' "echo @"',
+      'echo "@"; bash -c{ "echo @"',
+      'echo "@"; bash -[c "echo @"',
+      'echo "@"; bash \'-`c\' "echo @"',
+      'echo "@"; bash -{c "echo @"',
+      'grep -q "xargs rm" "@"; echo "@"',
+      'echo "@"; sh -c',
       'echo \\\n"@"',
       'echo "$\\\nd" "@"',
     ];
@@ -406,6 +421,11 @@ describe('evaluatePredicate — interpolation', () => {
           assert.doesNotThrow(() => run(spell(template, name)), JSON.stringify(template));
         }
       }
+    });
+    test('a cluster whose neighbour of a letter is `@` (the char before `A`) is no -c cluster', () => {
+      // `@` is the placeholder of the rows above, so these texts are written with the char code.
+      const at = String.fromCharCode(64);
+      for (const command of [`bash -c${at} "echo \${GSD_PHASE_DIR}"`, `bash -${at}c "echo \${GSD_PHASE_DIR}"`]) assert.doesNotThrow(() => run(command), command);
     });
     test('the real shell expands every allowed row and prints no literal placeholder', () => {
       const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' } });
