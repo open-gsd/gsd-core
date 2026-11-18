@@ -1635,6 +1635,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(gateResult(), { blocked: [], warnings: [] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(stderrWarningLines(r), 0, 'no stderr warning without a gate-declaring capability');
   });
 
   test('G16c a capability that failed to load is reported in gate_warnings, so would_refuse [] is not read as clean', () => {
