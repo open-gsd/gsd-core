@@ -104,9 +104,10 @@ shard cancelled after it ran (killed at its cap) counts.
 - The gap between the slowest and fastest shard's median must be at most `maxMedianGapMs`.
 - No shard's p90 may be above its entry in `baselineP90Ms`.
 
-Both values live only in `SHARD_BALANCE`, with the runs they were measured on, how each was
-derived and the margin later runs leave, in the comment above them; this page deliberately does
-not copy them. Since #5029 they describe the layout `baselineShardTotal` names. The gap limit is
+Both values live only in `SHARD_BALANCE`, whose comment gives the rule each was derived by; this
+page does not copy them. The runs they were measured on and the margin later runs leave are under
+[Where the two thresholds come from](#where-the-two-thresholds-come-from). Since #5029 they
+describe the layout `baselineShardTotal` names. The gap limit is
 deliberately wider than the 2 minutes #5101 set for the ~30-minute shards of its day: on shorter
 shards a single long test file moves one shard by minutes on its own.
 
@@ -131,6 +132,61 @@ if `insufficient-data` lasts past `minRuns` pushes, compare the newest run's sha
 
 The check never fails the workflow and never changes how shards are packed; it only reports.
 Closing the tracking issue after a fix is up to you. A later breach opens a new one.
+
+### Where the two thresholds come from
+
+#5029 set both thresholds before `next` had any 6-shard push runs, so they were measured on PR
+#5053's runs and on push runs of `test.yml` on the fork tarc/gsd-core. Once `next` has `minRuns`
+6-shard push runs, re-derive both from those, by the rules in the `SHARD_BALANCE` comment.
+
+**Gap limit.** Measured on the twelve 6-shard runs of PR #5053 whose heads carry #5097's win32
+weights: 36785097774, 37024435915, 37031116287, 37037251805, 37041237415, 37086102648,
+37138563782, 37694227292, 37697717410, 38647499912, 38650210804 and 38654860178. Their six
+11-17 minute shards have a median gap of 332.5 s (5/6's median is 1011.5 s, 6/6's 679 s); 1.5
+times that, rounded up, is `maxMedianGapMs`. The gap comes from single test files of 3.5-6.5
+minutes that land in different chunks of different shards: on run 37697717410, `install` took
+384 s, `codex-config-agents` 371 s, `verification-status` 219 s and `install-minimal-hooks` 218 s.
+
+Those twelve runs predate #5803, and the margin under the limit depends on the partition. The
+gaps measured since, computed as `evaluateShardBalance` computes them:
+
+| Runs | Tier files | Median gap |
+|---|---|---|
+| the twelve fork runs the baselines come from (below) | 367-375, nine partitions | 229 s |
+| PR #5053's 42078639141 and 42087947326, head `77b2d9a09` | 375 | 430.5 s (439 s and 459 s run by run) |
+| twelve fork runs on the partitions `next` has had since #6002: 43136204917, 43136204941, 43136205083, 43140668487, 43140668934, 43140669065, 43248156906, 43253932817, 43253932847, 43253934459, 43253938926, 43253940560 | 319-330 | 265.5 s; single runs 328-586 s, and 2/6 is the slow shard (median 938 s, against 672.5 s for 5/6) |
+| the newest twenty of those 26, the window the daily check reads | 319-375 | 268 s, `ok` |
+
+So a window spanning the partitions `next` had then leaves about 235 s (47%) to spare, though
+single runs there were already over the limit, and a window that sat on one unlucky partition
+would leave about 70 s (14%). The limit was kept rather than re-derived because the two honest
+re-derivations disagree: the first twelve runs' gap times 1.5 would be 398 s, under what one
+partition already measures, and that partition's gap times 1.5 would be 646 s, sized to whichever
+partition was sampled.
+
+**Baselines.** A shard's time moves with the tree. #5803 refreshed `tests/test-timings.json`, and
+`selectShard` re-packs the light files whenever the tier changes, so `next` went through nine
+partitions in the 40 commits from #5803 to `d47f196d1`. Baselines measured on the PR runs above
+read `breach` on those partitions (2/6's p90 was 957 s against 927.5 s). So the baselines come from
+twelve fork push runs, one per partition plus three repeats, each a `next` commit from that span
+merged with #5029: 42019488063, 42023851315, 42023856927, 42023862270, 42023868163, 42023874553,
+42023879784, 42034547210, 42034552231, 42034559137, 42034565931 and 42034572698. All twelve ran on
+one day, so they do not sample day-to-day runner variation. Their nearest-rank p90 of job
+wall-clock per shard, which 1.25 times gives `baselineP90Ms`:
+
+| Shard | 1/6 | 2/6 | 3/6 | 4/6 | 5/6 | 6/6 |
+|---|---|---|---|---|---|---|
+| p90 (ms) | 889000 | 957000 | 1028000 | 993000 | 904000 | 940000 |
+
+The baseline is not the p90 itself because a fresh sample's p90 exceeds it too often: 3/6's own
+twelfth value, 1047000, is already above 1028000.
+
+The twelve post-#6002 fork runs in the gap table read `ok` against these baselines. Their p90s are
+889000, 1125000, 999000, 973000, 749000 and 1034000 (1/6 to 6/6); 2/6 comes closest to its
+baseline. One row of their 71 is above its baseline: 2/6 at 1335000 on run 43248156906, a slow VM
+(the `test-conformance` `LANE_COSTS` entry in `tests/ci-test-job-timeout-budget.test.cjs`
+describes it). On the 330-file partition 2/6 starts with a chunk that is one 4-5 minute file
+(`codex-config-agents`), so it is the shard to watch.
 
 ## Line a failing test up against the spawn-stall watcher (#5473)
 

@@ -719,7 +719,8 @@ jobs:
           # test file fits each run's long pole as a fixed cost per shard plus
           # the shard's share of the tier. Steps outside the test step are one
           # to two and a half minutes of that cost (50-151s, median 97s, over the 72
-          # Windows jobs of the runs SHARD_BALANCE's baselines cite); the rest
+          # Windows jobs of the twelve fork runs SHARD_BALANCE's baselines were
+          # measured on, listed in docs/how-to/read-ci-timeout-signals.md); the rest
           # sits inside the test step and is unattributed. So each added shard
           # buys less while costing a 2x-billed Windows runner permanently.
           #

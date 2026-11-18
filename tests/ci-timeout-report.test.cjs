@@ -370,17 +370,23 @@ const {
 // The rule tests below are written against
 // 3-shard fixtures — the layout #5101 shipped with — so they run on this
 // frozen copy of the #5101 config instead: they pin the rules (window, gap,
-// p90, layout-change handling), not the current baselines. The live config's
-// wiring is pinned separately by "SHARD_BALANCE matches the windows shard
-// layout test.yml declares".
+// p90, layout-change handling), not the current baselines. Every field is
+// written out, none inherited, so a change to the live config cannot move
+// these fixtures. The live config's wiring is pinned separately by
+// "SHARD_BALANCE matches the windows shard layout test.yml declares".
 const THREE_SHARD_CONFIG = Object.freeze({
-  ...SHARD_BALANCE,
-  // #5101's own gap limit, pinned here because the live one is sized for the
-  // layout #5029 declared; the 120000/120001 boundary tests below are about
-  // this one.
+  workflowFile: 'test.yml',
+  branch: 'next',
+  event: 'push',
+  since: '2026-09-28T14:17:51Z', // #5097 merge
+  minRuns: 10,
+  windowRuns: 20,
+  // #5101's own gap limit; the 120000/120001 boundary tests below are about
+  // this one, not the live limit sized for the layout #5029 declared.
   maxMedianGapMs: 120000,
   baselineShardTotal: 3,
   baselineP90Ms: Object.freeze({ '1/3': 1824000, '2/3': 2046000, '3/3': 2208000 }),
+  issueTitle: 'CI: Windows conformance shard balance regressed',
 });
 
 function addMs(iso, ms) {
@@ -969,8 +975,9 @@ test('SHARD_BALANCE matches the windows shard layout test.yml declares (#5029)',
   }
 });
 
-// #5029: the live gap limit is sized for the layout test.yml declares (see
-// the SHARD_BALANCE comment for its measured basis). Boundary-tested against
+// #5029: the live gap limit is sized for the layout test.yml declares (the
+// SHARD_BALANCE comment gives its rule, the read-ci-timeout-signals how-to its
+// measured basis). Boundary-tested against
 // the live config with a fixture on that layout: one millisecond under the
 // limit and the gap exactly at it are ok, one millisecond over is a breach.
 // Fixture values are derived from the config (the slow shard is the one with
@@ -988,7 +995,11 @@ test('the live gap limit holds at its boundary on the declared shard layout (#50
     `fixture precondition: every baseline must admit ${base} and the slowest must admit ${base + limit + 1}`,
   );
 
-  const runsWithGap = (gap) => constantRuns(SHARD_BALANCE.minRuns, keys.map((_, i) => (i === slowIdx ? base + gap : base)));
+  const runsWithGap = (gap) => constantRuns(
+    SHARD_BALANCE.minRuns,
+    keys.map((_, i) => (i === slowIdx ? base + gap : base)),
+    { base: SHARD_BALANCE.since },
+  );
   const underLimit = evaluateShardBalance(extractShardSamples(runsWithGap(limit - 1), SHARD_BALANCE), SHARD_BALANCE);
   assert.equal(underLimit.status, 'ok');
   assert.equal(underLimit.gapMs, limit - 1);

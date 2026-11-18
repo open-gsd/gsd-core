@@ -147,14 +147,15 @@ const LANE_COSTS = [
     // 15m27s on run 42087947326, 14m49s-18m29s across the twelve fork runs
     // SHARD_BALANCE's baselines come from (367-375 files; worst shard 2/6, run
     // 42034565931), and 13m56s-22m15s across the eleven complete fork runs of
-    // 2026-11-12 its gap comment cites (319-330 files): 44 six-shard runs in
-    // all. The worst, 22m15s (shard 2/6, run 43248156906, 330 files), came
-    // from a slow VM: the same shard and partition took 18m45s on run
-    // 43136204941, every one of its five chunks ran 1.05-1.28x longer, and
-    // #5473's spawn watcher logged a slowest process sample of 8.5s against
-    // 2.3s. So did the previous worst, 21m43s (shard 5/6, run 40802722711,
-    // 367 files; 18m17s on run 40798310354). By this file's convention both
-    // count: 22m15s rounds up to 23, so this cap may not drop below 35m.
+    // 2026-11-12 listed with its measurements in the read-ci-timeout-signals
+    // how-to (319-330 files): 44 six-shard runs in all. The worst, 22m15s
+    // (shard 2/6, run 43248156906, 330 files), came from a slow VM: the same
+    // shard and partition took 18m45s on run 43136204941, every one of its
+    // five chunks ran 1.05-1.28x longer, and #5473's spawn watcher logged a
+    // slowest process sample of 8.5s against 2.3s. So did the previous worst,
+    // 21m43s (shard 5/6, run 40802722711, 367 files; 18m17s on run
+    // 40798310354). By this file's convention both count: 22m15s rounds up to
+    // 23, so this cap may not drop below 35m.
     //
     // macOS was the slowest row until #5029 sharded it too. Unsharded it ran
     // 18m13s-26m01s across six runs on this PR (repo-wide p90 26.0m over 43
@@ -168,8 +169,8 @@ const LANE_COSTS = [
     // rounds up to 20, so windows still sets this entry. At that slow runner's
     // worst 2.1x it would be ~42m, which requires 63m: over the 45m cap, so a
     // 3-shard row on such a runner could force this decision again. None has
-    // been observed (in the twenty runs SHARD_BALANCE's gap comment lists, the
-    // next worst row is 16m25s, run 43136204941), and the 19m54s row may
+    // been observed (in the twenty 3-shard runs #6148 lists, the next worst
+    // row is 16m25s, run 43136204941), and the 19m54s row may
     // already be a slow one
     // (its two single-file chunks took 1.6-1.8x their time on fork run
     // 42019488063). #5029 names only Windows, so that headroom is tracked in
@@ -189,7 +190,8 @@ const LANE_COSTS = [
     //
     // This comment is the one record of these long poles (test.yml and
     // the TESTING-SUITES doc point here). Per-shard medians, p90s and the
-    // shard-balance gap live in SHARD_BALANCE in scripts/ci-timeout-report.cjs.
+    // shard-balance gap live with SHARD_BALANCE's measured basis in the
+    // read-ci-timeout-signals how-to.
     evidence: 'run 43248156906 — windows shard 2/6 22m15s, worst of 44 6-shard runs (binding row); macOS 3-shard worst 19m54s on run 42078639141',
   },
 ];
@@ -309,7 +311,8 @@ test('CI job timeout budgets carry headroom over measured cost (#2952)', async (
  * The answer depends on which runs go in. The fits compared, as the share of
  * the cap at 330 files and the 1.62x skew ("before" is the 11 `next` runs
  * 42456493417 to 42517578294 at 378-380 files and the fourteen 6-shard runs
- * at 367-375 files that SHARD_BALANCE's comments cite):
+ * at 367-375 files that SHARD_BALANCE's measured basis lists in the
+ * read-ci-timeout-signals how-to):
  *
  *   runs                                     fixed  per file  3 shards  6 shards
  *   after #6002, 29 + 11 (these constants)    500s    10.28s     97.8%     63.9%
