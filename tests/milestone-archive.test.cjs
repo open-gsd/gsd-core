@@ -1223,7 +1223,7 @@ describe('#2142 review: README injection, symlink escape, dry-run/real-run parit
 // Workstream `alpha`: STATE.md declares milestone v1.0, but NO ROADMAP.md of its own — this is
 // what makes getMilestonePhaseFilter throw internally and degrade to SCOPE.UNREADABLE for this
 // workstream's window (#3597). Returns its phases dir.
-function seedUnreadableWorkstream(cwd, phaseNames) {
+function seedUnreadableAlphaWorkstream(cwd, phaseNames) {
   seedWorkstream(cwd, {
     name: 'alpha',
     state: '---\nmilestone: v1.0\n---\n\n# GSD State\n',
@@ -1256,7 +1256,7 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  function seedUnreadableRootRoadmapWorkstream(cwd) {
+  function seedUnreadableWorkstream(cwd) {
     // Root ROADMAP.md declares only phase 1 — irrelevant to the workstream's
     // OWN window once the workstream is active, but included to mirror the
     // exact reproduction shape (a root ROADMAP that could otherwise mislead a
@@ -1265,11 +1265,11 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
       path.join(cwd, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n### Phase 1: Root\n\n**Goal:** Root-only work.\n',
     );
-    return seedUnreadableWorkstream(cwd, ['01-a', '02-b', '03-c']);
+    return seedUnreadableAlphaWorkstream(cwd, ['01-a', '02-b', '03-c']);
   }
 
   test('archives NOTHING and leaves every phase dir on disk when the workstream has no ROADMAP.md', () => {
-    const alphaPhases = seedUnreadableRootRoadmapWorkstream(tmpDir);
+    const alphaPhases = seedUnreadableWorkstream(tmpDir);
 
     const result = runSdkQuery(['milestone.complete', 'v1.0', '--confirm'], tmpDir);
     assert.ok(result.success, `milestone.complete should still succeed (UNREADABLE is not a whole-command refusal): ${result.error}`);
@@ -1297,7 +1297,7 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
   });
 
   test('--dry-run previews an empty archive list and the same refusal on the unreadable-window workstream', () => {
-    seedUnreadableRootRoadmapWorkstream(tmpDir);
+    seedUnreadableWorkstream(tmpDir);
 
     const result = runSdkQuery(['milestone.complete', 'v1.0', '--dry-run'], tmpDir);
     assert.ok(result.success, `milestone.complete --dry-run should succeed: ${result.error}`);
@@ -1594,7 +1594,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   // Workstream with phase dirs but no ROADMAP of its own (#3597): scope UNREADABLE, archive skipped.
-  const seedUnreadable = () => seedUnreadableWorkstream(tmpDir, ['01-a', '02-b']);
+  const seedUnreadable = () => seedUnreadableAlphaWorkstream(tmpDir, ['01-a', '02-b']);
 
   test('G16 UNREADABLE window scope: a blocking halt gate that cannot run refuses the close, --force does not bypass it', () => {
     seedUnreadable();

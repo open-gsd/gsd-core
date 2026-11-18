@@ -76,7 +76,7 @@ A capability declares a `command-exit-zero` gate under the existing
 | cwd | Project root (the runtime `cwd`) | Matches the user's working context; the same root existing `check.query` gates operate from |
 | Environment | Inherit process env | The command runs as the user, on the user's machine, in the project they are working on — no sandbox boundary is crossed vs. the user's own shell. Override via the command itself (`env VAR=x ...`) |
 | Timeout | Default 30s; overridable per-gate | Bounded execution is non-negotiable; an unbounded gate could hang the loop forever |
-| Interpolation | `GSD_PHASE_NUMBER`, `GSD_PHASE_DIR` and `GSD_PHASE_REQ_IDS` are set in the gate shell's environment from the gate context (undefined → `''`); no value is substituted into the command text, and every other `${X}` is left for `sh` to interpret. History: the first revision substituted `${PHASE_NUMBER}`, `${PHASE_DIR}` and `${PHASE_REQ_IDS}`; see "Amendment (2026-11-16)". | Parity with the context existing `check.query` gates already receive |
+| Interpolation | `GSD_PHASE_NUMBER`, `GSD_PHASE_DIR` and `GSD_PHASE_REQ_IDS` are set in the gate shell's environment from the gate context (undefined → `''`); no value is substituted into the command text, and every other `${X}` is left for `sh` to interpret. History: the first revision substituted `${PHASE_NUMBER}`, `${PHASE_DIR}` and `${PHASE_REQ_IDS}`; see "Amendment (2026-11-18)". | Parity with the context existing `check.query` gates already receive |
 | Result mapping | exit 0 → `block:false`; non-zero → `block:true`; timeout (SIGTERM) → `block:true` (`timed_out`); `sh` missing (ENOENT, exit 127) → `block:true` | Fail-closed: every non-zero outcome blocks. A blocking gate with `block:true` halts per the existing two-step gate contract |
 | Output cap | stderr/stdout tail embedded in `message` trimmed to 2000 chars | Keeps the `GATE_RESULT` payload context-bounded |
 
@@ -154,7 +154,7 @@ hiding the mechanism.
 - `src/gate-predicate-evaluator.cts`, `src/check-command-router.cts`
 - Diátaxis docs: `docs/reference/gate-predicates.md`, `docs/how-to/command-exit-zero-gate.md`
 
-## Amendment (2026-11-16): placeholders are environment values (#5482)
+## Amendment (2026-11-18): placeholders are environment values (#5482)
 
 The Interpolation row above describes the first revision, which pasted the values into the command text. A directory name that held shell syntax then ran as a command. The gate shell now receives `GSD_PHASE_NUMBER`, `GSD_PHASE_DIR` and `GSD_PHASE_REQ_IDS` as environment values, in addition to the inherited process environment (the Environment row). The `GSD_` prefix keeps them apart from ordinary user shell variables. This follows the maintainer ruling on #5318.
 

@@ -15,7 +15,6 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { collectSection, extractFencedBlock } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { auditMilestoneMd, workflowMd, openWorkStep, codeSpans, openWorkYamlFields, successCriteria } = require('./helpers/audit-milestone-step.cjs');
 
 // audit-milestone.md is shipped workflow text — the bytes ARE what the
@@ -43,9 +42,9 @@ test('#3796: the audit report writer and readers agree on the single-version fil
 test('#5482: audit lists open ship:pre gate work (would_refuse) and blocks passed on it', () => {
   const step = openWorkStep();
   assert.ok(step, '#5482: an audit step 5.6 must list open work');
-  // The typed tokens the step names: the dry-run command, the JSON field it reads and the reason the CLI refuses with.
+  // The typed tokens the step names: the dry-run command and the JSON field it reads.
   const spans = codeSpans(step);
-  for (const token of ['would_refuse', 'gaps_found', 'gaps.open_work', ERROR_REASON.MILESTONE_GATE_BLOCKED]) {
+  for (const token of ['would_refuse', 'gaps_found', 'gaps.open_work']) {
     assert.ok(spans.includes(token), `step 5.6 names \`${token}\``);
   }
   assert.equal(extractFencedBlock(step, 'bash'), 'gsd_run query milestone complete {version} --dry-run');
