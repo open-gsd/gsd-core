@@ -28,6 +28,7 @@ const CELLS = [
   ['Pending (blocked on an upstream decision)', true, true],
   ['Pending - note', true, true],
   ['Pending: note', true, true],
+  ['Pending-review', true, true],
   ['Gaps Found', true, true],
   ['Gaps  Found (reverted)', true, true],
   ['In Progress', false, true],
@@ -118,6 +119,27 @@ describe('requirements mark-complete reads the Status word (#6238)', () => {
     });
   });
 
+  test('mark-complete reports a requirement whose row reads `Complete (note)` and whose checkbox is checked as already complete', () => {
+    fs.writeFileSync(reqPath(), requirementsText([['Complete (shipped in v1)']]).replace('- [ ] **CELL-01**', '- [x] **CELL-01**'));
+    const r = runGsdTools(['requirements', 'mark-complete', 'CELL-01'], tmpDir);
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.deepEqual(out.already_complete, ['CELL-01']);
+    assert.deepEqual(out.marked_complete, []);
+    assert.deepEqual(out.not_found, []);
+    assert.equal(rowOf(fs.readFileSync(reqPath(), 'utf-8'), 'CELL-01'), 'Complete (shipped in v1)');
+  });
+
+  test('revert-phase reads the Status word, so `Complete (note)` goes back to Gaps Found and `Completed` is left alone', () => {
+    const cells = [['Complete (shipped in v1)'], ['Completed']];
+    fs.writeFileSync(reqPath(), requirementsText(cells).replace(/- \[ \]/g, '- [x]'));
+    const r = runGsdTools(['requirements', 'revert-phase', 'CELL-01', 'CELL-02'], tmpDir);
+    assert.ok(r.success, r.error);
+    const after = fs.readFileSync(reqPath(), 'utf-8');
+    assert.equal(rowOf(after, 'CELL-01'), 'Gaps Found');
+    assert.equal(rowOf(after, 'CELL-02'), 'Completed');
+  });
+
   test('mark-complete still reports a requirement with no row as not_found', () => {
     fs.writeFileSync(reqPath(), requirementsText([['Pending']]));
     const r = runGsdTools(['requirements', 'mark-complete', 'CELL-99'], tmpDir);
@@ -195,6 +217,18 @@ describe('phase complete reads the Status word (#6238)', () => {
       assert.equal(rowOf(after, idOf(i)), 'Complete', `${JSON.stringify(cell)} row`);
       assert.equal(checkboxOf(after, idOf(i)), true, `${JSON.stringify(cell)} checkbox`);
     });
+  });
+
+  test('phase complete still leaves a cited requirement that has no traceability row without one', () => {
+    const cells = [['Pending (note)'], ['Pending']];
+    const reqFile = phaseFixture(cells);
+    // CELL-02 stays cited by the roadmap and keeps its checkbox, but loses its row.
+    fs.writeFileSync(reqFile, fs.readFileSync(reqFile, 'utf-8').split('\n').filter((l) => !l.startsWith('| CELL-02 |')).join('\n'));
+    const r = runGsdTools(['phase', 'complete', '1'], tmpDir);
+    assert.ok(r.success, r.error);
+    const after = fs.readFileSync(reqFile, 'utf-8');
+    assert.equal(rowOf(after, 'CELL-01'), 'Complete');
+    assert.equal(after.split('\n').some((l) => l.startsWith('| CELL-02 |')), false, 'a missing row must not be invented');
   });
 
   test('phase complete keeps refusing non-advanceable cells', () => {
