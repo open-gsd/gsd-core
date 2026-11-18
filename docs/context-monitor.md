@@ -30,7 +30,9 @@ breadcrumb bookkeeping.
 
 "Remaining" is measured to the point where Claude Code auto-compacts, not to the
 end of the model window — the same scale as the statusline's context bar (#4985).
-That point is the auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, else the
+That point is the auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, read the way
+Claude Code reads it: plain or grouped digits, or a case-insensitive `k` or `M` suffix on a number,
+so `500k` is 500,000 and `1.5M` is 1,500,000, clamped to 100k–1M (#6131); else the
 `autoCompactWindow` setting `/autocompact` saves, per model under `modelSettings` or
 top-level, else the model window) minus the 33k auto-compact buffer `/context` shows,
 lowered further when `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` sets an earlier point. With
