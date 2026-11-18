@@ -2617,3 +2617,21 @@ Command dispatch is then gated **twice**. Beyond that primary activation gate, t
 - [CLI Tools Reference](CLI-TOOLS.md)
 - [Feature Reference](FEATURES.md)
 - [Docs index](README.md)
+
+### Unsupported TDD RED reports (#6201)
+
+`gsd_run check tdd-red-evidence <record.json> --raw` distinguishes `UNSUPPORTED_REPORT`
+from `INVALID_RED`. Unsupported reports have null test counters (assessment unavailable,
+not measured zero). Unsupported alone blocks GREEN. Supported-format validation remains
+`RED_EVIDENCE_OK` followed by semantic inspection.
+
+Only explicit evidence-bound parent review may authorize an unsupported run. The gate then
+returns `passed: true`, `review_status: accepted`, and `authorization: parent_reviewed_red`,
+while preserving `verdict: UNSUPPORTED_REPORT`. No parent decision overrides `INVALID_RED`.
+Children must stop and return original evidence to their existing parent, not self-waive.
+
+See [the canonical capture/review procedure](../gsd-core/references/tdd.md#unsupported-format-parent-review-6201)
+for the record schema, original-stream requirements, run identity, file hashes, freshness
+checks and SUMMARY audit trail. Parent identity and scope completeness are workflow assertions,
+not cryptographically authenticated facts. See [ADR-6201](adr/6201-parent-review-unsupported-red.md)
+for the trust boundary and compatibility decision.

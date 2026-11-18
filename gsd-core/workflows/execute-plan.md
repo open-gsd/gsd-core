@@ -305,6 +305,7 @@ exactly as specified in the canonical `~/.claude/gsd-core/references/tdd.md` ref
 commits only on change), the "Gate Enforcement Rules" section's "Fail-Fast Rules" subsection,
 and the "Error Handling" section. The reference is the single source; do not improvise a
 variant.
+For `UNSUPPORTED_REPORT`, follow the reference's parent-review procedure: a direct parent may assess original evidence; a child must stop and escalate to its existing parent. No reviewer subagent is required. Preserve acceptance/rejection/abstention and evidence links in the SUMMARY RED entry; resume GREEN only on explicit current parent authorization.
 </tdd_plan_execution>
 
 <precommit_failure_handling>

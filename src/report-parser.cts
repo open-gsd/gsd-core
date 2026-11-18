@@ -41,6 +41,8 @@ export interface TestReport {
   format: ReportFormat;
   /** False means the entire report is unusable, even if some tests parsed. */
   valid: boolean;
+  /** Unrecognized nonempty input, never malformed supported evidence. */
+  unsupported?: boolean;
   tests: TestReportCase[];
   issues: string[];
   /**
@@ -347,7 +349,19 @@ const adapters: TestReportAdapter[] = [
 /** Parse supported reports into one result contract; unknown/malformed input fails closed. */
 export function parseTestReport(output: string): TestReport {
   const adapter = adapters.find((candidate) => candidate.matches(output));
-  if (!adapter) return { format: ReportFormat.Unknown, valid: false, tests: [], issues: ['Unsupported report format'] };
+  if (!adapter) {
+    const trimmed = output.trim();
+    // Prefixes of known headers are truncated evidence, even before a full token survives.
+    const markers = ['TAP version ', 'Bail out!', 'pragma ', '1..', 'not ok ', 'ok ',
+      '✘ Test ', '✔ Test ', '➜ Test ', '━ Test ', '× Test ', '√ Test ', '- Test ',
+      'FAIL: ', 'ERROR: ', 'FAILED (', '=== RUN ', '=== PAUSE ', '=== CONT ',
+      '======================================================================'];
+    const incomplete = !trimmed || markers.some(marker => marker.startsWith(trimmed) || trimmed.startsWith(marker))
+      || new RegExp(SWIFT_RESULT.source, 'm').test(output)
+      || /^[ \t]*(?:FAIL: |ERROR: |FAILED \(|TAP version|Bail out!|pragma |1\.\.|not ok\b|-{3} FAIL:|=== (?:RUN|PAUSE|CONT)\b|<\?xml|<testsuites?\b|[✘✔━➜×√-] Test )/m.test(output);
+    return { format: ReportFormat.Unknown, valid: false, tests: [], unsupported: !incomplete,
+      issues: [incomplete ? 'Incomplete report' : 'Unsupported report format'] };
+  }
   try {
     const report = adapter.parse(output);
     // One entry per problem: a long run of bad lines must not amplify the payload.

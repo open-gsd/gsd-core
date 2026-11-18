@@ -4,7 +4,8 @@
  * direct console/stdout/stderr write (ESLint-enforced).
  *
  * Validates a persisted RED-phase test-run record for a `type: tdd` plan. Only an INTENTIONAL
- * failure of the target test (verdict RED_EVIDENCE_OK) may authorize GREEN; zero-test discovery,
+ * failure of the target test may authorize GREEN: RED_EVIDENCE_OK, or explicit evidence-bound
+ * parent review of UNSUPPORTED_REPORT (#6201). Unsupported alone blocks. Zero-test discovery,
  * fixture/load crashes, nonzero exits without a failing test, unrelated failures, and unexpected
  * greens are INVALID_RED and block GREEN. The record is the JSON the executor persists after
  * running the RED command: `{ command, exitCode, output, targetTest, targetFile?, expected?,
@@ -26,12 +27,33 @@
  */
 
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
-import { readTextEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
-import type { Evidence } from './gate-evidence.cjs';
-import { classifyRedEvidence, buildRedEvidenceRecord } from './tdd-red-evidence.cjs';
+import { readTextEvidence, readBoundedBytesEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
+import type { Evidence, Observed } from './gate-evidence.cjs';
+import { classifyRedEvidence, buildRedEvidenceRecord, redReviewState, assessParentRedReview, ParentRedReviewStatus, RedEvidenceVerdict } from './tdd-red-evidence.cjs';
+import type { RedEvidenceInput } from './tdd-red-evidence.cjs';
+
+/** Bound each declared file read; the shared reader rejects devices/FIFOs before reading. */
+export const RED_REVIEW_MAX_FILE_BYTES = 16 * 1024 * 1024;
+
+/** Check byte-exact state immediately before GREEN, retaining typed unreadable evidence. */
+function currentReviewState(input: RedEvidenceInput, projectDir: string): Observed<Record<string, string | null> | null> {
+  const state = redReviewState(input);
+  if (!state) return evidenceFound(null);
+  const current = Object.create(null) as Record<string, string | null>;
+  for (const file of Object.keys(state)) {
+    if (path.isAbsolute(file)) return evidenceFound(null);
+    const contained = tryWithinRoot(path.resolve(projectDir, file), projectDir, PathAcceptance.AbsoluteInsideRoot);
+    if (contained === null) return evidenceFound(null);
+    const read = readBoundedBytesEvidence(contained, RED_REVIEW_MAX_FILE_BYTES);
+    if (read.kind === 'unreadable') return read;
+    current[file] = read.kind === 'none' ? null : createHash('sha256').update(read.value).digest('hex');
+  }
+  return evidenceFound(current);
+}
 
 /** Parse the persisted record. A parse failure is typed evidence (never a swallowed `null`). */
 function parseRecordEvidence(text: string, span: string): Evidence<Record<string, unknown>> {
@@ -82,20 +104,36 @@ export function evaluateTddRedEvidence(input: { projectDir: string; args: readon
     targetFile: record['targetFile'],
     expected: record['expected'],
     actual: record['actual'],
+    stdout: record['stdout'], stderr: record['stderr'], runId: record['runId'],
+    captureComplete: record['captureComplete'], state: record['state'], parentReview: record['parentReview'],
   };
   const result = classifyRedEvidence(evidenceInput);
   const built = buildRedEvidenceRecord(evidenceInput, result);
-  const ok = result.verdict === 'RED_EVIDENCE_OK';
+  const state = result.verdict === RedEvidenceVerdict.Unsupported && evidenceInput.parentReview !== undefined
+    ? currentReviewState(evidenceInput, input.projectDir) : evidenceFound(null);
+  const reviewStatus = result.verdict !== RedEvidenceVerdict.Unsupported ? null
+    : state.kind === 'unreadable' ? ParentRedReviewStatus.Unreadable
+      : assessParentRedReview(evidenceInput, state.value);
+  const parentAccepted = reviewStatus === ParentRedReviewStatus.Accepted;
+  const ok = result.verdict === RedEvidenceVerdict.Accepted || parentAccepted;
   // Uniform gate contract: block = !passed. INVALID_RED blocks GREEN.
-  return gateVerdict(ok ? 'pass' : 'block', !ok, {
+  const payload = {
     passed: ok,
     block: !ok,
     verdict: result.verdict,
     reason: result.reason,
     evidence: result.evidence,
     record: built,
-    message: ok
-      ? `RED evidence verified: target test "${result.evidence.target_test}" failed as expected (exit ${result.evidence.exit_code}). GREEN authorized.`
-      : `INVALID_RED (${result.reason}): GREEN blocked. Fix the RED phase — only an intentional failure of target test "${result.evidence.target_test}" authorizes production edits.`,
-  });
+    ...(state.kind === 'unreadable' ? { readError: state.reason, readPath: state.span } : {}),
+    ...(reviewStatus === null ? {} : { review_status: reviewStatus,
+      authorization: parentAccepted ? 'parent_reviewed_red' : null }),
+    message: parentAccepted
+      ? 'Parent-reviewed RED: explicit evidence-bound acceptance authorizes GREEN; machine assessment remains unavailable.'
+      : ok
+        ? `RED evidence verified: target test "${result.evidence.target_test}" failed as expected (exit ${result.evidence.exit_code}). GREEN authorized.`
+        : `${result.verdict} (${result.reason}): GREEN blocked. ${reviewStatus === null
+          ? `Fix the RED phase — only an intentional failure of target test "${result.evidence.target_test}" authorizes production edits.`
+          : 'Child executors must return original evidence to the parent; only explicit current parent review can authorize GREEN.'}`,
+  };
+  return state.kind === 'unreadable' ? gateUnreadable(true, payload) : gateVerdict(ok ? 'pass' : 'block', !ok, payload);
 }
