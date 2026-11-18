@@ -133,6 +133,89 @@ other PR values through `env:`, and has a read-only token. The check is **adviso
 required context on any ruleset. CI re-running the named failing-first test, and
 generating the report from a `gsd-test` verdict, are possible later steps.
 
+## `pull_request_target` needs an Actions event policy (#6253)
+
+Nine workflows run on `pull_request_target`: `auto-close-unsolicited-prs`,
+`close-draft-prs`, `close-draft-prs-sweep`, `pr-target-validator`,
+`pr-template-format`, `pr-title-validator`, `require-issue-link`,
+`reviewed-or-maintainer` and `self-test-report`. Three of them produce required
+checks on `next`: `validate-target`, `Issue link required` and
+`Pull request template format`.
+
+GitHub's default Actions event policy blocks `pull_request_target` in public
+repositories. It has run in scheduled brownout windows (each blocked run ends
+with a "Workflows are being blocked due to a scheduled brownout" error), and
+GitHub enforces it permanently on **December 2, 2026**. A repository that has no
+applicable Actions event policy gets the default one. Once it is enforced, none
+of the three required checks can report, so no PR can enter the merge queue.
+
+**Why the workflows are not changed.** Each one checks out only the base branch,
+passes PR data through `env:`, runs no pull-request code and does not use
+`allow-unsafe-pr-checkout`, which is the safe shape GitHub describes. They need
+`pull_request_target` for two reasons: a write token on fork PRs (closing,
+commenting, labeling, posting statuses), and workflow code loaded from the
+default branch. Under `pull_request` a fork author could edit the workflow file
+and emit a passing required check. Moving them would weaken the trust model, so
+the fix is an event policy that explicitly allows the event.
+
+**Symptom.** The runs finish as `startup_failure` with `jobs: 0` ("This run
+likely failed because of a workflow file issue"), the three required checks show
+as "expected, waiting for status to be reported" (they have no check run at
+all), and `enqueuePullRequest` answers "3 of 7 required status checks are
+expected". A run that never started has no jobs and no check run, and the
+Actions UI showed no re-run button for it (observed 2026-11-16), so the stuck
+run cannot be re-run in place; see "Recovering a PR" below.
+
+**Policy.** An admin creates a repository policy (or an organization policy that
+covers the repo). `restrict_action_events` is an allow-list: it must name every
+event the workflows use, or an unlisted event stops running. The events in use
+at the time of writing are `issue_comment`, `issues`, `merge_group`,
+`pull_request`, `pull_request_review`, `pull_request_target`, `push`, `release`,
+`schedule`, `workflow_call` and `workflow_dispatch`. Recompute the list from
+`on:` in `.github/workflows/` before changing the policy.
+
+```bash
+gh api -X POST -H "X-GitHub-Api-Version: 2026-03-10" \
+  repos/OWNER/REPO/actions/policies --input policy.json
+```
+
+```json
+{
+  "name": "Allow the events this repo's workflows use (including pull_request_target)",
+  "enforcement": "evaluate",
+  "rules": [
+    {
+      "type": "restrict_action_events",
+      "parameters": {
+        "allowed_events": [
+          "issue_comment", "issues", "merge_group", "pull_request",
+          "pull_request_review", "pull_request_target", "push", "release",
+          "schedule", "workflow_call", "workflow_dispatch"
+        ]
+      }
+    }
+  ]
+}
+```
+
+Create it in `evaluate` mode, read the policy insights for runs it would block,
+then set `enforcement` to `active`. (`evaluate` for a repository policy is the
+mode GitHub documents for its default policy; the REST page's create example
+only shows `active`. See
+[REST API endpoints for GitHub Actions policies](https://docs.github.com/en/rest/actions/policies)
+and
+[Securely using pull_request_target](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target).)
+
+**Adding a workflow.** A new workflow on an event that is not in the allow-list
+is blocked by the policy until the list is updated. Add the event to the policy
+in the same change that adds the workflow.
+
+**Recovering a PR after a blocked window.** The three required workflows listen
+to `opened`, `edited`, `reopened` and `synchronize` (`Pull request template
+format` also to `ready_for_review`). Any of those events starts them again. The
+lightest one is editing the PR body (for example appending an HTML comment); a
+push also works. Do not rely on re-running the stuck run.
+
 ## 4-PR Rollout Plan
 
 | PR | Branch | Action |
