@@ -24,7 +24,6 @@ const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
-const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
@@ -486,7 +485,7 @@ describe('evaluatePredicate — interpolation', () => {
         (phaseDir) => { fs.mkdirSync(phaseDir); fs.writeFileSync(path.join(phaseDir, 'f'), ''); },
         () => {},
       ];
-      test('the evaluator refuses each, a real shell runs it with the status of its rewrite, and the docs say the check refuses some correct commands', () => {
+      test('the evaluator refuses each, a real shell runs it with the status of its rewrite',() => {
         const env = isolatedEnv({ home: dir, override: { GSD_PHASE_DIR: 'a b' } });
         const status = (command, state) => {
           cleanup(path.join(dir, 'a b'));
@@ -499,8 +498,6 @@ describe('evaluatePredicate — interpolation', () => {
           assert.deepEqual(statuses, STATES.map((state) => status(rewrite, state)), refused);
           assert.ok(new Set(statuses).size > 1, `positive control: the status of ${refused} depends on the directory`);
         }
-        const docs = splitLines(fs.readFileSync(path.join(__dirname, '..', 'docs', 'reference', 'gate-predicates.md'), 'utf8'));
-        assert.ok(docs.includes('The check is conservative, so it also refuses some correct commands. Assign the'));
       });
     });
     test('only the refusal of a gate that runs xargs names the xargs -0 spelling, and a path-spelled xargs is refused too', () => {

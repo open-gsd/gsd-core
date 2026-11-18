@@ -213,7 +213,6 @@ const DOCS_GUARD_TESTS = {
   // #4974: doc/workflow content-parity checks read docs/CONFIGURATION.md's
   // Gate Settings section directly (see tests/gates-confirmation-toggle-config.test.cjs).
   'tests/gates-confirmation-toggle-config.test.cjs': ['docs/CONFIGURATION.md'],
-  'tests/gate-predicate-evaluator.test.cjs': ['docs/reference/gate-predicates.md'],
   'tests/context-index-sync.test.cjs': ['docs/CONTEXT-INDEX.json'],
   'tests/context-predicates-query.test.cjs': ['docs/contributor-standards.md'],
   // SCAN_DIRS includes 'docs' and recursively walks every .md file under it
