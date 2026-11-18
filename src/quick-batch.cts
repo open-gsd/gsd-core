@@ -137,6 +137,16 @@ interface QuickBatchManifest {
   options: Record<string, unknown>;
   /** The git revision this batch was created against, when the caller supplies one (see `createBatch`'s `baseRevision` option). Null when not tracked. */
   base_revision: string | null;
+  /**
+   * #6203: the git HEAD the batch itself last recorded (`quick-batch update
+   * --head-revision`) after one of its own HEAD-moving steps (an executor
+   * commit, a wave merge, the final docs commit). `resumeBatch` compares the
+   * live HEAD to this, falling back to `base_revision` when the batch never
+   * recorded one, so the batch's own commits are not read as divergence while
+   * a HEAD moved by anything else still is. Null (or absent in a manifest
+   * written before this field existed) means "the batch has not moved HEAD".
+   */
+  head_revision: string | null;
   items: QuickBatchItem[];
 }
 
@@ -540,6 +550,7 @@ function createBatch(
         created_at: clock.nowIso(),
         options: options.batchOptions ?? {},
         base_revision: options.baseRevision ?? null,
+        head_revision: null,
         items,
       };
 
@@ -580,6 +591,11 @@ function validateBatchSchema(parsed: unknown, batchId: string): Result<QuickBatc
     return { ok: false, reason: `BATCH.json for batch ${batchId} has an invalid base_revision field` };
   }
   const baseRevisionValue = typeof obj.base_revision === 'string' ? obj.base_revision : null;
+  // #6203: optional; a manifest written before the field existed has none.
+  if (obj.head_revision !== null && obj.head_revision !== undefined && typeof obj.head_revision !== 'string') {
+    return { ok: false, reason: `BATCH.json for batch ${batchId} has an invalid head_revision field` };
+  }
+  const headRevisionValue = typeof obj.head_revision === 'string' ? obj.head_revision : null;
   if (!Array.isArray(obj.items) || obj.items.length === 0) {
     return { ok: false, reason: `BATCH.json for batch ${batchId} has no items` };
   }
@@ -677,6 +693,7 @@ function validateBatchSchema(parsed: unknown, batchId: string): Result<QuickBatc
       created_at: obj.created_at,
       options: optionsValue,
       base_revision: baseRevisionValue,
+      head_revision: headRevisionValue,
       items,
     },
   };
@@ -841,7 +858,7 @@ function updateBatchItems(
   cwd: string,
   batchId: string,
   updates: QuickBatchItemUpdate[],
-  options: { clock?: Clock } = {},
+  options: { clock?: Clock; headRevision?: string } = {},
 ): Result<{ manifest: QuickBatchManifest }> {
   const clock = options.clock ?? realClock;
   try {
@@ -850,6 +867,13 @@ function updateBatchItems(
       if (!loaded.ok) return loaded;
       const manifest = loaded.value;
       const byId = new Map(manifest.items.map((it) => [it.quick_id, it]));
+      // #6203: the batch records the HEAD it left behind after each of its own
+      // HEAD-moving steps; `resumeBatch` compares the live HEAD to it. An opaque
+      // identifier this module never interprets (same as `commit`); `undefined`
+      // leaves the recorded value untouched.
+      if (options.headRevision !== undefined) {
+        manifest.head_revision = options.headRevision;
+      }
 
       for (const update of updates) {
         const item = byId.get(update.quickId);
@@ -925,8 +949,10 @@ interface QuickBatchTransition {
  * another resume) can never lose an update.
  *
  * When `options.currentBaseRevision` is supplied and the manifest carries a
- * non-null `base_revision` that differs from it, resume refuses with a
- * recoverable diagnostic rather than guessing past the divergence (ADR-1239
+ * non-null `base_revision`, resume refuses with a recoverable diagnostic when
+ * the live HEAD differs from the HEAD the batch expects: the last revision it
+ * recorded for itself (`head_revision`, #6203) or, when it recorded none, the
+ * one it was created against. It does not guess past the divergence (ADR-1239
  * "Quick-batch binding" § Base divergence). Reconciling the divergence — a
  * rebase, a fresh batch — is a caller (Phase 4) decision; this primitive only
  * detects and reports it. Omit the option to skip the check entirely.
@@ -943,14 +969,25 @@ function resumeBatch(
     if (!loaded.ok) return loaded;
     const manifest = loaded.value;
 
+    // #6203: the HEAD the batch expects is the last one it recorded for itself
+    // (after an executor commit, a wave merge or its final docs commit), else
+    // the one it was created against. The batch's own commits therefore do not
+    // read as divergence; a HEAD moved by anything the batch did not record
+    // still does.
+    const expectedRevision = manifest.head_revision ?? manifest.base_revision;
     if (
       options.currentBaseRevision !== undefined
       && manifest.base_revision !== null
-      && manifest.base_revision !== options.currentBaseRevision
+      && expectedRevision !== options.currentBaseRevision
     ) {
       return {
         ok: false,
-        reason: `batch ${batchId} base revision diverged: created against ${manifest.base_revision}, current is ${options.currentBaseRevision}`,
+        reason: `batch ${batchId} base revision diverged: created against ${manifest.base_revision}, `
+          + (manifest.head_revision !== null ? `last recorded batch head is ${manifest.head_revision}, ` : '')
+          + `current is ${options.currentBaseRevision}. `
+          + `If the commits since then are this batch's own (a step was interrupted before it recorded its head), `
+          + `record the current head with \`quick-batch update --batch ${batchId} --head-revision ${options.currentBaseRevision}\` and resume again; `
+          + `otherwise start a fresh batch.`,
       };
     }
 

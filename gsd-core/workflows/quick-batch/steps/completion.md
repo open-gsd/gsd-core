@@ -38,6 +38,11 @@ if [ "$COMMIT_DOCS" != "false" ]; then
   gsd_run query commit "docs(quick-batch-${BATCH_ID}): ${ITEM_COUNT} item(s)" --files "${BATCH_ARTIFACT_FILES[@]}"
 fi
 ```
+**Record the HEAD the final commit left behind (#6203).** That commit is the
+batch's own, so a later `/gsd:quick-batch --resume` must expect it:
+```bash
+gsd_run quick-batch update --batch "$BATCH_ID" --head-revision "$(git rev-parse HEAD)"
+```
 
 **Final report.** Re-load the batch (`gsd_run quick-batch resume --batch
 "$BATCH_ID" --raw` — read-only in effect when nothing changed) and summarize
