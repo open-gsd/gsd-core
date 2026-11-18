@@ -70,7 +70,8 @@ function planIndexEntry() {
 
 function verify(rel) {
   const r = runGsdTools(['verify', 'plan-structure', rel], project, env());
-  assert.equal(r.success, true, r.error);
+  // The verb exits 0 for a valid plan and 1 for an invalid one; either way it delivers the JSON verdict.
+  assert.ok(r.exitCode === 0 || r.exitCode === 1, r.error);
   return JSON.parse(r.output);
 }
 
@@ -158,12 +159,28 @@ describe('#6302 verify plan-structure refuses executor_runtime where a foreign e
 
   test('the verdict does not depend on the gate', () => {
     const rel = writePlan({ extra: ['executor_runtime: codex'], autonomous: 'false' });
-    const verdicts = [undefined, false, true].map((gate) => {
-      fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify(gate === undefined ? {} : { workflow: { cross_runtime_execution: gate } }));
-      return JSON.stringify(verify(rel));
-    });
-    assert.equal(new Set(verdicts).size, 1);
-    fs.writeFileSync(path.join(project, '.planning', 'config.json'), '{}');
+    try {
+      const verdicts = [undefined, false, true].map((gate) => {
+        fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify(gate === undefined ? {} : { workflow: { cross_runtime_execution: gate } }));
+        return JSON.stringify(verify(rel));
+      });
+      assert.equal(new Set(verdicts).size, 1);
+    } finally {
+      fs.writeFileSync(path.join(project, '.planning', 'config.json'), '{}');
+    }
+  });
+
+  test('a value that is not a runtime id is refused (letters, digits, underscore and dash only)', () => {
+    const bad = ['co dex', 'codex;rm', '--x', 'a/b', 'a.b', '../x'];
+    for (const value of bad) {
+      const v = verify(writePlan({ extra: [`executor_runtime: "${value}"`] }));
+      assert.equal(v.valid, false, value);
+      assert.ok(v.errors.some((e) => e.includes('executor_runtime') && e.includes('runtime id')), `${value}: ${JSON.stringify(v.errors)}`);
+    }
+    for (const value of ['codex', 'kimi-code', 'open_code2', 'A']) {
+      const v = verify(writePlan({ extra: [`executor_runtime: ${value}`] }));
+      assert.equal(v.errors.some((e) => e.includes('runtime id')), false, value);
+    }
   });
 });
 

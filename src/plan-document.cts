@@ -321,6 +321,7 @@ function planIdFromFile(planFile: string): string {
  * migration below naturally covers it. `gap_closure` (#4924) is a 9th field,
  * absorbed onto this same bulk-read seam by this fix rather than left on the
  * removed `fm[key]` object-property read it was rebased in against.
+ * `executor_runtime` (#6302) is a 10th field, read through the same seam.
  */
 const FRONTMATTER_READ_KEYS = [
   'wave',
@@ -369,8 +370,8 @@ type FrontmatterValueLike = string | string[] | Record<string, unknown>;
  * @param planPath Historically the path passed to `extractFrontmatter`'s
  *                 truncated-frontmatter diagnostic (#1882) — a stderr-only
  *                 side channel, never part of this function's return value.
- *                 #5026: the 9 frontmatter fields below (7 scheduling fields,
- *                 plus `objective` and `gap_closure`) now read through
+ *                 #5026: the 10 frontmatter fields below (7 scheduling fields,
+ *                 plus `objective`, `gap_closure` and `executor_runtime`) now read through
  *                 `readFrontmatterFieldFromSource`, which has no path
  *                 parameter, so this diagnostic's file-naming/dedup key is a
  *                 documented, accepted side-effect-only regression (falls

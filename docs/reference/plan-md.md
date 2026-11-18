@@ -123,6 +123,7 @@ What validates today:
 | `executor_runtime` on an `autonomous: true` plan of `auto` tasks | valid |
 | `executor_runtime` with `autonomous: false` or any `checkpoint:*` task | error: a foreign executor cannot raise a checkpoint back to the host |
 | `executor_runtime` together with `agent_hint` | error: the two cannot both be set |
+| `executor_runtime` that is not a bare runtime id (letters, digits, `_` and `-`, not starting with `-`) | error: must be a runtime id |
 | empty or blank `executor_runtime:` | treated as unset |
 
 The refusals do not depend on `workflow.cross_runtime_execution`. The gate (default `false`) and the per-runtime model keys `execute.models.<runtime>` are registered (see [Configuration](../CONFIGURATION.md)) and have no effect until the dispatch that reads them ships.
