@@ -77,7 +77,8 @@ export function indentWidth(line: string): number {
  * not a shell parser (ADR-3212 §4: a quoting context needs a scanner). The walk follows only `'`, `"`, a
  * backslash and `${...}` depth. It refuses:
  * - a marker outside plain double quotes (unquoted, single-quoted, escaped by `\`, or after `$` as in `$$name`). One
- *   single-quoted text is read instead: the script word of `sh -c` and the argument of `eval` or `trap` (`sh -c 'test -d "$name"'`).
+ *   single-quoted text is read instead: the script word of `sh -c` and the argument of `eval` or `trap`
+ *   (`sh -c 'test -d "$name"'`).
  *   The inner shell inherits the variable, so the value never becomes script text. The walk checks that text on its own,
  *   which refuses `sh -c 'test -d $name'` and the like; a single-quoted marker anywhere else is dead text and refused;
  * - a marker after a construct whose quoting the walk does not follow: `$(`, a backtick, `<<`, `$'`, a quote
