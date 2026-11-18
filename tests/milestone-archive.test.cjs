@@ -1484,11 +1484,12 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.equal(archived(), false);
   });
 
-  test('G7 control characters in gate output are escaped in the refusal', () => {
+  // The escaping itself is pinned where formatDiagnosticToken lives (pick-flag and command-arg-projection tests);
+  // here only the structure of the refusal: gate output with a newline must not forge a second stderr line.
+  test('G7 newlines in gate output do not forge a second refusal line', () => {
     writeGateCap(home, { command: "printf '\\033[31mred\\nError: forged' >&2; exit 1" });
     const r = runGsdTools('milestone complete v1.0 --name MVP --confirm', tmpDir, env());
     assert.equal(r.success, false);
-    assert.ok(!r.error.includes('\x1b'), 'raw ESC must not reach stderr');
     assert.equal(splitLines(r.error.trim()).length, 1, 'newline in gate output must not forge a second line');
   });
 
@@ -1601,6 +1602,19 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'scope_unreadable' }] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
+  });
+
+  test('G16f UNREADABLE window scope: a prose-only gate is skipped with its own warning, never refused', () => {
+    seedUnreadable();
+    writeGateCap(home, { gates: [{ check: { query: 'status' }, blocking: true, onError: 'halt' }] });
+    assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'not_check_predicate', cap_id: 'open-work' }] });
+  });
+
+  test('G16g UNREADABLE window scope: two skip gates report the unreadable scope once', () => {
+    seedUnreadable();
+    const skipGate = { check: { predicate: { kind: 'command-exit-zero', command: 'exit 3' } }, blocking: true, onError: 'skip' };
+    writeGateCap(home, { gates: [skipGate, skipGate] });
+    assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'scope_unreadable' }] });
   });
 
   test('G16d UNREADABLE window scope without a gate-declaring capability: no warning', () => {
