@@ -294,6 +294,37 @@ describe('ci-test-scope.cjs', () => {
       cleanup(tmp);
     }
   });
+
+  test('rename of product code onto the data-log path still reports the deleted source', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-scope-norename-'));
+    try {
+      const git = (...a) => gitOrThrow(a, { cwd: tmp }).trim();
+      git('init', '-q');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      git('config', 'commit.gpgsign', 'false');
+      fs.mkdirSync(path.join(tmp, 'tests'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+      const body = 'x'.repeat(400) + '\n';
+      fs.writeFileSync(path.join(tmp, 'src', 'x.cts'), body);
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('checkout', '-q', '-b', 'feature');
+      fs.renameSync(path.join(tmp, 'src', 'x.cts'), path.join(tmp, 'tests', 'ci-timeout-budget-history.jsonl'));
+      git('add', '-A');
+      git('commit', '-qm', 'rename');
+      const head = git('rev-parse', 'HEAD');
+
+      const r = runNode([SCRIPT, '--base', base, '--head', head], { cwd: tmp, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(r.exitCode, 0, `script failed: stderr=${r.stderr}\nstdout=${r.stdout}`);
+      const result = JSON.parse(r.stdout);
+      assert.ok(result.changed_files.includes('src/x.cts'), JSON.stringify(result.changed_files));
+      assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+    } finally {
+      cleanup(tmp);
+    }
+  });
 });
 
 describe('ci-test-scope superset invariant (#494, rescinded by #4421)', () => {
