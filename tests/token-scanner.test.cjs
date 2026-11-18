@@ -195,6 +195,8 @@ describe('firstUnprovenMarker', () => {
       'eval "@"', 'eval "test -e \\"@\\""', 'eval echo "@"', 'echo ok; eval "@"', 'trap "rm @" EXIT',
       'sh -c "echo @"', 'bash -c "echo @"', 'dash -c "echo @"', '/bin/sh -c "echo @"', 'sh -ec "echo @"', 'sh -ce "echo @"',
       'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c -o pipefail "echo @"', 'sh -c +e "echo @"', 'bash -ec +o errexit -O extglob "echo @"', 'sh -c "a" -c "@"', 'sh -c "a-@"',
+      // The cluster has no length cap: 15, 16, 17 and 40 letters before the `c` are read alike.
+      `sh -${'e'.repeat(15)}c "echo @"`, `sh -${'e'.repeat(16)}c "echo @"`, `sh -${'e'.repeat(17)}c "echo @"`, `sh -${'e'.repeat(40)}c "echo @"`, `sh -c${'e'.repeat(40)} "echo @"`,
       'printf x | xargs sh -c "echo @"', 'find . -exec sh -c "echo @" \\;', 'echo ok;sh -c "@"', '(sh -c "@")',
       // A quoted or escaped command name is still the command; `;` inside quotes does not end it.
       '"eval" "echo @"', "'eval' \"echo @\"", '\\eval "echo @"', '\\sh -c "echo @"', "'bash' -c \"echo @\"", '"sh" "-c" "echo @"', 'eval "a" "b;c" "@"',
@@ -220,10 +222,16 @@ describe('firstUnprovenMarker', () => {
       'test -d "@" && echo "@" | xargs ls', 'echo "@" | xargs ls -0', 'echo "@" | sort -d | xargs ls', '"xargs" ls "@"', 'echo "@" | xargs ls; echo "@" | xargs -0 ls',
       // A path spells the command word as it does for `sh -c`.
       'echo "@" | /usr/bin/xargs ls',
+      // An option group without `0` or `d`, and the argument word of `-n`, `-P`, `-I`, `-L` or `-s`, is no delimiter.
+      'echo "@" | xargs -r ls', 'echo "@" | xargs -n 10 ls', 'echo "@" | xargs -n10 ls', 'echo "@" | xargs -P 0 ls', 'echo "@" | xargs -s 0 ls', 'echo "@" | xargs -I d ls d', 'echo "@" | xargs --max-args 0 ls', 'echo "@" | xargs -rt ls',
+      // `--replace` and `--eof` take their argument only after `=`, so the next word is the command, not an argument.
+      'echo "@" | xargs --replace ls -0', 'echo "@" | xargs --eof ls -0', 'echo "@" | xargs --process-slot-var V ls -0',
     ]) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
-    for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@" | /usr/bin/xargs -0 ls', 'echo "@"; find . -delete', 'echo "@" xargsx']) {
+    for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@" | /usr/bin/xargs -0 ls', 'echo "@"; find . -delete', 'echo "@" xargsx',
+      // A null or custom delimiter inside an option group, or after an option that takes an argument.
+      'echo "@" | xargs -0r ls', 'echo "@" | xargs -r0 ls', 'echo "@" | xargs -n 1 -0 ls', 'echo "@" | xargs -n1 -0 ls', 'echo "@" | xargs -P 4 -I {} -0 ls', 'echo "@" | xargs -rd x ls', 'echo "@" | xargs -t --null ls', 'echo "@" | xargs --process-slot-var V -0 ls', 'echo "@" | xargs --max-args 1 --null ls']) {
       assert.equal(first(ok), undefined, ok);
     }
   });

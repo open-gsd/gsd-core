@@ -132,12 +132,22 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
 }
 
 const SHELL_WORD = /(?:^|\/)(?:ba|da|k|z|a)?sh$/;
-/** The `-c` option of a shell, alone or grouped (`-ec`, `-ce`): one dash, then a letter group that holds `c`. */
-const isCOption = (word: string): boolean => /^-[A-Za-z]{1,16}$/.test(word) && word.includes('c');
+const isAsciiLetter = (ch: string): boolean => (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+/**
+ * The `-c` option of a shell, alone or grouped (`-ec`, `-ce`): one dash, then letters only, at least one of them `c`.
+ * The check reads the word one character at a time, so a cluster of any length (`-eeeeeeeeeeeeeeeeec`) is read the same.
+ */
+const isCOption = (word: string): boolean =>
+  word.length > 1 && word.startsWith('-') && [...word.slice(1)].every(isAsciiLetter) && word.includes('c');
 /** A shell option whose next word is its argument (`-o pipefail`, `+o errexit`, `-O extglob`). */
 const SET_OPTION_WITH_ARG = /^[-+][oO]$/;
 const XARGS_WORD = /(?:^|\/)xargs$/;
-const DELIMITER_OPTION = /^(?:(?:-0|-d\S?|--null)$|--delimiter\b)/;
+/** `xargs` short options whose argument is the rest of the group (`-n1`) or, when the group ends there, the next word (`-n 1`). */
+const XARGS_ARG_OPTIONS = 'nPILsEa';
+/** `xargs` short options whose optional argument is always attached (`-eEOF`, `-i{}`, `-l2`). */
+const XARGS_ATTACHED_OPTIONS = 'eil';
+/** `xargs` long options that take their argument as the next word (`--max-args 1`) unless it follows `=`. */
+const XARGS_LONG_ARG_OPTIONS = new Set(['--max-args', '--max-procs', '--max-lines', '--max-chars', '--arg-file', '--process-slot-var']);
 
 /** The words of a shell text, split at blanks and command separators, with quotes and backslashes dropped (`"eval"`, `\sh`). */
 function shellWords(text: string): string[] {
@@ -161,15 +171,32 @@ function isReparsedWord(head: string): boolean {
   return words.slice(k).some(isCOption) && words.slice(0, k).some((w) => SHELL_WORD.test(w));
 }
 
+/**
+ * True when the xargs option word at `words[j]` (starting with `-`) sets a null or custom delimiter. `skip` is how many
+ * following words the option takes as its argument, so `xargs -n 1 -0` and `xargs -0r` read as `-0` is the option.
+ */
+function xargsOption(words: string[], j: number): { delimited: boolean; skip: number } {
+  const word = words[j];
+  if (word === '--null' || word.startsWith('--delimiter')) return { delimited: true, skip: 0 };
+  if (word.startsWith('--')) return { delimited: false, skip: XARGS_LONG_ARG_OPTIONS.has(word) ? 1 : 0 };
+  for (let k = 1; k < word.length; k++) {
+    if (word[k] === '0' || word[k] === 'd') return { delimited: true, skip: 0 };
+    if (XARGS_ATTACHED_OPTIONS.includes(word[k])) return { delimited: false, skip: 0 };
+    if (XARGS_ARG_OPTIONS.includes(word[k])) return { delimited: false, skip: k === word.length - 1 ? 1 : 0 };
+  }
+  return { delimited: false, skip: 0 };
+}
+
 /** True when the command runs an `xargs` with no delimiter option among its option words: `xargs` then splits and unquotes its input. */
 function splitsWithXargs(command: string): boolean {
   const words = shellWords(command);
   return words.some((word, i) => {
     if (!XARGS_WORD.test(word)) return false;
     let j = i + 1;
-    while (j < words.length && words[j].startsWith('-')) {
-      if (DELIMITER_OPTION.test(words[j])) return false;
-      j++;
+    while (j < words.length && words[j].startsWith('-') && words[j] !== '--') {
+      const option = xargsOption(words, j);
+      if (option.delimited) return false;
+      j += 1 + option.skip;
     }
     return true;
   });

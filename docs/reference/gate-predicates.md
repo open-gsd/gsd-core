@@ -81,8 +81,10 @@ refuses a variable that is unquoted, single-quoted, escaped by a backslash or wr
 text that `eval`, `trap` or `sh -c` parses again (`bash`, `dash`, `ksh`, `zsh` and `ash`
 too, also under `xargs` and `find -exec`): the value would run as shell, so a phase
 directory named `x$(touch PWNED)` would create `PWNED`. A command that runs `xargs`
-without `-0` or `-d` is refused for any variable, because `xargs` splits and unquotes
-what it reads. The check is conservative, so it also refuses some correct commands.
+without a delimiter option is refused for any variable, because `xargs` splits and unquotes
+what it reads. The delimiter options are `-0`, `-d`, `--null` and `--delimiter`; a short
+group such as `-0r` or `-r0` counts. The check is conservative, so it also refuses some
+correct commands.
 Assign the variable first, in plain double quotes, then use the shell variable where the
 refused construct needs it. Every later use of the copy is double-quoted too:
 `d="${GSD_PHASE_DIR}"; ... $d` splits the value again. Each row below is tested:

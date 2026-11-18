@@ -239,7 +239,6 @@ describe('evaluatePredicate — interpolation', () => {
       'echo "${x:-\'@\'}"',
       'echo "${x:-"@"}"',
       "echo \"${GSD_PHASE_DIR#'@'}\"",
-      "echo \"${GSD_PHASE_DIR%'@'}\"",
       'for id in %; do :; done',
       'test -d "@" && for id in @; do :; done',
       "sh -c 'test -d \"%\"'",
@@ -256,7 +255,13 @@ describe('evaluatePredicate — interpolation', () => {
       'printf x | xargs sh -c "test -e @"',
       'find . -exec sh -c "test -e @" \\;',
       'echo "@" | xargs ls',
+      'echo "@" | xargs -n 10 ls',
+      'echo "@" | xargs --replace ls -0',
       'test -d "@" && echo "@" | xargs ls',
+      `sh -${'e'.repeat(15)}c "test -e @"`,
+      `sh -${'e'.repeat(16)}c "test -e @"`,
+      `sh -${'e'.repeat(17)}c "test -e @"`,
+      `sh -${'e'.repeat(40)}c "test -e @"`,
       '"eval" "test -e @"',
       '\\sh -c "test -e @"',
       "'bash' -c \"test -e @\"",
@@ -279,6 +284,9 @@ describe('evaluatePredicate — interpolation', () => {
       "sh -c 'echo \"$1\"' sh \"@\"",
       'd="@"; eval \'echo "$d"\'',
       'echo "@" | tr "\\n" "\\0" | xargs -0 echo',
+      'echo "@" | xargs -0r echo',
+      'echo "@" | xargs -r0 echo',
+      'echo "@" | xargs -n 1 -0 echo',
       'grep -c x /dev/null; echo "@"',
       "trap 'rm -f tmp' EXIT; echo \"@\"",
       'sh -c true; echo "@"',
@@ -292,6 +300,15 @@ describe('evaluatePredicate — interpolation', () => {
         for (const template of REFUSED) {
           assert.throws(() => run(spell(template, name)), unprovable(name), JSON.stringify(template));
         }
+      }
+    });
+    test('a quote inside ${...} that holds a % operator is refused, and the same operator without the quote is not', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        const command = String.raw`echo "${'$'}{${name}%'${'$'}{${name}}'}"`;
+        assert.ok(command.includes(`${name}%'`), command);
+        assert.throws(() => run(command), unprovable(name), command);
+        const unquoted = String.raw`echo "${'$'}{${name}%x}" "${'$'}{${name}}"`;
+        assert.doesNotThrow(() => run(unquoted), unquoted);
       }
     });
     test('a similar name, a construct without a placeholder and a non-GSD variable throw nothing', () => {
