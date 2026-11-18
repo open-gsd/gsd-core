@@ -70,9 +70,50 @@ export function indentWidth(line: string): number {
   return match ? match[0].length : 0;
 }
 
-// A here-document opener: `<<`, optional `-`, then the delimiter word. A word that holds a quote or a backslash
-// makes the body literal; the delimiter is the word with those removed.
-const HEREDOC_OPEN_RE = /<<(-?)[ \t]*((?:\\[^\n]|'[^'\n]*'|"[^"\n]*"|[^\s;&|<>()'"\\])+)/y;
+interface HeredocOpener {
+  end: number;
+  delimiter: string;
+  literal: boolean;
+  stripTabs: boolean;
+}
+
+/** The delimiter word at `start` (after blanks): backslash pairs (a backslash-newline continues the word), closed quote spans on one line and plain characters. A quote or a backslash makes the body literal; the delimiter is the word with those removed. One pass, no backtracking. */
+function readHeredocWord(command: string, start: number): Omit<HeredocOpener, 'stripTabs'> | null {
+  let j = start;
+  while (command[j] === ' ' || command[j] === '\t') j++;
+  const from = j;
+  let delimiter = '';
+  let literal = false;
+  while (j < command.length) {
+    const c = command[j];
+    if (c === '\\') {
+      if (command[j + 1] !== '\n') {
+        delimiter += command[j + 1];
+        literal = true;
+      }
+      j += 2;
+    } else if (c === "'" || c === '"') {
+      let close = j + 1;
+      while (close < command.length && command[close] !== c && command[close] !== '\n') close++;
+      if (command[close] !== c) break;
+      delimiter += command.slice(j + 1, close);
+      literal = true;
+      j = close + 1;
+    } else if (/[^\s;&|<>()]/.test(c)) {
+      delimiter += c;
+      j++;
+    } else break;
+  }
+  return j === from ? null : { end: j, delimiter, literal };
+}
+
+/** A here-document opener at `i`: `<<`, optional `-` (strips leading tabs of the body), then the delimiter word. A `-` with no word after it is itself the delimiter. */
+function readHeredocOpener(command: string, i: number): HeredocOpener | null {
+  const stripped = command[i + 2] === '-' ? readHeredocWord(command, i + 3) : null;
+  if (stripped) return { ...stripped, stripTabs: true };
+  const plain = readHeredocWord(command, i + 2);
+  return plain && { ...plain, stripTabs: false };
+}
 
 interface QuoteCtx {
   kind: 'none' | 'sub' | 'arith' | 'tick' | 'param' | 'double' | 'single' | 'ansi' | 'heredoc' | 'literal-heredoc';
@@ -86,21 +127,23 @@ interface QuoteCtx {
 
 // `case` or `esac` as a command word: after a separator, a compound-command keyword or the start of the command.
 const CASE_WORD_RE = /(case|esac)(?![\w])/y;
-const KEYWORD_TAIL_RE = /(?:^|\W)(?:then|do|else|elif|if|while|until)$/;
+const KEYWORD_TAIL_RE = /\W(?:then|do|else|elif|if|while|until)$/;
 
-/** Whether the word at `i` starts a command: only whitespace back to a separator, a keyword or the start. Linear: each call reads back over its own whitespace run and at most six more characters. */
+/** Whether the word at `i` starts a command: only whitespace back to a separator, a newline or a compound-command keyword. Linear: each call reads back over its own whitespace run and at most six more characters. */
 function atCommandPosition(command: string, i: number): boolean {
   let j = i;
-  while (j > 0 && /\s/.test(command[j - 1])) j--;
-  return j === 0 || j < i && command.slice(j, i).includes('\n') || /[;&|(`{]/.test(command[j - 1]) || (j < i && KEYWORD_TAIL_RE.test(command.slice(Math.max(0, j - 6), j)));
+  while (/\s/.test(command[j - 1] ?? '')) j--;
+  const gap = command.slice(j, i);
+  return gap.includes('\n') || /[;&|(){]/.test(command[j - 1] ?? '') || (gap !== '' && KEYWORD_TAIL_RE.test(command.substring(j - 6, j)));
 }
 
 /** The end index of the line starting at `i` when it is the delimiter line of here-document `top`; -1 otherwise. */
 function endsHeredoc(command: string, i: number, top: QuoteCtx): number {
-  const eol = command.indexOf('\n', i);
-  const end = eol === -1 ? command.length : eol;
-  const line = command.slice(i, end);
-  return (top.stripTabs ? line.replace(/^\t+/, '') : line) === top.delimiter ? end : -1;
+  let end = i;
+  while (end < command.length && command[end] !== '\n') end++;
+  let from = i;
+  if (top.stripTabs) while (command[from] === '\t') from++;
+  return command.slice(from, end) === top.delimiter ? end : -1;
 }
 
 /**
@@ -142,22 +185,20 @@ export function literalDollarIndexes(command: string): number[] {
       stack.push({ kind: arith ? 'arith' : 'sub' });
       i += arith ? 2 : 1;
     } else if (c === '$' && command[i + 1] === '{') {
-      stack.push({ kind: 'param', quoted: top.kind === 'double' || top.kind === 'heredoc' || (top.kind === 'param' && top.quoted) });
-      i++;
+      stack.push({ kind: 'param', quoted: top.kind === 'double' || top.kind === 'heredoc' || top.quoted });
     } else if (top.kind === 'double' || top.kind === 'heredoc') {
       if (c === '"' && top.kind === 'double') stack.pop();
     } else if (c === '}' && top.kind === 'param') {
       stack.pop();
     } else if ((c === 'c' || c === 'e') && (CASE_WORD_RE.lastIndex = i, CASE_WORD_RE.test(command)) && atCommandPosition(command, i)) {
       top.cases = Math.max(0, (top.cases ?? 0) + (c === 'c' ? 1 : -1));
-      i += 3;
     } else if (c === '$') {
       dollarAt = i;
     } else if (c === '#' && (i === 0 || /[\s;&|()]/.test(prev))) {
       const eol = command.indexOf('\n', i);
       if (eol === -1) return found;
       i = eol - 1;
-    } else if (c === "'" && !(top.kind === 'param' && top.quoted)) {
+    } else if (c === "'" && !top.quoted) {
       stack.push({ kind: dollarAt === i - 1 ? 'ansi' : 'single' });
     } else if (c === '"') {
       stack.push({ kind: 'double' });
@@ -171,12 +212,10 @@ export function literalDollarIndexes(command: string): number[] {
         if (command[i + 1] === ')') i++;
       } else if (top.kind === 'sub' && !top.cases) stack.pop();
     } else if (c === '<' && command[i + 1] === '<' && prev !== '<' && !stack.some((q) => q.kind === 'arith')) {
-      HEREDOC_OPEN_RE.lastIndex = i;
-      const m = HEREDOC_OPEN_RE.exec(command);
-      if (m) {
-        const literal = /['"\\]/.test(m[2]);
-        pending.push({ kind: literal ? 'literal-heredoc' : 'heredoc', delimiter: m[2].replace(/\\([^\n])|['"]/g, '$1'), stripTabs: m[1] === '-' });
-        i += m[0].length - 1;
+      const opener = readHeredocOpener(command, i);
+      if (opener) {
+        pending.push({ kind: opener.literal ? 'literal-heredoc' : 'heredoc', delimiter: opener.delimiter, stripTabs: opener.stripTabs });
+        i = opener.end - 1;
       }
     } else if (c === '\n' && pending.length > 0) {
       stack.push(pending.shift() as QuoteCtx);

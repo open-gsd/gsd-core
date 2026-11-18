@@ -189,6 +189,36 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
     { text: 'echo "${x:-${y:-\'}}" "@"', literal: false },
     { text: "cat << 'EOF'\n@\nEOF", literal: true },
     { text: 'cat <<- "EOF"\n\t@\n\tEOF', literal: true },
+    { text: "cat <<<'@'", literal: true },
+    { text: 'cat <<<"@"', literal: false },
+    { text: 'echo it\\\'s "@"', literal: false },
+    { text: 'echo "a\\"b @"', literal: false },
+    { text: "echo a#b '@'", literal: true },
+    { text: "echo x;# it's @", literal: false },
+    { text: 'echo "$(case $v in a) case $w in b) echo x;; esac;; c) echo "it\'s";; esac)" \'@\'', literal: true },
+    { text: "cat <<'a\\b'\n@\na\\b", literal: true },
+    { text: "cat <<-\\E\n\t@\n\tE", literal: true },
+    { text: "cat <<\t'EOF'\n@\nEOF", literal: true },
+    { text: "cat <<a\\\nb\nit's @\nab", literal: false },
+    { text: "cat <<'ab\n@'", literal: true },
+    { text: "cat <<EOF\n\tEOF\nit's @\nEOF", literal: false },
+    { text: "cat <<-EOF\n\t\tit's @\n\t\tEOF", literal: false },
+    { text: "cat <<EOF\nxEOF\nit's @\nEOF", literal: false },
+    { text: 'cat <<\\\'\nx\n\'\necho "@"', literal: false },
+    { text: "cat <<'EOF'\nit's @\nEOF", literal: true },
+    { text: "cat <<EOF # it's\nbody it's @\nEOF", literal: false },
+    { text: "echo '\\' '@'", literal: true },
+    { text: "echo ${x:-'@'}", literal: true },
+    { text: "echo $(:)# it's @", literal: false },
+    { text: 'echo "$(echo $((1)))" \'@\'', literal: true },
+    { text: 'echo "$( ((1)))" \'@\'', literal: true },
+    { text: 'echo "$(echo $((1)) "it\'s")" \'@\'', literal: true },
+    { text: 'echo "$(cd x) it\'s" \'@\'', literal: true },
+    { text: 'echo "$(true && case $v in a) echo "it\'s";; esac)" \'@\'', literal: true },
+    { text: 'echo "$(x | case $v in a) echo "it\'s";; esac)" \'@\'', literal: true },
+    { text: 'echo "$(x;thencase) it\'s" \'@\'', literal: true },
+    { text: 'echo "$(echo do b case; echo "it\'s")" \'@\'', literal: true },
+    { text: 'echo "$(echo xthen case; echo "it\'s")" \'@\'', literal: true },
   ];
   test('the indexes equal the positions of the literal markers', () => {
     fc.assert(
@@ -202,5 +232,43 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
         assert.deepStrictEqual(literalDollarIndexes(command), expected);
       }),
     );
+  });
+  test('every compound-command keyword puts a following case word at command position', () => {
+    for (const kw of ['then', 'do', 'else', 'elif', 'if', 'while', 'until']) {
+      const command = `echo "$(${kw} case $v in a) echo "it's";; esac)" '$Z'`;
+      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')], kw);
+    }
+  });
+  test('a here-document opener ends at each word terminator', () => {
+    for (const t of ';&|<>()') {
+      const command = `cat <<E${t}echo\nE\necho '$Z'\n`;
+      assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')], t);
+    }
+  });
+  test('a single < opens no here-document', () => {
+    const command = "cat <file\necho '$Z'\n";
+    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
+  });
+  test('the delimiter word of a here-document is skipped whole and several openers on a line queue in order', () => {
+    assert.deepStrictEqual(literalDollarIndexes("cat <<'$Z'\nx\n$Z\n"), []);
+    const command = "cat <<A <<'B'\nx $Z\nA\ny $Z\nB\n";
+    assert.deepStrictEqual(literalDollarIndexes(command), [command.lastIndexOf('$Z')]);
+  });
+  test('a backslash-newline continues the delimiter word', () => {
+    const command = "cat <<a\\\nb\nx\nab\necho '$Z'\n";
+    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
+  });
+  test('a lone ) closes an arithmetic span and leaves the next character alone', () => {
+    const command = "echo $((1)'$Z')";
+    assert.deepStrictEqual(literalDollarIndexes(command), [command.indexOf('$Z')]);
+  });
+  test('input that ends inside a here-document line or an unclosed delimiter quote ends the walk', () => {
+    assert.deepStrictEqual(literalDollarIndexes("cat <<'E'\n$Z\nE"), [10]);
+    assert.deepStrictEqual(literalDollarIndexes("cat <<'abc"), []);
+  });
+  test('a very long here-document delimiter is read in one pass', () => {
+    const word = 'a'.repeat(200000);
+    const command = `cat <<'${word}'\n$Z\n${word}\necho '$Z'\n`;
+    assert.deepStrictEqual(literalDollarIndexes(command), [word.length + 9, command.length - 4]);
   });
 });
