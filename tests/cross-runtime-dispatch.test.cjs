@@ -261,3 +261,32 @@ describe('#6303 every unhappy case degrades to the host dispatch with one reason
     );
   });
 });
+
+describe('#6303 the foreign worker gets a lifecycle record naming its runtime', () => {
+  function record(extra) {
+    const wt = path.join(project, `wt-record-${extra.length}`);
+    fs.mkdirSync(wt, { recursive: true });
+    const result = runGsdTools(
+      ['query', 'worktree.worker-record', '--path', wt, '--pid', String(process.pid), '--plan', PLAN, '--summary-path', path.join(wt, 'S.md'), ...extra],
+      project,
+    );
+    assert.equal(result.success, true, result.error);
+    return { wt, stored: JSON.parse(fs.readFileSync(`${wt}.worker.json`, 'utf8')) };
+  }
+
+  test('--executor-runtime is stored on the record and survives worker-complete', () => {
+    const { wt, stored } = record(['--executor-runtime', 'codex']);
+    assert.equal(stored.executorRuntime, 'codex');
+    assert.equal(stored.state, 'running');
+    const done = runGsdTools(['query', 'worktree.worker-complete', '--path', wt, '--exit-code', '0'], project);
+    assert.equal(done.success, true, done.error);
+    const after = JSON.parse(fs.readFileSync(`${wt}.worker.json`, 'utf8'));
+    assert.equal(after.state, 'complete');
+    assert.equal(after.executorRuntime, 'codex');
+  });
+
+  test('a host-runtime worker record carries no executorRuntime key', () => {
+    const { stored } = record([]);
+    assert.equal('executorRuntime' in stored, false);
+  });
+});
