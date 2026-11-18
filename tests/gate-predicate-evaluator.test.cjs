@@ -248,6 +248,8 @@ describe('evaluatePredicate — interpolation', () => {
       'sh -ec "test -e @"',
       'bash -o pipefail -c "test -e @"',
       '/bin/sh -c -e "test -e @"',
+      'sh -c -o pipefail "test -e @"',
+      'sh -c +e "test -e @"',
       'eval "test -e @"',
       'eval echo "@"',
       'trap "rm @" EXIT',

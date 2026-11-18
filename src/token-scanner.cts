@@ -132,7 +132,10 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
 }
 
 const SHELL_WORD = /(?:^|\/)(?:ba|da|k|z|a)?sh$/;
-const C_OPTION = /^-[A-Za-z]*c[A-Za-z]*$/;
+/** The `-c` option of a shell, alone or grouped (`-ec`, `-ce`): one dash, then a letter group that holds `c`. */
+const isCOption = (word: string): boolean => /^-[A-Za-z]{1,16}$/.test(word) && word.includes('c');
+/** A shell option whose next word is its argument (`-o pipefail`, `+o errexit`, `-O extglob`). */
+const SET_OPTION_WITH_ARG = /^[-+][oO]$/;
 const XARGS_WORD = /(?:^|\/)xargs$/;
 const DELIMITER_OPTION = /^(?:(?:-0|-d\S?|--null)$|--delimiter\b)/;
 
@@ -150,8 +153,12 @@ function isReparsedWord(head: string): boolean {
   const words = shellWords(head);
   if (words.includes('eval') || words.includes('trap')) return true;
   let k = words.length;
-  while (k > 0 && (words[k - 1] === '' || words[k - 1].startsWith('-'))) k--;
-  return words.slice(k).some((w) => C_OPTION.test(w)) && words.slice(0, k).some((w) => SHELL_WORD.test(w));
+  while (k > 0) {
+    if (words[k - 1] === '' || /^[-+]/.test(words[k - 1])) k--;
+    else if (k > 1 && SET_OPTION_WITH_ARG.test(words[k - 2])) k -= 2;
+    else break;
+  }
+  return words.slice(k).some(isCOption) && words.slice(0, k).some((w) => SHELL_WORD.test(w));
 }
 
 /** True when the command runs an `xargs` with no delimiter option among its option words: `xargs` then splits and unquotes its input. */

@@ -194,7 +194,7 @@ describe('firstUnprovenMarker', () => {
     for (const bad of [
       'eval "@"', 'eval "test -e \\"@\\""', 'eval echo "@"', 'echo ok; eval "@"', 'trap "rm @" EXIT',
       'sh -c "echo @"', 'bash -c "echo @"', 'dash -c "echo @"', '/bin/sh -c "echo @"', 'sh -ec "echo @"', 'sh -ce "echo @"',
-      'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c "a" -c "@"', 'sh -c "a-@"',
+      'sh -o pipefail -c "echo @"', 'sh -c -e "echo @"', 'sh -c -- "echo @"', 'sh -c -o pipefail "echo @"', 'sh -c +e "echo @"', 'bash -ec +o errexit -O extglob "echo @"', 'sh -c "a" -c "@"', 'sh -c "a-@"',
       'printf x | xargs sh -c "echo @"', 'find . -exec sh -c "echo @" \\;', 'echo ok;sh -c "@"', '(sh -c "@")',
       // A quoted or escaped command name is still the command; `;` inside quotes does not end it.
       '"eval" "echo @"', "'eval' \"echo @\"", '\\eval "echo @"', '\\sh -c "echo @"', "'bash' -c \"echo @\"", '"sh" "-c" "echo @"', 'eval "a" "b;c" "@"',
