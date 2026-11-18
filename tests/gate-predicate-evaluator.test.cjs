@@ -244,6 +244,8 @@ describe('evaluatePredicate — interpolation', () => {
       'sh -ce "echo %"',
       'sh -c -e "echo @"',
       'sh -c -- "@"',
+      "sh -c 'test -d '\"@\"",
+      'sh -c "test -d ""@"',
       'trap "rm @" EXIT',
       'eval "test -d @"',
       'eval echo "@"',

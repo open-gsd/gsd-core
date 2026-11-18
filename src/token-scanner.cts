@@ -78,9 +78,10 @@ export function indentWidth(line: string): number {
  * - a marker outside plain double quotes (unquoted, single-quoted, escaped by `\`, or after `$` as in `$$name`);
  * - a marker after a construct whose quoting the walk does not follow: `$(`, a backtick, `<<`, `$'`, a quote
  *   inside `${...}`, a `#` that starts a word (a comment), or the word `eval` or `trap`;
- * - a marker inside the double-quoted script string of `-c` (`sh -c "...${name}..."`, also after further option
- *   words as in `sh -c -e "..."`): the outer shell pastes the value into the script text, where shell syntax in
- *   the value would run.
+ * - a marker inside a double-quoted part of the shell word that follows a `-c` option word (`sh -c "...${name}..."`,
+ *   `sh -c 'a '"${name}"`, also after further option words as in `sh -c -e "..."`): the outer shell pastes the
+ *   value into the script text, where shell syntax in the value would run. Option words are `-x` and `--`, found
+ *   by a forward word walk, not a regex over caller text (ADR-3212 §5).
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(command: string, marker: RegExp): string | undefined {
@@ -91,10 +92,22 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
   };
   let quote = '';
   let depth = 0;
-  let script = false; // inside the double-quoted argument that follows a `-c` option word
+  let script = false; // inside the shell word that follows a `-c` option word
+  let run = false; // the option words right before this word hold a `c`
+  let wordStart = 0;
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const here = markerAt(i);
+    if (quote === '' && depth === 0) {
+      if (/\s/.test(c)) {
+        if (i > wordStart) {
+          const word = command.slice(wordStart, i);
+          run = word === '--' || /^-[A-Za-z]+$/.test(word) ? run || word.includes('c') : false;
+        }
+        wordStart = i + 1;
+        script = false;
+      } else if (i === wordStart) script = run;
+    }
     if (quote === "'") {
       if (here) return here;
       if (c === "'") quote = '';
@@ -111,36 +124,12 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
     } else if (c === '}' && depth > 0) {
       depth--;
     } else if (quote === '"') {
-      if (c === '"') {
-        quote = '';
-        script = false;
-      }
+      if (c === '"') quote = '';
     } else if (c === "'" || c === '"') {
       quote = c;
-      script = c === '"' && followsCOption(command, i);
     }
   }
   return undefined;
-}
-
-/**
- * True when the words right before `i` are option words (`-x`, `--`) and one of them holds `c` (`-c`, `-ce`):
- * the quote at `i` then opens the script of `sh -c`, whatever options sit between. A backward word scan, not a
- * regex: ADR-3212 §5 bars an unbounded repeat over caller text.
- */
-function followsCOption(command: string, i: number): boolean {
-  let end = i;
-  let found = false;
-  while (end > 0 && /\s/.test(command[end - 1])) {
-    while (end > 0 && /\s/.test(command[end - 1])) end--;
-    let start = end;
-    while (start > 0 && !/\s/.test(command[start - 1])) start--;
-    const word = command.slice(start, end);
-    if (word !== '--' && !/^-[A-Za-z]+$/.test(word)) return found;
-    found ||= word.includes('c');
-    end = start;
-  }
-  return found;
 }
 
 /** A construct at `i` whose quoting `firstUnprovenMarker` does not follow: a marker after it is unprovable. */
