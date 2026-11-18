@@ -19,11 +19,12 @@
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
-const os = require('node:os');
+const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
@@ -277,6 +278,10 @@ describe('evaluatePredicate — interpolation', () => {
       'sh -Ac "test -e @"',
       'sh -Zc "test -e @"',
       'sh -Cc "test -e @"',
+      'sh > out -c "test -e @"',
+      'sh 2> /dev/null -c "test -e @"',
+      'sh < /dev/null -c "test -e @"',
+      'sh >| out -c "test -e @"',
       'ksh -c "test -e @"',
       'zsh -c "test -e @"',
       'ash -c "test -e @"',
@@ -290,9 +295,12 @@ describe('evaluatePredicate — interpolation', () => {
       'echo "@" | xargs --max-lines 1 ls',
       'echo "@" | xargs --max-chars 9 ls',
       'echo "@" | xargs --arg-file f ls',
+      'echo "@" | xargs -- ls',
+      'echo "@" | xargs -- -0',
       'if true; then eval "@"; fi',
       '{ trap "@" EXIT; }',
       'A="x y" eval "@"',
+      'A="" eval "@"',
       '! eval "@"',
       'while true; do eval "@"; done',
       'if false; then :; elif eval "@"; then :; fi',
@@ -357,6 +365,9 @@ describe('evaluatePredicate — interpolation', () => {
       'echo "@"; bash -{c "echo @"',
       'grep -q "xargs rm" "@"; echo "@"',
       'echo "@"; sh -c',
+      'echo "@"; sh -c "" "@"',
+      'echo "@"; "" eval "@"',
+      'echo "@"; xargs -0 -- echo < /dev/null',
       'echo \\\n"@"',
       'echo "$\\\nd" "@"',
     ];
@@ -405,9 +416,12 @@ describe('evaluatePredicate — interpolation', () => {
         assert.doesNotThrow(() => run(rewrite), rewrite);
       }
     });
-    test('the refusal of a gate that runs xargs names the xargs -0 spelling and a path-spelled xargs is refused too', () => {
+    test('only the refusal of a gate that runs xargs names the xargs -0 spelling, and a path-spelled xargs is refused too', () => {
       for (const refused of ['echo "${GSD_PHASE_DIR}" | xargs ls', 'echo "${GSD_PHASE_DIR}" | /usr/bin/xargs ls']) {
         assert.throws(() => run(refused), /xargs -0/, refused);
+      }
+      for (const refused of ['echo ${GSD_PHASE_DIR}', "echo '${GSD_PHASE_DIR}'", 'sh -c "test -d ${GSD_PHASE_DIR}"']) {
+        assert.throws(() => run(refused), (error) => /cannot prove sh expands it/.test(error.message) && !/xargs/.test(error.message), refused);
       }
       assert.doesNotThrow(() => run('echo "${GSD_PHASE_DIR}" | /usr/bin/xargs --delimiter=x ls'));
     });
@@ -440,7 +454,6 @@ describe('evaluatePredicate — interpolation', () => {
   });
 
   test('a double-quoted gate run by the real shell sees the phase values, even with shell syntax in them', () => {
-    const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
     const phaseDir = '/tmp/x $(touch PWNED) `id` y';
     const ctx = { cwd: process.cwd(), phaseNumber: '07', phaseDir, phaseReqIds: 'R-1' };
     const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
@@ -460,7 +473,6 @@ describe('evaluatePredicate — interpolation', () => {
       ['xargs sh -c', 'echo x | xargs sh -c "test -e @/BLOCKER"', 'printf "x\\0" | xargs -0 sh -c \'test -n "$1"\' sh "@"'],
       ['find -exec sh -c', 'find . -prune -exec sh -c "test -e @/BLOCKER" \\;', 'find . -prune -exec sh -c \'test -n "$1"\' sh "@" \\;'],
     ];
-    const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
     const spell = (template) => template.replaceAll('@', '${GSD_PHASE_DIR}');
     const marker = (dir) => fs.existsSync(path.join(dir, 'PWNED'));
     let control;

@@ -212,14 +212,14 @@ function shellCommands(text: string): string[][] {
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /** Words that start a command without being its command word: `if true; then eval ...`, `{ trap ...; }`, `! eval ...`. */
 const RESERVED_WORDS = new Set(['if', 'then', 'else', 'elif', 'while', 'until', 'do', '{', '!', 'time']);
-/** The index of the command word of a command's words: the first word that is no `NAME=value`, no empty word and no reserved word; -1 when none. */
-const commandWordIndex = (words: string[]): number => words.findIndex((w) => w !== '' && !ASSIGNMENT.test(w) && !RESERVED_WORDS.has(w));
+/** The index of the command word of a command's words: the first word that is no `NAME=value` and no reserved word (an empty word `""` is a command word); -1 when none. */
+const commandWordIndex = (words: string[]): number => words.findIndex((w) => !ASSIGNMENT.test(w) && !RESERVED_WORDS.has(w));
 
 /** A redirection word (`2>&1`, `>out`, `&>`): not an argument of the command; one that ends in its operator (`>`, `2>`, `>|`) takes the next word as its target. */
 const REDIRECTION_WORD = /^(?:\d*|&)[<>]/;
 /**
  * The index of the script word of a shell `-c` command (`sh -c '<script>' ...`): the first word after the first shell word
- * that is no option word (`-x`, `+x`, `-o name`, an empty word), provided a `-c` option stands before it. The script word
+ * that is no option word (`-x`, `+x`, `-o name`, a redirection), provided a `-c` option stands before it. The script word
  * is the text the shell parses again; `bash scripts/check.sh -c "$x"` has none (the `-c` belongs to the script). Returns
  * `words.length` when the option words run to the end (the next word is the script word) and -1 when there is no `-c` shell.
  */
@@ -227,7 +227,7 @@ function scriptWordIndex(words: string[]): number {
   const shell = words.findIndex((w) => SHELL_WORD.test(w));
   if (shell < 0) return -1;
   let k = shell + 1;
-  while (k < words.length && (words[k] === '' || /^[-+]/.test(words[k]) || REDIRECTION_WORD.test(words[k]))) {
+  while (k < words.length && (/^[-+]/.test(words[k]) || REDIRECTION_WORD.test(words[k]))) {
     k += SET_OPTION_WITH_ARG.test(words[k]) || (REDIRECTION_WORD.test(words[k]) && /[<>|]$/.test(words[k])) ? 2 : 1;
   }
   return words.slice(shell + 1, k).some(isCOption) ? Math.min(k, words.length) : -1;
@@ -264,7 +264,7 @@ function xargsOption(words: string[], j: number): { delimited: boolean; skip: nu
  * True when a command of the text runs `xargs` (as its command word) with no delimiter option among its option words:
  * `xargs` then splits and unquotes its input. The script word of a shell `-c` (`sh -c '... | xargs ls'`) is read as a text too.
  */
-function splitsWithXargs(command: string): boolean {
+export function splitsWithXargs(command: string): boolean {
   return shellCommands(command).some((words) => {
     const i = commandWordIndex(words);
     if (i < 0 || !XARGS_WORD.test(words[i])) {

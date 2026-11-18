@@ -29,7 +29,7 @@
 import path from 'node:path';
 import { capCodeUnits } from './code-unit-cap.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { firstUnprovenMarker } from './token-scanner.cjs';
+import { firstUnprovenMarker, splitsWithXargs } from './token-scanner.cjs';
 
 // ─── Public constants ─────────────────────────────────────────────────────────
 
@@ -118,7 +118,9 @@ function assertNoLegacyPlaceholder(command: string): void {
 function assertEveryPlaceholderDoubleQuoted(command: string): void {
   const name = firstUnprovenMarker(command, PLACEHOLDER_RE);
   if (name !== undefined) {
-    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it as one plain value: write "\${${name}}" in plain double quotes, outside the text that eval, trap or sh -c parses again (pass it as an argument: sh -c 'test -d "$1"' sh "\${${name}}"; for eval or trap assign d="\${${name}}" first and write "$d" in single-quoted text; a gate that runs xargs needs xargs -0 or -d, as in printf "%s\\0" "\${${name}}" | xargs -0 ls); docs/reference/gate-predicates.md ("Phase environment values") lists the refused forms and the rewrites`);
+    // Only a gate that runs xargs without a delimiter option needs the xargs spelling: name it for that gate alone.
+    const xargsHint = splitsWithXargs(command) ? `; a gate that runs xargs needs xargs -0 or -d, as in printf "%s\\0" "\${${name}}" | xargs -0 ls` : '';
+    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it as one plain value: write "\${${name}}" in plain double quotes, outside the text that eval, trap or sh -c parses again (pass it as an argument: sh -c 'test -d "$1"' sh "\${${name}}"; for eval or trap assign d="\${${name}}" first and write "$d" in single-quoted text${xargsHint}); docs/reference/gate-predicates.md ("Phase environment values") lists the refused forms and the rewrites`);
   }
 }
 

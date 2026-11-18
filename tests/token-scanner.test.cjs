@@ -207,10 +207,12 @@ describe('firstUnprovenMarker', () => {
       'eval echo >| out "@"', 'eval echo <(true) "@"', 'eval echo >(cat) "@"', 'eval echo 0<&3 "@"', 'eval cat <&3 "@"',
       // The bounds of a letter in the cluster: `a`, `z`, `A` and `Z` are letters, so the `c` is read.
       'sh -ac "test -e @"', 'sh -zc "test -e @"', 'sh -Ac "test -e @"', 'sh -Zc "test -e @"', 'sh -Cc "test -e @"',
+      // A redirection before `-c` is no option word and takes its target (`> out`, `2> file`, `< file`, `>| out`) as the next word.
+      'sh > out -c "test -e @"', 'sh 2> /dev/null -c "test -e @"', 'sh < /dev/null -c "test -e @"', 'sh >| out -c "test -e @"',
       // Each shell prefix of SHELL_WORD (`ksh`, `zsh`, `ash`) is a consumer too.
       'ksh -c "echo @"', 'zsh -c "echo @"', 'ash -c "echo @"',
       // The command word follows `NAME=value` words (quoted value included) and the reserved words that start a command.
-      'if true; then eval "@"; fi', '{ trap "@" EXIT; }', 'A="x y" eval "@"', '! eval "@"', 'while true; do eval "@"; done', 'if eval "@"; then :; fi', 'time eval "@"',
+      'if true; then eval "@"; fi', '{ trap "@" EXIT; }', 'A="x y" eval "@"', 'A="" eval "@"', '! eval "@"', 'while true; do eval "@"; done', 'if eval "@"; then :; fi', 'time eval "@"',
       'if false; then :; elif eval "@"; then :; fi', 'if false; then :; else eval "@"; fi', 'until eval "@"; do :; done', 'while eval "@"; do :; done',
     ]) {
       assert.equal(first(bad), 'GSD_MARK', bad);
@@ -234,6 +236,9 @@ describe('firstUnprovenMarker', () => {
       'sh -c "a" -c "@"', 'bash scripts/check.sh -c "@"', 'bash -c[ "echo @"', "bash '-c`' \"echo @\"", 'bash -c{ "echo @"', 'bash -[c "echo @"', "bash '-`c' \"echo @\"", 'bash -{c "echo @"',
       // `xargs` inside a word of a command that is no shell is no command word.
       'grep -q "xargs rm" "@"', 'sh -c; echo "@"',
+      // An empty word is a word: the empty script of `sh -c "" "@"` makes the value `$0`, and `"" eval "@"` runs the command `""`, not `eval`.
+      'sh -c "" "@"', '"" eval "@"', "sh -c '' \"@\"",
+
       "sh -c 'echo \"$1\"' sh \"@\"", "sh -ec 'echo \"$1\"' sh \"@\"", "bash -c 'echo \"$1\"' bash \"@\" \"@\"",
       "find . -exec sh -c 'echo \"$1\"' sh \"@\" \\;", "printf x | xargs -0 sh -c 'echo \"$1\"' sh \"@\"", "d=\"@\"; eval 'echo \"$d\"'", "d=\"@\"; trap 'echo \"$d\"' EXIT",
     ];
@@ -252,6 +257,8 @@ describe('firstUnprovenMarker', () => {
       // Every short and long option of the argument tables takes its argument: `-ed` is the EOF string `d`, not a delimiter.
       'echo "@" | xargs -ed ls', 'echo "@" | xargs -id ls', 'echo "@" | xargs -ld ls', 'echo "@" | xargs -L 1 ls', 'echo "@" | xargs -E x ls', 'echo "@" | xargs -a f ls',
       'echo "@" | xargs --max-procs 2 ls', 'echo "@" | xargs --max-lines 1 ls', 'echo "@" | xargs --max-chars 9 ls', 'echo "@" | xargs --arg-file f ls',
+      // `--` ends the option words: the `-0` after it is the command, not a delimiter option.
+      'echo "@" | xargs -- ls', 'echo "@" | xargs -- -0',
       'echo "@" | xargs --replace ls -0', 'echo "@" | xargs --eof ls -0', 'echo "@" | xargs --process-slot-var V ls -0',
       // `xargs` is the command word after a separator or a reserved word, and after `NAME=value` words.
       'echo a; xargs ls "@"', 'if true; then xargs ls "@"; fi', 'A="x y" xargs ls "@"', 'echo a | xargs ls "@"',
@@ -262,7 +269,7 @@ describe('firstUnprovenMarker', () => {
     }
     for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@" | /usr/bin/xargs -0 ls', 'echo "@"; find . -delete', 'echo "@" xargsx',
       // `xargs` as an argument or inside a quoted word is no command word.
-      'grep -q xargs "@"', 'echo "uses xargs" "@"', "sh -c 'echo \"$1\" | xargs -0 ls' sh \"@\"",
+      'grep -q xargs "@"', 'echo "uses xargs" "@"', 'echo "@" | xargs -0 -- ls', "sh -c 'echo \"$1\" | xargs -0 ls' sh \"@\"",
       // A null or custom delimiter inside an option group, or after an option that takes an argument.
       'echo "@" | xargs -0r ls', 'echo "@" | xargs -r0 ls', 'echo "@" | xargs -n 1 -0 ls', 'echo "@" | xargs -s 100 -0 ls', 'echo "@" | xargs -n1 -0 ls', 'echo "@" | xargs -P 4 -I {} -0 ls', 'echo "@" | xargs -rd x ls', 'echo "@" | xargs -t --null ls', 'echo "@" | xargs --process-slot-var V -0 ls', 'echo "@" | xargs --max-args 1 --null ls',
       // The argument of each table option is skipped, so the `-0` after it is the delimiter.
