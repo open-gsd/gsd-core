@@ -23828,3 +23828,71 @@ describe('#4998 record-session: an indented heading below a session field is the
     });
   }
 });
+
+// #5880 — `countRoadmapPhaseHeadings` (legacy convention) counted any `##`-`####`
+// + `Phase N:` substring in the milestone's ROADMAP text, so a heading quoted in a
+// code span, a fenced block, or a sentence inflated `progress.total_phases` (and
+// deflated `percent`) in every STATE.md write that rebuilds frontmatter. Only real
+// ATX headings of levels 2-4 count, as in the bracket branch and the roadmap
+// readers. Every assertion is an exact number: the over-count is the bug. The
+// shipped CLI is driven (`state record-session`) and the persisted frontmatter read back.
+describe('legacy phase-heading counting reads real headings only (#5880)', () => {
+  const HEAD = '# Roadmap\n\n## Milestone v1.0: Test\n\n';
+  const REAL = '### Phase 1: Foo\n\nGoal.\n\n### Phase 2: Bar\n\nGoal.\n';
+
+  /** Persisted `progress.total_phases` after a `state record-session` over `roadmap`. */
+  function totalPhasesFor(t, roadmap) {
+    const dir = fs.realpathSync(createTempGitProject());
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    fs.mkdirSync(path.join(planning, 'phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmap);
+    fs.writeFileSync(path.join(planning, 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v1.0', 'status: executing', '---', '',
+      '# Project State', '', '**Phase:** 01', '', '**Progress:** [░░░░░░░░░░] 0%', '',
+    ].join('\n'));
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'x'], dir);
+    assert.ok(result.success, `state record-session failed: ${result.error}`);
+    const match = /total_phases:\s*(\d+)/.exec(fs.readFileSync(path.join(planning, 'STATE.md'), 'utf8'));
+    assert.ok(match, 'record-session wrote progress.total_phases');
+    return Number(match[1]);
+  }
+
+  test('control: two real headings count as two', (t) => {
+    assert.strictEqual(totalPhasesFor(t, HEAD + REAL), 2);
+  });
+
+  test('#5880: a phase heading quoted in a blockquote code span is not counted', (t) => {
+    const quoted = '> Note: the heading `### Phase 1: Foo` is how a phase is written.\n\n';
+    assert.strictEqual(totalPhasesFor(t, HEAD + quoted + REAL), 2);
+  });
+
+  test('#5880: a phase heading mentioned mid-sentence is not counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}See ### Phase 9: Mid sentence for details.\n\n${REAL}`), 2);
+  });
+
+  test('#5880: a phase heading inside a fenced block is not counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}\`\`\`\n### Phase 8: Fenced\n\`\`\`\n\n${REAL}`), 2);
+  });
+
+  test('#5880: a heading without a space after the hashes is not counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}###Phase 7: Nospace\n\n${REAL}`), 2);
+  });
+
+  test('#5880: a level-5 heading is not counted (its inner hashes are not a level-4 heading)', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n##### Phase 5: Five\n`), 2);
+  });
+
+  test('levels 2 and 4 are counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}## Phase 1: A\n\n#### Phase 2: B\n`), 2);
+  });
+
+  test('#5880: an indented code line (four spaces) is not a heading', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n    ### Phase 6: Indented code\n`), 2);
+  });
+
+  test('sentinel phases 0 and 999.1 stay excluded', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n### Phase 0: Sentinel\n\n### Phase 999.1: Icebox\n`), 2);
+  });
+});

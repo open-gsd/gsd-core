@@ -48,7 +48,7 @@ AGENT_SKILLS_SYNTHESIZER=$(gsd_run query agent-skills gsd-research-synthesizer)
 AGENT_SKILLS_ROADMAPPER=$(gsd_run query agent-skills gsd-roadmapper)
 ```
 
-Parse JSON for: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `project_exists`, `has_codebase_map`, `planning_exists`, `has_existing_code`, `has_package_file`, `is_brownfield`, `needs_codebase_map`, `has_git`, `git_worktree_root`, `in_nested_subdir`, `project_path`, `agents_installed`, `missing_agents`, `agent_runtime`, `agents_dir`, `required_agents`, `required_agents_installed`, `missing_required_agents`, `agent_skill_payloads_available`, `agent_skill_payload_agents`, `requirements_exists`, `init_incomplete`, `requirements_path`, `roadmap_path`, `config_path`, `research_dir`, `response_language`.
+Parse JSON for: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `project_exists`, `has_codebase_map`, `planning_exists`, `has_existing_code`, `has_package_file`, `is_brownfield`, `needs_codebase_map`, `has_git`, `git_worktree_root`, `in_nested_subdir`, `project_path`, `agents_installed`, `missing_agents`, `agent_runtime`, `agents_dir`, `required_agents`, `required_agents_installed`, `missing_required_agents`, `agent_skill_payloads_available`, `agent_skill_payload_agents`, `requirements_exists`, `init_incomplete`, `requirements_path`, `roadmap_path`, `state_path`, `config_path`, `research_dir`, `response_language`.
 
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
@@ -324,6 +324,7 @@ Format the JSON into human-readable bullets using these label mappings:
 - `workflow.plan_check` → "Plan Check" (`true` → "Yes", `false` → "No")
 - `workflow.verifier` → "Verifier" (`true` → "Yes", `false` → "No")
 - `plan_review.source_grounding` → "Drift Guard" (`true` → "Yes", `false` → "No")
+- `workflow.agent_hint_routing` → "Executor" (`true` or absent → "Allow installed executors", `false` → "gsd-executor only")
 
 Display above the prompt:
 
@@ -338,6 +339,7 @@ Your saved defaults (~/.gsd/defaults.json):
   • Plan Check: [Yes|No]
   • Verifier: [Yes|No]
   • Drift Guard: [Yes|No]
+  • Executor: [Allow installed executors|gsd-executor only]
 ```
 
 Then ask:
@@ -375,6 +377,7 @@ Which settings do you want to change? (enter numbers, comma-separated)
   7. Plan Check — Currently: [Yes|No]
   8. Verifier — Currently: [Yes|No]
   9. Drift Guard — Currently: [Yes|No]
+  10. Executor — Currently: [Allow installed executors|gsd-executor only]
 ```
 
 **Otherwise** (Claude runtime with AskUserQuestion): use a two-block split
@@ -458,12 +461,22 @@ AskUserQuestion([
       { label: "Yes", description: "Toggle Drift Guard (currently: [Yes|No])" },
       { label: "No", description: "Keep current Drift Guard setting" }
     ]
+  },
+  {
+    question: "Do you want to change the Executor setting (which executors may run plans)?",
+    header: "Executor",
+    multiSelect: false,
+    options: [
+      { label: "Yes", description: "Choose the executor policy (currently: [Allow installed executors|gsd-executor only])" },
+      { label: "No", description: "Keep current Executor setting" }
+    ]
   }
 ])
 ```
 
-For each selected setting across both blocks, ask only that question using the
-option set from Round 1 / Round 2 below. Merge user answers over the saved
+For each selected setting across both blocks (and Drift Guard or Executor when
+answered "Yes"), ask only that question using the option set from Round 1 /
+Round 2 / the AI Models and Executor questions below. Merge user answers over the saved
 defaults — unchanged settings retain their saved values. Then skip to
 **Commit config.json**.
 
@@ -612,6 +625,24 @@ questions: [
 //   Q1 "Standard tier…" + Q2 "Quality"  → model_profile = "quality"
 //   Q1 "Standard tier…" + Q2 "Balanced" → model_profile = "balanced"
 //   Q1 "Standard tier…" + Q2 "Budget"   → model_profile = "budget"
+
+// Executor policy (#6211): always asked, after the model-profile questions and
+// independent of them.
+questions: [
+  {
+    header: "Executor",
+    question: "Executor for plans: use gsd-executor only, or allow other executors installed on this runtime (named by a plan's agent_hint)?",
+    multiSelect: false,
+    options: [
+      { label: "Allow installed executors (Recommended)", description: "A plan whose agent_hint names an executor agent installed on this runtime runs on that agent, with its own model override (else gsd-executor's model) and the same worktree isolation guard. GSD roles such as gsd-verifier are never used as executors. Plans without a hint run on gsd-executor." },
+      { label: "gsd-executor only", description: "Every plan runs on gsd-executor; agent_hint is ignored." }
+    ]
+  }
+]
+
+// Map the Executor answer → workflow.agent_hint_routing:
+//   "Allow installed executors (Recommended)" → true
+//   "gsd-executor only"                       → false
 ```
 
 **PR body onboarding:** Ask which optional PRD-style sections `/gsd:ship` should append to generated PR bodies. Use the same `ship.pr_body_sections` mapping as Step 2a: selected sections get `enabled: true`, seeded-but-unselected sections get `enabled: false`, and selecting none writes an empty list. Prefer lean/agile PRD sections that make user value, acceptance criteria, Definition of Done, and stakeholder traceability explicit.
@@ -627,7 +658,7 @@ Create `.planning/config.json` with all settings (CLI fills in remaining default
 
 ```bash
 mkdir -p .planning
-gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|adaptive|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"compact_content":true|false,"nyquist_validation":[false if granularity=coarse, true otherwise]},"plan_review":{"source_grounding":true|false},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
+gsd_run query config-new-project '{"mode":"[yolo|interactive]","granularity":"[selected]","parallelization":true|false,"commit_docs":true|false,"model_profile":"quality|balanced|budget|adaptive|inherit","workflow":{"research":true|false,"plan_check":true|false,"verifier":true|false,"compact_content":true|false,"agent_hint_routing":true|false,"nyquist_validation":[false if granularity=coarse, true otherwise]},"plan_review":{"source_grounding":true|false},"ship":{"pr_body_sections":[{"heading":"User Stories & Acceptance Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## User Stories || REQUIREMENTS.md ## Acceptance Criteria","fallback":"- Acceptance criteria are covered by the linked requirements and verification evidence."},{"heading":"Risks & Dependencies","enabled":true|false,"source":"PLAN.md ## Risks || PLAN.md ## Dependencies","fallback":"- No known high-risk rollout dependencies."},{"heading":"Success Metrics & Release Criteria","enabled":true|false,"source":"REQUIREMENTS.md ## Definition of Done || VERIFICATION.md ## Release Criteria","fallback":"- Release when automated verification and required manual checks pass."},{"heading":"Stakeholder Review & Approval","enabled":true|false,"template":"- Product owner approval pending for {phase_name}."}]}}'
 ```
 
 **Note:** Run `/gsd:settings` anytime to update model profile, workflow agents, branching strategy, and other preferences.
@@ -766,10 +797,10 @@ Commit after writing.
 <!-- gsd:protected -->
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 
-**Synthesizer output self-heal (#222) — verify SUMMARY.md materialized:** The synthesizer's canonical output is `.planning/research/SUMMARY.md` on disk; its brief structured return (`## SYNTHESIS COMPLETE` plus a few `###` confirmation lines) is NOT the file content. The restriction is not always fabricated: Claude Code refuses a subagent's `Write` to a few exact basenames — `SUMMARY.md` among them — with `Subagents should return findings as text, not write report files` (observed on Claude Code 2.1.301), and the synthesizer is told to return the full document inline when its `Write` hits that error; the refusal is real, not fabricated. It depends on the exact basename (`SUMMARY.md`, `REPORT.md`, `FINDINGS.md`, `ANALYSIS.md`, case-insensitive; a prefixed name such as `01-01-SUMMARY.md` and other agents' files write fine), so do not tell other agents to avoid `Write`. Either cause lands in step 2. A known LLM false-refusal (issue #222) sometimes makes the agent return the full SUMMARY.md document inline — fabricating a write restriction (e.g. "the runtime is blocking file writes") — instead of writing the file. Prompt hardening alone does not fully eliminate it, so the orchestrator MUST absorb either cause deterministically before spawning `gsd-roadmapper`:
+**Synthesizer output self-heal (#222) — verify SUMMARY.md materialized:** The synthesizer's canonical output is `{research_dir}/SUMMARY.md` on disk; its brief structured return (`## SYNTHESIS COMPLETE` plus a few `###` confirmation lines) is NOT the file content. The restriction is not always fabricated: Claude Code refuses a subagent's `Write` to a few exact basenames — `SUMMARY.md` among them — with `Subagents should return findings as text, not write report files` (observed on Claude Code 2.1.301), and the synthesizer is told to return the full document inline when its `Write` hits that error; the refusal is real, not fabricated. It depends on the exact basename (`SUMMARY.md`, `REPORT.md`, `FINDINGS.md`, `ANALYSIS.md`, case-insensitive; a prefixed name such as `01-01-SUMMARY.md` and other agents' files write fine), so do not tell other agents to avoid `Write`. Either cause lands in step 2. A known LLM false-refusal (issue #222) sometimes makes the agent return the full SUMMARY.md document inline — fabricating a write restriction (e.g. "the runtime is blocking file writes") — instead of writing the file. Prompt hardening alone does not fully eliminate it, so the orchestrator MUST absorb either cause deterministically before spawning `gsd-roadmapper`:
 
-1. Verify `.planning/research/SUMMARY.md` exists AND is substantive — non-empty, and free of any leftover `<!-- gsd:write-continue -->` continuation sentinel (which marks a truncated/incomplete write). You may validate with `gsd_run verify-summary .planning/research/SUMMARY.md` — it exits 0 regardless, so check its JSON `passed` field (`"passed": false` means missing or invalid), not the process exit code. If it passes, continue normally.
-2. If it is MISSING or invalid AND the synthesizer's return message contains the FULL SUMMARY.md document — recognizable by the template's top-level markers `# Project Research Summary`, `## Key Findings`, `## Implications for Roadmap`, and `## Sources`, not merely the brief `## SYNTHESIS COMPLETE` confirmation — the synthesizer returned the document inline (the #222 false-refusal, or the runtime's real refusal of the name `SUMMARY.md`): write that returned document to `.planning/research/SUMMARY.md` with the Write tool, then commit ALL research artifacts the synthesizer owns (it commits on behalf of the four researchers) with `gsd_run query commit "docs: complete project research" --files .planning/research/` unless they are already committed. Log `⚠ #222 self-heal: synthesizer returned SUMMARY.md inline without writing it; orchestrator persisted the file.`
+1. Verify `{research_dir}/SUMMARY.md` exists AND is substantive — non-empty, and free of any leftover `<!-- gsd:write-continue -->` continuation sentinel (which marks a truncated/incomplete write). You may validate with `gsd_run verify-summary "{research_dir}/SUMMARY.md"` — it exits 0 regardless, so check its JSON `passed` field (`"passed": false` means missing or invalid), not the process exit code. If it passes, continue normally.
+2. If it is MISSING or invalid AND the synthesizer's return message contains the FULL SUMMARY.md document — recognizable by the template's top-level markers `# Project Research Summary`, `## Key Findings`, `## Implications for Roadmap`, and `## Sources`, not merely the brief `## SYNTHESIS COMPLETE` confirmation — the synthesizer returned the document inline (the #222 false-refusal, or the runtime's real refusal of the name `SUMMARY.md`): write that returned document to `{research_dir}/SUMMARY.md` with the Write tool, then commit ALL research artifacts the synthesizer owns (it commits on behalf of the four researchers) with `gsd_run query commit "docs: complete project research" --files "{research_dir}/"` unless they are already committed. Log `⚠ #222 self-heal: synthesizer returned SUMMARY.md inline without writing it; orchestrator persisted the file.`
 3. If it is MISSING or invalid AND the return is only a brief confirmation (no full SUMMARY document to recover), the synthesizer genuinely failed — surface the error and stop; do NOT spawn `gsd-roadmapper` against a missing or incomplete SUMMARY.md.
 
 This guarantees `gsd-roadmapper` (which lists SUMMARY.md as required reading) never runs against a missing or truncated SUMMARY.md.
@@ -999,6 +1030,12 @@ Agent(prompt="
 - {config_path} (Granularity and mode settings)
 </required_reading>
 
+<write_targets>
+- ROADMAP.md: {roadmap_path}
+- STATE.md: {state_path}
+- REQUIREMENTS.md: {requirements_path}
+</write_targets>
+
 ${AGENT_SKILLS_ROADMAPPER}
 
 </planning_context>
@@ -1097,6 +1134,12 @@ Use AskUserQuestion:
   - {roadmap_path} (Current roadmap to revise)
   </required_reading>
 
+  <write_targets>
+  - ROADMAP.md: {roadmap_path}
+  - STATE.md: {state_path}
+  - REQUIREMENTS.md: {requirements_path}
+  </write_targets>
+
   ${AGENT_SKILLS_ROADMAPPER}
 
   Update the roadmap based on feedback. Edit files in place.
@@ -1110,7 +1153,7 @@ Use AskUserQuestion:
 - Present revised roadmap
 - Loop until user approves
 
-**If "Review full file":** Display raw `cat .planning/ROADMAP.md`, then re-ask.
+**If "Review full file":** Display raw `cat "{roadmap_path}"`, then re-ask.
 
 **Generate or refresh project instruction file before final commit:**
 
@@ -1123,7 +1166,7 @@ This ensures new projects get the default GSD workflow-enforcement guidance and 
 **Commit roadmap (after approval or auto mode):**
 
 ```bash
-gsd_run query commit "docs: create roadmap ([N] phases)" --files .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md "$INSTRUCTION_FILE"
+gsd_run query commit "docs: create roadmap ([N] phases)" --files "{roadmap_path}" "{state_path}" "{requirements_path}" "$INSTRUCTION_FILE"
 ```
 
 ## 9. Done
