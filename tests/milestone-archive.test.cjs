@@ -1376,8 +1376,8 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EXIT3 = { kind: 'command-exit-zero', exitCode: 3, signal: null };
-// Fixture data: the predicate's own `timeout` field (seconds), kept below the 30s sleep so the gate always times out.
-const GATE_TIMEOUT_FIXTURE_S = 0.3;
+// Preload for the CLI child: every `sh -c` gate command returns the spawnSync timeout result and never runs.
+const TIMED_OUT_SHELL_PRELOAD = path.join(__dirname, 'helpers', 'timed-out-shell-preload.cjs');
 
 describe('milestone complete re-checks blocking ship:pre predicate gates per milestone phase (#5482)', () => {
   let tmpDir;
@@ -1655,8 +1655,12 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G19b a gate that outlives its predicate timeout refuses the close with timedOut details', () => {
-    writeGateCap(home, { predicate: { kind: 'command-exit-zero', command: 'sleep 30', timeout: GATE_TIMEOUT_FIXTURE_S } });
-    const blocked = refusal(complete()).blocked;
+    writeGateCap(home, { command: 'exit 0' });
+    const r = runNode(
+      ['--require', TIMED_OUT_SHELL_PRELOAD, TOOLS_PATH, '--json-errors', 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
+      { cwd: tmpDir, env: { ...process.env, ...env() }, timeoutMs: PROBE_TIMEOUT_MS },
+    );
+    const blocked = refusal({ success: r.exitCode === 0, output: r.stdout, error: r.stderr }).blocked;
     assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.timedOut]), [['01', 'predicate_blocked', true], ['02', 'predicate_blocked', true]]);
   });
 
