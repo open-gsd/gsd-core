@@ -80,7 +80,7 @@ interface QuoteCtx {
   stripTabs?: boolean;
   /** Open `case` words: a `)` closes a pattern, not the enclosing `(...)`, while this is above zero. */
   cases?: number;
-  /** A `${...}` inside double quotes: a single quote there is an ordinary character. */
+  /** A `${...}` inside double quotes, an unquoted here-document body or another quoted `${...}`: a single quote there is an ordinary character. */
   quoted?: boolean;
 }
 
@@ -135,7 +135,7 @@ export function literalDollarIndexes(command: string): number[] {
       stack.push({ kind: arith ? 'arith' : 'sub' });
       i += arith ? 2 : 1;
     } else if (c === '$' && command[i + 1] === '{') {
-      stack.push({ kind: 'param', quoted: top.kind === 'double' });
+      stack.push({ kind: 'param', quoted: top.kind === 'double' || top.kind === 'heredoc' || (top.kind === 'param' && top.quoted) });
       i++;
     } else if (top.kind === 'double' || top.kind === 'heredoc') {
       if (c === '"' && top.kind === 'double') stack.pop();

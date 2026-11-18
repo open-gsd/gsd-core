@@ -267,6 +267,10 @@ describe('evaluatePredicate — interpolation', () => {
       assert.doesNotThrow(() => run(`test -d "\${x:-'\${GSD_PHASE_DIR}'}"`));
       assert.throws(() => run(`cat <<-EOF\n\tx\n\tEOF\ntest -d '\${GSD_PHASE_DIR}'`), quoted);
       assert.doesNotThrow(() => run(`cat <<EOF\nsay "hi it's\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.doesNotThrow(() => run(`cat <<EOF\n\${NAME:-it's}\nEOF\ntest -d "\${GSD_PHASE_DIR}"`));
+      assert.doesNotThrow(() => run(`test -d "\${x:-\${y:-it's}}"; test -d "\${GSD_PHASE_DIR}"`));
+      assert.throws(() => run(`cat << 'EOF'\n\${GSD_PHASE_DIR}\nEOF`), quoted);
+      assert.throws(() => run(`cat <<- "EOF"\n\t\${GSD_PHASE_DIR}\n\tEOF`), quoted);
     });
     test('quotes inside $(...), (...) and backticks follow the same states', () => {
       assert.throws(() => run(`echo "$(test -d '\${GSD_PHASE_DIR}')"`), quoted);

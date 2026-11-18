@@ -182,6 +182,10 @@ describe('property: literalDollarIndexes names exactly the markers in spans sh n
     { text: 'echo "${x:-\'@\'}"', literal: false },
     { text: "cat <<-EOF\n\tit's @\n\tEOF", literal: false },
     { text: 'echo "$(esac) it\'s" \'@\'', literal: true },
+    { text: "cat <<EOF\n${x:-it's @}\nEOF", literal: false },
+    { text: 'echo "${x:-${y:-\'}}" "@"', literal: false },
+    { text: "cat << 'EOF'\n@\nEOF", literal: true },
+    { text: 'cat <<- "EOF"\n\t@\n\tEOF', literal: true },
   ];
   test('the indexes equal the positions of the literal markers', () => {
     fc.assert(
