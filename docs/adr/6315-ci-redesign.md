@@ -12,7 +12,8 @@
 This file is the contract for the agents that implement epic #6315.
 
 - Each numbered item in *Phases* is **one child issue and one PR**. Do not combine items.
-- Before starting an item, read its *Depends on* line. Do not start an item whose dependency has not merged.
+- **No item waits on another.** Every item can start today. Where one item's result feeds another, the item says what to use until that result exists. The one exception is named in *Ordering*.
+- A blocker is part of the epic. If an item is held up by an open PR, a missing review or a missing measurement, the implementing agent picks that up as the next step of the item. It does not park the item.
 - The *Invariants* section applies to every item. A PR that breaks an invariant is wrong even if its own acceptance criteria pass.
 - The acceptance criteria are release blockers. Record the evidence (run links, command output) in the PR body.
 - Where an item says "decision rule", the implementing agent measures, applies the rule as written, and records the outcome in a dated section at the end of this file. The rule removes the need for a new ruling.
@@ -125,9 +126,9 @@ Add one job that runs pinned actionlint, pinned zizmor and `eslint . --max-warni
 - AC4: `static-fast` is in the `needs` list of `required-tests` (I1).
 - AC5: a scratch branch with a deliberately broken workflow (for example `shell: ${{ matrix.shell }}`) fails the job. The run link is in the PR body.
 
-**Item 4 — Slow-file budget ratchet.** Depends on: item 6.
-Files: a new script under `scripts/`, an allowlist data file under `tests/`, `ci-timeout-report.yml` or the refresh workflow from item 6.
-A budget needs measured durations, so it reads the CI duration artifacts and runs after the tests, on the schedule.
+**Item 4 — Slow-file budget ratchet.** Depends on: nothing.
+Files: a new script under `scripts/`, an allowlist data file under `tests/`, `ci-timeout-report.yml`.
+A budget needs measured durations, so it reads the CI duration artifacts that `test.yml` already uploads and runs after the tests, on the schedule. It does not need item 6: the committed timing table seeds the allowlist, and the artifacts exist today.
 
 - AC1: the script fails when a test file that is not on the allowlist exceeds the ceiling, and when an allowlisted file exceeds its recorded cost by more than a stated slack.
 - AC2: the allowlist is today's offenders at their current cost, taken from `tests/test-timings.json`. A new entry needs an issue link.
@@ -136,13 +137,18 @@ A budget needs measured durations, so it reads the CI duration artifacts and run
 
 #### Phase 2 — critical path and compute
 
-**Item 5 — Shard macOS conformance three ways.** Depends on: [#5053](https://github.com/open-gsd/gsd-core/issues/5053) merged. Closes [#6148](https://github.com/open-gsd/gsd-core/issues/6148).
-Files: `.github/workflows/test.yml` (`test-conformance` matrix), `scripts/run-tests.cjs`, a new `tests/test-timings.darwin.json`.
+**Item 5a — Land the conformance reshard ([#5053](https://github.com/open-gsd/gsd-core/pull/5053)).** Depends on: nothing. Closes [#5029](https://github.com/open-gsd/gsd-core/issues/5029) and [#6148](https://github.com/open-gsd/gsd-core/issues/6148).
+PR #5053 is an open contributor PR that already does this work: macOS conformance goes from one job to three shards, Windows from three shards to six, the cap stays at 45 min, and the lane gets its first `LANE_COSTS` entry. Its own evidence shows long poles of 13 min 34 s (macOS) and 15 min 46 s (Windows) on a green full-matrix run. On 2026-11-18 it was waiting on a maintainer review of head `c06a0c2e4`. That review is the first step of this epic. Do not write a second implementation.
 
-- AC1: the macOS rows of `test-conformance` carry `shard: 1/3`, `2/3`, `3/3`, and the packer reads a darwin timing table.
-- AC2: over 20 `merge_group` runs after the change, the slowest macOS shard is under 25 min and the median run wall-clock is under 30 min.
+- AC1: #5053 is reviewed at its current head and merged through the queue. If its author stops responding, a maintainer branch carries the same commits forward with the author credited.
+- AC2: over 20 `merge_group` runs after the merge, the slowest macOS shard is under 25 min and the median run wall-clock is under 30 min.
 - AC3: `Required tests` still accepts `success` or `skipped` for the lane.
-- AC4: **decision rule.** Run the same shard at `--test-concurrency` 2, 3 and 4 on the 3-vCPU macOS runner, five runs each. Adopt the value with the lowest median if it beats the current value by more than 10%. Otherwise keep the current value.
+
+**Item 5b — Darwin timing table and macOS concurrency.** Depends on: nothing for the table. The concurrency measurement runs after item 5a merges.
+Files: `scripts/run-tests.cjs`, `scripts/gen-test-timings.cjs`, a new `tests/test-timings.darwin.json`.
+
+- AC1: a darwin timing table is generated from the macOS duration artifacts that `test.yml` already uploads, and the packer reads it on macOS the way it reads the win32 table on Windows.
+- AC2: **decision rule.** Run the same macOS shard at `--test-concurrency` 2, 3 and 4 on the 3-vCPU runner, five runs each. Adopt the value with the lowest median if it beats the current value by more than 10%. Otherwise keep the current value.
 
 **Item 6 — Scheduled timing-table refresh.** Depends on: nothing.
 Files: a new scheduled workflow (or a job in `ci-timeout-report.yml`), `scripts/gen-test-timings.cjs`.
@@ -152,20 +158,20 @@ Files: a new scheduled workflow (or a job in `ci-timeout-report.yml`), `scripts/
 - AC3: 14 days after the first refresh merges, Ubuntu shard 2/3 has zero runs at ≥90% of its cap over 40 `merge_group` and `push` runs.
 - AC4: **decision rule.** If AC3 fails after two refreshes, add a fourth Ubuntu shard. Do not raise the cap (I4).
 
-**Item 7 — Windows packer accounts for long single files.** Depends on: item 5 (ordering only). Closes [#5807](https://github.com/open-gsd/gsd-core/issues/5807) and [#5162](https://github.com/open-gsd/gsd-core/issues/5162).
-Files: `scripts/run-tests.cjs`.
+**Item 7 — Windows packer accounts for long single files.** Depends on: nothing. Closes [#5807](https://github.com/open-gsd/gsd-core/issues/5807) and [#5162](https://github.com/open-gsd/gsd-core/issues/5162).
+Files: `scripts/run-tests.cjs`. PR #5053 does not touch this file, so the two do not conflict.
 
-- AC: the shard-balance check in `ci-timeout-report.yml` reports a gap under 2.0 min for two consecutive daily runs.
+- AC: the shard-balance check in `ci-timeout-report.yml` reports `ok` for two consecutive daily runs, against the baseline of whichever shard layout is live when this item merges.
 
-**Item 8 — One full matrix per merge.** Depends on: items 5, 6 and 7.
+**Item 8 — One full matrix per merge.** Depends on: nothing. Its precondition is met (see *Decision-rule outcomes*, 2026-11-18).
 Files: `.github/workflows/test.yml`, `scripts/ci-next-health.cjs`, the `publish-emitted-baseline` job.
-Owner ruling (2026-11-18): the post-merge `push` matrix may be skipped only after tree identity is proven.
+Owner ruling (2026-11-18): the post-merge `push` matrix may be skipped only after tree identity is proven. It is proven, and the result is stronger than tree identity: the queue fast-forwards `next` to the merge-group commit, so the pushed commit has the **same SHA** as the commit the `merge_group` run tested.
 
-- AC1 (precondition, its own PR or issue comment): for ten sampled squash merges, command output shows whether `git rev-parse <next-sha>^{tree}` equals the tree of the matching `merge_group` head commit. **Decision rule:** if all ten match, continue. If any differ, stop, record the result in this ADR, and close the item as rejected.
-- AC2: on `push` to `next`, a first job compares the pushed tree with the tree of the latest green `merge_group` run. The matrix is skipped only on an exact match. Any other case runs the full matrix as today.
+- AC1: done. Fourteen of fourteen sampled merges matched.
+- AC2: on `push` to `next`, a first job looks for a `merge_group` run of `test.yml` whose head SHA equals the pushed SHA and whose conclusion is `success`. The matrix is skipped only when one exists. Any other case, including a direct push, a bypass merge or a lookup error, runs the full matrix as today.
 - AC3: `scripts/ci-next-health.cjs` reads the `merge_group` conclusion when the push run skipped, and the push run otherwise. A unit test covers both arms.
 - AC4: `publish-emitted-baseline` still produces the baseline after every merge.
-- AC5: on merges where the trees match, runner-minutes per merge drop from about 187 to under 25.
+- AC5: on merges that come through the queue, runner-minutes for the post-merge run drop from about 187 to under 25.
 
 #### Phase 3 — diagnostics, selection and deeper static checks
 
@@ -176,7 +182,7 @@ Files: a new scheduled workflow, a shared test hook under `tests/helpers/`, `scr
 - AC2: a ledger job counts failures per test file over the last 50 `next` runs and publishes the top 20.
 - AC3: every ledger and leak entry becomes an issue, or is shown to be an infrastructure failure. None is left as a note (I3).
 
-**Item 10 — Affected-test selection in shadow mode.** Depends on: items 1 and 6.
+**Item 10 — Affected-test selection in shadow mode.** Depends on: nothing. The job gates nothing, so it can run before items 1 and 6 land.
 Files: `.github/workflows/test.yml`, `scripts/affected-tests-lib.cjs`, a report script.
 Much of this suite reads repo files instead of importing modules, so an import graph selects too few tests. Earlier selection work escaped regressions (see [ADR-4641](4641-windows-selector-consolidation.md)). Selection is therefore measured before it is trusted.
 
@@ -184,14 +190,14 @@ Much of this suite reads repo files instead of importing modules, so an import g
 - AC2: a daily report publishes the count of failing tests that were outside the selected set.
 - AC3: **decision rule.** Enforcement is proposed, in a new issue, only after 100 consecutive PR runs with that count at zero. Until then the PR lane runs the full Ubuntu shards. I2 holds either way.
 
-**Item 11 — Leak-shape lint rules.** Depends on: item 9 (its ledger says which shapes matter).
+**Item 11 — Leak-shape lint rules.** Depends on: nothing. AC1 and AC3 start now. AC2 picks its shapes from item 9's first report, and until that exists, from the stall and leak causes already recorded in closed issues.
 Files: `eslint-rules/`, `eslint.config.mjs`.
 
 - AC1: first read the existing rules (`no-unbounded-spawn`, `require-full-tmpdir-triad` and the rest) and list which of these shapes they already cover: an un-awaited promise in a test body, an async spawn whose stdin is never closed, a timer or server with no teardown, a fixed port, a write outside the tmp directory, real network use.
-- AC2: one rule per uncovered shape that the leak audit actually found. Each ships at `warn` with tests, then moves to `error` (I8).
+- AC2: one rule per uncovered shape that has a recorded occurrence. Each ships at `warn` with tests, then moves to `error` (I8).
 - AC3: **decision rule.** Measure `npm run lint` with type-aware `no-floating-promises` over `tests/**/*.cjs`. Enable it only if it adds under 60 s and `static-fast` stays inside its target.
 
-**Item 12 — Three measurements with a rule each.** Depends on: item 5.
+**Item 12 — Three measurements with a rule each.** Depends on: nothing.
 
 - **Coverage on PR shards.** A/B the same shard with and without c8, five runs each. If c8 costs more than 15% of the shard's test time, move coverage to `merge_group` and `push` runs and keep the coverage gate there. Otherwise change nothing.
 - **Queue minimum group size.** `.github/rulesets/next-queue.json` sets `min_entries_to_merge: 2` with a 15-min wait. Measure the time from enqueue to the start of the `merge_group` run over 30 merges. If the median wait for a lone PR is over 5 min, set the minimum to 1. The ruleset change is applied by the owner.
@@ -199,24 +205,19 @@ Files: `eslint-rules/`, `eslint.config.mjs`.
 
 #### Phase 4 — maintainability
 
-**Item 13 — One composite action for the repeated setup steps.** Depends on: every earlier item that edits `test.yml`.
+**Item 13 — One composite action for the repeated setup steps.** Depends on: nothing. It rebases on whichever `test.yml` change merges before it.
 Files: `.github/actions/`, `.github/workflows/test.yml`, `tests/ci-*.test.cjs`.
 
 - AC: checkout, runner guard, rebase check, Node setup and install are one `uses: ./.github/actions/...` step in `test`, `test-inert`, `test-conformance` and `qa-loop-walk`. The workflow-contract tests are updated and pass.
 
 ### 4. Ordering
 
-```text
-Phase 0:  1    2            (independent)
-Phase 1:  3                 (independent)      4 needs 6
-Phase 2:  6                 (independent)
-          5 needs #5053     7 after 5          8 needs 5, 6, 7 and its own AC1
-Phase 3:  9                 (independent)      10 needs 1, 6
-          11 needs 9        12 needs 5
-Phase 4:  13 last
-```
+Every item starts now. The phases are a priority order, not a queue: when agents are scarce, lower phase numbers go first.
 
-Items 1, 2, 3, 6 and 9 can start at once. Items 3, 5, 8 and 13 all edit `test.yml`, so they merge one at a time, in that order.
+- **One real wait:** the macOS concurrency measurement in item 5b needs the sharded lane from item 5a.
+- **One blocker to clear first:** item 5a is an open contributor PR that needs a maintainer review. Reviewing it is the first action of the epic.
+- **Shared file:** PR #5053 and items 3, 8, 10 and 13 all edit `.github/workflows/test.yml`. They do not wait for each other. Each one rebases on `next` before it is enqueued, and the merge queue serialises them. Items 5b and 7 both edit `scripts/run-tests.cjs` and follow the same rule.
+- **Results that feed other items:** item 9's first report sharpens item 11, and item 6's refreshed tables sharpen item 4. Neither is a precondition.
 
 ## Considered and rejected
 
@@ -239,7 +240,7 @@ Items 1, 2, 3, 6 and 9 can start at once. Items 3, 5, 8 and 13 all edit `test.ym
 ## Consequences
 
 - A PR with a workflow or lint defect fails in about a minute and starts no test shards.
-- The merge-queue wall-clock target moves from a 34.6-min median to under 30 min. After item 5 the Windows shards become the critical path, at 25–28 min.
+- The merge-queue wall-clock target moves from a 34.6-min median to under 30 min. After item 5a the Ubuntu unit shards become the critical path, at 19–22 min.
 - Compute per merged PR drops by about one full matrix once item 8 lands.
 - The repo takes on two pinned third-party tools (actionlint, zizmor) and three scheduled jobs that must be kept healthy.
 - Stryker results on PRs now depend on a cached file. The scheduled `--force` run is what catches drift.
@@ -248,7 +249,7 @@ Items 1, 2, 3, 6 and 9 can start at once. Items 3, 5, 8 and 13 all edit `test.ym
 
 ## Open questions this ADR does not settle
 
-None block the work. Each has a decision rule in an item above: static-tier gating (item 3), macOS concurrency (item 5), a fourth Ubuntu shard (item 6), tree identity (item 8), selection enforcement (item 10), type-aware lint (item 11), coverage placement, queue group size and property-test budgets (item 12).
+None block the work. Each has a decision rule in an item above: static-tier gating (item 3), macOS concurrency (item 5b), a fourth Ubuntu shard (item 6), selection enforcement (item 10), type-aware lint (item 11), coverage placement, queue group size and property-test budgets (item 12).
 
 ## Done when
 
@@ -261,4 +262,12 @@ None block the work. Each has a decision rule in an item above: static-tier gati
 
 ## Decision-rule outcomes
 
-*(Empty. Each implementing PR adds a dated entry here: the item, the measurement, and the arm of the rule that applied.)*
+Each implementing PR adds a dated entry here: the item, the measurement, and the arm of the rule that applied.
+
+### 2026-11-18 — Item 8, AC1: the merged commit is the tested commit
+
+For the 14 most recent green `merge_group` runs of `test.yml`, the run's head SHA was compared with the merge commit of the same PR on `next` (`gh run list --event merge_group --status success`, `gh pr view <n> --json mergeCommit`, `gh api repos/open-gsd/gsd-core/git/commits/<sha> --jq .tree.sha`).
+
+Result: 14 of 14 had the same commit SHA, and therefore the same tree. PRs sampled: 6305, 6309, 6311, 6307, 6308, 6306, 6304, 6290, 6183, 5871, 5639, 5502, 5408, 6094.
+
+Arm applied: continue. Item 8 keys its skip on SHA equality with a green `merge_group` run.
