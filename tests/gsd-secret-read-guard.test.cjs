@@ -431,6 +431,11 @@ describe('gsd-secret-read-guard: Bash blocks', () => {
     ["source <(echo 'cat .env')", '.env'],
     ['eval cat .env', '.env'],
     ["bash -lc 'cat .env'", '.env'], // combined short flags: guards the regression
+    // #6202: -- ends the interpreter's options, so the script sits one
+    // operand past it and must be scanned exactly like a plain -c script.
+    ["bash -c -- 'cat .env'", '.env'], // #6202: script behind the -- separator
+    ["bash -lc -- 'cat .env'", '.env'], // #6202: same for a compound flag cluster
+    ['cat -- .env', '.env'], // #6202: -- NOT after -c: ordinary operands still scanned
     ['bash -c cat .env', '.env'], // ordinary operand check still applies
     ['bash <<EOF\ncat .env\nEOF | tee x', '.env'],
     ['sudo bash <<EOF\ncat .env\nEOF', '.env'],
@@ -529,6 +534,8 @@ describe('gsd-secret-read-guard: Bash allows', () => {
     'cat <<EOF\ncat .env\nEOF',
     'bash <<EOF\necho .env\nEOF',
     'echo "cat .env" | bash -c "cat >/dev/null"', // -c: stdin is data
+    "bash -c 'echo hi'", // #6202 control: benign -c script stays allowed
+    "bash -c -- 'echo hi'", // #6202: benign script behind -- stays allowed
     'echo "cat .env" | grep cat',
     'bash script.sh',
     'cat script.sh | bash', // non-echo source: documented gap
@@ -1055,6 +1062,7 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['second command of a compound', 'cd /tmp && claude --agent gsd-debugger -p hi'],
     ['inside $( )', 'out=$(claude --agent gsd-debugger -p hi); echo "$out"'],
     ['inside bash -c', "bash -c 'claude --agent gsd-debugger -p hi'"],
+    ['inside bash -c --', "bash -c -- 'claude --agent gsd-debugger -p x'"], // #6202
     ['inside eval', 'eval "claude --agent gsd-debugger -p hi"'],
     ['piped', 'echo go | claude --agent gsd-debugger -p'],
   ];
