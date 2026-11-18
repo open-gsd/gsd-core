@@ -19,6 +19,7 @@ const path = require('node:path');
 const fc = require('fast-check');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { leadingRequirementStatus } = require('../gsd-core/bin/lib/markdown-table.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 /** [cell, advances in mark-complete, advances in phase complete] */
 const CELLS = [
@@ -223,12 +224,12 @@ describe('phase complete reads the Status word (#6238)', () => {
     const cells = [['Pending (note)'], ['Pending']];
     const reqFile = phaseFixture(cells);
     // CELL-02 stays cited by the roadmap and keeps its checkbox, but loses its row.
-    fs.writeFileSync(reqFile, fs.readFileSync(reqFile, 'utf-8').split('\n').filter((l) => !l.startsWith('| CELL-02 |')).join('\n'));
+    fs.writeFileSync(reqFile, splitLines(fs.readFileSync(reqFile, 'utf-8')).filter((l) => !l.startsWith('| CELL-02 |')).join('\n'));
     const r = runGsdTools(['phase', 'complete', '1'], tmpDir);
     assert.ok(r.success, r.error);
     const after = fs.readFileSync(reqFile, 'utf-8');
     assert.equal(rowOf(after, 'CELL-01'), 'Complete');
-    assert.equal(after.split('\n').some((l) => l.startsWith('| CELL-02 |')), false, 'a missing row must not be invented');
+    assert.equal(splitLines(after).some((l) => l.startsWith('| CELL-02 |')), false, 'a missing row must not be invented');
   });
 
   test('phase complete keeps refusing non-advanceable cells', () => {
