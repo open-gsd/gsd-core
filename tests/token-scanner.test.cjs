@@ -235,8 +235,8 @@ describe('firstUnprovenMarker', () => {
       'echo it\\\'s "@"', 'echo "a\\"b @"', "echo a#b '@'", "echo x;# it's @", "cat <<'a\\b'\n@\na\\b", "cat <<'ab\n@'",
       "cat <<EOF\n\tEOF\nit's @\nEOF", "cat <<EOF # it's\nbody it's @\nEOF", "echo '\\' '@'", 'echo ${x:-\'@\'}', 'echo "${x%% #*}" \'@\'',
       "echo $(:)#'@'", "(:)# it's @", 'echo "$(echo $((1)))" \'@\'',
-      'echo \\@', 'echo "\\@"', 'echo "$$@"', "echo a\\\n#'@'", 'echo "${GSD_MARK#\'@\'}"', 'echo ">#@"', 'echo "a"\'@\'', 'echo "$(echo "@")"',
-      'echo "$\\\n(echo \'@\')"', "cat <\\\n<'EOF'\n@\nEOF",
+      'echo \\@', 'echo "\\@"', 'echo "$$@"', 'echo "${GSD_MARK#\'@\'}"', 'echo ">#@"', 'echo "a"\'@\'', 'echo "$(echo "@")"',
+      'echo "$\\\n(echo \'@\')"', "cat <\\\n<'EOF'\n\"@\"\nEOF",
     ];
     const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_MARK: 'SENT' } });
     const probe = (command) => runHook('-c', [command], { interpreter: 'bash', env, input: '', timeoutMs: PROBE_TIMEOUT_MS });

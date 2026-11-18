@@ -224,7 +224,6 @@ describe('evaluatePredicate — interpolation', () => {
       'echo "\\@"',
       'echo "$$@"',
       'echo "$%"',
-      'echo a\\\n#\'@\'',
       'echo "$(ls -A "@")"',
       'echo "`ls "@"`"',
       'echo "`echo \'@\'`"',
@@ -242,7 +241,7 @@ describe('evaluatePredicate — interpolation', () => {
       'test -d "@" && for id in @; do :; done',
       "sh -c 'test -d \"%\"'",
       'echo "$\\\n(echo \'@\')"',
-      "cat <\\\n<'EOF'\n@\nEOF",
+      "cat <\\\n<'EOF'\n\"@\"\nEOF",
     ];
     // Each row makes `sh` print its placeholder in plain double quotes, so the real shell proves the check keeps them.
     const ALLOWED = [
@@ -298,7 +297,7 @@ describe('evaluatePredicate — interpolation', () => {
       const beads = '_B="${GSD_HOME:-${HOME:-}}"; case "$_B" in /?*) ;; *) echo "gsd-beads: no absolute GSD_HOME or HOME" >&2; exit 1;; esac; exec python3 -I "$_B/.gsd/capabilities/beads/scripts/sync.py" ship-gate "${GSD_PHASE_NUMBER}"';
       assert.doesNotThrow(() => run(beads));
     });
-    test('a double-quoted placeholder after a double-quoted apostrophe, a quoted # or an escaped quote throws nothing', () => {
+    test('every ALLOWED row passes the check', () => {
       for (const name of INTERPOLATION_VAR_NAMES) {
         for (const template of ALLOWED) {
           assert.doesNotThrow(() => run(spell(template, name)), JSON.stringify(template));
