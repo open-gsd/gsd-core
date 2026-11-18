@@ -80,7 +80,9 @@ export function indentWidth(line: string): number {
  *   inside `${...}`, or a `#` that starts a word (a comment).
  * A shell state the walk does not read therefore cannot hide a marker.
  */
-export function firstUnprovenMarker(command: string, marker: RegExp): string | undefined {
+export function firstUnprovenMarker(raw: string, marker: RegExp): string | undefined {
+  // `sh` deletes an unescaped backslash-newline pair before it tokenizes, so `$\<nl>(` is `$(` and `$\<nl>NAME` is a marker.
+  const command = raw.replace(/(?<!\\)((?:\\\\)*)\\\n/g, '$1');
   const at = new RegExp(marker.source, 'y');
   const markerAt = (i: number): string | undefined => {
     at.lastIndex = i;

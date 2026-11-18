@@ -168,4 +168,4 @@ The evaluator throws (`unevaluable`) unless every `GSD_PHASE_*` variable is prov
 - `ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do ...; done` replaces `for id in $GSD_PHASE_REQ_IDS`; the word split is now the author's own.
 - `sh -c 'test -d "$1"' sh "${GSD_PHASE_DIR}"` replaces `sh -c 'test -d "$GSD_PHASE_DIR"'`; the child shell reads the variable, and the check cannot tell that from a literal one.
 
-A fifth dispatch site joins the three generic workflow sites listed under Evaluation path: the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase.
+A fifth dispatch site joins the three generic workflow sites listed under Evaluation path and the generic `ship:pre` site (#3559): the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase.

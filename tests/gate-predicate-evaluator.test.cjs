@@ -241,6 +241,8 @@ describe('evaluatePredicate — interpolation', () => {
       'for id in %; do :; done',
       'test -d "@" && for id in @; do :; done',
       "sh -c 'test -d \"%\"'",
+      'echo "$\\\n(echo \'@\')"',
+      "cat <\\\n<'EOF'\n@\nEOF",
     ];
     // Each row makes `sh` print its placeholder in plain double quotes, so the real shell proves the check keeps them.
     const ALLOWED = [
@@ -258,6 +260,8 @@ describe('evaluatePredicate — interpolation', () => {
       "sh -c 'echo \"$1\"' sh \"@\"",
       'sh -c "echo @"',
       'eval echo "@"',
+      'echo \\\n"@"',
+      'echo "$\\\nd" "@"',
     ];
     const unprovable = (name) => new RegExp(`uses \\$\\{${escapeRegex(name)}\\} where this check cannot prove sh expands it: write "\\$\\{${escapeRegex(name)}\\}" in plain double quotes`);
 
