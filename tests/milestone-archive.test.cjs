@@ -21,6 +21,7 @@ const { createTempProject, createTempDir, cleanup, runGsdTools, toPosixPath, TOO
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { GATE_ROADMAP, writeGateCap, cleanEnv } = require('./helpers/ship-gate-fixture.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { openWorkStepFields } = require('./helpers/audit-milestone-step.cjs');
@@ -1383,6 +1384,8 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   let tmpDir;
   let home;
   const env = () => cleanEnv(home);
+  // The env of a raw spawn: the isolation helper's, with this fixture's home variables on top.
+  const childEnv = () => isolatedEnv({ home, override: env() });
   const complete = (extra = '') =>
     runGsdTools(`--json-errors milestone complete v1.0 --name MVP --confirm ${extra}`, tmpDir, env());
   const archived = () => fs.existsSync(path.join(tmpDir, '.planning', 'milestones'));
@@ -1400,7 +1403,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   // Raw spawn (stderr visible on success) for the warning assertions.
   const completeRaw = (cwd = tmpDir) => runNode(
     [TOOLS_PATH, 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
-    { cwd, env: { ...process.env, ...env() }, timeoutMs: PROBE_TIMEOUT_MS },
+    { cwd, env: childEnv(), timeoutMs: PROBE_TIMEOUT_MS },
   );
   const phaseDir = (name) => path.join(tmpDir, '.planning', 'phases', name);
   // Public boundary: the dry-run JSON carries the blocks (would_refuse) and the typed warnings (gate_warnings).
@@ -1601,8 +1604,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   test('G16d UNREADABLE window scope without a gate-declaring capability: no warning', () => {
-    seedWorkstream(tmpDir, { name: 'alpha', state: '---\nmilestone: v1.0\n---\n\n# GSD State\n', active: true });
-    for (const d of ['01-a', '02-b']) fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'phases', d), { recursive: true });
+    seedUnreadable();
     assert.deepEqual(gateResult(), { blocked: [], warnings: [] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
@@ -1658,7 +1660,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { command: 'exit 0' });
     const r = runNode(
       ['--require', TIMED_OUT_SHELL_PRELOAD, TOOLS_PATH, '--json-errors', 'milestone', 'complete', 'v1.0', '--name', 'MVP', '--confirm'],
-      { cwd: tmpDir, env: { ...process.env, ...env() }, timeoutMs: PROBE_TIMEOUT_MS },
+      { cwd: tmpDir, env: childEnv(), timeoutMs: PROBE_TIMEOUT_MS },
     );
     const blocked = refusal({ success: r.exitCode === 0, output: r.stdout, error: r.stderr }).blocked;
     assert.deepEqual(blocked.map((b) => [b.phase, b.reason, b.details.timedOut]), [['01', 'predicate_blocked', true], ['02', 'predicate_blocked', true]]);
