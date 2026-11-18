@@ -23,10 +23,8 @@ const assert = require('node:assert/strict');
 const os = require('node:os');
 const { isDeepStrictEqual } = require('node:util');
 const path = require('node:path');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
-const { oracleLines } = require('./helpers/oracle-shell.cjs');
+const { oracleLines, runShellText } = require('./helpers/oracle-shell.cjs');
 // Seeded fast-check convention: require the shared setup helper (NOT
 // 'fast-check' directly) so numRuns/seed are configured globally before any
 // fc.assert() call — mirrors tests/pattern.test.cjs / tests/text-lines.test.cjs.
@@ -363,7 +361,7 @@ describe('firstUnprovenMarker', () => {
       'echo "$\\\n(echo \'@\')"', "cat <\\\n<'EOF'\n\"@\"\nEOF",
     ];
     const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_MARK: 'SENT' } });
-    const probe = (command) => runHook('-c', [command], { interpreter: 'bash', env, input: '', timeoutMs: PROBE_TIMEOUT_MS });
+    const probe = (command) => runShellText(command, { interpreter: 'bash', env });
     test('each fragment runs clean in the oracle shell, so no combination is silenced by a syntax error', () => {
       const failed = FRAGMENTS.filter((text) => probe(text.replaceAll('@', '${GSD_MARK}')).exitCode !== 0);
       assert.deepStrictEqual(failed, []);
@@ -377,6 +375,14 @@ describe('firstUnprovenMarker', () => {
     });
     test('a fragment that breaks the wrapper is a failed oracle shell, not a JSON error', () => {
       assert.throws(() => oracleLines("cat <<'ab\n${GSD_MARK}'", { interpreter: 'bash', env }), /oracle shell failed/);
+      assert.throws(() => oracleLines('if', { interpreter: 'bash', env }), /oracle shell failed/);
+    });
+    test('a shell that cannot start is a failed oracle shell, not an empty answer', () => {
+      assert.throws(() => oracleLines('echo x', { interpreter: 'gsd-no-such-shell', env }), /oracle shell failed/);
+    });
+    test('the oracle returns the output of a command that exits non-zero, and the text byte-exact', () => {
+      assert.deepStrictEqual(oracleLines('echo a; false', { interpreter: 'bash', env }), ['a', '']);
+      assert.deepStrictEqual(oracleLines("printf '%s\\n' a\\\\\n#b", { interpreter: 'bash', env }), ['a\\', '']);
     });
     test('the oracle prints a literal marker by name and an expanded one by value', () => {
       assert.deepStrictEqual(oracleLines("echo '${GSD_MARK}'", { interpreter: 'bash', env }), ['${GSD_MARK}', '']);
@@ -390,7 +396,7 @@ describe('firstUnprovenMarker', () => {
           const written = command.replaceAll('${GSD_MARK}', 'SENT');
           if (!isDeepStrictEqual(oracleLines(command, { interpreter: 'bash', env }), oracleLines(written, { interpreter: 'bash', env }))) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
-        // Two oracle shells per run (the command and its written-out form), each a bash and a node encoder: a small count.
+        // Two oracle shells per run (the command and its written-out form), each a bash process: a small count.
         { numRuns: 30 },
       );
     });

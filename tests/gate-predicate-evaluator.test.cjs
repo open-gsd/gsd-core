@@ -25,10 +25,8 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { runHook } = require('./helpers/process-seam.cjs');
-const { oracleLines } = require('./helpers/oracle-shell.cjs');
+const { oracleLines, runShellText } = require('./helpers/oracle-shell.cjs');
 
 const {
   evaluatePredicate,
@@ -463,7 +461,7 @@ describe('evaluatePredicate — interpolation', () => {
       test('the real shell runs the hostile value as a command in each, and in none of the rewrites', () => {
         const env = isolatedEnv({ home: dir, override: { GSD_PHASE_DIR: 'x$(touch PWNED)' } });
         const ran = (command) => {
-          runHook('-c', [command], { interpreter: 'sh', env, cwd: dir, input: '', timeoutMs: PROBE_TIMEOUT_MS });
+          runShellText(command, { interpreter: 'sh', env, cwd: dir });
           const created = fs.existsSync(path.join(dir, 'PWNED'));
           cleanup(path.join(dir, 'PWNED'));
           return created;
@@ -490,7 +488,7 @@ describe('evaluatePredicate — interpolation', () => {
         const status = (command, state) => {
           cleanup(path.join(dir, 'a b'));
           state(path.join(dir, 'a b'));
-          return runHook('-c', [command], { interpreter: 'sh', env, cwd: dir, input: '', timeoutMs: PROBE_TIMEOUT_MS }).exitCode;
+          return runShellText(command, { interpreter: 'sh', env, cwd: dir }).exitCode;
         };
         for (const { refused, rewrite } of CONSERVATIVE) {
           assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
@@ -607,7 +605,7 @@ describe('evaluatePredicate — interpolation', () => {
     for (const [consumer, refused, supported] of CONSUMERS) {
       test(`${consumer}: the real shell runs the payload from the refused spelling, the evaluator refuses it and creates nothing`, () => {
         const env = isolatedEnv({ home: control, override: { GSD_PHASE_DIR: PAYLOAD_DIR } });
-        runHook('-c', [spell(refused)], { interpreter: 'sh', env, cwd: control, input: '', timeoutMs: PROBE_TIMEOUT_MS });
+        runShellText(spell(refused), { interpreter: 'sh', env, cwd: control });
         assert.equal(marker(control), true, 'positive control: this spelling executes the directory name');
 
         const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, { cwd: guarded, phaseNumber: '01', phaseDir: PAYLOAD_DIR, phaseReqIds: 'R-1' }, buildPredicateDeps());
