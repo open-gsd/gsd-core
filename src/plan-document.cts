@@ -110,6 +110,8 @@ interface PlanDocument {
   dependsOn: string[];
   autonomous: boolean;
   agentHint: string | null;
+  /** #6302 (ADR-3711 D1): frontmatter `executor_runtime`, a registry runtime id naming a foreign executor; null when unset or blank. */
+  executorRuntime: string | null;
   /** Frontmatter `files_modified` / `files-modified`, normalised to an array. */
   filesModified: string[];
   /**
@@ -329,6 +331,7 @@ const FRONTMATTER_READ_KEYS = [
   'files_deleted',
   'files-deleted',
   'agent_hint',
+  'executor_runtime',
   'type',
   'objective',
   'gap_closure',
@@ -427,6 +430,14 @@ function parsePlanDocument(content: string, _planPath = ''): PlanDocument {
     agentHint = hintStr !== '' ? hintStr : null;
   }
 
+  let executorRuntime: string | null = null;
+  const fmExecutorRuntime = frontmatterField(fields, 'executor_runtime');
+  // A bare `executor_runtime:` opens a nested map in the frontmatter reader, so only a scalar string counts.
+  if (typeof fmExecutorRuntime === 'string') {
+    const runtimeStr = fmExecutorRuntime.trim();
+    executorRuntime = runtimeStr !== '' ? runtimeStr : null;
+  }
+
   let planType: string | null = null;
   const fmType = frontmatterField(fields, 'type');
   if (fmType !== undefined) {
@@ -441,6 +452,7 @@ function parsePlanDocument(content: string, _planPath = ''): PlanDocument {
     dependsOn,
     autonomous,
     agentHint,
+    executorRuntime,
     filesModified,
     filesDeleted,
     // extractFrontmatter yields every scalar as a string, so YAML `true` is 'true'.
