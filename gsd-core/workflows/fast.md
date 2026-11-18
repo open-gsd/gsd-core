@@ -74,7 +74,7 @@ Use conventional commit format: `fix:`, `feat:`, `docs:`, `chore:`, `refactor:` 
 </step>
 
 <step name="log_to_state">
-If `.planning/STATE.md` exists and has a "Quick Tasks Completed" table, append a row
+If `{planning_root}/STATE.md` exists (`{planning_root}`: the active scope's root, from `planning.inspect`) and has a "Quick Tasks Completed" table, append a row
 that matches the existing table's schema via the schema-backed `gsd-tools
 quick-tasks-append` helper (`markdown-table.cjs`'s `appendQuickTaskRow`; #2133,
 ADR-2143 §3/§7). If no table exists, skip silently. If the table's schema is
@@ -89,7 +89,9 @@ commit message (#5830). A longer `--task` is still written in full, but the comm
 
 ```bash
 # Detect whether STATE.md has a Quick Tasks Completed table
-if grep -q "Quick Tasks Completed" .planning/STATE.md 2>/dev/null; then
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+if grep -q "Quick Tasks Completed" "${PLANNING_ROOT}/STATE.md" 2>/dev/null; then
   # #3730: bring a legacy pre-registry table onto the canonical schema BEFORE
   # appending — silent no-op when already canonical, so this runs harmlessly
   # on every fast task and migrates exactly once, on the first.

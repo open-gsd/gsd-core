@@ -120,13 +120,16 @@ After applying each fix:
 <step name="setup_worktree">
 **Isolation: create a dedicated git worktree BEFORE touching any files.** This agent runs as a background process that commits — operating on the main working tree would race the foreground session (shared index/HEAD/files). Every instance runs in its own isolated worktree.
 
-**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase` and `/gsd:quick`, plus the `execute-plan` and `diagnose-issues` workflows, all honor — this is the only writer that hand-rolls its own worktree).** Read it directly via `node` from `.planning/config.json` (NOT the gsd-tools CLI — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
+**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase` and `/gsd:quick`, plus the `execute-plan` and `diagnose-issues` workflows, all honor — this is the only writer that hand-rolls its own worktree).** Read it directly via `node` from the scoped config.json (path derived from `GSD_PROJECT`/`GSD_WS`, flat when unset; NOT the gsd-tools CLI — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
 
 ```bash
-USE_WORKTREES=$(node -e '
+USE_WORKTREES=$(GSD_WS="${GSD_WS:-}" node -e '
   try {
     const fs = require("fs");
-    const p = (process.env.GSD_PROJECT_DIR || process.cwd()) + "/.planning/config.json";
+    const path = require("path");
+    const seg = (v) => (/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(v || "") ? [v] : []);
+    const ws = seg((process.env.GSD_WS || "").replace(/^--ws\s+/, ""));
+    const p = path.join(process.env.GSD_PROJECT_DIR || process.cwd(), ".planning", ...seg(process.env.GSD_PROJECT), ...(ws.length ? ["workstreams", ...ws] : []), "config.json");
     const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
     process.stdout.write(String((cfg.workflow && cfg.workflow.use_worktrees) ?? true));
   } catch { process.stdout.write("true"); }

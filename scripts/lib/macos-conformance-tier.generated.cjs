@@ -281,6 +281,7 @@ module.exports = {
   "tests/windows-powershell-hook-runner.test.cjs",
   "tests/workflow-fragments.test.cjs",
   "tests/workstream-inventory.test.cjs",
+  "tests/workstream-scoped-paths.test.cjs",
   "tests/workstream.test.cjs",
   "tests/worktree-cleanup.test.cjs",
   "tests/worktree-safety-reap.test.cjs",
