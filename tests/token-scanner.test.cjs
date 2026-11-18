@@ -188,7 +188,7 @@ describe('firstUnprovenMarker', () => {
     }
   });
   test('a marker in the double-quoted script of -c, or after the word eval, is refused', () => {
-    for (const bad of ['sh -c "test -d \\"@\\""', 'bash -lc "echo @"', 'sh -ec  "echo $GSD_MARK"', 'eval "@"', 'eval echo "@"', 'true;eval echo "@"', '(eval "@")']) {
+    for (const bad of ['sh -c "test -d \\"@\\""', 'bash -lc "echo @"', 'sh -ec  "echo $GSD_MARK"', 'sh -ce "echo @"', 'bash -ceu "echo @"', 'eval "@"', 'eval echo "@"', 'true;eval echo "@"', '(eval "@")']) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
     for (const ok of ['echo -c x "@"', 'echo "-c" "@"', 'echo evaluate "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'sh -c "echo a" sh "@"', 'echo "a" -c "b" "@"']) {
@@ -229,7 +229,7 @@ describe('firstUnprovenMarker', () => {
       "echo $(echo '@')", 'echo "it\'s @"', "# it's @", "cat <<EOF\nit's @\nEOF", "echo `echo \"it's @\"`", 'echo $((1<<2)) "@"',
       'echo "${x:-"it\'s"}" \'@\'', 'echo "${x:-"it\'s"}" "@"', 'echo "$(case $v in a) echo "it\'s";; esac)" \'@\'',
       'echo "$(echo case) it\'s" "@"', 'echo $(( (1<<2) ))\necho \'@\'', 'echo "${x:-\'@\'}"', "cat <<-EOF\n\tit's @\n\tEOF",
-"cat << 'EOF'\n@\nEOF", "cat <<<'@'", 'cat <<<"@"',
+      "cat << 'EOF'\n@\nEOF", "cat <<<'@'", 'cat <<<"@"',
       'echo it\\\'s "@"', 'echo "a\\"b @"', "echo a#b '@'", "echo x;# it's @", "cat <<'a\\b'\n@\na\\b", "cat <<'ab\n@'",
       "cat <<EOF\n\tEOF\nit's @\nEOF", "cat <<EOF # it's\nbody it's @\nEOF", "echo '\\' '@'", 'echo ${x:-\'@\'}', 'echo "${x%% #*}" \'@\'',
       "echo $(:)#'@'", "(:)# it's @", 'echo "$(echo $((1)))" \'@\'',

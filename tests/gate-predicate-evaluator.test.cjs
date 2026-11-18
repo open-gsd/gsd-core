@@ -241,6 +241,7 @@ describe('evaluatePredicate — interpolation', () => {
       "eval 'test -d \"@\"'",
       'sh -c "test -d \\"@\\""',
       'bash -lc "echo %"',
+      'sh -ce "echo %"',
       'eval "test -d @"',
       'eval echo "@"',
       'true; eval echo "@"',

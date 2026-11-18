@@ -116,7 +116,7 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
       }
     } else if (c === "'" || c === '"') {
       quote = c;
-      script = c === '"' && /(?:^|\s)-[A-Za-z]*c\s+$/.test(command.slice(0, i));
+      script = c === '"' && /(?:^|\s)-[A-Za-z]*c[A-Za-z]*\s+$/.test(command.slice(0, i));
     }
   }
   return undefined;
