@@ -983,8 +983,8 @@ describe('guard <-> gsd-roadmapper binding (the /gsd:new-milestone collapse path
   // root .planning/research/ commits the root project's research and leaves the named project's
   // untracked. Each case runs the Step 7 fence as shipped, launcher preamble and real `query commit`
   // included, with the research directory put in place of the agent's placeholder (a no-op when the
-  // fence names a literal path). The directory stands in for init's research_dir, which still
-  // resolves to the root under GSD_PROJECT until #5858 lands.
+  // fence names a literal path). The directory stands in for init's research_dir, which resolves to
+  // the named project's own directory since #5858.
   for (const agent of ['gsd-research-synthesizer.md', 'gsd-research-synthesizer.compact.md']) {
     test(`${agent} Step 7 under ${NAMED_PROJECT.label}: the research commit stages only the named project's research directory (#5859)`,
       { skip: skipUnless('bash') }, () => {
