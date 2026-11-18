@@ -4003,3 +4003,74 @@ describe('evaluateUpdateCache lineage guard', () => {
     });
   });
 }
+
+// ─── CLAUDE_CODE_AUTO_COMPACT_WINDOW k/M suffix (#6131) ─────────────────────
+//
+// Claude Code reads a case-insensitive `k` (x1,000) or `M` (x1,000,000) suffix on
+// an integer or decimal (`500k`, `1.5M`). The meter used to parse `500k` as 500,
+// clamp it to the 100k minimum and put its 100% at 67,000 tokens instead of
+// 467,000. These cases drive the exported resolver on a 1M model window.
+describe('CLAUDE_CODE_AUTO_COMPACT_WINDOW k/M suffix (#6131)', () => {
+  const fc = require('fast-check');
+  const { resolveAutoCompactThreshold } = require('../hooks/gsd-statusline.js');
+  const threshold = (value, modelWindow = 1000000) => resolveAutoCompactThreshold(
+    modelWindow, null, { CLAUDE_CODE_AUTO_COMPACT_WINDOW: value },
+  );
+
+  test('500k and 500K resolve to a 467000 threshold', () => {
+    assert.equal(threshold('500k'), 467000);
+    assert.equal(threshold('500K'), 467000);
+  });
+
+  test('M suffix: decimals and the 1M clamp', () => {
+    for (const value of ['1.5M', '1M', '2M', '1.5m']) {
+      assert.equal(threshold(value), 967000, value);
+    }
+    assert.equal(threshold('0.5M'), 467000);
+  });
+
+  test('k suffix around the 100k minimum (limit-1, limit, limit+1)', () => {
+    for (const value of ['50k', '0.5k', '99k']) assert.equal(threshold(value), 67000, value);
+    assert.equal(threshold('100k'), 67000);
+    assert.equal(threshold('101k'), 68000);
+  });
+
+  test('k suffix around the 1M maximum (limit-1, limit, limit+1)', () => {
+    assert.equal(threshold('999k'), 966000);
+    assert.equal(threshold('1000k'), 967000);
+    assert.equal(threshold('1001k'), 967000);
+  });
+
+  test('plain and grouped digits are unchanged', () => {
+    for (const value of ['500000', '500_000', '500,000']) assert.equal(threshold(value), 467000, value);
+  });
+
+  test('other shapes keep the numeric-prefix fallback', () => {
+    assert.equal(threshold('300000 tokens'), 267000);
+    assert.equal(threshold('5kk'), 67000);
+  });
+
+  test('non-numeric values fall back to the model window', () => {
+    for (const value of ['abc', 'k', '0', '-5k', '', '   ']) {
+      assert.equal(threshold(value), 967000, JSON.stringify(value));
+    }
+  });
+
+  test('a suffixed value is trimmed and combined with the model window as before', () => {
+    assert.equal(threshold('  500k  '), 467000);
+    assert.equal(threshold('500k', 200000), threshold('500000', 200000));
+  });
+
+  test('a k/M suffix equals the spelled-out number (property)', () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 100, max: 1000 }),
+      fc.constantFrom('k', 'K'),
+      (n, suffix) => threshold(`${n}${suffix}`) === threshold(String(n * 1000)),
+    ));
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 3 }),
+      fc.constantFrom('m', 'M'),
+      (n, suffix) => threshold(`${n}${suffix}`) === threshold(String(n * 1000000)),
+    ));
+  });
+});
