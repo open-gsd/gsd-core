@@ -322,6 +322,22 @@ describe('runner — probe (ADR-2782 D7)', () => {
       }
     });
 
+    test('property: a valid envelope with one corrupted field is rejected', () => {
+      const ids = fc.array(fc.string(), { maxLength: 5 });
+      const corrupt = fc.constantFrom(
+        (e) => ({ ...e, object: 'model' }),
+        (e) => ({ ...e, object: undefined }),
+        (e) => ({ ...e, data: 'x' }),
+        (e) => ({ ...e, data: [...e.data, { name: 'no-id' }] }),
+        (e) => ({ ...e, data: [...e.data, 7] }),
+        (e) => ({ ...e, data: [...e.data, { id: 7 }] }),
+      );
+      fc.assert(fc.property(ids, corrupt, (list, mutate) => {
+        const ok = { object: 'list', data: list.map((id) => ({ id })) };
+        return isOpenAiModelsListing(JSON.stringify(ok)) === true && isOpenAiModelsListing(JSON.stringify(mutate(ok))) === false;
+      }));
+    });
+
     test('property: any JSON value that is not a list envelope is rejected', () => {
       fc.assert(
         fc.property(fc.jsonValue(), (v) => {
@@ -2178,5 +2194,41 @@ describe('#2295 — properties (pinned seed, bounded runs)', () => {
       ),
       FC,
     );
+  });
+});
+
+describe('#5963 — readCappedBody bounds a probe body read', () => {
+  const { readCappedBody } = require('../gsd-core/bin/lib/http-body-cap.cjs');
+  const CAP = 16;
+  const respond = (text) => new Response(text);
+
+  test('limit-1, limit and limit+1 bytes: whole body up to the cap, truncated beyond it', async () => {
+    assert.equal((await readCappedBody(respond('a'.repeat(CAP - 1)), CAP)).length, CAP - 1);
+    assert.equal((await readCappedBody(respond('a'.repeat(CAP)), CAP)).length, CAP);
+    assert.equal((await readCappedBody(respond('a'.repeat(CAP + 1)), CAP)).length, CAP);
+  });
+
+  test('a truncated body fails the models-listing shape check, an in-cap one passes', async () => {
+    const listing = JSON.stringify({ object: 'list', data: [{ id: 'm' }] });
+    assert.equal(isOpenAiModelsListing(await readCappedBody(respond(listing), listing.length)), true);
+    assert.equal(isOpenAiModelsListing(await readCappedBody(respond(listing), listing.length - 1)), false);
+  });
+
+  test('an endless stream is cancelled after the cap, not drained', async () => {
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream({
+      pull(c) { pulls += 1; c.enqueue(new TextEncoder().encode('a'.repeat(8))); },
+      cancel() { cancelled = true; },
+    });
+    const out = await readCappedBody(new Response(stream), CAP);
+    assert.equal(out.length, CAP);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(cancelled, true);
+    assert.ok(pulls < 10, `stream pulled ${pulls} times`);
+  });
+
+  test('a response with no body reads as empty', async () => {
+    assert.equal(await readCappedBody({ body: null }, CAP), '');
   });
 });

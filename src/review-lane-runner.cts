@@ -407,9 +407,10 @@ export async function probeLane(
       if (!base) {
         return { available: false, reason: LANE_UNAVAILABLE.HOST_UNREACHABLE, detail: 'no host resolved' };
       }
-      // D7: reachable ⇒ available. Any HTTP answer (401 behind an auth proxy, 404, 3xx) proves a
-      // server is there; only a transport failure (status 0) does not. Redirects are not followed:
-      // a probe must not issue a request to a host the descriptor never named.
+      // D7, CONFIGURED host (below the default-host branch): reachable ⇒ available. Any HTTP answer
+      // (401 behind an auth proxy, 404, 3xx) proves a server is there; only a transport failure
+      // (status 0) does not. Redirects are never followed, under either rule: a probe must not issue
+      // a request to a host the descriptor never named.
       if (plan.transport === 'openai-http' && !plan.hostConfigured) {
         // #5963: the built-in default host (localhost:8080/1234/11434) was never named by the user,
         // and any unrelated local service answers some HTTP status there. A default host counts as
@@ -431,7 +432,7 @@ export async function probeLane(
           : {
               available: false,
               reason: LANE_UNAVAILABLE.HOST_UNREACHABLE,
-              detail: `${base}${probe.path} answered HTTP ${s.status} but not with an OpenAI-style models listing — the default host is not a recognizable ${plan.slug} server; set '${plan.hostConfigKey}' to use a server there`,
+              detail: `${base}${probe.path} answered HTTP ${s.status} but not with an OpenAI-style models listing — the default host is not a recognizable ${plan.slug} server; set '${plan.hostConfigKey}' to use a server there (this includes a server that requires an API key and answers 401)`,
             };
       }
       const r = await deps.httpJson(`${base}${probe.path}`, { method: 'GET', timeoutMs: probe.timeoutMs, probe: true });
