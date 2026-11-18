@@ -81,7 +81,8 @@ export function indentWidth(line: string): number {
  * - a marker inside a double-quoted part of the shell word that follows a `-c` option word (`sh -c "...${name}..."`,
  *   `sh -c 'a '"${name}"`, also after further option words as in `sh -c -e "..."`): the outer shell pastes the
  *   value into the script text, where shell syntax in the value would run. Option words are `-x` and `--`, found
- *   by a forward word walk, not a regex over caller text (ADR-3212 §5).
+ *   by a forward word walk over each word with its quotes and backslashes dropped (`'-c'` is `-c`), not a regex over
+ *   caller text (ADR-3212 §5).
  * A shell state the walk does not read therefore cannot hide a marker.
  */
 export function firstUnprovenMarker(command: string, marker: RegExp): string | undefined {
@@ -101,7 +102,7 @@ export function firstUnprovenMarker(command: string, marker: RegExp): string | u
     if (quote === '' && depth === 0) {
       if (/\s/.test(c)) {
         if (i > wordStart) {
-          const word = command.slice(wordStart, i);
+          const word = command.slice(wordStart, i).replace(/['"\\]/g, ''); // the shell unquotes `'-c'` to `-c`
           run = word === '--' || /^-[A-Za-z]+$/.test(word) ? run || word.includes('c') : false;
         }
         wordStart = i + 1;

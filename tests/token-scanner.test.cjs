@@ -188,14 +188,14 @@ describe('firstUnprovenMarker', () => {
     }
   });
   test('a marker in the double-quoted script of -c (also after further options), or after the word eval or trap, is refused', () => {
-    for (const bad of ['sh -c "test -d \\"@\\""', 'bash -lc "echo @"', 'sh -ec  "echo $GSD_MARK"', 'sh -ce "echo @"', 'bash -ceu "echo @"', 'sh -c -e "echo @"', 'sh -c -- "@"', 'bash -c -l -x "echo @"', 'sh -e -c -u "echo @"', "sh -c 'echo '\"@\"", 'sh -c "a""@"', 'eval "@"', 'eval echo "@"', 'true;eval echo "@"', '(eval "@")', 'trap "rm @" EXIT', 'true;trap "@" EXIT']) {
+    for (const bad of ['sh -c "test -d \\"@\\""', 'bash -lc "echo @"', 'sh -ec  "echo $GSD_MARK"', 'sh -ce "echo @"', 'bash -ceu "echo @"', 'sh -c -e "echo @"', "sh '-c' \"@\"", 'sh "-c" "@"', 'sh \\-c "@"', 'sh -"c" "@"', 'sh -c -- "@"', 'bash -c -l -x "echo @"', 'sh -e -c -u "echo @"', "sh -c 'echo '\"@\"", 'sh -c "a""@"', 'eval "@"', 'eval echo "@"', 'true;eval echo "@"', '(eval "@")', 'trap "rm @" EXIT', 'true;trap "@" EXIT']) {
       assert.equal(first(bad), 'GSD_MARK', bad);
     }
-    for (const ok of ['echo -c x "@"', 'echo "-c" "@"', 'echo evaluate "@"', 'echo trapped "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'sh -c "echo a" sh "@"', 'sh -c "echo a""b" sh "@"', 'echo "a" -c "b" "@"', 'echo -e "@"', 'echo -- "@"']) {
+    for (const ok of ['echo -c x "@"', 'echo "-c" x "@"', 'echo evaluate "@"', 'echo trapped "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'sh -c "echo a" sh "@"', 'sh -c "echo a""b" sh "@"', 'echo "a" -c "b" "@"', 'echo -e "@"', 'echo -- "@"']) {
       assert.equal(first(ok), undefined, ok);
     }
   });
-  test('an option word of thousands of letters before many quotes is scanned in linear time', () => {
+  test('an option word of thousands of letters, then empty quoted words, leaves a later placeholder proven', () => {
     const command = `-${'c'.repeat(2000)}x ${'"" '.repeat(600)}"@"`;
     assert.equal(first(command), undefined);
   });
