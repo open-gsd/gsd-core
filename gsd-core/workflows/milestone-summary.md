@@ -54,7 +54,7 @@ Note: The audit file moves to `${PLANNING_ROOT}/milestones/` on archive (per `co
 
 **Always available:**
 ```bash
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS="${GSD_WS:-}"
 PROJECT_PATH="$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)"
 RETRO_PATH=".planning/RETROSPECTIVE.md"
 STATE_PATH="${PLANNING_ROOT}/STATE.md"

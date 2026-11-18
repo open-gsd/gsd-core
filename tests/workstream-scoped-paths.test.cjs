@@ -424,8 +424,9 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
   const ALLOWLIST = [
     { file: 'gsd-core/workflows/complete-milestone.md', match: /\.planning\/RETROSPECTIVE\.md/, why: `RETROSPECTIVE.md is ${SHARED}` },
     { file: 'agents/gsd-planner.md', match: /\.planning\/RETROSPECTIVE\.md/, why: `RETROSPECTIVE.md is ${SHARED}` },
-    { file: 'gsd-core/workflows/milestone-summary.md', match: /\.planning\/reports\//, why: `reports/MILESTONE_SUMMARY is ${SHARED}` },
-    { file: 'gsd-core/workflows/session-report.md', match: /\.planning\/reports\//, why: `reports/SESSION_REPORT is ${SHARED}` },
+    { file: 'gsd-core/workflows/milestone-summary.md', match: /\.planning\/reports/, why: `reports/MILESTONE_SUMMARY is ${SHARED}` },
+    { file: 'gsd-core/workflows/milestone-summary.md', match: /\.planning\/RETROSPECTIVE\.md/, why: `RETROSPECTIVE.md is ${SHARED}` },
+    { file: 'gsd-core/workflows/session-report.md', match: /\.planning\/reports/, why: `reports/SESSION_REPORT is ${SHARED}` },
     { file: 'gsd-core/workflows/next.md', match: /\.planning\/\.continue-here\.md/, why: `the root .continue-here.md is ${SHARED}` },
     { file: 'gsd-core/workflows/resume-project.md', match: /\.planning\/\.continue-here/, why: `the root .continue-here*.md is ${SHARED}` },
     { file: 'gsd-core/workflows/pause-work.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
@@ -563,7 +564,9 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
       const gateContent = fs.readFileSync(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate.md'), 'utf8');
       const gateFence = extractBashBlocks(gateContent).find((b) => b.includes('PRIOR_VERIFICATIONS='));
       assert.ok(gateFence, 'regression-gate.md has a PRIOR_VERIFICATIONS fence');
-      const head = gateFence.slice(0, gateFence.indexOf('# gsd-handoff:begin'));
+      // The harness prelude below stands in for the launcher preamble the fence carries.
+      const head = gateFence.slice(0, gateFence.indexOf('# gsd-handoff:begin'))
+        .split('\n').filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
       const parent = repo;
       repo = path.join(parent, 'proj7'); // the absolute path holds the phase number 7
       fs.mkdirSync(repo);
