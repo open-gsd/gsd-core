@@ -218,13 +218,27 @@ function verifySummaryCore(
       const capture = m[1];
       if (!capture) continue;
       // #6233: one backtick span may name SEVERAL paths ("`src/a.py src/b.py`"),
-      // and the capture is the whole span. Split it on whitespace and keep only
-      // tokens that survive the same isProbableProjectFile filter, so each named
-      // path becomes its own candidate instead of a single whitespace-joined
-      // string no filesystem can hold — which was always reported missing and
-      // consumed the check budget before any real path was reached. Pattern 2's
-      // capture class already excludes whitespace, so this is a no-op there.
-      const filePaths = capture.split(/\s+/).filter(isProbableProjectFile);
+      // and the capture is the whole span. Split ONLY when every whitespace
+      // token looks like a path with an extension (a `/` plus a `.<ext>` tail,
+      // after stripping trailing separators `,` `;`) and survives the same
+      // isProbableProjectFile filter — then each named path becomes its own
+      // candidate instead of a single whitespace-joined string no filesystem
+      // can hold, which was always reported missing and consumed the check
+      // budget before any real path was reached. A span that does not clear
+      // that bar names ONE path — possibly with a space in its name
+      // ("`docs/My File.md`", #6233 review Major 1) — and stays whole: splitting
+      // it would fabricate a missing `docs/My` for a file that exists. Pattern
+      // 2's capture class already excludes whitespace, so this is a no-op there.
+      const rawTokens = capture.split(/\s+/);
+      const strippedTokens = rawTokens.map((token) => token.replace(/[,;]+$/, ''));
+      const looksLikePathWithExtension = (token: string): boolean =>
+        token.includes('/') && /\.[A-Za-z0-9]+$/.test(token);
+      const multiPathSpan =
+        rawTokens.length > 1 &&
+        strippedTokens.every((token) => looksLikePathWithExtension(token) && isProbableProjectFile(token));
+      const filePaths = multiPathSpan
+        ? strippedTokens.filter(isProbableProjectFile)
+        : [capture].filter(isProbableProjectFile);
       if (filePaths.length === 0) continue;
       // #2844: skip a backticked path on a future/conditional line — it names a
       // deliverable this phase did NOT produce, so probing it is a false positive.
