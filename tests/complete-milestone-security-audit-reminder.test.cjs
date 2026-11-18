@@ -105,7 +105,6 @@ describe('security_audit_phase: config template default', () => {
   });
 });
 
-// allow-test-rule: source-text-is-the-product — complete-milestone.md is the deployed workflow instruction; its text IS what executes (see #6222)
 describe('security_audit_phase: complete-milestone.md reminder step', () => {
   let content;
   let step;
@@ -187,7 +186,6 @@ describe('security_audit_phase: complete-milestone.md reminder step', () => {
   });
 });
 
-// allow-test-rule: docs-parity — the public config docs must name the key (see #6222)
 describe('security_audit_phase: documentation', () => {
   let planningConfig;
   let docsConfig;
