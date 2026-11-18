@@ -28,6 +28,7 @@ const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs')
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
+const { oracleLines } = require('./helpers/oracle-shell.cjs');
 
 const {
   evaluatePredicate,
@@ -422,7 +423,7 @@ describe('evaluatePredicate — interpolation', () => {
         ['sh -c "test -d ${GSD_PHASE_DIR}"', 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"'],
         ['eval "test -d \\"${GSD_PHASE_DIR}\\""', 'd="${GSD_PHASE_DIR}"; eval \'test -d "$d"\''],
         ['trap "rm ${GSD_PHASE_DIR}" EXIT', 'd="${GSD_PHASE_DIR}"; trap \'rm "$d"\' EXIT'],
-        ['echo "${GSD_PHASE_DIR}" | xargs ls', 'printf "%s\\0" "${GSD_PHASE_DIR}" | xargs -0 ls'],
+        ['echo "${GSD_PHASE_DIR}" | xargs ls', 'printf \'%s\\0\' "${GSD_PHASE_DIR}" | xargs -0 ls'],
         ['# note\ntest -d "${GSD_PHASE_DIR}"', 'test -d "${GSD_PHASE_DIR}" # note'],
       ];
       for (const [refused, rewrite] of PAIRS) {
@@ -459,9 +460,9 @@ describe('evaluatePredicate — interpolation', () => {
       const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' } });
       for (const name of INTERPOLATION_VAR_NAMES) {
         for (const template of ALLOWED) {
-          const { stdout } = runHook('-c', [spell(template, name)], { interpreter: 'sh', env, input: '', timeoutMs: PROBE_TIMEOUT_MS });
-          assert.match(stdout, /SENT-(NUM|DIR|REQ)/, JSON.stringify(template));
-          assert.doesNotMatch(stdout, /GSD_PHASE_/, JSON.stringify(template));
+          const lines = oracleLines(spell(template, name), { interpreter: 'sh', env });
+          assert.equal(lines.some((line) => ['SENT-NUM', 'SENT-DIR', 'SENT-REQ'].some((value) => line.includes(value))), true, JSON.stringify(template));
+          assert.equal(lines.some((line) => line.includes('GSD_PHASE_')), false, JSON.stringify(template));
         }
       }
     });

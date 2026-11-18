@@ -24,7 +24,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { runHook } = require('./helpers/process-seam.cjs');
+const { oracleLines } = require('./helpers/oracle-shell.cjs');
 // Seeded fast-check convention: require the shared setup helper (NOT
 // 'fast-check' directly) so numRuns/seed are configured globally before any
 // fc.assert() call — mirrors tests/pattern.test.cjs / tests/text-lines.test.cjs.
@@ -352,16 +353,14 @@ describe('firstUnprovenMarker', () => {
       assert.deepStrictEqual(failed, []);
     });
     test('the oracle prints a literal marker by name and an expanded one by value', () => {
-      assert.match(probe("echo '${GSD_MARK}'").stdout, /GSD_MARK/);
-      assert.match(probe('echo "${GSD_MARK}"').stdout, /SENT/);
+      assert.deepStrictEqual(oracleLines("echo '${GSD_MARK}'", { interpreter: 'bash', env }), ['${GSD_MARK}', '']);
+      assert.deepStrictEqual(oracleLines('echo "${GSD_MARK}"', { interpreter: 'bash', env }), ['SENT', '']);
     });
     test('every combination with a literal marker is refused', () => {
       fc.assert(
         fc.property(fc.array(fc.constantFrom(...FRAGMENTS), { minLength: 1, maxLength: 5 }), (picked) => {
           const command = picked.map((text) => text.replaceAll('@', '${GSD_MARK}')).join('\n');
-          const { stdout, outcome } = probe(command);
-          assert.equal(outcome, OUTCOME.EXITED, command);
-          if (stdout.includes('GSD_MARK')) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
+          if (oracleLines(command, { interpreter: 'bash', env }).some((line) => line.includes('GSD_MARK'))) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
         // One bash spawn per run: a small count, as the other process-spawning properties use.
         { numRuns: 30 },
@@ -379,12 +378,12 @@ describe('firstUnprovenMarker', () => {
     ];
     const SAFE = ['echo "@"', "sh -c 'echo \"$1\"' sh \"@\"", 'd="@"; eval \'echo "$d"\'', 'd="@"; trap \'echo "$d"\' EXIT', 'echo "@" | xargs -0 echo', "find . -prune -exec sh -c 'echo \"$1\"' sh \"@\" \\;"];
     const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_MARK: 'a$(echo RAN)' } });
-    const probe = (command) => runHook('-c', [command], { interpreter: 'bash', env, input: '', timeoutMs: PROBE_TIMEOUT_MS });
     const spell = (text) => text.replaceAll('@', '${GSD_MARK}');
 
     test('the oracle runs the value from each consumer row and only expands it from each safe row', () => {
-      for (const text of CONSUMERS) assert.match(probe(spell(text)).stdout, /aRAN/, text);
-      for (const text of SAFE) assert.doesNotMatch(probe(spell(text)).stdout, /aRAN/, text);
+      const ran = (text) => oracleLines(spell(text), { interpreter: 'bash', env }).includes('aRAN');
+      for (const text of CONSUMERS) assert.equal(ran(text), true, text);
+      for (const text of SAFE) assert.equal(ran(text), false, text);
     });
     test('each consumer row is refused and each safe row is accepted', () => {
       for (const text of CONSUMERS) assert.notEqual(firstUnprovenMarker(spell(text), MARKER), undefined, text);
@@ -394,9 +393,7 @@ describe('firstUnprovenMarker', () => {
       fc.assert(
         fc.property(fc.array(fc.constantFrom(...CONSUMERS, ...SAFE), { minLength: 1, maxLength: 4 }), (picked) => {
           const command = picked.map(spell).join('\n');
-          const { stdout, outcome } = probe(command);
-          assert.equal(outcome, OUTCOME.EXITED, command);
-          if (/aRAN/.test(stdout)) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
+          if (oracleLines(command, { interpreter: 'bash', env }).includes('aRAN')) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
         { numRuns: 30 },
       );
