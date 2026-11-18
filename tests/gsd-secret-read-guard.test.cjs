@@ -1030,6 +1030,59 @@ describe('gsd-secret-read-guard: git configuration set in the environment on the
   }
 });
 
+describe('gsd-secret-read-guard: pinned git gaps the guide documents (#5492)', () => {
+  // Each is allowed on `next` too. They pin the current verdict so the gap is visible. A change that closes
+  // one flips its row to a block and updates the guide's "Documented gaps"
+  // paragraph and the hook header with it. Plain strings: the rows hold `$E`.
+  const GIT = "git -c core.editor='cat .env #' log";
+
+  // #6138: the word after a reserved word is not resolved as the command, so
+  // the git scan never runs on it.
+  const behindReservedWord = [
+    `if true; then ${GIT}; fi`,
+    `if ${GIT}; then :; fi`,
+    `if false; then :; else ${GIT}; fi`,
+    `if false; then :; elif ${GIT}; then :; fi`,
+    `while ${GIT}; do :; done`,
+    `until ${GIT}; do :; done`,
+    `for i in 1; do ${GIT}; done`,
+    `! ${GIT}`,
+    "if true; then GIT_EDITOR='cat .env #' git log; fi",
+    "if true; then ssh -o ProxyCommand='cat .env' host; fi",
+  ];
+  // The `$VAR` gap: no value is expanded, in git's configuration or anywhere.
+  const throughVariable = [
+    'E=\'cat .env #\'; git -c core.editor="$E" log',
+    'E=\'cat .env #\'; git -c core.editor="${E}" log',
+    'E=\'cat .env #\'; GIT_EDITOR="$E" git log',
+    'E=\'!cat .env\'; git -c alias.x="$E" x',
+    'E=\'cat .env\'; ssh -o ProxyCommand="$E" host',
+  ];
+  for (const cmd of [...behindReservedWord, ...throughVariable]) {
+    test(`allowed: ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The same git where the scan does resolve it, so a row above cannot pass
+  // because the shape stopped being read as a command at all.
+  const stillBlocked = [
+    GIT,
+    `{ ${GIT}; }`,
+    `( ${GIT} )`,
+    `true && ${GIT}`,
+    `case x in x) ${GIT};; esac`,
+    `time ${GIT}`,
+    `command ${GIT}`,
+    `f() { ${GIT}; }; f`,
+  ];
+  for (const cmd of stillBlocked) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
   // A hook that crashes or outlives its timeout allows the command, so each
   // of these must decide. They are the reviewers' payloads, at a size that
