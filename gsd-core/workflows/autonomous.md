@@ -145,7 +145,7 @@ If `INTERACTIVE` is set, display: `Mode: Interactive (discuss inline, plan+execu
 If `section_manifest` is `null` or `"converge-banner"` is in its `included` list: read and execute `gsd-core/workflows/autonomous/steps/converge-banner.md`. Otherwise skip — do not read the file.
 <!-- /gsd:section -->
 
-**Agent skills (delegated agents self-load):** Plan/execute/review run as flat `Skill()` invocations, so this workflow does not resolve `agent_skills`; each consumer agent (`gsd-planner`, `gsd-executor`, `gsd-plan-checker`, `gsd-verifier`, …) self-loads its configured `.planning/config.json` `agent_skills` per `@~/.claude/gsd-core/references/agent-skills-bootstrap.md`. See open-gsd/gsd-core#1866.
+**Agent skills (delegated agents self-load):** Plan/execute/review run as flat `Skill()` invocations, so this workflow does not resolve `agent_skills`; each consumer agent (`gsd-planner`, `gsd-executor`, `gsd-plan-checker`, `gsd-verifier`, …) self-loads its configured scoped `config.json` `agent_skills` per `@~/.claude/gsd-core/references/agent-skills-bootstrap.md`. See open-gsd/gsd-core#1866.
 
 </step>
 
@@ -673,7 +673,9 @@ Skill(skill="gsd-audit-milestone")
 After audit completes, detect the result:
 
 ```bash
-AUDIT_FILE=".planning/v${milestone_version}-MILESTONE-AUDIT.md"
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+AUDIT_FILE="${PLANNING_ROOT}/v${milestone_version}-MILESTONE-AUDIT.md"
 AUDIT_STATUS=$(grep "^status:" "${AUDIT_FILE}" 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
 ```
 
