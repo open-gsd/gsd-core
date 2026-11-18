@@ -27,7 +27,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const helpers = require('./helpers.cjs');
 const {
   createTempDir, createTempGitProject, cleanup, runGsdTools, homeSandboxEnv, readFileNormalized, toPosixPath,
@@ -891,8 +890,8 @@ describe('guard <-> gsd-roadmapper binding (the /gsd:new-milestone collapse path
   function runStep7Arming(dir, leg, target, agent = 'gsd-roadmapper.md') {
     const fence = armingCommands(agent, leg).split(leg.placeholder).join(target);
     // `[ -f X ] && printf ...` exits 1 when X is absent; only a shell error fails here.
-    const armed = spawnSync('bash', ['-c', fence], { cwd: dir, encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
-    assert.equal(armed.error, undefined, `bash could not run Step 7's ${leg.file} fence: ${armed.error}`);
+    const armed = runHookSeam('-c', [fence], { interpreter: 'bash', cwd: dir, timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+    assert.equal(armed.timedOut, false, `bash could not run Step 7's ${leg.file} fence: ${armed.summary}`);
     assert.equal(armed.stderr, '', `Step 7's ${leg.file} fence must run cleanly: ${armed.stderr}`);
   }
 
@@ -1011,9 +1010,9 @@ describe('guard <-> gsd-roadmapper binding (the /gsd:new-milestone collapse path
             ...process.env, ...helpers.TEST_ENV_BASE, ...homeSandboxEnv(dir), ...NAMED_PROJECT.env,
             RUNTIME_DIR: path.join(__dirname, '..'), CLAUDE_ENV_FILE: '',
           };
-          const run = spawnSync('bash', ['-c', fence], { cwd: dir, env, encoding: 'utf8', timeout: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS });
-          assert.equal(run.error, undefined, `bash could not run ${agent}'s Step 7 fence: ${run.error}`);
-          assert.equal(run.status, 0, `${agent}'s Step 7 commit fence failed: ${run.stderr}`);
+          const run = runHookSeam('-c', [fence], { interpreter: 'bash', cwd: dir, env, timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS });
+          assert.equal(run.timedOut, false, `bash could not run ${agent}'s Step 7 fence: ${run.summary}`);
+          assert.equal(run.exitCode, 0, `${agent}'s Step 7 commit fence failed: ${run.stderr}`);
           assert.equal(JSON.parse(run.stdout).committed, true, `query commit must commit the research: ${run.stdout}`);
 
           const committed = gitOrThrow(['show', '--name-only', '--format=', 'HEAD'], { cwd: dir }).split('\n').filter(Boolean).sort();
