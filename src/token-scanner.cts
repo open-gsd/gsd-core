@@ -80,8 +80,11 @@ export function indentWidth(line: string): number {
  *   inside `${...}`, or a `#` that starts a word (a comment);
  * - a double-quoted marker in a word that a consumer parses again, in the same command (up to the last `;`, `&`,
  *   `|`, parenthesis or newline): after `eval` or `trap`, or the script word of `sh -c` (also `bash`, `dash`, `ksh`,
- *   `zsh`, `ash`; `find -exec` and `xargs` run them too). A `&` of a redirection (`2>&1`, `>&2`, `&>`) does not end the command. The outer shell has expanded the value into that text, so
+ *   `zsh`, `ash`; `find -exec` and `xargs` run them too). `eval` and `trap` count only as the command word, the first
+ *   word after leading `NAME=value` words. The outer shell has expanded the value into that text, so
  *   a value such as `x$(cmd)` runs. `sh -c '...' sh "$name"`, where the value is a later argument, is proven.
+ *   A `&`, `|` or `(` of a redirection (`2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`) does not end the command, nor does the
+ *   `)` that closes `<(` or `>(`.
  * - any marker in a command line that runs `xargs` without `-0` or `-d` among its options: `xargs` splits and
  *   unquotes what it reads, and it reads pipe input, so the marker may sit before it.
  * A shell state the walk does not read therefore cannot hide a marker.
@@ -99,6 +102,7 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
   let depth = 0;
   let wordStart = 0;
   let commandStart = 0;
+  let procSubst = 0;
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
     const here = markerAt(i);
@@ -125,8 +129,15 @@ export function firstUnprovenMarker(raw: string, marker: RegExp): string | undef
       quote = c;
     } else if (depth === 0 && /[\s;&|()]/.test(c)) {
       wordStart = i + 1;
-      // A `&` that belongs to a redirection (`2>&1`, `>&2`, `&>`) does not end the command.
-      const redirects = c === '&' && (/[<>]/.test(command[i - 1] ?? '') || command[i + 1] === '>');
+      // A `&`, `|` or `(` of a redirection (`2>&1`, `>&2`, `&>`, `>|`, `<(`, `>(`) does not end the command; nor does the `)` closing `<(` or `>(`.
+      const prev = command[i - 1] ?? '';
+      const redirects =
+        (c === '&' && (/[<>]/.test(prev) || command[i + 1] === '>')) ||
+        (c === '|' && prev === '>') ||
+        (c === '(' && /[<>]/.test(prev)) ||
+        (c === ')' && procSubst > 0);
+      if (redirects && c === '(') procSubst++;
+      else if (redirects && c === ')') procSubst--;
       if (/[;&|()\n]/.test(c) && !redirects) commandStart = i + 1;
     }
   }
@@ -158,12 +169,13 @@ function shellWords(text: string): string[] {
 
 /**
  * True when the word that starts right after `head` (the text of its command up to that word) is text a consumer
- * parses as shell again: any word after `eval` or `trap`, or the script word of `sh -c` (the word after the
+ * parses as shell again: any word of a command whose command word is `eval` or `trap`, or the script word of `sh -c` (the word after the
  * trailing option words, one of which holds `c`).
  */
 function isReparsedWord(head: string): boolean {
   const words = shellWords(head);
-  if (words.includes('eval') || words.includes('trap')) return true;
+  const commandWord = words.find((w) => w !== '' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+  if (commandWord === 'eval' || commandWord === 'trap') return true;
   let k = words.length;
   while (k > 0) {
     if (words[k - 1] === '' || /^[-+]/.test(words[k - 1])) k--;

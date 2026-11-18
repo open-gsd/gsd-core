@@ -203,6 +203,8 @@ describe('firstUnprovenMarker', () => {
       'echo ok\nsh -c "@"', 'FOO=1 eval "@"', 'sudo -n sh -c "@"',
       // The `&` of a redirection (`2>&1`, `>&2`, `&>`) does not end the command, so the consumer word still counts.
       'eval echo 2>&1 "@"', 'sh 2>&1 -c "test -e @"', 'trap 2>&1 "rm @" EXIT', 'eval echo >&2 "@"', 'eval echo &> /dev/null "@"', 'echo x >&2; eval "@"',
+      // `>|`, `<(`, `>(` and `<&` are redirections too: the command goes on after them.
+      'eval echo >| out "@"', 'eval echo <(true) "@"', 'eval echo >(cat) "@"', 'eval echo 0<&3 "@"', 'eval cat <&3 "@"',
       // Each shell prefix of SHELL_WORD (`ksh`, `zsh`, `ash`) is a consumer too.
       'ksh -c "echo @"', 'zsh -c "echo @"', 'ash -c "echo @"',
     ]) {
@@ -215,7 +217,9 @@ describe('firstUnprovenMarker', () => {
       // The consumer ends at the command separator: a later command is read on its own.
       "trap 'rm -f tmp' EXIT; test -d \"@\"", 'sh build.sh && wc -c "@"', 'sh -c true; echo "@"', 'sh -c true\necho "@"', 'echo "@" | wc -c',
       // A `&` that is no redirection ends the command; a redirection before the separator leaves the next command on its own.
-      'eval true && echo "@"', 'eval true & echo "@"', 'eval true 2>&1; echo "@"', 'echo x >&2; eval true; echo "@"',
+      'eval true && echo "@"', 'eval true & echo "@"', 'eval true 2>&1; echo "@"', 'echo x >&2; eval true; echo "@"', 'eval true <&3; echo "@"',
+      // `eval` and `trap` are consumers only as the command word: as an argument they are plain words.
+      'grep -q trap "@"', 'echo eval "@"', 'FOO=1 echo trap "@"',
       "sh -c 'echo \"$1\"' sh \"@\"", "sh -ec 'echo \"$1\"' sh \"@\"", "bash -c 'echo \"$1\"' bash \"@\" \"@\"",
       "find . -exec sh -c 'echo \"$1\"' sh \"@\" \\;", "printf x | xargs -0 sh -c 'echo \"$1\"' sh \"@\"", "d=\"@\"; eval 'echo \"$d\"'", "d=\"@\"; trap 'echo \"$d\"' EXIT",
     ];
@@ -240,7 +244,7 @@ describe('firstUnprovenMarker', () => {
     }
     for (const ok of ['echo "@" | xargs -0 ls', 'echo "@" | xargs -d x ls', 'echo "@" | xargs -dx ls', 'echo "@" | xargs --null ls', 'echo "@" | xargs --delimiter=x ls', 'echo "@" | /usr/bin/xargs -0 ls', 'echo "@"; find . -delete', 'echo "@" xargsx',
       // A null or custom delimiter inside an option group, or after an option that takes an argument.
-      'echo "@" | xargs -0r ls', 'echo "@" | xargs -r0 ls', 'echo "@" | xargs -n 1 -0 ls', 'echo "@" | xargs -n1 -0 ls', 'echo "@" | xargs -P 4 -I {} -0 ls', 'echo "@" | xargs -rd x ls', 'echo "@" | xargs -t --null ls', 'echo "@" | xargs --process-slot-var V -0 ls', 'echo "@" | xargs --max-args 1 --null ls',
+      'echo "@" | xargs -0r ls', 'echo "@" | xargs -r0 ls', 'echo "@" | xargs -n 1 -0 ls', 'echo "@" | xargs -s 100 -0 ls', 'echo "@" | xargs -n1 -0 ls', 'echo "@" | xargs -P 4 -I {} -0 ls', 'echo "@" | xargs -rd x ls', 'echo "@" | xargs -t --null ls', 'echo "@" | xargs --process-slot-var V -0 ls', 'echo "@" | xargs --max-args 1 --null ls',
       // The argument of each table option is skipped, so the `-0` after it is the delimiter.
       'echo "@" | xargs -L 1 -0 ls', 'echo "@" | xargs -E x -0 ls', 'echo "@" | xargs -a /dev/null -0 ls', 'echo "@" | xargs --max-procs 2 -0 ls', 'echo "@" | xargs --max-lines 1 -0 ls', 'echo "@" | xargs --max-chars 99999 -0 ls', 'echo "@" | xargs --arg-file /dev/null -0 ls']) {
       assert.equal(first(ok), undefined, ok);
