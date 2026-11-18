@@ -1107,15 +1107,9 @@ describe('#2142 review: README injection, symlink escape, dry-run/real-run parit
     fs.writeFileSync(path.join(outsideDir, 'marker.txt'), 'do not touch\n');
     const symlinkPath = path.join(tmpDir, '.planning', 'quick', '2026-10-02-escape-symlink');
     fs.mkdirSync(path.dirname(symlinkPath), { recursive: true });
-    try {
-      fs.symlinkSync(outsideDir, symlinkPath, process.platform === 'win32' ? 'junction' : 'dir');
-    } catch (err) {
+    if (!symlinkDirOrSkip(t, outsideDir, symlinkPath)) {
       cleanup(outsideDir);
-      if (err && ['EPERM', 'EACCES', 'ENOTSUP'].includes(err.code)) {
-        t.skip(`symlink creation is not available on this platform (${err.code})`);
-        return null;
-      }
-      throw err;
+      return null;
     }
     return { outsideDir, symlinkPath };
   }
@@ -1225,13 +1219,43 @@ describe('#2142 review: README injection, symlink escape, dry-run/real-run parit
 // at the TRUNCATED-only whole-command refusal above it in src/milestone.cts.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Workstream `alpha`: STATE.md declares milestone v1.0, but NO ROADMAP.md of its own — this is
+// what makes getMilestonePhaseFilter throw internally and degrade to SCOPE.UNREADABLE for this
+// workstream's window (#3597). Returns its phases dir.
+function seedUnreadableWorkstream(cwd, phaseNames) {
+  seedWorkstream(cwd, {
+    name: 'alpha',
+    state: '---\nmilestone: v1.0\n---\n\n# GSD State\n',
+    active: true,
+  });
+  const alphaPhases = path.join(cwd, '.planning', 'workstreams', 'alpha', 'phases');
+  for (const dir of phaseNames) {
+    fs.mkdirSync(path.join(alphaPhases, dir), { recursive: true });
+  }
+  return alphaPhases;
+}
+
+// A directory symlink; where the platform cannot create one the test is skipped and false returned.
+function symlinkDirOrSkip(t, target, linkPath) {
+  try {
+    fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+    return true;
+  } catch (err) {
+    if (err && ['EPERM', 'EACCES', 'ENOTSUP'].includes(err.code)) {
+      t.skip(`symlink creation is not available on this platform (${err.code})`);
+      return false;
+    }
+    throw err;
+  }
+}
+
 describe('#3597: milestone complete refuses to archive on a non-COMPLETE window scope', () => {
   let tmpDir;
 
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  function seedUnreadableWorkstream(cwd) {
+  function seedUnreadableRootRoadmapWorkstream(cwd) {
     // Root ROADMAP.md declares only phase 1 — irrelevant to the workstream's
     // OWN window once the workstream is active, but included to mirror the
     // exact reproduction shape (a root ROADMAP that could otherwise mislead a
@@ -1240,24 +1264,11 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
       path.join(cwd, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n### Phase 1: Root\n\n**Goal:** Root-only work.\n',
     );
-    // Workstream `alpha`: STATE.md declares milestone v1.0, but NO
-    // ROADMAP.md of its own — this is what makes getMilestonePhaseFilter
-    // throw internally and degrade to SCOPE.UNREADABLE for this workstream's
-    // window.
-    seedWorkstream(cwd, {
-      name: 'alpha',
-      state: '---\nmilestone: v1.0\n---\n\n# GSD State\n',
-      active: true,
-    });
-    const alphaPhases = path.join(cwd, '.planning', 'workstreams', 'alpha', 'phases');
-    for (const dir of ['01-a', '02-b', '03-c']) {
-      fs.mkdirSync(path.join(alphaPhases, dir), { recursive: true });
-    }
-    return alphaPhases;
+    return seedUnreadableWorkstream(cwd, ['01-a', '02-b', '03-c']);
   }
 
   test('archives NOTHING and leaves every phase dir on disk when the workstream has no ROADMAP.md', () => {
-    const alphaPhases = seedUnreadableWorkstream(tmpDir);
+    const alphaPhases = seedUnreadableRootRoadmapWorkstream(tmpDir);
 
     const result = runSdkQuery(['milestone.complete', 'v1.0', '--confirm'], tmpDir);
     assert.ok(result.success, `milestone.complete should still succeed (UNREADABLE is not a whole-command refusal): ${result.error}`);
@@ -1285,7 +1296,7 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
   });
 
   test('--dry-run previews an empty archive list and the same refusal on the unreadable-window workstream', () => {
-    seedUnreadableWorkstream(tmpDir);
+    seedUnreadableRootRoadmapWorkstream(tmpDir);
 
     const result = runSdkQuery(['milestone.complete', 'v1.0', '--dry-run'], tmpDir);
     assert.ok(result.success, `milestone.complete --dry-run should succeed: ${result.error}`);
@@ -1583,10 +1594,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   });
 
   // Workstream with phase dirs but no ROADMAP of its own (#3597): scope UNREADABLE, archive skipped.
-  const seedUnreadable = () => {
-    seedWorkstream(tmpDir, { name: 'alpha', state: '---\nmilestone: v1.0\n---\n\n# GSD State\n', active: true });
-    for (const d of ['01-a', '02-b']) fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'phases', d), { recursive: true });
-  };
+  const seedUnreadable = () => seedUnreadableWorkstream(tmpDir, ['01-a', '02-b']);
 
   test('G16 UNREADABLE window scope: a blocking halt gate that cannot run refuses the close, --force does not bypass it', () => {
     seedUnreadable();
@@ -1606,6 +1614,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'scope_unreadable' }] });
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(stderrWarningLines(r), 1, 'one stderr line for the one gate warning');
   });
 
   test('G16f UNREADABLE window scope: a prose-only gate is skipped with its own warning, never refused', () => {
@@ -1652,8 +1661,9 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     cleanup(phaseDir('02-build'));
     writeGateCap(home, { command: 'exit 3' });
     assert.deepEqual(gateResult(), { blocked: [], warnings: [{ kind: 'no_phase_dirs' }] });
-    const r = complete();
-    assert.equal(r.success, true, r.error);
+    const r = completeRaw();
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(stderrWarningLines(r), 1, 'one stderr line for the one gate warning');
   });
 
   test('G18b a phase dir named like a flag is unevaluable, not a gate run with an empty GSD_PHASE_NUMBER', () => {
@@ -1798,8 +1808,9 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.equal(refusal(complete()).reason, named[1]);
   });
 
-  test('G30 the unstarted-phase guard and the gate token map read the same milestone window', () => {
-    // Free-form ROADMAP (no versioned milestone): the window comes from extractCurrentMilestone for both.
+  test('G30 the gate token map reads the current-milestone window of a free-form ROADMAP', () => {
+    // Free-form ROADMAP (no versioned milestone): the window comes from extractCurrentMilestone.
+    // --force skips the unstarted-phase guard, so only the token map is exercised.
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'),
       '# Roadmap\n\n### Phase 1: A\n**Goal:** a\n\n### Phase 2: B\n**Goal:** b\n\n### Phase 3: C\n**Goal:** c\n');
     cleanup(phaseDir('01-foundation'));
@@ -1846,7 +1857,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     const outside = createTempDir('gsd-5482-outside-');
     t.after(() => cleanup(outside));
     cleanup(phaseDir('02-build'));
-    fs.symlinkSync(outside, phaseDir('02-build'), 'dir');
+    if (!symlinkDirOrSkip(t, outside, phaseDir('02-build'))) return;
     writeGateCap(home, { command: 'exit 3' });
     assert.deepEqual(refusal(complete('--force')).blocked.map((b) => b.phase), ['01']);
     assert.ok(fs.existsSync(outside));
