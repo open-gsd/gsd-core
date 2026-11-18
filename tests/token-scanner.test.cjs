@@ -21,6 +21,7 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('node:os');
+const { isDeepStrictEqual } = require('node:util');
 const path = require('node:path');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
@@ -370,7 +371,9 @@ describe('firstUnprovenMarker', () => {
       fc.assert(
         fc.property(fc.array(fc.constantFrom(...FRAGMENTS), { minLength: 1, maxLength: 5 }), (picked) => {
           const command = picked.map((text) => text.replaceAll('@', '${GSD_MARK}')).join('\n');
-          if (oracleLines(command, { interpreter: 'bash', env }).some((line) => line.includes('GSD_MARK'))) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
+          // A marker that is only a plain expanded value prints what its value would: the same command with 'SENT' written out.
+          const written = command.replaceAll('${GSD_MARK}', 'SENT');
+          if (!isDeepStrictEqual(oracleLines(command, { interpreter: 'bash', env }), oracleLines(written, { interpreter: 'bash', env }))) assert.notEqual(firstUnprovenMarker(command, MARKER), undefined, command);
         }),
         // One bash spawn per run: a small count, as the other process-spawning properties use.
         { numRuns: 30 },

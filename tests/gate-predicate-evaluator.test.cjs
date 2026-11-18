@@ -432,8 +432,9 @@ describe('evaluatePredicate — interpolation', () => {
       }
     });
     // The PAIRS rows above come from the docs. The shell is the source of the hazard here: a value with a space reaches
-    // each refused spelling as two words (or a glob-capable list) and each rewrite as one value. Rows 1 and 7 of PAIRS
-    // (nested quotes in `$(...)`, a leading comment) split nothing in a real shell, so they have no row here.
+    // each refused spelling as two words (or a glob-capable list) and each rewrite as one value. Rows 1 and 8 of PAIRS
+    // (nested quotes in `$(...)`, a leading comment) split nothing in a real shell, so they have no row here. Rows 4 to 6
+    // (`sh -c`, `eval`, `trap`) run the value as code, not as words: the consumer test below shows that in a real shell.
     test('the real shell splits the hostile value in each refused spelling that reads it unquoted, and in none of the rewrites', () => {
       const ROWS = [
         { name: 'GSD_PHASE_REQ_IDS', value: 'R-1 R-2', refused: String.raw`for id in $GSD_PHASE_REQ_IDS; do echo "[$id]"; done`, pieces: ['[R-1]', '[R-2]', ''] },
@@ -475,13 +476,15 @@ describe('evaluatePredicate — interpolation', () => {
       const at = String.fromCharCode(64);
       for (const command of [`bash -c${at} "echo \${GSD_PHASE_DIR}"`, `bash -${at}c "echo \${GSD_PHASE_DIR}"`]) assert.doesNotThrow(() => run(command), command);
     });
-    test('the real shell expands every allowed row and prints no literal placeholder', () => {
-      const env = isolatedEnv({ home: os.tmpdir(), override: { GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' } });
+    test('the real shell expands every allowed row: it prints what the same row prints with the value written out', () => {
+      const VALUES = { GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' };
+      const env = isolatedEnv({ home: os.tmpdir(), override: VALUES });
       for (const name of INTERPOLATION_VAR_NAMES) {
         for (const template of ALLOWED) {
-          const lines = oracleLines(spell(template, name), { interpreter: 'sh', env });
-          assert.equal(lines.some((line) => ['SENT-NUM', 'SENT-DIR', 'SENT-REQ'].some((value) => line.includes(value))), true, JSON.stringify(template));
-          assert.equal(lines.some((line) => line.includes('GSD_PHASE_')), false, JSON.stringify(template));
+          const written = spell(template, name).replaceAll(`\${${name}}`, VALUES[name]).replaceAll(`$${name}`, VALUES[name]);
+          const expected = oracleLines(written, { interpreter: 'sh', env });
+          assert.notDeepEqual(expected, [''], `${JSON.stringify(template)} prints something`);
+          assert.deepEqual(oracleLines(spell(template, name), { interpreter: 'sh', env }), expected, JSON.stringify(template));
         }
       }
     });
