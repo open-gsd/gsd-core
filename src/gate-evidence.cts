@@ -20,6 +20,8 @@
  * inject a read failure by replacing the method.
  */
 import fs from 'node:fs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ledgerMod = require('./capability-ledger.cjs');
 import type { GateVerdict, UnreadableVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
@@ -81,6 +83,16 @@ export function readTextEvidence(filePath: string): Evidence<string> {
     return evidenceFound(fs.readFileSync(filePath, 'utf8'));
   } catch (err) {
     return classifyFailure<string>(err, filePath);
+  }
+}
+
+/** Bounded raw-byte evidence: reuse the existing nonblocking, regular-file-only fd reader. */
+export function readBoundedBytesEvidence(filePath: string, maxBytes: number): Evidence<Buffer> {
+  try {
+    const bytes = ledgerMod.readSmallRegularFileBuffer(filePath, maxBytes);
+    return bytes === null ? evidenceNone<Buffer>() : evidenceFound(bytes);
+  } catch (err) {
+    return classifyFailure<Buffer>(err, filePath);
   }
 }
 

@@ -253,8 +253,9 @@ describe('executor requires format-based RED evidence (#4692)', () => {
     assert.match(canonical(), /shared TAP adapter[^\n]*Node[^\n]*Vitest/);
     assert.match(canonical(), /JUnit XML adapter[^\n]*Surefire\/Failsafe/);
     assert.match(canonical(), /`gsd_run check tdd-red-evidence <record\.json> --raw`[^\n]*require `RED_EVIDENCE_OK` before GREEN/);
-    assert.match(canonical(), /unsupported format requires a supported reporter or a parser adapter before GREEN/);
-    assert.match(canonical(), /Classifier rejection never authorizes a fallback to self-attestation/);
+    assert.match(canonical(), /UNSUPPORTED_REPORT/);
+    assert.match(canonical(), /authorization: parent_reviewed_red/);
+    assert.match(canonical(), /Classifier rejection never authorizes a fallback to child self-attestation/);
   });
 
   test('#4692: reruns and current Maven reports retain evidence provenance', () => {

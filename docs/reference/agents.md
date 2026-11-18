@@ -32,6 +32,16 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 ---
 
+## Unsupported RED evidence (#6201)
+
+A child `gsd-executor` stops on `UNSUPPORTED_REPORT`, preserves the complete original
+capture, and returns it to its existing parent. It cannot author/alter `parentReview` or
+self-authorize GREEN. The parent may review directly, record acceptance/rejection/abstention
+with reasons bound to the run and file state, then explicitly resume the child for that run.
+The child rechecks freshness before production edits. This is workflow authority, not
+independent verification or authenticated agent identity. Follow the single canonical
+[unsupported-format procedure](../../gsd-core/references/tdd.md#unsupported-format-parent-review-6201).
+
 ## Agent Details
 
 ### gsd-project-researcher

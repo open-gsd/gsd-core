@@ -64,7 +64,8 @@ test('#4692 property: arbitrary report strings return a deterministic result wit
       assert.equal(typeof report.valid, 'boolean');
       assert.ok(Array.isArray(report.tests));
       assert.ok(Array.isArray(report.issues));
-      if (!report.valid) assert.equal(classifyRedEvidence(evidence(output)).verdict, 'INVALID_RED');
+      if (!report.valid) assert.equal(classifyRedEvidence(evidence(output)).verdict,
+        report.unsupported ? 'UNSUPPORTED_REPORT' : 'INVALID_RED');
     }
   }));
 });

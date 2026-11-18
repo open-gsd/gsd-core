@@ -1173,3 +1173,23 @@ To disable parallel execution entirely: `/gsd-settings` → set `parallelization
 - [Configuration](CONFIGURATION.md)
 - [The phase loop](explanation/the-phase-loop.md)
 - [Community Capability Registry & EoS Registry](registries/README.md) — discover third-party Capabilities and EoS host integrations
+
+## TDD with an unsupported test reporter
+
+An unsupported report is an unavailable machine assessment (`UNSUPPORTED_REPORT`), not
+proof that zero tests ran and not permission to implement. A supported reporter remains
+preferred. If installing one would be unrelated work, the parent agent may inspect complete
+original stdout/stderr, the exact intended test, and relevant source state, and explicitly
+record acceptance, rejection or abstention in the RED record. No separate reviewer agent is
+required. Child executors must stop and escalate; they cannot self-waive this gate.
+
+The existing `check tdd-red-evidence` command validates the review's binding to the run and
+declared file hashes. Acceptance is labeled `parent_reviewed_red`, never `RED_EVIDENCE_OK`.
+Invalid machine evidence cannot be overridden. Changed tests, relevant source changes or a
+new RED run require fresh assessment. Incomplete/ambiguous evidence, compile/setup failure,
+missing or ignored targets, unrelated failures and unexpected passes still block GREEN.
+
+Follow the [canonical parent-review procedure](../gsd-core/references/tdd.md#unsupported-format-parent-review-6201)
+and retain its record and pre-GREEN result in the task's SUMMARY audit trail. This is parent
+judgment, not independent verification; file-scope completeness and parent identity remain
+workflow responsibilities.
