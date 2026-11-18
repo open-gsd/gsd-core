@@ -2,7 +2,7 @@
 Interactive configuration of third-party integrations for GSD — search API keys
 (Brave / Firecrawl / Exa), code-review CLI routing (`review.models.<cli>`), and
 agent-skill injection (`agent_skills.<agent-type>`). Writes to
-`.planning/config.json` via `gsd-tools` so unrelated keys are
+`$GSD_CONFIG_PATH` (resolved via `config-path --raw`) via `gsd-tools` so unrelated keys are
 preserved, never clobbered.
 
 This command is deliberately separate from `/gsd:settings` (workflow toggles)
@@ -12,7 +12,7 @@ cross-tool routing are *connectivity* concerns, not workflow or tuning knobs.
 
 <security>
 **API keys are secrets.** They are written as plaintext to
-`.planning/config.json` — that is where secrets live on disk, and file
+`$GSD_CONFIG_PATH` — that is where secrets live on disk, and file
 permissions are the security boundary. The UI must never display, echo, or
 log the plaintext value. The workflow follows these rules:
 
@@ -55,7 +55,7 @@ if [[ -z "${GSD_CONFIG_PATH:-}" ]]; then
     WS=$(tr -d '\n\r' < .planning/active-workstream)
     GSD_CONFIG_PATH=".planning/workstreams/${WS}/config.json"
   else
-    GSD_CONFIG_PATH=".planning/config.json"
+    GSD_CONFIG_PATH="$(gsd_run query config-path --raw ${GSD_WS:+--ws=${GSD_WS##* }})"
   fi
 fi
 ```

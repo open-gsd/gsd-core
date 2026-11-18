@@ -293,7 +293,7 @@ Read tool:
   file_path: "{outputFile from that agent's async_launched result}"
 ```
 
-> Allow up to `workflow.subagent_timeout` for the slowest agent to finish before treating it as failed. The timeout is configurable via `workflow.subagent_timeout` in `.planning/config.json` (milliseconds). Default: 300000 (5 minutes). Increase for large codebases or slower models.
+> Allow up to `workflow.subagent_timeout` for the slowest agent to finish before treating it as failed. The timeout is configurable via `workflow.subagent_timeout` in `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`) (milliseconds). Default: 300000 (5 minutes). Increase for large codebases or slower models.
 
 Each output file contains that agent's completion confirmation. Parse the confirmation marker (see below) from the file contents.
 

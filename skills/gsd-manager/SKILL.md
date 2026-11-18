@@ -25,7 +25,7 @@ Designed for power users who want to parallelize work across phases from one ter
 
 **Creates/Updates:**
 - No files created directly — dispatches to existing GSD commands via Skill() and background Task agents.
-- Reads `.planning/STATE.md`, `.planning/ROADMAP.md`, phase directories for status.
+- Reads `{planning_root}/STATE.md`, `{planning_root}/ROADMAP.md`, phase directories for status. (`{planning_root}`: the active scope's root, from `planning.inspect`)
 
 **After:** User exits when done managing, or all phases complete and milestone lifecycle is suggested.
 </objective>

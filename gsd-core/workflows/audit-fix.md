@@ -41,7 +41,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 If `summary.files_scanned` in `$INIT` is 0 (the field is present and zero), the audit read no UAT, VERIFICATION or deferred-items file, so there are no findings to classify and none to report as "zero findings". Report `Nothing Scanned: the audit reached no UAT or verification files` and stop; do not continue to the globs below.
 
-Read the UAT and verification files the audit scanned to extract findings: the `file_path` of each entry in the `results` array of `$INIT`. That list covers active phases and archived milestone phases alike; a glob over `.planning/phases/` alone would walk less than the audit did.
+Read the UAT and verification files the audit scanned to extract findings: the `file_path` of each entry in the `results` array of `$INIT`. That list covers active phases and archived milestone phases alike; a glob over `{planning_root}/phases/` alone (`{planning_root}`: the active scope's root, from `planning.inspect`) would walk less than the audit did.
 
 Parse each finding into a structured record:
 - **ID** — sequential identifier (F-01, F-02, ...)
