@@ -72,6 +72,22 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
   return false;
 }
 
+// #5861: the scoped-planning-path sweep replaces every root `.planning/` literal in a shell
+// fence or prose line with the scope-resolved root (`PLANNING_ROOT` from `planning.inspect`,
+// `{planning_root}` in prose, `${STATE_PATH}`/`init` placeholders), so a project or workstream
+// scope reads and writes its own tree. Like the sweeps above it is a mechanical propagation,
+// not quick-batch phase work: an added line counts only when it names one of those scoped
+// tokens, and a removed line counts only when it carried a root `.planning` literal AND the
+// diff added at least one scoped line. Any OTHER edit to quick.md still trips this row.
+const SCOPED_PLANNING_ADDED_RE = /\$\{PLANNING_ROOT\b|\{planning_root\}|planning\.inspect|\$\{STATE_PATH\}/;
+function isScopedPlanningSweepLine(sign, body, addedBodies) {
+  if (sign === '+') return SCOPED_PLANNING_ADDED_RE.test(body);
+  if (sign === '-' && body.includes('.planning')) {
+    for (const added of addedBodies) if (SCOPED_PLANNING_ADDED_RE.test(added)) return true;
+  }
+  return false;
+}
+
 /**
  * Does this path's diff say anything beyond the shared response-language
  * directive (#2529)?
@@ -104,6 +120,7 @@ function editsBeyondSharedDirective(base, file) {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return false;
     const body = line.slice(1).trim();
     if (isWorkstreamForwardingSweepLine(line[0], body, addedBodies, removedBodies)) return false;
+    if (isScopedPlanningSweepLine(line[0], body, addedBodies)) return false;
     if (body === '' || body === INLINE_RESPONSE_LANGUAGE_DIRECTIVE) return false;
     if (body === CANONICAL_LAUNCHER_PREAMBLE.trim()) return false;
     if (looksLikeLauncherPreambleLine(body)) return false;
@@ -214,6 +231,13 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
         'gsd-core/workflows/quick/steps/sub/quick-verification.md',
       ],
     );
+    // #5861 positive control: the scoped-planning carve-out accepts the sweep's lines only.
+    const scopedAdded = new Set(['PLANNING_ROOT=$(gsd-tools query planning.inspect --pick generated_from.planning_root)']);
+    assert.equal(isScopedPlanningSweepLine('+', '`{planning_root}/config.json`', scopedAdded), true);
+    assert.equal(isScopedPlanningSweepLine('-', 'ls -d .planning/quick/*/', scopedAdded), true);
+    assert.equal(isScopedPlanningSweepLine('+', 'Skip the codebase map entirely.', scopedAdded), false);
+    assert.equal(isScopedPlanningSweepLine('-', 'Skip the codebase map entirely.', scopedAdded), false);
+    assert.equal(isScopedPlanningSweepLine('-', 'ls -d .planning/quick/*/', new Set(['unrelated added line'])), false);
     // The two whole-file rows are untouched by the allowance.
     for (const wholeFile of ['commands/gsd/quick.md', 'gsd-core/workflows/quick.md']) {
       assert.equal(quickWholeFileViolation([...changed, wholeFile], everyPathIsPhaseWork, wholeFile), true, wholeFile);
