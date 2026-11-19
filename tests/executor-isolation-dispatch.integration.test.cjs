@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, readFileNormalized, createTempDir } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { DISPATCH_STEP_PATH, createBlock, readBlock } = require('./qa/tdd-walk.cjs');
@@ -58,7 +59,7 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     // failglob makes an unquoted glob that matches nothing fatal, as zsh does: the blocks must not rely on one.
     fs.writeFileSync(script, `set -euo pipefail\nshopt -s failglob\n${code}\n${tail}`);
     // Each block fans out to find, cat, rm and a printf|grep pipeline per guard: the fan-out bound of timeouts.cjs.
-    return runHook(script, [], { interpreter: 'bash', timeoutMs: HOOK_FANOUT_TIMEOUT_MS, env: { ...process.env, ORCH_ROOT: root, WAVE_WORKTREE_MANIFEST: path.join(path.dirname(root), `${WAVE}.json`) } });
+    return runHook(script, [], { interpreter: 'bash', timeoutMs: HOOK_FANOUT_TIMEOUT_MS, env: isolatedEnv({ home: path.dirname(root), override: { ORCH_ROOT: root, WAVE_WORKTREE_MANIFEST: path.join(path.dirname(root), `${WAVE}.json`) } }) });
   }
 
   /** Block 1 (its TDD lookup stubbed to a successful "false"); returns the prompt file path it printed. */
