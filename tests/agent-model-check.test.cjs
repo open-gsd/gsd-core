@@ -270,6 +270,19 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.doesNotMatch(stderrOf('gsd-executor'), NOT_WRITTEN, 'a runtime without native tier aliases');
   });
 
+  test('the not-written warning prints a hostile resolved model on one line, filtered and capped like the hook reason', (t) => {
+    const hostile = `gpt-5\n\u001b[2K FORGED ${'z'.repeat(200)}`;
+    const elsewhere = createTempDir('gsd-aig-hostile-');
+    t.after(() => cleanup(elsewhere));
+    setup(t, { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: [hostile] } });
+    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    const line = r.stderr.split('\n').find((l) => l.includes('model-escalation record not written'));
+    assert.ok(line, `positive control: the warning prints: ${r.stderr}`);
+    assert.ok(line.endsWith(`blocks gpt-5??[2K?FORGED?${'z'.repeat(REASON_INTERPOLATION_MAX_LEN - 'gpt-5??[2K?FORGED?'.length)}`), line);
+    assert.equal(r.stderr.includes('\u001b'), false, 'no raw escape byte reaches stderr');
+  });
+
   test('family match is token-bounded: substrings of custom model names do not collide', (t) => {
     setup(t);
     assert.equal(evaluate(dispatch('gsd-planner', 'noopus-1')).action, 'warn');
@@ -864,6 +877,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const cli = require('../gsd-core/bin/gsd-tools.cjs');
     assert.equal(require('../gsd-core/bin/lib/model-escalation.cjs').MODEL_ID_CHARSET_BODY, MODEL_ID_CHARSET_BODY, 'model-escalation re-exports the owner');
     assert.equal(cli.MODEL_ID_CHARSET_BODY, MODEL_ID_CHARSET_BODY, 'gsd-tools reads the owner');
+    assert.equal(require('../gsd-core/bin/lib/model-catalog.cjs').MODEL_ECHO_MAX_LEN, REASON_INTERPOLATION_MAX_LEN, 'the echo cap equals the hook reason cap');
     for (let c = 0x20; c < 0x7f; c++) {
       const ch = String.fromCharCode(c);
       const keep = !cli.MODEL_ID_SANITIZE_STRIP_RE.test(ch) || ch === '[' || ch === ']';

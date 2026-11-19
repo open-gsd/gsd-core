@@ -9,7 +9,6 @@
 // Never fails closed: any inability to verify is an allow.
 
 const { resolveSentinelRoot } = require('./isolation-sentinel.js');
-const { REASON_INTERPOLATION_MAX_LEN } = require('./isolation-deny-reason.js');
 
 const ALLOW = { action: 'allow' };
 
@@ -19,14 +18,12 @@ const GUARDED_TYPES = new Set(['gsd-executor', 'gsd-verifier', 'gsd-plan-checker
 
 // An omitted model is denied too: no stock agent pins a model in its frontmatter, so the subagent
 // would inherit the orchestrator's model, which is the drift #5328 reports.
-// tool_input.model is model-authored and the expected model comes from repo config: both keep only the model-id
-// charset (MODEL_ID_CHARSET_BODY) plus `[` `]` for the host's `[1m]` context-window suffix, capped, before they reach
-// additionalContext. (No product name here: this file installs to every runtime, tests/install.test.cjs:723.)
+// tool_input.model is model-authored and the expected model comes from repo config: both go through
+// sanitizeModelForMessage (model-id charset plus `[` `]`, capped) before they reach additionalContext. (No product name here: this file installs to every runtime, tests/install.test.cjs:723.)
 // `rawExpected` is every baseline's model (the recorded workstreams' and the unflagged one's): the text names each, so a
 // dispatch on the root workstream is not told to use another workstream's model.
 function verdict(esc, mode, type, rawPassed, rawExpected) {
-  const strip = new RegExp(`[^[\\]${esc.MODEL_ID_CHARSET_BODY}]`, 'g');
-  const sanitise = (s) => s.replace(strip, '?').slice(0, REASON_INTERPOLATION_MAX_LEN);
+  const sanitise = esc.sanitizeModelForMessage;
   const passed = sanitise(rawPassed);
   const models = [...new Set(rawExpected.map(sanitise))];
   const named = models.map((m) => `model="${m}"`).join(' or ');

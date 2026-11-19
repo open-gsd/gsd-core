@@ -15,7 +15,7 @@ import { ensureToolOwnedGsdDir } from './gsd-tool-dir.cjs';
 import { realClock, type Clock } from './clock.cjs';
 import { retryRenameSync, readBoundedRegularFile } from './shell-command-projection.cjs';
 import { resolveProjectContext } from './project-context.cjs';
-import { CLAUDE_AGENT_ALIASES, MODEL_ID_CHARSET_BODY } from './model-catalog.cjs';
+import { CLAUDE_AGENT_ALIASES, MODEL_ID_CHARSET_BODY, sanitizeModelForMessage } from './model-catalog.cjs';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configFileReadMod = require('./config-file-read.cjs');
@@ -31,7 +31,7 @@ export const ESCALATION_SKEW_MS = 5000;
 /** An escalation record is a few hundred bytes; anything bigger is not ours. */
 export const MAX_READ_BYTES = 64 * 1024;
 /** The model-id charset is the Model Catalog Module's (a leaf); re-exported so the hook and gsd-tools keep one require. */
-export { MODEL_ID_CHARSET_BODY };
+export { MODEL_ID_CHARSET_BODY, sanitizeModelForMessage };
 
 /** The agent types the guard checks; also the only ones an escalation record is written for. */
 export const GUARDED_AGENT_TYPES: ReadonlySet<string> = new Set(['gsd-executor', 'gsd-verifier', 'gsd-plan-checker', 'gsd-planner']);
