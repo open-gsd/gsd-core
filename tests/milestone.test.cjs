@@ -2434,7 +2434,9 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('behavioral: parity between executor ready-ids gate and orchestrator requirements step (#4944)', () => {
     const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
-    const workflowContent = fs.readFileSync(workflowPath, 'utf-8');
+    // The orchestrator can forward an active workstream before the positional arguments.
+    const workflowContent = fs.readFileSync(workflowPath, 'utf-8')
+      .replaceAll(' ${GSD_WS:+--ws=${GSD_WS##* }}', '');
     const refPath = path.join(__dirname, '..', 'gsd-core', 'references', 'executor-ready-ids-gate.md');
     const refContent = fs.readFileSync(refPath, 'utf-8');
 
