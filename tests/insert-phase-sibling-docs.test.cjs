@@ -56,7 +56,7 @@ describe('#5583 insert-phase --sibling', () => {
     const WORKFLOW = read(WF);
     assert.match(WORKFLOW, /Usage: \/gsd:phase --insert <after> \[--sibling\] <description>/);
     assert.match(WORKFLOW, /\(optional, any position, like the CLI router\)/);
-    const cmds = WORKFLOW.match(/^RESULT=\$\(gsd_run query phase\.insert .*$/gm) || [];
+    const cmds = WORKFLOW.match(/^gsd_run query phase\.insert .*$/gm) || [];
     assert.equal(cmds.length, 1, 'one phase.insert call per run');
     assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
     const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
@@ -66,13 +66,13 @@ describe('#5583 insert-phase --sibling', () => {
 
   // Run the shipped insert fence, capture included, over the typed arguments.
   describe('insert fence argument split', { skip: SKIP }, () => {
-    const runFence = (args, shell = 'bash') => {
+    const runFence = (args, shell = 'bash', stub = "gsd_run() { printf '[%s]\\n' \"$@\"; }") => {
       const fence = read(WF).split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
       const lines = fence.split('\n').slice(1).join('\n').replace('$ARGUMENTS', () => args).split('\n');
       return runBash(
         lines,
         { stdout: '', rc: 0 },
-        { shell, setE: false, preamble: ["gsd_run() { printf '[%s]\\n' \"$@\"; }"], probe: 'true' },
+        { shell, setE: false, preamble: [stub] },
       );
     };
     const split = (args, shell = 'bash') => {
@@ -82,7 +82,7 @@ describe('#5583 insert-phase --sibling', () => {
     };
     // The CLI reads a one-word description such as -h or --raw, and any argument starting with
     // --cwd=, --project-dir=, --exit-contract= or --ws=, as a flag; so does an after-phase starting with `-`.
-    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x', '5 --exit-contract=1 y', '5 --ws=feature x', '--insert --cwd=/tmp 5 x', '--raw 5 x']) {
+    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x', '5 --exit-contract=1 y', '5 --ws=feature x', '--insert --cwd=/tmp 5 x', '--raw 5 x', '15.2 --ws a --ws b Fix y']) {
       test('refuses the description of: ' + args, () => {
         const r = runFence(args);
         assert.notEqual(r.status, 0);
@@ -90,6 +90,11 @@ describe('#5583 insert-phase --sibling', () => {
         assert.match(r.stderr, /the CLI reads it as a flag/);
       });
     }
+    test('a failed phase.insert fails the fence and its output reaches the agent', () => {
+      const r = runFence('15.2 x', 'bash', "gsd_run() { printf 'boom\\n'; return 3; }");
+      assert.equal(r.status, 3);
+      assert.equal(r.stdout, 'boom\n');
+    });
     // [typed text, the arguments phase.insert receives after `query phase.insert`]
     for (const [args, want] of [
       ['15.2 --sibling x', ['[15.2]', '[--sibling]', '[x]']],
@@ -100,7 +105,9 @@ describe('#5583 insert-phase --sibling', () => {
       ['--ws feature 15.2 x --sibling', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
       ['15.2 x --ws', ['[15.2]', '[x]']],
       ['15.2 --ws --sibling x', ['[15.2]', '[--sibling]', '[x]']],
-      ['15.2 --ws "feature" x', ['[15.2]', '[feature x]']],
+      ['15.2 --ws "feature" x', ['[--ws=feature]', '[15.2]', '[x]']],
+      ["15.2 --ws 'feature' x", ['[--ws=feature]', '[15.2]', '[x]']],
+      ['06 --ws "foo" Fix y', ['[--ws=foo]', '[06]', '[Fix y]']],
       ['15.2 --ws\tfeature x', ['[15.2]', '[feature x]']],
       ['15.2 x\n--ws feature', ['[15.2]', '[x feature]']],
       ['5 -5 degrees', ['[5]', '[-5 degrees]']],
@@ -140,21 +147,21 @@ describe('#5583 insert-phase --sibling', () => {
     // --ws/--sibling/--insert first, middle, last, repeated, attached, value-less, a value starting with
     // `-`, empty argument) checked against a plain re-statement of the contract.
     const reference = (args) => {
-      const ws = (' ' + args).split('\n').map((l) => /.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(l)).find(Boolean);
+      const ws = (' ' + args.replace(/["']/g, '')).split('\n').map((l) => /.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(l)).find(Boolean);
       const name = ws ? ws[1] : '';
       const toks = args.split(/\s+/).map((t) => t.replace(/^"/, '').replace(/"$/, '')).filter(Boolean);
       if (toks[0] === '--insert') toks.shift();
-      let sibling = false, afterWs = false, after = '';
+      let sibling = false, afterWs = false, after = '', wsCount = 0;
       const desc = [];
       for (const t of toks) {
-        if (afterWs) { afterWs = false; if (name && t === name) continue; }
+        if (afterWs) { afterWs = false; if (name && t.replace(/["']/g, '') === name) continue; }
         if (t === '--sibling') sibling = true;
-        else if (t === '--ws') afterWs = true;
+        else if (t === '--ws') { afterWs = true; wsCount++; }
         else if (!after) after = t;
         else desc.push(t);
       }
       const d = desc.join(' ');
-      if (/^(--cwd=|--project-dir=|--exit-contract=|--ws=)/.test(d) || (/^-/.test(d) && !d.includes(' ')) || /^-/.test(after)) return null;
+      if (/^(--cwd=|--project-dir=|--exit-contract=|--ws=)/.test(d) || (/^-/.test(d) && !d.includes(' ')) || /^-/.test(after) || wsCount > 1) return null;
       return [...(name ? ['[--ws=' + name + ']'] : []), '[' + after + ']', ...(sibling ? ['[--sibling]'] : []), '[' + d + ']'];
     };
     test('property: the fence matches the reference tokenizer over every token shape', () => {
@@ -185,6 +192,31 @@ describe('#5583 insert-phase --sibling', () => {
         assert.equal(JSON.parse(r.output).name, desc);
       });
     }
+    // The fence mirrors the CLI's own flag grammar (gsd-tools.cjs reads `-h`, `--raw` and the `--cwd=`, `--project-dir=`,
+    // `--exit-contract=`, `--ws=` prefixes as flags). Each form the fence refuses must really not reach phase.insert as a name,
+    // and a multi-word description that starts with `-` must.
+    test('keeps "-5 degrees" as the phase name', () => {
+      const r = runGsdTools(['query', 'phase.insert', '1', '-5 degrees'], tmp);
+      assert.ok(r.success, r.error);
+      assert.equal(JSON.parse(r.output).name, '-5 degrees');
+    });
+    for (const desc of ['-h', '--raw', '--cwd=/tmp x', '--project-dir=/tmp x', '--exit-contract=1 y', '--ws=feature x']) {
+      test('the CLI reads "' + desc + '" as a flag, not as a phase name', () => {
+        const r = runGsdTools(['query', 'phase.insert', '1', desc], tmp);
+        const name = r.success ? (() => { try { return JSON.parse(r.output).name; } catch { return undefined; } })() : undefined;
+        assert.notEqual(name, desc);
+      });
+    }
+    test('--sibling after a decimal phase creates the peer, nested is the default', () => {
+      fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n### Phase 1.1: Hotfix (INSERTED)\n**Goal:** Fix\n\n### Phase 2: API\n**Goal:** Build API\n');
+      fs.mkdirSync(path.join(tmp, '.planning', 'phases', '01.1-hotfix'), { recursive: true });
+      const sib = runGsdTools(['query', 'phase.insert', '1.1', '--sibling', 'x'], tmp);
+      assert.ok(sib.success, sib.error);
+      assert.equal(JSON.parse(sib.output).phase_number, '01.2');
+      const nested = runGsdTools(['query', 'phase.insert', '1.1', 'y'], tmp);
+      assert.ok(nested.success, nested.error);
+      assert.equal(JSON.parse(nested.output).phase_number, '01.1.1');
+    });
   });
 
   // The init step, the insert fence and the state block each read --ws from the typed text: all must pick the same workstream.
@@ -196,6 +228,8 @@ describe('#5583 insert-phase --sibling', () => {
       '15.2 y --ws=x',
       '15.2 --ws a.b-c_1 x',
       '15.2 --ws -bad x',
+      '06 --ws "foo" Fix y',
+      "06 --ws 'foo' Fix y",
     ];
     const blocks = (text) => text.split('```').filter((f, i) => i % 2 && f.includes('GSD_WS=$('));
     const STATE_CALLS = 2; // state.patch and state.add-roadmap-evolution
@@ -222,6 +256,20 @@ describe('#5583 insert-phase --sibling', () => {
         const [a, b, c] = wsPair(read(WF), args);
         assert.equal(a, b);
         assert.equal(c, b.repeat(STATE_CALLS), 'both state queries get the same --ws');
+      });
+    }
+    // The state block takes the description from a quoted heredoc: no text of it is ever expanded.
+    for (const d of ['use `id` and $(printf x)', 'say "hi" \\', 'a $HOME b']) {
+      test('the state block passes the description literally: ' + d, () => {
+        const lines = blocks(read(WF))[2].split('\n').slice(1).join('\n')
+          .replace('$ARGUMENTS', () => '15.2 x').replace('{description}', () => d).split('\n');
+        const r = runBash(lines, { stdout: '', rc: 0 }, {
+          setE: false,
+          preamble: ["gsd_run() { printf '[%s]\\n' \"$@\"; }"],
+          probe: 'true',
+        });
+        assert.equal(r.status, 0, r.stderr);
+        assert.ok(r.stdout.includes('[--note]\n[' + d + ']\n'), r.stdout);
       });
     }
     test('a table row reads a workstream in all three blocks', () => {
