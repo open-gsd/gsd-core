@@ -1577,13 +1577,13 @@
     {
       "id": "SEAM.git-commit-timeout.enforced-by",
       "klass": "SEAM",
-      "value": "test:tests/commands.platform.test.cjs",
+      "value": "test:tests/git-commit-timeout.property.test.cjs",
       "line": 239
     },
     {
       "id": "SEAM.git-commit-timeout.owns",
       "klass": "SEAM",
-      "value": "commitTimeoutMs / isValidCommitTimeoutMs (src/git-commit-timeout.cts) are the single owners of the rule and default for git.commit_timeout_ms; every commit site reads the bound through commitTimeoutMs (#5231)",
+      "value": "commitTimeoutMs / isValidCommitTimeoutMs (src/git-commit-timeout.cts) are the single owners of the rule and default for git.commit_timeout_ms (#5231)",
       "line": 238
     },
     {

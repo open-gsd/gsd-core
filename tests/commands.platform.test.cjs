@@ -931,25 +931,6 @@ describe('#3776: query commit --files reports an empty diff as nothing_to_commit
   });
 });
 
-// #5231: the third commit site. The SEAM.git-commit-timeout.enforced-by pointer names this file, so
-// it must pin every site (cmdCommit here; the two sub-repo sites below).
-describe('#5231: git.commit_timeout_ms reaches cmdCommit', () => {
-  const { createTempGitProject } = require('./helpers.cjs');
-  let rootDir;
-  afterEach(() => { if (rootDir) cleanup(rootDir); rootDir = undefined; });
-
-  for (const [ms, expected] of [[60000, 60000], [undefined, 30000]]) {
-    test(`cmdCommit passes ${expected} to git commit when git.commit_timeout_ms is ${ms}`, () => {
-      rootDir = createTempGitProject();
-      const git = ms === undefined ? {} : { commit_timeout_ms: ms };
-      fs.writeFileSync(path.join(rootDir, '.planning', 'config.json'), JSON.stringify({ git }));
-      fs.writeFileSync(path.join(rootDir, '.planning', 'STATE.md'), '# state\n');
-      const r = runWithTimedOutCommit(`cmds.cmdCommit(${JSON.stringify(rootDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);`);
-      assert.strictEqual(r.timeout, expected, `stderr: ${r.stderr}`);
-    });
-  }
-});
-
 // #5231: `git.commit_timeout_ms` must reach the sub-repo commit sites too. Both read it
 // through `loadConfig(cwd)`, so an active workstream config wins over the root (pinned
 // for cmdCommit in commit-files-pathspec.test.cjs).
