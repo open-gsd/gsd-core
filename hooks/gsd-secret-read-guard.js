@@ -2758,9 +2758,50 @@ function isDebuggerAgent(value) {
   return value.slice(value.lastIndexOf(':') + 1) === DEBUGGER_AGENT_NAME;
 }
 
-// Returns the `--agent` value text of a debugger launch, or null.
+// Returns the `--agent` value text of a debugger launch, or null. A command
+// readsEachWay flags is read the way findSecretRead reads it (#5441): under
+// bash's, zsh's and dash's readings, then the plain one, and a launch any of
+// them finds is the answer, so `claude --agent $'gsd-debugger'` is a launch as
+// the unquoted spelling is. readsEachWay joins `\<newline>` continuations first
+// (bash joins them before it reads a quote), then flags dollar-quoting (`$'`,
+// `$"`), a `$${` or `$$(`, and a quote in a command that also holds `((` or
+// `$[`, so `(( n = 1 )); echo "x"` is read every way too. Each body the scan
+// rescans (a substitution, an `eval` operand, a `bash -c` body) comes back
+// through here and picks its own readings, so
+// `bash -c $'claude --agent gsd-debugger'` is decoded by the reading and then
+// read again. A command readsEachWay does not flag gets the plain scan alone,
+// which is the check as it was before #5441.
+//
+// A reading that could not finish (a stack overflow, a spent budget) does not
+// cost the other readings their say: when none of them finds a launch, its
+// error is thrown on, and the command is denied as `command-too-complex`
+// (scanDebuggerSpawn, main), as findSecretRead denies one. Any other error in
+// a reading is reported as readingBug and the scan goes on; an error in the
+// plain reading is thrown as before.
 function findDebuggerCliSpawn(command, depth) {
-  const { tokens, nested } = tokenizeCharged(command);
+  if (!readsEachWay(command)) return findDebuggerCliSpawnUnder(command, depth, false);
+  let unfinished = null;
+  for (const shell of READINGS) {
+    try {
+      const spawn = findDebuggerCliSpawnUnder(command, depth, shell);
+      if (spawn !== null) return spawn;
+    } catch (e) {
+      if (!unfinishedBy(e)) {
+        if (readingBug === null) readingBug = e;
+      } else if (unfinished === null) {
+        unfinished = e;
+      }
+    }
+  }
+  const spawn = findDebuggerCliSpawnUnder(command, depth, false);
+  if (spawn === null && unfinished !== null) throw unfinished;
+  return spawn;
+}
+
+// One reading of findDebuggerCliSpawn: `reading` is false for the plain
+// reading, or the shell whose reading it is (scanCommand).
+function findDebuggerCliSpawnUnder(command, depth, reading) {
+  const { tokens, nested } = tokenizeCharged(command, reading);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
