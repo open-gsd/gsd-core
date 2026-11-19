@@ -1492,13 +1492,16 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     });
   }
 
+  // A gate that cannot be evaluated (no command) under onError skip: one skipped_phase warning per phase (G3, G16h).
+  const SKIPPED_GATE = { predicate: { kind: 'command-exit-zero' }, onError: 'skip' };
+
   test('G3 malformed predicate: onError halt refuses, skip archives with warning', () => {
     writeGateCap(home, { predicate: { kind: 'command-exit-zero' } });
     const err = refusal(complete());
     assert.equal(err.blocked[0].reason, 'unevaluable');
     assert.equal(archived(), false);
 
-    writeGateCap(home, { predicate: { kind: 'command-exit-zero' }, onError: 'skip' });
+    writeGateCap(home, SKIPPED_GATE);
     const { blocked, warnings } = gateResult();
     assert.deepEqual(blocked, []);
     assert.deepEqual(warnings.map((w) => [w.kind, w.cap_id, w.phase]), [['skipped_phase', 'open-work', '01'], ['skipped_phase', 'open-work', '02']]);
@@ -1683,18 +1686,27 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.equal(r.exitCode, 0, r.stderr);
   });
 
-  // The audit must tell an agent where a gate_warnings entry goes: step 5.6 names every key an entry carries
-  // (kind, cap_id, phase, detail; the real entry below) and each open_work key it fills from them.
-  test('G16d audit step 5.6 maps every key of a gate_warnings entry to an open_work key', () => {
-    writeGateCap(home, { command: 'exit 3' });
-    const manifest = path.join(home, '.gsd', 'capabilities', 'open-work', 'capability.json');
-    const cap = JSON.parse(fs.readFileSync(manifest, 'utf-8'));
-    cap.engines = { gsd: '>=999.0.0' };
-    fs.writeFileSync(manifest, JSON.stringify(cap));
+  // The audit must tell an agent where a gate_warnings entry goes. Step 5.6 words the mapping as one run of code
+  // spans: `reason` set to its `kind`, `gate_message` set to its `detail` (to its `kind` when it has none), `details` set to `null`.
+  const MAPPING_SPANS = ['reason', 'kind', 'gate_message', 'detail', 'kind', 'details', 'null'];
+  const mappingSpans = (stepText) => {
+    const spans = codeSpans(stepText);
+    const start = spans.indexOf('reason');
+    return spans.slice(start, start + MAPPING_SPANS.length);
+  };
+
+  test('G16h audit step 5.6 sends each key of a real skipped_phase gate_warnings entry to its open_work key, in order', () => {
+    writeGateCap(home, SKIPPED_GATE);
     const [entry] = gateResult().warnings;
-    const spans = codeSpans(openWorkStep());
-    for (const key of [...Object.keys(entry), 'phase', 'detail']) assert.ok(spans.includes(key), `step 5.6 names the gate_warnings key \`${key}\``);
-    for (const key of openWorkYamlFields()) assert.ok(spans.includes(key), `step 5.6 names the open_work key \`${key}\``);
+    assert.deepEqual(Object.keys(entry).sort(), ['cap_id', 'detail', 'kind', 'phase']);
+    const step = openWorkStep();
+    const spans = codeSpans(step);
+    for (const key of [...Object.keys(entry), ...openWorkYamlFields()]) assert.ok(spans.includes(key), `step 5.6 names the key \`${key}\``);
+    assert.deepEqual(mappingSpans(step), MAPPING_SPANS);
+    // A swapped mapping must go red: the same text with `reason` and `gate_message` exchanged.
+    const swapped = step.replace('`reason` set to its `kind`, `gate_message` set to its `detail`', '`reason` set to its `detail`, `gate_message` set to its `kind`');
+    assert.notEqual(swapped, step, 'the mutation must change the step text');
+    assert.notDeepEqual(mappingSpans(swapped), MAPPING_SPANS);
   });
 
   test('G17 --no-archive-phases still gates the milestone phases', () => {
