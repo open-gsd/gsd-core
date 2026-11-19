@@ -4133,6 +4133,25 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     const result = save({ model_profile: 'quality', brave_search: true, firecrawl: true, exa_search: true, tavily_search: true, ref_search: true, perplexity: true, jina: true });
     assert.ok(result.success, result.error);
     assert.deepStrictEqual(read(), { mode: 'yolo', model_profile: 'quality' });
+    // Review 2026-11-18, Minor 6: the dropped flags are reported, so a caller
+    // can tell they were not saved.
+    assert.deepStrictEqual(JSON.parse(result.output).skipped,
+      ['brave_search', 'firecrawl', 'exa_search', 'tavily_search', 'ref_search', 'perplexity', 'jina']);
+  });
+
+  test('a save that gives only search flags writes an empty store and lists every flag as skipped', (t) => {
+    const { save, read } = store(t);
+    const result = save({ brave_search: true, firecrawl: true });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(JSON.parse(result.output), { saved: true, created: true, path: JSON.parse(result.output).path, skipped: ['brave_search', 'firecrawl'] });
+    assert.deepStrictEqual(read(), {});
+  });
+
+  test('a save with no search flags reports an empty skipped list', (t) => {
+    const { save } = store(t);
+    const result = save({ mode: 'yolo' });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(JSON.parse(result.output).skipped, []);
   });
 
   for (const [label, contents] of [['not valid JSON', '{"model_profile": "quality",'], ['not a JSON object', '["quality"]']]) {

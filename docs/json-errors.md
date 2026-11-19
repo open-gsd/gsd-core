@@ -301,7 +301,7 @@ text (unstable).
 | `config_defaults_invalid` | `config-save-defaults` when `$GSD_HOME/.gsd/defaults.json` exists but cannot be read (for example, permission denied), is not a regular file (a FIFO or device), is larger than 1 MiB, is not valid JSON, is not a JSON object, is a link whose target cannot be resolved, disappears while it is read, or is nested too deeply to merge into; the store is left as it was (#5681, #5759) |
 | `config_defaults_write_failed` | `config-save-defaults` when writing the merged store fails, or when the merged store, written as 2-space JSON, would be larger than 1 MiB; the store is left as it was (#5681, #5759) |
 | `config_defaults_lock_unavailable` | `config-save-defaults` when the installer lock on `$GSD_HOME/.gsd/` cannot be taken within 30 s, for example while another install or save holds it; the error carries `lock_path`, `holder_pid` when the lock names an owner, and `holder_since` when it records one. The message says to remove the lock file when no install or save is running (a lock that names no owner is never reclaimed) or, when it names an owner, when that pid is not running. Nothing is written (#5681) |
-| `config_defaults_lock_release_failed` | `config-save-defaults` saved the store but could not release the lock; the error carries `saved`, `created` and `path` (#5681) |
+| `config_defaults_lock_release_failed` | `config-save-defaults` saved the store but could not release the lock; the error carries `saved`, `created`, `path` and `skipped` (#5681) |
 
 ### Phase / workflow errors
 

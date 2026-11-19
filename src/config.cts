@@ -930,7 +930,12 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
     error('Invalid settings for config-save-defaults: expected a JSON object of config keys.', ERROR_REASON.USAGE);
   }
   const unchecked: Record<string, unknown> = { ...(settings as Record<string, unknown>) };
-  for (const { key } of DETECTED_SEARCH_INTEGRATIONS) delete unchecked[key];
+  // The detected search flags are never saved; the result lists the ones given
+  // so a caller can tell they were dropped (#5681).
+  const skipped = DETECTED_SEARCH_INTEGRATIONS
+    .map(({ key }) => key)
+    .filter((key) => Object.prototype.hasOwnProperty.call(unchecked, key));
+  for (const key of skipped) delete unchecked[key];
   const patch = validateNewProjectChoices(cwd, unchecked, '', true, 'config-save-defaults');
   // Both spellings of one setting would both be stored, and the loader and
   // new-project creation each read a different one first.
@@ -991,7 +996,7 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   if ('reason' in outcome) {
     return error(releaseFailure ? `${outcome.message} Also: ${releaseFailure}.` : outcome.message, outcome.reason);
   }
-  const result = { saved: true, created: outcome.created, path: defaultsPath };
+  const result = { saved: true, created: outcome.created, path: defaultsPath, skipped };
   if (releaseFailure) {
     error(`Saved ${defaultsPath}, but: ${releaseFailure}.`, ERROR_REASON.CONFIG_DEFAULTS_LOCK_RELEASE_FAILED, result);
   }

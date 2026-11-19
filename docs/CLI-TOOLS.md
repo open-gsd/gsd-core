@@ -798,9 +798,11 @@ setting removes the other from the store (`research` for `workflow.research`,
 `planning.commit_docs` for `commit_docs`, `depth` for `granularity`), so a stale value cannot
 keep winning or be copied into new projects. A missing file is created, and a store kept as a
 symlink is written through to its target, so the link survives; a link whose target is missing
-is refused. The search flags that new
-projects detect from this machine (`brave_search`, `firecrawl`, `exa_search`,
-`tavily_search`, `ref_search`, `perplexity`, `jina`) are never copied. The store is read the
+is refused. Exactly seven keys are never saved: the search flags that new projects detect from
+this machine (`brave_search`, `firecrawl`, `exa_search`, `tavily_search`, `ref_search`,
+`perplexity`, `jina`). A save that gives one leaves it out and lists it in the result's `skipped`
+array (`[]` when none was given). Every other key the `config-set` rules accept is saved,
+project-specific settings such as `project_code` or `git.base_branch` included. The store is read the
 way the loader reads every config file: one that cannot be read, is not a regular file (a FIFO
 or device), is larger than 1 MiB, is not valid JSON, or is not a JSON object is refused and left
 as it was. The store is written as 2-space JSON, and a save whose result in that form would be
@@ -836,7 +838,7 @@ that would grow past 1 MiB, and
 install or save holds it. The lock is released before the result is reported. If releasing it
 fails after a refusal, the refusal is still the error, with the release failure added to its
 message. If it fails after a save that landed, the error is
-`config_defaults_lock_release_failed`, and it carries `saved`, `created` and `path`.
+`config_defaults_lock_release_failed`, and it carries `saved`, `created`, `path` and `skipped`.
 
 ---
 
