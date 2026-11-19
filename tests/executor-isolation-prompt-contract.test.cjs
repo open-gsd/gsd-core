@@ -40,7 +40,11 @@ test('#3637: the executor prompt carries the required-reading contract with the 
   const body = promptBody();
   assert.match(body, /<required_reading>/, 'the prompt must carry the required-reading contract');
   assert.match(body, /\{phase_dir\}\/\{plan_file\}/, 'the prompt must name the explicit plan path');
-  assert.match(body, /PROJECT\.md/, 'project context is required reading');
+  // #5861: required reading names the scope-resolved placeholders, not root `.planning/` literals
+  assert.match(body, /\{project_rel\}/, 'project context is required reading');
+  assert.match(body, /\{state_rel\}/, 'state is required reading');
+  assert.match(body, /\{config_rel\}/, 'config is required reading');
+  assert.doesNotMatch(body, /\.planning\/(?:PROJECT|STATE)\.md|\.planning\/config\.json/, 'no root .planning/ literal in required reading');
 });
 
 test('#3637: the executor prompt carries the execution-context build-time embeds', () => {
@@ -127,4 +131,59 @@ test('#3637: the prompt body contains no single-quote character (single-quoted a
   const startQuote = body.indexOf("'");
   const rest = body.slice(startQuote + 1);
   assert.ok(!rest.includes("'"), 'the prompt body must be free of apostrophes or the shell assignment breaks');
+});
+
+// ─── #5934: quick-batch reuses this fragment, so every placeholder it substitutes needs a value ─────
+
+const QUICK_STEP = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'quick-batch', 'steps', 'worktree-dispatch.md',
+);
+// allow-test-rule: source-text-is-the-product the quick-batch dispatch step is runtime-loaded workflow text (#5934)
+const quickContent = fs.readFileSync(QUICK_STEP, 'utf8');
+
+/** The placeholders the fragment itself says the orchestrator substitutes ("Substitute this plan's ... placeholders"). */
+function substitutedPlaceholders() {
+  const sentence = content.match(/Substitute this plan's([\s\S]{0,400}?)placeholders/);
+  assert.ok(sentence, 'the fragment must state its substitution list');
+  const names = [...sentence[1].matchAll(/\{([a-z][a-z_]*)\}/g)].map((m) => m[1]);
+  assert.ok(names.length >= 7, `the fragment's substitution list must name at least the 7 known placeholders, saw ${names.length}`);
+  return names;
+}
+
+/** The quick-batch step's `orchestrator-worktree` bullet. */
+function quickOrchestratorWorktreeBullet() {
+  const start = quickContent.indexOf('**`isolation == "orchestrator-worktree"`:**');
+  const end = quickContent.indexOf('**`isolation == "none"`:**', start);
+  assert.ok(start !== -1 && end !== -1, 'the quick-batch orchestrator-worktree bullet must exist');
+  return quickContent.slice(start, end);
+}
+
+test('#5934: quick-batch gives every orchestrator-worktree placeholder a value or a stated not-applicable', () => {
+  const bullet = quickOrchestratorWorktreeBullet();
+  for (const name of substitutedPlaceholders()) {
+    const mention = bullet.split('\n').find((line) => line.includes(`{${name}}`));
+    assert.ok(mention, `the quick-batch step never names {${name}}, which the reused fragment substitutes`);
+    // Either an explicit mapping (`{name}` = `value`) or named in a sentence that says it is not applicable.
+    const mapped = new RegExp(`\`\\{${name}\\}\`\\s*=\\s*\`[^\`\\n]{1,80}\``).test(bullet);
+    const notApplicable = bullet
+      .split('\n')
+      .some((line) => line.includes(`\`{${name}}\``) && /\b(?:is|are) not applicable\b/.test(line));
+    assert.ok(mapped || notApplicable, `{${name}} is named but has neither a mapped value nor a stated "not applicable" for a quick item`);
+  }
+});
+
+test('#5934: the not-applicable placeholders name what the prompt carries instead and the omitted marker', () => {
+  const bullet = quickOrchestratorWorktreeBullet();
+  assert.match(bullet, /Execute quick item \$\{quick_id\}/, 'the prompt header for a quick item must be stated');
+  assert.match(
+    bullet,
+    /omit[^\n]*\[gsd:dispatch/i,
+    'the [gsd:dispatch ...] marker line must be stated as omitted for a quick item',
+  );
+});
+
+test('#5934: the summary path for a quick item has no placeholder left', () => {
+  const bullet = quickOrchestratorWorktreeBullet();
+  assert.match(bullet, /`\{plan_padded\}`\s*=\s*`\$\{quick_id\}`/, '{plan_padded} must map to the quick id');
+  assert.match(bullet, /\$\{ITEM_DIR\}\/\$\{quick_id\}-SUMMARY\.md/, 'the worker-record summary path must be spelled out');
 });

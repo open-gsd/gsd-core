@@ -55,7 +55,7 @@ export interface RunnerDeps {
    */
   spawn: (binary: string, argv: string[], opts: { input?: string; timeoutMs: number; env?: Readonly<Record<string, string>> }) => SpawnOutcome;
   /** Bounded HTTP POST/GET returning the RAW body — never pre-parsed, so errors stay diagnosable. */
-  httpJson: (url: string, opts: { method: 'GET' | 'POST'; body?: string; timeoutMs: number; probe?: true /* status-only: no redirects, body '' */ }) =>
+  httpJson: (url: string, opts: { method: 'GET' | 'POST'; body?: string; timeoutMs: number; probe?: true /* no redirects; body '' unless readBody */; readBody?: true /* with probe: a 2xx body, size-capped */ }) =>
     Promise<{ ok: boolean; status: number; body: string; error?: string }>;
   readFile: (p: string) => string;
   writeFile: (p: string, content: string) => void;
@@ -314,6 +314,27 @@ export function checkEgressHost(consentedHost: unknown, currentHost: string): Eg
  * Probe (D7) — every probe bounded, and only for a SELECTED lane
  * ------------------------------------------------------------------ */
 
+/**
+ * `GET /v1/models` as llama.cpp, LM Studio and Ollama document it: a JSON object with
+ * `object: "list"` and a `data` array whose entries are objects carrying a string `id`
+ * (an empty `data` is still a models listing — a server with nothing loaded).
+ */
+export function isOpenAiModelsListing(body: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const { object, data } = parsed as { object?: unknown; data?: unknown };
+  return (
+    object === 'list' &&
+    Array.isArray(data) &&
+    data.every((m) => m !== null && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string')
+  );
+}
+
 export async function probeLane(
   plan: LanePlan,
   deps: RunnerDeps,
@@ -386,9 +407,34 @@ export async function probeLane(
       if (!base) {
         return { available: false, reason: LANE_UNAVAILABLE.HOST_UNREACHABLE, detail: 'no host resolved' };
       }
-      // D7: reachable ⇒ available. Any HTTP answer (401 behind an auth proxy, 404, 3xx) proves a
-      // server is there; only a transport failure (status 0) does not. Redirects are not followed:
-      // a probe must not issue a request to a host the descriptor never named.
+      // D7, CONFIGURED host (below the default-host branch): reachable ⇒ available. Any HTTP answer
+      // (401 behind an auth proxy, 404, 3xx) proves a server is there; only a transport failure
+      // (status 0) does not. Redirects are never followed, under either rule: a probe must not issue
+      // a request to a host the descriptor never named.
+      if (plan.transport === 'openai-http' && !plan.hostConfigured) {
+        // #5963: the built-in default host (localhost:8080/1234/11434) was never named by the user,
+        // and any unrelated local service answers some HTTP status there. A default host counts as
+        // available only when it answers 2xx with an OpenAI-style models listing — the shape llama.cpp,
+        // LM Studio and Ollama all document for `/v1/models`. A configured host keeps D7's
+        // "any answer proves a server" rule: the user named it, so the answer is the user's call.
+        const s = await deps.httpJson(`${base}${probe.path}`, {
+          method: 'GET', timeoutMs: probe.timeoutMs, probe: true, readBody: true,
+        });
+        if (s.status === 0) {
+          return {
+            available: false,
+            reason: LANE_UNAVAILABLE.HOST_UNREACHABLE,
+            detail: `${base}${probe.path} unreachable: ${s.error ?? `HTTP ${s.status}`}`,
+          };
+        }
+        return s.status >= 200 && s.status < 300 && isOpenAiModelsListing(s.body)
+          ? { available: true }
+          : {
+              available: false,
+              reason: LANE_UNAVAILABLE.HOST_UNREACHABLE,
+              detail: `${base}${probe.path} answered HTTP ${s.status} but not with an OpenAI-style models listing — the default host is not a recognizable ${plan.slug} server; set '${plan.hostConfigKey}' to use a server there (this includes a server that requires an API key and answers 401)`,
+            };
+      }
       const r = await deps.httpJson(`${base}${probe.path}`, { method: 'GET', timeoutMs: probe.timeoutMs, probe: true });
       return r.status > 0
         ? { available: true }

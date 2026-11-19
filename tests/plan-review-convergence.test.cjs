@@ -43,9 +43,9 @@ const fc = require('fast-check');
 // coincidentally-matching value: that constant's own doc comment (see
 // tests/helpers/timeouts.cjs) scopes it to "a single scripts/*.cjs generator
 // or lint script, spawned directly ... no fan-out" — and its cited precedent
-// sites (tests/adr-index-gate.test.cjs, tests/check-env.test.cjs) confirm
-// that shape in practice: both spawn `process.execPath` against a single
-// script file directly via spawnSync, with no intermediate shell. This
+// site (tests/adr-index-gate.test.cjs) confirms that shape in practice: it
+// spawns `process.execPath` against a single script file directly via
+// spawnSync, with no intermediate shell. This
 // file's sites are a heavier, different shape (bash wrapping a further node
 // spawn), so they get their own file-local constant instead of borrowing one
 // whose doc comment describes something else.

@@ -3391,7 +3391,9 @@ function _stripCallArgument(spanText, matchStart, matchEnd, { consumeLeadingComm
 /**
  * Replace a named-role argument token's `[matchStart, matchEnd)` span
  * (`subagent_type=`/`subagent_type:` + its value) with the projected
- * `gsd_role=` / role-prompt-resolution / structural-role argument group.
+ * `gsd_role=` / role-prompt-resolution / structural-role argument group (the
+ * `context=<role prompt>` / structural-role group for a `rolePromptResolution: 'context'`
+ * primitive such as Hermes's `delegate_task`, #6066).
  * Preserves the pretty multi-line one-arg-per-line style when the original
  * token owned its own line; falls back to an inline, comma-joined group for
  * the single-line-compact and object-literal forms.
@@ -3406,6 +3408,10 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
   }
   const lineStart = spanText.lastIndexOf('\n', matchStart - 1) + 1;
   const startsOwnLine = /^[ \t]*$/.test(spanText.slice(lineStart, matchStart));
+  // #6066: a primitive with no role parameters at all (Hermes `delegate_task`: goal / context / role ...) takes the
+  // resolved role prompt as the task's `context` (instructions, not a tool result the child could window or
+  // compact) and the plan as the first thing the child reads from `goal`. No `gsd_role` / `gsd_role_prompt`.
+  const contextMode = toolConfig.rolePromptResolution === 'context';
 
   // Consume an immediately-following separator comma (+ same-line whitespace/
   // newline) into `end` — never leave it dangling AFTER an injected trailing
@@ -3418,17 +3424,22 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
   if (afterMatch) end += afterMatch[0].length;
   const ownLine = startsOwnLine && hadTrailingComma && /\n$/.test(afterMatch[0]);
 
-  const promptContentPhrase =
-    `${promptContentParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and load ` +
-    'its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
+  const promptContentPhrase = contextMode
+    ? `${toolConfig.contextParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and put ` +
+      `its full contents here as the task's instructions (never a pointer to the file); the \`${toolConfig.taskParam}\` ` +
+      'names the plan and tells the child to read it with read_file as a call of its own, first; FAIL CLOSED with an ' +
+      'explicit error if unresolved — never execute the role inline>'
+    : `${promptContentParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and load ` +
+      'its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
+  const namedRolePart = contextMode ? '' : `${namedRoleParam}=${roleValueExpr},`;
 
   let replacement;
   if (ownLine) {
     const indent = spanText.slice(lineStart, matchStart);
     const depthNote = canOrchestrate ? '' : '  # nested delegation is unavailable at this dispatch depth/toolkit';
     replacement =
-      `${namedRoleParam}=${roleValueExpr},\n` +
-      `${indent}${promptContentPhrase},\n` +
+      (contextMode ? '' : `${namedRoleParam}=${roleValueExpr},\n${indent}`) +
+      `${promptContentPhrase},\n` +
       `${indent}${structuralRoleParam}="${leafRoleValue}",${depthNote}\n`;
   } else {
     // Inline forms never carry a trailing `#` comment mid-argument-list (it
@@ -3437,7 +3448,7 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
     // Re-emit exactly the separator that originally followed this argument
     // (a comma if more args follow; nothing if it was the last one).
     replacement =
-      `${namedRoleParam}=${roleValueExpr}, ${promptContentPhrase}, ${structuralRoleParam}="${leafRoleValue}"` +
+      `${contextMode ? '' : namedRolePart + ' '}${promptContentPhrase}, ${structuralRoleParam}="${leafRoleValue}"` +
       (hadTrailingComma ? ', ' : '');
   }
   return spanText.slice(0, matchStart) + replacement + spanText.slice(end);
@@ -3537,8 +3548,9 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
 
   // 1b. #5569: a tool-resolved primitive (`rolePromptResolution: 'tool'`) takes
   //     `role` + `task` only. The task text arrives as `prompt`, so the key is
-  //     renamed; `description` has no counterpart and is dropped.
-  if (toolConfig.rolePromptResolution === 'tool') {
+  //     renamed; `description` has no counterpart and is dropped. #6066: Hermes's `delegate_task`
+  //     (`rolePromptResolution: 'context'`) takes `goal` for the task text and has no `description` either.
+  if (toolConfig.rolePromptResolution === 'tool' || toolConfig.rolePromptResolution === 'context') {
     const pm = /\bprompt(\s*[=:])/.exec(_maskStringsAndComments(text));
     if (pm) {
       text = text.slice(0, pm.index) + toolConfig.taskParam + text.slice(pm.index + 'prompt'.length);
@@ -3546,6 +3558,16 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
     const dm = _callArgValueRe('description').exec(_maskStringsAndComments(text));
     if (dm) {
       text = _stripCallArgument(text, dm.index, dm.index + dm[0].length);
+    }
+  }
+
+  // 1c. #6066: Hermes's `delegate_task` (goal / context / role / background) has no `isolation` or `mode`
+  //     parameter, so a Claude-shaped `isolation="worktree"` / `mode="auto"` argument is dropped rather than
+  //     forwarded to a primitive that does not accept it.
+  if (toolConfig.rolePromptResolution === 'context') {
+    for (const key of ['isolation', 'mode']) {
+      const am = _callArgValueRe(key).exec(_maskStringsAndComments(text));
+      if (am) text = _stripCallArgument(text, am.index, am.index + am[0].length);
     }
   }
 
@@ -3762,7 +3784,7 @@ function _assertProjectionComplete(content, toolConfig, namedDispatch = false) {
  *
  * @param {string} content
  * @param {{namedDispatch?: boolean, nested?: boolean, maxDepth?: number, background?: boolean, backgroundDispatch?: boolean, subagentToolkit?: string}} dispatch
- * @param {{toolName: string, namedRoleParam: string, promptContentParam: string, structuralRoleParam: string, leafRoleValue: string, backgroundParam: string, supportsPerCallModel: boolean, availableRoles: Set<string>|null, runtime: string}} toolConfig
+ * @param {{toolName: string, namedRoleParam: string, promptContentParam: string, structuralRoleParam: string, leafRoleValue: string, backgroundParam: string, supportsPerCallModel: boolean, availableRoles: Set<string>|null, runtime: string, rolePromptResolution?: string, contextParam?: string, taskParam?: string}} toolConfig
  */
 function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig) {
   const d = dispatch || {};
@@ -3787,6 +3809,18 @@ function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig)
         'runs the role in an isolated child session; the child cannot dispatch further. FAIL CLOSED — surface the ' +
         `tool's error and stop — if it reports the role unresolved; never execute the role inline as a substitute. ` +
         `Always dispatch ${rosterFlat} as separate \`${toolName}\` calls.`
+      );
+    }
+    if (toolConfig.rolePromptResolution === 'context') {
+      return (
+        `${sessionName} has no \`Agent\` tool. It exposes \`${toolName}\`, which takes a \`${toolConfig.taskParam}\` and a ` +
+        `\`${toolConfig.contextParam}\` and has no named-role parameter. GSD projects each named gsd-* role onto it itself: ` +
+        `resolve the role's prompt file from the active install, load its contents, and put them in the task's ` +
+        `\`${toolConfig.contextParam}\` as the child's operating instructions (a pointer to the file is not enough: file reads ` +
+        `can be windowed, truncated and compacted). The \`${toolConfig.taskParam}\` names the plan and tells the child to read ` +
+        'it with `read_file` as a call of its own, as its first read. FAIL CLOSED — surface an explicit error and stop — ' +
+        'if a referenced role prompt cannot be resolved; never execute the role inline as a substitute. In a top-level ' +
+        `${sessionName} session, always dispatch ${rosterFlat} as separate \`${toolName}\` calls.`
       );
     }
     return (
@@ -3916,6 +3950,10 @@ const HERMES_DISPATCH_TOOL_CONFIG = Object.freeze({
   leafRoleValue: 'leaf',
   backgroundParam: 'background',
   supportsPerCallModel: false,
+  // #6066: `delegate_task` takes goal / context / role; the role prompt rides `context`.
+  rolePromptResolution: 'context',
+  contextParam: 'context',
+  taskParam: 'goal',
 });
 
 /**
@@ -6695,6 +6733,23 @@ function resolveSymlinkWriteTarget(filePath) {
   try { return fs.realpathSync(filePath); } catch (_) { return filePath; }
 }
 
+/**
+ * #5946: true when `filePath` is a symlink the installer must refuse to edit, i.e. a
+ * link without GSD_ALLOW_SYMLINKED_DEST. The Copilot instructions files (the repo-root
+ * AGENTS.md above all) sit outside the install-root symlink guard, so the policy is
+ * applied at their writers. lstat classifies the path once; a dangling link counts.
+ */
+function isRefusedSymlinkedDest(filePath) {
+  let stat;
+  try { stat = fs.lstatSync(filePath); } catch (_) { return false; }
+  return stat.isSymbolicLink() && !isSymlinkedDestOptIn();
+}
+
+function symlinkedDestRefusal(filePath) {
+  return `${filePath} is a symlink; refusing to change it. ` +
+    'Re-run with GSD_ALLOW_SYMLINKED_DEST=1 to edit the file it points at (the link is kept).';
+}
+
 function mergeCodexConfig(configPath, gsdBlock) {
   // #5301: the write lands on the symlink's target, never replaces the link.
   configPath = resolveSymlinkWriteTarget(configPath);
@@ -7010,6 +7065,12 @@ function hasEnabledCodexHooksFeature(configContent) {
  * @param {string} gsdContent - Template content (without markers)
  */
 function mergeCopilotInstructions(filePath, gsdContent) {
+  // #5946: a symlinked destination is refused without the opt-in; with it the write
+  // lands on the link's target and the link itself is kept.
+  if (isRefusedSymlinkedDest(filePath)) {
+    throw new Error(symlinkedDestRefusal(filePath));
+  }
+  filePath = resolveSymlinkWriteTarget(filePath);
   const gsdBlock = GSD_COPILOT_INSTRUCTIONS_MARKER + '\n' +
     gsdContent.trim() + '\n' +
     GSD_COPILOT_INSTRUCTIONS_CLOSE_MARKER;
@@ -8709,16 +8770,42 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // which writes this same repo-root AGENTS.md only for local ('!isGlobal')
   // installs — 'copilot-instructions' is unique to copilot's descriptor, so
   // this is byte-parity.
+  if (resolveInstallPlan(runtime).installSurface === 'copilot-instructions') {
+    // #5946: refuse a symlinked instructions file before ANY change, so a refused run
+    // leaves the link, its target and every other GSD file exactly as they were.
+    const refused = [
+      ...(!isGlobal ? [path.join(process.cwd(), 'AGENTS.md')] : []),
+      path.join(targetDir, 'copilot-instructions.md'),
+    ].filter((candidate) => {
+      if (!isRefusedSymlinkedDest(candidate) || !fs.existsSync(candidate)) return false;
+      let content;
+      // A link to something unreadable (a directory) is still a link we will not touch.
+      try { content = fs.readFileSync(candidate, 'utf8'); } catch (_) { return true; }
+      return stripGsdFromCopilotInstructions(content) !== content;
+    });
+    if (refused.length > 0) {
+      for (const candidate of refused) {
+        console.error(`  ${yellow}⚠${reset} ${symlinkedDestRefusal(candidate)}`);
+      }
+      console.error('  Nothing was uninstalled.\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
   if (resolveInstallPlan(runtime).installSurface === 'copilot-instructions' && !isGlobal) {
     const agentsMdPath = path.join(process.cwd(), 'AGENTS.md');
     if (fs.existsSync(agentsMdPath)) {
       const content = fs.readFileSync(agentsMdPath, 'utf8');
       const cleaned = stripGsdFromCopilotInstructions(content);
+      const writePath = resolveSymlinkWriteTarget(agentsMdPath);
+      const throughLink = writePath !== agentsMdPath;
       if (cleaned === null) {
-        fs.unlinkSync(agentsMdPath);
-        console.log(`  ${green}✓${reset} Removed AGENTS.md (was GSD-only)`);
+        // A link's target is emptied, never deleted: deleting it would leave a dangling link.
+        if (throughLink) fs.writeFileSync(writePath, '');
+        else fs.unlinkSync(agentsMdPath);
+        console.log(`  ${green}✓${reset} ${throughLink ? 'Emptied AGENTS.md target, symlink kept' : 'Removed AGENTS.md'} (was GSD-only)`);
       } else if (cleaned !== content) {
-        fs.writeFileSync(agentsMdPath, cleaned);
+        fs.writeFileSync(writePath, cleaned);
         console.log(`  ${green}✓${reset} Cleaned GSD section from AGENTS.md`);
       }
     }
@@ -8729,6 +8816,19 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     console.log(`  ${yellow}⚠${reset} Directory does not exist: ${locationLabel}`);
     console.log(`  Nothing to uninstall.\n`);
     return;
+  }
+
+  // #5978: a symlinked Windsurf hooks.json holding GSD entries is refused without
+  // GSD_ALLOW_SYMLINKED_DEST. Refuse here, before anything is removed, so a refused run leaves
+  // the link, its target and every other GSD file exactly as they were (as #5946 does for Copilot).
+  if (resolveInstallPlan(runtime).hooksSurface === 'windsurf-hooks-json') {
+    const windsurfRefusal = hooksSurface.windsurfHooksJsonRemovalRefusal(targetDir);
+    if (windsurfRefusal) {
+      console.error(`  ${yellow}⚠${reset} ${windsurfRefusal}`);
+      console.error('  Nothing was uninstalled.\n');
+      process.exitCode = 1;
+      return;
+    }
   }
 
   let removedCount = 0;
@@ -8874,12 +8974,16 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     if (fs.existsSync(instructionsPath)) {
       const content = fs.readFileSync(instructionsPath, 'utf8');
       const cleaned = stripGsdFromCopilotInstructions(content);
+      const writePath = resolveSymlinkWriteTarget(instructionsPath);
+      const throughLink = writePath !== instructionsPath;
       if (cleaned === null) {
-        fs.unlinkSync(instructionsPath);
+        // A link's target is emptied, never deleted: deleting it would leave a dangling link.
+        if (throughLink) fs.writeFileSync(writePath, '');
+        else fs.unlinkSync(instructionsPath);
         removedCount++;
-        console.log(`  ${green}✓${reset} Removed copilot-instructions.md (was GSD-only)`);
+        console.log(`  ${green}✓${reset} ${throughLink ? 'Emptied copilot-instructions.md target, symlink kept' : 'Removed copilot-instructions.md'} (was GSD-only)`);
       } else if (cleaned !== content) {
-        fs.writeFileSync(instructionsPath, cleaned);
+        fs.writeFileSync(writePath, cleaned);
         removedCount++;
         console.log(`  ${green}✓${reset} Cleaned GSD section from copilot-instructions.md`);
       }
@@ -8940,14 +9044,24 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
         if (fs.existsSync(agentsPath)) {
           const content = fs.readFileSync(agentsPath, 'utf8');
           const cleaned = stripGsdFromAgentsMd(content);
-          if (cleaned === null) {
-            fs.unlinkSync(agentsPath);
-            removedCount++;
-            console.log(`  ${green}✓${reset} Removed ~/.agents/AGENTS.md (was GSD-only)`);
-          } else if (cleaned !== content) {
-            fs.writeFileSync(agentsPath, cleaned);
-            removedCount++;
-            console.log(`  ${green}✓${reset} Cleaned GSD section from ~/.agents/AGENTS.md`);
+          // #5947: a symlinked AGENTS.md follows the symlinked-destination policy: without the
+          // opt-in it is left alone (and said so); with it the link is kept and its target edited.
+          if (cleaned !== content && isRefusedSymlinkedDest(agentsPath)) {
+            console.log(`  ${yellow}⚠${reset} Skipped ~/.agents/AGENTS.md: ${symlinkedDestRefusal(agentsPath)}`);
+          } else {
+            const writePath = resolveSymlinkWriteTarget(agentsPath);
+            const throughLink = writePath !== agentsPath;
+            if (cleaned === null) {
+              // A link's target is emptied, never deleted: deleting it would leave a dangling link.
+              if (throughLink) fs.writeFileSync(writePath, '');
+              else fs.unlinkSync(agentsPath);
+              removedCount++;
+              console.log(`  ${green}✓${reset} ${throughLink ? 'Emptied ~/.agents/AGENTS.md target, symlink kept' : 'Removed ~/.agents/AGENTS.md'} (was GSD-only)`);
+            } else if (cleaned !== content) {
+              fs.writeFileSync(writePath, cleaned);
+              removedCount++;
+              console.log(`  ${green}✓${reset} Cleaned GSD section from ~/.agents/AGENTS.md`);
+            }
           }
         }
       } catch { /* best-effort */ }
@@ -9418,11 +9532,23 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   // 6. Clean up settings.json (remove GSD hooks and statusline)
-  const settingsPath = path.join(targetDir, 'settings.json');
+  // #5952: a local install of a runtime with a per-scope settings file (local Claude, #338)
+  // registered its hooks in that file (settings.local.json), not settings.json, so both are
+  // cleaned: settings.json still holds the entries of an install that predates the routing.
+  const _localSettingsFile = !isGlobal
+    ? ((_resolvedUninstallScope && _resolvedUninstallScope.settingsFile)
+      || (hostBehaviorsFor(runtime).settingsFileByScope || {}).local
+      || null)
+    : null;
+  const _uninstallSettingsFiles = _localSettingsFile && _localSettingsFile !== 'settings.json'
+    ? ['settings.json', _localSettingsFile]
+    : ['settings.json'];
+  for (const _settingsFileName of _uninstallSettingsFiles) {
+  const settingsPath = path.join(targetDir, _settingsFileName);
   if (fs.existsSync(settingsPath)) {
     let settings = readSettings(settingsPath);
     if (settings === null) {
-      console.log(`  ${yellow}i${reset} Skipping settings.json cleanup — file could not be parsed`);
+      console.log(`  ${yellow}i${reset} Skipping ${_settingsFileName} cleanup — file could not be parsed`);
       settings = {}; // prevent downstream crashes, but don't write back
     }
     let settingsModified = false;
@@ -9518,7 +9644,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       }
       if (permissionsModified) {
         settingsModified = true;
-        console.log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
+        console.log(`  ${green}✓${reset} Removed GSD permissions from ${_settingsFileName}`);
       }
     }
 
@@ -9567,6 +9693,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       writeSettings(settingsPath, settings);
       removedCount++;
     }
+  }
   }
 
   // 6. For OpenCode, clean up permissions and the companion MCP entry from opencode.json or opencode.jsonc
@@ -10540,6 +10667,79 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 }
 
 /**
+ * The two content rewrites install() runs on manifest-listed files AFTER the first writeManifest
+ * (#5954): the Codex `@~/.claude/gsd-core/` include rewrite (#4667) and the Copilot / Antigravity /
+ * Kimi include retarget (#5123, global installs only). Applied to `relPaths` under `rootDir` (the
+ * install dir, or the staging dir populatePristineDir builds baselines in, so a regenerated baseline
+ * has the bytes the manifest records). `installRoot` is the real install dir the retarget prefix is
+ * computed for. Returns true when any file changed.
+ *
+ * #5123: the Copilot and Antigravity converters write their DEFAULT home
+ * into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
+ * path, none of which exist when the payload lives somewhere else. Point
+ * them at the real install root (the same `$HOME/…` / absolute prefix the
+ * other runtimes use). Global installs only: a local install resolves
+ * against its project, which the converters already handle.
+ */
+function rewriteInstalledIncludes({ rootDir, relPaths, runtime, isGlobal, installRoot }) {
+  let rewrittenAny = false;
+  const behaviors = hostBehaviorsFor(runtime);
+  const textTargets = relPaths.filter((relPath) => {
+    const fileName = path.basename(relPath);
+    return (fileName.endsWith('.md') || fileName.endsWith('.toml')) && fileName !== 'CHANGELOG.md';
+  });
+  if (behaviors.rewriteClaudeAtIncludes) {
+    for (const relPath of textTargets) {
+      const rewritePath = path.join(rootDir, relPath);
+      let rewriteContent;
+      try {
+        rewriteContent = fs.readFileSync(rewritePath, 'utf8');
+      } catch (_rewriteErr) {
+        continue; // inaccessible or missing — the leak scan reports or skips it
+      }
+      const rewritten = rewriteContent
+        .split('@~/.claude/gsd-core/').join('@~/.codex/gsd-core/')
+        .split('@$HOME/.claude/gsd-core/').join('@$HOME/.codex/gsd-core/');
+      if (rewritten !== rewriteContent) {
+        try {
+          fs.writeFileSync(rewritePath, rewritten);
+          rewrittenAny = true;
+        } catch (_rewriteWriteErr) {
+          continue; // never fail the install over the rewrite; the scan still warns
+        }
+      }
+    }
+  }
+  if (isGlobal && (behaviors.defaultHomeIncludeRoot || behaviors.retargetsGsdCoreProsePath === true)) {
+    const includePrefix = runtimeArtifactConversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      resolvedTarget: installRoot,
+      homeDir: os.homedir(),
+    });
+    for (const relPath of textTargets) {
+      const retargetPath = path.join(rootDir, relPath);
+      let retargetContent;
+      try {
+        retargetContent = fs.readFileSync(retargetPath, 'utf8');
+      } catch (_retargetReadErr) {
+        continue; // inaccessible or missing — never fail the install over this pass
+      }
+      const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, behaviors, includePrefix);
+      if (retargeted !== retargetContent) {
+        try {
+          fs.writeFileSync(retargetPath, retargeted);
+          rewrittenAny = true;
+        } catch (_retargetWriteErr) {
+          continue;
+        }
+      }
+    }
+  }
+  return rewrittenAny;
+}
+
+/**
  * Populate gsd-pristine/ with the transformed pristine versions of every
  * `modified` file, derived from the current package's source tree by
  * running the install transform pipeline (`copyWithPathReplacement`)
@@ -10561,7 +10761,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
  * would have written under normal install. Cost: one extra full transform
  * pass per install where local patches were detected; acceptable.
  */
-function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathPrefix, isGlobal }) {
+function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathPrefix, isGlobal, installRoot }) {
   if (!modified || modified.length === 0) return 0;
   // Modified paths come from manifest.files which can live under several
   // install roots: gsd-core/, commands/gsd/, command/, skills/, agents/,
@@ -10605,6 +10805,9 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
       if (!fs.existsSync(srcDir)) continue;
       copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal, stageRoot);
     }
+    // #5954: the installed files were rewritten after the manifest was first hashed and the manifest
+    // is re-hashed after those rewrites, so a regenerated baseline needs the same rewrites to match.
+    if (installRoot) rewriteInstalledIncludes({ rootDir: stageRoot, relPaths: safeModified, runtime, isGlobal, installRoot });
 
     for (const relPath of safeModified) {
       // Only populate pristine for paths we successfully staged. If a path's
@@ -10908,6 +11111,7 @@ function saveLocalPatches(configDir, pristineCtx) {
             runtime: pristineCtx.runtime,
             pathPrefix: pristineCtx.pathPrefix,
             isGlobal: pristineCtx.isGlobal,
+            installRoot: configDir,
           });
           for (const relPath of missingPaths) {
             const tempRef = resolveInstallRelativePath(tempPristineDir, relPath);
@@ -11384,6 +11588,33 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Preflight's role gate and _stageAgents use the same resolved profile;
   // core's agent roles follow #5503's profile-derived selection too.
   preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, options.installerMigrations);
+
+  // #5949: Kimi's native config.toml lives outside the install root (~/.kimi, ~/.kimi-code), so a
+  // symlinked one is refused HERE, before this install writes its shared hooks and skills, when
+  // the install would have to write the managed block into a file that does not hold it yet. A
+  // link whose target already carries the block proceeds: the writer refuses only if it changes.
+  if (plan.hooksSurface === 'kimi-hooks-toml') {
+    const kimiConfigToml = path.join(resolveKimiHooksTomlDir({ runtime }), 'config.toml');
+    let current = '';
+    try { current = fs.readFileSync(kimiConfigToml, 'utf8'); } catch (_) { /* absent or dangling */ }
+    // Throws for a symlink without the opt-in (and for a dangling one), returns otherwise.
+    if (!current.includes(hooksSurface.KIMI_HOOKS_TOML_MARKER_BEGIN)) {
+      hooksSurface.resolveKimiConfigDestination(kimiConfigToml);
+    }
+  }
+
+  // #5946: the Copilot instructions destinations sit outside the install-root symlink
+  // preflight above (AGENTS.md is at the repo root), so refuse a symlinked one HERE, before
+  // the first file of this install is written, rather than mid-install at the merge.
+  if (plan.installSurface === 'copilot-instructions') {
+    const linked = [
+      path.join(targetDir, 'copilot-instructions.md'),
+      ...(!isGlobal ? [path.join(process.cwd(), 'AGENTS.md')] : []),
+    ].filter(isRefusedSymlinkedDest);
+    if (linked.length > 0) {
+      throw new Error(linked.map(symlinkedDestRefusal).join('\n'));
+    }
+  }
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and
@@ -12943,64 +13174,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // verification backstop. The `_GSD_RUNTIME_ROOT`/`$PREFERRED_CONFIG_DIR`
       // fallback chains and prose `.claude` mentions carry no `@~/` prefix and
       // are deliberately untouched, as is CHANGELOG.md.
-      if (hostBehaviorsFor(runtime).rewriteClaudeAtIncludes) {
-        for (const relPath of manifestFiles) {
-          const fileName = path.basename(relPath);
-          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-          if (fileName === 'CHANGELOG.md') continue;
-          const rewritePath = path.join(targetDir, relPath);
-          let rewriteContent;
-          try {
-            rewriteContent = fs.readFileSync(rewritePath, 'utf8');
-          } catch (rewriteErr) {
-            continue; // inaccessible or missing — the scan below reports or skips it
-          }
-          const rewritten = rewriteContent
-            .split('@~/.claude/gsd-core/').join('@~/.codex/gsd-core/')
-            .split('@$HOME/.claude/gsd-core/').join('@$HOME/.codex/gsd-core/');
-          if (rewritten !== rewriteContent) {
-            try {
-              fs.writeFileSync(rewritePath, rewritten);
-            } catch (writeErr) {
-              continue; // never fail the install over the rewrite; the scan still warns
-            }
-          }
-        }
-      }
-      // #5123: the Copilot and Antigravity converters write their DEFAULT home
-      // into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
-      // path, none of which exist when the payload lives somewhere else. Point
-      // them at the real install root (the same `$HOME/…` / absolute prefix the
-      // other runtimes use). Global installs only: a local install resolves
-      // against its project, which the converters already handle.
-      const includeRetarget = hostBehaviorsFor(runtime);
-      if (isGlobal && (includeRetarget.defaultHomeIncludeRoot || includeRetarget.retargetsGsdCoreProsePath === true)) {
-        const includePrefix = runtimeArtifactConversion._computePathPrefix({
-          isGlobal: true,
-          isOpencode: false,
-          resolvedTarget: targetDir,
-          homeDir: os.homedir(),
-        });
-        for (const relPath of manifestFiles) {
-          const fileName = path.basename(relPath);
-          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-          if (fileName === 'CHANGELOG.md') continue;
-          const retargetPath = path.join(targetDir, relPath);
-          let retargetContent;
-          try {
-            retargetContent = fs.readFileSync(retargetPath, 'utf8');
-          } catch (_retargetReadErr) {
-            continue; // inaccessible or missing — never fail the install over this pass
-          }
-          const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, includeRetarget, includePrefix);
-          if (retargeted !== retargetContent) {
-            try {
-              fs.writeFileSync(retargetPath, retargeted);
-            } catch (_retargetWriteErr) {
-              continue;
-            }
-          }
-        }
+      // #5954: the first writeManifest above hashed these files BEFORE the two rewrites below changed
+      // them, so any rewrite makes that manifest stale; it is re-hashed once both have run.
+      const _includesRewritten = rewriteInstalledIncludes({
+        rootDir: targetDir, relPaths: manifestFiles, runtime, isGlobal, installRoot: targetDir,
+      });
+      if (_includesRewritten) {
+        writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: _installScopeId });
       }
       for (const relPath of manifestFiles) {
         const fileName = path.basename(relPath);

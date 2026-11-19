@@ -113,7 +113,7 @@ Set `is_re_verification = false`, proceed with Step 1.
 ls "$PHASE_DIR"/*-PLAN.md 2>/dev/null
 ls "$PHASE_DIR"/*-SUMMARY.md 2>/dev/null
 gsd_run query roadmap.get-phase "$PHASE_NUM"
-grep -E "^| $PHASE_NUM" .planning/REQUIREMENTS.md 2>/dev/null
+grep -E "^| $PHASE_NUM" "$PHASE_DIR/../../REQUIREMENTS.md" 2>/dev/null
 ```
 
 Extract phase goal from ROADMAP.md — this is the outcome to verify, not the tasks.
@@ -375,7 +375,7 @@ For each requirement ID from plans:
 **6c. Check for orphaned requirements:**
 
 ```bash
-grep -E "Phase $PHASE_NUM" .planning/REQUIREMENTS.md 2>/dev/null
+grep -E "Phase $PHASE_NUM" "$PHASE_DIR/../../REQUIREMENTS.md" 2>/dev/null
 ```
 
 If REQUIREMENTS.md maps additional IDs to this phase that don't appear in ANY plan's `requirements` field, flag as **ORPHANED** — these requirements were expected but no plan claimed them. ORPHANED requirements MUST appear in the verification report.
@@ -680,7 +680,7 @@ If `valid != true`, refuse to verify. Surface the discrepancy and ask the user t
 
 **#4155 / #5095:** the fingerprint command adds the phase's own PLAN/SUMMARY files automatically (+superseded, nested `plans/`) and never counts the report itself — list only the changed implementation files (and any other evidence), ROOT-relative; planning-root docs are inert (#4623). `gsd_run query verification.fingerprint {phaseDir} {file}...`, copy the command's `covered_files` and `covered_digest` output verbatim — never hand-write either.
 
-Create `.planning/phases/{phase_dir}/{phase_num}-VERIFICATION.md`:
+Create `{phase_dir}/{phase_num}-VERIFICATION.md`:
 
 ```markdown
 ---
