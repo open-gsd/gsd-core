@@ -18,9 +18,9 @@ export interface CodeReviewFlags {
   all: boolean;
   /** true when --auto is present (implies fix) */
   auto: boolean;
-  /** --depth= override value, or '' if not supplied */
+  /** --depth= / --depth <value> override value, or '' if not supplied */
   depth: string;
-  /** --files= override value, or '' if not supplied */
+  /** --files= / --files <value> override value, or '' if not supplied */
   files: string;
 }
 
@@ -30,7 +30,11 @@ export type CodeReviewWorkflow = 'code-review.md' | 'code-review-fix.md';
 /**
  * Parse code-review flags from an argv array. The first positional argument
  * (phase number) is ignored — phase validation is handled by
- * `gsd-tools query init.phase-op`. Unknown flags are silently ignored.
+ * `gsd-tools query init.phase-op`. `--files` and `--depth` accept both the
+ * `=` form and the space-separated form (`--files a.py,b.py` / `--depth deep`
+ * take their value from the next token, #6240); a bare flag with no usable
+ * value token throws rather than silently dropping the scope/depth override.
+ * Unknown flags are silently ignored.
  */
 export function parseCodeReviewFlags(argv: string[]): CodeReviewFlags {
   const flags: CodeReviewFlags = {
@@ -41,7 +45,8 @@ export function parseCodeReviewFlags(argv: string[]): CodeReviewFlags {
     files: '',
   };
 
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
     if (arg === '--fix') {
       flags.fix = true;
     } else if (arg === '--all') {
@@ -52,6 +57,25 @@ export function parseCodeReviewFlags(argv: string[]): CodeReviewFlags {
       flags.depth = arg.slice('--depth='.length);
     } else if (arg.startsWith('--files=')) {
       flags.files = arg.slice('--files='.length);
+    } else if (arg === '--files' || arg === '--depth') {
+      // #6240: the space-separated form consumes the next token as its value.
+      // Refuse (never silently drop) when the value is missing or looks like
+      // another flag — otherwise the review falls back to a different scope
+      // (--files) or a different depth (--depth).
+      const value = argv[i + 1];
+      if (!value || value.startsWith('--')) {
+        throw new Error(
+          arg === '--files'
+            ? 'Missing value for --files (use --files=<file1,file2> or --files <file1,file2>)'
+            : 'Missing value for --depth (use --depth=<value> or --depth <value>)',
+        );
+      }
+      if (arg === '--files') {
+        flags.files = value;
+      } else {
+        flags.depth = value;
+      }
+      i += 1;
     }
   }
 
