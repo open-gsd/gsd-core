@@ -3669,14 +3669,22 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
   test('stop-tracking recipe (scratch repo): a failed git rm commits nothing', (t) => {
     const fence = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');
-    const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489q-');
-    fs.writeFileSync(path.join(dir, 'code'), 'c');
-    git('add', '-A'); git('commit', '-q', '-m', 'seed');
-    // No tracked .planning file, so `git rm -r --cached .planning/` fails and the && must stop the commit.
-    // An empty index makes `git commit` fail anyway, so a wrapper records whether the recipe ran it.
-    const log = path.join(dir, 'commit.log');
-    runFence(dir, `git() { [ "$1" = commit ] && echo commit >> '${log}'; command git "$@"; }\n${fence}`);
-    assert.equal(fs.existsSync(log), false);
+    // The tracked case is the positive control: the same wrapper must log the commit when `git rm` succeeds.
+    for (const tracked of [true, false]) {
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489q-');
+      if (tracked) { fs.mkdirSync(path.join(dir, '.planning')); fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 's'); }
+      fs.writeFileSync(path.join(dir, 'code'), 'c');
+      git('add', '-A'); git('commit', '-q', '-m', 'seed');
+      // With no tracked .planning file `git rm -r --cached .planning/` fails and the && must stop the commit.
+      // An empty index makes `git commit` fail anyway, so a wrapper records whether the recipe ran it.
+      const log = path.join(dir, 'commit.log');
+      const r = runFence(dir, `git() { [ "$1" = commit ] && echo commit >> '${log}'; command git "$@"; }\n${fence}`);
+      assert.equal(fs.existsSync(log), tracked, r.stderr);
+      if (!tracked) {
+        assert.notEqual(r.exitCode, 0);
+        assert.match(r.stderr, /did not match any files/);
+      }
+    }
   });
   test('stop-tracking recipe (scratch repo): a staged foreign file refuses it; a clean index untracks .planning', (t) => {
     const fence = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');
