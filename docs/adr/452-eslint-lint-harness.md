@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-05-28
+- **Amended by:** [ADR-6315](6315-ci-redesign.md) (Proposed; the amendment takes effect when that ADR is ratified)
 
 This codebase adopts ESLint flat config (eslint ≥ 9) with `typescript-eslint`, `eslint-plugin-n`, `eslint-plugin-no-only-tests`, and a local AST-rule plugin as the canonical lint harness, replacing the homegrown regex-based `scripts/lint-*.cjs` scripts. The ESLint harness becomes the single enforcement point for import-graph, Node API, and test-rigor rules. The three test-rigor rules (`local/no-source-grep`, `local/no-magic-sleep-in-tests`, `local/no-elapsed-assertion`) initially ship at `warn`; a follow-up issue (tracked at #453) promotes them to `error` after the cleanup phases merge.
 

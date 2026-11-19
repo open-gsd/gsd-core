@@ -213,7 +213,7 @@
     "pr-branch-planning-filter.test.cjs": 40071,
     "precommit-alias-drift-hook.test.cjs": 11071,
     "prepush-enterprise-email-hook.test.cjs": 985,
-    "process-seam.test.cjs": 5572,
+    "process-seam.process.test.cjs": 5572,
     "profile-output.test.cjs": 14231,
     "profile-pipeline.test.cjs": 3123,
     "prohibition-enforcement.test.cjs": 42248,

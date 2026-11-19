@@ -2712,6 +2712,8 @@ interface WorkerRecord {
   exitCode: number | null;
   note: string;
   completedAt: string | null;
+  /** #6303 (ADR-3711 D8): the foreign runtime this worker was spawned on; absent on a host-runtime worker. */
+  executorRuntime?: string;
 }
 
 const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
@@ -2764,8 +2766,9 @@ function cmdWorktreeWorkerRecord(cwd: string, args: string[] = [], deps: Record<
   const plan = flag('--plan');
   const summaryPath = flag('--summary-path');
   const logFile = flag('--log-file');
+  const executorRuntime = flag('--executor-runtime');
   if (!worktreePath || !pidText || !plan || !summaryPath) {
-    writeErr('Usage: worktree worker-record --path <worktree> --pid <pid> --plan <plan_number> --summary-path <path> [--log-file <path>]\n');
+    writeErr('Usage: worktree worker-record --path <worktree> --pid <pid> --plan <plan_number> --summary-path <path> [--log-file <path>] [--executor-runtime <runtime>]\n');
     process.exitCode = 2;
     return;
   }
@@ -2806,6 +2809,7 @@ function cmdWorktreeWorkerRecord(cwd: string, args: string[] = [], deps: Record<
     exitCode: null,
     note: '',
     completedAt: null,
+    ...(executorRuntime ? { executorRuntime } : {}),
   };
   try {
     writeWorkerRecord(recordPath, record, deps);

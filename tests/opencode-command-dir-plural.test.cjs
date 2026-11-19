@@ -37,7 +37,7 @@ const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const {
-  runMinimalInstall,
+  copyRuntimeFixture,
   installerEnv,
   INSTALL_SCRIPT,
 } = require('./helpers/install-shared.cjs');
@@ -56,7 +56,7 @@ const EXPECTED_COMMAND_DIR = 'commands';
  *  invocation — see bin/install.js installAllRuntimes -> install() ->
  *  runInstallerMigrations, unconditional, not gated on first-install).
  *  #3547 — `configDir` is the runtime's REAL global home (<root>/<globalSuffix>),
- *  the same shape runMinimalInstall now installs into; reinstalling into the
+ *  the same shape runMinimalInstall installs into, and a copy keeps; reinstalling into the
  *  bare <root> would target a different config home and never see the
  *  fabricated legacy state. */
 function reinstallOpencode(root, configDir = null, scope = 'global') {
@@ -160,7 +160,7 @@ function fabricateLegacyOpencodeCommandDir(configDir, opts = {}) {
 describe('#2329: opencode install writes commands to commands/ (plural), not command/ (singular)', () => {
   for (const scope of ['global', 'local']) {
     test(`opencode --${scope}: command files land under commands/, and command/ does NOT exist`, (t) => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope });
       t.after(() => cleanup(root));
 
       const pluralDir = path.join(configDir, 'commands');
@@ -192,7 +192,7 @@ describe('#2329: opencode install writes commands to commands/ (plural), not com
 
 describe('#2329: opencode install manifest records the commands/ prefix', () => {
   test('manifest.files keys use "commands/" prefix; none use "command/"', (t) => {
-    const { manifest, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { manifest, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     assert.ok(manifest && manifest.files, 'manifest.files must exist');
@@ -266,7 +266,7 @@ describe('#2329: opencode command-dir declarations are a single source of truth'
     const globalCommands = cap.runtime.artifactLayout.global.find((k) => k.kind === 'commands');
     const descriptorPrefix = globalCommands.destSubpath;
 
-    const { manifest, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { manifest, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     const keys = Object.keys(manifest.files);
@@ -295,7 +295,7 @@ describe('#2329: upgrading an install with an orphaned command/ dir migrates it 
     // user has (populated command/ dir + a manifest that proves GSD manages
     // those files at the legacy path) by hand-rewriting a fresh install's
     // output — see fabricateLegacyOpencodeCommandDir's doc comment.
-    const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     const legacyDir = path.join(configDir, 'command');
@@ -331,7 +331,7 @@ describe('#2329: upgrading an install with an orphaned command/ dir migrates it 
   });
 
   test('an unrelated user file placed inside command/ survives the migration (not destroyed)', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     const legacyDir = path.join(configDir, 'command');
@@ -382,7 +382,7 @@ describe('#2329: upgrading an install with an orphaned command/ dir migrates it 
   });
 
   test('both-dirs-exist case: pre-existing unrelated content already in commands/ is not clobbered while command/ is still relocated', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     const legacyDir = path.join(configDir, 'command');
@@ -447,7 +447,7 @@ describe('#2329: upgrading an install with an orphaned command/ dir migrates it 
 
 describe('#2329: the fix must not affect other runtimes\' command output directories', () => {
   test('kilo global install still writes to command/ (singular) — unaffected by the opencode-only fix', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'kilo', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'kilo', scope: 'global' });
     t.after(() => cleanup(root));
 
     const singularDir = path.join(configDir, 'command');

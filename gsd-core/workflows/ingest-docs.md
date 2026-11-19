@@ -170,7 +170,7 @@ On Revise: exit with guidance to re-run with `--manifest` or a narrower path.
 Create staging directory:
 
 ```bash
-mkdir -p .planning/intel/classifications/
+mkdir -p "{intel_dir}/classifications/"
 ```
 
 For each discovered doc, spawn `gsd-doc-classifier` in parallel. In Claude Code, issue all Task calls in a single message with multiple tool uses so the harness runs them concurrently. For Copilot / sequential runtimes, fall back to sequential dispatch.
@@ -323,14 +323,14 @@ Agent({
 
 **Applies only when MODE=merge.**
 
-Load existing `.planning/ROADMAP.md`, `.planning/PROJECT.md`, `.planning/REQUIREMENTS.md`, all `CONTEXT.md` files under `.planning/phases/`.
+Load existing `{roadmap_path}`, `.planning/PROJECT.md`, `{requirements_path}`, all `CONTEXT.md` files under `{planning_root}/phases/` (`{planning_root}`: the active scope's root, from `planning.inspect`).
 
 The synthesizer has already hard-blocked on any LOCKED-in-ingest vs LOCKED-in-existing contradiction; if we reach this step, no such blockers remain.
 
 Plan the merge:
 - **New requirements** from synthesized `.planning/intel/requirements.md` that do not overlap existing REQUIREMENTS.md entries → append to REQUIREMENTS.md
 - **New decisions** from synthesized `.planning/intel/decisions.md` that do not overlap existing CONTEXT.md `<decisions>` blocks → write to a new phase's CONTEXT.md or append to the next milestone's requirements
-- **New scope** → derive phase additions following the `new-milestone.md` pattern; append phases to `.planning/ROADMAP.md`
+- **New scope** → derive phase additions following the `new-milestone.md` pattern; append phases to `{roadmap_path}`
 
 Preview the merge diff to the user and gate via approve-revise-abort before writing.
 
@@ -341,14 +341,18 @@ Preview the merge diff to the user and gate via approve-revise-abort before writ
 Commit the ingest results:
 
 ```bash
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+GSD_WS="${GSD_WS:-}"
+PROJECT_MD=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)
 gsd_run commit \
   "docs: ingest {N} docs from {SCAN_PATH} (#2387)" --files \
-  .planning/PROJECT.md \
-  .planning/REQUIREMENTS.md \
-  .planning/ROADMAP.md \
-  .planning/STATE.md \
-  .planning/intel/ \
-  .planning/INGEST-CONFLICTS.md
+  "${PROJECT_MD}" \
+  "${PLANNING_ROOT}/REQUIREMENTS.md" \
+  "${PLANNING_ROOT}/ROADMAP.md" \
+  "${PLANNING_ROOT}/STATE.md" \
+  "{intel_dir}/" \
+  "{conflicts_path}"
 ```
 
 (For merge mode, substitute the actual set of modified files.)

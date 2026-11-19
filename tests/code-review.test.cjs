@@ -548,7 +548,7 @@ describe('CR-WORKFLOW: code review workflow structure', () => {
         block.includes('gsd_run check evaluation-scope') && block.includes('DIFF_BASE=$(scope_field rangeBase)'));
       assert.ok(tier3Block, 'code-review.md Tier 3 resolver block not found');
 
-      assert.ok(tier3Block.includes('${LAST_REVIEW_COMMIT:+--since "$LAST_REVIEW_COMMIT"}'),
+      assert.ok(tier3Block.includes('${LAST_REVIEW_COMMIT:+--since} ${LAST_REVIEW_COMMIT:+"$LAST_REVIEW_COMMIT"}'),
         'Tier 3 must hand LAST_REVIEW_COMMIT to the resolver as --since, so a prior review narrows the scope and the base (#3661)');
       assert.ok(!tier3Block.includes('PHASE_START'), 'Tier 3 must not derive a phase-start anchor of its own');
     });

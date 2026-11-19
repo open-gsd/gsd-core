@@ -43,7 +43,7 @@ const { getProjectInstructionFile } = require('../gsd-core/bin/lib/runtime-name-
 const { convertClaudeToTraeMarkdown } = require('../bin/install.js');
 const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 
-const { runMinimalInstall, walk } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture, walk } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const TRAE_CAP = JSON.parse(
@@ -360,7 +360,7 @@ describe('#2658: trae runtime detection and instruction path (folded from fix-26
 
   describe('#2658: end-to-end --trae install never emits the malformed path (acceptance criterion 1)', () => {
     test('local install: no emitted .md/.js/.cjs file contains the malformed strings; the rules file is concrete', () => {
-      const { configDir, root } = runMinimalInstall({ runtime: 'trae', scope: 'local' });
+      const { configDir, root } = copyRuntimeFixture({ runtime: 'trae', scope: 'local' });
       try {
         const files = walk(configDir)
           .filter((f) => /\.(md|js|cjs)$/.test(f))

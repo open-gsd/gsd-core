@@ -13,6 +13,7 @@
 import { collectSection, collectSections, replaceSection, tokenizeHeadings, headingSliceRange, editHeadingSlice } from './markdown-sectionizer.cjs';
 import type { HeadingToken, Section } from './markdown-sectionizer.cjs';
 import type { Result } from './write-set.cjs';
+import { STATE_MD_ENTRY_MAX_CHARS } from './state-md-schema.cjs';
 export type { Result } from './write-set.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -805,7 +806,22 @@ export interface QuickTaskFields {
 }
 
 /**
+ * Advisory length bound for a Quick Tasks `Description` cell (#5830), in
+ * UTF-16 code units (`string.length`). It is `STATE_MD_ENTRY_MAX_CHARS`
+ * (`src/state-md-schema.cts`), the same 240 bound #2618 set for pending-todo
+ * bullets (`PENDING_TODO_BULLET_MAX_CHARS`, `src/init.cts`): one table row is
+ * one line of STATE.md, which is a digest, so a row should name the task, not
+ * narrate it — the detail belongs in the task's SUMMARY. Exceeding it never
+ * shortens or rejects the row; `appendQuickTaskRow` only reports a warning.
+ */
+export const QUICK_TASK_DESCRIPTION_MAX_CHARS = STATE_MD_ENTRY_MAX_CHARS;
+
+/**
  * Append one row to STATE.md's "Quick Tasks Completed" table.
+ *
+ * A description longer than `QUICK_TASK_DESCRIPTION_MAX_CHARS` (measured on
+ * the raw description, before cell escaping) is still written verbatim; the
+ * result's `warnings` carries one prose entry saying so (#5830).
  *
  * Pure, schema-driven replacement for fast.md's inline `awk NF-2` column-count
  * guess (#2133, ADR-2143 §3 schema registry / §7 fail-loud unrecognized-schema
@@ -826,7 +842,7 @@ export interface QuickTaskFields {
 export function appendQuickTaskRow(
   stateContent: string,
   fields: QuickTaskFields,
-): Result<{ content: string; row: string; variant: string }> {
+): Result<{ content: string; row: string; variant: string; warnings: string[] }> {
   const section = selectQuickTasksSection(stateContent);
   if (!section) {
     return { ok: false, reason: QUICK_TASKS_SECTION_ABSENT };
@@ -882,7 +898,15 @@ export function appendQuickTaskRow(
 
   const content = replaceSection(stateContent, section, newBody);
 
-  return { ok: true, value: { content, row, variant: match.label } };
+  const warnings: string[] = [];
+  if (fields.description.length > QUICK_TASK_DESCRIPTION_MAX_CHARS) {
+    warnings.push(
+      `description is ${fields.description.length} characters (limit ${QUICK_TASK_DESCRIPTION_MAX_CHARS}); ` +
+      'the row was written in full, but STATE.md is a digest — pass a one-line title and keep the detail in the task\'s SUMMARY',
+    );
+  }
+
+  return { ok: true, value: { content, row, variant: match.label, warnings } };
 }
 
 
@@ -1102,6 +1126,29 @@ export function resetQuickTaskRows(
   const content = replaceSection(stateContent, section, newBody);
 
   return { ok: true, value: { content, cleared, variant: match.label } };
+}
+
+// The status words a requirement traceability Status cell can lead with. A word
+// is followed by a non-word character or the end of the cell, so `Pendingx` and
+// `Completed` are not statuses; the two-word forms allow any whitespace run.
+const REQUIREMENT_STATUS_WORD_RE = /^(pending|in\s+progress|gaps\s+found|complete)(?!\w)/i;
+
+/**
+ * #6238: the status word a traceability Status cell leads with, lower-cased and
+ * single-spaced, when it is one of `accepted`; null otherwise. Operator prose
+ * after the word (`Pending (blocked on an upstream decision)`) does not change
+ * the status, the leading-token convention the ROADMAP Status reader follows
+ * (#4925) over this vocabulary (requirement rows say `Pending`, not
+ * `Not started`; the two vocabularies are deliberately separate). The ONE
+ * reader behind every requirement-Status gate (`requirements mark-complete`,
+ * `requirements revert-phase`, `phase complete`), so they cannot disagree on
+ * what a cell says; each caller passes the words it acts on.
+ */
+export function leadingRequirementStatus(cell: string, accepted: readonly string[]): string | null {
+  const m = REQUIREMENT_STATUS_WORD_RE.exec(String(cell).trim());
+  if (m === null) return null;
+  const word = m[1].toLowerCase().replace(/\s+/g, ' ');
+  return accepted.includes(word) ? word : null;
 }
 
 /** The one Traceability heading rule shared by the write and the existence read. */

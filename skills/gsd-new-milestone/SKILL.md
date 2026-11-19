@@ -24,9 +24,9 @@ Brownfield equivalent of new-project. Project exists, PROJECT.md has history. Ga
 **Creates/Updates:**
 - `.planning/PROJECT.md` — updated with new milestone goals
 - `.planning/research/` — domain research (optional, NEW features only)
-- `.planning/REQUIREMENTS.md` — scoped requirements for this milestone
-- `.planning/ROADMAP.md` — phase structure (continues numbering)
-- `.planning/STATE.md` — reset for new milestone
+- `{planning_root}/REQUIREMENTS.md` — scoped requirements for this milestone (`{planning_root}`: the active scope's root, from `planning.inspect`)
+- `{planning_root}/ROADMAP.md` — phase structure (continues numbering)
+- `{planning_root}/STATE.md` — reset for new milestone
 
 **After:** Run `/gsd-discuss-phase [N]` to clarify the approach (or `/gsd-plan-phase [N]` to plan directly); then `/gsd-execute-phase [N]` to execute.
 </objective>
