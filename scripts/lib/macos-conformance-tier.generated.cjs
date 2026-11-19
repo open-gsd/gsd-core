@@ -110,6 +110,7 @@ module.exports = {
   "tests/gate-verify-failure-directions.unit.test.cjs",
   "tests/git-base-branch.test.cjs",
   "tests/git-head-tree.test.cjs",
+  "tests/git-layout-parity.process.test.cjs",
   "tests/git-location-env-scrub.test.cjs",
   "tests/graphify-query.test.cjs",
   "tests/graphify-visualization.test.cjs",

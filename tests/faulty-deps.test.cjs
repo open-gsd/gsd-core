@@ -187,7 +187,7 @@ describe('A. execGit normalization (#3071)', () => {
     // degrades to the lexical start directory without throwing — a
     // `typeof === 'string'` check would still pass if a shape regrowth returned
     // some other reason.
-    const ctx = resolveProjectContext(tmpDir, { deps: { execGit: sharedStub } });
+    const ctx = resolveProjectContext(tmpDir, { deps: { readGitLayout: () => null, execGit: sharedStub } });
     assert.strictEqual(ctx.worktreeRoot, tmpDir);
     assert.strictEqual(ctx.repoRoot, tmpDir);
     assert.strictEqual(ctx.gitCommonDir, null);
