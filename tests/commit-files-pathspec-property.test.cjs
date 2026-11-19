@@ -18,6 +18,7 @@ const MARKED = [
   'gsd-core/workflows/pr-branch.md',
   'gsd-core/workflows/ship.md',
   'gsd-core/workflows/undo.md',
+  'pi/package-agents/gsd-executor.md',
 ];
 
 test('shipped #5211 declarations: each marked file keeps its markers and no marked line is flagged', () => {

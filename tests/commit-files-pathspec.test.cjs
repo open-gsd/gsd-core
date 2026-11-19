@@ -3474,7 +3474,10 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   function runFence(dir, script, cwd = dir) {
     const file = path.join(dir, '.git', 'fence.sh');
     fs.writeFileSync(file, script);
-    return runHook(file, [], { interpreter: 'bash', cwd, timeoutMs: GIT_TIMEOUT_MS });
+    // A home inside .git keeps the developer's global git config (gpgsign, hooksPath, identity) out of the fence.
+    const home = path.join(dir, '.git', 'fence-home');
+    fs.mkdirSync(home, { recursive: true });
+    return runHook(file, [], { interpreter: 'bash', cwd, env: isolatedEnv({ home }), timeoutMs: GIT_TIMEOUT_MS });
   }
 
   // Body of the first bash fence at or after `marker` in `rel`; `bounded` stops the search at the step's `</step>`.
