@@ -46,7 +46,9 @@ function runTrackShipping(responses) {
     fs.writeFileSync(gitCallsPath, '', 'utf8');
 
     const preamble = [
-      'gsd_run() { :; }',
+      // `query planning.inspect --pick generated_from.planning_root` returns the fixture's absolute
+      // `.planning` dir (#5861); every other verb (state.update, commit) is a no-op here.
+      'gsd_run() { if [ "$2" = "planning.inspect" ]; then printf "%s" "$PWD/.planning"; fi; }',
       'sleep() { :; }',
       'git() {',
       '  if [ "$1" = "rev-parse" ] && [ "$2" = "HEAD" ]; then',

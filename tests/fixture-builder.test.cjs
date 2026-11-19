@@ -83,4 +83,35 @@ describe('fixture builder module', () => {
       'git fixture writes canonical PROJECT.md'
     );
   });
+
+  // #5913: the fixture repo's initial branch must not follow the host's `init.defaultBranch`
+  // (Apple's Command Line Tools git sets `main` in its system gitconfig). CI leaves it unset, which
+  // git reads as `master`, so `master` is the value every fixture user already sees there.
+  describe('initial branch ignores the host init.defaultBranch (#5913)', () => {
+    for (const hostDefault of ['trunk', 'main', null]) {
+      test(`host init.defaultBranch=${hostDefault === null ? '(unset)' : hostDefault}`, (t) => {
+        const hostConfigDir = fs.mkdtempSync(path.join(fs.realpathSync(require('os').tmpdir()), 'gsd-host-gitconfig-'));
+        t.after(() => cleanup(hostConfigDir));
+        const hostConfig = path.join(hostConfigDir, 'gitconfig');
+        fs.writeFileSync(hostConfig, hostDefault === null ? '' : `[init]\n\tdefaultBranch = ${hostDefault}\n`);
+
+        const saved = { GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM };
+        process.env.GIT_CONFIG_GLOBAL = hostConfig;
+        process.env.GIT_CONFIG_NOSYSTEM = '1';
+        let dir;
+        try {
+          dir = createFixture({ git: true });
+        } finally {
+          for (const [key, value] of Object.entries(saved)) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+        }
+        created.push(dir);
+
+        const branch = gitOrThrow(['symbolic-ref', '--short', 'HEAD'], { cwd: dir }).trim();
+        assert.strictEqual(branch, 'master');
+      });
+    }
+  });
 });

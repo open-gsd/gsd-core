@@ -170,7 +170,10 @@ function scanForRawWrites(file, lines) {
   const violations = [];
   const flag = (line, text, pathspecRaw) => {
     const p = stripQuotes(pathspecRaw);
-    if (isVerificationReportPath(p) || isSharedPlanningDoc(p)) return;
+    // #5861: a shared planning doc named through the scope root a fence resolves
+    // (`${PLANNING_ROOT}/ROADMAP.md`) is the same inert doc as the flat `.planning/ROADMAP.md`.
+    const flatP = p.replace(/^"?\$\{PLANNING_ROOT\}"?\//, '.planning/');
+    if (isVerificationReportPath(flatP) || isSharedPlanningDoc(flatP)) return;
     violations.push({ rule: 'L2', file, line, target: p, text: text.trim() });
   };
   const collectPathTokens = (tokens, startIdx) => {

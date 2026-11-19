@@ -317,7 +317,7 @@ below still need to re-read it (each is its own shell) to resolve
 REQUIREMENTS.md/ROADMAP.md/STATE.md correctly under a workstream. It is
 removed in Step 10, its true last consumer. -->
 
-Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `missing_agents`, `project_path`, `roadmap_path`, `requirements_path`, `config_path`, `research_dir`, `milestones_path`, `phases_dir`, `archive_dir`.
+Extract from init JSON: `researcher_model`, `synthesizer_model`, `roadmapper_model`, `commit_docs`, `research_enabled`, `current_milestone`, `project_exists`, `roadmap_exists`, `latest_completed_milestone`, `phase_dir_count`, `phase_archive_path`, `agents_installed`, `missing_agents`, `project_path`, `roadmap_path`, `state_path`, `requirements_path`, `config_path`, `research_dir`, `milestones_path`, `phases_dir`, `archive_dir`.
 
 **If `agents_installed` is false:** Display a warning before proceeding:
 ```
@@ -569,6 +569,12 @@ Agent(prompt="
 - {milestones_path}
 </required_reading>
 
+<write_targets>
+- ROADMAP.md: {roadmap_path}
+- STATE.md: {state_path}
+- REQUIREMENTS.md: {requirements_path}
+</write_targets>
+
 ${AGENT_SKILLS_ROADMAPPER}
 
 </planning_context>
@@ -622,7 +628,7 @@ Success criteria:
 - "Adjust phases" — Tell me what to change
 - "Review full file" — Show raw ROADMAP.md
 
-**If "Adjust":** Get notes, re-spawn roadmapper with revision context, loop until approved.
+**If "Adjust":** Get notes, re-spawn roadmapper with revision context and the same `<write_targets>` block, loop until approved.
 **If "Review":** Display raw ROADMAP.md, re-ask.
 
 **Commit roadmap** (after approval):

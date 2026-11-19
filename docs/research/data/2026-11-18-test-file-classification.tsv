@@ -1,0 +1,1220 @@
+file	class	sub-class	linux_ms	win32_ms	win_tier	mac_tier	cases	reason
+tests/4213-progress-helpers.property.test.cjs	D	D	55		n	n	11	calls product module on constructed input in-process
+tests/5100-win32-bare-bash-sentinel.property.test.cjs	D	D	50		y	y	12	calls product module on constructed input in-process
+tests/active-workstream-store.test.cjs	D	D	15		n	n	13	calls product module on constructed input in-process
+tests/active-workstream-store.unit.test.cjs	D	D	159		n	y	147	calls product module on constructed input in-process
+tests/adapter-declarative-equivalence.test.cjs	D	D	9		n	n	4	calls product module on constructed input in-process
+tests/adapter-imperative.test.cjs	D	D	29		n	n	5	calls product module on constructed input in-process
+tests/add-todo.test.cjs	A	A4	9		n	n	5	scans source/prose text for a string/pattern
+tests/adr-15-progress-converge.test.cjs	A	A4	291		n	n	9	scans source/prose text for a string/pattern
+tests/adr-218-release-version-validation.test.cjs	A	A4	18		n	n	12	asserts string/pattern in repo file text
+tests/adr-22-plan-drift-guard.test.cjs	E	E	6114		n	n	58	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-230-pr-target-policy.test.cjs	A	A4	24		n	n	45	scans source/prose text for a string/pattern
+tests/adr-612-bracket-coherence.test.cjs	E	E	15907		n	n	29	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-bracket-display.property.test.cjs	E	E	3480		n	n	12	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-bracket-grammar.test.cjs	D	D	98		n	n	85	calls product module on constructed input in-process
+tests/adr-612-bracket-heading-selection.test.cjs	D	D	135		n	n	41	calls product module on constructed input in-process
+tests/adr-612-bracket-new-project-config.test.cjs	E	E	574		y	n	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-bracket-phase-counting.test.cjs	E	E	48201		n	n	117	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-bracket-phase-remove.test.cjs	E	E	36911		y	y	80	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-bracket-read-tolerance.test.cjs	E	E	32173		n	n	69	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-bracket-roundtrip.property.test.cjs	D	D	565		n	n	50	calls product module on constructed input in-process
+tests/adr-612-bracket-selection.property.test.cjs	D	D	367		n	n	30	calls product module on constructed input in-process
+tests/adr-612-bracket-write-parity.test.cjs	E	E	5653		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-bracket-write-path.test.cjs	E	E	45009		y	y	71	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-612-collision-characterization.test.cjs	D	D	49		n	n	7	calls product module on constructed input in-process
+tests/adr-index-gate.test.cjs	E	E	26080	20776	y	y	99	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr-parser.property.test.cjs	D	D	1096		n	y	26	hand-verified: calls product module on constructed input in-process
+tests/adr-parser.test.cjs	D	D	14		n	n	4	calls product module on constructed input in-process
+tests/adr-parser.unit.test.cjs	D	D	84		n	y	233	calls product module on constructed input in-process
+tests/adr857-contribution-merge.test.cjs	D	D	89		n	n	5	calls product module on constructed input in-process
+tests/adr857-core-without-capabilities.test.cjs	E	E	3870	10064	n	n	16	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/adr857-predicate-boundary.test.cjs	F	F1	59		n	n	20	product code applied to repo content
+tests/advance-plan-ambiguous-phase.test.cjs	E	E	1166		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/advertised-command-parity.test.cjs	E	E	4792		n	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/affected-tests-lib.test.cjs	D	D	44		n	n	28	calls product module on constructed input in-process
+tests/agent-classification-parity.test.cjs	A	A4	62		n	n	4	scans source/prose text for a string/pattern
+tests/agent-descriptor-parity.install.test.cjs	E	E	880		n	n	21	qa/install/integration suite drives real binaries
+tests/agent-fragments-emission.install.test.cjs	E	E	228000		n	n	2	hand-verified: qa/install/integration suite drives real binaries
+tests/agent-frontmatter.test.cjs	A	A4	184		n	n	91	scans source/prose text for a string/pattern
+tests/agent-hint-routing-1689.test.cjs	E	E	4653		n	n	17	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/agent-install-check.test.cjs	D	D	476	2413	y	y	81	calls product module on constructed input in-process
+tests/agent-install-validation.test.cjs	E	E	13772	22416	y	y	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/agent-marker-documentation-guard.test.cjs	F	F1	29		n	n	4	product code applied to repo content
+tests/agent-required-reading-consistency.test.cjs	A	A4	133		n	n	13	hand-verified: scans source/prose text for a string/pattern
+tests/agent-size-budget.test.cjs	D	D	39		n	n	13	calls product module on constructed input in-process
+tests/agent-skills-awareness.test.cjs	A	A4	26		n	n	3	scans source/prose text for a string/pattern
+tests/agent-skills-bootstrap.test.cjs	A	A4	96		n	n	13	hand-verified: scans source/prose text for a string/pattern
+tests/agent-skills-compact-variant.test.cjs	E	E	47		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/agent-skills.test.cjs	E	E	35550	48271	y	y	106	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/agent-tools.install.test.cjs	E	E	44141		n	n	32	qa/install/integration suite drives real binaries
+tests/agent-tracked-source-rule.test.cjs	A	A4	10		n	n	4	scans source/prose text for a string/pattern
+tests/ai-evals.test.cjs	E	E	4359		n	n	32	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/allowlist-ratchet.test.cjs	D	D	18		n	n	27	hand-verified: calls product module on constructed input in-process
+tests/analyze-checkbox-conflict.test.cjs	E	E	11222		n	n	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/analyze-dependencies.test.cjs	A	A4	18		n	n	6	scans source/prose text for a string/pattern
+tests/anti-pattern-enforcement.test.cjs	A	A4	27		n	n	12	hand-verified: scans source/prose text for a string/pattern
+tests/antigravity-repo-grounding.test.cjs	D	D	40		n	n	15	calls product module on constructed input in-process
+tests/antigravity-reviewer.test.cjs	D	D	23		n	n	24	calls product module on constructed input in-process
+tests/antigravity-upgrades.test.cjs	E	E	6382	21256	y	n	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/api-coverage-gate-e2e.test.cjs	E	E	6589	17681	n	n	30	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/api-coverage.test.cjs	E	E	2005	1968	n	y	85	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/args-terminator-nonce.test.cjs	E	E	27337		y	y	29	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/artifacts.test.cjs	D	D	353		n	n	27	calls product module on constructed input in-process
+tests/ask-user-questions-fallback.test.cjs	A	A4	42		n	n	2	scans source/prose text for a string/pattern
+tests/assumption-delta-checkpoint-e2e.test.cjs	E	E	4687	11144	n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/assumption-delta.test.cjs	E	E	1618	2308	n	n	37	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/atomic-write-coverage.test.cjs	A	A4	26		n	n	3	hand-verified: scans source/prose text for a string/pattern
+tests/atomic-write-rename-failure.test.cjs	D	D	12		n	n	2	calls product module on constructed input in-process
+tests/audit-command-cutover.test.cjs	E	E	40723	51752	n	n	115	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/audit-fix-command.test.cjs	A	A4	24		n	n	39	scans source/prose text for a string/pattern
+tests/audit-milestone-filename-guard.test.cjs	A	A4	14		n	n	1	asserts string/pattern in repo file text
+tests/audit-open-remainder-count.test.cjs	E	E	3124		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/audit-uat-acknowledged.test.cjs	E	E	1181		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/audit-uat-summary-segmentation.test.cjs	E	E	2031		n	n	16	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/audit-workstream-layouts.test.cjs	E	E	1905		y	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/augment-conversion.test.cjs	D	D	30		n	n	10	calls product module on constructed input in-process
+tests/augment-upgrades.test.cjs	E	E	5947	36625	y	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/auto-chain-transition-delegation.test.cjs	A	A4	17		n	n	5	scans source/prose text for a string/pattern
+tests/auto-select-attribute.test.cjs	E	E	2344		n	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/autonomous-allowed-tools.test.cjs	A	A3	9		n	n	1	hand-verified: scans source/prose text for a string/pattern
+tests/autonomous-converge.test.cjs	A	A4	499		n	n	13	hand-verified: scans source/prose text for a string/pattern
+tests/autonomous-decomposition.test.cjs	A	A4	19		n	n	6	scans source/prose text for a string/pattern
+tests/autonomous-interactive.test.cjs	A	A4	16		n	n	8	scans source/prose text for a string/pattern
+tests/autonomous-to-flag.test.cjs	A	A4	18		n	n	14	scans source/prose text for a string/pattern
+tests/autonomous-ui-steps.test.cjs	A	A4	23		n	n	21	asserts string/pattern in repo file text
+tests/backwards-compat-phase-id.test.cjs	D	D	24		n	n	7	calls product module on constructed input in-process
+tests/benchmark-compact-content.test.cjs	E	E	9134		n	n	29	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/blocking-guard-budget-parity.test.cjs	E	E	4488		y	y	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/branch-no-track-guard.test.cjs	A	A4	47		n	n	1	scans source/prose text for a string/pattern
+tests/broken-windows-description.test.cjs	D	D	101		n	n	1	calls product module on constructed input in-process
+tests/broken-windows.test.cjs	E	E	30284	71381	y	y	101	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/bugs-1656-1657.test.cjs	E	E	124		n	n	8	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/c8-merge-async-flag.test.cjs	D	D	16		n	n	7	calls product module on constructed input in-process
+tests/canary-version-leak-lint.test.cjs	B	B-lint-script	127		n	n	14	drives scripts/lint-*.cjs
+tests/capability-cli.test.cjs	E	E	32277	72949	y	y	72	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-command-dispatch.test.cjs	D	D	90	649	y	y	48	calls product module on constructed input in-process
+tests/capability-consent.test.cjs	E	E	6226	7930	y	y	64	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-consumption.test.cjs	D	D	134		n	n	31	calls product module on constructed input in-process
+tests/capability-ledger.test.cjs	D	D	447	1192	y	y	91	in-process logic with <=3 incidental process calls
+tests/capability-lifecycle.test.cjs	E	E	3183	6078	y	y	132	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-loader.test.cjs	D	D	3461	5414	y	y	60	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-lock-lazy-self-probe-5327.test.cjs	E	E	645		y	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-lock-mkdir-failure-3987.test.cjs	D	D	12	22	n	n	4	calls product module on constructed input in-process
+tests/capability-manifest-version.test.cjs	D	D	294		n	n	24	calls product module on constructed input in-process
+tests/capability-matrix-sync.test.cjs	D	D	14		n	n	2	calls product module on constructed input in-process
+tests/capability-precedence-parity.test.cjs	D	D	49		n	n	38	calls product module on constructed input in-process
+tests/capability-probe-fallback.test.cjs	E	E	1564	6012	y	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-registry.test.cjs	E	E	25366		n	y	344	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-source.test.cjs	E	E	634	2005	y	y	148	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-state.test.cjs	E	E	9364	15593	y	y	99	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/capability-trust.test.cjs	D	D	31		n	y	64	calls product module on constructed input in-process
+tests/capability-validator-task-content-resolver.test.cjs	D	D	22		n	n	14	hand-verified: calls product module on constructed input in-process
+tests/capability-writer.test.cjs	E	E	3988		n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/chain-flag-plan-phase.test.cjs	A	A4	16		n	n	9	scans source/prose text for a string/pattern
+tests/changelog-release-notes.test.cjs	E	E			n	y	31	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/changeset-cli.test.cjs	E	E	2160		n	n	40	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/changeset-github-release-notes.test.cjs	E	E	450		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/changeset-lint.test.cjs	B	B-lint-script	990		n	y	40	hand-verified: drives scripts/lint-*.cjs
+tests/changeset-new.test.cjs	D	D	98	90	y	n	13	in-process logic with <=3 incidental process calls
+tests/changeset-parse.test.cjs	D	D	22		n	y	23	calls product module on constructed input in-process
+tests/changeset-render.test.cjs	D	D	11		n	n	2	hand-verified: calls product module on constructed input in-process
+tests/changeset-serialize.test.cjs	F	F1	78		n	n	12	product code applied to repo content
+tests/check-contract-drift.test.cjs	E	E	2774	4825	y	y	100	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-decision-coverage-config.test.cjs	E	E	14583		n	n	23	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-decision-coverage-frontmatter-evidence.test.cjs	D	D	661		n	n	12	calls product module on constructed input in-process
+tests/check-env.test.cjs	E	E	5570	10854	y	n	7	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-gap-analysis-plan-post-e2e.test.cjs	E	E	22816	31862	n	n	32	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-glossary-refs.test.cjs	E	E	1888	1588	y	n	13	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-predicate-dispatch-phase-flags-4483.test.cjs	A	A4	31		n	n	3	hand-verified: asserts string/pattern in repo file text
+tests/check-predicate.test.cjs	E	E	2025	5357	y	y	23	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-router-cutover-equivalence.test.cjs	D	D	50875		n	y	28	hand-verified: product module on constructed input; few repo reads
+tests/check-router-gate-boundaries.test.cjs	B	B-eslint-rule	11153		y	n	18	hand-verified: RuleTester/eslint-rules ref
+tests/check-tdd-review-checkpoint-e2e.test.cjs	E	E	5000	13269	n	n	13	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-ui-plan-gate.test.cjs	D	D	264		n	y	48	calls product module on constructed input in-process
+tests/check-ui-safety-gate.test.cjs	E	E	1885	3409	y	y	68	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-update-config-dir.test.cjs	E	E	1108	1317	y	y	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/check-update-fail-open.test.cjs	E	E	192		y	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/checker-passed-with-findings-5578.test.cjs	D	D	12		n	n	2	pure assertions on helper-built inputs, no repo reads
+tests/chunked-planning-parallel.test.cjs	E	E	1833	4068	y	y	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ci-compact-v8-coverage.test.cjs	D	D			n	y	22	calls product module on constructed input in-process
+tests/ci-conformance-pr-gating.test.cjs	E	E	48		y	y	16	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ci-docs-guard-registry.test.cjs	B	B-lint-script	2338	1967	n	n	51	drives scripts/lint-*.cjs
+tests/ci-durations-upload-nonfatal.test.cjs	A	A3			n	n	3	structure/schema of parsed repo config/prose
+tests/ci-fix-next-rerun-wiring.test.cjs	F	F1			n	n	13	product code applied to repo content
+tests/ci-fix-next-rerun.test.cjs	D	D			n	n	26	in-process logic with <=3 incidental process calls
+tests/ci-full-lane-sharding.test.cjs	F	F1	143		n	n	6	product code applied to repo content
+tests/ci-job-timing.test.cjs	D	D	46		n	n	5	calls product module on constructed input in-process
+tests/ci-merge-group-wiring.test.cjs	A	A5	87		n	n	6	inventory/count/roster over repo files
+tests/ci-next-health-recovery.test.cjs	D	D	26		n	n	27	calls product module on constructed input in-process
+tests/ci-next-health.test.cjs	D	D	608		n	n	33	in-process logic with <=3 incidental process calls
+tests/ci-pr-mergeability.test.cjs	D	D	678		n	n	62	in-process logic with <=3 incidental process calls
+tests/ci-rebase-check.test.cjs	E	E	535	1655	y	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ci-test-job-timeout-budget.test.cjs	F	F1	164		n	n	8	product code applied to repo content
+tests/ci-test-scope.test.cjs	E	E	4869	7390	y	y	96	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ci-timeout-report-rolling-pr.test.cjs	D	D	123		n	n	88	in-process logic with <=3 incidental process calls
+tests/ci-timeout-report.test.cjs	D	D	40		n	n	13	hand-verified: product code applied to repo content
+tests/cjs-command-router-adapter.test.cjs	E	E	6309	10550	n	n	29	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/claude-imperative-reference.test.cjs	F	F1	42		n	n	12	product code applied to repo content
+tests/claude-local-uninstall-settings-local.test.cjs	D	D			y	n	5	calls product module on constructed input in-process
+tests/claude-md-path.test.cjs	E	E	2737		n	y	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/claude-md.test.cjs	E	E	7944	16735	y	y	27	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/claude-orchestration-4747.test.cjs	D	D			y	y	56	in-process logic with <=3 incidental process calls
+tests/claude-orchestration-command-router.test.cjs	E	E	1577		n	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/claude-orchestration.test.cjs	E	E	6903		n	n	118	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/claude-skills-migration.test.cjs	D	D	81		n	n	18	hand-verified: calls product module on constructed input in-process
+tests/cleanup-branch-pruning.test.cjs	A	A4	14		n	n	14	hand-verified: scans source/prose text for a string/pattern
+tests/cli-exit.test.cjs	E	E	13874		n	n	127	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/cli-surface-host-router-locks.test.cjs	E	E			y	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/cli-surface-parity.test.cjs	D	D			n	n	18	in-process logic with <=3 incidental process calls
+tests/cline-beforetool-upgrade.test.cjs	D	D	22		n	n	15	calls product module on constructed input in-process
+tests/cline-dispatch-degradation.test.cjs	D	D	12		n	n	9	calls product module on constructed input in-process
+tests/cline-imperative-reference.test.cjs	F	F1	29		n	n	7	product code applied to repo content
+tests/cline-install.test.cjs	E	E	5390	24301	y	y	36	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/cline-model-override-upgrade.test.cjs	D	D	23		n	n	12	calls product module on constructed input in-process
+tests/cline-support.test.cjs	A	A4	13		n	n	4	scans source/prose text for a string/pattern
+tests/cline-uninstall-symlinked-agents-md.test.cjs	D	D			y	y	5	calls product module on constructed input in-process
+tests/clock-seam.test.cjs	E	E	9219		n	n	42	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/clock.test.cjs	E	E	192		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/close-phase-todos-padded-resolves.test.cjs	E	E	194	3004	y	n	14	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/close-phase-todos-stage-deletion.test.cjs	A	A4	17		n	n	4	hand-verified: scans source/prose text for a string/pattern
+tests/clusters.test.cjs	C	C	10		n	n	10	hand-verified: type/shape/exports assertions only
+tests/code-review-agent-skills.test.cjs	D	D	17		n	n	1	product module on constructed input; few repo reads
+tests/code-review-cicd.test.cjs	E	E			y	n	26	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/code-review-command.test.cjs	F	F	329		n	n	15	hand-verified: in-process logic with <=3 incidental process calls
+tests/code-review-depth.test.cjs	D	D	1254		n	n	54	in-process logic with <=3 incidental process calls
+tests/code-review-disposition.property.test.cjs	E	E	19186		n	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/code-review-fix-pipeline-regression.test.cjs	E	E	244	151	y	y	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/code-review-flags.test.cjs	A	A4	20		n	n	24	scans source/prose text for a string/pattern
+tests/code-review-necessity.test.cjs	E	E			y	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/code-review-pipeline-regression.test.cjs	D	D	52102	14990	y	y	25	calls product module on constructed input in-process
+tests/code-review-summary-parser.test.cjs	A	A4	28		n	n	13	scans source/prose text for a string/pattern
+tests/code-review-tier3-files-override-scoping.test.cjs	E	E	3637	2957	y	y	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/code-review.test.cjs	E	E	6899	22137	y	y	84	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/code-reviewer-contribution.test.cjs	E	E	3420		y	n	16	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/code-unit-cap.test.cjs	D	D			n	n	11	calls product module on constructed input in-process
+tests/codebase-mapper-date-restamp.test.cjs	A	A4	10		n	n	3	asserts string/pattern in repo file text
+tests/codebuddy-install.test.cjs	D	D	2798		n	n	15	calls product module on constructed input in-process
+tests/codebuddy-upgrades.test.cjs	E	E	1626		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/codex-agent-toml.test.cjs	D	D	26		n	n	33	calls product module on constructed input in-process
+tests/codex-config-agents.test.cjs	E	E	69354	293559	y	y	41	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/codex-config-hooks.test.cjs	E	E	39037	190518	y	y	145	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/codex-config-install.test.cjs	E	E	34680	120534	y	y	75	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/codex-config.test.cjs	D	D	517	1342	y	n	155	in-process logic with <=3 incidental process calls
+tests/codex-declarative-reference.test.cjs	D	D	34		n	n	17	calls product module on constructed input in-process
+tests/codex-inherit-smoke.test.cjs	D	D	8946	53837	y	n	12	calls product module on constructed input in-process
+tests/codex-windows-shim-node-resolution.test.cjs	D	D	16		y	n	7	calls product module on constructed input in-process
+tests/command-arg-projection.test.cjs	D	D	1219		n	n	105	in-process logic with <=3 incidental process calls
+tests/command-arguments-block.test.cjs	E	E	28095		y	y	33	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/command-contract.test.cjs	B	B-lint-script	451		n	n	53	drives scripts/lint-*.cjs
+tests/command-routing-hub.test.cjs	E	E	16253	26325	y	n	116	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/commands.platform.test.cjs	E	E	12935		y	y	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/commands.test.cjs	E	E	64212	235791	n	n	316	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/commit-docs-bypass.test.cjs	E	E	5847		n	n	124	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/commit-files-deletion.test.cjs	E	E	44661	94921	y	y	49	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/commit-files-pathspec.test.cjs	E	E	30895	81763	y	y	78	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/commonjs-marker.test.cjs	E	E	21193	77488	y	y	28	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/compact-agent-staging.test.cjs	E	E	2429		n	n	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/compact-content-4139.test.cjs	E	E	7685	18993	y	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/compact-content-partition-guard.test.cjs	E	E	726		n	n	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/compact-content-template-variant-parity.test.cjs	F	F1	12		n	n	5	product code applied to repo content
+tests/compact-content-variant-guard.test.cjs	E	E	70		n	n	16	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/complete-milestone-release-map-routing.test.cjs	E	E	11889		y	y	26	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/completion-predicate-drift-guard.test.cjs	B	B-lint-script	3129		n	n	40	drives scripts/lint-*.cjs
+tests/completion-ratio-scope-withholding.test.cjs	E	E	20032	40291	n	n	36	hand-verified: drives scripts/lint-*.cjs
+tests/completion-ratio-single-owner.test.cjs	B	B-lint-script	1705		n	n	42	hand-verified: drives scripts/lint-*.cjs
+tests/complexity-trigger.test.cjs	D	D	1039		n	n	60	calls product module on constructed input in-process
+tests/concurrency-safety.test.cjs	E	E	10668		n	n	26	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/config-defaults-runtime-exclusion.test.cjs	E	E	857	1200	y	n	2	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/config-field-docs.test.cjs	D	D	563		n	n	39	in-process logic with <=3 incidental process calls
+tests/config-get-default.test.cjs	E	E	9636	22086	n	n	113	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/config-get-raw-guard.test.cjs	A	A4	102		n	n	1	asserts string/pattern in repo file text
+tests/config-loader-bounded-read.platform.test.cjs	E	E			y	y	135	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/config-loader-bounded-read.test.cjs	D	D			n	n	20	in-process logic with <=3 incidental process calls
+tests/config-loader.test.cjs	E	E	5690	13938	y	n	98	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/config-schema.property.test.cjs	E	E	4176	9782	y	y	65	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/config.platform.test.cjs	E	E	8480		y	n	29	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/config.test.cjs	E	E	125512	166589	n	y	234	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/configuration-migrate-config.test.cjs	E	E	3971		n	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/configuration-normalize-legacy-keys.test.cjs	D	D	81		n	n	9	calls product module on constructed input in-process
+tests/configured-entrypoint-validation.test.cjs	E	E	9981	54998	y	n	22	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/context-composer.property.test.cjs	D	D	172		n	n	15	calls product module on constructed input in-process
+tests/context-composer.test.cjs	D	D	17		n	n	15	calls product module on constructed input in-process
+tests/context-drift.test.cjs	E	E	19115		y	n	42	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/context-enrichment.test.cjs	A	A4	23		n	n	7	hand-verified: scans source/prose text for a string/pattern
+tests/context-index-sync.test.cjs	A	A2	56		n	n	2	committed generated artifact equals regeneration/parse of source
+tests/context-monitor-host-contract.test.cjs	E	E	7749		y	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/context-predicates-query.test.cjs	E	E	12322		n	n	24	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/context-predicates.property.test.cjs	D	D	198		n	n	15	calls product module on constructed input in-process
+tests/context-predicates.test.cjs	D	D	56		n	n	72	product module on constructed input; few repo reads
+tests/context-utilization.property.test.cjs	D	D	41		n	n	28	calls product module on constructed input in-process
+tests/context-utilization.test.cjs	D	D	26		n	n	16	calls product module on constructed input in-process
+tests/context7-plugin-grant-parity.test.cjs	A	A1	27		n	n	1	hand-verified: compares >=2 repo artifacts
+tests/context7-tool-name-parity.test.cjs	A	A1	144		n	n	3	compares >=2 repo artifacts
+tests/continuation-grammar-parity.test.cjs	D	D	85		n	n	30	calls product module on constructed input in-process
+tests/contributor-standards.test.cjs	A	A4	30		n	y	14	scans source/prose text for a string/pattern
+tests/conventional-title.property.test.cjs	D	D	106		n	n	12	calls product module on constructed input in-process
+tests/conventional-title.test.cjs	D	D	16		n	n	23	calls product module on constructed input in-process
+tests/copilot-install.test.cjs	E	E	38982	106364	y	y	46	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/copilot-upgrades.test.cjs	E	E	4560	24127	y	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/core-utils.test.cjs	D	D	791	2948	y	y	139	in-process logic with <=3 incidental process calls
+tests/coverage-metadata-parser.test.cjs	E	E	9192		n	n	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/coverage-uat-routing.test.cjs	E	E	1720		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/criterion-baseline.test.cjs	D	D			n	n	76	in-process logic with <=3 incidental process calls
+tests/criterion-replay.test.cjs	D	D			y	y	66	in-process logic with <=3 incidental process calls
+tests/cross-ai-execution.test.cjs	F	F1	81		n	n	18	product code applied to repo content
+tests/cross-runtime-execution.test.cjs	D	D			y	n	16	in-process logic with <=3 incidental process calls
+tests/cursor-conversion.test.cjs	D	D	13		n	n	10	hand-verified: calls product module on constructed input in-process
+tests/cursor-dispatch-upgrade.test.cjs	D	D	8		n	n	6	calls product module on constructed input in-process
+tests/cursor-hook-bus-upgrade.test.cjs	D	D	21		n	n	10	calls product module on constructed input in-process
+tests/cursor-hook-workspace-roots.test.cjs	E	E	2197	7332	n	n	14	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/cursor-hooks.test.cjs	D	D	149	176	y	n	20	in-process logic with <=3 incidental process calls
+tests/cursor-imperative-reference.test.cjs	F	F1	34		n	n	9	product code applied to repo content
+tests/cursor-reviewer.test.cjs	A	A4	28		n	n	23	hand-verified: scans source/prose text for a string/pattern
+tests/cursor-subagent-isolation.test.cjs	E	E	4396	13998	y	y	51	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/custom-phase-identity-boundaries.test.cjs	E	E	9134		n	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/custom-phase-readers.test.cjs	E	E	183758		y	y	92	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/custom-phase-review-round7.test.cjs	E	E	24284		n	y	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/debug-manager-blocking-spawn.test.cjs	A	A4	35		n	n	8	asserts string/pattern in repo file text
+tests/debug-session-management.test.cjs	D	D	202		y	n	49	in-process logic with <=3 incidental process calls
+tests/debug-session-manager-commit.test.cjs	E	E	993		n	n	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/debug-symptoms-prefilled-arguments.test.cjs	A	A4	12		n	n	5	asserts string/pattern in repo file text
+tests/debugger-bug-taxonomy.test.cjs	A	A4	19		n	n	14	scans source/prose text for a string/pattern
+tests/debugger-fix-acceptance.test.cjs	A	A4	34		n	n	14	scans source/prose text for a string/pattern
+tests/debugger-prevention.test.cjs	A	A4	20		n	n	12	scans source/prose text for a string/pattern
+tests/debugger-rca-branching.test.cjs	A	A4	25		n	n	14	scans source/prose text for a string/pattern
+tests/debugger-repro-hardening.test.cjs	A	A4	16		n	n	11	hand-verified: scans source/prose text for a string/pattern
+tests/debugger-sbfl.test.cjs	A	A4	38		n	n	18	hand-verified: scans source/prose text for a string/pattern
+tests/debugger-semantic-recall.test.cjs	A	A4	17		n	y	11	scans source/prose text for a string/pattern
+tests/decisions.test.cjs	E	E	19724		n	n	214	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/declarative-reference-antigravity.test.cjs	E	E	1414		n	n	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/declarative-reference-augment.test.cjs	E	E	929		n	n	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/declarative-reference-codebuddy.test.cjs	E	E	1241		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/declarative-reference-copilot.test.cjs	E	E	889		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/declarative-reference-windsurf.test.cjs	E	E	938		n	n	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/declarative-reference-zcode.test.cjs	E	E	2260		n	n	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/default-flip-documentation-lint.test.cjs	B	B-lint-script	604		n	y	15	drives scripts/lint-*.cjs
+tests/defaults-json-fallback.test.cjs	E	E	6195		y	n	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/dependency-advisory-floors.test.cjs	A	A3			n	n	1	structure/schema of parsed repo config/prose
+tests/derive-progress.property.test.cjs	D	D	109		n	n	3	calls product module on constructed input in-process
+tests/diagnose-issues-workflow.test.cjs	A	A1	31		n	n	6	compares >=2 repo artifacts
+tests/diagnose-windows-spawn-watcher.test.cjs	D	D	26		y	n	12	calls product module on constructed input in-process
+tests/discord-release-summary-changelog-body-5922.test.cjs	D	D			n	n	8	calls product module on constructed input in-process
+tests/discord-release-summary.test.cjs	D	D	17		n	n	4	calls product module on constructed input in-process
+tests/discuss-all-flag.test.cjs	A	A4	12		n	n	7	asserts string/pattern in repo file text
+tests/discuss-checkpoint.test.cjs	A	A4	11		n	n	6	scans source/prose text for a string/pattern
+tests/discuss-mode.test.cjs	D	D	158		n	n	21	calls product module on constructed input in-process
+tests/discuss-phase-power.test.cjs	A	A4	76		n	n	24	scans source/prose text for a string/pattern
+tests/dispatch-identity.test.cjs	D	D	125	134	n	n	40	in-process logic with <=3 incidental process calls
+tests/dispatch-isolation-derived-executor.test.cjs	E	E			n	y	26	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/dispatch-model-pin.test.cjs	D	D	21		n	n	13	hand-verified: calls product module on constructed input in-process
+tests/dispatch/trace-correlation.test.cjs	D	D	16		n	n	7	calls product module on constructed input in-process
+tests/dispatcher.test.cjs	E	E	9382	20938	n	n	35	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/do-routing-specificity.test.cjs	A	A4	13		n	n	7	hand-verified: scans source/prose text for a string/pattern
+tests/doc-writer-no-run-mode.test.cjs	A	A4	17		n	n	5	asserts string/pattern in repo file text
+tests/docs-hooks-table-parity.test.cjs	F	F1	36		n	n	3	product code applied to repo content
+tests/docs-parity-live-registry.test.cjs	A	A4	170		n	n	41	scans source/prose text for a string/pattern
+tests/docs-state-md-locale-parity.test.cjs	A	A1	11		n	n	1	hand-verified: compares >=2 repo artifacts
+tests/docs-update.test.cjs	E	E	7361		n	y	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/drift-detection.test.cjs	E	E	10531	42199	y	n	83	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/drift-whole-change-set.test.cjs	E	E	23012		y	y	103	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/edge-probe-docs-fixtures.test.cjs	A	A4	19		n	n	7	scans source/prose text for a string/pattern
+tests/edge-probe-planner-contract.test.cjs	A	A4	12		n	n	5	hand-verified: scans source/prose text for a string/pattern
+tests/edge-probe-spec-phase-contract.test.cjs	A	A4	31		n	n	27	scans source/prose text for a string/pattern
+tests/edge-probe.test.cjs	D	D	337		n	n	78	in-process logic with <=3 incidental process calls
+tests/edit-phase-milestone-scope-guard.test.cjs	E	E	5644		n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/edit-phase.test.cjs	A	A4	45		n	n	35	scans source/prose text for a string/pattern
+tests/effort-local-install.test.cjs	E	E	2665		y	n	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/effort-surface-axis.test.cjs	E	E	5232	12409	y	y	47	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/effort-sync-installed-runtime.test.cjs	E	E	7790	22174	y	y	37	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/effort-sync-manifest.test.cjs	E	E			y	n	18	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/emitted-ack-trailer.test.cjs	E	E	4803	20946	n	n	54	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/emitted-attribution.test.cjs	E	E	77607	5641	y	y	116	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/emitted-caps-gate.test.cjs	E	E	1063		n	n	5	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/emitted-caps.test.cjs	D	D	84		n	n	29	hand-verified: pure assertions on helper-built inputs, no repo reads
+tests/emitted-provenance.test.cjs	A	A1	26167	75404	n	n	41	hand-verified: compares >=2 repo artifacts
+tests/emitted-sizes.test.cjs	E	E	1098		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ensure-runtime-build.test.cjs	E	E	4397	2271	n	n	14	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/enumeration-drift-guard.test.cjs	B	B-lint-script	704		n	n	11	hand-verified: drives scripts/lint-*.cjs
+tests/enumeration-single-owner.test.cjs	E	E	5713		n	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/eslint-glob-coverage.test.cjs	B	B-eslint-rule	2006		n	n	32	RuleTester/eslint-rules ref
+tests/eslint-named-args-spec-from-registry.test.cjs	B	B-eslint-rule			n	n	2	RuleTester/eslint-rules ref
+tests/eslint-no-adhoc-regex-escape.test.cjs	B	B-eslint-rule	126		n	n	20	hand-verified: RuleTester/eslint-rules ref
+tests/eslint-no-runtime-name-literal.test.cjs	B	B-eslint-rule	39537		n	n	15	hand-verified: RuleTester/eslint-rules ref
+tests/eslint-no-verification-status-literal.test.cjs	B	B-eslint-rule	4231		n	y	7	hand-verified: RuleTester/eslint-rules ref
+tests/eslint-rules.test.cjs	B	B-eslint-rule	65917	23201	y	n	240	hand-verified: RuleTester/eslint-rules ref
+tests/estimate-calibrate.test.cjs	E	E	5669		n	n	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/estimate-loop-convergence.test.cjs	E	E	7969		n	n	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/eval.property.test.cjs	D	D	114		n	n	18	calls product module on constructed input in-process
+tests/eval.test.cjs	D	D	17		n	n	8	calls product module on constructed input in-process
+tests/evaluation-scope-capture-exit-status.test.cjs	E	E	749		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/evaluation-scope-drift-lint.test.cjs	B	B-lint-script	101		n	n	14	drives scripts/lint-*.cjs
+tests/execute-mvp-tdd-gate.test.cjs	E	E	910		n	n	13	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/execute-phase-active-flags.test.cjs	A	A4	118		n	n	34	scans source/prose text for a string/pattern
+tests/execute-phase-branch-base-ahead-warning.test.cjs	A	A4	10		n	n	2	scans source/prose text for a string/pattern
+tests/execute-phase-completion-reconciliation.test.cjs	F	F1	25		n	n	18	product code applied to repo content
+tests/execute-phase-continuation-template-4783.test.cjs	A	A4	13		n	n	2	asserts string/pattern in repo file text
+tests/execute-phase-cross-block-state.test.cjs	E	E	334		y	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/execute-phase-decimal-arithmetic.test.cjs	E	E	253	1099	y	n	13	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/execute-phase-human-needed-uat-merge.test.cjs	A	A4			n	n	7	asserts string/pattern in repo file text
+tests/execute-phase-step-5-5-deviation-doc.test.cjs	A	A4	25		n	n	18	scans source/prose text for a string/pattern
+tests/execute-phase-wave.test.cjs	E	E	5760		n	n	76	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/execute-phase-worktree-artifacts.test.cjs	A	A4	19		n	n	20	scans source/prose text for a string/pattern
+tests/execute-phase-worktree-guard.test.cjs	E	E	834	9493	y	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/execute-plan-interrupted-agent-guard.test.cjs	A	A4	11		n	n	1	hand-verified: asserts string/pattern in repo file text
+tests/execute-plan-update-codebase-map-diff-base.test.cjs	E	E	1580	1990	y	y	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/execute-wave-post-gate-pipeline-e2e.test.cjs	E	E	5435	19496	n	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/executed-plan.test.cjs	D	D	3750	31772	y	y	42	calls product module on constructed input in-process
+tests/executor-isolation-prompt-contract.test.cjs	A	A4	9		n	n	13	scans source/prose text for a string/pattern
+tests/executor-mvp-tdd-section.test.cjs	E	E	8190	10130	y	y	36	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/executor-policy-new-project-6211.test.cjs	E	E			y	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/executor-runtime-validation.test.cjs	E	E			y	n	22	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/executor-sequential-linked-worktree.test.cjs	E	E	120		y	y	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/exit-code-registry.test.cjs	E	E	2136		n	n	68	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/explore-command.test.cjs	A	A4	47		n	n	31	hand-verified: scans source/prose text for a string/pattern
+tests/external-descriptor-confinement.test.cjs	D	D	19	14	y	n	10	calls product module on constructed input in-process
+tests/external-descriptor-loader-wiring.test.cjs	D	D	217		n	n	2	calls product module on constructed input in-process
+tests/external-job-waiting.test.cjs	A	A4	16		n	n	10	asserts string/pattern in repo file text
+tests/external-job.test.cjs	F	F1	48		n	y	35	product code applied to repo content
+tests/extract-learnings.test.cjs	A	A4	13		n	n	23	scans source/prose text for a string/pattern
+tests/extraction-discipline-consistency.test.cjs	A	A1	17		n	n	5	compares >=2 repo artifacts
+tests/failing-direction.test.cjs	D	D	663	1473	n	y	51	in-process logic with <=3 incidental process calls
+tests/fallow-runner.test.cjs	D	D	22	56	y	n	16	calls product module on constructed input in-process
+tests/faulty-deps.test.cjs	D	D	450	2766	y	n	23	calls product module on constructed input in-process
+tests/feat-2296-provider-escalation.test.cjs	E	E	27494		n	n	33	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/feat-2483-review-claude-mds-guard.test.cjs	D	D	362	26	y	y	14	in-process logic with <=3 incidental process calls
+tests/feat-2646-deferred-items-audit-scanner.test.cjs	E	E	2684		n	n	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/feat-3881-yaml-parser-consequences.test.cjs	D	D	4370		n	n	46	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/features-index-gate.test.cjs	E	E	8356	7048	y	y	92	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/federated-config-key-removal.test.cjs	D	D	35		n	n	11	calls product module on constructed input in-process
+tests/federated-config-loadconfig.test.cjs	D	D	228		n	n	16	calls product module on constructed input in-process
+tests/federated-config.test.cjs	D	D	34		n	n	44	calls product module on constructed input in-process
+tests/few-shot-calibration.test.cjs	A	A3	20		n	n	14	structure/schema of parsed repo config/prose
+tests/file-overlap-partitioner.property.test.cjs	D	D	74		n	n	9	calls product module on constructed input in-process
+tests/file-overlap-partitioner.test.cjs	D	D	13		n	n	8	calls product module on constructed input in-process
+tests/filename-classification.test.cjs	D	D	52		n	n	30	calls product module on constructed input in-process
+tests/fixture-builder.test.cjs	E	E	56		n	y	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/fold-helper-shadowing.test.cjs	A	A4	23460		n	n	3	hand-verified: scans source/prose text for a string/pattern
+tests/forensics.test.cjs	D	D	19		n	n	23	temp/mock inputs, no product require detected
+tests/format-github-release-notes.test.cjs	D	D	23		n	n	17	calls product module on constructed input in-process
+tests/fragment-single-edit-propagation.install.test.cjs	E	E	575000		n	n	12	hand-verified: qa/install/integration suite drives real binaries
+tests/frontmatter-cli.test.cjs	E	E	31595		n	n	71	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/frontmatter-fence.test.cjs	B	B-lint-script	500		n	n	43	drives scripts/lint-*.cjs
+tests/frontmatter-golden-parity.test.cjs	D	D	128		n	n	9	calls product module on constructed input in-process
+tests/frontmatter-roundtrip.property.test.cjs	D	D	359		n	n	14	calls product module on constructed input in-process
+tests/frontmatter-splice.property.test.cjs	D	D	2825		n	n	29	calls product module on constructed input in-process
+tests/frontmatter.property.test.cjs	D	D	1317		n	n	43	calls product module on constructed input in-process
+tests/frontmatter.test.cjs	E	E	35534	23077	n	n	148	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/frontmatter.unit.test.cjs	D	D	222		n	y	371	calls product module on constructed input in-process
+tests/gap-checker.property.test.cjs	E	E	7526	17147	n	n	77	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-api-coverage-verify-pre-escape.test.cjs	D	D	84		n	n	4	calls product module on constructed input in-process
+tests/gate-api-coverage-verify-pre.unit.test.cjs	D	D	65		n	y	1	calls product module on constructed input in-process
+tests/gate-args.property.test.cjs	D	D	111		n	n	21	hand-verified: calls product module on constructed input in-process
+tests/gate-codebase-drift.unit.test.cjs	E	E	9289		n	y	31	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-consumer-exit-awareness.test.cjs	E	E	3876		n	n	38	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-contained-path-symlinked-planning.test.cjs	E	E			y	y	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-context-drift.unit.test.cjs	D	D	124		n	n	22	in-process logic with <=3 incidental process calls
+tests/gate-decision-coverage-plan.unit.test.cjs	D	D	186		n	y	26	calls product module on constructed input in-process
+tests/gate-decision-coverage-verify-stderr.test.cjs	E	E	343		y	y	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-decision-coverage-verify.unit.test.cjs	D	D	1564		n	y	19	calls product module on constructed input in-process
+tests/gate-evaluation-scope-consumers.test.cjs	E	E	3814		n	n	16	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-evaluation-scope.test.cjs	E	E	8338		n	y	105	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-evidence.test.cjs	D	D	7542		n	n	22	calls product module on constructed input in-process
+tests/gate-exit.test.cjs	D	D	101		n	n	18	in-process logic with <=3 incidental process calls
+tests/gate-gap-analysis-plan-post.unit.test.cjs	D	D	22		n	y	1	calls product module on constructed input in-process
+tests/gate-plan-scan-truncated.test.cjs	E	E	3622		n	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-positive-control-harness.test.cjs	E	E	22		n	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-positive-control.test.cjs	E	E	861		n	n	0	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-predicate-evaluator-missing.test.cjs	D	D	72		n	n	15	calls product module on constructed input in-process
+tests/gate-predicate-evaluator.test.cjs	D	D	32		n	n	55	hand-verified: calls product module on constructed input in-process
+tests/gate-predicate.unit.test.cjs	D	D	66		y	y	10	calls product module on constructed input in-process
+tests/gate-prohibition-enforcement.unit.test.cjs	D	D	64		n	n	24	in-process logic with <=3 incidental process calls
+tests/gate-query-validation-5647.test.cjs	E	E	2435		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-schema-drift.unit.test.cjs	E	E	740		n	n	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-tdd-red-evidence-containment.test.cjs	D	D	27		y	y	9	calls product module on constructed input in-process
+tests/gate-tdd-red-evidence.unit.test.cjs	D	D	28		n	y	1	calls product module on constructed input in-process
+tests/gate-tdd-review-checkpoint-hardening.test.cjs	E	E	1220		y	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-tdd-review-checkpoint.unit.test.cjs	E	E	486		y	y	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-tdd-review-order-5275.test.cjs	D	D	1395		y	n	11	in-process logic with <=3 incidental process calls
+tests/gate-tolerant-probe-evidence.test.cjs	E	E	1540		n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-ui-plan.unit.test.cjs	D	D	30		n	y	1	calls product module on constructed input in-process
+tests/gate-ui-safety-frontend-evidence-5646.test.cjs	D	D	777		n	n	10	in-process logic with <=3 incidental process calls
+tests/gate-ui-safety.unit.test.cjs	E	E	299		y	y	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-verb-query-form-parity.test.cjs	E	E	11616		n	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gate-verdict.test.cjs	D	D	61		n	n	15	calls product module on constructed input in-process
+tests/gate-verify-command-paths.unit.test.cjs	D	D	24		n	y	1	calls product module on constructed input in-process
+tests/gate-verify-failure-directions.unit.test.cjs	D	D	31		n	y	1	calls product module on constructed input in-process
+tests/gates-confirmation-toggle-config.test.cjs	E	E	3455		n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gates-taxonomy.test.cjs	A	A4	16		n	n	9	scans source/prose text for a string/pattern
+tests/gemini-runtime-removed.test.cjs	E	E	3584	13646	y	n	32	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gen-cli-surface-manifest.test.cjs	B	B-gen-script			n	n	16	drives gen-*.cjs --check
+tests/gen-context-index.test.cjs	B	B-gen-script	1836	1729	n	n	24	drives gen-*.cjs --check
+tests/gen-health-docs.test.cjs	B	B-gen-script	1830	1306	n	n	19	drives gen-*.cjs --check
+tests/gen-registry.test.cjs	B	B-gen-script	789		n	n	15	drives gen-*.cjs --check
+tests/gen-section-manifest.test.cjs	B	B-gen-script	937	1490	n	n	23	drives gen-*.cjs --check
+tests/gen-state-md-docs.test.cjs	B	B-gen-script	889		n	n	22	drives gen-*.cjs --check
+tests/getdirname-registry-derivation.test.cjs	C	C	17		n	n	3	hand-verified: type/shape/exports assertions only
+tests/git-base-branch.test.cjs	E	E	7585	50720	y	y	122	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/git-fixture.test.cjs	E	E	540		n	n	32	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/git-head-tree.test.cjs	D	D			y	y	50	in-process logic with <=3 incidental process calls
+tests/git-location-env-scrub.test.cjs	E	E	4399		y	y	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/git-optional-locks-parity.test.cjs	E	E	956		y	n	24	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/global-config-home-fragment.test.cjs	D	D	14		n	n	4	calls product module on constructed input in-process
+tests/golden-install-tree.test.cjs	E	E	20651	13214	y	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/golden-parity-single-source.test.cjs	E	E	14886		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/graphify-auto-update.slow.test.cjs	E	E	37442		n	n	46	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/graphify-command-cutover.test.cjs	E	E	7391		n	n	52	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/graphify-graph-path.test.cjs	E	E	1052	2373	y	n	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/graphify-query.test.cjs	E	E	51663		n	y	58	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/graphify-visualization.test.cjs	E	E	1707	11778	y	y	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/graphify.test.cjs	E	E	708	4129	y	n	44	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-agent-isolation-guard.test.cjs	E	E	31146	73477	y	y	109	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-check-update-worker-atomic-cache.test.cjs	E	E	869	1000	n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-check-update-worker-platform-gate.test.cjs	D	D	547	1953	y	n	36	in-process logic with <=3 incidental process calls
+tests/gsd-mcp-server-bin.test.cjs	E	E	306	267	n	n	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-mcp-server.test.cjs	E	E	3001		y	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-path-export-hook.test.cjs	E	E	448		y	y	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-quick-batch-merge-integration.test.cjs	E	E	1169		n	n	10	hand-verified: in-process logic with <=3 incidental process calls
+tests/gsd-quick-batch-quick-regression.test.cjs	E	E	27		n	n	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-quick-batch-workflow.test.cjs	D	D	21		n	n	39	in-process logic with <=3 incidental process calls
+tests/gsd-researcher-app-aware.test.cjs	A	A4	23		n	n	11	scans source/prose text for a string/pattern
+tests/gsd-researcher-flow-diagram.test.cjs	A	A4	15		n	n	8	hand-verified: scans source/prose text for a string/pattern
+tests/gsd-secret-read-guard-regex-escape.test.cjs	E	E			y	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-secret-read-guard-search-operands.test.cjs	E	E			n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-secret-read-guard.test.cjs	E	E	49873		n	y	55	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-settings-advanced.test.cjs	E	E	2775		n	n	68	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-statusline-git.property.test.cjs	D	D	1087		n	n	15	hand-verified: calls product module on constructed input in-process
+tests/gsd-statusline-state.property.test.cjs	D	D	76		n	n	27	calls product module on constructed input in-process
+tests/gsd-statusline.test.cjs	E	E	9017	35553	y	y	296	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-tool-dir.platform.test.cjs	E	E			y	y	17	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-tool-dir.test.cjs	D	D			n	y	8	calls product module on constructed input in-process
+tests/gsd-tools-lazy-lib-load.test.cjs	E	E			n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-tools-path-refs.test.cjs	D	D	55		n	y	37	calls product module on constructed input in-process
+tests/gsd-validate-commit-crash-policy.test.cjs	E	E	709	3144	y	y	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-validate-commit-sigpipe.test.cjs	E	E	16556	20	y	y	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-workflow.structure.test.cjs	A	A3	78		n	n	13	hand-verified: product module on constructed input; few repo reads
+tests/gsd-write-guard.property.test.cjs	E	E	2819		n	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd-write-guard.test.cjs	E	E	2705	4314	y	y	56	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/gsd2-import.test.cjs	E	E	3638		n	n	58	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/handoff-next-step.test.cjs	A	A4			n	n	1	hand-verified: asserts string/pattern in repo file text
+tests/handshake-serialized.test.cjs	D	D	18		n	n	8	calls product module on constructed input in-process
+tests/hardcoded-paths.test.cjs	D	D	660		n	n	5	temp/mock inputs, no product require detected
+tests/health-diagnostic-rules/agent-install.test.cjs	D	D	97		n	n	7	calls product module on constructed input in-process
+tests/health-diagnostic-rules/config-validation.test.cjs	D	D	1031	10771	y	n	48	calls product module on constructed input in-process
+tests/health-diagnostic-rules/consistency.test.cjs	D	D	351		n	n	18	calls product module on constructed input in-process
+tests/health-diagnostic-rules/milestone-archive-hygiene.test.cjs	D	D	135		n	n	8	calls product module on constructed input in-process
+tests/health-diagnostic-rules/phase-structure.test.cjs	D	D	266		n	n	12	calls product module on constructed input in-process
+tests/health-diagnostic-rules/roadmap-disk-consistency.test.cjs	D	D	273		n	n	20	calls product module on constructed input in-process
+tests/health-diagnostic-rules/root-existence.test.cjs	D	D	250		n	n	14	calls product module on constructed input in-process
+tests/health-diagnostic-rules/state-consistency.test.cjs	D	D	573		n	n	38	calls product module on constructed input in-process
+tests/health-diagnostic-rules/worktree-health.test.cjs	D	D	91	183	y	y	26	calls product module on constructed input in-process
+tests/health-diagnostic.test.cjs	E	E	388	2595	n	n	34	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/health-validation.test.cjs	E	E	23874		n	n	65	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/helpers-cleanup.test.cjs	D	D	16	31	y	y	8	temp/mock inputs, no product require detected
+tests/helpers-install-shared.test.cjs	E	E			n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/helpers-process-isolation.test.cjs	E	E	1939	8938	y	y	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/hermes-dispatch-upgrade.test.cjs	D	D	9		n	n	5	calls product module on constructed input in-process
+tests/hermes-imperative-reference.test.cjs	D	D	27		n	n	9	product module on constructed input; few repo reads
+tests/hermes-skills-migration.test.cjs	D	D	6843	33655	y	n	18	calls product module on constructed input in-process
+tests/hinted-executor-isolation.test.cjs	D	D			y	y	98	calls product module on constructed input in-process
+tests/hinted-executor-record.test.cjs	F	F			n	n	16	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/hinted-executor-workflow-contract.test.cjs	E	E			n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/hook-activation-probe.test.cjs	E	E	19819		y	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/hook-bus.test.cjs	D	D	16		n	n	6	calls product module on constructed input in-process
+tests/hook-registration-table.test.cjs	D	D	228		n	n	11	calls product module on constructed input in-process
+tests/hook-validation.test.cjs	D	D	18		n	n	24	calls product module on constructed input in-process
+tests/hooks-commonjs-marker.test.cjs	E	E	6318	49343	n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/hooks-crash-policy.test.cjs	E	E	17843	5332	y	y	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/hooks-opt-in.test.cjs	E	E	31601	444	y	y	60	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/host-integration-descriptors.test.cjs	A	A4	44		n	n	31	scans source/prose text for a string/pattern
+tests/host-integration-validator-parity.test.cjs	C	C	48		n	n	30	hand-verified: calls product module on constructed input in-process
+tests/host-integration.test.cjs	E	E	25544	59501	y	n	296	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/host-runtime-detection.test.cjs	D	D	176		n	n	49	calls product module on constructed input in-process
+tests/import-command.test.cjs	A	A4	25		n	n	13	scans source/prose text for a string/pattern
+tests/in-tier-msys-fork-stress.test.cjs	E	E	9		y	n	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/in-tier-sh-pipeline-timing.test.cjs	E	E	10		y	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ingest-docs.test.cjs	E	E	1791		n	n	51	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/init-debug-workflow-contract.test.cjs	A	A4	10		n	n	5	scans source/prose text for a string/pattern
+tests/init-debug.test.cjs	E	E	11170		n	n	34	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/init-manager.test.cjs	E	E	48683	53189	y	y	76	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/init.test.cjs	E	E	84992	160603	n	y	292	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/injection-blocking-config.test.cjs	E	E	558		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/injection-patterns-parity.security.test.cjs	E	E	3155		n	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/inline-plan-threshold-default.test.cjs	A	A3	22		n	n	2	structure/schema of parsed repo config/prose
+tests/inline-plan-threshold.test.cjs	E	E	570		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/insert-phase-chain-placeholder.test.cjs	D	D	189		n	n	13	product module on constructed input; few repo reads
+tests/install-fs-adapter-seam.test.cjs	D	D	32		n	y	6	calls product module on constructed input in-process
+tests/install-minimal-hooks.test.cjs	E	E	47592	182551	y	y	141	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/install-nested-layout.test.cjs	D	D	2355	20161	y	n	6	calls product module on constructed input in-process
+tests/install-path-detection.test.cjs	E	E	4346	6100	y	y	45	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/install-profile-workflow-spawns.test.cjs	D	D	139		n	n	3	temp/mock inputs, no product require detected
+tests/install-regressions.test.cjs	E	E	57953	110827	y	y	63	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/install-runtime-artifacts.test.cjs	E	E	43138	229398	y	y	363	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/install-scope.test.cjs	D	D	65		n	n	27	calls product module on constructed input in-process
+tests/install-update-marker.test.cjs	D	D	129		n	n	15	calls product module on constructed input in-process
+tests/install-write-confinement.test.cjs	E	E	5353	23419	y	y	185	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/install.test.cjs	E	E	43097	216753	y	y	279	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/installed-surface-resolver.test.cjs	D	D	132		n	n	47	calls product module on constructed input in-process
+tests/installer-first-install-user-skill-5522.test.cjs	E	E	7500		y	n	7	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/installer-migration-antigravity-retire-confighome-artifacts.test.cjs	D	D	61	135	y	y	9	calls product module on constructed input in-process
+tests/installer-migration-authoring.test.cjs	D	D	24		n	n	7	calls product module on constructed input in-process
+tests/installer-migration-config-root-marker.test.cjs	D	D	31	91	y	y	15	calls product module on constructed input in-process
+tests/installer-migration-install.integration.test.cjs	E	E	74165		n	n	8	qa/install/integration suite drives real binaries
+tests/installer-migration-opencode-mcp-no-prompts.test.cjs	B	B-eslint-rule	48		n	n	9	RuleTester/eslint-rules ref
+tests/installer-migration-pi-extension-ext.test.cjs	D	D	16		n	n	9	calls product module on constructed input in-process
+tests/installer-migration-pi-retire-hooks-dir.test.cjs	D	D	47	194	y	y	10	calls product module on constructed input in-process
+tests/installer-migration-prune-stale-pristine.test.cjs	D	D	44	82	y	y	11	calls product module on constructed input in-process
+tests/installer-migration-rename-gsd-core.test.cjs	D	D	35	139	y	y	12	calls product module on constructed input in-process
+tests/installer-migration-report.test.cjs	D	D	85		n	n	21	calls product module on constructed input in-process
+tests/installer-migrations-manifest-schema.test.cjs	D	D	71		n	n	34	calls product module on constructed input in-process
+tests/installer-migrations.test.cjs	E	E	2672	16653	y	y	78	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/instruction-surface-disclosure.security.test.cjs	D	D	782		n	n	54	calls product module on constructed input in-process
+tests/intel-command-cutover.test.cjs	E	E	7170		n	n	35	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/intel.test.cjs	D	D	4667	12526	n	y	25	calls product module on constructed input in-process
+tests/inventory-headings-countfree.test.cjs	A	A4	11		n	n	1	scans source/prose text for a string/pattern
+tests/inventory-manifest-sync.test.cjs	F	F1	228		n	n	30	product code applied to repo content
+tests/inventory-nested-families.test.cjs	D	D	39	120	y	y	19	calls product module on constructed input in-process
+tests/io.test.cjs	E	E	6610	4159	n	n	59	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ios-scaffold-safety.test.cjs	A	A4	13		n	n	8	hand-verified: scans source/prose text for a string/pattern
+tests/isolated-env.test.cjs	E	E			y	y	24	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/isolation-aged-none-sentinel.test.cjs	E	E	3842		y	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/isolation-sentinel-read.platform.test.cjs	E	E			y	y	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/isolation-sentinel-read.test.cjs	E	E			n	n	22	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/isolation-sentinel.test.cjs	D	D	14	14	y	y	21	in-process logic with <=3 incidental process calls
+tests/issue-dedupe.test.cjs	D	D	28		n	n	75	calls product module on constructed input in-process
+tests/issue-version-gate.test.cjs	D	D	51		n	y	86	calls product module on constructed input in-process
+tests/jsonc-edit.test.cjs	D	D	30		n	n	9	calls product module on constructed input in-process
+tests/kilo-imperative-reference.test.cjs	D	D	30		n	n	7	hand-verified: product code applied to repo content
+tests/kilo-upgrades.test.cjs	E	E	5823	27745	y	y	13	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/kimi-agent-converter.test.cjs	E	E	4173	24389	y	n	13	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/kimi-config-toml-symlink.test.cjs	D	D			y	y	9	in-process logic with <=3 incidental process calls
+tests/kimi-guard-normalization-parity.test.cjs	A	A4	21		n	n	8	scans source/prose text for a string/pattern
+tests/kimi-guard-typed-payload-reads.test.cjs	A	A4	90		n	n	2	scans source/prose text for a string/pattern
+tests/kimi-imperative-reference.test.cjs	F	F1	33		n	n	9	product code applied to repo content
+tests/kimi-normalize-payload.property.test.cjs	D	D	413		n	n	22	hand-verified: extracts/evaluates source block, drives it on constructed inputs
+tests/kimi-payload-field-shadowing.security.test.cjs	E	E	1643		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/kimi-skill-converter.test.cjs	D	D	10		n	n	3	calls product module on constructed input in-process
+tests/kimi-tool-mapping.test.cjs	D	D	11		n	n	5	calls product module on constructed input in-process
+tests/kimi-upgrades.test.cjs	E	E	23016	125204	y	y	39	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/kimi-variant-disambiguation.test.cjs	E	E	783	2924	y	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/launcher-homes-derivation.test.cjs	D	D	220		y	y	17	in-process logic with <=3 incidental process calls
+tests/learnings.test.cjs	D	D	1123		n	n	42	in-process logic with <=3 incidental process calls
+tests/legacy-cleanup-config-dir.test.cjs	E	E	191		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/legacy-cleanup.test.cjs	D	D	64		n	n	22	hand-verified: calls product module on constructed input in-process
+tests/lint-allow-test-rule-refs.test.cjs	B	B-eslint-rule	36491		n	n	27	RuleTester/eslint-rules ref
+tests/lint-allowed-tools-parity.test.cjs	B	B-lint-script	30		n	n	15	drives scripts/lint-*.cjs
+tests/lint-compiled-artifact-sync.test.cjs	B	B-lint-script	110		n	n	5	hand-verified: drives scripts/lint-*.cjs
+tests/lint-docs-command-form.test.cjs	B	B-lint-script	549		n	y	9	hand-verified: drives scripts/lint-*.cjs
+tests/lint-docs-required.test.cjs	B	B-lint-script	19		n	n	28	drives scripts/lint-*.cjs
+tests/lint-frontmatter-scalar-broad-grep.test.cjs	B	B-lint-script	464		n	y	20	hand-verified: drives scripts/lint-*.cjs
+tests/lint-gate-evidence-drift.test.cjs	B	B-lint-script	134295		n	n	52	hand-verified: drives scripts/lint-*.cjs
+tests/lint-gate-positive-control.test.cjs	E	E	2237		n	n	47	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/lint-health-diagnostic-rule-table.test.cjs	B	B-lint-script	179		n	n	20	drives scripts/lint-*.cjs
+tests/lint-hooks-runtime-build-seam.test.cjs	B	B-lint-script	45		n	n	7	drives scripts/lint-*.cjs
+tests/lint-legacy-dir-name.test.cjs	B	B-lint-script	297		n	n	4	drives scripts/lint-*.cjs
+tests/lint-phase-arg-assignment.test.cjs	B	B-lint-script	90	86	y	n	18	drives scripts/lint-*.cjs
+tests/lint-phase-id-drift.test.cjs	B	B-lint-script	240		n	n	52	drives scripts/lint-*.cjs
+tests/lint-planning-artifact-writer-drift.test.cjs	B	B-lint-script	1652		n	n	14	drives scripts/lint-*.cjs
+tests/lint-planning-document-positive-control.test.cjs	B	B-lint-script	435		n	n	16	hand-verified: drives scripts/lint-*.cjs
+tests/lint-portable-grep.test.cjs	B	B-lint-script	24		n	n	14	drives scripts/lint-*.cjs
+tests/lint-pr-branch-pattern-drift.test.cjs	B	B-lint-script	10		n	n	8	drives scripts/lint-*.cjs
+tests/lint-pr-check-project-dir.test.cjs	B	B-lint-script	99		n	n	7	hand-verified: drives scripts/lint-*.cjs
+tests/lint-regression-test-names.test.cjs	B	B-lint-script	657		n	n	10	drives scripts/lint-*.cjs
+tests/lint-resolution-provenance.test.cjs	B	B-lint-script	24		n	n	13	drives scripts/lint-*.cjs
+tests/lint-retired-runtime-name.test.cjs	B	B-lint-script	7569		n	y	33	drives scripts/lint-*.cjs
+tests/lint-seam-enforcement.test.cjs	B	B-eslint-rule	19		n	n	20	RuleTester/eslint-rules ref
+tests/lint-skill-deps.test.cjs	B	B-lint-script	929		n	n	8	drives scripts/lint-*.cjs
+tests/lint-source-test-name-collision.test.cjs	B	B-lint-script	36		n	n	14	drives scripts/lint-*.cjs
+tests/lint-state-field-drift-retained.test.cjs	B	B-lint-script	694		n	n	1	drives scripts/lint-*.cjs
+tests/lint-test-file-count.test.cjs	B	B-lint-script	467		n	n	38	drives scripts/lint-*.cjs
+tests/lint-vendored-deps-manifest.test.cjs	B	B-lint-script	612		n	n	23	drives scripts/lint-*.cjs
+tests/lint-verify-lifecycle-writes.test.cjs	B	B-lint-script	381		n	n	36	drives scripts/lint-*.cjs
+tests/lint-workflow-shellcheck-fetch.test.cjs	D	D	310	157	y	y	31	hand-verified: calls product module on constructed input in-process
+tests/lint-workflow-shellcheck.test.cjs	B	B-lint-script	45		n	n	36	drives scripts/lint-*.cjs
+tests/list-seeds.property.test.cjs	D	D	153		n	n	25	calls product module on constructed input in-process
+tests/list-seeds.test.cjs	E	E	9011		n	y	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/live-config-guard.test.cjs	D	D	208	333	n	n	44	hand-verified: calls product module on constructed input in-process
+tests/live-dom-uat.test.cjs	E	E	1573		n	n	28	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/load-bearing-contract-gate.test.cjs	D	D	16		n	n	7	calls product module on constructed input in-process
+tests/localized-inventory-agent-counts.test.cjs	A	A5	38		n	n	4	inventory/count/roster over repo files
+tests/lockfile-cve-audit.test.cjs	E	E	1293	7111	y	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/locking-bugs-1909-1916-1925-1927.test.cjs	E	E	2561	3722	y	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/loop-hook-firing-spike.test.cjs	D	D	13		n	n	6	hand-verified: calls product module on constructed input in-process
+tests/loop-hooks-empty-points-e2e.test.cjs	E	E	8137	20095	n	n	46	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/loop-hooks-ship-pre-e2e.test.cjs	E	E	7529	12695	n	n	29	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/loop-hooks-verify-post-e2e.test.cjs	E	E	4042	9624	n	n	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/loop-host-contract.test.cjs	D	D	192		n	n	83	calls product module on constructed input in-process
+tests/loop-render-hooks-after-fingerprint.test.cjs	E	E	3000		n	n	8	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/loop-render-hooks.test.cjs	E	E	4543		n	n	92	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/loop-walk.qa.test.cjs	E	E	28396		n	n	142	qa/install/integration suite drives real binaries
+tests/m8-writestatemd-scan-after-lock.test.cjs	D	D	22		n	n	2	calls product module on constructed input in-process
+tests/m9-statelock-write-error-orphan.test.cjs	D	D	13		n	n	3	calls product module on constructed input in-process
+tests/managed-hooks.test.cjs	E	E	7929		n	n	17	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/manifest-version-sync.test.cjs	D	D	56		n	n	31	in-process logic with <=3 incidental process calls
+tests/markdown-line-diff.test.cjs	D	D	98		n	n	17	calls product module on constructed input in-process
+tests/markdown-sectionizer-xml-tags.property.test.cjs	D	D	135		n	n	18	calls product module on constructed input in-process
+tests/markdown-sectionizer.test.cjs	D	D	959		n	y	206	pure assertions on helper-built inputs, no repo reads
+tests/markdown-table.test.cjs	D	D	6300		n	n	116	hand-verified: drives scripts/lint-*.cjs
+tests/mcp-catalog-parity.install.test.cjs	E	E	5166		n	n	3	qa/install/integration suite drives real binaries
+tests/mcp-catalog.property.test.cjs	D	D	94	153	n	n	15	calls product module on constructed input in-process
+tests/mcp-catalog.test.cjs	D	D	45	68	y	y	39	calls product module on constructed input in-process
+tests/mcp-server-catalog.test.cjs	D	D	20		n	n	9	calls product module on constructed input in-process
+tests/mcp-tool-inheritance.test.cjs	A	A4	125		n	n	32	scans source/prose text for a string/pattern
+tests/mempalace-capture-gate-default.test.cjs	A	A1	38		n	n	13	hand-verified: scans source/prose text for a string/pattern
+tests/mempalace-capture-headless-invocation.test.cjs	A	A3	30		n	n	9	structure/schema of parsed repo config/prose
+tests/merge-commit-pr.test.cjs	D	D			n	y	33	calls product module on constructed input in-process
+tests/methodology-artifact.test.cjs	A	A4	13		n	n	11	asserts string/pattern in repo file text
+tests/milestone-archive.test.cjs	E	E	14426	35828	y	y	52	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/milestone-helper.test.cjs	D	D	25		n	n	14	calls product module on constructed input in-process
+tests/milestone-lock.test.cjs	E	E	9496		y	n	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/milestone-prefixed-convention.test.cjs	E	E	2115		n	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/milestone-release-map-archive.test.cjs	E	E	16118		y	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/milestone-release-map.test.cjs	D	D	239		n	n	25	calls product module on constructed input in-process
+tests/milestone-release-tags.test.cjs	E	E	12218		y	y	41	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/milestone-summary.test.cjs	D	D	873		n	n	42	calls product module on constructed input in-process
+tests/milestone-window-drift-guard.test.cjs	B	B-lint-script	925		n	n	15	hand-verified: drives scripts/lint-*.cjs
+tests/milestone-window-single-owner.test.cjs	E	E	10621	27202	y	y	119	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/milestone.test.cjs	E	E	30631		y	n	128	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/model-adapter.test.cjs	D	D	14		n	n	5	calls product module on constructed input in-process
+tests/model-alias-map.test.cjs	D	D	11		n	n	3	calls product module on constructed input in-process
+tests/model-catalog-runtime-defaults.test.cjs	F	F	20		n	n	6	hand-verified: scans source/prose text for a string/pattern
+tests/model-catalog-valid-tiers.test.cjs	D	D	10		n	n	5	calls product module on constructed input in-process
+tests/model-catalog.unit.test.cjs	D	D	48		n	n	63	calls product module on constructed input in-process
+tests/model-omit-tier-alias.test.cjs	D	D			y	n	47	in-process logic with <=3 incidental process calls
+tests/model-omit-when-inherit-guard.test.cjs	E	E	4780		n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/model-profiles.test.cjs	D	D	940		n	n	46	in-process logic with <=3 incidental process calls
+tests/model-resolver-attempt-parity.test.cjs	D	D			y	n	19	in-process logic with <=3 incidental process calls
+tests/model-resolver.test.cjs	E	E	31016	78435	y	y	521	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/model-routing-spawn-threading.test.cjs	A	A4	29		n	n	7	scans source/prose text for a string/pattern
+tests/multi-runtime-select.test.cjs	D	D	19		n	n	35	calls product module on constructed input in-process
+tests/mutation-matrix-ratchet.test.cjs	D	D	410		n	n	47	hand-verified: in-process logic with <=3 incidental process calls
+tests/mutation-matrix-stdin-eagain.test.cjs	D	D	21		n	n	3	calls product module on constructed input in-process
+tests/mutation-score-ratchet.test.cjs	E	E	210		n	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/mutation-tap-runner-wiring.test.cjs	A	A1	171		n	n	19	hand-verified: scans source/prose text for a string/pattern
+tests/mutation-test-derivation-drift.test.cjs	B	B-lint-script	130		n	n	6	drives scripts/lint-*.cjs
+tests/mutation-workflow-base-ref.test.cjs	E	E	1180	11989	y	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/mvp-phase-command.test.cjs	A	A3	10		n	n	5	structure/schema of parsed repo config/prose
+tests/mvp-phase-integration.test.cjs	E	E	1370		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/mvp-phase-spidr.test.cjs	A	A4	13		n	n	6	asserts string/pattern in repo file text
+tests/new-milestone-clear-phases.test.cjs	E	E	15377	28584	y	y	47	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/new-project-mvp-prompt.test.cjs	A	A4	31		n	n	10	asserts string/pattern in repo file text
+tests/next-decimal-roadmap-scan.test.cjs	E	E	2624		n	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/next-queue-ruleset.test.cjs	A	A1	15		n	n	11	compares >=2 repo artifacts
+tests/next-safety-gates.test.cjs	A	A4	26		n	n	16	scans source/prose text for a string/pattern
+tests/next-up-clear-order.test.cjs	A	A4	59		n	n	15	scans source/prose text for a string/pattern
+tests/no-bare-gsd-tools-command-position.test.cjs	A	A4	61		n	n	3	scans source/prose text for a string/pattern
+tests/no-bare-npm-exec.rule.test.cjs	B	B-eslint-rule	79	79	y	n	13	RuleTester/eslint-rules ref
+tests/no-crlf-fragile-split.rule.test.cjs	B	B-eslint-rule	99		n	n	24	RuleTester/eslint-rules ref
+tests/no-dead-sdk-refs.test.cjs	D	D	319		n	n	18	product module on constructed input; few repo reads
+tests/no-exact-case-env-access.rule.test.cjs	B	B-eslint-rule	122	163	y	y	24	RuleTester/eslint-rules ref
+tests/no-hardcoded-home-gsd-tools.test.cjs	A	A4	77		n	n	4	hand-verified: scans source/prose text for a string/pattern
+tests/no-hardcoded-tmp.rule.test.cjs	B	B-eslint-rule	71		n	n	12	RuleTester/eslint-rules ref
+tests/no-path-literal-in-assert.rule.test.cjs	B	B-eslint-rule	169	155	y	n	38	RuleTester/eslint-rules ref
+tests/no-pending-3212-markers.test.cjs	E	E	239	448	n	n	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/no-phantom-issue-refs.test.cjs	D	D	16	21	y	y	4	temp/mock inputs, no product require detected
+tests/no-posix-mode-bit-assert.rule.test.cjs	B	B-eslint-rule	132	197	y	y	37	RuleTester/eslint-rules ref
+tests/no-private-binary-resolution.rule.test.cjs	B	B-eslint-rule	118	111	y	y	24	RuleTester/eslint-rules ref
+tests/no-rendered-text-length-assert.rule.test.cjs	B	B-eslint-rule	105		n	n	18	RuleTester/eslint-rules ref
+tests/no-swallowed-precondition.rule.test.cjs	B	B-eslint-rule	113		n	n	8	RuleTester/eslint-rules ref
+tests/no-unbounded-dirname-walk.rule.test.cjs	B	B-eslint-rule	120	97	n	n	10	RuleTester/eslint-rules ref
+tests/no-unbounded-quantifier.rule.test.cjs	B	B-eslint-rule	143		n	n	15	RuleTester/eslint-rules ref
+tests/no-unbounded-spawn-allowlist.test.cjs	E	E	310		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/no-unbounded-spawn.test.cjs	B	B-eslint-rule	362	383	y	n	42	RuleTester/eslint-rules ref
+tests/no-unconfined-path-join.rule.test.cjs	B	B-eslint-rule	155		n	n	40	RuleTester/eslint-rules ref
+tests/no-unguarded-nonportable-exec.rule.test.cjs	B	B-eslint-rule	144	104	y	y	17	RuleTester/eslint-rules ref
+tests/node-compile-cache.test.cjs	E	E	4446		y	y	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/non-claude-runtimes-registry-derivation.test.cjs	D	D	16		n	n	4	calls product module on constructed input in-process
+tests/normalize-path-in-content.rule.test.cjs	B	B-eslint-rule	567		n	n	31	RuleTester/eslint-rules ref
+tests/normalize-test-command.test.cjs	D	D	310		n	n	26	hand-verified: in-process logic with <=3 incidental process calls
+tests/npm-audit-baseline-safe-directory-5659.test.cjs	D	D	80		y	n	8	in-process logic with <=3 incidental process calls
+tests/npm-audit-baseline.test.cjs	E	E	682	3630	y	n	48	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/npm-integrity-gate.test.cjs	E	E	2360	5052	y	n	18	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/npm-version-check-diagnosis.test.cjs	D	D	10		n	n	5	calls product module on constructed input in-process
+tests/nsegment-phase-grammar.test.cjs	E	E	922	18544	y	n	34	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/observability/event.test.cjs	D	D	25		n	y	26	calls product module on constructed input in-process
+tests/observability/hub-logger-integration.test.cjs	D	D	38		n	n	24	calls product module on constructed input in-process
+tests/observability/logger.test.cjs	D	D	269		n	n	43	calls product module on constructed input in-process
+tests/observability/redaction.test.cjs	D	D	18		n	n	10	calls product module on constructed input in-process
+tests/onboard-command.test.cjs	E	E	9713	17380	n	y	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-advisory-stderr.test.cjs	E	E	1136		y	y	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-command-dir-plural.test.cjs	E	E	13213	51247	y	n	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-command-foreground.test.cjs	D	D	92		n	n	3	calls product module on constructed input in-process
+tests/opencode-config-jsonc.test.cjs	D	D	3679		y	n	3	temp/mock inputs, no product require detected
+tests/opencode-generations.smoke.test.cjs	E	E	7		y	y	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-imperative-reference.test.cjs	E	E	1589		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-install-notices.test.cjs	E	E	5947		y	y	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-install-state.test.cjs	D	D	14		n	y	3	calls product module on constructed input in-process
+tests/opencode-matrix.smoke.test.cjs	E	E	16		n	n	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-parity-hooks.test.cjs	D	D	1820		y	y	8	calls product module on constructed input in-process
+tests/opencode-permissions.test.cjs	E	E	1070		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-plugin-adapter.test.cjs	E	E	2126	6367	y	y	38	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-review-reconstruction.property.test.cjs	D	D	213		n	n	18	calls product module on constructed input in-process
+tests/opencode-statusline-plugin.test.cjs	E	E	2810		y	y	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-uninstall-roundtrip.test.cjs	E	E	5184		y	y	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/opencode-version.test.cjs	D	D	26		n	n	16	hand-verified: calls product module on constructed input in-process
+tests/orphan-worktree-detection.test.cjs	E	E	715		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/orphaned-hooks.test.cjs	A	A4	15		n	n	7	scans source/prose text for a string/pattern
+tests/overlay-repo-helpers.test.cjs	E	E	1094	15199	y	n	34	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/package-identity.test.cjs	B	B-lint-script	203		n	n	25	hand-verified: drives scripts/lint-*.cjs
+tests/package-legitimacy-gate.test.cjs	A	A4	154		n	n	32	scans source/prose text for a string/pattern
+tests/package-legitimacy.property.test.cjs	D	D	97		n	n	9	calls product module on constructed input in-process
+tests/package-legitimacy.test.cjs	D	D	43		n	n	42	calls product module on constructed input in-process
+tests/package-manifest.test.cjs	A	A4	8		n	n	3	scans source/prose text for a string/pattern
+tests/package-name-single-source.test.cjs	F	F1	113		n	n	2	product code applied to repo content
+tests/packaging-shipped-scripts-require-only-shipped.test.cjs	E	E	17550	10045	y	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/parallel-dependent-plans.test.cjs	A	A4	29		n	n	27	scans source/prose text for a string/pattern
+tests/partial-init-routing.test.cjs	A	A4	10		n	n	4	hand-verified: scans source/prose text for a string/pattern
+tests/path-replacement.test.cjs	E	E	7399	27514	y	y	133	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pattern-mapper.test.cjs	E	E	1961		n	n	8	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pattern.test.cjs	D	D	307		n	n	33	in-process logic with <=3 incidental process calls
+tests/pause-work-context-detection.test.cjs	E	E	162	1448	y	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pause-work-improvements.test.cjs	E	E	106	1011	y	y	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/perf-315-loadconfig-subrepo-scan.test.cjs	D	D	23		n	n	1	calls product module on constructed input in-process
+tests/perf-316-state-lock-buffer-alloc.test.cjs	D	D	617		n	n	1	calls product module on constructed input in-process
+tests/perf-317-context-monitor-fs.test.cjs	E	E	7275	15052	y	y	130	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/perf-407-planning-lock-buffer-alloc.test.cjs	D	D	30		n	n	1	calls product module on constructed input in-process
+tests/phase-command-router.test.cjs	E	E	5163		n	n	40	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase-completion-single-owner.test.cjs	E	E	6373	13576	n	n	33	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase-dependency-levels.test.cjs	D	D	12		n	n	17	calls product module on constructed input in-process
+tests/phase-entry-grammar-agreement.test.cjs	E	E			n	n	23	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase-entry-grammar.test.cjs	D	D	15		n	n	25	calls product module on constructed input in-process
+tests/phase-estimation.test.cjs	E	E	11888	24065	n	n	79	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase-id-card.test.cjs	D	D	9		n	n	3	calls product module on constructed input in-process
+tests/phase-id-drift-guard.test.cjs	B	B-lint-script	688		n	y	31	drives scripts/lint-*.cjs
+tests/phase-id.test.cjs	D	D	472		n	y	215	calls product module on constructed input in-process
+tests/phase-lifecycle.test.cjs	D	D	61		n	n	26	calls product module on constructed input in-process
+tests/phase-locator.test.cjs	D	D	7184	17050	n	n	107	hand-verified: drives scripts/lint-*.cjs
+tests/phase-resolution-parity.test.cjs	E	E	16818		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase-status.test.cjs	D	D	264		n	y	60	calls product module on constructed input in-process
+tests/phase-tdd-applicable.test.cjs	E	E	2922		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase.platform.test.cjs	E	E	965		y	y	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase.test.cjs	E	E	171369	349600	n	y	661	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase6-capability-docs.test.cjs	A	A4	11		n	n	6	scans source/prose text for a string/pattern
+tests/phase6-capstone-conformance.test.cjs	E	E	3486	6238	y	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/phase6-planning-capabilities.test.cjs	A	A4	10		n	n	4	scans source/prose text for a string/pattern
+tests/phase6-review-capabilities.test.cjs	F	F1	23		n	n	13	product code applied to repo content
+tests/phases-command-router.test.cjs	E	E	849		n	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pi-config-dir-env-override.test.cjs	E	E	5281	8394	y	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pi-dispatch-install.test.cjs	E	E	7479		y	n	30	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pi-dispatch.test.cjs	D	D	602		y	y	43	temp/mock inputs, no product require detected
+tests/pi-extension-reachability.test.cjs	D	D	1134		n	n	9	temp/mock inputs, no product require detected
+tests/pi-gsd-debug-loop.test.cjs	D	D	1396		n	n	33	in-process logic with <=3 incidental process calls
+tests/pi-hook-bridge.test.cjs	D	D	549		y	n	41	in-process logic with <=3 incidental process calls
+tests/pi-imperative-reference.test.cjs	D	D	19		n	n	6	calls product module on constructed input in-process
+tests/pi-package.test.cjs	E	E	9840		y	y	32	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pi-parity-matrix.test.cjs	E	E	1536		n	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pi-unsupported-skill-docs.test.cjs	A	A4	9		n	n	2	hand-verified: product module on constructed input; few repo reads
+tests/pi-upgrades.test.cjs	D	D	74		n	n	16	calls product module on constructed input in-process
+tests/pi-workflow-handoff.test.cjs	E	E	11646		n	n	46	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pick-flag.test.cjs	E	E	9133		n	n	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plan-authoring-verification-gaps.test.cjs	E	E	1454		n	y	14	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plan-bounce.test.cjs	E	E	988		n	n	16	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plan-checker-coupling.test.cjs	A	A4	39		n	n	25	scans source/prose text for a string/pattern
+tests/plan-count-single-owner.test.cjs	B	B-lint-script	193	290	y	y	53	drives scripts/lint-*.cjs
+tests/plan-document.test.cjs	D	D	50		n	y	49	hand-verified: calls product module on constructed input in-process
+tests/plan-phase-background-wait-wakeup.test.cjs	D	D	22		n	n	6	pure assertions on helper-built inputs, no repo reads
+tests/plan-phase-drift-guard.test.cjs	A	A4	89		n	n	90	scans source/prose text for a string/pattern
+tests/plan-phase-mvp-flag.test.cjs	E	E	542		n	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plan-phase-stall-detection.test.cjs	E	E	64999	140998	y	y	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plan-phase-ui-redirect.test.cjs	A	A4	45		n	n	23	scans source/prose text for a string/pattern
+tests/plan-pre-generic-dispatch-5982.test.cjs	E	E			n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plan-pre-hook-e2e.test.cjs	E	E	4392	11054	y	n	14	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plan-review-convergence.test.cjs	E	E	20659	135	y	y	154	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/planner-decomposition.test.cjs	A	A4	14		n	n	17	scans source/prose text for a string/pattern
+tests/planner-estimate-emission.test.cjs	A	A4	26		n	n	11	scans source/prose text for a string/pattern
+tests/planner-language-regression.test.cjs	A	A4	169		n	n	32	scans source/prose text for a string/pattern
+tests/planner-memory-recall-5960.test.cjs	E	E			y	n	22	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/planner-mvp-mode.test.cjs	A	A4	18		n	n	6	asserts string/pattern in repo file text
+tests/planning-document.test.cjs	D	D	479		n	n	77	calls product module on constructed input in-process
+tests/planning-inspect.test.cjs	E	E	46243	91063	y	y	108	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/planning-inspect.unit.test.cjs	D	D	646	1810	y	y	56	calls product module on constructed input in-process
+tests/planning-lock-mkdir-failure-1884.test.cjs	D	D	37	26	n	n	5	calls product module on constructed input in-process
+tests/planning-prompt-drift.test.cjs	B	B-lint-script	430	898	n	n	33	drives scripts/lint-*.cjs
+tests/planning-snapshot-bypass-drift.test.cjs	B	B-lint-script	25		n	n	11	drives scripts/lint-*.cjs
+tests/planning-snapshot.test.cjs	E	E	2464	23813	y	n	116	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/planning-workspace.test.cjs	E	E	10852	9759	n	n	47	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/plant-seed-id.test.cjs	D	D	101		n	n	6	calls product module on constructed input in-process
+tests/platform-conformance-tier.test.cjs	E	E	2966	2241	y	y	102	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/platform-guard.unit.test.cjs	B	B-eslint-rule	86	91	y	n	30	RuleTester/eslint-rules ref
+tests/playwright-ui-verify.test.cjs	A	A4	15		n	n	4	scans source/prose text for a string/pattern
+tests/plugin-manifest.test.cjs	D	D	199	1882	y	y	53	in-process logic with <=3 incidental process calls
+tests/plugin-ref-publish-5796.test.cjs	E	E			n	n	28	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/policy-138-nyquist-config-default.test.cjs	D	D	9		n	n	6	temp/mock inputs, no product require detected
+tests/policy-160-route0-resume.test.cjs	E	E	301	1127	y	n	33	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/policy-lint-shallow-checkout.test.cjs	A	A4	30		n	n	3	asserts string/pattern in repo file text
+tests/policy-release-no-npm-self-upgrade.test.cjs	A	A4	17		n	n	2	scans source/prose text for a string/pattern
+tests/policy-shell-pinning.test.cjs	D	D	194	124	y	y	17	calls product module on constructed input in-process
+tests/portability-rule-disable-ban.test.cjs	A	A4	76416	11101	n	n	5	hand-verified: scans source/prose text for a string/pattern
+tests/portability-vocab-drift.test.cjs	B	B-eslint-rule	1146		n	n	9	RuleTester/eslint-rules ref
+tests/portable-node-runner.install.test.cjs	E	E	679		n	n	21	qa/install/integration suite drives real binaries
+tests/post-planning-gaps-2493.test.cjs	E	E	10656		n	n	44	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pr-branch-patterns.test.cjs	D	D	23		n	n	12	calls product module on constructed input in-process
+tests/pr-branch-planning-filter.test.cjs	E	E	3519	40071	y	n	62	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/pr-template-policy.test.cjs	D	D	31		n	n	29	calls product module on constructed input in-process
+tests/precommit-alias-drift-hook.test.cjs	E	E	1024	11071	y	y	16	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/precondition-element.test.cjs	E	E	898		n	n	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/prepush-enterprise-email-hook.test.cjs	E	E	73	985	y	y	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/probe-core.property.test.cjs	D	D	168		n	n	21	calls product module on constructed input in-process
+tests/probe-core.test.cjs	D	D	121		n	n	74	calls product module on constructed input in-process
+tests/process-seam-spawn-metrics.test.cjs	D	D	1201		n	n	20	temp/mock inputs, no product require detected
+tests/process-seam.test.cjs	E	E	8159	5572	y	y	51	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/product-name-purity.test.cjs	F	F1	26		n	n	4	product code applied to repo content
+tests/profile-output.test.cjs	E	E	4878	14231	y	n	30	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/profile-pipeline.test.cjs	E	E	2285	3123	n	y	8	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/progress-debt-segmentation-guard.test.cjs	A	A4	10		n	n	2	asserts string/pattern in repo file text
+tests/progress-drift-guard.test.cjs	B	B-lint-script			n	n	36	drives scripts/lint-*.cjs
+tests/progress-forensic.test.cjs	A	A4	17		n	n	20	scans source/prose text for a string/pattern
+tests/progress-mvp-display.test.cjs	A	A4	21		n	n	7	scans source/prose text for a string/pattern
+tests/prohibition-enforcement.property.test.cjs	D	D	61		n	n	18	hand-verified: calls product module on constructed input in-process
+tests/prohibition-enforcement.test.cjs	E	E	24778	42248	y	n	75	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/prohibition-probe.docs-fixtures.test.cjs	A	A5	48		n	n	3	hand-verified: inventory/count/roster over repo files
+tests/prohibition-probe.planner-contract.test.cjs	A	A4	8		n	n	3	scans source/prose text for a string/pattern
+tests/prohibition-probe.schema.test.cjs	D	D	90		n	n	11	hand-verified: calls product module on constructed input in-process
+tests/prohibition-probe.spec-phase-contract.test.cjs	A	A4	14		n	n	10	scans source/prose text for a string/pattern
+tests/prohibition-probe.validators.test.cjs	F	F1	13		n	n	3	product code applied to repo content
+tests/prohibition-probe.verify-tier.test.cjs	D	D	25		n	n	7	calls product module on constructed input in-process
+tests/project-context-cli.test.cjs	E	E			y	y	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/project-context.test.cjs	D	D			y	y	27	in-process logic with <=3 incidental process calls
+tests/project-instruction-file-parity.test.cjs	E	E	2936		n	n	4	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/project-root.test.cjs	D	D	40	95	y	y	25	calls product module on constructed input in-process
+tests/prompt-budget-cli.test.cjs	E	E	2276		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/prompt-budget-parity.test.cjs	D	D	29		n	n	4	calls product module on constructed input in-process
+tests/prompt-budget.property.test.cjs	D	D	1025		n	n	31	calls product module on constructed input in-process
+tests/prompt-budget.test.cjs	D	D	23		n	n	12	calls product module on constructed input in-process
+tests/prompt-budget.unit.test.cjs	D	D	75		n	n	208	calls product module on constructed input in-process
+tests/prompt-injection-scan.security.test.cjs	E	E	1253		n	n	37	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/prompt-thinning.test.cjs	A	A4	20		n	n	14	scans source/prose text for a string/pattern
+tests/prune-orphaned-worktrees.test.cjs	E	E	396		n	y	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/quick-batch-command-router.stdin.test.cjs	E	E	1170		y	y	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/quick-batch-command-router.test.cjs	F	F	2083		n	n	35	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/quick-batch-dispatch.property.test.cjs	D	D	145		n	n	9	calls product module on constructed input in-process
+tests/quick-batch-dispatch.test.cjs	D	D	58		n	n	55	calls product module on constructed input in-process
+tests/quick-batch.property.test.cjs	D	D	310		n	n	24	hand-verified: calls product module on constructed input in-process
+tests/quick-batch.test.cjs	D	D	423	2172	y	y	82	in-process logic with <=3 incidental process calls
+tests/quick-branching.test.cjs	E	E	500	5296	y	y	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/quick-commit-boundary-context-research.test.cjs	A	A4	10		n	n	10	asserts string/pattern in repo file text
+tests/quick-commit-boundary.test.cjs	E	E	435		y	y	26	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/quick-plan-pre-capabilities.test.cjs	D	D	14		n	n	1	pure assertions on helper-built inputs, no repo reads
+tests/quick-planner-scope-guard.test.cjs	A	A4	7		n	n	1	scans source/prose text for a string/pattern
+tests/quick-research.test.cjs	E	E	2264	5483	n	y	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/quick-review-scope-tip-bound.test.cjs	E	E	409	1490	y	y	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/quick-session-management.test.cjs	A	A3	11		n	n	10	structure/schema of parsed repo config/prose
+tests/qwen-imperative-reference.test.cjs	F	F1	41		n	n	7	product code applied to repo content
+tests/qwen-skills-migration.test.cjs	D	D	117		n	n	11	calls product module on constructed input in-process
+tests/qwen-upgrades.test.cjs	E	E	3000		n	n	4	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/reachability-check.test.cjs	A	A4	9		n	n	7	asserts string/pattern in repo file text
+tests/read-guard.test.cjs	E	E	1194	2302	y	n	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/read-injection-scanner.property.test.cjs	E	E	3812		n	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/read-injection-scanner.security.test.cjs	E	E	6812		n	n	30	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/readfilesync-trace-parity.test.cjs	B	B-eslint-rule	92		n	n	3	RuleTester/eslint-rules ref
+tests/reapply-patches.test.cjs	D	D	43		n	n	32	calls product module on constructed input in-process
+tests/reapply-verify-hunks.test.cjs	E	E	4267	11272	y	y	108	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/refactor-1390-t3-characterization.test.cjs	D	D	31		n	y	46	calls product module on constructed input in-process
+tests/refactor-trigger-cli.test.cjs	E	E	18715		n	n	44	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/registry-axes-parity.test.cjs	D	D	23		n	n	11	calls product module on constructed input in-process
+tests/registry-docs-approved-issue-parity.test.cjs	F	F1			n	n	28	product code applied to repo content
+tests/registry-reviewer-parity.test.cjs	D	D	13		n	n	5	calls product module on constructed input in-process
+tests/registry-schema.test.cjs	D	D	173		n	n	128	calls product module on constructed input in-process
+tests/release-ancestry.test.cjs	D	D			y	n	11	in-process logic with <=3 incidental process calls
+tests/release-backmerge-invariants.test.cjs	A	A4	35		y	n	19	scans source/prose text for a string/pattern
+tests/release-coverage-scope.test.cjs	A	A4	12		n	n	3	scans source/prose text for a string/pattern
+tests/release-finalize-notes-5922.test.cjs	A	A3			n	n	3	structure/schema of parsed repo config/prose
+tests/release-finalize-syncs-next-version.test.cjs	A	A4	18		n	n	3	scans source/prose text for a string/pattern
+tests/release-hotfix-empty-cherry-pick.test.cjs	E	E	237		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/release-notes-real-os-5922.test.cjs	E	E			y	y	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/release-pipeline-pr.test.cjs	D	D			n	y	27	in-process logic with <=3 incidental process calls
+tests/release-shard-lane-sharding.test.cjs	A	A3	32		n	n	2	structure/schema of parsed repo config/prose
+tests/release-tarball-smoke-bin-invocation.test.cjs	D	D	8		n	n	4	calls product module on constructed input in-process
+tests/release-tarball-smoke-workflow.test.cjs	A	A4	8		n	n	7	scans source/prose text for a string/pattern
+tests/release-tarball-smoke.install.test.cjs	E	E	167690		n	n	26	hand-verified: qa/install/integration suite drives real binaries
+tests/removed-but-needed-lint.test.cjs	B	B-lint-script	3280		n	n	116	drives scripts/lint-*.cjs
+tests/repo-invariants.test.cjs	B	B-eslint-rule	16600		n	n	8	RuleTester/eslint-rules ref
+tests/repo-layout.test.cjs	E	E	1546	8302	y	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/repo-tagging-config.test.cjs	E	E	5834		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/report-parser.property.test.cjs	D	D	2038		n	n	51	calls product module on constructed input in-process
+tests/representative-corpus.test.cjs	E	E	1890	4328	n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/require-fs-op-fallback.rule.test.cjs	B	B-eslint-rule	214	134	y	n	17	RuleTester/eslint-rules ref
+tests/require-full-tmpdir-triad.rule.test.cjs	B	B-eslint-rule	208	138	y	n	13	RuleTester/eslint-rules ref
+tests/require-issue-link-policy.property.test.cjs	D	D	64		n	n	12	calls product module on constructed input in-process
+tests/require-issue-link-policy.test.cjs	F	F1	27		n	y	47	product code applied to repo content
+tests/require-userprofile-with-home.rule.test.cjs	B	B-eslint-rule	124	84	y	n	11	RuleTester/eslint-rules ref
+tests/requirements-annotated-status.test.cjs	E	E			n	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/research-agent-profiles.test.cjs	A	A4	72		n	n	52	scans source/prose text for a string/pattern
+tests/research-cli.test.cjs	E	E	4956		n	n	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/research-provider.property.test.cjs	D	D	93		n	n	28	calls product module on constructed input in-process
+tests/research-provider.test.cjs	D	D	31		n	n	30	calls product module on constructed input in-process
+tests/research-store.property.test.cjs	D	D	80		n	n	26	calls product module on constructed input in-process
+tests/research-store.test.cjs	D	D	59		n	n	47	calls product module on constructed input in-process
+tests/resolution.test.cjs	D	D	26		n	n	9	calls product module on constructed input in-process
+tests/resolve-agent-executor-role.test.cjs	E	E			n	n	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/resolve-dispatch-type.test.cjs	D	D	14		n	n	9	calls product module on constructed input in-process
+tests/resolve-execution-dynamic-routing.test.cjs	E	E	3103		n	n	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/resolve-model-fallback-agent.test.cjs	E	E			n	n	13	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/resolver-hoist-guard.test.cjs	A	A4	27		n	n	4	scans source/prose text for a string/pattern
+tests/response-language-coverage.test.cjs	B	B-lint-script	216	381	y	y	40	drives scripts/lint-*.cjs
+tests/responsive-separators.test.cjs	D	D	147		n	n	22	temp/mock inputs, no product require detected
+tests/retired-artifact-cleanup.test.cjs	D	D	19	47	y	y	6	calls product module on constructed input in-process
+tests/reversibility-tagging.test.cjs	E	E	1346		n	n	37	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-build-prompt-optional-sections.test.cjs	E	E	145	2421	y	y	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-default-reviewers-config.test.cjs	E	E	5384	7820	y	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-default-reviewers-resolution.test.cjs	D	D	10		n	n	4	calls product module on constructed input in-process
+tests/review-default-reviewers-workflow.test.cjs	A	A4	21		n	n	23	hand-verified: product code applied to repo content
+tests/review-lane-availability.test.cjs	E	E	7226		y	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-lane-descriptor.test.cjs	E	E	2867		n	n	86	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-lane-invocation.test.cjs	D	D	1189		y	y	88	in-process logic with <=3 incidental process calls
+tests/review-lane-no-redirect-5433.test.cjs	D	D	4390		y	n	4	temp/mock inputs, no product require detected
+tests/review-lane-prompt-cap.test.cjs	D	D			y	y	69	in-process logic with <=3 incidental process calls
+tests/review-lane-runner.test.cjs	F	F1	225	187	n	y	185	product code applied to repo content
+tests/review-lane-windows-spawn-resolution.test.cjs	D	D	18	1540	y	y	12	in-process logic with <=3 incidental process calls
+tests/review-model-config.test.cjs	E	E	4494	10920	y	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-parallel-lanes.test.cjs	E	E	2727	30211	y	y	36	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-plan-coverage-manifest.test.cjs	E	E	532	3947	y	y	24	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-reviewer-instances-config.test.cjs	E	E	1301		n	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/review-reviewer-instances.test.cjs	D	D	25		n	n	15	calls product module on constructed input in-process
+tests/review-reviewer-selection.test.cjs	D	D	13		n	y	30	calls product module on constructed input in-process
+tests/review-timeout-guidance.test.cjs	A	A4	9		n	n	4	asserts string/pattern in repo file text
+tests/reviewed-or-maintainer-policy.test.cjs	D	D	715		n	y	56	in-process logic with <=3 incidental process calls
+tests/reviewed-or-maintainer-workflow.test.cjs	A	A1	13		n	n	14	compares >=2 repo artifacts
+tests/reviewer-config-federation.test.cjs	E	E	9377		n	n	39	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/reviewer-docs-parity.test.cjs	E	E	2865		n	n	60	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/reviewer-lane-declarations.test.cjs	D	D	190		n	n	34	calls product module on constructed input in-process
+tests/reviewer-manifest-body.test.cjs	D	D	546	979	n	y	164	calls product module on constructed input in-process
+tests/reviewer-step-dispatch.test.cjs	D	D	131	192	y	y	31	calls product module on constructed input in-process
+tests/reviewer-trust-disclosure.test.cjs	D	D	240		n	n	56	calls product module on constructed input in-process
+tests/revision-remediation-binding.test.cjs	F	F	3562	72	y	n	76	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmap-command-router.test.cjs	E	E	2661		n	n	8	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmap-mode-field.test.cjs	E	E	1399		n	y	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmap-parser-phase-id-dedupe.test.cjs	D	D			n	n	11	calls product module on constructed input in-process
+tests/roadmap-parser.test.cjs	E	E	19673	39255	n	y	293	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmap-phase-fallback.test.cjs	E	E	2275		n	y	20	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmap-progress-owner.test.cjs	D	D	50		n	n	23	calls product module on constructed input in-process
+tests/roadmap-progress-writers.test.cjs	E	E	1262		n	n	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmap-upgrade-bracket.test.cjs	E	E	38808	100909	y	y	95	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmap-upgrade.test.cjs	D	D	672		y	n	19	in-process logic with <=3 incidental process calls
+tests/roadmap.test.cjs	E	E	140748	91997	y	n	309	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/roadmapper-contract-guard.test.cjs	A	A4	8		n	n	1	asserts string/pattern in repo file text
+tests/roadmapper-granularity.test.cjs	E	E	4724		n	n	50	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/run-tests-accounting.test.cjs	E	E	40773		y	y	45	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/run-tests-harness.test.cjs	E	E	198625	120125	y	y	253	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/run-tests-temp-root.test.cjs	E	E	15240	8515	y	y	38	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/run-with-timeout.test.cjs	E	E	13239	15635	y	n	31	hand-verified: drives scripts/lint-*.cjs
+tests/runtime-artifact-install-plan.test.cjs	D	D	64		n	n	17	calls product module on constructed input in-process
+tests/runtime-artifact-layout-descriptor-drive.test.cjs	D	D	26		n	n	8	calls product module on constructed input in-process
+tests/runtime-artifact-layout-install-profiles.test.cjs	D	D	1765		n	n	68	calls product module on constructed input in-process
+tests/runtime-artifact-layout-surface.test.cjs	E	E	8431	36312	y	n	58	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/runtime-artifact-layout-trigger-surface.test.cjs	F	F1	31		n	n	26	product code applied to repo content
+tests/runtime-artifact-layout.test.cjs	D	D	5042	48996	y	y	28	calls product module on constructed input in-process
+tests/runtime-brand-swap-parity.test.cjs	D	D	22		n	n	2	calls product module on constructed input in-process
+tests/runtime-command-form.test.cjs	E	E	1666		n	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/runtime-config-adapter-registry.test.cjs	D	D	471		n	n	38	calls product module on constructed input in-process
+tests/runtime-converters.test.cjs	E	E	17337	26733	y	n	148	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/runtime-descriptor-owner.test.cjs	D	D	193		y	n	42	calls product module on constructed input in-process
+tests/runtime-flags.test.cjs	D	D	30		n	n	5	calls product module on constructed input in-process
+tests/runtime-home-hermeticity.test.cjs	E	E			y	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/runtime-homes-descriptor-drive.test.cjs	D	D	266	298	y	n	121	calls product module on constructed input in-process
+tests/runtime-homes-legacy-ids-drift-guard.test.cjs	D	D	22		n	n	5	calls product module on constructed input in-process
+tests/runtime-homes.property.test.cjs	D	D	107		n	n	18	calls product module on constructed input in-process
+tests/runtime-identity.test.cjs	E	E	2403	2930	y	y	62	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/runtime-label-policy.test.cjs	D	D	11		n	n	3	calls product module on constructed input in-process
+tests/runtime-launcher-parity.test.cjs	E	E	3399	7380	y	y	36	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/runtime-marker-resolution.test.cjs	D	D	32		n	n	11	hand-verified: calls product module on constructed input in-process
+tests/runtime-name-policy.test.cjs	B	B-lint-script	71		n	n	36	drives scripts/lint-*.cjs
+tests/safe-resume-gate-anchoring.test.cjs	E	E	380		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/scan-command.test.cjs	A	A4	10		n	n	6	scans source/prose text for a string/pattern
+tests/schema-drift-files-modified-property.test.cjs	E	E	14954		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/schema-drift.test.cjs	E	E	6042		n	n	48	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/sdk-removal-query-family-dispatch.test.cjs	E	E	2147		n	n	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/sdk-smoke.test.cjs	D	D	16		n	n	4	calls product module on constructed input in-process
+tests/secret-read-exemptions.test.cjs	D	D			y	y	60	in-process logic with <=3 incidental process calls
+tests/secret-scan-lint.security.test.cjs	E	E	3885		n	n	24	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/secrets.test.cjs	D	D	39		n	n	17	calls product module on constructed input in-process
+tests/section-manifest-init-facts.test.cjs	E	E	11638		y	n	39	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/section-manifest.property.test.cjs	D	D	218		n	n	21	calls product module on constructed input in-process
+tests/section-manifest.test.cjs	D	D	40		n	n	59	calls product module on constructed input in-process
+tests/section-marker-inversion-guard.test.cjs	A	A4	18		n	n	10	scans source/prose text for a string/pattern
+tests/secure-phase-single-writer.test.cjs	A	A3	9		n	n	2	structure/schema of parsed repo config/prose
+tests/secure-phase.test.cjs	A	A4	45		n	n	67	scans source/prose text for a string/pattern
+tests/security-dead-exports.regression.test.cjs	F	F1	13		n	n	6	product code applied to repo content
+tests/security-prompt-injection.security.test.cjs	E	E	8289		n	n	70	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/security-scan.security.test.cjs	E	E	16659		n	n	67	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/security.test.cjs	E	E	3628	8697	y	y	159	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/seed-scan-new-milestone.test.cjs	A	A4	16		n	n	13	scans source/prose text for a string/pattern
+tests/self-test-report-policy.test.cjs	D	D	639		y	y	84	in-process logic with <=3 incidental process calls
+tests/self-test-report-workflow.test.cjs	F	F1	16		n	n	15	product code applied to repo content
+tests/semver-compare.test.cjs	D	D	61		n	n	30	calls product module on constructed input in-process
+tests/settings-integrations.test.cjs	E	E	10560		n	n	34	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/settings-jsonc.test.cjs	D	D	31	41	y	y	22	calls product module on constructed input in-process
+tests/sh-hook-paths.test.cjs	D	D	53	22	y	n	8	calls product module on constructed input in-process
+tests/shadow-report.security.test.cjs	D	D	109		n	n	18	calls product module on constructed input in-process
+tests/shadow-report.test.cjs	D	D	301		n	n	56	calls product module on constructed input in-process
+tests/shared-hooks-dir-resolution.test.cjs	E	E	476	1042	y	y	26	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/shell-command-projection-dispatch.test.cjs	D	D	1772	5451	y	y	224	calls product module on constructed input in-process
+tests/shell-command-projection-md-normalize.test.cjs	D	D	1000		y	y	74	in-process logic with <=3 incidental process calls
+tests/shell-command-projection-path-sep.test.cjs	D	D	81	43	n	n	26	calls product module on constructed input in-process
+tests/ship-note.test.cjs	A	A4	11		n	n	5	asserts string/pattern in repo file text
+tests/ship-notes-wedged-pr.test.cjs	D	D	352	10	y	n	10	in-process logic with <=3 incidental process calls
+tests/ship-phase-complete-gate.test.cjs	E	E	13607		n	n	35	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/shipped-reference-cites.test.cjs	D	D	129	269	y	y	16	calls product module on constructed input in-process
+tests/skill-frontmatter-contract.test.cjs	A	A4	203		n	n	62	scans source/prose text for a string/pattern
+tests/skill-manifest.test.cjs	E	E	6593	6457	y	y	28	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/slash-command-namespace.test.cjs	E	E	3566		n	n	45	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/slug-derivation-drift-guard.test.cjs	B	B-lint-script	19256	4271	y	n	40	drives scripts/lint-*.cjs
+tests/slurm-adapter.test.cjs	D	D	15		n	n	12	calls product module on constructed input in-process
+tests/smart-discuss-classification.test.cjs	F	F1			n	n	29	product code applied to repo content
+tests/smart-entry.property.test.cjs	D	D	14837		n	n	24	calls product module on constructed input in-process
+tests/smart-entry.unit.test.cjs	E	E	3062		y	y	74	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/spawn-liveness-banner.test.cjs	A	A4	92		n	n	2	scans source/prose text for a string/pattern
+tests/spec-phase-probe-reachability.test.cjs	A	A4	21		n	n	5	scans source/prose text for a string/pattern
+tests/spec-section.test.cjs	E	E	153		n	n	10	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/spike-manifest-scoping.test.cjs	A	A5	31		n	n	15	inventory/count/roster over repo files
+tests/stale-bake-guard.test.cjs	D	D	159		n	n	54	calls product module on constructed input in-process
+tests/state-acquirestatelock-non-eexist.test.cjs	D	D	30		n	n	16	calls product module on constructed input in-process
+tests/state-command-cutover.test.cjs	E	E	903		n	n	8	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/state-contract.test.cjs	E	E	10537		n	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/state-contract.unit.test.cjs	D	D	1394		n	n	96	calls product module on constructed input in-process
+tests/state-document.test.cjs	E	E	40271		n	y	181	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/state-field-drift.test.cjs	B	B-lint-script	503		n	n	39	drives scripts/lint-*.cjs
+tests/state-io.test.cjs	D	D	11		n	n	5	calls product module on constructed input in-process
+tests/state-prune.test.cjs	E	E	2819		n	n	61	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/state-rebuild-cli.test.cjs	E	E	1804		n	n	7	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/state-rebuild.test.cjs	D	D	53		n	n	20	calls product module on constructed input in-process
+tests/state-todos-render.test.cjs	D	D	1150	2559	y	n	31	in-process logic with <=3 incidental process calls
+tests/state-transition.test.cjs	D	D	583		n	y	319	in-process logic with <=3 incidental process calls
+tests/state-write-path-drift-guard.test.cjs	B	B-lint-script	2019		n	n	36	drives scripts/lint-*.cjs
+tests/state.platform.test.cjs	E	E	3553		y	y	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/state.test.cjs	E	E	267296	475683	n	y	479	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/stats-mvp-display.test.cjs	E	E	538		n	n	3	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/stats-phase-id-shape.test.cjs	E	E	1484		n	n	4	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/sub-repos-evaluation-scope-5867.test.cjs	D	D			y	y	44	in-process logic with <=3 incidental process calls
+tests/subagent-timeout.test.cjs	E	E	5166		n	n	24	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/subject-first-line.platform.test.cjs	E	E	4563		y	n	6	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/summary-commit-verification.test.cjs	A	A3	21		n	n	7	structure/schema of parsed repo config/prose
+tests/summary-status-blocked-3345.test.cjs	E	E	866		n	n	21	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/summary-task-commits-template-parity.test.cjs	D	D	12		n	n	4	calls product module on constructed input in-process
+tests/surface-empty-manifest-agents.test.cjs	D	D	20		n	n	4	calls product module on constructed input in-process
+tests/surface-md-paths.regression.test.cjs	D	D	10		n	n	5	calls product module on constructed input in-process
+tests/sync-next-version.test.cjs	D	D	96		n	n	23	calls product module on constructed input in-process
+tests/sync-runtime-launcher-guard-placement.test.cjs	D	D	36		n	n	7	calls product module on constructed input in-process
+tests/sync-skills-cross-runtime-refuse.test.cjs	A	A4	9		n	n	6	scans source/prose text for a string/pattern
+tests/table-schema-drift-lint.test.cjs	B	B-lint-script	108		n	n	8	drives scripts/lint-*.cjs
+tests/task-command-router-resolve-content.test.cjs	D	D	30		n	n	8	calls product module on constructed input in-process
+tests/task-content-resolution.test.cjs	D	D	89		n	n	35	calls product module on constructed input in-process
+tests/task-content-resolver-grammar-parity.test.cjs	D	D	16		n	n	1	calls product module on constructed input in-process
+tests/tdd-backend-wiring.test.cjs	A	A4	21		n	n	10	scans source/prose text for a string/pattern
+tests/tdd-mode.platform.test.cjs	E	E	12		y	n	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/tdd-mode.test.cjs	E	E	8168		n	n	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/tdd-red-evidence.test.cjs	F	F	1034		n	n	98	hand-verified: in-process logic with <=3 incidental process calls
+tests/tdd-reference-correctness.test.cjs	A	A4	14		n	n	7	asserts string/pattern in repo file text
+tests/tdd-review-checkpoint-cross-plan.test.cjs	D	D	1021		y	n	9	in-process logic with <=3 incidental process calls
+tests/tdd-single-statement.test.cjs	A	A4	29		n	n	16	asserts string/pattern in repo file text
+tests/tdd-walk.qa.test.cjs	E	E	16515		n	n	9	hand-verified: qa/install/integration suite drives real binaries
+tests/teams-status.test.cjs	E	E	1244	27260	y	n	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/temp-subdir.test.cjs	D	D	13		n	n	7	calls product module on constructed input in-process
+tests/template-phase-prompt-dependson-3427.test.cjs	A	A4	11		n	n	3	scans source/prose text for a string/pattern
+tests/template.test.cjs	E	E	4644		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/test-failure-reasons.test.cjs	D	D	15		n	n	5	calls product module on constructed input in-process
+tests/test-gate-watch-mode.test.cjs	A	A4	41	126	y	n	14	scans source/prose text for a string/pattern
+tests/test-report-evidence.test.cjs	E	E	7438		n	n	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/text-lines.test.cjs	D	D	82		n	n	26	pure assertions on helper-built inputs, no repo reads
+tests/thinking-model-guidance.test.cjs	A	A4	22		n	n	14	asserts string/pattern in repo file text
+tests/thinking-partner.test.cjs	E	E	319		n	n	18	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/thread-session-management.test.cjs	A	A3	11		n	n	13	structure/schema of parsed repo config/prose
+tests/timeout-evidence-from-ci.test.cjs	E	E			y	y	57	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/timeout-evidence.test.cjs	D	D			y	y	36	pure assertions on helper-built inputs, no repo reads
+tests/todos-done-rename-guard.test.cjs	A	A4	104		n	n	1	scans source/prose text for a string/pattern
+tests/todos-workstream-scope.test.cjs	E	E	6914	10635	y	y	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/token-scanner.test.cjs	D	D	36		n	n	16	calls product module on constructed input in-process
+tests/traceability-row-existence-5844.test.cjs	D	D			n	y	18	in-process logic with <=3 incidental process calls
+tests/tracer-bullet.test.cjs	E	E	1889		n	y	35	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/trae-imperative-reference.test.cjs	D	D	1019		n	n	26	in-process logic with <=3 incidental process calls
+tests/trae-upgrades.test.cjs	E	E	2668		n	n	3	hand-verified: spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/transition-verification-gate.test.cjs	A	A4	8		n	n	1	scans source/prose text for a string/pattern
+tests/trim-safety.test.cjs	D	D	66		n	n	20	pure assertions on helper-built inputs, no repo reads
+tests/tsconfig-noemit.test.cjs	E	E	6097		n	n	1	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/uat-complete-session.test.cjs	E	E	5716		y	y	43	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/uat-predicate.test.cjs	D	D	291		n	y	123	hand-verified: calls product module on constructed input in-process
+tests/uat.test.cjs	E	E	33547		n	n	391	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ui-auditor-screenshot-block.test.cjs	E	E	705		y	y	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ui-checker-adversarial-stance.test.cjs	A	A4	9		n	n	3	asserts string/pattern in repo file text
+tests/ui-consideration-probe-docs-fixtures.test.cjs	A	A4	20		n	n	6	scans source/prose text for a string/pattern
+tests/ui-consideration-probe-ui-phase-contract.test.cjs	D	D	37		n	n	5	calls product module on constructed input in-process
+tests/ui-consideration-probe.test.cjs	D	D	67		n	n	55	in-process logic with <=3 incidental process calls
+tests/ui-frontend-evidence-unreadable.test.cjs	D	D	75		n	n	15	calls product module on constructed input in-process
+tests/ui-interaction-capture.test.cjs	E	E	25800	40386	y	y	44	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/ui-researcher-inventory-self-check.test.cjs	A	A5	12		n	n	6	inventory/count/roster over repo files
+tests/ui-review-next-guidance.test.cjs	A	A4	11		n	n	4	scans source/prose text for a string/pattern
+tests/ui-safety-gate.test.cjs	D	D	20		n	y	19	calls product module on constructed input in-process
+tests/ui-spec-inventory-provenance.test.cjs	A	A4	139		n	n	39	scans source/prose text for a string/pattern
+tests/ultraplan-phase.test.cjs	A	A4	18		n	n	23	scans source/prose text for a string/pattern
+tests/undo-commit-selection-4465.test.cjs	E	E	31191	26	y	y	54	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/undo-commit-selection.test.cjs	E	E	4923	8630	y	n	29	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/unreachable-guard-drift.test.cjs	B	B-lint-script	1421	1472	y	y	72	drives scripts/lint-*.cjs
+tests/unreachable-shell-guard.test.cjs	E	E	2604	4016	y	y	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/untrusted-input-isolation.test.cjs	A	A4	25		n	n	5	asserts string/pattern in repo file text
+tests/unusable-input.test.cjs	D	D	120	100	n	n	48	calls product module on constructed input in-process
+tests/update-context.test.cjs	D	D	476		n	n	23	in-process logic with <=3 incidental process calls
+tests/update-custom-backup.test.cjs	E	E	14076	40564	y	y	62	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/update-workflow.test.cjs	A	A4	22		n	n	9	scans source/prose text for a string/pattern
+tests/user-artifact-staging.test.cjs	D	D	164	392	y	y	43	calls product module on constructed input in-process
+tests/user-home-isolation-5594.test.cjs	E	E	7721		y	n	2	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/validate-context.test.cjs	E	E	1880		n	n	9	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/validate-registry.test.cjs	E	E	724		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/verification-append-audit.test.cjs	E	E	17384		y	y	32	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/verification-overrides.test.cjs	A	A3	45		n	y	27	structure/schema of parsed repo config/prose
+tests/verification-status.test.cjs	E	E	110132	58387	y	y	264	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/verifier-behavior-unverified.test.cjs	F	F1	84		n	n	20	product code applied to repo content
+tests/verifier-coincidental-reliance.test.cjs	A	A4	71		n	n	23	scans source/prose text for a string/pattern
+tests/verifier-deferred-items.test.cjs	A	A3	27		n	n	15	structure/schema of parsed repo config/prose
+tests/verifier-evidence-gate.test.cjs	F	F1	55		n	n	18	product code applied to repo content
+tests/verifier-gsd-run-all-modes.test.cjs	A	A4	19		n	n	5	asserts string/pattern in repo file text
+tests/verifier-harvest-recorded-verdict.test.cjs	A	A4			n	n	4	asserts string/pattern in repo file text
+tests/verifier-mvp-section.test.cjs	A	A4	16		n	n	4	asserts string/pattern in repo file text
+tests/verifier-spotcheck-test-discipline.test.cjs	A	A4	12		n	n	4	asserts string/pattern in repo file text
+tests/verify-archive-dirs-live-path.test.cjs	D	D	38	49	n	n	3	calls product module on constructed input in-process
+tests/verify-command-grounding.test.cjs	E	E	5635	10114	y	y	113	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/verify-health.test.cjs	E	E	16005		n	n	57	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/verify-lifecycle-writes-e2e.test.cjs	E	E	30829		y	n	14	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/verify-mvp-uat.test.cjs	A	A4	15		n	n	10	asserts string/pattern in repo file text
+tests/verify-npm-publish.test.cjs	D	D	58		n	n	22	calls product module on constructed input in-process
+tests/verify-test-quality.test.cjs	D	D	23		n	n	19	temp/mock inputs, no product require detected
+tests/verify-work-auto-transition.test.cjs	E	E	2991		y	n	27	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/verify-work-deferred-promotion.test.cjs	D	D	24		n	n	2	calls product module on constructed input in-process
+tests/verify.test.cjs	E	E	44088	75773	y	y	258	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/vscode-browser-no-node-api.test.cjs	D	D	12		y	n	5	calls product module on constructed input in-process
+tests/vscode-extension-reachability.test.cjs	D	D	1308		n	n	9	calls product module on constructed input in-process
+tests/vscode-ide-reference.test.cjs	D	D	82		n	n	7	calls product module on constructed input in-process
+tests/vscode-lm-tools.test.cjs	D	D	1298		n	n	9	temp/mock inputs, no product require detected
+tests/vscode-subagent-dispatch.test.cjs	D	D	1772		n	n	10	temp/mock inputs, no product require detected
+tests/windows-powershell-hook-runner.test.cjs	D	D			y	y	48	in-process logic with <=3 incidental process calls
+tests/windows-robustness.test.cjs	E	E	69		n	n	12	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/windsurf-conversion.test.cjs	D	D	71		n	n	35	product module on constructed input; few repo reads
+tests/windsurf-hooks-bridge.test.cjs	E	E	1363	2894	y	n	30	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/windsurf-install.test.cjs	D	D	18		n	n	5	calls product module on constructed input in-process
+tests/workflow-compat.test.cjs	E	E	118		n	n	22	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/workflow-fragments-emission.install.test.cjs	E	E	113902		n	n	7	qa/install/integration suite drives real binaries
+tests/workflow-fragments.property.test.cjs	D	D	110		n	n	9	calls product module on constructed input in-process
+tests/workflow-fragments.test.cjs	D	D	95		n	y	60	calls product module on constructed input in-process
+tests/workflow-guard-registration.test.cjs	D	D	141		n	n	6	calls product module on constructed input in-process
+tests/workflow-guard.test.cjs	E	E	1565	5191	y	n	19	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/workflow-jq-dependency.test.cjs	A	A1	36		n	n	10	compares >=2 repo artifacts
+tests/workflow-maintainer-skip.test.cjs	A	A4	38		n	n	14	scans source/prose text for a string/pattern
+tests/workflow-shell-pinning.test.cjs	D	D	17	17	y	n	3	temp/mock inputs, no product require detected
+tests/workflow-size-budget.test.cjs	D	D	75		n	n	47	calls product module on constructed input in-process
+tests/workflow-size.test.cjs	D	D	30		n	n	9	calls product module on constructed input in-process
+tests/workflow-step-tag-balance.test.cjs	A	A1	58		n	n	2	compares >=2 repo artifacts
+tests/workflow-token-permissions.test.cjs	A	A3	73		n	n	2	structure/schema of parsed repo config/prose
+tests/workspace.test.cjs	E	E	3897		n	n	28	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/workstream-inventory.test.cjs	D	D	1531	7758	y	y	78	calls product module on constructed input in-process
+tests/workstream-name-policy.test.cjs	D	D	103		n	n	18	calls product module on constructed input in-process
+tests/workstream-scoped-paths.test.cjs	E	E	1359	5024	y	y	25	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/workstream.test.cjs	E	E	25837	70707	y	y	75	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/worktree-base-ref.test.cjs	D	D	127		n	n	157	in-process logic with <=3 incidental process calls
+tests/worktree-baseref-install.test.cjs	E	E	6344		n	n	15	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/worktree-cleanup.test.cjs	E	E	416	3230	y	y	89	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/worktree-safety-reap.test.cjs	E	E	3221		n	y	43	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/worktree-safety.test.cjs	E	E	18980	47065	y	y	379	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/worktree-subdir-effective-root-4885.test.cjs	E	E	479		y	y	5	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/worktree-worker-log.test.cjs	E	E	1098		n	n	11	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/worktree.test.cjs	E	E	195	452	y	y	43	spawns process (gsd-tools/git/installer/node) directly or via helper
+tests/write-set.test.cjs	D	D	34		n	n	10	calls product module on constructed input in-process
+tests/zcode-agent-mcp-grants.install.test.cjs	E	E	19539		n	n	4	qa/install/integration suite drives real binaries

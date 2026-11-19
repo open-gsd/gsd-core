@@ -311,6 +311,7 @@ const DOCS_GUARD_TESTS = {
     'docs/pt-BR/context-monitor.md',
     'docs/zh-CN/context-monitor.md',
   ],
+  'tests/gen-cli-surface-manifest.test.cjs': ['docs/CLI-SURFACE-MANIFEST.json'],
   'tests/gen-state-md-docs.test.cjs': [
     'docs/reference/state-md.md',
     'docs/ja-JP/reference/state-md.md',
@@ -388,6 +389,11 @@ const DOCS_GUARD_TESTS = {
     'docs/pt-BR/README.md',
   ],
   'tests/progress-forensic.test.cjs': ['docs/COMMANDS.md'],
+  'tests/registry-docs-approved-issue-parity.test.cjs': [
+    'docs/registries/README.md',
+    'docs/how-to/list-your-reviewer-lane.md',
+    'docs/how-to/take-over-a-capability-or-eos.md',
+  ],
   'tests/repo-layout.test.cjs': ['docs/contributing/bootstrap.md'],
   // Reads REQ-LANG-04 and runs every form it offers an author through the
   // matcher that enforces it, so a reword of the requirement alone is exactly

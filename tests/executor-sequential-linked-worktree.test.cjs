@@ -22,7 +22,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -71,7 +72,10 @@ function runStep0(t, { branch, sequential, linkedWorktree = true, protectedBranc
     asExecutorWouldRun(sequential),
     'printf "GUARD_PASSED\\n"',
   ].join('\n'), { mode: 0o755 });
-  return spawnSync('bash', [script], { cwd: dir, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
+  const r = runHook(script, [], { interpreter: 'bash', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+  // A timeout or spawn failure must not read as a bare exit-status mismatch (status null) in the callers.
+  assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+  return toLegacyResult(r);
 }
 
 describe('#4799 executor Step 0: the branch allow-list follows the dispatch, not the physical worktree', () => {
