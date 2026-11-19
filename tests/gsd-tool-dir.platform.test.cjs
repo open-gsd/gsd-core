@@ -156,32 +156,29 @@ describe('#5757 case 13: parity - sentinel writer and probe writer share one pol
   test('sentinel temp write is exclusive: a link planted at the exact temp name is not written through, not unlinked, and recorded:false', (t) => {
     const root = freshRepo();
     const outside = tmp('gsd-5757-outside-');
-    const preloadDir = tmp('gsd-5757-preload-');
     t.after(() => cleanup(root));
     t.after(() => cleanup(outside));
-    t.after(() => cleanup(preloadDir));
-    // The writer runs in a child process, so its temp name is made
-    // deterministic by a preload that pins pid, Date.now and randomBytes to
-    // values that spell the SAME name for the legacy (pid-Date.now) and the
-    // current (pid-randomhex) schemes: 123456789012 == hex of bytes 12 34 56 78 90 12.
-    const preload = path.join(preloadDir, 'pin-tmp-name.cjs');
-    fs.writeFileSync(preload, [
-      "Object.defineProperty(process, 'pid', { value: 4242 });",
-      'Date.now = () => 123456789012;',
-      "const crypto = require('node:crypto');",
-      "crypto.randomBytes = () => Buffer.from('123456789012', 'hex');",
-      '',
-    ].join('\n'));
+    // The writer runs in this process (#6333: runGsdTools is in-process), so
+    // its temp name is made deterministic by pinning pid, Date.now and
+    // randomBytes here, to values that spell the SAME name for the legacy
+    // (pid-Date.now) and the current (pid-randomhex) schemes:
+    // 123456789012 == hex of bytes 12 34 56 78 90 12. Before #6333 this was a
+    // preload injected into a spawned child with NODE_OPTIONS.
+    const crypto = require('node:crypto');
+    const pidDescriptor = Object.getOwnPropertyDescriptor(process, 'pid');
+    const unpin = () => { Object.defineProperty(process, 'pid', pidDescriptor); };
+    t.after(unpin);
+    Object.defineProperty(process, 'pid', { value: 4242, configurable: true });
+    t.mock.method(Date, 'now', () => 123456789012);
+    t.mock.method(crypto, 'randomBytes', () => Buffer.from('123456789012', 'hex'));
     const victim = path.join(outside, 'victim.txt');
     fs.writeFileSync(victim, 'original');
     const planted = path.join(root, '.gsd', 'dispatch-isolation-sentinel.json.tmp-4242-123456789012');
     fs.mkdirSync(path.join(root, '.gsd'));
     fs.symlinkSync(victim, planted);
-    const result = runGsdTools(
-      ['record-dispatch-isolation', '--isolation', 'none'],
-      root,
-      { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require ${JSON.stringify(preload)}`].filter(Boolean).join(' ') },
-    );
+    const result = runGsdTools(['record-dispatch-isolation', '--isolation', 'none'], root);
+    t.mock.restoreAll();
+    unpin();
     assert.strictEqual(JSON.parse(result.output).recorded, false);
     assert.strictEqual(fs.readFileSync(victim, 'utf8'), 'original');
     assert.strictEqual(fs.lstatSync(planted).isSymbolicLink(), true, 'a link this process did not create is left alone');

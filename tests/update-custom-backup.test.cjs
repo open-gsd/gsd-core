@@ -28,7 +28,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempDir, cleanup } = require('./helpers.cjs');
 
 function sha256(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
@@ -66,7 +66,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     cleanup(tmpDir);
   });
 
-  test('detects a custom file added inside gsd-core/workflows/', () => {
+  test('detects a custom file added inside gsd-core/workflows/', async () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/execute-phase.md': '# Execute Phase\n',
       'gsd-core/workflows/plan-phase.md': '# Plan Phase\n',
@@ -76,7 +76,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     const customFile = path.join(tmpDir, 'gsd-core/workflows/my-custom-workflow.md');
     fs.writeFileSync(customFile, '# My Custom Workflow\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -92,7 +92,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     );
   });
 
-  test('detects custom gsd-prefixed files added inside agents/', () => {
+  test('detects custom gsd-prefixed files added inside agents/', async () => {
     writeManifest(tmpDir, {
       'agents/gsd-executor.md': '# GSD Executor\n',
     });
@@ -102,7 +102,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     fs.mkdirSync(path.dirname(customAgent), { recursive: true });
     fs.writeFileSync(customAgent, '# My Custom Agent\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -114,7 +114,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
       `custom agent should be detected; got: ${JSON.stringify(json.custom_files)}`);
   });
 
-  test('reports zero custom files when all files are in manifest', () => {
+  test('reports zero custom files when all files are in manifest', async () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/execute-phase.md': '# Execute Phase\n',
       'gsd-core/references/gates.md': '# Gates\n',
@@ -122,7 +122,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     });
     // No extra files added
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -135,7 +135,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     assert.strictEqual(json.custom_count, 0, 'custom_count should be 0');
   });
 
-  test('returns custom_count equal to custom_files length', () => {
+  test('returns custom_count equal to custom_files length', async () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/execute-phase.md': '# Execute Phase\n',
     });
@@ -150,7 +150,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
       '# Custom B\n'
     );
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -163,7 +163,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     assert.strictEqual(json.custom_count, 2, 'should detect exactly 2 custom files');
   });
 
-  test('does not flag manifest files as custom even if content was modified', () => {
+  test('does not flag manifest files as custom even if content was modified', async () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/execute-phase.md': '# Execute Phase\nOriginal\n',
     });
@@ -174,7 +174,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
       '# Execute Phase\nModified by user\n'
     );
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -190,13 +190,13 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     );
   });
 
-  test('handles missing manifest gracefully — treats all GSD-dir files as custom', () => {
+  test('handles missing manifest gracefully — treats all GSD-dir files as custom', async () => {
     // No manifest. Add a file in a GSD-managed dir.
     const workflowDir = path.join(tmpDir, 'gsd-core/workflows');
     fs.mkdirSync(workflowDir, { recursive: true });
     fs.writeFileSync(path.join(workflowDir, 'my-workflow.md'), '# My Workflow\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -211,7 +211,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     assert.ok(typeof json.custom_count === 'number', 'should return numeric custom_count');
   });
 
-  test('detects custom files inside gsd-core/references/', () => {
+  test('detects custom files inside gsd-core/references/', async () => {
     writeManifest(tmpDir, {
       'gsd-core/references/gates.md': '# Gates\n',
     });
@@ -219,7 +219,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     const customRef = path.join(tmpDir, 'gsd-core/references/my-domain-probes.md');
     fs.writeFileSync(customRef, '# My Domain Probes\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -235,7 +235,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
 
   // skills/ is prefix-selective: the installer prunes gsd-* entries, not every
   // skill directory under the shared runtime skill root.
-  test('scans skills/ directory and detects custom gsd-prefixed skills not in manifest (#2942, #1325)', () => {
+  test('scans skills/ directory and detects custom gsd-prefixed skills not in manifest (#2942, #1325)', async () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/execute-phase.md': '# Execute Phase\n',
       'skills/gsd-planner/SKILL.md': '# GSD Planner\n',
@@ -246,7 +246,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     fs.mkdirSync(customSkillDir, { recursive: true });
     fs.writeFileSync(path.join(customSkillDir, 'SKILL.md'), '# My Custom Skill\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -268,7 +268,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     );
   });
 
-  test('does not report non-gsd shared skills, hooks, or prior backups (#1325)', () => {
+  test('does not report non-gsd shared skills, hooks, or prior backups (#1325)', async () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner\n',
       'hooks/gsd-check-update.js': 'console.log("managed");\n',
@@ -281,7 +281,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     fs.mkdirSync(path.join(tmpDir, 'gsd-user-files-backup', 'skills', 'gsd-old'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'gsd-user-files-backup', 'skills', 'gsd-old', 'SKILL.md'), '# Old backup\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -304,7 +304,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     );
   });
 
-  test('does not scan command/ directory (installer does not wipe it)', () => {
+  test('does not scan command/ directory (installer does not wipe it)', async () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/execute-phase.md': '# Execute Phase\n',
     });
@@ -314,7 +314,7 @@ describe('detect-custom-files — update workflow backup detection (#1997)', () 
     fs.mkdirSync(commandDir, { recursive: true });
     fs.writeFileSync(path.join(commandDir, 'user-command.md'), '# User Command\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -353,7 +353,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempDir, cleanup } = require('./helpers.cjs');
 
 function sha256(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
@@ -402,7 +402,7 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
   });
 
   // Test 1: detects custom GSD-prefixed skill in skills/gsd-<name>/SKILL.md
-  test('detects custom skill file at skills/gsd-<name>/SKILL.md', () => {
+  test('detects custom skill file at skills/gsd-<name>/SKILL.md', async () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
@@ -410,7 +410,7 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
     // User-added custom GSD-prefixed skill — NOT in manifest
     writeCustomFile(tmpDir, 'skills/gsd-test-custom/SKILL.md', '# My Custom Skill\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -426,14 +426,14 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
     );
   });
 
-  test('does not detect non-gsd shared skills preserved by installer (#1325)', () => {
+  test('does not detect non-gsd shared skills preserved by installer (#1325)', async () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
 
     writeCustomFile(tmpDir, 'skills/test-custom/SKILL.md', '# My Custom Skill\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -449,14 +449,14 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
   });
 
   // Test 2: does not flag GSD-owned skills as custom (manifest-tracked path NOT in custom_files)
-  test('does not flag GSD-owned skill as custom when it is tracked in manifest', () => {
+  test('does not flag GSD-owned skill as custom when it is tracked in manifest', async () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
 
     // No extra files — only the manifest-tracked skill exists
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -472,7 +472,7 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
   });
 
   // Test 3: regression guard — still detects custom files in gsd-core/workflows/
-  test('regression: still detects custom files in gsd-core/workflows/', () => {
+  test('regression: still detects custom files in gsd-core/workflows/', async () => {
     writeManifest(tmpDir, {
       'gsd-core/workflows/plan-phase.md': '# Plan Phase\n',
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
@@ -480,7 +480,7 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
 
     writeCustomFile(tmpDir, 'gsd-core/workflows/custom-workflow.md', '# My Custom Workflow\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -495,7 +495,7 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
   });
 
   // Test 4: custom_count matches custom_files.length
-  test('custom_count matches custom_files.length when multiple custom gsd-prefixed skills exist', () => {
+  test('custom_count matches custom_files.length when multiple custom gsd-prefixed skills exist', async () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
@@ -503,7 +503,7 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
     writeCustomFile(tmpDir, 'skills/gsd-test-custom/SKILL.md', '# Custom Skill One\n');
     writeCustomFile(tmpDir, 'skills/gsd-another-custom/SKILL.md', '# Custom Skill Two\n');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -520,12 +520,12 @@ describe('detect-custom-files — skills/ directory missing from GSD_MANAGED_DIR
   });
 
   // Test 5: manifest_found: true when manifest is present
-  test('manifest_found is true when manifest is present', () => {
+  test('manifest_found is true when manifest is present', async () => {
     writeManifest(tmpDir, {
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
     });
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['detect-custom-files', '--config-dir', tmpDir],
       tmpDir
     );
@@ -564,7 +564,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
   // Regression test — fails before the fix: with 'hooks' hardcoded, absDir
   // resolves to <configDir>/hooks, which does not exist for a pi install, so
   // the scan never even looks inside gsd-hooks/.
-  test('pi-shaped install: a user-added gsd-prefixed file under gsd-hooks/ is reported as custom', () => {
+  test('pi-shaped install: a user-added gsd-prefixed file under gsd-hooks/ is reported as custom', async () => {
     writeManifest(tmpDir, {
       'gsd-hooks/gsd-context-monitor.js': '// real GSD hook\n',
     });
@@ -575,7 +575,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
       '// user-added hook, not shipped by GSD\n',
     );
 
-    const result = runGsdTools(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
+    const result = await runGsdToolsAsync(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const json = JSON.parse(result.output);
@@ -585,14 +585,14 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
     );
   });
 
-  test('pi-shaped install: the same file is NOT reported as custom once it is tracked in the manifest', () => {
+  test('pi-shaped install: the same file is NOT reported as custom once it is tracked in the manifest', async () => {
     writeManifest(tmpDir, {
       'gsd-hooks/gsd-context-monitor.js': '// real GSD hook\n',
       'gsd-hooks/gsd-my-own-hook.js': '// now shipped/tracked\n',
     });
     writeRuntimeMarker(tmpDir, 'pi');
 
-    const result = runGsdTools(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
+    const result = await runGsdToolsAsync(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const json = JSON.parse(result.output);
@@ -602,7 +602,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
     );
   });
 
-  test('claude-shaped install: behavior at hooks/ is byte-identical to before the fix', () => {
+  test('claude-shaped install: behavior at hooks/ is byte-identical to before the fix', async () => {
     writeManifest(tmpDir, {
       'hooks/gsd-context-monitor.js': '// real GSD hook\n',
     });
@@ -613,7 +613,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
       '// user-added hook, not shipped by GSD\n',
     );
 
-    const result = runGsdTools(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
+    const result = await runGsdToolsAsync(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const json = JSON.parse(result.output);
@@ -623,7 +623,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
     );
   });
 
-  test('runtime undeterminable (no .gsd-runtime marker): the fallback still finds a user file under gsd-hooks/', () => {
+  test('runtime undeterminable (no .gsd-runtime marker): the fallback still finds a user file under gsd-hooks/', async () => {
     writeManifest(tmpDir, {
       'agents/gsd-executor.md': '# GSD Executor\n',
     });
@@ -636,7 +636,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
       '// user-added hook, not shipped by GSD\n',
     );
 
-    const result = runGsdTools(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
+    const result = await runGsdToolsAsync(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const json = JSON.parse(result.output);
@@ -646,7 +646,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
     );
   });
 
-  test('agents/ and skills/ scanning is unaffected by the hooks-dir resolution change', () => {
+  test('agents/ and skills/ scanning is unaffected by the hooks-dir resolution change', async () => {
     writeManifest(tmpDir, {
       'agents/gsd-executor.md': '# GSD Executor\n',
       'skills/gsd-planner/SKILL.md': '# GSD Planner Skill\n',
@@ -658,7 +658,7 @@ describe('detect-custom-files — renamed shared-hooks bundle (#3023 finding 1)'
     fs.mkdirSync(path.join(tmpDir, 'skills', 'gsd-my-custom-skill'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'skills', 'gsd-my-custom-skill', 'SKILL.md'), '# My Skill\n');
 
-    const result = runGsdTools(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
+    const result = await runGsdToolsAsync(['detect-custom-files', '--config-dir', tmpDir], tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const json = JSON.parse(result.output);
@@ -738,7 +738,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempDir, cleanup } = require('./helpers.cjs');
 
 // Frozen tokens the CLI emits through --json. Mirrors RESTORE_OUTCOME /
 // RESTORE_WARNING in gsd-core/bin/gsd-tools.cjs — a drift here is a real
@@ -787,16 +787,16 @@ function writeBackupEntry(configDir, relPath, content) {
   return full;
 }
 
-function runRestore(configDir, extraArgs = []) {
-  const result = runGsdTools(
+async function runRestore(configDir, extraArgs = []) {
+  const result = await runGsdToolsAsync(
     ['restore-custom-files', '--config-dir', configDir, ...extraArgs],
     configDir,
   );
   return result;
 }
 
-function parseRestore(configDir, extraArgs = []) {
-  const result = runRestore(configDir, extraArgs);
+async function parseRestore(configDir, extraArgs = []) {
+  const result = await runRestore(configDir, extraArgs);
   assert.ok(result.success, `restore-custom-files failed: ${result.error}`);
   return JSON.parse(result.output);
 }
@@ -836,10 +836,10 @@ describe('restore-custom-files — plan mode', () => {
     cleanup(tmpDir);
   });
 
-  test('no backup directory leaves the update flow unchanged', () => {
+  test('no backup directory leaves the update flow unchanged', async () => {
     writeInstalledManifest(tmpDir, { 'gsd-core/workflows/update.md': '# Update\n' });
 
-    const json = parseRestore(tmpDir);
+    const json = await parseRestore(tmpDir);
 
     assert.strictEqual(json.backup_found, false, 'backup_found must be false when the dir is absent');
     assert.deepStrictEqual(json.entries, [], 'no entries without a backup dir');
@@ -847,17 +847,17 @@ describe('restore-custom-files — plan mode', () => {
     assert.strictEqual(json.applied, false);
   });
 
-  test('empty backup directory reports nothing to restore', () => {
+  test('empty backup directory reports nothing to restore', async () => {
     writeInstalledManifest(tmpDir, { 'gsd-core/workflows/update.md': '# Update\n' });
     fs.mkdirSync(path.join(tmpDir, 'gsd-user-files-backup'), { recursive: true });
 
-    const json = parseRestore(tmpDir);
+    const json = await parseRestore(tmpDir);
 
     assert.strictEqual(json.eligible_count, 0, 'an empty backup dir yields no eligible entries');
     assert.deepStrictEqual(json.entries, []);
   });
 
-  test('plan mode lists a backed-up custom skill without writing it back', () => {
+  test('plan mode lists a backed-up custom skill without writing it back', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     writeBackupEntry(
       tmpDir,
@@ -865,7 +865,7 @@ describe('restore-custom-files — plan mode', () => {
       '---\nname: gsd-my-thing\ndescription: mine\n---\n# Mine\n',
     );
 
-    const json = parseRestore(tmpDir);
+    const json = await parseRestore(tmpDir);
 
     assert.strictEqual(json.backup_found, true);
     assert.strictEqual(json.applied, false, 'plan mode must not apply');
@@ -880,16 +880,16 @@ describe('restore-custom-files — plan mode', () => {
     );
   });
 
-  test('counts stay consistent across 0, 1, and 2 backup entries', () => {
+  test('counts stay consistent across 0, 1, and 2 backup entries', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     fs.mkdirSync(path.join(tmpDir, 'gsd-user-files-backup'), { recursive: true });
-    assert.strictEqual(parseRestore(tmpDir).eligible_count, 0, 'limit-1 boundary: no entries');
+    assert.strictEqual((await parseRestore(tmpDir)).eligible_count, 0, 'limit-1 boundary: no entries');
 
     writeBackupEntry(tmpDir, 'skills/gsd-a/SKILL.md', '---\nname: a\ndescription: a\n---\n');
-    assert.strictEqual(parseRestore(tmpDir).eligible_count, 1, 'limit boundary: one entry');
+    assert.strictEqual((await parseRestore(tmpDir)).eligible_count, 1, 'limit boundary: one entry');
 
     writeBackupEntry(tmpDir, 'skills/gsd-b/SKILL.md', '---\nname: b\ndescription: b\n---\n');
-    const two = parseRestore(tmpDir);
+    const two = await parseRestore(tmpDir);
     assert.strictEqual(two.eligible_count, 2, 'limit+1 boundary: two entries');
     assert.strictEqual(two.entries.length, two.eligible_count + two.skipped_count);
   });
@@ -906,13 +906,13 @@ describe('restore-custom-files — compatibility pass against the new release', 
     cleanup(tmpDir);
   });
 
-  test('a backup entry the new release now ships is skipped, not restored over', () => {
+  test('a backup entry the new release now ships is skipped, not restored over', async () => {
     // The user added skills/gsd-planner/SKILL.md themselves; the new release
     // now ships that exact path. Restoring would clobber shipped content.
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Shipped Planner\n' });
     writeBackupEntry(tmpDir, 'skills/gsd-planner/SKILL.md', '# My Old Planner\n');
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
     const entry = entryFor(json, 'skills/gsd-planner/SKILL.md');
 
     assert.strictEqual(entry.outcome, OUTCOME.SKIPPED_DESTINATION_MANAGED);
@@ -927,14 +927,14 @@ describe('restore-custom-files — compatibility pass against the new release', 
     );
   });
 
-  test('a differing file already at the destination is not clobbered', () => {
+  test('a differing file already at the destination is not clobbered', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const dest = path.join(tmpDir, 'skills', 'gsd-mine', 'SKILL.md');
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, '# Current on-disk content\n');
     writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', '# Older backed-up content\n');
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
     const entry = entryFor(json, 'skills/gsd-mine/SKILL.md');
 
     assert.strictEqual(entry.outcome, OUTCOME.SKIPPED_DESTINATION_EXISTS);
@@ -946,7 +946,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
     );
   });
 
-  test('a byte-identical destination is already present, neither blocked nor restored (#4558)', () => {
+  test('a byte-identical destination is already present, neither blocked nor restored (#4558)', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const body = '---\nname: gsd-mine\ndescription: mine\n---\n# Mine\n';
     const dest = path.join(tmpDir, 'skills', 'gsd-mine', 'SKILL.md');
@@ -954,7 +954,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
     fs.writeFileSync(dest, body);
     writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', body);
 
-    const entry = entryFor(parseRestore(tmpDir, ['--apply']), 'skills/gsd-mine/SKILL.md');
+    const entry = entryFor(await parseRestore(tmpDir, ['--apply']), 'skills/gsd-mine/SKILL.md');
 
     assert.strictEqual(
       entry.outcome, OUTCOME.ALREADY_PRESENT,
@@ -966,7 +966,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
     );
   });
 
-  test('warns when a backed-up file references a GSD path the new release dropped', () => {
+  test('warns when a backed-up file references a GSD path the new release dropped', async () => {
     writeInstalledManifest(tmpDir, { 'gsd-core/workflows/plan-phase.md': '# Plan\n' });
     writeBackupEntry(
       tmpDir,
@@ -975,7 +975,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
       + 'See @gsd-core/workflows/plan-phase.md and @gsd-core/workflows/retired.md\n',
     );
 
-    const entry = entryFor(parseRestore(tmpDir), 'skills/gsd-mine/SKILL.md');
+    const entry = entryFor(await parseRestore(tmpDir), 'skills/gsd-mine/SKILL.md');
     const codes = warningCodes(entry);
 
     assert.ok(
@@ -990,7 +990,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
     );
   });
 
-  test('warns when a backed-up file references a slash command the new release dropped', () => {
+  test('warns when a backed-up file references a slash command the new release dropped', async () => {
     writeInstalledManifest(tmpDir, { 'commands/gsd/plan-phase.md': '# Plan\n' });
     writeBackupEntry(
       tmpDir,
@@ -998,7 +998,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
       '---\nname: gsd-mine\ndescription: mine\n---\nRun /gsd:plan-phase then /gsd:retired-verb\n',
     );
 
-    const entry = entryFor(parseRestore(tmpDir), 'skills/gsd-mine/SKILL.md');
+    const entry = entryFor(await parseRestore(tmpDir), 'skills/gsd-mine/SKILL.md');
 
     assert.ok(
       warningCodes(entry).includes(WARNING.MISSING_REFERENCED_COMMAND),
@@ -1009,11 +1009,11 @@ describe('restore-custom-files — compatibility pass against the new release', 
     assert.ok(!details.includes('/gsd:plan-phase'), 'must not warn about a surviving command');
   });
 
-  test('warns when a backed-up skill is missing required frontmatter', () => {
+  test('warns when a backed-up skill is missing required frontmatter', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     writeBackupEntry(tmpDir, 'skills/gsd-broken/SKILL.md', '# No frontmatter at all\n');
 
-    const entry = entryFor(parseRestore(tmpDir), 'skills/gsd-broken/SKILL.md');
+    const entry = entryFor(await parseRestore(tmpDir), 'skills/gsd-broken/SKILL.md');
 
     assert.ok(
       warningCodes(entry).includes(WARNING.FRONTMATTER_MISSING_FIELD),
@@ -1029,26 +1029,26 @@ describe('restore-custom-files — compatibility pass against the new release', 
     ['a BOM before its block', '\uFEFF---\nname: gsd-mine\ndescription: mine\n---\nBody\n', false],
     ['an unterminated block', '---\nname: gsd-mine\ndescription: mine\n', true],
   ]) {
-    test(`a backed-up skill with ${label}: frontmatter_missing_field is ${warned ? '' : 'not '}raised`, () => {
+    test(`a backed-up skill with ${label}: frontmatter_missing_field is ${warned ? '' : 'not '}raised`, async () => {
       writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
       writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', skillMd);
-      const entry = entryFor(parseRestore(tmpDir), 'skills/gsd-mine/SKILL.md');
+      const entry = entryFor(await parseRestore(tmpDir), 'skills/gsd-mine/SKILL.md');
       assert.strictEqual(warningCodes(entry).includes(WARNING.FRONTMATTER_MISSING_FIELD), warned, JSON.stringify(entry.warnings));
     });
   }
 
-  test('a warned-but-eligible entry still restores — warnings never block', () => {
+  test('a warned-but-eligible entry still restores — warnings never block', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     writeBackupEntry(tmpDir, 'skills/gsd-broken/SKILL.md', '# No frontmatter at all\n');
 
-    const entry = entryFor(parseRestore(tmpDir, ['--apply']), 'skills/gsd-broken/SKILL.md');
+    const entry = entryFor(await parseRestore(tmpDir, ['--apply']), 'skills/gsd-broken/SKILL.md');
 
     assert.strictEqual(entry.outcome, OUTCOME.RESTORED, 'warnings are advisory, not blocking');
     assert.ok(warningCodes(entry).includes(WARNING.FRONTMATTER_MISSING_FIELD));
     assert.ok(fs.existsSync(path.join(tmpDir, 'skills', 'gsd-broken', 'SKILL.md')));
   });
 
-  test('a manifest whose files field is not a plain object reports manifest_found false', () => {
+  test('a manifest whose files field is not a plain object reports manifest_found false', async () => {
     // An array/scalar `files` yields numeric-index keys that match no path, so
     // the managed-path check is silently dead. Reporting manifest_found:true
     // there would claim a check ran that did not (ADR-227: shape, not type).
@@ -1057,7 +1057,7 @@ describe('restore-custom-files — compatibility pass against the new release', 
         path.join(tmpDir, 'gsd-file-manifest.json'),
         `{"version":"1.9.0","files":${badFiles}}`,
       );
-      const json = parseRestore(tmpDir);
+      const json = await parseRestore(tmpDir);
       assert.strictEqual(
         json.manifest_found, false,
         `files: ${badFiles} must not count as a usable manifest`,
@@ -1065,22 +1065,22 @@ describe('restore-custom-files — compatibility pass against the new release', 
     }
   });
 
-  test('a well-formed but empty files map still counts as a usable manifest', () => {
+  test('a well-formed but empty files map still counts as a usable manifest', async () => {
     // Boundary companion to the test above: {} is a legitimate manifest that
     // simply ships nothing, and must NOT be conflated with a malformed one.
     fs.writeFileSync(
       path.join(tmpDir, 'gsd-file-manifest.json'),
       '{"version":"1.9.0","files":{}}',
     );
-    assert.strictEqual(parseRestore(tmpDir).manifest_found, true);
+    assert.strictEqual((await parseRestore(tmpDir)).manifest_found, true);
   });
 
-  test('missing manifest degrades to restore-without-managed-checks rather than failing', () => {
+  test('missing manifest degrades to restore-without-managed-checks rather than failing', async () => {
     // No gsd-file-manifest.json — the destination-managed check has no source
     // of truth. The restore must still work (the backup is the user's data).
     writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', '---\nname: m\ndescription: m\n---\n');
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(json.manifest_found, false);
     assert.strictEqual(entryFor(json, 'skills/gsd-mine/SKILL.md').outcome, OUTCOME.RESTORED);
@@ -1098,12 +1098,12 @@ describe('restore-custom-files — apply mode', () => {
     cleanup(tmpDir);
   });
 
-  test('restores a backed-up custom skill to its original location', () => {
+  test('restores a backed-up custom skill to its original location', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const body = '---\nname: gsd-my-thing\ndescription: mine\n---\n# Mine\n';
     writeBackupEntry(tmpDir, 'skills/gsd-my-thing/SKILL.md', body);
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(json.applied, true);
     assert.strictEqual(json.restored_count, 1);
@@ -1115,25 +1115,25 @@ describe('restore-custom-files — apply mode', () => {
     );
   });
 
-  test('restores nested backups under gsd-core/ and commands/gsd/', () => {
+  test('restores nested backups under gsd-core/ and commands/gsd/', async () => {
     writeInstalledManifest(tmpDir, { 'gsd-core/workflows/plan-phase.md': '# Plan\n' });
     writeBackupEntry(tmpDir, 'gsd-core/references/my-probes.md', '# Probes\n');
     writeBackupEntry(tmpDir, 'commands/gsd/my-verb.md', '# My Verb\n');
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(json.restored_count, 2);
     assert.ok(fs.existsSync(path.join(tmpDir, 'gsd-core', 'references', 'my-probes.md')));
     assert.ok(fs.existsSync(path.join(tmpDir, 'commands', 'gsd', 'my-verb.md')));
   });
 
-  test('the backup is never discarded, even after a successful restore', () => {
+  test('the backup is never discarded, even after a successful restore', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const backupPath = writeBackupEntry(
       tmpDir, 'skills/gsd-mine/SKILL.md', '---\nname: m\ndescription: m\n---\n',
     );
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(json.restored_count, 1);
     assert.ok(fs.existsSync(backupPath), 'backup file must survive the restore');
@@ -1144,7 +1144,7 @@ describe('restore-custom-files — apply mode', () => {
     );
   });
 
-  test('one unwritable entry is reported and the rest still restore', () => {
+  test('one unwritable entry is reported and the rest still restore', async () => {
     // Deterministic, root-independent, cross-platform IO fault: the
     // destination's parent path already exists as a FILE, so mkdir/copy for
     // that one entry fails with ENOTDIR everywhere. No chmod tricks — a
@@ -1156,7 +1156,7 @@ describe('restore-custom-files — apply mode', () => {
     writeBackupEntry(tmpDir, 'skills/gsd-blocked/SKILL.md', '# Blocked\n');
     writeBackupEntry(tmpDir, 'skills/gsd-ok/SKILL.md', '---\nname: ok\ndescription: ok\n---\n');
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(
       entryFor(json, 'skills/gsd-blocked/SKILL.md').outcome,
@@ -1203,10 +1203,10 @@ describe('restore-custom-files — byte-identical destination settles the restor
     cleanup(tmpDir);
   });
 
-  test('plan reports already_present and excludes it from eligible_count', () => {
+  test('plan reports already_present and excludes it from eligible_count', async () => {
     seedIdenticalDestination();
 
-    const json = parseRestore(tmpDir);
+    const json = await parseRestore(tmpDir);
 
     assert.strictEqual(entryFor(json, REL).outcome, OUTCOME.ALREADY_PRESENT);
     assert.strictEqual(json.eligible_count, 0, 'accepting the prompt would restore nothing for an already-present file');
@@ -1215,10 +1215,10 @@ describe('restore-custom-files — byte-identical destination settles the restor
     assert.strictEqual(json.entries.length, json.eligible_count + json.skipped_count);
   });
 
-  test('--apply writes nothing for an already_present entry and keeps the backup intact', () => {
+  test('--apply writes nothing for an already_present entry and keeps the backup intact', async () => {
     const { dest, backupPath } = seedIdenticalDestination();
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(entryFor(json, REL).outcome, OUTCOME.ALREADY_PRESENT);
     assert.strictEqual(json.restored_count, 0, 'no-op must not count as restored');
@@ -1232,32 +1232,32 @@ describe('restore-custom-files — byte-identical destination settles the restor
     assert.strictEqual(fs.readFileSync(backupPath, 'utf8'), body);
   });
 
-  test('a plan run after a successful restore is silent (idempotent after success)', () => {
+  test('a plan run after a successful restore is silent (idempotent after success)', async () => {
     writeInstalledManifest(tmpDir, { 'gsd-core/workflows/update.md': '# Update\n' });
     writeBackupEntry(tmpDir, REL, body);
 
-    const plan1 = parseRestore(tmpDir);
+    const plan1 = await parseRestore(tmpDir);
     assert.strictEqual(entryFor(plan1, REL).outcome, OUTCOME.ELIGIBLE);
     assert.strictEqual(plan1.eligible_count, 1, 'a genuinely missing file is offered');
 
-    const applied = parseRestore(tmpDir, ['--apply']);
+    const applied = await parseRestore(tmpDir, ['--apply']);
     assert.strictEqual(entryFor(applied, REL).outcome, OUTCOME.RESTORED);
     assert.strictEqual(applied.restored_count, 1, 'a genuinely missing file still restores normally');
     assert.strictEqual(fs.readFileSync(path.join(tmpDir, REL), 'utf8'), body);
 
-    const plan2 = parseRestore(tmpDir);
+    const plan2 = await parseRestore(tmpDir);
     assert.strictEqual(entryFor(plan2, REL).outcome, OUTCOME.ALREADY_PRESENT);
     assert.strictEqual(plan2.eligible_count, 0, 'the next plan must not re-offer the restore');
   });
 
-  test('mixed backup: only the missing entry is eligible, the differing one is still skipped', () => {
+  test('mixed backup: only the missing entry is eligible, the differing one is still skipped', async () => {
     seedIdenticalDestination();
     writeBackupEntry(tmpDir, 'hooks/missing.cmd', 'echo missing\n');
     const differing = path.join(tmpDir, 'hooks', 'differing.cmd');
     fs.writeFileSync(differing, 'echo on-disk\n');
     writeBackupEntry(tmpDir, 'hooks/differing.cmd', 'echo backed-up\n');
 
-    const json = parseRestore(tmpDir);
+    const json = await parseRestore(tmpDir);
 
     assert.strictEqual(entryFor(json, REL).outcome, OUTCOME.ALREADY_PRESENT);
     assert.strictEqual(entryFor(json, 'hooks/missing.cmd').outcome, OUTCOME.ELIGIBLE);
@@ -1279,7 +1279,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     cleanup(tmpDir);
   });
 
-  test('a symlinked backup entry is skipped and never followed', (t) => {
+  test('a symlinked backup entry is skipped and never followed', async (t) => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const outsideDir = createTempDir('gsd-1854-outside-');
     t.after(() => cleanup(outsideDir));
@@ -1290,7 +1290,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     fs.mkdirSync(path.dirname(linkPath), { recursive: true });
     if (!trySymlink(secret, linkPath)) return t.skip(SYMLINK_UNAVAILABLE);
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
     const entry = entryFor(json, 'skills/gsd-evil/SKILL.md');
 
     assert.strictEqual(entry.outcome, OUTCOME.SKIPPED_UNSAFE_PATH);
@@ -1301,7 +1301,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     assert.strictEqual(fs.readFileSync(secret, 'utf8'), 'SECRET\n', 'link target untouched');
   });
 
-  test('a symlinked destination is skipped, never written through', (t) => {
+  test('a symlinked destination is skipped, never written through', async (t) => {
     // copyFileSync FOLLOWS a symlinked destination, so a link planted at the
     // restore target would write outside the config dir even though every
     // ancestor directory is real.
@@ -1316,7 +1316,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     if (!trySymlink(outsideFile, dest)) return t.skip(SYMLINK_UNAVAILABLE);
     writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', 'ATTACKER CONTENT\n');
 
-    const entry = entryFor(parseRestore(tmpDir, ['--apply']), 'skills/gsd-mine/SKILL.md');
+    const entry = entryFor(await parseRestore(tmpDir, ['--apply']), 'skills/gsd-mine/SKILL.md');
 
     assert.strictEqual(entry.outcome, OUTCOME.SKIPPED_UNSAFE_PATH);
     assert.strictEqual(
@@ -1325,7 +1325,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     );
   });
 
-  test('a dangling symlinked destination is skipped, never created through', (t) => {
+  test('a dangling symlinked destination is skipped, never created through', async (t) => {
     // The nastier variant: the link target does NOT exist, so existsSync on the
     // destination returns false and the differing-file guard never fires —
     // copyFileSync would CREATE the target wherever the link points.
@@ -1339,7 +1339,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     if (!trySymlink(neverCreated, dest)) return t.skip(SYMLINK_UNAVAILABLE);
     writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', 'ATTACKER CONTENT\n');
 
-    const entry = entryFor(parseRestore(tmpDir, ['--apply']), 'skills/gsd-mine/SKILL.md');
+    const entry = entryFor(await parseRestore(tmpDir, ['--apply']), 'skills/gsd-mine/SKILL.md');
 
     assert.strictEqual(entry.outcome, OUTCOME.SKIPPED_UNSAFE_PATH);
     assert.ok(
@@ -1348,7 +1348,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     );
   });
 
-  test('a symlinked backup root is not walked', (t) => {
+  test('a symlinked backup root is not walked', async (t) => {
     // A gsd-user-files-backup/ that is itself a link would let the walk read
     // arbitrary files and present them as the user's own backup.
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
@@ -1361,14 +1361,14 @@ describe('restore-custom-files — hostile input and path safety', () => {
       return t.skip(SYMLINK_UNAVAILABLE);
     }
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(json.backup_found, false, 'a symlinked backup root is not a backup');
     assert.deepStrictEqual(json.entries, []);
     assert.ok(!fs.existsSync(path.join(tmpDir, 'skills', 'gsd-implant', 'SKILL.md')));
   });
 
-  test('a symlinked backup directory is not traversed out of the config dir', (t) => {
+  test('a symlinked backup directory is not traversed out of the config dir', async (t) => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const outsideDir = createTempDir('gsd-1854-outdir-');
     t.after(() => cleanup(outsideDir));
@@ -1378,7 +1378,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
     fs.mkdirSync(path.dirname(linkDir), { recursive: true });
     if (!trySymlink(outsideDir, linkDir, 'dir')) return t.skip(SYMLINK_UNAVAILABLE);
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.ok(
       !json.entries.some(e => e.path.includes('loot.md') && e.outcome === OUTCOME.RESTORED),
@@ -1387,19 +1387,19 @@ describe('restore-custom-files — hostile input and path safety', () => {
     assert.ok(!fs.existsSync(path.join(tmpDir, 'escaped', 'loot.md')));
   });
 
-  test('shell metacharacters in a backup path are treated as literal path text', () => {
+  test('shell metacharacters in a backup path are treated as literal path text', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     const nasty = 'skills/gsd-$(touch pwned);&&`id`/SKILL.md';
     writeBackupEntry(tmpDir, nasty, '---\nname: n\ndescription: n\n---\n');
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(entryFor(json, nasty).outcome, OUTCOME.RESTORED);
     assert.ok(!fs.existsSync(path.join(tmpDir, 'pwned')), 'no shell interpolation of path text');
     assert.ok(!fs.existsSync(path.join(process.cwd(), 'pwned')));
   });
 
-  test('injection-shaped text inside a backed-up file is data, never instructions', () => {
+  test('injection-shaped text inside a backed-up file is data, never instructions', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     writeBackupEntry(
       tmpDir,
@@ -1409,7 +1409,7 @@ describe('restore-custom-files — hostile input and path safety', () => {
       + '$(rm -rf /) && `whoami`\n',
     );
 
-    const json = parseRestore(tmpDir, ['--apply']);
+    const json = await parseRestore(tmpDir, ['--apply']);
 
     assert.strictEqual(entryFor(json, 'skills/gsd-inject/SKILL.md').outcome, OUTCOME.RESTORED);
     assert.ok(
@@ -1430,42 +1430,42 @@ describe('restore-custom-files — argument contract', () => {
     cleanup(tmpDir);
   });
 
-  test('missing --config-dir fails with a usage error and no stack trace', () => {
-    const result = runGsdTools(['restore-custom-files'], tmpDir);
+  test('missing --config-dir fails with a usage error and no stack trace', async () => {
+    const result = await runGsdToolsAsync(['restore-custom-files'], tmpDir);
 
     assert.strictEqual(result.success, false, 'missing --config-dir must fail');
     assert.ok(!/\n\s+at\s/.test(result.error), `no stack trace in usage failure: ${result.error}`);
   });
 
-  test('empty --config-dir value fails rather than defaulting to cwd', () => {
-    const result = runGsdTools(['restore-custom-files', '--config-dir', ''], tmpDir);
+  test('empty --config-dir value fails rather than defaulting to cwd', async () => {
+    const result = await runGsdToolsAsync(['restore-custom-files', '--config-dir', ''], tmpDir);
     assert.strictEqual(result.success, false, 'empty --config-dir must not silently resolve');
   });
 
-  test('whitespace-only --config-dir value fails', () => {
-    const result = runGsdTools(['restore-custom-files', '--config-dir', '   '], tmpDir);
+  test('whitespace-only --config-dir value fails', async () => {
+    const result = await runGsdToolsAsync(['restore-custom-files', '--config-dir', '   '], tmpDir);
     assert.strictEqual(result.success, false, 'whitespace-only --config-dir must not resolve');
   });
 
-  test('a --config-dir that does not exist fails with a usage error', () => {
+  test('a --config-dir that does not exist fails with a usage error', async () => {
     const missing = path.join(tmpDir, 'definitely', 'not', 'here');
-    const result = runGsdTools(['restore-custom-files', '--config-dir', missing], tmpDir);
+    const result = await runGsdToolsAsync(['restore-custom-files', '--config-dir', missing], tmpDir);
 
     assert.strictEqual(result.success, false);
     assert.ok(!/\n\s+at\s/.test(result.error), 'no stack trace for a missing config dir');
   });
 
-  test('a flag-shaped --config-dir value is rejected, not consumed', () => {
-    const result = runGsdTools(['restore-custom-files', '--config-dir', '--apply'], tmpDir);
+  test('a flag-shaped --config-dir value is rejected, not consumed', async () => {
+    const result = await runGsdToolsAsync(['restore-custom-files', '--config-dir', '--apply'], tmpDir);
     assert.strictEqual(result.success, false, '--config-dir must not swallow the next flag');
   });
 
-  test('the last --config-dir wins when the flag is duplicated', () => {
+  test('the last --config-dir wins when the flag is duplicated', async () => {
     writeInstalledManifest(tmpDir, { 'skills/gsd-planner/SKILL.md': '# Planner\n' });
     writeBackupEntry(tmpDir, 'skills/gsd-mine/SKILL.md', '---\nname: m\ndescription: m\n---\n');
     const decoy = createTempDir('gsd-1854-decoy-');
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['restore-custom-files', '--config-dir', decoy, '--config-dir', tmpDir],
       tmpDir,
     );

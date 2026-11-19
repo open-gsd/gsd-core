@@ -27,7 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, cleanup } = require('./helpers.cjs');
 const { runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { skipUnless } = require('./helpers/bash-probe.cjs');
 const { span } = require('./helpers/doc-bash-span.cjs');
@@ -80,12 +80,12 @@ function makeConsumer() {
 
 const ENV = (home) => ({ GSD_HOME: home, GSD_WORKSTREAM: '', GSD_PROJECT: '' });
 
-function install(src, cwd, home) {
-  return runGsdTools(['capability', 'install', src, '--scope', 'project', '--yes', '--raw'], cwd, ENV(home));
+async function install(src, cwd, home) {
+  return await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--yes', '--raw'], cwd, ENV(home));
 }
 
-function renderHooks(point, cwd, home) {
-  const r = runGsdTools(['loop', 'render-hooks', point, '--raw'], cwd, ENV(home));
+async function renderHooks(point, cwd, home) {
+  const r = await runGsdToolsAsync(['loop', 'render-hooks', point, '--raw'], cwd, ENV(home));
   assert.equal(r.success, true, `render-hooks ${point} failed: ${r.error}`);
   return JSON.parse(r.output);
 }
@@ -107,27 +107,27 @@ describe('the host contract still admits the verifier role at the execute step o
 // ─── 2. install and render ──────────────────────────────────────────────────
 
 describe('install and render of a verifier-targeted contribution (#5984)', () => {
-  test('the reproduction from the issue installs and renders at execute:post', () => {
+  test('the reproduction from the issue installs and renders at execute:post', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('ver-contrib-home-');
-    const r = install(writeCap('verifier-probe', { point: 'execute:post', into: 'verifier', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('verifier-probe', { point: 'execute:post', into: 'verifier', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
-    assert.deepEqual(verifierFragments(renderHooks('execute:post', cwd, home)), [FRAGMENT]);
+    assert.deepEqual(verifierFragments(await renderHooks('execute:post', cwd, home)), [FRAGMENT]);
   });
 
-  test('declared at execute:wave:post it installs and renders, but that point is not a delivery point', () => {
+  test('declared at execute:wave:post it installs and renders, but that point is not a delivery point', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('ver-contrib-home-');
-    const r = install(writeCap('verifier-wave', { point: 'execute:wave:post', into: 'verifier', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('verifier-wave', { point: 'execute:wave:post', into: 'verifier', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
-    assert.deepEqual(verifierFragments(renderHooks('execute:wave:post', cwd, home)), [FRAGMENT]);
-    assert.deepEqual(verifierFragments(renderHooks('execute:post', cwd, home)), [], 'the delivery point does not see it');
+    assert.deepEqual(verifierFragments(await renderHooks('execute:wave:post', cwd, home)), [FRAGMENT]);
+    assert.deepEqual(verifierFragments(await renderHooks('execute:post', cwd, home)), [], 'the delivery point does not see it');
   });
 
-  test('a verifier contribution at a plan point is still refused at install', () => {
+  test('a verifier contribution at a plan point is still refused at install', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('ver-contrib-home-');
-    const r = install(writeCap('verifier-at-plan', { point: 'plan:pre', into: 'verifier', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('verifier-at-plan', { point: 'plan:pre', into: 'verifier', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /agentRoles/);
   });
@@ -320,11 +320,11 @@ describe('delivery of verifier contributions inside verify-phase-goal.md (#5984)
 });
 
 describe('end to end: the shipped mempalace contribution reaches the verifier block (#5984)', { skip: skipUnless('bash', 'node') }, () => {
-  test('real `loop render-hooks execute:post` output, piped through the shipped fence, carries the capture instructions', () => {
+  test('real `loop render-hooks execute:post` output, piped through the shipped fence, carries the capture instructions', async () => {
     const cwd = tmpDir('ver-contrib-e2e-');
     fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ runtime: 'codex', mempalace: { enabled: true, capture_artifacts: true } }));
-    const rendered = runGsdTools(['loop', 'render-hooks', 'execute:post', '--raw'], cwd, ENV(tmpDir('ver-contrib-e2e-home-')));
+    const rendered = await runGsdToolsAsync(['loop', 'render-hooks', 'execute:post', '--raw'], cwd, ENV(tmpDir('ver-contrib-e2e-home-')));
     assert.equal(rendered.success, true, rendered.error);
     const envelope = JSON.parse(rendered.output);
     assert.ok(verifierFragments(envelope).length >= 1, 'mempalace contributes a verifier fragment at execute:post');
