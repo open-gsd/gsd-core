@@ -72,7 +72,7 @@ const { readConfigFileBounded } = require('./lib/config-read.js');
 // writeCursorHooksJson so the require always resolves post-install.
 const { resolveStatePath } = require('./lib/cursor-workspace.js');
 const { readSentinel, isGsdRoleName, displayAgentName, isExecutorDispatch, EXECUTOR_SUBAGENT_TYPES, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
-const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
+const { REASON_CODE, remedyFor, composeRemedyText, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 // #3582: gsd-core/bin/lib/*.cjs (runtime-homes.cjs, worktree-safety.cjs,
 // runtime-name-policy.cjs, capability-registry.cjs — required below, inside
 // resolveIsolationEvidence and resolveFallbackIsolation) are tsc build
@@ -610,17 +610,23 @@ function evaluateRootIsolation(root, subagentType, { clock = Date, dispatchIds =
     };
   }
 
+  // #6028: the same remedy rule as hooks/gsd-agent-isolation-guard.js — a fresh recorded `none` that did not
+  // apply to this dispatch is a recorded degrade, so "start an isolated session" is not the advice.
+  const remedy = remedyFor(sentinelDiscarded);
   return {
     action: 'deny',
     reason:
       `GSD subagent isolation guard: this project's dispatch isolation resolves to ` +
       `"harness-worktree", but subagent_type="${displayAgentName(subagentType)}" is about to spawn in "${root}", ` +
       `which is not an isolated Cursor worktree — it would edit the user's primary checkout ` +
-      `directly, with no consent and no warning. Start an isolated session first (the ` +
-      `"--worktree" CLI flag or the "/worktree" chat command; Cursor manages these worktrees ` +
-      `under "~/.cursor/worktrees/") and retry.` +
-      (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : ''),
+      `directly, with no consent and no warning.` +
+      composeRemedyText(
+        sentinelDiscarded,
+        ` Start an isolated session first (the "--worktree" CLI flag or the "/worktree" chat command; ` +
+          `Cursor manages these worktrees under "~/.cursor/worktrees/") and retry.`,
+      ),
     reasonCode: REASON_CODE.NOT_ISOLATED_WORKTREE,
+    remedy,
     sentinelDiscarded,
     agentName: displayAgentName(subagentType),
   };
@@ -676,6 +682,7 @@ function main() {
           permission: 'deny',
           user_message: decision.reason,
           reason_code: decision.reasonCode,
+          remedy: decision.remedy ?? null,
           sentinel_discarded: decision.sentinelDiscarded ?? null,
         };
         if (additionalContext !== null) out.additional_context = additionalContext;

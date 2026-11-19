@@ -22,6 +22,10 @@ const { specFor } = require('../gsd-core/bin/lib/cli-surface.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { assertNoLeftoverStall, killRecordedStalls } = require('./helpers/stall-leftovers.cjs');
+
+/** The stall a git hook plants; a duration no other fixture uses, so a leftover is attributable (#6086). */
+const HOOK_STALL_COMMAND = 'sleep 12.0864';
 
 describe('commit --files: missing files must not stage deletions (#2014)', () => {
   let tmpDir;
@@ -868,7 +872,16 @@ describe('commit --files-removed: index states absent by design are never remova
     const before = git(['ls-files', '-s', '--', PENDING]);
     const hooksDir = path.join(tmpDir, '.git', 'hooks');
     fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(path.join(hooksDir, 'post-index-change'), '#!/bin/sh\nsleep 12\n', { mode: 0o755 });
+    // The killed pid is `git`, so `exec` alone cannot reach a hook git started: the hook records its own pid
+    // (the sleep's, after the `exec`) and the test terminates each one after the call returns (#6086). POSIX
+    // only: win32 has no `ps` for the comm guard or the leftover check, so there the stall runs out as before.
+    const stallPids = path.join(tmpDir, 'stall-pids.txt');
+    const stallPidsForSh = stallPids.split(path.sep).join('/');
+    fs.writeFileSync(
+      path.join(hooksDir, 'post-index-change'),
+      `#!/bin/sh\necho $$ >> '${stallPidsForSh}'\nexec ${HOOK_STALL_COMMAND}\n`,
+      { mode: 0o755 },
+    );
     const emptyConfig = path.join(tmpDir, 'empty.gitconfig');
     fs.writeFileSync(emptyConfig, '');
 
@@ -877,6 +890,8 @@ describe('commit --files-removed: index states absent by design are never remova
       tmpDir,
       { GIT_CONFIG_GLOBAL: emptyConfig, GIT_CONFIG_NOSYSTEM: '1' },
     );
+    killRecordedStalls(stallPids);
+    assertNoLeftoverStall(assert, HOOK_STALL_COMMAND, 'the post-index-change hook stalls');
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.committed, false, result.output);
     // Consistency only, NOT the control: whichever way the killed write went,

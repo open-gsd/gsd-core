@@ -102,6 +102,7 @@ These hold for every item in the epic.
 - **I8 — Checks on code shape are ESLint rules, and a new rule ships at `error`.** `npm run lint` runs with `--max-warnings 0`, so a `warn` rule already fails CI; the cleanup lands in the PR that adds the rule (I9). Workflow YAML is checked by actionlint and zizmor, and other non-JavaScript content by the static content lane (item 19).
 - **I9 — First-run findings are fixed in the PR that adds the check.** A new linter does not land with a backlog. A false positive is suppressed in the tool's config with a recorded reason.
 - **I10 — Every new third-party binary or action is pinned** to a version and a checksum or commit SHA.
+- **I11 — The testing standards change in the PR that changes the rules.** When an item adds or changes a requirement on test authors, or on product code for the sake of testability, the same PR states it in `TESTING-STANDARDS.md`, under "Test architecture policies (ADR 6315)", and, for placement and naming, in `docs/TESTING-SUITES.md`: the rule, its reason, and what enforces it. `CONTRIBUTING.md` ("Testing Standards") keeps the helper tables and setup patterns and points there. A rule known only from a PR description or a review thread is not a rule the next contributor can follow (maintainer instruction, 2026-11-19; [#6367](https://github.com/open-gsd/gsd-core/issues/6367); the file named here was corrected by [#6383](https://github.com/open-gsd/gsd-core/issues/6383)).
 
 ### 3. Phases
 
@@ -239,7 +240,7 @@ Every item starts now. The phases are a priority order, not a queue. Sections 5 
 | 17 | [#6335](https://github.com/open-gsd/gsd-core/issues/6335) | 23 | [#6341](https://github.com/open-gsd/gsd-core/issues/6341) |
 | 18 | [#6336](https://github.com/open-gsd/gsd-core/issues/6336) | 24 | [#6342](https://github.com/open-gsd/gsd-core/issues/6342) |
 | 19 | [#6337](https://github.com/open-gsd/gsd-core/issues/6337) | 14b | [#6354](https://github.com/open-gsd/gsd-core/issues/6354) |
-| 25 | [#6355](https://github.com/open-gsd/gsd-core/issues/6355) | | |
+| 25 | [#6355](https://github.com/open-gsd/gsd-core/issues/6355) | 26 | [#6369](https://github.com/open-gsd/gsd-core/issues/6369) |
 
 - **Real dependencies:** item 15 needs item 14's entry point; item 16 needs item 15; item 20 needs items 15 and 19; the second half of item 24 needs item 19; the macOS concurrency measurement in item 5b needs the sharded lane from item 5a, which has merged.
 - **Item 5a is done:** PR #5053 merged on 2026-11-18. Its review findings are tracked in [#6329](https://github.com/open-gsd/gsd-core/issues/6329).
@@ -470,7 +471,7 @@ Two consequences of the swap hold until item 14b lands: in-process calls run one
 | `await runGsdToolsAsync` | in the test process, any command | the last two of those |
 | `runGsdToolsProcess` | a spawned `node gsd-tools.cjs` | nothing; for `*.process.test.cjs` files |
 
-Fifteen test files that called asynchronous commands (`capability`, `review-lane`, `detect-custom-files`, `prompt-budget`, `classify-confidence`, `package-legitimacy`, `extract-messages`, `profile-sample`) moved to `runGsdToolsAsync`. Three tests that injected a failure by preloading a patch into a child with `NODE_OPTIONS=--require` now mock the function in the test process, which is what running in-process makes possible.
+Sixteen test files that called asynchronous commands (`capability`, `review-lane`, `detect-custom-files`, `prompt-budget`, `classify-confidence`, `package-legitimacy`, `extract-messages`, `profile-sample`) moved to `runGsdToolsAsync`. Three tests that injected a failure by preloading a patch into a child with `NODE_OPTIONS=--require` now mock the function in the test process, which is what running in-process makes possible.
 
 **Defects the in-process suite found in shipped code.** Each was invisible while every call had its own process:
 
@@ -498,7 +499,23 @@ Summed per-file time, first row against the last:
 
 These are single runs per head on a shared bench, so they are an indication and not a measurement with a known error. One run in the series showed the files that never call the helper 38% slower and the next showed them 15% faster; that spread is the noise.
 
-What the series does show: moving the synchronous calls in-process did not move the wall clock (rows one and two), and moving the asynchronous commands in-process as well took about a minute and a half off it. On Linux the wall clock is set by the install-class tests, which never call the helper (class E in `docs/research/data/2026-11-18-test-file-classification.tsv`) and are the slowest files in every run. **Item 17 (one install per runtime) is where the Linux wall clock is.** Item 15's larger effect is expected on Windows, where a process spawn costs several times more and the spawning files are 94% of the conformance tier; that is measured when the change runs through the merge queue.
+What the series does show: moving the synchronous calls in-process did not move the wall clock (rows one and two), and moving the asynchronous commands in-process as well took about a minute and a half off it. On Linux the wall clock is set by the install-class tests, which never call the helper (class E in `docs/research/data/2026-11-18-test-file-classification.tsv`) and are the slowest files in every run. **Item 17 (one install per runtime) is where the Linux wall clock is.** Item 15's larger effect was expected on Windows, where a process spawn costs several times more and the spawning files are 94% of the conformance tier. The merge queue measured it, and the expectation was wrong:
+
+| Windows conformance lane (six shards, job time) | Sum | Slowest shard |
+|---|---|---|
+| item 14's merge-group run (`44470893686`) | 77 min 10 s | 17 min 37 s |
+| item 15's merge-group run that merged it (`44552501419`) | 72 min 55 s | 15 min 34 s |
+
+Single runs, and job time includes checkout, install and build. The difference is a few percent. The helper's spawns are not what makes the Windows lanes slow either; the installer tests are, on every platform.
+
+**What the merge queue taught.** Item 15 was ejected from the queue four times before it merged. None of the four was a defect in the shipped code:
+
+1. Its parity test canonicalised temp directories with `fs.realpathSync`, which keeps a Windows 8.3 short name; the CLI prints the long name.
+2. The same test masked a run directory in two spellings of its path; four commands print a third (forward slashes on Windows). The mask now replaces the directory's name.
+3. Another PR merged while it was queued and added a synchronous helper call to an asynchronous command, which the new helper refuses.
+4. `next`'s own last Tests run was not green at that moment (a cancelled Windows shard), so the base-branch health gate refused every merge.
+
+The first two are Windows-only mistakes in test code, and the Windows lanes run only in the queue, so each cost a full queue cycle to find. Rule 6 of "In-process CLI tests: the rules" in `TESTING-STANDARDS.md` and the mask's own test exist because of them. Nothing in this ADR would have caught them earlier, so item 26 is added ([#6369](https://github.com/open-gsd/gsd-core/issues/6369)): a PR runs the test files it adds or changes on Windows before it can be queued.
 
 ### 2026-11-18 — Item 25 added: the git probe is 90% of an in-process call
 

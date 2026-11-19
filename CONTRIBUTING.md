@@ -485,6 +485,13 @@ proves command by command that both give the same exit code, stdout and stderr. 
 - `GSD_TEST_CLI_MODE=process` makes both helpers spawn, to check a suspected in-process difference against
   the real binary.
 
+### In-process CLI tests: the rules
+
+The rules that in-process CLI tests put on tests and on product code are in
+[`TESTING-STANDARDS.md` — "In-process CLI tests: the rules"](TESTING-STANDARDS.md#in-process-cli-tests-the-rules).
+The helper table above says which helper to call; that section says what a test and the code under
+test must and must not do, and what enforces each rule.
+
 ### Spawning a subprocess: use the process seam
 
 Anything that shells out goes through `tests/helpers/process-seam.cjs` — never a hand-rolled
@@ -909,6 +916,12 @@ Required cases where relevant:
 - Runtime `.cjs` and SDK `.ts` generated surfaces disagree
 
 Generator tests should run in temp fixtures and assert atomic output behavior. Do not mutate production generated files except in explicit freshness checks.
+
+### A parser or reader that must agree with an external tool
+
+Code that gives the answer another program gives, without running it, is tested against that
+program. The rules are in
+[`TESTING-STANDARDS.md` — "A parser or reader that must agree with an external tool"](TESTING-STANDARDS.md#a-parser-or-reader-that-must-agree-with-an-external-tool).
 
 ### Prohibited: Source-Grep Tests
 

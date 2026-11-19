@@ -25,6 +25,7 @@ const identity = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-iden
 const pkg = require(path.join(ROOT, 'package.json'));
 const { MANAGED_HOOKS } = require(path.join(ROOT, 'hooks', 'managed-hooks-registry.cjs'));
 const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { loaderSpawnEnv, loaderSpawnArgs } = require('./helpers/claude-loader-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { BLOCKING_GUARD_TIMEOUT_S, BLOCKING_GUARD_NAMES } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs'));
 
@@ -1317,16 +1318,17 @@ describe('H: skills surface projection (#1596)', () => {
   // #5504: `claude plugin details` reports `Skills (72)` whether or not the command-surface
   // duplicates load, so it cannot see this defect. The loader's own `system init` event lists
   // every registered slash command (`<plugin>:<name>`), emitted before any model call, so it is
-  // read here without authentication or a network round trip.
+  // read here without authentication or a network round trip (#6091: the spawn's environment carries no
+  // credential variable and its hooks are disabled, so that is true of the whole run, not only of `init`).
   test('#5504: the Claude Code loader registers each workflow exactly once (opportunistic — skip when claude is not on PATH)', (t) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5504-home-'));
     t.after(() => cleanup(home));
-    const env = { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') };
+    // #6091: no credential or provider variable, offline npm, and hooks disabled, so this run neither authenticates
+    // (no model call on the developer's account) nor lets the SessionStart update worker reach the registry.
+    const env = loaderSpawnEnv(process.env, { ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') });
     const probe = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS, env });
     if (probe.error || probe.status !== 0) { t.skip('claude CLI not on PATH'); return; }
-    const res = spawnSync('claude', [
-      '-p', '--plugin-dir', ROOT, '--output-format', 'stream-json', '--verbose', '--max-turns', '1', '--model', 'haiku', 'reply ok',
-    ], { encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT, input: '' });
+    const res = spawnSync('claude', loaderSpawnArgs(ROOT), { encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT, input: '' });
     const init = (res.stdout || '').split('\n').map((line) => {
       try { return JSON.parse(line); } catch { return null; }
     }).find((event) => event && event.type === 'system' && event.subtype === 'init');
