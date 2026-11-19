@@ -616,7 +616,7 @@ issue:
   severity: blocker
   required_property: "Each open question cites only D-NNs under CONTEXT.md <decisions> (not Discretion), one answering it"
   description: "01-RESEARCH.md: 'Hash prefix?' cites no D-NN"
-  fix_hint: "Cite a D-NN under <decisions> that answers it: 'RESOLVED (D-NN): <ruling>'. Else the user rules (orchestrator records a D-NN, or /gsd:discuss-phase then /gsd:plan-phase --research), or a source settles a factual gap"
+  fix_hint: "Cite a D-NN under <decisions> that answers it: 'RESOLVED (D-NN): <ruling>'. Else the user rules (orchestrator records a D-NN, or /gsd:discuss-phase {phase} → /gsd:plan-phase {phase} --research) or a source settles a factual gap"
 ```
 
 **Example — self-resolved (BLOCKER); real D-01 decides cache backend:**
