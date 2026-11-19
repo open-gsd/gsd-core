@@ -283,7 +283,7 @@ the reviewer lanes that need an anchor sha.
 # Exit 69 (UNAVAILABLE) is the resolver saying "could not look" (`status: unresolvable`): its JSON
 # carries the reason and is kept. Any other non-zero status means the command did not run: no JSON.
 SCOPE_RC=0
-SCOPE_JSON=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" ${LAST_REVIEW_COMMIT:+--since "$LAST_REVIEW_COMMIT"} --raw 2>/dev/null) || SCOPE_RC=$?
+SCOPE_JSON=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" ${LAST_REVIEW_COMMIT:+--since} ${LAST_REVIEW_COMMIT:+"$LAST_REVIEW_COMMIT"} --raw 2>/dev/null) || SCOPE_RC=$?
 if [ "$SCOPE_RC" -ne 0 ] && [ "$SCOPE_RC" -ne 69 ]; then SCOPE_JSON=""; fi
 # One field of the resolver's JSON; arrays print one element per line, an absent field prints nothing.
 scope_field() {
