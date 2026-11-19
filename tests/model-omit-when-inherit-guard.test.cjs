@@ -93,6 +93,102 @@ test('#2517: every workflow that dispatches model= documents omitting it on inhe
   );
 });
 
+/**
+ * #5996 — spawn sites the quoted `model="{…}"` scan above cannot see. A workflow also hands a
+ * resolved model to an agent when it binds one with `NAME=$(gsd_run query resolve-model …)`,
+ * spawns with the unquoted form `model=executor_model`, or says "with model `AUDITOR_MODEL`" in
+ * prose. eval-review.md and execute-plan.md did, carried no omit rule, and slipped past the guard.
+ */
+const RESOLVE_MODEL_BINDING_RE = /^[ \t]*(?:export[ \t]+)?[A-Za-z0-9_]+="?\$\(\s*(?:gsd_run|gsd-sdk)\s+query\s+resolve-model\b/m;
+// `(?<![-\w])` keeps a CLI flag such as `--model=opus` and `submodel=x` from reading as a spawn argument.
+const UNQUOTED_MODEL_ARG_RE = /(?<![-\w])model=[A-Za-z_][A-Za-z0-9_]*\b/;
+const PROSE_MODEL_SPAWN_RE = /\b(?:with|using) model `[A-Za-z0-9_]+`/i;
+
+function spawnsWithAResolvedModel(content) {
+  return (
+    /model="\{/.test(content) ||
+    RESOLVE_MODEL_BINDING_RE.test(content) ||
+    UNQUOTED_MODEL_ARG_RE.test(content) ||
+    PROSE_MODEL_SPAWN_RE.test(content)
+  );
+}
+
+function workflowsThatSpawnWithAResolvedModel() {
+  return fs
+    .readdirSync(WORKFLOWS)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => ({ file: f, content: readWorkflowCombined(path.join(WORKFLOWS, f)) }))
+    .filter((w) => spawnsWithAResolvedModel(w.content));
+}
+
+test('#5996: every workflow that spawns with a resolved model (any form) documents omitting it on inherit/empty', () => {
+  const spawning = workflowsThatSpawnWithAResolvedModel();
+
+  // Non-vacuity: the widened derivation must still contain the quoted sites AND the new forms.
+  assert.ok(spawning.length >= 27, `expected >=27 workflows that spawn with a resolved model, derived ${spawning.length}`);
+  const names = spawning.map((w) => w.file);
+  for (const f of ['eval-review.md', 'execute-plan.md', 'ai-integration-phase.md', 'audit-milestone.md']) {
+    assert.ok(names.includes(f), `${f} must be in the derived set`);
+  }
+
+  const missing = spawning
+    .filter((w) => !statesOmitRule(w.content))
+    .map((w) => w.file);
+  assert.deepEqual(
+    missing,
+    [],
+    `these workflows spawn with a resolved model but never tell the orchestrator to OMIT the model= ` +
+      `param when it is "inherit" or empty (#2517/#5996):\n  ${missing.join('\n  ')}\n` +
+      'See gsd-core/references/model-profile-resolution.md; use the <!-- #2517 model-omit-on-inherit --> block.',
+  );
+});
+
+test('#5996: the widened derivation recognises each spawn form, and only spawn forms', () => {
+  assert.equal(spawnsWithAResolvedModel('# doc\nAUDITOR_MODEL=$(gsd_run query resolve-model gsd-x --pick model)\n'), true, 'bound resolve-model');
+  assert.equal(spawnsWithAResolvedModel('# doc\nAgent(subagent_type="x", model=executor_model)\n'), true, 'unquoted model arg');
+  assert.equal(spawnsWithAResolvedModel('# doc\nSpawn as Task with model `AUDITOR_MODEL`.\n'), true, 'prose spawn');
+  assert.equal(spawnsWithAResolvedModel('# doc\nAgent(subagent_type="x", model="{m}")\n'), true, 'quoted placeholder');
+  // limit-1: a workflow that never names a resolved model is not dragged in.
+  assert.equal(spawnsWithAResolvedModel('# doc\nno model here; the word model alone is prose.\n'), false);
+  // Neighbouring forms: a bound value in the other shell spellings and the other prose verb count; a
+  // CLI flag, a word ending in `model`, or a literal argument does not.
+  assert.equal(spawnsWithAResolvedModel('# doc\nexport M=$(gsd_run query resolve-model gsd-x --pick model)\n'), true, 'export binding');
+  assert.equal(spawnsWithAResolvedModel('# doc\nM="$(gsd_run query resolve-model gsd-x --pick model)"\n'), true, 'quoted binding');
+  assert.equal(spawnsWithAResolvedModel('# doc\nM=$(gsd-sdk query resolve-model gsd-x --pick model)\n'), true, 'gsd-sdk binding');
+  assert.equal(spawnsWithAResolvedModel('# doc\nSpawn the agent using model `M`.\n'), true, '"using model" prose');
+  assert.equal(spawnsWithAResolvedModel('# doc\nRun the tool with --model=opus for this step.\n'), false, 'a CLI flag is not a spawn argument');
+  assert.equal(spawnsWithAResolvedModel('# doc\nset submodel=value in the config\n'), false, 'a suffix match is not a spawn argument');
+  assert.equal(spawnsWithAResolvedModel('# doc\nAgent(subagent_type="x", model="opus")\n'), false, 'a literal model is not a resolved one');
+  // A spawn form without the rule is detected as a violation; with the marker it passes.
+  const prose = '# doc\nSpawn as Task with model `AUDITOR_MODEL`.\n';
+  assert.equal(statesOmitRule(prose), false);
+  assert.equal(statesOmitRule(`${prose}\n${OMIT_RULE_MARKER}\n`), true);
+});
+
+test('#5996: appending the marker to any spawn form satisfies the rule and keeps it a spawn (property)', () => {
+  const ident = fc.stringMatching(/^[A-Za-z_][A-Za-z0-9_]{0,15}$/);
+  const forms = [
+    (n) => `${n}=$(gsd_run query resolve-model gsd-x --pick model)\n`,
+    (n) => `Agent(subagent_type="x", model=${n})\n`,
+    (n) => `Spawn as Task with model \`${n}\`.\n`,
+    (n) => `Agent(subagent_type="x", model="{${n}}")\n`,
+  ];
+  fc.assert(
+    fc.property(ident, fc.integer({ min: 0, max: forms.length - 1 }), (name, i) => {
+      const body = `# doc\n${forms[i](name)}`;
+      assert.equal(spawnsWithAResolvedModel(body), true);
+      assert.equal(statesOmitRule(body), false, 'the bare form is a violation');
+      assert.equal(statesOmitRule(`${body}\n${OMIT_RULE_MARKER}\n`), true, 'the marker satisfies the rule');
+    }),
+    { numRuns: 100 },
+  );
+});
+
+test('#5996: spawn-form detection is CRLF-safe', () => {
+  const body = ['# doc', 'AUDITOR_MODEL=$(gsd_run query resolve-model gsd-x --pick model)', 'Spawn as Task with model `AUDITOR_MODEL`.', ''];
+  assert.equal(spawnsWithAResolvedModel(body.join('\r\n')), spawnsWithAResolvedModel(body.join('\n')));
+});
+
 test('#2711: the guarded set is derived from dispatch sites, not hand-maintained', () => {
   const derived = workflowsThatDispatchWithAModel().map((w) => w.file);
 
