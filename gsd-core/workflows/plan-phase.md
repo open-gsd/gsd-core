@@ -1420,14 +1420,14 @@ after thousands of dollars of execution.
 
 ## 13b. Record Planning Completion in STATE.md
 
-After plans pass all gates, record planning completion in STATE.md:
+After the gates pass:
 
 ```bash
 PLAN_COUNT=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -er .plan_count) || exit 1
 gsd_run query state.planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
-This sets STATUS to "Ready to execute", plan count and Last Activity. Exits non-zero and writes nothing on three failures: no plan line (add the line it names, retry); on a same-phase replan, a count below the recorded position or disagreeing plan lines (stop; fix the line).
+Sets Ready to execute, plan count, Last Activity. On failure nothing is written: fix the named line.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 
