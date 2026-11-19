@@ -292,5 +292,6 @@ module.exports = {
   "tests/worktree-safety.test.cjs",
   "tests/worktree-subdir-effective-root-4885.test.cjs",
   "tests/worktree.test.cjs",
+  "tests/zsh-joined-flag-expansion.test.cjs",
   ],
 };
