@@ -37,9 +37,11 @@ const destOf = (raw) => {
   const rest = raw.slice(raw.search(/[^ \t]|$/));
   return /^<([^<>]{0,999})>/.exec(rest)?.[1] ?? rest.split(/[^!-~\u0080-￿]/)[0];
 };
+// Code spans are the sectionizer's: it blanks them before the gate's extractLinks reads a line.
+const linksOf = (line) => extractLinks(stripInlineCode(line));
 // Line by line: the gate's fence mask spans lines, and this guard checks code blocks too.
 const hrefsIn = (text) => splitLines(text)
-  .flatMap((line) => extractLinks(line).map(({ target }) => destOf(target)));
+  .flatMap((line) => linksOf(line).map(({ target }) => destOf(target)));
 // A name WHATWG reads as an href, src or srcset attribute (any case).
 const URL_ATTR = /(?:^|[\s"'/])(?:href|src|srcset)(?=[\s/>=]|$)/i;
 // The lines this guard refuses instead of reading, as `N: "line"`: see the header.
@@ -49,7 +51,7 @@ const unreadForms = (text) => {
     const tag = tagged ? 0 : line.search(/<[A-Za-z]/);
     tagged = tag >= 0; // an HTML block may span blank lines, so a tag marks the rest
     const refused = line.includes(']:') || (tagged && URL_ATTR.test(line.slice(tag)))
-      || stripInlineCode(line).split('](').length - 1 > extractLinks(line).length
+      || stripInlineCode(line).split('](').length - 1 > linksOf(line).length
       || line.includes('\\`');
     return refused ? [`${i + 1}: ${JSON.stringify(line)}`] : [];
   });

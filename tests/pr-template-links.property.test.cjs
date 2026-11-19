@@ -7,6 +7,8 @@ const assert = require('node:assert/strict');
 const {
   REPO, NEXT, hrefsIn, unreadForms, isBadLink, unresolvedAnchors, headingSet,
 } = require('./helpers/pr-template-links.cjs');
+const { extractLinks } = require('../scripts/gen-adr-index.cjs');
+const { stripInlineCode } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const seg = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,19}$/); // never `.` or `..`
 const rel = fc.array(seg, { minLength: 1, maxLength: 3 }).map((a) => a.join('/'));
@@ -117,6 +119,13 @@ describe('link extractor properties (#5427)', () => {
     const words = fc.array(dest, { minLength: 2, maxLength: 3 }).map((w) => w.join(' '));
     fc.assert(fc.property(words, fc.constantFrom('', ' '), fc.constantFrom('', ' "t"'),
       (d, pad, t) => assert.deepEqual(hrefsIn(`[a](${pad}<${d}>${t})`), [d])));
+  });
+  test('property: the gate and the sectionizer agree on which spans hide a link', () => {
+    const piece = fc.constantFrom('`', '``', '[a]', '(x.md)', ' ', '\\', '~', '[a](x.md)');
+    fc.assert(fc.property(fc.array(piece, { maxLength: 8 }).map((p) => p.join('')), (line) => {
+      assert.deepEqual(extractLinks(stripInlineCode(line)), extractLinks(line),
+        JSON.stringify(line));
+    }));
   });
   test('property: an empty destination yields one empty string', () => {
     fc.assert(fc.property(fc.constantFrom('', ' ', '  ', '<>', ' <>'), (ws) => {
