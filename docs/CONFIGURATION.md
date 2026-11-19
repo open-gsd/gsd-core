@@ -789,17 +789,6 @@ W029  .planning/ is gitignored but N file(s) are still tracked by git
       Fix: git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"
 ```
 
-The guarded form refuses while unrelated paths are staged:
-
-```bash
-if git diff --cached --quiet -- ':!.planning'; then
-  git rm -r --cached .planning/ &&
-  git commit -m "chore: stop tracking planning docs"
-else
-  echo "unrelated staged paths; unstage them first" >&2
-fi
-```
-
 The warning is advisory. GSD never untracks files for you — `--repair` deliberately will not act on
 `W029`, because removing files from the index is destructive and the timing is yours to choose.
 
