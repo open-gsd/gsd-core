@@ -4183,6 +4183,168 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.strictEqual(config.branching_strategy, 'phase');
   });
 
+  // Review 2026-11-18, Major 1: new-project creation wrote the flat commit_docs
+  // and search_gitignored from fixed defaults, and the loader reads the flat key
+  // first, so a saved nested spelling never reached a new project while the
+  // save had dropped the flat value that did.
+  test('a saved nested planning.commit_docs reaches a new project over a stale flat value', (t) => {
+    const { config, store } = newProjectAfterSave(t, { commit_docs: true }, { planning: { commit_docs: false } });
+    assert.deepStrictEqual(store, { planning: { commit_docs: false } });
+    assert.strictEqual(config.commit_docs, false);
+  });
+
+  test('a saved nested planning.search_gitignored reaches a new project over a stale flat value', (t) => {
+    const { config, store } = newProjectAfterSave(t, { search_gitignored: false }, { planning: { search_gitignored: true } });
+    assert.deepStrictEqual(store, { planning: { search_gitignored: true } });
+    assert.strictEqual(config.search_gitignored, true);
+  });
+
+  // RV6.5 review of this round: a workstream config is merged over the root's
+  // before the loader's flat-first read, so the new project must carry the flat
+  // key with the chosen value. A nested-only workstream config lost to the
+  // root's flat `commit_docs: true`, and planning files were committed.
+  test('a nested choice in a workstream overrides the flat value in the root config', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: true, search_gitignored: false }));
+    const env = { GSD_HOME: gsdHome };
+    fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), JSON.stringify({ commit_docs: true, search_gitignored: false }));
+    const created = runGsdTools(['config-new-project', JSON.stringify({ planning: { commit_docs: false, search_gitignored: true } }), '--ws', 'lane'], projectDir, env);
+    assert.ok(created.success, created.error);
+    const read = (key) => runGsdTools(['config-get', key, '--raw', '--ws', 'lane'], projectDir, env);
+    assert.strictEqual(read('commit_docs').output.trim(), 'false');
+    assert.strictEqual(read('search_gitignored').output.trim(), 'true');
+  });
+
+  // The flat key the template writes takes the chosen value, and a nested twin
+  // in the new project is given the same value, so the two spellings agree.
+  // RV6.5 review of this round: a nested value of another type than the
+  // template's default counts as no setting. Copied into the flat key, a string
+  // "false" read as false to config-get but as true to check-commit, and a
+  // stored 1e400 (Infinity) was written as null.
+  test('a nested commit_docs that is not a boolean is no setting', (t) => {
+    for (const bad of ['"false"', '0', '1e400']) {
+      for (const [label, store, choices, want] of [
+        ['in the store', `{"planning":{"commit_docs":${bad}}}`, '{}', true],
+        ['as a choice', '{}', `{"planning":{"commit_docs":${bad}}}`, true],
+        ['as a choice over a flat store value', '{"commit_docs":false}', `{"planning":{"commit_docs":${bad}}}`, false],
+      ]) {
+        const gsdHome = createTempDir('gsd-5681-home-');
+        const projectDir = createTempDir('gsd-5681-proj-');
+        t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+        fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+        fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), store);
+        const created = runGsdTools(['config-new-project', choices], projectDir, { GSD_HOME: gsdHome });
+        assert.ok(created.success, created.error);
+        const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
+        assert.strictEqual(written.commit_docs, want, `${bad} ${label}: flat`);
+        if (written.planning && 'commit_docs' in written.planning) {
+          assert.strictEqual(written.planning.commit_docs, want, `${bad} ${label}: nested`);
+        }
+      }
+    }
+  });
+
+  test('check-commit refuses planning files when a string "false" was chosen over a stored false', (t) => {
+    const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: false }));
+    const env = { GSD_HOME: gsdHome };
+    gitOrThrow(['init', '-q'], { cwd: projectDir });
+    const created = runGsdTools(['config-new-project', JSON.stringify({ planning: { commit_docs: 'false' } })], projectDir, env);
+    assert.ok(created.success, created.error);
+    fs.writeFileSync(path.join(projectDir, '.planning', 'REVIEW.md'), '# Review\n');
+    gitOrThrow(['add', '.planning/REVIEW.md'], { cwd: projectDir });
+    const checked = runGsdTools(['check-commit', '--raw'], projectDir, env);
+    assert.ok(!checked.success, 'a staged .planning/ file must be refused');
+    assert.ok(checked.error.includes('commit_docs is false'), checked.error);
+  });
+
+  test('the flat and nested commit_docs of a new project agree', (t) => {
+    for (const [label, store, choices, want] of [
+      ['a saved nested default', { planning: { commit_docs: false } }, {}, false],
+      ['a flat choice over a saved nested default', { planning: { commit_docs: false } }, { commit_docs: true }, true],
+      ['a nested choice over a flat store value', { commit_docs: false }, { planning: { commit_docs: true } }, true],
+    ]) {
+      const gsdHome = createTempDir('gsd-5681-home-');
+      const projectDir = createTempDir('gsd-5681-proj-');
+      t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(store));
+      const created = runGsdTools(['config-new-project', JSON.stringify(choices)], projectDir, { GSD_HOME: gsdHome });
+      assert.ok(created.success, created.error);
+      const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
+      assert.strictEqual(written.commit_docs, want, `${label}: flat`);
+      assert.strictEqual(written.planning.commit_docs, want, `${label}: nested`);
+      assert.strictEqual(loadConfig(projectDir).commit_docs, want, `${label}: resolved`);
+    }
+  });
+
+  test('a null nested commit_docs in the store is no setting, so the template default stands', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ planning: { commit_docs: null, search_gitignored: null } }));
+    const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
+    assert.ok(created.success, created.error);
+    const config = loadConfig(projectDir);
+    assert.strictEqual(config.commit_docs, true);
+    assert.strictEqual(config.search_gitignored, false);
+  });
+
+  test('a null flat commit_docs in the store is no setting, so the template default stands', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: null }));
+    const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
+    assert.ok(created.success, created.error);
+    assert.strictEqual(loadConfig(projectDir).commit_docs, true);
+  });
+
+  // Every twin the loader reads (CONFIG_KEY_ALIASES, less parallelization, whose
+  // nested field sits under the flat key): its nested spelling saved with a
+  // value that is not the default, over a store holding the flat default, is
+  // the value the loader resolves in a new project.
+  test('every saved nested twin reaches a new project as the value the loader resolves', (t) => {
+    const { CONFIG_KEY_ALIASES, CONFIG_DEFAULTS, readResolvedAlias } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const chosen = {
+      sub_repos: ['svc'], branching_strategy: 'phase', base_branch: 'trunk', max_prompt_tokens: 50000,
+      phase_branch_template: 'p/{phase}-{slug}', milestone_branch_template: 'm/{milestone}-{slug}', quick_branch_template: 'q/{num}-{slug}',
+    };
+    const twins = CONFIG_KEY_ALIASES.filter((alias) => alias.section !== alias.key);
+    assert.ok(twins.some((alias) => alias.key === 'commit_docs'), 'precondition: commit_docs is a twin');
+    for (const alias of twins) {
+      const fallback = CONFIG_DEFAULTS[alias.key];
+      const want = Object.hasOwn(chosen, alias.key) ? chosen[alias.key]
+        : typeof fallback === 'number' ? fallback + 1 : typeof fallback === 'boolean' ? !fallback : true;
+      const { config } = newProjectAfterSave(t, { [alias.key]: fallback ?? false }, { [alias.section]: { [alias.field]: want } });
+      assert.deepStrictEqual(readResolvedAlias(config, alias), want, `${alias.section}.${alias.field}`);
+    }
+  });
+
+  // The same order holds for config-new-project's own choices: a nested
+  // choice is not shadowed by the template's flat default, and it outranks a
+  // saved default under either spelling.
+  test('a nested planning choice reaches the new project over the template and the store', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: true }));
+    const created = runGsdTools(['config-new-project', JSON.stringify({ planning: { commit_docs: false } })], projectDir, { GSD_HOME: gsdHome });
+    assert.ok(created.success, created.error);
+    assert.strictEqual(loadConfig(projectDir).commit_docs, false);
+  });
+
   test('a saved branching strategy wins over a stale flat branching_strategy', (t) => {
     const { config } = newProjectAfterSave(t, { branching_strategy: 'milestone' }, { git: { branching_strategy: 'phase' } });
     assert.strictEqual(config.branching_strategy, 'phase');

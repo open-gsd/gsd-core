@@ -565,6 +565,41 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     },
   };
 
+  // The template writes `commit_docs` and `search_gitignored` under their flat
+  // spelling, and the loader reads a flat key before its nested twin, so a layer
+  // that sets only the nested spelling (`planning.commit_docs`, the spelling
+  // config-save-defaults keeps) would lose to the template's default. Each such
+  // key takes the loader's reading (flat, then nested) of the highest layer that
+  // sets either spelling: the choices, then the user defaults. A null is no
+  // setting, and neither is a nested value of another type than the template's
+  // default (a string "false" would read as false to config-get but as true to
+  // check-commit), so such a value stays as inert as it was before. The flat
+  // key stays, as the template always writes it: a workstream config needs it
+  // to override the root's. A nested twin in the new project is given the same
+  // value, so the two spellings agree (#5681).
+  const isSet = (value: unknown): boolean => value !== undefined && value !== null;
+  for (const { key, section, field } of CONFIG_KEY_ALIASES) {
+    if (section === key || !Object.prototype.hasOwnProperty.call(hardcoded, key)) continue;
+    let resolved: unknown = hardcoded[key];
+    for (const layer of [choices, safeDefaults] as Record<string, unknown>[]) {
+      const layerSection = layer[section];
+      const nested = isPlainObject(layerSection) ? layerSection[field] : undefined;
+      if (isSet(layer[key])) {
+        resolved = layer[key];
+        break;
+      }
+      if (isSet(nested) && typeof nested === typeof hardcoded[key]) {
+        resolved = nested;
+        break;
+      }
+    }
+    config[key] = resolved;
+    const projectSection = config[section];
+    if (isPlainObject(projectSection) && Object.prototype.hasOwnProperty.call(projectSection, field)) {
+      config[section] = { ...projectSection, [field]: resolved };
+    }
+  }
+
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
   return { config, defaultsRewrite };
 }
