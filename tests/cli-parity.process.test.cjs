@@ -46,6 +46,17 @@ const ASYNC_COMMANDS = new Set([
     && asyncRouters.includes(commandFamilies[name].router)),
 ]);
 
+/**
+ * The directory as the CLI will print it. The CLI resolves paths with the
+ * native realpath, which on Windows expands an 8.3 short name
+ * (`C:\\Users\\RUNNER~1\\…` becomes `C:\\Users\\runneradmin\\…`); the plain
+ * `fs.realpathSync` does not. A directory spelled the short way would not be
+ * found in the output, and the two runs' random names would then differ.
+ */
+function canonical(dir) {
+  return fs.realpathSync.native(dir);
+}
+
 /** A small project: enough for the read commands in SUCCESS_ROWS to answer. */
 function seedProject(dir) {
   const planning = path.join(dir, '.planning');
@@ -74,12 +85,12 @@ function comparable(result, dir) {
 }
 
 function harness(t) {
-  const home = fs.realpathSync(createTempDir('gsd-parity-home-'));
+  const home = canonical(createTempDir('gsd-parity-home-'));
   t.after(() => cleanup(home));
   const env = { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: path.join(home, '.gsd') };
 
   const inFreshProject = (run) => {
-    const dir = fs.realpathSync(createTempDir('gsd-parity-'));
+    const dir = canonical(createTempDir('gsd-parity-'));
     try {
       seedProject(dir);
       return run(dir);
@@ -95,7 +106,7 @@ function harness(t) {
     )),
     sync: (argv) => inFreshProject((dir) => comparable(runCliSync({ argv, cwd: dir, env }), dir)),
     async: async (argv) => {
-      const dir = fs.realpathSync(createTempDir('gsd-parity-'));
+      const dir = canonical(createTempDir('gsd-parity-'));
       try {
         seedProject(dir);
         return comparable(await runCli({ argv, cwd: dir, env }), dir);
@@ -250,7 +261,7 @@ test('uat.complete-session restores once, in-process as spawned (#6333)', (t) =>
   const argv = ['query', 'uat.complete-session', '.planning/phases/01-foo/01-UAT.md'];
 
   function run(call) {
-    const dir = fs.realpathSync(createTempGitProject());
+    const dir = canonical(createTempGitProject());
     t.after(() => cleanup(dir));
     const file = path.join(dir, '.planning', 'phases', '01-foo', '01-UAT.md');
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -277,7 +288,7 @@ test('capability commands that finish asynchronously (#6333)', async (t) => {
   const commands = CAPABILITY_COMMANDS.filter((name) => ASYNC_COMMANDS.has(name)).sort();
 
   function sessions(t2) {
-    const dir = fs.realpathSync(createTempDir('gsd-parity-sessions-'));
+    const dir = canonical(createTempDir('gsd-parity-sessions-'));
     t2.after(() => cleanup(dir));
     fs.mkdirSync(path.join(dir, 'proj'));
     fs.writeFileSync(path.join(dir, 'proj', 's1.jsonl'), `${JSON.stringify({
