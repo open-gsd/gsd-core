@@ -19,11 +19,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempGitProject, createTempDir, homeSandboxEnv, cleanup, TOOLS_PATH } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const sentinel = require('../hooks/lib/isolation-sentinel.js');
 const executorType = require('../gsd-core/bin/lib/executor-type.cjs');
@@ -537,8 +536,8 @@ describe('#4904 a held foreign plan\'s caller none does not outlive the hold', {
     const block = span(GATE_DOC, 'if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]', '# An EMPTY value');
     const script = ['set -e', `gsd_run() { "${process.execPath}" "${TOOLS_PATH}" "$@"; }`,
       `PHASE_NUMBER=${PHASE}; plan_id=${PLAN}; USE_WORKTREES_FOR_PLAN=true`, ...block, ''].join('\n');
-    const g = spawnSync('bash', ['-c', script], { cwd: root, env: envAt(GATE_AT), encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-    assert.equal(g.status, 0, g.stderr);
+    const g = runHook('-c', [script], { interpreter: 'bash', cwd: root, env: envAt(GATE_AT), timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(g.exitCode, 0, g.stderr);
     const planDispatch = JSON.parse(g.stdout.slice(g.stdout.indexOf('PLAN_DISPATCH=') + 'PLAN_DISPATCH='.length));
     const afterGate = keyedRecord();
 
