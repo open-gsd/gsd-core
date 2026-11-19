@@ -213,8 +213,8 @@ describe('next-ref existence and anchors (#5427)', () => {
       ['contributing.md', '.github/../CONTRIBUTING.md', 'CONTRIBUTING.md/x']);
   });
   test('a malformed percent escape quotes control bytes in its message', () => {
-    assert.throws(() => repoPathOf(`${NEXT}a%zz\n::add-mask::.md`, 'tpl.md'),
-      (e) => !e.message.includes('\n') && e.link.includes('\n'));
+    assert.throws(() => repoPathOf(`${NEXT}a%zz\n\r\u001b::add-mask::.md`, 'tpl.md'),
+      (e) => ![...e.message].some((c) => c.charCodeAt(0) < 0x20) && e.link.includes('\n\r\u001b'));
   });
   test('a malformed percent escape names the template and the link', () => {
     assert.throws(() => repoPathOf(`${NEXT}a%zz.md`, 'tpl.md'),
@@ -270,8 +270,8 @@ describe('next-ref existence and anchors (#5427)', () => {
     const view = `${NEXT}CONTRIBUTING.md?plain=1`;
     const seams = { linesOf: () => 1e10 };
     const found = (anchor) => unresolvedAnchors([`${view}#${anchor}`], 'tpl.md', seams);
-    for (const anchor of ['L5C3', 'L5C3-L6C10', 'L5-L6C10', 'L5C3-L6', 'L999999999',
-      'L5C999999999']) {
+    for (const anchor of ['L5C3', 'L5C3-L6C10', 'L5-L6C10', 'L5C3-L6', 'L99999999',
+      'L5C99999999', 'L999999999', 'L5C999999999']) {
       assert.deepEqual(found(anchor), [], anchor);
     }
     for (const anchor of ['L5C', 'LC3', 'L5C-L6', 'L1000000000', 'L5C1000000000',
@@ -323,6 +323,14 @@ describe('readRepoFile (#5427)', () => {
     for (const rel of ['no-such-file.md', 'contributing.md', '../outside.md']) {
       assert.throws(() => readRepoFile(rel), /no such file inside the repo/, JSON.stringify(rel));
     }
+  });
+  test('an existing file outside the repo is refused although fs.existsSync finds it', (t) => {
+    const dir = createTempDir();
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(path.join(dir, 'secret.md'), '# secret\n');
+    const rel = path.relative(ROOT, path.join(dir, 'secret.md'));
+    assert.ok(fs.existsSync(path.join(ROOT, rel)), rel);
+    assert.throws(() => readRepoFile(rel), /no such file inside the repo/);
   });
 });
 
