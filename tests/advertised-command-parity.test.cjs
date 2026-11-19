@@ -15,7 +15,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const layout = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const { resolveAdvertisedNewProject, resolveTriggerSurface } = layout;
@@ -138,7 +138,7 @@ describe('the installer completion message is generated from the registered surf
   ];
   for (const [runtime, scope, advertises] of cases) {
     test(`${runtime} --${scope} ${advertises ? 'advertises' : 'does not advertise'} a new-project command`, () => {
-      const res = runMinimalInstall({ runtime, scope });
+      const res = copyRuntimeFixture({ runtime, scope });
       try {
         const out = res.stdout.replace(ANSI, '');
         const done = out.slice(out.lastIndexOf('Done!'));

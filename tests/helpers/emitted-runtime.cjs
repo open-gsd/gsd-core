@@ -41,6 +41,7 @@ const {
   MANIFEST_FAMILIES,
   MINIMUM_MANIFEST_FAMILIES,
   runMinimalInstall,
+  installRuntimeFixture,
   buildParityManifest,
   extraEmitRootsFor,
   PKG_VERSION,
@@ -967,7 +968,12 @@ function currentManifests({ repoRoot } = {}) {
   const pkgVersion = measuredPackageVersion(repoRoot);
   const manifests = {};
   for (const { name, runtime, scope } of MANIFEST_FAMILIES) {
-    const { configDir, root } = runMinimalInstall({ runtime, scope, installScript });
+    // This checkout's own install is only read here, so it is the shared fixture
+    // (#6335). Another checkout's installer makes a tree of its own, removed below.
+    const own = installScript === undefined;
+    const { configDir, root } = own
+      ? installRuntimeFixture({ runtime, scope })
+      : runMinimalInstall({ runtime, scope, installScript });
     try {
       manifests[name] = buildParityManifest(configDir, root, {
         pkgVersion,
@@ -976,7 +982,7 @@ function currentManifests({ repoRoot } = {}) {
         extraEmitRoots: extraEmitRootsFor(runtime, scope, root),
       });
     } finally {
-      cleanup(root);
+      if (!own) cleanup(root);
     }
   }
   return manifests;

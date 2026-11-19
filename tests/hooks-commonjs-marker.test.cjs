@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { runMinimalInstall, copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const COMMONJS_MARKER = '{"type":"commonjs"}\n';
@@ -40,7 +40,7 @@ function readMarker(configDir) {
 describe('#2717 CommonJS marker for staged .js hooks', () => {
   for (const { runtime, sampleHook } of AFFECTED_RUNTIMES) {
     test(`${runtime}: install writes {"type":"commonjs"} into hooks/ alongside the staged .js scripts`, (t) => {
-      const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
+      const { configDir, root } = copyRuntimeFixture({ runtime, scope: 'global' });
       t.after(() => cleanup(root));
 
       // The sample hook must actually be staged (sanity — confirms the install
@@ -68,7 +68,7 @@ describe('#2717 CommonJS marker for staged .js hooks', () => {
   // non-zero for benign reasons (no STATE.md, no config, etc.) — the ONLY
   // failure we gate on is the ESM/require error on stderr.
   function assertHookLoadsUnderEsmRoot(t, runtime, hookFile, stdinPayload) {
-    const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime, scope: 'global' });
     t.after(() => cleanup(root));
 
     // Plant the hostile ESM-typed package.json at the config root.
