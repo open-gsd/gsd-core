@@ -4805,14 +4805,14 @@ const HOST_COMMAND_ROUTERS = {
         // Only a workstream init resolves (the directory its config loader reads): a --ws naming none adds no guard baseline.
         if (flagged && fs.statSync(planningDir(root, ws.ws), { throwIfNoEntry: false })?.isDirectory() === true) {
           if (!store.recordInitWorkstream(root, process.env.CLAUDE_CODE_SESSION_ID, ws.ws, now)) {
-            process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard\n`);
+            process.stderr.write(`${esc.formatNotRecorded(ws.ws)}\n`);
           }
         } else {
           store.pruneInitWorkstreams(root, now);
         }
       }
     } catch (e) {
-      if (flagged) process.stderr.write(`gsd: --ws ${ws.ws} not recorded for the Agent model guard: ${e.message}\n`);
+      if (flagged) process.stderr.write(`${require('./lib/model-escalation.cjs').formatNotRecorded(ws.ws, e.message)}\n`);
     }
     routeInitCommand({ init, ...ctx });
   },

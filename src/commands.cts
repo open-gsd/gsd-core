@@ -14,7 +14,7 @@ import { escapeRegex } from './pattern.cjs';
 import { stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
-import { requireSafePath, sanitizeForDisplay, sanitizeLabel, tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
 import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
@@ -83,7 +83,7 @@ import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
-import { writeEscalation, modelFamily, sessionRoot, escalationRoot, GUARDED_AGENT_TYPES, guardApplies as agentModelGuardApplies, sanitizeModelForMessage } from './model-escalation.cjs';
+import { writeEscalation, modelFamily, sessionRoot, escalationRoot, GUARDED_AGENT_TYPES, guardApplies as agentModelGuardApplies, formatNotWritten } from './model-escalation.cjs';
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planScanMod = require('./plan-scan.cjs');
@@ -636,7 +636,7 @@ function recordModelEscalation(cwd: string, agentType: string, model: string): v
     const root = sessionRoot(cwd);
     writeEscalation(root, agentType, model, process.env['CLAUDE_CODE_SESSION_ID'] || undefined);
   } catch (e) {
-    process.stderr.write(`gsd: model-escalation record not written: ${sanitizeLabel((e as Error).message)}; under hooks.agent_model_guard "deny" the guard blocks ${sanitizeModelForMessage(model)}\n`);
+    process.stderr.write(`${formatNotWritten((e as Error).message, model)}\n`);
   }
 }
 

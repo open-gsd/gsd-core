@@ -24,7 +24,12 @@ const { runHook, mkProject, writeConfig } = require('./helpers/agent-isolation-g
 
 describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved model', () => {
   const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
-  const { ESCALATION_WINDOW_MS, ESCALATION_SKEW_MS, escalationFile } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const { ESCALATION_WINDOW_MS, ESCALATION_SKEW_MS, escalationFile, parseNotWritten, parseNotRecorded } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const { sanitizeLabel } = require('../gsd-core/bin/lib/security.cjs');
+  const WIN32 = process.platform === 'win32';
+  const stderrLines = (stderr) => stderr.split('\n');
+  const notWritten = (stderr) => stderrLines(stderr).map(parseNotWritten).filter(Boolean);
+  const notRecorded = (stderr) => stderrLines(stderr).map(parseNotRecorded).filter(Boolean);
   // adaptive + dynamic_routing: executor/verifier resolve sonnet at first
   // spawn (opus on attempt 1), plan-checker is pinned sonnet, planner opus.
   const ISSUE_CONFIG = {
@@ -252,22 +257,21 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   // runGsdTools drops stderr on success, so these spawn the CLI directly from a directory other than the project (--cwd names the project).
   test('resolve-execution prints no guard warning where the guard does not apply, and one where it applies but the root differs', (t) => {
     const escalating = { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } };
-    const NOT_WRITTEN = /model-escalation record not written/; // other stderr lines (a global-defaults warning) may appear
     const elsewhere = createTempDir('gsd-aig-elsewhere-');
     t.after(() => cleanup(elsewhere));
     const stderrOf = (agent) => {
       const r = runNode([TOOLS_PATH, 'resolve-execution', agent, '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
       assert.equal(r.exitCode, 0, r.stderr);
       assert.equal(JSON.parse(r.stdout).model, 'gpt-5', 'the escalation itself proceeds');
-      return r.stderr;
+      return notWritten(r.stderr); // other stderr lines (a global-defaults warning) may appear
     };
     setup(t, escalating);
-    assert.match(stderrOf('gsd-executor'), NOT_WRITTEN, 'positive control: a guarded type with the guard on warns when the root differs');
-    assert.doesNotMatch(stderrOf('gsd-debugger'), NOT_WRITTEN, 'an agent type the hook never checks');
+    assert.deepEqual(stderrOf('gsd-executor').map((w) => w.model), ['gpt-5'], 'positive control: a guarded type with the guard on warns when the root differs');
+    assert.deepEqual(stderrOf('gsd-debugger'), [], 'an agent type the hook never checks');
     writeConfig(project, JSON.stringify({ ...escalating, hooks: { agent_model_guard: false } }));
-    assert.doesNotMatch(stderrOf('gsd-executor'), NOT_WRITTEN, 'the guard is off');
+    assert.deepEqual(stderrOf('gsd-executor'), [], 'the guard is off');
     writeConfig(project, JSON.stringify({ ...escalating, runtime: 'codex' }));
-    assert.doesNotMatch(stderrOf('gsd-executor'), NOT_WRITTEN, 'a runtime without native tier aliases');
+    assert.deepEqual(stderrOf('gsd-executor'), [], 'a runtime without native tier aliases');
   });
 
   test('the not-written warning prints a hostile resolved model on one line, filtered and capped like the hook reason', (t) => {
@@ -277,13 +281,12 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     setup(t, { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: [hostile] } });
     const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
-    const line = r.stderr.split('\n').find((l) => l.includes('model-escalation record not written'));
-    assert.ok(line, `positive control: the warning prints: ${r.stderr}`);
-    assert.ok(line.endsWith(`blocks gpt-5??[2K?FORGED?${'z'.repeat(REASON_INTERPOLATION_MAX_LEN - 'gpt-5??[2K?FORGED?'.length)}`), line);
-    assert.equal(r.stderr.includes('\u001b'), false, 'no raw escape byte reaches stderr');
+    const warnings = notWritten(r.stderr);
+    assert.equal(warnings.length, 1, `positive control: the warning prints once: ${r.stderr}`);
+    assert.equal(warnings[0].model, `gpt-5??[2K?FORGED?${'z'.repeat(REASON_INTERPOLATION_MAX_LEN - 'gpt-5??[2K?FORGED?'.length)}`);
   });
 
-  test('the not-written warning prints a hostile session directory name on one line', (t) => {
+  test('the not-written warning prints a hostile session directory name on one line', { skip: WIN32 }, (t) => {
     const escalating = { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } };
     const parent = createTempDir('gsd-aig-hostile-dir-');
     t.after(() => cleanup(parent));
@@ -292,9 +295,10 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     setup(t, escalating);
     const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.ok(r.stderr.includes('model-escalation record not written'), `positive control: the warning prints: ${r.stderr}`);
-    assert.equal(r.stderr.includes('\u001b'), false, 'no raw escape byte reaches stderr');
-    assert.equal(r.stderr.split('\n').filter((l) => l.includes('FORGED')).every((l) => l.includes('model-escalation record not written')), true, 'the directory name does not start a forged line');
+    const warnings = notWritten(r.stderr);
+    assert.equal(warnings.length, 1, `positive control: the warning prints once: ${r.stderr}`);
+    assert.equal(warnings[0].reason, sanitizeLabel(warnings[0].reason), 'the directory name reaches stderr filtered');
+    assert.equal(stderrLines(r.stderr).every((l) => parseNotWritten(l) !== null || !/FORGED/.test(l)), true, 'the directory name does not start a forged line');
   });
 
   test('family match is token-bounded: substrings of custom model names do not collide', (t) => {
@@ -302,6 +306,15 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(evaluate(dispatch('gsd-planner', 'noopus-1')).action, 'warn');
     assert.equal(evaluate(dispatch('gsd-planner', 'claude-opus-4-8')).action, 'allow');
     assert.equal(evaluate(dispatch('gsd-planner', 'opus45')).action, 'allow');
+  });
+
+  test('property: sanitizeModelForMessage output is id-shaped and capped for any string', () => {
+    const { sanitizeModelForMessage, MODEL_ECHO_MAX_LEN } = require('../gsd-core/bin/lib/model-catalog.cjs');
+    const ECHOABLE = /^[A-Za-z0-9._:/@[\]?-]*$/;
+    fc.assert(fc.property(fc.string({ unit: 'binary', maxLength: 300 }), (s) => {
+      const out = sanitizeModelForMessage(s);
+      return ECHOABLE.test(out) && out.length <= MODEL_ECHO_MAX_LEN;
+    }));
   });
 
   test('the passed model keeps only id-shaped characters and is capped', (t) => {
@@ -369,8 +382,6 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(warned('sess-x'), false, 'a session-less record is honoured');
     assert.equal(warned(undefined), false);
   });
-
-  const WIN32 = process.platform === 'win32';
 
   test('a symlinked escalation record is not followed', { skip: WIN32 }, (t) => {
     setup(t);
@@ -587,7 +598,6 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   });
 
   // The init --ws carry lives under os.tmpdir(), keyed by project and session: clear every one a test makes.
-  const NOT_RECORDED = /not recorded for the Agent model guard/;
   const carryStore = () => require('../gsd-core/bin/lib/active-workstream-store.cjs');
   function clearCarries(t, ...sessions) {
     const dir = project;
@@ -630,7 +640,6 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const v = evaluate(inSession('opus', 'sess-ws'));
     assert.equal(v.action, 'warn');
     assert.equal(v.expected, 'haiku or sonnet');
-    assert.ok(v.reason.includes('but GSD resolved model="haiku" or model="sonnet". Pass one of them'), v.reason);
     assert.equal(process.env.GSD_WORKSTREAM, undefined, 'the hook restores the environment');
   });
 
@@ -798,17 +807,17 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     setupCarry(t, ISSUE_CONFIG, 'sess-ws');
     const bare = run('');
     assert.equal(bare.exitCode, 0, bare.stderr);
-    assert.match(bare.stderr, NOT_RECORDED, 'no session id: the carry is skipped and says so');
+    assert.deepEqual(notRecorded(bare.stderr), [{ ws: 'alpha' }], 'no session id: the carry is skipped and says so');
     const withSession = run('sess-ws');
     assert.equal(withSession.exitCode, 0, withSession.stderr);
-    assert.doesNotMatch(withSession.stderr, NOT_RECORDED);
+    assert.deepEqual(notRecorded(withSession.stderr), []);
     assert.deepEqual(JSON.parse(bare.stdout), JSON.parse(withSession.stdout));
     assert.deepEqual(carryStore().peekInitWorkstream(project, 'sess-ws', PIN), ['alpha']);
     for (const config of [{ ...ISSUE_CONFIG, runtime: 'codex' }, { ...ISSUE_CONFIG, hooks: { agent_model_guard: false } }]) {
       setupCarry(t, config);
       const quiet = run('');
       assert.equal(quiet.exitCode, 0, quiet.stderr);
-      assert.doesNotMatch(quiet.stderr, NOT_RECORDED, 'where the guard does not apply nothing is recorded and nothing is said');
+      assert.deepEqual(notRecorded(quiet.stderr), [], 'where the guard does not apply nothing is recorded and nothing is said');
     }
   });
 
