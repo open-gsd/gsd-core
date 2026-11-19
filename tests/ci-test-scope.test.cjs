@@ -73,26 +73,40 @@ describe('ci-test-scope.cjs', () => {
     });
   }
 
-  test('test.yml: the changes job exports zsh_changed and test-insert-shell runs on it', () => {
+  // One parse of test.yml, one table: every guard property of the test-insert-shell job. A fail-open
+  // install or run (`|| true`, `continue-on-error`, a step `if`), a dropped `needs`, or a dropped
+  // result check in required-tests lets the job pass with the insert-phase rows never run.
+  test('test.yml: every guard property of the test-insert-shell job holds', () => {
     const doc = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8'));
-    assert.match(doc.jobs.changes.outputs.zsh_changed, /steps\.scope\.outputs\.zsh_changed/);
-    assert.strictEqual(doc.jobs['test-insert-shell'].if, "needs.changes.outputs.zsh_changed == 'true'");
-    // Behaviour of the steps: zsh is installed before the test runs (a failed install fails the job, so no
-    // row skips), and the run goes through run-tests.cjs, which accepts the arguments and selects exactly
-    // the insert-phase test.
-    const steps = doc.jobs['test-insert-shell'].steps;
+    const job = doc.jobs['test-insert-shell'];
+    const steps = job.steps;
     const install = steps.findIndex(s => /apt-get install .*\bzsh\b/.test(s.run || ''));
     const runStep = steps.findIndex(s => /scripts\/run-tests\.cjs/.test(s.run || ''));
-    assert.ok(install >= 0 && runStep > install, 'test-insert-shell installs zsh, then runs run-tests.cjs');
-    // The install keeps its failure status: a fail-open install lets the job pass with every row skipped.
-    assert.ok(!('continue-on-error' in steps[install]), 'the zsh install step is not continue-on-error');
-    assert.doesNotMatch(steps[install].run, /\|\||;/, 'the zsh install command swallows no failure');
+    const gate = doc.jobs['required-tests'];
+    const REFUSAL = '[ "$TEST_INSERT_SHELL_RESULT" != "success" ] && [ "$TEST_INSERT_SHELL_RESULT" != "skipped" ]';
+    const table = [
+      ['job if', job.if, "needs.changes.outputs.zsh_changed == 'true'"],
+      ['job needs', [...job.needs].sort(), ['changes', 'preflight']],
+      ['job continue-on-error', job['continue-on-error'], undefined],
+      ['job runs-on', job['runs-on'], 'ubuntu-latest'],
+      ['job timeout-minutes', job['timeout-minutes'], 10],
+      ['install step precedes run step', install >= 0 && runStep > install, true],
+      ['run step command', steps[runStep]?.run, 'node scripts/run-tests.cjs --files tests/insert-phase-sibling-docs.test.cjs'],
+      ['install step command', steps[install]?.run, 'sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh'],
+      ['steps with continue-on-error', steps.filter(s => 'continue-on-error' in s).length, 0],
+      ['steps with if', steps.filter(s => 'if' in s).length, 0],
+      ['changes job exports zsh_changed', /steps\.scope\.outputs\.zsh_changed/.test(doc.jobs.changes.outputs.zsh_changed), true],
+      // Push, merge-group and dispatch runs have no changed-file list: the job stays skipped there.
+      ['non-PR runs skip the job', /echo "zsh_changed=false"/.test(doc.jobs.changes.steps.find(s => s.id === 'scope').run), true],
+      ['required-tests needs the job', gate.needs.includes('test-insert-shell'), true],
+      ['required-tests result env', gate.steps[0].env.TEST_INSERT_SHELL_RESULT, '${{ needs.test-insert-shell.result }}'],
+      ['required-tests refuses a failed job', gate.steps[0].run.includes(`${REFUSAL}; then\n  echo "::error::test-insert-shell did not pass"\n  exit 1`), true],
+    ];
+    for (const [label, actual, expected] of table) assert.deepStrictEqual(actual, expected, label);
+    // The run goes through run-tests.cjs, which accepts the arguments and selects exactly the insert-phase test.
     const parsed = parseArgs(steps[runStep].run.trim().split(/\s+/).slice(2));
     assert.strictEqual(parsed.error, undefined, 'run-tests.cjs accepts the job arguments');
     assert.deepStrictEqual(parsed.files.split(/\s+/), ['tests/insert-phase-sibling-docs.test.cjs']);
-    // Push, merge-group and dispatch runs have no changed-file list: the job stays skipped there.
-    assert.match(doc.jobs.changes.steps.find(s => s.id === 'scope').run, /echo "zsh_changed=false"/);
-    assert.ok(doc.jobs['required-tests'].needs.includes('test-insert-shell'), 'required-tests waits for test-insert-shell');
   });
 
   test('a different tests/ .jsonl is not exempt', () => {
