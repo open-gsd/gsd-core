@@ -819,7 +819,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **Configurable stall surveillance (#3212):** Every `${EXECUTOR_STALL_INTERVAL_MINUTES}`
    minutes while waiting, inspect `git log "${EXPECTED_BRANCH}" --since="${DISPATCH_TS}"`
    for activity. If no completion signal, no SUMMARY.md, and no expected-branch
-   commits appear for `${EXECUTOR_STALL_THRESHOLD_MINUTES}` minutes, pause and
+   commits (`harness-worktree` plan: plan commits on any branch, #6117) appear for `${EXECUTOR_STALL_THRESHOLD_MINUTES}` minutes, pause and
    ask for one recovery path: `continue waiting`, `kill and retry`, or
    `kill and switch to inline execution`.
 
