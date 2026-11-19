@@ -265,54 +265,40 @@ function swapProperty(target: object, key: string, replacement: unknown): { orig
 }
 
 /**
- * Where a stand-in sends a call it does not own.
- *
- * While its call is open, that is the function it replaced. It must not look
- * at what is installed now: code inside the call may have layered its own
- * wrapper on top (io.cts's stdout capture does), and that wrapper calls back
- * down into this stand-in, so sending the call up to it would never return.
- *
- * Once its call has closed, the stand-in is stale: something kept a reference
- * to it. Then it defers to whatever is installed now, so the reference can
- * never reach past a later call's stand-in to the real function.
- *
- * What is installed now may itself be a wrapper that was layered over this
- * stand-in during its call and installed again afterwards. It calls back down
- * here, so a stale stand-in that is entered while it is already deferring
- * goes to the function it replaced: the same loop as above, ended the same way.
- * It counts as deferring until the installed function has returned, and when
- * that returned a promise, until the promise has settled.
+ * What a stand-in does with a call: handle it for its own call (capture the
+ * write, record the exit) and say so, or decline with `undefined`.
  */
-function passThrough(
-  target: object, key: string, standIn: object, original: unknown, callOpen: boolean,
-): (...a: unknown[]) => unknown {
-  const replaced = original as (...a: unknown[]) => unknown;
-  if (callOpen) return replaced;
-  const live = Reflect.get(target, key) as (...a: unknown[]) => unknown;
-  if (live === standIn || deferring.has(standIn)) return replaced;
-  return function deferToInstalled(this: unknown, ...a: unknown[]): unknown {
-    deferring.add(standIn);
-    let result: unknown;
-    try {
-      result = live.apply(this, a);
-    } catch (error) {
-      deferring.delete(standIn);
-      throw error;
-    }
-    // A wrapper that returned a promise may call back down after an await,
-    // so the stand-in stays marked until that promise has settled.
-    if (result !== null && typeof result === 'object' && typeof (result as { then?: unknown }).then === 'function') {
-      const done = (): void => { deferring.delete(standIn); };
-      (result as PromiseLike<unknown>).then(done, done);
-    } else {
-      deferring.delete(standIn);
-    }
-    return result;
-  };
-}
+type Handler = (thisArg: unknown, args: unknown[]) => { value: unknown } | undefined;
 
-/** The stale stand-ins that are, right now, inside a call to what is installed. See passThrough. */
-const deferring = new WeakSet<object>();
+/** The handlers of the call that is open right now, by what they stand in for. One call is open at a time. */
+let openHandlers: Map<string, Handler> | undefined;
+
+/**
+ * Where a stand-in sends a call it declined.
+ *
+ * Always DOWN, to the function it replaced, and never up to whatever is
+ * installed now. Code inside a call may layer its own wrapper over a stand-in
+ * (io.cts's stdout capture does) and that wrapper calls back down into it;
+ * anything that sent the call up again would never return.
+ *
+ * One case comes first. A stand-in whose call has closed is stale: something
+ * kept a reference to it (`const { exit } = process` in a module first loaded
+ * inside main). If another call is open now, that call's handler is offered
+ * the call, so a stale `exit` used inside a later call ends that call and not
+ * the host. If it declines, the call goes down as usual.
+ */
+function forward(
+  slot: string, self: Handler, original: unknown, callOpen: boolean, thisArg: unknown, args: unknown[],
+): unknown {
+  if (!callOpen) {
+    const current = openHandlers?.get(slot);
+    if (current !== undefined && current !== self) {
+      const handled = current(thisArg, args);
+      if (handled !== undefined) return handled.value;
+    }
+  }
+  return (original as (...a: unknown[]) => unknown).apply(thisArg, args);
+}
 
 /**
  * Marks the async context of a call, so a call made from inside `main` is
@@ -377,8 +363,9 @@ async function runOne(
   const capturedBytes = { 1: 0, 2: 0 };
   let overflowed: 1 | 2 | undefined;
   let firstExit: number | undefined;
-  // True until the restore starts. See passThrough.
+  // True until the restore starts. See forward.
   let open = true;
+  const handlers = new Map<string, Handler>();
 
   const capture = (fd: 1 | 2, bytes: Buffer): void => {
     // A real process is gone once it has asked to exit. Whatever a catch
@@ -392,17 +379,24 @@ async function runOne(
     capturedBytes[fd] += bytes.byteLength;
   };
 
-  const streamWrite = (fd: 1 | 2, stream: object, real: () => unknown) => (
-    function write(this: unknown, chunk: unknown, encodingOrCallback?: unknown, callback?: unknown): boolean {
-      if (!ownsCurrentContext()) {
-        return passThrough(stream, 'write', write, real(), open).call(this, chunk, encodingOrCallback, callback) as boolean;
-      }
-      capture(fd, streamWriteBytes(chunk, encodingOrCallback));
-      const done = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
-      if (typeof done === 'function') (done as () => void)();
-      return true;
-    }
-  );
+  // Builds the function installed in place of `slot`. It handles what its
+  // call owns and forwards everything else to what it replaced.
+  const standInFor = (slot: string, handle: Handler, real: () => unknown) => {
+    handlers.set(slot, handle);
+    return function standIn(this: unknown, ...args: unknown[]): unknown {
+      const handled = handle(this, args);
+      return handled !== undefined ? handled.value : forward(slot, handle, real(), open, this, args);
+    };
+  };
+
+  const streamWrite = (fd: 1 | 2, real: () => unknown) => standInFor(`stream.${fd}.write`, (_thisArg, args) => {
+    if (!ownsCurrentContext()) return undefined;
+    const [chunk, encodingOrCallback, callback] = args;
+    capture(fd, streamWriteBytes(chunk, encodingOrCallback));
+    const done = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+    if (typeof done === 'function') (done as () => void)();
+    return { value: true };
+  }, real);
 
   let result: InProcessResult | undefined;
   let failure: { error: unknown } | undefined;
@@ -442,33 +436,30 @@ async function runOne(
     // stream captures fs.writeSync at creation; created under the stand-in,
     // it would keep writing into this call's buffer for the rest of the
     // process.
-    const stdoutWrite = swapProperty(process.stdout, 'write', streamWrite(1, process.stdout, () => stdoutWrite.original));
+    openHandlers = handlers;
+    undo.push(() => { if (openHandlers === handlers) openHandlers = undefined; });
+    const stdoutWrite = swapProperty(process.stdout, 'write', streamWrite(1, () => stdoutWrite.original));
     undo.push(stdoutWrite.restore);
-    const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, process.stderr, () => stderrWrite.original));
+    const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, () => stderrWrite.original));
     undo.push(stderrWrite.restore);
-    const writeSyncStandIn = (fd: number, data: unknown, ...rest: unknown[]): number => {
-      if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) {
-        return passThrough(fs, 'writeSync', writeSyncStandIn, writeSync.original, open).call(fs, fd, data, ...rest) as number;
-      }
-      const bytes = writeSyncBytes(data, rest[0], rest[1]);
+    const writeSync = swapProperty(fs, 'writeSync', standInFor('fs.writeSync', (_thisArg, args) => {
+      const [fd, data, offsetOrOptions, length] = args;
+      if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) return undefined;
+      const bytes = writeSyncBytes(data, offsetOrOptions, length);
       capture(fd, bytes);
-      return bytes.byteLength;
-    };
-    const writeSync = swapProperty(fs, 'writeSync', writeSyncStandIn);
+      return { value: bytes.byteLength };
+    }, () => writeSync.original));
     undo.push(writeSync.restore);
     // As the real one does: an argument, even `undefined`, replaces
     // process.exitCode first. The assignment goes through Node's own setter,
     // so a code Node refuses is refused here with Node's own error.
-    const exitStandIn = (...args: unknown[]): never => {
-      if (!ownsCurrentContext()) {
-        return passThrough(process, 'exit', exitStandIn, exit.original, open).call(process, ...args) as never;
-      }
+    const exit = swapProperty(process, 'exit', standInFor('process.exit', (_thisArg, args) => {
+      if (!ownsCurrentContext()) return undefined;
       if (args.length > 0) process.exitCode = args[0] as number | undefined;
       const requested = exitStatus(process.exitCode);
       if (firstExit === undefined) firstExit = requested;
       throw new InProcessExit(requested);
-    };
-    const exit = swapProperty(process, 'exit', exitStandIn);
+    }, () => exit.original));
     undo.push(exit.restore);
 
     await runMainAsync(main);
