@@ -1405,11 +1405,11 @@ describe('#3873 phase-3 rows 23/24/25: parser accepts exactly the schema-declare
     current_plan: driveCurrentPlanShape,
   };
 
-  // shape name -> [example value, drive opts]
+  // shape name -> [every spelling the grammar reads (or must refuse) for it, drive opts]
   const SHAPE_EXAMPLES = {
-    'N': ['3', { withTotalSibling: true }],
-    'N of M': ['3 of 5', {}],
-    'N/M': ['3/5', {}],
+    'N': [['3'], { withTotalSibling: true }],
+    'N of M': [['3 of 5', '3 OF 5', '3 Of 5', '3 of 5.', '3 of 5)'], {}],
+    'N/M': [['3/5'], {}],
   };
 
   const rowsWithAcceptedShapes = Object.entries(STATE_FIELD_SCHEMA).filter(
@@ -1427,9 +1427,11 @@ describe('#3873 phase-3 rows 23/24/25: parser accepts exactly the schema-declare
       for (const shape of row.acceptedShapes) {
         const example = SHAPE_EXAMPLES[shape];
         assert.ok(example, `no SHAPE_EXAMPLES entry for shape ${JSON.stringify(shape)} (field ${JSON.stringify(field)})`);
-        const [value, opts] = example;
-        const parsed = driver(value, opts);
-        assert.strictEqual(parsed, true, `declared shape ${JSON.stringify(shape)} for field ${JSON.stringify(field)} did not parse`);
+        const [values, opts] = example;
+        for (const value of values) {
+          const parsed = driver(value, opts);
+          assert.strictEqual(parsed, true, `declared shape ${JSON.stringify(shape)} spelled ${JSON.stringify(value)} for field ${JSON.stringify(field)} did not parse`);
+        }
       }
     }
   });
@@ -1443,9 +1445,11 @@ describe('#3873 phase-3 rows 23/24/25: parser accepts exactly the schema-declare
       const undeclaredCandidates = Object.keys(SHAPE_EXAMPLES).filter((shape) => !row.acceptedShapes.includes(shape));
       assert.ok(undeclaredCandidates.length > 0, `no undeclared shape candidate available to probe field ${JSON.stringify(field)}`);
       for (const shape of undeclaredCandidates) {
-        const [value, opts] = SHAPE_EXAMPLES[shape];
-        const parsed = driver(value, opts);
-        assert.strictEqual(parsed, false, `undeclared shape ${JSON.stringify(shape)} for field ${JSON.stringify(field)} was accepted by the parser`);
+        const [values, opts] = SHAPE_EXAMPLES[shape];
+        for (const value of values) {
+          const parsed = driver(value, opts);
+          assert.strictEqual(parsed, false, `undeclared shape ${JSON.stringify(shape)} spelled ${JSON.stringify(value)} for field ${JSON.stringify(field)} was accepted by the parser`);
+        }
       }
     }
   });

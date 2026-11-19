@@ -202,7 +202,9 @@ export const STATE_FIELD_SCHEMA: Readonly<Record<string, StateFieldSchema>> = Ob
         // is `['N', 'N of M']`. Two properties of the widening matter to a
         // future reader:
         //
-        //   - It is ANCHORED. The parser matches `/^(\d+)\s+of\s+(\d+)\s*$/`
+        //   - It is ANCHORED. The parser matches `PLAN_SHAPE_N_OF_M`
+        //     (`N of M` with `of` in any letter case, the total ending at a
+        //     word boundary, so `3 of 5.` reads and `3 of 5.5` does not)
         //     against the whole value, so `4 — blocked on review of 2 PRs`
         //     is REJECTED rather than yielding a total of 2 out of prose.
         //     Declaring `'N of M'` is a claim about that grammar, not about
