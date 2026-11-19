@@ -6499,6 +6499,8 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number | null |
     phaseNumber: phaseNumber as string | number,
     phaseName: phaseName ?? null,
     planCount: planCount ?? null,
+    phaseIdConvention: resolvePhaseIdConvention(cwd),
+    directoryContext: phaseDirectoryOptions(cwd),
   };
   const deps: StateTransitionDeps = {
     clock: realClock,

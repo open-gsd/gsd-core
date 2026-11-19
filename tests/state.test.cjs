@@ -5765,6 +5765,26 @@ describe('state planned-phase command', () => {
     }
   });
 
+  test('#5320: a same-phase replan keeps its position under every phase-id convention (CLI)', () => {
+    const planning = path.join(tmpDir, '.planning');
+    const planLine = () => splitLines(fs.readFileSync(path.join(planning, 'STATE.md'), 'utf8')).find((l) => l.startsWith('Plan: '));
+    // [config, ROADMAP, recorded phase, --phase, line written]: equal ids name one phase and keep the position; a different id resets it
+    for (const [config, roadmap, recorded, phase, wrote] of [
+      [{ phase_id_convention: 'milestone-prefixed' }, '', '3-02', '3-02', 'Plan: 2 of 6'],
+      [{ phase_naming: 'custom' }, '### Phase DEPLOY: Ship\n', 'DEPLOY (Ship)', 'DEPLOY', 'Plan: 2 of 6'],
+      [{ phase_id_convention: 'milestone-prefixed' }, '', '3-01', '3-02', 'Plan: 0 of 6 in current phase'],
+      [{}, '', '2', '2.1', 'Plan: 0 of 6 in current phase'],
+      [{}, '', '2.1', '2', 'Plan: 0 of 6 in current phase'],
+    ]) {
+      fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify(config));
+      fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmap);
+      writeTbdPlanFixture([`Phase: ${recorded}`, 'Plan: 2 of 4', 'Status: Ready']);
+      const r = runGsdTools(['state', 'planned-phase', '--phase', phase, '--name', 'Tbd', '--plans', '6'], tmpDir);
+      assert.ok(r.success, `${recorded} -> ${phase}: ${r.error}`);
+      assert.strictEqual(planLine(), wrote, `${JSON.stringify(config)} ${recorded} -> ${phase}`);
+    }
+  });
+
   test('#5320: an unreadable Current Plan beside a readable Total Plans in Phase is left as written', () => {
     // complete-phase writes `Current Plan: Not started`; only the Total line records --plans there.
     writeTbdPlanFixture(['Phase: 19', 'Current Plan: Not started', 'Total Plans in Phase: 5', 'Status: Ready']);
@@ -5927,6 +5947,9 @@ describe('state planned-phase command', () => {
       ['Plan: 2 of 5', 'Plan: 2 of 8'],
       ['Plan: 1 of ?', 'Plan: 1 of 8'],
       ['Plan: 2 of 5.', 'Plan: 2 of 8.'],
+      ['Plan: 2 OF 5', 'Plan: 2 OF 8'],
+      ['Plan: 2 Of 5', 'Plan: 2 Of 8'],
+      ['Plan: 1 OF ?', 'Plan: 1 OF 8'],
       ['Plan: 2 of 5,', 'Plan: 2 of 8,'],
       ['Plan: 2 of 5)', 'Plan: 2 of 8)'],
       ['Plan: 2 of 5; wave 2', 'Plan: 2 of 8; wave 2'],
@@ -5944,7 +5967,7 @@ describe('state planned-phase command', () => {
 
   test('#5320: a total continued by a separator or a glued word is refused before any write, not given a second " of"', () => {
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
-    for (const line of ['Plan: 2 of 5.5', 'Plan: 2 of 5/7', 'Plan: 2 of 5,6', 'Plan: 2 of 5a', 'Plan: 1 of ?x', 'Plan: 1 of Bx', 'Plan: 2 of', 'Current Plan: 2 of 5.5']) {
+    for (const line of ['Plan: 2 of 5.5', 'Plan: 2 of 5/7', 'Plan: 2 of 5,6', 'Plan: 2 of 5a', 'Plan: 1 of ?x', 'Plan: 1 of Bx', 'Plan: 2 of', 'Plan: 2 OF 5.5', 'Plan: 2 Of', 'Current Plan: 2 of 5.5']) {
       writeTbdPlanFixture(['Phase: 19', line, 'Status: Ready']);
       const before = fs.readFileSync(statePath);
       const r = runGsdTools([...PLAN_CMD, '8', '--json-errors'], tmpDir);

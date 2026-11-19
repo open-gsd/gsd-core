@@ -4,6 +4,7 @@ const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { runGsdTools, createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -1918,6 +1919,15 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       fs.readFileSync(statePath, 'utf8').includes('**Last Activity Description:** [CK.02] 02 planning complete — 0 plans ready'),
       true,
     );
+  });
+
+  test('state planned-phase --plans keeps the recorded position on the same bracket phase and resets it on another (#5320)', () => {
+    for (const [phase, wrote] of [['01', 'Plan: 1 of 3'], ['02', 'Plan: 0 of 3 in current phase']]) {
+      const dir = project('adr-612-state-planned-position-');
+      writeBracketFixture(dir);
+      run(['state', 'planned-phase', '--phase', phase, '--name', 'Foundation', '--plans', '3'], dir);
+      assert.ok(splitLines(fs.readFileSync(planning(dir, 'STATE.md'), 'utf8')).includes(wrote), `phase ${phase}`);
+    }
   });
 
   test('a state write materializes milestone frontmatter from the active ROADMAP milestone', () => {

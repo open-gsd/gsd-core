@@ -5336,14 +5336,15 @@ describe('#5320 plan-count / plan-position owner parity', () => {
       m: fc.integer({ min: 1, max: 9 }),
       x: fc.constantFrom('5.5', '5/7', '5a'),
       rest: fc.constantFrom(...rests),
+      of: fc.constantFrom('of', 'OF', 'Of', 'oF'),
     });
     const render = (s) => {
       if (s.kind === 'TBD') return 'TBD';
-      if (s.kind === 'NofX') return `${s.n} of ${s.x}`; // a total the number continues into: no total to land on
+      if (s.kind === 'NofX') return `${s.n} ${s.of} ${s.x}`; // a total the number continues into: no total to land on
       // punctuation tails (`5.`, `5)`) follow only a numeric total: a bare N needs whitespace after it
       const rest = s.kind === 'NofM' || /^\s|^$/.test(s.rest) ? s.rest : '';
       if (s.kind === 'N') return `${s.n}${rest}`;
-      return `${s.n} of ${s.kind === 'NofM' ? s.m : '?'}${rest}`;
+      return `${s.n} ${s.of} ${s.kind === 'NofM' ? s.m : '?'}${rest}`;
     };
     const readable = (s) => s !== null && s.kind !== 'TBD';
     const adv0 = (content) => transitionCore(content, { kind: 'advancePlan' }, deps).data;
@@ -5373,9 +5374,9 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           let want = null;
           // a `Current Plan: N of X` beside a Total Plans in Phase line is left as written: the count lands on the Total line
           // a new phase discards the old position, so an unreadable `N of X` is rewritten there, not refused
-          if ((!plan && !cur && !total) || (!newPhase && (plan?.kind === 'NofX' || (cur?.kind === 'NofX' && !total)))) want = 'plans_no_line';
-          else if (!newPhase && reads.length === 2 && reads[0].n !== reads[1].n) want = 'ambiguous_plan_position';
-          else if (!newPhase && recorded > count) want = 'plans_below_position';
+          if ((!plan && !cur && !total) || (!newPhase && (plan?.kind === 'NofX' || (cur?.kind === 'NofX' && !total)))) want = ERROR_REASON.PLANS_NO_LINE;
+          else if (!newPhase && reads.length === 2 && reads[0].n !== reads[1].n) want = ERROR_REASON.AMBIGUOUS_PLAN_POSITION;
+          else if (!newPhase && recorded > count) want = ERROR_REASON.PLANS_BELOW_POSITION;
           const r = transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: count }, deps);
           if (r.data?.reason !== (want ?? undefined)) return false;
           if (want !== null) return r.content === content && r.updated.length === 0;
@@ -5383,7 +5384,7 @@ describe('#5320 plan-count / plan-position owner parity', () => {
           if (reads.length === 0 && total) return adv0(r.content).error === true;
           if (readRecordedPlanTotal(r.content) !== count) return false;
           // a written position names its total once: never `N of M of <old text>`
-          if (plan && plan.kind !== 'TBD' && lineOf(r.content).split(' of ').length !== 2) return false;
+          if (plan && plan.kind !== 'TBD' && lineOf(r.content).split(/ of /i).length !== 2) return false;
           const adv = adv0(r.content);
           const position = newPhase ? 0 : recorded;
           return adv.error === undefined && adv.total_plans === count && (adv.previous_plan ?? adv.current_plan) === position;
@@ -5415,21 +5416,21 @@ describe('#5320 plan-count / plan-position owner parity', () => {
       assert.ok(beside(line, 18).includes(fresh), `${line} is written ${fresh} on a new phase`);
     }
     const huge = planned('Plan: 99999999999999999999 of 5', 3);
-    assert.strictEqual(huge.data.reason, 'plans_below_position');
+    assert.strictEqual(huge.data.reason, ERROR_REASON.PLANS_BELOW_POSITION);
     assert.strictEqual(huge.content, doc('Plan: 99999999999999999999 of 5'));
     // Boundary of the safe-integer limit: limit-1 and limit are accepted, limit+1 is refused with nothing written.
     for (const n of [Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER]) {
       assert.strictEqual(planned(`Plan: ${n} of 5`, Number.MAX_SAFE_INTEGER).data?.reason, undefined, `position ${n} is accepted`);
     }
     const over = planned('Plan: 9007199254740992 of 5', Number.MAX_SAFE_INTEGER);
-    assert.strictEqual(over.data.reason, 'plans_below_position');
+    assert.strictEqual(over.data.reason, ERROR_REASON.PLANS_BELOW_POSITION);
     assert.strictEqual(over.content, doc('Plan: 9007199254740992 of 5'));
   });
 
   // A value that reads `N of` but holds no total is refused with nothing written: the count has no slot, and a second " of" would corrupt the line.
   const refused = (line) => {
     const r = planned(line, 6);
-    return r.data?.reason === 'plans_no_line' && r.content === doc(line) && r.updated.length === 0;
+    return r.data?.reason === ERROR_REASON.PLANS_NO_LINE && r.content === doc(line) && r.updated.length === 0;
   };
 
   test('plannedPhase unit: `Current Plan: N of X` beside Total Plans in Phase records the count and keeps the line; a line only the frontmatter holds is refused', () => {
@@ -5444,26 +5445,26 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     // the reader sees the frontmatter line, the writer edits the body only: nothing may be written and exit 0
     const fm = `---\nPlan: 1 of 3\n---\n${doc('Status: Ready')}`;
     const r = transitionCore(fm, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps);
-    assert.strictEqual(r.data?.reason, 'plans_no_line');
+    assert.strictEqual(r.data?.reason, ERROR_REASON.PLANS_NO_LINE);
     assert.strictEqual(r.content, fm);
     assert.strictEqual(r.updated.length, 0);
     // the same holds for a `Current Plan:` line only the frontmatter holds
     const fmCurrent = `---\nCurrent Plan: 1 of 3\n---\n${doc('Status: Ready')}`;
     const rc = transitionCore(fmCurrent, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps);
-    assert.strictEqual(rc.data?.reason, 'plans_no_line');
+    assert.strictEqual(rc.data?.reason, ERROR_REASON.PLANS_NO_LINE);
     assert.strictEqual(rc.content, fmCurrent);
   });
 
   test('plannedPhase unit: a digit-led value that reads no position is refused when no Total line can hold the count', () => {
     for (const line of ['Plan: 3/5', 'Plan: 3.', 'Plan: 3:', 'Current Plan: 3/5']) {
       const r = planned(line, 6);
-      assert.strictEqual(r.data?.reason, 'plans_no_line', line);
+      assert.strictEqual(r.data?.reason, ERROR_REASON.PLANS_NO_LINE, line);
       assert.ok(r.content.split('\n').includes(line), `${line} is left as written`);
     }
     // a digit-led sibling is recorded progress: the unreadable line beside it is not rewritten over it
     for (const both of ['Plan: Not started\nCurrent Plan: 3/5', 'Current Plan: Not started\nPlan: 3/5']) {
       const r = planned(both, 6);
-      assert.strictEqual(r.data?.reason, 'plans_no_line', both);
+      assert.strictEqual(r.data?.reason, ERROR_REASON.PLANS_NO_LINE, both);
       for (const l of both.split('\n')) assert.ok(r.content.split('\n').includes(l), `${l} is left as written`);
     }
     // a Total line records the count, so the digit-led line stays as written and the command succeeds
@@ -5518,6 +5519,12 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.deepStrictEqual(written('duplicate-plan-lines.md'), ['Plan: 1 of 5', 'Plan: 2 of 3']);
     assert.deepStrictEqual(written('null-byte-plan-line.md'), ['Plan: 1 of 5\0x']);
     assert.deepStrictEqual(written('unclosed-frontmatter-plan-line.md'), ['Plan: 2 of 5']);
+    assert.deepStrictEqual(written('decimal-phase-id.md'), ['Plan: 0 of 5 in current phase']);
+    const unclosed = fs.readFileSync(path.join(dir, 'unclosed-body-fence-plan-line.md'), 'utf8');
+    const hidden = transitionCore(unclosed, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 5 }, deps);
+    assert.strictEqual(hidden.data.reason, ERROR_REASON.PLANS_NO_LINE);
+    assert.strictEqual(hidden.content, unclosed);
+    assert.strictEqual(transitionCore(unclosed, { kind: 'advancePlan' }, deps).data?.error, true, 'advance-plan reads no Plan line either');
     // CRLF and mixed LF/CRLF documents are built here: .gitattributes (`eol=lf`) would normalise a stored fixture
     const lf = doc('Plan: 1 of 3.');
     assert.deepStrictEqual(plannedLines(lf.replaceAll('\n', '\r\n'), 'crlf'), ['Plan: 1 of 5.']);
@@ -5565,15 +5572,24 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.ok(refused('Current Plan: 2 of 5.5'));
   });
 
+  test('plannedPhase unit: a refusal prints the STATE.md text it names with control and bidi characters escaped', () => {
+    const hostile = '\u0007\u001b[31m‮';
+    for (const content of [`Plan: 2 of 5.5${hostile}`, `Plan: 2 of 5${hostile}\nCurrent Plan: 3 of 5`]) {
+      const { message } = planned(content, 6).data;
+      assert.ok([...message].every((ch) => ch.charCodeAt(0) > 0x1f && ch !== '‮'), JSON.stringify(message));
+      assert.ok(message.includes('\\u0007\\u001b[31m\\u202e'), JSON.stringify(message));
+    }
+  });
+
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
     const tbd = planned('Plan: 0 TBD in current phase', 3);
     assert.strictEqual(lineOf(tbd.content), 'Plan: 0 of 3 in current phase');
     assert.ok(tbd.updated.includes('Plan'));
     assert.ok(tbd.content.includes('Status: Ready to execute'));
     const none = transitionCore(doc('Notes: none'), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 3 }, deps);
-    assert.strictEqual(none.data.reason, 'plans_no_line');
+    assert.strictEqual(none.data.reason, ERROR_REASON.PLANS_NO_LINE);
     assert.strictEqual(none.content, doc('Notes: none'));
-    assert.strictEqual(planned('Plan: 3 of 5', 2).data.reason, 'plans_below_position');
+    assert.strictEqual(planned('Plan: 3 of 5', 2).data.reason, ERROR_REASON.PLANS_BELOW_POSITION);
     assert.strictEqual(lineOf(planned('Plan: 3 of 5', 3).content), 'Plan: 3 of 3');
     // a different phase restarts at plan 0 instead of refusing
     const other = transitionCore(doc('Plan: 3 of 5').replace('Phase: 19', 'Phase: 18'), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 2 }, deps);
@@ -5766,6 +5782,13 @@ describe('#5786: readRecordedPlanTotal prefers an explicit Total Plans in Phase'
     for (const tail of ['.', ',', ')', ';']) assert.equal(recorded(`Plan: 2 of 5${tail}`), 5, tail);
     for (const bad of ['5\u00e9', '5\u0663']) assert.equal(recorded(`Plan: 2 of ${bad}`), null, bad);
     for (const bad of ['5.5', '5/7', '5,6']) assert.equal(recorded(`Plan: 2 of ${bad}`), null, bad);
+  });
+
+  test('#5320 the word `of` reads in any letter case, as the total and the refusal of a continued total', () => {
+    for (const word of ['OF', 'Of', 'oF']) {
+      assert.equal(recorded(`Plan: 2 ${word} 5`), 5, word);
+      assert.equal(recorded(`Plan: 2 ${word} 5.5`), null, word);
+    }
   });
 
   test('#5786 explicit Total beats `Current Plan: N of M`', () => {

@@ -36,7 +36,7 @@ import stateMdSchemaMod = require('./state-md-schema.cjs');
 const { STATE_FIELD_SCHEMA } = stateMdSchemaMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { ERROR_REASON } = ioMod;
+const { ERROR_REASON, formatDiagnosticToken } = ioMod;
 type StateFieldSchema = stateMdSchemaMod.StateFieldSchema;
 
 const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter, FRONTMATTER_UNPARSEABLE } = frontmatter;
@@ -1261,7 +1261,15 @@ export type StateTransitionIntent =
        */
       milestone?: string | null;
     }
-  | { kind: 'plannedPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
+  | {
+      kind: 'plannedPhase';
+      phaseNumber: string | number;
+      phaseName: string | null;
+      planCount: number | null;
+      /** The caller's phase-id convention and directory context: the same-phase test reads both ids under them (#5320). */
+      phaseIdConvention?: string | null;
+      directoryContext?: phaseIdMod.PhaseDirectoryContext;
+    }
   | { kind: 'milestoneSwitch'; version: string; name: string }
   | {
       kind: 'milestoneComplete';
@@ -1738,7 +1746,7 @@ type PlanFieldName = 'Plan' | 'Current Plan';
 
 const PLAN_SHAPE_N = /^(\d+)((?:\s.*)?)$/;
 // The total ends at a word boundary, so `2 of 5.` and `2 of 5)` read; a separator that continues the number (`5.5`, `5/7`) does not.
-const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)(?![\p{L}\p{N}_])(?![^\s\w]\d)((?:\W.*)?)$/u;
+const PLAN_SHAPE_N_OF_M = /^(\d+)\s+of\s+(\d+)(?![\p{L}\p{N}_])(?![^\s\w]\d)((?:\W.*)?)$/iu;
 
 /**
  * Parse a decimal group into a plan number, or `null` if it is not a value we
@@ -1798,7 +1806,7 @@ function readPlanValue(raw: string | null | undefined): PlanPosition | null {
   if (!bare) return null;
   const n = planNumberFrom(bare[1]);
   // `N of ?` (begin-phase without --plans) holds an unfilled total: a `?` or a lone capital letter (`N of M`, not `A/B`) is the slot, so no second " of" is written.
-  const unfilled = /^(\s+of\s+)(?:\?|[A-Z])(?=\s|$)/.exec(bare[2]);
+  const unfilled = /^(\s+[Oo][Ff]\s+)(?:\?|[A-Z])(?=\s|$)/.exec(bare[2]);
   if (unfilled) return { n, ofM: false, legacy: false, m: null, slot: [`${bare[1]}${unfilled[1]}`, 1, bare[2].slice(unfilled[0].length)] };
   return { n, ofM: false, legacy: !/^\s+TBD\b/.test(bare[2]), m: null, slot: [`${bare[1]} of `, 1, bare[2].replace(/^\s+TBD\b/, '') || ' in current phase'] };
 }
@@ -1889,10 +1897,10 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
   // A `Current Plan` beside a recorded `Total Plans in Phase:` is never rewritten (the count lands on the Total line), so it is not refused.
   for (const [name, value, pos] of [['Plan', lines.plan, planPos], ['Current Plan', lines.currentPlan, legacy]] as const) {
     if (name === 'Current Plan' && totalRecorded) continue;
-    if (samePhase && pos?.legacy && /^\d+\s+of(?:\s|$)/.test(value ?? '')) {
+    if (samePhase && pos?.legacy && /^\d+\s+of(?:\s|$)/i.test(value ?? '')) {
       return { error: {
         reason: ERROR_REASON.PLANS_NO_LINE,
-        message: `state planned-phase: --plans cannot replace the total in \`${name}: ${value}\`. ` +
+        message: `state planned-phase: --plans cannot replace the total in ${formatDiagnosticToken(`${name}: ${value}`)}. ` +
           `Write the line as \`${name}: N of M\` (or \`${name}: N of ?\`) and retry.`,
       } };
     }
@@ -1909,7 +1917,7 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     if (lines.ambiguous) {
       return { error: {
         reason: ERROR_REASON.AMBIGUOUS_PLAN_POSITION,
-        message: `state planned-phase: Plan and Current Plan record different plan positions (Plan ${lines.plan}, Current Plan ${lines.currentPlan}). ` +
+        message: `state planned-phase: Plan and Current Plan record different plan positions (Plan ${formatDiagnosticToken(lines.plan ?? '')}, Current Plan ${formatDiagnosticToken(lines.currentPlan ?? '')}). ` +
           'Correct one of them and retry.',
       } };
     }
@@ -2702,7 +2710,7 @@ function completePhaseCore(
  */
 function plannedPhaseCore(
   content: string,
-  intent: { kind: 'plannedPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null },
+  intent: Extract<StateTransitionIntent, { kind: 'plannedPhase' }>,
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
@@ -2796,7 +2804,7 @@ function plannedPhaseCore(
   const bodyPhase = stateExtractField(posBefore, 'Phase') ?? stateExtractField(posBefore, 'Current Phase');
   const fmPhase = existingFm['current_phase'];
   const recordedPhase = bodyPhase ?? (typeof fmPhase === 'string' || typeof fmPhase === 'number' ? String(fmPhase) : null);
-  const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber);
+  const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase, intent.directoryContext, intent.phaseIdConvention) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber, intent.directoryContext);
   // #5320: the plan lines advance-plan reads, from the same scope; a refusal writes nothing.
   const planned: ReturnType<typeof planLinesForPlanned> = intent.planCount == null ? {} : planLinesForPlanned(content, intent.planCount, samePhase, totalRecorded);
   if (planned.error) return { content, updated: [], data: { error: true, ...planned.error } };

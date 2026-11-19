@@ -12,5 +12,7 @@ feeds each file to `transitionCore` as a `plannedPhase` transition with a count 
   reads, so it is the one written; the second stays as written.
 - `null-byte-plan-line.md` — a NUL after the total. The total is rewritten and the trailing text is kept.
 - `unclosed-frontmatter-plan-line.md` — a frontmatter fence that never closes. The `Plan:` line is still rewritten.
+- `unclosed-body-fence-plan-line.md` — a code fence in the body that never closes. It hides the `Plan:` line after it, as it does for `advance-plan`, so the command refuses with `plans_no_line` and writes nothing.
+- `decimal-phase-id.md` — the recorded phase is `19.1` and the planned phase is `19`. These are two phases, so the position resets to `Plan: 0 of 5 in current phase`.
 
 CRLF and mixed LF/CRLF documents are built inside the test, because `.gitattributes` (`eol=lf`) normalises a stored fixture.
