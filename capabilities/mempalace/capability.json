@@ -158,7 +158,7 @@
       "onError": "skip"
     },
     {
-      "point": "execute:wave:post",
+      "point": "execute:post",
       "into": "verifier",
       "fragment": {
         "path": "fragments/capture-problems.md"

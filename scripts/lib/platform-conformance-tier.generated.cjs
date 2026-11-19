@@ -327,6 +327,7 @@ module.exports = {
   "tests/user-home-isolation-5594.test.cjs",
   "tests/verification-append-audit.test.cjs",
   "tests/verification-status.test.cjs",
+  "tests/verifier-contribution.test.cjs",
   "tests/verify-command-grounding.test.cjs",
   "tests/verify-lifecycle-writes-e2e.test.cjs",
   "tests/verify-work-auto-transition.test.cjs",
