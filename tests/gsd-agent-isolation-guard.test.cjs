@@ -2024,7 +2024,7 @@ describe('gsd-agent-isolation-guard.js: #6028 — the deny remedy agrees with a 
     savedGsdRuntime = process.env.GSD_RUNTIME;
     delete process.env.GSD_RUNTIME;
     project = mkProject('gsd-aig-6028-');
-    writeConfig(project, JSON.stringify({ runtime: 'claude' }));
+    writeConfig(project, pinnedConfig({ runtime: 'claude' }));
   });
   after(() => {
     cleanup(project);
@@ -2082,6 +2082,7 @@ describe('gsd-agent-isolation-guard.js: #6028 — the deny remedy agrees with a 
       tool_input: {
         subagent_type: 'gsd-executor',
         isolation: 'worktree',
+        model: agentPayload().tool_input.model,
         prompt: `[gsd:dispatch phase="${DISPATCH.phase}" plan="${DISPATCH.plan}"] Execute the plan.`,
       },
     }, { clock });
