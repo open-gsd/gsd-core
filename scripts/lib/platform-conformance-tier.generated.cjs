@@ -29,6 +29,7 @@ module.exports = {
   "tests/capability-state.test.cjs",
   "tests/changeset-new.test.cjs",
   "tests/check-contract-drift.test.cjs",
+  "tests/check-env.process.test.cjs",
   "tests/check-env.test.cjs",
   "tests/check-glossary-refs.test.cjs",
   "tests/check-predicate.test.cjs",
