@@ -45,6 +45,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 import { execGit, platformWriteSync } from './shell-command-projection.cjs';
 import { splitLines, joinLines } from './text-lines.cjs';
+import { capCodeUnits } from './code-unit-cap.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
@@ -54,7 +55,7 @@ import { parseMarkdownTable } from './markdown-table.cjs';
 import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
 
 const { output, error } = io;
-const { extractPhaseToken, scopeToPhase } = phaseId;
+const { extractPhaseToken, normalizePhaseName, scopeToPhase } = phaseId;
 const { extractFrontmatter, FRONTMATTER_UNPARSEABLE } = frontmatterMod;
 const { normalizeLineEndings } = coreUtilsMod;
 const { SCOPE } = planningScopeMod;
@@ -168,8 +169,7 @@ function describeRawStatus(raw: unknown): string {
   if (partialEscape) {
     cut -= partialEscape[0].length;
   } else {
-    const last = rendered.charCodeAt(cut - 1);
-    if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+    cut = capCodeUnits(rendered, cut, 'head').length;
   }
   // JSON also emits two-character escapes (`\n`, `\t`, `\"`, `\\`): an odd
   // trailing run of backslashes is the first half of one, so drop it too.
@@ -1697,8 +1697,16 @@ function resolvePhaseArtifactFile(
   const candidates = entries.filter((f) => f.endsWith(`-${bareName}`)).sort();
   if (candidates.length > 0) {
     if (options.phaseToken) {
-      const thisPhaseFile = `${options.phaseToken}-${bareName}`;
-      if (candidates.includes(thisPhaseFile)) return thisPhaseFile;
+      // #5931: the token as the directory spells it (`XR-03`, `5`) first, so a file that literally
+      // carries it keeps winning; then the spelling the scaffolder writes, `normalizePhaseName`'s
+      // code-stripped, zero-padded form (`03`, `05`). Callers pass `extractPhaseToken(dirName)`, which
+      // keeps the code and the padding as written, so without the second spelling a project-coded or
+      // unpadded directory's own `NN-UAT.md` lost to any sibling that sorts first.
+      const spellings = [options.phaseToken, normalizePhaseName(options.phaseToken)];
+      for (const token of new Set(spellings)) {
+        const thisPhaseFile = `${token}-${bareName}`;
+        if (candidates.includes(thisPhaseFile)) return thisPhaseFile;
+      }
     }
     // #3511: scope the fallback to files that belong to THIS phase, so a
     // stray cross-phase file can no longer outrank a return of null.
@@ -1931,8 +1939,10 @@ function findStaleVerificationSummary(
  *    writer set (`VERIFIER_STATUSES`) — any other string, case variant,
  *    reader-only member, or non-string value — THROWS `VerificationStatusError`
  *    (#5118). The throw sits outside the parse `try`, and before the
- *    `gaps_found` short-circuit and the staleness check, so it can neither be
- *    folded into `missing` nor masked by `stale` (#4817 Part 2).
+ *    `gaps_found` guard and the staleness check, so it can neither be
+ *    folded into `missing` nor masked by `stale` (#4817 Part 2). A `gaps_found`
+ *    report with a well-formed fingerprint of a known version is staleness-checked
+ *    like any other (#6078); without one it routes straight to gap planning.
  *
  * #5118 / ADR-5057 amendment 2: a path with no phase DIRECTORY behind it
  * (ENOENT, ENOTDIR, a non-directory) reads `phase_dir_not_found` — a usage
@@ -1992,12 +2002,6 @@ function readVerificationStatus(
   if (located.kind === 'unparseable') return route(VERIFICATION_STATUS.UNPARSEABLE);
   const { status: reportStatus, fm } = located;
 
-  // gaps_found takes priority over stale — gap closure is the correct next
-  // step regardless of whether summaries are newer than the verification file.
-  if (reportStatus === VERIFICATION_STATUS.GAPS_FOUND) {
-    return route(VERIFICATION_STATUS.GAPS_FOUND);
-  }
-
   // #4155: a report that declares a covered-input fingerprint is checked by
   // RECOMPUTING that fingerprint over current file content — strictly
   // content-grounded, and it REPLACES (not supplements) the legacy
@@ -2018,6 +2022,20 @@ function readVerificationStatus(
     coveredFilesVal.every((f) => typeof f === 'string') &&
     typeof coveredDigestVal === 'string' &&
     coveredDigestVal.trim().length > 0;
+
+  // gaps_found takes priority over a merely-newer SUMMARY — gap closure is the correct next step regardless of
+  // whether summaries are newer than the verification file, so the legacy mtime check never runs for it.
+  // #6078: the one exception is a gaps_found report that declares a well-formed covered-input fingerprint of a
+  // known version. Its covered files moving means the gap may already be closed (a fix outside a gap-closure
+  // plan), so the content-grounded check below runs for it too and a moved digest reports `stale`, whose one
+  // route re-runs the verifier. A matching digest, a malformed pair, or an unknown version keeps `gaps_found`
+  // (it does not fail closed to `stale` the way a `passed` report does: there is no remedy to gain from it).
+  if (
+    reportStatus === VERIFICATION_STATUS.GAPS_FOUND &&
+    !(hasWellFormedFingerprint && typeof coveredDigestVal === 'string' && parseFingerprintVersion(coveredDigestVal) !== null)
+  ) {
+    return route(VERIFICATION_STATUS.GAPS_FOUND);
+  }
 
   let staleCheckIndeterminate = false;
   let staleDetail: StaleDetail | undefined;

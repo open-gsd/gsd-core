@@ -71,6 +71,66 @@ function sanitizeForReason(value) {
     : stripped;
 }
 
+// #6028: which remedy a flag-missing / not-isolated deny gives. A stable code (surfaced on the hook's stdout
+// JSON as `remedy`) so tests assert it instead of the prose, like REASON_CODE.
+const REMEDY = Object.freeze({
+  // The default: add the harness flag (Claude) or start an isolated session (Cursor): one code for the
+  // "isolate this dispatch" advice, since the hooks share the seam.
+  ADD_FLAG: 'add_flag',
+  // A fresh recorded sequential degrade (`none`) for a different phase existed but did not apply to this
+  // dispatch: the remedy is to record an applicable decision (null on every other deny path: not applicable).
+  RECORD_APPLICABLE_DECISION: 'record_applicable_decision',
+});
+
+/**
+ * True when the discarded record was a recorded sequential degrade (isolation `none`) for a DIFFERENT phase than
+ * the dispatch. A `none` for another plan of the same phase is not matched: it can be a per-plan decision (a
+ * submodule intersection, #2474) and adding the flag is then still the right fix.
+ */
+function isRecordedDegradeDiscard(sentinelDiscarded) {
+  if (!sentinelDiscarded || !sentinelDiscarded.sentinel || !sentinelDiscarded.dispatch) return false;
+  const { sentinel, dispatch } = sentinelDiscarded;
+  return sentinel.isolation === 'none' && !!sentinel.phase && !!dispatch.phase && sentinel.phase !== dispatch.phase;
+}
+
+/** The remedy code for a deny whose natural advice is to add the flag / start an isolated session. */
+function remedyFor(sentinelDiscarded) {
+  return isRecordedDegradeDiscard(sentinelDiscarded) ? REMEDY.RECORD_APPLICABLE_DECISION : REMEDY.ADD_FLAG;
+}
+
+/**
+ * The remedy text for a recorded degrade that did not apply to this dispatch (#6028). Names the recorded
+ * degrade and both identifiers and says how to record a decision that applies, instead of telling the
+ * orchestrator to do what the degrade's base-check refused.
+ */
+// #6028: the dispatch phase is copied into a runnable command line below, so it is echoed only when it is a
+// well-formed phase token; anything else (it comes from the orchestrator's prompt marker, which accepts almost
+// any text) becomes the `<phase>` placeholder. Mirrors DISPATCH_PHASE_TOKEN_SOURCE in
+// hooks/lib/dispatch-identity.js (a test pins the two equal; this module stays dependency-free).
+const PHASE_ARG_SOURCE = '\\d+[A-Za-z]?(?:\\.\\d+)*';
+const PHASE_ARG_RE = new RegExp(`^${PHASE_ARG_SOURCE}$`);
+const PHASE_ARG_MAX_LEN = 32;
+
+function safePhaseArg(phase) {
+  return typeof phase === 'string' && phase.length <= PHASE_ARG_MAX_LEN && PHASE_ARG_RE.test(phase) ? phase : '<phase>';
+}
+
+function describeRecordedDegradeRemedy(sentinelDiscarded) {
+  const sentinelPhase = sanitizeForReason(sentinelDiscarded.sentinel.phase);
+  const sentinelPlan = sanitizeForReason(sentinelDiscarded.sentinel.plan);
+  const dispatchPhase = sanitizeForReason(sentinelDiscarded.dispatch.phase);
+  const dispatchPlan = sanitizeForReason(sentinelDiscarded.dispatch.plan);
+  const phaseArg = safePhaseArg(sentinelDiscarded.dispatch.phase);
+  return (
+    ` A sequential degrade (isolation "none") was recorded for phase="${sentinelPhase}" plan="${sentinelPlan}" ` +
+    `but it did not apply to this dispatch (phase="${dispatchPhase}" plan="${dispatchPlan}"). If that degrade came ` +
+    `from the worktree base-check refusing the harness worktree for this repository, isolating this dispatch ` +
+    `(adding the harness flag or starting an isolated session) is what the base-check refused; record a decision ` +
+    `that applies to this dispatch with \`gsd_run query dispatch-isolation --raw --phase ${phaseArg} ` +
+    `--force-isolation none\` and retry. Otherwise isolate the dispatch as usual.`
+  );
+}
+
 function describeSentinelDiscard(sentinelDiscarded) {
   const sentinelPhase = sanitizeForReason(sentinelDiscarded.sentinel.phase);
   const sentinelPlan = sanitizeForReason(sentinelDiscarded.sentinel.plan);
@@ -83,8 +143,24 @@ function describeSentinelDiscard(sentinelDiscarded) {
   );
 }
 
+/**
+ * The remedy tail of a deny whose natural advice is `addAdvice` (add the flag / start an isolated session):
+ * the advice plus the discarded-sentinel note when no recorded degrade is involved, otherwise the recorded
+ * degrade's remedy in its place. One composition for both hooks, so they cannot diverge (#6028).
+ */
+function composeRemedyText(sentinelDiscarded, addAdvice) {
+  if (remedyFor(sentinelDiscarded) === REMEDY.RECORD_APPLICABLE_DECISION) return describeRecordedDegradeRemedy(sentinelDiscarded);
+  return addAdvice + (sentinelDiscarded ? describeSentinelDiscard(sentinelDiscarded) : '');
+}
+
 module.exports = {
   REASON_CODE,
+  REMEDY,
+  PHASE_ARG_SOURCE,
+  composeRemedyText,
+  isRecordedDegradeDiscard,
+  remedyFor,
+  describeRecordedDegradeRemedy,
   REASON_INTERPOLATION_MAX_LEN,
   sanitizeForReason,
   describeSentinelDiscard,

@@ -107,6 +107,25 @@ describe('ci-test-scope.cjs', () => {
     );
   });
 
+  test('data-log only (ci-timeout-budget-history.jsonl): matrix skipped like docs-only', () => {
+    const result = scopeFor(['tests/ci-timeout-budget-history.jsonl']);
+    assert.strictEqual(result.code_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, false, JSON.stringify(result));
+    assert.strictEqual(result.full_matrix, false);
+    assert.deepStrictEqual(result.targeted_tests, []);
+  });
+
+  test('data-log mixed with product code: product files still decide scope', () => {
+    const result = scopeFor(['tests/ci-timeout-budget-history.jsonl', 'src/init.cts']);
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+    assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+  });
+
+  test('a different tests/ .jsonl is not exempt', () => {
+    const result = scopeFor(['tests/other-history.jsonl']);
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+  });
+
   test('root markdown only: code_changed is false, product_changed false', () => {
     const result = scopeFor(['README.md']);
     assert.strictEqual(result.code_changed, false,
@@ -342,6 +361,48 @@ describe('ci-test-scope.cjs', () => {
       cleanup(tmp);
     }
   });
+
+  test('a src/ file listed as deleted by a rename escalates to full_matrix (fail-safe, --no-renames side effect)', () => {
+    // reachesConformanceTierOrSeam cannot read a path that no longer exists and
+    // fails safe to true, so every src/ move runs the conformance matrix.
+    const result = scopeFor(['src/does-not-exist-after-rename.cts']);
+    assert.strictEqual(result.full_matrix, true, JSON.stringify(result));
+    assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+  });
+
+  test('rename of product code onto the data-log path still reports the deleted source', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-scope-norename-'));
+    try {
+      const git = (...a) => gitOrThrow(a, { cwd: tmp }).trim();
+      git('init', '-q');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      git('config', 'commit.gpgsign', 'false');
+      fs.mkdirSync(path.join(tmp, 'tests'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+      const body = Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n') + '\n';
+      fs.writeFileSync(path.join(tmp, 'src', 'x.cts'), body);
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD');
+      git('checkout', '-q', '-b', 'feature');
+      // Modified rename (~90% similar): git would report it as a rename, not add+delete.
+      fs.renameSync(path.join(tmp, 'src', 'x.cts'), path.join(tmp, 'tests', 'ci-timeout-budget-history.jsonl'));
+      fs.appendFileSync(path.join(tmp, 'tests', 'ci-timeout-budget-history.jsonl'), 'extra line\n');
+      git('add', '-A');
+      git('commit', '-qm', 'rename');
+      const head = git('rev-parse', 'HEAD');
+
+      const r = runNode([SCRIPT, '--base', base, '--head', head], { cwd: tmp, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(r.exitCode, 0, `script failed: stderr=${r.stderr}\nstdout=${r.stdout}`);
+      const result = JSON.parse(r.stdout);
+      assert.ok(result.changed_files.includes('src/x.cts'), JSON.stringify(result.changed_files));
+      assert.strictEqual(result.product_changed, true, JSON.stringify(result));
+      assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+    } finally {
+      cleanup(tmp);
+    }
+  });
 });
 
 describe('ci-test-scope superset invariant (#494, rescinded by #4421)', () => {
@@ -473,6 +534,11 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
       'tests/release-tarball-smoke-workflow.test.cjs',
       'tests/ci-conformance-pr-gating.test.cjs',
       'tests/workflow-token-permissions.test.cjs',
+      // #5029: holds the SHARD_BALANCE <-> test.yml layout-parity test, which
+      // must fail in the re-shard PR (a test.yml-only diff), not on `next`.
+      'tests/ci-timeout-report.test.cjs',
+      // #5299: reads APPROVAL_LABELS from auto-close-unsolicited-prs.yml
+      'tests/registry-docs-approved-issue-parity.test.cjs',
     ];
     for (const file of ['.github/workflows/test.yml', '.github/workflows/release.yml', '.github/actions/x/action.yml']) {
       const result = assertInert([file]);

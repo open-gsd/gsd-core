@@ -28,11 +28,11 @@ Then proceed to Step 1.
 
 ## Step 1 -- Config Gate
 
-Check whether the MemPalace capability is enabled by reading `.planning/config.json` directly with the Read tool.
+Check whether the MemPalace capability is enabled by reading `{planning_root}/config.json` directly with the Read tool. (`{planning_root}`: the active scope's root, from `planning.inspect`)
 
 **DO NOT use `gsd-tools config get-value`** -- it hard-exits on missing keys.
 
-1. Read `.planning/config.json` with the Read tool.
+1. Read `{planning_root}/config.json` with the Read tool.
 2. If the file does not exist: write the "unavailable" stub (Step 4) and **STOP**.
 3. Parse the JSON. Proceed to Step 2 only if `config.mempalace && config.mempalace.enabled === true` **and** `config.mempalace.recall_on_plan !== false`. Otherwise display the disabled message and **STOP** (`recall_on_plan: false` turns plan-time recall off while leaving the rest of the capability enabled).
 

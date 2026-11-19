@@ -266,6 +266,16 @@ class ExitError extends Error {
   }
 }
 
+type CliMain = () => number | string | void | Promise<number | string | void>;
+
+/**
+ * The entrypoint form of runMainAsync (documented below): starts it and
+ * discards the promise, which never rejects.
+ */
+function runMain(main: CliMain): void {
+  void runMainAsync(main);
+}
+
 /**
  * Run a CLI main and translate its outcome into process.exitCode (never
  * process.exit, so n/no-process-exit stays satisfied; output flushes and
@@ -313,84 +323,125 @@ class ExitError extends Error {
  *   thrown ExitError -> process.exitCode = err.code (+ stderr err.message if hasUserMessage && code!=0) (unchanged)
  *   other throw -> when json-error mode is active, emits structured { ok:false, reason, message }
  *                  to stderr; otherwise writes raw stack trace. exit code = 1 in either case. (unchanged)
+ *
+ * #6332: the body lives in runMainAsync, which returns the settling promise,
+ * so an in-process caller (src/in-process-cli.cts) can wait for the exit code
+ * to be decided. runMain is the entrypoint form and discards the promise; the
+ * chain ends in a catch that handles every rejection, so it never rejects.
  */
-function runMain(main: () => number | string | void | Promise<number | string | void>): void {
-  Promise.resolve()
+function runMainAsync(main: CliMain): Promise<void> {
+  return Promise.resolve()
     .then(() => main())
-    .then((result) => {
-      // Cleared on EVERY branch below, not only the pending-cell-consuming
-      // void arm: an explicit number/string return means main() declared
-      // its own outcome and the cell (if anything set it earlier in this
-      // same invocation) is now stale — leaving it set would leak into the
-      // NEXT runMain call in this process, reintroducing the #3912 leak one
-      // level up. "Cleared on consumption" therefore means "consumption of
-      // this runMain call", not just "consumption of the pending value".
-      try {
-        if (typeof result === 'number') { process.exitCode = result; return; }
-        if (typeof result === 'string') {
-          const projected = projectOutcome(result, getContractVersion());
-          // ADR-3889 §3: exit code 2 (the hook-protocol deny) may
-          // ONLY be produced by terminateNow, never by runMain. runMain is
-          // drain-then-exit; a deny drained this way can be truncated on
-          // Windows, which is exactly why terminateNow (write-then-terminate)
-          // exists. Gated on the PROJECTED code, not on the literal string
-          // `'HOOK_DENY'`, so a future registry rename that still resolves to
-          // this code cannot slip past the guard.
-          if (projected === HOOK_DENY_CODE) {
-            process.stderr.write(
-              `runMain: refusing to exit with code ${HOOK_DENY_CODE} — outcome ${JSON.stringify(result)} `
-              + `projects to the ${HOOK_DENY_NAME} exit code, which is reserved to terminateNow. `
-              + `A hook-protocol deny must be delivered write-then-terminate via terminateNow(${JSON.stringify(result)}, payload), `
-              + 'never drain-then-exit via runMain — a drained deny can be truncated on Windows. '
-              + 'This is a caller bug: runMain must not be given a main() that returns HOOK_DENY.\n',
-            );
-            process.exitCode = exitCodeFor('INTERNAL');
-            return;
-          }
-          process.exitCode = projected;
-          return;
-        }
-        // result is undefined (void return): main declared no outcome itself.
-        // Fall back to the pending-outcome cell, if anything set it — but
-        // NEVER lower an exit code main() already raised on its own (see the
-        // precedence order in this function's doc comment above). Without
-        // this guard, a void-returning main() that set process.exitCode = 1
-        // directly (e.g. `state validate --strict` on a missing STATE.md)
-        // would have that 1 clobbered down to DEGRADED's v1 projection (0)
-        // by a payload-carried error the SAME call also recorded via
-        // io.cts's output() — a real failure silently reported as success.
-        const pending = getPendingOutcome();
-        if (typeof pending === 'string' && pending.length > 0 && !process.exitCode) {
-          process.exitCode = projectOutcome(pending, getContractVersion());
-        }
-      } finally {
-        // Cell is consumed exactly once per runMain call regardless of which
-        // branch above ran (see the cell's own doc comment — "last
-        // declaration wins, cleared on consumption") — so a later `runMain`
-        // in the same process never inherits this one's declaration.
-        setPendingOutcome(undefined);
-      }
-    })
-    .catch((err: unknown) => {
-      if (err instanceof ExitError) {
-        if (err.hasUserMessage && err.code !== 0) process.stderr.write(`${err.message}\n`);
-        process.exitCode = err.code;
+    .then(settleMainResult)
+    .catch(settleMainError);
+}
+
+/**
+ * Run a main that must finish synchronously, and settle it by the same rules
+ * as runMainAsync (#6333). Returns `true` when it settled. Returns `false`,
+ * having settled nothing, when main returned a promise: the caller asked for
+ * a synchronous result and this main cannot give one.
+ */
+function runMainSync(main: CliMain): boolean {
+  let result: number | string | void | Promise<number | string | void>;
+  try {
+    result = main();
+  } catch (err) {
+    settleMainError(err);
+    return true;
+  }
+  if (result !== null && typeof result === 'object' && typeof (result as { then?: unknown }).then === 'function') {
+    // Nobody will wait for this promise. If it rejects, the rejection must
+    // not reach the process as an unhandled one and end a host that only
+    // asked a question it could not get answered synchronously.
+    (result as PromiseLike<unknown>).then(undefined, () => undefined);
+    return false;
+  }
+  // As in the promise chain: a throw while settling the result is settled as an error.
+  try {
+    settleMainResult(result as number | string | void);
+  } catch (err) {
+    settleMainError(err);
+  }
+  return true;
+}
+
+/** The fulfilment arm of runMainAsync and runMainSync: main's return value decides process.exitCode. */
+function settleMainResult(result: number | string | void): void {
+  // Cleared on EVERY branch below, not only the pending-cell-consuming
+  // void arm: an explicit number/string return means main() declared
+  // its own outcome and the cell (if anything set it earlier in this
+  // same invocation) is now stale — leaving it set would leak into the
+  // NEXT runMain call in this process, reintroducing the #3912 leak one
+  // level up. "Cleared on consumption" therefore means "consumption of
+  // this runMain call", not just "consumption of the pending value".
+  try {
+    if (typeof result === 'number') { process.exitCode = result; return; }
+    if (typeof result === 'string') {
+      const projected = projectOutcome(result, getContractVersion());
+      // ADR-3889 §3: exit code 2 (the hook-protocol deny) may
+      // ONLY be produced by terminateNow, never by runMain. runMain is
+      // drain-then-exit; a deny drained this way can be truncated on
+      // Windows, which is exactly why terminateNow (write-then-terminate)
+      // exists. Gated on the PROJECTED code, not on the literal string
+      // `'HOOK_DENY'`, so a future registry rename that still resolves to
+      // this code cannot slip past the guard.
+      if (projected === HOOK_DENY_CODE) {
+        process.stderr.write(
+          `runMain: refusing to exit with code ${HOOK_DENY_CODE} — outcome ${JSON.stringify(result)} `
+          + `projects to the ${HOOK_DENY_NAME} exit code, which is reserved to terminateNow. `
+          + `A hook-protocol deny must be delivered write-then-terminate via terminateNow(${JSON.stringify(result)}, payload), `
+          + 'never drain-then-exit via runMain — a drained deny can be truncated on Windows. '
+          + 'This is a caller bug: runMain must not be given a main() that returns HOOK_DENY.\n',
+        );
+        process.exitCode = exitCodeFor('INTERNAL');
         return;
       }
-      if (getJsonErrorMode()) {
-        const e = err as Error;
-        const payload = JSON.stringify({
-          ok: false,
-          reason: EXIT_ENVELOPE_REASON,
-          message: (e && e.message) ? e.message : String(err),
-        }) + '\n';
-        fs.writeSync(2, payload);
-      } else {
-        const e = err as Error;
-        process.stderr.write(`${e && e.stack ? e.stack : String(err)}\n`);
-      }
-      process.exitCode = 1;
-    });
+      process.exitCode = projected;
+      return;
+    }
+    // result is undefined (void return): main declared no outcome itself.
+    // Fall back to the pending-outcome cell, if anything set it — but
+    // NEVER lower an exit code main() already raised on its own (see the
+    // precedence order in this function's doc comment above). Without
+    // this guard, a void-returning main() that set process.exitCode = 1
+    // directly (e.g. `state validate --strict` on a missing STATE.md)
+    // would have that 1 clobbered down to DEGRADED's v1 projection (0)
+    // by a payload-carried error the SAME call also recorded via
+    // io.cts's output() — a real failure silently reported as success.
+    const pending = getPendingOutcome();
+    if (typeof pending === 'string' && pending.length > 0 && !process.exitCode) {
+      process.exitCode = projectOutcome(pending, getContractVersion());
+    }
+  } finally {
+    // Cell is consumed exactly once per runMain call regardless of which
+    // branch above ran (see the cell's own doc comment — "last
+    // declaration wins, cleared on consumption") — so a later `runMain`
+    // in the same process never inherits this one's declaration.
+    setPendingOutcome(undefined);
+  }
+}
+
+/** The rejection arm of runMainAsync and runMainSync: an ExitError is its code; anything else is 1, reported. */
+function settleMainError(err: unknown): void {
+  if (err instanceof ExitError) {
+    if (err.hasUserMessage && err.code !== 0) process.stderr.write(`${err.message}\n`);
+    process.exitCode = err.code;
+    return;
+  }
+  if (getJsonErrorMode()) {
+    const e = err as Error;
+    const payload = JSON.stringify({
+      ok: false,
+      reason: EXIT_ENVELOPE_REASON,
+      message: (e && e.message) ? e.message : String(err),
+    }) + '\n';
+    fs.writeSync(2, payload);
+  } else {
+    const e = err as Error;
+    process.stderr.write(`${e && e.stack ? e.stack : String(err)}\n`);
+  }
+  process.exitCode = 1;
 }
 
 /**
@@ -565,6 +616,8 @@ function terminateNow(outcome: string, payload: unknown, stderrPayload?: unknown
 export = {
   ExitError,
   runMain,
+  runMainAsync,
+  runMainSync,
   setJsonErrorMode,
   getJsonErrorMode,
   EXIT_ENVELOPE_REASON,

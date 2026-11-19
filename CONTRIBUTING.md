@@ -460,7 +460,37 @@ const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdT
 | `createTempGitProject(prefix?)` | Same + git init + initial commit | Testing git-dependent features |
 | `createTempDir(prefix?)` | Bare temp directory | Testing features that don't need `.planning/` |
 | `cleanup(tmpDir)` | Removes directory recursively | Always use in `afterEach` |
-| `runGsdTools(args, cwd, env?)` | Executes gsd-tools.cjs | Testing CLI commands |
+| `runGsdTools(args, cwd, env?)` | Runs a gsd-tools command in the test process (no child process) | Testing CLI commands |
+| `await runGsdToolsAsync(args, cwd, env?)` | The same, for any command including the asynchronous ones | Testing `capability`, `review-lane`, `websearch` and the other commands `runGsdTools` refuses |
+| `runGsdToolsProcess(args, cwd, env?)` | Runs the same command in a spawned `node gsd-tools.cjs` | Testing the process boundary itself, from a `*.process.test.cjs` file |
+
+`runGsdTools` calls the CLI's own `main` through `runCliSync` (ADR-6315 item 15) and returns the
+same `{ success, output, error, exitCode }` a spawned call returns. `tests/cli-parity.process.test.cjs`
+proves command by command that both give the same exit code, stdout and stderr. What follows from that:
+
+- The command runs in your test's process, so `mock.method` on a module the command uses takes effect. To
+  inject a failure, mock the function; do not preload a patch into a child.
+- Neither in-process helper ever spawns. Each refuses what it cannot do and names the helper that can:
+  - a command that finishes asynchronously (`asyncHostCommandNames()` in `gsd-tools.cjs`, the capability
+    routers named in a module's `asyncRouters`, and `run-with-timeout`): `runGsdTools` throws before the
+    command runs; use `await runGsdToolsAsync(...)`;
+  - an `env` argument that sets a `NODE_*` variable, and a working directory that does not exist: both
+    are questions about a real process; use `runGsdToolsProcess`.
+- A router that returns a promise without being declared asynchronous fails a synchronous call with
+  `in_process_async_started`, because its work has already begun. Declare it: make the router an
+  `async function`, or list it in its module's `asyncRouters` (capability routers) or in
+  `MAYBE_ASYNC_HOST_COMMANDS` (`gsd-tools.cjs`).
+- Nothing bounds an in-process call. A command that never returns holds the whole test file until the lane's
+  cap ends it, where a spawned child was killed after its own timeout.
+- `GSD_TEST_CLI_MODE=process` makes both helpers spawn, to check a suspected in-process difference against
+  the real binary.
+
+### In-process CLI tests: the rules
+
+The rules that in-process CLI tests put on tests and on product code are in
+[`TESTING-STANDARDS.md` — "In-process CLI tests: the rules"](TESTING-STANDARDS.md#in-process-cli-tests-the-rules).
+The helper table above says which helper to call; that section says what a test and the code under
+test must and must not do, and what enforces each rule.
 
 ### Spawning a subprocess: use the process seam
 
@@ -886,6 +916,12 @@ Required cases where relevant:
 - Runtime `.cjs` and SDK `.ts` generated surfaces disagree
 
 Generator tests should run in temp fixtures and assert atomic output behavior. Do not mutate production generated files except in explicit freshness checks.
+
+### A parser or reader that must agree with an external tool
+
+Code that gives the answer another program gives, without running it, is tested against that
+program. The rules are in
+[`TESTING-STANDARDS.md` — "A parser or reader that must agree with an external tool"](TESTING-STANDARDS.md#a-parser-or-reader-that-must-agree-with-an-external-tool).
 
 ### Prohibited: Source-Grep Tests
 

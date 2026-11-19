@@ -194,23 +194,182 @@ function scrubConfigLocationEnv() {
   };
 }
 
+/** A command string as an argv vector (quotes group and are removed), or the array as given. */
+function gsdToolsArgv(args) {
+  return Array.isArray(args)
+    ? args
+    : (args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [])
+        .map(t => t.replace(/"([^"]*)"/g, '$1').replace(/'([^']*)'/g, '$1'));
+}
+
+// What child_process gives a spawned command per stream before it reports a
+// buffer overflow (spawnSync's default; the process seam sets no other). The
+// in-process call is given the same limit so both forms overflow together.
+const SPAWNED_MAX_BUFFER_BYTES = 1024 * 1024;
+
+function isDirectory(dir) {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+// A NODE_* variable is node's own: node reads nearly all of them once, when a
+// process starts (NODE_OPTIONS, NODE_PATH, NODE_NO_WARNINGS, …), so setting one
+// for an in-process call would do nothing. The two below are the exceptions:
+// NODE_ENV is read by programs, at any time, and NODE_TEST_CONTEXT is what
+// env builders blank for every child so it does not report to this runner,
+// which is harmless for a call that has no child.
+const NODE_VARIABLES_AN_IN_PROCESS_CALL_MAY_SET = new Set(['NODE_ENV', 'NODE_TEST_CONTEXT']);
+
+function isNodeStartVariable(name) {
+  const upper = name.toUpperCase();
+  return upper.startsWith('NODE_') && !NODE_VARIABLES_AN_IN_PROCESS_CALL_MAY_SET.has(upper);
+}
+
 /**
- * Run gsd-tools command.
+ * What an in-process call cannot honour, said before the command runs. Each
+ * message names the helper that can. Nothing here spawns: a test that needs a
+ * real process says so in its file name and calls runGsdToolsProcess.
+ */
+function refuseWhatNeedsAProcess(helper, cwd, env) {
+  // NODE_OPTIONS=--require … is read by node when a process starts.
+  // Only a variable the caller is CHANGING: a key whose value is undefined sets
+  // nothing, and one copied from this process's own environment (a test that
+  // passes `{ ...process.env }`) asks for what the command already runs under.
+  const startVariable = Object.keys(env).find(
+    (name) => env[name] !== undefined && env[name] !== process.env[name] && isNodeStartVariable(name),
+  );
+  if (startVariable !== undefined) {
+    throw new Error(
+      `${helper} runs the command in this process, where ${startVariable} has no effect. To change what the `
+      + 'command sees, mock it in the test (the command runs in the test\'s process). To test a real process, '
+      + 'call runGsdToolsProcess from a *.process.test.cjs file.',
+    );
+  }
+  // Checked here and not inferred from an ENOENT thrown by the call, which a
+  // deleted host directory raises as well.
+  if (!isDirectory(cwd)) {
+    throw new Error(
+      `${helper}: the working directory ${JSON.stringify(cwd)} is not a directory. What a process does when it is `
+      + 'started in a directory that is not there is a property of a real process: call runGsdToolsProcess from a '
+      + '*.process.test.cjs file.',
+    );
+  }
+}
+
+/** The options both in-process helpers give the CLI. */
+function inProcessOptions(argv, cwd, env) {
+  return { argv, cwd, env: { ...process.env, ...testEnvBase(), ...env }, maxBufferBytes: SPAWNED_MAX_BUFFER_BYTES };
+}
+
+/** An in-process result in the shape the spawned form has always returned. */
+function helperResult(result, argv) {
+  const output = result.stdout.trim();
+  if (result.exitCode === 0) return { success: true, output, exitCode: 0 };
+  // The same message the spawned form gives for a clean non-zero exit.
+  const commandLine = [process.execPath, TOOLS_PATH, ...argv].join(' ');
+  const error = result.stderr.trim()
+    || `Command failed: ${commandLine} [stderr: (empty) exit:${result.exitCode}]`;
+  return { success: false, output, error, exitCode: result.exitCode };
+}
+
+/**
+ * An error from an in-process call as a result, where the spawned form
+ * returned one. Only an overflow: the command ran and wrote more than a
+ * spawned child may, which the spawned form reports as a failure. It is not
+ * run again. Anything else is thrown.
+ */
+function helperFailure(err) {
+  if (err && err.code === 'in_process_output_overflow') return bufferOverflowResult('', 'ENOBUFS');
+  throw err;
+}
+
+/**
+ * Run a gsd-tools command.
  *
- * @param {string|string[]} args - Command string (shell-interpreted) or array
- *   of arguments (shell-bypassed via execFileSync, safe for JSON and dollar signs).
+ * #6333 (ADR-6315 item 15): the command runs IN THIS PROCESS, through
+ * `runCliSync`, and no child process is started. The result has the shape
+ * this helper has always returned.
+ *
+ * It never spawns. A command that finishes asynchronously cannot be served
+ * by a synchronous call: use `await runGsdToolsAsync(...)`, which runs the
+ * same command in this process too. A test whose subject is the process
+ * boundary itself calls runGsdToolsProcess from a `*.process.test.cjs` file.
+ * `GSD_TEST_CLI_MODE=process` runs every call through the spawned CLI instead,
+ * to check a suspected in-process difference against the real binary.
+ *
+ * @param {string|string[]} args - Command string (split on spaces, quotes
+ *   group) or an argv array (taken as is, safe for JSON and dollar signs).
  * @param {string} cwd - Working directory.
  * @param {object} [env] - Optional env overrides merged on top of process.env.
  *   Pass { HOME: cwd } to sandbox ~/.gsd/ lookups in tests that assert concrete
  *   config values that could be overridden by a developer's defaults.json.
  */
 function runGsdTools(args, cwd = process.cwd(), env = {}) {
+  if (process.env.GSD_TEST_CLI_MODE === 'process') return runGsdToolsProcess(args, cwd, env);
+  refuseWhatNeedsAProcess('runGsdTools', cwd, env);
+
+  const argv = gsdToolsArgv(args);
+  try {
+    return helperResult(require(TOOLS_PATH).runCliSync(inProcessOptions(argv, cwd, env)), argv);
+  } catch (err) {
+    if (err && err.code === 'in_process_async_command') {
+      throw new Error(
+        `runGsdTools: "${String(err.command)}" finishes asynchronously, so a synchronous call cannot serve it. `
+        + 'Nothing was run. Use `await runGsdToolsAsync(...)`: same arguments, same result, same process.',
+        { cause: err },
+      );
+    }
+    return helperFailure(err);
+  }
+}
+
+/**
+ * runGsdTools for any command, asynchronous ones included (#6333): the
+ * command runs in this process through `runCli`, and the promise resolves to
+ * the same `{ success, output, error, exitCode }`.
+ *
+ * @param {string|string[]} args
+ * @param {string} cwd
+ * @param {object} [env]
+ */
+async function runGsdToolsAsync(args, cwd = process.cwd(), env = {}) {
+  if (process.env.GSD_TEST_CLI_MODE === 'process') return runGsdToolsProcess(args, cwd, env);
+  refuseWhatNeedsAProcess('runGsdToolsAsync', cwd, env);
+
+  const argv = gsdToolsArgv(args);
+  try {
+    return helperResult(await require(TOOLS_PATH).runCli(inProcessOptions(argv, cwd, env)), argv);
+  } catch (err) {
+    return helperFailure(err);
+  }
+}
+
+/** What a command that wrote more than the buffer limit returns, spawned or in-process. */
+function bufferOverflowResult(output, code) {
+  return {
+    success: false,
+    output,
+    error: `gsd-tools output exceeded the subprocess buffer limit (code=${code})`,
+    exitCode: 1,
+  };
+}
+
+/**
+ * Run a gsd-tools command in a spawned process: the real binary, with the
+ * process boundary a user's shell has. For tests of that boundary, and what
+ * runGsdTools falls back to for a command it cannot run in-process.
+ *
+ * @param {string|string[]} args
+ * @param {string} cwd
+ * @param {object} [env]
+ */
+function runGsdToolsProcess(args, cwd = process.cwd(), env = {}) {
   // Resolve argv once so both the first attempt and the retry use the same vector.
   const childEnv = { ...process.env, ...testEnvBase(), ...env };
-  const argv = Array.isArray(args)
-    ? args
-    : (args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [])
-        .map(t => t.replace(/"([^"]*)"/g, '$1').replace(/'([^']*)'/g, '$1'));
+  const argv = gsdToolsArgv(args);
 
   // Adapter over tests/helpers/process-seam.cjs (#3055). The seam returns a
   // typed { outcome, exitCode, stdout, stderr, timedOut, signal, killed, code }
@@ -273,6 +432,7 @@ function runGsdTools(args, cwd = process.cwd(), env = {}) {
       };
     }
     if (result.outcome === processSeam.OUTCOME.BUFFER_OVERFLOW) {
+      // The shape itself is bufferOverflowResult, shared with runGsdTools.
       // Never retried. This is a DELIBERATE divergence from the old
       // execFileSync-based helper, not an oversight: the old code saw a
       // maxBuffer overflow as `err.signal === 'SIGTERM'`, which made the old
@@ -293,12 +453,7 @@ function runGsdTools(args, cwd = process.cwd(), env = {}) {
       // lives, discriminated via `outcome`. This LEGACY adapter's job is to
       // preserve the old numeric contract for existing callers, so it
       // coerces null to 1 here rather than propagating the seam's null.
-      return {
-        success: false,
-        output: (result.stdout || '').trim(),
-        error: `gsd-tools output exceeded the subprocess buffer limit (code=${result.code})`,
-        exitCode: 1,
-      };
+      return bufferOverflowResult((result.stdout || '').trim(), result.code);
     }
     if (result.outcome === processSeam.OUTCOME.KILLED) {
       // Defensive only: the retry loop below always retries KILLED once and
@@ -1157,6 +1312,95 @@ function restoreWorkstreamEnv() {
   else process.env.GSD_PROJECT = _origGsdProject;
 }
 
+/** Sets each [name, value] pair on process.env, deleting the undefined ones. */
+function _restoreEnvPairs(saved) {
+  for (const [name, value] of saved) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+}
+
+/**
+ * Gives git a configuration of its own, for a test whose answer depends on what
+ * git ignores. The config loader runs `git check-ignore` to decide
+ * `commit_docs`, so a developer whose git setup ignores `.planning` would
+ * otherwise see every fixture's `.planning/` as gitignored (#5470). Call it
+ * BEFORE creating the fixture repo, so templates cannot seed its exclude file.
+ *
+ * - Every GIT_* variable is cleared: GIT_CONFIG_PARAMETERS and
+ *   GIT_CONFIG_COUNT/KEY_n/VALUE_n inject config, and GIT_DIR and GIT_WORK_TREE
+ *   point git at another repository.
+ * - GIT_TEMPLATE_DIR names an empty directory, because `git init` otherwise
+ *   copies the installation's default template, whose `info/exclude` a
+ *   developer-owned git install can carry `.planning` in.
+ * - GIT_CONFIG_GLOBAL names a config written here and GIT_CONFIG_NOSYSTEM drops
+ *   the system one. That config sets `core.excludesFile` to an empty file,
+ *   because without it git still reads its default global ignore file,
+ *   `$XDG_CONFIG_HOME/git/ignore` (or `~/.config/git/ignore`).
+ * - Both are real files rather than /dev/null, which Windows does not have. The
+ *   path is quoted, with `\`, `"`, newline, tab and backspace escaped, so no
+ *   character a TMPDIR can hold changes what git reads.
+ *
+ * The variables set here reach git through execGit and runGsdTools alike, so
+ * this covers in-process reads and CLI spawns. execGit itself drops inherited
+ * repository-location variables such as GIT_DIR and GIT_WORK_TREE (#5548), but
+ * the git calls that build fixtures do not, so clearing them here still
+ * matters. It does not cover a `git` on PATH that is itself a wrapper adding
+ * `-c` options. Returns a restore function, which puts back every
+ * GIT_* variable exactly as it was and removes any a test added.
+ */
+function isolateGitConfigEnv() {
+  // Case-insensitive: Windows env names are, and keep the spelling they were set with.
+  const gitVars = () => Object.keys(process.env).filter((name) => name.toUpperCase().startsWith('GIT_'));
+  // Absolute: git runs from the fixture's cwd, where a relative TMPDIR names nothing.
+  const dir = path.resolve(createTempDir('gsd-gitconfig-'));
+  const file = path.join(dir, 'global.gitconfig');
+  const ignoreFile = path.join(dir, 'global.gitignore');
+  fs.writeFileSync(ignoreFile, '');
+  const quoted = ignoreFile.replace(/[\\"\n\t\b]/g, (c) => ({ '\\': '\\\\', '"': '\\"', '\n': '\\n', '\t': '\\t', '\b': '\\b' })[c]);
+  fs.writeFileSync(file, `[core]\n\texcludesFile = "${quoted}"\n`);
+  const templateDir = path.join(dir, 'template');
+  fs.mkdirSync(templateDir);
+  // The environment changes only after every step that can throw, so a failed
+  // setup leaves it as it was rather than isolated with no restore function.
+  const saved = gitVars().map((name) => [name, process.env[name]]);
+  for (const [name] of saved) delete process.env[name];
+  process.env.GIT_CONFIG_GLOBAL = file;
+  process.env.GIT_TEMPLATE_DIR = templateDir;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+  return () => {
+    for (const name of gitVars()) delete process.env[name];
+    _restoreEnvPairs(saved);
+    cleanup(dir);
+  };
+}
+
+/**
+ * Isolates a config read from the developer's environment, for a test that
+ * asserts what the config loader resolves. Clears GSD_PROJECT and
+ * GSD_WORKSTREAM, which redirect which config.json the loader reads, points
+ * GSD_HOME at a fresh directory, where the loader finds the global defaults file
+ * it falls back to, and isolates git's config (isolateGitConfigEnv). Returns
+ * `{ gsdHome, restore }`; call restore() in the matching afterEach.
+ */
+function isolateConfigReadEnv() {
+  const saved = ['GSD_PROJECT', 'GSD_WORKSTREAM', 'GSD_HOME'].map((name) => [name, process.env[name]]);
+  // Allocated before any isolation: a throw here must not leave git isolated.
+  const gsdHome = path.resolve(createTempDir('gsd-home-'));
+  const restoreGitConfig = isolateGitConfigEnv();
+  delete process.env.GSD_PROJECT;
+  delete process.env.GSD_WORKSTREAM;
+  process.env.GSD_HOME = gsdHome;
+  return {
+    gsdHome,
+    restore() {
+      _restoreEnvPairs(saved);
+      restoreGitConfig();
+      cleanup(gsdHome);
+    },
+  };
+}
+
 /**
  * #3156: env for a RAW installer spawn — one that bypasses runGsdTools and so
  * never receives TEST_ENV_BASE on its own.
@@ -1360,7 +1604,7 @@ function seedCustomPhaseDirectory(cwd, id, title, projectCode = null) {
   return directory;
 }
 
-module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, runGsdToolsAsync, runGsdToolsProcess, SPAWNED_MAX_BUFFER_BYTES, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, isolateGitConfigEnv, isolateConfigReadEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still

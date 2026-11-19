@@ -41,6 +41,7 @@
     "workflow.specless_probe_fallback",
     "workflow.plan_review_convergence",
     "workflow.agent_hint_routing",
+    "workflow.cross_runtime_execution",
     "code_quality.fallow.enabled",
     "code_quality.fallow.scope",
     "code_quality.fallow.profile",
@@ -207,6 +208,11 @@
       "topLevel": "model_policy",
       "source": "^model_policy\\.runtime_tiers\\.[a-zA-Z0-9_-]+\\.(opus|sonnet|haiku)$",
       "description": "model_policy.runtime_tiers.<runtime>.<opus|sonnet|haiku> (#3587)"
+    },
+    {
+      "topLevel": "execute",
+      "source": "^execute\\.models\\.[a-zA-Z0-9_-]+$",
+      "description": "execute.models.<runtime> — model id passed to a foreign executor of that runtime (#6302, ADR-3711 D7); never the host's model"
     },
     {
       "topLevel": "phase_commit_docs",

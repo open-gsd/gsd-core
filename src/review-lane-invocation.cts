@@ -148,6 +148,12 @@ export interface HttpPlan {
   /** Resolved base URL, normalized (no trailing slash). */
   host: string;
   hostConfigKey: string;
+  /**
+   * True when the user named `host` through `hostConfigKey`; false when `host` is the descriptor's
+   * built-in default. The availability probe holds a default host to a stricter standard (#5963):
+   * the user never chose it, so an answer from it must be recognizably the expected server.
+   */
+  hostConfigured: boolean;
   /** `host` + the declared path. */
   url: string;
   /** Models endpoint for discovery, when `modelDiscovery` asks for it. */
@@ -736,6 +742,7 @@ export function resolveLanePlan(input: ResolveInput): ResolveResult {
         slug,
         host,
         hostConfigKey,
+        hostConfigured: configured !== null,
         url: `${host}${apiPath}`,
         modelsUrl: discovers ? `${host}/v1/models` : null,
         model,
