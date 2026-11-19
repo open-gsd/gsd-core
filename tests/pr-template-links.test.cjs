@@ -7,6 +7,9 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const { slugify } = require('../scripts/gen-features.cjs');
+const {
+  stripInlineCode, scanFencedBlocks, tokenizeHeadings,
+} = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, unreadForms, isBadLink, missingNext, repoPathOf, unresolvedAnchors,
@@ -20,6 +23,18 @@ const hrefsOf = (f) => hrefsIn(readRepoFile(f));
 const refused = (text) => unreadForms(text).map((entry) => Number.parseInt(entry, 10));
 // An anchor list the guard gives is a subset of the ids GitHub renders for the same text.
 const anchors = (md) => [...headingSet(md)];
+
+describe('sectionizer parity (#5427)', () => {
+  test('headings and code spans come from the sectionizer exports, not a second reader', () => {
+    const md = '# A\n```\n## Fake\n```\n## B\n## B';
+    assert.deepEqual(tokenizeHeadings(md).map(({ text }) => text), ['A', 'B', 'B']);
+    assert.deepEqual(anchors(md), ['a', 'b', 'b-1']);
+    assert.deepEqual(scanFencedBlocks(md.split('\n')).map((b) => b.openLineIdx), [1]);
+    assert.equal(stripInlineCode('x `](` y').includes(']('), false);
+    assert.deepEqual(refused('x `](` y'), []);
+    assert.deepEqual(refused('x ]( y'), [1]);
+  });
+});
 
 describe('heading anchors (#5427)', () => {
   test('reads ATX headings, including indented', () => {
