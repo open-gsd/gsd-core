@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { unscopedGitCommits } = require('./helpers/shipped-command-scan.cjs');
+const { unscopedGitCommits, isDeclared } = require('./helpers/shipped-command-scan.cjs');
 
 // A `# gsd-scan-ignore: #5211` marker on a shipped command line declares that unscoped commit deliberate. Each file this PR marks keeps its markers, and the scan reports no commit on a marked line.
 const MARKED = [
@@ -22,8 +22,9 @@ const MARKED = [
 
 test('shipped #5211 declarations: each marked file keeps its markers and no marked line is flagged', () => {
   for (const f of MARKED) {
-    const lines = splitLines(fs.readFileSync(path.join(__dirname, '..', f), 'utf8')).filter((l) => l.includes('gsd-scan-ignore: #5211'));
-    assert.ok(lines.length > 0, `${f} declares no #5211 marker`);
+    // The scanner's own predicate decides what a declaration is, so this test holds no second copy of the marker grammar.
+    const lines = splitLines(fs.readFileSync(path.join(__dirname, '..', f), 'utf8')).filter(isDeclared);
+    assert.ok(lines.length > 0, `${f} declares no marker`);
     for (const l of lines) assert.deepEqual(unscopedGitCommits(l), [], `${f}: marked line still flagged: ${l}`);
   }
 });

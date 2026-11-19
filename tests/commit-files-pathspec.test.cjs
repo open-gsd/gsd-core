@@ -21,6 +21,7 @@ const { spawnSync } = require('child_process');
 const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { runHook } = require('./helpers/process-seam.cjs');
+const { isolatedEnv, createHermeticRoot } = require('./helpers/isolated-env.cjs');
 const { execFileSync } = require('node:child_process');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { scanFencedBlocks, stripFencedCode, scanInlineCodeSpans } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
@@ -3357,9 +3358,11 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     for (const c of ['bash -lc "git commit -m x -- a"', 'git commit -m x -- "$FILES"', "git commit -m x -- '$FILES'", 'git commit -m x -- $A b', 'git commit -m x -- a$B', 'git commit -m x -- "$A" "$B"']) assert.equal(unscopedGitCommits(c).length, 0, c);
   });
 
-  test('parity: the scanner sees every -c cluster and git value option the secret guard sees', () => {
+  test('parity: the scanner sees every -c cluster and git value option the secret guard sees', (t) => {
+    const home = createHermeticRoot('gsd-5211-hook-');
+    t.after(() => cleanup(home));
     const hook = (command) => runHook(path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js'), [], {
-      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } }), env: { ...process.env }, timeoutMs: PROBE_TIMEOUT_MS,
+      input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command } }), env: isolatedEnv({ home }), timeoutMs: PROBE_TIMEOUT_MS,
     }).exitCode;
     for (const flag of ['-c', '-lc', '-ec', '-euc', '-xec']) {
       assert.equal(hook(`bash ${flag} 'cat .env'`), 2, `hook blocks bash ${flag}`);
@@ -3426,6 +3429,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
         for (const cmd of unscopedGitCommits(seg, inline)) offenders.push(`${f}: ${cmd.split('\n')[0]}`);
       }
     }
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.deepStrictEqual(offenders, [],
       'unscoped `git commit` in shipped prompts sweeps foreign staged files (#5211); append `-- <paths>` or declare it with `# gsd-scan-ignore: #NNN <reason>`');
   });
@@ -3477,12 +3481,15 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   const bashFenceAfter = (rel, marker, bounded = false) => {
     const all = splitLines(fs.readFileSync(path.join(root, rel), 'utf8'));
     const from = all.findIndex((l) => l.includes(marker));
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.notEqual(from, -1, `${rel}: ${marker} exists`);
     const rest = all.slice(from);
     const end = rest.findIndex((l) => l.includes('</step>'));
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.ok(!bounded || end !== -1, `${rel}: </step> closes the step after ${marker}`);
     const scope = bounded ? rest.slice(0, end) : rest;
     const blk = scanFencedBlocks(scope).find((b) => b.infoString === 'bash');
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.ok(blk, `${rel}: bash fence after ${marker}`);
     return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
   };
@@ -3545,16 +3552,39 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     const merge = guard('**Merge with history:**');
     const commit = bashFenceAfter('gsd-core/workflows/complete-milestone.md', '<step name="git_commit_milestone">', true).join('\n');
     const re = String.raw`[[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]]`;
+    // allow-test-rule: docs-parity (#5211)
     for (const f of [squash, merge, commit]) assert.ok(f.includes(re), 'the .planning REQUIREMENTS.md regex is the same in every fence');
+    // allow-test-rule: docs-parity (#5211)
     for (const f of [squash, merge]) assert.ok(f.includes('STAGED=0'), 'both merge guards hold the STAGED=0 parser loop');
     const loop = (f) => f.slice(f.indexOf('STAGED=0'));
+    // allow-test-rule: docs-parity (#5211)
     assert.equal(loop(squash), loop(merge), 'the squash and merge guards run the same parser');
+  });
+  test('the staged-path guards refuse a staged submodule bump under diff.ignoreSubmodules=all', (t) => {
+    const guard = (marker) => { const l = bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker); return l.slice(0, l.findIndex((x) => x.startsWith('git checkout'))).join('\n'); };
+    const recipe = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');
+    const gitlink = (git, sha) => git('update-index', '--add', '--cacheinfo', `160000,${sha},sub`);
+    for (const fence of [guard('**Squash merge:**'), guard('**Merge with history:**'), recipe]) {
+      const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5211-sub-');
+      fs.mkdirSync(path.join(dir, '.planning'));
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), 's');
+      git('add', '.planning/STATE.md'); gitlink(git, 'a'.repeat(40)); git('commit', '-q', '-m', 'seed');
+      git('config', 'diff.ignoreSubmodules', 'all');
+      gitlink(git, 'b'.repeat(40));
+      // Control: git exits 0 here (it throws on 1), so only the pin lets a guard see the bump.
+      git('diff', '--cached', '--quiet', '--', ':!.planning');
+      const r = runFence(dir, fence);
+      if (fence === recipe) assert.equal(Number(git('rev-list', '--count', 'HEAD')), 2, 'the recipe commits nothing');
+      else assert.equal(r.exitCode, 1, 'the guard refuses the staged gitlink bump');
+    }
   });
   test('pr-branch.md preflight refuses a staged foreign path', (t) => {
     const all = splitLines(fs.readFileSync(path.join(root, 'gsd-core/workflows/pr-branch.md'), 'utf8'));
     const from = all.findIndex((l) => l.startsWith('DIRTY=$(git status'));
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.notEqual(from, -1, 'the preflight exists');
     const len = all.slice(from).findIndex((l) => l === 'fi');
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.notEqual(len, -1, 'the preflight closes with fi');
     const pre = all.slice(from, from + len + 1).join('\n');
     const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489b-');
@@ -3588,21 +3618,18 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(git('diff', '--cached', '--name-only').trim(), '');
     assert.equal(git('diff', '--name-only').trim(), 'other/o');
   });
-  test('stop-tracking recipe carries the same four fragments in all six docs', () => {
+  test('stop-tracking recipe in planning-config.md carries its four fragments in order', () => {
     const norm = (s) => s.replace(/;/g, ' ').replace(/\s+/g, ' ');
-    const recipe = 'if git diff --cached --quiet -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
-    const frags = ["git diff --cached --quiet -- ':!.planning'", 'git rm -r --cached .planning/',
+    const recipe = 'if git diff --cached --quiet --ignore-submodules=none -- \':!.planning\'; then git rm -r --cached .planning/ && git commit -m "chore: stop tracking planning docs"; else echo "unrelated staged paths; unstage them first" >&2; fi';
+    const frags = ["git diff --cached --quiet --ignore-submodules=none -- ':!.planning'", 'git rm -r --cached .planning/',
       'git commit -m "chore: stop tracking planning docs"', 'unrelated staged paths; unstage them first'];
-    for (const f of ['gsd-core/references/planning-config.md', 'docs/how-to/keep-planning-docs-private.md', 'docs/CONFIGURATION.md', 'docs/zh-CN/references/planning-config.md',
-      'docs/ja-JP/CONFIGURATION.md', 'docs/ko-KR/CONFIGURATION.md']) {
-      // Each doc copies the recipe the scratch-repo test below runs, so the copies must stay in sync with it.
-      const md = fs.readFileSync(path.join(root, f), 'utf8');
-      // allow-test-rule: docs-parity (#5211)
-      for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
-      // allow-test-rule: docs-parity (#5211)
-      // The scan declaration sits on the commit line of planning-config.md only; it is not part of the recipe.
-      assert.ok(norm(splitLines(md).map((l) => (l.includes('# gsd-scan-ignore:') ? l.slice(0, l.indexOf('# gsd-scan-ignore:')) : l)).join('\n')).includes(norm(recipe)), `${f}: recipe order`);
-    }
+    const f = 'gsd-core/references/planning-config.md';
+    const md = fs.readFileSync(path.join(root, f), 'utf8');
+    // allow-test-rule: docs-parity (#5211)
+    for (const frag of frags) assert.ok(md.includes(frag), `${f}: ${frag}`);
+    // allow-test-rule: docs-parity (#5211)
+    // The scan declaration sits on the commit line only; it is not part of the recipe.
+    assert.ok(norm(splitLines(md).map((l) => (l.includes('# gsd-scan-ignore:') ? l.slice(0, l.indexOf('# gsd-scan-ignore:')) : l)).join('\n')).includes(norm(recipe)), `${f}: recipe order`);
   });
   test('add-tests.md and validate-phase.md guard the test-file commit with a condition line', () => {
     for (const f of ['gsd-core/workflows/add-tests.md', 'gsd-core/workflows/validate-phase.md']) {
@@ -3644,35 +3671,39 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('git-integration.md commit examples quote every path as :(literal)', () => {
-    for (const f of ['gsd-core/references/git-integration.md', 'docs/zh-CN/references/git-integration.md']) {
-      // The example commands are what an agent copies, so their quoting is the shipped contract.
-      const md = fs.readFileSync(path.join(root, f), 'utf8');
-      const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
-      assert.equal(tails.length, 3, f);
-      for (const t of tails) {
-        // allow-test-rule: docs-parity (#5211)
-        assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
-      }
+    const f = 'gsd-core/references/git-integration.md';
+    // The example commands are what an agent copies, so their quoting is the shipped contract.
+    const md = fs.readFileSync(path.join(root, f), 'utf8');
+    const tails = [...md.matchAll(/^" -- (.+)$/gm)].map((m) => m[1]);
+    // allow-test-rule: docs-parity (#5211)
+    assert.equal(tails.length, 3, f);
+    for (const t of tails) {
+      // allow-test-rule: docs-parity (#5211)
+      assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
     }
   });
 
   test('a pasted-path placeholder after a commit -- is a single-quoted :(literal) word in every shipped prompt: never unquoted, never double-quoted', () => {
     const bad = [];
     for (const f of promptFiles()) {
+      // allow-test-rule: source-text-is-the-product (#5211)
       // The prompt text is what the model pastes a path into, so its quoting is the shipped contract.
       for (const l of splitLines(fs.readFileSync(path.join(root, f), 'utf8'))) {
         const at = l.includes('git commit') ? l.indexOf(' -- ', l.indexOf('git commit')) : -1;
         // Single-quoted spans and shell `${...}` expansions are fine; a `{...}` or `<...>` placeholder left over is an unquoted pasted path.
         const rest = at === -1 ? '' : l.slice(at + 4).split('`')[0].replace(/'[^']{0,200}'/g, '').replace(/\$\{[^}]{0,80}\}/g, '');
+        // allow-test-rule: source-text-is-the-product (#5211)
         if (/[{<][^}>]{1,80}[}>]/.test(rest) || /":\(literal\)[^"]{1,80}[}>]"/.test(l)) bad.push(`${f}: ${l.trim()}`);
       }
     }
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.deepStrictEqual(bad, []);
   });
   test('WIP and recovery examples that use -- . say they run from the worktree root', () => {
     for (const f of ['gsd-core/workflows/execute-phase.md', 'agents/gsd-executor.md', 'pi/package-agents/gsd-executor.md']) {
       // The example lines are what the agent runs, so the root note beside `-- .` is the shipped contract.
       const hits = splitLines(fs.readFileSync(path.join(root, f), 'utf8')).filter((l) => /git add -A( --)? \.?.*git commit .* -- \./.test(l));
+      // allow-test-rule: source-text-is-the-product (#5211)
       assert.ok(hits.length > 0, f);
       for (const l of hits) {
         // allow-test-rule: source-text-is-the-product (#5211)

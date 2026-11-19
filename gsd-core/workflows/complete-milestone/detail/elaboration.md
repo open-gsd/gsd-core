@@ -203,8 +203,8 @@ CURRENT_BRANCH=$(git branch --show-current)
 REPO_TOP=$(git rev-parse --show-toplevel) || exit 1
 STAGED_LIST=$(mktemp) || exit 1
 trap 'rm -f "$STAGED_LIST"' EXIT
-# -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone.
-git -C "$REPO_TOP" diff --cached --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
+# -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone. --ignore-submodules=none: a user or .gitmodules setting of `all` would hide a staged submodule bump.
+git -C "$REPO_TOP" diff --cached --ignore-submodules=none --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
 # Allowed: nothing staged, or exactly one staged .planning REQUIREMENTS.md deletion.
 STAGED=0; OWN=0
 while IFS= read -r -d '' st && IFS= read -r -d '' p; do
@@ -248,8 +248,8 @@ CURRENT_BRANCH=$(git branch --show-current)
 REPO_TOP=$(git rev-parse --show-toplevel) || exit 1
 STAGED_LIST=$(mktemp) || exit 1
 trap 'rm -f "$STAGED_LIST"' EXIT
-# -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone.
-git -C "$REPO_TOP" diff --cached --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
+# -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone. --ignore-submodules=none: a user or .gitmodules setting of `all` would hide a staged submodule bump.
+git -C "$REPO_TOP" diff --cached --ignore-submodules=none --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
 # Allowed: nothing staged, or exactly one staged .planning REQUIREMENTS.md deletion.
 STAGED=0; OWN=0
 while IFS= read -r -d '' st && IFS= read -r -d '' p; do

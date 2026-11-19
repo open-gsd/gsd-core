@@ -208,8 +208,10 @@ for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is
   const body = fs.readFileSync(file, 'utf8');
   // allow-test-rule: source-text-is-the-product (#5211)
   // The prompt line is the command the session manager runs, so the line itself is the contract.
-  const line = splitLines(body).find((l) => l.includes('git diff HEAD --quiet -- ')) ?? '';
-  const guard = line.indexOf('git diff HEAD --quiet -- ');
+  // The pin keeps diff.ignoreSubmodules=all and a .gitmodules `ignore = all` from hiding a gitlink bump, as cmdCommit's probe does (src/commands.cts).
+  const GUARD = 'git diff HEAD --quiet --ignore-submodules=dirty -- ';
+  const line = splitLines(body).find((l) => l.includes('git diff HEAD --quiet')) ?? '';
+  const guard = line.indexOf(GUARD);
   const commit = line.indexOf(' || git commit -m ', guard);
   // allow-test-rule: source-text-is-the-product (#5211)
   // The prompt line is the command the session manager runs, so its guard-then-commit shape is the contract.
@@ -218,7 +220,7 @@ for (const file of [MANAGER, COMPACT]) test(`#2568: the in-session fix commit is
       'already committed it, and an unguarded git commit exits non-zero on an empty diff',
   );
   // #5211: guard and commit must name the SAME paths, or the guard tests different files than the commit records.
-  const guardPaths = line.slice(guard + 'git diff HEAD --quiet -- '.length, line.indexOf(' || ', guard));
+  const guardPaths = line.slice(guard + GUARD.length, line.indexOf(' || ', guard));
   const commitPaths = line.slice(line.indexOf(' -- ', commit) + 4);
   // allow-test-rule: source-text-is-the-product (#5211)
   // Guard and commit paths come from the same prompt line the manager runs, so their equality is the contract.

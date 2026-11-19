@@ -204,6 +204,9 @@ describe('#5638: the generated gsd-debug skill', () => {
     // allow-test-rule: source-text-is-the-product (#5211)
     // The agent prompt carries the same command, so the same quoting must hold.
     assert.ok(read('agents', 'gsd-debug-session-manager.md').includes(`-- ':(literal)<file fix touched>' ...`));
+    // allow-test-rule: source-text-is-the-product (#5211)
+    // The guard before the commit must pin submodule handling, or diff.ignoreSubmodules=all hides a gitlink bump.
+    assert.ok(skill.includes('git diff HEAD --quiet --ignore-submodules=dirty -- '));
     assert.equal(skill.includes('git commit -m'), false);
     assert.ok(skill.includes('{debug_dir}/resolved/<slug>.md'));
     assert.ok(skill.includes('{debug_dir}/<slug>.md'));
