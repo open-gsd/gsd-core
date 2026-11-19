@@ -531,7 +531,7 @@ if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
 fi
 ```
 
-`requirements.ready-ids` is read-only and prints JSON by default (`--raw` prints a prose summary `jq` cannot read, so the ready list would always be empty, #4956): it scans sibling `*-PLAN.md` files in this plan's phase directory and blocks an ID only when a sibling ALSO declares it and that sibling has no `*-SUMMARY.md` yet. An ID no sibling declares is always ready (single-plan requirements mark immediately, no added latency). A blocked ID is re-evaluated the next time any plan in this phase finishes its own `update_requirements` step, and becomes ready once the LAST declaring plan's SUMMARY exists.
+`requirements.ready-ids` is read-only and prints JSON by default (`--raw` prints a prose summary `jq` cannot read, so the ready list would always be empty, #4956): it scans sibling `*-PLAN.md` files in this plan's phase directory and blocks an ID only when a sibling ALSO declares it and that sibling has no `*-SUMMARY.md` yet. An ID no sibling declares is always ready (single-plan requirements mark immediately, no added latency). A blocked ID is re-evaluated the next time any plan in this phase finishes its own `update_requirements` step, and becomes ready once the LAST declaring plan's SUMMARY exists — in the same tree. A worktree executor sees only its own SUMMARY, so in worktree mode `execute-phase`'s post-wave pass (`execute-phase/steps/post-wave-requirements.md`, #6102) settles shared IDs on the merged tree.
 </step>
 
 <step name="git_commit_metadata">
