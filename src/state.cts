@@ -486,6 +486,12 @@ const _diskScanCache = new Map<string, {
   phaseDirScope: Scope;
 }>();
 
+// #6332: the cache is per invocation. The binary gets that for free from its
+// one-call process; an in-process caller gets it from this reset.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('state.diskScanCache', () => { _diskScanCache.clear(); });
+
 // Track all lock files held by this process so they can be removed on exit.
 // process.on('exit') fires even on process.exit(1), unlike try/finally which is
 // skipped when error() calls process.exit(1) inside a locked region (#1916).

@@ -322,8 +322,14 @@ CREATE_JSON=$(gsd_run query worktree.create \
 #    data — command, args, cwd flag and prompt flag all come from the
 #    capability descriptor, so no host is named here.
 EXEC_JSON=$(gsd_run query dispatch-isolation --json \
+  --phase "${PHASE_NUMBER:-}" --plan "{plan_id}" \
   --cwd-target "$WT_PATH" \
   --prompt "$EXECUTOR_PROMPT")
+# A non-null executorRuntime with a null fallback means the plan declared executor_runtime and the
+# route resolved the TARGET runtime's exec: follow execute-phase/steps/cross-runtime-executor-dispatch.md
+# for the launch record (--executor-runtime) and reconciliation. The prompt above is reused unchanged.
+# That plan may reach this block on a phase whose ISOLATION is harness-worktree: the per-plan answer
+# from per-plan-worktree-gate.md Part 2 overrides the phase-level value for that plan only.
 
 # 3. MANDATORY fail-closed check. `dispatch-isolation` degrades to
 #    isolation:"none" / exec:null rather than exiting non-zero, so the
