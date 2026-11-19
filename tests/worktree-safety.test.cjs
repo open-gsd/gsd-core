@@ -6407,12 +6407,32 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     );
   });
 
+  // Either word order on one line: the command (`git reset`, `git -C <dir> reset`) or prose ("reset the
+  // branch with git"). The `\s` before "reset" can itself be an LF, so a line ending in a git command
+  // followed by a line that starts with "reset" is caught too. That is all it crosses: an indented
+  // continuation ("  reset --hard" on the next line), a CRLF break, or "reset" later on the next line is
+  // not caught.
+  const GIT_RESET_ANY_FORM = /git\b.*\sreset|\breset\b.*\bgit\b/i;
+  const GIT_RESET_ANY_FORM_CASES = [
+    ['git reset --hard {EXPECTED_BASE}', true],
+    ['git -C "$WT" reset --soft HEAD', true],
+    ['reset the branch with git', true],
+    ['git -C "$WT"\nreset --hard', true],
+    ['git fetch origin\nthen reset the counter', false],
+    ['git status --porcelain', false],
+  ];
+  for (const [text, matches] of GIT_RESET_ANY_FORM_CASES) {
+    test(`GIT_RESET_ANY_FORM ${matches ? 'matches' : 'does not match'} ${JSON.stringify(text)} (#5310)`, () => {
+      if (matches) assert.match(text, GIT_RESET_ANY_FORM);
+      else assert.doesNotMatch(text, GIT_RESET_ANY_FORM);
+    });
+  }
+
   test('the branch check the old exemption named stays verify-only, with no reset (#48, #5310)', () => {
     // The step the old exemption pointed at must still give it nothing to apply to.
     const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
     assert.ok(fragmentSource.includes('VERIFY-ONLY'), 'canonical fragment must still declare itself VERIFY-ONLY (#48)');
-    // Either word order: the command (`git reset`, `git -C <dir> reset`) or prose ("reset the branch with git").
-    assert.doesNotMatch(fragmentSource, /git\b.*\sreset|\breset\b.*\bgit\b/i, 'canonical fragment must contain no `git reset` in any form (#48)');
+    assert.doesNotMatch(fragmentSource, GIT_RESET_ANY_FORM, 'canonical fragment must contain no `git reset` in any form (#48)');
   });
 
   test('git-integration.md, required reading for the executor, offers no hard reset as recovery (#48, #5310)', () => {
