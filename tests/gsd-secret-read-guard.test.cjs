@@ -1009,20 +1009,21 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
   test('the debugger check reads `((` the same however much read-ahead the secret-read scan used', () => {
     // One hook run makes two grammar scans: for a secret read, then for a
     // gsd-debugger spawn. Each reads `((` by reading ahead, within a cap on
-    // the total. A shared cap would let the
-    // first `((` here, read ahead over 600,000 characters by the secret-read
-    // scan, leave the spawn scan none for the second: it would read that
-    // `((` as two subshells, open a pattern list at `case x in y`, and take
-    // the string after the span for commands. The same span alone is allowed.
-    // #5285's scan budget denies the long command whole (`command-too-complex`, as on
-    // `next`), so the two grammar scans are driven in process on a budget large enough
-    // for both to run.
+    // the total that scanByGrammar refills per scan. A cap shared by the two
+    // would let the first `((` here, read ahead over 150,000 characters in each
+    // of the secret-read scan's passes, leave the spawn scan none for the second:
+    // it would read that `((` as two subshells, open a pattern list at
+    // `case x in y`, and take the string after the span for commands. The same
+    // span alone is allowed. Within one scan the passes share the cap: the spawn
+    // scan makes one per shell reading since #5441, so at twice this length its
+    // later passes read the second `((` as two subshells and it denies the
+    // command, but the hook's own budget denies that one as `command-too-complex`.
     const span = 'echo "$( (( case x in y )) )"; echo "; claude --agent gsd-debugger -p y; "';
-    const longArith = `echo "$( (( ${'1+'.repeat(300000)}1 )) )"; `;
+    const longArith = `echo "$( (( ${'1+'.repeat(75000)}1 )) )"; `;
     assertAllowed(runHook(bash(span)), 'the span alone');
-    assertBlocked(runHook(bash(longArith + span)), 'the hook, on its own budget', { code: 'command-too-complex', tool: 'Bash' });
-    assert.equal(onBigBudget(span), null, 'the span alone, in process');
-    assert.equal(onBigBudget(longArith + span), null, 'the span after a long arithmetic read-ahead, in process');
+    assertAllowed(runHook(bash(longArith + span)), 'the span after a long arithmetic read-ahead');
+    assert.equal(checkBashCommand(span), null, 'the span alone, in process');
+    assert.equal(checkBashCommand(longArith + span), null, 'the span after a long arithmetic read-ahead, in process');
   });
 
   test('a carriage return inside a pattern word does not end the case: blocks the later arm', () => {
