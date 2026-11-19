@@ -2573,9 +2573,48 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // plan, which the guard applies to every plan of the phase. Where the
     // harness forks from origin/HEAD, a flagged spawn on that diverged base is
     // still stopped by the spawn-time branch check (`exit 42`).
-    const heldDegrade = !forcedApplied
+    let heldDegrade = !forcedApplied
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
       : null;
+    // WHAT A HELD QUERY REFRESHES (#4904 review 2026-11-17, option (c)). It
+    // writes no decision record: isolation, harness_flag, decided_by,
+    // decided_at and written_at of every decision record, legacy slot
+    // included, stay as the caller wrote them, so neither the hold nor the
+    // guards' ten-minute window moves. That also leaves the executor fields
+    // those records carry as of the caller's write, which the guards'
+    // classification reads (isExecutorDispatch): a routed executor changed in
+    // the hold, another plan of a held phase, the all-phase list of an
+    // unscoped query, a plan or hint added in the hold, or a record written
+    // without --executor-type. So the held query writes the executor identity
+    // it derives, and only that, to its own scope's identity record, which the
+    // classification reads beside the decision records (the union of all).
+    // A held query whose identity record cannot be written (a phase or plan
+    // that is not a safe key, a directory or an unwritable directory in the
+    // way) does not hold: it records the decision as an unheld query on this
+    // branch does, rather than keep a hold the guards could not classify by. A
+    // decision write removes its scope's identity record: the decision record
+    // now carries the same fields. The hold is a read-then-write with no lock:
+    // a caller's forced `none` landing between a plain query's read and its
+    // write can still be overwritten by that write (ADR-4630). Decided before
+    // the #4222 re-derivation below, so a query that stops holding re-derives.
+    let truncatedRecord = false;
+    const warnDropped = (dropped) => {
+      truncatedRecord = true;
+      process.stderr.write(`warning: dispatch-isolation phase ${phaseArg}: executor_types capped at 64 names or did not fit the record; names left out: ${dropped.join(', ')} (#6213)\n`);
+    };
+    if (heldDegrade !== null) {
+      const identity = writeExecutorIdentityRecord(cwd, {
+        phase: phaseArg, plan: planArg,
+        executorType: planArg ? deriveRecordedExecutor(cwd, phaseArg, planArg).resolved : null,
+        executorTypes: planArg ? [] : deriveRecordedExecutorTypes(cwd, phaseArg, planArg),
+      });
+      if (identity.recorded) {
+        if (identity.dropped.length > 0) warnDropped(identity.dropped);
+      } else {
+        heldDegrade = null;
+        process.stderr.write('warning: dispatch-isolation: could not record executor identity for a held decision, so this query does not hold it (#4904)\n');
+      }
+    }
     let recordedIsolation = isolation;
     let recordedHarnessFlag = harnessFlag;
     // `plan` is a bareEmptyFlags member of the verb's spec (src/cli-surface.cts),
@@ -2601,7 +2640,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //
     //   forced  → the shell's decision; always recorded (unchanged).
     //   plain, a fresh well-formed `none` stands, and every scope identifier
-    //           THIS query names matches the record's → hold: no write.
+    //           THIS query names matches the record's → hold: no decision
+    //           write; only its scope's executor-identity record (below).
     //   plain, otherwise → recorded as before.
     //
     // Scope: an identifier the query omits is unconstrained, one it names
@@ -2639,7 +2679,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // `AGED_NONE_MAX_MS` (#5479).
     // #4630 child 1 — ORDER CONTRACT for the two mechanisms above, which
     // arrived as separate PRs (#4232 for the re-derivation, #4620 for the
-    // hold). The hold is decided FIRST: a held query writes nothing, so the
+    // hold). The hold is decided FIRST: a held query writes no decision, so the
     // #4222 re-derivation is skipped rather than spending its bounded git
     // spawns on a value nobody reads. A plain query that is not held then
     // records the re-derived value. The hold is consulted on EVERY plain
@@ -2670,21 +2710,17 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const decidedAt = decidedBy === 'caller' && recordedIsolation === 'none'
       ? dispatchIsolationOwner().parseRenewHeldMs(parsed['renew-held'])
       : null;
-    let truncatedRecord = false;
     if (heldDegrade === null) {
       try {
         const written = writeDispatchIsolationSentinel(cwd, {
           isolation: recordedIsolation, harnessFlag: recordedHarnessFlag, phase: phaseArg, plan: planArg, decidedBy, decidedAt,
           // #6213: a plan-scoped record names its own executor (`executor_type`); a phase-level record
           // (no plan) names every routable hinted executor of its phase (`executor_types`). A held query
-          // writes nothing: the record it holds was written through this same call.
+          // does not reach this write; it refreshes identity through writeExecutorIdentityRecord above.
           executorType: deriveRecordedExecutor(cwd, phaseArg, planArg).resolved,
           executorTypes: planArg ? null : deriveRecordedExecutorTypes(cwd, phaseArg, planArg),
         });
-        truncatedRecord = !!written.droppedExecutorTypes;
-        if (written.droppedExecutorTypes) {
-          process.stderr.write(`warning: dispatch-isolation phase ${phaseArg}: executor_types capped at 64 names or did not fit the record; names left out: ${written.droppedExecutorTypes.join(', ')} (#6213)\n`);
-        }
+        if (written.droppedExecutorTypes) warnDropped(written.droppedExecutorTypes);
       } catch {
         // writeDispatchIsolationSentinel already swallows its own errors into
         // a { recorded: false } result; this catch is defense in depth only.
@@ -3214,12 +3250,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const keyedFile = payload.plan
         ? keyedSentinelPath(cwd, payload.phase, payload.plan)
         : phaseSentinelPath(cwd, payload.phase);
-      if (!keyedFile) return;
+      if (!keyedFile) return 'none';
       const keyedDir = nodePath.join(cwd, KEYED_SENTINEL_DIR);
       nodeFs.mkdirSync(keyedDir, { recursive: true });
       if (nodeFs.lstatSync(keyedDir).isSymbolicLink() ||
           nodePath.relative(nodeFs.realpathSync(sentinelDir), nodeFs.realpathSync(keyedDir)) !== 'dispatch-isolation') {
-        return;
+        return 'failed';
       }
       const tmpPath = `${keyedFile}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
       try {
@@ -3240,7 +3276,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
         } catch (_) { /* best-effort prune */ }
       }
-    } catch (_) { /* keyed record is best-effort; the legacy record already landed */ }
+      return 'written';
+    } catch (_) {
+      /* keyed record is best-effort; the legacy record already landed */
+      return 'failed';
+    }
   }
 
   /**
@@ -3253,6 +3293,116 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
+  // The `.gsd/.gitignore` rules both dispatch-isolation writers seed (#5757 tool-owned directory), so the
+  // executor-identity directory (#4904) is ignored whichever writer runs first.
+  const DISPATCH_SENTINEL_IGNORE = Object.freeze({
+    marker: '# gsd-core dispatch sentinel',
+    rules: Object.freeze([
+      '/dispatch-isolation-sentinel.json',
+      '/dispatch-isolation-sentinel.json.tmp-*',
+      '/dispatch-isolation/',
+      '/dispatch-isolation-identity/',
+      '/.gitignore',
+    ]),
+  });
+
+  /**
+   * #4904 (option (c), ADR-4630): write the executor identity a HELD plain query derived, for its own scope,
+   * to `.gsd/dispatch-isolation-identity/<scope>.json` (`identityRecordName`). Only a held query calls this:
+   * it writes no decision record, so without it the names the guards classify by would be as of the caller's
+   * write. Never touches a decision record. Each scope (plan, phase, neither) has its own file, replaced whole
+   * by an exclusive temp file and a rename, so a reader sees one complete snapshot; two queries at the same
+   * scope race on the rename, and the file holds the snapshot renamed last. Records older than
+   * AGED_NONE_MAX_MS are pruned, as in the keyed directory. Returns `{ recorded, dropped }`; never throws.
+   */
+  function writeExecutorIdentityRecord(cwd, { phase, plan, executorType, executorTypes }, { clock = require('./lib/clock.cjs').realClock } = {}) {
+    const nodePath = require('path');
+    const nodeFs = require('fs');
+    let tmpPath = null;
+    try {
+      const sentinelLib = require('../../hooks/lib/isolation-sentinel.js');
+      const executorTypeLib = require('./lib/executor-type.cjs');
+      const name = sentinelLib.identityRecordName(phase, plan);
+      if (!name) return { recorded: false, dropped: [] };
+      const { record, dropped } = executorTypeLib.buildExecutorIdentityRecord({ phase, plan }, executorType, executorTypes, clock.now());
+      const toolDir = require('./lib/gsd-tool-dir.cjs');
+      toolDir.ensureToolOwnedGsdDir(cwd, DISPATCH_SENTINEL_IGNORE);
+      const gsdDir = nodePath.join(cwd, '.gsd');
+      const identityDir = nodePath.join(cwd, sentinelLib.IDENTITY_RECORD_DIR);
+      nodeFs.mkdirSync(identityDir, { recursive: true });
+      // The tool-owned .gsd owner vetted `.gsd`; the record directory must be a real directory directly inside it.
+      if (nodeFs.lstatSync(identityDir).isSymbolicLink() ||
+          nodePath.relative(nodeFs.realpathSync(gsdDir), nodeFs.realpathSync(identityDir)) !== executorTypeLib.EXECUTOR_IDENTITY_DIR) {
+        return { recorded: false, dropped };
+      }
+      const file = nodePath.join(identityDir, name);
+      const candidateTmp = `${file}.tmp-${process.pid}-${require('crypto').randomBytes(6).toString('hex')}`;
+      // Tracked from the exclusive create, so a failed write never leaves a partial temp file behind.
+      const tmpFd = nodeFs.openSync(candidateTmp, 'wx');
+      tmpPath = candidateTmp;
+      try {
+        nodeFs.writeFileSync(tmpFd, JSON.stringify(record));
+      } finally {
+        nodeFs.closeSync(tmpFd);
+      }
+      require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, file);
+      tmpPath = null;
+      // The prune reads at most the reader's entry bound per write, so a crowded directory costs a write
+      // no more than it costs a guard read; each later write prunes further.
+      const cutoff = clock.now() - sentinelLib.AGED_NONE_MAX_MS;
+      const handle = nodeFs.opendirSync(identityDir);
+      try {
+        let seen = 0;
+        for (let ent = handle.readSync(); ent !== null && seen < sentinelLib.MAX_SCANNED_DIR_ENTRIES; ent = handle.readSync()) {
+          seen += 1;
+          const entry = ent.name;
+          if (entry === name || !(sentinelLib.hasJsonSuffix(entry) || entry.includes('.json.tmp-'))) continue;
+          try {
+            const old = nodePath.join(identityDir, entry);
+            if (nodeFs.lstatSync(old).mtimeMs < cutoff) nodeFs.unlinkSync(old);
+          } catch (_) { /* best-effort prune */ }
+        }
+      } finally {
+        handle.closeSync();
+      }
+      return { recorded: true, dropped };
+    } catch (_) {
+      return { recorded: false, dropped: [] };
+    } finally {
+      if (tmpPath) {
+        try { nodeFs.unlinkSync(tmpPath); } catch (_) { /* best-effort cleanup */ }
+      }
+    }
+  }
+
+  /**
+   * #4904: remove the executor-identity record of one query scope, after a decision write recorded that
+   * scope's decision (an unheld or forced `dispatch-isolation` query and `record-dispatch-isolation` alike):
+   * the guards then read that decision for the scope, as on `next`. A regular file or a link is removed;
+   * anything else, or any failure, is left for the reader's fail-closed rules and the 24-hour prune.
+   * Never throws.
+   */
+  function removeExecutorIdentityRecord(cwd, phase, plan) {
+    try {
+      const nodePath = require('path');
+      const nodeFs = require('fs');
+      const sentinelLib = require('../../hooks/lib/isolation-sentinel.js');
+      const name = sentinelLib.identityRecordName(phase, plan);
+      if (!name) return;
+      // Only inside the project: `.gsd` and the record directory must both be real directories, so a
+      // linked directory can never steer the unlink to a file elsewhere.
+      const gsdDir = nodePath.join(cwd, '.gsd');
+      const identityDir = nodePath.join(cwd, sentinelLib.IDENTITY_RECORD_DIR);
+      for (const dir of [gsdDir, identityDir]) {
+        const st = nodeFs.lstatSync(dir);
+        if (!st.isDirectory() || st.isSymbolicLink()) return;
+      }
+      const file = nodePath.join(identityDir, name);
+      const st = nodeFs.lstatSync(file);
+      if (st.isFile() || st.isSymbolicLink()) nodeFs.unlinkSync(file);
+    } catch (_) { /* absent, or not ours to remove */ }
+  }
+
   function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, decidedBy = 'caller', decidedAt = null, executorType = null, executorTypes = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
@@ -3324,15 +3474,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // ignore-file IO failure must not prevent recording isolation.
       const toolDir = require('./lib/gsd-tool-dir.cjs');
       try {
-        toolDir.ensureToolOwnedGsdDir(cwd, {
-          marker: '# gsd-core dispatch sentinel',
-          rules: [
-            '/dispatch-isolation-sentinel.json',
-            '/dispatch-isolation-sentinel.json.tmp-*',
-            '/dispatch-isolation/',
-            '/.gitignore',
-          ],
-        });
+        toolDir.ensureToolOwnedGsdDir(cwd, DISPATCH_SENTINEL_IGNORE);
       } catch (ownerError) {
         // The recorded `error` text is observable JSON (hyrums-law): keep the
         // sentinel's historical wording, translating by the owner's stable code.
@@ -3361,7 +3503,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
       require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
       tmpPath = null;
-      writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
+      const keyed = writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
+      // #4904: this scope's decision is now what the guards read for it, so its identity record is
+      // superseded, as on `next` where the decision write replaces the record that carried the names.
+      // Only once the scope's own keyed record landed (or it has none): a failed keyed write leaves the
+      // identity record in place rather than leave the scope with neither.
+      if (keyed !== 'failed') removeExecutorIdentityRecord(cwd, payload.phase, payload.plan);
       return {
         recorded: true,
         path: '.gsd/dispatch-isolation-sentinel.json',

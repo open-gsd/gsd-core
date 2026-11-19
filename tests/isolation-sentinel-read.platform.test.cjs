@@ -166,3 +166,137 @@ describe('#5758 hooks: a hostile record leaves both hooks at the no-sentinel dec
     });
   }
 });
+
+// #4904 (option (c)): an executor-identity record that is a link, a hard link, a FIFO, or sits in a linked
+// directory cannot be read, and it may name the type, so the classification scan fails closed (`scanOverflow`)
+// rather than reading the record as absent. The signal-free hostile rows are in
+// tests/held-query-executor-identity.test.cjs.
+describe('#4904 hostile executor-identity records fail classification closed', { skip: SKIP }, () => {
+  const { readSentinel, IDENTITY_RECORD_DIR } = require('../hooks/lib/isolation-sentinel.js');
+  const NOW = 1_000_000;
+  const clock = { now: () => NOW };
+  const body = JSON.stringify({
+    schema: 1, phase: '02', plan: null, executor_type: null, executor_types: ['acme-rails-executor'],
+    executor_types_truncated: false, written_at: NOW,
+  });
+  let root;
+  let outside;
+  before(() => {
+    root = createTempDir('gsd-4904-plat-root-');
+    fs.mkdirSync(path.join(root, '.planning'));
+    outside = createTempDir('gsd-4904-plat-out-');
+  });
+  after(() => { cleanup(root); cleanup(outside); });
+  afterEach(() => {
+    cleanup(path.join(root, '.gsd'));
+    for (const entry of fs.readdirSync(outside)) cleanup(path.join(outside, entry));
+  });
+  const identityFile = () => path.join(root, IDENTITY_RECORD_DIR, 'phase+02.json');
+  const realOutside = () => h.writeFileAt(outside, 'real.json', body);
+  const read = () => readSentinel(root, { clock, subagentType: 'acme-ui-executor', dispatchIds: { phase: '03', plan: null } });
+
+  const rows = [
+    ['a symlink to a valid record elsewhere', () => link(realOutside(), identityFile())],
+    ['a hard link to a valid record elsewhere', () => {
+      fs.mkdirSync(path.dirname(identityFile()), { recursive: true });
+      fs.linkSync(realOutside(), identityFile());
+    }],
+    ['a FIFO', () => mkfifo(identityFile())],
+    ['a record directory that is a symlink to an outside directory', () => {
+      h.writeFileAt(outside, path.join('ids', 'phase+02.json'), body);
+      fs.mkdirSync(path.join(root, '.gsd'), { recursive: true });
+      link(path.join(outside, 'ids'), path.join(root, IDENTITY_RECORD_DIR));
+    }],
+  ];
+  for (const [label, plant] of rows) {
+    test(`${label}: scanOverflow`, () => {
+      plant();
+      assert.equal(read().scanOverflow, true);
+    });
+  }
+
+  test('control: the same record as a regular file is read, not overflow', () => {
+    h.writeFileAt(root, path.join(IDENTITY_RECORD_DIR, 'phase+02.json'), body);
+    const r = read();
+    assert.equal(r.scanOverflow, undefined);
+    assert.ok(r.candidates.some((c) => c.identity && c.executorTypes.includes('acme-rails-executor')));
+  });
+});
+
+// #4904: an identity directory the writer cannot write to makes a held query record its decision instead of
+// holding (a hold the guards could not classify by would allow what `next` blocks).
+describe('#4904 an unwritable identity directory: the query does not hold', { skip: SKIP || (process.getuid && process.getuid() === 0 ? 'root ignores the mode' : false) }, () => {
+  const { IDENTITY_RECORD_DIR } = require('../hooks/lib/isolation-sentinel.js');
+  const { runGsdTools, createTempGitProject, homeSandboxEnv, TOOLS_PATH } = require('./helpers.cjs');
+  const { runNode } = require('./helpers/process-seam.cjs');
+  let root;
+  before(() => { root = createTempGitProject('gsd-4904-plat-ro-'); });
+  after(() => {
+    try { fs.chmodSync(path.join(root, IDENTITY_RECORD_DIR), 0o755); } catch { /* absent */ }
+    cleanup(root);
+  });
+
+  test('mode 0555 on .gsd/dispatch-isolation-identity: held false, with the warning', () => {
+    const env = { ...homeSandboxEnv(root), GSD_TEST_MODE: '1', GSD_NOW_MS: '1000000' };
+    const forced = runGsdTools(['dispatch-isolation', '--raw', '--phase', '02', '--force-isolation', 'none'], root, env);
+    assert.ok(forced.success, forced.error);
+    fs.mkdirSync(path.join(root, IDENTITY_RECORD_DIR), { recursive: true });
+    fs.chmodSync(path.join(root, IDENTITY_RECORD_DIR), 0o555);
+    const r = runNode([TOOLS_PATH, 'dispatch-isolation', '--json', '--phase', '02'],
+      { cwd: root, env: { ...process.env, ...env, GSD_NOW_MS: '1060000' }, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).held, false);
+    assert.match(r.stderr, /could not record executor identity/);
+  });
+});
+
+// #4904: a decision write removes its scope's identity record, and never through a linked directory.
+describe('#4904 a decision write never removes a file through a linked identity directory', { skip: SKIP }, () => {
+  const { IDENTITY_RECORD_DIR } = require('../hooks/lib/isolation-sentinel.js');
+  const { runGsdTools, createTempGitProject, homeSandboxEnv } = require('./helpers.cjs');
+  let root;
+  let outside;
+  before(() => { root = createTempGitProject('gsd-4904-plat-rm-'); outside = createTempDir('gsd-4904-plat-rm-out-'); });
+  after(() => { cleanup(root); cleanup(outside); });
+
+  test('the outside file survives; the same file in a real directory is removed (control)', () => {
+    const env = { ...homeSandboxEnv(root), GSD_TEST_MODE: '1', GSD_NOW_MS: '1000000' };
+    const victim = h.writeFileAt(outside, 'phase+02.json', 'keep');
+    fs.mkdirSync(path.join(root, '.gsd'), { recursive: true });
+    link(outside, path.join(root, IDENTITY_RECORD_DIR));
+    let r = runGsdTools(['record-dispatch-isolation', '--isolation', 'none', '--phase', '02'], root, env);
+    assert.ok(r.success, r.error);
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'keep');
+    fs.unlinkSync(path.join(root, IDENTITY_RECORD_DIR));
+    const own = h.writeFileAt(root, path.join(IDENTITY_RECORD_DIR, 'phase+02.json'), '{}');
+    r = runGsdTools(['record-dispatch-isolation', '--isolation', 'none', '--phase', '02'], root, env);
+    assert.ok(r.success, r.error);
+    assert.equal(fs.existsSync(own), false);
+  });
+});
+
+// #4904: the identity writer refuses a linked record directory, so a held query never writes (or prunes)
+// outside the project; it records its decision instead of holding.
+describe('#4904 a held query never writes through a linked identity directory', { skip: SKIP }, () => {
+  const { IDENTITY_RECORD_DIR } = require('../hooks/lib/isolation-sentinel.js');
+  const { runGsdTools, createTempGitProject, homeSandboxEnv, TOOLS_PATH } = require('./helpers.cjs');
+  const { runNode } = require('./helpers/process-seam.cjs');
+  let root;
+  let outside;
+  before(() => { root = createTempGitProject('gsd-4904-plat-wl-'); outside = createTempDir('gsd-4904-plat-wl-out-'); });
+  after(() => { cleanup(root); cleanup(outside); });
+
+  test('held false, and the outside directory is unchanged', () => {
+    const env = { ...homeSandboxEnv(root), GSD_TEST_MODE: '1', GSD_NOW_MS: '1000000' };
+    const forced = runGsdTools(['dispatch-isolation', '--raw', '--phase', '02', '--force-isolation', 'none'], root, env);
+    assert.ok(forced.success, forced.error);
+    h.writeFileAt(outside, 'other.json', 'keep');
+    link(outside, path.join(root, IDENTITY_RECORD_DIR));
+    const r = runNode([TOOLS_PATH, 'dispatch-isolation', '--json', '--phase', '02'],
+      { cwd: root, env: { ...process.env, ...env, GSD_NOW_MS: '1060000' }, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).held, false);
+    assert.deepEqual(fs.readdirSync(outside), ['other.json']);
+    assert.equal(fs.readFileSync(path.join(outside, 'other.json'), 'utf8'), 'keep');
+  });
+});
