@@ -62,6 +62,8 @@ describe('ci-test-scope.cjs', () => {
   for (const file of ['tests/insert-phase-sibling-docs.test.cjs', 'gsd-core/workflows/insert-phase.md',
     'tests/helpers/doc-bash-span.cjs', 'tests/helpers/bash-probe.cjs']) {
     test(`zsh_changed is true for ${file}`, () => {
+      // A renamed or deleted entry would leave the trigger naming a dead path.
+      assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
       assert.strictEqual(scopeFor([file]).zsh_changed, true);
     });
   }
