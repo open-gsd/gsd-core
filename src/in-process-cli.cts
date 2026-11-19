@@ -280,6 +280,8 @@ function swapProperty(target: object, key: string, replacement: unknown): { orig
  * stand-in during its call and installed again afterwards. It calls back down
  * here, so a stale stand-in that is entered while it is already deferring
  * goes to the function it replaced: the same loop as above, ended the same way.
+ * It counts as deferring until the installed function has returned, and when
+ * that returned a promise, until the promise has settled.
  */
 function passThrough(
   target: object, key: string, standIn: object, original: unknown, callOpen: boolean,
@@ -290,11 +292,22 @@ function passThrough(
   if (live === standIn || deferring.has(standIn)) return replaced;
   return function deferToInstalled(this: unknown, ...a: unknown[]): unknown {
     deferring.add(standIn);
+    let result: unknown;
     try {
-      return live.apply(this, a);
-    } finally {
+      result = live.apply(this, a);
+    } catch (error) {
+      deferring.delete(standIn);
+      throw error;
+    }
+    // A wrapper that returned a promise may call back down after an await,
+    // so the stand-in stays marked until that promise has settled.
+    if (result !== null && typeof result === 'object' && typeof (result as { then?: unknown }).then === 'function') {
+      const done = (): void => { deferring.delete(standIn); };
+      (result as PromiseLike<unknown>).then(done, done);
+    } else {
       deferring.delete(standIn);
     }
+    return result;
   };
 }
 
