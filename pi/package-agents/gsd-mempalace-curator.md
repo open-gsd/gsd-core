@@ -13,7 +13,7 @@ If the prompt contains a `<required_reading>` block, you MUST use the `Read` too
 </role>
 
 <inputs>
-- `.planning/config.json` — read `mempalace.enabled`, `mempalace.memory_mode`, `mempalace.wing`, `mempalace.diary_journal`, `mempalace.cross_project_tunnels`, `mempalace.mirror_kg`, `project_code`.
+- `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`) — read `mempalace.enabled`, `mempalace.memory_mode`, `mempalace.wing`, `mempalace.diary_journal`, `mempalace.cross_project_tunnels`, `mempalace.mirror_kg`, `project_code`.
 - The completed phase artifacts: `UAT.md`, `SUMMARY.md`, and any `extract-learnings` output.
 </inputs>
 

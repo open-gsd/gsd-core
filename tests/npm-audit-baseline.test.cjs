@@ -236,6 +236,133 @@ describe('resolveBaselineRef', () => {
 
 // ─── extractBaselineTree ─────────────────────────────────────────────────────
 
+// ─── resolveBaselineRef: pull_request pin is a floor (#5897) ───────────────
+
+describe('resolveBaselineRef — stale pull_request pin advances to the merged base (#5897)', () => {
+  const envKeys = ['AUDIT_BASELINE_REF', 'GITHUB_BASE_REF', 'GITHUB_EVENT_NAME'];
+  let originalEnv;
+
+  beforeEach(() => {
+    originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+    for (const key of envKeys) delete process.env[key];
+  });
+
+  afterEach(() => {
+    for (const key of envKeys) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  });
+
+  // A lockfile whose first and last lines are independent hunks, so a base-side edit (top) and a PR-side
+  // edit (bottom) merge cleanly, like two real lockfile changes in different places.
+  const lockOf = (top, bottom = "bottom0") => `${top}\n1\n2\n3\n4\n5\n${bottom}\n`;
+
+  function commitLock(dir, lockContent, message) {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"fixture"}');
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), lockContent);
+    git(['add', '-A'], dir);
+    git(['commit', '-q', '-m', message], dir);
+    return git(['rev-parse', 'HEAD'], dir);
+  }
+
+  /**
+   * A = pull_request.base.sha. `next` then lands `baseLocks.length` more commits that each change
+   * the lockfile (the last one is origin/next). The PR branch forks at A, adds `prLock` (or nothing)
+   * and HEAD is the merge of the PR into next's tip -- the shape of GitHub's refs/pull/N/merge.
+   */
+  function makeMergeRefFixture(t, { baseLocks, prLock = null }) {
+    const dir = createTempDir('gsd-audit-baseline-merge-ref-');
+    t.after(() => cleanup(dir));
+    git(['init', '-q', '-b', 'next'], dir);
+    git(['config', 'user.email', 'test@example.com'], dir);
+    git(['config', 'user.name', 'Test'], dir);
+    const pin = commitLock(dir, lockOf('top0'), 'A');
+    const baseShas = baseLocks.map((lock, i) => commitLock(dir, lock, `base ${i + 1}`));
+    const tip = baseShas.length ? baseShas[baseShas.length - 1] : pin;
+    git(['update-ref', 'refs/remotes/origin/next', tip], dir);
+    git(['checkout', '-q', '-b', 'pr', pin], dir);
+    if (prLock) commitLock(dir, prLock, 'pr adds a package');
+    else {
+      fs.writeFileSync(path.join(dir, 'pr.txt'), 'pr work');
+      git(['add', '-A'], dir);
+      git(['commit', '-q', '-m', 'pr work'], dir);
+    }
+    if (baseShas.length) git(['merge', '-q', '--no-ff', '-m', 'merge ref', tip], dir);
+    return { dir, pin, baseShas, tip };
+  }
+
+  test('pin older than the merged base advances to merge-base(origin/<base>, HEAD)', (t) => {
+    const { dir, pin, tip } = makeMergeRefFixture(t, { baseLocks: [lockOf('vuln')] });
+    process.env.AUDIT_BASELINE_REF = pin;
+    process.env.GITHUB_BASE_REF = 'next';
+    const resolved = resolveBaselineRef(dir);
+    assert.notStrictEqual(resolved, pin);
+    assert.strictEqual(resolved, tip);
+  });
+
+  test('the resolved baseline carries the base-side lockfile change, so it is not read as PR-introduced', (t) => {
+    const { dir, pin } = makeMergeRefFixture(t, { baseLocks: [lockOf('vuln')] });
+    process.env.AUDIT_BASELINE_REF = pin;
+    process.env.GITHUB_BASE_REF = 'next';
+    const resolved = resolveBaselineRef(dir);
+    assert.match(git(['show', `${resolved}:package-lock.json`], dir), /vuln/);
+  });
+
+  test('a package the PR itself adds is absent from the resolved baseline (real additions still diff)', (t) => {
+    const { dir, pin, tip } = makeMergeRefFixture(t, {
+      baseLocks: [lockOf('vuln')],
+      prLock: lockOf('top0', 'pr-added'),
+    });
+    process.env.AUDIT_BASELINE_REF = pin;
+    process.env.GITHUB_BASE_REF = 'next';
+    const resolved = resolveBaselineRef(dir);
+    assert.strictEqual(resolved, tip); // advanced to the base side, not left on the pin and not HEAD
+    assert.doesNotMatch(git(['show', `${resolved}:package-lock.json`], dir), /pr-added/);
+  });
+
+  test('lag N advances to the newest base commit HEAD contains', (t) => {
+    const { dir, pin, tip } = makeMergeRefFixture(t, {
+      baseLocks: [lockOf('b'), lockOf('c'), lockOf('d')],
+    });
+    process.env.AUDIT_BASELINE_REF = pin;
+    process.env.GITHUB_BASE_REF = 'next';
+    assert.strictEqual(resolveBaselineRef(dir), tip);
+  });
+
+  test('lag 0 (pin already is the merge-base) returns the pin', (t) => {
+    const { dir, pin } = makeMergeRefFixture(t, { baseLocks: [] });
+    git(['update-ref', 'refs/remotes/origin/next', pin], dir);
+    process.env.AUDIT_BASELINE_REF = pin;
+    process.env.GITHUB_BASE_REF = 'next';
+    assert.strictEqual(resolveBaselineRef(dir), pin);
+  });
+
+  test('no GITHUB_BASE_REF (push / merge_group / release lanes) returns the pin verbatim', (t) => {
+    const { dir, pin } = makeMergeRefFixture(t, { baseLocks: [lockOf('vuln')] });
+    process.env.AUDIT_BASELINE_REF = pin;
+    assert.strictEqual(resolveBaselineRef(dir), pin);
+  });
+
+  test('an unresolvable origin/<base> falls back to the pin', (t) => {
+    const { dir, pin } = makeMergeRefFixture(t, { baseLocks: [lockOf('vuln')] });
+    git(['update-ref', '-d', 'refs/remotes/origin/next'], dir);
+    process.env.AUDIT_BASELINE_REF = pin;
+    process.env.GITHUB_BASE_REF = 'next';
+    assert.strictEqual(resolveBaselineRef(dir), pin);
+  });
+
+  test('a pin that is not an ancestor of the merge-base is kept, never replaced by an unrelated commit', (t) => {
+    const { dir } = makeMergeRefFixture(t, { baseLocks: [lockOf('vuln')] });
+    git(['checkout', '-q', '--orphan', 'unrelated'], dir);
+    const stranger = commitLock(dir, lockOf('z'), 'unrelated history');
+    git(['checkout', '-q', 'pr'], dir);
+    process.env.AUDIT_BASELINE_REF = stranger;
+    process.env.GITHUB_BASE_REF = 'next';
+    assert.strictEqual(resolveBaselineRef(dir), stranger);
+  });
+});
+
 describe('extractBaselineTree', () => {
   test('extracts package.json + package-lock.json at root from a real commit', (t) => {
     const pkgContent = JSON.stringify({ name: 'root-fixture' });
