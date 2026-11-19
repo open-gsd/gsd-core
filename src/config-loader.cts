@@ -110,40 +110,6 @@ function _getNestedConfigDefault(section: string, field: string): unknown {
   return undefined;
 }
 
-/**
- * The legacy flat spellings `loadConfig` still reads, each with the nested key it
- * falls back to. The loader's own `get()` looks the nested key up here, so this
- * table is the only list of these pairs; `config-save-defaults` reads it to drop
- * a saved setting's legacy spelling (#5681).
- */
-const LEGACY_FLAT_KEYS: Readonly<Record<string, { readonly section: string; readonly field: string }>> = Object.freeze({
-  _auto_chain_active: { section: 'workflow', field: '_auto_chain_active' },
-  auto_advance: { section: 'workflow', field: 'auto_advance' },
-  base_branch: { section: 'git', field: 'base_branch' },
-  branching_strategy: { section: 'git', field: 'branching_strategy' },
-  commit_docs: { section: 'planning', field: 'commit_docs' },
-  max_prompt_tokens: { section: 'review', field: 'max_prompt_tokens' },
-  milestone_branch_template: { section: 'git', field: 'milestone_branch_template' },
-  mvp_mode: { section: 'workflow', field: 'mvp_mode' },
-  nyquist_validation: { section: 'workflow', field: 'nyquist_validation' },
-  phase_branch_template: { section: 'git', field: 'phase_branch_template' },
-  plan_checker: { section: 'workflow', field: 'plan_check' },
-  post_planning_gaps: { section: 'workflow', field: 'post_planning_gaps' },
-  pr_strict: { section: 'planning', field: 'pr_strict' },
-  quick_branch_template: { section: 'git', field: 'quick_branch_template' },
-  research: { section: 'workflow', field: 'research' },
-  search_gitignored: { section: 'planning', field: 'search_gitignored' },
-  sub_repos: { section: 'planning', field: 'sub_repos' },
-  subagent_timeout: { section: 'workflow', field: 'subagent_timeout' },
-  text_mode: { section: 'workflow', field: 'text_mode' },
-  verifier: { section: 'workflow', field: 'verifier' },
-});
-
-/** The nested key a legacy flat key falls back to, or undefined when it has none. */
-function legacyNestedSpelling(key: string): { section: string; field: string } | undefined {
-  return Object.prototype.hasOwnProperty.call(LEGACY_FLAT_KEYS, key) ? LEGACY_FLAT_KEYS[key] : undefined;
-}
-
 /** Shared flat-then-nested config lookup; exported for parity tests. */
 function _getConfigValue(
   parsed: Record<string, unknown>,
@@ -170,7 +136,8 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
  * #5470: every key the project-config branch of the loader reads from two
  * spellings — the flat top-level key and its nested `<section>.<field>` alias.
  * (With no `.planning/`, the global-defaults branch below projects its own
- * keys from `~/.gsd/defaults.json` and does not use this table.) The flat key
+ * keys from `~/.gsd/defaults.json`, reading each one this table lists under
+ * either spelling, flat first, through `aliasNestedSpelling` (#5681).) The flat key
  * wins, except for `branching_strategy`, `base_branch` and `sub_repos`:
  * normalizeLegacyKeys hoists those legacy flat keys under their section first,
  * and an existing nested value wins there. `_baseConfig` reads them through
@@ -240,6 +207,16 @@ function readResolvedAlias(config: Record<string, unknown>, alias: ConfigKeyAlia
       : undefined;
   }
   return value;
+}
+
+/**
+ * The nested spelling `<section>.<field>` of a flat key in CONFIG_KEY_ALIASES,
+ * or undefined when the key has no second spelling. `parallelization` is left
+ * out: its nested field lives under the flat key itself (#5681).
+ */
+function aliasNestedSpelling(key: string): { section: string; field: string } | undefined {
+  const alias = CONFIG_KEY_ALIASES.find((entry) => entry.key === key);
+  return alias && alias.section !== alias.key ? { section: alias.section, field: alias.field } : undefined;
 }
 
 const CONFIG_DEFAULTS = {
@@ -526,13 +503,13 @@ function _warnShadowedGlobalDefaults(globalDefaults: Record<string, unknown>, gl
   const shadowed = GLOBAL_DEFAULTS_RESOLUTION_KEYS.filter(k =>
     k !== 'effort' && Object.prototype.hasOwnProperty.call(globalDefaults, k));
   // Branch D also reads these keys under their nested spelling (the
-  // LEGACY_FLAT_KEYS twins through globalGet, #5681, and the
+  // CONFIG_KEY_ALIASES twins through globalGet, #5681, and the
   // workflow.research_before_questions fallback, #3894), so a global file using
   // only the nested form is equally shadowed and reports under its dotted name.
   // A nested key under a section already reported (`planning`) is not repeated.
   for (const k of GLOBAL_DEFAULTS_RESOLUTION_KEYS) {
     if (shadowed.includes(k)) continue;
-    const nested = k === 'research_before_questions' ? { section: 'workflow', field: k } : legacyNestedSpelling(k);
+    const nested = k === 'research_before_questions' ? { section: 'workflow', field: k } : aliasNestedSpelling(k);
     if (!nested || shadowed.includes(nested.section)) continue;
     const sec = globalDefaults[nested.section];
     if (sec && typeof sec === 'object' && !Array.isArray(sec) && Object.prototype.hasOwnProperty.call(sec, nested.field)) {
@@ -1238,7 +1215,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // A key with a nested twin is read flat-then-nested, as in a project
       // config: `config-save-defaults` stores the nested spelling and drops the
       // flat one (#5681), so a flat-only read lost a saved `workflow.research`.
-      const globalGet = (key: string): unknown => _getConfigValue(globalDefaults, key, legacyNestedSpelling(key));
+      const globalGet = (key: string): unknown => _getConfigValue(globalDefaults, key, aliasNestedSpelling(key));
       const _globalBaseCfg: Record<string, unknown> = {
         ...defaults,
         model_profile: (globalDefaults['model_profile']) ?? defaults.model_profile,
@@ -1369,7 +1346,6 @@ export = {
   _getNestedConfigDefault,
   _getConfigValue,
   _getConfigNested,
-  LEGACY_FLAT_KEYS,
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   _warnedUnknownConfigKeys,

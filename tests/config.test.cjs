@@ -4214,7 +4214,7 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   });
 
   test('outside a project, each twin key the loader reads is honored under its nested spelling', (t) => {
-    const { LEGACY_FLAT_KEYS, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const { CONFIG_KEY_ALIASES, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
     const keys = ['commit_docs', 'research', 'plan_checker', 'verifier', 'nyquist_validation', 'text_mode', 'subagent_timeout'];
     const gsdHome = createTempDir('gsd-5681-home-');
     const outside = createTempDir('gsd-5681-outside-');
@@ -4223,7 +4223,7 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     const store = {};
     const want = {};
     for (const key of keys) {
-      const { section, field } = LEGACY_FLAT_KEYS[key];
+      const { section, field } = CONFIG_KEY_ALIASES.find((alias) => alias.key === key);
       const fallback = CONFIG_DEFAULTS[key];
       want[key] = typeof fallback === 'number' ? fallback + 1 : !fallback;
       store[section] = { ...store[section], [field]: want[key] };
@@ -4299,7 +4299,7 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
 
 describe('#5681: a save removes the other spelling of every spelling twin', () => {
   // Table-driven over SPELLING_TWINS, the one list of [legacy, canonical] pairs,
-  // so a new LEGACY_FLAT_KEYS entry is covered without a new row.
+  // so a new CONFIG_KEY_ALIASES entry is covered without a new row.
   const { SPELLING_TWINS } = configLib;
   const at = valueAt;
   const nested = (dotted, value) => {

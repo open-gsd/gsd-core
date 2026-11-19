@@ -18,7 +18,7 @@ import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, LEGACY_FLAT_KEYS, resolvePlannerStallDetectionEnabled } = configLoader;
+const { CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -798,12 +798,15 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
 
 /**
  * Settings with a legacy spelling, as [legacy, canonical]: each flat key the
- * loader reads ahead of its nested key (config-loader's LEGACY_FLAT_KEYS), and
- * `depth`, which the loader and new-project creation read only when
+ * loader reads ahead of its nested key (config-loader's CONFIG_KEY_ALIASES;
+ * not `parallelization`, whose nested field sits under the flat key itself),
+ * and `depth`, which the loader and new-project creation read only when
  * `granularity` is absent.
  */
 const SPELLING_TWINS: readonly (readonly [string, string])[] = [
-  ...Object.entries(LEGACY_FLAT_KEYS).map(([flat, { section, field }]) => [flat, `${section}.${field}`] as const),
+  ...CONFIG_KEY_ALIASES
+    .filter(({ key, section }) => section !== key)
+    .map(({ key, section, field }) => [key, `${section}.${field}`] as const),
   ['depth', 'granularity'],
 ];
 

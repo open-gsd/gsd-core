@@ -1467,7 +1467,7 @@ describe('#3532 shadowed global-defaults warning', () => {
   // #5681: Branch D reads every key with a nested twin under either spelling,
   // so each nested-only spelling is equally shadowed inside a project. The
   // last row is not new behavior: it keeps #3894's research_before_questions
-  // alias reported now that the alias list is derived from LEGACY_FLAT_KEYS.
+  // alias reported now that the alias list is derived from CONFIG_KEY_ALIASES.
   for (const [key, dotted] of [
     ['research', 'workflow.research'], ['plan_checker', 'workflow.plan_check'], ['verifier', 'workflow.verifier'],
     ['nyquist_validation', 'workflow.nyquist_validation'], ['text_mode', 'workflow.text_mode'],
