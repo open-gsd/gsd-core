@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, error, captureStdoutSyncWrites, resolveAtFileOutput } = io;
+const { output, error, captureStdoutMaybeSync, resolveAtFileOutput } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { collectSection, withSection, tokenizeHeadings, stripFencedCode, scanFencedBlocks } = markdownSectionizer;
@@ -764,7 +764,7 @@ function readBaselineAtHead(absPath: string): string | null {
  * committed baseline ONLY in the frontmatter `updated:` value is one such
  * no-op and is never written. On a material change, writes the file and
  * commits through the existing `cmdCommit` internals (honoring `commit_docs`),
- * reading `cmdCommit`'s own result back via the shared `captureStdoutSyncWrites`
+ * reading `cmdCommit`'s own result back via the shared `captureStdoutMaybeSync`
  * helper (#5105 review S9 — the ONE such helper, also used by gsd-tools.cjs)
  * instead of a hand-rolled `fs.writeSync` monkeypatch, so this command can
  * report the real `committed`/`reason` outcome rather than assuming success.
@@ -772,12 +772,12 @@ function readBaselineAtHead(absPath: string): string | null {
  * byte-exact restore to the committed baseline — but never commits: this is
  * still a no-op from git's perspective (see `completeUatSession`'s own doc).
  */
-async function cmdUatCompleteSession(
+function cmdUatCompleteSession(
   cwd: string,
   uatPathArg: string | undefined,
   options: { message?: string } = {},
   raw: boolean,
-): Promise<void> {
+): void {
   if (!uatPathArg) {
     error('UAT file required: use uat.complete-session <uatPath>');
     return;
@@ -822,11 +822,13 @@ async function cmdUatCompleteSession(
   // STRING (its own `output(result, raw, hash || 'committed')` rawValue arm),
   // not the structured `{ committed, reason }` object this command needs to
   // read back; the full JSON envelope is captured here and never reaches the
-  // real stdout (captureStdoutSyncWrites), so suppressing it via `raw` would
-  // only destroy the information this command needs.
-  const captured = await captureStdoutSyncWrites(() => {
+  // real stdout (captureStdoutMaybeSync), so suppressing it via `raw` would
+  // only destroy the information this command needs. cmdCommit is synchronous,
+  // so the capture returns its text and this command finishes before it
+  // returns (#6333): a synchronous in-process call can serve it.
+  const captured = captureStdoutMaybeSync(() => {
     commandsMod.cmdCommit(cwd, message, [relPath], false, false, false);
-  });
+  }) as string;
 
   let committed = false;
   let reason: string | undefined;
