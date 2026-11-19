@@ -1358,3 +1358,91 @@ describe('H: skills surface projection (#1596)', () => {
     );
   });
 });
+
+// ─── #6107 (canonical-path hook) ───────────────────────────────────
+//
+// On a case-insensitive volume `fs.realpathSync` keeps the caller's letter case while `realpathSync.native`
+// (realpath(3)) returns the spelling stored on disk. The suite also runs on case-sensitive hosts, so the volume is
+// simulated: `realpathSync` follows Node's documented behaviour (a followed symlink resolves in the target's
+// on-disk spelling, otherwise the caller's spelling is kept) and `.native` always answers the on-disk spelling.
+
+function simulateCaseInsensitiveVolumeForHook(t) {
+  const original = fs.realpathSync;
+  const native = original.native;
+  const fold = (p) => String(p).replace(/([\\/])root(?=[\\/]|$)/i, '$1Root');
+  const nativeVariant = (p, o) => native(fold(p), o);
+  const jsVariant = (p, o) => {
+    const onDisk = native(fold(p), o);
+    return onDisk === fold(p) ? String(p) : onDisk;
+  };
+  jsVariant.native = nativeVariant;
+  // plain assignment, not mock.method: the mock wrapper forwards `.native` to the ORIGINAL function, and the
+  // simulation must answer `.native` itself
+  fs.realpathSync = jsVariant;
+  t.after(() => { fs.realpathSync = original; });
+}
+const flipCaseForHook = (p) => p.replace(/([\\/])Root(?=[\\/]|$)/, '$1root');
+
+describe('#6107: gsd-ensure-canonical-path resolves two spellings of one plugin root to one bundle', () => {
+  const { resolveBundledTree: resolveBundle, ensureCanonicalPath: ensureCanonical, linkPointsAt: pointsAt, MANAGED_SUBDIRS: MANAGED } =
+    require(path.join(ROOT, 'hooks', 'gsd-ensure-canonical-path.js'));
+
+  /** <base>/Root with `gsd-core` a symlink to <base>/Root/Bundle (the on-disk spelling), as in the issue. */
+  function pluginRoot(t) {
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6107-plugin-')));
+    t.after(() => cleanup(base));
+    const root = path.join(base, 'Root');
+    fs.mkdirSync(path.join(root, 'Bundle'), { recursive: true });
+    for (const sub of MANAGED) fs.mkdirSync(path.join(root, 'Bundle', sub), { recursive: true });
+    fs.symlinkSync(path.join(root, 'Bundle'), path.join(root, 'gsd-core'));
+    return { base, root };
+  }
+
+  test('a symlinked bundle is found under both spellings of the root (the same bundle)', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const { root } = pluginRoot(t);
+    const typed = resolveBundle(root);
+    assert.ok(typed, 'the typed spelling resolves a bundle');
+    assert.equal(resolveBundle(flipCaseForHook(root)), typed, 'the case-flipped spelling resolves the same bundle');
+  });
+
+  test('a link created through one spelling reads as correct through the other (idempotent, no relink)', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const { base, root } = pluginRoot(t);
+    const homeDir = path.join(base, 'home');
+    fs.mkdirSync(homeDir, { recursive: true });
+    const first = ensureCanonical({ pluginRoot: root, homeDir, platform: 'linux', env: {} });
+    assert.equal(first.status, 'ensured');
+    const second = ensureCanonical({ pluginRoot: flipCaseForHook(root), homeDir, platform: 'linux', env: {} });
+    assert.notEqual(second.status, 'noop', 'the flipped spelling is not mistaken for "no bundle"');
+    assert.deepEqual([...second.linked].sort(), [...first.linked].sort(), 'every managed link still reads as correct');
+    assert.deepEqual(second.prunedStale, [], 'nothing is pruned or relinked because a spelling differs');
+  });
+
+  test('a correct managed link is recognised as correct when its expected target is spelled the other way', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const { root } = pluginRoot(t);
+    const linkPath = path.join(root, 'managed-link');
+    const target = path.join(root, 'Bundle', MANAGED[0]);
+    fs.symlinkSync(target, linkPath);
+    assert.equal(pointsAt(linkPath, target), true, 'the on-disk spelling');
+    assert.equal(pointsAt(linkPath, flipCaseForHook(target)), true, 'the case-flipped spelling of the same target');
+    // a link to a DIFFERENT directory is still wrong under either spelling
+    fs.mkdirSync(path.join(root, 'Bundle', 'other'));
+    assert.equal(pointsAt(linkPath, path.join(root, 'Bundle', 'other')), false);
+    assert.equal(pointsAt(linkPath, flipCaseForHook(path.join(root, 'Bundle', 'other'))), false);
+  });
+
+  test('a bundle symlink that escapes the plugin root is still rejected under either spelling', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6107-escape-')));
+    t.after(() => cleanup(base));
+    const root = path.join(base, 'Root');
+    fs.mkdirSync(path.join(base, 'Outside'), { recursive: true });
+    fs.mkdirSync(root, { recursive: true });
+    fs.symlinkSync(path.join(base, 'Outside'), path.join(root, 'gsd-core'));
+    assert.equal(resolveBundle(root), null);
+    assert.equal(resolveBundle(flipCaseForHook(root)), null);
+  });
+});
+
