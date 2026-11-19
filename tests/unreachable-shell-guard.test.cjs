@@ -66,13 +66,8 @@ const COMPLETE_MILESTONE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'c
 const LAUNCHER_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', '_runtime-launcher.snippet.sh');
 const GSD_TOOLS_PATH = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
 
-// A `cat`-under-blocked-stdin hang (G4) must be bounded well under this, but
-// give the CI-shape headroom PROBE_TIMEOUT_MS documents for a short CLI call.
-const G4_TIMEOUT_MS = 5000; // short and explicit per the test-matrix note (G4 must assert on
-// `outcome`, never `signal` — a real timeout and a maxBuffer overflow both
-// report SIGTERM; PROBE_TIMEOUT_MS (15000ms) would work too but a tight,
-// named bound makes a genuine hang fail fast instead of eating the suite's
-// time budget on every RED run.
+// G4 runs the real launcher shim (node fan-out), bounded by HOOK_FANOUT_TIMEOUT_MS; it asserts on
+// `outcome`, never `signal` — a real timeout and a maxBuffer overflow both report SIGTERM.
 
 // ─── extraction (source-text-is-the-product) ─────────────────────────────
 
@@ -357,7 +352,15 @@ test('#3409 G4: the milestone summary read does not hang with no summaries', (t)
     snippet,
   ].join('\n');
 
-  const result = runBashScript(t, script, { cwd: root, timeoutMs: G4_TIMEOUT_MS });
+  // The shipped fence now opens with the launcher preamble and resolves the scoped planning root through
+  // `gsd_run query planning.inspect` (#5861), so it runs the real shim: RUNTIME_DIR points it at this checkout,
+  // and the node fan-out gets the suite's fan-out bound instead of the bare-`cat` G4_TIMEOUT_MS. A real hang
+  // still reports TIMED_OUT, so the assertions below keep their meaning.
+  const result = runBashScript(t, script, {
+    cwd: root,
+    env: { ...process.env, RUNTIME_DIR: REPO_ROOT },
+    timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
+  });
 
   // RED on the current tree: the bare `cat <glob>` reads from the blocked
   // stdin and never returns within G4_TIMEOUT_MS, so `outcome` is

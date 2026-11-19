@@ -983,6 +983,36 @@ describe('quick-batch: manifest tracks identity, options, base revision, stage s
     }
   });
 
+  // #5830: the batch path writes the same Quick Tasks row as
+  // quick-tasks-append, so it must surface the same length warning.
+  for (const [len, warns] of [[239, false], [240, false], [241, true]]) {
+    test(`#5830: completeQuickItem with a ${len}-character description ${warns ? 'returns' : 'returns no'} length warning`, () => {
+      const dir = mkTmpProject();
+      writeState(dir, stateWithQuickTasksSection());
+      try {
+        const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+        assert.equal(created.ok, true);
+        const item = created.value.manifest.items[0];
+        const description = 'd'.repeat(len);
+        const fields = { description, date: '2026-01-01', commit: 'sha1' };
+        const result = completeQuickItem(dir, created.value.batchId, item.quick_id, fields);
+        assert.equal(result.ok, true, result.reason);
+        assert.equal(result.value.appended, true);
+        assert.equal(result.value.warnings.length, warns ? 1 : 0, JSON.stringify(result.value.warnings));
+        if (warns) assert.ok(result.value.warnings[0].includes(String(len)), result.value.warnings[0]);
+        assert.ok(readState(dir).includes(`| ${description} |`), 'the row carries the full description');
+
+        // The idempotent repeat appends nothing, so it has nothing to warn about.
+        const again = completeQuickItem(dir, created.value.batchId, item.quick_id, fields);
+        assert.equal(again.ok, true);
+        assert.equal(again.value.appended, false);
+        assert.deepEqual(again.value.warnings, []);
+      } finally {
+        cleanupDir(dir);
+      }
+    });
+  }
+
   test('resumeBatch refuses with a recoverable diagnostic when currentBaseRevision diverges from the manifest', () => {
     const dir = mkTmpProject();
     writeState(dir, stateWithQuickTasksSection());
@@ -1456,5 +1486,145 @@ describe('quick-batch: updateBatchItems — post-planning wave recompute (design
     } finally {
       cleanupDir(dir);
     }
+  });
+});
+
+// ─── #6203: resume accepts the HEAD the batch itself recorded ────────────────────
+//
+// `base_revision` is set once at create, but the batch's own steps move HEAD
+// (executor commits, wave merges, the final docs commit), so a resume after the
+// first merge read the batch's own commits as divergence. The batch now records
+// the HEAD it left behind (`updateBatchItems(..., { headRevision })`, written by
+// `quick-batch update --head-revision`), and resume compares the live HEAD to
+// that, falling back to `base_revision` when none was recorded.
+describe("resumeBatch accepts the batch's own recorded HEAD (#6203)", () => {
+  const TWO_ITEMS = [{ description: 'first task' }, { description: 'second task' }];
+
+  function withBatch(baseRevision, fn) {
+    const dir = mkTmpProject();
+    try {
+      const created = createBatch(dir, TWO_ITEMS, baseRevision === undefined ? {} : { baseRevision });
+      assert.equal(created.ok, true, created.ok ? '' : created.reason);
+      fn(dir, created.value.batchId);
+    } finally {
+      cleanupDir(dir);
+    }
+  }
+
+  const record = (dir, batchId, headRevision) => {
+    const r = updateBatchItems(dir, batchId, [], { headRevision });
+    assert.equal(r.ok, true, r.ok ? '' : r.reason);
+    return r.value.manifest;
+  };
+
+  test('a batch resumes at the HEAD it recorded for itself', () => {
+    withBatch('aaaa111', (dir, id) => {
+      const manifest = record(dir, id, 'bbbb222');
+      assert.equal(manifest.head_revision, 'bbbb222');
+      const r = resumeBatch(dir, id, { currentBaseRevision: 'bbbb222' });
+      assert.equal(r.ok, true, r.ok ? '' : r.reason);
+    });
+  });
+
+  test('a HEAD the batch did not record is still refused', () => {
+    withBatch('aaaa111', (dir, id) => {
+      record(dir, id, 'bbbb222');
+      const r = resumeBatch(dir, id, { currentBaseRevision: 'cccc333' });
+      assert.equal(r.ok, false);
+      assert.match(r.reason, /base revision diverged/);
+      assert.match(r.reason, /created against aaaa111/);
+      assert.match(r.reason, /last recorded batch head is bbbb222/);
+      assert.match(r.reason, /current is cccc333/);
+      // the crash window (a step moved HEAD before it recorded) is recoverable: the message names the command
+      assert.ok(
+        r.reason.includes(`quick-batch update --batch ${id} --head-revision cccc333`),
+        `the diagnostic must say how to record the head and resume: ${r.reason}`,
+      );
+    });
+  });
+
+  test('the CLI records a head and resume accepts it end to end', () => {
+    withBatch('aaaa111', (dir, id) => {
+      const update = runGsdTools(['quick-batch', 'update', '--batch', id, '--head-revision', 'bbbb222'], dir);
+      assert.ok(update.success, update.error);
+      const ok = runGsdTools(['quick-batch', 'resume', '--batch', id, '--current-base-revision', 'bbbb222'], dir);
+      assert.ok(ok.success, ok.error);
+      const refused = runGsdTools(['quick-batch', 'resume', '--batch', id, '--current-base-revision', 'cccc333'], dir);
+      assert.equal(refused.success, false);
+      assert.match(String(refused.error), /base revision diverged/);
+    });
+  });
+
+  test('only the exact recorded head resumes (limit-1, limit, limit+1)', () => {
+    withBatch('aaaa111', (dir, id) => {
+      record(dir, id, 'bbbb222');
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'bbbb22' }).ok, false, 'one character shorter');
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'bbbb222' }).ok, true, 'exact');
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'bbbb2222' }).ok, false, 'one character longer');
+    });
+  });
+
+  test('the creation base is no longer accepted once the batch recorded a later head', () => {
+    withBatch('aaaa111', (dir, id) => {
+      record(dir, id, 'bbbb222');
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'aaaa111' }).ok, false);
+    });
+  });
+
+  test('a batch that recorded no head behaves as before', () => {
+    withBatch('aaaa111', (dir, id) => {
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'aaaa111' }).ok, true);
+      const r = resumeBatch(dir, id, { currentBaseRevision: 'bbbb222' });
+      assert.equal(r.ok, false);
+      assert.match(r.reason, /created against aaaa111, current is bbbb222/);
+    });
+  });
+
+  test('a manifest without head_revision loads and behaves as before', () => {
+    withBatch('aaaa111', (dir, id) => {
+      const manifestPath = path.join(dir, '.planning', 'quick-batches', id, 'BATCH.json');
+      const doc = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      delete doc.head_revision;
+      fs.writeFileSync(manifestPath, JSON.stringify(doc, null, 2));
+      assert.equal(loadBatch(dir, id).ok, true);
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'aaaa111' }).ok, true);
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'bbbb222' }).ok, false);
+    });
+  });
+
+  test('a non-string head_revision is rejected at load', () => {
+    withBatch('aaaa111', (dir, id) => {
+      const manifestPath = path.join(dir, '.planning', 'quick-batches', id, 'BATCH.json');
+      const doc = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      doc.head_revision = 42;
+      fs.writeFileSync(manifestPath, JSON.stringify(doc, null, 2));
+      const r = loadBatch(dir, id);
+      assert.equal(r.ok, false);
+      assert.match(r.reason, /invalid head_revision field/);
+    });
+  });
+
+  test('a batch without a base revision skips the check', () => {
+    withBatch(undefined, (dir, id) => {
+      record(dir, id, 'bbbb222');
+      assert.equal(resumeBatch(dir, id, { currentBaseRevision: 'zzzz999' }).ok, true);
+    });
+  });
+
+  test('an unknown batch id is still refused', () => {
+    withBatch('aaaa111', (dir) => {
+      const r = resumeBatch(dir, 'no-such-batch', { currentBaseRevision: 'aaaa111' });
+      assert.equal(r.ok, false);
+      assert.match(r.reason, /no BATCH\.json found/);
+    });
+  });
+
+  test('an update without headRevision leaves the recorded head alone', () => {
+    withBatch('aaaa111', (dir, id) => {
+      record(dir, id, 'bbbb222');
+      const r = updateBatchItems(dir, id, [], {});
+      assert.equal(r.ok, true, r.ok ? '' : r.reason);
+      assert.equal(r.value.manifest.head_revision, 'bbbb222');
+    });
   });
 });
