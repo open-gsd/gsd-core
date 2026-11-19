@@ -31,14 +31,10 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   // The reason the owner (sessionRoot) gives when a CLI run in `cwd` names the project `root`.
   const rootMismatch = (t, root, cwd) => {
     const cwdMock = t.mock.method(process, 'cwd', () => fs.realpathSync(cwd));
-    try {
-      sessionRoot(fs.realpathSync(root));
-    } catch (e) {
-      return e.message;
-    } finally {
-      cwdMock.mock.restore();
-    }
-    throw new Error('sessionRoot did not refuse the other root');
+    let reason;
+    assert.throws(() => sessionRoot(fs.realpathSync(root)), (e) => { reason = e.message; return true; });
+    cwdMock.mock.restore();
+    return reason;
   };
   // RULESET.TESTS isolation: a child env with a fresh home, PINNED and `override` on top (CONTRIBUTING.md isolatedEnv).
   const childEnv = (t, override = {}) => {
@@ -281,9 +277,10 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
       const r = runNode([TOOLS_PATH, 'resolve-execution', agent, '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env, timeoutMs: PROBE_TIMEOUT_MS });
       assert.equal(r.exitCode, 0, r.stderr);
       assert.equal(JSON.parse(r.stdout).model, 'gpt-5', 'the escalation itself proceeds');
-      return stderrLines(r.stderr).includes(formatNotWritten(rootMismatch(t, project, elsewhere), 'gpt-5'));
+      return stderrLines(r.stderr).includes(mismatch);
     };
     setup(t, escalating);
+    const mismatch = formatNotWritten(rootMismatch(t, project, elsewhere), 'gpt-5');
     assert.equal(warns('gsd-executor'), true, 'positive control: a guarded type with the guard on warns when the root differs');
     assert.equal(warns('gsd-debugger'), false, 'an agent type the hook never checks');
     assert.equal(warns('x/../../escape'), false, 'a traversal-shaped agent type: the CLI guard returns before the record is tried');
