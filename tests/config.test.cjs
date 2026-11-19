@@ -4398,6 +4398,26 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.deepStrictEqual(Object.fromEntries(keys.map((key) => [key, loaded[key]])), want);
   });
 
+  // Review 2026-11-18, Minor 2: the loader reads a flat research_before_questions
+  // ahead of workflow.research_before_questions, so a stale flat value kept
+  // winning over a saved nested one.
+  test('a saved workflow.research_before_questions replaces a stale flat value', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const outside = createTempDir('gsd-5681-outside-');
+    t.after(() => { cleanup(gsdHome); cleanup(outside); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.writeFileSync(defaultsPath, JSON.stringify({ research_before_questions: true }));
+    const saved = runGsdTools(['config-save-defaults', JSON.stringify({ workflow: { research_before_questions: false } })], outside, { GSD_HOME: gsdHome });
+    assert.ok(saved.success, saved.error);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { workflow: { research_before_questions: false } });
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.strictEqual(loaded.research_before_questions, false);
+  });
+
   test('clearing a setting with null removes it and its legacy spelling, so the default applies', (t) => {
     const { config, store } = newProjectAfterSave(
       t,

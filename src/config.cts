@@ -835,13 +835,15 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
  * Settings with a legacy spelling, as [legacy, canonical]: each flat key the
  * loader reads ahead of its nested key (config-loader's CONFIG_KEY_ALIASES;
  * not `parallelization`, whose nested field sits under the flat key itself),
- * and `depth`, which the loader and new-project creation read only when
- * `granularity` is absent.
+ * `research_before_questions`, which the loader's global-defaults branch reads
+ * flat first (#3894), and `depth`, which the loader and new-project creation
+ * read only when `granularity` is absent.
  */
 const SPELLING_TWINS: readonly (readonly [string, string])[] = [
   ...CONFIG_KEY_ALIASES
     .filter(({ key, section }) => section !== key)
     .map(({ key, section, field }) => [key, `${section}.${field}`] as const),
+  ['research_before_questions', 'workflow.research_before_questions'],
   ['depth', 'granularity'],
 ];
 
