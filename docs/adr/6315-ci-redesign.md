@@ -570,5 +570,7 @@ Measured locally before the change: `createFixture({ git: true })` took 66 ms, s
 3. The template is built under a fixed environment (no inherited `GIT_*`, no system config, an empty global config, an empty init template) so its content does not depend on the machine or on which test file built it. The first version kept the machine's init template; review pointed out that its `info/exclude` can ignore `.planning` (#5470), which the tests that isolate their git config had been guarding against by building their fixture after isolating.
 4. A fixture needs no `git` on `PATH`: a test makes fixtures with `PATH` emptied.
 
+**What it saves, measured.** A bench run that logged each fixture counted 1,478 git fixtures in 81 test files, so 8,868 `git` processes a run are gone. On Linux that is about 80 s of summed file time at 55 ms a fixture, which two runs on the same bench could not tell from noise (5,117 s before, 5,180 s after). The research note's "about 7,200 git spawn sites" counted call sites in the source, six for each fixture call, and most git calls in tests are not fixture builds. The Windows lanes pay more for each process, and what this saves there is not measured yet: it shows only in the merge queue's shard times.
+
 **Not in this change.** Acceptance criterion 3 of item 18, the ESLint rule against building a fixture inside a test body, with its 3,939 sites. Copying made each of those builds cheap; whether the rule is still worth its churn is to be measured after this lands.
 
