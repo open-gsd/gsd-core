@@ -112,23 +112,25 @@ describe('ci-test-scope.cjs', () => {
   }
 
   // Push, merge-group and dispatch runs have no changed-file list: the real `scope` step of test.yml, run under
-  // bash for a push, must leave the zsh job skipped.
-  test('the scope step writes zsh_changed=false for a push event', (t) => {
-    const dir = createTempDir('ci-scope-step-');
-    t.after(() => cleanup(dir));
-    const out = path.join(dir, 'github-output');
-    const step = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8')).jobs.changes.steps.find(s => s.id === 'scope');
-    const file = path.join(dir, 'scope.sh');
-    fs.writeFileSync(file, `#!/usr/bin/env bash\n${step.run}\n`, { mode: 0o755 });
-    const r = runHook(file, [], {
-      interpreter: 'bash',
-      cwd: ROOT,
-      timeoutMs: PROBE_TIMEOUT_MS,
-      env: isolatedEnv({ home: dir, override: { EVENT_NAME: 'push', GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, 'summary') } }),
+  // bash for each of those events, must leave the zsh job skipped.
+  for (const event of ['push', 'merge_group', 'workflow_dispatch']) {
+    test(`the scope step writes zsh_changed=false for a ${event} event`, (t) => {
+      const dir = createTempDir('ci-scope-step-');
+      t.after(() => cleanup(dir));
+      const out = path.join(dir, 'github-output');
+      const step = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8')).jobs.changes.steps.find(s => s.id === 'scope');
+      const file = path.join(dir, 'scope.sh');
+      fs.writeFileSync(file, `#!/usr/bin/env bash\n${step.run}\n`, { mode: 0o755 });
+      const r = runHook(file, [], {
+        interpreter: 'bash',
+        cwd: ROOT,
+        timeoutMs: PROBE_TIMEOUT_MS,
+        env: isolatedEnv({ home: dir, override: { EVENT_NAME: event, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, 'summary') } }),
+      });
+      assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
+      assert.strictEqual(readOutputs(out).zsh_changed, 'false');
     });
-    assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
-    assert.strictEqual(readOutputs(out).zsh_changed, 'false');
-  });
+  }
 
   // One parse of test.yml, one table: every guard property of the test-insert-shell job. A fail-open
   // install or run (`|| true`, `continue-on-error`, a step `if`), a dropped `needs`, or a dropped
