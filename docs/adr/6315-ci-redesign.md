@@ -102,7 +102,7 @@ These hold for every item in the epic.
 - **I8 — Checks on code shape are ESLint rules, and a new rule ships at `error`.** `npm run lint` runs with `--max-warnings 0`, so a `warn` rule already fails CI; the cleanup lands in the PR that adds the rule (I9). Workflow YAML is checked by actionlint and zizmor, and other non-JavaScript content by the static content lane (item 19).
 - **I9 — First-run findings are fixed in the PR that adds the check.** A new linter does not land with a backlog. A false positive is suppressed in the tool's config with a recorded reason.
 - **I10 — Every new third-party binary or action is pinned** to a version and a checksum or commit SHA.
-- **I11 — The testing standards change in the PR that changes the rules.** When an item adds or changes a requirement on test authors, or on product code for the sake of testability, the same PR states it in `CONTRIBUTING.md` ("Testing Standards") and, for placement and naming, in `docs/TESTING-SUITES.md`: the rule, its reason, and what enforces it. A rule known only from a PR description or a review thread is not a rule the next contributor can follow (maintainer instruction, 2026-11-19; [#6367](https://github.com/open-gsd/gsd-core/issues/6367)).
+- **I11 — The testing standards change in the PR that changes the rules.** When an item adds or changes a requirement on test authors, or on product code for the sake of testability, the same PR states it in `TESTING-STANDARDS.md`, under "Test architecture policies (ADR 6315)", and, for placement and naming, in `docs/TESTING-SUITES.md`: the rule, its reason, and what enforces it. `CONTRIBUTING.md` ("Testing Standards") keeps the helper tables and setup patterns and points there. A rule known only from a PR description or a review thread is not a rule the next contributor can follow (maintainer instruction, 2026-11-19; [#6367](https://github.com/open-gsd/gsd-core/issues/6367); the file named here was corrected by [#6383](https://github.com/open-gsd/gsd-core/issues/6383)).
 
 ### 3. Phases
 
@@ -515,7 +515,7 @@ Single runs, and job time includes checkout, install and build. The difference i
 3. Another PR merged while it was queued and added a synchronous helper call to an asynchronous command, which the new helper refuses.
 4. `next`'s own last Tests run was not green at that moment (a cancelled Windows shard), so the base-branch health gate refused every merge.
 
-The first two are Windows-only mistakes in test code, and the Windows lanes run only in the queue, so each cost a full queue cycle to find. Rule 6 of "In-process CLI tests: the rules" in `CONTRIBUTING.md` and the mask's own test exist because of them. Nothing in this ADR would have caught them earlier, so item 26 is added ([#6369](https://github.com/open-gsd/gsd-core/issues/6369)): a PR runs the test files it adds or changes on Windows before it can be queued.
+The first two are Windows-only mistakes in test code, and the Windows lanes run only in the queue, so each cost a full queue cycle to find. Rule 6 of "In-process CLI tests: the rules" in `TESTING-STANDARDS.md` and the mask's own test exist because of them. Nothing in this ADR would have caught them earlier, so item 26 is added ([#6369](https://github.com/open-gsd/gsd-core/issues/6369)): a PR runs the test files it adds or changes on Windows before it can be queued.
 
 ### 2026-11-18 — Item 25 added: the git probe is 90% of an in-process call
 
