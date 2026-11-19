@@ -13,9 +13,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execGit as execGitSeam, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
 import { isContainedIn, tryWithinRoot, PathAcceptance } from './security.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import planningWorkspace = require('./planning-workspace.cjs');
-const { planningRoot } = planningWorkspace;
 
 // Default timeout for worktree-related git subprocess calls.
 // 10 s is generous enough for normal git operations on large repos while still
@@ -3366,6 +3363,8 @@ function cmdWorktreeManifestPath(cwd: string, args: string[] = [], deps: Record<
   }
 
   const resolvedPhaseDir = posixNormalize(phaseDir);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- load only for manifest path resolution
+  const { planningRoot } = require('./planning-workspace.cjs') as typeof import('./planning-workspace.cjs');
   const planningTreeRoot = planningRoot(cwd);
   const contained = tryWithinRoot(phaseDir, planningTreeRoot, PathAcceptance.AbsoluteInsideRoot);
   const isStrictDescendant = Boolean(contained && posixNormalize(contained) !== posixNormalize(planningTreeRoot));

@@ -136,10 +136,8 @@ test('#5531: the instruction says the whole conditional line, its trailing comme
   assert.match(content, /replace the whole line, its trailing `#` comment included, with `- tdd\.md` when the verdict is `true` and with nothing otherwise/, 'the instruction replaces the whole line');
 });
 
-test('#5531: the wave name shape the prompt file carries is the one execute-phase.md gives the manifest', () => {
-  // The integration test builds wave names of this shape by hand.
-  const executePhase = readFileNormalized(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'));
-  assert.ok(executePhase.includes('mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX"'), 'the manifest is named gsd-worktree-wave-XXXXXX');
+test('#5531: the executor prompt uses the basename of the durable wave manifest', () => {
+  assert.match(content, /_PROMPT_STEM=.*basename "\$WAVE_WORKTREE_MANIFEST" \.json/); // allow-test-rule: source-text-is-the-product the dispatch fragment defines the wave naming contract
 });
 
 // ─── #5934: quick-batch reuses this fragment, so every placeholder it substitutes needs a value ─────
