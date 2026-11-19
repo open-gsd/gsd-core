@@ -34,6 +34,8 @@ import path from 'node:path';
 import { platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
 import { armArgsNonce, disarmArgsNonce, readInstalledNonce } from './args-terminator.cjs';
+import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -384,6 +386,43 @@ function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]
 // ---------------------------------------------------------------------------
 
 /**
+ * #6331: the install manifest entries for files under the destinations a
+ * surface apply is about to sync, each with its pre-sync hash, for
+ * recordManifestFileHashes. A key resolves against the config dir first; a
+ * `skills/` key whose file is not there resolves against a skills destination
+ * outside the config dir (Codex `~/.agents/skills`), as saveLocalPatches does.
+ * Empty when the manifest is absent or not the documented shape.
+ */
+function manifestEntriesUnder(configDir: string, runtime: string, kinds: readonly { kind: ArtifactKind; dest: string }[]): RewrittenFile[] {
+  let files: unknown;
+  try {
+    files = (JSON.parse(fs.readFileSync(path.join(configDir, INSTALL_MANIFEST_FILE_NAME), 'utf8')) as Record<string, unknown>)?.['files'];
+  } catch {
+    return [];
+  }
+  if (!files || typeof files !== 'object' || Array.isArray(files)) return [];
+  // Lexical containment: the dests are not realpath-resolved by the sync either.
+  const within = (root: string, candidate: string): string | null => tryWithinRootLexical(candidate, root);
+  const dests = kinds.map((k) => path.resolve(k.dest));
+  const skillsPrefix: string = (hostBehaviorsFor(runtime).skillsManifestPrefix as string | undefined) || 'skills/';
+  const outsideSkillsDest = kinds
+    .filter((k) => k.kind.kind === 'skills' && within(configDir, path.resolve(k.dest)) === null)
+    .map((k) => path.resolve(k.dest))[0];
+  const entries: RewrittenFile[] = [];
+  for (const key of Object.keys(files)) {
+    let abs = within(configDir, path.resolve(configDir, key));
+    if (abs === null) continue;
+    if (!fs.existsSync(abs) && outsideSkillsDest !== undefined && key.startsWith(skillsPrefix)) {
+      abs = within(outsideSkillsDest, path.resolve(outsideSkillsDest, key.slice(skillsPrefix.length))) ?? abs;
+    }
+    const file = abs;
+    if (!dests.some((d) => within(d, file) !== null)) continue;
+    entries.push({ path: file, preHash: tryFileHash(file), key });
+  }
+  return entries;
+}
+
+/**
  * Re-stage the active surface using the resolved layout.
  * Iterates layout.kinds and syncs each artifact kind to its destination.
  */
@@ -504,9 +543,15 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
     // successfully. A missing source provider therefore leaves both artifacts
     // and the persisted surface state untouched.
     retiredArtifactCleanup.pruneRetiredRuntimeArtifacts(layout.runtime, layout.configDir);
+    // #6331: the sync rewrites installed files the install manifest records
+    // (a capability's new skill text after `capability set`). Re-record the
+    // ones GSD still owned, as `effort sync --apply` does (#5683), or the next
+    // install reports them as local patches.
+    const recordedBeforeSync = manifestEntriesUnder(layout.configDir, layout.runtime, stagedKinds);
     for (const item of stagedKinds) {
       _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
     }
+    recordManifestFileHashes(layout.configDir, recordedBeforeSync);
 
     if (hasCandidateState) {
       if (candidateState === null) {

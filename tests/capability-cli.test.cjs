@@ -1182,6 +1182,115 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
   });
 });
 
+// ─── #6331: capability set keeps the install manifest in step with its skills ──
+
+describe('#6331: capability set --runtime re-records the install manifest hashes of the skills it rewrites', () => {
+  const STEM = 'manifest-thing';
+  const SKILL_V1 = `---\nname: ${STEM}\ndescription: v1\n---\n\n# v1\n`;
+  const SKILL_V2 = `---\nname: ${STEM}\ndescription: v2\n---\n\n# v2, new text\n`;
+  const MANIFEST = 'gsd-file-manifest.json';
+  const SKILL_KEY = `skills/gsd-${STEM}/SKILL.md`;
+
+  function sha256File(p) {
+    return require('node:crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  }
+
+  /** Install the capability at v1 and materialize it, as the installer leaves it. */
+  function installedAtV1() {
+    const home = tmpDir('cap-cli-6331-home-');
+    const cwd = makeCwd();
+    const src = tmpDir('cap-cli-6331-src-');
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify({
+      id: STEM, role: 'feature', version: '1.0.0', title: STEM, description: 'x', tier: 'standard',
+      requires: [], runtimeCompat: { supported: ['*'], unsupported: [] }, skills: [STEM],
+      agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    }, null, 2));
+    fs.mkdirSync(path.join(src, 'skills', STEM), { recursive: true });
+    fs.writeFileSync(path.join(src, 'skills', STEM, 'SKILL.md'), SKILL_V1);
+    const install = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
+    const rcd = tmpDir('cap-cli-6331-rcd-');
+    fs.writeFileSync(path.join(rcd, '.gsd-source'), path.join(__dirname, '..', 'commands', 'gsd') + '\n');
+    const set = () => {
+      const r = runGsdTools(
+        ['capability', 'set', STEM, '--runtime', 'claude', '--scope', 'global', '--config-dir', rcd, '--raw'],
+        cwd, scopeEnv(home),
+      );
+      assert.equal(r.success, true, `capability set failed: ${r.error || r.output}`);
+      assert.deepEqual(parse(r.output).errors, []);
+    };
+    set();
+    const skillPath = path.join(rcd, 'skills', `gsd-${STEM}`, 'SKILL.md');
+    assert.ok(fs.existsSync(skillPath), 'sanity: v1 skill materialized');
+    // The installer's record of what it wrote: the v1 skill's hash.
+    fs.writeFileSync(path.join(rcd, MANIFEST), JSON.stringify({
+      manifestVersion: 2, version: '0.0.0-test', runtime: 'claude', scope: 'global',
+      files: { [SKILL_KEY]: sha256File(skillPath) },
+    }));
+    // A newer capability version ships new skill text (what `capability install <url>#<new-tag>` does).
+    fs.writeFileSync(path.join(capDir(home, STEM), 'skills', STEM, 'SKILL.md'), SKILL_V2);
+    return { rcd, home, cwd, skillPath, set };
+  }
+
+  /** The installer's local-patch scan, as the next gsd-core install runs it. */
+  function saveLocalPatches(configDir) {
+    const saved = process.env.GSD_TEST_MODE;
+    process.env.GSD_TEST_MODE = '1';
+    const installScript = path.join(__dirname, '..', 'bin', 'install.js');
+    delete require.cache[require.resolve(installScript)];
+    const mod = require(installScript);
+    if (saved === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = saved;
+    return mod.saveLocalPatches(configDir);
+  }
+
+  test('a GSD-owned skill rewritten by capability set is recorded, so the next install backs nothing up', () => {
+    const { rcd, skillPath, set } = installedAtV1();
+    set();
+    assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'sanity: v2 skill text materialized');
+    const recorded = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files[SKILL_KEY];
+    assert.equal(recorded, sha256File(skillPath), 'the manifest records the rewritten skill');
+    assert.deepEqual(saveLocalPatches(rcd), [], 'the next install reports no locally modified files (#6331)');
+    assert.equal(fs.existsSync(path.join(rcd, 'gsd-local-patches', SKILL_KEY)), false, 'and creates no patch backup');
+  });
+
+  test('a skill the user had edited keeps its stale entry, so the next install still reports it', () => {
+    const { rcd, skillPath, set } = installedAtV1();
+    fs.writeFileSync(skillPath, `${SKILL_V1}\nuser edit\n`);
+    const before = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files[SKILL_KEY];
+    set();
+    const after = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files[SKILL_KEY];
+    assert.equal(after, before, 'an entry that no longer matched the file before the write is left as recorded');
+    assert.deepEqual(saveLocalPatches(rcd), [SKILL_KEY], 'the next install still lists it as locally modified');
+    assert.ok(fs.existsSync(path.join(rcd, 'gsd-local-patches', SKILL_KEY)), 'and backs it up');
+  });
+
+  test('capability set without --runtime leaves the manifest byte-identical', () => {
+    const { rcd, home, cwd } = installedAtV1();
+    const manifestPath = path.join(rcd, MANIFEST);
+    const before = fs.readFileSync(manifestPath);
+    const r = runGsdTools(['capability', 'set', STEM, '--scope', 'global', '--config-dir', rcd, '--raw'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `capability set failed: ${r.error || r.output}`);
+    assert.deepEqual(fs.readFileSync(manifestPath), before, 'no materialize, no manifest write');
+  });
+
+  test('an unparseable manifest does not make capability set fail and is left as is', () => {
+    const { rcd, skillPath, set } = installedAtV1();
+    const manifestPath = path.join(rcd, MANIFEST);
+    fs.writeFileSync(manifestPath, '{ not json');
+    set();
+    assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'the skill is still re-staged');
+    assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{ not json', 'the unparseable manifest is not rewritten');
+  });
+
+  test('a missing manifest does not make capability set fail and is not created', () => {
+    const { rcd, skillPath, set } = installedAtV1();
+    fs.unlinkSync(path.join(rcd, MANIFEST));
+    set();
+    assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'the skill is still re-staged');
+    assert.equal(fs.existsSync(path.join(rcd, MANIFEST)), false, 'no manifest is invented');
+  });
+});
+
 // ─── #3929 — install-time cross-capability validation sees the merged registry ──
 
 describe('#3929: install-time validation is seeded with first-party + installed overlays + candidate', () => {

@@ -23,6 +23,12 @@ export function fileHash(filePath: string): string {
 export interface RewrittenFile {
   path: string;
   preHash: string | null;
+  /**
+   * Manifest key, when it is not `path` relative to the config dir: a skill
+   * under a skills root outside the config dir (Codex `~/.agents/skills`) is
+   * recorded under the runtime's skills manifest prefix (#6331).
+   */
+  key?: string;
 }
 
 /** fileHash that returns null instead of throwing — for capturing a pre-rewrite hash. */
@@ -54,8 +60,8 @@ export function recordManifestFileHashes(configDir: string, rewritten: readonly 
 
   const entries = files as Record<string, string>;
   let changed = false;
-  for (const { path: absPath, preHash } of rewritten) {
-    const rel = relative(configDir, absPath).replace(/\\/g, '/');
+  for (const { path: absPath, preHash, key } of rewritten) {
+    const rel = key ?? relative(configDir, absPath).replace(/\\/g, '/');
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
     if (preHash === null || entries[rel] !== preHash) continue;
     try {

@@ -1515,6 +1515,42 @@ describe('codex skills-kind destination: home override (#2911)', () => {
     });
   });
 
+  test('#6331: codex + global: applySurface re-records the manifest hash of a skill it rewrites under $HOME/.agents', (t) => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-codex-home-'));
+    t.after(() => cleanup(fakeHome));
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-codex-home-dir-'));
+    t.after(() => cleanup(codexHome));
+    writePackageSourceMarkerFixture(codexHome);
+    const sha256 = (buf) => require('node:crypto').createHash('sha256').update(buf).digest('hex');
+
+    withFakeHome(fakeHome, () => {
+      const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+      writeActiveProfile(codexHome, 'core');
+      const layout = resolveRuntimeArtifactLayout('codex', codexHome, 'global');
+      const skillsKind = layout.kinds.find((k) => k.kind === 'skills');
+      applySurface(codexHome, layout, manifest, CLUSTERS);
+      const skillsRoot = runtimeArtifactInstallPlan.assertDestWithinConfigHome(path.join(fakeHome, '.agents'), skillsKind.destSubpath);
+      const stem = fs.readdirSync(skillsRoot).find((d) => d.startsWith('gsd-') && fs.existsSync(path.join(skillsRoot, d, 'SKILL.md')));
+      assert.ok(stem, 'pre-condition: a gsd-* skill staged under $HOME/.agents');
+      const skillPath = path.join(skillsRoot, stem, 'SKILL.md');
+      const current = fs.readFileSync(skillPath);
+
+      // An earlier GSD version wrote different text, and the manifest recorded it.
+      const OLD = 'older skill text\n';
+      fs.writeFileSync(skillPath, OLD);
+      const key = `skills/${stem}/SKILL.md`;
+      fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), JSON.stringify({
+        manifestVersion: 2, runtime: 'codex', scope: 'global', files: { [key]: sha256(OLD) },
+      }));
+
+      applySurface(codexHome, layout, manifest, CLUSTERS);
+
+      assert.deepEqual(fs.readFileSync(skillPath), current, 'sanity: the apply rewrote the skill');
+      const recorded = JSON.parse(fs.readFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'utf8')).files[key];
+      assert.equal(recorded, sha256(current), '#6331: the skills/ key resolves to the $HOME/.agents file and records its new hash');
+    });
+  });
+
   test('codex + local: no home override — surface-apply destination is unchanged (#2911 AC3)', (t) => {
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2911-codex-local-'));
     t.after(() => cleanup(codexHome));
