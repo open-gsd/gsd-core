@@ -73,6 +73,20 @@ describe('ci-test-scope.cjs', () => {
     });
   }
 
+  // writeOutputs puts zsh_changed on $GITHUB_OUTPUT, the channel test.yml reads; the JSON rows above never run it.
+  for (const [file, expected] of [['gsd-core/workflows/insert-phase.md', 'true'], ['docs/usage.md', 'false']]) {
+    test(`GITHUB_OUTPUT holds zsh_changed=${expected} for ${file}`, () => {
+      const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ci-scope-out-')), 'github-output');
+      try {
+        const r = runNode([SCRIPT, '--files', file], { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, GITHUB_OUTPUT: out } });
+        assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
+        assert.ok(fs.readFileSync(out, 'utf8').split('\n').includes(`zsh_changed=${expected}`));
+      } finally {
+        cleanup(path.dirname(out));
+      }
+    });
+  }
+
   // One parse of test.yml, one table: every guard property of the test-insert-shell job. A fail-open
   // install or run (`|| true`, `continue-on-error`, a step `if`), a dropped `needs`, or a dropped
   // result mapping in required-tests lets the job pass with the insert-phase rows never run. The refusal
