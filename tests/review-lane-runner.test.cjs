@@ -19,6 +19,7 @@ const {
   checkEgressHost,
   probeLane,
   probeHttpLanes,
+  isOpenAiModelsListing,
   runLane,
   writeReviewOrStub,
   handleOpencodeOutput,
@@ -41,11 +42,27 @@ const REVIEW_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md
 const RUN = '/run';
 const ROOT = '/repo';
 
-function plan(slug, config = {}) {
+/**
+ * A plan with the lane's built-in default host and NO host configured (#5963): the availability
+ * probe holds such a host to the stricter models-listing rule.
+ */
+function defaultHostPlan(slug, config = {}) {
   const lane = REVIEWER_LANES.find((l) => l.slug === slug);
   const r = resolveLanePlan({ lane, configGet: (k) => config[k], runDir: RUN, repoRoot: ROOT });
   assert.equal(r.ok, true, `${slug} failed to resolve`);
   return r.plan;
+}
+
+/**
+ * A plan for the lane. An openai-http lane gets its host CONFIGURED (set to the descriptor default
+ * unless the test names one), so tests of run-time behavior — model discovery, completions, stubs —
+ * reach the host through D7's any-answer probe, as they did before #5963 split the two cases.
+ */
+function plan(slug, config = {}) {
+  const lane = REVIEWER_LANES.find((l) => l.slug === slug);
+  const hostKey = lane && lane.transport === 'openai-http' ? lane.invoke.hostConfigKey : null;
+  const withHost = hostKey && config[hostKey] === undefined ? { ...config, [hostKey]: lane.invoke.defaultHost } : config;
+  return defaultHostPlan(slug, withHost);
 }
 
 /** An in-memory dependency set. Overrides replace individual seams per test. */
@@ -206,11 +223,147 @@ describe('runner — probe (ADR-2782 D7)', () => {
     assert.equal(r.reason, LANE_UNAVAILABLE.HOST_UNREACHABLE);
   });
 
-  test('http-reachable treats any HTTP response (401, 404, 302) as available', async () => {
+  test('http-reachable treats any HTTP response (401, 404, 302) as available on a CONFIGURED host', async () => {
     for (const status of [401, 404, 302]) {
-      const r = await probeLane(plan('ollama'), deps({ httpJson: async () => ({ ok: false, status, body: '' }) }));
+      const r = await probeLane(
+        plan('ollama', { 'review.ollama_host': 'http://gateway.internal:11434' }),
+        deps({ httpJson: async () => ({ ok: false, status, body: '' }) }),
+      );
       assert.equal(r.available, true, `status ${status}`);
     }
+  });
+
+  describe('#5963 — a built-in default host must answer like the expected server', () => {
+    const LISTING = JSON.stringify({ object: 'list', data: [{ id: 'm1', object: 'model' }] });
+    const LANES = [
+      ['llama_cpp', 'http://localhost:8080'],
+      ['lm_studio', 'http://localhost:1234'],
+      ['ollama', 'http://localhost:11434'],
+    ];
+
+    for (const [slug, host] of LANES) {
+      test(`${slug}: 401, 404, 302, 200 non-listing and 500 on the default ${host} are unavailable`, async () => {
+        const cases = [
+          { status: 401, body: '' },
+          { status: 404, body: 'not found' },
+          { status: 302, body: '' },
+          { status: 200, body: '<html>hello</html>' },
+          { status: 200, body: '{"ok":true}' },
+          { status: 500, body: LISTING },
+        ];
+        for (const c of cases) {
+          const r = await probeLane(defaultHostPlan(slug), deps({ httpJson: async () => ({ ok: c.status < 300, ...c }) }));
+          assert.equal(r.available, false, `${slug} ${c.status} ${c.body}`);
+          assert.equal(r.reason, LANE_UNAVAILABLE.HOST_UNREACHABLE);
+          assert.ok(r.detail.includes(host), 'the detail names the default host');
+        }
+      });
+
+      test(`${slug}: a 200 OpenAI-style models listing on the default host is available`, async () => {
+        const calls = [];
+        const r = await probeLane(defaultHostPlan(slug), deps({
+          httpJson: async (url, opts) => { calls.push({ url, opts }); return { ok: true, status: 200, body: LISTING }; },
+        }));
+        assert.equal(r.available, true);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].url, `${host}/v1/models`);
+        assert.equal(calls[0].opts.probe, true, 'redirects stay unfollowed');
+        assert.equal(calls[0].opts.readBody, true);
+      });
+
+      test(`${slug}: a transport failure on the default host is still unreachable`, async () => {
+        const r = await probeLane(defaultHostPlan(slug), deps({ httpJson: async () => ({ ok: false, status: 0, body: '', error: 'ECONNREFUSED' }) }));
+        assert.equal(r.available, false);
+        assert.equal(r.reason, LANE_UNAVAILABLE.HOST_UNREACHABLE);
+        assert.ok(r.detail.includes('ECONNREFUSED'));
+      });
+
+      test(`${slug}: a configured host keeps "any answer" semantics and the status-only probe`, async () => {
+        const calls = [];
+        const p = plan(slug, { [`review.${slug}_host`]: 'http://gw.internal:9' });
+        const r = await probeLane(p, deps({
+          httpJson: async (url, opts) => { calls.push(opts); return { ok: false, status: 401, body: '' }; },
+        }));
+        assert.equal(r.available, true);
+        assert.equal(calls[0].readBody, undefined, 'a configured host is never body-inspected');
+      });
+
+      test(`${slug}: an unavailable default host never receives the review prompt`, async () => {
+        const p = defaultHostPlan(slug);
+        const posts = [];
+        const d = deps({
+          files: { [p.promptPath]: 'review this' },
+          httpJson: async (url, opts) => {
+            if (opts.method === 'POST') posts.push(url);
+            return { ok: false, status: 404, body: 'nope' };
+          },
+        });
+        const r = await runLane(p, d, { repoRoot: ROOT });
+        assert.equal(r.ok, false);
+        assert.deepEqual(posts, []);
+      });
+    }
+
+    test('a configured host equal to the default still counts as configured', async () => {
+      const r = await probeLane(
+        plan('ollama', { 'review.ollama_host': 'http://localhost:11434' }),
+        deps({ httpJson: async () => ({ ok: false, status: 404, body: '' }) }),
+      );
+      assert.equal(r.available, true);
+    });
+
+    test('models-listing shape: accepted and rejected bodies (boundary: empty data, missing id)', async () => {
+      const accept = [
+        LISTING,
+        JSON.stringify({ object: 'list', data: [] }),
+        JSON.stringify({ object: 'list', data: [{ id: 'a' }, { id: 'b', owned_by: 'x' }], models: [] }),
+      ];
+      const reject = [
+        '',
+        'null',
+        '[]',
+        JSON.stringify({ data: [{ id: 'a' }] }),
+        JSON.stringify({ object: 'list' }),
+        JSON.stringify({ object: 'list', data: {} }),
+        JSON.stringify({ object: 'list', data: [{ name: 'a' }] }),
+        JSON.stringify({ object: 'list', data: [{ id: 1 }] }),
+        JSON.stringify({ object: 'list', data: [null] }),
+        JSON.stringify({ object: 'model', data: [] }),
+      ];
+      for (const body of accept) {
+        assert.equal(isOpenAiModelsListing(body), true, body);
+      }
+      for (const body of reject) {
+        assert.equal(isOpenAiModelsListing(body), false, body);
+      }
+    });
+
+    test('property: a valid envelope with one corrupted field is rejected', () => {
+      const ids = fc.array(fc.string(), { maxLength: 5 });
+      const corrupt = fc.constantFrom(
+        (e) => ({ ...e, object: 'model' }),
+        (e) => ({ ...e, object: undefined }),
+        (e) => ({ ...e, data: 'x' }),
+        (e) => ({ ...e, data: [...e.data, { name: 'no-id' }] }),
+        (e) => ({ ...e, data: [...e.data, 7] }),
+        (e) => ({ ...e, data: [...e.data, { id: 7 }] }),
+      );
+      fc.assert(fc.property(ids, corrupt, (list, mutate) => {
+        const ok = { object: 'list', data: list.map((id) => ({ id })) };
+        return isOpenAiModelsListing(JSON.stringify(ok)) === true && isOpenAiModelsListing(JSON.stringify(mutate(ok))) === false;
+      }));
+    });
+
+    test('property: any JSON value that is not a list envelope is rejected', () => {
+      fc.assert(
+        fc.property(fc.jsonValue(), (v) => {
+          const isEnvelope =
+            v !== null && typeof v === 'object' && !Array.isArray(v) && v.object === 'list' &&
+            Array.isArray(v.data) && v.data.every((m) => m !== null && typeof m === 'object' && typeof m.id === 'string');
+          return isOpenAiModelsListing(JSON.stringify(v)) === isEnvelope;
+        }),
+      );
+    });
   });
 
   test('http-reachable never follows redirects (probe: true)', async () => {
@@ -238,7 +391,7 @@ describe('runner — probe (ADR-2782 D7)', () => {
       { slug: 'c', transport: 'spawn' },
     ];
     const resolve = (lane) => (lane.slug === 'b' ? { ok: false, detail: 'bad host' } : { ok: true, plan: plan('ollama') });
-    const d = deps({ httpJson: async () => ({ ok: true, status: 200, body: '{}' }) });
+    const d = deps({ httpJson: async () => ({ ok: true, status: 200, body: JSON.stringify({ object: 'list', data: [] }) }) });
     assert.deepEqual(await probeHttpLanes(lanes, [], resolve, d), { rows: ['a:available', 'b:missing'], warnings: ['b: bad host'] });
     assert.deepEqual((await probeHttpLanes(lanes, ['a'], resolve, d)).rows, ['a:available']);
   });
@@ -1008,7 +1161,7 @@ describe('#2605 local OpenAI-compatible lanes produce diagnosable output', () =>
   function reachableThen(chatResponse) {
     return async (url, opts) =>
       opts.method === 'GET'
-        ? { ok: true, status: 200, body: JSON.stringify({ data: [{ id: 'stub-model' }] }) }
+        ? { ok: true, status: 200, body: JSON.stringify({ object: 'list', data: [{ id: 'stub-model' }] }) }
         : (typeof chatResponse === 'function' ? chatResponse(url, opts) : chatResponse);
   }
 
@@ -1294,7 +1447,7 @@ describe('#3194 — evidence grounding is verified from review output, not decla
       const laneDeps = (content) => deps({
         httpJson: async (url, opts) =>
           opts.method === 'GET'
-            ? { ok: true, status: 200, body: JSON.stringify({ data: [{ id: 'stub-model' }] }) }
+            ? { ok: true, status: 200, body: JSON.stringify({ object: 'list', data: [{ id: 'stub-model' }] }) }
             : {
                 ok: true, status: 200,
                 body: JSON.stringify({ choices: [{ message: { content } }] }),
@@ -2057,5 +2210,59 @@ describe('#2295 — properties (pinned seed, bounded runs)', () => {
       ),
       FC,
     );
+  });
+});
+
+describe('#5963 — readCappedBody bounds a probe body read', () => {
+  const { readCappedBody, probeBody } = require('../gsd-core/bin/lib/http-body-cap.cjs');
+  const CAP = 16;
+  const respond = (text) => new Response(text);
+
+  test('limit-1, limit and limit+1 bytes: whole body up to the cap, truncated beyond it', async () => {
+    assert.equal((await readCappedBody(respond('a'.repeat(CAP - 1)), CAP)).length, CAP - 1);
+    assert.equal((await readCappedBody(respond('a'.repeat(CAP)), CAP)).length, CAP);
+    assert.equal((await readCappedBody(respond('a'.repeat(CAP + 1)), CAP)).length, CAP);
+  });
+
+  test('a truncated body fails the models-listing shape check, an in-cap one passes', async () => {
+    const listing = JSON.stringify({ object: 'list', data: [{ id: 'm' }] });
+    assert.equal(isOpenAiModelsListing(await readCappedBody(respond(listing), listing.length)), true);
+    assert.equal(isOpenAiModelsListing(await readCappedBody(respond(listing), listing.length - 1)), false);
+  });
+
+  test('an endless stream is cancelled after the cap, not drained', async () => {
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream({
+      pull(c) { pulls += 1; c.enqueue(new TextEncoder().encode('a'.repeat(8))); },
+      cancel() { cancelled = true; },
+    });
+    const out = await readCappedBody(new Response(stream), CAP);
+    assert.equal(out.length, CAP);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(cancelled, true);
+    assert.ok(pulls < 10, `stream pulled ${pulls} times`);
+  });
+
+  test('multi-chunk bodies: a chunk straddling the cap is trimmed to it', async () => {
+    const enc = new TextEncoder();
+    const chunked = (parts) => new Response(new ReadableStream({
+      start(c) { for (const p of parts) c.enqueue(enc.encode(p)); c.close(); },
+    }));
+    assert.equal(await readCappedBody(chunked(['a'.repeat(10), 'b'.repeat(10)]), CAP), 'a'.repeat(10) + 'b'.repeat(6));
+    assert.equal(await readCappedBody(chunked(['a'.repeat(8), 'b'.repeat(8), 'c']), CAP), 'a'.repeat(8) + 'b'.repeat(8));
+  });
+
+  test('probeBody: a 2xx body is read only when readBody is set; non-2xx and status-only return empty', async () => {
+    const ok = () => new Response('hello', { status: 200 });
+    assert.equal(await probeBody(ok(), true), 'hello');
+    assert.equal(await probeBody(ok(), false), '');
+    assert.equal(await probeBody(new Response('nope', { status: 404 }), true), '');
+    assert.equal(await probeBody(new Response('x', { status: 500 }), true), '');
+    assert.equal(await probeBody(new Response(null, { status: 204 }), true), '');
+  });
+
+  test('a response with no body reads as empty', async () => {
+    assert.equal(await readCappedBody({ body: null }, CAP), '');
   });
 });

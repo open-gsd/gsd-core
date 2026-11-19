@@ -42,7 +42,9 @@
  *                                      markdown-table.cjs; #2133/ADR-2143).
  *                                      Fails loud (non-zero exit) on a missing
  *                                      or unrecognized table instead of the old
- *                                      awk NF-2 silent-skip guess.
+ *                                      awk NF-2 silent-skip guess. A --task
+ *                                      over 240 chars is written in full with
+ *                                      a `warnings` entry, exit 0 (#5830).
  *   config-ensure-section              Initialize .planning/config.json
  *   history-digest                     Aggregate all SUMMARY.md data
  *   summary-extract <path> [--fields]  Extract structured data from SUMMARY.md
@@ -321,61 +323,130 @@ try {
 } catch { /* advisory — never block */ }
 
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv, peekActiveWorkstream } = require('./lib/active-workstream-store.cjs');
-const { planningDir, planningRoot } = require('./lib/planning-workspace.cjs');
-const state = require('./lib/state.cjs');
-const phase = require('./lib/phase.cjs');
-const roadmap = require('./lib/roadmap.cjs');
+const { specFor, GLOBAL_FLAGS } = require('./lib/cli-surface.cjs');
+
+// #5865: every ./lib module below is required on first use instead of here, so
+// a command loads only the modules it runs. The requires above stay eager:
+// main() uses each of them before it dispatches any command except
+// run-with-timeout. Dispatch, its order and every command's output are
+// unchanged; only the moment each require() runs moves. One visible trace of
+// the move: a stack trace through a function binding below shows one more
+// frame, the wrapper's.
+//
+// A namespace binding (lazyModule) is a proxy that requires its module on the
+// first property access; a function binding (lazyFn) is a wrapper that
+// requires its module when it is first called. Both take the module from
+// loadLib(), which requires each id once and keeps what it got, so every
+// binding to a module uses one instance from its first use on, as every
+// binding did from load before. A module placed in require.cache before that
+// first use is the one used.
+//
+// A ./lib module's top-level code now runs at first use, or not at all. In the
+// ~220 modules these requires used to load (audited for #5865), the top-level
+// code that does more than define things is: the exit handlers in state and
+// planning-workspace, which remove only locks those modules take; reads of
+// shipped data files (configuration's two manifests, runtime-name-policy's
+// alias manifest, model-catalog's catalog, with GSD_MODEL_CATALOG as its
+// fallback path); learnings' capture of the home directory; and io's capture
+// of the temp directory (io stays eager). Nothing in this file changes those
+// inputs before a command runs. Code that reads argv or stdin sits behind
+// `require.main === module` and never runs on a require. No require that
+// runs while a module loads closes a cycle (the requires that close one in the
+// full graph, e.g. frontmatter and frontmatter-splice, sit inside functions and
+// run at call time), so the order modules load in cannot change what one sees
+// of another. tests/gsd-tools-lazy-lib-load.test.cjs
+// pins the load set.
+const loadedLibModules = new Map();
+function loadLib(id) {
+  let mod = loadedLibModules.get(id);
+  if (mod === undefined) {
+    mod = require(id);
+    loadedLibModules.set(id, mod);
+  }
+  return mod;
+}
+
+function lazyFn(id, name) {
+  return (...args) => loadLib(id)[name](...args);
+}
+
+function lazyModule(id) {
+  const load = () => loadLib(id);
+  return new Proxy(Object.create(null), {
+    get: (_target, key) => load()[key],
+    set: (_target, key, value) => { load()[key] = value; return true; },
+    has: (_target, key) => key in load(),
+    ownKeys: () => Reflect.ownKeys(load()),
+    getOwnPropertyDescriptor: (_target, key) => {
+      const desc = Object.getOwnPropertyDescriptor(load(), key);
+      // A proxy may not report a property as non-configurable when its target
+      // lacks it; the target here is an empty object, so report it configurable.
+      if (desc) desc.configurable = true;
+      return desc;
+    },
+  });
+}
+
+const planningDir = lazyFn('./lib/planning-workspace.cjs', 'planningDir');
+const planningRoot = lazyFn('./lib/planning-workspace.cjs', 'planningRoot');
+const state = lazyModule('./lib/state.cjs');
+const phase = lazyModule('./lib/phase.cjs');
+const roadmap = lazyModule('./lib/roadmap.cjs');
 // #3024: resolve skills root for the sync-skills workflow (install.js is not
 // shipped in installed trees; gsd-tools IS shipped, so the workflow calls this).
-const { getGlobalSkillsBase, isRegisteredRuntimeId } = require('./lib/runtime-homes.cjs');
+const getGlobalSkillsBase = lazyFn('./lib/runtime-homes.cjs', 'getGlobalSkillsBase');
+const isRegisteredRuntimeId = lazyFn('./lib/runtime-homes.cjs', 'isRegisteredRuntimeId');
 // #1561 — assumption-delta advisory checkpoint detector (pure function).
-const { detectAssumptionDelta } = require('./lib/assumption-delta.cjs');
-const verify = require('./lib/verify.cjs');
-const config = require('./lib/config.cjs');
-const estimateCli = require('./lib/estimate-cli.cjs');
-const template = require('./lib/template.cjs');
-const milestone = require('./lib/milestone.cjs');
-const milestoneReleaseTags = require('./lib/milestone-release-tags.cjs');
-const commands = require('./lib/commands.cjs');
-const runtimeIdentity = require('./lib/runtime-identity.cjs');
-const init = require('./lib/init.cjs');
-const frontmatter = require('./lib/frontmatter.cjs');
-const workstream = require('./lib/workstream.cjs');
-const docs = require('./lib/docs.cjs');
-const learnings = require('./lib/learnings.cjs');
-const gapChecker = require('./lib/gap-checker.cjs');
-const { routeStateCommand } = require('./lib/state-command-router.cjs');
-const { routeVerifyCommand } = require('./lib/verify-command-router.cjs');
-const { routeEvalCommand } = require('./lib/eval-command-router.cjs');
-const evalMod = require('./lib/eval.cjs');
-const { routeVerificationCommand } = require('./lib/verification-command-router.cjs');
-const { routePlanningCommand } = require('./lib/planning-command-router.cjs');
-const verification = require('./lib/verification.cjs');
-const { routeInitCommand } = require('./lib/init-command-router.cjs');
+const detectAssumptionDelta = lazyFn('./lib/assumption-delta.cjs', 'detectAssumptionDelta');
+const verify = lazyModule('./lib/verify.cjs');
+const config = lazyModule('./lib/config.cjs');
+const estimateCli = lazyModule('./lib/estimate-cli.cjs');
+const template = lazyModule('./lib/template.cjs');
+const milestone = lazyModule('./lib/milestone.cjs');
+const milestoneReleaseTags = lazyModule('./lib/milestone-release-tags.cjs');
+const commands = lazyModule('./lib/commands.cjs');
+const runtimeIdentity = lazyModule('./lib/runtime-identity.cjs');
+const init = lazyModule('./lib/init.cjs');
+const frontmatter = lazyModule('./lib/frontmatter.cjs');
+const workstream = lazyModule('./lib/workstream.cjs');
+const docs = lazyModule('./lib/docs.cjs');
+const learnings = lazyModule('./lib/learnings.cjs');
+const gapChecker = lazyModule('./lib/gap-checker.cjs');
+const routeStateCommand = lazyFn('./lib/state-command-router.cjs', 'routeStateCommand');
+const routeVerifyCommand = lazyFn('./lib/verify-command-router.cjs', 'routeVerifyCommand');
+const routeEvalCommand = lazyFn('./lib/eval-command-router.cjs', 'routeEvalCommand');
+const evalMod = lazyModule('./lib/eval.cjs');
+const routeVerificationCommand = lazyFn('./lib/verification-command-router.cjs', 'routeVerificationCommand');
+const routePlanningCommand = lazyFn('./lib/planning-command-router.cjs', 'routePlanningCommand');
+const verification = lazyModule('./lib/verification.cjs');
+const routeInitCommand = lazyFn('./lib/init-command-router.cjs', 'routeInitCommand');
 // Stale-bake guard (#1688): warns once when model config changed since agents
-// were last baked on static-frontmatter runtimes (codex/opencode). Lazy-required
-// here, invoked from case 'init' below.
-const { warnIfStaleBake } = require('./lib/stale-bake-guard.cjs');
-const loopResolver = require('./lib/loop-resolver.cjs');
-const brokenWindows = require('./lib/broken-windows.cjs');
-const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
-const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
-const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
-const { routeRoadmapCommand } = require('./lib/roadmap-command-router.cjs');
+// were last baked on static-frontmatter runtimes (codex/opencode). Invoked
+// from case 'init' below.
+const warnIfStaleBake = lazyFn('./lib/stale-bake-guard.cjs', 'warnIfStaleBake');
+const loopResolver = lazyModule('./lib/loop-resolver.cjs');
+const brokenWindows = lazyModule('./lib/broken-windows.cjs');
+const routePhaseCommand = lazyFn('./lib/phase-command-router.cjs', 'routePhaseCommand');
+const routePhasesCommand = lazyFn('./lib/phases-command-router.cjs', 'routePhasesCommand');
+const routeValidateCommand = lazyFn('./lib/validate-command-router.cjs', 'routeValidateCommand');
+const routeRoadmapCommand = lazyFn('./lib/roadmap-command-router.cjs', 'routeRoadmapCommand');
 // #3676 (Phase 4, epic #3344): quick-batch is a first-party, always-on
 // command family (like `/gsd:quick`) — wired directly into
 // HOST_COMMAND_ROUTERS, not the opt-in capability-registry/`activationKey`
 // path graphify uses.
-const { routeQuickBatchCommand } = require('./lib/quick-batch-command-router.cjs');
-const { routeCapabilityCommand } = require('./lib/capability-command-router.cjs');
-const { routeAgentCommand, AGENT_FAILURE_CLASSES } = require('./lib/agent-command-router.cjs');
-const smartEntryMod = require('./lib/smart-entry.cjs');
-const { routeCheckCommand } = require('./lib/check-command-router.cjs');
-const { routeTaskCommand } = require('./lib/task-command-router.cjs');
-const { parseNamedArgsOrExit, isFlagToken } = require('./lib/command-arg-projection.cjs');
-const { specFor, GLOBAL_FLAGS } = require('./lib/cli-surface.cjs');
-const { cmdGitBaseBranch } = require('./lib/git-base-branch.cjs');
-const { getEffectiveAuthority, classifyDriftSeverity, comparePhaseStatus } = require('./lib/plan-drift-guard.cjs');
+const routeQuickBatchCommand = lazyFn('./lib/quick-batch-command-router.cjs', 'routeQuickBatchCommand');
+const routeCapabilityCommand = lazyFn('./lib/capability-command-router.cjs', 'routeCapabilityCommand');
+const agentCommandRouter = lazyModule('./lib/agent-command-router.cjs');
+const routeAgentCommand = lazyFn('./lib/agent-command-router.cjs', 'routeAgentCommand');
+const smartEntryMod = lazyModule('./lib/smart-entry.cjs');
+const routeCheckCommand = lazyFn('./lib/check-command-router.cjs', 'routeCheckCommand');
+const routeTaskCommand = lazyFn('./lib/task-command-router.cjs', 'routeTaskCommand');
+const parseNamedArgsOrExit = lazyFn('./lib/command-arg-projection.cjs', 'parseNamedArgsOrExit');
+const isFlagToken = lazyFn('./lib/command-arg-projection.cjs', 'isFlagToken');
+const cmdGitBaseBranch = lazyFn('./lib/git-base-branch.cjs', 'cmdGitBaseBranch');
+const getEffectiveAuthority = lazyFn('./lib/plan-drift-guard.cjs', 'getEffectiveAuthority');
+const classifyDriftSeverity = lazyFn('./lib/plan-drift-guard.cjs', 'classifyDriftSeverity');
+const comparePhaseStatus = lazyFn('./lib/plan-drift-guard.cjs', 'comparePhaseStatus');
 
 /**
  * Free positional words from `args[from..]` for a spec that sets `freePositionals`: every
@@ -463,7 +534,9 @@ function _dispatchNonFamily({ registryCommand, registryArgs, legacyCommand, lega
  * @param {Function} opts.error          Error reporter (io.error)
  * @param {object}   [opts.registry]     Injectable registry (for tests)
  * @param {Function} [opts.requireModule] Injectable module loader (for tests)
- * @returns {boolean} true if the command was dispatched, false otherwise
+ * @returns {boolean | Promise<true>} true if the command was dispatched, false otherwise;
+ *   a promise of true when the router is one its module declares in `asyncRouters` and it
+ *   returned a promise (#6332)
  */
 function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, requireModule }) {
   // Prototype-pollution guard: reject reserved property names as command keys
@@ -545,6 +618,13 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     );
   }
   if (_result && typeof _result.then === 'function') {
+    // #6332: a first-party router its own module declares asynchronous is
+    // waited for. The caller gets a promise of `true` and main() awaits it, so
+    // an in-process call (runCli) ends when the command has, as the binary does.
+    const declared = Object.prototype.hasOwnProperty.call(mod, 'asyncRouters') ? mod.asyncRouters : undefined;
+    if (Array.isArray(declared) && declared.includes(entry.router)) {
+      return _result.then(() => true);
+    }
     error(
       'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" must be synchronous (returned a Promise); async capability routers are not supported.',
       ERROR_REASON.SDK_FAIL_FAST,
@@ -689,8 +769,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // arrive via the destructured context.
 
   function routeResolveModel({ args, cwd, raw }) {
-    parseNamedArgsOrExit(args, specFor('resolve-model'), error);
-    commands.cmdResolveModel(cwd, args[1], raw);
+    const spec = specFor('resolve-model');
+    const parsed = parseNamedArgsOrExit(args, spec, error);
+    // A repeated value flag (--fallback-agent) has no defined winner (the parser keeps the first), so it is a usage error (#6213).
+    for (const flag of spec.valueFlags ?? []) {
+      if (args.filter((token) => token === `--${flag}`).length > 1) error(`Duplicate --${flag}: pass it once`, ERROR_REASON.USAGE);
+    }
+    // The agent type is the one free word, whichever side of --fallback-agent it sits on (#6213).
+    const positionals = positionalWords(args, spec);
+    if (positionals.length > 1) error('resolve-model takes one agent type', ERROR_REASON.USAGE);
+    commands.cmdResolveModel(cwd, positionals[0], raw, parsed['fallback-agent'] ?? undefined);
   }
 
   function routeResolveGranularity({ args, cwd, raw }) {
@@ -707,7 +795,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const parsed = parseNamedArgsOrExit(args, spec, error);
     // #2296: the valid classes come from the classifier's own frozen enum, so
     // this validator can never drift from what `agent classify-failure` emits.
-    const validFailureClasses = Object.values(AGENT_FAILURE_CLASSES);
+    const validFailureClasses = Object.values(agentCommandRouter.AGENT_FAILURE_CLASSES);
     const failureClass = parsed['failure-class'] ?? undefined;
     if (failureClass !== undefined && !validFailureClasses.includes(failureClass)) {
       error(
@@ -1564,7 +1652,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             return result.value.content;
           }, cwd, { resync: false });
 
-          output({ ok: true, row: mutation.row, variant: mutation.variant }, raw, mutation.row);
+          // #5830: an over-long description is written verbatim, exit stays 0;
+          // the warning rides in the JSON `warnings` (prose string[], the
+          // repo-wide meaning of that field) and, in --raw mode where stdout
+          // carries only the row, goes to stderr.
+          if (raw) {
+            for (const w of mutation.warnings) process.stderr.write(`⚠ quick-tasks-append: ${w}\n`);
+          }
+          output({ ok: true, row: mutation.row, variant: mutation.variant, warnings: mutation.warnings }, raw, mutation.row);
   }
 
   /**
@@ -1700,11 +1795,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             redirect: 'manual',
             signal: AbortSignal.timeout(opts.timeoutMs),
           });
-          // probe:true marks a reachability probe (returns status only, body ''): the status line is the answer, so do not
-          // let a stalled body turn a replying server into `missing`.
+          // probe:true marks a reachability probe: the status line is the answer (body '', so a stalled
+          // body cannot turn a replying server into `missing`), except readBody:true on a 2xx.
           if (opts.probe) {
-            res.body?.cancel().catch(() => {});
-            return { ok: res.ok, status: res.status, body: '' };
+            // #5963: a default-host probe may judge a 2xx body's shape (size-capped); see probeBody.
+            const body = await require('./lib/http-body-cap.cjs').probeBody(res, opts.readBody === true);
+            return { ok: res.ok, status: res.status, body };
           }
           if (res.status >= 300 && res.status < 400) {
             res.body?.cancel().catch(() => {});
@@ -2387,17 +2483,42 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       exec = null;
     }
 
+    // #6303 (ADR-3711): a plan that declares `executor_runtime` resolves to the target runtime's
+    // exec when the gate and every precondition hold, else to `fallback` (one reason) with the host
+    // decision untouched. The single sentinel write below records whichever decision stands.
+    const cross = resolveCrossRuntimeDispatch({ cwd, parsed, hostRuntimeId: runtimeId });
+    const foreign = cross.isolation !== null;
+    if (foreign) {
+      isolation = cross.isolation;
+      exec = cross.exec;
+      harnessFlag = null;
+    } else if (cross.fallback) {
+      process.stderr.write(`note: plan ${planArg} declares executor_runtime${cross.executorRuntime ? ` '${cross.executorRuntime}'` : ''} but is dispatched on the host (${cross.fallback}).\n`);
+    }
+
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
+    let truncatedRecord = false;
     try {
-      writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase: phaseArg, plan: planArg });
+      const written = writeDispatchIsolationSentinel(cwd, {
+        isolation, harnessFlag, phase: phaseArg, plan: planArg,
+        ...(foreign ? { producer: 'dispatch-isolation', executorRuntime: cross.executorRuntime } : {}),
+        // #6213: a plan-scoped record names its own executor (`executor_type`); a phase-level record
+        // (no plan) names every routable hinted executor of its phase (`executor_types`).
+        executorType: deriveRecordedExecutor(cwd, phaseArg, planArg).resolved,
+        executorTypes: planArg ? null : deriveRecordedExecutorTypes(cwd, phaseArg, planArg),
+      });
+      truncatedRecord = !!written.droppedExecutorTypes;
+      if (written.droppedExecutorTypes) {
+        process.stderr.write(`warning: dispatch-isolation phase ${phaseArg}: executor_types capped at 64 names or did not fit the record; names left out: ${written.droppedExecutorTypes.join(', ')} (#6213)\n`);
+      }
     } catch {
       // writeDispatchIsolationSentinel already swallows its own errors into
       // a { recorded: false } result; this catch is defense in depth only.
     }
 
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      output({ runtime: runtimeId, executorRuntime: cross.executorRuntime, isolation, exec, harnessFlag, fallback: cross.fallback, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2634,13 +2755,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * documented desired behavior of falling back to the session model rather
    * than aborting the wave.
    */
-  function resolveDispatchModelPin(agentName, rawValue) {
+  function resolveDispatchModelPin(agentName, rawValue, { foreignTarget = false } = {}) {
     if (typeof rawValue !== 'string') return undefined; // not a string -> no model
     const trimmed = rawValue.trim();
     if (trimmed === '') return undefined; // whitespace-only -> no model, no warning (#3241)
     if (trimmed.toLowerCase() === 'inherit') return undefined; // sentinel -> no model, no warning
     const { isAnthropicFlavoredModel } = require('./lib/model-catalog.cjs');
-    if (isAnthropicFlavoredModel(trimmed)) {
+    // #6303: the Anthropic-flavored rule guards a Codex host's passive model posture. A foreign target
+    // is chosen by the operator under `execute.models.<runtime>`, and a runtime such as opencode
+    // legitimately takes `anthropic/claude-...`, so only the charset, length and leading-dash rules apply.
+    if (!foreignTarget && isAnthropicFlavoredModel(trimmed)) {
       _warnDispatchModelPinDropped(agentName, rawValue, 'is an Anthropic-flavored model/alias, not a valid Codex model');
       return undefined;
     }
@@ -2719,7 +2843,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         const cwdTarget = parsed['cwd-target'];
         if (cwdTarget) {
           const promptArg = parsed.prompt ?? undefined;
-          const hostIntegration = require('./lib/host-integration.cjs');
           // #3714: resolve an EXPLICIT, non-sentinel per-agent model pin for the
           // spawned worktree executor. Passing `null` as the runtime resolver
           // (3rd arg) is LOAD-BEARING, not an oversight — it is what keeps
@@ -2764,19 +2887,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               'gsd-executor', readGsdEffectiveModelOverrides(cwd), null);
             model = resolveDispatchModelPin('gsd-executor', pinned);
           }
-          let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
-          // eslint-disable-next-line local/named-args-spec-from-registry -- compares a runtime descriptor's cwd flag for the host process argv gsd-tools builds, not a gsd-tools CLI flag
-          if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
-            // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
-            const ocv = require('./lib/opencode-version.cjs');
-            orchestratorExec = ocv.adaptOrchestratorExecForGeneration(orchestratorExec, ocv.detectOpencodeGeneration().generation);
-          }
-          const resolution = hostIntegration.resolveOrchestratorExec(
-            orchestratorExec,
-            cwdTarget,
-            promptArg,
-            model,
-          );
+          const resolution = resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model);
           // A host declaring orchestrator-worktree whose exec descriptor does not
           // resolve halts THIS wave's dispatch: isolation is forced to 'none' here,
           // and the EXEC_OK fail-closed halt of executor-isolation-dispatch.md treats a null exec as FATAL
@@ -2801,6 +2912,82 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harnessFlag = null;
     }
     return { runtimeId, isolation, exec, harnessFlag };
+  }
+
+  /** Resolve one runtime descriptor's `orchestratorExec` against a worktree, prompt and model (shared by the host and the #6303 foreign path). */
+  function resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model) {
+    const hostIntegration = require('./lib/host-integration.cjs');
+    let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
+    // eslint-disable-next-line local/named-args-spec-from-registry -- compares a runtime descriptor's cwd flag for the host process argv gsd-tools builds, not a gsd-tools CLI flag
+    if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
+      // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
+      const ocv = require('./lib/opencode-version.cjs');
+      orchestratorExec = ocv.adaptOrchestratorExecForGeneration(orchestratorExec, ocv.detectOpencodeGeneration().generation);
+    }
+    return hostIntegration.resolveOrchestratorExec(orchestratorExec, cwdTarget, promptArg, model);
+  }
+
+  /** True when `command` is a bare name that resolves to an executable file on PATH, through the shared binary-resolution seam. */
+  function commandOnPath(command) {
+    if (typeof command !== 'string' || command.length === 0 || command.includes('/') || command.includes('\\')) return false;
+    return require('./lib/shell-command-projection.cjs').resolveExecutableBinary(command, { requireExecutable: true }) !== null;
+  }
+
+  /**
+   * #6303 (ADR-3711 D1-D3, D7): resolve a plan's `executor_runtime` into a foreign dispatch, or the one
+   * reason it degrades to the host's own dispatch. Returns `{ executorRuntime, fallback, isolation, exec }`;
+   * `isolation`/`exec` are set only when the foreign dispatch is in effect. The branch is the TARGET
+   * descriptor's declared `dispatch.isolation`, never a runtime id; the model is `execute.models.<target>`
+   * only, so the host's pin cannot reach the spawned argv. Never throws.
+   */
+  function resolveCrossRuntimeDispatch({ cwd, parsed, hostRuntimeId }) {
+    const none = { executorRuntime: null, fallback: null, isolation: null, exec: null };
+    try {
+      if (!parsed.plan) return none;
+      const declared = require('./lib/phase.cjs').resolvePlanExecutorRuntime(cwd, parsed.phase || null, parsed.plan);
+      if (declared === null) return none;
+      const target = declared.trim();
+      // The value is plan text. Only a bare runtime id is ever echoed or looked up (verify plan-structure
+      // holds the same grammar); anything else is an unknown runtime reported without its text.
+      const isId = /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(target);
+      const degrade = (fallback) => ({ executorRuntime: isId ? target : null, fallback, isolation: null, exec: null });
+      if (!isId) return degrade('unknown_runtime');
+      const { readScopedConfigValue } = require('./lib/planning-workspace.cjs');
+      const gate = readScopedConfigValue(cwd, ['workflow', 'cross_runtime_execution']);
+      if (!gate.present || gate.value !== true) return degrade('gate_off');
+      if (projectWorktreesOptedOut(cwd)) return degrade('worktrees_off');
+      // A caller that forced this plan's isolation (the #2474 submodule gate, the #683 base-check
+      // degrade) has decided it with context this resolver cannot see; the foreign dispatch never overrides it.
+      if (parsed['force-isolation'] && DISPATCH_ISOLATION_VOCABULARY.has(parsed['force-isolation'])) return degrade('forced_isolation');
+      const runtimes = require('./lib/capability-registry.cjs').runtimes;
+      if (!runtimes || !Object.hasOwn(runtimes, target)) return degrade('unknown_runtime');
+      if (target === hostRuntimeId) return degrade('same_runtime');
+      const entry = runtimes[target];
+      const declaredIsolation = entry?.runtime?.hostIntegration?.dispatch?.isolation;
+      const descriptor = entry?.runtime?.orchestratorExec;
+      if (declaredIsolation !== 'orchestrator-worktree' || !descriptor || typeof descriptor.command !== 'string') return degrade('descriptor_unresolved');
+      // Probe PATH before anything that may spawn (the opencode generation probe runs `opencode --version`).
+      if (!commandOnPath(descriptor.command)) return degrade('binary_absent');
+      // Model: the target runtime's own key only, applied only when its descriptor declares a modelFlag.
+      let model;
+      if (typeof descriptor.modelFlag === 'string' && descriptor.modelFlag.length > 0) {
+        const pin = readScopedConfigValue(cwd, ['execute', 'models', target]);
+        model = resolveDispatchModelPin('gsd-executor', pin.present ? pin.value : null, { foreignTarget: true });
+      }
+      // Without a worktree yet (the per-plan decision is taken before it is created) the descriptor is
+      // proven resolvable against the project directory and no exec is returned.
+      const cwdTarget = parsed['cwd-target'] || cwd;
+      const resolution = resolveRuntimeOrchestratorExec(target, entry, cwdTarget, parsed.prompt ?? undefined, model);
+      if (!resolution.ok) return degrade('descriptor_unresolved');
+      return {
+        executorRuntime: target,
+        fallback: null,
+        isolation: 'orchestrator-worktree',
+        exec: parsed['cwd-target'] ? { command: resolution.command, args: resolution.args, cwd: resolution.cwd } : null,
+      };
+    } catch {
+      return none;
+    }
   }
 
   function routeInspectDispatchIsolation({ args, cwd, raw }) {
@@ -2849,7 +3036,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //     read has nothing to record.
     const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ parsed, cwd });
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      // #6303: the same key set as `dispatch-isolation --json`, so a consumer written against either verb
+      // reads the other verbatim. This read has no plan (--plan is refused above), so it declares no
+      // executor runtime and never reports a fallback.
+      output({ runtime: runtimeId, executorRuntime: null, isolation, exec, harnessFlag, fallback: null }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2867,7 +3057,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const nodeFs = require('fs');
     try {
       const {
-        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS,
+        keyedSentinelPath, phaseSentinelPath, KEYED_SENTINEL_DIR, AGED_NONE_MAX_MS, hasJsonSuffix,
       } = require('../../hooks/lib/isolation-sentinel.js');
       // A plan-scoped decision lands at <phase>--<plan>.json; a plan-less one (the phase-level
       // degrade) at <phase>.json, so concurrent phase-level orchestrators keep separate records.
@@ -2894,7 +3084,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       const cutoff = clock.now() - AGED_NONE_MAX_MS;
       const written = nodePath.basename(keyedFile);
       for (const name of nodeFs.readdirSync(keyedDir)) {
-        if (name === written || !(name.endsWith('.json') || name.includes('.json.tmp-'))) continue;
+        if (name === written || !(hasJsonSuffix(name) || name.includes('.json.tmp-'))) continue;
         try {
           const file = nodePath.join(keyedDir, name);
           if (nodeFs.lstatSync(file).mtimeMs < cutoff) nodeFs.unlinkSync(file);
@@ -2913,7 +3103,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, executorType = null, executorTypes = null, producer = null, executorRuntime = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -2923,8 +3113,43 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harness_flag: harnessFlag || null,
       phase: phase || null,
       plan: plan || null,
+      // #6213: a type the guards would refuse to read back is recorded as null (resolved just below).
+      executor_type: null,
       written_at: clock.now(),
+      // #6303 (ADR-3711 D8): present only on a foreign dispatch's record, so every other record is unchanged.
+      ...(producer ? { producer } : {}),
+      ...(executorRuntime ? { executor_runtime: executorRuntime } : {}),
     };
+    let droppedExecutorTypes = [];
+    // A validator that fails to load records no executor type; it never prevents the rest of the
+    // record from being written (this function's contract is: never throw).
+    try {
+      const executorTypeLib = require('./lib/executor-type.cjs');
+      if (executorTypeLib.isValidExecutorType(executorType)) payload.executor_type = executorType;
+      // #6213: a phase-level record (executorTypes an array) also names every routable hinted
+      // executor of its phase as `executor_types` (sorted, de-duplicated, at most 64 valid names).
+      // The reader refuses a record over SENTINEL_MAX_BYTES, so entries that would push the
+      // serialized record past it are dropped from the end of the list rather than the record.
+      if (Array.isArray(executorTypes)) {
+        const sentinelLib = require('../../hooks/lib/isolation-sentinel.js');
+        const maxBytes = sentinelLib.SENTINEL_MAX_BYTES;
+        // The uncapped list: the entry cap is applied here so names capped out are reported too.
+        const types = executorTypeLib.uniqueExecutorTypes(executorTypes);
+        payload.executor_types = executorTypeLib.normalizeExecutorTypes(executorTypes);
+        if (types.length > payload.executor_types.length) payload.executor_types_truncated = true;
+        if (Buffer.byteLength(JSON.stringify(payload)) > maxBytes) {
+          // Visible, not silent: the record says it was truncated and the caller reports the
+          // dropped names. The reader treats a fresh applicable truncated record as unable to rule a
+          // type out (isExecutorDispatch fails closed for a valid non-GSD-role name), and their
+          // plan-scoped records still guard them.
+          payload.executor_types_truncated = true;
+          while (payload.executor_types.length > 0 && Buffer.byteLength(JSON.stringify(payload)) > maxBytes) {
+            payload.executor_types = payload.executor_types.slice(0, -1);
+          }
+        }
+        droppedExecutorTypes = types.slice(payload.executor_types.length);
+      }
+    } catch (_) { /* executor_type stays null */ }
     let tmpPath = null;
     try {
       // #5757: the shared tool-owned .gsd owner refuses a project-supplied
@@ -2971,7 +3196,11 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, sentinelPath);
       tmpPath = null;
       writeKeyedDispatchIsolationRecord(cwd, sentinelDir, payload, clock);
-      return { recorded: true, path: '.gsd/dispatch-isolation-sentinel.json' };
+      return {
+        recorded: true,
+        path: '.gsd/dispatch-isolation-sentinel.json',
+        ...(droppedExecutorTypes.length > 0 ? { droppedExecutorTypes } : {}),
+      };
     } catch (err) {
       return { recorded: false, path: '.gsd/dispatch-isolation-sentinel.json', error: err && err.message };
     } finally {
@@ -3004,7 +3233,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     if (!VALID_ISOLATION.has(isolation)) {
       error(
         'Usage: record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> ' +
-        '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>]',
+        '[--harness-flag <flag>|--harness-flag=<flag>] [--phase <n>] [--plan <id>] [--executor-type <agent>]',
         ERROR_REASON.USAGE,
       );
       return;
@@ -3028,7 +3257,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const phase = parsed.phase || null;
     const plan = parsed.plan || null;
 
-    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan });
+    // #6213: a GSD non-executor role is never recorded as the executor (it would hold that role to the
+    // worktree rule); refuse it the way resolve-agent refuses it as a hint.
+    let executorType = parsed['executor-type'] || null;
+    if (isGsdNonExecutorRole(executorType)) {
+      warnRefusedExecutorType(executorType);
+      executorType = null;
+    }
+    const result = writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag, phase, plan, executorType });
     output(result, raw);
   }
 
@@ -3078,29 +3314,38 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
            // unvalidated name, which would make Agent() error and block the wave.
            //
            // Output:
+           //   --plan <id> [--phase <p>] (no --name): the plan's own agent_hint resolved as the
+           //   dispatch-isolation record resolves it (#6213); --json adds phase and plan, `requested`
+           //   is the hint (null when none), `fallback` is true when the hint was not found or not used
            //   --raw (default) -> prints the resolved type (the hint, or 'gsd-executor')
            //   --json          -> prints { runtime, requested, resolved, fallback }
     const FALLBACK = 'gsd-executor';
     try {
-      const requested = parsed.name ?? '';
       const { resolveRuntime } = require('./lib/runtime-slash.cjs');
       const runtimeId = resolveRuntime(cwd);
-      const { resolveAgentHint } = require('./lib/agent-install-check.cjs');
-      let resolved = FALLBACK;
-      let resolvedOk = false; // true only when resolveAgentHint returned a hit
-      if (requested && !requested.startsWith('-')) {
-        const hit = resolveAgentHint(requested, runtimeId, cwd);
-        if (hit !== null) {
-          resolved = hit;
-          resolvedOk = true;
+      // #6213: `--plan` (no `--name`) resolves the plan's OWN agent_hint on disk through
+      // deriveRecordedExecutor, the resolution the dispatch-isolation record uses (routing toggle
+      // included), so the dispatched type and the recorded type come from one read.
+      if (!parsed.name && parsed.plan) {
+        const { resolved, refused, hit, hint } = deriveRecordedExecutor(cwd, parsed.phase || null, parsed.plan);
+        if (refused) warnRefusedHint(hint, FALLBACK);
+        if (parsed.json) {
+          // `requested` is the plan's agent_hint (null when none); `fallback` is `!hit`, as in --name mode.
+          output({ runtime: runtimeId, phase: parsed.phase || null, plan: parsed.plan, requested: hint || null, resolved, fallback: !hit, ...(refused ? { refused: 'non-executor-role' } : {}) }, raw);
+        } else {
+          process.stdout.write(String(resolved));
         }
+        return;
       }
+      const requested = parsed.name ?? '';
+      const { resolved, refused, hit } = resolveRoutedExecutor(requested, runtimeId, cwd);
+      if (refused) warnRefusedHint(requested, FALLBACK);
       // `fallback` = we did NOT honor a resolvable hint (absent/flag-shaped name,
       // the named agent did not resolve, or resolution errored). Requesting
       // gsd-executor explicitly and resolving to it is NOT a fallback.
-      const fellBack = !resolvedOk;
+      const fellBack = !hit;
       if (parsed.json) {
-        output({ runtime: runtimeId, requested: requested || null, resolved, fallback: fellBack }, raw);
+        output({ runtime: runtimeId, requested: requested || null, resolved, fallback: fellBack, ...(refused ? { refused: 'non-executor-role' } : {}) }, raw);
       } else {
         process.stdout.write(String(resolved));
       }
@@ -3108,6 +3353,114 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // Fail-closed: degrade to the legacy executor on any error so dispatch
       // never blocks on resolution.
       process.stdout.write(FALLBACK);
+    }
+  }
+
+  /** #6213: the stderr warning for a hint that names a GSD non-executor role (resolve-agent). */
+  function warnRefusedHint(hint, fallback) {
+    process.stderr.write(`warning: agent_hint "${String(hint).trim()}" names a GSD non-executor role; dispatching ${fallback} instead (#6213)\n`);
+  }
+
+  /** #6213: the stderr warning for record-dispatch-isolation --executor-type naming a GSD non-executor role (nothing is dispatched; no executor is recorded). */
+  function warnRefusedExecutorType(name) {
+    process.stderr.write(`warning: --executor-type "${String(name).trim()}" names a GSD non-executor role; recording no executor (#6213)\n`);
+  }
+
+  // #6213: a GSD role other than gsd-executor (the MODEL_PROFILES keys), trimmed and case-folded. The one
+  // predicate behind both the resolve-agent hint refusal and the record-dispatch-isolation refusal.
+  function isGsdNonExecutorRole(name) {
+    if (typeof name !== 'string') return false;
+    const { MODEL_PROFILES: gsdRoles } = require('./lib/model-profiles.cjs');
+    const folded = name.trim().toLowerCase();
+    return folded !== 'gsd-executor' && Object.keys(gsdRoles).some((k) => k.toLowerCase() === folded);
+  }
+
+  /**
+   * #6213: the ONE resolution of a plan's `agent_hint` to the executor an Agent() call dispatches,
+   * shared by `resolve-agent` and the `dispatch-isolation` recorder so the executor the workflow
+   * dispatches and the executor the isolation record names cannot diverge.
+   *
+   * The name is trimmed and case-folded before it is compared with GSD's own roles: a hint naming
+   * a GSD non-executor role (gsd-verifier, gsd-planner, ...) is refused whatever its spacing or
+   * case and resolves to gsd-executor. `hit` is true only when an installed hinted agent (or
+   * gsd-executor itself) resolved. Never throws past its callers' try/catch.
+   */
+  function resolveRoutedExecutor(hint, runtimeId, cwd) {
+    const FALLBACK = 'gsd-executor';
+    const trimmed = typeof hint === 'string' ? hint.trim() : '';
+    if (!trimmed || trimmed.startsWith('-')) return { resolved: FALLBACK, refused: false, hit: false };
+    const folded = trimmed.toLowerCase();
+    if (isGsdNonExecutorRole(trimmed)) return { resolved: FALLBACK, refused: true, hit: false };
+    // A name the record could not carry (and the guards would refuse to read back) is never
+    // routed to, so the printed executor and the recorded executor always satisfy one grammar.
+    if (!require('./lib/executor-type.cjs').isValidExecutorType(trimmed)) return { resolved: FALLBACK, refused: false, hit: false };
+    const { resolveAgentHint } = require('./lib/agent-install-check.cjs');
+    // gsd-executor in any casing resolves as the canonical name, never as the caller's spelling.
+    const lookup = folded === FALLBACK ? FALLBACK : trimmed;
+    const found = resolveAgentHint(lookup, runtimeId, cwd);
+    if (found === null) return { resolved: FALLBACK, refused: false, hit: false };
+    return { resolved: found, refused: false, hit: true };
+  }
+
+  /** `workflow.agent_hint_routing` is off when it is boolean `false` or the string "false" (trimmed, any case). */
+  function agentHintRoutingOff(cwd) {
+    const { readScopedConfigValue } = require('./lib/planning-workspace.cjs');
+    const routing = readScopedConfigValue(cwd, ['workflow', 'agent_hint_routing']);
+    if (!routing.present) return false;
+    if (routing.value === false) return true;
+    return typeof routing.value === 'string' && routing.value.trim().toLowerCase() === 'false';
+  }
+
+  /**
+   * #6213: the executor type a plan-scoped `dispatch-isolation` record names, derived from the
+   * plan's OWN `agent_hint` (the parser `phase-plan-index` uses) under the SAME resolution
+   * `resolve-agent` applies, so the recorder never depends on a shell value carried across tool
+   * calls. With a phase, the plan is looked up in that phase; with no phase (`--plan` only) the plan
+   * id is looked up across every phase directory and used only when exactly one plan carries it
+   * (zero or several resolve to gsd-executor). `workflow.agent_hint_routing` off, a missing plan,
+   * an absent hint, or any lookup failure gives 'gsd-executor'. A record with no plan gives
+   * 'gsd-executor' (the phase-level list is deriveRecordedExecutorTypes). Returns the full
+   * `{ resolved, refused, hit, hint }` so resolve-agent can report a refusal; never throws.
+   */
+  function deriveRecordedExecutor(cwd, phaseArg, planArg) {
+    const FALLBACK = 'gsd-executor';
+    const none = { resolved: FALLBACK, refused: false, hit: false, hint: null };
+    try {
+      if (!planArg) return none;
+      if (agentHintRoutingOff(cwd)) return none;
+      const phaseLib = require('./lib/phase.cjs');
+      const hint = phaseArg
+        ? phaseLib.resolvePlanAgentHint(cwd, phaseArg, planArg)
+        : phaseLib.resolvePlanAgentHintAcrossPhases(cwd, planArg).hint;
+      if (hint === null) return none;
+      const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+      return { ...resolveRoutedExecutor(hint, resolveRuntime(cwd), cwd), hint };
+    } catch {
+      return none;
+    }
+  }
+
+  /**
+   * #6213: the `executor_types` a PHASE-LEVEL record (phase set, no plan) names: the sorted,
+   * de-duplicated routed executors, other than gsd-executor, of every canonical plan in that phase
+   * (same resolution as deriveRecordedExecutor), each a valid executor type, NOT capped here (the
+   * record writer caps at MAX_EXECUTOR_TYPES and reports what it drops). A plan-scoped record, routing off, or any failure gives []. A record with no phase and no
+   * plan names the executors of every milestone phase directory. Never throws.
+   */
+  function deriveRecordedExecutorTypes(cwd, phaseArg, planArg) {
+    try {
+      if (planArg) return [];
+      if (agentHintRoutingOff(cwd)) return [];
+      const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+      const runtimeId = resolveRuntime(cwd);
+      const phaseLib = require('./lib/phase.cjs');
+      const routed = (phaseArg ? phaseLib.listPhaseAgentHints(cwd, phaseArg) : phaseLib.listAllPhaseAgentHints(cwd))
+        .map((hint) => resolveRoutedExecutor(hint, runtimeId, cwd).resolved)
+        .filter((type) => type !== 'gsd-executor');
+      // Uncapped: writeDispatchIsolationSentinel applies the cap and reports the names it drops.
+      return require('./lib/executor-type.cjs').uniqueExecutorTypes(routed);
+    } catch {
+      return [];
     }
   }
 
@@ -5502,7 +5855,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // dispatchCapabilityCommand routes it to the capability's registered router.
       // commandFamilies now includes migrated capabilities (e.g. graphify → graphify-command-router.cjs);
       // this returns true when a registered capability owns the command, false otherwise.
-      if (dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
+      if (await dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
 
       // ADR-1244 Phase 5 (D7): if no first-party family owns the command, try an INSTALLED
       // THIRD-PARTY (overlay) capability — dispatched only if committed/consented and only by
@@ -5541,6 +5894,20 @@ if (require.main === module) {
   runMain(main);
 }
 
+/**
+ * Run this CLI in-process (#6332, ADR-6315 item 14): the same `main` the
+ * entry point above runs, behind the in-process seam. Resolves to
+ * `{ exitCode, stdout, stderr }`, writes nothing to the real streams and
+ * leaves process state as it found it. `argv` is what follows the script path.
+ *
+ * @param {{ argv?: readonly string[], cwd?: string, env?: Record<string, string | undefined> }} [options]
+ * @returns {Promise<{ exitCode: number, stdout: string, stderr: string }>}
+ */
+function runCli(options = {}) {
+  const { runInProcess } = require('./lib/in-process-cli.cjs');
+  return runInProcess(main, { ...options, scriptPath: __filename });
+}
+
 // ─── Exports (for tests) ──────────────────────────────────────────────────────
 // ADR-959: export dispatchCapabilityCommand so tests can exercise it with
 // synthetic registry + requireModule injections.
@@ -5552,6 +5919,7 @@ function hostCommandNames() {
 }
 
 module.exports = {
+  runCli,
   hostCommandNames,
   dispatchCapabilityCommand,
   dispatchOverlayCapabilityCommand,

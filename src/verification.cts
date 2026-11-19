@@ -45,6 +45,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 import { execGit, platformWriteSync } from './shell-command-projection.cjs';
 import { splitLines, joinLines } from './text-lines.cjs';
+import { capCodeUnits } from './code-unit-cap.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { isContainedIn, requireSafePath, PathAcceptance } from './security.cjs';
@@ -54,7 +55,7 @@ import { parseMarkdownTable } from './markdown-table.cjs';
 import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
 
 const { output, error } = io;
-const { extractPhaseToken, scopeToPhase } = phaseId;
+const { extractPhaseToken, normalizePhaseName, scopeToPhase } = phaseId;
 const { extractFrontmatter, FRONTMATTER_UNPARSEABLE } = frontmatterMod;
 const { normalizeLineEndings } = coreUtilsMod;
 const { SCOPE } = planningScopeMod;
@@ -168,8 +169,7 @@ function describeRawStatus(raw: unknown): string {
   if (partialEscape) {
     cut -= partialEscape[0].length;
   } else {
-    const last = rendered.charCodeAt(cut - 1);
-    if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+    cut = capCodeUnits(rendered, cut, 'head').length;
   }
   // JSON also emits two-character escapes (`\n`, `\t`, `\"`, `\\`): an odd
   // trailing run of backslashes is the first half of one, so drop it too.
@@ -1697,8 +1697,16 @@ function resolvePhaseArtifactFile(
   const candidates = entries.filter((f) => f.endsWith(`-${bareName}`)).sort();
   if (candidates.length > 0) {
     if (options.phaseToken) {
-      const thisPhaseFile = `${options.phaseToken}-${bareName}`;
-      if (candidates.includes(thisPhaseFile)) return thisPhaseFile;
+      // #5931: the token as the directory spells it (`XR-03`, `5`) first, so a file that literally
+      // carries it keeps winning; then the spelling the scaffolder writes, `normalizePhaseName`'s
+      // code-stripped, zero-padded form (`03`, `05`). Callers pass `extractPhaseToken(dirName)`, which
+      // keeps the code and the padding as written, so without the second spelling a project-coded or
+      // unpadded directory's own `NN-UAT.md` lost to any sibling that sorts first.
+      const spellings = [options.phaseToken, normalizePhaseName(options.phaseToken)];
+      for (const token of new Set(spellings)) {
+        const thisPhaseFile = `${token}-${bareName}`;
+        if (candidates.includes(thisPhaseFile)) return thisPhaseFile;
+      }
     }
     // #3511: scope the fallback to files that belong to THIS phase, so a
     // stray cross-phase file can no longer outrank a return of null.

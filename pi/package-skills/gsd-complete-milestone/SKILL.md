@@ -30,9 +30,9 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
 
 <context>
 **Project files:**
-- `.planning/ROADMAP.md`
-- `.planning/REQUIREMENTS.md`
-- `.planning/STATE.md`
+- `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`)
+- `{planning_root}/REQUIREMENTS.md`
+- `{planning_root}/STATE.md`
 - `.planning/PROJECT.md`
 
 **User input:**
@@ -46,7 +46,7 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
 
 0. **Check for audit:**
 
-   - Look for `.planning/v{{version}}-MILESTONE-AUDIT.md`
+   - Look for `v{{version}}-MILESTONE-AUDIT.md` under the scope root (`planning.inspect --pick generated_from.planning_root`)
    - If missing or stale: recommend `/skill:gsd-audit-milestone` first
    - If audit status is `gaps_found`: recommend closing the gaps inline
      (the audit output already enumerates them — insert closure phases
@@ -103,7 +103,7 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
    - Create `.planning/milestones/v{{version}}-REQUIREMENTS.md`
    - Mark all v1 requirements as complete (checkboxes checked)
    - Note requirement outcomes (validated, adjusted, dropped)
-   - Delete `.planning/REQUIREMENTS.md` (fresh one created for next milestone)
+   - Delete `{planning_root}/REQUIREMENTS.md` (fresh one created for next milestone)
 
 6. **Update PROJECT.md:**
 
@@ -127,7 +127,7 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
 
 - Milestone archived to `.planning/milestones/v{{version}}-ROADMAP.md`
 - Requirements archived to `.planning/milestones/v{{version}}-REQUIREMENTS.md`
-- `.planning/REQUIREMENTS.md` deleted (fresh for next milestone)
+- `{planning_root}/REQUIREMENTS.md` deleted (fresh for next milestone)
 - ROADMAP.md collapsed to one-line entry
 - PROJECT.md updated with current state
 - Git tag v{{version}} created (if `git.create_tag` enabled)
