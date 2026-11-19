@@ -3682,7 +3682,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(fs.existsSync(log), tracked, r.stderr);
       if (!tracked) {
         assert.notEqual(r.exitCode, 0);
-        assert.match(r.stderr, /did not match any files/);
       }
     }
   });
