@@ -4,6 +4,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 
 const { slugify } = require('../scripts/gen-features.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
@@ -295,6 +296,7 @@ describe('link classification (#5427)', () => {
       `${REPO}archive/main.zip`, `${REPO}commits/next/docs`, `${REPO}edit/next/x`,
       `${REPO}Blob/next/x`, `${REPO}bob/next/x`, `${REPO}blob/next/../x`,
       `${REPO}blob/next/%2e%2e/x`, `${REPO}blob/next/./x`, `${REPO}blob/next/%2e/x`,
+      `${REPO}blob/next/%2E%2E/x`, `${REPO}blob/next/.%2E/x`, `${REPO}blob/next/%2E/x`,
       `${REPO}issues/&#46;&#46;/x`, `${REPO}issues/\\.\\./x`,
       `${REPO}issues/../blob/main/x`, `${REPO}/blob/main/x`, `${REPO}blob/next//x`,
       `${REPO}blob//next/x`, 'https://github.com/open-gsd/gsd-coreissues/1',
@@ -343,16 +345,19 @@ describe('readRepoFile (#5427)', () => {
   });
   test('a symlink in the repo that leads out of it is refused', (t) => {
     const dir = createTempDir();
-    t.after(() => cleanup(dir));
+    const name = `.link-5427-${randomUUID()}`;
+    // the link goes first: a parallel walk of the repo root must not see it dangle
+    t.after(() => {
+      if (fs.existsSync(path.join(ROOT, name, 'secret.md'))) fs.unlinkSync(path.join(ROOT, name));
+      cleanup(dir);
+    });
     fs.writeFileSync(path.join(dir, 'secret.md'), '# secret\n');
-    const name = `.link-5427-${process.pid}`;
     try {
       fs.symlinkSync(dir, path.join(ROOT, name), 'dir');
     } catch (err) {
       if (err.code === 'EPERM') return t.skip('cannot create symlinks on this platform');
       throw err;
     }
-    t.after(() => fs.unlinkSync(path.join(ROOT, name)));
     assert.ok(fs.existsSync(path.join(ROOT, name, 'secret.md')));
     // a fresh cache: the module cache lists the repo root before this link exists
     assert.throws(() => readRepoFile(`${name}/secret.md`, new Map()),

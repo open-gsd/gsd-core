@@ -30,7 +30,7 @@ describe('repo link grammar (#5427)', () => {
     bad(fc.tuple(fc.constantFrom('edit', 'commits', 'Blob', 'bob', 'archive'), rel)
       .map(([v, p]) => `${REPO}${v}/next/${p}`)),
     bad(fc.tuple(fc.constantFrom(...noRef), rel).map(([v, p]) => `${REPO}${v}/../${p}`)),
-    bad(fc.tuple(fc.constantFrom('.', '..', '%2e%2e', '.%2e'), rel)
+    bad(fc.tuple(fc.constantFrom('.', '..', '%2e%2e', '.%2e', '%2E%2E', '.%2E'), rel)
       .map(([d, p]) => `${NEXT}${d}/${p}`)),
     // CommonMark decodes an entity or an escape in a destination: either can spell `..`
     bad(rel.map((p) => `${REPO}issues/&#46;&#46;/${p}`)),
