@@ -59,7 +59,7 @@ const PROFILES = [
       'gsd_run query package-legitimacy check',
     ],
     outputContract: [
-      '.planning/phases/XX-name/{phase_num}-RESEARCH.md',
+      '{phase_dir}/{phase_num}-RESEARCH.md',
       '## RESEARCH COMPLETE',
     ],
   },
@@ -140,7 +140,7 @@ const PROFILES = [
       'gsd_run query commit',
     ],
     outputContract: [
-      '.planning/research/SUMMARY.md',
+      '{research_dir}/SUMMARY.md',
       '## SYNTHESIS COMPLETE',
     ],
   },
