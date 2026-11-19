@@ -3298,7 +3298,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
 
     test('in process: a case-block script a shell reads from a heredoc is denied between 24,000 and 29,000 characters', () => {
-      // One of the reaches the user guide gives. Every pass re-tokenizes the
+      // One of the shapes behind the user guide's examples. Every pass re-tokenizes the
       // script, so with a reading trigger (the `$((` beside a quote) each
       // character is charged several separators, and the separator budget stops
       // it before the character budget would. The `$((` also starts the grammar
@@ -3316,8 +3316,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
     });
 
-    test('in process: the same kind of script inside `$( )` is denied between 2,500 and 3,500 characters', () => {
-      // The lowest reach the user guide gives. A body nested one level deeper is
+    test('in process: a strict-mode script inside `$( )` is denied between 2,500 and 3,500 characters', () => {
+      // One of the shapes behind the user guide's examples. A body nested one level deeper is
       // read again at each outer pass, so a strict-mode script of `(( n += K ))`
       // lines given to `bash <<'EOF'` inside `$( )` is charged about 130
       // separators a character, and the `$( )` adds the grammar scan (#5267):
