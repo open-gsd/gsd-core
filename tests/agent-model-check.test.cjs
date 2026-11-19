@@ -25,12 +25,21 @@ const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved model', () => {
   const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
-  const { ESCALATION_WINDOW_MS, ESCALATION_SKEW_MS, escalationFile, escalationRoot, formatNotWritten, formatNotRecorded, writeEscalation } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  const { ESCALATION_WINDOW_MS, ESCALATION_SKEW_MS, escalationFile, sessionRoot, formatNotWritten, formatNotRecorded, writeEscalation } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const WIN32 = process.platform === 'win32';
   const stderrLines = (stderr) => stderr.split('\n');
-  // The reason sessionRoot gives when a CLI run in `cwd` names another project root than its own.
-  const rootMismatch = (root, cwd) =>
-    `the project resolves to ${escalationRoot(fs.realpathSync(root))}, but the Agent model guard reads at ${escalationRoot(fs.realpathSync(cwd))}`;
+  // The reason the owner (sessionRoot) gives when a CLI run in `cwd` names the project `root`.
+  const rootMismatch = (t, root, cwd) => {
+    const cwdMock = t.mock.method(process, 'cwd', () => fs.realpathSync(cwd));
+    try {
+      sessionRoot(fs.realpathSync(root));
+    } catch (e) {
+      return e.message;
+    } finally {
+      cwdMock.mock.restore();
+    }
+    throw new Error('sessionRoot did not refuse the other root');
+  };
   // RULESET.TESTS isolation: a child env with a fresh home, PINNED and `override` on top (CONTRIBUTING.md isolatedEnv).
   const childEnv = (t, override = {}) => {
     const home = createTempDir('gsd-aig-home-');
@@ -272,7 +281,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
       const r = runNode([TOOLS_PATH, 'resolve-execution', agent, '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env, timeoutMs: PROBE_TIMEOUT_MS });
       assert.equal(r.exitCode, 0, r.stderr);
       assert.equal(JSON.parse(r.stdout).model, 'gpt-5', 'the escalation itself proceeds');
-      return stderrLines(r.stderr).includes(formatNotWritten(rootMismatch(project, elsewhere), 'gpt-5'));
+      return stderrLines(r.stderr).includes(formatNotWritten(rootMismatch(t, project, elsewhere), 'gpt-5'));
     };
     setup(t, escalating);
     assert.equal(warns('gsd-executor'), true, 'positive control: a guarded type with the guard on warns when the root differs');
@@ -292,7 +301,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
     const echoed = `gpt-5??[2K?FORGED?${'z'.repeat(REASON_INTERPOLATION_MAX_LEN - 'gpt-5??[2K?FORGED?'.length)}`;
-    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(project, elsewhere), echoed)],
+    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(t, project, elsewhere), echoed)],
       'positive control: the warning prints once, on one line, with the model filtered and capped');
   });
 
@@ -305,7 +314,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     setup(t, escalating);
     const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(project, elsewhere), 'gpt-5')],
+    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(t, project, elsewhere), 'gpt-5')],
       'the directory name reaches stderr filtered, on the one warning line');
   });
 
