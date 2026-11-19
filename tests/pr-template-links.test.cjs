@@ -154,13 +154,12 @@ describe('link extractor (#5427)', () => {
     assert.deepEqual(hrefsIn('[]: ../x.md'), []);
     assert.deepEqual(hrefsIn('[a]: ../x.md'), ['../x.md']);
   });
-  test('a heading code span is stripped up to 999 characters', () => {
-    // `_` inside a span is no emphasis; a span the strip does not reach leaves it, so no anchor
-    for (const [n, size] of [[998, 1], [999, 1], [1000, 0]]) {
-      const md = `## x \`_${'a'.repeat(n - 1)}\` y`;
-      assert.equal(headingSet(md).size, size, `span of ${n}`);
-      if (size) assert.deepEqual([...headingSet(md)], [slugify(md.slice(3))]);
+  test('a heading code span of any length is code: `_` inside it is no emphasis', () => {
+    for (const code of ['`_a`', `\`_${'a'.repeat(5000)}\``, '``a`_b``']) {
+      const md = `## x ${code} y`;
+      assert.deepEqual([...headingSet(md)], [slugify(md.slice(3))], JSON.stringify(code));
     }
+    assert.equal(headingSet('## x _a y').size, 0);
   });
   test('a quote marker takes at most 3 spaces of indent', () => {
     assert.deepEqual(hrefsIn('   > [a]: ../x.md'), ['../x.md']);

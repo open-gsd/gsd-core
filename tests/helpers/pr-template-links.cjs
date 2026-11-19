@@ -106,8 +106,8 @@ const attrUrls = (attrs) => attrs
     name === 'srcset' ? value.split(',').map(firstCandidate).filter(Boolean) : [value]);
 
 // A link destination is the first word of the parentheses, or the whole of an `<...>` form.
-// A label takes the CommonMark limit of 999 characters. The angle destination and the code span
-// of a heading take the same number as this guard's own scan bound: it keeps each scan linear.
+// A label takes the CommonMark limit of 999 characters. The angle destination takes the same
+// number as this guard's own scan bound: it keeps the scan linear.
 const destOf = (raw) => /^\s*<([^<>]{0,999})>/.exec(raw)?.[1] ?? raw.trim().split(/\s+/)[0];
 const REF_DEF = /^ {0,3}\[[^\]\n]{1,999}\]:[ \t]*(?:<([^<>\n]{0,999})>|(\S+))/gm;
 const hrefsIn = (text) => {
@@ -179,7 +179,7 @@ const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
 // GitHub keeps non-ASCII letters and slugs the rendered text; slugify keeps neither, so
 // such a heading gets no anchor and a link to it fails.
 const unslugable = (text) => {
-  const bare = text.replace(/`[^`\n]{0,999}`/g, '');
+  const bare = stripInlineCode(text);
   return /(?!\p{ASCII})[\p{L}\p{N}]/u.test(text) || /\]\(|\]\[/.test(bare)
     || /<[A-Za-z/!]|&[A-Za-z0-9#]+;/.test(bare) // an HTML tag or entity renders to other text
     || /(?:^|\W)_|_(?:\W|$)/.test(bare);
