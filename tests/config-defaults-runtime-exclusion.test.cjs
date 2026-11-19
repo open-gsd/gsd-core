@@ -256,6 +256,43 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     });
   }
 
+  // The changeset promises these two routes survive seeding. A copied project
+  // omit takes the #3703 tier-alias path, which outranks both, so the old
+  // seeding collapsed them to the bare alias.
+  const PINNED = 'claude-sonnet-4-6';
+  for (const [route, extra] of [
+    ['model_profile_overrides.claude pin', { model_profile_overrides: { claude: { sonnet: PINNED } } }],
+    ['dynamic_routing tier model', {
+      dynamic_routing: { enabled: true, tier_models: { light: 'claude-haiku-4-5', standard: PINNED, heavy: 'claude-opus-4-8' } },
+    }],
+  ]) {
+    test(`Claude ${route} survives seeding under a shared omit`, (t) => {
+      const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
+      const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+      t.after(() => {
+        for (const key of keys) {
+          if (original[key] === undefined) delete process.env[key];
+          else process.env[key] = original[key];
+        }
+      });
+      Object.assign(process.env, env, { GSD_RUNTIME: 'claude' });
+      delete process.env.GSD_WORKSTREAM;
+      delete process.env.GSD_PROJECT;
+      fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({
+        resolve_model_ids: 'omit', model_profile: 'balanced', ...extra,
+      }));
+      assert.equal(resolveModelInternal(project, 'gsd-executor'), PINNED);
+      configCommands.cmdConfigNewProject(project, '{}', false);
+      const configPath = path.join(project, '.planning', 'config.json');
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      assert.equal(Object.hasOwn(config, 'resolve_model_ids'), false);
+      assert.equal(resolveModelInternal(project, 'gsd-executor'), PINNED);
+      // Control: the omit the old seeding copied would discard the route.
+      fs.writeFileSync(configPath, JSON.stringify({ ...config, resolve_model_ids: 'omit' }));
+      assert.equal(resolveModelInternal(project, 'gsd-executor'), 'sonnet');
+    });
+  }
+
   test('existing project omit survives both creation commands byte-for-byte', () => {
     fs.mkdirSync(path.join(project, '.planning'));
     const configPath = path.join(project, '.planning', 'config.json');

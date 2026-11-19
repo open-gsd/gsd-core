@@ -520,7 +520,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   // runtime's install ran last). On a machine with 2+ runtimes, it poisons every
   // new project config — e.g. a Codex install's `runtime:"codex"` leaks into
   // Claude Code projects, resolving agents to wrong model IDs. Shared
-  // `resolve_model_ids:"omit"` is excluded only when the ACTIVE runtime has a
+  // `resolve_model_ids:"omit"` is excluded only when the ACTIVE runtime has
   // native model aliases (#5329): copying it into a Claude project
   // makes the resolver treat it as explicit project intent, bypassing the #2297
   // shared-defaults guard. Every non-native runtime still needs the shared omit
