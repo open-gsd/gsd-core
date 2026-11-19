@@ -101,6 +101,11 @@ describe('link extractor (#5427)', () => {
     assert.deepEqual(hrefsIn('see href="x" in prose'), []);
     assert.deepEqual(hrefsIn('<a title="href=x" href="y">'), ['y']);
   });
+  test('a reference definition is indented at most 3 spaces', () => {
+    assert.deepEqual(hrefsIn('   [a]: ../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('    [a]: ../x.md'), []);
+    assert.deepEqual(hrefsIn('  [a]: ../x.md'), ['../x.md']);
+  });
   test('a title does not belong to the destination', () => {
     assert.deepEqual(hrefsIn('[a](../x.md "t")\n[b]: ../y.md "t"'), ['../x.md', '../y.md']);
   });
@@ -143,7 +148,8 @@ describe('next-ref existence and anchors (#5427)', () => {
       ['contributing.md', '.github/../CONTRIBUTING.md', 'CONTRIBUTING.md/x']);
   });
   test('a malformed percent escape names the template and the link', () => {
-    assert.throws(() => repoPathOf(`${NEXT}a%zz.md`, 'tpl.md'), /tpl\.md.*a%zz\.md/);
+    assert.throws(() => repoPathOf(`${NEXT}a%zz.md`, 'tpl.md'),
+      { where: 'tpl.md', link: `${NEXT}a%zz.md` });
   });
   test('a heading anchor resolves on rendered markdown, behind a query, percent-decoded', () => {
     const real = DOCS_ANCHOR.split('#')[1];
@@ -191,7 +197,8 @@ describe('link classification (#5427)', () => {
       `${REPO}blob//next/x`, `${REPO}/`, `${NEXT}CONTRIBUTING.md/`, `${REPO}tree/next/docs/`];
     assert.deepEqual(bad.filter(isBadLink), bad);
     const ok = [`${NEXT}a.md`, `${REPO}tree/next/docs`, `${REPO}raw/next/a.md`,
-      `${REPO}blame/next/a.md`, `${REPO}discussions/1`, `${REPO}issues/1`, `${REPO}pull/1`,
+      `${NEXT}.../x`, `${NEXT}%2e%2e%2e/x`, `${REPO}blame/next/a.md`, `${REPO}discussions/1`,
+      `${REPO}issues/1`, `${REPO}pull/1`,
       `${REPO}actions`, REPO, REPO.slice(0, -1), '?template=fix.md', `${REPO}tree/next`,
       `${REPO}#readme`, `${REPO}compare/main...next`,
       'https://GitHub.com/OPEN-GSD/GSD-CORE/blob/next/x', '#'];

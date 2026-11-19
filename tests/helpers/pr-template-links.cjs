@@ -97,7 +97,8 @@ const decode = (s, h, where) => {
   try {
     return decodeURIComponent(s);
   } catch {
-    throw new Error(`${where}: malformed percent escape in ${h}`);
+    throw Object.assign(new Error(`${where}: malformed percent escape in ${h}`),
+      { where, link: h });
   }
 };
 // drop ?plain=1 / #anchor
@@ -175,6 +176,6 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
 };
 
 module.exports = {
-  REPO, NEXT, hrefsIn, isBadLink, nextRel, repoPathOf, missingNext,
+  REPO, NEXT, hrefsIn, isBadLink, repoPathOf, missingNext,
   unresolvedAnchors, headingSet, anchorKind,
 };
