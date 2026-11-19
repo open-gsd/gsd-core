@@ -3027,7 +3027,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //     read has nothing to record.
     const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ parsed, cwd });
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      // #6303: the same key set as `dispatch-isolation --json`, so a consumer written against either verb
+      // reads the other verbatim. This read has no plan (--plan is refused above), so it declares no
+      // executor runtime and never reports a fallback.
+      output({ runtime: runtimeId, executorRuntime: null, isolation, exec, harnessFlag, fallback: null }, raw);
     } else {
       process.stdout.write(isolation);
     }

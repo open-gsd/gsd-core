@@ -202,7 +202,7 @@ describe('#6303 every unhappy case degrades to the host dispatch with one reason
     assert.equal(output.isolation, 'harness-worktree');
   });
 
-  for (const inherited of ['__proto__', 'constructor', 'toString']) {
+  for (const inherited of ['constructor', 'toString']) {
     test(`unknown_runtime: ${inherited} is not looked up as an inherited property`, () => {
       writeConfig({ runtime: 'claude', workflow: { cross_runtime_execution: true } });
       writePlan({ executor_runtime: inherited });
@@ -211,6 +211,15 @@ describe('#6303 every unhappy case degrades to the host dispatch with one reason
       assert.equal(output.exec, null);
     });
   }
+
+  test('unknown_runtime: __proto__ is not a runtime id, so it is neither looked up nor echoed', () => {
+    writeConfig({ runtime: 'claude', workflow: { cross_runtime_execution: true } });
+    writePlan({ executor_runtime: '__proto__' });
+    const { output } = dispatch('claude');
+    assert.equal(output.fallback, 'unknown_runtime');
+    assert.equal(output.executorRuntime, null);
+    assert.equal(output.exec, null);
+  });
 
   test('same_runtime: the target is the host', () => {
     writeConfig({ runtime: 'codex', workflow: { cross_runtime_execution: true } });

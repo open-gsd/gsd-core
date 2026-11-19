@@ -66,7 +66,8 @@ describe('#6213 execute-phase records the routed executor without a carried shel
     assert.equal(r.status, 0, r.stderr);
     const argv = calls(log);
     assert.equal(argv.length, 1);
-    assert.deepEqual(argv[0], ['query', 'dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01-api']);
+    // #6303: the per-plan call asks for --json so the plan's executorRuntime and fallback are readable.
+    assert.deepEqual(argv[0], ['query', 'dispatch-isolation', '--json', '--phase', '02', '--plan', '02-01-api']);
     assert.ok(!argv[0].includes('--executor-type'));
   });
 
