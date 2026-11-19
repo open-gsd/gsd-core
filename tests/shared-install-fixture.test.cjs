@@ -69,14 +69,21 @@ const claude = { runtime: 'claude', scope: 'global' };
 const entries = () => fs.readdirSync(dir).sort();
 
 describe('runStoreDir', () => {
+  // The store directory is the resolved path: on Windows that adds the drive
+  // of the current directory to a path that names none.
   test('a temp directory named as a run root is the store directory', () => {
     const root = path.join(path.sep, 'tmp', `${RUN_TEMP_ROOT_PREFIX}Ab12Cd`);
+    assert.equal(runStoreDir(root), path.resolve(root));
+  });
+
+  test('an absolute temp directory is returned as it is', () => {
+    const root = path.resolve(path.sep, 'tmp', `${RUN_TEMP_ROOT_PREFIX}Ab12Cd`);
     assert.equal(runStoreDir(root), root);
   });
 
   test('a doubled or trailing separator in the temp directory names the same store', () => {
-    const root = path.join(path.sep, 'tmp', `${RUN_TEMP_ROOT_PREFIX}Ab12Cd`);
-    assert.equal(runStoreDir(`${path.sep}tmp${path.sep}${path.sep}${RUN_TEMP_ROOT_PREFIX}Ab12Cd${path.sep}`), root);
+    const root = path.resolve(path.sep, 'tmp', `${RUN_TEMP_ROOT_PREFIX}Ab12Cd`);
+    assert.equal(runStoreDir(`${path.dirname(root)}${path.sep}${path.sep}${path.basename(root)}${path.sep}`), root);
   });
 
   test('any other temp directory gives no store', () => {
