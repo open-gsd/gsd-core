@@ -7,9 +7,11 @@
  * Test matrix:  .gsd/phase/refactor-3309-health-diagnostic-rule-table/50-test-matrix.md
  *
  * Covers test-matrix section 2 (rows 9-16) against the FULLY WIRED rule
- * table (`RULES` now carries all 31 rules — see the "RULES" describe block
- * below for the exact count and why it is 31, not 32 — extracted from
- * `cmdValidateHealth`, `src/verify.cts:1616-2577`). Rows 15-16 (the
+ * table (`RULES` now carries all 35 rules — see the "RULES" describe block
+ * below for the exact per-group count — 31 extracted from
+ * `cmdValidateHealth`, `src/verify.cts:1616-2577`, which is one fewer than
+ * the design doc's own prose figure of "32" (that doc flags its table and
+ * prose counts as inconsistent), plus the new W028/W029/W030/W031). Rows 15-16 (the
  * DESTRUCTIVE-refusal proof and the NONE-risk apply proof) run against REAL
  * diagnostics emitted by REAL rules over a REAL `buildPlanningSnapshot`
  * projection of a temp fixture, not hand-constructed fakes — the
@@ -144,12 +146,11 @@ describe('SEVERITY', () => {
 
 // ─── Rows 11-12 — applyRepairs risk-gating, hand-constructed diagnostics ───
 //
-// No real rule exists yet to emit these remedies (RULES is empty in this
-// skeleton). These diagnostics are hand-built using the risk harvested from
-// health.md's published table (design doc, "Risk assignment" section):
-// resetConfig/regenerateState are DESTRUCTIVE; every other real action is
-// NONE. This proves applyRepairs's gating logic is correct independent of
-// whether any real rule exists to produce these shapes yet.
+// These diagnostics are hand-built rather than produced by running RULES, so
+// the gating test exercises each remedy/risk combination independently of
+// which real rules emit them. Risks follow health.md's published table
+// (design doc, "Risk assignment" section): resetConfig/regenerateState are
+// DESTRUCTIVE; every other real action is NONE.
 
 function fakeDiagnostic(code, action, risk) {
   return {
@@ -276,24 +277,25 @@ describe('evaluateRuleTable — duplicate-code guard (row 13)', () => {
 
 // ─── RULES — the fully wired table ──────────────────────────────────────────
 //
-// 34 rule entries. Counted directly from each rule-group file's own exported
+// 35 rule entries. Counted directly from each rule-group file's own exported
 // `RULES` array: root-existence (4: E002/E003/E004/W001) + state-consistency
-// (5: W024/W002/W011/W021/W026) + config-validation (11: W003/E005/W004/
+// (6: W024/W002/W011/W021/W026/W031 — W031 is #5830's STATE.md size advisory)
+// + config-validation (11: W003/E005/W004/
 // W008/W016/W012/W013/W014/W015/W022/W029) + phase-structure (5: W005/W023/
 // I001/W009/W030 — W030 is #5118's out-of-set verification report status) +
 // agent-install (1: W010) + roadmap-disk-consistency (2: W006/
 // W007) + worktree-health (3: W020/W017/W027) + milestone-archive-hygiene
 // (2: W018/W019) + install-surface-shadowing (1: W028, #2873 epic #2866
-// Phase 4a) = 34. config-validation.cts's W029 (#3586, epic #2292) is
+// Phase 4a) = 35. config-validation.cts's W029 (#3586, epic #2292) is
 // registered there per this batch's brief even though its subject
 // (`.planning/` tracked-but-ignored) is not config.json-sourced. E001 and
 // the home-directory guard (E010/I010) are deliberately NOT rows (design
 // doc, "Two guards that stay OUTSIDE the rule table entirely").
 
 describe('RULES', () => {
-  test('is the full, frozen 34-rule table with every code unique', () => {
+  test('is the full, frozen 35-rule table with every code unique', () => {
     assert.equal(Array.isArray(RULES), true);
-    assert.equal(RULES.length, 34);
+    assert.equal(RULES.length, 35);
     const codes = RULES.map((r) => r.code);
     assert.equal(new Set(codes).size, codes.length, 'every rule code must be unique');
   });
@@ -609,5 +611,158 @@ describe('health repair — GSD_PROJECT scoping (#3749)', () => {
       'the documented root-vs-workstream split keeps config.json at the workstream PARENT');
     assert.ok(!fs.existsSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'config.json')),
       'config.json must not move into the workstream dir');
+  });
+});
+
+// ─── #5881: W018 and its backfill use the same milestone-archive pair `milestone complete` writes ──
+describe('#5881: W018 detection and backfillMilestones follow the workstream archive', () => {
+  const { runGsdTools } = require('./helpers.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+
+  /** The issue's fixture: a root archive v1.0 without a root MILESTONES entry; ws-a with its own (empty) pair. */
+  function fixture() {
+    const dir = createTempGitProject('gsd-5881-');
+    const plan = (...p) => path.join(dir, '.planning', ...p);
+    fs.mkdirSync(plan('milestones'), { recursive: true });
+    fs.writeFileSync(plan('config.json'), '{}\n');
+    fs.writeFileSync(plan('PROJECT.md'), '# Project\n');
+    fs.writeFileSync(plan('MILESTONES.md'), '# Milestones: Demo\n\n## v2.0 Root (Shipped: 2026-01-01)\n');
+    fs.writeFileSync(plan('milestones', 'v1.0-ROADMAP.md'), '# Roadmap: Other Stream v1.0\n');
+    const ws = (...p) => plan('workstreams', 'ws-a', ...p);
+    fs.mkdirSync(ws('phases', '01-alpha'), { recursive: true });
+    fs.mkdirSync(ws('milestones'), { recursive: true });
+    fs.writeFileSync(ws('ROADMAP.md'), '# Roadmap\n\n## Milestone v3.0 — A\n\n### Phase 1: Alpha\n\n## Progress\n\n| Phase | Plans | Status |\n|---|---|---|\n| 1. Alpha | 0/0 | Not started |\n');
+    fs.writeFileSync(ws('STATE.md'), '---\nmilestone: v3.0\n---\n\n# State\n');
+    fs.writeFileSync(ws('MILESTONES.md'), '# Milestones\n');
+    const git = (...a) => gitOrThrow(a, { cwd: dir });
+    git('add', '-A');
+    git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'fixture');
+    return { dir, plan, ws, git };
+  }
+  const w018 = (res) => {
+    assert.ok(res.success, `validate health failed: ${res.error}`);
+    const found = [];
+    const walk = (node) => {
+      if (Array.isArray(node)) node.forEach(walk);
+      else if (node && typeof node === 'object') {
+        if (node.code === 'W018') found.push(JSON.stringify(node));
+        Object.values(node).forEach(walk);
+      }
+    };
+    walk(JSON.parse(res.output));
+    return found;
+  };
+  const w018Messages = (res) => w018(res).map((json) => JSON.parse(json).message);
+
+  test('--ws: root archives are not reported as missing from the workstream registry', (t) => {
+    const f = fixture();
+    t.after(() => cleanup(f.dir));
+    const res = runGsdTools(['validate', 'health', '--ws', 'ws-a'], f.dir);
+    assert.deepEqual(w018(res), [], 'the root v1.0 archive is not the workstream\'s');
+  });
+
+  test('--ws: a workstream archive snapshot with no workstream entry raises W018 and --repair writes only there', (t) => {
+    const f = fixture();
+    t.after(() => cleanup(f.dir));
+    fs.writeFileSync(f.ws('milestones', 'v2.9-ROADMAP.md'), '# Roadmap: A v2.9\n');
+    f.git('add', '-A');
+    f.git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'archive');
+    const found = w018(runGsdTools(['validate', 'health', '--ws', 'ws-a'], f.dir));
+    assert.ok(found.length > 0 && found.join(' ').includes('v2.9'), `W018 names v2.9: ${found.join(' | ')}`);
+    const rootBefore = fs.readFileSync(f.plan('MILESTONES.md'), 'utf8');
+    const repaired = runGsdTools(['validate', 'health', '--ws', 'ws-a', '--repair'], f.dir);
+    assert.ok(repaired.success, `repair failed: ${repaired.error}`);
+    assert.match(fs.readFileSync(f.ws('MILESTONES.md'), 'utf8'), /v2\.9/, 'the stub lands in the workstream MILESTONES.md');
+    assert.equal(fs.readFileSync(f.plan('MILESTONES.md'), 'utf8'), rootBefore, 'root MILESTONES.md is byte-identical');
+  });
+
+  test('flat mode still detects and repairs the root pair', (t) => {
+    const f = fixture();
+    t.after(() => cleanup(f.dir));
+    const found = w018(runGsdTools(['validate', 'health'], f.dir));
+    assert.ok(found.join(' ').includes('v1.0'), `flat W018 names the root v1.0: ${found.join(' | ')}`);
+    const repaired = runGsdTools(['validate', 'health', '--repair'], f.dir);
+    assert.ok(repaired.success, `repair failed: ${repaired.error}`);
+    assert.match(fs.readFileSync(f.plan('MILESTONES.md'), 'utf8'), /v1\.0/, 'the stub lands in the root MILESTONES.md');
+    assert.doesNotMatch(fs.readFileSync(f.ws('MILESTONES.md'), 'utf8'), /v1\.0/, 'the workstream registry is untouched');
+  });
+
+  // Parity: detection and repair derive ONE pair per scope. For every scope, with 0, 1 and 2 archived
+  // versions missing from the registry (limit-1, limit, limit+1 of "one missing"), W018 names exactly
+  // those versions, --repair backfills exactly that many stubs into the same scope's MILESTONES.md,
+  // no other scope's pair is read (decoy archives) or written, and a re-run reports nothing.
+  const SCOPES = [
+    { name: 'flat', base: ['.planning'], args: [], env: {} },
+    { name: '--ws', base: ['.planning', 'workstreams', 'ws-a'], args: ['--ws', 'ws-a'], env: {} },
+    { name: 'GSD_WORKSTREAM', base: ['.planning', 'workstreams', 'ws-a'], args: [], env: { GSD_WORKSTREAM: 'ws-a' } },
+    { name: 'GSD_PROJECT', base: ['.planning', 'beta'], args: [], env: { GSD_PROJECT: 'beta' } },
+    { name: 'GSD_PROJECT + --ws', base: ['.planning', 'beta', 'workstreams', 'ws-a'], args: ['--ws', 'ws-a'], env: { GSD_PROJECT: 'beta' } },
+  ];
+  const ALL_BASES = [['.planning'], ['.planning', 'workstreams', 'ws-a'], ['.planning', 'beta'], ['.planning', 'beta', 'workstreams', 'ws-a']];
+
+  function writeScope(dir, base, versions) {
+    const at = (...p) => path.join(dir, ...base, ...p);
+    fs.mkdirSync(at('milestones'), { recursive: true });
+    fs.mkdirSync(at('phases', '01-x'), { recursive: true });
+    fs.writeFileSync(at('ROADMAP.md'), '# Roadmap\n\n## Milestone v3.0 — S\n\n### Phase 1: X\n\n## Progress\n\n| Phase | Plans | Status |\n|---|---|---|\n| 1. X | 0/0 | Not started |\n');
+    fs.writeFileSync(at('STATE.md'), '---\nmilestone: v3.0\n---\n\n# State\n');
+    fs.writeFileSync(at('MILESTONES.md'), '# Milestones\n');
+    for (const v of versions) fs.writeFileSync(at('milestones', `${v}-ROADMAP.md`), `# Roadmap: ${v}\n`);
+  }
+
+  for (const scope of SCOPES) {
+    for (const missing of [0, 1, 2]) {
+      test(`parity [${scope.name}] with ${missing} missing: detection, repair and the untouched pairs agree`, (t) => {
+        const dir = createTempGitProject('gsd-5881-parity-');
+        t.after(() => cleanup(dir));
+        const versions = ['v1.1', 'v1.2'].slice(0, missing);
+        fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+        fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{}\n');
+        fs.writeFileSync(path.join(dir, '.planning', 'PROJECT.md'), '# P\n');
+        for (const base of ALL_BASES) writeScope(dir, base, base.join('/') === scope.base.join('/') ? versions : ['v9.9']);
+        fs.writeFileSync(path.join(dir, '.planning', 'beta', 'config.json'), '{}\n');
+        fs.writeFileSync(path.join(dir, '.planning', 'beta', 'PROJECT.md'), '# B\n');
+        gitOrThrow(['add', '-A'], { cwd: dir });
+        gitOrThrow(['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-qm', 'fixture'], { cwd: dir });
+
+        const others = ALL_BASES.filter((b) => b.join('/') !== scope.base.join('/')).map((b) => path.join(dir, ...b, 'MILESTONES.md'));
+        const before = others.map((f) => fs.readFileSync(f, 'utf8'));
+        const detected = w018Messages(runGsdTools(['validate', 'health', ...scope.args], dir, scope.env));
+        if (missing === 0) assert.deepEqual(detected, [], 'nothing is missing in this scope');
+        else {
+          assert.equal(detected.length, 1);
+          assert.match(detected[0], new RegExp(`missing ${missing} archived milestone`));
+          for (const v of versions) assert.ok(detected[0].includes(v), `names ${v}`);
+        }
+        assert.ok(detected.every((m) => !m.includes('v9.9')), 'a decoy archive in another scope is never read');
+
+        assert.ok(runGsdTools(['validate', 'health', ...scope.args, '--repair'], dir, scope.env).success);
+        const registry = fs.readFileSync(path.join(dir, ...scope.base, 'MILESTONES.md'), 'utf8');
+        assert.equal((registry.match(/\(Backfilled:/g) || []).length, missing, 'one stub per missing version, in this scope only');
+        others.forEach((f, i) => assert.equal(fs.readFileSync(f, 'utf8'), before[i], `${path.relative(dir, f)} is byte-identical`));
+        assert.deepEqual(w018Messages(runGsdTools(['validate', 'health', ...scope.args], dir, scope.env)), [], 'repair satisfies the detection');
+      });
+    }
+  }
+
+  test('GSD_PROJECT: detection and repair resolve the same project base', (t) => {
+    const f = fixture();
+    t.after(() => cleanup(f.dir));
+    const proj = (...p) => f.plan('beta', ...p);
+    fs.mkdirSync(proj('milestones'), { recursive: true });
+    fs.mkdirSync(proj('phases', '01-x'), { recursive: true });
+    fs.writeFileSync(proj('config.json'), '{}\n');
+    fs.writeFileSync(proj('PROJECT.md'), '# Beta\n');
+    fs.writeFileSync(proj('ROADMAP.md'), '# Roadmap\n\n## Milestone v1.0 — B\n\n### Phase 1: X\n\n## Progress\n\n| Phase | Plans | Status |\n|---|---|---|\n| 1. X | 0/0 | Not started |\n');
+    fs.writeFileSync(proj('STATE.md'), '---\nmilestone: v1.0\n---\n\n# State\n');
+    fs.writeFileSync(proj('MILESTONES.md'), '# Milestones: Beta\n');
+    fs.writeFileSync(proj('milestones', 'v0.9-ROADMAP.md'), '# Roadmap: Beta v0.9\n');
+    const env = { GSD_PROJECT: 'beta' };
+    const found = w018(runGsdTools(['validate', 'health'], f.dir, env));
+    assert.ok(found.join(' ').includes('v0.9') && !found.join(' ').includes('v1.0'), `project pair only: ${found.join(' | ')}`);
+    const rootBefore = fs.readFileSync(f.plan('MILESTONES.md'), 'utf8');
+    assert.ok(runGsdTools(['validate', 'health', '--repair'], f.dir, env).success);
+    assert.match(fs.readFileSync(proj('MILESTONES.md'), 'utf8'), /v0\.9/, 'the stub lands in the project MILESTONES.md');
+    assert.equal(fs.readFileSync(f.plan('MILESTONES.md'), 'utf8'), rootBefore, 'root MILESTONES.md is untouched');
   });
 });

@@ -30,11 +30,11 @@ Then proceed to Step 1.
 
 ## Step 1 -- Config Gate
 
-Check if graphify is enabled by reading `.planning/config.json` directly using the Read tool.
+Check if graphify is enabled by reading `{planning_root}/config.json` directly using the Read tool. (`{planning_root}`: the active scope's root, from `planning.inspect`)
 
 **DO NOT use the gsd-tools config get-value command** -- it hard-exits on missing keys.
 
-1. Read `.planning/config.json` using the Read tool
+1. Read `{planning_root}/config.json` using the Read tool
 2. If the file does not exist: display the disabled message below and **STOP**
 3. Parse the JSON content. Check if `config.graphify && config.graphify.enabled === true`
 4. If `graphify.enabled` is NOT explicitly `true`: display the disabled message below and **STOP**
