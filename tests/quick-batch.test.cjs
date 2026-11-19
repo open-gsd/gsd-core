@@ -983,6 +983,36 @@ describe('quick-batch: manifest tracks identity, options, base revision, stage s
     }
   });
 
+  // #5830: the batch path writes the same Quick Tasks row as
+  // quick-tasks-append, so it must surface the same length warning.
+  for (const [len, warns] of [[239, false], [240, false], [241, true]]) {
+    test(`#5830: completeQuickItem with a ${len}-character description ${warns ? 'returns' : 'returns no'} length warning`, () => {
+      const dir = mkTmpProject();
+      writeState(dir, stateWithQuickTasksSection());
+      try {
+        const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+        assert.equal(created.ok, true);
+        const item = created.value.manifest.items[0];
+        const description = 'd'.repeat(len);
+        const fields = { description, date: '2026-01-01', commit: 'sha1' };
+        const result = completeQuickItem(dir, created.value.batchId, item.quick_id, fields);
+        assert.equal(result.ok, true, result.reason);
+        assert.equal(result.value.appended, true);
+        assert.equal(result.value.warnings.length, warns ? 1 : 0, JSON.stringify(result.value.warnings));
+        if (warns) assert.ok(result.value.warnings[0].includes(String(len)), result.value.warnings[0]);
+        assert.ok(readState(dir).includes(`| ${description} |`), 'the row carries the full description');
+
+        // The idempotent repeat appends nothing, so it has nothing to warn about.
+        const again = completeQuickItem(dir, created.value.batchId, item.quick_id, fields);
+        assert.equal(again.ok, true);
+        assert.equal(again.value.appended, false);
+        assert.deepEqual(again.value.warnings, []);
+      } finally {
+        cleanupDir(dir);
+      }
+    });
+  }
+
   test('resumeBatch refuses with a recoverable diagnostic when currentBaseRevision diverges from the manifest', () => {
     const dir = mkTmpProject();
     writeState(dir, stateWithQuickTasksSection());
