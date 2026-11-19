@@ -149,7 +149,8 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     for (const verdict of ['true', 'false']) {
       const r = runBlock(root, `gsd_run() { echo ${verdict}; }\n${createBlock(content)}`);
       assert.equal(r.exitCode, 0, r.stderr);
-      assert.ok(r.stdout.split('\n').includes(`TDD_APPLICABLE=${verdict}`), `block 1 prints TDD_APPLICABLE=${verdict}`);
+      const [made] = fs.readdirSync(path.join(root, '.claude'));
+      assert.equal(r.stdout, `PROMPT_FILE=${path.join(root, '.claude', made)}\nTDD_APPLICABLE=${verdict}\n`, `block 1 prints its file and the verdict ${verdict}`);
     }
   });
 
