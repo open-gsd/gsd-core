@@ -351,522 +351,160 @@ function bareAdrRefs(text) {
 }
 
 /**
- * `text` with everything CommonMark renders as code or as a comment replaced by spaces (fenced,
- * indented and inline code, HTML comments), so a link guard never reads a `[…](…)` sequence that
- * markdown does not render as a link. The output is the SAME LENGTH as the input and every newline
- * stays, so a finding computed against it still names the right 1-indexed line.
+ * Mask code (fenced blocks and inline spans) so link resolution never reads a
+ * `[…](…)` sequence that markdown does not render as a link. The corpus has
+ * two real examples of this: `mod[entry.router]({ args, cwd, raw, error })`
+ * inside a ``` fence, and `` `require(module)[router]()` `` inline — both
+ * ordinary JavaScript, neither a link.
+ *
+ * The output is the SAME LENGTH as the input, with every masked character
+ * replaced by a single space and every newline left untouched — so a finding
+ * computed against the masked text still names the correct 1-indexed line
+ * (Kernighan's Law: keep the debug surface honest rather than deleting text).
  */
 function maskCode(text) {
-  return scanBlocks(text).masked;
-}
+  // Capturing split keeps the line terminators as their own array elements
+  // (even indices are line content, odd indices are the terminator that
+  // followed), so the rebuild below never has to guess LF vs CRLF.
+  const parts = String(text).split(/(\r?\n)/);
 
-// The CommonMark link grammar (spec 0.31, inline links and link reference definitions): the one
-// owner of a destination, a title and the whitespace around them. Whitespace is spaces, tabs and
-// at most one line ending (LINK_WS). A link lies in one paragraph: `scanBlocks` finds the
-// paragraphs, so a scan holds no blank line.
-const LINK_WS = String.raw`[ \t]*(?:\r?\n[ \t]*)?`;
-// A backslash escape, `[` or `]`.
-const LABEL_TOKEN = /\\[^]|\[|\]/g;
-const LEAD = new RegExp(LINK_WS, 'y');
-const CLOSE = new RegExp(`${LINK_WS}\\)`, 'y');
-// An angle destination holds no unescaped `<` or `>`, so a scan ends at the next `<`.
-const ANGLE = /<((?:\\[^\n\r]|[^<>\\\n\r])*)>/y;
-const TITLE = new RegExp(String.raw`(?:[ \t]+(?:\r?\n[ \t]*)?|\r?\n[ \t]*)(?:`
-  + String.raw`"(?:\\[^]|[^"\\])*"|'(?:\\[^]|[^'\\])*'|\((?:\\[^]|[^()\\])*\))`, 'y');
-const MAX_PAREN_DEPTH = 32; // CommonMark's nesting limit for a bare destination; bounds the scan
-// A bare destination ends at a space or an ASCII control character, nothing else (not U+00A0).
-const endsBare = (ch) => ch === undefined || ch <= ' ' || ch === '\x7f';
-/**
- * The destination at `at`: an angle form or a bare one (both honour `\` escapes; bare:
- * balanced parentheses up to 32 deep). `{ dest, end }`, or null when none starts there; an
- * empty bare destination has `end === at`.
- */
-function linkDestination(text, at) {
-  if (text[at] === '<') {
-    ANGLE.lastIndex = at;
-    const angle = ANGLE.exec(text);
-    return angle && { dest: angle[1], end: ANGLE.lastIndex };
-  }
-  let end = at;
-  let depth = 0;
-  for (; !endsBare(text[end]); end += 1) {
-    if (text[end] === '\\' && !endsBare(text[end + 1])) end += 1;
-    else if (text[end] === '(' && ++depth > MAX_PAREN_DEPTH) return null;
-    else if (text[end] === ')' && !depth--) break;
-  }
-  return depth > 0 ? null : { dest: text.slice(at, end), end };
-}
-/** The end of the title at `at` (the whitespace before it included), or -1 when no title
- * starts there. */
-function linkTitleEnd(text, at) {
-  TITLE.lastIndex = at;
-  return TITLE.test(text) ? TITLE.lastIndex : -1;
-}
-/**
- * The `](` in `text` whose `]` closes a bracket pair opened earlier in its paragraph
- * (balanced, backslash escapes honoured), as `]` index -> `[` index: a stray `](x)` is text,
- * not a link. One forward pass keeps the open `[`; a backslash escapes the next character.
- */
-function labelPairs(text) {
-  const out = new Map(); // the `]` of each `](` that closes a pair -> the `[` it closes
-  const open = [];
-  for (const m of text.matchAll(LABEL_TOKEN)) {
-    if (m[0] === '[') open.push(m.index);
-    else if (m[0] === ']' && open.length) {
-      const from = open.pop();
-      if (text[m.index + 1] === '(') out.set(m.index, from);
+  // null outside a fence; otherwise the marker char ('`' or '~') and the
+  // length of the run that opened it — both are load-bearing for closing:
+  // only the SAME char with a run length >= the opener's closes the fence.
+  let fence = null;
+
+  for (let i = 0; i < parts.length; i += 2) {
+    const line = parts[i];
+
+    if (fence) {
+      // Whichever way this line resolves, it is code: the closing fence line
+      // is still a fence delimiter, not prose.
+      const closeRe = fence.char === '`' ? /^ {0,3}(`{3,})\s*$/ : /^ {0,3}(~{3,})\s*$/;
+      const close = line.match(closeRe);
+      parts[i] = ' '.repeat(line.length);
+      if (close && close[1].length >= fence.len) fence = null;
+      continue;
     }
-  }
-  return out;
-}
-/** The indexes of the `](` that close a bracket pair (see `labelPairs`). */
-const labelledCloses = (text) => new Set(labelPairs(text).keys());
 
-/**
- * Every inline-link destination in `text` (one paragraph or heading, see `scanBlocks`): a
- * destination (`linkDestination`), then an optional title (`linkTitleEnd`), then `)`. A link
- * whose text holds another link is no link; an image may hold one. Returns
- * `{ at, dest, raw }` per link: `at` is the index of the `]`, `dest` the destination (may be
- * empty), `raw` the text between the parentheses. The one scanner behind `extractLinks` and the
- * PR-template link guard.
- */
-function scanInlineLinks(text) {
-  const out = [];
-  const pairs = labelPairs(text);
-  let inner = -1; // the `[` of the last link found: a link holds no link, an image may
-  for (let i = text.indexOf(']('); i >= 0; i = text.indexOf('](', i + 2)) {
-    const from = pairs.get(i);
-    const image = text[from - 1] === '!';
-    if (from === undefined || (!image && from < inner)) continue;
-    LEAD.lastIndex = i + 2;
-    LEAD.test(text);
-    const d = linkDestination(text, LEAD.lastIndex);
-    if (!d) continue;
-    const title = linkTitleEnd(text, d.end);
-    CLOSE.lastIndex = title < 0 ? d.end : title;
-    if (CLOSE.test(text)) {
-      out.push({ at: i, dest: d.dest, raw: text.slice(i + 2, CLOSE.lastIndex - 1) });
-      if (!image) inner = Math.max(inner, from);
+    const open = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (open) {
+      fence = { char: open[1][0], len: open[1].length };
+      parts[i] = ' '.repeat(line.length);
+      continue;
     }
-  }
-  return out;
-}
 
-const REF_LABEL = /\[((?:\\[^]|[^[\]\\])+)\]:/y;
-const LINE_END = /[ \t]*(?:\n|$)/y;
-/**
- * The link reference definition that starts at `at` in a paragraph's text: `{ dest, end }`
- * (`end` is the index after its line ending), or null. The label holds some text and no
- * unescaped bracket; the destination and the title end the line (a title may start the next one).
- */
-function refDefAt(text, at) {
-  REF_LABEL.lastIndex = at;
-  const label = REF_LABEL.exec(text);
-  if (!label || !/\S/.test(label[1])) return null;
-  LEAD.lastIndex = REF_LABEL.lastIndex;
-  LEAD.test(text);
-  const start = LEAD.lastIndex;
-  const d = linkDestination(text, start);
-  if (!d || d.end === start) return null; // a bare destination is not empty
-  for (const end of [linkTitleEnd(text, d.end), d.end]) {
-    if (end < 0) continue;
-    LINE_END.lastIndex = end;
-    if (LINE_END.test(text)) return { dest: d.dest, end: LINE_END.lastIndex };
+    parts[i] = maskInlineCodeSpans(line);
   }
-  return null;
+
+  return parts.join('');
 }
 
 /**
- * The code spans and HTML comments of one paragraph (or, with `markdown` false, one HTML block:
- * comments only, no escapes), as `[start, end)` holes in left-to-right order. The first opener
- * wins: a code span hides a `<!--` inside it and a comment hides a backtick inside it. A backslash
- * escapes an opener but not a closer. A backtick run with no closer is text, and so is a `<!--`
- * with no `-->` in a paragraph; in an HTML block it hides the rest of the block. One pass: the
- * next closer of each backtick run length comes from a per-length cursor that only moves forward.
+ * Mask backtick-delimited inline code spans within a single line (fences are
+ * handled by the caller, per-line, before this runs — a span never crosses a
+ * newline). CommonMark's rule: a run of N backticks opens a span, closed by
+ * the NEXT run of exactly N backticks; a run of any other length in between
+ * is part of the span's content, not a delimiter. An opening run with no
+ * matching close is literal text, not a span.
+ *
+ * LINEAR, not the naive per-opener rescan this replaced: the old
+ * implementation, for every backtick run, rescanned the entire remainder of
+ * the line looking for a same-length closer. A line of strictly-ascending-
+ * length backtick runs (nothing ever closes) forced a near-full rescan per
+ * run — measured ~O(n^1.6) and unbounded (34ms/50KB -> 220ms/200KB ->
+ * 1.76s/800KB on adversarial input). This version scans the line ONCE to
+ * collect every backtick run as `{start, end, len}`, then walks that run
+ * list left to right with a per-length cursor (`byLen`/`cursor` below) that
+ * only ever advances forward — so finding "the next run of equal length" is
+ * amortized O(1) per step and the whole pass is O(line length).
+ *
+ * Behavior is identical to the rescan version for every input: once an
+ * opener at run `r` is paired with the next same-length run `r'`, every run
+ * strictly between them is consumed as span content and is never
+ * reconsidered as its own delimiter — exactly what the old code did by
+ * jumping `i` straight to the close and never revisiting the interior.
  */
-function inlineHoles(s, markdown) {
-  const holes = [];
-  const runs = []; // every backtick run as [start, end)
-  const byLen = new Map(); // run length -> indexes into runs, in order
-  for (let a = markdown ? s.indexOf('`') : -1, b = 0; a >= 0; a = s.indexOf('`', b)) {
-    b = a;
-    while (s[b] === '`') b += 1;
-    runs.push([a, b]);
-    if (!byLen.has(b - a)) byLen.set(b - a, []);
-    byLen.get(b - a).push(runs.length - 1);
-  }
-  const cursor = new Map(); // run length -> next unexamined index into its list
-  const escaped = (k) => {
-    let n = 0;
-    while (s[k - 1 - n] === '\\') n += 1;
-    return markdown && n % 2 === 1;
-  };
-  const findComment = (from) => {
-    let k = s.indexOf('<!--', from);
-    while (k >= 0 && escaped(k)) k = s.indexOf('<!--', k + 1);
-    return k;
-  };
-  let noClose = false; // no `-->` follows the last comment opener, so none follows a later one
+function maskInlineCodeSpans(line) {
+  const runs = [];
   let i = 0;
+  while (i < line.length) {
+    if (line[i] !== '`') {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    while (i < line.length && line[i] === '`') i += 1;
+    runs.push({ start, end: i, len: i - start });
+  }
+  if (runs.length === 0) return line;
+
+  // Every run's index, grouped by length, in left-to-right order (already
+  // sorted — `runs` was built in scan order).
+  const byLen = new Map();
+  for (let idx = 0; idx < runs.length; idx += 1) {
+    const len = runs[idx].len;
+    if (!byLen.has(len)) byLen.set(len, []);
+    byLen.get(len).push(idx);
+  }
+  const cursor = new Map(); // len -> next unexamined index into byLen.get(len)
+
+  const spans = []; // [start, end) ranges to mask, in order, non-overlapping
   let r = 0;
-  let c = findComment(0);
-  for (;;) {
-    while (r < runs.length && runs[r][0] < i) r += 1;
-    if (c >= 0 && c < i) c = findComment(i);
-    const run = runs[r];
-    if (c >= 0 && (!run || c < run[0])) {
-      const end = noClose ? -1 : s.indexOf('-->', c + 2); // `<!-->` and `<!--->` close at once
-      noClose = end < 0;
-      if (noClose && markdown) i = c + 4; // in a paragraph an unclosed `<!--` is text
-      else if (noClose) {
-        holes.push([c, s.length]); // in an HTML block an unclosed one hides the rest of the block
-        i = s.length;
-      } else {
-        holes.push([c, end + 3]);
-        i = end + 3;
-      }
-      c = findComment(i);
-    } else if (run) {
-      const start = escaped(run[0]) ? run[0] + 1 : run[0];
-      const len = run[1] - start;
-      const list = byLen.get(len) ?? [];
-      let k = cursor.get(len) ?? 0;
-      while (k < list.length && list[k] <= r) k += 1;
-      if (len > 0 && k < list.length) {
-        holes.push([start, runs[list[k]][1]]);
-        cursor.set(len, k + 1);
-        r = list[k] + 1;
-        i = runs[list[k]][1];
-      } else {
-        cursor.set(len, k);
-        i = run[1];
-        r += 1;
-      }
-    } else break;
+  while (r < runs.length) {
+    const len = runs[r].len;
+    const candidates = byLen.get(len);
+    let c = cursor.get(len) || 0;
+    // Skip past any candidate at or before `r`: `r` itself, or an index
+    // already consumed as interior content of an earlier matched span (a run
+    // inside a completed span is never revisited — same as the rescan
+    // version never re-examining a delimiter it has already masked over).
+    while (c < candidates.length && candidates[c] <= r) c += 1;
+    if (c < candidates.length) {
+      const closeIdx = candidates[c];
+      spans.push([runs[r].start, runs[closeIdx].end]);
+      cursor.set(len, c + 1);
+      r = closeIdx + 1;
+    } else {
+      cursor.set(len, c);
+      r += 1; // no closer of equal length anywhere ahead — literal text
+    }
   }
-  return holes;
-}
-const applyHoles = (s, holes) => {
+
   let out = '';
-  let from = 0;
-  for (const [a, b] of holes) {
-    out += s.slice(from, a) + s.slice(a, b).replace(/[^\n]/g, ' ');
-    from = b;
+  let pos = 0;
+  for (const [s, e] of spans) {
+    out += line.slice(pos, s) + ' '.repeat(e - s);
+    pos = e;
   }
-  return out + s.slice(from);
-};
-
-const BLOCK_TAGS = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup'
-  + '|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]'
-  + '|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option'
-  + '|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
-const HTML_ATTR = String.raw`[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*`
-  + String.raw`(?:[ \t]*=[ \t]*(?:[^ \t"'=<>\x60]+|'[^']*'|"[^"]*"))?`;
-// The seven HTML block kinds: [start, end (null: a blank line ends it), may interrupt a paragraph].
-const HTML_BLOCKS = [
-  [/<(?:pre|script|style|textarea)(?:[ \t>]|$)/iy, /<\/(?:pre|script|style|textarea)>/i, true],
-  [/<!--/y, /-->/, true],
-  [/<\?/y, /\?>/, true],
-  [/<![A-Za-z]/y, />/, true],
-  [/<!\[CDATA\[/y, /\]\]>/, true],
-  [new RegExp(String.raw`</?(?:${BLOCK_TAGS})(?:[ \t]|/?>|$)`, 'iy'), null, true],
-  [new RegExp(String.raw`(?:<[A-Za-z][A-Za-z0-9-]*(?:${HTML_ATTR})*[ \t]*/?>`
-    + String.raw`|</[A-Za-z][A-Za-z0-9-]*[ \t]*>)[ \t]*$`, 'y'), null, false],
-];
-const ATX = /#{1,6}(?:[ \t]|$)/y;
-const FENCE = /(`{3,}|~{3,})([^\n]*)$/y;
-const FENCE_END = /(`+|~+)[ \t]*$/y;
-const SETEXT = /(?:=+|-+)[ \t]*$/y;
-const THEMATIC = /(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/y;
-const ITEM = /(?:[-+*]|\d{1,9}[.)])(?=[ \t]|$)/y;
-const SPACES = / */y;
-const hit = (re, s, at) => {
-  re.lastIndex = at;
-  return re.exec(s);
-};
-// A line with its tabs expanded to spaces (stops of 4), so an index is a column; `at` maps an
-// index of the expanded line back to the line.
-function expandTabs(line) {
-  if (!line.includes('\t')) return { e: line, at: (j) => j };
-  const back = [];
-  let e = '';
-  for (let k = 0; k < line.length; k += 1) {
-    const width = line[k] === '\t' ? 4 - (e.length % 4) : 1;
-    for (let w = 0; w < width; w += 1) back.push(k);
-    e += line[k] === '\t' ? ' '.repeat(width) : line[k];
-  }
-  back.push(line.length);
-  return { e, at: (j) => back[j] };
+  out += line.slice(pos);
+  return out;
 }
 
 /**
- * The block structure of `text` as CommonMark 0.31 reads it (one pass, line by line: block quotes
- * and list items hold paragraphs, ATX and setext headings, thematic breaks, fenced and indented
- * code, HTML blocks and link reference definitions). The one owner of what a line is, for the ADR
- * gate and the PR-template link guard. Returns
- *   masked: `text` with code (fenced, indented, inline) and HTML comments as spaces;
- *   markup: the same length, blank except where HTML can occur (paragraphs, headings, HTML
- *           blocks), with code and comments as spaces;
- *   groups: `{ line, text, heading }` per run of inline content (a paragraph, or a heading's text),
- *           `text` joined with `\n` and masked like `masked`, `line` 1-indexed, `heading` the
- *           setext heading's text (undefined for the rest);
- *   atx:    one line per line of `text`, holding the line of an ATX heading from its `#` on;
- *   refs:   the destination of every link reference definition.
- * A list item is open while its lines are indented to its content column; a lazy continuation
- * line keeps its paragraph open. A lone CR is no line ending.
- */
-function scanBlocks(text) {
-  const lines = String(text).split('\n');
-  const cr = lines.map((l) => (l.endsWith('\r') ? '\r' : ''));
-  const raw = lines.map((l, i) => (cr[i] ? l.slice(0, -1) : l));
-  const masked = raw.slice();
-  const markup = raw.map((l) => ' '.repeat(l.length));
-  const atx = raw.map(() => '');
-  const groups = [];
-  const refs = [];
-  const wipe = (i) => {
-    masked[i] = ' '.repeat(raw[i].length);
-  };
-  const textOf = (rows) => rows.map(({ i, p }) => raw[i].slice(p)).join('\n');
-  // Writes the lines of `rows` (each from its index p) back as `mask`, one line per row.
-  const put = (rows, mask) => {
-    const parts = mask.split('\n');
-    rows.forEach(({ i, p }, k) => {
-      masked[i] = raw[i].slice(0, p) + parts[k];
-      markup[i] = ' '.repeat(p) + parts[k];
-    });
-  };
-  // A paragraph starts with its link reference definitions; `rest` holds the rows after them.
-  const defsOf = (rows) => {
-    const content = textOf(rows);
-    const found = [];
-    let at = 0;
-    for (let d = refDefAt(content, 0); d; d = refDefAt(content, at)) {
-      found.push(d.dest);
-      at = d.end;
-    }
-    const used = at >= content.length ? rows.length : content.slice(0, at).split('\n').length - 1;
-    return { found, rest: rows.slice(used) };
-  };
-  const endParagraph = (rows, heading) => {
-    const { found, rest } = defsOf(rows);
-    refs.push(...found);
-    if (!rest.length) return;
-    const s = textOf(rest);
-    const mask = applyHoles(s, inlineHoles(s, true));
-    put(rest, mask);
-    const title = heading ? rest.map(({ i, p }) => raw[i].slice(p).trim()).join(' ') : undefined;
-    groups.push({ line: rest[0].i + 1, text: mask, heading: title });
-  };
-  const stack = []; // the open containers: { quote } or an item { col, empty }
-  let leaf = null; // the open leaf block: paragraph, fence, indented code or HTML block
-  const endLeaf = () => {
-    if (leaf?.t === 'para') endParagraph(leaf.rows, false);
-    if (leaf?.t === 'html' && leaf.comment) leaf.rows.forEach(({ i }) => wipe(i));
-    else if (leaf?.t === 'html') {
-      const s = textOf(leaf.rows);
-      put(leaf.rows, applyHoles(s, inlineHoles(s, false)));
-    }
-    leaf = null;
-  };
-  raw.forEach((line, i) => {
-    const { e, at } = expandTabs(line);
-    let pos = 0; // the columns the containers have consumed
-    const next = () => {
-      let j = pos;
-      while (e[j] === ' ') j += 1;
-      return j;
-    };
-    let matched = 0;
-    for (; matched < stack.length; matched += 1) {
-      const c = stack[matched];
-      const j = next();
-      if (c.quote) {
-        if (j - pos > 3 || e[j] !== '>') break;
-        pos = j + 1;
-        if (e[pos] === ' ') pos += 1;
-      } else if (j >= e.length) {
-        if (c.empty) break; // an item that starts with a blank line holds nothing after it
-        pos = j;
-      } else if (j >= c.col) pos = c.col;
-      else break;
-    }
-    const all = matched === stack.length;
-    let closed = all; // false while containers beyond `matched` still wait for their end
-    const closeRest = () => {
-      if (closed) return;
-      endLeaf();
-      stack.length = matched;
-      closed = true;
-    };
-    if (leaf && leaf.t !== 'para' && !all) endLeaf();
-    if (leaf?.t === 'fence') {
-      const close = hit(FENCE_END, e, next());
-      if (next() - pos < 4 && close && close[1][0] === leaf.ch && close[1].length >= leaf.len) {
-        leaf = null;
-      }
-      wipe(i);
-      return;
-    }
-    if (leaf?.t === 'html' && (leaf.end || next() < e.length)) {
-      leaf.rows.push({ i, p: at(pos) });
-      if (leaf.end?.test(line.slice(at(pos)))) endLeaf();
-      return;
-    }
-    if (leaf?.t === 'html') endLeaf(); // a blank line ends a block of kind 6 or 7
-    if (leaf?.t === 'code') {
-      if (next() - pos >= 4 || next() >= e.length) {
-        wipe(i);
-        return;
-      }
-      endLeaf();
-    }
-    let blank = false;
-    let fresh = null; // an item this line opens with nothing after its marker
-    // a thematic break lies in the trailing run of one of `-*_` (blanks between): from `hrFrom`
-    let hrFrom = e.length;
-    const mark = e.trimEnd().slice(-1);
-    while (hrFrom > 0 && '-*_'.includes(mark)
-      && (e[hrFrom - 1] === mark || e[hrFrom - 1] === ' ')) {
-      hrFrom -= 1;
-    }
-    for (;;) {
-      const j = next();
-      if (j >= e.length) {
-        closeRest();
-        endLeaf();
-        blank = true;
-        break;
-      }
-      if (j - pos >= 4) {
-        if (leaf) leaf.rows.push({ i, p: at(j) }); // paragraph text, lazy or not
-        else {
-          closeRest();
-          leaf = { t: 'code' };
-          wipe(i);
-        }
-        break;
-      }
-      if (e[j] === '>') {
-        closeRest();
-        endLeaf();
-        if (stack.length) stack[stack.length - 1].empty = false;
-        stack.push({ quote: true });
-        matched = stack.length;
-        pos = e[j + 1] === ' ' ? j + 2 : j + 1;
-        continue;
-      }
-      if (hit(ATX, e, j)) {
-        closeRest();
-        endLeaf();
-        atx[i] = line.slice(at(j));
-        const mask = applyHoles(atx[i], inlineHoles(atx[i], true));
-        put([{ i, p: at(j) }], mask);
-        groups.push({ line: i + 1, text: mask, heading: undefined });
-        break;
-      }
-      const fence = hit(FENCE, e, j);
-      if (fence && !(fence[1][0] === '`' && fence[2].includes('`'))) {
-        closeRest();
-        endLeaf();
-        leaf = { t: 'fence', ch: fence[1][0], len: fence[1].length };
-        wipe(i);
-        break;
-      }
-      const kind = HTML_BLOCKS.findIndex(([start, , interrupts]) => (interrupts || !leaf)
-        && hit(start, e, j));
-      if (kind >= 0) {
-        closeRest();
-        endLeaf();
-        const [, end] = HTML_BLOCKS[kind];
-        leaf = { t: 'html', end, comment: kind === 1, rows: [{ i, p: at(j) }] };
-        if (end?.test(line.slice(at(j)))) endLeaf();
-        break;
-      }
-      if (all && leaf && hit(SETEXT, e, j) && defsOf(leaf.rows).rest.length) {
-        endParagraph(leaf.rows, true); // a setext underline: only under a paragraph of this item
-        leaf = null;
-        break;
-      }
-      if (j >= hrFrom && hit(THEMATIC, e, j)) {
-        closeRest();
-        endLeaf();
-        break;
-      }
-      const item = hit(ITEM, e, j);
-      if (item) {
-        const after = j + item[0].length;
-        const gap = hit(SPACES, e, after)[0].length;
-        const empty = after + gap >= e.length;
-        // an empty item, or an ordered one that does not start at 1, cannot interrupt a paragraph
-        const late = /^\d/.test(item[0]) && parseInt(item[0], 10) !== 1;
-        if (!(all && leaf && (empty || late))) {
-          closeRest();
-          endLeaf();
-          const col = empty || gap > 4 ? after + 1 : after + gap;
-          const entry = { col, empty };
-          if (stack.length) stack[stack.length - 1].empty = false;
-          stack.push(entry);
-          matched = stack.length;
-          fresh = empty ? entry : null;
-          pos = empty ? after : col;
-          continue;
-        }
-      }
-      if (leaf) leaf.rows.push({ i, p: at(j) });
-      else {
-        closeRest();
-        leaf = { t: 'para', rows: [{ i, p: at(j) }] };
-      }
-      break;
-    }
-    const top = stack[stack.length - 1]; // only the innermost item can still be empty
-    if (!blank && top && top !== fresh) top.empty = false;
-  });
-  endLeaf();
-  const join = (rows) => rows.map((l, i) => l + cr[i]).join('\n');
-  return { masked: join(masked), markup: join(markup), atx: atx.join('\n'), groups, refs };
-}
-
-/**
- * Every inline `[text](dest)` / `![alt](dest)` link or image in `text`, read from the
- * paragraphs and headings `scanBlocks` finds, so a code-shaped bracket/paren sequence,
- * raw HTML or a reference definition is never misread as a link.
+ * Every inline `[text](dest)` / `![alt](dest)` link or image in `text`, with
+ * code masked out first so a code-shaped bracket/paren sequence is never
+ * misread as a link (see `maskCode`).
  *
- * `scanInlineLinks` finds each destination; two clauses narrow it. The link
- * text (back to the nearest `[`) holds no `[`, `]` or newline, so `[see [1]](x.md)`
- * is no link (nested brackets are out of the inline-links-only scope this gate
- * supports) and a regex character class in prose like `[A-Z][A-Z0-9_]` is not
- * one either. The raw target holds no parenthesis or newline and is not empty.
- * Reference-style links (`[text][ref]`) are not supported: the corpus has zero
- * reference definitions to resolve against.
- *
- * A form CommonMark reads as no link is no link here, though the regex this replaced
- * returned it. A bare destination holds no space and no ASCII control character
- * (`[a](x y)`, `[a](x\u0001y)`) and is not empty (`[a]()`). A bracket or parenthesis
- * may be escaped (`\[x](y)`, `[a\](x)`, `[a](\)`, `[a](x\)y)`). An angle destination holds
- * no `<`, closes with `>` and ends the destination (`[a](<x<y>)`, `[a](<x)`, `[a](<x>y)`).
- * A title is closed once and ends the link (`[a](x "t" y)`, `[a](x "t)`). A title honours
- * `\` escapes: `[a](x "t\"u")` stays a link. The raw-target clause drops a parenthesis in
- * an angle destination or a title (`[a](<x)y>)`, `[a](x "t)")`).
+ * `[^\][\n]*` for the link-text class deliberately excludes BOTH bracket
+ * characters, not just `]` — so `[see [1]](x.md)` does not match (nested
+ * brackets are out of the inline-links-only scope this gate supports) and a
+ * regex character class in prose like `[A-Z][A-Z0-9_]` cannot be misread as
+ * one either. Reference-style links (`[text][ref]`) are correspondingly not
+ * supported: the corpus has zero reference definitions to resolve against.
  *
  * Returns `{ line, target }` per match — `line` is 1-indexed, `target` is the
  * RAW parenthesized capture, untrimmed and unresolved; callers normalize.
  */
 function extractLinks(text) {
+  const masked = maskCode(String(text));
+  const lines = masked.split(/\r?\n/);
   const out = [];
-  for (const { line: first, text: group } of scanBlocks(String(text)).groups) {
-    let line = first;
-    let newline = group.indexOf('\n'); // the next newline not yet counted into `line`
-    let seen = 0; // group[0, seen) is read; `last` is the nearest `[`, `]` or newline in it
-    let last = -1;
-    for (const { at, dest, raw } of scanInlineLinks(group)) {
-      for (; seen < at; seen += 1) if ('[]\n'.includes(group[seen])) last = seen;
-      const textOk = last >= 0 && group[last] === '['; // the link text holds no `[`, `]` or newline
-      if (dest && textOk && !/[()\n]/.test(raw)) {
-        for (; newline >= 0 && newline < at; newline = group.indexOf('\n', newline + 1)) line += 1;
-        out.push({ line, target: raw });
-      }
+  const re = /!?\[[^\][\n]*\]\(([^()\n]*)\)/g;
+  for (let i = 0; i < lines.length; i += 1) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(lines[i])) !== null) {
+      out.push({ line: i + 1, target: m[1] });
     }
   }
   return out;
@@ -1583,5 +1221,6 @@ function main() {
 // effect of loading it.
 if (require.main === module) runMain(main);
 
-module.exports = { STATUSES, REASON, extractLinks, maskCode, scanBlocks, scanInlineLinks,
-  labelledCloses, LINK_WS, existsCaseExact, realRootOrFallback };
+module.exports = {
+  STATUSES, REASON, extractLinks, maskCode, existsCaseExact, realRootOrFallback,
+};

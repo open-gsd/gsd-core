@@ -1533,7 +1533,7 @@ test('the generated index is byte-identical to the pre-change output', (t) => {
 // the raw `err.stack` — absolute host filesystem paths — to public fork-PR
 // CI logs.
 //
-// F3 (MAJOR): `maskCode`'s correctness under adversarial input is
+// F3 (MAJOR): `maskInlineCodeSpans`'s correctness under adversarial input is
 // covered separately below; see that test's comment.
 
 describe('symlink escape guard (F1/F2)', () => {

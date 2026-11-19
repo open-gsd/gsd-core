@@ -5,14 +5,12 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const assert = require('node:assert/strict');
 
 const {
-  REPO, NEXT, hrefsIn, isBadLink, unresolvedAnchors, headingSet,
+  REPO, NEXT, hrefsIn, isBadLink, unresolvedAnchors,
 } = require('./helpers/pr-template-links.cjs');
-const { extractLinks } = require('../scripts/gen-adr-index.cjs');
-const { isPrTemplate } = require('../scripts/ci-test-scope.cjs');
 
 const seg = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,19}$/); // never `.` or `..`
 const rel = fc.array(seg, { minLength: 1, maxLength: 3 }).map((a) => a.join('/'));
-const title = fc.constantFrom('', ' "t"', " 't'", ' (t)');
+const title = fc.constantFrom('', ' "t"', " 't'");
 
 describe('repo link grammar (#5427)', () => {
   const checked = ['blob', 'tree', 'raw', 'blame'];
@@ -98,25 +96,6 @@ describe('link extractor properties (#5427)', () => {
       }
     }));
   });
-  test('property: a destination with nested balanced parentheses parses at every depth', () => {
-    fc.assert(fc.property(fc.integer({ min: 0, max: 4 }), title, (depth, t) => {
-      const d = `x_${'('.repeat(depth)}b${')'.repeat(depth)}`;
-      assert.deepEqual(hrefsIn(`[a](${d}${t})`), [d], d);
-      assert.deepEqual(hrefsIn(`[a](<${d}>${t})`), [d], d);
-    }));
-  });
-  test('property: a comment opens only outside code, in both nestings, and a line that '
-    + 'opens with an inline code span still yields its links', () => {
-    fc.assert(fc.property(dest, (d) => {
-      const link = `[a](${d})`;
-      // a fence opener inside a comment hides nothing after the comment
-      assert.deepEqual(hrefsIn(`<!--\n\`\`\`\n-->\n${link}`), [d], 'opener in comment');
-      // a `<!--` inside a fence or inline code opens no comment
-      assert.deepEqual(hrefsIn(`\`\`\`\n<!--\n\`\`\`\n${link}\n-->`), [d], 'comment in fence');
-      assert.deepEqual(hrefsIn(`\`<!--\` ${link} -->`), [d], 'comment in inline code');
-      assert.deepEqual(hrefsIn(`\`code\` ${link}`), [d], 'line opens with a code span');
-    }));
-  });
   test('property: attributes are read only inside open tags', () => {
     fc.assert(fc.property(dest, dest, (d, e) => {
       assert.deepEqual(hrefsIn(`prose href="${d}" and src='${d}'`), [], 'prose');
@@ -124,179 +103,9 @@ describe('link extractor properties (#5427)', () => {
       assert.deepEqual(hrefsIn(`<a title='src=${e}' src='${d}'>`), [d], 'single-quoted value');
     }));
   });
-});
-
-describe('PR template locations (#5427)', () => {
-  const recase = (word) => fc
-    .array(fc.boolean(), { minLength: word.length, maxLength: word.length })
-    .map((flags) => [...word].map((c, i) => (flags[i] ? c.toUpperCase() : c)).join(''));
-  const where = fc.constantFrom('', 'docs/', '.github/');
-  test('property: isPrTemplate holds for every location x casing and fails for near-misses', () => {
-    fc.assert(fc.property(where, recase('pull_request_template'), seg, (dir, name, f) => {
-      assert.ok(isPrTemplate(`${dir}${name}.md`), `${dir}${name}.md`);
-      assert.ok(isPrTemplate(`${dir}${name}/${f}.md`), `${dir}${name}/${f}.md`);
-      for (const near of [`${dir}${name}.md.bak`, `${dir}${name}.mdx`, `${dir}${name}s/${f}.md`,
-        `${dir}${name}`, `${dir}sub/${name}.md`, `x${dir}${name}.md`, `${dir}${name}/`,
-        `${dir}${name}/${f}/${f}.md`, `DOCS/${name}.md`, `.GITHUB/${name}/${f}.md`]) {
-        assert.ok(!isPrTemplate(near), near);
-      }
-    }));
-  });
-});
-
-describe('ADR gate extractLinks (#5427)', () => {
-  const d = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._/-]{0,19}$/);
-  const text = fc.stringMatching(/^[A-Za-z0-9 ]{0,10}$/);
-  const ttl = fc.constantFrom('', ' "t"', " 't'");
-  test('property: a bracket-free text and a parenthesis-free target give one link', () => {
-    fc.assert(fc.property(text, d, ttl, (a, dest, t) => {
-      assert.deepEqual(extractLinks(`[${a}](${dest}${t})`), [{ line: 1, target: dest + t }]);
-    }));
-  });
-  test('property: an open parenthesis in the destination or a stray close bracket or newline'
-    + ' in the text is no link; a close parenthesis ends the link; an open bracket restarts it',
-  () => {
-    fc.assert(fc.property(text, d, ttl, (a, dest, t) => {
-      assert.deepEqual(extractLinks(`[${a}](${dest}(${t})`), []);
-      assert.deepEqual(extractLinks(`[${a}](${dest})x${t})`), [{ line: 1, target: dest }]);
-      for (const bad of [']', '\n']) {
-        assert.deepEqual(extractLinks(`[${a}${bad}${a}](${dest}${t})`), []);
-      }
-      assert.deepEqual(extractLinks(`[${a}[${a}](${dest}${t})`), [{ line: 1, target: dest + t }]);
-    }));
-  });
-});
-
-// Expected values follow CommonMark's productions (spec 0.31, inline links and link reference
-// definitions), not the guard's predicates: one owner reads the destination, the title and the
-// whitespace between them, for the inline form and the reference form alike.
-describe('link grammar productions (#5427)', () => {
-  // never a lone `-`: that line is a setext underline
-  const d = fc.stringMatching(/^[A-Za-z0-9_][A-Za-z0-9._/-]{0,9}$/);
-  // Unicode spaces are not CommonMark whitespace: they are ordinary destination characters.
-  const uniSpace = fc.constantFrom(0xa0, 0x2028, 0x3000, 0xfeff, 0x2003)
-    .map((c) => String.fromCharCode(c));
-  const control = fc.constantFrom(...[...Array(0x20).keys(), 0x7f]
-    .filter((c) => ![0x09, 0x0a, 0x0d].includes(c)).map((c) => String.fromCharCode(c)));
-  const eol = fc.constantFrom('\n', '\r\n');
-  const pad = fc.constantFrom('', ' ', '\t', '  ');
-  test('property: a Unicode space belongs to a bare destination, in both forms', () => {
-    fc.assert(fc.property(d, uniSpace, d, (a, w, b) => {
-      assert.deepEqual(hrefsIn(`[a](${a}${w}${b})`), [`${a}${w}${b}`]);
-      assert.deepEqual(hrefsIn(`[a](${w}${b})`), [`${w}${b}`]);
-      assert.deepEqual(hrefsIn(`[a]: ${a}${w}${b}`), [`${a}${w}${b}`]);
-    }));
-  });
-  test('property: an ASCII control character ends no link and starts none', () => {
-    fc.assert(fc.property(d, control, d, (a, c, b) => {
-      assert.deepEqual(hrefsIn(`[a](${a}${c}${b})`), [], JSON.stringify(c));
-      assert.deepEqual(hrefsIn(`[a](${c})`), [], JSON.stringify(c));
-      assert.deepEqual(hrefsIn(`[a]: ${a}${c}${b}`), [], JSON.stringify(c));
-    }));
-  });
-  test('property: whitespace is spaces, tabs and one line ending; a blank line ends it', () => {
-    fc.assert(fc.property(d, eol, pad, pad, title, (x, e, p, q, t) => {
-      const one = `${p}${e}${q}`;
-      assert.deepEqual(hrefsIn(`[a](${one}${x}${one})`), [x]);
-      assert.deepEqual(hrefsIn(`[a](<${x}>${one}"t"${one})`), [x]);
-      for (const blank of [`${e}${p}${e}`, `${e}${p}${e}${q}${e}`]) {
-        assert.deepEqual(hrefsIn(`[a](${blank}${x})`), [], 'before the destination');
-        assert.deepEqual(hrefsIn(`[a](${x}${blank})`), [], 'after the destination');
-        assert.deepEqual(hrefsIn(`[a](${x} "t${blank}u")`), [], 'inside a title');
-        assert.deepEqual(hrefsIn(`[a](<${x}>${blank}${t.trim() || '"t"'})`), []);
-      }
-    }));
-  });
-  test('property: a reference destination is an angle form or a balanced bare one', () => {
-    fc.assert(fc.property(d, title, (x, t) => {
-      for (const bad of [`<${x}`, `<${x}${t}`, `${x})`, `${x}(`, `<${x}<y>`]) {
-        assert.deepEqual(hrefsIn(`[a]: ${bad}`), [], bad);
-      }
-      assert.deepEqual(hrefsIn(`[a]: ${x}(y)${t}`), [`${x}(y)`]);
-    }));
-  });
-  test('property: a reference label holds no unescaped [ , some text and no blank line', () => {
-    fc.assert(fc.property(d, d, eol, (a, b, e) => {
-      assert.deepEqual(hrefsIn(`[${a}[${b}]: ${a}`), [], 'unescaped [');
-      assert.deepEqual(hrefsIn(`[${a}\\[${b}]: ${a}`), [a], 'escaped [');
-      for (const blank of [' ', '  ', '\t', `${e}`]) {
-        assert.deepEqual(hrefsIn(`[${blank}]: ${a}`), [], JSON.stringify(blank));
-      }
-      assert.deepEqual(hrefsIn(`[${a}${e}${b}]: ${a}`), [a], 'one line ending');
-      assert.deepEqual(hrefsIn(`[${a}${e}${e}${b}]: ${a}`), [], 'a blank line');
-    }));
-  });
-});
-
-// Documents built from blocks whose links and anchors CommonMark decides by the block's shape,
-// alone or inside block quotes and list items: the expected values come from this table.
-describe('block structure by construction (#5427)', () => {
-  // lines(d, t): the block's lines for destination d and heading word t; links: how many
-  // destinations a CommonMark reader finds; anchors(t): the heading slugs it finds.
-  const none = () => [];
-  const one = (t) => [t];
-  const SHAPES = [
-    { lines: (d) => [`p [a](${d})`], links: 1, anchors: none },
-    { lines: (d) => ['p', `[a](${d})`], links: 1, anchors: none },
-    { lines: (d) => ['p', `    [a](${d})`], links: 1, anchors: none }, // a continuation
-    { lines: (d) => [`    [a](${d})`], links: 0, anchors: none }, // indented code
-    { lines: (d) => ['```', `[a](${d})`, '```'], links: 0, anchors: none },
-    { lines: (d) => ['~~~', `[a](${d})`, '~~~'], links: 0, anchors: none },
-    { lines: (d) => ['<!--', `[a](${d})`, '-->'], links: 0, anchors: none },
-    { lines: (d) => [`<!-- [a](${d}) -->`], links: 0, anchors: none },
-    { lines: (d) => ['<div>', `[a](${d})`, '</div>'], links: 0, anchors: none },
-    { lines: (d) => [`[r]: ${d}`], links: 1, anchors: none },
-    { lines: (d) => ['p', `[r]: ${d}`], links: 0, anchors: none }, // no interrupt
-    { lines: (d, t) => [t, '---'], links: 0, anchors: one },
-    { lines: (d, t) => [t, '==='], links: 0, anchors: one },
-    { lines: (d, t) => [t, `${t}b`, '---'], links: 0, anchors: (t) => [`${t}-${t}b`] },
-    { lines: (d, t) => [`# ${t}`], links: 0, anchors: one },
-    { lines: (d, t) => [`<a id="${t}"></a>`], links: 0, anchors: one },
-    { lines: (d, t) => [`\`<a id="${t}">\``], links: 0, anchors: none },
-  ];
-  const wrap = {
-    quote: (lines) => lines.map((l) => `> ${l}`),
-    item: (lines) => lines.map((l, i) => (i ? `  ${l}` : `- ${l}`)),
-  };
-  const block = fc.record({
-    shape: fc.integer({ min: 0, max: SHAPES.length - 1 }),
-    wraps: fc.array(fc.constantFrom('quote', 'item'), { maxLength: 2 }),
-  });
-  test('property: links and anchors follow each block, wrapped in quotes and items', () => {
-    const docs = fc.array(block, { minLength: 1, maxLength: 6 });
-    fc.assert(fc.property(docs, fc.constantFrom('\n', '\r\n'), (list, eol) => {
-      const links = [];
-      const anchors = [];
-      const parts = list.map(({ shape, wraps }, k) => {
-        const { lines, links: n, anchors: slugs } = SHAPES[shape];
-        if (n) links.push(`d${k}`);
-        anchors.push(...slugs(`h${k}`));
-        return wraps.reduce((ls, w) => wrap[w](ls), lines(`d${k}`, `h${k}`)).join('\n');
-      });
-      const doc = parts.join('\n\n* * *\n\n').replace(/\n/g, eol); // a break ends any item
-      assert.deepEqual(hrefsIn(doc).sort(), links.sort(), JSON.stringify(doc));
-      assert.deepEqual([...headingSet(doc)].sort(), anchors.sort(), JSON.stringify(doc));
-    }));
-  });
-});
-
-describe('escapes and empty destinations (#5427)', () => {
-  const n = fc.integer({ min: 0, max: 5 });
-  const bs = (k) => '\\'.repeat(k);
-  test('property: escaped label end', () => {
-    fc.assert(fc.property(n, rel, (k, d) => {
-      assert.deepEqual(hrefsIn(`[a${bs(k)}](${d})`), k % 2 ? [] : [d]);
-    }));
-  });
-  test('property: escaped reference label', () => {
-    fc.assert(fc.property(n, rel, (k, d) => {
-      assert.deepEqual(hrefsIn(`[a${bs(k)}]: ${d}`), k % 2 ? [] : [d]);
-    }));
-  });
-  test('property: an empty destination yields one empty string, never a link', () => {
+  test('property: an empty destination yields one empty string', () => {
     fc.assert(fc.property(fc.constantFrom('', ' ', '  ', '<>', ' <>'), (ws) => {
       assert.deepEqual(hrefsIn(`[a](${ws})`), ['']);
-      assert.deepEqual(extractLinks(`[a](${ws})`), []);
     }));
   });
 });

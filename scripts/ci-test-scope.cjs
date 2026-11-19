@@ -11,10 +11,8 @@ const { classifyUnstrippedContent, NOISY_FOR_SOURCE_REACHABILITY } = require('./
 // #6075: CI YAML (any `.github/**/*.yml|*.yaml`: workflows, composite actions,
 // dependabot/labeler/issue-form config) is "inert" CI. A PR that changes only CI
 // YAML never runs the matrix: it reports code_changed=true, product_changed=false,
-// full_matrix=false and targets the workflow-lint, policy-lint and workflow-contract
-// tests (the `test-inert` lane). A PR template or a doc a template links
-// (isTemplateLinkDoc) is lightweight too and targets TEMPLATE_LINK_OBSERVERS. Mixed
-// with product code, the product files decide the scope.
+// full_matrix=false and targets only the workflow-lint tests (the `test-inert`
+// lane). Mixed with product code, the product files decide the scope.
 // Anchored at the repo root: a nested `.github/` under a product prefix is not CI YAML.
 const CI_YAML_RE = /^\.github\/.+\.ya?ml$/;
 function isCiYaml(filePath) {
@@ -28,35 +26,11 @@ const WORKFLOW_LINT_TESTS = [
   'tests/lint-pr-check-project-dir.test.cjs',
 ];
 
-// GitHub's default PR-template locations: the root, docs/ and .github/, as
-// pull_request_template.md or a file directly in a PULL_REQUEST_TEMPLATE/ directory (names
-// case-insensitive, the docs/ and .github/ directories exact; GitHub reads no deeper level).
-// CONTRIBUTING.md (the anchor target) and docs/registries/README.md (the registry-entry
-// link target) are docs whose links a test guards: they count as lightweight code
-// changes (like inert CI), so the nine TEMPLATE_LINK_OBSERVERS are selected.
-const isPrTemplate = filePath =>
-  /^pull_request_template(?:\.md|\/[^/]+)$/i.test(filePath.replace(/^(?:\.github|docs)\//, ''));
-const isTemplateLinkDoc = filePath => filePath === 'CONTRIBUTING.md' ||
-  filePath === 'docs/registries/README.md' || isPrTemplate(filePath);
-const isLightweight = filePath => isCiYaml(filePath) || isTemplateLinkDoc(filePath);
-const TEMPLATE_LINK_OBSERVERS = [
-  'tests/pr-template-links.test.cjs',
-  'tests/pr-template-links.property.test.cjs',
-  'tests/self-test-report-workflow.test.cjs',
-  'tests/gemini-runtime-removed.test.cjs',
-  'tests/adr-index-gate.test.cjs',
-  'tests/contributor-standards.test.cjs',
-  'tests/context-predicates.test.cjs',
-  'tests/features-index-gate.test.cjs',
-  'tests/commit-files-pathspec.test.cjs',
-];
-
 // #6075: tests that read `.github/**` YAML content (workflow contracts). A CI
 // YAML edit re-runs them in the targeted lane (never full_matrix). Several are
 // conformance-tier members; that does not flip full_matrix for a CI-YAML-only
-// change because classify() exempts isLightweight(file) from the windows-hint
-// escalation and forces full_matrix=false when only lightweight files (CI YAML,
-// template-link docs) changed.
+// change because classify() exempts isCiYaml(file) from the windows-hint
+// escalation and forces full_matrix=false when only CI YAML changed.
 const WORKFLOW_CONTRACT_TESTS = [
   'tests/adr-218-release-version-validation.test.cjs',
   'tests/adr-230-pr-target-policy.test.cjs',
@@ -249,11 +223,6 @@ const RULES = [
       'tests/precommit-alias-drift-hook.test.cjs',
       'tests/prepush-enterprise-email-hook.test.cjs',
     ],
-  },
-  {
-    name: 'PR template links (#5427)',
-    match: isTemplateLinkDoc,
-    tests: TEMPLATE_LINK_OBSERVERS,
   },
   {
     name: 'changeset tooling',
@@ -605,7 +574,7 @@ function classify(files, reachabilityDeps = {}) {
   const targeted = new Set();
   const reasons = [];
   let productOrPipelineChanged = false; // product/pipeline code (excludes docs)
-  let lightweightChanged = false;       // CI YAML (#6075) / template-link docs
+  let inertCiChanged = false;           // CI YAML files (#6075)
   let fullMatrix = false;
 
   for (const file of files) {
@@ -631,10 +600,9 @@ function classify(files, reachabilityDeps = {}) {
       productOrPipelineChanged = true;
     }
 
-    // CI YAML and template-link docs (isTemplateLinkDoc) set a lightweight signal; neither
-    // is product/pipeline code.
-    if (isLightweight(file)) {
-      lightweightChanged = true;
+    // CI YAML sets a lightweight signal; it is never product/pipeline code.
+    if (isCiYaml(file)) {
+      inertCiChanged = true;
     }
 
     if (file.startsWith('tests/') && file.endsWith('.test.cjs')) {
@@ -694,13 +662,12 @@ function classify(files, reachabilityDeps = {}) {
         // (src/, agents/, commands/, hooks/, skills/, config paths). Only one
         // rule's escalation is live today: 'portability lint rules (ADR-1703)'.
         // Four others already had fullMatrix: true (no-op here), and CI YAML
-        // or a template-link doc (isLightweight) is excluded from this
-        // escalation entirely.
+        // (the 'inert CI' rule) is excluded from this escalation entirely.
         // Distinct, greppable reason so the conformance-lane coverage for it
         // is traceable per rule.
-        // #6075: a lightweight file (CI YAML, a template-link doc) never escalates,
-        // also when mixed with product code, so the product files alone decide full_matrix.
-        if (!isLightweight(file) && rule.tests.some(t => isWindowsHint(t) && reachesConformanceTierOrSeam(t, reachabilityDeps))) {
+        // #6075: CI YAML never escalates (it is lint-only scope, also when mixed
+        // with product code, so the product files alone decide full_matrix).
+        if (!isCiYaml(file) && rule.tests.some(t => isWindowsHint(t) && reachesConformanceTierOrSeam(t, reachabilityDeps))) {
           fullMatrix = true;
           reasons.push(`${file}: ${rule.name} (windows-hint rule test, #4641)`);
         }
@@ -719,9 +686,9 @@ function classify(files, reachabilityDeps = {}) {
   ]);
   for (const f of SCOPED_LANE_EXCLUDE) { targeted.delete(f); }
 
-  // code_changed: true when product/pipeline code, CI YAML or a template-link doc changed.
+  // code_changed: true when product/pipeline code OR CI YAML changed.
   // Docs-only PRs (neither flag set) get code_changed=false → full matrix skip.
-  const codeChanged = productOrPipelineChanged || lightweightChanged;
+  const codeChanged = productOrPipelineChanged || inertCiChanged;
 
   const targetedTests = existingTests([...targeted].sort());
 
@@ -731,8 +698,8 @@ function classify(files, reachabilityDeps = {}) {
     targetedTests.push('unit');
   }
 
-  // CI-YAML / template-link-doc-only: full_matrix must be false (override any RULES that fired).
-  if (lightweightChanged && !productOrPipelineChanged) {
+  // CI-YAML-only: full_matrix must be false (override any RULES that fired).
+  if (inertCiChanged && !productOrPipelineChanged) {
     fullMatrix = false;
   }
 
@@ -791,9 +758,6 @@ module.exports = {
   RULES,
   missingRuleTestFiles,
   PROTECTED_WORKFLOWS,
-  isPrTemplate,
-  isTemplateLinkDoc,
-  TEMPLATE_LINK_OBSERVERS,
   missingProtectedWorkflows,
   classify,
   reachesConformanceTierOrSeam,

@@ -10,21 +10,28 @@
 // Anchors use scripts/gen-features.cjs `slugify` on the raw heading text. A heading it
 // cannot reproduce (a non-ASCII letter or digit, a link, an HTML tag or entity, `_` emphasis)
 // gets no anchor, so a link to it fails. Blockquote headings and `<a id>`/`<a name>` anchors count.
+// Owners: the sectionizer reads fences, code spans and ATX headings; the ADR gate reads inline
+// link syntax (extractLinks) and the case-exact path walk.
 const fs = require('node:fs');
 const path = require('node:path');
 
 const { slugify } = require('../../scripts/gen-features.cjs');
 const {
-  scanBlocks, scanInlineLinks, LINK_WS, existsCaseExact, realRootOrFallback,
+  extractLinks, existsCaseExact, realRootOrFallback,
 } = require('../../scripts/gen-adr-index.cjs');
-const { tokenizeHeadings } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const {
+  stripFencedCode, stripInlineCode, tokenizeHeadings,
+} = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const REPO = 'https://github.com/open-gsd/gsd-core/';
 const NEXT = `${REPO}blob/next/`;
 
-// The block structure (what is code, a comment, a definition, a heading, a paragraph) is read by
-// the ADR gate's scanBlocks, the one owner; this file reads links and anchors from its parts.
+const COMMENT = /<!--[\s\S]*?-->/g;
+// What a reader sees: a quote marker is no content, and neither is a fence or a comment.
+const unfenced = (text) => stripFencedCode(text.replace(/^(?: {0,3}>[ \t]?)+/gm, '')).text;
+const visible = (text) => unfenced(text).replace(COMMENT, '');
+const prose = (text) => stripInlineCode(unfenced(text)).replace(COMMENT, '');
 
 const NAME = /\s+[^\s"'<>/=]+/;
 const VALUE = /(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>`=]+))?/;
@@ -33,8 +40,6 @@ const TAG = new RegExp(`<[A-Za-z][A-Za-z0-9-]*((?:${NAME.source}${VALUE.source})
 const ATTR = /\s+([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))?/g;
 const URL_ATTRS = new Set(['href', 'src', 'srcset']);
 const firstCandidate = (c) => c.trim().split(/\s+/)[0];
-// A tag-shaped span right after `](` is a destination (`<x y>`), not a tag.
-const PROSE_TAG = new RegExp(`(?<!\\]\\(${LINK_WS})${TAG.source}`, 'g');
 const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.matchAll(ATTR)])
   .filter(([, name]) => URL_ATTRS.has(name.toLowerCase()))
   .flatMap(([, name, ...v]) => {
@@ -44,15 +49,13 @@ const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.match
     return srcset ? val.split(',').map(firstCandidate).filter(Boolean) : [val];
   });
 
-// Attribute text of an HTML open tag is not prose: blanked for the link scan only
-// (the `<A>` of `[a](<A>)` has no attributes and stays).
-const blankTags = (s) => s
-  .replace(PROSE_TAG, (tag, body) => tag.replace(body, body.replace(/\S/g, ' ')));
+// A link destination is the first word of the parentheses, or the whole of an `<...>` form.
+const destOf = (raw) => /^\s*<([^<>]*)>/.exec(raw)?.[1] ?? raw.trim().split(/\s+/)[0];
+const REF_DEF = /^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^<>\n]*)>|(\S+))/gm;
 const hrefsIn = (text) => {
-  const { groups, markup, refs } = scanBlocks(text);
-  const inline = groups
-    .flatMap((g) => scanInlineLinks(blankTags(g.text)).map(({ dest }) => dest));
-  return [...inline, ...attrsIn(markup), ...refs];
+  const src = prose(text);
+  const refs = [...src.matchAll(REF_DEF)].map((m) => m[1] ?? m[2]);
+  return [...extractLinks(src).map(({ target }) => destOf(target)), ...attrsIn(src), ...refs];
 };
 
 // Host and owner/name are case-insensitive on GitHub, the view and the ref are not.
@@ -110,9 +113,8 @@ const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
   .map((h) => repoPathOf(h, where))
   .filter((rel) => badSegs(rel.split('/')) || !existsExact(rel));
 
-// GitHub anchors: ATX headings (the sectionizer seam reads the lines scanBlocks marks), setext
-// headings and `<a id>`/`<a name>` outside code and comments count; a repeated slug gets -1,
-// -2, ...
+// GitHub anchors: ATX headings and `<a id>`/`<a name>` outside code and comments count; a
+// repeated slug gets -1, -2, ...
 // GitHub keeps non-ASCII letters and slugs the rendered text; slugify keeps neither, so
 // such a heading gets no anchor and a link to it fails.
 const unslugable = (text) => {
@@ -124,17 +126,14 @@ const unslugable = (text) => {
 const A_ID = /<a\s(?:[^>]*?\s)?(?:id|name)\s*=\s*["']([^"'\s>]+)["']/gi;
 const headingSet = (source) => {
   const seen = new Map();
-  const { markup, groups, atx } = scanBlocks(source);
-  const setext = groups.filter((g) => g.heading !== undefined)
-    .map((g) => ({ line: g.line, text: g.heading }));
-  const headings = [...tokenizeHeadings(atx), ...setext].sort((a, b) => a.line - b.line);
-  const slugs = headings.filter(({ text }) => !unslugable(text)).map(({ text }) => {
-    const s = slugify(text);
-    const n = seen.get(s) ?? 0;
-    seen.set(s, n + 1);
-    return n ? `${s}-${n}` : s;
-  });
-  return new Set([...slugs, ...[...markup.matchAll(A_ID)].map((m) => m[1])]);
+  const slugs = tokenizeHeadings(visible(source)).filter(({ text }) => !unslugable(text))
+    .map(({ text }) => {
+      const s = slugify(text);
+      const n = seen.get(s) ?? 0;
+      seen.set(s, n + 1);
+      return n ? `${s}-${n}` : s;
+    });
+  return new Set([...slugs, ...[...prose(source).matchAll(A_ID)].map((m) => m[1])]);
 };
 const headingsOfFile = (rel) => headingSet(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
 

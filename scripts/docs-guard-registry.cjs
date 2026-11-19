@@ -32,17 +32,6 @@
  * set was the defect; extracting it here removes any path by which it can
  * influence classify() at all.
  *
- * ## The one exception: PR-template links (#5427)
- *
- * `RULES` holds one docs-to-tests rule, `PR template links (#5427)` (`isTemplateLinkDoc`
- * in scripts/ci-test-scope.cjs), and this registry also lists
- * tests/pr-template-links.test.cjs. Each serves a different consumer. This registry
- * selects by a changed docs/ path for the `docs-lint` lane, so it never sees the root
- * CONTRIBUTING.md or a PR template outside docs/. The RULE owns those files: it
- * makes them a lightweight code change (the `test-inert` lane) that runs the nine
- * TEMPLATE_LINK_OBSERVERS. A docs/ template or docs/registries/README.md reaches the
- * guard through both lanes, once each.
- *
  * ## Who reads this
  *
  * - .github/workflows/docs-required.yml (`docs-lint` job) — derives the
@@ -391,8 +380,7 @@ const DOCS_GUARD_TESTS = {
     'docs/ARCHITECTURE.md',
   ],
   'tests/planner-estimate-emission.test.cjs': ['docs/reference/plan-md.md', 'docs/CONFIGURATION.md'],
-  // #5427: walks docs/ for PR templates (isPrTemplate) and resolves every template link
-  // against the tree (computed paths under docs/), so no fixed docs/ path set exists.
+  // #5427: walks docs/ for PR templates and resolves their links against the tree.
   'tests/pr-template-links.test.cjs': ['*'],
   'tests/precondition-element.test.cjs': ['docs/reference/plan-md.md'],
   'tests/product-name-purity.test.cjs': [
