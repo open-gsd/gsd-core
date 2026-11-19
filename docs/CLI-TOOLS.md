@@ -43,6 +43,7 @@ Each command declares its flags in one place, `src/cli-surface.cts` ([ADR-4909](
 - how many positional words it takes, and whether further words may appear among the flags (`freePositionals`), and whether a short flag such as `-n` is refused instead of read as a word (`rejectShortFlags`);
 - each flag and its kind;
 - the flags it requires;
+- the global value flags it refuses before they are consumed (`rejectedGlobalFlags`), for the commands that declare any;
 - whether the command reads the active workstream.
 
 Regenerate the manifest with `npm run gen:cli-surface-manifest`. `npm run lint:generated-sync` fails when it is stale.
