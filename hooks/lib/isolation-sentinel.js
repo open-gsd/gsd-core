@@ -367,7 +367,10 @@ function readSentinelAt(root, { clock = Date, dispatchIds = null, ownScope = fal
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
     }
     if (ownScope && !dispatchIds.plan) {
-      for (const planFile of planRecordsOfPhase(root, dispatchIds.phase)) {
+      const planFiles = planRecordsOfPhase(root, dispatchIds.phase);
+      // More entries than the bound: the hold cannot see every plan record of the phase, so it holds nothing.
+      if (planFiles === null) return { present: false };
+      for (const planFile of planFiles) {
         const c = parseSentinelFileRetrying(planFile, clock, keyedDirs, readText);
         if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan &&
             keyedSentinelPath(root, c.phase, c.plan) === planFile) keyedCandidates.push(c);
@@ -568,17 +571,34 @@ function withCandidates(winner, considered, scanOverflow = false) {
   return winner;
 }
 
-/** Paths of the `<phase>--<plan>.json` records under `root`, or none unless the phase is a safe key. */
+/**
+ * Paths of the `<phase>--<plan>.json` records under `root`, or none unless the phase is a safe key. Bounded
+ * like `scanRecentKeyedRecords`: the directory is iterated for at most MAX_SCANNED_DIR_ENTRIES entries (every
+ * entry counts) and at most MAX_SCANNED_RECORDS paths are returned. A directory past the entry bound returns
+ * null, which the resolver's hold read answers with "no hold": it could not read every plan record of the
+ * phase. An absent or unreadable directory lists no records, as before. Never throws.
+ */
 function planRecordsOfPhase(root, phase) {
   if (!isSafeSentinelKey(phase)) return [];
   const dir = path.join(root, KEYED_SENTINEL_DIR);
+  const out = [];
+  let handle = null;
   try {
-    return fs.readdirSync(dir)
-      .filter((name) => name.startsWith(`${phase}--`) && name.endsWith('.json'))
-      .map((name) => path.join(dir, name));
+    handle = fs.opendirSync(dir);
+    let seen = 0;
+    for (let ent = handle.readSync(); ent !== null; ent = handle.readSync()) {
+      seen += 1;
+      if (seen > MAX_SCANNED_DIR_ENTRIES) return null;
+      if (ent.name.startsWith(`${phase}--`) && ent.name.endsWith('.json')) out.push(path.join(dir, ent.name));
+    }
   } catch {
     return [];
+  } finally {
+    if (handle) {
+      try { handle.closeSync(); } catch { /* nothing left to release */ }
+    }
   }
+  return out.slice(0, MAX_SCANNED_RECORDS);
 }
 
 /** Does `record` carry every identifier `ids` names? An omitted identifier is unconstrained. */
