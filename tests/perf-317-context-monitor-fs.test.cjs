@@ -15,6 +15,7 @@
  *   - #1974 — one-time critical-session breadcrumb
  *   - #3709 — PreCompact clears the warn sentinel AND the metrics bridge
  *   - #4285 — WARNING/CRITICAL fire-points resolve from .planning/config.json
+ *   - #6360 — a subagent's input (agent_id) is silent and touches no session file
  * Extend this list when folding in the next one.
  */
 
@@ -1329,6 +1330,115 @@ describe('#2289 context-monitor: side effects still fire on silent events (no ou
  * about state carried ACROSS calls. The helpers above deliberately delete the
  * sentinel after every invocation, so this block needs its own driver.
  */
+/**
+ * #6360 — a subagent's hook input is silent and leaves the parent's files alone.
+ *
+ * Inside a subagent (or in-process teammate) Claude Code sends the PARENT's
+ * session_id plus agent_id / agent_type. The hook built every path from
+ * session_id alone, so it read the parent's bridge and reported the parent's
+ * usage as the subagent's own, advanced the parent's debounce sentinel, and at
+ * CRITICAL in a GSD project started the parent's record-session write. A
+ * top-level `claude --agent` session sets agent_type WITHOUT agent_id, so
+ * agent_type alone must still be monitored.
+ */
+describe('#6360 context-monitor: subagent inputs (agent_id) are silent and touch no session file', () => {
+  const SUBAGENT = { agent_id: 'a4653ce68d3a4418c', agent_type: 'general-purpose' };
+
+  function makeParentSession(t, { remaining, gsdActive = false } = {}) {
+    const dir = os.tmpdir();
+    const id = `fix-6360-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const metricsPath = path.join(dir, `claude-ctx-${id}.json`);
+    const warnPath = path.join(dir, `claude-ctx-${id}-warned.json`);
+    const watermarkPath = path.join(dir, `claude-ctx-${id}-compacted.json`);
+    const projDir = fs.mkdtempSync(path.join(dir, 'fix-6360-proj-'));
+    const statePath = path.join(projDir, '.planning', 'STATE.md');
+    if (gsdActive) {
+      fs.mkdirSync(path.join(projDir, '.planning'), { recursive: true });
+      fs.writeFileSync(statePath, '# State\n');
+    }
+    // The parent's statusline bridge, fresh, past the given threshold.
+    fs.writeFileSync(metricsPath, JSON.stringify({
+      session_id: id,
+      remaining_percentage: remaining,
+      used_pct: 100 - remaining,
+      timestamp: Math.floor(Date.now() / 1000),
+    }));
+    t.after(() => {
+      for (const p of [metricsPath, warnPath, watermarkPath]) { try { fs.unlinkSync(p); } catch { /* absent */ } }
+      try { cleanup(projDir); } catch { /* best effort */ }
+    });
+    return {
+      metricsPath,
+      warnPath,
+      watermarkPath,
+      statePath,
+      call(extra = {}, event = 'PostToolUse') {
+        const input = JSON.stringify({ session_id: id, cwd: projDir, tool_name: 'Bash', hook_event_name: event, ...extra });
+        try {
+          const stdout = execFileSync(process.execPath, [MONITOR_PATH], {
+            input,
+            encoding: 'utf-8',
+            timeout: CONTEXT_MONITOR_QUERY_TIMEOUT_MS,
+          });
+          return { exitCode: 0, stdout };
+        } catch (e) {
+          return { exitCode: e.status ?? 1, stdout: e.stdout || '' };
+        }
+      },
+    };
+  }
+
+  test('a subagent input at CRITICAL in a GSD project emits nothing, writes no sentinel and records no session', (t) => {
+    const s = makeParentSession(t, { remaining: 20, gsdActive: true });
+    const { exitCode, stdout } = s.call(SUBAGENT);
+    assert.strictEqual(exitCode, 0);
+    assert.strictEqual(stdout, '', 'the parent\'s usage must not be reported to a subagent');
+    // criticalRecorded is written to the sentinel in the same step that spawns
+    // record-session, so no sentinel means the spawn branch was not reached.
+    assert.ok(!fs.existsSync(s.warnPath), 'a subagent must not create the parent\'s debounce sentinel');
+    assert.strictEqual(fs.readFileSync(s.statePath, 'utf-8'), '# State\n', 'STATE.md untouched');
+  });
+
+  test('a subagent input leaves the parent\'s debounce sentinel byte-identical (no escalation spent)', (t) => {
+    const s = makeParentSession(t, { remaining: 20 });
+    const before = JSON.stringify({ callsSinceWarn: 2, lastLevel: 'warning' });
+    fs.writeFileSync(s.warnPath, before);
+    const { exitCode, stdout } = s.call(SUBAGENT);
+    assert.strictEqual(exitCode, 0);
+    assert.strictEqual(stdout, '');
+    assert.strictEqual(fs.readFileSync(s.warnPath, 'utf-8'), before,
+      'the WARNING->CRITICAL escalation must stay for the parent\'s own next tool call');
+  });
+
+  test('a subagent PreCompact leaves the parent\'s bridge and sentinel in place and writes no watermark', (t) => {
+    const s = makeParentSession(t, { remaining: 30 });
+    const sentinel = JSON.stringify({ callsSinceWarn: 1, lastLevel: 'warning' });
+    fs.writeFileSync(s.warnPath, sentinel);
+    const bridge = fs.readFileSync(s.metricsPath, 'utf-8');
+    const { exitCode, stdout } = s.call(SUBAGENT, 'PreCompact');
+    assert.strictEqual(exitCode, 0);
+    assert.strictEqual(stdout, '');
+    assert.strictEqual(fs.readFileSync(s.metricsPath, 'utf-8'), bridge, 'parent bridge kept');
+    assert.strictEqual(fs.readFileSync(s.warnPath, 'utf-8'), sentinel, 'parent sentinel kept');
+    assert.ok(!fs.existsSync(s.watermarkPath), 'no compaction watermark for the parent');
+  });
+
+  test('the same input without agent_id still warns and writes the sentinel (top level unchanged)', (t) => {
+    const s = makeParentSession(t, { remaining: 30 });
+    const { exitCode, stdout } = s.call();
+    assert.strictEqual(exitCode, 0);
+    assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, /^CONTEXT WARNING: Usage at 70%/);
+    assert.ok(fs.existsSync(s.warnPath), 'top-level debounce bookkeeping still runs');
+  });
+
+  test('a top-level --agent session (agent_type without agent_id) still warns', (t) => {
+    const s = makeParentSession(t, { remaining: 30 });
+    const { exitCode, stdout } = s.call({ agent_type: 'general-purpose' });
+    assert.strictEqual(exitCode, 0);
+    assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, /^CONTEXT WARNING: Usage at 70%/);
+  });
+});
+
 describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
   const HOOK = path.join(__dirname, '..', 'hooks', 'gsd-context-monitor.js');
   const UNLINK_EPERM_PRELOAD = path.join(__dirname, 'helpers', 'context-monitor-unlink-eperm-preload.cjs');

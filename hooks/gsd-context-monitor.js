@@ -249,6 +249,20 @@ const handleStdinEnd = () => {
       allow(undefined);
     }
 
+    // #6360: inside a subagent or in-process teammate, Claude Code sends the
+    // PARENT's session_id and adds agent_id (a top-level session has none, and
+    // a top-level `claude --agent` session sets only agent_type). Every path
+    // below is built from session_id alone, so such an input would read the
+    // parent's bridge and report the parent's usage as the subagent's own,
+    // spend the parent's debounce and WARNING->CRITICAL escalation, start the
+    // parent's CRITICAL record-session write, and on PreCompact clear the
+    // parent's bridge and sentinel. Nothing the hook can read describes the
+    // subagent's own context, so it exits before touching any of those files,
+    // on every event.
+    if (typeof data.agent_id === 'string' && data.agent_id !== '') {
+      allow(undefined);
+    }
+
     const tmpDir = os.tmpdir();
     const warnPath = path.join(tmpDir, `claude-ctx-${sessionId}-warned.json`);
     const metricsPath = path.join(tmpDir, `claude-ctx-${sessionId}.json`);

@@ -979,7 +979,8 @@ Debounce: 5 tool uses between repeated warnings. Severity escalation (WARNING→
 - All hooks wrap in try/catch, exit silently on error
 - stdin timeout guard (3s) prevents hanging on pipe issues
 - Stale metrics (>60s old) are ignored
-- Missing bridge files handled gracefully (subagents, fresh sessions)
+- Missing bridge files handled gracefully (fresh sessions)
+- Subagent inputs (non-empty `agent_id`) exit silently before any bridge or sentinel access: they share the parent's `session_id`, so any reading would be the parent's (#6360)
 - Context monitor is advisory — never issues imperative commands that override user preferences
 
 ### Package Legitimacy Gate (v1.42.1)
