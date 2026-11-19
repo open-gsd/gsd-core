@@ -343,8 +343,16 @@ function projectedLongPoleSeconds(shards, tierFiles, model = WINDOWS_CONFORMANCE
   return model.fixedSecondsPerShard + (model.secondsPerTierFile * tierFiles) / shards;
 }
 
-// Fraction of the cap a slow runner's long pole would use.
+// Fraction of the cap a slow runner's long pole would use. Throws an error
+// with code PROJECTION_CAP_INVALID unless the cap is a finite positive number
+// (#6329): any other cap gives a share isNearCap cannot judge.
 function slowRunnerCapShare(shards, tierFiles, capMinutes, model = WINDOWS_CONFORMANCE_PROJECTION) {
+  if (typeof capMinutes !== 'number' || !Number.isFinite(capMinutes) || capMinutes <= 0) {
+    throw Object.assign(
+      new Error(`the cap must be a finite positive number of minutes, got ${String(capMinutes)}`),
+      { code: 'PROJECTION_CAP_INVALID' },
+    );
+  }
   return (projectedLongPoleSeconds(shards, tierFiles, model) * model.slowRunnerSkew) / (capMinutes * 60);
 }
 
@@ -352,6 +360,10 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
   await t.test('at the shard count test.yml declares and the current tier size', () => {
     const workflow = loadWorkflow('test.yml');
     const cap = workflow.jobs['test-conformance']['timeout-minutes'];
+    assert.ok(
+      typeof cap === 'number' && Number.isFinite(cap) && cap > 0,
+      `test-conformance timeout-minutes must be a finite positive number, got ${String(cap)}`,
+    );
     const shards = declaredWindowsConformanceShards(workflow);
     assert.ok(Number.isInteger(shards) && shards > 0, `test.yml must declare a positive shard count, got ${shards}`);
     const tierFiles = CONFORMANCE_TIER_FILES.length;
@@ -377,39 +389,26 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
     assert.equal(isNearCap(slowRunnerCapShare(1, line + 1, 45, unit)), true);
   });
 
-  // The budget-limit invariant (CONTEXT.md, RULESET.TESTS.property-based-testing):
-  // for any tier and cap, adding shards never raises the share, so a count that
-  // clears the near-cap line also clears it at every higher count.
-  // This holds algebraically for any non-negative constants, so it can only
-  // catch a negative one. It does not guard the fit: the worst-row coverage
-  // test below is the check that fails on a refit that is too low.
-  await t.test('adding shards never raises the projected share of the cap', () => {
-    fc.assert(fc.property(
-      fc.integer({ min: 1, max: 64 }),
-      fc.integer({ min: 1, max: 64 }),
-      fc.nat({ max: 5000 }),
-      fc.integer({ min: 1, max: 360 }),
-      (a, b, tierFiles, cap) => {
-        const [fewer, more] = a <= b ? [a, b] : [b, a];
-        const shareAtFewer = slowRunnerCapShare(fewer, tierFiles, cap);
-        const shareAtMore = slowRunnerCapShare(more, tierFiles, cap);
-        assert.ok(
-          shareAtMore <= shareAtFewer,
-          `${more} shards share ${shareAtMore}, above ${fewer} shards at ${shareAtFewer}`,
-        );
-        assert.ok(
-          isNearCap(shareAtFewer) || !isNearCap(shareAtMore),
-          `${fewer} shards clear the near-cap line but ${more} do not`,
-        );
-      },
-    ));
+  // #6329: a cap that is not a finite positive number used to give a NaN (or
+  // infinite, or negative) share, and isNearCap reads NaN as clear, so the
+  // projection passed without a cap to compare against.
+  await t.test('a cap that is not a finite positive number is refused (#6329)', () => {
+    const refused = { code: 'PROJECTION_CAP_INVALID' };
+    for (const cap of [undefined, null, '45', 'not-a-number', Number.NaN, Number.POSITIVE_INFINITY, -1, 0]) {
+      assert.throws(() => slowRunnerCapShare(6, 330, cap), refused, `cap ${String(cap)} must be refused`);
+    }
+    // The limit is exclusive at zero: a finite cap just above it is accepted.
+    assert.equal(Number.isFinite(slowRunnerCapShare(6, 330, 1e-9)), true);
+    assert.equal(Number.isFinite(slowRunnerCapShare(6, 330, 1)), true);
   });
 
-  // The property above holds for any non-negative constants. This one rejects
-  // one class of bad fit: a zero or negative per-file slope, which least
-  // squares can return on a narrow range, or a model that stopped reading the
-  // tier size. A tier that gains files must cost strictly more at the same
-  // shard count.
+  // The budget-limit invariant (CONTEXT.md, RULESET.TESTS.property-based-testing).
+  // It rejects one class of bad fit: a zero or negative per-file slope, which
+  // least squares can return on a narrow range, or a model that stopped
+  // reading the tier size. A tier that gains files must cost strictly more at
+  // the same shard count. (#6329 removed an "adding shards never raises the
+  // share" property: it held for any non-negative constants, and its second
+  // assertion followed from its first.)
   await t.test('a larger tier always raises the projected share of the cap', () => {
     fc.assert(fc.property(
       fc.integer({ min: 1, max: 64 }),
@@ -427,7 +426,7 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
     ));
   });
 
-  // Neither property can tell a good fit from one that is merely monotone.
+  // The property above cannot tell a good fit from one that is merely monotone.
   // This can: the projection at the slow-runner skew must cover the slowest
   // Windows row observed at each layout, at that run's own tier size. A refit
   // that lands too low fails here. Add a row when a run sets a new worst.

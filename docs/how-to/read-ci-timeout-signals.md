@@ -118,14 +118,14 @@ until someone closes it.
 
 | Status | What it means | What to do |
 |---|---|---|
-| `insufficient-data` | Fewer than `minRuns` qualifying runs so far, or fewer than two shards have data. Also right after a re-shard merges: the newest runs still use the old layout while the baseline's layout has fewer than `minRuns` runs. | Nothing. It reports once enough `next` pushes land. |
+| `insufficient-data` | Fewer than `minRuns` qualifying runs so far, or fewer than two shards have data. Also right after a re-shard merges: the newest runs still use the old layout while the baseline's layout has fewer than `minRuns` complete runs (a run counts only when every shard of that layout reported a duration). | Nothing. It reports once enough `next` pushes land. |
 | `ok` | Both criteria hold. | Nothing. |
 | `breach` | The median gap is over `maxMedianGapMs`, or a shard's p90 is over its baseline. The issue lists which. | First find which kind of cost moved. In the slow shard's log, compare the `run-tests: chunk N/M completed in Xms` lines with a fast shard's. **One chunk far longer than the rest** means a single long test file sets that chunk's wall time (a chunk cannot finish before its longest file), and regenerating the timing table will not help; the fix is splitting that file, or packing that accounts for it. **Every chunk uniformly slower** across the run means a slow runner; wait for more runs. **The shard's chunks are all heavier than another shard's** points at weights: regenerate the win32 timing table ([Regenerate the win32 timing table](regenerate-the-win32-timing-table.md)), since a new heavy conformance file or a stale table mis-prices the split. |
-| `baseline-mismatch` | The newest run's Windows shard count differs from `baselineShardTotal`, and the baseline's layout has at least `minRuns` runs. The lane was re-sharded away from it. | Measure the new layout and update `baselineShardTotal` and `baselineP90Ms` in `SHARD_BALANCE`. Until then, no gap or p90 verdict is given. A re-shard PR should already fail `tests/ci-timeout-report.test.cjs`, which checks this count against `test.yml`. |
+| `baseline-mismatch` | The newest run's Windows shard count differs from `baselineShardTotal`, and the baseline's layout has at least `minRuns` complete runs. The lane was re-sharded away from it. | Measure the new layout and update `baselineShardTotal` and `baselineP90Ms` in `SHARD_BALANCE`. Until then, no gap or p90 verdict is given. A re-shard PR should already fail `tests/ci-timeout-report.test.cjs`, which checks this count against `test.yml`. |
 | `error` | The GitHub API could not be read. The step logs a warning. | Re-run the workflow once the API is reachable. The per-job report step is unaffected. |
 
 The check reads the newest 40 runs (twice `windowRuns`). So `baseline-mismatch` needs at least
-`minRuns` of those to be baseline-layout runs: once they age out, a lane that really did move
+`minRuns` of those to be complete baseline-layout runs: once they age out, a lane that really did move
 reads `insufficient-data` and never `baseline-mismatch`. An issue already opened stays open, but
 if `insufficient-data` lasts past `minRuns` pushes, compare the newest run's shard count with
 `baselineShardTotal`.
@@ -160,7 +160,7 @@ gaps measured since, computed as `evaluateShardBalance` computes them:
 So a window spanning the partitions `next` had then leaves about 235 s (47%) to spare, though
 single runs there were already over the limit, and a window that sat on one unlucky partition
 would leave about 70 s (14%). The limit was kept rather than re-derived because the two honest
-re-derivations disagree: the first twelve runs' gap times 1.5 would be 398 s, under what one
+re-derivations disagree: the twelve post-#6002 fork runs' gap (265.5 s) times 1.5 would be 398 s, under what one
 partition already measures, and that partition's gap times 1.5 would be 646 s, sized to whichever
 partition was sampled.
 

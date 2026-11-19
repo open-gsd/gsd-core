@@ -615,6 +615,54 @@ test('shard balance (#5101)', async (t) => {
     assert.equal(statusWith(minRuns + 1), 'baseline-mismatch');
   });
 
+  // #6329: a run counts toward minRuns only when every shard of the baseline
+  // layout has a sample. A run with a shard missing (cancelled before it got
+  // a runner, say) does not establish the layout.
+  await t.test('baseline-mismatch counts only complete baseline-layout runs (#6329)', () => {
+    const { minRuns, baselineShardTotal } = THREE_SHARD_CONFIG;
+    const statusWith = (completeRuns, shardsInLastBaselineRun) => {
+      const complete = constantRuns(completeRuns, [1200000, 1200000, 1200000], { startId: 1, base: '2026-09-28T15:00:00Z' });
+      const last = constantRuns(1, [1200000, 1200000, 1200000], { startId: 51, base: '2026-09-29T15:00:00Z' });
+      last[0].jobs.splice(shardsInLastBaselineRun);
+      const newRuns = constantRuns(5, [1200000, 1200000, 1200000, 1200000], { startId: 101, base: '2026-09-30T15:00:00Z' });
+      return evaluateShardBalance(
+        extractShardSamples([...complete, ...last, ...newRuns], THREE_SHARD_CONFIG),
+        THREE_SHARD_CONFIG,
+      ).status;
+    };
+
+    // minRuns - 1 complete runs plus one run short of a shard: not established.
+    assert.equal(statusWith(minRuns - 1, 1), 'insufficient-data');
+    assert.equal(statusWith(minRuns - 1, baselineShardTotal - 1), 'insufficient-data');
+    // The same run with every shard present is the minRuns-th complete run.
+    assert.equal(statusWith(minRuns - 1, baselineShardTotal), 'baseline-mismatch');
+    // A partial run does not subtract from the complete ones.
+    assert.equal(statusWith(minRuns, baselineShardTotal - 1), 'baseline-mismatch');
+  });
+
+  // #6329: completeness is every shard 1..total present, not a count of
+  // samples. Neither a shard sampled twice nor an out-of-range index stands in
+  // for a missing shard.
+  await t.test('a duplicated or out-of-range shard does not complete a baseline-layout run (#6329)', () => {
+    const { minRuns, baselineShardTotal } = THREE_SHARD_CONFIG;
+    const start = '2026-09-29T15:00:00Z';
+    const statusWithLastRun = (shardIndexes) => {
+      const complete = constantRuns(minRuns - 1, [1200000, 1200000, 1200000], { startId: 1, base: '2026-09-28T15:00:00Z' });
+      const last = runAt(51, start, shardIndexes.map((i) => winJobFromMs(i, baselineShardTotal, 1200000, { start })));
+      const newRuns = constantRuns(5, [1200000, 1200000, 1200000, 1200000], { startId: 101, base: '2026-09-30T15:00:00Z' });
+      return evaluateShardBalance(
+        extractShardSamples([...complete, last, ...newRuns], THREE_SHARD_CONFIG),
+        THREE_SHARD_CONFIG,
+      ).status;
+    };
+
+    assert.equal(statusWithLastRun([1, 1, 2]), 'insufficient-data', 'shard 1 twice, shard 3 missing');
+    assert.equal(statusWithLastRun([1, 2, baselineShardTotal + 1]), 'insufficient-data', 'an index past the total');
+    assert.equal(statusWithLastRun([1, 2, 0]), 'insufficient-data', 'index zero');
+    assert.equal(statusWithLastRun([1, '01', 2]), 'insufficient-data', 'a zero-padded second spelling of shard 1');
+    assert.equal(statusWithLastRun([1, 1, 2, 3]), 'baseline-mismatch', 'a duplicate beside a complete set');
+  });
+
   await t.test('mixed layouts use only the newest layout', () => {
     const oldRuns = constantRuns(12, [1200000, 1200000, 1200000], { startId: 1, base: '2026-09-28T15:00:00Z' });
     const newRuns = constantRuns(10, [1200000, 1200000, 1200000, 1200000], { startId: 101, base: '2026-09-29T15:00:00Z' });
