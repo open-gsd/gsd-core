@@ -708,7 +708,6 @@ describe('test.yml changes job contract (#837)', () => {
 });
 
 describe('test.yml gating internals (#2472 / #4241)', () => {
-  const yaml = require('js-yaml');
 
   // #2472: every job of a run must merge ONE base commit. Each job runs the
   // rebase-check step independently, minutes apart across the matrix, so
