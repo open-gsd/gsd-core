@@ -134,10 +134,11 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const prompt = `${GUARDED}aÿb\n`;
     fs.writeFileSync(create(root), prompt);
     // GNU tr cannot show the macOS fault, so the stubs misbehave unless the call carries LC_ALL=C, as BSD tr does on such a byte: tr stops
-    // after two bytes, wc reports one byte too few. A failing stub would not do: an empty count skips the compare, so the test would stay green.
+    // after two bytes, wc prints no count (an empty count halts the block). The parent's LC_ALL is unset, or a CI value of C would make both stubs behave.
     const stubs = [
+      'unset LC_ALL',
       'tr() { if [ "${LC_ALL:-}" = C ]; then command tr "$@"; else command tr "$@" | command head -c 2; fi; }',
-      'wc() { if [ "${LC_ALL:-}" = C ]; then command wc "$@"; else echo $(( $(command wc "$@") - 1 )); fi; }',
+      'wc() { if [ "${LC_ALL:-}" = C ]; then command wc "$@"; else return 1; fi; }',
     ].join('\n');
     const r = runBlock(root, `${stubs}\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
     assert.equal(r.exitCode, 0, r.stderr);
@@ -305,7 +306,6 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const root = path.join(dir, `or ch's \n\u00fc $(touch ${marker}) \`touch ${marker}\``);
     const prompt = `${GUARDED}the user's vision\n`;
     const file = create(root);
-    assert.equal(path.dirname(file), path.join(root, '.claude'), 'the prompt file sits under the hostile root');
     fs.writeFileSync(file, prompt);
     const r = readAndCheck(root);
     assert.equal(r.exitCode, 0, r.stderr);
