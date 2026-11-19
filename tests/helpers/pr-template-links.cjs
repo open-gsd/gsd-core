@@ -97,7 +97,9 @@ const decode = (s, h, where) => {
   try {
     return decodeURIComponent(s);
   } catch {
-    throw Object.assign(new Error(`${where}: malformed percent escape in ${h}`),
+    // quoted: a template file is data, and a raw newline could forge a `::command::` log line
+    throw Object.assign(
+      new Error(`${JSON.stringify(where)}: malformed percent escape in ${JSON.stringify(h)}`),
       { where, link: h });
   }
 };
@@ -147,8 +149,8 @@ const anchorKind = ({ segs, tail }, rel) => {
   if (segs[0] === 'blame' || (segs[0] === 'blob' && (plain || !md))) return 'line';
   return REF_PAGE.has(segs[0]) && segs[0] !== 'raw' && md ? 'heading' : 'none';
 };
-const lineCountOf = (rel) => {
-  const abs = path.join(ROOT, rel);
+const lineCountOf = (rel, root = ROOT) => {
+  const abs = path.join(root, rel);
   if (!fs.statSync(abs).isFile()) return 0;
   const text = fs.readFileSync(abs, 'utf8');
   let lines = 0; // an indexOf loop: CRLF-safe and accepted by local/no-crlf-fragile-split
@@ -177,5 +179,5 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
 
 module.exports = {
   REPO, NEXT, hrefsIn, isBadLink, repoPathOf, missingNext,
-  unresolvedAnchors, headingSet, anchorKind,
+  unresolvedAnchors, headingSet, anchorKind, lineCountOf,
 };

@@ -9,7 +9,7 @@ const { slugify } = require('../scripts/gen-features.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, missingNext, repoPathOf, unresolvedAnchors, headingSet,
-  anchorKind,
+  anchorKind, lineCountOf,
 } = require('./helpers/pr-template-links.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -147,6 +147,10 @@ describe('next-ref existence and anchors (#5427)', () => {
     assert.deepEqual(missingNext(hs, 'tpl.md'),
       ['contributing.md', '.github/../CONTRIBUTING.md', 'CONTRIBUTING.md/x']);
   });
+  test('a malformed percent escape quotes control bytes in its message', () => {
+    assert.throws(() => repoPathOf(`${NEXT}a%zz\n::add-mask::.md`, 'tpl.md'),
+      (e) => !e.message.includes('\n') && e.link.includes('\n'));
+  });
   test('a malformed percent escape names the template and the link', () => {
     assert.throws(() => repoPathOf(`${NEXT}a%zz.md`, 'tpl.md'),
       { where: 'tpl.md', link: `${NEXT}a%zz.md` });
@@ -166,6 +170,14 @@ describe('next-ref existence and anchors (#5427)', () => {
       ['CONTRIBUTING.md#nope']);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md`, `${NEXT}no-such.md#a`,
       `${REPO}issues/1#a`], 'tpl.md'), []);
+  });
+  test('lineCountOf counts a last line with or without a trailing newline', (t) => {
+    const dir = createTempDir();
+    t.after(() => cleanup(dir));
+    for (const [text, n] of [['', 0], ['a', 1], ['a\n', 1], ['a\nb', 2], ['a\r\nb\r\n', 2]]) {
+      fs.writeFileSync(path.join(dir, 'f.txt'), text);
+      assert.equal(lineCountOf('f.txt', dir), n, JSON.stringify(text));
+    }
   });
   test('line anchors: ?plain=1, blame and non-markdown blob yes; rendered markdown no', () => {
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#L274`,
