@@ -55,6 +55,9 @@ function buildFixtures(t) {
 
   // The same linked worktree shape, with the `.git` file's path written relative.
   git(at('main'), ['worktree', 'add', '-q', at('linked-relative'), '-b', 'linked-relative']);
+  // Replaced, not overwritten: on Windows git marks a worktree's `.git` file
+  // hidden, and opening a hidden file for truncation fails with EPERM.
+  fs.unlinkSync(at('linked-relative', '.git'));
   fs.writeFileSync(at('linked-relative', '.git'), 'gitdir: ../main/.git/worktrees/linked-relative\n');
 
   git(root, ['clone', '-q', '--bare', at('main'), at('bare.git')]);
