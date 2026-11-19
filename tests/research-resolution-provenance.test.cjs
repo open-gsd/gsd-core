@@ -214,8 +214,8 @@ describe('plan-checker Dimension 11 requires provenance, not a marker (#5438)', 
       assert.match(hint, /Cite a D-NN under <decisions> that answers it/);
       assert.match(hint, /Else the user rules \(orchestrator records a D-NN, or/);
       assert.match(hint, /a source settles a factual gap/);
-      assert.match(hint, /\/gsd:discuss-phase/);
-      assert.match(hint, /\/gsd:plan-phase --research/);
+      // Both commands carry the phase: discuss-phase requires it, and plan-phase without it plans another phase.
+      assert.match(hint, /\/gsd:discuss-phase \{phase\} → \/gsd:plan-phase \{phase\} --research\)/);
     }
   });
 
@@ -319,9 +319,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(resolve(), /commit CONTEXT\.md at once \(`gsd_run query commit "docs\(\{phase\}\): record research rulings" --files \{context_path\}`\): the planner's Step 6 commit does not run when the loop escalates/);
     assert.match(resolve(), /The re-spawned planner cites it in RESEARCH\.md and in the `<action>` of the task that implements it/);
     assert.match(resolve(), /record each answer under the checker's CONTEXT\.md `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`/);
-    assert.match(resolve(), /`\/gsd:discuss-phase` or `\/gsd:plan-phase --research`/, 'leaving the loop stays open to the user');
+    assert.match(resolve(), /`\/gsd:discuss-phase \{phase\}` or `\/gsd:plan-phase \{phase\} --research`/, 'leaving the loop stays open to the user');
+    assert.doesNotMatch(resolve(), /`\/gsd:(discuss|plan)-phase( --research)?`/, 'every command the Resolve step names carries {phase}');
     // The checker reads the CONTEXT.md path plan-phase resolved at init; a file created mid-loop never reaches it.
-    assert.match(resolve(), /With no CONTEXT\.md there is nowhere to record, so the user leaves the loop for `\/gsd:discuss-phase`, which writes one/);
+    assert.match(resolve(), /With no CONTEXT\.md there is nowhere to record, so the user leaves the loop for `\/gsd:discuss-phase \{phase\}`, which writes one/);
   });
 
   // Close fires only once a resolution is applied, and plan-phase closes a line only on the revised plans a
@@ -372,6 +373,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.ok(spine.indexOf('plan-phase/steps/auto-advance-check.md') > spine.indexOf('## 12. Revision Loop'), 'auto-advance-check runs after the revision loop');
     for (const doc of ['docs/features/research-gate.md', 'docs/FEATURES.md']) {
       assert.match(read(doc), /In a pipeline run \(plan-phase's `AUTO_CHAIN`: the `workflow\._auto_chain_active` flag a chained run sets, or `--auto`\/`--chain` passed\) no answer is recorded/, doc);
+      assert.match(read(doc), /the user leaves to run `\/gsd-discuss-phase <N>` or `\/gsd-plan-phase <N> --research`\./, doc);
     }
   });
 });
