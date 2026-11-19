@@ -73,6 +73,15 @@ describe('ci-test-scope.cjs', () => {
     assert.match(doc.jobs.changes.outputs.zsh_changed, /steps\.scope\.outputs\.zsh_changed/);
     assert.strictEqual(doc.jobs['test-insert-shell'].if, "needs.changes.outputs.zsh_changed == 'true'");
     assert.ok(doc.jobs['test-insert-shell'].steps.some(s => /apt-get install .*\bzsh\b/.test(s.run || '')), 'test-insert-shell installs zsh');
+    // The guards that make a skipped or missing row fail the job.
+    const run = doc.jobs['test-insert-shell'].steps.map(s => s.run || '').find(r => r.includes('--test-name-pattern'));
+    assert.ok(run, 'test-insert-shell has a step that runs the filtered rows');
+    for (const part of ['set -euo pipefail', "--test-name-pattern='zsh split'", "'^# skipped 0$'", "'^# pass [1-9][0-9]*$'"]) {
+      assert.ok(run.includes(part), `the run step keeps ${part}`);
+    }
+    // Push, merge-group and dispatch runs have no changed-file list: the job stays skipped there.
+    assert.match(doc.jobs.changes.steps.find(s => s.id === 'scope').run, /echo "zsh_changed=false"/);
+    assert.ok(doc.jobs['required-tests'].needs.includes('test-insert-shell'), 'required-tests waits for test-insert-shell');
   });
 
   test('a different tests/ .jsonl is not exempt', () => {

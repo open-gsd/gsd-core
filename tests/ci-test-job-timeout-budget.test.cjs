@@ -115,14 +115,6 @@ const LANE_COSTS = [
     evidence: 'targeted-only lane, ~1m observed',
   },
   {
-    job: 'test-insert-shell',
-    measuredMinutes: 2,
-    // Same checkout, setup-node and npm ci steps as test-inert (~1m observed),
-    // plus an apt install of the extra shell and one test file (1.1s for the
-    // whole file on a local checkout).
-    evidence: 'test-inert ~1m observed for the shared steps; local run of the test file 1.1s',
-  },
-  {
     job: 'smoke',
     workflowFile: 'install-smoke.yml',
     measuredMinutes: 2,
@@ -532,6 +524,12 @@ test('near-cap check CI_JOB_TIMEOUT_MINUTES literals match each job\'s own timeo
     assert.equal(testWorkflow.jobs['test-inert'].name, 'test (inert CI)',
       'test.yml jobs.test-inert.name changed — update JOB_RULES to match');
     assert.equal(testInertRule.test('test (inert CI)'), true);
+
+    const insertShellRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'test-insert-shell');
+    assert.equal(testWorkflow.jobs['test-insert-shell'].name, 'insert-phase shell test',
+      'test.yml jobs.test-insert-shell.name changed — update JOB_RULES to match');
+    assert.equal(insertShellRule.test('insert-phase shell test'), true);
+    assert.equal(testRule.test('insert-phase shell test'), false);
 
     const coverageGateRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'coverage-gate');
     assert.equal(testWorkflow.jobs['coverage-gate'].name, 'Coverage gate (merged shards)',

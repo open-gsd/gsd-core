@@ -159,7 +159,7 @@ jobs:
               echo "code_changed=true"
               echo "product_changed=true"
               echo "full_matrix=true"
-              echo "zsh_changed=true"
+              echo "zsh_changed=false"
               echo "targeted_tests="
             } >> "$GITHUB_OUTPUT"
             {
@@ -652,7 +652,7 @@ jobs:
   # rows, when scripts/ci-test-scope.cjs sets zsh_changed (ZSH_JOB_FILES). The
   # tap summary check fails the job when a row was skipped or none ran.
   test-insert-shell:
-    name: zsh split test (insert-phase)
+    name: insert-phase shell test
     needs: [changes, preflight]
     if: needs.changes.outputs.zsh_changed == 'true'
     runs-on: ubuntu-latest
@@ -1092,6 +1092,7 @@ jobs:
       - test
       - test-inert
       - test-conformance
+      - test-insert-shell
       - coverage-gate
       - qa-loop-walk
     if: always()
@@ -1109,6 +1110,7 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           TEST_CONFORMANCE_RESULT: ${{ needs.test-conformance.result }}
           INERT_RESULT: ${{ needs.test-inert.result }}
+          TEST_INSERT_SHELL_RESULT: ${{ needs.test-insert-shell.result }}
           COVERAGE_GATE_RESULT: ${{ needs.coverage-gate.result }}
           QA_LOOP_WALK_RESULT: ${{ needs.qa-loop-walk.result }}
         run: |
@@ -1122,6 +1124,7 @@ jobs:
           echo "test=$TEST_RESULT"
           echo "test-conformance=$TEST_CONFORMANCE_RESULT"
           echo "test-inert=$INERT_RESULT"
+          echo "test-insert-shell=$TEST_INSERT_SHELL_RESULT"
           echo "coverage-gate=$COVERAGE_GATE_RESULT"
           echo "qa-loop-walk=$QA_LOOP_WALK_RESULT"
 
@@ -1158,6 +1161,13 @@ jobs:
           if [ "$CODE_CHANGED" != "true" ]; then
             echo "No code paths changed; matrix tests intentionally skipped."
             exit 0
+          fi
+
+          # The zsh rows run in their own job, started only when zsh_changed is
+          # true; a skipped job is not a failure.
+          if [ "$TEST_INSERT_SHELL_RESULT" != "success" ] && [ "$TEST_INSERT_SHELL_RESULT" != "skipped" ]; then
+            echo "::error::test-insert-shell did not pass"
+            exit 1
           fi
 
           if [ "$PRODUCT_CHANGED" = "true" ]; then
