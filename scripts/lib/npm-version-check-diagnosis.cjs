@@ -28,10 +28,9 @@
  * risk of a false NEGATIVE on Windows -- the exact platform this failure
  * was discovered on.
  *
- * Kept out of scripts/check-env.cjs itself (which runs its CLI unconditionally
- * on require, with no `require.main === module` guard) so this pure logic
- * can be required directly by tests without triggering a real environment
- * check.
+ * Kept in its own module so the wording can be tested without a project
+ * directory. scripts/check-env.cjs is itself importable (#6375): it runs its
+ * CLI only as the entry script.
  *
  * @param {{exitCode: number, stdout: string, signal: string|null, error: (Error & {code?: string})|null, timedOut: boolean}} result
  * @returns {string}
