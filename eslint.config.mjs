@@ -948,6 +948,35 @@ export default tseslint.config(
     },
   },
 
+  // ── #6334 (ADR-6315 item 16): the six command suites are in-process unit files ──
+  // A case that needs a real process (a spawned CLI, a hook, git as the subject) lives in the
+  // `<suite>.process.test.cjs` sibling. ESLint is the enforcement point (ADR-452). This block repeats
+  // the two selectors of the tests block above, because a later block replaces a rule's options.
+  {
+    files: ['tests/{state,phase,roadmap,config,init,custom-phase-readers}.test.cjs'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
+          message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
+        },
+        {
+          selector: 'CallExpression[callee.object.name="Atomics"][callee.property.name="wait"]',
+          message: 'Atomics.wait() used as a sleep in tests. Use a proper async wait pattern instead.',
+        },
+        {
+          selector: 'CallExpression[callee.name="require"][arguments.0.value=/process-seam/]',
+          message: 'This is an in-process unit file. A case that spawns a process goes in the .process.test.cjs sibling; to capture stderr in-process call runGsdToolsCaptured (tests/helpers.cjs).',
+        },
+        {
+          selector: 'Identifier[name="runGsdToolsProcess"]',
+          message: 'runGsdToolsProcess spawns the real binary: call it from the .process.test.cjs sibling of this suite.',
+        },
+      ],
+    },
+  },
+
   // ── #1279 lint-rule fail-first fixture ──────────────────────────────────────
   // `tests/_ff_lint_violation.cjs` is a PLAIN `.cjs` (NOT `*.test.cjs`) on purpose: it is a KNOWN
   // `local/no-source-grep` violation that `defaultProveFailFirst` lints to machine-prove the rule
