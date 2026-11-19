@@ -53,7 +53,9 @@ function dispatch(runtime, extraEnv = {}) {
   );
   assert.equal(result.success, true, result.error);
   const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
-  // Both are the write's own clock reading: a fresh decision is decided as it is written (#4904).
+  // A fresh decision is decided as it is written (#4904), so both are the write's own clock reading:
+  // pin that, then drop both so two runs compare equal.
+  assert.equal(record.decided_at, record.written_at, 'a fresh decision is decided when it is written');
   delete record.written_at;
   delete record.decided_at;
   return { output: JSON.parse(result.output), raw: result.output, record };
