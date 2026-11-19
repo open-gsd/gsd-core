@@ -967,6 +967,29 @@ Required cases where relevant:
 
 Generator tests should run in temp fixtures and assert atomic output behavior. Do not mutate production generated files except in explicit freshness checks.
 
+### A parser or reader that must agree with an external tool
+
+Some code exists to give the answer another program gives, without running it: `parseGitConfig` reads a git
+config the way git does, and `readGitLayout` reports the checkout and git dirs that `git rev-parse` reports
+(ADR-6315 item 25). For code like this:
+
+- **Test it against the tool.** `tests/git-layout-parity.process.test.cjs` builds its fixtures with real git and
+  compares the reader's answer with git's for each one; a fast-check property compares the parser with
+  `git config --file` over generated files. These are process-contract tests, so the file is a
+  `*.process.test.cjs`.
+- **The oracle must not share the code's shortcuts.** An earlier version of that property rebuilt git's keys by
+  dropping the subsection, exactly as the parser then did, and so could not see that the parser read
+  `[core "x"] bare = false` as `core.bare`. Compare on the tool's own output, in full.
+- **Answer only where the answer is certain, and hand everything else to the tool.** The reader returns `null`
+  for any layout it does not recognise, and git is asked as before. Being stricter than the tool only costs
+  speed. Being looser is a defect: review found a planted `.git`, a quoted `bare = "true"` and an unsupported
+  repository format, each of which an early version accepted and git refuses.
+- **Pin which side answered.** Each fixture row states whether the reader or the tool must answer, so a layout
+  cannot move from one to the other without the test changing.
+- **Never block and never throw.** A file is opened only after `lstat` says it is a regular file, and opened
+  non-blocking: a FIFO planted where a config file is expected would otherwise hang every call. The tool this
+  replaces ran under a timeout.
+
 ### Prohibited: Source-Grep Tests
 
 **Never read source-code `.cjs` files with `readFileSync` to assert that strings exist within them.** This is source-grep theater: it proves a literal is present in a file, not that the feature works at runtime.
