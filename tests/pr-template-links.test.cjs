@@ -48,7 +48,8 @@ describe('heading anchors (#5427)', () => {
   test('a `<!--` inside a code span is no comment: later headings and the span text stay', () => {
     assert.deepEqual([...headingSet('## Marker `<!--` here\n## After')],
       [slugify('Marker `<!--` here'), 'after']);
-    assert.deepEqual([...headingSet('## A `<!-- x -->` b')], [slugify('A `<!-- x -->` b')]);  });
+    assert.deepEqual([...headingSet('## A `<!-- x -->` b')], [slugify('A `<!-- x -->` b')]);
+  });
   test('only the id and name attributes make an anchor, not data-id or aria-name', () => {
     assert.deepEqual([...headingSet('<a data-id="x" aria-name="y"></a>')], []);
     assert.deepEqual([...headingSet('<a href="u" id="z" class="c"></a>')], ['z']);
@@ -157,6 +158,12 @@ describe('link extractor (#5427)', () => {
   test('a label holds at least one character', () => {
     assert.deepEqual(hrefsIn('[]: ../x.md'), []);
     assert.deepEqual(hrefsIn('[a]: ../x.md'), ['../x.md']);
+  });
+  test('a definition may break a line after the colon or in the label, not at a blank line', () => {
+    assert.deepEqual(hrefsIn('[a]:\n  ../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('[a]:\r\n../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('[foo\nbar]: ../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('[foo\n\nbar]: ../x.md'), []);
   });
   test('a heading code span of any length is code: `_` inside it is no emphasis', () => {
     for (const code of ['`_a`', `\`_${'a'.repeat(5000)}\``, '``a`_b``']) {

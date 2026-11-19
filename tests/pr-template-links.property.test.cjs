@@ -72,7 +72,7 @@ describe('link extractor properties (#5427)', () => {
   const dest = fc.stringMatching(/^[A-Za-z0-9._/-]{1,20}$/);
   const forms = (d, t) => [`[a](${d}${t})`, `[a](<${d}>${t})`, `<a href="${d}">`, `<a href='${d}'>`,
     `<a href=${d}>`, `<img src="${d}">`, `[a]: ${d}${t}`, `[a]: <${d}>${t}`, `> [a]: ${d}${t}`,
-    `> > [a]: ${d}${t}`];
+    `> > [a]: ${d}${t}`, `[a]:\n${d}${t}`];
   test('property: every destination form yields the generated destination, CRLF included', () => {
     fc.assert(fc.property(dest, title, (d, t) => {
       for (const text of forms(d, t)) {

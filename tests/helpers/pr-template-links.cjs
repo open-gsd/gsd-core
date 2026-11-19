@@ -121,7 +121,10 @@ const attrUrls = (attrs) => attrs
 // A label takes the CommonMark limit of 999 characters. The angle destination takes the same
 // number as this guard's own scan bound: it keeps the scan linear.
 const destOf = (raw) => /^\s*<([^<>]{0,999})>/.exec(raw)?.[1] ?? raw.trim().split(/\s+/)[0];
-const REF_DEF = /^ {0,3}\[[^\]\n]{1,999}\]:[ \t]*(?:<([^<>\n]{0,999})>|(\S+))/gm;
+// A reference label may span lines (no blank line) and one line ending may follow the colon.
+const REF_LABEL = String.raw`\[(?:[^\]\n]|\n(?![ \t]*\r?\n)){1,999}\]`;
+const REF_DEF = new RegExp(
+  String.raw`^ {0,3}${REF_LABEL}:[ \t]*(?:\r?\n[ \t]*)?(?:<([^<>\n]{0,999})>|(\S+))`, 'gm');
 const hrefsIn = (text) => {
   const { text: src, attrs } = prose(text);
   const refs = [...src.matchAll(REF_DEF)].map((m) => m[1] ?? m[2]);
