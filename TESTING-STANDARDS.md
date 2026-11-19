@@ -238,33 +238,73 @@ The fields of a `measured` entry:
 
 **Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`) for literals; `tests/timeout-evidence.test.cjs` for the evidence in `tests/helpers/timeouts.cjs`; code review for the comment shape of file-local constants. A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. There is no allowlist. `eslint-rules/no-adhoc-timeout-literal.allowlist.json` grandfathered pre-existing legacy violations; the epic that introduced it (#4445) migrated every site across seventeen batches and deleted the file in its terminal batch, so `local/no-adhoc-timeout-literal` now runs with **no exemption surface**.
 
-### One installer run per runtime configuration per file
+### One installer run per runtime configuration per run
 
-A real `bin/install.js` run is the most expensive thing a test can do. When several tests in one file install the **same** runtime configuration only to read different parts of the result, install it once with `installRuntimeFixture` from `tests/helpers/install-shared.cjs` (#4688):
+A real `bin/install.js` run is the most expensive thing a test can do: about a second, most of it
+writing a thousand files. One bench run made 1,553 of them for 187 distinct configurations (#6335).
+A test that needs an installed tree takes it from `tests/helpers/install-shared.cjs`, by what it
+does with the tree:
+
+| The test | Uses | Cost |
+|---|---|---|
+| only reads the installed tree | `installRuntimeFixture({ runtime, scope })` | one install per configuration for the whole run |
+| writes into the tree, reinstalls over it, or uninstalls it | `copyRuntimeFixture({ runtime, scope })` | a copy, about a quarter of an install |
+| puts files in place before the install, or asserts on the installer's own run (exit code, output, a failure) | `runMinimalInstall({ runtime, scope })` | an install |
 
 ```javascript
-const { installRuntimeFixture } = require('./helpers/install-shared.cjs');
+const { installRuntimeFixture, copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 
 test('settings.json registers the hooks', () => {
   const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' });
   // read-only assertions against configDir
 });
 
-test('settings.json registers the MCP companion', () => {
-  const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' }); // no second install
-  // read-only assertions against configDir
+test('an uninstall removes the hooks', (t) => {
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'augment', scope: 'global' });
+  t.after(() => cleanup(root));
+  // this tree is the test's own
 });
 ```
 
 | Behavior | Detail |
 |---|---|
 | Key | `runtime`, `scope`, `extraArgs` (order matters) and `extraEnv` (key order does not). Each distinct key installs once. |
-| Lifetime | One test file. `node --test` runs each file in its own process; every cached root is deleted when that process exits. |
-| Result | The same object `runMinimalInstall` returns (`configDir`, `root`, `manifest`, `stdout`, `stderr`), deep-frozen and shared by every caller with that key. |
-| Failure | A failed install throws exactly as `runMinimalInstall` does and is not cached; the next call retries. |
-| `root` | Rejected with a `TypeError`. A shared fixture owns its root. |
+| Lifetime | Under `scripts/run-tests.cjs` (CI, `gsd-test`, `npm test`): the whole run. The trees live under the run's temp root, every test file reads the same ones, and the runner removes them when the run ends. A file started any other way keeps its trees for that one process. |
+| Result | The object `runMinimalInstall` returns (`configDir`, `root`, `manifest`, `stdout`, `stderr`). From `installRuntimeFixture` it is deep-frozen and shared. |
+| Failure | A failed install throws exactly as `runMinimalInstall` does and is not kept; the next call retries. |
+| `root` | Rejected with a `TypeError`. A shared fixture owns its root, and a copy gets a new one. |
 
-**Use it only for read-only tests.** A test that writes into the installed tree, reinstalls, uninstalls, or seeds files before installing changes what every later test sees. Keep `runMinimalInstall` (a fresh root per call) for those. Do not register `t.after(() => cleanup(root))` on a shared fixture: it would delete the tree for the tests after it.
+**A shared tree is read-only, and the helper checks it.** Every test file of the run reads it, so a
+write would change what a file running minutes later sees. The check is a digest taken when the
+tree was built: every path, its kind, permission bits and modification time, and each file's size.
+
+- When a test process exits, the helper compares each shared tree it used with that digest. A
+  difference fails the process and names the test file and the configuration. The tree was intact
+  when the process first read it, so the write happened while that file ran.
+- A file that starts later and asks for the changed tree fails at once with
+  `SharedFixtureModifiedError`, before it can read anything from it.
+
+The digest does not read file contents. A file rewritten with the same length and given its old
+modification time back is not seen. Do not register `t.after(() => cleanup(root))` on a shared
+fixture.
+
+**What a shared tree holds does not depend on which file built it.** The installer copies hooks
+from `hooks/dist`, which is build output and absent, or partial, in a lane that has not built it.
+The fixture helpers call `ensureHooksDist` first, so a file that never needed hooks cannot publish
+a tree without them. The builder's `PATH` still reaches the installer, as it does for any install a test
+runs.
+
+**A copy stands in for a fresh install.** `copyRuntimeFixture` copies the shared tree to a new root
+and writes the new root's name wherever the old one appears, in file contents, symlink targets and
+the manifest's hashes. `tests/shared-install-fixture.install.test.cjs` compares a copy with a real
+install for every runtime family: the same files and the same content, apart from what each
+install draws at random (the heredoc terminator and timestamps). A copy therefore carries its
+source's terminator and its files' modification times. A test about either installs for real.
+
+**Each shared configuration costs disk for the whole run:** about 20 MB under the run's temp root,
+which the runner's sweep between chunks does not reclaim. Share a configuration that several files
+read. A configuration only one test uses is cheaper as that test's own `runMinimalInstall`, removed
+when the test ends.
 
 ### Mutation testing — 80 % threshold
 
