@@ -3085,9 +3085,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { toLegacyResult } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runGsdToolsCaptured } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -3096,11 +3094,8 @@ function read(relativePath) {
 }
 
 function runGsd(args, cwd) {
-  const result = runNode([path.join(ROOT, 'gsd-core/bin/gsd-tools.cjs'), ...args], {
-    cwd,
-    timeoutMs: PROBE_TIMEOUT_MS,
-  });
-  return toLegacyResult(result);
+  const { exitCode, stdout, stderr } = runGsdToolsCaptured(args, cwd);
+  return { status: exitCode, stdout, stderr };
 }
 
 describe('bug #3212 execute-phase stall detection and safe resume', () => {

@@ -3317,13 +3317,7 @@ describe('cmdStateUpdateProgress (state update-progress)', () => {
     fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary\n');
 
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
-    const rec = runNode(
-      [toolsPath, 'state', 'update-progress'],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS },
-    );
+    const rec = require('./helpers.cjs').runGsdToolsCaptured(['state', 'update-progress'], tmpDir);
     assert.equal(rec.exitCode, 0, `Command failed: ${rec.stderr}`);
     const output = JSON.parse(rec.stdout);
     assert.strictEqual(output.updated, true, `scope gate must not withhold; got ${rec.stdout}`);
@@ -13754,9 +13748,6 @@ const { stateExtractField } = require('../gsd-core/bin/lib/state-document.cjs');
 const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { stripFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
-const ROOT = path.join(__dirname, '..');
-const TOOLS_PATH = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -13774,19 +13765,16 @@ function readState(dir) {
 }
 
 function runGsdState(args, cwd) {
-  const { runNode } = require('./helpers/process-seam.cjs');
-  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
   const env = {
-    ...process.env,
     GSD_SESSION_KEY: '',
     CODEX_THREAD_ID: '',
     CLAUDE_SESSION_ID: '',
     CLAUDE_CODE_SSE_PORT: '',
     OPENCODE_SESSION_ID: '',
   };
-  const r = runNode([TOOLS_PATH, 'state', ...args], { cwd, env, timeoutMs: PROBE_TIMEOUT_MS });
+  const r = require('./helpers.cjs').runGsdToolsCaptured(['state', ...args], cwd, env);
   if (r.exitCode === 0) return { success: true };
-  return { success: false, error: r.stderr.trim() || `exited with outcome=${r.outcome} exitCode=${r.exitCode}` };
+  return { success: false, error: r.stderr.trim() || `exited with exitCode=${r.exitCode}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -22381,13 +22369,10 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
     const body = fs.readFileSync(statePath(), 'utf-8');
     return body.slice(body.search(/^## Session/m));
   }
-  // runNode, not runGsdTools: the success path's stderr carries the warning.
+  // runGsdToolsCaptured, not runGsdTools: the success path's stderr carries the warning.
   function recordSession(...args) {
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
-    const rec = runNode([toolsPath, 'state', 'record-session', ...args],
-      { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+    const { runGsdToolsCaptured } = require('./helpers.cjs');
+    const rec = runGsdToolsCaptured(['state', 'record-session', ...args], tmpDir);
     assert.equal(rec.exitCode, 0, `record-session failed: ${rec.stderr}`);
     return { json: JSON.parse(rec.stdout), stderr: rec.stderr };
   }
@@ -22576,12 +22561,9 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
   test('(a) a line break in --stopped-at is refused before anything is written', () => {
     seed([], ['Last session: 2026-01-01', 'Stopped at: Phase 2', 'Resume file: None']);
     const before = readState();
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
+    const { runGsdToolsCaptured } = require('./helpers.cjs');
     for (const value of ['line one\nForged: line', 'line one\rForged: line']) {
-      const rec = runNode([toolsPath, 'state', 'record-session', '--stopped-at', value],
-        { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+      const rec = runGsdToolsCaptured(['state', 'record-session', '--stopped-at', value], tmpDir);
       assert.notStrictEqual(rec.exitCode, 0, `must refuse ${JSON.stringify(value)}`);
       assert.match(rec.stderr, /--stopped-at must be a single line/);
       assert.strictEqual(readState(), before, 'STATE.md must be untouched');
@@ -22671,10 +22653,7 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
 
   // ─── trek-e review 2026-10-10 ─────────────────────────────────────────────
   function runTool(...args) {
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-    const { TOOLS_PATH: toolsPath, TEST_ENV_BASE } = require('./helpers.cjs');
-    return runNode([toolsPath, ...args], { cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS });
+    return require('./helpers.cjs').runGsdToolsCaptured(args, tmpDir);
   }
 
   // Major 1: U+2028/U+2029 start a line for every `m`-flag reader, so they

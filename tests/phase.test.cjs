@@ -16,24 +16,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
-const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
-const {
-  GIT_TIMEOUT_MS,
-  LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-  PROBE_TIMEOUT_MS,
-} = require('./helpers/timeouts.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-// `phase complete` against a real STATE.md rewrite; matches the 60000ms bound
-// already used for the same CLI call elsewhere in this file (runPhaseComplete
-// above, and `run()` below at 15000ms for a lighter query-only call).
-const PHASE_COMPLETE_TIMEOUT_MS = 60000;
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { splitTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('fast-check');
-
-const GSD_TOOLS_BIN = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function normalizePhaseToken(token) {
   return String(token).replace(/\d+/g, (digits) => String(Number(digits)));
@@ -2803,7 +2792,7 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
       '\n### [CK.02] 05: sibling without a project code\n\n**Goal:** ignored\n',
     );
 
-    const result = runNode([GSD_TOOLS_BIN, 'phase', 'add', 'Local'], { cwd: repoDir, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
+    const result = require('./helpers.cjs').runGsdToolsCaptured(['phase', 'add', 'Local'], repoDir);
 
     assert.strictEqual(result.exitCode, 0, result.stderr);
     assert.doesNotMatch(result.stderr || '', /Error:|project_code|phase_id_convention/);
@@ -7629,32 +7618,21 @@ describe('bug #1962: normalizePhaseName preserves letter suffix case', () => {
  */
 function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
   writePassedVerificationForPhase(tmpDir, phase);
-  const r = runNode([GSD_TOOLS_BIN, 'phase', 'complete', phase], {
-    cwd: tmpDir,
-    timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-  });
-  // A signal/timeout kill terminated the process before it finished writing —
-  // never tolerate it; surface it with whatever output was captured.
-  if (r.killed) {
-    throw new Error(
-      `gsd-tools phase complete ${phase} was killed before completion ` +
-        `(signal=${r.signal}, code=${r.code}). ` +
-        `stdout=${r.stdout || ''} stderr=${r.stderr || ''}`
-    );
-  }
-  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+  // In this process (#6334): there is no child to be killed, so the timeout and
+  // signal handling this helper once carried (#1998) has nothing left to guard.
+  const r = require('./helpers.cjs').runGsdToolsCaptured(['phase', 'complete', phase], tmpDir);
+  if (r.exitCode === 0) {
     return r.stdout;
   }
   if (tolerateExit) {
     return `${r.stdout || ''}${r.stderr || ''}`;
   }
   const err = new Error(
-    `gsd-tools phase complete ${phase} failed — outcome=${r.outcome} exitCode=${r.exitCode} stderr=${r.stderr.trim()}`
+    `gsd-tools phase complete ${phase} failed — exitCode=${r.exitCode} stderr=${r.stderr.trim()}`
   );
   err.status = r.exitCode;
   err.stdout = r.stdout;
   err.stderr = r.stderr;
-  err.signal = r.signal;
   throw err;
 }
 
@@ -8754,11 +8732,8 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       const { planningDir } = setupPhase1316Project(tmpDir);
       writePassedVerificationForPhase(tmpDir, '32');
 
-      const result = toLegacyResult(runNode([GSD_TOOLS_BIN, 'phase', 'complete', '32'], {
-        cwd: tmpDir,
-        env: process.env,
-        timeoutMs: PHASE_COMPLETE_TIMEOUT_MS,
-      }));
+      const captured = require('./helpers.cjs').runGsdToolsCaptured(['phase', 'complete', '32'], tmpDir);
+      const result = { status: captured.exitCode, stdout: captured.stdout, stderr: captured.stderr };
 
       assert.strictEqual(result.status, 0, `phase complete failed: ${result.stderr || result.stdout}`);
       assert.ok(
@@ -10526,15 +10501,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 
-const { cleanup } = require('./helpers.cjs');
-
-const gsdTools = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+const { cleanup, runGsdToolsCaptured } = require('./helpers.cjs');
 
 function run(args, cwd) {
-  const r = runNode([gsdTools, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
-  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+  const r = runGsdToolsCaptured(args, cwd);
+  if (r.exitCode === 0) {
     return { stdout: r.stdout, ok: true };
   }
   return {
@@ -10890,14 +10862,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
-const { cleanup } = require('./helpers.cjs');
-
-const gsdTools2853 = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+const { cleanup, runGsdToolsCaptured } = require('./helpers.cjs');
 
 function run2853(args, cwd) {
-  const r = runNode([gsdTools2853, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
-  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+  const r = runGsdToolsCaptured(args, cwd);
+  if (r.exitCode === 0) {
     return { stdout: r.stdout, ok: true };
   }
   return {
@@ -17976,8 +17945,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
 // #5165: milestone-grouped roadmaps — scoped progress, phase.complete re-runs, write-scoped
 // Markdown normalization at the ROADMAP/STATE seam, and ship tracking.
 {
-  const TIMEOUT_MS = PHASE_COMPLETE_TIMEOUT_MS;
-
+  
   const ROADMAP_HEAD = `# Roadmap: Demo
 
   ## Milestones
@@ -18080,11 +18048,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
   }
 
   function gsd(cwd, ...args) {
-    const r = runNode([GSD_TOOLS_BIN, 'query', ...args], {
-      cwd,
-      env: { ...process.env, HOME: cwd },
-      timeoutMs: TIMEOUT_MS,
-    });
+    const r = require('./helpers.cjs').runGsdToolsCaptured(['query', ...args], cwd, { HOME: cwd });
     assert.equal(r.exitCode, 0, `gsd ${args.join(' ')} failed: ${r.stderr}`);
     return r.stdout;
   }

@@ -347,6 +347,41 @@ async function runGsdToolsAsync(args, cwd = process.cwd(), env = {}) {
   }
 }
 
+/**
+ * Run a gsd-tools command in this process and return what a process leaves
+ * behind (#6334, ADR-6315 item 16): `{ exitCode, stdout, stderr }`, each as the
+ * command wrote it. `runGsdTools` keeps stderr only for a failed command and
+ * trims stdout; a test that asserts on a warning a successful command writes to
+ * stderr, or on stdout's exact bytes, calls this instead of spawning the binary.
+ *
+ * Like `runGsdTools` it never spawns, refuses what only a process can honour
+ * (a start-time Node variable, a working directory that is not there), and does
+ * not serve a command that finishes asynchronously. A test whose subject is the
+ * process boundary calls `runGsdToolsProcess` from a `*.process.test.cjs` file.
+ *
+ * @param {string|string[]} args
+ * @param {string} cwd
+ * @param {object} [env]
+ * @returns {{ exitCode: number, stdout: string, stderr: string }}
+ */
+function runGsdToolsCaptured(args, cwd = process.cwd(), env = {}) {
+  refuseWhatNeedsAProcess('runGsdToolsCaptured', cwd, env);
+  const argv = gsdToolsArgv(args);
+  try {
+    const { exitCode, stdout, stderr } = require(TOOLS_PATH).runCliSync(inProcessOptions(argv, cwd, env));
+    return { exitCode, stdout, stderr };
+  } catch (err) {
+    if (err && err.code === 'in_process_async_command') {
+      throw new Error(
+        `runGsdToolsCaptured: "${String(err.command)}" finishes asynchronously, so a synchronous call cannot serve it. `
+        + 'Nothing was run. Use `await runGsdToolsAsync(...)`.',
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+}
+
 /** What a command that wrote more than the buffer limit returns, spawned or in-process. */
 function bufferOverflowResult(output, code) {
   return {
@@ -1607,7 +1642,7 @@ function seedCustomPhaseDirectory(cwd, id, title, projectCode = null) {
   return directory;
 }
 
-module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, runGsdToolsAsync, runGsdToolsProcess, SPAWNED_MAX_BUFFER_BYTES, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, isolateGitConfigEnv, isolateConfigReadEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, runGsdToolsAsync, runGsdToolsCaptured, runGsdToolsProcess, SPAWNED_MAX_BUFFER_BYTES, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, isolateGitConfigEnv, isolateConfigReadEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still
