@@ -127,6 +127,7 @@ module.exports = {
   "tests/hinted-executor-isolation.test.cjs",
   "tests/hooks-crash-policy.test.cjs",
   "tests/hooks-opt-in.test.cjs",
+  "tests/in-process-cli.test.cjs",
   "tests/init-manager.test.cjs",
   "tests/init.test.cjs",
   "tests/install-fs-adapter-seam.test.cjs",
