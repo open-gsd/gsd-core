@@ -226,6 +226,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/review-lane-runner.cjs',
       // #5963: tsc-generated runtime artifact — lint src/http-body-cap.cts, not this.
       'gsd-core/bin/lib/http-body-cap.cjs',
+      // #6332: tsc-generated runtime artifacts — lint src/in-process-cli.cts and
+      // src/invocation-scope.cts, not these.
+      'gsd-core/bin/lib/in-process-cli.cjs',
+      'gsd-core/bin/lib/invocation-scope.cjs',
       'gsd-core/bin/lib/reviewer-step-dispatch.cjs',
       'gsd-core/bin/lib/clusters.cjs',
       'gsd-core/bin/lib/installer-migrations/001-legacy-orphan-files.cjs',

@@ -5799,6 +5799,20 @@ if (require.main === module) {
   runMain(main);
 }
 
+/**
+ * Run this CLI in-process (#6332, ADR-6315 item 14): the same `main` the
+ * entry point above runs, behind the in-process seam. Resolves to
+ * `{ exitCode, stdout, stderr }`, writes nothing to the real streams and
+ * leaves process state as it found it. `argv` is what follows the script path.
+ *
+ * @param {{ argv?: readonly string[], cwd?: string, env?: Record<string, string | undefined> }} [options]
+ * @returns {Promise<{ exitCode: number, stdout: string, stderr: string }>}
+ */
+function runCli(options = {}) {
+  const { runInProcess } = require('./lib/in-process-cli.cjs');
+  return runInProcess(main, { ...options, scriptPath: __filename });
+}
+
 // ─── Exports (for tests) ──────────────────────────────────────────────────────
 // ADR-959: export dispatchCapabilityCommand so tests can exercise it with
 // synthetic registry + requireModule injections.
@@ -5810,6 +5824,7 @@ function hostCommandNames() {
 }
 
 module.exports = {
+  runCli,
   hostCommandNames,
   dispatchCapabilityCommand,
   dispatchOverlayCapabilityCommand,
