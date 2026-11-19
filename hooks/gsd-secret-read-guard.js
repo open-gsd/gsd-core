@@ -2778,10 +2778,18 @@ let scanSpent = false;
 // nested body is read again at each outer pass, so the charge on a script a
 // shell reads from a heredoc is a fixed multiple of its length, set by its
 // nesting. With a reading trigger in it, each character of a `bash <<'EOF'`
-// script is scanned about 120 times and charged up to about 33 separators,
-// and such scripts are denied from about 16,000-70,000 characters by shape;
-// inside `$( )` or a second heredoc each is scanned about 500 times and
-// charged up to about 130, and they are denied from about 4,000-17,000. The
+// script is scanned about 120-135 times and charged up to about 49
+// separators (bare `:` lines), so such scripts are denied at a
+// size set by their shape: measured, from about 10,700 characters (`:` lines)
+// to 69,900. Inside `$( )` or a second heredoc each is scanned about 370-520
+// times and charged up to about 190, and they are denied from about 2,700 to
+// 16,400. #5523's readings (SHELL_READINGS) add a pass each to a command
+// holding the characters it needs, so with no trigger a heredoc commit message
+// of plain lines is scanned about 10 times and denied from about 840,000
+// characters, one of `{a, b}` lines from about 600,000 and, with a backslash
+// or a CR in each line, from about 466,000; `echo ${HOME}` lines fed to bash
+// are scanned about 14 times and denied from about 600,000 (400,000 inside
+// `$( )`). The
 // most any of the 1,384,856 real agent commands above needs is 20,043 (a
 // 4,543-character heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;

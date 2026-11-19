@@ -2391,13 +2391,84 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
     });
 
-    test('in process: a commit message holding a reading trigger is scanned to about 70,000 characters', () => {
-      // The user guide's figure: two levels, eight scans each, and #5513's
-      // heredoc passes put the boundary near 69,900 characters. Pinned at
-      // 10% either side, so the guide's "about" stays true.
-      const message = (n) => `git commit -m "$(cat <<'EOF'\nsubject $'\\t'\n\n${'a'.repeat(n)}\nEOF\n)"`;
-      assert.equal(scanBashCommand(message(63000)), null);
-      assert.deepEqual(scanBashCommand(message(77000)), TOO_COMPLEX);
+    // The user guide's measured examples of where the scan budget stops a long
+    // command, each pinned about 2-10% either side of its edge on this hook.
+    // `verdict` is main()'s order: the secret scan, then the debugger-spawn
+    // check on what it left. Every deny pin asserts command-too-complex.
+    const budgetVerdict = (cmd) => scanBashCommand(cmd) || scanDebuggerSpawn(cmd);
+    const fillLines = (line, chars) => {
+      let body = '';
+      for (let i = 0; body.length < chars; i++) body += line(i);
+      return body;
+    };
+    const assertBudgetEdge = (cmd, below, above, label) => {
+      assert.equal(budgetVerdict(cmd(below)), null, `${label}: ${below} characters`);
+      assert.deepEqual(budgetVerdict(cmd(above)), TOO_COMPLEX, `${label}: ${above} characters`);
+    };
+
+    test('in process: a heredoc commit message holding a reading trigger is scanned to about 64,500 or 67,700 characters', () => {
+      // Two levels, eight scans each, #5513's heredoc passes and #5523's
+      // readings: about 64,500 with a `$'\t'` (its backslash also calls for
+      // the join readings), about 67,700 with a quote beside `((`. `next`
+      // denies both from about 69,900, so the `$'\t'` pin fails there.
+      const message = (subject) => (n) => `git commit -m "$(cat <<'EOF'\nsubject ${subject}\n\n${'a'.repeat(n)}\nEOF\n)"`;
+      assertBudgetEdge(message("$'\\t'"), 61000, 67000, "$'\\t'");
+      assertBudgetEdge(message("' (( '"), 64000, 71000, 'quote beside ((');
+    });
+
+    test('in process: scripts with a reading trigger a shell reads from a heredoc are denied at sizes set by their shape', () => {
+      // The guide's examples: strict-mode `(( n += k ))` lines about 15,700;
+      // `echo` lines after `IFS=$'\t'` about 67,700 (`next`: 69,900, so the
+      // 69,000 pin fails there); bare `:` lines about 10,700; `echo` lines
+      // after `echo ' (( '` about 69,900; and inside `$( )` about 16,200
+      // (`echo`) and 2,700 (`:`). The strict-mode script in `$( )` is the row above.
+      const script = (head, line, nested) => (chars) => {
+        const body = head + fillLines(line, chars);
+        return nested ? `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"` : `bash <<'EOF'\n${body}EOF\n`;
+      };
+      const tab = "IFS=$'\\t'\n";
+      assertBudgetEdge(script("set -euo pipefail\nIFS=$'\\n\\t'\n", (k) => `(( n += ${k} ))\n`, false), 15000, 17000, 'strict-mode lines');
+      assertBudgetEdge(script(tab, (k) => `echo line ${k}\n`, false), 64000, 69000, 'echo lines');
+      assertBudgetEdge(script(tab, () => ':\n', false), 10000, 11500, ': lines');
+      assertBudgetEdge(script("echo ' (( '\n", (k) => `echo line ${k}\n`, false), 66000, 73000, "echo lines after ' (( '");
+      assertBudgetEdge(script(tab, (k) => `echo line ${k}\n`, true), 15000, 17500, 'echo lines in $( )');
+      assertBudgetEdge(script(tab, () => ':\n', true), 2500, 3000, ': lines in $( )');
+    });
+
+    test('in process: a heredoc with none of the reading triggers is scanned once per #5523 reading it calls for', () => {
+      // The guide's examples. A commit-message heredoc's own `$(` calls for the
+      // spans readings, a brace for zsh's grouping, a backslash (with the `<<`
+      // and a newline) or a CR for the join and CR readings, and each composes.
+      // `next` scans every one of these to the length limit but the `$( )` script.
+      const message = (line) => (chars) => `git commit -m "$(cat <<'EOF'\nSubject\n\n${fillLines(line, chars)}EOF\n)"`;
+      assertBudgetEdge(message((k) => `Plain line ${k}.\n`), 800000, 880000, 'plain lines');
+      assertBudgetEdge(message((k) => `Keep {a, b} in step ${k}.\n`), 570000, 630000, '{a, b} lines');
+      assertBudgetEdge(message((k) => `Keep {a, b} in \\n step ${k}.\n`), 440000, 490000, '{a, b} lines with a backslash');
+      assertBudgetEdge(message((k) => `Keep {a, b} in step ${k}.\r\n`), 440000, 490000, '{a, b} lines ending in CRLF');
+      const home = (line, nested) => (chars) => {
+        const body = fillLines(line, chars);
+        return nested ? `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"` : `bash <<'EOF'\n${body}EOF\n`;
+      };
+      const plainHome = () => 'echo ${HOME}\n';
+      const slashHome = (k) => `echo \${HOME} 'a\\n' ${k}\n`;
+      assertBudgetEdge(home(plainHome, false), 570000, 630000, 'echo ${HOME} lines');
+      assertBudgetEdge(home(plainHome, true), 370000, 430000, 'echo ${HOME} lines in $( )');
+      assertBudgetEdge(home(slashHome, false), 440000, 490000, 'echo ${HOME} lines with a backslash');
+      assertBudgetEdge(home(slashHome, true), 290000, 330000, 'echo ${HOME} lines with a backslash in $( )');
+    });
+
+    test('in process: a single-quoted commit message is scanned once per reading its characters call for', () => {
+      // The guide's examples: `{a, b}` lines call for zsh's grouping only, so
+      // the message is scanned twice and stays within the budget to the length
+      // limit; a backtick, a backslash, `<<` and a CR as well call for ten
+      // scans, about 840,000; a `((` added is a #5255 form, about 270,000.
+      const message = (subject, line) => (chars) => `git commit -m '${subject}\n\n${fillLines(line, chars)}'`;
+      const braces = message('Subject', (k) => `Keep {a, b} in step ${k}.\n`)(1048000);
+      assert.ok(braces.length <= 1024 * 1024);
+      assert.equal(budgetVerdict(braces), null);
+      const mixed = (k) => `Keep {a} and \`b\` with \\n ${k}.\n`;
+      assertBudgetEdge(message('Subject: cat <<EOF\r', mixed), 800000, 880000, 'mixed');
+      assertBudgetEdge(message('Subject: cat <<EOF ((y))\r', mixed), 255000, 285000, 'mixed with ((');
     });
 
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
