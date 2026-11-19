@@ -109,3 +109,53 @@ describe('link extractor properties (#5427)', () => {
     }));
   });
 });
+
+// The tag shapes follow the WHATWG tokenizer (states "attribute value (double-quoted)",
+// "(single-quoted)", "(unquoted)", "after attribute value (quoted)"). The expected URLs come
+// from the generated attribute list, never from the scanner.
+describe('tag scanner properties (#5427)', () => {
+  const value = fc.stringMatching(/^[A-Za-z0-9._/-]{1,12}$/);
+  const attr = fc.record({
+    name: fc.constantFrom('href', 'src', 'title', 'data-x', 'alt'),
+    form: fc.constantFrom('dq', 'sq', 'unquoted', 'unquoted-eq', 'boolean'),
+    value,
+    more: value,
+    gap: fc.constantFrom(' ', '  ', '\n', '\t'),
+  });
+  const render = ({ name, form, value: v, more }) => ({
+    dq: `${name}="${v}"`, sq: `${name}='${v}'`, unquoted: `${name}=${v}`,
+    'unquoted-eq': `${name}=${v}=${more}`, boolean: name,
+  })[form];
+  const expected = ({ name, form, value: v, more }) => {
+    if (!['href', 'src'].includes(name) || form === 'boolean') return [];
+    return [form === 'unquoted-eq' ? `${v}=${more}` : v];
+  };
+  test('property: each attribute of a tag is read, whatever its neighbours look like', () => {
+    fc.assert(fc.property(fc.array(attr, { minLength: 1, maxLength: 6 }), (attrs) => {
+      const quoted = (a) => a.form === 'dq' || a.form === 'sq';
+      // after a quoted value the next attribute may follow with no space at all
+      const body = attrs.map((a, i) => (i > 0 && quoted(attrs[i - 1]) && a.gap === ' ' ? '' : a.gap)
+        + render(a)).join('');
+      const tag = `<a${attrs[0].gap}${body.replace(/^\s+/, '')}>`;
+      assert.deepEqual(hrefsIn(tag), attrs.flatMap(expected), tag);
+    }));
+  });
+  // Linear time is a property of the scan, not of a clock (RULESET.TESTS.no-timing-assertion):
+  // each attack has a result known by construction at any size; a quadratic scan hangs the run.
+  const N = 30000;
+  const attacks = [
+    ['unclosed comments', '<!--'],
+    ['open tags without end', '<a '],
+    ['quotes without partner', '<a href="'],
+    ['values without partner', '<a href=\'x\' b="'],
+  ];
+  for (const [label, unit] of attacks) {
+    test(`scan attack stays linear: ${label}`, () => {
+      assert.deepEqual(hrefsIn(unit.repeat(N)), []);
+      assert.deepEqual(hrefsIn(`[a](../x.md) ${unit.repeat(N)}`), ['../x.md']);
+    });
+  }
+  test('scan attack stays linear: one tag with many attributes', () => {
+    assert.deepEqual(hrefsIn(`<a ${'href=x '.repeat(N)}>`), Array(N).fill('x'));
+  });
+});

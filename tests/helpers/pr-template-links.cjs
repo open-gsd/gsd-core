@@ -11,7 +11,8 @@
 // cannot reproduce (a non-ASCII letter or digit, a link, an HTML tag or entity, `_` emphasis)
 // gets no anchor, so a link to it fails. Blockquote headings and `<a id>`/`<a name>` anchors count.
 // Owners: the sectionizer reads fences, code spans and ATX headings; the ADR gate reads inline
-// link syntax (extractLinks) and the case-exact path walk.
+// link syntax (extractLinks) and the case-exact path walk; scanHtml below reads HTML comments and
+// tag attributes, which neither owner covers.
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -27,35 +28,91 @@ const ROOT = path.join(__dirname, '..', '..');
 const REPO = 'https://github.com/open-gsd/gsd-core/';
 const NEXT = `${REPO}blob/next/`;
 
-const COMMENT = /<!--[\s\S]*?-->/g;
+// One linear pass (ADR-3212 section 5) after the WHATWG tokenizer: it drops HTML comments and
+// reads the attributes of open tags. A comment ends at the first `-->`, so `<!-->` is empty and
+// an unclosed one hides the rest. A tag takes an attribute right after a quoted value and keeps
+// an `=` inside an unquoted value; a quote with no partner ends the tag, which yields none.
+const eat = (re, s, at) => {
+  re.lastIndex = at;
+  return re.exec(s)?.[0] ?? '';
+};
+const SKIP = /[\s/]*/y;
+const SPACE = /\s*/y;
+const TAG_NAME = /[A-Za-z][^\s/>]*/y;
+const ATTR_NAME = /=?[^\s/>=]*/y;
+const UNQUOTED = /[^\s>]*/y;
+const scanHtml = (s) => {
+  const attrs = [];
+  const unclosed = new Set(); // a quote with no partner after one point has none after a later one
+  const close = (q, at) => {
+    const end = unclosed.has(q) ? -1 : s.indexOf(q, at);
+    if (end < 0) unclosed.add(q);
+    return end;
+  };
+  const tag = (start) => {
+    const found = [];
+    const name = eat(TAG_NAME, s, start + 1);
+    let i = start + 1 + name.length;
+    for (;;) {
+      i += eat(SKIP, s, i).length;
+      if (i >= s.length) return i;
+      if (s[i] === '>') {
+        attrs.push(...found);
+        return i + 1;
+      }
+      const key = eat(ATTR_NAME, s, i);
+      i += key.length;
+      let j = i + eat(SPACE, s, i).length;
+      let value;
+      if (s[j] === '=') {
+        j += 1 + eat(SPACE, s, j + 1).length;
+        const q = s[j];
+        if (q === '"' || q === "'") {
+          const end = close(q, j + 1);
+          if (end < 0) return j;
+          value = s.slice(j + 1, end);
+          i = end + 1;
+        } else {
+          value = eat(UNQUOTED, s, j);
+          i = j + value.length;
+        }
+      }
+      found.push({ tag: name.toLowerCase(), name: key.toLowerCase(), value });
+    }
+  };
+  let text = '';
+  let from = 0;
+  for (let i = s.indexOf('<'); i >= 0; i = s.indexOf('<', i)) {
+    if (s.startsWith('<!--', i)) {
+      const end = s.indexOf('-->', i + 2);
+      text += s.slice(from, i);
+      if (end < 0) return { text, attrs };
+      from = i = end + 3;
+    } else {
+      i = /[A-Za-z]/.test(s[i + 1] ?? '') ? tag(i) : i + 1;
+    }
+  }
+  return { text: text + s.slice(from), attrs };
+};
 // What a reader sees: a quote marker is no content, and neither is a fence or a comment.
 const unfenced = (text) => stripFencedCode(text.replace(/^(?: {0,3}>[ \t]?)+/gm, '')).text;
-const visible = (text) => unfenced(text).replace(COMMENT, '');
-const prose = (text) => stripInlineCode(unfenced(text)).replace(COMMENT, '');
+const prose = (text) => scanHtml(stripInlineCode(unfenced(text)));
 
-const NAME = /\s+[^\s"'<>/=]+/;
-const VALUE = /(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>`=]+))?/;
-const TAG = new RegExp(`<[A-Za-z][A-Za-z0-9-]*((?:${NAME.source}${VALUE.source})*)\\s*/?>`, 'g');
-// One attribute at a time: a quoted value is consumed whole, so `title="href=x"` yields nothing.
-const ATTR = /\s+([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`=]+)))?/g;
 const URL_ATTRS = new Set(['href', 'src', 'srcset']);
 const firstCandidate = (c) => c.trim().split(/\s+/)[0];
-const attrsIn = (t) => [...t.matchAll(TAG)].flatMap(([, body]) => [...body.matchAll(ATTR)])
-  .filter(([, name]) => URL_ATTRS.has(name.toLowerCase()))
-  .flatMap(([, name, ...v]) => {
-    const val = v.find((g) => g !== undefined);
-    if (val === undefined) return [];
-    const srcset = name.toLowerCase() === 'srcset';
-    return srcset ? val.split(',').map(firstCandidate).filter(Boolean) : [val];
-  });
+const attrUrls = (attrs) => attrs
+  .filter(({ name, value }) => URL_ATTRS.has(name) && value !== undefined)
+  .flatMap(({ name, value }) =>
+    name === 'srcset' ? value.split(',').map(firstCandidate).filter(Boolean) : [value]);
 
 // A link destination is the first word of the parentheses, or the whole of an `<...>` form.
-const destOf = (raw) => /^\s*<([^<>]*)>/.exec(raw)?.[1] ?? raw.trim().split(/\s+/)[0];
-const REF_DEF = /^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^<>\n]*)>|(\S+))/gm;
+// Labels and angle destinations take the CommonMark limit of 999 characters.
+const destOf = (raw) => /^\s*<([^<>]{0,999})>/.exec(raw)?.[1] ?? raw.trim().split(/\s+/)[0];
+const REF_DEF = /^ {0,3}\[[^\]\n]{1,999}\]:[ \t]*(?:<([^<>\n]{0,999})>|(\S+))/gm;
 const hrefsIn = (text) => {
-  const src = prose(text);
+  const { text: src, attrs } = prose(text);
   const refs = [...src.matchAll(REF_DEF)].map((m) => m[1] ?? m[2]);
-  return [...extractLinks(src).map(({ target }) => destOf(target)), ...attrsIn(src), ...refs];
+  return [...extractLinks(src).map(({ target }) => destOf(target)), ...attrUrls(attrs), ...refs];
 };
 
 // Host and owner/name are case-insensitive on GitHub, the view and the ref are not.
@@ -121,24 +178,32 @@ const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
 // GitHub keeps non-ASCII letters and slugs the rendered text; slugify keeps neither, so
 // such a heading gets no anchor and a link to it fails.
 const unslugable = (text) => {
-  const bare = text.replace(/`[^`\n]*`/g, '');
+  const bare = text.replace(/`[^`\n]{0,999}`/g, '');
   return /(?!\p{ASCII})[\p{L}\p{N}]/u.test(text) || /\]\(|\]\[/.test(bare)
     || /<[A-Za-z/!]|&[A-Za-z0-9#]+;/.test(bare) // an HTML tag or entity renders to other text
     || /(?:^|\W)_|_(?:\W|$)/.test(bare);
 };
-const A_ID = /<a\s(?:[^>]*?\s)?(?:id|name)\s*=\s*["']([^"'\s>]+)["']/gi;
+const anchorIds = (attrs) => attrs
+  .filter(({ tag, name, value }) => tag === 'a' && (name === 'id' || name === 'name') && value
+    && !/\s/.test(value))
+  .map(({ value }) => value);
 const headingSet = (source) => {
   const seen = new Map();
-  const slugs = tokenizeHeadings(visible(source)).filter(({ text }) => !unslugable(text))
+  const slugs = tokenizeHeadings(scanHtml(unfenced(source)).text).filter(({ text }) => !unslugable(text))
     .map(({ text }) => {
       const s = slugify(text);
       const n = seen.get(s) ?? 0;
       seen.set(s, n + 1);
       return n ? `${s}-${n}` : s;
     });
-  return new Set([...slugs, ...[...prose(source).matchAll(A_ID)].map((m) => m[1])]);
+  return new Set([...slugs, ...anchorIds(prose(source).attrs)]);
 };
-const headingsOfFile = (rel) => headingSet(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
+// A repo file read through the gate's case-exact walk, which refuses a symlink out of the repo.
+const readRepoFile = (rel) => {
+  if (!existsExact(rel)) throw new Error(`${JSON.stringify(rel)}: no such file inside the repo`);
+  return fs.readFileSync(path.join(ROOT, rel), 'utf8');
+};
+const headingsOfFile = (rel) => headingSet(readRepoFile(rel));
 
 const LINE_ANCHOR = /^L(\d+)(?:C\d+)?(?:-L(\d+)(?:C\d+)?)?$/;
 // heading: rendered markdown (blob or tree, no ?plain=1).
@@ -179,5 +244,5 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
 
 module.exports = {
   REPO, NEXT, hrefsIn, isBadLink, repoPathOf, missingNext,
-  unresolvedAnchors, headingSet, anchorKind, lineCountOf,
+  unresolvedAnchors, headingSet, anchorKind, lineCountOf, readRepoFile,
 };

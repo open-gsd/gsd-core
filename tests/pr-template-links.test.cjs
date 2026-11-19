@@ -9,12 +9,12 @@ const { slugify } = require('../scripts/gen-features.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   REPO, NEXT, hrefsIn, isBadLink, missingNext, repoPathOf, unresolvedAnchors, headingSet,
-  anchorKind, lineCountOf,
+  anchorKind, lineCountOf, readRepoFile,
 } = require('./helpers/pr-template-links.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const DOCS_ANCHOR = 'CONTRIBUTING.md#documentation-updates--update-the-relevant-docs';
-const hrefsOf = (f) => hrefsIn(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+const hrefsOf = (f) => hrefsIn(readRepoFile(f));
 
 describe('heading anchors (#5427)', () => {
   test('reads ATX headings, including indented', () => {
@@ -100,6 +100,30 @@ describe('link extractor (#5427)', () => {
   test('an attribute name is read only inside an open tag', () => {
     assert.deepEqual(hrefsIn('see href="x" in prose'), []);
     assert.deepEqual(hrefsIn('<a title="href=x" href="y">'), ['y']);
+  });
+  // Shapes of the WHATWG HTML tokenizer: an odd attribute drops only itself, never its siblings.
+  test('an attribute after a quoted value needs no space, and `=` stays in an unquoted value', () => {
+    assert.deepEqual(hrefsIn('<a title=a=b href="../x.md">'), ['../x.md']);
+    assert.deepEqual(hrefsIn('<a href="../x.md"title="t" src=\'y.png\'>'), ['../x.md', 'y.png']);
+    assert.deepEqual(hrefsIn('<a href=../x=1.md>'), ['../x=1.md']);
+    assert.deepEqual(hrefsIn('<a data-x href=../x.md/>'), ['../x.md/']);
+  });
+  test('a tag with a quote that has no partner, or no closing `>`, yields nothing', () => {
+    assert.deepEqual(hrefsIn('<a href="../x.md'), []);
+    assert.deepEqual(hrefsIn('<a href="../x.md"'), []);
+  });
+  test('a comment ends at its first `-->`: `<!-->` is empty, an unclosed one hides the rest', () => {
+    assert.deepEqual(hrefsIn('<!--> [a](../x.md)'), ['../x.md']);
+    assert.deepEqual(hrefsIn('<!---> [a](../x.md)'), ['../x.md']);
+    assert.deepEqual(hrefsIn('<!-- a --> [a](../x.md) <!-- [b](../y.md) -->'), ['../x.md']);
+    assert.deepEqual(hrefsIn('[a](../x.md) <!-- [b](../y.md)'), ['../x.md']);
+  });
+  test('labels and angle destinations stop at 999 characters', () => {
+    const long = (n) => 'a'.repeat(n);
+    assert.deepEqual(hrefsIn(`[${long(999)}]: ../x.md`), ['../x.md']);
+    assert.deepEqual(hrefsIn(`[${long(1000)}]: ../x.md`), []);
+    assert.deepEqual(hrefsIn(`[t](<${long(999)}>)`), [long(999)]);
+    assert.deepEqual(hrefsIn(`[t](<${long(1000)}>)`), [`<${long(1000)}>`]);
   });
   test('a reference definition is indented at most 3 spaces', () => {
     assert.deepEqual(hrefsIn('   [a]: ../x.md'), ['../x.md']);
@@ -227,6 +251,17 @@ describe('link classification (#5427)', () => {
     assert.deepEqual(missingNext([`${NEXT}CONTRIBUTING.md%2F`], 'x.md'), ['CONTRIBUTING.md/']);
     assert.deepEqual(missingNext([`${NEXT}.%2FCONTRIBUTING.md`], 'x.md'), ['./CONTRIBUTING.md']);
     assert.deepEqual(unresolvedAnchors([''], 'x.md'), []);
+  });
+});
+
+describe('readRepoFile (#5427)', () => {
+  // The refusal of a link out of the repo is the ADR gate's existsCaseExact, tested in
+  // tests/adr-index-gate.test.cjs; this test pins that the helper reads through it.
+  test('reads a repo file; a missing name, a wrong case or a path out of the repo is refused', () => {
+    assert.match(readRepoFile('CONTRIBUTING.md'), /^# /m);
+    for (const rel of ['no-such-file.md', 'contributing.md', '../outside.md']) {
+      assert.throws(() => readRepoFile(rel), /no such file inside the repo/, rel);
+    }
   });
 });
 
