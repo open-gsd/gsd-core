@@ -129,15 +129,93 @@ test('tools/call: explicit subcommand and positional args still reach the CLI (#
 test('tools/call gsd_read_state + gsd_write_state: round-trip through the stateIO seam (point 5)', () => {
   const dir = createTempDir();
   try {
-    const file = path.join(dir, 'STATE.md');
-    const writeRes = handleMessage({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'gsd_write_state', arguments: { path: file, content: '# State\n' } } });
+    const planningDir = path.join(dir, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+    const file = path.join(planningDir, 'STATE.md');
+    const ctx = { cwd: dir };
+    const writeRes = handleMessage({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'gsd_write_state', arguments: { path: file, content: '# State\n' } } }, ctx);
     assert.strictEqual(writeRes.result.isError, undefined, 'write must succeed');
     assert.strictEqual(fs.readFileSync(file, 'utf-8'), '# State\n', 'write went through to fs');
-    const readRes = handleMessage({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'gsd_read_state', arguments: { path: file } } });
+    const readRes = handleMessage({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'gsd_read_state', arguments: { path: file } } }, ctx);
     assert.strictEqual(readRes.result.content[0].text, '# State\n', 'read returns the written content');
   } finally {
     cleanup(dir);
   }
+});
+
+test('tools/call gsd_read_state + gsd_write_state: REGRESSION #6146 — paths must stay under .planning/', (t) => {
+  const dir = createTempDir();
+  const strayRel = path.join(process.cwd(), 'gsd-6146-rel-notes.md');
+  t.after(() => {
+    cleanup(dir);
+    if (fs.existsSync(strayRel)) fs.rmSync(strayRel);
+  });
+  const planningDir = path.join(dir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  const ctx = { cwd: dir };
+
+  const inside = path.join(planningDir, 'STATE.md');
+  const writeInside = handleMessage({
+    jsonrpc: '2.0', id: 61460, method: 'tools/call',
+    params: { name: 'gsd_write_state', arguments: { path: inside, content: '# ok\n' } },
+  }, ctx);
+  assert.notEqual(writeInside.result.isError, true, 'a path under .planning/ must still be writable');
+  assert.equal(fs.readFileSync(inside, 'utf8'), '# ok\n');
+
+  const readInside = handleMessage({
+    jsonrpc: '2.0', id: 61461, method: 'tools/call',
+    params: { name: 'gsd_read_state', arguments: { path: inside } },
+  }, ctx);
+  assert.notEqual(readInside.result.isError, true, 'a path under .planning/ must still be readable');
+  assert.equal(readInside.result.content[0].text, '# ok\n');
+
+  const relativeInside = handleMessage({
+    jsonrpc: '2.0', id: 61462, method: 'tools/call',
+    params: { name: 'gsd_write_state', arguments: { path: 'gsd-6146-rel-notes.md', content: '# rel\n' } },
+  }, ctx);
+  assert.notEqual(relativeInside.result.isError, true, 'a relative path must resolve under .planning/');
+  assert.equal(fs.readFileSync(path.join(planningDir, 'gsd-6146-rel-notes.md'), 'utf8'), '# rel\n');
+
+  const escaped = path.join(dir, 'escaped.md');
+  const cases = [
+    escaped,
+    path.join(planningDir, '..', 'escaped.md'),
+    path.join(planningDir, 'sub', '..', '..', 'escaped.md'),
+    '/etc/passwd',
+    path.join(planningDir, '..', '..', 'passwd'),
+  ];
+  for (const [i, target] of cases.entries()) {
+    const marker = `escape-${i}\n`;
+    if (fs.existsSync(escaped)) fs.rmSync(escaped);
+    const writeRes = handleMessage({
+      jsonrpc: '2.0', id: 61470 + i, method: 'tools/call',
+      params: { name: 'gsd_write_state', arguments: { path: target, content: marker } },
+    }, ctx);
+    assert.equal(writeRes.result.isError, true, `write must refuse ${target}`);
+    assert.equal(fs.existsSync(escaped), false, `must not create ${escaped} via ${target}`);
+    if (target === '/etc/passwd') {
+      // never try to assert we did not write /etc/passwd; just that the tool errored
+    } else if (path.resolve(target) !== path.resolve(inside) && fs.existsSync(target) && !target.startsWith(planningDir)) {
+      const text = fs.readFileSync(target, 'utf8');
+      assert.notEqual(text, marker, `must not write escape payload to ${target}`);
+    }
+    const readRes = handleMessage({
+      jsonrpc: '2.0', id: 61480 + i, method: 'tools/call',
+      params: { name: 'gsd_read_state', arguments: { path: target } },
+    }, ctx);
+    assert.equal(readRes.result.isError, true, `read must refuse ${target}`);
+  }
+
+  // Sibling-prefix: ".planning-evil" must not be treated as inside ".planning/"
+  const siblingDir = path.join(dir, '.planning-evil');
+  fs.mkdirSync(siblingDir, { recursive: true });
+  const sibling = path.join(siblingDir, 'STATE.md');
+  const siblingWrite = handleMessage({
+    jsonrpc: '2.0', id: 61490, method: 'tools/call',
+    params: { name: 'gsd_write_state', arguments: { path: sibling, content: '# sibling\n' } },
+  }, ctx);
+  assert.equal(siblingWrite.result.isError, true, 'sibling-prefix directory must be refused');
+  assert.equal(fs.existsSync(sibling), false);
 });
 
 test('tools/call gsd_invoke_command: dispatches to the command hub (point 1); unknown family returns a hub error, not a crash', () => {
