@@ -3583,7 +3583,7 @@ describe('#4904: a renewed hold lapses ten minutes after the degrade was decided
     // Pattern B segments never run a resolve block; Pattern A's is prose, not a shell line
     'gsd-core/workflows/execute-plan.md': /--force-isolation none >\/dev\/null/,
     // the `true` branch forces a worktree mode, never a `none`, so it follows no hold
-    'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md': /\$\{_PLAN_CAPABILITY:\+--force-isolation\}/,
+    'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md': /--force-isolation "\$_PLAN_CAPABILITY"/,
   };
   test('every shipped forced re-record that can follow a held answer passes back its decidedAt', () => {
     const roots = [path.join(__dirname, '..', 'gsd-core', 'workflows'), path.join(__dirname, '..', 'gsd-core', 'references')];

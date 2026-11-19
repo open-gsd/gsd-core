@@ -66,9 +66,11 @@ describe('#6213 execute-phase records the routed executor without a carried shel
     const r = runGate('true');
     assert.equal(r.status, 0, r.stderr);
     const argv = calls(log);
-    // The `true` branch first reads the host capability (the stub prints none, so the record stays plain).
-    assert.deepEqual(argv.map((a) => a[1]), ['inspect-dispatch-isolation', 'dispatch-isolation']);
-    assert.deepEqual(argv[1], ['query', 'dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01-api']);
+    // #6303: the per-plan call asks for --json so the plan's executorRuntime and fallback are readable.
+    // #4904: a plan not sent to another runtime then reads the host capability (the stub prints none,
+    // so the record stays plain and nothing is forced).
+    assert.deepEqual(argv.map((a) => a[1]), ['dispatch-isolation', 'inspect-dispatch-isolation']);
+    assert.deepEqual(argv[0], ['query', 'dispatch-isolation', '--json', '--phase', '02', '--plan', '02-01-api']);
     assert.ok(!argv.some((a) => a.includes('--executor-type')));
   });
 

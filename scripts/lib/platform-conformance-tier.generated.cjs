@@ -80,6 +80,7 @@ module.exports = {
   "tests/copilot-upgrades.test.cjs",
   "tests/core-utils.test.cjs",
   "tests/criterion-replay.test.cjs",
+  "tests/cross-runtime-dispatch.test.cjs",
   "tests/cross-runtime-execution.test.cjs",
   "tests/cursor-hooks.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",

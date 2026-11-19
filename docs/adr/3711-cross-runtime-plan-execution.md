@@ -1,6 +1,6 @@
 # ADR-3711: Cross-runtime plan execution — a per-plan `executor_runtime` on the `orchestrator-worktree` backend
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-18
 - **Issue:** [#3711](https://github.com/open-gsd/gsd-core/issues/3711) (`approved-feature`, go-with-conditions, maintainer verdict 2026-11-08); phase issue [#6300](https://github.com/open-gsd/gsd-core/issues/6300)
 - **Amends:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) interface point 2 (Dispatch). The executor binary stops being a function of the host's identity alone: one plan may select a different registry entry's `orchestratorExec`.

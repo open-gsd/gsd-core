@@ -343,12 +343,19 @@ CREATE_JSON=$(gsd_run query worktree.create \
 
 # 2. Resolve the host's headless-exec argv for that worktree. Descriptor
 #    data — command, args, cwd flag and prompt flag all come from the
-#    capability descriptor, so no host is named here. Read from the
-#    sentinel-free inspect verb: a plain `query dispatch-isolation` would
-#    hold a degrade another plan recorded and answer exec:null (#4904).
-EXEC_JSON=$(gsd_run query inspect-dispatch-isolation --json \
+#    capability descriptor, so no host is named here. Scoped to this plan
+#    (#6303), so a hold reaches it only through a `none` this plan's own
+#    caller recorded, which per-plan-worktree-gate.md replaces for a plan
+#    decided `true` (#4904); a held host answer is exec:null and halts below.
+EXEC_JSON=$(gsd_run query dispatch-isolation --json \
+  --phase "${PHASE_NUMBER:-}" --plan "{plan_id}" \
   --cwd-target "$WT_PATH" \
   --prompt "$EXECUTOR_PROMPT")
+# A non-null executorRuntime with a null fallback means the plan declared executor_runtime and the
+# route resolved the TARGET runtime's exec: follow execute-phase/steps/cross-runtime-executor-dispatch.md
+# for the launch record (--executor-runtime) and reconciliation. The prompt above is reused unchanged.
+# That plan may reach this block on a phase whose ISOLATION is harness-worktree: the per-plan answer
+# from per-plan-worktree-gate.md Part 2 overrides the phase-level value for that plan only.
 
 # 3. MANDATORY fail-closed check. `dispatch-isolation` degrades to
 #    isolation:"none" / exec:null rather than exiting non-zero, so the

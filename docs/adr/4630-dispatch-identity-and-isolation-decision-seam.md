@@ -290,6 +290,17 @@ it derives, and nothing else, to an executor-identity record:
   cap and budget are literals in `hooks/lib/isolation-sentinel.js`, pinned to their owner,
   `src/executor-type.cts`, by `tests/held-query-executor-identity.test.cjs`.
 
+**A held query and a foreign dispatch (#6303).** A plan that declares `executor_runtime` resolves to
+the target runtime's exec in `dispatch-isolation` (ADR-3711). A query that holds a caller's `none`
+still resolves it: its stdout and `--json` carry the foreign dispatch, with `held: true`, and it writes
+no decision record, so the guards keep reading the caller's `none`; the foreign plan runs as a process
+they do not see. The per-plan gate's `true` branch forces the host's capability only for a plan that
+does not go to another runtime, because a forced decision turns the foreign dispatch into a
+`forced_isolation` fallback. `inspect-dispatch-isolation --json` reports `held: false` and
+`decidedAt: null` beside `executorRuntime: null` and `fallback: null`, so the two verbs keep one key
+set. The orchestrator-worktree exec read names its plan, as #6303 requires, so a hold reaches it only
+through that plan's own caller `none`.
+
 ### Decision 3 — a copy that must exist is pinned by a parity test, never merely tolerated
 
 Decision 1's cold-load constraint means `hooks/lib/` carries deliberate mirrors of two
