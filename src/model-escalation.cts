@@ -87,10 +87,15 @@ export function guardApplies(root: string): boolean {
     modelResolverMod.hasNativeModelAliases(resolveActiveRuntime(configLoaderMod.loadConfig(root, { persist: false })));
 }
 
+function canonical(p: string): string {
+  try { return fs.realpathSync(p); } catch { return p; }
+}
+
 /** The root a CLI run at `cwd` writes a guard record at; throws when --project-dir/--cwd point away from the session's working directory, whose root the hook reads. */
 export function sessionRoot(cwd: string): string {
-  const root = escalationRoot(cwd);
-  const session = escalationRoot(process.cwd());
+  // Compare canonical paths: process.cwd() is canonical, a --cwd naming the same project through a symlink (macOS /var) is not.
+  const root = canonical(escalationRoot(cwd));
+  const session = canonical(escalationRoot(process.cwd()));
   if (root !== session) throw new Error(`the project resolves to ${root}, but the Agent model guard reads at ${session}`);
   return root;
 }

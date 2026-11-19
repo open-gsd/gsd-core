@@ -315,6 +315,19 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
       'the directory name reaches stderr filtered, on the one warning line');
   });
 
+  test('a --cwd naming the session project through a symlink still records and prints no warning', { skip: WIN32 }, (t) => {
+    const escalating = { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } };
+    const parent = createTempDir('gsd-aig-link-');
+    t.after(() => cleanup(parent));
+    const link = path.join(parent, 'project-link');
+    setup(t, escalating);
+    fs.symlinkSync(project, link, 'dir');
+    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', link], { cwd: project, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(stderrLines(r.stderr).some((l) => l.includes('model-escalation record not written')), false, 'the same directory through a symlink is not another root');
+    assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
+  });
+
   test('family match is token-bounded: substrings of custom model names do not collide', (t) => {
     setup(t);
     assert.equal(evaluate(dispatch('gsd-planner', 'noopus-1')).action, 'warn');
