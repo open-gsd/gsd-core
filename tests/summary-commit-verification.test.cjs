@@ -13,8 +13,12 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+
+const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
@@ -123,5 +127,108 @@ describe('#4670 — bounded commit-claim reconciliation', () => {
       verify, /WARNING[\s\S]{0,400}plan_head_after/,
       'SUMMARYs without plan_head_after must fall back to the WARNING path, not the unsound BLOCKER'
     );
+  });
+});
+
+// ── #6230 — the claim grep must read the templates' INDENTED `commits:` line ──
+// Every shipped SUMMARY template writes the commit claim INDENTED under
+// `actuals:` (`  commits: 7`), and agents/gsd-executor.md shows the same
+// nested yaml shape — but the reconciliation grep was anchored at column 0
+// (`'^commits: '`), so it matched NOTHING on any SUMMARY written to template:
+// CLAIMED silently became `absent` and the file was downgraded to the
+// pre-#3968 legacy WARNING path, skipping the #3968/#4670 reconciliation on
+// exactly the documents it was built for. These tests extract the CLAIMED
+// pipeline from the SHIPPED workflow text and execute it against fixtures, so
+// a re-anchored pattern fails here exactly as it fails in production.
+
+/** The `CLAIMED=$(...)` pipeline line, extracted from the shipped workflow. */
+function shippedClaimPipeline() {
+  const verify = read('gsd-core/workflows/verify-work.md');
+  const match = verify.match(/^CLAIMED=\$.+$/m);
+  assert.ok(match, 'verify-work must carry the CLAIMED= extraction pipeline');
+  return match[0];
+}
+
+/**
+ * Run the shipped CLAIMED pipeline over `summaryText` and return the value it
+ * assigns (`'<number>'` or `'absent'`). The pipeline is executed verbatim —
+ * never re-implemented — so the test pins the production behavior, not a copy.
+ */
+function extractClaim(summaryText) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6230-claim-'));
+  const summaryFile = path.join(dir, '02-auth-01-SUMMARY.md');
+  fs.writeFileSync(summaryFile, summaryText);
+  const script = [
+    `SUMMARY_FILE=${JSON.stringify(summaryFile)}`,
+    shippedClaimPipeline(),
+    'printf \'%s\' "$CLAIMED"',
+  ].join('\n');
+  return execFileSync('bash', ['-c', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
+}
+
+describe('#6230 — the claim grep reads template-indented commits lines', () => {
+  // The four templates the issue names; each writes `  commits: [slot]` under
+  // `actuals:`. `summary-complex.md` carries no commits slot and is excluded
+  // by the slot-filling step below, so the scan stays future-template-safe.
+  const TEMPLATE_DIR = path.join(ROOT, 'gsd-core', 'templates');
+  const CLAIM_SLOT = /^([ \t]*)commits: \[commits made\][ \t]*$/m;
+
+  const templateShapedFixtures = fs.readdirSync(TEMPLATE_DIR)
+    .filter((name) => /^summary([-.][^/]*)?\.md$/.test(name))
+    .map((name) => {
+      const text = read(path.join('gsd-core', 'templates', name));
+      const filled = text.replace(CLAIM_SLOT, '$1commits: 4');
+      return { name, filled: filled === text ? null : filled };
+    })
+    .filter((t) => t.filled !== null);
+
+  test('every shipped template carries the indented commits slot (#6230 guard scope)', () => {
+    assert.ok(
+      templateShapedFixtures.length >= 4,
+      `expected the four slot-bearing templates, found: ${templateShapedFixtures.map((t) => t.name).join(', ')}`
+    );
+  });
+
+  for (const { name, filled } of templateShapedFixtures) {
+    test(`${name}: a SUMMARY written to template yields its indented commit claim, not absent`, { skip: process.platform === 'win32' }, () => {
+      assert.equal(extractClaim(filled), '4',
+        `${name}: the claim grep must read the INDENTED '  commits: 4' line (reconciled path), not classify it absent (legacy WARNING path)`);
+    });
+  }
+
+  test('a SUMMARY with no commits claim at all still yields absent (legacy path intact)', { skip: process.platform === 'win32' }, () => {
+    const noClaim = [
+      '---',
+      'phase: 02-auth',
+      'plan: 01',
+      'actuals:',
+      '  tokens: 74000',
+      '  tasks: 5',
+      'plan_head_before: 1234567',
+      '---',
+      '',
+      '# Phase 2 Plan 1 Summary',
+      '',
+    ].join('\n');
+    assert.equal(extractClaim(noClaim), 'absent');
+  });
+
+  test('a file with both an indented and a top-level copy yields ONE number (the first in file order)', { skip: process.platform === 'win32' }, () => {
+    const both = [
+      '---',
+      'phase: 02-auth',
+      'plan: 01',
+      'actuals:',
+      '  tokens: 74000',
+      '  tasks: 5',
+      '  commits: 4',
+      'commits: 9',
+      'plan_head_before: 1234567',
+      '---',
+      '',
+    ].join('\n');
+    // Two matches would print '4\n9' (or '49') and fail the equality test on
+    // an otherwise consistent plan — only the FIRST match may be taken.
+    assert.equal(extractClaim(both), '4');
   });
 });
