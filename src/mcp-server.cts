@@ -43,6 +43,11 @@ import {
   REASON,
   type Catalog,
 } from './mcp-catalog.cjs';
+import {
+  PathAcceptance,
+  assertWithinRootLexical,
+  requireSafePath,
+} from './security.cjs';
 
 export const PROTOCOL_VERSION = '2024-11-05';
 export const SERVER_NAME = 'gsd-core';
@@ -134,20 +139,20 @@ const TOOLS = [
   },
   {
     name: 'gsd_read_state',
-    description: 'Read a .planning state file (interface point 5).',
+    description: 'Read a state file confined to the project .planning/ root (interface point 5).',
     inputSchema: {
       type: 'object',
-      properties: { path: { type: 'string', description: 'Absolute path under .planning/.' } },
+      properties: { path: { type: 'string', description: 'Path under the project .planning/ root (absolute or relative).' } },
       required: ['path'],
     },
   },
   {
     name: 'gsd_write_state',
-    description: 'Write a .planning state file (interface point 5).',
+    description: 'Write a state file confined to the project .planning/ root (interface point 5).',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Absolute path under .planning/.' },
+        path: { type: 'string', description: 'Path under the project .planning/ root (absolute or relative).' },
         content: { type: 'string', description: 'File content.' },
       },
       required: ['path', 'content'],
@@ -200,6 +205,32 @@ function wirePrompt(entry: { name: string; title: string; description: string })
   return { name: entry.name, title: entry.title, description: entry.description };
 }
 
+
+function planningRoot(ctx: McpContext): string {
+  const cwd = asString(ctx.cwd) || process.cwd();
+  return path.resolve(cwd, '.planning');
+}
+
+/**
+ * Confine gsd_read_state / gsd_write_state paths to the project's `.planning/`
+ * root (#6146, ADR-4650). Lexical containment is used first because a write
+ * may create a file that does not exist yet. If the path or its parent already
+ * exists, a realpath check also runs so a symlink cannot walk out of the root.
+ */
+function confineStatePath(rawPath: string, ctx: McpContext, label: string): string {
+  const root = planningRoot(ctx);
+  const contained = assertWithinRootLexical(rawPath, root, label);
+  if (fs.existsSync(contained)) {
+    return requireSafePath(contained, root, label, PathAcceptance.AbsoluteInsideRoot);
+  }
+  const parent = path.dirname(contained);
+  if (parent !== contained && fs.existsSync(parent)) {
+    const parentReal = requireSafePath(parent, root, label, PathAcceptance.AbsoluteInsideRoot);
+    return path.join(parentReal, path.basename(contained));
+  }
+  return contained;
+}
+
 function callTool(name: string, args: unknown, ctx: McpContext): { content: Array<{ type: string; text: string }>; isError?: boolean } {
   const a = (args && typeof args === 'object' ? args : {}) as Record<string, unknown>;
   const cwd = asString(ctx.cwd) || process.cwd();
@@ -222,16 +253,18 @@ function callTool(name: string, args: unknown, ctx: McpContext): { content: Arra
     if (name === 'gsd_read_state') {
       const p = asString(a.path);
       if (!p) return { isError: true, content: [{ type: 'text', text: 'gsd_read_state requires string "path".' }] };
+      const confined = confineStatePath(p, ctx, 'gsd_read_state path');
       const io = stateIo.createStateIO({ io: 'filesystem' });
-      return { content: [{ type: 'text', text: io.read(p) }] };
+      return { content: [{ type: 'text', text: io.read(confined) }] };
     }
     if (name === 'gsd_write_state') {
       const p = asString(a.path);
       const content = asString(a.content);
       if (!p || content === null) return { isError: true, content: [{ type: 'text', text: 'gsd_write_state requires string "path" and "content".' }] };
+      const confined = confineStatePath(p, ctx, 'gsd_write_state path');
       const io = stateIo.createStateIO({ io: 'filesystem' });
-      io.write(p, content);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, path: p }) }] };
+      io.write(confined, content);
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, path: confined }) }] };
     }
     return { isError: true, content: [{ type: 'text', text: `Unknown tool: ${name}` }] };
   } catch (e) {
