@@ -734,8 +734,8 @@ the merge queue ejected a docs-only PR for it (#6375).
 - **The process boundary** (exit code, `--json` on stdout, which stream an error goes to) is
   tested in a `*.process.test.cjs` file with a stand-in executable on the child's PATH and the
   real tool removed from it: `isolatedPath({ without: ['npm', 'npm.cmd'] })`, then the stand-in's
-  directory in front. The stand-in logs its arguments; one test reads the log, which proves the
-  stand-in answered. Ship both a POSIX script and a `.cmd`, since Windows runs `npm.cmd` through
+  directory in front. The stand-in logs its arguments; each test that reaches the tool reads the
+  log, which proves the stand-in answered. Ship both a POSIX script and a `.cmd`, since Windows runs `npm.cmd` through
   the shell.
 - A script that runs its CLI at load cannot be tested in-process. Export the logic and run `main`
   under `require.main === module`.

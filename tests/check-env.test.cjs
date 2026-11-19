@@ -257,10 +257,12 @@ describe('check-env.cjs checks', () => {
 
   test('a pin file passes exactly when its major is the running Node major', () => {
     const dir = dirs['pin-property'];
+    // The running major is the pinned one or a neighbour, so both outcomes occur.
     fc.assert(fc.property(
-      fc.integer({ min: 1, max: 99 }), fc.integer({ min: 1, max: 99 }), fc.constantFrom('', 'v'), fc.constantFrom('', '.4', '.4.2'),
+      fc.integer({ min: 2, max: 99 }), fc.constantFrom(-1, 0, 0, 1), fc.constantFrom('', 'v'), fc.constantFrom('', '.4', '.4.2'),
       fc.constantFrom('.nvmrc', '.node-version', '.tool-versions'),
-      (pinned, running, prefix, rest, file) => {
+      (pinned, offset, prefix, rest, file) => {
+        const running = pinned + offset;
         const version = `${prefix}${pinned}${rest}`;
         fs.writeFileSync(path.join(dir, file), file === '.tool-versions' ? `nodejs ${version}\n` : `${version}\n`);
         try {
@@ -301,11 +303,22 @@ describe('satisfiesConstraint', () => {
   const holds = { '>=': (o) => o >= 0, '>': (o) => o > 0, '<=': (o) => o <= 0, '<': (o) => o < 0, '=': (o) => o === 0 };
   const part = fc.oneof(fc.integer({ min: 0, max: 30 }), fc.integer({ min: 0, max: 99_999 }));
   const triple = fc.tuple(part, part, part);
+  // Two independent triples almost never tie or differ in one part only, so
+  // half the pairs are a version and a neighbour of it (or itself).
+  const nudge = fc.tuple(fc.constantFrom(0, 1, 2), fc.constantFrom(-1, 0, 1));
+  const pair = fc.oneof(
+    fc.tuple(triple, triple),
+    fc.tuple(triple, nudge).map(([version, [index, by]]) => {
+      const required = [...version];
+      required[index] = Math.max(0, required[index] + by);
+      return [version, required];
+    }),
+  );
 
   test('agrees with a part-by-part comparison for every operator', () => {
     fc.assert(fc.property(
-      triple, triple, fc.constantFrom('>=', '>', '<=', '<', '='), fc.boolean(), fc.constantFrom('', '-rc.1', '+build.5'),
-      (version, required, op, vPrefix, suffix) => {
+      pair, fc.constantFrom('>=', '>', '<=', '<', '='), fc.boolean(), fc.constantFrom('', '-rc.1', '+build.5'),
+      ([version, required], op, vPrefix, suffix) => {
         const text = `${vPrefix ? 'v' : ''}${version.join('.')}${suffix}`;
         assert.equal(satisfiesConstraint(text, `${op}${required.join('.')}`), holds[op](order(version, required)));
       },
@@ -313,7 +326,7 @@ describe('satisfiesConstraint', () => {
   });
 
   test('a constraint with no operator means equality', () => {
-    fc.assert(fc.property(triple, triple, (version, required) => {
+    fc.assert(fc.property(pair, ([version, required]) => {
       assert.equal(satisfiesConstraint(version.join('.'), required.join('.')), order(version, required) === 0);
     }));
   });

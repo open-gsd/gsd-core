@@ -82,19 +82,18 @@ describe('check-env.cjs as a spawned process, with a stand-in npm on PATH', () =
 
   const run = (name, args = []) => runNode([SCRIPT, ...args], { cwd: dirs[name], env });
   const npmCalls = () => fs.readFileSync(npmLog, 'utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  /** Every test that runs the checks ends with this: the stand-in, not a real npm, took both calls. */
+  const assertStandInAnswered = () => assert.deepEqual(npmCalls(), ['--version', 'ci --dry-run --ignore-scripts']);
 
   test('exits 0 when every check passes', () => {
     const r = run('good');
     assert.equal(r.exitCode, 0, r.summary);
-  });
-
-  test('the stand-in npm answers both of the script\'s npm calls', () => {
-    run('good');
-    assert.deepEqual(npmCalls(), ['--version', 'ci --dry-run --ignore-scripts']);
+    assertStandInAnswered();
   });
 
   test('exits 1 when a check fails', () => {
     assert.equal(run('old-node-only').exitCode, 1);
+    assertStandInAnswered();
   });
 
   test('--json prints one JSON document with pass and checks, and exits 0 on a pass', () => {
@@ -114,6 +113,7 @@ describe('check-env.cjs as a spawned process, with a stand-in npm on PATH', () =
       ],
     );
     for (const row of parsed.checks) assert.deepEqual(Object.keys(row), ['name', 'status', 'message']);
+    assertStandInAnswered();
   });
 
   test('--json reports pass:false and exits 1 when a check fails', () => {
@@ -122,6 +122,7 @@ describe('check-env.cjs as a spawned process, with a stand-in npm on PATH', () =
     const parsed = JSON.parse(r.stdout);
     assert.equal(parsed.pass, false);
     assert.equal(parsed.checks.find((c) => c.name === 'node-version').status, 'fail');
+    assertStandInAnswered();
   });
 
   test('--help exits 0, writes to stdout only and does not call npm', () => {
