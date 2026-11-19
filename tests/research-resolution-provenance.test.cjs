@@ -379,7 +379,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     const calls = auto.split('\n').filter((l) => /gsd-plan-phase\\?", args=\\?"\$\{PHASE_NUM\}/.test(l));
     assert.ok(calls.length >= 3, 'autonomous invokes plan-phase');
     for (const l of calls) assert.doesNotMatch(l, /--auto|--chain/, l);
-    assert.match(auto.replace(/\s+/g, ' '), /run_in_background=true, prompt="You are running in the background\. Do NOT use AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
+    assert.match(auto.replace(/\s+/g, ' '), /run_in_background=true, prompt="Background: no AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
     // Within plan-phase, only step 15 clears a leftover flag, and it runs after the revision loop.
     assert.match(read('gsd-core/workflows/plan-phase/steps/auto-advance-check.md'), /gsd_run query config-set workflow\._auto_chain_active false/);
     const spine = read('gsd-core/workflows/plan-phase.md');
@@ -397,12 +397,11 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous` reads so that it does not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
     assert.doesNotMatch(resolve(), /a caller never executes/, 'only autonomous reads the marker');
     const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
-    assert.match(auto, /check `has_plans`\. If false → go to handle_blocker: "Plan phase \$\{PHASE_NUM\} did not produce any plans\." If the plan run's output or return carries `PLANNING STOPPED: research questions need a user ruling`, go to handle_blocker with that line/);
-    assert.match(auto, /Wait for the plan agent to complete \(if not already\) and verify plans exist and its return carries no `PLANNING STOPPED` line \(else handle_blocker, as in 3b\)/);
+    // One rule covers all three plan runs (3b, the INTERACTIVE wait at 3c, gap closure): autonomous.md sits
+    // just under its 40,960-char limit (tests/autonomous-decomposition.test.cjs), so it is stated once.
+    assert.match(auto, /check `has_plans`\. If false → go to handle_blocker: "Plan phase \$\{PHASE_NUM\} did not produce any plans\." Any plan run \(here, 3c, gap closure\) printing `PLANNING STOPPED` → handle_blocker with it; never execute its plans\./);
     // The background planner is told it cannot ask, so the no-one-can-be-asked stop is observable to it.
-    assert.match(auto, /prompt="You are running in the background\. Do NOT use AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
-    // Gap closure re-plans with the phase's RESEARCH.md still in Dimension 11's reach, then re-executes.
-    assert.match(auto, /Gap closure planning for phase \$\{PHASE_NUM\} did not produce plans\." If the plan run's output carries `PLANNING STOPPED: research questions need a user ruling`, handle_blocker with that line and do not re-execute\./);
+    assert.match(auto, /prompt="Background: no AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
   });
 });
 
