@@ -8780,6 +8780,19 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     return;
   }
 
+  // #5978: a symlinked Windsurf hooks.json holding GSD entries is refused without
+  // GSD_ALLOW_SYMLINKED_DEST. Refuse here, before anything is removed, so a refused run leaves
+  // the link, its target and every other GSD file exactly as they were (as #5946 does for Copilot).
+  if (resolveInstallPlan(runtime).hooksSurface === 'windsurf-hooks-json') {
+    const windsurfRefusal = hooksSurface.windsurfHooksJsonRemovalRefusal(targetDir);
+    if (windsurfRefusal) {
+      console.error(`  ${yellow}⚠${reset} ${windsurfRefusal}`);
+      console.error('  Nothing was uninstalled.\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   let removedCount = 0;
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user

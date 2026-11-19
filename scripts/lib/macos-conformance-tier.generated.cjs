@@ -282,6 +282,7 @@ module.exports = {
   "tests/verify-command-grounding.test.cjs",
   "tests/verify.test.cjs",
   "tests/windows-powershell-hook-runner.test.cjs",
+  "tests/windsurf-hooks-bridge.test.cjs",
   "tests/workflow-fragments.test.cjs",
   "tests/workstream-inventory.test.cjs",
   "tests/workstream-scoped-paths.test.cjs",
