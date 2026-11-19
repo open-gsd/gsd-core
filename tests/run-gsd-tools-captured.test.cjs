@@ -54,8 +54,9 @@ describe('runGsdToolsCaptured (#6334)', () => {
   test('returns the exit code and stderr of a command that fails, without throwing', () => {
     const dir = project();
     const result = runGsdToolsCaptured(['state', 'no-such-subcommand'], dir);
-    assert.notEqual(result.exitCode, 0);
-    assert.notEqual(result.stderr, '');
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /Unknown state subcommand: "no-such-subcommand"/);
+    assert.equal(result.stdout, '');
   });
 
   test('returns the same stdout runGsdTools trims, untrimmed', () => {
@@ -69,8 +70,18 @@ describe('runGsdToolsCaptured (#6334)', () => {
 
   test('passes an environment override to the command', () => {
     const dir = project();
-    const withHome = runGsdToolsCaptured(['config-get', 'model_profile', '--raw'], dir, { HOME: dir });
-    assert.equal(withHome.exitCode, 0, withHome.stderr);
+    const state = (status) => `---\ngsd_state_version: 1.0\nstatus: ${status}\n---\n# State\n`;
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{}\n');
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), state('executing'));
+    const workstream = path.join(dir, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(workstream, { recursive: true });
+    fs.writeFileSync(path.join(workstream, 'config.json'), '{}\n');
+    fs.writeFileSync(path.join(workstream, 'STATE.md'), state('paused'));
+
+    const scoped = runGsdToolsCaptured(['state', 'json'], dir, { GSD_WORKSTREAM: 'alpha' });
+    const root = runGsdToolsCaptured(['state', 'json'], dir);
+    assert.equal(JSON.parse(scoped.stdout).status, 'paused');
+    assert.equal(JSON.parse(root.stdout).status, 'executing');
   });
 
   test('refuses a working directory that does not exist, and names the process helper', () => {

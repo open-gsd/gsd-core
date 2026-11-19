@@ -13,7 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, createTempDir, createTempProject, createTempGitProject, cleanup, captureFdSync } = require('./helpers.cjs');
 const { createFixture, seedWorkstream, writeState } = require('./fixtures/index.cjs');
 // ADR-3473 §8.7 (#3872): git-fixture spawns for the state_head rows (10/11)
 // go through the throw-preserving wrapper, never a raw execFileSync.
@@ -3317,7 +3317,7 @@ describe('cmdStateUpdateProgress (state update-progress)', () => {
     fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary\n');
 
-    const rec = require('./helpers.cjs').runGsdToolsCaptured(['state', 'update-progress'], tmpDir);
+    const rec = runGsdToolsCaptured(['state', 'update-progress'], tmpDir);
     assert.equal(rec.exitCode, 0, `Command failed: ${rec.stderr}`);
     const output = JSON.parse(rec.stdout);
     assert.strictEqual(output.updated, true, `scope gate must not withhold; got ${rec.stdout}`);
@@ -13772,7 +13772,7 @@ function runGsdState(args, cwd) {
     CLAUDE_CODE_SSE_PORT: '',
     OPENCODE_SESSION_ID: '',
   };
-  const r = require('./helpers.cjs').runGsdToolsCaptured(['state', ...args], cwd, env);
+  const r = runGsdToolsCaptured(['state', ...args], cwd, env);
   if (r.exitCode === 0) return { success: true };
   return { success: false, error: r.stderr.trim() || `exited with exitCode=${r.exitCode}` };
 }
@@ -22025,7 +22025,6 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
   }
   // runGsdToolsCaptured, not runGsdTools: the success path's stderr carries the warning.
   function recordSession(...args) {
-    const { runGsdToolsCaptured } = require('./helpers.cjs');
     const rec = runGsdToolsCaptured(['state', 'record-session', ...args], tmpDir);
     assert.equal(rec.exitCode, 0, `record-session failed: ${rec.stderr}`);
     return { json: JSON.parse(rec.stdout), stderr: rec.stderr };
@@ -22215,7 +22214,6 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
   test('(a) a line break in --stopped-at is refused before anything is written', () => {
     seed([], ['Last session: 2026-01-01', 'Stopped at: Phase 2', 'Resume file: None']);
     const before = readState();
-    const { runGsdToolsCaptured } = require('./helpers.cjs');
     for (const value of ['line one\nForged: line', 'line one\rForged: line']) {
       const rec = runGsdToolsCaptured(['state', 'record-session', '--stopped-at', value], tmpDir);
       assert.notStrictEqual(rec.exitCode, 0, `must refuse ${JSON.stringify(value)}`);
@@ -22307,7 +22305,7 @@ describe('#4998 regression: record-session leaves a wrapped field whole and inse
 
   // ─── trek-e review 2026-10-10 ─────────────────────────────────────────────
   function runTool(...args) {
-    return require('./helpers.cjs').runGsdToolsCaptured(args, tmpDir);
+    return runGsdToolsCaptured(args, tmpDir);
   }
 
   // Major 1: U+2028/U+2029 start a line for every `m`-flag reader, so they

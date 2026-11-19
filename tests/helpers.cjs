@@ -309,20 +309,34 @@ function helperFailure(err) {
  */
 function runGsdTools(args, cwd = process.cwd(), env = {}) {
   if (process.env.GSD_TEST_CLI_MODE === 'process') return runGsdToolsProcess(args, cwd, env);
-  refuseWhatNeedsAProcess('runGsdTools', cwd, env);
+  try {
+    const { argv, result } = runCliSyncChecked('runGsdTools', args, cwd, env);
+    return helperResult(result, argv);
+  } catch (err) {
+    return helperFailure(err);
+  }
+}
 
+/**
+ * The synchronous in-process call both `runGsdTools` and `runGsdToolsCaptured`
+ * make: refuse what only a process can honour, run the command, and turn the
+ * in-process "this command is asynchronous" refusal into an error that names
+ * the helper to use. Returns the raw `runCliSync` result with the argv it ran.
+ */
+function runCliSyncChecked(helper, args, cwd, env) {
+  refuseWhatNeedsAProcess(helper, cwd, env);
   const argv = gsdToolsArgv(args);
   try {
-    return helperResult(require(TOOLS_PATH).runCliSync(inProcessOptions(argv, cwd, env)), argv);
+    return { argv, result: require(TOOLS_PATH).runCliSync(inProcessOptions(argv, cwd, env)) };
   } catch (err) {
     if (err && err.code === 'in_process_async_command') {
       throw new Error(
-        `runGsdTools: "${String(err.command)}" finishes asynchronously, so a synchronous call cannot serve it. `
+        `${helper}: "${String(err.command)}" finishes asynchronously, so a synchronous call cannot serve it. `
         + 'Nothing was run. Use `await runGsdToolsAsync(...)`: same arguments, same result, same process.',
         { cause: err },
       );
     }
-    return helperFailure(err);
+    throw err;
   }
 }
 
@@ -358,6 +372,10 @@ async function runGsdToolsAsync(args, cwd = process.cwd(), env = {}) {
  * (a start-time Node variable, a working directory that is not there), and does
  * not serve a command that finishes asynchronously. A test whose subject is the
  * process boundary calls `runGsdToolsProcess` from a `*.process.test.cjs` file.
+ * `GSD_TEST_CLI_MODE=process` runs the call through the spawned CLI instead, as
+ * for `runGsdTools`. Output over the buffer limit throws (`in_process_output_overflow`)
+ * where `runGsdTools` turns it into a failed result: a test that captures output
+ * wants all of it, so a truncated capture is an error, not a result.
  *
  * @param {string|string[]} args
  * @param {string} cwd
@@ -365,21 +383,16 @@ async function runGsdToolsAsync(args, cwd = process.cwd(), env = {}) {
  * @returns {{ exitCode: number, stdout: string, stderr: string }}
  */
 function runGsdToolsCaptured(args, cwd = process.cwd(), env = {}) {
-  refuseWhatNeedsAProcess('runGsdToolsCaptured', cwd, env);
-  const argv = gsdToolsArgv(args);
-  try {
-    const { exitCode, stdout, stderr } = require(TOOLS_PATH).runCliSync(inProcessOptions(argv, cwd, env));
-    return { exitCode, stdout, stderr };
-  } catch (err) {
-    if (err && err.code === 'in_process_async_command') {
-      throw new Error(
-        `runGsdToolsCaptured: "${String(err.command)}" finishes asynchronously, so a synchronous call cannot serve it. `
-        + 'Nothing was run. Use `await runGsdToolsAsync(...)`.',
-        { cause: err },
-      );
-    }
-    throw err;
+  if (process.env.GSD_TEST_CLI_MODE === 'process') {
+    const spawned = processSeam.runNode([TOOLS_PATH, ...gsdToolsArgv(args)], {
+      cwd,
+      env: { ...process.env, ...testEnvBase(), ...env },
+      timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
+    });
+    return { exitCode: spawned.exitCode, stdout: spawned.stdout, stderr: spawned.stderr };
   }
+  const { exitCode, stdout, stderr } = runCliSyncChecked('runGsdToolsCaptured', args, cwd, env).result;
+  return { exitCode, stdout, stderr };
 }
 
 /** What a command that wrote more than the buffer limit returns, spawned or in-process. */

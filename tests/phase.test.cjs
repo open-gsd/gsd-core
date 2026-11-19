@@ -18,7 +18,7 @@ const path = require('path');
 const os = require('node:os');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, createTempProject, cleanup } = require('./helpers.cjs');
 const { splitTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('fast-check');
@@ -6818,32 +6818,20 @@ describe('bug #1962: normalizePhaseName preserves letter suffix case', () => {
  * Run `gsd-tools phase complete <phase>` for the phase-complete regression
  * suites and return its stdout.
  *
- * `phase complete` writes ROADMAP.md as its LAST step, after a read-heavy
- * parse/lock sequence (ROADMAP read, two extractCurrentMilestone STATE.md
- * parses, REQUIREMENTS read, phase-dir scan, STATE read — all before the single
- * writePlanningFileSet flush). Under the high-concurrency docker run (~672 test
- * files in parallel), a tight 10s timeout could fire mid-parse and SIGTERM the
- * subprocess BEFORE that write landed, leaving ROADMAP.md untouched. Call sites
- * that used a bare `catch {}` then silently proceeded to assert on the pristine
- * file — an intermittent "checkbox not checked" failure (bug #1998 flake).
- *
- * Two-part fix, no retry loop:
- *  1. A generous timeout so the test's own timer never kills the subprocess
- *     under load (10s cold-node startup × 672-way CPU/IO contention was the
- *     real culprit — all I/O is scoped to tmpDir, so there is no cross-process
- *     race to blame).
- *  2. Never silently swallow a signal/timeout kill: it means the process was
- *     terminated before completing its writes, so we surface it loudly with
- *     context instead of letting it masquerade as an assertion failure. A
- *     *clean* non-zero exit is still tolerated when `tolerateExit` is set,
- *     because the ROADMAP write has already landed before any post-write step
- *     that may exit non-zero in these minimal fixtures.
+ * It runs in this process (#6334). While every call was its own child, a tight
+ * timeout could SIGTERM the child before `phase complete` wrote ROADMAP.md, and
+ * a call site that swallowed the kill then asserted on the pristine file (bug
+ * #1998, an intermittent "checkbox not checked"). There is no child to kill
+ * now, so the timeout and the kill handling are gone and the failure shows as
+ * what it is. A *clean* non-zero exit is still tolerated when `tolerateExit`
+ * is set, because the ROADMAP write has already landed before any post-write
+ * step that may exit non-zero in these minimal fixtures.
  */
 function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
   writePassedVerificationForPhase(tmpDir, phase);
   // In this process (#6334): there is no child to be killed, so the timeout and
   // signal handling this helper once carried (#1998) has nothing left to guard.
-  const r = require('./helpers.cjs').runGsdToolsCaptured(['phase', 'complete', phase], tmpDir);
+  const r = runGsdToolsCaptured(['phase', 'complete', phase], tmpDir);
   if (r.exitCode === 0) {
     return r.stdout;
   }
@@ -7955,10 +7943,9 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       const { planningDir } = setupPhase1316Project(tmpDir);
       writePassedVerificationForPhase(tmpDir, '32');
 
-      const captured = require('./helpers.cjs').runGsdToolsCaptured(['phase', 'complete', '32'], tmpDir);
-      const result = { status: captured.exitCode, stdout: captured.stdout, stderr: captured.stderr };
+      const result = runGsdToolsCaptured(['phase', 'complete', '32'], tmpDir);
 
-      assert.strictEqual(result.status, 0, `phase complete failed: ${result.stderr || result.stdout}`);
+      assert.strictEqual(result.exitCode, 0, `phase complete failed: ${result.stderr || result.stdout}`);
       assert.ok(
         !result.stderr.includes('Current Phase Name'),
         `phase.complete must not warn about missing Current Phase Name on prose-block STATE.md; stderr:\n${result.stderr}`,
@@ -17168,7 +17155,6 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
 // #5165: milestone-grouped roadmaps — scoped progress, phase.complete re-runs, write-scoped
 // Markdown normalization at the ROADMAP/STATE seam, and ship tracking.
 {
-  
   const ROADMAP_HEAD = `# Roadmap: Demo
 
   ## Milestones
@@ -17271,7 +17257,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
   }
 
   function gsd(cwd, ...args) {
-    const r = require('./helpers.cjs').runGsdToolsCaptured(['query', ...args], cwd, { HOME: cwd });
+    const r = runGsdToolsCaptured(['query', ...args], cwd, { HOME: cwd });
     assert.equal(r.exitCode, 0, `gsd ${args.join(' ')} failed: ${r.stderr}`);
     return r.stdout;
   }

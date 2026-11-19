@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
-// Generated round trips each spawn add, find, and analyze commands.
+// Generated round trips run add, find, and analyze commands, many per property.
 const ROUND_TRIP_TIMEOUT_MS = 120000;
 const { createCustomPhaseProject: fixture, runCustomPhaseCommand: run, addCustomPhase: add, seedCustomPhaseDirectory: existingCustomDirectory, cleanup, runGsdTools, runGsdToolsCaptured, homeSandboxEnv, toPosixPath } = require('./helpers.cjs');
 const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
@@ -721,16 +721,13 @@ test('custom context: one context resolves a large identity set', () => {
   const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
   const roadmap = Array.from({length: 1200}, (_, i) => `### Phase AUTH-${i}: Step\n`).join('');
   const context = phaseId.phaseDirectoryContext({phase_naming: 'custom'}, roadmap);
-  let resolved = 0;
   for (let i = 0; i < 1200; i++) {
     const id = `AUTH-${i}`;
     const dir = `${id}-step`;
     assert.equal(phaseId.phaseKeyFromDir(dir, undefined, context), id);
     assert.equal(phaseId.phaseKeyFromToken(id, context), id);
     assert.equal(phaseId.matchPhaseDirs([dir], id, undefined, undefined, context).matches[0], dir);
-    resolved++;
   }
-  assert.deepEqual({resolved}, {resolved: 1200});
 });
 
 test('custom context: projected roadmap is complete or bounded by its read limit', () => {

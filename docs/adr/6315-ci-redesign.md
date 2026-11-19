@@ -469,6 +469,7 @@ Two consequences of the swap hold until item 14b lands: in-process calls run one
 |---|---|---|
 | `runGsdTools` | in the test process, synchronously | a command that finishes asynchronously; a `NODE_OPTIONS`-class variable in the per-call `env`; a working directory that does not exist |
 | `await runGsdToolsAsync` | in the test process, any command | the last two of those |
+| `runGsdToolsCaptured` (item 16) | in the test process, synchronously; returns `{ exitCode, stdout, stderr }` as written, where `runGsdTools` keeps stderr only for a failed command and trims stdout | the same three as `runGsdTools` |
 | `runGsdToolsProcess` | a spawned `node gsd-tools.cjs` | nothing; for `*.process.test.cjs` files |
 
 Sixteen test files that called asynchronous commands (`capability`, `review-lane`, `detect-custom-files`, `prompt-budget`, `classify-confidence`, `package-legitimacy`, `extract-messages`, `profile-sample`) moved to `runGsdToolsAsync`. Three tests that injected a failure by preloading a patch into a child with `NODE_OPTIONS=--require` now mock the function in the test process, which is what running in-process makes possible.

@@ -3093,11 +3093,6 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
-function runGsd(args, cwd) {
-  const { exitCode, stdout, stderr } = runGsdToolsCaptured(args, cwd);
-  return { status: exitCode, stdout, stderr };
-}
-
 describe('bug #3212 execute-phase stall detection and safe resume', () => {
   test('config schemas register executor stall detector keys', () => {
     // After Cycle 5 (#3536), both CJS and SDK source from the manifest.
@@ -3126,12 +3121,12 @@ describe('bug #3212 execute-phase stall detection and safe resume', () => {
     fs.mkdirSync(path.join(tmp, '.planning'));
     fs.writeFileSync(path.join(tmp, '.planning/config.json'), '{}\n');
 
-    const interval = runGsd(['config-get', 'executor.stall_detect_interval_minutes', '--raw'], tmp);
-    const threshold = runGsd(['config-get', 'executor.stall_threshold_minutes', '--raw'], tmp);
+    const interval = runGsdToolsCaptured(['config-get', 'executor.stall_detect_interval_minutes', '--raw'], tmp);
+    const threshold = runGsdToolsCaptured(['config-get', 'executor.stall_threshold_minutes', '--raw'], tmp);
 
-    assert.equal(interval.status, 0, interval.stderr);
+    assert.equal(interval.exitCode, 0, interval.stderr);
     assert.equal(interval.stdout.trim(), '5');
-    assert.equal(threshold.status, 0, threshold.stderr);
+    assert.equal(threshold.exitCode, 0, threshold.stderr);
     assert.equal(threshold.stdout.trim(), '10');
   });
 

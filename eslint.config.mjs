@@ -48,6 +48,20 @@ import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-regis
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
+// The `no-restricted-syntax` selectors every file under tests/ is held to. The block for the six
+// in-process command suites (#6334) extends this list; a later flat-config block replaces a rule's
+// options, so the shared part lives here once instead of being copied.
+const TESTS_RESTRICTED_SYNTAX = [
+  {
+    selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
+    message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
+  },
+  {
+    selector: 'CallExpression[callee.object.name="Atomics"][callee.property.name="wait"]',
+    message: 'Atomics.wait() used as a sleep in tests. Use a proper async wait pattern instead.',
+  },
+];
+
 const localPlugin = {
   rules: {
     'no-source-grep': noSourceGrep,
@@ -923,17 +937,7 @@ export default tseslint.config(
       // so registering here alone would be inert without that gate change.
       'local/no-adhoc-markdown-parsing': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
-          message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
-        },
-        {
-          selector: 'CallExpression[callee.object.name="Atomics"][callee.property.name="wait"]',
-          message: 'Atomics.wait() used as a sleep in tests. Use a proper async wait pattern instead.',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...TESTS_RESTRICTED_SYNTAX],
       'no-unused-vars': ['warn', {
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
@@ -950,21 +954,14 @@ export default tseslint.config(
 
   // ── #6334 (ADR-6315 item 16): the six command suites are in-process unit files ──
   // A case that needs a real process (a spawned CLI, a hook, git as the subject) lives in the
-  // `<suite>.process.test.cjs` sibling. ESLint is the enforcement point (ADR-452). This block repeats
-  // the two selectors of the tests block above, because a later block replaces a rule's options.
+  // `<suite>.process.test.cjs` sibling. ESLint is the enforcement point (ADR-452). The suites listed
+  // here are the same six TESTING-STANDARDS.md names under "A test that needs a real process".
   {
     files: ['tests/{state,phase,roadmap,config,init,custom-phase-readers}.test.cjs'],
     rules: {
       'no-restricted-syntax': [
         'error',
-        {
-          selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
-          message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
-        },
-        {
-          selector: 'CallExpression[callee.object.name="Atomics"][callee.property.name="wait"]',
-          message: 'Atomics.wait() used as a sleep in tests. Use a proper async wait pattern instead.',
-        },
+        ...TESTS_RESTRICTED_SYNTAX,
         {
           selector: 'CallExpression[callee.name="require"][arguments.0.value=/process-seam/]',
           message: 'This is an in-process unit file. A case that spawns a process goes in the .process.test.cjs sibling; to capture stderr in-process call runGsdToolsCaptured (tests/helpers.cjs).',

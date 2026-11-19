@@ -3,7 +3,8 @@
  *
  * Phase numbers are allocated across sibling git worktrees, so the subject of
  * these cases is git itself: they build repositories and linked worktrees with
- * the real binary and assert what `phase add` allocates against them. The
+ * real git and assert what `phase add` allocates against them (the `phase add`
+ * call is made in this process, as everywhere else; only git is real). The
  * rest of the phase suite is tested in-process in tests/phase.test.cjs.
  */
 

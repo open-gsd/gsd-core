@@ -3,7 +3,7 @@
  *
  * `state_head` is the commit a STATE.md was written against, read from a real
  * git repository, so the subject of these cases is git itself: they build
- * repositories with the real binary and assert what the library reads back.
+ * repositories with real git and assert what the library reads back.
  * Everything else about state is tested in-process in tests/state.test.cjs.
  */
 
