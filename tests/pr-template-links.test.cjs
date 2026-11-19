@@ -45,6 +45,7 @@ describe('heading anchors (#5427)', () => {
     for (const [n, size] of [[31, 0], [32, 0], [33, 1]]) {
       assert.equal(headingSet(`## x &${'a'.repeat(n)};`).size, size, `entity of ${n}`);
     }
+    assert.equal(headingSet('## x &;').size, 1);
   });
   test('a quoted heading, a list-marker heading and an <a id> give no anchor', () => {
     const md = '## A\n> ## Q\n- ## I\nt <a id="m"></a>\n<a name="n"></a>\n## After';
@@ -71,10 +72,14 @@ describe('heading anchors (#5427)', () => {
   test('`<` before a non-tag character and a fence in column 0 stop nothing', () => {
     assert.deepEqual(anchors('## A\na < b\n<= 3\n<-- x\n< 2\n```\nx\n```\n## B'), ['a', 'b']);
     assert.deepEqual(anchors('## A\n---\n## B\n- x\n- y\n## C'), ['a', 'b', 'c']);
+    for (const run of ['- ``', '- ~~', '1. ``']) {
+      assert.deepEqual(anchors(`## A\n${run}\n## F`), ['a', 'f'], JSON.stringify(run));
+    }
   });
   test('a front matter `---` on line 1 stops the anchors; a later one does not', () => {
     assert.deepEqual(anchors('---\n# F\n---\n## G'), []);
     assert.deepEqual(anchors('## A\n---\n## B'), ['a', 'b']);
+    assert.deepEqual(anchors('--\n# F\n--\n## G'), ['f', 'g']);
   });
   test('a `<!--` inside a code span still gives the span text a slug', () => {
     assert.deepEqual(anchors('## Marker `<!--` here\n## After'),
