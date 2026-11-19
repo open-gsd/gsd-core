@@ -210,10 +210,11 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const root = path.join(tempDir(t), 'orch');
     const dir = path.join(root, '.claude', `${STEM}-aaaaaa`);
     fs.mkdirSync(dir, { recursive: true });
-    const r = readAndCheck(root);
+    const mark = path.join(tempDir(t), 'cat-ran');
+    const r = runBlock(root, `cat() { : > "${mark}"; return 1; }\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
     assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
     assert.equal(r.exitCode, EXIT.none, r.stderr);
-    assert.match(r.stderr, /found no executor prompt file/);
+    assert.ok(!fs.existsSync(mark), 'the no-file guard halts before any read');
     assert.equal(r.stdout, '', 'no prompt printed');
     assert.ok(!fs.existsSync(dir), 'a matching directory is removed, so the next dispatch of the plan does not halt on it');
   });
@@ -226,10 +227,11 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const link = path.join(root, '.claude', `${STEM}-aaaaaa`);
     fs.mkdirSync(path.dirname(link), { recursive: true });
     fs.symlinkSync(target, link);
-    const r = readAndCheck(root);
+    const mark = path.join(dir, 'cat-ran');
+    const r = runBlock(root, `cat() { : > "${mark}"; return 1; }\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
     assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
     assert.equal(r.exitCode, EXIT.none, r.stderr);
-    assert.match(r.stderr, /found no executor prompt file/);
+    assert.ok(!fs.existsSync(mark), 'the no-file guard halts before any read');
     assert.equal(r.stdout, '', 'no prompt printed');
     assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' }, 'the link is removed');
     assert.ok(fs.existsSync(target), 'the link target stays');
@@ -253,10 +255,11 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const root = path.join(tempDir(t), 'orch');
     const file = place(root, `${STEM}-aaaaaa`, GUARDED);
     // A failing `cat` stands in for a mode-000 file without mode bits, so the case also runs as root.
-    const r = runBlock(root, `cat() { return 1; }\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
+    const mark = path.join(path.dirname(root), 'cat-ran');
+    const r = runBlock(root, `cat() { : > "${mark}"; return 1; }\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
     assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
     assert.equal(r.exitCode, EXIT.unreadable, r.stderr);
-    assert.match(r.stderr, /missing or unreadable/);
+    assert.ok(fs.existsSync(mark), 'the read ran and failed, unlike the no-file halt');
     assert.ok(!fs.existsSync(file), 'the file is removed before the halt');
   });
 
@@ -264,20 +267,20 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     const dir = tempDir(t);
     // A failing `wc` leaves one count empty (the first count reads a file, the second reads a pipe); a failing `rm` leaves the file.
     // Neither may let the prompt through.
-    const wcFailsWhen = (test) => `wc() { if ${test}; then return 1; fi; command wc "$@"; }`;
-    const counting = /could not count the bytes/;
+    // Each stub leaves the mark of its case name, so a halt is told apart by the step that failed, not by its message.
+    const stubFor = (name, fn, test) => `${fn}() { if ${test}; then : > "${path.join(dir, `${name}-stub-failed`)}"; return 1; fi; command ${fn} "$@"; }`;
     const cases = {
-      bytes: [wcFailsWhen('[ ! -p /dev/stdin ]'), counting, true],
-      nonnul: [wcFailsWhen('[ -p /dev/stdin ]'), counting, true],
-      remove: ['rm() { return 1; }', /could not remove the executor prompt file/, false],
+      bytes: [stubFor('bytes', 'wc', '[ ! -p /dev/stdin ]'), true],
+      nonnul: [stubFor('nonnul', 'wc', '[ -p /dev/stdin ]'), true],
+      remove: [stubFor('remove', 'rm', 'true'), false],
     };
-    for (const [name, [stub, message, removed]] of Object.entries(cases)) {
+    for (const [name, [stub, removed]] of Object.entries(cases)) {
       const root = path.join(dir, name);
       const file = place(root, `${STEM}-aaaaaa`, GUARDED);
       const r = runBlock(root, `${stub}\n${readBlock(content)}`, 'printf "%s" "$EXECUTOR_PROMPT"');
       assert.equal(r.outcome, OUTCOME.EXITED, `${name}: ${r.stderr}`);
       assert.equal(r.exitCode, EXIT.count, `${name}: ${r.stderr}`);
-      assert.match(r.stderr, message, name);
+      assert.ok(fs.existsSync(path.join(dir, `${name}-stub-failed`)), `${name}: its stubbed step failed`);
       assert.equal(r.stdout, '', `${name}: no prompt printed`);
       assert.equal(!fs.existsSync(file), removed, `${name}: the count halt removes the file; the stubbed rm cannot`);
     }
