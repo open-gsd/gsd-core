@@ -64,7 +64,7 @@ points.
 | `graphify` | feature | full | `>=1.6.0` | — | — | first-party |
 | `intel` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
 | `live-dom-uat` | feature | full | `>=1.11.0` | `execute:wave:post` | step | first-party |
-| `mempalace` | feature | full | `>=1.6.0` | `discuss:pre`, `discuss:post`, `plan:pre`, `plan:post`, `execute:wave:post`, `verify:post`, `ship:post` | step, contribution | first-party |
+| `mempalace` | feature | full | `>=1.6.0` | `discuss:pre`, `discuss:post`, `plan:pre`, `plan:post`, `execute:post`, `verify:post`, `ship:post` | step, contribution | first-party |
 | `nyquist` | feature | full | `>=1.6.0` | `verify:post` | step | first-party |
 | `pattern-mapper` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
 | `profile-pipeline` | feature | full | `>=1.6.0` | — | — | first-party |

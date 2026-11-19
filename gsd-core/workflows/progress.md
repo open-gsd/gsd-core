@@ -84,7 +84,7 @@ This minimizes orchestrator context usage.
 **Get comprehensive roadmap analysis (replaces manual parsing):**
 
 ```bash
-ROADMAP=$(gsd_run query roadmap.analyze)
+ROADMAP=$(gsd_run query roadmap.analyze ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 This returns structured JSON with:
@@ -253,7 +253,9 @@ counts, i.e. `status: superseded` plans excluded, matching "outstanding work"):
 PHASE_COUNTS=$(gsd_run query find-phase "${CURRENT_PHASE}")
 X=$(echo "$PHASE_COUNTS" | jq -r '.plan_count // 0')
 Y=$(echo "$PHASE_COUNTS" | jq -r '.summary_count // 0')
-(ls -1 .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true) | wc -l
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+(ls -1 "${PLANNING_ROOT}"/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true) | wc -l
 ```
 
 State: "This phase has {X} plans, {Y} summaries."
@@ -264,7 +266,9 @@ Check for UAT.md files with status "diagnosed" (has gaps needing fixes).
 
 ```bash
 # Check for diagnosed UAT with gaps or partial (incomplete) testing
-grep -l "status: diagnosed\|status: partial" .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+grep -l "status: diagnosed\|status: partial" "${PLANNING_ROOT}"/phases/[current-phase-dir]/*-UAT.md 2>/dev/null || true
 ```
 
 Track:
@@ -374,7 +378,7 @@ Check if `{phase_num}-CONTEXT.md` exists in phase directory.
 Check if current phase has UI indicators:
 
 ```bash
-PHASE_SECTION=$(gsd_run query roadmap.get-phase "${CURRENT_PHASE}" 2>/dev/null)
+PHASE_SECTION=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${CURRENT_PHASE}" 2>/dev/null)
 PHASE_HAS_UI=$(echo "$PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true" || echo "false")
 ```
 
@@ -580,7 +584,7 @@ Read ROADMAP.md to get the next phase's name and goal.
 Check if next phase has UI indicators:
 
 ```bash
-NEXT_PHASE_SECTION=$(gsd_run query roadmap.get-phase "$((Z+1))" 2>/dev/null)
+NEXT_PHASE_SECTION=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$((Z+1))" 2>/dev/null)
 NEXT_HAS_UI=$(echo "$NEXT_PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true" || echo "false")
 ```
 

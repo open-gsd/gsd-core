@@ -293,7 +293,8 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: the call keeps its --phase, --name and --plans arguments', () => {
     assert.ok(
       workflow().includes(
-        'state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"'
+        // #5861: the verb carries the workstream token so the phase-start write lands in the scoped STATE.md
+        'state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"'
       ),
       'the begin-phase arguments are unchanged by the move'
     );
