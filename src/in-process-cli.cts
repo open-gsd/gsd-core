@@ -20,6 +20,13 @@
  *     them set;
  *   - every module-level cache registered with src/invocation-scope.cts.
  *
+ * Only the call's own writes are captured. Other code can run while an
+ * asynchronous `main` is suspended at an `await` (under `node:test`, the
+ * runner reports to its parent by writing to stdout). A write, or a
+ * `process.exit`, made from outside the call's async context goes to the real
+ * function. `process.argv`, the working directory and the environment are
+ * process-wide for the length of the call and cannot be scoped this way.
+ *
  * What it does not cover:
  *   - module-level state that no module has registered;
  *   - work `main` schedules that runs after its promise settles (a timer that
@@ -292,7 +299,7 @@ async function runInProcess(main: CliMain, options: RunInProcessOptions = {}): P
   await ahead;
   const call = { active: true };
   try {
-    return await insideCall.run(call, () => runOne(main, options, validated));
+    return await insideCall.run(call, () => runOne(main, options, validated, () => insideCall.getStore() === call));
   } finally {
     call.active = false;
     release();
@@ -303,6 +310,7 @@ async function runOne(
   main: CliMain,
   options: RunInProcessOptions,
   { argv, maxBufferBytes }: { argv: string[]; maxBufferBytes: number },
+  ownsCurrentContext: () => boolean,
 ): Promise<InProcessResult> {
   // Each entry undoes one change. They run in reverse, each in its own
   // try/catch, so one failing restore cannot leave the others undone.
@@ -325,8 +333,11 @@ async function runOne(
     capturedBytes[fd] += bytes.byteLength;
   };
 
-  const streamWrite = (fd: 1 | 2) => (
-    (chunk: unknown, encodingOrCallback?: unknown, callback?: unknown): boolean => {
+  const streamWrite = (fd: 1 | 2, real: () => unknown) => (
+    function write(this: unknown, chunk: unknown, encodingOrCallback?: unknown, callback?: unknown): boolean {
+      if (!ownsCurrentContext()) {
+        return (real() as (...a: unknown[]) => boolean).call(this, chunk, encodingOrCallback, callback);
+      }
       capture(fd, streamWriteBytes(chunk, encodingOrCallback));
       const done = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
       if (typeof done === 'function') (done as () => void)();
@@ -372,10 +383,12 @@ async function runOne(
     // stream captures fs.writeSync at creation; created under the stand-in,
     // it would keep writing into this call's buffer for the rest of the
     // process.
-    undo.push(swapProperty(process.stdout, 'write', streamWrite(1)).restore);
-    undo.push(swapProperty(process.stderr, 'write', streamWrite(2)).restore);
+    const stdoutWrite = swapProperty(process.stdout, 'write', streamWrite(1, () => stdoutWrite.original));
+    undo.push(stdoutWrite.restore);
+    const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, () => stderrWrite.original));
+    undo.push(stderrWrite.restore);
     const writeSync = swapProperty(fs, 'writeSync', (fd: number, data: unknown, ...rest: unknown[]): number => {
-      if (fd !== 1 && fd !== 2) {
+      if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) {
         return (writeSync.original as (...a: unknown[]) => number).call(fs, fd, data, ...rest);
       }
       const bytes = writeSyncBytes(data, rest[0], rest[1]);
@@ -386,12 +399,14 @@ async function runOne(
     // As the real one does: an argument, even `undefined`, replaces
     // process.exitCode first. The assignment goes through Node's own setter,
     // so a code Node refuses is refused here with Node's own error.
-    undo.push(swapProperty(process, 'exit', (...args: unknown[]): never => {
+    const exit = swapProperty(process, 'exit', (...args: unknown[]): never => {
+      if (!ownsCurrentContext()) return (exit.original as (...a: unknown[]) => never).call(process, ...args);
       if (args.length > 0) process.exitCode = args[0] as number | undefined;
       const requested = exitStatus(process.exitCode);
       if (firstExit === undefined) firstExit = requested;
       throw new InProcessExit(requested);
-    }).restore);
+    });
+    undo.push(exit.restore);
 
     await runMainAsync(main);
 

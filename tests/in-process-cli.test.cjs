@@ -355,6 +355,47 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     assert.deepEqual(await later, { exitCode: 5, stdout: '', stderr: '' });
   });
 
+  // Found by the first full-suite run of this file: node:test reports to its
+  // parent by writing to stdout, and that write landed while an in-process
+  // call was suspended at an await. The call captured it and the runner lost
+  // it. Only writes made from inside the call's own async context belong to it.
+  await t.test('a write made from outside a suspended call goes to the real writer, not the capture', async (t2) => {
+    const outside = [];
+    const realStderrWrite = process.stderr.write;
+    const realWriteSync = fs.writeSync;
+    process.stderr.write = (chunk) => { outside.push(`stream:${String(chunk)}`); return true; };
+    fs.writeSync = (fd, data, ...rest) => {
+      if (fd !== 2) return realWriteSync.call(fs, fd, data, ...rest);
+      outside.push(`sync:${String(data)}`);
+      return String(data).length;
+    };
+    t2.after(() => {
+      process.stderr.write = realStderrWrite;
+      fs.writeSync = realWriteSync;
+    });
+
+    let suspended;
+    const reachedAwait = new Promise((resolve) => { suspended = resolve; });
+    let resume;
+    const gate = new Promise((resolve) => { resume = resolve; });
+
+    const running = runInProcess(async () => {
+      process.stderr.write('inside-before');
+      suspended();
+      await gate;
+      fs.writeSync(2, 'inside-after');
+    });
+
+    await reachedAwait;
+    process.stderr.write('from-outside');
+    fs.writeSync(2, 'from-outside');
+    resume();
+    const result = await running;
+
+    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: 'inside-beforeinside-after' });
+    assert.deepEqual(outside, ['stream:from-outside', 'sync:from-outside']);
+  });
+
   await t.test('calls started together queue, and each gets only its own output', async () => {
     const order = [];
     const call = (name, code) => runInProcess(async () => {
