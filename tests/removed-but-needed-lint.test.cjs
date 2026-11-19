@@ -169,6 +169,33 @@ describe('removed-but-needed lint: findSurvivingReferences (pure)', () => {
     assert.ok(violations.some((v) => v.deletedFile === 'package-lock.json'));
   });
 
+  // #6375: a workflow's `npm ci` runs at the repository root and reads the root
+  // lockfile. Deleting a fixture's lockfile cannot break it.
+  for (const deleted of ['tests/fixtures/check-env/good/package-lock.json', 'sub/package-lock.json']) {
+    test(`a lockfile that is not the root one (${deleted}) is not tied to a workflow's npm ci`, () => {
+      const violations = findSurvivingReferences(
+        [deleted],
+        [{ file: '.github/workflows/ci.yml', content: 'jobs:\n  test:\n    steps:\n      - run: npm ci\n' }],
+      );
+      assert.deepEqual(violations, []);
+    });
+  }
+
+  test('the root lockfile is tied to every workflow that runs npm ci, once each', () => {
+    const violations = findSurvivingReferences(
+      ['package-lock.json', 'tests/fixtures/x/package-lock.json'],
+      [
+        { file: '.github/workflows/ci.yml', content: '      - run: npm ci\n' },
+        { file: '.github/workflows/release.yml', content: '      - run: npm ci\n' },
+        { file: '.github/workflows/labels.yml', content: '      - run: echo hi\n' },
+      ],
+    );
+    assert.deepEqual(
+      violations.map((v) => [v.deletedFile, v.referencedIn]),
+      [['package-lock.json', '.github/workflows/ci.yml'], ['package-lock.json', '.github/workflows/release.yml']],
+    );
+  });
+
   test('a deleted workflow still referenced in docs IS flagged (e3b52c70 shape)', () => {
     const violations = findSurvivingReferences(
       ['gsd-core/workflows/new-workspace.md'],

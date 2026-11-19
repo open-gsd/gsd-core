@@ -46,8 +46,12 @@ Parse JSON for: `state_exists`, `roadmap_exists`, `project_exists`, `planning_ex
 Read and parse STATE.md, then PROJECT.md:
 
 ```bash
-cat .planning/STATE.md
-cat .planning/PROJECT.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+cat "${PLANNING_ROOT}/STATE.md"
+GSD_WS="${GSD_WS:-}"
+PROJECT_PATH=$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)
+cat "${PROJECT_PATH}"
 ```
 
 **From STATE.md extract:**
@@ -76,6 +80,10 @@ Look for incomplete work that needs attention:
 # #2962: zsh aborts the block on an unmatched for-list glob (nomatch); bash passes it through. nullglob both.
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 
+# Scope root: the continue-here files under it are checked in the phase and non-phase layouts
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+
 # Check for structured handoff (preferred — machine-readable)
 cat .planning/HANDOFF.json 2>/dev/null || true
 
@@ -86,9 +94,9 @@ cat .planning/HANDOFF.json 2>/dev/null || true
 #  - `find` is an external binary that allowlisted agent shells (an fd-only policy, for one) refuse, and a
 #    per-line `2>/dev/null || true` then hid the refusal, so a checkpoint on disk looked absent (#4805).
 # The shell alone does this: nullglob (set above) drops an unmatched glob, `[ -e ]` guards the shells that
-# keep it, and an absent directory simply matches nothing. Output is `.planning/...` and `./...` as before.
-for f in .planning/.continue-here*.md .planning/*/.continue-here*.md .planning/*/*/.continue-here*.md ./.continue-here*.md; do
-  if [ -e "$f" ]; then echo "$f"; fi
+# keep it, and an absent directory simply matches nothing. Output is repo-relative (`.planning/...`, `./...`) as before: the resolved scope root is absolute, so the cwd prefix is stripped.
+for f in .planning/.continue-here*.md "${PLANNING_ROOT}"/*/.continue-here*.md "${PLANNING_ROOT}"/*/*/.continue-here*.md ./.continue-here*.md; do
+  if [ -e "$f" ]; then echo "${f#"$PWD"/}"; fi
 done 2>/dev/null || true
 
 # Outstanding async external jobs (legal external_job_waiting half-state).
@@ -100,7 +108,7 @@ for f in .planning/async-jobs/*.json; do
 done 2>/dev/null || true
 
 # Check for plans without summaries (incomplete execution)
-for plan in .planning/phases/*/*-PLAN.md; do
+for plan in "${PLANNING_ROOT}"/phases/*/*-PLAN.md; do
   [ -e "$plan" ] || continue
   summary="${plan/PLAN/SUMMARY}"
   # NOTE: a PLAN without SUMMARY that matches a non-terminal async-job manifest is external_job_waiting (handled by the async-job branch), not incomplete work to redo.
@@ -252,7 +260,9 @@ What would you like to do?
 **Note:** When offering phase planning, check for CONTEXT.md existence first:
 
 ```bash
-ls .planning/phases/XX-name/*-CONTEXT.md 2>/dev/null || true
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+ls "${PLANNING_ROOT}"/phases/XX-name/*-CONTEXT.md 2>/dev/null || true
 ```
 
 If missing, suggest discuss-phase before plan. If exists, offer plan directly.

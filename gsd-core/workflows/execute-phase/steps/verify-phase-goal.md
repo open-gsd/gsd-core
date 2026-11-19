@@ -30,6 +30,12 @@ TDD_MODE=${TDD_MODE:-$(gsd_run loop render-hooks execute:post --active-cap tdd)}
 # #4772: this file is Read, not textually substituted - write the parent command's original argument string in place of $ARGUMENTS so --ws reaches the query.
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
+# #5984: capability rules addressed to this verifier (active `contribution` hooks, `into: verifier`, at execute:post). Advisory: any failure leaves the prompt without them and never blocks verification.
+# Hooks with kind == "contribution" reach an agent through that role's landing site: into: verifier here (#5984), into: code-reviewer in code-review.md (#4790).
+VERIFIER_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw 2>/dev/null) || VERIFIER_HOOKS_JSON=""
+if [[ "$VERIFIER_HOOKS_JSON" == @file:* ]]; then VERIFIER_HOOKS_JSON=$(cat "${VERIFIER_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
+# A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
+VERIFIER_CONTRIBUTIONS=$(printf '%s' "$VERIFIER_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="verifier"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_verifier_rules>").join("<"+String.fromCharCode(92)+"/capability_verifier_rules>"));if(h.length)process.stdout.write("<capability_verifier_rules>\n"+h.join("\n\n")+"\n</capability_verifier_rules>")}catch(e){}})' 2>/dev/null || true)
 CONTEXT_WINDOW=$(gsd_run query config-get context_window --raw 2>/dev/null || echo "200000")
 PHASE_GOAL=$(gsd_run query roadmap.get-phase "${PHASE_NUMBER}" ${GSD_WS:+--ws} ${GSD_WS:+"${GSD_WS##*[[:space:]]}"} --pick goal)
 ```
@@ -151,7 +157,9 @@ ${CONTEXT_WINDOW >= 500000 ? `- {phase_dir}/*-CONTEXT.md (User decisions — ver
 ` : ''}
 </required_reading>
 
-${VERIFIER_SKILLS}",
+${VERIFIER_SKILLS}
+
+${VERIFIER_CONTRIBUTIONS}",
   subagent_type="gsd-verifier",
   model="{verifier_model}"
 )

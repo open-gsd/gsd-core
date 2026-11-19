@@ -19424,9 +19424,13 @@ describe('#3871 / #3756: curated progress must survive a write on an archived mi
   // for the current milestone, exactly as it is right after `milestone
   // complete --archive-phases` runs while STATE.md has not yet been
   // advanced to a new milestone.
-  function buildArchivedMilestoneFixture(cwd) {
+  function buildArchivedMilestoneFixture(cwd, { emptyPhasesDir = false } = {}) {
     const planningDir = path.join(cwd, '.planning');
     fs.mkdirSync(planningDir, { recursive: true });
+    // #6279: `milestone complete` moves the phase dirs out but KEEPS the
+    // parent `.planning/phases/`, so the real post-close shape is an
+    // existing-but-empty directory, not an absent one.
+    if (emptyPhasesDir) fs.mkdirSync(path.join(planningDir, 'phases'), { recursive: true });
 
     fs.writeFileSync(
       path.join(planningDir, 'ROADMAP.md'),
@@ -19460,8 +19464,9 @@ describe('#3871 / #3756: curated progress must survive a write on an archived mi
       }
     });
 
-    // Deliberately NO .planning/phases/ directory at all for the current
-    // milestone — the archived-milestone shape this issue is about.
+    // By default NO .planning/phases/ directory at all for the current
+    // milestone — the archived-milestone shape #3756 is about. The #6279
+    // tests below pass emptyPhasesDir to add the empty directory instead.
 
     fs.writeFileSync(
       path.join(planningDir, 'STATE.md'),
@@ -19542,6 +19547,116 @@ describe('#3871 / #3756: curated progress must survive a write on an archived mi
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     assertCuratedProgressSurvived(cwd);
+  });
+
+  // #6279: the same two verbs with an EXISTING-but-empty `.planning/phases/`
+  // (what `milestone complete` actually leaves). The empty walk derived
+  // total_plans 0 while total_phases still came from the ROADMAP headings,
+  // so the resync merge took the 0 and left 32 of 0 plans complete.
+  test('recordSessionOnArchivedMilestoneWithEmptyPhasesDirKeepsTotalPlans', (t) => {
+    const cwd = createTempDir('gsd-6279-record-session-');
+    t.after(() => cleanup(cwd));
+    buildArchivedMilestoneFixture(cwd, { emptyPhasesDir: true });
+
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'Milestone closed'], cwd);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assertCuratedProgressSurvived(cwd);
+  });
+
+  test('addDecisionOnArchivedMilestoneWithEmptyPhasesDirKeepsTotalPlans', (t) => {
+    const cwd = createTempDir('gsd-6279-add-decision-');
+    t.after(() => cleanup(cwd));
+    buildArchivedMilestoneFixture(cwd, { emptyPhasesDir: true });
+
+    const result = runGsdTools(
+      ['state', 'add-decision', '--phase', '05-01', '--summary', 'Ship v1.0', '--rationale', 'milestone complete'],
+      cwd,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assertCuratedProgressSurvived(cwd);
+  });
+
+  // #6279 guard: the fix must not freeze totals on an ACTIVE milestone. With
+  // a real phase directory on disk the walk measured something, so a plan
+  // that was deleted still lowers total_plans below the stored value.
+  test('activeMilestonePlanDeletionStillLowersTotalPlans', (t) => {
+    const cwd = createTempDir('gsd-6279-active-');
+    t.after(() => cleanup(cwd));
+    const planningDir = path.join(cwd, '.planning');
+    const phaseDir = path.join(planningDir, 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      ['## v1.0 Current 🚧', '', '### Phase 1: Foo', '### Phase 2: Bar', ''].join('\n'),
+    );
+    // Three plans were stored; one was deleted from disk, two remain.
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(
+      path.join(planningDir, 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0',
+        'status: executing',
+        'progress:',
+        '  total_phases: 2',
+        '  completed_phases: 0',
+        '  total_plans: 3',
+        '  completed_plans: 0',
+        '  percent: 0',
+        '---',
+        '',
+        '# Project State',
+        '',
+        '## Session Continuity',
+        '',
+        '**Last session:** 2024-01-10',
+        '**Stopped at:** Phase 1, Plan 2',
+        '**Resume file:** None',
+        '',
+      ].join('\n'),
+    );
+
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'Plan 3 dropped'], cwd);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const fm = frontmatterLib.extractFrontmatter(fs.readFileSync(path.join(planningDir, 'STATE.md'), 'utf-8'));
+    assert.ok(fm && fm.progress, 'STATE.md frontmatter must still carry a progress block');
+    assert.strictEqual(Number(fm.progress.total_plans), 2, 'total_plans must follow the disk count down when a real phase dir was scanned');
+  });
+
+  // #6279 guard: an empty `.planning/phases/` alone is not an archived
+  // milestone. STATE asserts v2.0 and only v1.0 was archived, so the empty
+  // walk is a real measurement and the stored plan total drops to the disk 0.
+  test('emptyPhasesDirWithoutThisMilestonesArchiveTakesDiskZero', (t) => {
+    const cwd = createTempDir('gsd-6279-no-archive-');
+    t.after(() => cleanup(cwd));
+    const planningDir = path.join(cwd, '.planning');
+    fs.mkdirSync(path.join(planningDir, 'phases'), { recursive: true });
+    fs.mkdirSync(path.join(planningDir, 'milestones', 'v1.0-phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      ['## v2.0 Current 🚧', '', '### Phase 2: Bar', '### Phase 3: Baz', ''].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(planningDir, 'STATE.md'),
+      [
+        '---', 'gsd_state_version: 1.0', 'milestone: v2.0', 'status: executing',
+        'progress:', '  total_phases: 2', '  completed_phases: 0', '  total_plans: 3', '  completed_plans: 0', '  percent: 0',
+        '---', '', '# Project State', '', '## Session Continuity', '',
+        '**Last session:** 2024-01-10', '**Stopped at:** None', '**Resume file:** None', '',
+      ].join('\n'),
+    );
+
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'Plans dropped'], cwd);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const fm = frontmatterLib.extractFrontmatter(fs.readFileSync(path.join(planningDir, 'STATE.md'), 'utf-8'));
+    assert.ok(fm && fm.progress, 'STATE.md frontmatter must still carry a progress block');
+    assert.strictEqual(Number(fm.progress.total_plans), 0, 'without this milestone\'s archive the empty walk is a measurement: total_plans takes the disk 0');
   });
 
   // The over-preservation guard: a genuinely empty project (no phases
@@ -23827,4 +23942,72 @@ describe('#4998 record-session: an indented heading below a session field is the
       assert.ok(after.includes(`\n${pad}## Notes\n`), 'the heading is left in place');
     });
   }
+});
+
+// #5880 — `countRoadmapPhaseHeadings` (legacy convention) counted any `##`-`####`
+// + `Phase N:` substring in the milestone's ROADMAP text, so a heading quoted in a
+// code span, a fenced block, or a sentence inflated `progress.total_phases` (and
+// deflated `percent`) in every STATE.md write that rebuilds frontmatter. Only real
+// ATX headings of levels 2-4 count, as in the bracket branch and the roadmap
+// readers. Every assertion is an exact number: the over-count is the bug. The
+// shipped CLI is driven (`state record-session`) and the persisted frontmatter read back.
+describe('legacy phase-heading counting reads real headings only (#5880)', () => {
+  const HEAD = '# Roadmap\n\n## Milestone v1.0: Test\n\n';
+  const REAL = '### Phase 1: Foo\n\nGoal.\n\n### Phase 2: Bar\n\nGoal.\n';
+
+  /** Persisted `progress.total_phases` after a `state record-session` over `roadmap`. */
+  function totalPhasesFor(t, roadmap) {
+    const dir = fs.realpathSync(createTempGitProject());
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    fs.mkdirSync(path.join(planning, 'phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmap);
+    fs.writeFileSync(path.join(planning, 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v1.0', 'status: executing', '---', '',
+      '# Project State', '', '**Phase:** 01', '', '**Progress:** [░░░░░░░░░░] 0%', '',
+    ].join('\n'));
+    const result = runGsdTools(['state', 'record-session', '--stopped-at', 'x'], dir);
+    assert.ok(result.success, `state record-session failed: ${result.error}`);
+    const match = /total_phases:\s*(\d+)/.exec(fs.readFileSync(path.join(planning, 'STATE.md'), 'utf8'));
+    assert.ok(match, 'record-session wrote progress.total_phases');
+    return Number(match[1]);
+  }
+
+  test('control: two real headings count as two', (t) => {
+    assert.strictEqual(totalPhasesFor(t, HEAD + REAL), 2);
+  });
+
+  test('#5880: a phase heading quoted in a blockquote code span is not counted', (t) => {
+    const quoted = '> Note: the heading `### Phase 1: Foo` is how a phase is written.\n\n';
+    assert.strictEqual(totalPhasesFor(t, HEAD + quoted + REAL), 2);
+  });
+
+  test('#5880: a phase heading mentioned mid-sentence is not counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}See ### Phase 9: Mid sentence for details.\n\n${REAL}`), 2);
+  });
+
+  test('#5880: a phase heading inside a fenced block is not counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}\`\`\`\n### Phase 8: Fenced\n\`\`\`\n\n${REAL}`), 2);
+  });
+
+  test('#5880: a heading without a space after the hashes is not counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}###Phase 7: Nospace\n\n${REAL}`), 2);
+  });
+
+  test('#5880: a level-5 heading is not counted (its inner hashes are not a level-4 heading)', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n##### Phase 5: Five\n`), 2);
+  });
+
+  test('levels 2 and 4 are counted', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}## Phase 1: A\n\n#### Phase 2: B\n`), 2);
+  });
+
+  test('#5880: an indented code line (four spaces) is not a heading', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n    ### Phase 6: Indented code\n`), 2);
+  });
+
+  test('sentinel phases 0 and 999.1 stay excluded', (t) => {
+    assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n### Phase 0: Sentinel\n\n### Phase 999.1: Icebox\n`), 2);
+  });
 });

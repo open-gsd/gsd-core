@@ -18,6 +18,11 @@
  * echo the fields of — an arbitrary readable file (#5139 security review). The path echoed in the
  * payload stays the resolved (not realpath'd) form, unchanged.
  *
+ * A linked worktree is part of the project it was cut from (#5879): dispatch remaps `projectDir` to
+ * the main checkout when the worktree has no `.planning/` of its own, so a record the executor wrote
+ * inside the worktree it runs in is ALSO accepted. Nothing else widens: a path outside both roots
+ * is still the usage failure.
+ *
  * Consequence of resolving against the process cwd: the CLI runs with cwd === projectDir in every
  * workflow, so a project-relative path (`r.json`) works. Invoked with cwd !== projectDir, that same
  * relative path resolves outside the project and is the usage failure above (it was an
@@ -27,6 +32,7 @@
 
 import path from 'node:path';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
+import { resolveProjectContext } from './project-context.cjs';
 import { gateVerdict, gateUnreadable, gateUsageFailure, GATE_FAILURE_CODE } from './gate-verdict.cjs';
 import type { GateResult } from './gate-verdict.cjs';
 import { readTextEvidence, evidenceFound, evidenceFromError } from './gate-evidence.cjs';
@@ -42,7 +48,21 @@ function parseRecordEvidence(text: string, span: string): Evidence<Record<string
   }
 }
 
-export function evaluateTddRedEvidence(input: { projectDir: string; args: readonly string[] }): GateResult {
+/**
+ * The linked worktree the process runs in, when `projectDir` is not already it. Absent outside a
+ * linked worktree (then only `projectDir` contains the record).
+ */
+function currentLinkedWorktree(projectDir: string): string | null {
+  const ctx = resolveProjectContext(process.cwd());
+  return ctx.isLinkedWorktree && path.resolve(ctx.worktreeRoot) !== path.resolve(projectDir) ? ctx.worktreeRoot : null;
+}
+
+export function evaluateTddRedEvidence(input: {
+  projectDir: string;
+  args: readonly string[];
+  /** The executor's linked worktree; defaults to the one the process runs in. `null` = none. */
+  worktreeDir?: string | null;
+}): GateResult {
   const recordPath = typeof input.args[0] === 'string' ? input.args[0] : '';
   if (!recordPath) {
     return gateUsageFailure(
@@ -53,7 +73,9 @@ export function evaluateTddRedEvidence(input: { projectDir: string; args: readon
   const resolved = path.resolve(recordPath);
   // Containment BEFORE the read (the read follows symlinks, so it is decided on the resolved
   // target). Only the verdict of the predicate is used; the echoed path stays `resolved`.
-  if (tryWithinRoot(resolved, input.projectDir, PathAcceptance.AbsoluteInsideRoot) === null) {
+  const worktreeDir = input.worktreeDir === undefined ? currentLinkedWorktree(input.projectDir) : input.worktreeDir;
+  const inside = (root: string): boolean => tryWithinRoot(resolved, root, PathAcceptance.AbsoluteInsideRoot) !== null;
+  if (!inside(input.projectDir) && !(worktreeDir !== null && inside(worktreeDir))) {
     return gateUsageFailure(GATE_FAILURE_CODE.USAGE, `path escapes its allowed directory: ${recordPath}`);
   }
   const read = readTextEvidence(resolved);

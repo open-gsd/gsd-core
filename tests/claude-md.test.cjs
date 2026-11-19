@@ -148,7 +148,7 @@ describe('new-project workflow includes CLAUDE.md generation', () => {
     assert.ok(content.includes('generate-claude-md'));
     // Codex fix: workflow now uses $INSTRUCTION_FILE (AGENTS.md for Codex, CLAUDE.md otherwise)
     assert.ok(
-      content.includes('.planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md "$INSTRUCTION_FILE"'),
+      content.includes('--files "{roadmap_path}" "{state_path}" "{requirements_path}" "$INSTRUCTION_FILE"'),
       'final roadmap commit should stage ROADMAP, STATE, REQUIREMENTS, and instruction file'
     );
   });

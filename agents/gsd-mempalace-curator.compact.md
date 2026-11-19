@@ -12,7 +12,7 @@ Runs once per phase at `ship:post`, after verification passes, to consolidate th
 </role>
 
 <inputs>
-- `.planning/config.json`: `mempalace.enabled`, `mempalace.memory_mode`, `mempalace.wing`, `mempalace.diary_journal`, `mempalace.cross_project_tunnels`, `mempalace.mirror_kg`, `project_code`.
+- `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`): `mempalace.enabled`, `mempalace.memory_mode`, `mempalace.wing`, `mempalace.diary_journal`, `mempalace.cross_project_tunnels`, `mempalace.mirror_kg`, `project_code`.
 - Completed phase artifacts: `UAT.md`, `SUMMARY.md`, any `extract-learnings` output.
 </inputs>
 
