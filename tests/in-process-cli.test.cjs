@@ -448,9 +448,9 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     assert.deepEqual(JSON.parse(result.stdout), { ok: true, migrated: false });
   });
 
-  // The same loop, after the call: a wrapper that was layered over the
-  // stand-in outlives the call and is installed again. The stand-in is stale
-  // and defers to what is installed, which is the wrapper that calls it.
+  // After the call: a wrapper that was layered over the stand-in outlives the
+  // call and is installed again. The stand-in is stale and goes down to what
+  // it replaced, so the wrapper is entered once and nothing calls it again.
   await t.test('a wrapper over a stale stand-in, installed again after the call, still reaches the real function', async (t2) => {
     const file = path.join(tempDir(t2), 'stale-layered.txt');
     const real = fs.writeSync;
@@ -521,8 +521,8 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     assert.equal(wrapperCalls, 2, 'once for the file write forwarded down, once called directly');
   });
 
-  // The same loop with a wrapper that calls down after an await: the stale
-  // stand-in is entered again once the first deferral has returned its promise.
+  // The same with a wrapper that calls down after an await: the stale
+  // stand-in is entered later, and still goes down.
   await t.test('a stale asynchronous wrapper installed again after the call still reaches the real function', async (t2) => {
     const file = path.join(tempDir(t2), 'stale-async.txt');
     const real = fs.writeSync;
@@ -572,6 +572,55 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     });
 
     assert.deepEqual(later, { exitCode: 9, stdout: 'sync;stream;', stderr: '' });
+  });
+
+  // The other half: the same stale references used from OUTSIDE the later
+  // call, while it is suspended. They belong to nobody's call, so they reach
+  // the real writer and the later call captures nothing of them.
+  await t.test('a stand-in kept from an earlier call, used outside a later suspended call, reaches the real writer', async (t2) => {
+    const outside = [];
+    const realStderrWrite = process.stderr.write;
+    const realWriteSync = fs.writeSync;
+    const isMarker = (data) => typeof data === 'string' && data.startsWith('in-process-marker:');
+    process.stderr.write = function write(chunk, ...rest) {
+      if (!isMarker(chunk)) return realStderrWrite.call(this, chunk, ...rest);
+      outside.push(`stream:${chunk}`);
+      return true;
+    };
+    fs.writeSync = (fd, data, ...rest) => {
+      if (fd !== 2 || !isMarker(data)) return realWriteSync.call(fs, fd, data, ...rest);
+      outside.push(`sync:${data}`);
+      return data.length;
+    };
+    t2.after(() => {
+      process.stderr.write = realStderrWrite;
+      fs.writeSync = realWriteSync;
+    });
+
+    let keptWriteSync;
+    let keptStderrWrite;
+    await runInProcess(() => {
+      keptWriteSync = fs.writeSync;
+      keptStderrWrite = process.stderr.write;
+    });
+
+    let suspended;
+    const reachedAwait = new Promise((resolve) => { suspended = resolve; });
+    let resume;
+    const gate = new Promise((resolve) => { resume = resolve; });
+    const running = runInProcess(async () => {
+      suspended();
+      await gate;
+      keptWriteSync.call(fs, 2, 'in-process-marker:inside;');
+    });
+
+    await reachedAwait;
+    keptWriteSync.call(fs, 2, 'in-process-marker:stale-outside');
+    keptStderrWrite.call(process.stderr, 'in-process-marker:stale-outside');
+    resume();
+
+    assert.deepEqual(await running, { exitCode: 0, stdout: '', stderr: 'in-process-marker:inside;' });
+    assert.deepEqual(outside, ['sync:in-process-marker:stale-outside', 'stream:in-process-marker:stale-outside']);
   });
 
   await t.test('calls started together queue, and each gets only its own output', async () => {

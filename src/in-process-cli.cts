@@ -30,9 +30,12 @@
  * and cannot be scoped this way.
  *
  * Code may keep a reference to a stand-in after its call has ended (a module
- * first loaded inside `main` that saved `process.exit`). Called later, that
- * stale stand-in defers to whatever is installed now: a later call's stand-in
- * during that call, the real function otherwise.
+ * first loaded inside `main` that saved `process.exit`). Called later from
+ * inside another in-process call, that stale stand-in acts for that call.
+ * Called at any other time it calls the function it replaced, which is the
+ * real one unless something else was installed when its call began. It does
+ * not see anything installed since: a test that mocks `process.exit` after an
+ * in-process call does not intercept a stale reference to it.
  *
  * What it does not cover:
  *   - module-level state that no module has registered;
@@ -268,7 +271,7 @@ function swapProperty(target: object, key: string, replacement: unknown): { orig
  * What a stand-in does with a call: handle it for its own call (capture the
  * write, record the exit) and say so, or decline with `undefined`.
  */
-type Handler = (thisArg: unknown, args: unknown[]) => { value: unknown } | undefined;
+type Handler = (args: unknown[]) => { value: unknown } | undefined;
 
 /** The handlers of the call that is open right now, by what they stand in for. One call is open at a time. */
 let openHandlers: Map<string, Handler> | undefined;
@@ -293,7 +296,7 @@ function forward(
   if (!callOpen) {
     const current = openHandlers?.get(slot);
     if (current !== undefined && current !== self) {
-      const handled = current(thisArg, args);
+      const handled = current(args);
       if (handled !== undefined) return handled.value;
     }
   }
@@ -384,12 +387,12 @@ async function runOne(
   const standInFor = (slot: string, handle: Handler, real: () => unknown) => {
     handlers.set(slot, handle);
     return function standIn(this: unknown, ...args: unknown[]): unknown {
-      const handled = handle(this, args);
+      const handled = handle(args);
       return handled !== undefined ? handled.value : forward(slot, handle, real(), open, this, args);
     };
   };
 
-  const streamWrite = (fd: 1 | 2, real: () => unknown) => standInFor(`stream.${fd}.write`, (_thisArg, args) => {
+  const streamWrite = (fd: 1 | 2, real: () => unknown) => standInFor(`stream.${fd}.write`, (args) => {
     if (!ownsCurrentContext()) return undefined;
     const [chunk, encodingOrCallback, callback] = args;
     capture(fd, streamWriteBytes(chunk, encodingOrCallback));
@@ -442,7 +445,7 @@ async function runOne(
     undo.push(stdoutWrite.restore);
     const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, () => stderrWrite.original));
     undo.push(stderrWrite.restore);
-    const writeSync = swapProperty(fs, 'writeSync', standInFor('fs.writeSync', (_thisArg, args) => {
+    const writeSync = swapProperty(fs, 'writeSync', standInFor('fs.writeSync', (args) => {
       const [fd, data, offsetOrOptions, length] = args;
       if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) return undefined;
       const bytes = writeSyncBytes(data, offsetOrOptions, length);
@@ -453,7 +456,7 @@ async function runOne(
     // As the real one does: an argument, even `undefined`, replaces
     // process.exitCode first. The assignment goes through Node's own setter,
     // so a code Node refuses is refused here with Node's own error.
-    const exit = swapProperty(process, 'exit', standInFor('process.exit', (_thisArg, args) => {
+    const exit = swapProperty(process, 'exit', standInFor('process.exit', (args) => {
       if (!ownsCurrentContext()) return undefined;
       if (args.length > 0) process.exitCode = args[0] as number | undefined;
       const requested = exitStatus(process.exitCode);
