@@ -309,6 +309,7 @@ module.exports = {
   "tests/skill-manifest.test.cjs",
   "tests/slug-derivation-drift-guard.test.cjs",
   "tests/smart-entry.unit.test.cjs",
+  "tests/stall-leftovers.test.cjs",
   "tests/state-todos-render.test.cjs",
   "tests/state.platform.test.cjs",
   "tests/sub-repos-evaluation-scope-5867.test.cjs",
