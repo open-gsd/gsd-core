@@ -437,6 +437,38 @@ This is the **only** GSD agent carrying browser MCP tools. `gsd-executor` is del
 
 ---
 
+### gsd-behavior-verifier
+
+**Role:** Enumerates the interaction-level behaviors a phase delivered, executes the machine-observable ones against the running app through a browser MCP server, and hands the human only what a human must still confirm. Additive — never blocks UAT.
+
+| Property | Value |
+|----------|-------|
+| **Spawned by** | `deep-verify` capability step at `verify:pre` |
+| **Parallelism** | One per `verify-work` run |
+| **Tools** | Read, Write, Glob, Grep, mcp__playwright__*, mcp__chrome-devtools__*, mcp__claude-in-chrome__* |
+| **Disallowed Tools** | Edit, Bash |
+| **Model (balanced)** | Sonnet |
+| **Color** | Cyan |
+| **Produces** | `{phase}-DEEP-VERIFY.md` (full results), `DEEP-VERIFY-CHECKPOINTS.md` (human checkpoints only; rewritten every run) |
+| **Gated by** | `workflow.deep_verify` (default `false`); `workflow.deep_verify_all_phases` widens it beyond UI phases |
+
+It carries no `Bash`: it does not start dev servers, run git or shell out, so the diff it works from is the SUMMARY's "Files Changed" list plus the files it names. Chrome-family servers are driven only while `workflow.live_dom_uat` is also `true` (an instruction the agent follows, read from `.planning/config.json`; the `tools:` line grants all three families); `mcp__playwright__*` is driven whenever it responds. Only the checkpoint artefact is declared in `produces`, so passed behaviors never reach the human.
+
+**Outcome codes** (`nothing_to_report` and `could_not_look` are never conflated):
+
+| `outcome` | `reason` | Meaning |
+|---|---|---|
+| `verified` | `ok` | Behaviors were enumerated and observed; a partial run counts the unobserved ones in `could_not_look` |
+| `nothing_to_report` | `not_ui_phase` | No `{phase}-UI-SPEC.md` and `workflow.deep_verify_all_phases` is off |
+| `nothing_to_report` | `no_behaviors` | The plan, summary and changed files support no behavior |
+| `could_not_look` | `no_browser_mcp` | No browser MCP answered; every behavior is routed to the human |
+| `could_not_look` | `profile_locked` | Another instance holds the browser profile |
+| `could_not_look` | `target_unreachable` | Nothing serving the target |
+
+**Reference:** [Enable deep verification](../how-to/enable-deep-verification.md)
+
+---
+
 ### gsd-codebase-mapper
 
 **Role:** Explores codebase and writes structured analysis documents.

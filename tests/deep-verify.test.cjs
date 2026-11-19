@@ -340,7 +340,6 @@ describe('deep-verify: config key acceptance and coercion', () => {
 
 describe('deep-verify: shipped agent, fragment and core-surface contracts', () => {
   test('deepVerifierCarriesBrowserGlobsAndNoShell', () => {
-    // allow-test-rule: source-text-is-the-product (#3858)
     // An agent's frontmatter IS its tool grant at runtime; there is no API to
     // enumerate a not-yet-spawned agent's permissions.
     assert.deepStrictEqual(mcpGlobsOf(AGENT_PATH), [PLAYWRIGHT_GLOB, ...CHROME_GLOBS].sort());
@@ -352,7 +351,6 @@ describe('deep-verify: shipped agent, fragment and core-surface contracts', () =
   });
 
   test('browserGlobParityAcrossAgentsAndFragment', () => {
-    // allow-test-rule: source-text-is-the-product (#3858)
     // The chrome-family list is one shared constant across three surfaces now
     // (gsd-dom-verifier tools, this agent's tools, this fragment): divergence
     // class DEFECT.GENERATIVE-FIX-DIVERGENCE.
@@ -367,43 +365,70 @@ describe('deep-verify: shipped agent, fragment and core-surface contracts', () =
   });
 
   test('fragmentKeepsTheTwoFamilyGateContract', () => {
-    // allow-test-rule: source-text-is-the-product (#3858)
     // Playwright works today on presence + UI phase; chrome-family only behind
     // workflow.live_dom_uat. The fragment must keep both halves of that contract.
     const text = fragmentText();
-    assert.ok(text.includes(LIVE_DOM_KEY), 'chrome-family reach must be tied to workflow.live_dom_uat');
-    const playwrightAt = text.indexOf(PLAYWRIGHT_GLOB);
-    const keyAt = text.indexOf(LIVE_DOM_KEY);
-    assert.ok(playwrightAt !== -1 && keyAt !== -1);
+    // A bullet runs until the next line that starts a new bullet; continuation lines belong to it.
+    const bullets = text.split(/\n(?=- )/).filter((b) => b.startsWith('- `mcp__'));
+    const chromeBullet = bullets.find((l) => CHROME_GLOBS.every((g) => l.includes(g)));
+    assert.ok(chromeBullet, 'the fragment must carry one bullet naming both Chrome-family globs');
+    assert.ok(chromeBullet.includes(LIVE_DOM_KEY),
+      'the Chrome-family bullet itself must tie reach to workflow.live_dom_uat');
+    const playwrightBullet = bullets.find((l) => l.includes(PLAYWRIGHT_GLOB));
+    assert.ok(playwrightBullet, 'the fragment must carry a Playwright bullet');
+    assert.ok(!playwrightBullet.includes(LIVE_DOM_KEY),
+      'Playwright reach must not be gated behind workflow.live_dom_uat (Hyrum: it works today without it)');
+  });
+
+  test('checkpointArtefactIsBareNamedAndAlwaysRewritten', () => {
+    // The seam looks the artefact up by the bare `produces` name, and the agent has
+    // no delete tool, so a stale file can only be retired by overwriting it.
+    const agentSrc = fs.readFileSync(AGENT_PATH, 'utf8');
+    for (const [label, text] of [['fragment', fragmentText()], ['agent', agentSrc]]) {
+      assert.ok(text.includes(`{phase_dir}/${CHECKPOINT_ARTEFACT}`),
+        `${label} must write the bare declared name ${CHECKPOINT_ARTEFACT}`);
+      assert.ok(!/\{phase_num\}-DEEP-VERIFY-CHECKPOINTS/.test(text),
+        `${label} must not write a phase-prefixed checkpoint file the seam would not find`);
+      assert.ok(text.includes('No checkpoints.'),
+        `${label} must define the empty checkpoint file so a stale one is overwritten`);
+    }
+    assert.ok(readManifest().steps[0].produces.includes(CHECKPOINT_ARTEFACT));
+  });
+
+  test('scopeDoesNotDependOnAnOrchestratorRelay', () => {
+    // Nothing in core relays ui_phase_active to a ref.agent step, so neither shipped
+    // surface may depend on it; the agent resolves scope from files it can read.
+    const agentSrc = fs.readFileSync(AGENT_PATH, 'utf8');
+    for (const [label, text] of [['fragment', fragmentText()], ['agent', agentSrc]]) {
+      assert.ok(!text.includes('ui_phase_active'), `${label} must not depend on a relayed ui_phase_active`);
+      assert.ok(text.includes('.planning/config.json'), `${label} must read the two keys from config itself`);
+      assert.ok(text.includes('UI-SPEC.md'), `${label} must derive a UI phase from the phase-scoped UI-SPEC`);
+    }
   });
 
   test('fragmentNamesTheUiGateAndOutcomeReasons', () => {
-    // allow-test-rule: source-text-is-the-product (#3858)
     const text = fragmentText();
     for (const needle of [
-      'ui_phase_active', WIDEN_KEY, 'not_ui_phase', 'no_browser_mcp', 'no_behaviors',
-      CHECKPOINT_ARTEFACT, RESULTS_ARTEFACT, 'nothing_to_report', 'could_not_look',
+      WIDEN_KEY, 'not_ui_phase', 'no_browser_mcp', 'no_behaviors', 'profile_locked', 'target_unreachable',
+      CHECKPOINT_ARTEFACT, '{phase_num}-DEEP-VERIFY.md', 'nothing_to_report', 'could_not_look',
     ]) {
       assert.ok(text.includes(needle), `fragment must name ${needle}`);
     }
   });
 
   test('agentTreatsPlanAndPageTextAsData', () => {
-    // allow-test-rule: source-text-is-the-product (#3858)
     const src = fs.readFileSync(AGENT_PATH, 'utf8');
     assert.ok(src.includes('<untrusted-input>'), 'agent must carry an untrusted-input boundary section');
     assert.ok(src.includes('DATA'), 'plan, summary and live-page text must be declared data');
   });
 
   test('executorSurfaceIsUnchanged', () => {
-    // allow-test-rule: source-text-is-the-product (#3858)
     const tools = agentTools(EXECUTOR_PATH);
     assert.ok(!tools.some((t) => t.startsWith('mcp__') && !t.includes('context7')),
       'gsd-executor may carry no MCP family beyond context7');
   });
 
   test('coreWorkflowsStayFree', () => {
-    // allow-test-rule: source-text-is-the-product (#3858)
     // Maintainer ruling: "Nothing in core changes." The capability wires in through
     // the #3866 seam alone, so neither core workflow may name this capability.
     for (const p of [VERIFY_WORK_PATH, UI_VERIFY_PATH]) {
