@@ -1115,15 +1115,16 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
    [Awaiting section from agent return]
    ```
 5. User responds: "approved"/"done" | issue description | decision selection
-6. **Spawn continuation agent (NOT resume)** with a prompt built from these placeholders (there is no separate template file; this list is the contract):
+6. **Spawn continuation agent (NOT resume, except `harness-worktree`)** with a prompt built from these placeholders (there is no separate template file; this list is the contract):
    - `{completed_tasks_table}`: From checkpoint return, wrapped in a `<completed_tasks>` tag (the executor's continuation handling keys on it)
    - `{resume_task_number}` + `{resume_task_name}`: Current task
    - `{user_response}`: What user provided
    - `{resume_instructions}`: Based on checkpoint type
+   - A `harness-worktree` plan's commits are on its unmerged agent branch, not in a fresh worktree: follow `execute-phase/steps/worktree-recovery-policy.md` § checkpoint continuation (#6118)
 7. Continuation agent verifies previous commits, continues from resume point
 8. Repeat until plan completes or user stops
 
-**Why fresh agent, not resume:** Resume relies on internal serialization that breaks with parallel tool calls. Fresh agents with explicit state are more reliable.
+**Why fresh agent, not resume (except `harness-worktree`, #6118):** Resume relies on internal serialization that breaks with parallel tool calls. Fresh agents with explicit state are more reliable.
 
 **Checkpoints in parallel waves:** Agent pauses and returns while other parallel agents may complete. Present checkpoint, spawn continuation, wait for all before next wave.
 </step>
