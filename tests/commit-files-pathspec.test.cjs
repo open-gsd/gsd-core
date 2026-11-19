@@ -3256,7 +3256,7 @@ describe('commit timeout reporting (#3886)', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ git }));
   }
 
-  test('#5231: git.commit_timeout_ms sets the git commit timeout and the reported error differs per configured value', () => {
+  test('#5231: git.commit_timeout_ms sets the git commit timeout and the reported error head names the configured value', () => {
     writeGitConfig({ commit_timeout_ms: 60000 });
     const { result, timeout } = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
     assert.equal(timeout, 60000, 'execGit(commit) must receive the configured timeout');
@@ -3265,7 +3265,10 @@ describe('commit timeout reporting (#3886)', () => {
     writeGitConfig({ commit_timeout_ms: 30000 });
     const other = commitWithTimedOutCommit({ cwd: tmpDir, files: ['.planning/STATE.md'] });
     assert.equal(other.timeout, 30000);
-    assert.notStrictEqual(result.error, other.result.error, 'the message must follow the configured timeout');
+    // The expected head comes from the owner, so no prose literal is compared (ADR-456).
+    const { commitTimeoutHead } = require('../gsd-core/bin/lib/commands.cjs');
+    assert.ok(result.error.startsWith(commitTimeoutHead(tmpDir, 60000)), result.error);
+    assert.ok(other.result.error.startsWith(commitTimeoutHead(tmpDir, 30000)), other.result.error);
   });
 
   test('#5231: an active workstream config wins over the root config for the commit timeout', () => {
@@ -3275,6 +3278,11 @@ describe('commit timeout reporting (#3886)', () => {
     fs.writeFileSync(path.join(wsDir, 'config.json'), JSON.stringify({ git: { commit_timeout_ms: 60000 } }));
     const run = runWithTimedOutCommit(`process.env.GSD_WORKSTREAM = 'ws'; cmds.cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);`);
     assert.equal(run.timeout, 60000, run.stderr);
+    // An invalid workstream value shadows a valid root value: the default applies, not the root's 60000.
+    fs.writeFileSync(path.join(wsDir, 'config.json'), JSON.stringify({ git: { commit_timeout_ms: 0 } }));
+    writeGitConfig({ commit_timeout_ms: 60000 });
+    const shadowed = runWithTimedOutCommit(`process.env.GSD_WORKSTREAM = 'ws'; cmds.cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], false, false, false);`);
+    assert.equal(shadowed.timeout, 30000, shadowed.stderr);
   });
 
   test('#5231: unset git.commit_timeout_ms defaults to 30000', () => {
