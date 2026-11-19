@@ -5,14 +5,19 @@
 - **Issue:** [#6315](https://github.com/open-gsd/gsd-core/issues/6315)
 - **Supersedes:** nothing.
 - **Relationship to prior work:** this ADR builds on four accepted decisions and changes none of them. [ADR-452](452-eslint-lint-harness.md) makes ESLint the lint enforcement point. [ADR-456](456-test-rigor-architecture.md) rejects retries and keeps mutation testing as a PR gate. [ADR-4593](4593-macos-conformance-tier-architecture.md) and [ADR-4641](4641-windows-selector-consolidation.md) define the macOS and Windows conformance tiers. One statement in ADR-456 (`--since origin/next`) is checked by item 2 and amended there if it is wrong.
-- **Research input:** [`docs/research/ci-redesign-options-survey.md`](../research/ci-redesign-options-survey.md). Every figure in this ADR comes from that memo, which records the command behind each one. Section numbers below written as "memo §N" point into it.
+- **Amends:** [ADR-452](452-eslint-lint-harness.md) (item 19), [ADR-456](456-test-rigor-architecture.md) (items 22 to 24), [ADR-4593](4593-macos-conformance-tier-architecture.md) and [ADR-4641](4641-windows-selector-consolidation.md) (item 20). The amendments take effect when this ADR is ratified. Each of the four carries the reciprocal pointer.
+- **Amended:** 2026-11-18, the day it was written. The first version redesigned the CI pipeline and left the test suite as it was. The owner's review asked for a redesign of the test architecture and the working rules as well, with nothing deferred. Sections 5 and 6 are that amendment. They take priority over sections 3 and 4.
+- **Research input:** three memos. Every figure in this ADR comes from one of them, and each records the command or file behind its numbers.
+  - [`ci-redesign-options-survey.md`](../research/ci-redesign-options-survey.md) — CI timings and the options survey ("memo §N" below points into it).
+  - [`test-suite-cost-structure-and-lint-conversion.md`](../research/test-suite-cost-structure-and-lint-conversion.md) — where test time goes, and which tests can become lints ("cost memo §N").
+  - [`talk-slop-applied-to-ci-redesign.md`](../research/talk-slop-applied-to-ci-redesign.md) — a fact check of a talk on keeping agent-written code trustworthy, and what it implies here.
 
 ## How to use this ADR
 
 This file is the contract for the agents that implement epic #6315.
 
 - Each numbered item in *Phases* is **one child issue and one PR**. Do not combine items.
-- **No item waits on another.** Every item can start today. Where one item's result feeds another, the item says what to use until that result exists. The one exception is named in *Ordering*.
+- **Items do not wait on each other unless the code forces it.** Where one item's result only informs another, the item says what to use until that result exists. The real dependencies are few and are listed in *Ordering*.
 - A blocker is part of the epic. If an item is held up by an open PR, a missing review or a missing measurement, the implementing agent picks that up as the next step of the item. It does not park the item.
 - The *Invariants* section applies to every item. A PR that breaks an invariant is wrong even if its own acceptance criteria pass.
 - The acceptance criteria are release blockers. Record the evidence (run links, command output) in the PR body.
@@ -38,7 +43,7 @@ Measured over `test.yml` runs from 2026-11-12 to 2026-11-18 and over the 6,564-r
 | Runner-minutes for one full `push` or `merge_group` run | about 187 |
 | Test files | 1,204; the top 50 are 57.7% of summed test time, the top 100 are 73.9% |
 
-### Five problems
+### Eight problems
 
 1. **The critical path is the unsharded macOS lane.** It sets the merge-queue wall-clock and has been cancelled at its cap twice in the sample.
 2. **Two defects waste the most compute per incident.**
@@ -47,6 +52,9 @@ Measured over `test.yml` runs from 2026-11-12 to 2026-11-18 and over the 6,564-r
 3. **Static checks do not gate the matrix.** `lint-tests` and `test` both need only `preflight` (`test.yml:191-192`, `:255-257`). A PR with a static defect still runs all shards. No workflow linter runs at all, although workflow defects are the ones that waste whole runs.
 4. **The full matrix runs twice per merge:** on the `merge_group` commit and again on the `push` to `next`.
 5. **Nothing keeps the suite fast.** The timing tables that balance the shards are refreshed by hand, and there is no darwin table. No gate stops a new slow test file. `--test-force-exit` is on by default, so leaked handles are invisible. No ledger names the files that fail intermittently.
+6. **The suite tests logic through real processes.** Files that spawn a process hold 89% of Linux test time and 94% of Windows-tier time. The largest suites (`state`, `phase`, `roadmap`, `config`, `init`) assert JSON fields and file content, and reach them through about 2,800 CLI spawn sites. The 418 files that test logic in-process run 12,560 cases in 3.8% of the time (cost memo §1).
+7. **Static checks run as tests.** 190 test files only read repo content and assert on it. Each one costs a process in the test lane, and 29 tests repeat a scan that `lint:ci` already runs (cost memo §3).
+8. **The working rules multiply the cost.** PR #5053, the reshard that fixed the critical path, was open from 2026-09-27 to 2026-11-18 and went through at least 14 review rounds, the later ones on comment wording and fixture style. The 230-line follow-up to it (#6329) needed three review rounds and six full-suite runs, because every finding of any size triggers a failing-first run and a passing run of all 61,443 tests.
 
 ### What already exists
 
@@ -78,6 +86,8 @@ CI has four tiers. Each tier has one job to do.
 
 The post-merge `push` run on `next` repeats T2 only when the merged tree differs from the tree the queue tested (item 8).
 
+Section 5 changes what runs inside these tiers. After it, T1 runs in-process tests plus a small process-contract tier, the Windows and macOS lanes in T2 run only the contract tiers, and checks of repo content run in T0 and the static content lane and are no longer tests.
+
 ### 2. Invariants
 
 These hold for every item in the epic.
@@ -89,7 +99,7 @@ These hold for every item in the epic.
 - **I5 — Free GitHub-hosted standard runners only.** No larger runners and no self-hosted runners (owner ruling, 2026-11-18).
 - **I6 — No `paths:` filter on a workflow that carries a required check.** Scope is decided at job level by `scripts/ci-test-scope.cjs`.
 - **I7 — Correctness gates stay on the PR or in the queue.** T3 holds diagnostics and refresh jobs only. Mutation testing stays a PR gate.
-- **I8 — Checks on code shape are ESLint rules.** A new one ships at `warn`, then moves to `error` after cleanup, per [ADR-452](452-eslint-lint-harness.md). Workflow YAML is checked by actionlint and zizmor because it is not JavaScript.
+- **I8 — Checks on code shape are ESLint rules, and a new rule ships at `error`.** `npm run lint` runs with `--max-warnings 0`, so a `warn` rule already fails CI; the cleanup lands in the PR that adds the rule (I9). Workflow YAML is checked by actionlint and zizmor, and other non-JavaScript content by the static content lane (item 19).
 - **I9 — First-run findings are fixed in the PR that adds the check.** A new linter does not land with a backlog. A false positive is suppressed in the tool's config with a recorded reason.
 - **I10 — Every new third-party binary or action is pinned** to a version and a checksum or commit SHA.
 
@@ -194,7 +204,7 @@ Much of this suite reads repo files instead of importing modules, so an import g
 Files: `eslint-rules/`, `eslint.config.mjs`.
 
 - AC1: first read the existing rules (`no-unbounded-spawn`, `require-full-tmpdir-triad` and the rest) and list which of these shapes they already cover: an un-awaited promise in a test body, an async spawn whose stdin is never closed, a timer or server with no teardown, a fixed port, a write outside the tmp directory, real network use.
-- AC2: one rule per uncovered shape that has a recorded occurrence. Each ships at `warn` with tests, then moves to `error` (I8).
+- AC2: one rule per uncovered shape that has a recorded occurrence. Each ships at `error` with tests and with its findings fixed in the same PR (I8, I9).
 - AC3: **decision rule.** Measure `npm run lint` with type-aware `no-floating-promises` over `tests/**/*.cjs`. Enable it only if it adds under 60 s and `static-fast` stays inside its target.
 
 **Item 12 — Three measurements with a rule each.** Depends on: nothing.
@@ -212,7 +222,7 @@ Files: `.github/actions/`, `.github/workflows/test.yml`, `tests/ci-*.test.cjs`.
 
 ### 4. Ordering
 
-Every item starts now. The phases are a priority order, not a queue: when agents are scarce, lower phase numbers go first.
+Every item starts now. The phases are a priority order, not a queue. Sections 5 and 6 (items 14 to 24) go first: they shrink the suite that every item in section 3 schedules. Within section 3, lower phase numbers go first.
 
 | Item | Issue | Item | Issue |
 |---|---|---|---|
@@ -223,11 +233,154 @@ Every item starts now. The phases are a priority order, not a queue: when agents
 | 5a | PR [#5053](https://github.com/open-gsd/gsd-core/pull/5053) | 11 | [#6326](https://github.com/open-gsd/gsd-core/issues/6326) |
 | 5b | [#6321](https://github.com/open-gsd/gsd-core/issues/6321) | 12 | [#6327](https://github.com/open-gsd/gsd-core/issues/6327) |
 | 6 | [#6322](https://github.com/open-gsd/gsd-core/issues/6322) | 13 | [#6328](https://github.com/open-gsd/gsd-core/issues/6328) |
+| 14 | [#6332](https://github.com/open-gsd/gsd-core/issues/6332) | 20 | [#6338](https://github.com/open-gsd/gsd-core/issues/6338) |
+| 15 | [#6333](https://github.com/open-gsd/gsd-core/issues/6333) | 21 | [#6339](https://github.com/open-gsd/gsd-core/issues/6339) |
+| 16 | [#6334](https://github.com/open-gsd/gsd-core/issues/6334) | 22 | [#6340](https://github.com/open-gsd/gsd-core/issues/6340) |
+| 17 | [#6335](https://github.com/open-gsd/gsd-core/issues/6335) | 23 | [#6341](https://github.com/open-gsd/gsd-core/issues/6341) |
+| 18 | [#6336](https://github.com/open-gsd/gsd-core/issues/6336) | 24 | [#6342](https://github.com/open-gsd/gsd-core/issues/6342) |
+| 19 | [#6337](https://github.com/open-gsd/gsd-core/issues/6337) | | |
 
-- **One real wait:** the macOS concurrency measurement in item 5b needs the sharded lane from item 5a.
-- **One blocker to clear first:** item 5a is an open contributor PR that needs a maintainer review. Reviewing it is the first action of the epic.
+- **Real dependencies:** item 15 needs item 14's entry point; item 16 needs item 15; item 20 needs items 15 and 19; the second half of item 24 needs item 19; the macOS concurrency measurement in item 5b needs the sharded lane from item 5a, which has merged.
+- **Item 5a is done:** PR #5053 merged on 2026-11-18. Its review findings are tracked in [#6329](https://github.com/open-gsd/gsd-core/issues/6329).
 - **Shared file:** PR #5053 and items 3, 8, 10 and 13 all edit `.github/workflows/test.yml`. They do not wait for each other. Each one rebases on `next` before it is enqueued, and the merge queue serialises them. Items 5b and 7 both edit `scripts/run-tests.cjs` and follow the same rule.
 - **Results that feed other items:** item 9's first report sharpens item 11, and item 6's refreshed tables sharpen item 4. Neither is a precondition.
+
+### 5. Test architecture
+
+These items come before everything in section 3. They change how tests are written, where sections 3 and 4 change only how they are scheduled.
+
+#### The design
+
+Tests fall into four tiers. The filename says which tier a file is in, and a lint rule holds each file to its tier.
+
+| Tier | Filename | May do | Runs on |
+|---|---|---|---|
+| Unit | `*.test.cjs` | Call product code in-process. No process spawn of any kind. | Linux, every PR |
+| Process contract | `*.process.test.cjs` | Spawn the real CLI, git, hooks or scripts. Asserts only what a process boundary adds: argv parsing, exit code, stdout and stderr framing, signals. | Linux every PR; Windows and macOS in the queue |
+| Install contract | `*.install.test.cjs` | Run the real installer, `npm pack`, a global install. | Linux every PR; Windows and macOS in the queue |
+| Platform | `*.platform.test.cjs` | OS-specific behaviour (paths, case, mode bits). Already exists (#5074). | Windows and macOS in the queue |
+
+A check that only reads repo content is not a test. It is a lint and runs in the static lanes (item 19).
+
+The reasoning is the correction ladder from the talk memo: remove the bad choice by design first, enforce what is left with a deterministic check, and use prose last. Today "do not spawn a process to test logic" is not even prose. After this section it is a design property (the CLI is callable in-process) held by a lint rule (a unit file cannot import a spawn helper).
+
+#### Phase A — the in-process seam
+
+**Item 14 — An exported, capturable CLI entry point.** Depends on: nothing.
+Files: `gsd-core/bin/gsd-tools.cjs`, `src/cli-exit.cts`, `src/io.cts`, the `src/*-command-router.cts` files, a new `src/process-context.cts`.
+Today `main` is not exported, reads `process.argv`, `process.env` and `process.cwd()` directly, and writes with `fs.writeSync(1, …)` (cost memo §2).
+
+- AC1: `gsd-tools.cjs` exports `runCli({ argv, cwd, env, stdin })`, which returns `{ exitCode, stdout, stderr }`. It never calls `process.exit`, never writes to the real stdout or stderr, and leaves `process.cwd()`, `process.env` and `process.exitCode` as it found them.
+- AC2: the binary's own entry is `runMain(() => runCli(fromRealProcess()))`. There is one code path, used by both the binary and the tests.
+- AC3: `argv`, `cwd`, `env`, the output sinks and the exit path reach handlers through one process-context object. A new ESLint rule, `local/no-process-global-outside-context`, fails any read of `process.argv`, `process.cwd()`, `process.exit`, `process.exitCode`, `process.stdout` or `process.stderr` in `src/` outside that module. The rule lands with an allowlist of today's sites (the cost memo counts them) that only shrinks, and reaches zero for every module a command handler can reach before item 15 starts.
+- AC4: a property test runs random sequences of `runCli` calls and asserts that process state after each call equals process state before it.
+
+**Item 15 — `runGsdTools` runs in-process.** Depends on: item 14.
+Files: `tests/helpers.cjs`, `tests/helpers/process-seam.cjs`, a new `tests/cli-parity.process.test.cjs`.
+`runGsdTools` (`tests/helpers.cjs:207`) is the one adapter that builds the `{ success, output, error, exitCode }` shape its callers use. Changing what it does underneath moves every caller at once.
+
+- AC1: `runGsdTools` calls `runCli` in-process and returns the same shape. `runGsdToolsProcess` is the spawning version, and only process-contract files may import it.
+- AC2: `tests/cli-parity.process.test.cjs` runs a table of invocations through both and asserts equal exit code, stdout and stderr. The table has at least one success, one usage error and one handler failure for every top-level command (`hostCommandNames()` supplies the list, so a new command without rows fails the test).
+- AC3: a full-suite run is green with `runGsdTools` in-process. Any test that fails because it depended on a real process either moves to a `.process.test.cjs` file with that dependency named in its title, or is fixed.
+- AC4: the PR body records the summed `gsd-test` time of the 280 CLI-spawning files before and after.
+
+**Item 16 — Split the six command suites.** Depends on: item 15.
+Files: `tests/state.test.cjs`, `tests/phase.test.cjs`, `tests/roadmap.test.cjs`, `tests/config.test.cjs`, `tests/init.test.cjs`, `tests/custom-phase-readers.test.cjs`.
+
+- AC1: each file's logic cases run in-process, and its fixtures are built once in `before()` and copied per test.
+- AC2: cases that assert the process boundary move to a `.process.test.cjs` sibling. The sibling is the only part of the suite in the Windows and macOS tiers.
+- AC3: no case is deleted without a replacement, and each module's mutation score does not drop.
+- AC4: the six files' summed Linux time, 974 s today, is under 200 s.
+
+#### Phase B — installer and fixtures
+
+**Item 17 — One install per runtime per run.** Depends on: nothing.
+Files: `tests/helpers/install-shared.cjs`, the `*.install.test.cjs` files, `bin/install.js` (generated from its source).
+79 files run the installer and hold 26.8% of Linux time. On Windows a single installer spawn averages at least 2.8 s.
+
+- AC1: emitted-content tests call `install()` in-process (it is already exported) into a fixture built once per runtime and scope and shared through `createRuntimeFixtureCache`. A test that needs a changed tree copies the fixture.
+- AC2: the real-process installer runs once per runtime in one install-contract file, plus the tarball smoke test.
+- AC3: `fragment-single-edit-propagation.install.test.cjs` (575 s) builds its 18-runtime install once and derives each row from it.
+- AC4: summed Linux time of the install class drops from 33.2 min to under 10 min, and the count of installer spawns of 2 s or more on a Windows shard drops by at least 80%.
+
+**Item 18 — Git fixtures without git spawns.** Depends on: nothing.
+Files: `tests/fixtures/index.cjs`, `tests/helpers.cjs`.
+`createTempGitProject` runs six git commands per fixture, and there are about 7,200 git spawn sites.
+
+- AC1: a git fixture is a prebuilt repository directory copied with `fs.cpSync`. Building it costs zero spawns per test.
+- AC2: the template is built once per run by one spawn sequence, and its content is asserted by one test.
+- AC3: fixture builders run in `before()` or at module scope. A new ESLint rule, `local/no-fixture-build-in-test-body`, fails a temp-project builder called inside a test body or `beforeEach` when the file has more than one test; today's sites are fixed in the PR that adds it.
+
+#### Phase C — static checks leave the test lane
+
+**Item 19 — The static content lane.** Depends on: nothing. Amends [ADR-452](452-eslint-lint-harness.md) (see section 6).
+Files: `scripts/lint-*.cjs`, a new single-process runner `scripts/run-static-checks.cjs`, `package.json`, the 190 class-A test files listed in `docs/research/data/2026-11-18-test-file-classification.tsv`.
+
+- AC1: `lint:ci` stops being one `&&` chain of about 55 `node` processes. One runner loads every check as a module, runs them in one process, and reports every failure, not only the first.
+- AC2: each class-A test file is deleted and its assertions become a check in that runner, or an ESLint rule when the subject is JavaScript. The PR that deletes a file shows the new check failing on a seeded violation.
+- AC3: `portability-rule-disable-ban`, `fold-helper-shadowing` and `emitted-provenance` (126 s between them) are converted first.
+- AC4: parity checks between two repo artifacts are replaced by generating one side and checking it with the existing `gen-*.cjs --check` pattern. A hand-written parity check stays only where generation is impossible, and the check says why.
+- AC5: the 29 test cases that re-scan the real tree (`docs/research/data/2026-11-18-test-lint-duplicate-pairs.txt`) are deleted. The tests of each lint keep their fixture-based detection cases.
+- AC6: the static content lane runs once, on Linux, never on Windows or macOS, and finishes in under 90 s.
+
+**Item 20 — Tier enforcement.** Depends on: items 15 and 19.
+Files: `eslint-rules/`, `eslint.config.mjs`, `scripts/run-tests.cjs`, `scripts/lib/platform-conformance-tier.generated.cjs` and its generator, `.github/workflows/test.yml`.
+
+- AC1: `local/no-spawn-in-unit-test` fails any import of `child_process`, the process seam, `runGsdToolsProcess`, the installer runner or a git runner in a file that is not `.process.`, `.install.` or `.platform.`. It lands with an allowlist of the files still to convert, and the allowlist only shrinks.
+- AC2: `local/no-repo-content-assertion-in-test` fails a test that reads a tracked repo file outside `tests/fixtures/` and asserts on its content. It replaces the `allow-test-rule` exemption for product text (section 6).
+- AC3: the Windows and macOS tiers are generated from the filename suffixes. The evidence-based classifiers of [ADR-4593](4593-macos-conformance-tier-architecture.md) and [ADR-4641](4641-windows-selector-consolidation.md) are retired in the same PR, with a dated section in each.
+- AC4: the unit tier has a per-file ceiling of 5 s on Linux, enforced by item 4's ratchet. A unit file over it is slow for a reason the ratchet makes someone state.
+
+#### What this is expected to buy
+
+These are targets, set from the measurements. Each item records its own before and after.
+
+| Measure | Today | Target |
+|---|---|---|
+| Linux test time, summed over files | 123.7 min | under 45 min |
+| Windows conformance time, summed | 116.7 min | under 30 min |
+| Files that spawn a process | 540 | under 120 |
+| Static checks running as tests | 190 files | 0 |
+| Full-suite `gsd-test` run | all 61,443 tests, one process per file | the same tests, about a third of the wall-clock |
+
+When the summed Linux time is under 45 min, the Ubuntu lane drops from three shards to two, and the Windows lane from six to three. Sharding was the answer to a suite that could not be made faster; it is undone as the suite gets faster.
+
+### 6. Process rules
+
+The rules below are how work on this repo is done. They are amended here because problem 8 shows them costing more than they return, and because the owner has ruled that no existing rule is fixed. Each change replaces judgement applied late with a check applied early.
+
+**Item 21 — The correction ladder is the rule for every finding.** Depends on: nothing.
+Files: `CONTRIBUTING.md`, `CLAUDE.md`, the review directives.
+A finding from review, CI or a bug report is handled at the highest rung that works:
+
+1. Design: change the code so the mistake cannot be written.
+2. Deterministic check: an ESLint rule, a static check or a type.
+3. Verification: a test.
+4. Prose: a line in an instruction file, only when 1 to 3 are impossible, and the line says why.
+
+- AC1: `CONTRIBUTING.md` states the ladder. A review finding of a kind that has been raised before names the rung that will stop it recurring, and that work is part of the fix.
+- AC2: every rule in `CLAUDE.md` "Known defects and anti-patterns" and "Test rules and conventions" is listed with its current rung. Each prose-only rule gets a check, or a recorded reason why none is possible. The list lives in `docs/` and a static check fails when a rule is added to `CLAUDE.md` without a row.
+
+**Item 22 — Review is sized to risk, and ends.** Depends on: nothing. Amends the two-review rule in `CLAUDE.md` and the review directive.
+
+- AC1: a change confined to `tests/`, `scripts/`, `eslint-rules/`, `.github/` and `docs/` needs one isolated review pass. A change that touches shipped code (`src/`, `gsd-core/`, `bin/`, `agents/`, `commands/`, `hooks/`) needs the two passes it needs today.
+- AC2: only Blocker and Major findings block an approval. Minor and Nit findings are listed once. The author fixes them, and the reviewer checks the delta; no new full review round starts for them.
+- AC3: a finding that a lint could have caught is filed as a lint under item 21, not argued in the PR.
+- AC4: a review that reaches a third round on the same PR stops, and the maintainer decides between merging with a follow-up issue and taking the branch over.
+- AC5: the hooks that gate `gh pr review` and `gh pr create` are updated to this rule in the same PR as the text.
+
+**Item 23 — Failing-first proof at file scope.** Depends on: nothing. Amends the regression protocol in `CLAUDE.md` and `gsd-test-verify`.
+Proving that a new test fails does not need the other 61,442 tests.
+
+- AC1: `gsd-test` can run a named list of test files in its disposable container. If it cannot today, that is added first.
+- AC2: the failing-first step runs only the changed test files and records the failure the same way a full run records a verdict. The passing step is one full run on the commit that ships.
+- AC3: a change that adds tests and a fix in several steps needs one full run, on its final commit.
+
+**Item 24 — Exemptions name an issue, and the product-text exemption ends.** Depends on: item 19 for the second half. Amends [ADR-456](456-test-rigor-architecture.md) and `CONTEXT.md`.
+
+- AC1: one ESLint rule fails any `eslint-disable`, `allow-test-rule` or `allow-unbounded-subprocess` directive that carries no `#NNN` issue reference. Today's bare directives are fixed in that PR.
+- AC2: `CONTEXT.md` `RULESET.TESTS.no-source-grep.exemption` is removed when item 19 has converted the files that use it (113 of the 154 class-A4 files). A check of product text is a static check, so the exemption has nothing left to exempt.
+- AC3: a comment may explain code. It may not hold measurement logs or the history of a number. Run ids and measured tables live in `docs/research/data/`, and the comment links there. `local/max-comment-block-lines` enforces a ceiling of 15 lines, with today's longer blocks moved in the PR that adds it.
 
 ## Considered and rejected
 
@@ -259,11 +412,13 @@ Every item starts now. The phases are a priority order, not a queue: when agents
 
 ## Open questions this ADR does not settle
 
-None block the work. Each has a decision rule in an item above: static-tier gating (item 3), macOS concurrency (item 5b), a fourth Ubuntu shard (item 6), selection enforcement (item 10), type-aware lint (item 11), coverage placement, queue group size and property-test budgets (item 12).
+None, and nothing is deferred. Every item above has an issue and can start now. Where a choice depends on a measurement, the item carries the rule that decides it: static-tier gating (item 3), macOS concurrency (item 5b), a fourth Ubuntu shard (item 6), selection enforcement (item 10), type-aware lint (item 11), coverage placement, queue group size and property-test budgets (item 12).
 
 ## Done when
 
-- [ ] Items 1 through 13 are merged, or closed as rejected by their own decision rule with the evidence recorded below.
+- [ ] Items 1 through 24 are merged, or closed as rejected by their own decision rule with the evidence recorded below.
+- [ ] Summed Linux test time is under 45 min and summed Windows conformance time is under 30 min, from the committed timing tables.
+- [ ] No test file reads repo content to assert on it, and no unit-tier file spawns a process; both are held by ESLint rules with empty allowlists.
 - [ ] Over 20 `merge_group` runs, the median wall-clock is under 30 min and no job is cancelled at its cap.
 - [ ] Over 30 PR runs, no targeted-lane job exceeds 10 min.
 - [ ] `static-fast` median is under 60 s and has zero findings on `next`.
