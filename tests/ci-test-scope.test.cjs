@@ -9,7 +9,7 @@ const os = require('node:os');
 const yaml = require('js-yaml');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { parseArgs } = require('../scripts/run-tests.cjs');
@@ -17,6 +17,12 @@ const { parseArgs } = require('../scripts/run-tests.cjs');
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'ci-test-scope.cjs');
 const WORKFLOWS_DIR = path.join(ROOT, '.github', 'workflows');
+
+// The GITHUB_OUTPUT file as key/value pairs.
+function readOutputs(file) {
+  return Object.fromEntries(fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+}
 
 function scopeForAt(files, cwd) {
   const r = runNode([SCRIPT, '--files', files.join(' ')], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
@@ -88,9 +94,7 @@ describe('ci-test-scope.cjs', () => {
       });
       assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
       const result = JSON.parse(r.stdout);
-      const written = Object.fromEntries(fs.readFileSync(out, 'utf8').split(/\r?\n/).filter(Boolean)
-        .map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
-      assert.deepStrictEqual(written, {
+      assert.deepStrictEqual(readOutputs(out), {
         code_changed: String(result.code_changed),
         product_changed: String(result.product_changed),
         full_matrix: String(result.full_matrix),
@@ -99,6 +103,25 @@ describe('ci-test-scope.cjs', () => {
       });
     });
   }
+
+  // Push, merge-group and dispatch runs have no changed-file list: the real `scope` step of test.yml, run under
+  // bash for a push, must leave the zsh job skipped.
+  test('the scope step writes zsh_changed=false for a push event', (t) => {
+    const dir = createTempDir('ci-scope-step-');
+    t.after(() => cleanup(dir));
+    const out = path.join(dir, 'github-output');
+    const step = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8')).jobs.changes.steps.find(s => s.id === 'scope');
+    const file = path.join(dir, 'scope.sh');
+    fs.writeFileSync(file, `#!/usr/bin/env bash\n${step.run}\n`, { mode: 0o755 });
+    const r = runHook(file, [], {
+      interpreter: 'bash',
+      cwd: ROOT,
+      timeoutMs: PROBE_TIMEOUT_MS,
+      env: isolatedEnv({ home: dir, override: { EVENT_NAME: 'push', GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, 'summary') } }),
+    });
+    assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
+    assert.strictEqual(readOutputs(out).zsh_changed, 'false');
+  });
 
   // One parse of test.yml, one table: every guard property of the test-insert-shell job. A fail-open
   // install or run (`|| true`, `continue-on-error`, a step `if`), a dropped `needs`, or a dropped
@@ -122,9 +145,7 @@ describe('ci-test-scope.cjs', () => {
       ['install step command', steps[install]?.run, 'sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh'],
       ['steps with continue-on-error', steps.filter(s => 'continue-on-error' in s).length, 0],
       ['steps with if', steps.filter(s => 'if' in s).length, 0],
-      ['changes job exports zsh_changed', /steps\.scope\.outputs\.zsh_changed/.test(doc.jobs.changes.outputs.zsh_changed), true],
-      // Push, merge-group and dispatch runs have no changed-file list: the job stays skipped there.
-      ['non-PR runs skip the job', /echo "zsh_changed=false"/.test(doc.jobs.changes.steps.find(s => s.id === 'scope').run), true],
+      ['changes job exports zsh_changed', doc.jobs.changes.outputs.zsh_changed, '${{ steps.scope.outputs.zsh_changed }}'],
       ['required-tests needs the job', gate.needs.includes('test-insert-shell'), true],
       ['required-tests result env', gate.steps[0].env.TEST_INSERT_SHELL_RESULT, '${{ needs.test-insert-shell.result }}'],
     ];
