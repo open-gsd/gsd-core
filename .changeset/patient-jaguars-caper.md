@@ -1,6 +1,6 @@
 ---
 type: Fixed
-pr: 5190
+pr: 6312
 ---
 **`gsd-plan-checker` no longer calls queries the runtime does not register.** It guards research and summary file scans against an unset phase directory, reads task structure and displays its verdict from `verify.plan-structure`, and uses `frontmatter.get --field` with JSON error checks. (#5178)
 
