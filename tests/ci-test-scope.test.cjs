@@ -136,7 +136,8 @@ describe('ci-test-scope.cjs', () => {
     const gate = doc.jobs['required-tests'];
     const table = [
       ['job if', job.if, "needs.changes.outputs.zsh_changed == 'true'"],
-      ['job needs', [...job.needs].sort(), ['changes', 'preflight']],
+      // The `if` reads needs.changes.outputs; the preflight need is pinned by ci-pr-mergeability.test.cjs (GATED).
+      ['job needs changes', job.needs.includes('changes'), true],
       ['job continue-on-error', job['continue-on-error'], undefined],
       ['job runs-on', job['runs-on'], 'ubuntu-latest'],
       ['job timeout-minutes', job['timeout-minutes'], 10],
