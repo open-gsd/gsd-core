@@ -79,7 +79,7 @@ describe('#6213 execute-phase records the routed executor without a carried shel
   });
 });
 
-describe('#6213 the phase-level dispatch-isolation call surfaces the truncation warning', { skip: SKIP }, () => {
+describe('#6213 the dispatch-isolation calls that can truncate surface the warning', { skip: SKIP }, () => {
   const DISPATCH = 'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md';
 
   test('a warning the call writes to stderr reaches the orchestrator, and the raw value is still captured', () => {
@@ -90,6 +90,20 @@ describe('#6213 the phase-level dispatch-isolation call surfaces the truncation 
         'PHASE_NUMBER=02',
         'gsd_run() { echo "STUB-TRUNCATION-WARNING" >&2; printf \'{"isolation":"harness-worktree","held":false}\'; }',
       ],
+      probe: 'printf "RAW=%s RC=%s\\n" "$_ISOLATION_RAW" "$_ISOLATION_RC"',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stderr.includes('STUB-TRUNCATION-WARNING'), `the call's stderr must stay visible: ${r.stderr}`);
+    assert.equal(r.stdout.trim(), 'RAW=harness-worktree RC=0', 'the warning does not leak into the captured value');
+  });
+
+  test('the dispatch-isolation gate\'s unscoped query lets the same warning reach the orchestrator (#4904)', () => {
+    // dispatch-isolation-gate.md's query names no phase, so its record lists every phase's hinted executors
+    // and is the one most likely to be truncated; its warning must not be discarded.
+    const lines = span('gsd-core/references/dispatch-isolation-gate.md',
+      '_ISOLATION_JSON=$(gsd_run query dispatch-isolation', '_ISOLATION_RAW=${_ISOLATION_FIELDS% *}');
+    const r = runBash(lines, { stdout: '', rc: 0 }, {
+      preamble: ['gsd_run() { echo "STUB-TRUNCATION-WARNING" >&2; printf \'{"isolation":"harness-worktree","held":false}\'; }'],
       probe: 'printf "RAW=%s RC=%s\\n" "$_ISOLATION_RAW" "$_ISOLATION_RC"',
     });
     assert.equal(r.status, 0, r.stderr);

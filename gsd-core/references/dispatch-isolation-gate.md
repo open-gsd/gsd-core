@@ -30,7 +30,7 @@ read. It requires `gsd_run` to be defined (the standard shim preamble).
 # a degrade an earlier step recorded as `none` with `held: true` (see "A plain
 # re-query reports the held decision" below), and a second call could land
 # after that record went stale and answer the host capability instead.
-_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json 2>/dev/null)
+_ISOLATION_JSON=$(gsd_run query dispatch-isolation --json)
 _ISOLATION_RC=$?
 _ISOLATION_FIELDS=$(printf '%s' "$_ISOLATION_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write((j&&typeof j.isolation==="string"&&/^[a-z-]+$/.test(j.isolation)?j.isolation:"")+" "+(j&&j.held===true?"held:"+(Number.isSafeInteger(j.decidedAt)&&j.decidedAt>=0?j.decidedAt:""):"live"))}catch{process.stdout.write(" live")}})')
 _ISOLATION_RAW=${_ISOLATION_FIELDS% *}
