@@ -235,6 +235,61 @@ what the resolver derives without the base check (the host capability, or `none`
 `use_worktrees` opt-out), and a hold still applies to it. If it needs the base check, it runs
 that check in shell and forces the result, as the per-plan gate does for its submodule degrade.
 
+**The hold is a read-then-write with no lock.** A plain query reads the records, decides whether to
+hold, then writes. When it decided not to hold, a caller's forced `none` that lands between that read
+and its decision write is overwritten by that write; a query that holds writes no decision. The writers take no lock, so the hold narrows the race with a plain query; it does not
+close it.
+
+**A held query refreshes executor identity, never the decision (amendment, #4904 review
+2026-11-17).** Since #6220 the guards classify a dispatch as an executor dispatch by the executor
+types recent records name (`isExecutorDispatch`). A held query writes no decision record, so those
+names would stay as of the caller's write: a routed executor changed in the hold, another plan of a
+held phase, the all-phase list of an unscoped query, a plan or `agent_hint` added in the hold, or a
+record written without `--executor-type`. A flag-less specialist dispatch that `next` blocks with
+`harness_flag_missing` would be allowed for the rest of the hold. So a held query writes the identity
+it derives, and nothing else, to an executor-identity record:
+
+- **Where.** `.gsd/dispatch-isolation-identity/`, a sibling of `.gsd/dispatch-isolation/`, never inside
+  it: the keyed scan treats a file there that does not match its own phase/plan key as unusable and
+  fails classification closed. The directory sits in the tool-owned `.gsd/` and is in its
+  `.gitignore`; the writer refuses a linked record directory.
+- **Key and merge rule.** One file per query scope: `plan+<phase>+<plan>.json`,
+  `phase+<phase>.json`, or `all.json` for a query naming neither (`+` is outside the safe-key alphabet,
+  so no two scopes share a name). Each write is a full snapshot of that scope's derivation, through an
+  exclusive temp file and a rename, so a reader sees one whole snapshot. Two queries at the same scope
+  race on the rename and the file holds the snapshot renamed last: a derivation that read the plans
+  before an edit can replace one that read them after, until the next held query at that scope. The
+  reader takes the union of every recent record's names, decision and identity alike; neither kind
+  wins over the other.
+- **When.** Only on a held query. An unheld query's decision record carries the same fields, so it
+  writes none. Every decision write (an unheld or forced query, `record-dispatch-isolation`) removes
+  its scope's identity record once the scope's keyed record landed, so the guards read that decision
+  for the scope, as on `next` (`record-dispatch-isolation` carries only `--executor-type`, as it does
+  there); a snapshot otherwise lasts until the next held query at its scope rewrites it or it ages
+  out after 24 hours. A held query that cannot write its record (a phase or plan that is not a safe key, a
+  directory or an unwritable directory in the way) does not hold: it records its decision as an
+  unheld query on this branch does (the #4222 re-derivation included), rather than keep a hold the guards could not classify by, and says so on stderr (if that
+  decision write fails too, no decision is recorded, as on `next`). An empty
+  derivation (routing off, no hinted plans) is a valid snapshot and replaces the scope's previous one;
+  a name another recent record carries still classifies.
+- **Truncation.** The decision record's 64-name cap and its 4096-byte budget; names are dropped from
+  the end, `executor_types_truncated` says so, the reader maps it to `executorTypesTruncated` and
+  `isExecutorDispatch` fails closed. The held query's `--json` carries `executor_types_truncated` and
+  its stderr the warning. The record carries no `decided_by` or `decided_at`, so its budget holds a
+  few more names than the decision record's.
+- **Hostile input.** A recent `.json` entry that is oversize, a link, a hard link, not a regular file,
+  not JSON, of the wrong field types, stored under another scope's name, or stamped more than the
+  clock-skew allowance in the future sets `scanOverflow`: classification fails closed, it does not
+  ignore the record. A directory named `*.json` is skipped, as in the keyed scan; one at a scope's own
+  name stops that scope's held query from holding (above). The scan has the keyed scan's bounds (1024
+  entries, newest mtime first). Two phases that differ only in case share one file on a
+  case-insensitive volume, as their keyed records do.
+- **Reader.** `readSentinelAt` reads the records on its classify path only, in the shape
+  `isExecutorDispatch` already consumes, so the two guard hooks are unchanged. Enforcement, the
+  resolver's own-scope hold read and a `gsd-executor` dispatch never read them. The directory name,
+  cap and budget are literals in `hooks/lib/isolation-sentinel.js`, pinned to their owner,
+  `src/executor-type.cts`, by `tests/held-query-executor-identity.test.cjs`.
+
 ### Decision 3 — a copy that must exist is pinned by a parity test, never merely tolerated
 
 Decision 1's cold-load constraint means `hooks/lib/` carries deliberate mirrors of two
