@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 323,
+  "count": 325,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 61,
-    "SEAM": 50,
+    "SEAM": 52,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1315,6 +1315,16 @@
       "id": "SEAM.gate-verdict.owns",
       "klass": "SEAM",
       "value": "GateVerdict / GateResult (src/gate-verdict.cts) is the single value a check gate module returns; only the command router formats it (ADR-5057 §4, #5139)"
+    },
+    {
+      "id": "SEAM.git-commit-timeout.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/git-commit-timeout.property.test.cjs"
+    },
+    {
+      "id": "SEAM.git-commit-timeout.owns",
+      "klass": "SEAM",
+      "value": "commitTimeoutMs / isValidCommitTimeoutMs (src/git-commit-timeout.cts) are the single owners of the rule and default for git.commit_timeout_ms; every commit site reads the bound through commitTimeoutMs (#5231)"
     },
     {
       "id": "SEAM.git-query-readonly-seam.enforced-by",
