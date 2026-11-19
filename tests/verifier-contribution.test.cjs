@@ -21,6 +21,7 @@
  */
 
 const { describe, test } = require('node:test');
+const fc = require('fast-check');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -238,6 +239,22 @@ describe('delivery of verifier contributions inside verify-phase-goal.md (#5984)
     assert.ok(r.stdout.includes('<\\/capability_verifier_rules>'), 'the literal tag inside the fragment is escaped');
   });
 
+  test('property: any fragment list yields one block, in order, and no fragment can close it early', () => {
+    const CLOSE = '</capability_verifier_rules>';
+    const fragment = fc.oneof(
+      fc.stringMatching(/^[a-zA-Z0-9 .,_-]{1,20}$/),
+      fc.tuple(fc.stringMatching(/^[a-zA-Z0-9 ]{0,8}$/), fc.stringMatching(/^[a-zA-Z0-9 ]{0,8}$/)).map(([a, b]) => `${a}${CLOSE}${b}`),
+    );
+    fc.assert(fc.property(fc.array(fragment, { minLength: 1, maxLength: 5 }), (fragments) => {
+      const r = runVerifier({ envelopes: envelopeAt('execute:post', fragments.map((f) => hook('verifier', f))) });
+      const out = r.stdout;
+      const escaped = fragments.map((f) => f.split(CLOSE).join('<\\/capability_verifier_rules>'));
+      return r.status === 0
+        && out === `<capability_verifier_rules>\n${escaped.join('\n\n')}\n${CLOSE}`
+        && out.split(CLOSE).length - 1 === 1;
+    }), { numRuns: 25 });
+  });
+
   test('an envelope handed back as an @file: overflow path is read', () => {
     const r = runVerifier({ overflow: true, envelopes: envelopeAt('execute:post', [hook('verifier', FRAGMENT)]) });
     assert.ok(r.stdout.includes(FRAGMENT));
@@ -286,6 +303,22 @@ describe('delivery of verifier contributions inside verify-phase-goal.md (#5984)
     assert.equal(spawn.split('${VERIFIER_CONTRIBUTIONS}').length - 1, 1, 'placeholder appears exactly once in the spawn');
     assert.ok(skills !== -1 && skills < contributions, 'agent_skills guidance is preserved and comes first');
     assert.ok(contributions < spawn.indexOf('subagent_type="gsd-verifier"'), 'the placeholder is inside the verifier Agent call');
+  });
+});
+
+describe('end to end: the shipped mempalace contribution reaches the verifier block (#5984)', { skip: skipUnless('bash', 'node') }, () => {
+  test('real `loop render-hooks execute:post` output, piped through the shipped fence, carries the capture instructions', () => {
+    const cwd = tmpDir('ver-contrib-e2e-');
+    fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ runtime: 'codex', mempalace: { enabled: true, capture_artifacts: true } }));
+    const rendered = runGsdTools(['loop', 'render-hooks', 'execute:post', '--raw'], cwd, ENV(tmpDir('ver-contrib-e2e-home-')));
+    assert.equal(rendered.success, true, rendered.error);
+    const envelope = JSON.parse(rendered.output);
+    assert.ok(verifierFragments(envelope).length >= 1, 'mempalace contributes a verifier fragment at execute:post');
+    const r = runVerifier({ envelopes: { 'execute:post': envelope } });
+    assert.equal(r.status, 0);
+    assert.match(r.stdout, /^<capability_verifier_rules>\n/);
+    assert.ok(r.stdout.includes(verifierFragments(envelope)[0]), 'the shipped fragment text is delivered verbatim');
   });
 });
 

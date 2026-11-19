@@ -31,6 +31,7 @@ TDD_MODE=${TDD_MODE:-$(gsd_run loop render-hooks execute:post --active-cap tdd)}
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
 # #5984: capability rules addressed to this verifier (active `contribution` hooks, `into: verifier`, at execute:post). Advisory: any failure leaves the prompt without them and never blocks verification.
+# Hooks with kind == "contribution" reach an agent through that role's landing site: into: verifier here (#5984), into: code-reviewer in code-review.md (#4790).
 VERIFIER_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw 2>/dev/null) || VERIFIER_HOOKS_JSON=""
 if [[ "$VERIFIER_HOOKS_JSON" == @file:* ]]; then VERIFIER_HOOKS_JSON=$(cat "${VERIFIER_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
 # A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.

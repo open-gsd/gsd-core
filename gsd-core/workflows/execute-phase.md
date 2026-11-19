@@ -208,7 +208,7 @@ EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
 TDD_MODE=$(gsd_run loop render-hooks execute:post --active-cap tdd)
 ```
 
-A `kind == "contribution"` hook at this point is not dispatched from this envelope: with `into: code-reviewer` (#4790) `code-review.md` reads it itself and hands it to `gsd-code-reviewer`, and with `into: verifier` (#5984) the `verifier_dispatch` step hands it to `gsd-verifier`, each exactly once.
+A `contribution` hook at this point with `into: code-reviewer` (#4790) is not dispatched from this envelope: `code-review.md` reads it itself and hands it to `gsd-code-reviewer` exactly once.
 
 <step name="safe_resume_gate">
 Before trusting `STATE.md` or dispatching any executor, derive `CURRENT_PLAN_ID`

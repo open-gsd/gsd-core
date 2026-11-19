@@ -9,6 +9,8 @@
 
 Otherwise — after verifying this phase, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a phase.
 
+**Tool availability.** The verifier's default tools are Read, Write, Bash, Grep, Glob and Skill; the `mempalace_*` MCP calls below run only where your runtime exposes them to this agent. Otherwise take the headless path in step 3 and skip steps 2 and 4 (the queued mine files under deterministic drawer IDs).
+
 For each confirmed bug/issue resolved in this phase:
 
 1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.
