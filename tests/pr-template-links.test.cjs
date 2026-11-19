@@ -271,11 +271,12 @@ describe('next-ref existence and anchors (#5427)', () => {
     const seams = { linesOf: () => 1e10 };
     const found = (anchor) => unresolvedAnchors([`${view}#${anchor}`], 'tpl.md', seams);
     for (const anchor of ['L5C3', 'L5C3-L6C10', 'L5-L6C10', 'L5C3-L6', 'L99999999',
-      'L5C99999999', 'L999999999', 'L5C999999999']) {
+      'L5C99999999', 'L999999999', 'L5C999999999', 'L1-L99999999', 'L1-L999999999',
+      'L1-L2C99999999', 'L1-L2C999999999']) {
       assert.deepEqual(found(anchor), [], anchor);
     }
     for (const anchor of ['L5C', 'LC3', 'L5C-L6', 'L1000000000', 'L5C1000000000',
-      'L1-L1000000000']) {
+      'L1-L1000000000', 'L1-L2C1000000000']) {
       assert.deepEqual(found(anchor), [`CONTRIBUTING.md#${anchor}`], anchor);
     }
   });
@@ -289,7 +290,8 @@ describe('link classification (#5427)', () => {
       `${REPO}commits/main`, `${REPO}edit/main/CONTRIBUTING.md`,
       `${REPO}archive/main.zip`, `${REPO}commits/next/docs`, `${REPO}edit/next/x`,
       `${REPO}Blob/next/x`, `${REPO}bob/next/x`, `${REPO}blob/next/../x`,
-      `${REPO}blob/next/%2e%2e/x`, `${REPO}issues/&#46;&#46;/x`, `${REPO}issues/\\.\\./x`,
+      `${REPO}blob/next/%2e%2e/x`, `${REPO}blob/next/./x`, `${REPO}blob/next/%2e/x`,
+      `${REPO}issues/&#46;&#46;/x`, `${REPO}issues/\\.\\./x`,
       `${REPO}issues/../blob/main/x`, `${REPO}/blob/main/x`, `${REPO}blob/next//x`,
       `${REPO}blob//next/x`, `${REPO}/`, `${NEXT}CONTRIBUTING.md/`, `${REPO}tree/next/docs/`];
     assert.deepEqual(bad.filter(isBadLink), bad);
@@ -329,6 +331,7 @@ describe('readRepoFile (#5427)', () => {
     t.after(() => cleanup(dir));
     fs.writeFileSync(path.join(dir, 'secret.md'), '# secret\n');
     const rel = path.relative(ROOT, path.join(dir, 'secret.md'));
+    if (path.isAbsolute(rel)) return t.skip('the temp dir is on another drive than the repo');
     assert.ok(fs.existsSync(path.join(ROOT, rel)), rel);
     assert.throws(() => readRepoFile(rel), /no such file inside the repo/);
   });
