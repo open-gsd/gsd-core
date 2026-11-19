@@ -575,3 +575,15 @@ Measured locally before the change: `createFixture({ git: true })` took 66 ms, s
 
 **Not in this change.** Acceptance criterion 3 of item 18, the ESLint rule against building a fixture inside a test body, with its 3,939 sites. Copying made each of those builds cheap; whether the rule is still worth its churn is to be measured after this lands.
 
+### 2026-11-19 — Item 16: the six suites were already in-process; what was left was spawn wrappers and the tier line
+
+**What the measurement said.** A full run of `next` at `2bb91a8250` (after item 15; `gsd-test`, holodeck, linux-node24, 62,219 passed) put the six suites at 180.4 s of file time: state 56.7, phase 69.1, init 33.7, custom-phase-readers 10.3, roadmap 7.5, config 3.2. The 974 s in the issue was measured before item 15 made `runGsdTools` in-process, so acceptance criterion 4 (under 200 s) already held when item 16 started. The suites had few direct spawn sites (19 `runNode` or `runHook` calls) but they hid behind wrappers that many cases called: `recordSession` 61, `runTool` 30, `run` and `run2853` 47, `gsd` 18, `runSectionManifestCli` 16, `runPhaseComplete` 8. Each wrapper existed because `runGsdTools` keeps stderr only for a failed command, and these cases assert on a warning a successful command writes to stderr, or on stdout's exact bytes.
+
+**Decision.**
+
+1. `runGsdToolsCaptured(args, cwd, env)` returns `{ exitCode, stdout, stderr }` from the same in-process call as `runGsdTools`, with the same refusals. The spawn wrappers in the six suites call it. `GSD_TEST_CLI_MODE=process` runs it through the spawned CLI, so a suspected in-process difference can still be checked.
+2. A case moves to a `.process.test.cjs` sibling only when its subject is a process or git: an `ExitError` becoming an exit code with a JSON error on stderr, a reader meeting a named pipe (a hang a timeout isolates), the commit a STATE.md was written against, and phase allocation across linked worktrees. Titles and assertions did not change; the multiset of titles across each file and its sibling is 2,394 before and after.
+3. ESLint holds the six unit files to this: they cannot import `tests/helpers/process-seam.cjs` or call `runGsdToolsProcess`. The rule is a block of `no-restricted-syntax` in `eslint.config.mjs`. Git used only to build a repository a case needs stays allowed.
+4. The fixture template of criterion 1 was not applied. `createFixture()` measures 0.22 ms and a git fixture 4 to 7 ms since item 18; a copy of a template cannot be cheaper than the build it replaces.
+
+**Not in this change.** Criterion 2's "the only part in the Windows and macOS tiers": the conformance tier lists are chosen by content signals (`realpath`, case sensitivity, `process.platform`), which the unit files keep, so the OS lanes still run them until item 20 chooses tiers by filename. The cost of the 380 phase and state tests that take 100 to 1000 ms each in the container is not explained by a local measurement (a command is about 3 ms, with no fsync).
