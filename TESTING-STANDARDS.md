@@ -295,6 +295,39 @@ Real multi-process race tests are deleted once the corresponding deterministic c
 
 ---
 
+## Test architecture policies (ADR 6315)
+
+These come from the CI and test-architecture redesign (`docs/adr/6315-ci-redesign.md`, section 5).
+Each item of that epic adds the rule it places on test authors here, in the PR that makes the
+change (invariant I11).
+
+### A test does not start an external tool it is not testing
+
+A test of code that calls `npm`, `gh`, `docker` or another external tool does not start the real
+tool, unless the tool's own behavior is what the test asserts (the tarball smoke test and the
+install-contract tests do). The real tool's start-up time is outside the test's control: a cold
+`npm` on a Windows runner took longer than the 30 s a spawned `check-env.cjs` test allowed, and
+the merge queue ejected a docs-only PR for it (#6375).
+
+- **Logic** is tested in-process. The code takes its process runner as a required argument
+  (`collectChecks({ run })` in `scripts/check-env.cjs`; only the CLI entry passes `spawnSync`),
+  and the test passes a stand-in that returns a recorded result. The runner has no default, so a
+  test that forgets it gets a `TypeError`, not the real tool. The stand-in throws on a call the
+  test did not plan, and the test asserts the argument list the code sent, because that list is
+  the code's whole contract with the tool.
+- **The process boundary** (exit code, `--json` on stdout, which stream an error goes to) is
+  tested in a `*.process.test.cjs` file with a stand-in executable on the child's PATH and the
+  real tool removed from it: `isolatedPath({ without: ['npm', 'npm.cmd'] })`, then the stand-in's
+  directory in front. The stand-in logs its arguments; each test that reaches the tool reads the
+  log, which proves the stand-in answered. Ship both a POSIX script and a `.cmd`, since Windows runs `npm.cmd` through
+  the shell.
+- A script that runs its CLI at load cannot be tested in-process. Export the logic and run `main`
+  under `require.main === module`.
+
+Raising the spawn limit is not the fix (ADR-6315 invariant I4).
+
+---
+
 ## ESLint rule reference
 
 | Rule | Severity | What it catches |
