@@ -41,6 +41,7 @@ module.exports = {
   "tests/ci-conformance-pr-gating.test.cjs",
   "tests/ci-rebase-check.test.cjs",
   "tests/ci-test-scope.test.cjs",
+  "tests/claude-loader-env.test.cjs",
   "tests/claude-local-uninstall-settings-local.test.cjs",
   "tests/claude-md.test.cjs",
   "tests/claude-orchestration-4747.test.cjs",

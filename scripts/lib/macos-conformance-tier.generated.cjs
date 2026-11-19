@@ -44,6 +44,7 @@ module.exports = {
   "tests/ci-compact-v8-coverage.test.cjs",
   "tests/ci-conformance-pr-gating.test.cjs",
   "tests/ci-test-scope.test.cjs",
+  "tests/claude-loader-env.test.cjs",
   "tests/claude-md-path.test.cjs",
   "tests/claude-md.test.cjs",
   "tests/claude-orchestration-4747.test.cjs",
