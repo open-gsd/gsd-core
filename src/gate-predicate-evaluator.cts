@@ -28,6 +28,8 @@
 
 import path from 'node:path';
 import { capCodeUnits } from './code-unit-cap.cjs';
+import { escapeRegex } from './pattern.cjs';
+import { firstUnprovenMarker, splitsWithXargs } from './token-scanner.cjs';
 
 // ─── Public constants ─────────────────────────────────────────────────────────
 
@@ -43,8 +45,17 @@ const COMMAND_MAX_LENGTH = 4096;
 /** Predicate kinds this evaluator recognises (extensible — add to KIND_TABLE). */
 const EVALUATOR_KINDS = Object.freeze(['command-exit-zero', 'artifact-frontmatter-equals']);
 
-/** Placeholders interpolated into a declared command, in addition to sh's own vars. */
-const INTERPOLATION_VAR_NAMES = Object.freeze(['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']);
+/** The env name behind each PredicateContext key: the one place a placeholder name meets its value. */
+const ENV_CONTEXT_KEYS = Object.freeze({ GSD_PHASE_NUMBER: 'phaseNumber', GSD_PHASE_DIR: 'phaseDir', GSD_PHASE_REQ_IDS: 'phaseReqIds' } as const);
+
+/** Placeholders a declared command expands from the gate shell environment, in addition to its own vars. */
+const INTERPOLATION_VAR_NAMES = Object.freeze(Object.keys(ENV_CONTEXT_KEYS));
+
+/** The prefix of every GSD environment name. */
+const ENV_PREFIX = 'GSD_';
+
+/** The pre-#5482 spellings. They collide with ordinary shell variables, so a command that uses one is refused. */
+const LEGACY_VAR_NAMES = Object.freeze(INTERPOLATION_VAR_NAMES.map((name) => name.slice(ENV_PREFIX.length)));
 
 // ─── Types (internal; runtime API is the `export =` block) ────────────────────
 
@@ -65,7 +76,8 @@ interface BoundedShellResult {
 }
 
 interface PredicateDeps {
-  runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): BoundedShellResult;
+  /** `env` holds GSD_PHASE_NUMBER, GSD_PHASE_DIR and GSD_PHASE_REQ_IDS: the shell expands `${GSD_PHASE_*}` from it, so a value never becomes command text. */
+  runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number; env: Record<string, string> }): BoundedShellResult;
   /** All distinct matches for the artifact, in any order; `[]` when absent. Entries must be realpaths: the evaluator dedupes by string, so a symlink to one file counts once only if both names resolve to the same path. */
   findPhaseArtifact(phaseDir: string, artifactSuffix: string): string[];
   readFrontmatter(filePath: string): Record<string, unknown>;
@@ -79,16 +91,37 @@ interface PredicateResult {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const INTERPOLATION_RE = /\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/g;
+const namesPattern = (names: readonly string[]): string => `\\$\\{?(${names.map(escapeRegex).join('|')})\\b`;
+const PLACEHOLDER_RE = new RegExp(namesPattern(INTERPOLATION_VAR_NAMES));
+// Only the braced spelling was ever a GSD placeholder; a bare `$PHASE_DIR` is the gate's own shell variable.
+const LEGACY_PLACEHOLDER_RE = new RegExp(`\\$\\{(${LEGACY_VAR_NAMES.map(escapeRegex).join('|')})\\}`);
 
-/** Replace the three known ${PHASE_*} placeholders with context values (undefined => ''). */
-function interpolate(command: string, ctx: PredicateContext): string {
-  return command.replace(INTERPOLATION_RE, (_whole, name: string): string => {
-    if (name === 'PHASE_NUMBER') return ctx.phaseNumber ?? '';
-    if (name === 'PHASE_DIR') return ctx.phaseDir ?? '';
-    if (name === 'PHASE_REQ_IDS') return ctx.phaseReqIds ?? '';
-    return '';
-  });
+/**
+ * Throw when the command uses a pre-#5482 placeholder (`${PHASE_DIR}`), in any quoting form: GSD no
+ * longer sets it, so the shell would expand an empty or foreign value. The message names the replacement.
+ */
+function assertNoLegacyPlaceholder(command: string): void {
+  const name = LEGACY_PLACEHOLDER_RE.exec(command)?.[1];
+  if (name !== undefined) {
+    throw new Error(`gate command uses \${${name}}, which GSD no longer sets: write "\${${ENV_PREFIX}${name}}" (double-quoted); sh expands it from the environment`);
+  }
+}
+
+/**
+ * Throw unless every placeholder is provably in plain double quotes. Where `sh` does not expand it, the gate
+ * would test the literal text `${GSD_PHASE_DIR}` and pass on a path that does not exist; unquoted, the value
+ * splits into words. The throw is the gate's existing "unevaluable" path (a `usage` failure). The check is a
+ * conservative refusal (`firstUnprovenMarker`, the shared shell scanner, which lists the refused forms), so it
+ * also refuses some correct commands: assign the placeholder to a variable first. A double-quoted placeholder in
+ * the text that `eval`, `trap` or `sh -c` parses again is refused too: the value would run as code.
+ */
+function assertEveryPlaceholderDoubleQuoted(command: string): void {
+  const name = firstUnprovenMarker(command, PLACEHOLDER_RE);
+  if (name !== undefined) {
+    // Only a gate that runs xargs without a delimiter option needs the xargs spelling: name it for that gate alone.
+    const xargsHint = splitsWithXargs(command) ? `; a gate that runs xargs needs xargs -0 or -d, as in printf "%s\\0" "\${${name}}" | xargs -0 ls` : '';
+    throw new Error(`gate command uses \${${name}} where this check cannot prove sh expands it as one plain value: write "\${${name}}" in plain double quotes, outside the text that eval, trap or sh -c parses again (read it from the environment in single-quoted text: sh -c 'test -d "$${name}"'; or pass it as an argument: sh -c 'test -d "$1"' sh "\${${name}}"; for eval or trap assign d="\${${name}}" first and write "$d" in single-quoted text${xargsHint}); docs/reference/gate-predicates.md ("Phase environment values") lists the refused forms and the rewrites`);
+  }
 }
 
 /**
@@ -132,8 +165,11 @@ function evaluateCommandExitZero(
     timeoutMs = Math.floor(rawTimeout * 1000);
   }
 
-  const interpolated = interpolate(command, ctx);
-  const res = deps.runBoundedShell({ command: interpolated, cwd: ctx.cwd, timeoutMs });
+  // GSD pastes nothing into the command text: every value reaches `sh` as an environment value (unset => '').
+  const env = Object.fromEntries(Object.entries(ENV_CONTEXT_KEYS).map(([name, key]) => [name, ctx[key] ?? '']));
+  assertNoLegacyPlaceholder(command);
+  assertEveryPlaceholderDoubleQuoted(command);
+  const res = deps.runBoundedShell({ command, cwd: ctx.cwd, timeoutMs, env });
   const hasStderr = isNonEmptyString(res.stderr);
 
   if (res.timedOut) {
@@ -143,7 +179,7 @@ function evaluateCommandExitZero(
       // The command's head (program name, leading args) identifies it; only stderr is tail-capped.
       message: hasStderr
         ? prefixedCap(prefix, res.stderr, 'tail')
-        : prefixedCap(prefix, interpolated, 'head'),
+        : prefixedCap(prefix, command, 'head'),
       details: { kind: 'command-exit-zero', timedOut: true, signal: res.signal },
     };
   }
@@ -291,7 +327,6 @@ function evaluatePredicate(predicate: unknown, context: unknown, deps: unknown):
 export = {
   evaluatePredicate,
   evaluateCommandExitZero,
-  interpolate,
   COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS,
   COMMAND_MAX_OUTPUT_CHARS,
   COMMAND_MAX_LENGTH,

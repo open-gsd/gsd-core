@@ -16,9 +16,17 @@
  * Per RULESET.TESTS.property-based: interpolation bijection property (fast-check).
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
+const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const { buildPredicateDeps } = require('../gsd-core/bin/lib/gate-predicate.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { oracleLines, runShellText } = require('./helpers/oracle-shell.cjs');
 
 const {
   evaluatePredicate,
@@ -26,6 +34,7 @@ const {
   COMMAND_MAX_OUTPUT_CHARS,
   COMMAND_MAX_LENGTH,
   EVALUATOR_KINDS,
+  INTERPOLATION_VAR_NAMES,
 } = require('../gsd-core/bin/lib/gate-predicate-evaluator.cjs');
 
 /**
@@ -163,27 +172,461 @@ describe('evaluatePredicate — command-exit-zero timeout', () => {
 // ─── interpolation ────────────────────────────────────────────────────────────
 
 describe('evaluatePredicate — interpolation', () => {
-  test('${PHASE_DIR}, ${PHASE_NUMBER}, ${PHASE_REQ_IDS} are substituted', () => {
+  test('${GSD_PHASE_DIR}, ${GSD_PHASE_NUMBER}, ${GSD_PHASE_REQ_IDS} reach the shell as environment values and the text is not rewritten', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${PHASE_DIR} ${PHASE_NUMBER} ${PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}" "${GSD_PHASE_REQ_IDS}"' },
       baseCtx,
       { runBoundedShell: shell.run },
     );
-    assert.equal(
-      shell.calls[0].command,
-      'check /proj/.planning/phases/03-x 03 R-1',
-    );
+    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}" "${GSD_PHASE_REQ_IDS}"');
+    assert.deepEqual(shell.calls[0].env, {
+      GSD_PHASE_DIR: '/proj/.planning/phases/03-x',
+      GSD_PHASE_NUMBER: '03',
+      GSD_PHASE_REQ_IDS: 'R-1',
+    });
   });
 
-  test('undefined context var => empty string (no leftover placeholder)', () => {
+  test('a value with a shell-significant character is never pasted: the shell expands it from the environment', () => {
+    const shell = fakeShell({ exitCode: 0 });
+    const phaseDir = '/proj/.planning/phases/01-$(touch pwned) x';
+    evaluatePredicate(
+      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}"' },
+      { ...baseCtx, phaseDir },
+      { runBoundedShell: shell.run },
+    );
+    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_DIR}" "${GSD_PHASE_NUMBER}"');
+    assert.equal(shell.calls[0].env.GSD_PHASE_DIR, phaseDir);
+  });
+
+  test('the pre-#5482 spelling is refused in every quoting form, and the message names the GSD_ replacement', () => {
+    const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a', phaseReqIds: 'R-1' };
+    const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
+    for (const name of ['PHASE_NUMBER', 'PHASE_DIR', 'PHASE_REQ_IDS']) {
+      const named = { message: new RegExp(`uses \\$\\{${escapeRegex(name)}\\}.*write "\\$\\{GSD_${escapeRegex(name)}\\}"`) };
+      for (const form of [`'\${${name}}'`, `"\${${name}}"`, `\${${name}}`]) {
+        assert.throws(() => run(`test -n ${form}`), named, form);
+      }
+    }
+    assert.doesNotThrow(() => run('test -n "${PHASE_DIR_OTHER}"'));
+    assert.doesNotThrow(() => run('PHASE_DIR=build; test -d "$PHASE_DIR"'));
+  });
+
+  describe('every placeholder must be provably in plain double quotes (a conservative refusal)', () => {
+    const ctx = { cwd: '/proj', phaseNumber: '01', phaseDir: '/a b', phaseReqIds: 'R-1' };
+    const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, { runBoundedShell: fakeShell({ exitCode: 0 }).run });
+    // `@` is the braced placeholder `${NAME}`, `%` the bare `$NAME`; each row runs once per placeholder name.
+    const spell = (template, name) => template.replaceAll('@', `\${${name}}`).replaceAll('%', `$${name}`);
+    const REFUSED = [
+      'echo @',
+      'echo %',
+      "echo '@'",
+      "echo '%'",
+      "echo $'@'",
+      'echo \\@',
+      'echo "\\@"',
+      'echo "$$@"',
+      'echo "$%"',
+      'echo "$(ls -A "@")"',
+      'echo "`ls "@"`"',
+      'echo "`echo \'@\'`"',
+      'cat <<EOF\n@\nEOF',
+      "cat <<'EOF'\n@\nEOF",
+      'cat <<<"@"',
+      '# it\'s\ntest -d "@"',
+      'echo ok # it\'s\ntest -d "@"',
+      'echo ok;# it\'s\ntest -d "@"',
+      'echo "${x:-\'@\'}"',
+      'echo "${x:-"@"}"',
+      "echo \"${GSD_PHASE_DIR#'@'}\"",
+      'for id in %; do :; done',
+      'test -d "@" && for id in @; do :; done',
+      // A double-quoted placeholder in the text a consumer parses again: the value would run as code.
+      'sh -c "test -e @"',
+      'sh -ec "test -e @"',
+      'bash -o pipefail -c "test -e @"',
+      '/bin/sh -c -e "test -e @"',
+      'sh -c -o pipefail "test -e @"',
+      'bash -eo pipefail -c "test -e @"',
+      'bash -euo pipefail -c "test -e @"',
+      'bash -c -eo pipefail "echo @"',
+      'bash -oe pipefail -c "test -e @"',
+      'bash -oo pipefail errexit -c "test -e @"',
+      'bash --noprofile -c "test -e @"',
+      'sh -c +e "test -e @"',
+      'eval "test -e @"',
+      'eval echo "@"',
+      'trap "rm @" EXIT',
+      'printf x | xargs sh -c "test -e @"',
+      'find . -exec sh -c "test -e @" \\;',
+      'echo "@" | xargs ls',
+      'echo "@" | xargs -n 10 ls',
+      'echo "@" | xargs --replace ls -0',
+      'test -d "@" && echo "@" | xargs ls',
+      `sh -${'e'.repeat(15)}c "test -e @"`,
+      `sh -${'e'.repeat(16)}c "test -e @"`,
+      `sh -${'e'.repeat(17)}c "test -e @"`,
+      `sh -${'e'.repeat(40)}c "test -e @"`,
+      '"eval" "test -e @"',
+      '\\sh -c "test -e @"',
+      "'bash' -c \"test -e @\"",
+      'eval echo 2>&1 "@"',
+      'sh 2>&1 -c "test -e @"',
+      'trap 2>&1 "rm @" EXIT',
+      'eval echo >| out "@"',
+      'eval echo <(true) "@"',
+      'eval echo 0<&3 "@"',
+      'eval cat <&3 "@"',
+      'sh -ac "test -e @"',
+      'sh -zc "test -e @"',
+      'sh -Ac "test -e @"',
+      'sh -Zc "test -e @"',
+      'sh -Cc "test -e @"',
+      'sh > out -c "test -e @"',
+      'sh 2> /dev/null -c "test -e @"',
+      'sh < /dev/null -c "test -e @"',
+      'sh >| out -c "test -e @"',
+      'ksh -c "test -e @"',
+      'zsh -c "test -e @"',
+      'ash -c "test -e @"',
+      'echo "@" | xargs -ed ls',
+      'echo "@" | xargs -id ls',
+      'echo "@" | xargs -ld ls',
+      'echo "@" | xargs -L 1 ls',
+      'echo "@" | xargs -E x ls',
+      'echo "@" | xargs -a f ls',
+      'echo "@" | xargs --max-procs 2 ls',
+      'echo "@" | xargs --max-lines 1 ls',
+      'echo "@" | xargs --max-chars 9 ls',
+      'echo "@" | xargs --arg-file f ls',
+      'echo "@" | xargs -- ls',
+      'echo "@" | xargs -- -0',
+      'if true; then eval "@"; fi',
+      '{ trap "@" EXIT; }',
+      'A="x y" eval "@"',
+      'A="" eval "@"',
+      '! eval "@"',
+      'while true; do eval "@"; done',
+      'if false; then :; elif eval "@"; then :; fi',
+      'if false; then :; else eval "@"; fi',
+      'until eval "@"; do :; done',
+      'while eval "@"; do :; done',
+      'time eval "@"',
+      'echo a | xargs ls "@"',
+      'if true; then xargs ls "@"; fi',
+      'A="x y" xargs ls "@"',
+      "sh -c 'echo \"$1\" | xargs ls' sh \"@\"",
+      // Single-quoted script text is read on its own: an unquoted or `$(`-nested use in it splits or runs, and a marker in dead text is no variable.
+      "sh -c 'test -d @'", "sh -c 'test -d %'", "eval 'echo @'", "trap 'rm @' EXIT", "sh -c 'echo \"$(ls \"@\")\"'", "sh -c 'echo \"@\" | xargs ls'", "sh -c 'echo \"@\"' | xargs ls",
+      "sh -c 'x' sh '@'", "sh script.sh '@'", "eval true; echo '@'", "echo '@' | sh -c 'cat'", "sh -c 'x'; echo '@'",
+      "echo '\"@\"'", "sh -c 'x' sh '\"@\"'", "sh script.sh '\"@\"'",
+      'echo "$\\\n(echo \'@\')"',
+      "cat <\\\n<'EOF'\n\"@\"\nEOF",
+    ];
+    // Each row makes `sh` print its placeholder in plain double quotes, so the real shell proves the check keeps them.
+    const ALLOWED = [
+      'echo "@"',
+      'echo "%"',
+      'echo "@/x" "@"',
+      'echo "it\'s" "@"',
+      'echo "a # b" "@"',
+      'echo \\" "@"',
+      'echo "${x:-@}"',
+      'echo "@"; echo \'single\' "it\'s"',
+      'd="@"; echo "$d"',
+      'd="@"; echo "$(echo "$d")"',
+      'ids="@"; for id in $ids; do echo "$id"; done',
+      "sh -c 'echo \"$1\"' sh \"@\"",
+      'd="@"; eval \'echo "$d"\'',
+      // A single-quoted script word, or an argument of eval or trap, reads the variable from the environment of the inner shell.
+      "sh -c 'echo \"@\"'", "sh -c 'echo \"%\"'", "bash -ec 'echo \"@\"'", "eval 'echo \"@\"'", "trap 'echo \"@\"' EXIT", "find . -prune -exec sh -c 'echo \"@\"' \\;",
+      'echo "@" | tr "\\n" "\\0" | xargs -0 echo',
+      'echo "@" | xargs -0r echo',
+      'echo "@" | xargs -r0 echo',
+      'echo "@" | xargs -n 1 -0 echo',
+      'echo "@"; xargs -s 100 -0 echo < /dev/null',
+      'echo "@"; xargs -L 1 -0 echo < /dev/null',
+      'echo "@"; xargs -E x -0 echo < /dev/null',
+      'echo "@"; xargs -a /dev/null -0 echo',
+      'echo "@"; xargs --max-procs 2 -0 echo < /dev/null',
+      'echo "@"; xargs --max-lines 1 -0 echo < /dev/null',
+      'echo "@"; xargs --max-chars 99999 -0 echo < /dev/null',
+      'echo "@"; xargs --arg-file /dev/null -0 echo < /dev/null',
+      'grep -c x /dev/null; echo "@"',
+      'eval true && echo "@"',
+      'eval true & echo "@"',
+      'eval true <&0; echo "@"',
+      'echo eval "@"',
+      'echo trap "@"',
+      'grep -q xargs "@"; echo "@"',
+      'echo "uses xargs" "@"',
+      'A="eval x" echo "@"',
+      'if true; then echo eval "@"; fi',
+      'echo x >&2; eval true; echo "@"',
+      "trap 'rm -f tmp' EXIT; echo \"@\"",
+      'sh -c true; echo "@"',
+      'echo "@"; bash scripts/check.sh -c "@"',
+      'echo "@"; bash -eo pipefail check.sh "@"',
+      'echo "@"; bash -oo pipefail errexit check.sh -c "@"',
+      'echo "@"; bash --noprofile -c "a" "@"',
+      'echo "@"; sh -c "a" -c "@"',
+      'echo "@"; bash -c[ "echo @"',
+      'echo "@"; bash \'-c`\' "echo @"',
+      'echo "@"; bash -c{ "echo @"',
+      'echo "@"; bash -[c "echo @"',
+      'echo "@"; bash \'-`c\' "echo @"',
+      'echo "@"; bash -{c "echo @"',
+      'grep -q "xargs rm" "@"; echo "@"',
+      'echo "@"; sh -c',
+      'echo "@"; sh -c "" "@"',
+      'echo "@"; "" eval "@"',
+      'echo "@"; xargs -0 -- echo < /dev/null',
+      'echo \\\n"@"',
+      'echo "$\\\nd" "@"',
+    ];
+    const unprovable = (name) => new RegExp(`uses \\$\\{${escapeRegex(name)}\\} where this check cannot prove sh expands it as one plain value: write "\\$\\{${escapeRegex(name)}\\}" in plain double quotes`);
+
+    test('a placeholder outside plain double quotes, or after a construct the check does not read, throws and names it', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        for (const template of REFUSED) {
+          assert.throws(() => run(spell(template, name)), unprovable(name), JSON.stringify(template));
+        }
+      }
+    });
+    test('a quote inside ${...} that holds a % operator is refused, and the same operator without the quote is not', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        const command = String.raw`echo "${'$'}{${name}%'${'$'}{${name}}'}"`;
+        assert.ok(command.includes(`${name}%'`), command);
+        assert.throws(() => run(command), unprovable(name), command);
+        const unquoted = String.raw`echo "${'$'}{${name}%x}" "${'$'}{${name}}"`;
+        assert.doesNotThrow(() => run(unquoted), unquoted);
+      }
+    });
+    test('a similar name, a construct without a placeholder and a non-GSD variable throw nothing', () => {
+      for (const command of [
+        "echo '${GSD_PHASE_DIR_X}' '$GSD_PHASE_DIRX' '${HOME}'",
+        'echo "$(date)" `date` $HOME ${HOME}',
+        "cat <<'EOF'\nx\nEOF",
+        '# a comment\necho ok',
+        "echo \"${GSD_PHASE_DIR_X}\" $'x'",
+      ]) {
+        assert.doesNotThrow(() => run(command), JSON.stringify(command));
+      }
+    });
+    // The rows come from the docs (ADR-2008, gate-predicates.md). `hazard` says what a real shell does with the refused
+    // spelling when the value is hostile: `words` (the value splits or globs) or `code` (the value runs as a command). The
+    // two tests after the parity test show it in a shell, so each row guards a hazard that the shell makes. The two
+    // refusals that guard none (nested quotes in `$(...)`, a comment line before the command) are in CONSERVATIVE below.
+    const PAIRS = [
+      { hazard: 'words', refused: 'for id in $GSD_PHASE_REQ_IDS; do :; done', rewrite: 'ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do :; done' },
+      { hazard: 'words', refused: 'sh -c \'test -d $GSD_PHASE_DIR\'', rewrite: 'sh -c \'test -d "$GSD_PHASE_DIR"\'' },
+      { hazard: 'code', refused: 'sh -c "test -d ${GSD_PHASE_DIR}"', rewrite: 'sh -c \'test -d "$1"\' sh "${GSD_PHASE_DIR}"' },
+      { hazard: 'code', refused: 'eval "test -d \\"${GSD_PHASE_DIR}\\""', rewrite: 'd="${GSD_PHASE_DIR}"; eval \'test -d "$d"\'' },
+      { hazard: 'code', refused: 'trap "rm ${GSD_PHASE_DIR}" EXIT', rewrite: 'd="${GSD_PHASE_DIR}"; trap \'rm "$d"\' EXIT' },
+      { hazard: 'words', refused: 'echo "${GSD_PHASE_DIR}" | xargs ls', rewrite: 'printf \'%s\\0\' "${GSD_PHASE_DIR}" | xargs -0 ls' },
+    ];
+    const CONSERVATIVE = [
+      { refused: 'test -z "$(ls -A "${GSD_PHASE_DIR}")"', rewrite: 'd="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"' },
+      { refused: '# note\ntest -d "${GSD_PHASE_DIR}"', rewrite: 'test -d "${GSD_PHASE_DIR}" # note' },
+    ];
+    test('each rewrite that ADR-2008 and gate-predicates.md give for a refused command passes, and the original throws', () => {
+      for (const { refused, rewrite } of [...PAIRS, ...CONSERVATIVE]) {
+        assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
+        assert.doesNotThrow(() => run(rewrite), rewrite);
+      }
+    });
+    // A `words` row reaches the shell as a probe that prints each word: the docs spelling with a printing body.
+    const SPLITS = {
+      [PAIRS[0].refused]: { name: 'GSD_PHASE_REQ_IDS', value: 'R-1 R-2', probe: String.raw`for id in $GSD_PHASE_REQ_IDS; do echo "[$id]"; done`, pieces: ['[R-1]', '[R-2]', ''] },
+      [PAIRS[1].refused]: { name: 'GSD_PHASE_DIR', value: 'a b', probe: String.raw`sh -c 'printf "%s\n" $GSD_PHASE_DIR'`, rewriteProbe: String.raw`sh -c 'printf "%s\n" "$GSD_PHASE_DIR"'`, pieces: ['a', 'b', ''] },
+      [PAIRS[5].refused]: { name: 'GSD_PHASE_DIR', value: 'a b', probe: String.raw`echo "${'$'}{GSD_PHASE_DIR}" | xargs printf '%s\n'`, rewriteProbe: String.raw`printf '%s\0' "${'$'}{GSD_PHASE_DIR}" | xargs -0 printf '%s\n'`, pieces: ['a', 'b', ''] },
+    };
+    test('the real shell splits the hostile value in each docs spelling that reads it as words, and in none of the rewrites', () => {
+      for (const { refused } of PAIRS.filter((pair) => pair.hazard === 'words')) {
+        assert.ok(SPLITS[refused], `a real-shell probe for ${refused}`);
+        const { name, value, probe, rewriteProbe, pieces } = SPLITS[refused];
+        const env = isolatedEnv({ home: os.tmpdir(), override: { [name]: value } });
+        assert.throws(() => run(probe), /cannot prove sh expands it/, probe);
+        assert.deepEqual(oracleLines(probe, { interpreter: 'sh', env }), pieces, probe);
+        if (rewriteProbe) {
+          assert.doesNotThrow(() => run(rewriteProbe), rewriteProbe);
+          assert.deepEqual(oracleLines(rewriteProbe, { interpreter: 'sh', env }), [value, ''], rewriteProbe);
+        }
+      }
+    });
+    describe('a docs spelling that the shell parses again', () => {
+      let dir;
+      beforeEach(() => { dir = createTempDir(); });
+      afterEach(() => { cleanup(dir); });
+      test('the real shell runs the hostile value as a command in each, and in none of the rewrites', () => {
+        const env = isolatedEnv({ home: dir, override: { GSD_PHASE_DIR: 'x$(touch PWNED)' } });
+        const ran = (command) => {
+          runShellText(command, { interpreter: 'sh', env, cwd: dir });
+          const created = fs.existsSync(path.join(dir, 'PWNED'));
+          cleanup(path.join(dir, 'PWNED'));
+          return created;
+        };
+        for (const { refused, rewrite } of PAIRS.filter((pair) => pair.hazard === 'code')) {
+          assert.equal(ran(refused), true, `positive control: the shell runs the value in ${refused}`);
+          assert.equal(ran(rewrite), false, rewrite);
+        }
+      });
+    });
+    describe('a conservative refusal is documented with its rewrite', () => {
+      let dir;
+      beforeEach(() => { dir = createTempDir(); });
+      afterEach(() => { cleanup(dir); });
+      // The phase directory is `a b` in three states. The exit status of a spelling depends on the state, so equal
+      // statuses for the refused text and its rewrite show that the shell reads both the same way.
+      const STATES = [
+        (phaseDir) => fs.mkdirSync(phaseDir),
+        (phaseDir) => { fs.mkdirSync(phaseDir); fs.writeFileSync(path.join(phaseDir, 'f'), ''); },
+        () => {},
+      ];
+      test('the evaluator refuses each, a real shell runs it with the status of its rewrite', () => {
+        const env = isolatedEnv({ home: dir, override: { GSD_PHASE_DIR: 'a b' } });
+        const status = (command, state) => {
+          cleanup(path.join(dir, 'a b'));
+          state(path.join(dir, 'a b'));
+          return runShellText(command, { interpreter: 'sh', env, cwd: dir }).exitCode;
+        };
+        for (const { refused, rewrite } of CONSERVATIVE) {
+          assert.throws(() => run(refused), /cannot prove sh expands it/, refused);
+          const statuses = STATES.map((state) => status(refused, state));
+          assert.deepEqual(statuses, STATES.map((state) => status(rewrite, state)), refused);
+          assert.ok(new Set(statuses).size > 1, `positive control: the status of ${refused} depends on the directory`);
+        }
+      });
+    });
+    test('only the refusal of a gate that runs xargs names the xargs -0 spelling, and a path-spelled xargs is refused too', () => {
+      for (const refused of ['echo "${GSD_PHASE_DIR}" | xargs ls', 'echo "${GSD_PHASE_DIR}" | /usr/bin/xargs ls']) {
+        assert.throws(() => run(refused), /xargs -0/, refused);
+      }
+      for (const refused of ['echo ${GSD_PHASE_DIR}', "echo '${GSD_PHASE_DIR}'", 'sh -c "test -d ${GSD_PHASE_DIR}"']) {
+        assert.throws(() => run(refused), (error) => /cannot prove sh expands it/.test(error.message) && !/xargs/.test(error.message), refused);
+      }
+      assert.doesNotThrow(() => run('echo "${GSD_PHASE_DIR}" | /usr/bin/xargs --delimiter=x ls'));
+    });
+    test('the beads ship gate (gsd-beads-i7e7) in its migrated spelling passes the check', () => {
+      const beads = '_B="${GSD_HOME:-${HOME:-}}"; case "$_B" in /?*) ;; *) echo "gsd-beads: no absolute GSD_HOME or HOME" >&2; exit 1;; esac; exec python3 -I "$_B/.gsd/capabilities/beads/scripts/sync.py" ship-gate "${GSD_PHASE_NUMBER}"';
+      assert.doesNotThrow(() => run(beads));
+    });
+    test('every ALLOWED row passes the check', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        for (const template of ALLOWED) {
+          assert.doesNotThrow(() => run(spell(template, name)), JSON.stringify(template));
+        }
+      }
+    });
+    test('a cluster whose neighbour of a letter is `@` (the char before `A`) is no -c cluster', () => {
+      // `@` is the placeholder of the rows above, so these texts are written with the char code.
+      const at = String.fromCharCode(64);
+      for (const command of [`bash -c${at} "echo \${GSD_PHASE_DIR}"`, `bash -${at}c "echo \${GSD_PHASE_DIR}"`]) assert.doesNotThrow(() => run(command), command);
+    });
+    test('a backslash-newline pair joins its lines after an odd run of backslashes only (0 to 3), so a `#` after it is a comment only after an even run', () => {
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        for (const backslashes of [0, 1, 2, 3]) {
+          const command = spell(`echo a${'\\'.repeat(backslashes)}\n#b "@"`, name);
+          if (backslashes % 2 === 1) assert.doesNotThrow(() => run(command), JSON.stringify(command));
+          else assert.throws(() => run(command), unprovable(name), JSON.stringify(command));
+        }
+      }
+    });
+    test('the real shell expands every allowed row: it prints what the same row prints with the value written out', () => {
+      const VALUES = { GSD_PHASE_NUMBER: 'SENT-NUM', GSD_PHASE_DIR: 'SENT-DIR', GSD_PHASE_REQ_IDS: 'SENT-REQ' };
+      const env = isolatedEnv({ home: os.tmpdir(), override: VALUES });
+      for (const name of INTERPOLATION_VAR_NAMES) {
+        for (const template of ALLOWED) {
+          const written = spell(template, name).replaceAll(`\${${name}}`, VALUES[name]).replaceAll(`$${name}`, VALUES[name]);
+          const expected = oracleLines(written, { interpreter: 'sh', env });
+          assert.notDeepEqual(expected, [''], `${JSON.stringify(template)} prints something`);
+          assert.deepEqual(oracleLines(spell(template, name), { interpreter: 'sh', env }), expected, JSON.stringify(template));
+        }
+      }
+    });
+  });
+
+  describe('a gate run by the real shell', () => {
+    let dir;
+    beforeEach(() => { dir = createTempDir(); });
+    afterEach(() => { cleanup(dir); });
+
+    test('a double-quoted gate sees the phase values, even with shell syntax in them', () => {
+      const phaseDir = '/tmp/x $(touch PWNED) `id` y';
+      const ctx = { cwd: dir, phaseNumber: '07', phaseDir, phaseReqIds: 'R-1' };
+      const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, ctx, buildPredicateDeps());
+      assert.equal(run(`test "\${GSD_PHASE_NUMBER}" = 07 && test "\${GSD_PHASE_DIR}" = '${phaseDir}'`).block, false);
+      assert.equal(run('test "${GSD_PHASE_NUMBER}" = 08').block, true);
+      // Negative proof: the `$(touch PWNED)` in the value ran as no command in the gate's working directory.
+      assert.equal(fs.existsSync(path.join(dir, 'PWNED')), false);
+    });
+  });
+
+  // One row per consumer that parses its argument as shell again. `@` is the placeholder. The refused spelling pastes
+  // the value into that text; the supported one hands it over as a later argument or a variable.
+  describe('a consumer that re-parses its argument never runs the phase directory name', () => {
+    const PAYLOAD_DIR = 'x$(touch PWNED)';
+    const CONSUMERS = [
+      ['eval', 'eval "test -e \\"@/BLOCKER\\""', 'd="@"; eval \'test -n "$d"\''],
+      ['sh -c', 'sh -c "test -e @/BLOCKER"', 'sh -c \'test -n "$1"\' sh "@"'],
+      ['bash -c', 'bash -c "test -e @/BLOCKER"', 'bash -c \'test -n "$1"\' bash "@"'],
+      ['bash -eo pipefail -c', 'bash -eo pipefail -c "test -e @/BLOCKER"', 'bash -eo pipefail -c \'test -n "$1"\' bash "@"'],
+      ['bash -c -eo pipefail', 'bash -c -eo pipefail "test -e @/BLOCKER"', 'bash -c -eo pipefail \'test -n "$1"\' bash "@"'],
+      // An EXIT trap's status never changes the shell's, so the supported trap bodies write TRAPPED when they read the value.
+      ['trap', 'trap "test -e @/BLOCKER" EXIT', 'd="@"; trap \'test -n "$d" && touch TRAPPED\' EXIT'],
+      ['xargs sh -c', 'echo x | xargs sh -c "test -e @/BLOCKER"', 'printf "x\\0" | xargs -0 sh -c \'test -n "$1"\' sh "@"'],
+      ['find -exec sh -c', 'find . -prune -exec sh -c "test -e @/BLOCKER" \\;', 'find . -prune -exec sh -c \'test -n "$1"\' sh "@" \\;'],
+    ];
+    const spell = (template) => template.replaceAll('@', '${GSD_PHASE_DIR}');
+    const marker = (dir) => fs.existsSync(path.join(dir, 'PWNED'));
+    let control;
+    let guarded;
+    beforeEach(() => { control = createTempDir(); guarded = createTempDir(); });
+    afterEach(() => { cleanup(control); cleanup(guarded); });
+
+    test('the variable read from the environment in single-quoted text is data for each consumer, and the real shell finds it set', () => {
+      const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, { cwd: guarded, phaseNumber: '01', phaseDir: PAYLOAD_DIR, phaseReqIds: 'R-1' }, buildPredicateDeps());
+      for (const template of ['eval \'test -n "@"\'', 'sh -c \'test -n "@"\'', 'bash -c \'test -n "@"\'']) {
+        assert.equal(run(spell(template)).block, false, template);
+        assert.equal(marker(guarded), false, template);
+      }
+      assert.equal(run(spell('sh -c \'test -z "@"\'')).block, true, 'the inner shell reads the value from its environment');
+    });
+
+    test('trap: the trap body reads the value from the environment (an unset variable writes no TRAPPED)', () => {
+      const run = (phaseDir) => evaluatePredicate({ kind: 'command-exit-zero', command: spell('trap \'test -n "@" && touch TRAPPED\' EXIT') }, { cwd: guarded, phaseNumber: '01', phaseDir, phaseReqIds: 'R-1' }, buildPredicateDeps());
+      assert.equal(run('').block, false);
+      assert.equal(fs.existsSync(path.join(guarded, 'TRAPPED')), false, 'with an empty value the body writes nothing');
+      assert.equal(run(PAYLOAD_DIR).block, false);
+      assert.equal(fs.existsSync(path.join(guarded, 'TRAPPED')), true);
+      assert.equal(marker(guarded), false);
+    });
+
+    for (const [consumer, refused, supported] of CONSUMERS) {
+      test(`${consumer}: the real shell runs the payload from the refused spelling, the evaluator refuses it and creates nothing`, () => {
+        const env = isolatedEnv({ home: control, override: { GSD_PHASE_DIR: PAYLOAD_DIR } });
+        runShellText(spell(refused), { interpreter: 'sh', env, cwd: control });
+        assert.equal(marker(control), true, 'positive control: this spelling executes the directory name');
+
+        const run = (command) => evaluatePredicate({ kind: 'command-exit-zero', command }, { cwd: guarded, phaseNumber: '01', phaseDir: PAYLOAD_DIR, phaseReqIds: 'R-1' }, buildPredicateDeps());
+        assert.throws(() => run(spell(refused)), /cannot prove sh expands it as one plain value/);
+        assert.equal(marker(guarded), false);
+        assert.equal(run(spell(supported)).block, false, 'the supported spelling runs and passes');
+        assert.equal(fs.existsSync(path.join(guarded, 'TRAPPED')), consumer === 'trap', 'only the trap row writes TRAPPED, and only when it read the value');
+        assert.equal(marker(guarded), false);
+      });
+    }
+  });
+
+  test('undefined context var => empty string, in the text and in the environment', () => {
     const shell = fakeShell({ exitCode: 0 });
     evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'check ${PHASE_REQ_IDS}' },
+      { kind: 'command-exit-zero', command: 'check "${GSD_PHASE_REQ_IDS}"' },
       { cwd: '/proj' },
       { runBoundedShell: shell.run },
     );
-    assert.equal(shell.calls[0].command, 'check ');
+    assert.equal(shell.calls[0].command, 'check "${GSD_PHASE_REQ_IDS}"');
+    assert.deepEqual(shell.calls[0].env, { GSD_PHASE_DIR: '', GSD_PHASE_NUMBER: '', GSD_PHASE_REQ_IDS: '' });
   });
 
   test('foreign ${HOME} placeholder left untouched (shell interprets)', () => {
@@ -510,7 +953,7 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
   test('strings without the 3 placeholders pass through unchanged', () => {
     fc.assert(
       fc.property(
-        fc.string({ maxLength: 40 }).filter((s) => s.trim().length > 0 && !/\$\{(PHASE_NUMBER|PHASE_DIR|PHASE_REQ_IDS)\}/.test(s)),
+        fc.string({ maxLength: 40 }).filter((s) => s.trim().length > 0 && !/\$\{(GSD_PHASE_NUMBER|GSD_PHASE_DIR|GSD_PHASE_REQ_IDS)\}/.test(s)),
         (cmd) => {
         const shell = fakeShell({ exitCode: 0 });
         evaluatePredicate(
@@ -525,19 +968,23 @@ describe('evaluatePredicate — interpolation property (fast-check)', () => {
     );
   });
 
-  test('every placeholder is fully replaced (no leftover ${PHASE_*})', () => {
-    fc.assert(
-      fc.property(fc.string({ maxLength: 20 }), (noise) => {
-        const cmd = `${noise} ${noise}`;
-        const shell = fakeShell({ exitCode: 0 });
-        evaluatePredicate(
-          { kind: 'command-exit-zero', command: `\${PHASE_DIR}${cmd}\${PHASE_NUMBER}` },
-          baseCtx,
-          { runBoundedShell: shell.run },
-        );
-        assert.doesNotMatch(shell.calls[0].command, /\$\{PHASE_(DIR|NUMBER|REQ_IDS)\}/);
-      }),
-      { numRuns: 100 },
-    );
-  });
+  // The ctx field behind each placeholder: one loop covers every name, so a new placeholder cannot skip the property.
+  const CTX_FIELD = { GSD_PHASE_NUMBER: 'phaseNumber', GSD_PHASE_DIR: 'phaseDir', GSD_PHASE_REQ_IDS: 'phaseReqIds' };
+
+  for (const name of INTERPOLATION_VAR_NAMES) {
+    test(`${name}: any value reaches the environment and never the command text`, () => {
+      fc.assert(
+        fc.property(fc.string({ maxLength: 40 }), (value) => {
+          const shell = fakeShell({ exitCode: 0 });
+          evaluatePredicate(
+            { kind: 'command-exit-zero', command: `x "\${${name}}"` },
+            { ...baseCtx, [CTX_FIELD[name]]: value },
+            { runBoundedShell: shell.run },
+          );
+          assert.equal(shell.calls[0].env[name], value);
+          assert.equal(shell.calls[0].command, `x "\${${name}}"`);
+        }),
+      );
+    });
+  }
 });

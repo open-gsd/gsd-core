@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * #4483: `gsd_run check predicate` resolves ${PHASE_DIR}/${PHASE_NUMBER}/${PHASE_REQ_IDS} in a
+ * #4483: `gsd_run check predicate` passes GSD_PHASE_DIR/GSD_PHASE_NUMBER/GSD_PHASE_REQ_IDS to a
  * command-exit-zero gate from the --phase-dir/--phase-number/--phase-req-ids flags the calling
  * workflow passes. A dispatch line that omits a value the same workflow already holds makes a
- * capability gate silently resolve that placeholder to ''. These workflow dispatch lines are the
+ * capability gate silently see that variable as ''. These workflow dispatch lines are the
  * installed contract the orchestrating LLM follows, so the contract is asserted on the lines.
  */
 

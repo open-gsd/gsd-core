@@ -701,6 +701,7 @@ const EXPECTED_REASON_OUTCOME_3912 = {
   pick_output_not_json: 'UNAVAILABLE',
   summary_extract_unparseable: 'UNAVAILABLE',
   verification_status_invalid: 'UNAVAILABLE',
+  milestone_gate_blocked: 'UNAVAILABLE',
   usage: 'USAGE',
   unknown: 'FAIL',
 };
@@ -713,7 +714,7 @@ function expectedErrorCode3912(reasonValue, version) {
   return CODE_FOR_3912.get(outcome);
 }
 
-describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 32-member enum', () => {
+describe('#3912 A1/B1: error() declares from ERROR_REASON, exhaustive over the 33-member enum', () => {
   afterEach(() => {
     resolveContractVersion({ argv: ['node', 'x'], env: {} }); // restore v1 default
   });

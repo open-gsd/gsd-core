@@ -96,9 +96,9 @@ describe('evaluatePredicate + production deps — command-exit-zero e2e', () => 
     assert.match(res.message, /1/);
   });
 
-  test('interpolation reaches the real shell ($PHASE_NUMBER via flag context)', () => {
+  test('interpolation reaches the real shell ($GSD_PHASE_NUMBER via flag context)', () => {
     const res = evaluatePredicate(
-      { kind: 'command-exit-zero', command: 'test "${PHASE_NUMBER}" = "07" && true || false' },
+      { kind: 'command-exit-zero', command: 'test "${GSD_PHASE_NUMBER}" = "07" && true || false' },
       { cwd: process.cwd(), phaseNumber: '07' },
       deps,
     );
@@ -184,7 +184,7 @@ describe('partitionPredicateArgs (#4130 follow-up)', () => {
 // (src/gate-predicate.cts) with no containment validation. Both predicate
 // kinds read/interpolate that value: `artifact-frontmatter-equals` resolves it
 // as `targetDir` for `findPhaseArtifact`, and `command-exit-zero` interpolates
-// it into `${PHASE_DIR}` in the shelled-out command. These tests reproduce the
+// it into `${GSD_PHASE_DIR}` in the shelled-out command. These tests reproduce the
 // issue's exact repro and prove the boundary is currently unconfined.
 
 describe('check predicate --phase-dir — containment boundary (#4354)', () => {
@@ -232,12 +232,12 @@ describe('check predicate --phase-dir — containment boundary (#4354)', () => {
     );
   });
 
-  test('[RED #4354] a command-exit-zero predicate interpolating ${PHASE_DIR} with an outside --phase-dir must also be rejected', () => {
+  test('[RED #4354] a command-exit-zero predicate interpolating ${GSD_PHASE_DIR} with an outside --phase-dir must also be rejected', () => {
     fs.writeFileSync(path.join(outsideDir, 'marker.txt'), 'outside-marker\n');
 
     const predicate = JSON.stringify({
       kind: 'command-exit-zero',
-      command: 'test -f "${PHASE_DIR}/marker.txt"',
+      command: 'test -f "${GSD_PHASE_DIR}/marker.txt"',
     });
 
     const result = runGsdTools(
@@ -349,13 +349,13 @@ describe('check predicate --phase-dir — containment boundary (#4354)', () => {
     );
   });
 
-  test('[#4652] a relative --phase-dir interpolates ${PHASE_DIR} as the resolved ABSOLUTE path, not the relative value', () => {
+  test('[#4652] a relative --phase-dir interpolates ${GSD_PHASE_DIR} as the resolved ABSOLUTE path, not the relative value', () => {
     const phaseDir = path.join(projDir, '.planning', 'phases', '05-x');
     fs.writeFileSync(path.join(phaseDir, 'marker.txt'), 'marker\n');
 
     const predicate = JSON.stringify({
       kind: 'command-exit-zero',
-      command: 'echo "${PHASE_DIR}" > "${PHASE_DIR}/interpolated.txt"',
+      command: 'echo "${GSD_PHASE_DIR}" > "${GSD_PHASE_DIR}/interpolated.txt"',
     });
 
     const result = runGsdTools(
@@ -368,7 +368,7 @@ describe('check predicate --phase-dir — containment boundary (#4354)', () => {
     assert.strictEqual(
       interpolated,
       fs.realpathSync(phaseDir),
-      `${'${PHASE_DIR}'} must interpolate the resolved absolute path, not the relative --phase-dir value`,
+      `${'${GSD_PHASE_DIR}'} must interpolate the resolved absolute path, not the relative --phase-dir value`,
     );
   });
 

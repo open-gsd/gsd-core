@@ -54,7 +54,7 @@ A capability declares a `command-exit-zero` gate under the existing
     "check": {
       "predicate": {
         "kind": "command-exit-zero",
-        "command": "node scripts/check.sh \"${PHASE_DIR}\"",
+        "command": "node scripts/check.sh \"${GSD_PHASE_DIR}\"",
         "timeout": 30
       }
     },
@@ -76,7 +76,7 @@ A capability declares a `command-exit-zero` gate under the existing
 | cwd | Project root (the runtime `cwd`) | Matches the user's working context; the same root existing `check.query` gates operate from |
 | Environment | Inherit process env | The command runs as the user, on the user's machine, in the project they are working on — no sandbox boundary is crossed vs. the user's own shell. Override via the command itself (`env VAR=x ...`) |
 | Timeout | Default 30s; overridable per-gate | Bounded execution is non-negotiable; an unbounded gate could hang the loop forever |
-| Interpolation | `${PHASE_NUMBER}`, `${PHASE_DIR}`, `${PHASE_REQ_IDS}` substituted from gate context; undefined → `''`; all other `${X}` left untouched for `sh` to interpret | Parity with the context existing `check.query` gates already receive |
+| Interpolation | `GSD_PHASE_NUMBER`, `GSD_PHASE_DIR` and `GSD_PHASE_REQ_IDS` are set in the gate shell's environment from the gate context (undefined → `''`); no value is substituted into the command text, and every other `${X}` is left for `sh` to interpret. History: the first revision substituted `${PHASE_NUMBER}`, `${PHASE_DIR}` and `${PHASE_REQ_IDS}`; see "Amendment (2026-11-18)". | Parity with the context existing `check.query` gates already receive |
 | Result mapping | exit 0 → `block:false`; non-zero → `block:true`; timeout (SIGTERM) → `block:true` (`timed_out`); `sh` missing (ENOENT, exit 127) → `block:true` | Fail-closed: every non-zero outcome blocks. A blocking gate with `block:true` halts per the existing two-step gate contract |
 | Output cap | stderr/stdout tail embedded in `message` trimmed to 2000 chars | Keeps the `GATE_RESULT` payload context-bounded |
 
@@ -159,3 +159,22 @@ hiding the mechanism.
 Recorded as a dated section because ADRs here are append-only. The Output cap row above reads as superseded on this one point.
 
 The 2000-character cap on the whole `message`, prefix included, is unchanged. What changed is the end that survives: the evaluator now keeps the tail of stderr or stdout. On a timeout with empty or whitespace-only stderr it keeps the head of the command, so the program name survives. Whitespace-only stderr counts as empty, so a non-zero exit then shows stdout.
+
+## Amendment (2026-11-18): placeholders are environment values (#5482)
+
+The Interpolation row above describes the first revision, which pasted the values into the command text. A directory name that held shell syntax then ran as a command. The gate shell now receives `GSD_PHASE_NUMBER`, `GSD_PHASE_DIR` and `GSD_PHASE_REQ_IDS` as environment values, in addition to the inherited process environment (the Environment row). The `GSD_` prefix keeps them apart from ordinary user shell variables. This follows the maintainer ruling on #5318.
+
+GSD pastes no value into the command text; the command reaches `sh` unchanged, so a gate double-quotes the variable (`"${GSD_PHASE_DIR}"`).
+
+The old names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS` are no longer set. The evaluator throws for a command that uses one (`${PHASE_DIR}`), in single, double or no quotes, and the gate takes its `onError` path (`unevaluable`). The message names the replacement. Migration: `test -n '${PHASE_NUMBER}'` becomes `test -n "${GSD_PHASE_NUMBER}"`. The beads ship gate (gsd-beads-i7e7) migrates to `$GSD_PHASE_NUMBER`.
+
+The evaluator throws (`unevaluable`) unless every `GSD_PHASE_*` variable is provably in plain double quotes, outside any text that a consumer parses again. It follows only `'`, `"`, a backslash and `${...}` depth, so it refuses what it cannot read: a variable that is unquoted, single-quoted (except as the next sentence says), escaped by a backslash or written `$$GSD_PHASE_DIR`, and a variable after `$(`, a backtick, `<<`, `$'`, a quote inside `${...}`, or a `#` that starts a word. A single-quoted variable is read, not refused, when its text is the script word of `sh -c` or the argument of `eval` or `trap`: the inner shell inherits the environment, so the value never becomes script text, and the walk checks that text on its own (a bare `$GSD_PHASE_DIR` inside it splits the value and is refused). It also refuses a double-quoted variable in the text that `eval`, `trap` or `sh -c` parses again (`sh` stands for `bash`, `dash`, `ksh`, `zsh` and `ash` too, and for the shell that `xargs` and `find -exec` start): the outer shell has already pasted the value into that text, so a directory name such as `x$(touch PWNED)` would run as a command. A command that runs `xargs` without a delimiter option (`-0`, `-d`, `--null` or `--delimiter`) is refused for any variable, because `xargs` splits and unquotes what it reads. This follows the maintainer reviews of 2026-11-08 ("Throw unless every non-inert placeholder is provably in the double-quote state") and 2026-11-18 (refuse "a gate that passes a placeholder inside the argument of a re-parsing consumer"), and it refuses some commands that are correct. The fix is to assign the variable first, in plain double quotes, and use the shell variable where the refused construct needs it. Every later use of the copy is double-quoted too, because `d="${GSD_PHASE_DIR}"; ... $d` splits the value again:
+
+- `d="${GSD_PHASE_DIR}"; test -z "$(ls -A "$d")"` replaces `test -z "$(ls -A "${GSD_PHASE_DIR}")"`.
+- `ids="${GSD_PHASE_REQ_IDS}"; for id in $ids; do ...; done` replaces `for id in $GSD_PHASE_REQ_IDS`; the word split is now the author's own.
+- `sh -c 'test -d "$GSD_PHASE_DIR"'` replaces `sh -c 'test -d $GSD_PHASE_DIR'`; the child shell reads the variable from its environment and the double quotes keep the value one word. `sh -c 'test -d "$1"' sh "${GSD_PHASE_DIR}"` replaces `sh -c "test -d ${GSD_PHASE_DIR}"`; the value is a later argument, which the child shell reads as data.
+- `d="${GSD_PHASE_DIR}"; eval 'test -d "$d"'` replaces `eval "test -d \"${GSD_PHASE_DIR}\""`; the text that `eval` parses holds `$d`, never the value. `trap` takes the same spelling: `d="${GSD_PHASE_DIR}"; trap 'rm "$d"' EXIT`.
+- `printf '%s\0' "${GSD_PHASE_DIR}" | xargs -0 ls` replaces `echo "${GSD_PHASE_DIR}" | xargs ls`.
+- `test -d "${GSD_PHASE_DIR}" # note` replaces a comment line before the variable.
+
+A fifth dispatch site joins the three generic workflow sites listed under Evaluation path and the generic `ship:pre` site (#3559): the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase when the phases are readable; when they cannot be read, only an `onError: halt` gate refuses (one block, phase `*`) and the others warn.

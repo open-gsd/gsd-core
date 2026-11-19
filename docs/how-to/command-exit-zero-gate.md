@@ -33,13 +33,13 @@ the project root as its cwd and the inherited process environment.
 node "${GSD_CAP_DIR}/checks/pre-ship.js"
 ```
 
-You may interpolate three loop-context placeholders directly into the command:
+The command can read three loop-context environment variables. Write each one in plain double quotes (`"${GSD_PHASE_DIR}"`). A use that is not provably in plain double quotes reports `unevaluable`; assign the value to a variable first and double-quote every use of that variable. The same holds for a use inside the text that `eval`, `trap` or `sh -c` parses again: read the variable there from the environment in single quotes (`sh -c 'test -d "$GSD_PHASE_DIR"'`; the check reads that text on its own, so `$GSD_PHASE_DIR` without double quotes inside it is refused), pass the value as an argument (`sh -c 'test -d "$1"' sh "${GSD_PHASE_DIR}"`) or write `$d` in single quotes. A command that runs `xargs` without a delimiter option (`-0`, `-d`, `--null` or `--delimiter`) is refused for any use, because `xargs` splits and unquotes its input. [gate-predicates](../reference/gate-predicates.md) lists the refused forms and shows the rewrites. The old names `PHASE_NUMBER`, `PHASE_DIR` and `PHASE_REQ_IDS` are no longer set. A command that writes one in the braced form (`${PHASE_DIR}`) is refused, and the message names the replacement. A bare `$PHASE_DIR` is the gate's own shell variable and runs. Migration: `'${PHASE_NUMBER}'` becomes `"${GSD_PHASE_NUMBER}"`.
 
-| Placeholder | Meaning |
+| Variable | Meaning |
 |---|---|
-| `${PHASE_NUMBER}` | the active phase number (e.g. `03`) |
-| `${PHASE_DIR}` | the active phase directory |
-| `${PHASE_REQ_IDS}` | the phase's requirement ids |
+| `GSD_PHASE_NUMBER` | the active phase number (e.g. `03`) |
+| `GSD_PHASE_DIR` | the active phase directory |
+| `GSD_PHASE_REQ_IDS` | the phase's requirement ids |
 
 Anything else (`${HOME}`, `$VAR`, etc.) is left for `sh` to interpret against
 the inherited env.
@@ -58,7 +58,7 @@ config key with `when`:
       "check": {
         "predicate": {
           "kind": "command-exit-zero",
-          "command": "node \"${GSD_CAP_DIR}/checks/pre-ship.js\" \"${PHASE_DIR}\"",
+          "command": "node \"${GSD_CAP_DIR}/checks/pre-ship.js\" \"${GSD_PHASE_DIR}\"",
           "timeout": 30
         }
       },
@@ -96,7 +96,7 @@ into a loop point:
 
 ```bash
 gsd_run check predicate \
-  --predicate '{"kind":"command-exit-zero","command":"node checks/pre-ship.js \"${PHASE_DIR}\"","timeout":30}' \
+  --predicate '{"kind":"command-exit-zero","command":"node checks/pre-ship.js \"${GSD_PHASE_DIR}\"","timeout":30}' \
   --phase-dir ".planning/phases/03-my-phase" \
   --phase-number "03" \
   --raw
@@ -124,6 +124,17 @@ dispatches the evaluator automatically — no further wiring needed.
 ```bash
 gsd_run loop render-hooks ship:pre --raw
 ```
+
+A blocking `ship:pre` predicate gate (except `security` and `broken-windows`,
+which `ship.md` enforces itself) also guards the milestone close:
+`milestone complete --confirm` re-checks it once per milestone phase when the phases are readable (with
+`${GSD_PHASE_NUMBER}`/`${GSD_PHASE_DIR}` set to that phase) and refuses while it
+blocks; when they cannot be read, only an `onError: halt` gate refuses (one
+block) and the others warn. `--force` does not bypass it, and `--dry-run` runs it
+too: `would_refuse` lists every gate the close would refuse on, and
+`gate_warnings` lists gates skipped without refusing, so an empty `would_refuse`
+with a non-empty `gate_warnings` is not "no open work". Your command therefore
+runs again at close, once per phase, so keep it read-only and idempotent.
 
 ## Gotchas
 
