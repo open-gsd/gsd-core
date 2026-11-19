@@ -1896,6 +1896,50 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
       assertBlocked(runEntry(command), 'two readings on one budget', TOO_COMPLEX);
     });
 
+    // The budget's edge, in process with the budgets set small (RULESET.TESTS
+    // boundary-coverage). With an `env -S` option every reading runs: the reading
+    // before #5514 charges the command's characters once (its spawn check charges
+    // none, as on next), each of the six splitting readings charges them twice (the
+    // scan and the spawn check), and every reading's two tokenizes count the
+    // separators, so the readings together spend 13 times the characters and 14
+    // times the separators. One reading's share is far below that, so these rows
+    // sit on the budget the readings share. At the total the command is allowed;
+    // one less and it is denied as command-too-complex.
+    const { scanBashReadings } = require(HOOK_PATH);
+    const SHARED = `env -S true; ${'x;'.repeat(1000)}`;
+    const SHARED_SEPARATORS = 1001;
+    const codeOf = ({ block }) => (block === null ? null : block.code);
+    test('the env -S readings together spend 13 times the characters and 14 times the separators', () => {
+      assert.equal(codeOf(scanBashReadings(SHARED)), null);
+      assert.deepEqual(workSpent(), { scan: 13 * SHARED.length, reader: 0, separators: 14 * SHARED_SEPARATORS, exhausted: false });
+    });
+    for (const [label, delta, code] of [['limit - 1', -1, 'command-too-complex'], ['limit', 0, null], ['limit + 1', 1, null]]) {
+      test(`the shared character budget at ${label}`, () => {
+        assert.equal(codeOf(scanBashReadings(SHARED, 13 * SHARED.length + delta)), code);
+      });
+      test(`the shared separator budget at ${label}`, () => {
+        assert.equal(codeOf(scanBashReadings(SHARED, undefined, 14 * SHARED_SEPARATORS + delta)), code);
+      });
+    }
+
+    // The same edge for any number of separators, with and without an env -S
+    // option: without one only the reading before #5514 runs, and it spends the
+    // characters once and the separators twice.
+    test('property: each budget is met exactly at the readings\' total, and one less denies', () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 0, max: 300 }), fc.boolean(), (n, split) => {
+          const command = `${split ? 'env -S true' : 'true'}; ${'x;'.repeat(n)}`;
+          const chars = (split ? 13 : 1) * command.length;
+          const separators = (split ? 14 : 2) * (n + 1);
+          assert.equal(codeOf(scanBashReadings(command, chars)), null);
+          assert.equal(codeOf(scanBashReadings(command, chars - 1)), 'command-too-complex');
+          assert.equal(codeOf(scanBashReadings(command, undefined, separators)), null);
+          assert.equal(codeOf(scanBashReadings(command, undefined, separators - 1)), 'command-too-complex');
+        }),
+        { seed: 5514, numRuns: 100 },
+      );
+    });
+
     // With no env -S option no later reading can name a read, so a block that is not a
     // read or a launch is emitted at once, as `next` emits it, before the spawn check runs.
     test('with no env -S option, a block that is not a read or a launch is emitted as next emits it', () => {
