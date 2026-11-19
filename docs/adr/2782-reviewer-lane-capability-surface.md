@@ -445,7 +445,17 @@ and sequences it last. It should be revisited only with its own ADR and its own 
 |---|---|---|
 | `command-exists` | `binary` | `command -v <binary>` |
 | `command-capability` | `binary`, `needle`, `timeoutMs` | `<binary> --help` bounded, matched against `needle` |
-| `http-reachable` | `hostConfigKey`, `path`, `timeoutMs` | Bounded GET; reachable ⇒ available |
+| `http-reachable` | `hostConfigKey`, `path`, `timeoutMs` | Bounded GET; configured host: reachable ⇒ available; built-in default host: available only on a 2xx OpenAI-style models listing (#5963) |
+
+`http-reachable` distinguishes **configured** from **default** hosts (#5963). A host the user named through
+`hostConfigKey` keeps the original rule: any HTTP answer (401 behind an auth proxy, 404, 3xx) proves a
+server is there, and what runs there is the user's call. A host that is only the descriptor's
+`defaultHost` was never chosen, and any unrelated local service answers *some* status on `:8080`,
+`:1234` or `:11434`; reachable ⇒ available would send the review prompt (repository content) to it.
+For a default host the probe therefore requires a 2xx answer whose body is an OpenAI-style models
+listing (`object: "list"`, `data` an array of entries with a string `id`) — the shape llama.cpp, LM Studio
+and Ollama each document for `GET /v1/models`. Transport failure is unreachable under both rules, and
+redirects are never followed under either.
 
 `command-exists` alone is **structurally insufficient**, and the evidence is concrete: `kimi` is
 claimed by both Kimi Code CLI (Node) and the legacy Python kimi-cli — which is a separate,

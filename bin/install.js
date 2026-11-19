@@ -8780,6 +8780,19 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     return;
   }
 
+  // #5978: a symlinked Windsurf hooks.json holding GSD entries is refused without
+  // GSD_ALLOW_SYMLINKED_DEST. Refuse here, before anything is removed, so a refused run leaves
+  // the link, its target and every other GSD file exactly as they were (as #5946 does for Copilot).
+  if (resolveInstallPlan(runtime).hooksSurface === 'windsurf-hooks-json') {
+    const windsurfRefusal = hooksSurface.windsurfHooksJsonRemovalRefusal(targetDir);
+    if (windsurfRefusal) {
+      console.error(`  ${yellow}⚠${reset} ${windsurfRefusal}`);
+      console.error('  Nothing was uninstalled.\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   let removedCount = 0;
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
@@ -10616,6 +10629,79 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 }
 
 /**
+ * The two content rewrites install() runs on manifest-listed files AFTER the first writeManifest
+ * (#5954): the Codex `@~/.claude/gsd-core/` include rewrite (#4667) and the Copilot / Antigravity /
+ * Kimi include retarget (#5123, global installs only). Applied to `relPaths` under `rootDir` (the
+ * install dir, or the staging dir populatePristineDir builds baselines in, so a regenerated baseline
+ * has the bytes the manifest records). `installRoot` is the real install dir the retarget prefix is
+ * computed for. Returns true when any file changed.
+ *
+ * #5123: the Copilot and Antigravity converters write their DEFAULT home
+ * into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
+ * path, none of which exist when the payload lives somewhere else. Point
+ * them at the real install root (the same `$HOME/…` / absolute prefix the
+ * other runtimes use). Global installs only: a local install resolves
+ * against its project, which the converters already handle.
+ */
+function rewriteInstalledIncludes({ rootDir, relPaths, runtime, isGlobal, installRoot }) {
+  let rewrittenAny = false;
+  const behaviors = hostBehaviorsFor(runtime);
+  const textTargets = relPaths.filter((relPath) => {
+    const fileName = path.basename(relPath);
+    return (fileName.endsWith('.md') || fileName.endsWith('.toml')) && fileName !== 'CHANGELOG.md';
+  });
+  if (behaviors.rewriteClaudeAtIncludes) {
+    for (const relPath of textTargets) {
+      const rewritePath = path.join(rootDir, relPath);
+      let rewriteContent;
+      try {
+        rewriteContent = fs.readFileSync(rewritePath, 'utf8');
+      } catch (_rewriteErr) {
+        continue; // inaccessible or missing — the leak scan reports or skips it
+      }
+      const rewritten = rewriteContent
+        .split('@~/.claude/gsd-core/').join('@~/.codex/gsd-core/')
+        .split('@$HOME/.claude/gsd-core/').join('@$HOME/.codex/gsd-core/');
+      if (rewritten !== rewriteContent) {
+        try {
+          fs.writeFileSync(rewritePath, rewritten);
+          rewrittenAny = true;
+        } catch (_rewriteWriteErr) {
+          continue; // never fail the install over the rewrite; the scan still warns
+        }
+      }
+    }
+  }
+  if (isGlobal && (behaviors.defaultHomeIncludeRoot || behaviors.retargetsGsdCoreProsePath === true)) {
+    const includePrefix = runtimeArtifactConversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      resolvedTarget: installRoot,
+      homeDir: os.homedir(),
+    });
+    for (const relPath of textTargets) {
+      const retargetPath = path.join(rootDir, relPath);
+      let retargetContent;
+      try {
+        retargetContent = fs.readFileSync(retargetPath, 'utf8');
+      } catch (_retargetReadErr) {
+        continue; // inaccessible or missing — never fail the install over this pass
+      }
+      const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, behaviors, includePrefix);
+      if (retargeted !== retargetContent) {
+        try {
+          fs.writeFileSync(retargetPath, retargeted);
+          rewrittenAny = true;
+        } catch (_retargetWriteErr) {
+          continue;
+        }
+      }
+    }
+  }
+  return rewrittenAny;
+}
+
+/**
  * Populate gsd-pristine/ with the transformed pristine versions of every
  * `modified` file, derived from the current package's source tree by
  * running the install transform pipeline (`copyWithPathReplacement`)
@@ -10637,7 +10723,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
  * would have written under normal install. Cost: one extra full transform
  * pass per install where local patches were detected; acceptable.
  */
-function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathPrefix, isGlobal }) {
+function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathPrefix, isGlobal, installRoot }) {
   if (!modified || modified.length === 0) return 0;
   // Modified paths come from manifest.files which can live under several
   // install roots: gsd-core/, commands/gsd/, command/, skills/, agents/,
@@ -10681,6 +10767,9 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
       if (!fs.existsSync(srcDir)) continue;
       copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal, stageRoot);
     }
+    // #5954: the installed files were rewritten after the manifest was first hashed and the manifest
+    // is re-hashed after those rewrites, so a regenerated baseline needs the same rewrites to match.
+    if (installRoot) rewriteInstalledIncludes({ rootDir: stageRoot, relPaths: safeModified, runtime, isGlobal, installRoot });
 
     for (const relPath of safeModified) {
       // Only populate pristine for paths we successfully staged. If a path's
@@ -10984,6 +11073,7 @@ function saveLocalPatches(configDir, pristineCtx) {
             runtime: pristineCtx.runtime,
             pathPrefix: pristineCtx.pathPrefix,
             isGlobal: pristineCtx.isGlobal,
+            installRoot: configDir,
           });
           for (const relPath of missingPaths) {
             const tempRef = resolveInstallRelativePath(tempPristineDir, relPath);
@@ -13046,64 +13136,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // verification backstop. The `_GSD_RUNTIME_ROOT`/`$PREFERRED_CONFIG_DIR`
       // fallback chains and prose `.claude` mentions carry no `@~/` prefix and
       // are deliberately untouched, as is CHANGELOG.md.
-      if (hostBehaviorsFor(runtime).rewriteClaudeAtIncludes) {
-        for (const relPath of manifestFiles) {
-          const fileName = path.basename(relPath);
-          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-          if (fileName === 'CHANGELOG.md') continue;
-          const rewritePath = path.join(targetDir, relPath);
-          let rewriteContent;
-          try {
-            rewriteContent = fs.readFileSync(rewritePath, 'utf8');
-          } catch (rewriteErr) {
-            continue; // inaccessible or missing — the scan below reports or skips it
-          }
-          const rewritten = rewriteContent
-            .split('@~/.claude/gsd-core/').join('@~/.codex/gsd-core/')
-            .split('@$HOME/.claude/gsd-core/').join('@$HOME/.codex/gsd-core/');
-          if (rewritten !== rewriteContent) {
-            try {
-              fs.writeFileSync(rewritePath, rewritten);
-            } catch (writeErr) {
-              continue; // never fail the install over the rewrite; the scan still warns
-            }
-          }
-        }
-      }
-      // #5123: the Copilot and Antigravity converters write their DEFAULT home
-      // into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
-      // path, none of which exist when the payload lives somewhere else. Point
-      // them at the real install root (the same `$HOME/…` / absolute prefix the
-      // other runtimes use). Global installs only: a local install resolves
-      // against its project, which the converters already handle.
-      const includeRetarget = hostBehaviorsFor(runtime);
-      if (isGlobal && (includeRetarget.defaultHomeIncludeRoot || includeRetarget.retargetsGsdCoreProsePath === true)) {
-        const includePrefix = runtimeArtifactConversion._computePathPrefix({
-          isGlobal: true,
-          isOpencode: false,
-          resolvedTarget: targetDir,
-          homeDir: os.homedir(),
-        });
-        for (const relPath of manifestFiles) {
-          const fileName = path.basename(relPath);
-          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
-          if (fileName === 'CHANGELOG.md') continue;
-          const retargetPath = path.join(targetDir, relPath);
-          let retargetContent;
-          try {
-            retargetContent = fs.readFileSync(retargetPath, 'utf8');
-          } catch (_retargetReadErr) {
-            continue; // inaccessible or missing — never fail the install over this pass
-          }
-          const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, includeRetarget, includePrefix);
-          if (retargeted !== retargetContent) {
-            try {
-              fs.writeFileSync(retargetPath, retargeted);
-            } catch (_retargetWriteErr) {
-              continue;
-            }
-          }
-        }
+      // #5954: the first writeManifest above hashed these files BEFORE the two rewrites below changed
+      // them, so any rewrite makes that manifest stale; it is re-hashed once both have run.
+      const _includesRewritten = rewriteInstalledIncludes({
+        rootDir: targetDir, relPaths: manifestFiles, runtime, isGlobal, installRoot: targetDir,
+      });
+      if (_includesRewritten) {
+        writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: _installScopeId });
       }
       for (const relPath of manifestFiles) {
         const fileName = path.basename(relPath);
