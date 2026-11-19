@@ -135,6 +135,7 @@ jobs:
     outputs:
       code_changed: ${{ steps.scope.outputs.code_changed }}
       full_matrix: ${{ steps.scope.outputs.full_matrix }}
+      zsh_changed: ${{ steps.scope.outputs.zsh_changed }}
       product_changed: ${{ steps.scope.outputs.product_changed }}
       targeted_tests: ${{ steps.scope.outputs.targeted_tests }}
     steps:
@@ -158,6 +159,7 @@ jobs:
               echo "code_changed=true"
               echo "product_changed=true"
               echo "full_matrix=true"
+              echo "zsh_changed=true"
               echo "targeted_tests="
             } >> "$GITHUB_OUTPUT"
             {
@@ -643,6 +645,44 @@ jobs:
         run: node scripts/ci-prepare-test-scope.cjs
       - name: Run scoped tests
         run: node scripts/run-tests.cjs --files-from .ci-selected-tests.txt
+
+  # zsh rows of tests/insert-phase-sibling-docs.test.cjs: ubuntu runners ship no
+  # zsh, so the `test` job skips them, and test-conformance (macOS, whose shell
+  # is zsh) runs only on full_matrix. This job installs zsh and runs only those
+  # rows, when scripts/ci-test-scope.cjs sets zsh_changed (ZSH_JOB_FILES). The
+  # tap summary check fails the job when a row was skipped or none ran.
+  test-insert-shell:
+    name: zsh split test (insert-phase)
+    needs: [changes, preflight]
+    if: needs.changes.outputs.zsh_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
+      GSD_STRICT_LIVE_CONFIG_GUARD: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ github.token }}
+      - name: Guard — require GitHub-hosted runner
+        run: node scripts/ci-guard-runner.cjs
+      - name: Set up Node.js 24
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: 24
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+      - name: Run the zsh rows
+        run: |
+          set -euo pipefail
+          node --test --test-name-pattern='zsh split' --test-reporter=tap tests/insert-phase-sibling-docs.test.cjs | tee zsh-rows.tap
+          grep -Eq '^# skipped 0$' zsh-rows.tap
+          grep -Eq '^# pass [1-9][0-9]*$' zsh-rows.tap
 
   # #4591 (epic #4589 Phase 2): runs ONLY the platform-conformance-tier file
   # list (scripts/lib/platform-conformance-tier.generated.cjs) on real

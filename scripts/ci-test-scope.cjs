@@ -89,6 +89,14 @@ const DATA_LOG_FILES = new Set([
   'tests/ci-timeout-budget-history.jsonl',
 ]);
 
+// Files whose change runs the `test-insert-shell` job (.github/workflows/test.yml): the
+// zsh rows of the insert-phase test skip on every runner without zsh, so they
+// get their own small job instead of the conformance lane.
+const ZSH_JOB_FILES = new Set([
+  'gsd-core/workflows/insert-phase.md',
+  'tests/insert-phase-sibling-docs.test.cjs',
+]);
+
 const RULES = [
   {
     name: 'workflow automation',
@@ -575,6 +583,7 @@ function classify(files, reachabilityDeps = {}) {
   let productOrPipelineChanged = false; // product/pipeline code (excludes docs)
   let inertCiChanged = false;           // CI YAML files (#6075)
   let fullMatrix = false;
+  let zshChanged = false;
 
   for (const file of files) {
     // DATA_LOG_FILES are append-only records written by automation; nothing
@@ -598,6 +607,8 @@ function classify(files, reachabilityDeps = {}) {
     ) {
       productOrPipelineChanged = true;
     }
+
+    if (ZSH_JOB_FILES.has(file)) zshChanged = true;
 
     // CI YAML sets a lightweight signal; it is never product/pipeline code.
     if (isCiYaml(file)) {
@@ -716,6 +727,7 @@ function classify(files, reachabilityDeps = {}) {
     code_changed: codeChanged,
     product_changed: productOrPipelineChanged,
     full_matrix: fullMatrix,
+    zsh_changed: zshChanged,
     targeted_tests: targetedTests,
     reasons: [...new Set(reasons)].sort(),
   };
@@ -727,6 +739,7 @@ function writeOutputs(result) {
     `code_changed=${result.code_changed}`,
     `product_changed=${result.product_changed}`,
     `full_matrix=${result.full_matrix}`,
+    `zsh_changed=${result.zsh_changed}`,
     `targeted_tests=${result.targeted_tests.join(' ')}`,
   ];
   appendFileSync(process.env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);

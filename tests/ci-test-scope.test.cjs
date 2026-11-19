@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs');
 const os = require('node:os');
+const yaml = require('js-yaml');
 const { cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -52,6 +53,26 @@ describe('ci-test-scope.cjs', () => {
     const result = scopeFor(['tests/ci-timeout-budget-history.jsonl', 'src/init.cts']);
     assert.strictEqual(result.product_changed, true, JSON.stringify(result));
     assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+  });
+
+  // The test-insert-shell job (test.yml) runs only when zsh_changed is true: the insert-phase
+  // test or the workflow it pins, so a change elsewhere never starts the zsh install.
+  for (const file of ['tests/insert-phase-sibling-docs.test.cjs', 'gsd-core/workflows/insert-phase.md']) {
+    test(`zsh_changed is true for ${file}`, () => {
+      assert.strictEqual(scopeFor([file]).zsh_changed, true);
+    });
+  }
+  for (const file of ['gsd-core/workflows/new-project.md', 'tests/commands.test.cjs', 'docs/usage.md']) {
+    test(`zsh_changed is false for ${file}`, () => {
+      assert.strictEqual(scopeFor([file]).zsh_changed, false);
+    });
+  }
+
+  test('test.yml: the changes job exports zsh_changed and test-insert-shell runs on it', () => {
+    const doc = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8'));
+    assert.match(doc.jobs.changes.outputs.zsh_changed, /steps\.scope\.outputs\.zsh_changed/);
+    assert.strictEqual(doc.jobs['test-insert-shell'].if, "needs.changes.outputs.zsh_changed == 'true'");
+    assert.ok(doc.jobs['test-insert-shell'].steps.some(s => /apt-get install .*\bzsh\b/.test(s.run || '')), 'test-insert-shell installs zsh');
   });
 
   test('a different tests/ .jsonl is not exempt', () => {
