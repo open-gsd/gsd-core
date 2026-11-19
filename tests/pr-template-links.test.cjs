@@ -45,6 +45,10 @@ describe('heading anchors (#5427)', () => {
     const md = '<!-- <a id="c"></a> -->\n<!--\n## Cm\n> ## Cq\n-->\n<a id="ok"></a>';
     assert.deepEqual([...headingSet(md)], ['ok']);
   });
+  test('a `<!--` inside a code span is no comment: later headings and the span text stay', () => {
+    assert.deepEqual([...headingSet('## Marker `<!--` here\n## After')],
+      [slugify('Marker `<!--` here'), 'after']);
+    assert.deepEqual([...headingSet('## A `<!-- x -->` b')], [slugify('A `<!-- x -->` b')]);  });
   test('only the id and name attributes make an anchor, not data-id or aria-name', () => {
     assert.deepEqual([...headingSet('<a data-id="x" aria-name="y"></a>')], []);
     assert.deepEqual([...headingSet('<a href="u" id="z" class="c"></a>')], ['z']);

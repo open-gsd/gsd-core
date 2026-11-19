@@ -21,7 +21,7 @@ const {
   extractLinks, existsCaseExact, realRootOrFallback,
 } = require('../../scripts/gen-adr-index.cjs');
 const {
-  stripFencedCode, stripInlineCode, tokenizeHeadings,
+  stripFencedCode, stripInlineCode, scanInlineCodeSpans, tokenizeHeadings,
 } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -41,7 +41,9 @@ const SPACE = /\s*/y;
 const TAG_NAME = /[A-Za-z][^\s/>]*/y;
 const ATTR_NAME = /=?[^\s/>=]*/y;
 const UNQUOTED = /[^\s>]*/y;
-const scanHtml = (s) => {
+// `shown` is `s` before its code spans were masked to spaces (same length): a `<!--` in a code
+// span is no comment, but the text kept for headings still holds the span.
+const scanHtml = (s, shown = s) => {
   const attrs = [];
   const unclosed = new Set(); // a quote with no partner after one point has none after a later one
   const close = (q, at) => {
@@ -85,18 +87,28 @@ const scanHtml = (s) => {
   for (let i = s.indexOf('<'); i >= 0; i = s.indexOf('<', i)) {
     if (s.startsWith('<!--', i)) {
       const end = s.indexOf('-->', i + 2);
-      text += s.slice(from, i);
+      text += shown.slice(from, i);
       if (end < 0) return { text, attrs };
       from = i = end + 3;
     } else {
       i = /[A-Za-z]/.test(s[i + 1] ?? '') ? tag(i) : i + 1;
     }
   }
-  return { text: text + s.slice(from), attrs };
+  return { text: text + shown.slice(from), attrs };
 };
 // What a reader sees: a quote marker is no content, and neither is a fence or a comment.
 const unfenced = (text) => stripFencedCode(text.replace(/^(?: {0,3}>[ \t]?)+/gm, '')).text;
 const prose = (text) => scanHtml(stripInlineCode(unfenced(text)));
+// The text with each code span (delimiters included) blanked to spaces: offsets stay the same.
+const blankCode = (text) => {
+  let out = '';
+  let at = 0;
+  for (const { start, end } of scanInlineCodeSpans(text)) {
+    out += text.slice(at, start) + ' '.repeat(end - start);
+    at = end;
+  }
+  return out + text.slice(at);
+};
 
 const URL_ATTRS = new Set(['href', 'src', 'srcset']);
 const firstCandidate = (c) => c.trim().split(/\s+/)[0];
@@ -190,7 +202,8 @@ const anchorIds = (attrs) => attrs
   .map(({ value }) => value);
 const headingSet = (source) => {
   const seen = new Map();
-  const slugs = tokenizeHeadings(scanHtml(unfenced(source)).text)
+  const plain = unfenced(source);
+  const slugs = tokenizeHeadings(scanHtml(blankCode(plain), plain).text)
     .filter(({ text }) => !unslugable(text))
     .map(({ text }) => {
       const s = slugify(text);
