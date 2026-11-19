@@ -194,7 +194,7 @@ TDD_APPLICABLE="$_TDD_APPLICABLE_RAW"
 
 # The prompt file lives under ORCH_ROOT/.claude, inside every host's writable
 # root (the worktrees live there too). Its name is keyed by plan so the
-# read-and-check block finds it by name pattern; leftovers of this plan are removed first.
+# read-and-check block finds it by name pattern; leftover files of this plan are removed first.
 # The name carries this wave's manifest name, so two orchestrators in one checkout never touch
 # each other's file for the same phase and plan numbers. A prompt file a crashed wave left
 # behind is swept once it is a day old.
@@ -207,7 +207,7 @@ _PROMPT_PREFIX='gsd-executor-prompt'
 _PROMPT_STEM="${_PROMPT_PREFIX}-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}"
 mkdir -p "${ORCH_ROOT}/.claude" || { echo "FATAL: could not create ${ORCH_ROOT}/.claude for the executor prompt file of plan {plan_number}. Halting." >&2; exit 69; }
 find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_PREFIX}-*" -mmin +1440 -exec rm -rf -- {} + 2>/dev/null || :
-find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "${_PROMPT_STEM}-??????" -exec rm -rf -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 69; }
+find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -type f -name "${_PROMPT_STEM}-??????" -exec rm -rf -- {} + || { echo "FATAL: could not remove a leftover executor prompt file of plan {plan_number} under ${ORCH_ROOT}/.claude. Halting." >&2; exit 69; }
 PROMPT_FILE=$(mktemp "${ORCH_ROOT}/.claude/${_PROMPT_STEM}-XXXXXX") || { echo "FATAL: could not create executor prompt file for plan {plan_number} (is ${ORCH_ROOT}/.claude writable?). Halting." >&2; exit 69; } # XXXXXX path-final on BSD/macOS (#1520)
 echo "PROMPT_FILE=$PROMPT_FILE"
 echo "TDD_APPLICABLE=$TDD_APPLICABLE"
@@ -296,13 +296,13 @@ Then read it back and check it:
 _PROMPT_PREFIX='gsd-executor-prompt'
 _PROMPT_NAME="${_PROMPT_PREFIX}-$(basename "$WAVE_WORKTREE_MANIFEST" .json)-{phase_number}-{plan_number}-??????"
 # Count the matches, not the lines of the output, so a newline in a path cannot read as two files.
-_PROMPT_HITS=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec printf x \; 2>/dev/null || :)
+_PROMPT_HITS=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -type f -name "$_PROMPT_NAME" -exec printf x \; 2>/dev/null || :)
 if [ "${#_PROMPT_HITS}" -ne 1 ]; then
   find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" -exec rm -rf -- {} + 2>/dev/null || :
   echo "FATAL: found no executor prompt file, or more than one, for plan {plan_number}. Halting." >&2
   exit 69
 fi
-PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -name "$_PROMPT_NAME" 2>/dev/null)
+PROMPT_FILE=$(find -H "${ORCH_ROOT}/.claude" -maxdepth 1 -type f -name "$_PROMPT_NAME" 2>/dev/null)
 # Count bytes in the C locale: BSD tr stops at the first byte that is not valid in the user's locale.
 _PROMPT_BYTES=$(LC_ALL=C wc -c 2>/dev/null < "$PROMPT_FILE" || :)
 _PROMPT_NONNUL=$(LC_ALL=C tr -d '\000' 2>/dev/null < "$PROMPT_FILE" | LC_ALL=C wc -c || :)

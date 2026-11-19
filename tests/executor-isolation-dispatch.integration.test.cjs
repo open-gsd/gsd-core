@@ -206,15 +206,47 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     }
   });
 
-  test('#5531: the read-and-check block halts with the unreadable code when the matched name is a directory `cat` cannot read', (t) => {
+  test('#5531: the read-and-check block counts a matching directory as no prompt file, halts and removes it', (t) => {
     const root = path.join(tempDir(t), 'orch');
     const dir = path.join(root, '.claude', `${STEM}-aaaaaa`);
     fs.mkdirSync(dir, { recursive: true });
     const r = readAndCheck(root);
     assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
-    assert.equal(r.exitCode, EXIT.unreadable, r.stderr);
+    assert.equal(r.exitCode, EXIT.none, r.stderr);
+    assert.match(r.stderr, /found no executor prompt file/);
     assert.equal(r.stdout, '', 'no prompt printed');
     assert.ok(!fs.existsSync(dir), 'a matching directory is removed, so the next dispatch of the plan does not halt on it');
+  });
+
+  test('#5531: a symlink named like the prompt file is no prompt file: the block halts, removes the link and never reads its target', (t) => {
+    const dir = tempDir(t);
+    const root = path.join(dir, 'orch');
+    const target = path.join(dir, 'elsewhere.txt');
+    fs.writeFileSync(target, `${GUARDED}text that must not reach the executor\n`);
+    const link = path.join(root, '.claude', `${STEM}-aaaaaa`);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link);
+    const r = readAndCheck(root);
+    assert.equal(r.outcome, OUTCOME.EXITED, r.stderr);
+    assert.equal(r.exitCode, EXIT.none, r.stderr);
+    assert.match(r.stderr, /found no executor prompt file/);
+    assert.equal(r.stdout, '', 'no prompt printed');
+    assert.throws(() => fs.lstatSync(link), { code: 'ENOENT' }, 'the link is removed');
+    assert.ok(fs.existsSync(target), 'the link target stays');
+  });
+
+  test('#5531: block 1 leaves a symlink named like the prompt file in place and still creates its own file', (t) => {
+    const dir = tempDir(t);
+    const root = path.join(dir, 'orch');
+    const target = path.join(dir, 'elsewhere.txt');
+    fs.writeFileSync(target, 'kept');
+    const link = path.join(root, '.claude', `${STEM}-aaaaaa`);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target, link);
+    const r = runBlock(root, `gsd_run() { echo false; }\n${createBlock(content)}`);
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the leftover removal matches regular files only');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'kept');
   });
 
   test('#5531: the read-and-check block removes a regular prompt file whose read fails and halts with the unreadable code', (t) => {
@@ -258,10 +290,8 @@ describe('executor-isolation-dispatch: the compose blocks run in real bash (#553
     assert.equal(r.exitCode, EXIT.none, 'plan 3 finds no file when only other plans have one');
     for (const f of others) assert.ok(fs.existsSync(f), 'the halt removes only this plan\'s matches');
     const leftover = place(root, `${STEM}-abcdef`, 'old');
-    const leftoverDir = path.join(root, '.claude', `${STEM}-ghijkl`);
-    fs.mkdirSync(leftoverDir);
     const file = create(root);
-    assert.ok(!fs.existsSync(leftover) && !fs.existsSync(leftoverDir), 'block 1 removes this plan\'s leftover file and directory');
+    assert.ok(!fs.existsSync(leftover), 'block 1 removes this plan\'s leftover file');
     assert.ok(fs.existsSync(file) && others.every((f) => fs.existsSync(f)), 'block 1 creates its file and keeps the other plans\'');
   });
 
