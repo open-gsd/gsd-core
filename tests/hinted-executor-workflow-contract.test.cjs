@@ -79,6 +79,47 @@ describe('#6213 execute-phase records the routed executor without a carried shel
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(calls(log), []);
   });
+
+  // #6303 x #4904: the `true` branch forces the host's capability only for a plan that does not go to
+  // another runtime, since a forced decision turns a foreign dispatch into a `forced_isolation` fallback.
+  // This stub answers the plain --json query with the given JSON and the capability read with a mode.
+  const answeringStub = (dispatchJson) => [
+    `gsd_run() { { for a in "$@"; do printf '%s\\037' "$a"; done; printf '\\n'; } >> '${log}'; ` +
+      `case "$2" in dispatch-isolation) case " $* " in *" --json "*) printf '%s' '${dispatchJson}';; esac;; inspect-dispatch-isolation) printf harness-worktree;; esac; }`,
+  ];
+  const runTrue = (dispatchJson) => {
+    fs.writeFileSync(log, '');
+    return runBash(part2(), { stdout: '', rc: 0 }, {
+      preamble: ['PHASE_NUMBER=02; plan_id=02-01-api; USE_WORKTREES_FOR_PLAN=true', ...answeringStub(dispatchJson)],
+    });
+  };
+  const plainJson = ['query', 'dispatch-isolation', '--json', '--phase', '02', '--plan', '02-01-api'];
+
+  test('a plan that goes to another runtime is not forced, and PLAN_DISPATCH is its answer', () => {
+    const json = '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":null,"held":false}';
+    const r = runTrue(json);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(calls(log), [plainJson]);
+    assert.ok(r.stdout.includes(`PLAN_DISPATCH=${json}`), r.stdout);
+  });
+
+  for (const [label, json] of [
+    ['stays on the host', '{"isolation":"harness-worktree","executorRuntime":null,"fallback":null,"held":false}'],
+    ['falls back, held', '{"isolation":"none","executorRuntime":"codex","fallback":"binary_absent","held":true}'],
+    // Any fallback reason means the host dispatches, whatever isolation field sits beside it.
+    ['names a fallback', '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":"binary_absent","held":false}'],
+  ]) {
+    test(`a plan that ${label} is forced to the host capability, and PLAN_DISPATCH stays the plain answer`, () => {
+      const r = runTrue(json);
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(calls(log), [
+        plainJson,
+        ['query', 'inspect-dispatch-isolation', '--raw'],
+        ['query', 'dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01-api', '--force-isolation', 'harness-worktree'],
+      ]);
+      assert.ok(r.stdout.includes(`PLAN_DISPATCH=${json}`), r.stdout);
+    });
+  }
 });
 
 describe('#6213 the dispatch-isolation calls that can truncate surface the warning', { skip: SKIP }, () => {
