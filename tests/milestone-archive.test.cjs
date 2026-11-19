@@ -1431,12 +1431,20 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   const complete = (extra = '') =>
     runGsdTools(`--json-errors milestone complete v1.0 --name MVP --confirm ${extra}`, tmpDir, env());
   const archived = () => fs.existsSync(path.join(tmpDir, '.planning', 'milestones'));
-  const parseErr = (r) => JSON.parse(splitLines(r.error.trim()).pop());
-  // A refused close: typed reason, raw output in the failure message so a red run is diagnosable.
+  // JSON.parse that names the raw output when it is not JSON (RULESET.TESTS.diagnostics).
+  const parseJson = (text, raw) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return assert.fail(`not JSON: ${raw}`);
+    }
+  };
+  // A refused close: typed reason and blocked array, raw output in the failure message so a red run is diagnosable.
   const refusal = (r) => {
     assert.equal(r.success, false, `expected refusal, got: ${r.output}`);
-    const err = parseErr(r);
+    const err = parseJson(splitLines(r.error.trim()).pop(), r.error);
     assert.equal(err.reason, ERROR_REASON.MILESTONE_GATE_BLOCKED, r.error);
+    assert.ok(Array.isArray(err.blocked), `refusal JSON lacks a blocked array: ${r.error}`);
     return err;
   };
   const wouldRefuse = () => gateResult().blocked;
@@ -1454,12 +1462,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
   const gateResult = (extra = '', cwd = tmpDir) => {
     const r = runGsdTools(`milestone complete v1.0 --name MVP --dry-run ${extra}`, cwd, env());
     assert.equal(r.success, true, r.error);
-    let out;
-    try {
-      out = JSON.parse(r.output);
-    } catch {
-      assert.fail(`dry-run stdout is not JSON: ${r.output}`);
-    }
+    const out = parseJson(r.output, r.output);
     assert.ok(Array.isArray(out.would_refuse) && Array.isArray(out.gate_warnings), `dry-run JSON lacks would_refuse/gate_warnings arrays: ${r.output}`);
     return { blocked: out.would_refuse, warnings: out.gate_warnings };
   };
