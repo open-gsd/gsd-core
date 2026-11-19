@@ -24,8 +24,15 @@
  * asynchronous `main` is suspended at an `await` (under `node:test`, the
  * runner reports to its parent by writing to stdout). A write, or a
  * `process.exit`, made from outside the call's async context goes to the real
- * function. `process.argv`, the working directory and the environment are
- * process-wide for the length of the call and cannot be scoped this way.
+ * function. That includes a listener registered inside `main` but emitted by
+ * outside code: it runs in the emitter's context. `process.argv`, the working
+ * directory and the environment are process-wide for the length of the call
+ * and cannot be scoped this way.
+ *
+ * Code may keep a reference to a stand-in after its call has ended (a module
+ * first loaded inside `main` that saved `process.exit`). Called later, that
+ * stale stand-in defers to whatever is installed now: a later call's stand-in
+ * during that call, the real function otherwise.
  *
  * What it does not cover:
  *   - module-level state that no module has registered;
@@ -258,6 +265,18 @@ function swapProperty(target: object, key: string, replacement: unknown): { orig
 }
 
 /**
+ * Where a stand-in sends a call it does not own. While it is still the
+ * installed function, that is the function it replaced. Once it has been
+ * restored away and something still holds a reference to it, that is whatever
+ * is installed now, so a stale reference can never reach past a later call's
+ * stand-in to the real function.
+ */
+function passThrough(target: object, key: string, standIn: unknown, original: unknown): (...a: unknown[]) => unknown {
+  const live: unknown = Reflect.get(target, key);
+  return (live === standIn ? original : live) as (...a: unknown[]) => unknown;
+}
+
+/**
  * Marks the async context of a call, so a call made from inside `main` is
  * recognised. `active` goes false when the call has finished restoring: the
  * store outlives the call in every timer and listener `main` created, and
@@ -299,7 +318,7 @@ async function runInProcess(main: CliMain, options: RunInProcessOptions = {}): P
   await ahead;
   const call = { active: true };
   try {
-    return await insideCall.run(call, () => runOne(main, options, validated, () => insideCall.getStore() === call));
+    return await insideCall.run(call, () => runOne(main, options, validated, () => call.active && insideCall.getStore() === call));
   } finally {
     call.active = false;
     release();
@@ -333,10 +352,10 @@ async function runOne(
     capturedBytes[fd] += bytes.byteLength;
   };
 
-  const streamWrite = (fd: 1 | 2, real: () => unknown) => (
+  const streamWrite = (fd: 1 | 2, stream: object, real: () => unknown) => (
     function write(this: unknown, chunk: unknown, encodingOrCallback?: unknown, callback?: unknown): boolean {
       if (!ownsCurrentContext()) {
-        return (real() as (...a: unknown[]) => boolean).call(this, chunk, encodingOrCallback, callback);
+        return passThrough(stream, 'write', write, real()).call(this, chunk, encodingOrCallback, callback) as boolean;
       }
       capture(fd, streamWriteBytes(chunk, encodingOrCallback));
       const done = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
@@ -383,29 +402,33 @@ async function runOne(
     // stream captures fs.writeSync at creation; created under the stand-in,
     // it would keep writing into this call's buffer for the rest of the
     // process.
-    const stdoutWrite = swapProperty(process.stdout, 'write', streamWrite(1, () => stdoutWrite.original));
+    const stdoutWrite = swapProperty(process.stdout, 'write', streamWrite(1, process.stdout, () => stdoutWrite.original));
     undo.push(stdoutWrite.restore);
-    const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, () => stderrWrite.original));
+    const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, process.stderr, () => stderrWrite.original));
     undo.push(stderrWrite.restore);
-    const writeSync = swapProperty(fs, 'writeSync', (fd: number, data: unknown, ...rest: unknown[]): number => {
+    const writeSyncStandIn = (fd: number, data: unknown, ...rest: unknown[]): number => {
       if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) {
-        return (writeSync.original as (...a: unknown[]) => number).call(fs, fd, data, ...rest);
+        return passThrough(fs, 'writeSync', writeSyncStandIn, writeSync.original).call(fs, fd, data, ...rest) as number;
       }
       const bytes = writeSyncBytes(data, rest[0], rest[1]);
       capture(fd, bytes);
       return bytes.byteLength;
-    });
+    };
+    const writeSync = swapProperty(fs, 'writeSync', writeSyncStandIn);
     undo.push(writeSync.restore);
     // As the real one does: an argument, even `undefined`, replaces
     // process.exitCode first. The assignment goes through Node's own setter,
     // so a code Node refuses is refused here with Node's own error.
-    const exit = swapProperty(process, 'exit', (...args: unknown[]): never => {
-      if (!ownsCurrentContext()) return (exit.original as (...a: unknown[]) => never).call(process, ...args);
+    const exitStandIn = (...args: unknown[]): never => {
+      if (!ownsCurrentContext()) {
+        return passThrough(process, 'exit', exitStandIn, exit.original).call(process, ...args) as never;
+      }
       if (args.length > 0) process.exitCode = args[0] as number | undefined;
       const requested = exitStatus(process.exitCode);
       if (firstExit === undefined) firstExit = requested;
       throw new InProcessExit(requested);
-    });
+    };
+    const exit = swapProperty(process, 'exit', exitStandIn);
     undo.push(exit.restore);
 
     await runMainAsync(main);

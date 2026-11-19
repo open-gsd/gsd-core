@@ -363,11 +363,18 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     const outside = [];
     const realStderrWrite = process.stderr.write;
     const realWriteSync = fs.writeSync;
-    process.stderr.write = (chunk) => { outside.push(`stream:${String(chunk)}`); return true; };
+    // Only this test's own marker is recorded. Anything else written to
+    // stderr while the stubs are installed still goes where it was going.
+    const isMarker = (data) => typeof data === 'string' && data.startsWith('in-process-marker:');
+    process.stderr.write = function write(chunk, ...rest) {
+      if (!isMarker(chunk)) return realStderrWrite.call(this, chunk, ...rest);
+      outside.push(`stream:${chunk}`);
+      return true;
+    };
     fs.writeSync = (fd, data, ...rest) => {
-      if (fd !== 2) return realWriteSync.call(fs, fd, data, ...rest);
-      outside.push(`sync:${String(data)}`);
-      return String(data).length;
+      if (fd !== 2 || !isMarker(data)) return realWriteSync.call(fs, fd, data, ...rest);
+      outside.push(`sync:${data}`);
+      return data.length;
     };
     t2.after(() => {
       process.stderr.write = realStderrWrite;
@@ -380,20 +387,44 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     const gate = new Promise((resolve) => { resume = resolve; });
 
     const running = runInProcess(async () => {
-      process.stderr.write('inside-before');
+      process.stderr.write('in-process-marker:inside-before;');
       suspended();
       await gate;
-      fs.writeSync(2, 'inside-after');
+      fs.writeSync(2, 'in-process-marker:inside-after;');
     });
 
     await reachedAwait;
-    process.stderr.write('from-outside');
-    fs.writeSync(2, 'from-outside');
+    process.stderr.write('in-process-marker:outside');
+    fs.writeSync(2, 'in-process-marker:outside');
     resume();
     const result = await running;
 
-    assert.deepEqual(result, { exitCode: 0, stdout: '', stderr: 'inside-beforeinside-after' });
-    assert.deepEqual(outside, ['stream:from-outside', 'sync:from-outside']);
+    assert.deepEqual(result, {
+      exitCode: 0, stdout: '', stderr: 'in-process-marker:inside-before;in-process-marker:inside-after;',
+    });
+    assert.deepEqual(outside, ['stream:in-process-marker:outside', 'sync:in-process-marker:outside']);
+  });
+
+  // A module first loaded inside main may keep a reference to a stand-in
+  // (`const { exit } = process`). Used during a later call, that stale
+  // reference must act for the later call, never reach the real function.
+  await t.test('a stand-in kept from an earlier call acts for the call that uses it', async () => {
+    let keptExit;
+    let keptWriteSync;
+    let keptStdoutWrite;
+    await runInProcess(() => {
+      keptExit = process.exit;
+      keptWriteSync = fs.writeSync;
+      keptStdoutWrite = process.stdout.write;
+    });
+
+    const later = await runInProcess(() => {
+      keptWriteSync.call(fs, 1, 'sync;');
+      keptStdoutWrite.call(process.stdout, 'stream;');
+      keptExit(9);
+    });
+
+    assert.deepEqual(later, { exitCode: 9, stdout: 'sync;stream;', stderr: '' });
   });
 
   await t.test('calls started together queue, and each gets only its own output', async () => {
