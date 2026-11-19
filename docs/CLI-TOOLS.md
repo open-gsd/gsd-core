@@ -830,8 +830,11 @@ that give both spellings of one setting (`commit_docs` and `planning.commit_docs
 `config_invalid_key` for a key that is not a known setting, is written dotted
 (`workflow.research` rather than nested) or gives a section a scalar, the reason `config-set` itself
 reports for a value it does not accept (`unknown` for most values, `usage` for a malformed number
-such as `context_window`), `config_parse_failed` for a key the prototype-pollution guard refuses
-(`__proto__`, `prototype`, `constructor`), `config_defaults_invalid` for a store
+such as `context_window`), `config_invalid_key` also for `__proto__`, `prototype` or
+`constructor` where the schema accepts no such key (a setting or section name, or an entry of
+`models` or `phase_commit_docs`), `config_parse_failed` for one of those names as an entry the
+schema accepts (`model_overrides.constructor`, `agent_skills.constructor`), which the
+prototype-pollution guard then refuses, `config_defaults_invalid` for a store
 that is not a readable JSON object, `config_defaults_write_failed` for a failed write or a store
 that would grow past 1 MiB, and
 `config_defaults_lock_unavailable` when the lock cannot be taken, for example while another

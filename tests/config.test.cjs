@@ -4620,6 +4620,32 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     });
   }
 
+  // Review 2026-11-18, Minor 1 and Nit 1: which reason each prototype-member
+  // name gets. As a setting or section key it is an unknown key, and the
+  // refusal suggests nothing (it suggested `[object Object]` for `__proto__`
+  // and `function Object() { [native code] }` for `constructor`). As an entry
+  // under a setting that takes named entries it reaches the prototype-pollution
+  // guard. The JSON is written as text: an object literal's `__proto__` sets
+  // the prototype instead of a key.
+  for (const name of ['__proto__', 'prototype', 'constructor']) {
+    for (const [where, json, reason] of [
+      ['a top-level key', `{"${name}":1}`, 'config_invalid_key'],
+      ['a workflow key', `{"workflow":{"${name}":1}}`, 'config_invalid_key'],
+      ['a model_overrides entry', `{"model_overrides":{"${name}":"opus"}}`, 'config_parse_failed'],
+      ['an agent_skills entry', `{"agent_skills":{"${name}":["x"]}}`, 'config_parse_failed'],
+      ['a models entry', `{"models":{"${name}":"opus"}}`, 'config_invalid_key'],
+      ['a phase_commit_docs entry', `{"phase_commit_docs":{"${name}":true}}`, 'config_invalid_key'],
+    ]) {
+      test(`${name} as ${where} is refused as ${reason}, suggesting nothing, and the store is left byte-identical`, (t) => {
+        const { defaultsPath, run } = storeWith(t, BEFORE);
+        const result = run([json]);
+        assertRefused(result, reason);
+        assert.doesNotMatch(JSON.parse(result.error).message, /Did you mean/);
+        assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+      });
+    }
+  }
+
   // CONTRIBUTING.md "CLI and command routing": empty, whitespace-only and
   // flag-like values. A flag-like positional is taken as the settings JSON.
   for (const [label, arg] of [['not valid JSON', '{"model_profile":'], ['empty', ''], ['whitespace only', '   '], ['flag-like', '--weird']]) {

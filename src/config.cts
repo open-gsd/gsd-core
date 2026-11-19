@@ -265,7 +265,11 @@ function emitConfigValue(kp: string, value: unknown, raw: boolean, sourceText?: 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
 function validateKnownConfigKeyPath(keyPath: string): void {
-  const suggested = CONFIG_KEY_SUGGESTIONS[keyPath];
+  // Own keys only: `__proto__` and `constructor` would otherwise read
+  // Object.prototype members and suggest them (#5681).
+  const suggested = Object.prototype.hasOwnProperty.call(CONFIG_KEY_SUGGESTIONS, keyPath)
+    ? CONFIG_KEY_SUGGESTIONS[keyPath]
+    : undefined;
   if (suggested) {
     error(`Unknown config key: ${keyPath}. Did you mean ${suggested}?`, ERROR_REASON.CONFIG_INVALID_KEY);
   }
