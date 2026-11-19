@@ -977,8 +977,8 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const w = runHook(dispatch('gsd-planner', 'sonnet'), project);
     assert.equal(w.status, 0, w.stderr);
     const out = JSON.parse(w.stdout);
-    assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
-    assert.equal(typeof out.hookSpecificOutput.additionalContext, 'string');
+    assert.equal(out.hookSpecificOutput?.hookEventName, 'PreToolUse', w.stdout);
+    assert.equal(typeof out.hookSpecificOutput?.additionalContext, 'string', w.stdout);
     writeConfig(project, JSON.stringify({ ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } }));
     const d = runHook(dispatch('gsd-planner', 'sonnet'), project);
     assert.equal(d.status, 2);
