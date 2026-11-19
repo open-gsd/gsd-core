@@ -21,7 +21,7 @@
  * stayed GREEN.
  *
  * This file instead drives a REAL spawned `bin/install.js` (via
- * `tests/helpers/install-shared.cjs`'s `runMinimalInstall` — the same driver
+ * `tests/helpers/install-shared.cjs`'s `runMinimalInstall` (through `copyRuntimeFixture`, which copies a tree it made) — the same driver
  * `tests/workflow-fragments-emission.install.test.cjs` and
  * `tests/agent-fragments-emission.install.test.cjs` use) and compares its
  * REAL emitted output against the catalog's served content, renamed to
@@ -76,7 +76,7 @@ const MARKER_TOKEN = 'gsd:section';
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // hooks/dist/ is gitignored and only produced by `npm run build:hooks`. This
-// suite's real spawned install (runMinimalInstall) and overlay builds
+// suite's real spawned install (the shared fixture a copy is made from) and overlay builds
 // (buildOverlayRepo, which hard-links every leaf under REPO_ROOT including
 // hooks/dist/) both need it populated. In CI the scoped/windows jobs do not
 // run build:hooks first, so — absent this guard — the suite only passes when

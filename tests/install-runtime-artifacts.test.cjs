@@ -8368,7 +8368,8 @@ describe('installRuntimeArtifacts — G3: adapter calling-convention regression 
 //
 // C7 (anti-inertness): recovery must be reachable from a REAL `bin/install.js`
 // run, not merely callable — the #1879-F15 failure mode this whole phase
-// exists to avoid. This spawns the real installer twice against the SAME
+// exists to avoid. The first install is a copy of a real one (copyRuntimeFixture);
+// the second spawns the real installer against the SAME
 // sandbox HOME, with an orphaned staged artifact manually planted between the
 // two runs (simulating a prior run that died between the wipe and its own
 // restore/discard), and asserts the SECOND real installer invocation recovers
@@ -8426,8 +8427,8 @@ describe('#2875: user-artifact-staging — call-site integration (C7 anti-inertn
 // silently loads nothing (planner guidance, the untrusted-input boundary,
 // the agent-skills bootstrap, the mandatory initial read).
 //
-// Uses the real spawned installer (runMinimalInstall, `bin/install.js`
-// subprocess) so a green run here proves the fix reaches the actual emit
+// Uses a tree the real spawned installer wrote (a copyRuntimeFixture copy of a
+// `bin/install.js` subprocess's output) so a green run here proves the fix reaches the actual emit
 // path, not just the pure function tested in tests/path-replacement.test.cjs.
 // ---------------------------------------------------------------------------
 describe('#3719: real global Claude install — agents/*.md @-refs must resolve on tilde', () => {

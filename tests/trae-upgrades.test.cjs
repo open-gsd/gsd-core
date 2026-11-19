@@ -4,7 +4,7 @@
  * trae capability UPGRADE — ADR-1239 Phase D / #2094 (EoS/trae).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) to prove the one real upgrade Trae contributes beyond
+ * `copyRuntimeFixture`, a copy of a real install) to prove the one real upgrade Trae contributes beyond
  * the base imperative migration (tests/trae-imperative-reference.test.cjs):
  *
  *   UPGRADE — SOLO stage/trigger metadata: every emitted `SKILL.md` carries a

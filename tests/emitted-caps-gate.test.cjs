@@ -18,7 +18,7 @@
  * (tests/fixtures/install-tree/windsurf.json) holds 344 paths and has ZERO
  * `workflows/` entries — a global install cannot exercise the windsurf cap
  * rule at all. This file therefore builds a LOCAL windsurf install
- * (`runMinimalInstall({ runtime: 'windsurf', scope: 'local' })`), the only
+ * (`copyRuntimeFixture({ runtime: 'windsurf', scope: 'local' })`, a copy of a real install), the only
  * scope where the capped artifact family exists.
  */
 

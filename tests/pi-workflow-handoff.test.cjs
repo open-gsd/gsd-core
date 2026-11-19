@@ -375,8 +375,9 @@ describe('#5547: the installed Pi extension', () => {
     assert.match(surface, /RUNTIME_CONFIG_DIR="\$\{CLAUDE_CONFIG_DIR:-\$HOME\/\.pi\/agent\}"/);
   });
 
+  // These two install for real: the subject is what the installer run printed.
   test('a pi install reports no unreplaced-path warning', () => {
-    const r = copyRuntimeFixture({ runtime: 'pi', scope: 'global' });
+    const r = runMinimalInstall({ runtime: 'pi', scope: 'global' });
     try {
       assert.doesNotMatch(`${r.stderr}\n${r.stdout}`, /unreplaced \.claude path reference/);
     } finally {
@@ -388,7 +389,7 @@ describe('#5547: the installed Pi extension', () => {
   // to the package so a refresh can restore it; counting its source-form paths as
   // leaks made every skills-runtime install warn about files nothing reads.
   test('the source-form corpus is not reported as leaked paths for a skills runtime', () => {
-    const r = copyRuntimeFixture({ runtime: 'hermes', scope: 'global' });
+    const r = runMinimalInstall({ runtime: 'hermes', scope: 'global' });
     try {
       assert.doesNotMatch(`${r.stderr}\n${r.stdout}`, /unreplaced \.claude path reference/);
     } finally {

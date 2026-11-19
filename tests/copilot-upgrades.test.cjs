@@ -4,7 +4,7 @@
  * Copilot capability UPGRADES — ADR-1239 / #2099 (EoS/copilot).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) plus a direct negotiation-contract check to prove the
+ * `copyRuntimeFixture`, a copy of a real install) plus a direct negotiation-contract check to prove the
  * two real upgrades Copilot contributes as part of the EoS migration:
  *
  *   UPGRADE 1 — multi-event hook bus: buildCopilotHookConfig() previously

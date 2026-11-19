@@ -90,7 +90,8 @@ const {
 
 /**
  * collectSkillBasenamesOnDisk(configDir, runtime, scope) re-resolves the
- * runtime's skills-kind layout via os.homedir(). runMinimalInstall() already
+ * runtime's skills-kind layout via os.homedir(). runMinimalInstall() (and so the
+ * tree a copy is made from) already
  * sandboxes HOME/USERPROFILE to `root` for the spawned install subprocess,
  * but that sandboxing does not persist into this (parent) process — without
  * re-sandboxing here, Codex's skills-kind `home: ".agents"` override

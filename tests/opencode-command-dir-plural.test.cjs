@@ -56,7 +56,7 @@ const EXPECTED_COMMAND_DIR = 'commands';
  *  invocation — see bin/install.js installAllRuntimes -> install() ->
  *  runInstallerMigrations, unconditional, not gated on first-install).
  *  #3547 — `configDir` is the runtime's REAL global home (<root>/<globalSuffix>),
- *  the same shape runMinimalInstall now installs into; reinstalling into the
+ *  the same shape runMinimalInstall installs into, and a copy keeps; reinstalling into the
  *  bare <root> would target a different config home and never see the
  *  fabricated legacy state. */
 function reinstallOpencode(root, configDir = null, scope = 'global') {

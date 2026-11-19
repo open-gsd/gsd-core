@@ -27,7 +27,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { runMinimalInstall, copyRuntimeFixture, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const INSTALL_JS = path.join(ROOT, 'bin', 'install.js');
@@ -150,7 +150,8 @@ describe('#1928 --gemini CLI deprecation redirect', () => {
   });
 
   test('control: an install WITHOUT --gemini does not print the sunset notice', (t) => {
-    const { root, stderr } = copyRuntimeFixture({ runtime: 'codex', scope: 'global' });
+    // A real install: the subject is what THIS installer run printed.
+    const { root, stderr } = runMinimalInstall({ runtime: 'codex', scope: 'global' });
     t.after(() => cleanup(root));
     assert.doesNotMatch(stderr, /sunset by Google/, 'the notice must be conditional on --gemini');
   });

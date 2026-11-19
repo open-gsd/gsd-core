@@ -4,7 +4,7 @@
  * qwen capability UPGRADES — ADR-1239 Phase D / #2092 (EoS/qwen).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) to prove the two real upgrades qwen contributes beyond
+ * `copyRuntimeFixture`, a copy of a real install) to prove the two real upgrades qwen contributes beyond
  * the hermes migration (#2091):
  *
  *   UPGRADE 1 — native `agents` artifact-layout kind: GSD specialist agents

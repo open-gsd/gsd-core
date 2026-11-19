@@ -5,7 +5,7 @@
  * kimi capability UPGRADES — ADR-1239 Phase D / #2095 (EoS/kimi).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) plus targeted unit coverage to prove the two real
+ * `runMinimalInstall`, or a copy of one from `copyRuntimeFixture`) plus targeted unit coverage to prove the two real
  * upgrades kimi contributes as part of the imperative-adapter migration:
  *
  *   UPGRADE 1 — native hook bus: `hooksSurface` moved from `"none"` to
@@ -142,9 +142,9 @@ test('kimi --global: reinstalling is idempotent — the GSD [[hooks]] block is n
   assert.equal(beginMarkers(first), 1, 'exactly one BEGIN marker after a fresh install');
   assert.equal(endMarkers(first), 1, 'exactly one END marker after a fresh install');
 
-  // Reinstall over the SAME root/config (runMinimalInstall always mkdtemps a
-  // fresh root, so the reinstall is driven directly against this test's root
-  // exactly the way runMinimalInstall drives its own install internally).
+  // Reinstall over the SAME root/config. The first tree is this test's own
+  // copy of the shared fixture; the reinstall is a real install driven
+  // directly against that root, the way runMinimalInstall drives its own.
   const reinstall = runNode([INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', root], {
     cwd: process.cwd(),
     env: installerEnv({ HOME: root, USERPROFILE: root }),

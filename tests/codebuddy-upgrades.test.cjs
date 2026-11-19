@@ -5,7 +5,7 @@
  * CodeBuddy capability UPGRADES — ADR-1239 / #2098 (EoS/codebuddy).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) plus a direct negotiation-contract check to prove the
+ * `copyRuntimeFixture`, a copy of a real install) plus a direct negotiation-contract check to prove the
  * two real upgrades CodeBuddy contributes as part of the EoS migration:
  *
  *   UPGRADE 1 — extended hook events: CodeBuddy's `extendedHookEvents` was

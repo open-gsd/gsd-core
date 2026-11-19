@@ -72,6 +72,20 @@ function surfaceBytesForTest(state) {
 // ─── applySurface ────────────────────────────────────────────────────────────
 
 describe('applySurface', () => {
+  // The two #4132 tests below expect a refusal after tampering with an
+  // installed tree. This is their control: the same call on the tree as
+  // installed is accepted, so a refusal there is caused by the tampering and
+  // not by the tree itself (it is a copy of the shared fixture, #6335).
+  test('#4132 control: the installed tree, untampered, is accepted', (t) => {
+    const installed = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
+    const configDir = installed.configDir;
+    t.after(() => cleanup(installed.root));
+    const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+    const surfaceState = { baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] };
+    assert.doesNotThrow(() => applySurface(configDir, layout, realManifest(), CLUSTERS, undefined, { surfaceState }));
+    assert.deepEqual(readSurface(configDir), surfaceState);
+  });
+
   test('#4132: an unmanifested installed command cannot become a live instruction', (t) => {
     const installed = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     const configDir = installed.configDir;
