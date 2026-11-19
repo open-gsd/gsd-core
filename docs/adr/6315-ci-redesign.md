@@ -239,6 +239,7 @@ Every item starts now. The phases are a priority order, not a queue. Sections 5 
 | 17 | [#6335](https://github.com/open-gsd/gsd-core/issues/6335) | 23 | [#6341](https://github.com/open-gsd/gsd-core/issues/6341) |
 | 18 | [#6336](https://github.com/open-gsd/gsd-core/issues/6336) | 24 | [#6342](https://github.com/open-gsd/gsd-core/issues/6342) |
 | 19 | [#6337](https://github.com/open-gsd/gsd-core/issues/6337) | 14b | [#6354](https://github.com/open-gsd/gsd-core/issues/6354) |
+| 25 | [#6355](https://github.com/open-gsd/gsd-core/issues/6355) | | |
 
 - **Real dependencies:** item 15 needs item 14's entry point; item 16 needs item 15; item 20 needs items 15 and 19; the second half of item 24 needs item 19; the macOS concurrency measurement in item 5b needs the sharded lane from item 5a, which has merged.
 - **Item 5a is done:** PR #5053 merged on 2026-11-18. Its review findings are tracked in [#6329](https://github.com/open-gsd/gsd-core/issues/6329).
@@ -291,6 +292,15 @@ Files: `tests/state.test.cjs`, `tests/phase.test.cjs`, `tests/roadmap.test.cjs`,
 - AC2: cases that assert the process boundary move to a `.process.test.cjs` sibling. The sibling is the only part of the suite in the Windows and macOS tiers.
 - AC3: no case is deleted without a replacement, and each module's mutation score does not drop.
 - AC4: the six files' summed Linux time, 974 s today, is under 200 s.
+
+**Item 25 — No git process to resolve the project context.** Depends on: nothing. It pays off fully once item 15 has landed.
+Files: `src/project-context.cts`, a new process-contract parity test.
+Every CLI call spawns `git rev-parse --show-toplevel --git-dir --git-common-dir`, and a second spawn in a linked worktree. Measured in-process on macOS, a call takes about 10 ms, of which about 9 ms is that spawn and under 1 ms is the CLI's own work (2026-11-18 entry below).
+
+- AC1: `resolveProjectContext` answers the three questions by reading `.git`, `gitdir` and `commondir`. It stays the one resolver ([ADR-4908](4908-project-context.md)).
+- AC2: a layout the reader does not recognise still resolves through `git`, and the context's provenance says which path answered.
+- AC3: a parity test compares the reader with real `git rev-parse` over built fixtures: plain repo, subdirectory, linked worktree, worktree of a bare repo, submodule, `GIT_DIR` and `GIT_WORK_TREE` set, a relative `gitdir`, a symlinked checkout, and no repo.
+- AC4: a test counts subprocesses and finds none for context resolution in a plain repo, a linked worktree and a directory with no repo.
 
 #### Phase B — installer and fixtures
 
@@ -445,3 +455,60 @@ Item 14 is split in two.
 - **Item 14b ([#6354](https://github.com/open-gsd/gsd-core/issues/6354)) delivers AC3.** The process-context object, the `local/no-process-global-outside-context` ratchet, and a second ratchet, `local/no-unregistered-module-state`, over the 162 module-level state declarations a scan of `src/` finds.
 
 Two consequences of the swap hold until item 14b lands: in-process calls run one at a time (concurrent calls queue), and a module-level cache that no module registered can carry from one call to the next. Item 15's parity suite is the check on the second.
+
+### 2026-11-18 — Item 15: the helper is synchronous, so the CLI gets a synchronous path
+
+`runGsdTools` is called synchronously at 4,658 sites in 239 test files, and none of them awaits it. `runCli` is asynchronous. Only 7 of the 98 top-level routers are declared `async`. Maintainer ruling: the dispatch chain returns a plain value for a synchronous command and a promise only for an asynchronous one; `runCliSync` serves the former; `runGsdTools` stays synchronous with no call-site change. The alternative, a codemod that makes all 239 files asynchronous, was not taken.
+
+### 2026-11-19 — Item 15: three helpers, none of which spawns unasked; what it saved and what it did not
+
+**The helper.** The first version of the in-process helper spawned a process whenever it could not serve a call. Running the whole suite found that this hides defects: a command refused after its work had started was run a second time in the child (`uat.complete-session` restored its file in the first run and reported nothing to restore in the second). The helper now has three explicit forms and no fallback between them:
+
+| Helper | Runs | Refuses, naming the helper to use |
+|---|---|---|
+| `runGsdTools` | in the test process, synchronously | a command that finishes asynchronously; a `NODE_OPTIONS`-class variable in the per-call `env`; a working directory that does not exist |
+| `await runGsdToolsAsync` | in the test process, any command | the last two of those |
+| `runGsdToolsProcess` | a spawned `node gsd-tools.cjs` | nothing; for `*.process.test.cjs` files |
+
+Fifteen test files that called asynchronous commands (`capability`, `review-lane`, `detect-custom-files`, `prompt-budget`, `classify-confidence`, `package-legitimacy`, `extract-messages`, `profile-sample`) moved to `runGsdToolsAsync`. Three tests that injected a failure by preloading a patch into a child with `NODE_OPTIONS=--require` now mock the function in the test process, which is what running in-process makes possible.
+
+**Defects the in-process suite found in shipped code.** Each was invisible while every call had its own process:
+
+- `extract-messages` and `profile-sample` dropped their router's promise, so their output bypassed `--pick` and `@file:` resolution (fixed in item 14, PR #6359).
+- `uat.complete-session` awaited a capture of a synchronous commit and so was asynchronous for no reason.
+- The learnings store directory and the GSD temp directory were computed once at module load from `os.homedir()` and `os.tmpdir()`.
+
+**The measurement.** Whole-suite runs on the Linux bench (plex2), one run at a time, wall clock from launch to verdict:
+
+| Head | `runGsdTools` | Wall clock | Tests |
+|---|---|---|---|
+| item 14 (`ae3010ffa4`) | spawns | 8 min 51 s | 61,549 |
+| item 15, fallback-spawn version (`3a78d0e5a2`) | in-process, async commands spawned | 8 min 45 s | 61,670 |
+| item 15, three helpers (`30898f1006`) | in-process, async commands in-process | 7 min 19 s | 61,673 |
+| item 15, three helpers (`d2c23caf43`) | in-process, async commands in-process | 7 min 08 s | 61,675 |
+| item 15, three helpers (`1101be3c0b`) | in-process, async commands in-process | 7 min 05 s | 61,675 |
+
+Summed per-file time, first row against the last:
+
+| | Files | Before | After | |
+|---|---|---|---|---|
+| Call `runGsdTools` | 238 | 1,988 s | 652 s | −67% |
+| Reach `gsd-tools.cjs` by any route | 344 | 2,840 s | 1,368 s | −52% |
+| All test files | 1,221 | 5,234 s | 3,408 s | −35% |
+
+These are single runs per head on a shared bench, so they are an indication and not a measurement with a known error. One run in the series showed the files that never call the helper 38% slower and the next showed them 15% faster; that spread is the noise.
+
+What the series does show: moving the synchronous calls in-process did not move the wall clock (rows one and two), and moving the asynchronous commands in-process as well took about a minute and a half off it. On Linux the wall clock is set by the install-class tests, which never call the helper (class E in `docs/research/data/2026-11-18-test-file-classification.tsv`) and are the slowest files in every run. **Item 17 (one install per runtime) is where the Linux wall clock is.** Item 15's larger effect is expected on Windows, where a process spawn costs several times more and the spawning files are 94% of the conformance tier; that is measured when the change runs through the merge queue.
+
+### 2026-11-18 — Item 25 added: the git probe is 90% of an in-process call
+
+Profiling 100 in-process calls per case, with every subprocess call timed, on macOS:
+
+| Command | Working directory | Per call | Git spawns | In git | CLI's own work |
+|---|---|---|---|---|---|
+| `generate-slug` | a linked worktree | 25.0 ms | 2 | 24.0 ms | 1.0 ms |
+| `generate-slug` | temp dir, no git | 9.8 ms | 1 | 9.1 ms | 0.7 ms |
+| `config-get` | temp dir, no git | 10.3 ms | 1 | 9.4 ms | 0.9 ms |
+| `state json` | temp dir, no git | 9.9 ms | 1 | 9.0 ms | 0.9 ms |
+
+A spawned call of the same command takes about 147 ms on the same machine. Item 15 removes the Node spawn; item 25 removes what is left.
