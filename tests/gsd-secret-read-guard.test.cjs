@@ -1770,9 +1770,26 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     }
   });
 
-  // A hang backstop, not a speed assertion: each string is pushed onto a stack, never
-  // spliced into a copy of the word list, so 1 MiB of strings stays linear. The child
-  // drops the inherited coverage hook, which slows a spawned hook several times over.
+  // These rows run the hook's own scan in process (scanBashReadings, which main()
+  // calls) and count the characters its readings tokenized (workSpent): a step
+  // count, not a clock. Each command is decided within a few passes over its text,
+  // and the bound is that pass count, so a reading that runs on after a denial, or
+  // tokenizes the command more often, spends past it. The count sees only charged
+  // work. Splitting an `env -S` string is not charged, so these rows do not pin how
+  // the split words reach the stack (a copy of it per string would pass them), and
+  // neither did the spawn rows they replace. lastSegment's own per-character bound,
+  // which this count does not see either, is pinned in
+  // tests/filename-classification.test.cjs.
+  const { scanBashReadings: scanReadings, workSpent: spentWork } = require(HOOK_PATH);
+  const assertScanned = (command, code, passes, label) => {
+    const { block } = scanReadings(command);
+    assert.equal(block === null ? null : block.code, code, label);
+    const { scan } = spentWork();
+    assert.ok(scan <= passes * command.length, `${label}: ${scan} characters scanned for a ${command.length}-character command, more than ${passes} passes`);
+  };
+
+  // 1 MiB of strings in one pass: the reading before #5514 skips each string and
+  // denies the launch after them, so no splitting reading runs.
   const TAIL = 'claude --agent gsd-debugger';
   const fill = (unit) => unit.repeat(Math.floor((1024 * 1024 - 1 - TAIL.length) / unit.length)) + TAIL;
   const LARGE = [
@@ -1781,72 +1798,43 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     ['one long string before the launch', `env -S '${'a '.repeat(500000)}' ${TAIL}`, 'debugger-cli-spawn'],
   ];
   for (const [label, command, code] of LARGE) {
-    test(`blocks: ${label}, 1 MiB`, () => {
-      const r = runHookSeam(HOOK_PATH, [], {
-        input: JSON.stringify(bash(command)),
-        env: { ...process.env, NODE_V8_COVERAGE: '' },
-        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-      });
-      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { code });
+    test(`blocks: ${label}, 1 MiB, in one pass`, () => {
+      assertScanned(command, code, 1, label);
     });
   }
 
   // Only the split reads this read, and it makes the slash run a word of it, which
   // `lastSegment` reads. Its regex strip was quadratic on such a run and outlasted
-  // the hook's 120 s timeout, after which the command runs; the read must be denied
-  // in time.
-  test('blocks: a read with a 1,000,000-slash word in an env -S string', () => {
-    const command = `env -S 'cat foo${'/'.repeat(1000000)}x .env'`;
-    const r = runHookSeam(HOOK_PATH, [], {
-      input: JSON.stringify(bash(command)),
-      env: { ...process.env, NODE_V8_COVERAGE: '' },
-      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-    });
-    assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'read', { code: 'secret-read' });
+  // the hook's 120 s timeout, after which the command runs. Two passes: the reading
+  // before #5514, then the GNU split, which denies it.
+  test('blocks: a read with a 1,000,000-slash word in an env -S string, in two passes', () => {
+    assertScanned(`env -S 'cat foo${'/'.repeat(1000000)}x .env'`, 'secret-read', 2, 'read');
   });
 
   // A split-made word can throw: `findParenClose` recurses once per `"$(`, and the
   // hook allows on a throw. The reading before #5514 never splits the string and runs
   // first, so the read or launch after it is denied before any splitting reading runs.
   for (const [label, tail, code] of [['read', 'cat .env', 'secret-read'], ['launch', TAIL, 'debugger-cli-spawn']]) {
-    test(`blocks: a ${label} after a string whose split overflows the parser`, () => {
-      const command = `env -S 'sh -c ${'\\"\\$('.repeat(20000)}' ; ${tail}`;
-      const r = runHookSeam(HOOK_PATH, [], {
-        input: JSON.stringify(bash(command)),
-        env: { ...process.env, NODE_V8_COVERAGE: '' },
-        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-      });
-      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { code });
+    test(`blocks: a ${label} after a string whose split overflows the parser, in one pass`, () => {
+      assertScanned(`env -S 'sh -c ${'\\"\\$('.repeat(20000)}' ; ${tail}`, code, 1, label);
     });
   }
 
   // The other way round: env runs the read or launch in the string, with the words
   // after it as its operands, and the reading that skips the string sees `bash -c`
   // with a body that overflows the parser. That throw must not cost the denial the
-  // split makes.
-  for (const [label, inner, code] of [['read', 'cat .env', 'secret-read'], ['launch', TAIL, 'debugger-cli-spawn']]) {
-    test(`blocks: a ${label} in a string, when skipping it overflows the parser`, () => {
-      const command = `env -S '${inner}' bash -c '${'"$('.repeat(20000)}'`;
-      const r = runHookSeam(HOOK_PATH, [], {
-        input: JSON.stringify(bash(command)),
-        env: { ...process.env, NODE_V8_COVERAGE: '' },
-        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-      });
-      assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, label, { code });
+  // split makes: the reading before #5514 throws partway, and the GNU split denies.
+  for (const [label, inner, code, passes] of [['read', 'cat .env', 'secret-read', 3], ['launch', TAIL, 'debugger-cli-spawn', 4]]) {
+    test(`blocks: a ${label} in a string, when skipping it overflows the parser, in ${passes} passes`, () => {
+      assertScanned(`env -S '${inner}' bash -c '${'"$('.repeat(20000)}'`, code, passes, label);
     });
   }
 
   // The other env -S dialects re-scan the whole command, and the BSD ones make the
   // 300,000-slash run below one word. The launch after it is denied by the reading
-  // before #5514, so no splitting reading runs: a hang backstop, as above.
-  test('blocks: a launch after a string only the other dialects read slowly', () => {
-    const command = `env -S '\${Z}\\ A=1 ls ${'/'.repeat(300000)}x'; ${TAIL}`;
-    const r = runHookSeam(HOOK_PATH, [], {
-      input: JSON.stringify(bash(command)),
-      env: { ...process.env, NODE_V8_COVERAGE: '' },
-      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-    });
-    assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'launch', { code: 'debugger-cli-spawn' });
+  // before #5514, so no splitting reading runs: one pass.
+  test('blocks: a launch after a string only the other dialects read slowly, in one pass', () => {
+    assertScanned(`env -S '\${Z}\\ A=1 ls ${'/'.repeat(300000)}x'; ${TAIL}`, 'debugger-cli-spawn', 1, 'launch');
   });
 
   // The env -S readings run on the scan budget #5255 sets for the whole command
