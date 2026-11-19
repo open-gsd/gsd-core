@@ -35,23 +35,13 @@ export const MAX_READ_BYTES = 64 * 1024;
 export { MODEL_ID_CHARSET_BODY, sanitizeModelForMessage };
 
 /**
- * The stderr lines of the two guard warnings, formatted and parsed here (the one owner) so a test reads typed
- * values back instead of matching the prose. Reason and model are filtered on the way in, as in the hook's reason.
+ * The stderr lines of the two guard warnings, formatted here (the one owner); a test compares a line with the
+ * formatter's output. Every interpolated value is filtered on the way in, as in the hook's reason.
  */
-const NOT_WRITTEN_RE = /^gsd: model-escalation record not written: (.*); under hooks\.agent_model_guard "deny" the guard blocks (.*)$/;
 export const formatNotWritten = (reason: string, model: string): string =>
   `gsd: model-escalation record not written: ${sanitizeLabel(reason)}; under hooks.agent_model_guard "deny" the guard blocks ${sanitizeModelForMessage(model)}`;
-export function parseNotWritten(line: string): { reason: string; model: string } | null {
-  const m = NOT_WRITTEN_RE.exec(line);
-  return m ? { reason: m[1], model: m[2] } : null;
-}
-const NOT_RECORDED_RE = /^gsd: --ws (.*?) not recorded for the Agent model guard(?:: (.*))?$/;
 export const formatNotRecorded = (ws: string, reason?: string): string =>
-  `gsd: --ws ${ws} not recorded for the Agent model guard${reason === undefined ? '' : `: ${reason}`}`;
-export function parseNotRecorded(line: string): { ws: string; reason?: string } | null {
-  const m = NOT_RECORDED_RE.exec(line);
-  return m ? (m[2] === undefined ? { ws: m[1] } : { ws: m[1], reason: m[2] }) : null;
-}
+  `gsd: --ws ${sanitizeLabel(ws)} not recorded for the Agent model guard${reason === undefined ? '' : `: ${sanitizeLabel(reason)}`}`;
 
 /** The agent types the guard checks; also the only ones an escalation record is written for. */
 export const GUARDED_AGENT_TYPES: ReadonlySet<string> = new Set(['gsd-executor', 'gsd-verifier', 'gsd-plan-checker', 'gsd-planner']);

@@ -146,3 +146,10 @@ test('escalationRoot degrades to the raw cwd on a resolution error, as resolveSe
   mock.mock.restore();
   assert.notEqual(escalationRoot(sub), sub, 'positive control: without the error the project root wins');
 });
+
+test('property: both guard warnings print one line whatever the workstream name, reason or model holds', () => {
+  const { formatNotWritten, formatNotRecorded } = require('../gsd-core/bin/lib/model-escalation.cjs');
+  fc.assert(fc.property(fc.string({ unit: 'binary', maxLength: 200 }), fc.string({ unit: 'binary', maxLength: 200 }), (a, b) => {
+    return [formatNotRecorded(a), formatNotRecorded(a, b), formatNotWritten(a, b)].every((line) => !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(line));
+  }));
+});

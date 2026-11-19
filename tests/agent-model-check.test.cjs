@@ -21,15 +21,22 @@ const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts
 const { createTempDir, runGsdTools, cleanup, TOOLS_PATH, saveSessionEnv, clearSessionEnv, restoreSessionEnv } = require('./helpers.cjs');
 const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN } = require('../hooks/lib/isolation-deny-reason.js');
 const { runHook, mkProject, writeConfig } = require('./helpers/agent-isolation-guard-fixtures.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved model', () => {
   const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
-  const { ESCALATION_WINDOW_MS, ESCALATION_SKEW_MS, escalationFile, parseNotWritten, parseNotRecorded } = require('../gsd-core/bin/lib/model-escalation.cjs');
-  const { sanitizeLabel } = require('../gsd-core/bin/lib/security.cjs');
+  const { ESCALATION_WINDOW_MS, ESCALATION_SKEW_MS, escalationFile, escalationRoot, formatNotWritten, formatNotRecorded, writeEscalation } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const WIN32 = process.platform === 'win32';
   const stderrLines = (stderr) => stderr.split('\n');
-  const notWritten = (stderr) => stderrLines(stderr).map(parseNotWritten).filter(Boolean);
-  const notRecorded = (stderr) => stderrLines(stderr).map(parseNotRecorded).filter(Boolean);
+  // The reason sessionRoot gives when a CLI run in `cwd` names another project root than its own.
+  const rootMismatch = (root, cwd) =>
+    `the project resolves to ${escalationRoot(fs.realpathSync(root))}, but the Agent model guard reads at ${escalationRoot(fs.realpathSync(cwd))}`;
+  // RULESET.TESTS isolation: a child env with a fresh home, PINNED and `override` on top (CONTRIBUTING.md isolatedEnv).
+  const childEnv = (t, override = {}) => {
+    const home = createTempDir('gsd-aig-home-');
+    t.after(() => cleanup(home));
+    return isolatedEnv({ home, override: { ...PINNED, ...override } });
+  };
   // adaptive + dynamic_routing: executor/verifier resolve sonnet at first
   // spawn (opus on attempt 1), plan-checker is pinned sonnet, planner opus.
   const ISSUE_CONFIG = {
@@ -259,19 +266,22 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const escalating = { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } };
     const elsewhere = createTempDir('gsd-aig-elsewhere-');
     t.after(() => cleanup(elsewhere));
-    const stderrOf = (agent) => {
-      const r = runNode([TOOLS_PATH, 'resolve-execution', agent, '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
+    const env = childEnv(t);
+    // other stderr lines (a global-defaults warning) may appear, so look for the exact line
+    const warns = (agent) => {
+      const r = runNode([TOOLS_PATH, 'resolve-execution', agent, '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env, timeoutMs: PROBE_TIMEOUT_MS });
       assert.equal(r.exitCode, 0, r.stderr);
       assert.equal(JSON.parse(r.stdout).model, 'gpt-5', 'the escalation itself proceeds');
-      return notWritten(r.stderr); // other stderr lines (a global-defaults warning) may appear
+      return stderrLines(r.stderr).includes(formatNotWritten(rootMismatch(project, elsewhere), 'gpt-5'));
     };
     setup(t, escalating);
-    assert.deepEqual(stderrOf('gsd-executor').map((w) => w.model), ['gpt-5'], 'positive control: a guarded type with the guard on warns when the root differs');
-    assert.deepEqual(stderrOf('gsd-debugger'), [], 'an agent type the hook never checks');
+    assert.equal(warns('gsd-executor'), true, 'positive control: a guarded type with the guard on warns when the root differs');
+    assert.equal(warns('gsd-debugger'), false, 'an agent type the hook never checks');
+    assert.equal(warns('x/../../escape'), false, 'a traversal-shaped agent type: the CLI guard returns before the record is tried');
     writeConfig(project, JSON.stringify({ ...escalating, hooks: { agent_model_guard: false } }));
-    assert.deepEqual(stderrOf('gsd-executor'), [], 'the guard is off');
+    assert.equal(warns('gsd-executor'), false, 'the guard is off');
     writeConfig(project, JSON.stringify({ ...escalating, runtime: 'codex' }));
-    assert.deepEqual(stderrOf('gsd-executor'), [], 'a runtime without native tier aliases');
+    assert.equal(warns('gsd-executor'), false, 'a runtime without native tier aliases');
   });
 
   test('the not-written warning prints a hostile resolved model on one line, filtered and capped like the hook reason', (t) => {
@@ -279,11 +289,11 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const elsewhere = createTempDir('gsd-aig-hostile-');
     t.after(() => cleanup(elsewhere));
     setup(t, { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: [hostile] } });
-    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
+    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
-    const warnings = notWritten(r.stderr);
-    assert.equal(warnings.length, 1, `positive control: the warning prints once: ${r.stderr}`);
-    assert.equal(warnings[0].model, `gpt-5??[2K?FORGED?${'z'.repeat(REASON_INTERPOLATION_MAX_LEN - 'gpt-5??[2K?FORGED?'.length)}`);
+    const echoed = `gpt-5??[2K?FORGED?${'z'.repeat(REASON_INTERPOLATION_MAX_LEN - 'gpt-5??[2K?FORGED?'.length)}`;
+    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(project, elsewhere), echoed)],
+      'positive control: the warning prints once, on one line, with the model filtered and capped');
   });
 
   test('the not-written warning prints a hostile session directory name on one line', { skip: WIN32 }, (t) => {
@@ -293,12 +303,10 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const elsewhere = path.join(parent, 'a\n\u001b[2K FORGED');
     fs.mkdirSync(elsewhere);
     setup(t, escalating);
-    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
+    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
-    const warnings = notWritten(r.stderr);
-    assert.equal(warnings.length, 1, `positive control: the warning prints once: ${r.stderr}`);
-    assert.equal(warnings[0].reason, sanitizeLabel(warnings[0].reason), 'the directory name reaches stderr filtered');
-    assert.equal(stderrLines(r.stderr).every((l) => parseNotWritten(l) !== null || !/FORGED/.test(l)), true, 'the directory name does not start a forged line');
+    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(project, elsewhere), 'gpt-5')],
+      'the directory name reaches stderr filtered, on the one warning line');
   });
 
   test('family match is token-bounded: substrings of custom model names do not collide', (t) => {
@@ -352,6 +360,8 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
   test('resolve-execution never writes outside .gsd for a traversal-shaped agent type', (t) => {
     setup(t, { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } });
     runGsdTools(['resolve-execution', 'x/../../escape', '--attempt', '1', '--failure-class', 'quota-exceeded'], project);
+    // the module guard on its own: the CLI guard returns first, and without this one the joined path would be tried
+    assert.doesNotThrow(() => writeEscalation(project, 'x/../../escape', 'opus'));
     assert.equal(fs.existsSync(path.join(project, 'escape.json')), false);
     assert.deepEqual(fs.readdirSync(project).filter((f) => f.includes('escape')), []);
   });
@@ -446,7 +456,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const elsewhere = createTempDir('gsd-aig-elsewhere-');
     t.after(() => cleanup(elsewhere));
     fs.symlinkSync(elsewhere, path.join(project, '.gsd'));
-    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1'], { cwd: project, timeoutMs: PROBE_TIMEOUT_MS });
+    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1'], { cwd: project, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, 'the escalation itself proceeds');
     assert.equal(JSON.parse(r.stdout).model, 'opus');
     assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), false, 'no record');
@@ -803,21 +813,22 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
 
   test('init --ws without a session id records nothing and leaves the init output unchanged', (t) => {
     const run = (session) => runNode([TOOLS_PATH, 'query', 'init.quick', 't', '--ws=alpha'],
-      { cwd: project, env: { ...process.env, ...PINNED, GSD_WORKSTREAM: '', CLAUDE_CODE_SESSION_ID: session }, timeoutMs: PROBE_TIMEOUT_MS });
+      { cwd: project, env: childEnv(t, { CLAUDE_CODE_SESSION_ID: session }), timeoutMs: PROBE_TIMEOUT_MS });
+    const says = (r) => stderrLines(r.stderr).includes(formatNotRecorded('alpha'));
     setupCarry(t, ISSUE_CONFIG, 'sess-ws');
     const bare = run('');
     assert.equal(bare.exitCode, 0, bare.stderr);
-    assert.deepEqual(notRecorded(bare.stderr), [{ ws: 'alpha' }], 'no session id: the carry is skipped and says so');
+    assert.equal(says(bare), true, 'no session id: the carry is skipped and says so');
     const withSession = run('sess-ws');
     assert.equal(withSession.exitCode, 0, withSession.stderr);
-    assert.deepEqual(notRecorded(withSession.stderr), []);
+    assert.equal(says(withSession), false);
     assert.deepEqual(JSON.parse(bare.stdout), JSON.parse(withSession.stdout));
     assert.deepEqual(carryStore().peekInitWorkstream(project, 'sess-ws', PIN), ['alpha']);
     for (const config of [{ ...ISSUE_CONFIG, runtime: 'codex' }, { ...ISSUE_CONFIG, hooks: { agent_model_guard: false } }]) {
       setupCarry(t, config);
       const quiet = run('');
       assert.equal(quiet.exitCode, 0, quiet.stderr);
-      assert.deepEqual(notRecorded(quiet.stderr), [], 'where the guard does not apply nothing is recorded and nothing is said');
+      assert.equal(says(quiet), false, 'where the guard does not apply nothing is recorded and nothing is said');
     }
   });
 
