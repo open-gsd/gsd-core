@@ -80,7 +80,7 @@ describe('ci-test-scope.cjs', () => {
       try {
         const r = runNode([SCRIPT, '--files', file], { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, GITHUB_OUTPUT: out } });
         assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
-        assert.ok(fs.readFileSync(out, 'utf8').split('\n').includes(`zsh_changed=${expected}`));
+        assert.ok(fs.readFileSync(out, 'utf8').includes(`zsh_changed=${expected}\n`));
       } finally {
         cleanup(path.dirname(out));
       }
