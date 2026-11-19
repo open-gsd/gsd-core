@@ -486,10 +486,19 @@ Fifteen test files that called asynchronous commands (`capability`, `review-lane
 | item 15, fallback-spawn version (`3a78d0e5a2`) | in-process, async commands spawned | 8 min 45 s | 61,670 |
 | item 15, three helpers (`30898f1006`) | in-process, async commands in-process | 7 min 19 s | 61,673 |
 | item 15, three helpers (`d2c23caf43`) | in-process, async commands in-process | 7 min 08 s | 61,675 |
+| item 15, three helpers (`1101be3c0b`) | in-process, async commands in-process | 7 min 05 s | 61,675 |
 
-Summed per-file time for the 239 files that call the helper fell from 1,988 s to 946 s between the first two rows. Wall clock did not move between them, and moved by about a minute and a half once the asynchronous commands were in-process too. These are single runs per head on a shared bench, so the wall-clock figures are an indication and not a measurement with a known error.
+Summed per-file time, first row against the last:
 
-What they do show: on Linux the suite's wall clock is not set by the helper. The files that never call it (install-class tests, class E in `docs/research/data/2026-11-18-test-file-classification.tsv`) took 3,246 s summed in the first row and are the slowest files in every run. **Item 17 (one install per runtime) is where the Linux wall clock is.** Item 15's larger effect is expected on Windows, where a process spawn costs several times more and the spawning files are 94% of the conformance tier; that is measured when the change runs through the merge queue.
+| | Files | Before | After | |
+|---|---|---|---|---|
+| Call `runGsdTools` | 238 | 1,988 s | 652 s | −67% |
+| Reach `gsd-tools.cjs` by any route | 344 | 2,840 s | 1,368 s | −52% |
+| All test files | 1,221 | 5,234 s | 3,408 s | −35% |
+
+These are single runs per head on a shared bench, so they are an indication and not a measurement with a known error. One run in the series showed the files that never call the helper 38% slower and the next showed them 15% faster; that spread is the noise.
+
+What the series does show: moving the synchronous calls in-process did not move the wall clock (rows one and two), and moving the asynchronous commands in-process as well took about a minute and a half off it. On Linux the wall clock is set by the install-class tests, which never call the helper (class E in `docs/research/data/2026-11-18-test-file-classification.tsv`) and are the slowest files in every run. **Item 17 (one install per runtime) is where the Linux wall clock is.** Item 15's larger effect is expected on Windows, where a process spawn costs several times more and the spawning files are 94% of the conformance tier; that is measured when the change runs through the merge queue.
 
 ### 2026-11-18 — Item 25 added: the git probe is 90% of an in-process call
 
