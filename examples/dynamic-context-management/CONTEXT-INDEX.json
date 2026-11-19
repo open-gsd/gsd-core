@@ -1577,7 +1577,7 @@
     {
       "id": "SEAM.git-commit-timeout.enforced-by",
       "klass": "SEAM",
-      "value": "test:tests/git-commit-timeout.property.test.cjs",
+      "value": "test:tests/commands.platform.test.cjs",
       "line": 239
     },
     {
