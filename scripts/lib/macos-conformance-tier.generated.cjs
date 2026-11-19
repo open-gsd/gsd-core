@@ -253,6 +253,7 @@ module.exports = {
   "tests/self-test-report-policy.test.cjs",
   "tests/settings-jsonc.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
+  "tests/shared-install-fixture.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
   "tests/shell-command-projection-md-normalize.test.cjs",
   "tests/shipped-reference-cites.test.cjs",
