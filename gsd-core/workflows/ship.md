@@ -42,7 +42,7 @@ Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, 
 
 Also load config for branching strategy:
 ```bash
-CONFIG=$(gsd_run query state.load)
+CONFIG=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Extract: `branching_strategy`, `branch_name`.
@@ -415,7 +415,7 @@ If `REVIEW_CMD` is non-empty and not `"null"`, run the external review:
 
 2. **Load phase context from STATE.md:**
    ```bash
-   STATE_STATUS=$(gsd_run query state.load 2>/dev/null | head -20)
+   STATE_STATUS=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }} 2>/dev/null | head -20)
    ```
 
 3. **Build review prompt and pipe to command via stdin:**
@@ -492,7 +492,7 @@ Report the PR URL and suggest: "Review the diff at {url}/files"
 Update STATE.md to reflect the shipping action. Write the activity line only, with its description; do not write `Status`. At ship time the Current Position block already describes the next phase, and `Status` feeds the frontmatter `status` field, so a free-text value such as "Phase N shipped" does not belong there (#5165).
 
 ```bash
-gsd_run query state.update "Last Activity" "$(date +%Y-%m-%d) -- Phase ${PHASE_NUMBER} shipped as PR #${PR_NUMBER}"
+gsd_run query state.update ${GSD_WS:+--ws=${GSD_WS##* }} "Last Activity" "$(date +%Y-%m-%d) -- Phase ${PHASE_NUMBER} shipped as PR #${PR_NUMBER}"
 ```
 
 If `commit_docs` is true, commit the ship-note AND push it onto the PR branch so
@@ -502,7 +502,9 @@ merge (#2138). The `[ci skip]` trailer suppresses the redundant pipeline the pus
 would otherwise trigger (GitHub honors `[ci skip]` / `[skip ci]`):
 
 ```bash
-gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER} [ci skip]" --files .planning/STATE.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER} [ci skip]" --files "${PLANNING_ROOT}/STATE.md"
 SHIP_NOTE_SHA=$(git rev-parse HEAD)
 git push origin ${CURRENT_BRANCH} 2>&1 || echo "⚠ track_shipping: ship-note push failed — it is local-only; rerun: git push origin ${CURRENT_BRANCH}"
 

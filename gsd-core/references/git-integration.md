@@ -136,7 +136,9 @@ SUMMARY: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
 What to commit:
 
 ```bash
-gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files .planning/phases/XX-name/{phase}-{plan}-PLAN.md .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/STATE.md .planning/ROADMAP.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "${PLANNING_ROOT}/phases/XX-name/{phase}-{plan}-PLAN.md" "${PLANNING_ROOT}/phases/XX-name/{phase}-{plan}-SUMMARY.md" "${PLANNING_ROOT}/STATE.md" "${PLANNING_ROOT}/ROADMAP.md"
 ```
 
 **Note:** Code files NOT included - already committed per-task.

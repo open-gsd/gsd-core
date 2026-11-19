@@ -95,7 +95,7 @@ PLANNER_STALL_DETECTION_ENABLED=$(gsd_run query config-get planner.stall_detecti
 [ "$PLANNER_STALL_DETECTION_ENABLED" = "false" ] || PLANNER_STALL_DETECTION_ENABLED=true
 PLANNER_STALL_INTERVAL_MINUTES=$(gsd_run query config-get planner.stall_detect_interval_minutes --raw 2>/dev/null || echo "5")
 PLANNER_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get planner.stall_threshold_minutes --raw 2>/dev/null || echo "10")
-# Both values are config-controlled (.planning/config.json, editable by any repo
+# Both values are config-controlled (the project config.json, editable by any repo
 # contributor) and both flow into `$(( ))` arithmetic below. A non-numeric
 # value there is NOT a code-execution risk (empirically verified: bash's
 # arithmetic evaluator hard-errors on a `$(cmd)`-shaped operand instead of

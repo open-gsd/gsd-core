@@ -30,6 +30,9 @@ const { splitLines } = require(
 const MARKER = '# gsd-core test owner';
 const RULES = ['/thing.json', '/thing.json.tmp-*', '/.gitignore'];
 const OPTIONS = { marker: MARKER, rules: RULES };
+// #5856: the owner appends the rule for its own staging name for every caller.
+const OWNER_RULE = '/.gitignore.tmp-*';
+const ALL_RULES = [...RULES, OWNER_RULE];
 
 function tmp(prefix) {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
@@ -67,7 +70,7 @@ describe('ensureToolOwnedGsdDir (#5757)', () => {
     const body = `${MARKER}\n/thing.json\n/.gitignore\n`;
     fs.writeFileSync(ignorePath, body);
     ensureToolOwnedGsdDir(root, OPTIONS);
-    assert.strictEqual(fs.readFileSync(ignorePath, 'utf8'), `${body}/thing.json.tmp-*\n`);
+    assert.strictEqual(fs.readFileSync(ignorePath, 'utf8'), `${body}/thing.json.tmp-*\n${OWNER_RULE}\n`);
   });
 
   test('inserts a newline before the appended block when the file lacks a trailing newline (case 11)', (t) => {
@@ -79,7 +82,7 @@ describe('ensureToolOwnedGsdDir (#5757)', () => {
     ensureToolOwnedGsdDir(root, OPTIONS);
     assert.strictEqual(
       fs.readFileSync(ignorePath, 'utf8'),
-      `user-rule\n${MARKER}\n${RULES.join('\n')}\n`,
+      `user-rule\n${MARKER}\n${ALL_RULES.join('\n')}\n`,
     );
   });
 
@@ -91,7 +94,7 @@ describe('ensureToolOwnedGsdDir (#5757)', () => {
     const randomLineArb = fc.string({ maxLength: 8 }).filter((s) => !/[\r\n]/.test(s) && s !== '*');
     // Mix in the marker and rule lines themselves so partial-presence and
     // marker-present paths are reached, not only the all-missing path.
-    const lineArb = fc.oneof(fc.constantFrom(MARKER, ...RULES), randomLineArb);
+    const lineArb = fc.oneof(fc.constantFrom(MARKER, ...ALL_RULES), randomLineArb);
     const textArb = fc.tuple(fc.array(lineArb, { maxLength: 6 }), fc.boolean())
       .map(([lines, trailing]) => lines.join('\n') + (trailing && lines.length ? '\n' : ''));
     fc.assert(fc.property(textArb, (userText) => {
@@ -101,9 +104,13 @@ describe('ensureToolOwnedGsdDir (#5757)', () => {
       ensureToolOwnedGsdDir(root, OPTIONS);
       const twice = fs.readFileSync(ignorePath, 'utf8');
       const lines = splitLines(once);
+      // The owner rule rides along whenever the merge writes; a text that already
+      // carried every caller rule is left alone (no write, so no owner rule added).
+      const wrote = once !== userText;
       return once.startsWith(userText) &&
         once === twice &&
-        RULES.every((rule) => lines.includes(rule));
+        RULES.every((rule) => lines.includes(rule)) &&
+        (!wrote || lines.includes(OWNER_RULE));
     }));
   });
 

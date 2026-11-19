@@ -8,8 +8,8 @@ Mark a shipped version (v1.0, v1.1, v2.0) as complete. Creates historical record
 
 1. templates/milestone.md
 2. templates/milestone-archive.md
-3. `.planning/ROADMAP.md`
-4. `.planning/REQUIREMENTS.md`
+3. `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`)
+4. `{planning_root}/REQUIREMENTS.md`
 5. `.planning/PROJECT.md`
 
 </required_reading>
@@ -149,7 +149,8 @@ If user selects "Proceed anyway": set `closeout_type=override_closeout`; note in
 <config-check>
 
 ```bash
-cat .planning/config.json 2>/dev/null || true
+CONFIG_PATH=$(gsd_run query config-path --raw ${GSD_WS:+--ws=${GSD_WS##* }})
+cat "${CONFIG_PATH}" 2>/dev/null || true
 ```
 
 </config-check>
@@ -217,7 +218,9 @@ Extract one-liners from SUMMARY.md files using summary-extract:
 shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 
 # For each phase in milestone, extract one-liner
-for summary in .planning/phases/*-*/*-SUMMARY.md; do
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+for summary in "${PLANNING_ROOT}"/phases/*-*/*-SUMMARY.md; do
   [ -e "$summary" ] || continue
   gsd_run query summary-extract "$summary" --fields one_liner --pick one_liner
 done
@@ -318,7 +321,7 @@ Verify after a default (archived) completion: `✅ Phase directories archived to
 After archival, the AI still handles:
 - Reorganizing ROADMAP.md with milestone grouping (requires judgment) — overwrite in place after extracting Backlog section, with the write-guard's single-use sentinel armed first (a per-step env var cannot reach a hook — see the reorganize step for the sentinel mechanics)
 - Full PROJECT.md evolution review (requires understanding; flat mode only — skipped under `--ws`)
-- Safety commit of archive files + updated ROADMAP.md, then `git rm .planning/REQUIREMENTS.md`
+- Safety commit of archive files + updated ROADMAP.md, then `git rm "$REQUIREMENTS_PATH"`
 - These are NOT fully delegated because they require AI interpretation of content
 
 </step>

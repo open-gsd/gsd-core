@@ -18,9 +18,9 @@ VERSION="$GSD_ARGS"
 ```
 
 If `$ARGUMENTS` is empty:
-1. Check `.planning/STATE.md` for current milestone version
+1. Check `{planning_root}/STATE.md` (`{planning_root}`: the active scope's root, from `planning.inspect`) for current milestone version
 2. Check `.planning/milestones/` for the latest archived version
-3. If neither found, check if `.planning/ROADMAP.md` exists (project may be mid-milestone)
+3. If neither found, check if `{planning_root}/ROADMAP.md` exists (project may be mid-milestone)
 4. If nothing found: error "No milestone found. Run /gsd:new-project or /gsd:new-milestone first."
 
 Set `VERSION` to the resolved version (e.g., "1.0").
@@ -29,27 +29,35 @@ Set `VERSION` to the resolved version (e.g., "1.0").
 
 Determine whether the milestone is **archived** or **current**:
 
-**Archived milestone** (`.planning/milestones/v{VERSION}-ROADMAP.md` exists):
+Resolve the scope root first (named project and workstream runs keep these files under their own planning root):
+```bash
+_GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
 ```
-ROADMAP_PATH=".planning/milestones/v${VERSION}-ROADMAP.md"
-REQUIREMENTS_PATH=".planning/milestones/v${VERSION}-REQUIREMENTS.md"
-AUDIT_PATH=".planning/milestones/v${VERSION}-MILESTONE-AUDIT.md"
+
+**Archived milestone** (`${PLANNING_ROOT}/milestones/v{VERSION}-ROADMAP.md` exists):
+```bash
+ROADMAP_PATH="${PLANNING_ROOT}/milestones/v${VERSION}-ROADMAP.md"
+REQUIREMENTS_PATH="${PLANNING_ROOT}/milestones/v${VERSION}-REQUIREMENTS.md"
+AUDIT_PATH="${PLANNING_ROOT}/milestones/v${VERSION}-MILESTONE-AUDIT.md"
 ```
 
 **Current/in-progress milestone** (no archive yet):
-```
-ROADMAP_PATH=".planning/ROADMAP.md"
-REQUIREMENTS_PATH=".planning/REQUIREMENTS.md"
-AUDIT_PATH=".planning/v${VERSION}-MILESTONE-AUDIT.md"
+```bash
+ROADMAP_PATH="${PLANNING_ROOT}/ROADMAP.md"
+REQUIREMENTS_PATH="${PLANNING_ROOT}/REQUIREMENTS.md"
+AUDIT_PATH="${PLANNING_ROOT}/v${VERSION}-MILESTONE-AUDIT.md"
 ```
 
-Note: The audit file moves to `.planning/milestones/` on archive (per `complete-milestone` workflow). Check both locations as a fallback.
+Note: The audit file moves to `${PLANNING_ROOT}/milestones/` on archive (per `complete-milestone` workflow). Check both locations as a fallback.
 
 **Always available:**
-```
-PROJECT_PATH=".planning/PROJECT.md"
+```bash
+GSD_WS="${GSD_WS:-}"
+PROJECT_PATH="$(gsd_run query init.resume ${GSD_WS:+--ws=${GSD_WS##* }} --pick project_path)"
 RETRO_PATH=".planning/RETROSPECTIVE.md"
-STATE_PATH=".planning/STATE.md"
+STATE_PATH="${PLANNING_ROOT}/STATE.md"
 ```
 
 Read all files that exist. Missing files are fine — the summary adapts to what's available.
@@ -63,7 +71,6 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-_GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 gsd_run query init.progress ${GSD_WS:+--ws=${GSD_WS##* }}
 ```
@@ -100,9 +107,11 @@ git log --oneline --since="<started_at_date>" | wc -l
 ```
 
 **Method 3 — Earliest phase commit** (if STATE.md has no date):
-Find the earliest `.planning/phases/` commit:
+Find the earliest `{planning_root}/phases/` commit:
 ```bash
-git log --oneline --diff-filter=A -- ".planning/phases/" | tail -1
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+git log --oneline --diff-filter=A -- "${PLANNING_ROOT}/phases/" | tail -1
 ```
 Use that commit's date as the start boundary.
 
@@ -229,7 +238,7 @@ If the user is done:
 ## Step 9: Update STATE.md
 
 ```bash
-gsd_run query state.record-session \
+gsd_run query state.record-session ${GSD_WS:+--ws=${GSD_WS##* }} \
   --stopped-at "Milestone v${VERSION} summary generated" \
   --resume-file ".planning/reports/MILESTONE_SUMMARY-v${VERSION}.md"
 ```
