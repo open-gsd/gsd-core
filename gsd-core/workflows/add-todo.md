@@ -148,7 +148,7 @@ files:
 </step>
 
 <step name="update_state">
-If `.planning/STATE.md` exists:
+If `{planning_root}/STATE.md` exists (`{planning_root}`: the active scope's root, from `planning.inspect`):
 
 1. Re-run `gsd_run query init.todos ${GSD_WS:+--ws=${GSD_WS##* }}` (same workstream flag as the first call) to get a fresh, post-write JSON snapshot (the count and rendering must reflect the change just made).
 2. **Fail-safe check (#2618):** if the JSON failed to parse, or `pending_read_ok` is not `true`, or `pending_todos_markdown` is not a string, do NOT touch the "### Pending Todos" section — leave it exactly as-is and continue to the next step. A partial or malformed `init.todos` result must never overwrite a good existing section.
@@ -159,7 +159,9 @@ If `.planning/STATE.md` exists:
 Commit the todo and any updated state:
 
 ```bash
-gsd_run query commit "docs: capture todo - [title]" --files .planning/todos/pending/[filename] .planning/STATE.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs: capture todo - [title]" --files .planning/todos/pending/[filename] "${PLANNING_ROOT}/STATE.md"
 ```
 
 Tool respects `commit_docs` config and gitignore automatically.

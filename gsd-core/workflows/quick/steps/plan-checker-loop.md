@@ -11,7 +11,7 @@ Display banner:
 
 **Verify-command path probe (#2401, #4767).** Before spawning, run the deterministic probe over
 the quick plan's `<automated>` commands and hand its JSON to the checker, exactly as
-`plan-phase.md` does. Quick plans live under `${QUICK_DIR}`, not `.planning/phases/`, so the
+`plan-phase.md` does. Quick plans live under `${QUICK_DIR}`, not `{planning_root}/phases/` (`{planning_root}`: the active scope's root, from `planning.inspect`), so the
 probe takes the directory directly. It never executes command text and never prescribes a
 replacement path.
 

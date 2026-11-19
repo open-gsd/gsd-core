@@ -1,0 +1,100 @@
+tests/ci-docs-guard-registry.test.cjs	B	linux=2338	win=1967	ci=scripts/lint-docs-guard-registration.cjs:478 (lint:ci package.json:154), scripts/lint-allow-test-rule-refs.cjs:870 (lint:ci package.json:154)
+    515: the shipped docs-paths baseline exactly matches the extracted fingerprint for every baselined file
+    584: the shipped baseline exactly matches every real docs-guard-exempt marker in tests/
+tests/command-contract.test.cjs	B	linux=451	win=null	ci=scripts/lint-command-contract.cjs:? (lint:ci package.json:154)
+tests/completion-predicate-drift-guard.test.cjs	B	linux=3129	win=null	ci=scripts/lint-completion-predicate-drift.cjs:889 (lint:ci package.json:154)
+    44: zero violations across the whole scan surface (src/ + prompt layer)
+    581: scanRepo against the real repo tree is capable of finding a deliberate shape (d) fixture (not silently swallow
+tests/completion-ratio-scope-withholding.test.cjs	B	linux=20032	win=40291	ci=scripts/lint-completion-ratio-drift.cjs:203 (lint:ci package.json:154)
+    562: E3: scripts/lint-completion-ratio-drift.cjs on the real tree — still an earned 0 for rules 1-2
+tests/completion-ratio-single-owner.test.cjs	B	linux=1705	win=null	ci=scripts/lint-completion-ratio-drift.cjs:203 (lint:ci package.json:154)
+    279: a clean temp tree with no re-derivations reports zero violations
+    292: scanRepo(repoRoot) against the real repo returns EMPTY — zero independent re-derivations
+tests/context-index-sync.test.cjs	A	linux=56	win=null	ci=scripts/gen-context-index.cjs:437 (lint:ci package.json:154), scripts/lint-example-parser-parity.cjs:393 (lint:ci package.json:154)
+tests/emitted-provenance.test.cjs	A	linux=26167	win=75404	ci=scripts/gen-plugin-skills.cjs:? (lint:ci package.json:154)
+    99: every attributed source exists in the repo (identity/rewrite/derived rules)
+    414: every declared transform path exists in the repo
+tests/enumeration-drift-guard.test.cjs	B	linux=704	win=null	ci=scripts/lint-phase-enumeration-drift.cjs:503 (lint:ci package.json:154)
+tests/evaluation-scope-drift-lint.test.cjs	B	linux=101	win=null	ci=scripts/lint-evaluation-scope-drift.cjs:226 (lint:ci package.json:154)
+    102: [happy] the real tree has zero bespoke derivations beyond the pinned allowlist
+tests/frontmatter-fence.test.cjs	B	linux=500	win=null	ci=scripts/lint-frontmatter-fence-drift.cjs:301 (lint:ci package.json:154), scripts/lint-frontmatter-scalar-broad-grep.cjs:343 (lint:ci package.json:154)
+tests/gsd-quick-batch-quick-regression.test.cjs	B	linux=27	win=null	ci=scripts/lint-test-file-count.cjs:301 (lint:ci package.json:154), scripts/lint-response-language-coverage.cjs:514 (lint:ci package.json:154)
+tests/lint-allowed-tools-parity.test.cjs	B	linux=30	win=null	ci=scripts/lint-allowed-tools-parity.cjs:221 (lint:ci package.json:154)
+    149: the exemption list has no stale entries on the real tree
+tests/lint-compiled-artifact-sync.test.cjs	B	linux=110	win=null	ci=scripts/lint-compiled-artifact-sync.cjs:149 (lint:ci package.json:154)
+tests/lint-docs-command-form.test.cjs	B	linux=549	win=null	ci=scripts/lint-docs-command-form.cjs:188 (lint:ci package.json:154)
+    214: exits 0 on a clean fixture repo with no colon-form commands
+tests/lint-frontmatter-scalar-broad-grep.test.cjs	B	linux=464	win=null	ci=scripts/lint-frontmatter-scalar-broad-grep.cjs:343 (lint:ci package.json:154)
+    129: exit 0 on the real repo tree
+    155: exit 0 on a fixture that is properly scoped (no false positive)
+tests/lint-gate-evidence-drift.test.cjs	B	linux=134295	win=null	ci=scripts/lint-gate-evidence-drift.cjs:1085 (lint:ci package.json:154)
+    311: the allowlisted site is real and tolerated: without the entry it is the one finding, with it the tree is clean
+    328: the census is zero in every class, over a non-trivial set of hosts
+    410: verb-no-gate-exit: the same verb is clean once it reaches declareGateExit, directly or through a helper
+tests/lint-gate-positive-control.test.cjs	B	linux=2237	win=null	ci=scripts/lint-gate-positive-control.cjs:523 (lint:ci package.json:154)
+    350: realTreeCensusIsZero: 16 gate modules (ADR-5057 census, arm C closed), every count zero
+tests/lint-health-diagnostic-rule-table.test.cjs	B	linux=179	win=null	ci=scripts/lint-health-diagnostic-rule-table.cjs:? (lint:ci package.json:154)
+    148: passes for a real code (W001) against the real tests/ tree
+    210: W024 is exempted (not uncovered, not silently "covered") against the real tests/ tree and the real PERMANENTLY
+    308: every code cmdStateValidate can emit is fixture-covered against the real state test file
+tests/lint-phase-arg-assignment.test.cjs	B	linux=90	win=86	ci=scripts/lint-phase-arg-assignment.cjs:257 (lint:ci package.json:154)
+    92: reports the shipped defect: a read with no assignment
+tests/lint-planning-artifact-writer-drift.test.cjs	B	linux=1652	win=null	ci=scripts/lint-planning-artifact-writer-drift.cjs:385 (lint:ci package.json:154)
+    38: reports zero violations against the actual src/*.cts tree
+    47: the real tree also has REAL statically-resolvable candidates (the detector is not silently inert)
+tests/lint-planning-document-positive-control.test.cjs	B	linux=435	win=null	ci=scripts/lint-planning-document-positive-control.cjs:314 (lint:ci package.json:154), scripts/lint-table-schema-drift.cjs:155 (lint:ci package.json:154)
+    108: scanRepo reports zero violations against the real repo tree
+    199: reports zero violations for a fully-covered, non-stale registry
+tests/lint-portable-grep.test.cjs	B	linux=24	win=null	ci=scripts/lint-portable-grep.cjs:176 (lint:ci package.json:154)
+tests/lint-pr-branch-pattern-drift.test.cjs	B	linux=10	win=null	ci=scripts/lint-pr-branch-pattern-drift.cjs:144 (lint:ci package.json:154)
+    103: PASS: scanRepo finds zero drift against the real shipped pr-branch.md (npm run build:lib must have run)
+tests/lint-pr-check-project-dir.test.cjs	B	linux=99	win=null	ci=scripts/lint-pr-check-project-dir.cjs:88 (lint:ci package.json:154)
+tests/lint-regression-test-names.test.cjs	B	linux=657	win=null	ci=scripts/lint-regression-test-names.cjs:? (lint:ci package.json:154)
+tests/lint-resolution-provenance.test.cjs	B	linux=24	win=null	ci=scripts/lint-resolution-provenance.cjs:201 (lint:ci package.json:154)
+tests/lint-retired-runtime-name.test.cjs	B	linux=7569	win=null	ci=scripts/lint-docs-guard-registration.cjs:478 (lint:ci package.json:154)
+tests/lint-source-test-name-collision.test.cjs	B	linux=36	win=null	ci=scripts/lint-source-test-name-collision.cjs:241 (lint:ci package.json:154), scripts/lint-fix-has-regression-tests.cjs:? (lint:ci package.json:154)
+    26: the real repo tree passes (post-rename)
+tests/lint-state-field-drift-retained.test.cjs	B	linux=694	win=null	ci=scripts/lint-state-field-drift.cjs:783 (lint:ci package.json:154), scripts/lint-state-write-path-drift.cjs:1012 (lint:ci package.json:154)
+tests/lint-test-file-count.test.cjs	B	linux=467	win=null	ci=scripts/lint-test-file-count.cjs:301 (lint:ci package.json:154)
+    517: exits 0 against real repo (allowlist covers all current violations)
+tests/lint-vendored-deps-manifest.test.cjs	B	linux=612	win=null	ci=scripts/lint-vendored-deps.cjs:431 (lint:ci package.json:154)
+    120: fresh state: re2js has zero findings today (sanity baseline before mutating)
+tests/lint-verify-lifecycle-writes.test.cjs	B	linux=381	win=null	ci=scripts/lint-verify-lifecycle-writes.cjs:458 (lint:ci package.json:154)
+    30: scanRepo(REPO_ROOT) finds ≥3 render-hooks sites and reports zero violations
+tests/lint-workflow-shellcheck.test.cjs	B	linux=45	win=null	ci=scripts/lint-workflow-shellcheck.cjs:598 (lint:ci package.json:154)
+tests/markdown-table.test.cjs	B	linux=6300	win=null	ci=scripts/lint-table-schema-drift.cjs:155 (lint:ci package.json:154)
+tests/mempalace-capture-gate-default.test.cjs	A	linux=38	win=null	ci=scripts/gen-plugin-skills.cjs:? (lint:ci package.json:154)
+tests/milestone-window-drift-guard.test.cjs	B	linux=925	win=null	ci=scripts/lint-milestone-window-drift.cjs:450 (lint:ci package.json:154)
+tests/milestone-window-single-owner.test.cjs	B	linux=10621	win=27202	ci=scripts/lint-milestone-window-drift.cjs:450 (lint:ci package.json:154)
+tests/mutation-test-derivation-drift.test.cjs	B	linux=130	win=null	ci=scripts/lint-mutation-test-derivation-drift.cjs:86 (lint:ci package.json:154)
+tests/no-bare-gsd-tools-command-position.test.cjs	A	linux=61	win=null	ci=scripts/gen-plugin-skills.cjs:? (lint:ci package.json:154)
+tests/packaging-shipped-scripts-require-only-shipped.test.cjs	B	linux=17550	win=10045	ci=scripts/lint-no-adhoc-regex-escape.cjs:236 (lint:ci package.json:154), scripts/gen-adr-index.cjs:1222 (lint:ci package.json:154)
+tests/phase-locator.test.cjs	B	linux=7184	win=17050	ci=scripts/lint-phase-enumeration-drift.cjs:503 (lint:ci package.json:154)
+    1870: F3: guardCanFail — both detectors are demonstrated failing above (not merely asserted passing), and the real t
+tests/plan-count-single-owner.test.cjs	B	linux=193	win=290	ci=scripts/lint-plan-count-drift.cjs:304 (lint:ci package.json:154)
+    843: (b) a symlinked .cts pointing OUTSIDE the root is NOT scanned: zero violations reported
+tests/planning-prompt-drift.test.cjs	B	linux=430	win=898	ci=scripts/lint-planning-prompt-drift.cjs:457 (lint:ci package.json:154)
+    224: a clean temp tree with no re-derivations reports zero violations
+    394: the default invocation (no --root) still scans the real repo green
+tests/planning-snapshot-bypass-drift.test.cjs	B	linux=25	win=null	ci=scripts/lint-planning-snapshot-bypass-drift.cjs:526 (lint:ci package.json:154), scripts/lint-completion-ratio-drift.cjs:203 (lint:ci package.json:154)
+tests/progress-drift-guard.test.cjs	B	linux=null	win=null	ci=scripts/lint-roadmap-progress-drift.cjs:405 (lint:ci package.json:154)
+    59: the real tree has no hand-written Progress or phase-entry pattern
+    67: the CLI exits 0 on the real tree
+tests/release-backmerge-invariants.test.cjs	A	linux=35	win=null	ci=scripts/gen-capability-registry.cjs:978 (lint:ci package.json:154)
+tests/removed-but-needed-lint.test.cjs	B	linux=3280	win=null	ci=scripts/lint-removed-but-needed.cjs:1000 (lint:ci package.json:154)
+    901: returns only the gitignored paths of a real repo
+tests/response-language-coverage.test.cjs	B	linux=216	win=381	ci=scripts/lint-response-language-coverage.cjs:514 (lint:ci package.json:154)
+    252: the shipped plan-phase/detail/elaboration.md fixture is covered in the real catalog (#4403)
+tests/run-with-timeout.test.cjs	B	linux=13239	win=15635	ci=scripts/lint-portable-timeout.cjs:140 (lint:ci package.json:154)
+tests/slug-derivation-drift-guard.test.cjs	B	linux=19256	win=4271	ci=scripts/lint-slug-derivation-drift.cjs:904 (lint:ci package.json:154)
+    82: the real owner file at its real repo-relative path is not flagged (allowlist entry present as a defensive back
+    358: a clean temp tree with no re-derivations reports zero violations
+    402: T8: scanRepo(repoRoot) against the real repo returns EMPTY after the Task-2 fixes (was 2 TRUE positives)
+tests/state-field-drift.test.cjs	B	linux=503	win=null	ci=scripts/lint-state-field-drift.cjs:783 (lint:ci package.json:154)
+tests/state-write-path-drift-guard.test.cjs	B	linux=2019	win=null	ci=scripts/lint-state-write-path-drift.cjs:1012 (lint:ci package.json:154)
+tests/table-schema-drift-lint.test.cjs	B	linux=108	win=null	ci=scripts/lint-table-schema-drift.cjs:155 (lint:ci package.json:154)
+    83: scanRepo finds zero drift against the current TABLE_SCHEMAS registry
+tests/ui-spec-inventory-provenance.test.cjs	A	linux=139	win=null	ci=scripts/lint-allow-test-rule-refs.cjs:870 (lint:ci package.json:154)
+tests/unreachable-guard-drift.test.cjs	B	linux=1421	win=1472	ci=scripts/lint-unreachable-guard-drift.cjs:805 (lint:ci package.json:154), scripts/lint-planning-prompt-drift.cjs:457 (lint:ci package.json:154)
+    875: C1a: the guard is green on the real committed tree (real CLI, real baseline, no isolation needed for a read-on
+total files referencing a lint:ci script: 55 with real-tree-style test titles: 29

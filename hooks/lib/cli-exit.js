@@ -264,6 +264,13 @@ class ExitError extends Error {
     }
 }
 /**
+ * The entrypoint form of runMainAsync (documented below): starts it and
+ * discards the promise, which never rejects.
+ */
+function runMain(main) {
+    void runMainAsync(main);
+}
+/**
  * Run a CLI main and translate its outcome into process.exitCode (never
  * process.exit, so n/no-process-exit stays satisfied; output flushes and
  * process.on('exit') cleanup still fires — this is precisely why runMain and
@@ -310,9 +317,14 @@ class ExitError extends Error {
  *   thrown ExitError -> process.exitCode = err.code (+ stderr err.message if hasUserMessage && code!=0) (unchanged)
  *   other throw -> when json-error mode is active, emits structured { ok:false, reason, message }
  *                  to stderr; otherwise writes raw stack trace. exit code = 1 in either case. (unchanged)
+ *
+ * #6332: the body lives in runMainAsync, which returns the settling promise,
+ * so an in-process caller (src/in-process-cli.cts) can wait for the exit code
+ * to be decided. runMain is the entrypoint form and discards the promise; the
+ * chain ends in a catch that handles every rejection, so it never rejects.
  */
-function runMain(main) {
-    Promise.resolve()
+function runMainAsync(main) {
+    return Promise.resolve()
         .then(() => main())
         .then((result) => {
         // Cleared on EVERY branch below, not only the pending-cell-consuming
@@ -559,6 +571,7 @@ function terminateNow(outcome, payload, stderrPayload) {
 module.exports = {
     ExitError,
     runMain,
+    runMainAsync,
     setJsonErrorMode,
     getJsonErrorMode,
     EXIT_ENVELOPE_REASON,

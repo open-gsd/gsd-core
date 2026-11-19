@@ -157,7 +157,7 @@ Using the 12 canonical points and per-step `agentRoles` from `loop-host-contract
 | `discuss:post` | step | skill `mempalace-capture` | — | `CONTEXT.md` | `mempalace.capture_artifacts` | File CONTEXT → `decisions`; KG decision facts |
 | `plan:pre` | step | skill `mempalace-recall` | `MEMORY-RECALL.md` | `CONTEXT.md` | `mempalace.recall_on_plan` | Retrieve prior decisions/patterns/surprises for the plan |
 | `plan:post` | step | skill `mempalace-capture` | — | `PLAN.md` | `mempalace.capture_artifacts` | File PLAN → `planning` |
-| `execute:wave:post` | contribution | into `verifier` | — | — | `mempalace.capture_artifacts` | Capture confirmed problems→fixes into `problems` |
+| `execute:post` | contribution | into `verifier` | — | — | `mempalace.capture_artifacts` | Capture confirmed problems→fixes into `problems` |
 | `verify:post` | step | skill `mempalace-capture` | — | `SUMMARY.md` | `mempalace.capture_artifacts` | File milestones; mirror `extract-learnings` → KG + `learnings` |
 | `ship:post` | step | agent `gsd-mempalace-curator` | — | `UAT.md` | `mempalace.diary_journal` | Diary entry; cross-project tunnels; `sync --apply` |
 
@@ -218,7 +218,7 @@ All steps/contributions are `onError: skip`. No gates.
   ],
   "contributions": [
     { "point": "discuss:pre",        "into": "orchestrator", "fragment": { "path": "fragments/recall-discuss.md" }, "when": "mempalace.recall_on_discuss", "onError": "skip" },
-    { "point": "execute:wave:post",  "into": "verifier",     "fragment": { "path": "fragments/capture-problems.md" }, "when": "mempalace.capture_artifacts", "onError": "skip" }
+    { "point": "execute:post",       "into": "verifier",     "fragment": { "path": "fragments/capture-problems.md" }, "when": "mempalace.capture_artifacts", "onError": "skip" }
   ],
   "gates": []
 }

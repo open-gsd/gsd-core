@@ -72,6 +72,62 @@ describe('scan-sessions command', () => {
   });
 });
 
+// ─── #6332: the session readers go through main's output handling ────────────
+//
+// extract-messages and profile-sample used to drop their router's promise, so
+// main() finished before they wrote anything and their output bypassed what
+// main does to every other command's output: `--pick` saw nothing ("command
+// output was not JSON", exit 1) and a result over 50 KB was printed as a bare
+// `@file:<path>` instead of the JSON it names.
+describe('#6332: extract-messages and profile-sample output goes through main', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-profile-test-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function sessionsWith(projectNames) {
+    const sessionsDir = path.join(tmpDir, 'projects');
+    for (const name of projectNames) {
+      fs.mkdirSync(path.join(sessionsDir, name), { recursive: true });
+      fs.writeFileSync(
+        path.join(sessionsDir, name, 'session-001.jsonl'),
+        `${JSON.stringify({ type: 'user', userType: 'external', message: { content: `hello from ${name}` }, timestamp: Date.now() })}\n`,
+      );
+    }
+    return sessionsDir;
+  }
+  const env = () => ({ GSD_TEMP_DIR: path.join(tmpDir, 'gsd-tmp') });
+
+  test('--pick returns the named field of extract-messages', () => {
+    const sessionsDir = sessionsWith(['my-project']);
+    const result = runGsdTools(['extract-messages', 'my-project', '--path', sessionsDir, '--pick', 'messages_extracted'], tmpDir, env());
+    assert.deepStrictEqual(result, { success: true, output: '1', exitCode: 0 });
+  });
+
+  test('--pick returns the named field of profile-sample', () => {
+    const sessionsDir = sessionsWith(['my-project']);
+    const result = runGsdTools(['profile-sample', '--path', sessionsDir, '--pick', 'messages_sampled'], tmpDir, env());
+    assert.deepStrictEqual(result, { success: true, output: '1', exitCode: 0 });
+  });
+
+  test('a profile-sample result over 50 KB is printed as JSON, not as an @file: reference', () => {
+    // 700 projects with long names make the per-project breakdown exceed 50 KB.
+    const names = Array.from({ length: 700 }, (_, i) => `project-${String(i).padStart(4, '0')}-${'x'.repeat(60)}`);
+    const sessionsDir = sessionsWith(names);
+    const result = runGsdTools(['profile-sample', '--path', sessionsDir, '--limit', '700'], tmpDir, env());
+    assert.ok(result.success, `Failed: ${result.error}`);
+    assert.ok(Buffer.byteLength(result.output) > 50 * 1024, `the fixture must exceed the 50 KB threshold, got ${Buffer.byteLength(result.output)}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.projects_sampled, 700);
+    assert.strictEqual(out.project_breakdown.length, 700);
+  });
+});
+
 // ─── extract-messages ─────────────────────────────────────────────────────────
 
 describe('extract-messages command', () => {

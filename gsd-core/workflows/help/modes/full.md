@@ -22,7 +22,7 @@ Not sure where to start? `/gsd:next` reads your project state and routes you to 
 **`/gsd:next`**
 The state-aware front door. Detects your current situation and presents a short menu of the right next actions.
 
-- Reads `.planning/STATE.md`, git state, and verification signals via `gsd-tools smart-entry`
+- Reads `{planning_root}/STATE.md` (`{planning_root}`: the active scope's root, from `planning.inspect`), git state, and verification signals via `gsd-tools smart-entry`
 - Classifies your situation (no-project, paused, blocked, planning, executing, needs-verify, idle, complete, …)
 - Shows a situation-appropriate menu with one recommended action, then dispatches
 - Launcher/router only — it never does the work itself; falls back to `/gsd:progress` if detection is unavailable
@@ -127,7 +127,7 @@ Create detailed execution plan for a specific phase.
 - `--no-tracer` — opt out of the default tracer-first slice and plan horizontal layers (legacy default)
 - `--no-reversibility-gates` — suppress the `checkpoint:decision` a `one-way`-door decision normally earns, for intentionally-unattended runs (ratings are still recorded)
 
-- Generates `.planning/phases/XX-phase-name/XX-YY-PLAN.md`
+- Generates `{planning_root}/phases/XX-phase-name/XX-YY-PLAN.md`
 - Breaks phase into concrete, actionable tasks
 - Includes verification criteria and success measures
 - Multiple plans per phase supported (XX-01, XX-02, etc.)
@@ -549,7 +549,7 @@ Configure workflow toggles and model profile interactively.
 
 - Toggle researcher, plan checker, verifier agents
 - Select model profile (quality/balanced/budget/inherit)
-- Updates `.planning/config.json`
+- Updates `{planning_root}/config.json`
 
 Usage: `/gsd:settings`
 
@@ -585,10 +585,10 @@ Usage: `/gsd:surface disable utility`
 **`/gsd:cleanup`**
 Archive accumulated phase directories from completed milestones.
 
-- Identifies phases from completed milestones still in `.planning/phases/`
+- Identifies phases from completed milestones still in `{planning_root}/phases/`
 - Shows dry-run summary before moving anything
 - Moves phase dirs to `.planning/milestones/v{X.Y}-phases/`
-- Use after multiple milestones to reduce `.planning/phases/` clutter
+- Use after multiple milestones to reduce `{planning_root}/phases/` clutter
 
 Usage: `/gsd:cleanup`
 
@@ -754,11 +754,11 @@ Set during `/gsd:new-project`:
 - Executes plans without confirmation
 - Only stops for critical checkpoints
 
-Change anytime by editing `.planning/config.json`
+Change anytime by editing `{planning_root}/config.json`
 
 ## Planning Configuration
 
-Configure how planning artifacts are managed in `.planning/config.json`:
+Configure how planning artifacts are managed in `{planning_root}/config.json`:
 
 **`planning.commit_docs`** (default: `true`)
 - `true`: Planning artifacts committed to git (standard workflow)
@@ -840,7 +840,7 @@ Example config:
 ## Getting Help
 
 - Read `.planning/PROJECT.md` for project vision
-- Read `.planning/STATE.md` for current context
-- Check `.planning/ROADMAP.md` for phase status
+- Read `{planning_root}/STATE.md` for current context
+- Check `{planning_root}/ROADMAP.md` for phase status
 - Run `/gsd:progress` to check where you're up to
 </reference>

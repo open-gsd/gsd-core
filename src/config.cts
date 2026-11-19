@@ -120,6 +120,8 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
   // without an agent_hint field, so existing dispatch is byte-identical.
   'workflow.agent_hint_routing': true,
+  // #6302 (ADR-3711 D1): the opt-in gate for dispatching a plan to a foreign executor; off unless set.
+  'workflow.cross_runtime_execution': false,
   // #4401: Compact Content mode gate — derived from the defaults manifest via
   // CONFIG_DEFAULTS (added in config-loader.cts) so the manifest stays the
   // single source of truth, matching workflow.smart_zone_tokens /
@@ -475,6 +477,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
       context_guard_mode: 'warn',
       text_mode: false,
       compact_content: false,
+      agent_hint_routing: true, // #6211: parity with the defaults manifest is tested
       research_before_questions: false,
       discuss_mode: 'discuss',
       skip_discuss: false,
@@ -1530,6 +1533,45 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
     if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
     error(message, reason);
   };
+
+  // #5470: `commit_docs` and `search_gitignored` answer, under either
+  // spelling, with the value the runtime resolves, not a literal path walk
+  // (their CONFIG_KEY_ALIASES entries say `configGet: 'loader'`). Shipped
+  // workflows read both through the flat key while the docs write the nested
+  // one, so after `config-set planning.commit_docs false` (the
+  // keep-planning-docs-private how-to) a `config-get commit_docs` read was
+  // "Key not found", and every workflow gate's `|| echo "true"` fallback
+  // committed `.planning/`. The loader also derives values the walk cannot
+  // (a gitignored `.planning/` resolves `commit_docs` to false). Same
+  // invariant as #2256: config-get must not disagree with the runtime. A value
+  // the loader resolves, null included, is printed and `--default` does not
+  // apply. The other loader aliases stay on the walk below, which ADR-5057
+  // makes the authority for gate config. `persist: false` because a read must
+  // not rewrite config.json (#3648).
+  // A config file the loader reports unusable (CONFIG_UNPARSEABLE /
+  // CONFIG_UNREADABLE) is not reported as a value: the loader discards it and
+  // resolves defaults, so `true` would read as the user's setting. config-get
+  // fails with CONFIG_PARSE_FAILED instead (ADR-1411: corrupt is not absent).
+  // The file can be, for example, the scoped config.json, the root config.json
+  // a workstream inherits from, or ~/.gsd/defaults.json when there is no
+  // .planning/; the loader has already named it on stderr. The loader's
+  // workstream fallback (GSD_PROJECT and GSD_WORKSTREAM both set, a usable
+  // root) reports no fault in what it falls back to (the GSD_PROJECT
+  // config.json, or ~/.gsd/defaults.json when that project has no directory),
+  // so there config-get prints the defaults the runtime resolves.
+  const loaderAlias = configLoader.configKeyAliasFor(kp);
+  if (loaderAlias?.configGet === 'loader') {
+    const resolution = configLoader.loadConfigResolved(cwd, { persist: false });
+    if (resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNPARSEABLE
+      || resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNREADABLE) {
+      error(`Failed to read config: ${resolution.reason} (the file named in the warning above)`, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const resolved = configLoader.readResolvedAlias(resolution.config, loaderAlias);
+    if (resolved !== undefined) {
+      emitConfigValue(kp, resolved, raw);
+      return;
+    }
+  }
 
   let config: Record<string, unknown> = {};
   try {

@@ -2975,7 +2975,11 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
 describe('validate agents against a real fresh Codex install (#5496)', () => {
   const { createTempDir } = require('./helpers.cjs');
   const { OUTCOME } = require('./helpers/process-seam.cjs');
-  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS, TIMEOUT_EVIDENCE } = require('./helpers/timeouts.cjs');
+  const { MIN_TIMEOUT_MARGIN } = require('./helpers/timeout-evidence.cjs');
+  // #6143: Tests run 43090201759 (windows-latest, shard 1/3) killed this spawn at 15020ms, so its true duration
+  // was at least that; a sibling spawn in the same job took 10972ms.
+  const OBSERVED_WIN32_COLD_START_MS = 15020;
   let codexHome;
   beforeEach(() => {
     codexHome = createTempDir('gsd-5496-install-');
@@ -2983,18 +2987,34 @@ describe('validate agents against a real fresh Codex install (#5496)', () => {
   });
   afterEach(() => { cleanup(codexHome); });
 
-  const validateAgents = () => {
+  // `spawnNode` is injected so the budget test can read the spawn options without spawning anything.
+  const validateAgents = (spawnNode = runNode) => {
     const tools = path.join(codexHome, 'gsd-core', 'bin', 'gsd-tools.cjs');
     assert.ok(fs.existsSync(tools), 'the install must ship gsd-tools.cjs');
-    const r = runNode([tools, 'validate', 'agents', '--json'], {
+    const r = spawnNode([tools, 'validate', 'agents', '--json'], {
       cwd: codexHome,
-      timeoutMs: PROBE_TIMEOUT_MS,
+      // One gsd-tools.cjs subcommand via runNode (GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS), not a light probe.
+      timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
       env: { ...process.env, GSD_RUNTIME: 'codex', GSD_AGENTS_DIR: path.join(codexHome, 'agents'), CODEX_HOME: codexHome, HOME: codexHome, USERPROFILE: codexHome, GSD_HOME: codexHome },
     });
     // The exit code is not asserted (violations may exit non-zero); a timeout or spawn failure must name itself.
     assert.strictEqual(r.outcome, OUTCOME.EXITED, `validate agents did not exit: ${r.summary}`);
     return JSON.parse(r.stdout);
   };
+
+  test('the validate-agents spawn budget covers the observed Windows cold start (#6143)', () => {
+    let seen;
+    validateAgents((_args, opts) => { seen = opts; return { outcome: OUTCOME.EXITED, stdout: '{}', summary: 'budget probe, no spawn' }; });
+    assert.strictEqual(seen.timeoutMs, GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS, 'the site uses its documented class: one gsd-tools.cjs subcommand via runNode');
+    assert.ok(
+      seen.timeoutMs >= MIN_TIMEOUT_MARGIN * OBSERVED_WIN32_COLD_START_MS,
+      `budget ${seen.timeoutMs}ms must be at least ${MIN_TIMEOUT_MARGIN}x the ${OBSERVED_WIN32_COLD_START_MS}ms the spawn was observed to need`,
+    );
+    assert.ok(
+      TIMEOUT_EVIDENCE.GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS.observedMaxMs >= OBSERVED_WIN32_COLD_START_MS,
+      "the class evidence must record this site's observed win32 duration",
+    );
+  });
 
   test('a clean install reports no sandbox_posture violations', () => {
     const out = validateAgents();
