@@ -12,7 +12,7 @@ const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { parseArgs } = require('../scripts/run-tests.cjs');
+const { parseArgs, selectExplicitFiles, walkTestFiles } = require('../scripts/run-tests.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'ci-test-scope.cjs');
@@ -158,10 +158,14 @@ describe('ci-test-scope.cjs', () => {
       ['required-tests result env', gate.steps[0].env.TEST_INSERT_SHELL_RESULT, '${{ needs.test-insert-shell.result }}'],
     ];
     for (const [label, actual, expected] of table) assert.deepStrictEqual(actual, expected, label);
-    // The run goes through run-tests.cjs, which accepts the arguments and selects exactly the insert-phase test.
+    // The run goes through run-tests.cjs, which accepts the arguments and selects exactly the insert-phase test
+    // from the files on disk: a renamed or deleted test file fails here, not in CI.
     const parsed = parseArgs(steps[runStep].run.trim().split(/\s+/).slice(2));
     assert.strictEqual(parsed.error, undefined, 'run-tests.cjs accepts the job arguments');
-    assert.deepStrictEqual(parsed.files.split(/\s+/), ['tests/insert-phase-sibling-docs.test.cjs']);
+    assert.deepStrictEqual(
+      selectExplicitFiles(walkTestFiles(path.join(ROOT, 'tests'), '').sort(), parsed.files, parsed.filesFrom),
+      { files: ['insert-phase-sibling-docs.test.cjs'] },
+    );
   });
 
   test('a different tests/ .jsonl is not exempt', () => {
