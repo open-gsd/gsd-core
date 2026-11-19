@@ -269,6 +269,15 @@ function _resetModelPolicyWarningCacheForTests(): void {
 // resolution; #4192 keeps the warn-once breadcrumb but changes the behavior to
 // a verbatim pass-through, so the text now describes the pass-through.
 const _modelOverrideUnmappableWarned = new Set<string>();
+
+// #6332: per invocation; an in-process caller resets it between calls.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('model-resolver.unmappableWarnings', () => {
+  _modelPolicyUnmappableWarned.clear();
+  _modelOverrideUnmappableWarned.clear();
+});
+
 function warnModelOverrideUnmappable(agentType: string, overrideValue: string): void {
   const key = `${agentType}::${overrideValue}`;
   if (_modelOverrideUnmappableWarned.has(key)) return;

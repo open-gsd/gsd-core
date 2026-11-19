@@ -88,10 +88,12 @@ still apply.
 
 ```bash
 # Commit with automatic commit_docs + gitignore checks:
-gsd_run query commit "docs: update state" --files .planning/STATE.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs: update state" --files "${PLANNING_ROOT}/STATE.md"
 
 # Load config via state load (returns JSON):
-INIT=$(gsd_run query state.load)
+INIT=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 # commit_docs is available in the JSON output
 
@@ -108,7 +110,9 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 **Commit via CLI (handles checks automatically):**
 
 ```bash
-gsd_run query commit "docs: update state" --files .planning/STATE.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs: update state" --files "${PLANNING_ROOT}/STATE.md"
 ```
 
 The CLI checks `commit_docs` config and gitignore status internally — no manual conditionals needed.
@@ -203,7 +207,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 Or use `state load` for the config values:
 ```bash
-INIT=$(gsd_run query state.load)
+INIT=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 # Parse branching_strategy, phase_branch_template, milestone_branch_template from JSON
 ```

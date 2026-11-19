@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, error, captureStdoutSyncWrites, resolveAtFileOutput } = io;
+const { output, error, captureStdoutMaybeSync, resolveAtFileOutput } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { collectSection, withSection, tokenizeHeadings, stripFencedCode, scanFencedBlocks } = markdownSectionizer;
@@ -170,6 +170,13 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
 
   const results: UatFileResult[] = [];
   let acknowledgedFiles = 0;
+  // #6231: every UAT / VERIFICATION / deferred-items document the scan actually
+  // READ, whether or not it yielded an item. `results` only holds files with
+  // something to report, so `total_files` is 0 both for a tree of clean files
+  // and for a tree the scan never reached; this counter tells them apart.
+  // A file that is read and then skipped as acknowledged still counts (it was
+  // examined); a file refused by the containment check is neither read nor counted.
+  let filesScanned = 0;
 
   // Active dirs are milestone-filtered; archived dirs deliberately are NOT.
   // listMilestonePhaseDirs derives the CURRENT milestone's phase directories
@@ -214,6 +221,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
       // `### N. <name>` and `expected:` text it points at never reaches the
       // audit output.
       if (!isReportContained(phaseDir, uatFilePath)) continue;
+      filesScanned++;
       const content = readNormalizedDocument(uatFilePath);
       const { items, headingsSeen } = parseUatItemsWithStats(content);
       const uatFm = extractFrontmatter(content, uatFilePath) as Record<string, unknown>;
@@ -287,6 +295,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
       // #5118 security review (S1): containment BEFORE the read — an escaping
       // report reads `missing` and never reaches `reportStatusOf`'s message.
       if (!isReportContained(phaseDir, verificationFilePath)) continue;
+      filesScanned++;
       const content = readNormalizedDocument(verificationFilePath);
       const verFm = extractFrontmatter(content, verificationFilePath) as Record<string, unknown>;
       // #5118: the owner's report reader judges `status` (exact match, no case
@@ -326,6 +335,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     // required.
     const deferredFile = 'deferred-items.md';
     if (files.includes(deferredFile)) {
+      filesScanned++;
       const content = readNormalizedDocument(path.join(phaseDir, deferredFile));
       const items = parseDeferredItems(content);
       if (items.length > 0) {
@@ -348,6 +358,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     total_files: number;
     total_items: number;
     parse_gap_files: number;
+    files_scanned: number;
     by_category: Record<string, number>;
     by_phase: Record<string, number>;
     current_milestone: { files: number; items: number };
@@ -373,6 +384,11 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     // to the identical row when it happened to parse — the exact bug class
     // this issue exists to fix.
     parse_gap_files: results.filter((r) => r.parse_gap).length,
+    // #6231: additive. `0` means the scan read no UAT / VERIFICATION /
+    // deferred-items file at all, so an empty `results` is "nothing examined",
+    // not "nothing wrong"; a positive count with no items is a genuinely clean
+    // scan. Consumers (audit-uat.md, audit-fix.md) gate their all-clear on it.
+    files_scanned: filesScanned,
     by_category: {},
     by_phase: {},
     // #3783: additive segmentation so a consumer reads one field instead of
@@ -748,7 +764,7 @@ function readBaselineAtHead(absPath: string): string | null {
  * committed baseline ONLY in the frontmatter `updated:` value is one such
  * no-op and is never written. On a material change, writes the file and
  * commits through the existing `cmdCommit` internals (honoring `commit_docs`),
- * reading `cmdCommit`'s own result back via the shared `captureStdoutSyncWrites`
+ * reading `cmdCommit`'s own result back via the shared `captureStdoutMaybeSync`
  * helper (#5105 review S9 — the ONE such helper, also used by gsd-tools.cjs)
  * instead of a hand-rolled `fs.writeSync` monkeypatch, so this command can
  * report the real `committed`/`reason` outcome rather than assuming success.
@@ -756,12 +772,12 @@ function readBaselineAtHead(absPath: string): string | null {
  * byte-exact restore to the committed baseline — but never commits: this is
  * still a no-op from git's perspective (see `completeUatSession`'s own doc).
  */
-async function cmdUatCompleteSession(
+function cmdUatCompleteSession(
   cwd: string,
   uatPathArg: string | undefined,
   options: { message?: string } = {},
   raw: boolean,
-): Promise<void> {
+): void {
   if (!uatPathArg) {
     error('UAT file required: use uat.complete-session <uatPath>');
     return;
@@ -806,11 +822,13 @@ async function cmdUatCompleteSession(
   // STRING (its own `output(result, raw, hash || 'committed')` rawValue arm),
   // not the structured `{ committed, reason }` object this command needs to
   // read back; the full JSON envelope is captured here and never reaches the
-  // real stdout (captureStdoutSyncWrites), so suppressing it via `raw` would
-  // only destroy the information this command needs.
-  const captured = await captureStdoutSyncWrites(() => {
+  // real stdout (captureStdoutMaybeSync), so suppressing it via `raw` would
+  // only destroy the information this command needs. cmdCommit is synchronous,
+  // so the capture returns its text and this command finishes before it
+  // returns (#6333): a synchronous in-process call can serve it.
+  const captured = captureStdoutMaybeSync(() => {
     commandsMod.cmdCommit(cwd, message, [relPath], false, false, false);
-  });
+  }) as string;
 
   let committed = false;
   let reason: string | undefined;

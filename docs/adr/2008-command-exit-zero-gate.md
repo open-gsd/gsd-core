@@ -153,3 +153,9 @@ hiding the mechanism.
 - ADR-0857 (capability system / module decomposition)
 - `src/gate-predicate-evaluator.cts`, `src/check-command-router.cts`
 - Diátaxis docs: `docs/reference/gate-predicates.md`, `docs/how-to/command-exit-zero-gate.md`
+
+## Amendment (2026-11-06): the evaluator keeps the output tail inside the cap (#5593)
+
+Recorded as a dated section because ADRs here are append-only. The Output cap row above reads as superseded on this one point.
+
+The 2000-character cap on the whole `message`, prefix included, is unchanged. What changed is the end that survives: the evaluator now keeps the tail of stderr or stdout. On a timeout with empty or whitespace-only stderr it keeps the head of the command, so the program name survives. Whitespace-only stderr counts as empty, so a non-zero exit then shows stdout.

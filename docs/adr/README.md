@@ -267,6 +267,7 @@ These govern the system as it stands. Cite these.
 | [ADR-3626](3626-context-md-seam-claim-gate.md) | CONTEXT.md seam claims carry a checkable enforcement pointer | Accepted | — |
 | [ADR-3628](3628-milestone-release-mapping.md) | Milestone release mapping — a GSD milestone version is not a repository release version | Accepted | — |
 | [ADR-3660](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Accepted | [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) |
+| [ADR-3711](3711-cross-runtime-plan-execution.md) | Cross-runtime plan execution — a per-plan `executor_runtime` on the `orchestrator-worktree` backend | Accepted | — |
 | [ADR-3806](3806-review-dispositions-ledger.md) | Review Dispositions Ledger canonizes where and how reviews-mode records incorporate/defer decisions in PLAN.md | Accepted | — |
 | [ADR-4139](4139-compact-content-seam.md) | The compact-content seam — shrink the eager window, never the guarantee | Accepted | — |
 | [ADR-4309](4309-criterion-baseline-notation.md) | Criterion baseline notation for quantitative acceptance criteria | Accepted | — |
@@ -305,6 +306,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-4909](4909-shipped-surface-contract-seam.md) | Shipped workflow bodies are a compiled artifact — two generated manifests and one extractor | Proposed | — |
 | [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md) | OpenCode 2.x support as a version-gated target of the `opencode` runtime, and sunset of OpenCode 1.x support | Proposed | — |
 | [ADR-5812](5812-worktree-residue-removal-guards.md) | Residue-removal guard standard for `worktree.reap-orphans` | Proposed | — |
+| [ADR-6315](6315-ci-redesign.md) | CI redesign — a fast static tier, a sharded critical path, one full matrix per merge, and feedback loops that keep it fast | Proposed | — |
 
 ### Superseded, Retired, and Legacy
 
