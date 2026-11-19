@@ -247,9 +247,10 @@ Consensus gate (applies to NEWLY RAISED HIGHs only; evaluate before the counting
       real project source, or another reviewer raised the same or a materially overlapping concern
       (i.e. it lands in REVIEWS.md's Consensus Summary "Agreed Concerns").
     - JUDGMENT-CLASS — counts UNLESS that reviewer's own section OPENS with an evidence-quality
-      discount marker blockquote: `[reviewed-without-source-citations]` or
-      `[reviewed-without-repo-access]`, or the reviewer is a diff-only lane (CodeRabbit). The marker
-      must be the LEADING blockquote of that reviewer's section — a review that merely quotes a
+      discount marker blockquote: `[reviewed-without-source-citations]`,
+      `[reviewed-without-repo-access]` or `[incomplete-read]` (#5491), or the reviewer is a
+      diff-only lane (CodeRabbit). The marker must be one of the LEADING marker blockquotes of that
+      reviewer's section (markers stack, one blockquote each) — a review that merely quotes a
       marker while discussing it is NOT marked. Corroboration by another reviewer overrides the
       marker and the HIGH counts.
 
@@ -258,8 +259,8 @@ Consensus gate (applies to NEWLY RAISED HIGHs only; evaluate before the counting
   architectural concern would suppress exactly the findings a multi-reviewer setup exists to surface.
 
   FAIL OPEN: if EVERY reviewer that ran this cycle carries a discount marker, this gate does not
-  apply at all — count as if it were absent. A gate must never manufacture convergence out of a
-  cycle in which nothing was verified.
+  apply at all — count as if it were absent. `[incomplete-read]` counts here like the other
+  markers. A gate must never manufacture convergence out of a cycle in which nothing was verified.
 
   A HIGH suppressed by this gate is still listed under "## Current HIGH Concerns", tagged
   `(single-reviewer, unconfirmed)`. It is excluded from current_high only — never silently dropped,
