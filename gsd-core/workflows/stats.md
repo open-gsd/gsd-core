@@ -58,7 +58,7 @@ If no `.planning/` directory exists, inform the user to run `/gsd:new-project` f
 **MVP phase summary.** Read all phases via `gsd_run query roadmap.analyze` (Phase 1's `cmdRoadmapAnalyze` surfaces a `mode` field per phase). Count phases by mode:
 
 ```bash
-ANALYZE=$(gsd_run query roadmap.analyze)
+ANALYZE=$(gsd_run query roadmap.analyze ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$ANALYZE" == @file:* ]]; then ANALYZE=$(cat "${ANALYZE#@file:}"); fi
 MVP_COUNT=$(echo "$ANALYZE" | jq '[.phases[] | select(.mode == "mvp")] | length')
 TOTAL_COUNT=$(echo "$ANALYZE" | jq '.phases | length')
