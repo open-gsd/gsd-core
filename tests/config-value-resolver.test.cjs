@@ -8,7 +8,7 @@ const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { resolveConfigValue } = require('../gsd-core/bin/lib/config-value-resolver.cjs');
-const { loadConfigResolved, BLOCKED_SECTION_PROJECTIONS, BARRIER_FAIL_SAFE_PROJECTIONS } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { loadConfigResolved, BLOCKED_SECTION_PROJECTIONS, BARRIER_FAIL_SAFE_PROJECTIONS, CONFIG_KEY_ALIASES, readResolvedAlias } = require('../gsd-core/bin/lib/config-loader.cjs');
 const { _unusableInputEmissionCountForTests } = require('../gsd-core/bin/lib/unusable-input.cjs');
 const { parseJsonc } = require('../gsd-core/bin/lib/settings-jsonc.cjs');
 const { isDeepStrictEqual } = require('node:util');
@@ -581,23 +581,49 @@ describe('Config Value Resolution Module (#5096)', () => {
     }
   });
 
-  test('a same-file flat value wins over its blocked nested alias', () => {
-    for (const [section, values] of [
-      ['planning', { commit_docs: true, search_gitignored: true }],
-      ['git', { branching_strategy: 'phase' }],
-      ['workflow', { research: false, text_mode: true }],
-    ]) {
+  test('an explicit flat value wins over its blocked nested alias in every blocked section', () => {
+    // Derived from the loader's own alias table, so a section whose flat key is
+    // published inside its container (`review.max_prompt_tokens`) is covered too.
+    let defaults;
+    withLayers((cwd) => {
+      writeLayer(cwd, 'root', {});
+      defaults = loadConfigResolved(cwd, { persist: false }).config;
+    });
+    const sentinel = (alias) => {
+      const current = readResolvedAlias(defaults, alias);
+      if (typeof current === 'boolean') return !current;
+      if (typeof current === 'number') return current + 7;
+      if (Array.isArray(current)) return ['sentinel-repo'];
+      if (alias.key === 'max_prompt_tokens') return 5000;
+      return `${alias.key}-sentinel`;
+    };
+    const covered = new Set();
+    for (const section of Object.keys(BLOCKED_SECTION_PROJECTIONS)) {
+      const aliases = CONFIG_KEY_ALIASES.filter((alias) => alias.section === section);
+      if (aliases.length === 0) continue;
+      const values = Object.fromEntries(aliases.map((alias) => [alias.key, sentinel(alias)]));
       withLayers((cwd) => {
         writeLayer(cwd, 'root', { [section]: null, ...values });
         const assembled = loadConfigResolved(cwd, { persist: false }).config;
-        for (const [key, value] of Object.entries(values)) {
-          assert.deepEqual(assembled[key], value);
+        for (const alias of aliases) {
+          assert.deepEqual(readResolvedAlias(assembled, alias), values[alias.key], `${section}: ${alias.key} at ${alias.resolvedAt}`);
           // C1's public per-key API accepts declared keys, not every legacy
           // flat loader alias (e.g. branching_strategy or text_mode).
-          if (VALID_CONFIG_KEYS.has(key)) assert.deepEqual(resolveConfigValue(key, { cwd }).value, value);
+          if (VALID_CONFIG_KEYS.has(alias.key)) assert.deepEqual(resolveConfigValue(alias.key, { cwd }).value, values[alias.key]);
         }
       });
+      covered.add(section);
     }
+    assert.deepEqual([...covered].sort(), ['git', 'planning', 'review', 'workflow']);
+  });
+
+  test('a blocked review section keeps only its explicit flat field', () => {
+    withLayers((cwd) => {
+      writeLayer(cwd, 'root', { review: null, max_prompt_tokens: 5000 });
+      assert.deepEqual(loadConfigResolved(cwd, { persist: false }).config.review, { max_prompt_tokens: 5000 });
+      writeLayer(cwd, 'root', { review: null });
+      assert.equal(Object.hasOwn(loadConfigResolved(cwd, { persist: false }).config, 'review'), false);
+    });
   });
 
   test('declared projection removals retain their empty/object controls on both loader paths', () => {

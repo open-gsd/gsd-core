@@ -428,3 +428,17 @@ not read them as drift:
   pinned by tests.
 
 The child issues now exist: C1 #5096, C2 #6029, C3 #6030, C4 #6031, C5 #6032.
+
+## Amendment — 2026-11-19: C1 (#5096) keys are canonical spellings
+
+The Config Value Resolution Module resolves a declared key exactly as written. It does not apply
+the Config Loader's flat-then-nested alias reading, which `CONFIG_KEY_ALIASES` (#5470) declares
+for twenty-one settings. The two owners can therefore disagree for a flat spelling: with a flat
+`research: false`, `loadConfig` resolves `false`, while `resolveConfigValue('workflow.research')`
+reports the schema default and the flat `research` is not configured. C1 leaves that difference in
+place because it migrates no caller. C3 must close it for each loader reader it migrates, either by
+resolving the alias in the owner or by keeping that reader on the loader, and must not inherit the
+difference silently.
+
+The non-object section barrier (C1) reads the effective project configuration, the root file merged
+with the active workstream file, so a flat key in either file outranks the blocked nested alias.

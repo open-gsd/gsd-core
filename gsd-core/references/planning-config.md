@@ -9,7 +9,7 @@ TDD, subagent timeout and security settings (`security_enforcement`, `security_a
 lanes run without default prompt trimming. `planner: null` is the documented exception:
 the assembled watchdog projection remains `true` while its raw key is absent.
 
-An explicit `planning: null` removes planning defaults, including `commit_docs`, so planning commits are skipped unless a same-file flat `commit_docs: true` explicitly enables them. An explicit `git: null` removes inherited/default branching strategy, base branch and branch templates. Explicit flat keys in that effective config retain precedence over their blocked nested aliases, including a flat `max_prompt_tokens` under `review: null`.
+An explicit `planning: null` removes planning defaults, including `commit_docs`, so planning commits are skipped unless a flat `commit_docs: true` in the effective config (the root file merged with the active workstream file) explicitly enables them. An explicit `git: null` removes inherited/default branching strategy, base branch and branch templates. Explicit flat keys in that effective config retain precedence over their blocked nested aliases, including a flat `max_prompt_tokens` under `review: null`.
 
 <config_schema>
 ```json

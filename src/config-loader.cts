@@ -162,6 +162,22 @@ const BLOCKED_SECTION_PROJECTIONS: Readonly<Record<string, readonly string[]>> =
 
 const BARRIER_FAIL_SAFE_PROJECTIONS: ReadonlySet<string> = new Set(['planner_stall_detection_enabled']);
 
+function _explicitFlatFieldsInContainer(
+  parsed: Record<string, unknown>,
+  section: string,
+  container: unknown,
+): Record<string, unknown> | null {
+  if (!isConfigSection(container)) return null;
+  const prefix = `${section}.`;
+  const kept: Record<string, unknown> = {};
+  for (const alias of CONFIG_KEY_ALIASES) {
+    if (alias.section !== section || !alias.resolvedAt.startsWith(prefix) || !Object.hasOwn(parsed, alias.key)) continue;
+    const field = alias.resolvedAt.slice(prefix.length);
+    if (Object.hasOwn(container, field)) kept[field] = container[field];
+  }
+  return Object.keys(kept).length > 0 ? kept : null;
+}
+
 function _removeBlockedSectionDefaults(
   parsed: Record<string, unknown>,
   assembled: Record<string, unknown>,
@@ -170,9 +186,19 @@ function _removeBlockedSectionDefaults(
     if (!Object.prototype.hasOwnProperty.call(parsed, section) || isConfigSection(parsed[section])) continue;
     for (const projection of projections) {
       if (BARRIER_FAIL_SAFE_PROJECTIONS.has(projection)) continue;
-      // A flat value in this file outranks the blocked nested alias. The section
-      // container itself is not a flat alias and must still be removed.
+      // A flat value in the effective (root plus workstream) config outranks the
+      // blocked nested alias.
       if (projection !== section && Object.hasOwn(parsed, projection)) continue;
+      // The container itself is not a flat alias, but the loader may publish a
+      // flat key inside it (`max_prompt_tokens` → `review.max_prompt_tokens`,
+      // CONFIG_KEY_ALIASES `resolvedAt`). Keep only those explicit fields.
+      if (projection === section) {
+        const kept = _explicitFlatFieldsInContainer(parsed, section, assembled[section]);
+        if (kept) {
+          assembled[section] = kept;
+          continue;
+        }
+      }
       delete assembled[projection];
     }
   }
