@@ -46,6 +46,7 @@ const { createTempDir, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runHook: runHookSeam, runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { assertNoLeftoverStall } = require('./helpers/stall-leftovers.cjs');
 const { ensureBuiltHooks } = require('../scripts/run-tests.cjs');
 const { BLOCKING_GUARD_PROBE_TIMEOUT_MS } = require('../hooks/lib/git-probe.js');
 
@@ -525,6 +526,8 @@ describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> a
   // to the budget cannot leave the stub finishing inside it (no timeout, no
   // diagnostic).
   const GIT_STUB_SLEEP_MS = BLOCKING_GUARD_PROBE_TIMEOUT_MS + 1000;
+  /** The stub's stall; `exec`'d so the hook's git bound kills it, and asserted gone after each cell (#6086). */
+  const GIT_STUB_STALL_COMMAND = `sleep ${(GIT_STUB_SLEEP_MS / 1000).toFixed(3)}1`;
 
   let stubDir;
 
@@ -538,7 +541,8 @@ describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> a
     // win32-only t.skip() on each case below.
     if (process.platform !== 'win32') {
       const shPath = path.join(stubDir, 'git');
-      fs.writeFileSync(shPath, `#!/bin/sh\nsleep ${(GIT_STUB_SLEEP_MS / 1000).toFixed(3)}\nexit 0\n`);
+      // `exec` so the hook's git bound kills the stall itself, not the shell above it (#6086).
+      fs.writeFileSync(shPath, `#!/bin/sh\nexec ${GIT_STUB_STALL_COMMAND}\n`);
       fs.chmodSync(shPath, 0o755);
     }
   });
@@ -619,6 +623,7 @@ describe('hooks-crash-policy: #3911 git-probe timeout forced via a stub git -> a
         r.stderr, /git probe/,
         `stderr diagnostic must name the git probe that could not run; got: ${r.stderr}`
       );
+      assertNoLeftoverStall(assert, GIT_STUB_STALL_COMMAND, `${c.file}: the git stub's stall`);
     });
   }
 });
