@@ -558,3 +558,17 @@ Item 17's first acceptance criterion named a mechanism: call `install()` in-proc
 **The first conversions, measured.** Every `runMinimalInstall({ runtime, scope })` with no other option became `copyRuntimeFixture` in 36 test files, and two helpers that only read their trees took the shared ones. Two bench runs under different load (the untouched files took 1.51 times as long in the second) put the 38 affected files at 15.8% of summed file time before and 12.2% after: about 147 s at the first run's load. A copy still costs about a third of an install, and the file that happens to build a shared tree first pays for the build. Sharing and copying do not by themselves bring the install class under ten minutes.
 
 **What it does not cover.** A test that puts files in place before installing, or that asserts on the installer's own run, still installs. Those are the upgrade and configuration-merge suites, and they are most of the 372 in-process calls (156 of them `codex` global, in nine files). Converting each remaining file is per-file work that follows this change, measured against the table above.
+
+### 2026-11-19 — Item 18: a git fixture is a copy of a template
+
+Measured locally before the change: `createFixture({ git: true })` took 66 ms, six `git` processes; a copy of the 28-file result took 5 ms. Twenty fixtures in one process went from about 1,320 ms to 189 ms including the one template build, and to 96 ms in a second process that found the templates already built.
+
+**Decision.**
+
+1. The four fixture shapes are each built once per run by the same six git commands, into the run-wide store item 17 added, and a fixture is `fs.cpSync` of the template with timestamps kept.
+2. A copied repository has new inode numbers and change times, so git's plumbing reads every tracked file as possibly changed: `git diff-files --quiet` exits 1 on a clean copy. The template sets `core.trustctime = false` and `core.checkStat = minimal`, which limits git's comparison to modification time and size. A copy then reads as clean with no refresh, and an edited file still reads as modified. Both are tested.
+3. The template is built under a fixed environment (no inherited `GIT_*`, no system config, an empty global config, an empty init template) so its content does not depend on the machine or on which test file built it. The first version kept the machine's init template; review pointed out that its `info/exclude` can ignore `.planning` (#5470), which the tests that isolate their git config had been guarding against by building their fixture after isolating.
+4. A fixture needs no `git` on `PATH`: a test makes fixtures with `PATH` emptied.
+
+**Not in this change.** Acceptance criterion 3 of item 18, the ESLint rule against building a fixture inside a test body, with its 3,939 sites. Copying made each of those builds cheap; whether the rule is still worth its churn is to be measured after this lands.
+

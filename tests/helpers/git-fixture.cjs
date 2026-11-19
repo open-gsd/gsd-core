@@ -55,8 +55,9 @@ const DEFAULT_GIT_TIMEOUT_MS = 15000;
  *
  * A distinct class from `DEFAULT_GIT_TIMEOUT_MS` above, which is sized for
  * plumbing READS (rev-parse, branch, log) against an existing repo.
- * `createFixture` (`tests/fixtures/index.cjs`) issues SIX sequential spawns to
- * build one repo — `init`, three `config` writes, `add -A`, `commit` — and
+ * Building a repository issues several sequential spawns — `createFixture`'s
+ * template build (`tests/fixtures/index.cjs`, once per shape since #6336) runs
+ * `init`, config writes, `add -A` and `commit` — and
  * `init`/`commit` each write dozens of files. On Windows every one of those
  * spawns is Defender-scanned, so the construction sequence is materially
  * heavier than any single read.
