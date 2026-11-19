@@ -373,3 +373,23 @@ describe('quick-batch planner mode: agents/gsd-planner.md extension (rows 13-15)
     assert.match(content, /Full batch task catalog/);
   });
 });
+
+// ─── #6203: every step that moves HEAD records it, so --resume does not read the
+// batch's own commits as base divergence ─────────────────────────────────────
+describe('quick-batch workflow: the batch records the HEAD it leaves behind (#6203)', () => {
+  const RECORD = /quick-batch update --batch "\$BATCH_ID" --head-revision "\$\(git rev-parse HEAD\)"/;
+
+  for (const [file, moves] of [
+    ['worktree-dispatch.md', 'an inline executor (isolation none) commits on the primary checkout'],
+    ['merge-wave.md', 'worktree.cleanup-wave merges a wave into the primary checkout'],
+    ['completion.md', 'the final docs commit'],
+  ]) {
+    test(`${file} records the head after ${moves}`, () => {
+      assert.match(readStep(file), RECORD);
+    });
+  }
+
+  test('resume-mode.md still passes the live HEAD as --current-base-revision', () => {
+    assert.match(readStep('resume-mode.md'), /quick-batch resume --batch "\$RESUME_BATCH_ID" --current-base-revision "\$CURRENT_BASE"/);
+  });
+});

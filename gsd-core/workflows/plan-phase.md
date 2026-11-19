@@ -225,7 +225,7 @@ If `section_manifest` is `null` or `"reviews-prerequisite"` is in its `included`
 ## 3. Validate Phase
 
 ```bash
-PHASE_INFO=$(gsd_run query roadmap.get-phase "${PHASE}")
+PHASE_INFO=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}")
 ```
 
 **If `found` is false:** Error with available phases. **If `found` is true:** Extract `phase_number`, `phase_name`, `goal` from JSON.
@@ -411,7 +411,7 @@ fi
 ```
 
 ```bash
-PHASE_DESC=$(gsd_run query roadmap.get-phase "${PHASE}" --pick section)
+PHASE_DESC=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}" --pick section)
 if [ -z "${PLAN_PRE_HOOKS_JSON:-}" ]; then
   PLAN_PRE_HOOKS_JSON=$(gsd_run loop render-hooks plan:pre --raw)
 fi
@@ -499,7 +499,7 @@ Display banner:
 
 Each PLAN.md must include a <threat_model> block.
 Block on: {SECURITY_BLOCK} severity threats.
-Opt out: set security_enforcement: false in .planning/config.json
+Opt out: set security_enforcement: false in {planning_root}/config.json (`{planning_root}`: the active scope's root, from `planning.inspect`)
 ```
 
 Continue to step 5.6. Security config is passed to the planner in step 8.
@@ -1424,7 +1424,7 @@ After plans pass all gates, record planning completion in STATE.md:
 
 ```bash
 PLAN_COUNT=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -er .plan_count) || exit 1
-gsd_run query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
+gsd_run query state.planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
 This sets STATUS to "Ready to execute", plan count and Last Activity. Exits non-zero and writes nothing on three failures: no plan line (add the line it names, retry); on a same-phase replan, a count below the recorded position or disagreeing plan lines (stop; fix the line).
@@ -1438,7 +1438,7 @@ After plans are finalized, annotate the ROADMAP.md plan list for this phase with
 This step is derived entirely from existing PLAN frontmatter — no extra LLM pass is required.
 
 ```bash
-gsd_run query roadmap.annotate-dependencies "${PHASE_NUMBER}"
+gsd_run query roadmap.annotate-dependencies ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}"
 ```
 
 Skip this step if `plan_count` is 0. Re-running regenerates the annotation from current PLAN frontmatter; an unchanged result writes nothing, and an unrecognised checklist row leaves ROADMAP.md untouched and reports `skipped: "unrecognised_checklist_row"`. The `**Cross-cutting constraints:**` header line ends in an HTML-comment marker; that block is machine-owned and the bullets directly under it are regenerated. Put hand-written bullets after a blank line. Bullets kept from a block written before the marker existed are reported as `stale_legacy_constraints`.
@@ -1448,7 +1448,7 @@ Skip this step if `plan_count` is 0. Re-running regenerates the annotation from 
 If `commit_docs` is true (from the init JSON parsed in step 1), commit the generated plan artifacts (including any ROADMAP.md annotations from step 13c):
 
 ```bash
-gsd_run query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE_DIR}"/*-PLAN.md .planning/STATE.md .planning/ROADMAP.md
+gsd_run query commit "docs(${PADDED_PHASE}): create phase plan" --files "${PHASE_DIR}"/*-PLAN.md "${PHASE_DIR}/../../STATE.md" "${PHASE_DIR}/../../ROADMAP.md"
 ```
 
 This commits all PLAN.md files for the phase plus the updated STATE.md and ROADMAP.md to version-control the planning artifacts. Skip this step if `commit_docs` is false.
@@ -1543,7 +1543,7 @@ Verification: {Passed | Passed with override | Skipped}
 ---
 
 **Also available:**
-- cat .planning/phases/{phase-dir}/*-PLAN.md — review plans
+- cat {planning_root}/phases/{phase-dir}/*-PLAN.md — review plans
 - /gsd:plan-phase {X} --research — re-research first
 - /gsd:review --phase {X} --all — peer review plans with external AIs
 - /gsd:plan-phase {X} --reviews — replan incorporating review feedback

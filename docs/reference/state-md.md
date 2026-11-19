@@ -11,7 +11,7 @@ Every project managed by GSD Core keeps one `STATE.md` at `.planning/STATE.md`. 
 - **YAML frontmatter** — machine-readable fields consumed by the status-line hook (`parseStateMd`) and the `gsd-tools state` commands.
 - **Markdown body** — human-readable sections covering current position, accumulated context, session continuity, and performance metrics.
 
-The file is intentionally small (target: under 100 lines). It is a digest of the project's state, not an archive.
+The file is intentionally small (target: under 100 lines). It is a digest of the project's state, not an archive. `/gsd-health` warns (`W031`) when the file is more than three times that target.
 
 ---
 

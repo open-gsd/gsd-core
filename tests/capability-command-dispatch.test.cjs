@@ -632,6 +632,86 @@ describe('dispatchCapabilityCommand — non-ExitError from router → structured
 
 // ─── 10. Async router (thenable) → structured error ─────────────────────────
 
+describe('dispatchCapabilityCommand — a router its module declares asynchronous is waited for (#6332)', () => {
+  const call = (requireModule, errorCalls = []) => dispatchCapabilityCommand({
+    command: 'foo',
+    args: ['foo'],
+    cwd: '/p',
+    raw: false,
+    error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+    registry: makeRegistry({ foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' } }),
+    requireModule,
+  });
+
+  test('the dispatch returns a promise of true that settles when the router has', async () => {
+    const errorCalls = [];
+    let finished = false;
+    let finish;
+    const work = new Promise((resolve) => { finish = resolve; }).then(() => { finished = true; });
+
+    const dispatched = call(() => ({ routeFoo: () => work, asyncRouters: ['routeFoo'] }), errorCalls);
+
+    assert.equal(typeof dispatched.then, 'function');
+    assert.equal(finished, false);
+    finish();
+    assert.equal(await dispatched, true);
+    assert.equal(finished, true);
+    assert.deepEqual(errorCalls, []);
+  });
+
+  test('a declared router whose promise rejects rejects the dispatch with the same error', async () => {
+    const errorCalls = [];
+    const failure = new Error('router work failed');
+
+    const dispatched = call(() => ({ routeFoo: () => Promise.reject(failure), asyncRouters: ['routeFoo'] }), errorCalls);
+
+    await assert.rejects(dispatched, (err) => err === failure);
+    assert.deepEqual(errorCalls, []);
+  });
+
+  // A name in asyncRouters that is not a router changes nothing and says
+  // nothing: the router it was meant for is refused as "must be synchronous".
+  test('every asyncRouters entry of a first-party router module names a registered router it exports', () => {
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const routersByModule = new Map();
+    for (const family of Object.values(registry.commandFamilies)) {
+      if (!routersByModule.has(family.module)) routersByModule.set(family.module, new Set());
+      routersByModule.get(family.module).add(family.router);
+    }
+    const declaring = [];
+    for (const [moduleName, registered] of routersByModule) {
+      const mod = require(path.join('..', 'gsd-core', 'bin', 'lib', moduleName));
+      if (!Object.prototype.hasOwnProperty.call(mod, 'asyncRouters')) continue;
+      declaring.push(moduleName);
+      assert.ok(Array.isArray(mod.asyncRouters), `${moduleName}: asyncRouters must be an array`);
+      for (const name of mod.asyncRouters) {
+        assert.equal(typeof mod[name], 'function', `${moduleName}: asyncRouters names "${name}", which it does not export`);
+        assert.ok(registered.has(name), `${moduleName}: asyncRouters names "${name}", which no command family routes to`);
+      }
+    }
+    // Pinned on purpose: with no declaring module the loop above checks nothing.
+    // A second module that declares asyncRouters is added here with it.
+    assert.deepEqual(declaring, ['profile-pipeline-command-router.cjs']);
+  });
+
+  test('a declared router that returns a plain value is dispatched synchronously', () => {
+    assert.equal(call(() => ({ routeFoo: () => undefined, asyncRouters: ['routeFoo'] })), true);
+  });
+
+  test('a declaration for another router, or one that is inherited, does not cover this one', () => {
+    for (const mod of [
+      { routeFoo: () => Promise.resolve(), asyncRouters: ['routeOther'] },
+      Object.assign(Object.create({ asyncRouters: ['routeFoo'] }), { routeFoo: () => Promise.resolve() }),
+      { routeFoo: () => Promise.resolve(), asyncRouters: 'routeFoo' },
+    ]) {
+      const errorCalls = [];
+      assert.equal(call(() => mod, errorCalls), true);
+      assert.equal(errorCalls.length, 1);
+      assert.match(errorCalls[0].msg, /must be synchronous/);
+    }
+  });
+});
+
 describe('dispatchCapabilityCommand — async router returns a Promise → structured error', () => {
   const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 

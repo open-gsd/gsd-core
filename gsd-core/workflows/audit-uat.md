@@ -16,11 +16,22 @@ AUDIT=$(gsd_run query audit-uat --raw)
 
 Parse JSON for `results` array and `summary` object.
 
-If `summary.total_items` is 0 AND `summary.parse_gap_files` is 0:
+If `summary.files_scanned` is 0 (the field is present and zero), the audit read no UAT, VERIFICATION or deferred-items file at all, so there is nothing to call clear — an empty scan is not an all-clear:
+```
+## Nothing Scanned
+
+The audit reached no UAT or verification files, so it cannot report the project clear.
+Check that the phases you expect hold `*-UAT.md` / `*-VERIFICATION.md` files
+(active phases or archived milestone phases).
+```
+Stop here.
+
+If `summary.total_items` is 0 AND `summary.parse_gap_files` is 0 (and `summary.files_scanned` is positive, or absent on an older runtime):
 ```
 ## All Clear
 
-No outstanding UAT or verification items found across all phases.
+No outstanding UAT or verification items found across all phases
+({files_scanned} files scanned; omit the parenthesis when the field is absent).
 All tests are passing, resolved, or diagnosed with fix plans.
 ```
 Stop here.

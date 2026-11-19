@@ -11,10 +11,12 @@
  * Test seams: _pipeline / _output inject mock modules; _core injects mock core.
  *
  * Async note: cmdExtractMessages and cmdProfileSample are async functions.
- * dispatchCapabilityCommand (gsd-tools.cjs:366-371) explicitly errors if a
- * router returns a Promise. Therefore these router functions call the async
- * function WITHOUT await and WITHOUT returning the Promise; the event loop
- * drains once the returned promise settles. Since ADR-3889 (#3910), the
+ * Their routers return the promise of that work, and this module names them
+ * in `asyncRouters`, which is what makes dispatchCapabilityCommand wait for
+ * the promise instead of refusing it (#6332). Before that the promise was
+ * dropped and only the non-empty event loop kept the binary alive until the
+ * work finished; an in-process caller (runCli) has no such wait, and returned
+ * before the command had written anything. Since ADR-3889 (#3910), the
  * pipeline functions terminate by THROWING ExitError (never process.exit()
  * directly), so a rejection surfacing here can carry either a genuine error
  * OR a declared ExitError termination — the `.catch()` below must
@@ -31,7 +33,7 @@ const { ERROR_REASON, getJsonErrorMode } = require('./io.cjs');
 const { ExitError } = require('./cli-exit.cjs');
 
 /**
- * Interpret a rejection from a fire-and-forget async pipeline call: an
+ * Interpret a rejection from an async pipeline call: an
  * ExitError sets process.exitCode (and, for a non-zero code carrying a user
  * message, writes it to stderr) exactly like runMain does; anything else
  * reproduces io.cjs's error() stderr output byte-for-byte and sets
@@ -90,10 +92,9 @@ function routeExtractMessages({ args, cwd, raw, error, _pipeline }) {
     error('Usage: gsd-tools extract-messages <project> [--session <id>] [--limit N] [--path <dir>]\nRun scan-sessions first to see available projects.', ERROR_REASON.USAGE);
     return;
   }
-  // cmdExtractMessages is async — do NOT return the Promise.
-  // The function ends with output() or process.exit(); the event loop will drain.
+  // cmdExtractMessages is async. The promise returned here never rejects.
   void cwd;
-  p.cmdExtractMessages(projectArg, { sessionId, limit }, raw, sessionsPath)
+  return p.cmdExtractMessages(projectArg, { sessionId, limit }, raw, sessionsPath)
     .catch(e => { _handlePipelineRejection(e, error); });
 }
 
@@ -108,8 +109,8 @@ function routeProfileSample({ args, cwd, raw, error, _pipeline }) {
   const maxPerProject = maxPerIdx !== -1 ? parseInt(args[maxPerIdx + 1], 10) : null;
   const maxCharsIdx = args.indexOf('--max-chars');
   const maxChars = maxCharsIdx !== -1 ? parseInt(args[maxCharsIdx + 1], 10) : 500;
-  // cmdProfileSample is async — do NOT return the Promise.
-  p.cmdProfileSample(sessionsPath, { limit, maxPerProject, maxChars }, raw)
+  // cmdProfileSample is async. The promise returned here never rejects.
+  return p.cmdProfileSample(sessionsPath, { limit, maxPerProject, maxChars }, raw)
     .catch(e => { _handlePipelineRejection(e, error); });
 }
 
@@ -170,6 +171,8 @@ function routeGenerateClaudeMd({ args, cwd, raw, error, _output }) {
 }
 
 module.exports = {
+  // The routers that return a promise of their work. See the async note above.
+  asyncRouters: Object.freeze(['routeExtractMessages', 'routeProfileSample']),
   routeScanSessions,
   routeExtractMessages,
   routeProfileSample,

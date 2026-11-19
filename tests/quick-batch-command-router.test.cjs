@@ -121,6 +121,88 @@ describe('quick-batch-command-router: argument shaping (mocked modules)', () => 
     assert.equal(called, false);
   });
 
+  // #6203: the batch records the HEAD it left behind; `--updates` is optional then.
+  test('update --head-revision records a head with no --updates', () => {
+    const calls = [];
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--head-revision', 'bbbb222'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { throw new Error(`unexpected error: ${msg}`); },
+      _quickBatch: {
+        updateBatchItems: (...args) => {
+          calls.push(args);
+          return { ok: true, value: { manifest: {} } };
+        },
+      },
+      _quickBatchDispatch: {},
+    });
+    assert.deepEqual(calls, [['/tmp/proj', 'b1', [], { headRevision: 'bbbb222' }]]);
+  });
+
+  test('update --head-revision with --updates forwards both', () => {
+    const calls = [];
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--updates', '[{"quickId":"260101-abc"}]', '--head-revision', 'bbbb222'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { throw new Error(`unexpected error: ${msg}`); },
+      _quickBatch: {
+        updateBatchItems: (...args) => {
+          calls.push(args);
+          return { ok: true, value: { manifest: {} } };
+        },
+      },
+      _quickBatchDispatch: {},
+    });
+    assert.deepEqual(calls, [['/tmp/proj', 'b1', [{ quickId: '260101-abc' }], { headRevision: 'bbbb222' }]]);
+  });
+
+  test('update without --head-revision keeps the three-argument call; a bare flag is a usage error', () => {
+    const calls = [];
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--updates', '[]'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { throw new Error(`unexpected error: ${msg}`); },
+      _quickBatch: {
+        updateBatchItems: (...args) => {
+          calls.push(args);
+          return { ok: true, value: { manifest: {} } };
+        },
+      },
+      _quickBatchDispatch: {},
+    });
+    assert.deepEqual(calls, [['/tmp/proj', 'b1', []]]);
+
+    let message = null;
+    let called = false;
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--head-revision'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { message = msg; },
+      _quickBatch: { updateBatchItems: () => { called = true; return { ok: true, value: {} }; } },
+      _quickBatchDispatch: {},
+    });
+    assert.match(message, /--head-revision/);
+    assert.equal(called, false);
+
+    // a following flag is not a revision: `--head-revision --updates []` must not record "--updates"
+    message = null;
+    called = false;
+    routeQuickBatchCommand({
+      args: ['quick-batch', 'update', '--batch', 'b1', '--head-revision', '--updates', '[]'],
+      cwd: '/tmp/proj',
+      raw: true,
+      error: (msg) => { message = msg; },
+      _quickBatch: { updateBatchItems: () => { called = true; return { ok: true, value: {} }; } },
+      _quickBatchDispatch: {},
+    });
+    assert.match(message, /--head-revision/);
+    assert.equal(called, false);
+  });
+
   test('resume requires --batch', () => {
     let message = null;
     routeQuickBatchCommand({
@@ -466,6 +548,36 @@ describe('quick-batch-command-router: end-to-end via gsd-tools (rows 46-47)', ()
       assert.equal(resumed.success, true, `resume failed: ${resumed.error}`);
       const resumedJson = JSON.parse(resumed.output);
       assert.equal(resumedJson.eligible.length, 2, 'both items are eligible before any leaf runs');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('#5830: quick-batch complete surfaces the length warning in its JSON result', () => {
+    const dir = mkTmpProject();
+    try {
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), [
+        '# STATE', '', '## Quick Tasks Completed', '',
+        '| # | Description | Date | Commit | Status | Directory |',
+        '| --- | --- | --- | --- | --- | --- |', '',
+      ].join('\n'));
+      const tasksFile = path.join(dir, '.planning', 'tasks.md');
+      fs.writeFileSync(tasksFile, '- first task\n- second task\n');
+      const created = runGsdTools(['quick-batch', 'create', '--file', tasksFile, '--raw'], dir);
+      assert.equal(created.success, true, `create failed: ${created.error}`);
+      const createdJson = JSON.parse(created.output);
+      const quickId = createdJson.manifest.items[0].quick_id;
+
+      const description = 'd'.repeat(241);
+      const completed = runGsdTools([
+        'quick-batch', 'complete', '--batch', createdJson.batchId, '--quick-id', quickId,
+        '--description', description, '--date', '2026-01-01', '--commit', 'abc1234', '--raw',
+      ], dir);
+      assert.equal(completed.success, true, `complete failed: ${completed.error}`);
+      const completedJson = JSON.parse(completed.output);
+      assert.equal(completedJson.appended, true);
+      assert.equal(completedJson.warnings.length, 1, JSON.stringify(completedJson.warnings));
+      assert.ok(completedJson.warnings[0].includes('241'), completedJson.warnings[0]);
     } finally {
       cleanup(dir);
     }
