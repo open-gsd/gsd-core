@@ -74,15 +74,44 @@ function seedProject(dir) {
  * What must be equal: the three observable results, with the two things that
  * legitimately differ between two runs taken out. Each run gets its own
  * project directory (commands may write), and some commands print the time.
+ *
+ * Only the directory's own NAME is masked, never its whole path. Both runs'
+ * directories have the same parent, so the name is all that differs, and a
+ * name has one spelling where a path has several: the CLI prints the same
+ * directory with backslashes, JSON-escaped backslashes and, from the commands
+ * that emit POSIX paths, forward slashes (`C:/Users/…`). Masking the full path
+ * in one spelling left the others unmasked on Windows, twice.
  */
 function comparable(result, dir) {
+  // The last segment under either separator, so the rule is the same on every platform.
+  const name = dir.split(/[\\/]/).filter(Boolean).pop();
   const strip = (text) => String(text)
-    .split(JSON.stringify(dir).slice(1, -1)).join('<DIR>')
-    .split(dir).join('<DIR>')
+    .split(name).join('<DIR>')
     .replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z/g, '<TIME>')
     .replace(/\d{4}-\d\d-\d\d/g, '<DATE>');
   return { exitCode: result.exitCode, stdout: strip(result.stdout), stderr: strip(result.stderr) };
 }
+
+// The mask is what the whole file rests on, so it is checked on its own: every
+// spelling of a directory that the CLI can print must come out the same.
+test('the comparison masks a run directory however its path is spelled (#6333)', () => {
+  const a = { win: 'C:\\Users\\me\\Temp\\gsd-parity-AAAAAA', posix: '/tmp/x/gsd-parity-AAAAAA' };
+  const b = { win: 'C:\\Users\\me\\Temp\\gsd-parity-BBBBBB', posix: '/tmp/x/gsd-parity-BBBBBB' };
+  const spellings = (dir) => [
+    dir,
+    JSON.stringify(dir).slice(1, -1),
+    dir.split('\\').join('/'),
+    `${dir}\\.planning\\STATE.md`,
+    `${dir.split('\\').join('/')}/.planning/phases/01-setup`,
+  ].join('\n');
+
+  for (const kind of ['win', 'posix']) {
+    const left = comparable({ exitCode: 0, stdout: spellings(a[kind]), stderr: spellings(a[kind]) }, a[kind]);
+    const right = comparable({ exitCode: 0, stdout: spellings(b[kind]), stderr: spellings(b[kind]) }, b[kind]);
+    assert.deepEqual(left, right, kind);
+    assert.ok(!left.stdout.includes('AAAAAA') && left.stdout.includes('<DIR>'), kind);
+  }
+});
 
 function harness(t) {
   const home = canonical(createTempDir('gsd-parity-home-'));
