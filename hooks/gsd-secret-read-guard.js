@@ -3200,7 +3200,11 @@ let scanSpent = false;
 // script is scanned about 120 times and charged up to about 33 separators,
 // and such scripts are denied from about 16,000-70,000 characters by shape;
 // inside `$( )` or a second heredoc each is scanned about 500 times and
-// charged up to about 130, and they are denied from about 4,000-17,000. The
+// charged up to about 130, and they are denied from about 4,000-17,000. A
+// command holding a `$( )`, `$(( ))`, `<( )` or `>( )` is scanned once more
+// (scanBashByGrammar), on what those scans leave, so it is denied at half to
+// three quarters of its size without that scan: such scripts from about
+// 12,000-52,000, and from about 3,000-12,500 inside `$( )`. The
 // most any of the 1,384,856 real agent commands above needs is 20,043 (a
 // 4,543-character heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;
