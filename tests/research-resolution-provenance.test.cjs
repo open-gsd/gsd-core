@@ -338,11 +338,11 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     const binding = splitLines(read('gsd-core/workflows/plan-phase.md')).find((l) => l.startsWith('- Record channel:'));
     assert.ok(binding, 'plan-phase must bind the record channel');
     const rest = read('gsd-core/workflows/plan-phase.md').split(binding)[1].split('\n')[1];
-    assert.match(`${binding} ${rest}`, /plan-phase closes it, on the leave-the-loop exit too \(fence below, then stop\)/);
+    assert.match(`${binding} ${rest}`, /plan-phase closes it, leaving the loop too \(fence below, then stop\)/);
     // The close fence runs only when CONVERGENCE_ENABLED is "true", and nothing persists across fences, so the
     // export list it states must name it, or the close silently does nothing and the line stays open.
     const close = read('gsd-core/workflows/plan-phase.md').replace(/\s+/g, ' ');
-    assert.match(close, /close its record — nothing persists across fences, so export `REVIEWS_FILE`, `CONVERGENCE_ENABLED`, the same `CONFLICT_DIMENSION`\/`CONFLICT_PLAN`/);
+    assert.match(close, /close its record — nothing persists across fences, so export `REVIEWS_FILE`, `CONVERGENCE_ENABLED`, the `CONFLICT_DIMENSION`\/`CONFLICT_PLAN`/);
   });
 
   // A re-spawn under --auto can only return the same conflict, and the cap gate has no --auto choice of its
@@ -363,9 +363,9 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
 // discuss-phase clears, so the option that skips it says so where the user chooses.
 describe('plan-phase\'s no-context option names the Dimension 11 consequence (#5438)', () => {
   test('both forms of "Continue without context" say open research questions block until discuss-phase', () => {
-    const lines = splitLines(read('gsd-core/workflows/plan-phase.md')).filter((l) => /Continue without context.* — Plan using research \+ requirements only/.test(l));
+    const lines = splitLines(read('gsd-core/workflows/plan-phase.md')).filter((l) => /Continue without context\W* — /.test(l));
     assert.equal(lines.length, 2, 'the text-mode list and the AskUserQuestion options each carry the option');
-    for (const l of lines) assert.match(l, /; open research questions block until discuss-phase$/);
+    for (const l of lines) assert.match(l, / — Open research questions block until discuss-phase$/);
   });
 });
 

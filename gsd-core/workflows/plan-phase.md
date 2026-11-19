@@ -253,16 +253,16 @@ If `context_path` is not null, display: `Using phase context from: ${context_pat
 
 **If `context_path` is null (no CONTEXT.md exists):**
 
-Read discuss mode for context gate label:
+Read the discuss mode:
 ```bash
 DISCUSS_MODE=$(gsd_run query config-get workflow.discuss_mode --raw 2>/dev/null || echo "discuss")
 ```
 
 If `TEXT_MODE` is true, present as a plain-text numbered list:
 ```
-No CONTEXT.md found for Phase {X}. Plans will use research and requirements only — your design preferences won't be included.
+No CONTEXT.md for Phase {X}: plans use research and requirements only, not your design preferences.
 
-1. Continue without context — Plan using research + requirements only; open research questions block until discuss-phase
+1. Continue without context — Open research questions block until discuss-phase
 [If DISCUSS_MODE is "assumptions":]
 2. Gather context (assumptions mode) — Analyze codebase and surface assumptions before planning
 [If DISCUSS_MODE is "discuss" or unset:]
@@ -273,9 +273,9 @@ Enter number:
 
 Otherwise use AskUserQuestion:
 - header: "No context"
-- question: "No CONTEXT.md found for Phase {X}. Plans will use research and requirements only — your design preferences won't be included. Continue or capture context first?"
+- question: "No CONTEXT.md for Phase {X}: plans use research and requirements only, not your design preferences. Continue or capture context first?"
 - options:
-  - "Continue without context" — Plan using research + requirements only; open research questions block until discuss-phase
+  - "Continue without context" — Open research questions block until discuss-phase
   If `DISCUSS_MODE` is `"assumptions"`:
   - "Gather context (assumptions mode)" — Analyze codebase and surface assumptions before planning
   If `DISCUSS_MODE` is `"discuss"` (or unset):
@@ -284,8 +284,8 @@ Otherwise use AskUserQuestion:
 If "Continue without context": Proceed to step 5.
 If "Run discuss-phase first":
   **IMPORTANT:** Do NOT invoke discuss-phase as a nested Skill/Task call — AskUserQuestion
-  does not work correctly in nested subcontexts (#1009). Instead, display the command
-  and exit so the user runs it as a top-level command:
+  fails in nested subcontexts (#1009). Display the command and exit so the user runs
+  it at top level:
   ```
   Run this command first, then re-run /gsd:plan-phase {X} ${GSD_WS}:
 
@@ -1230,7 +1230,7 @@ fi
 
 - Counter not spent: `iteration_count`.
 - Record channel: `$REVIEWS_FILE`'s `## Plan-Revision Conflicts` section. plan-phase wrote the
-  line, so plan-phase closes it, on the leave-the-loop exit too (fence below, then stop).
+  line, so plan-phase closes it, leaving the loop too (fence below, then stop).
 - After re-spawning, return to this step, not the checker.
 - Escalates via the iteration cap on repeated `required_property`, and on the THIRD conflict
   return of this loop whatever property it names.
@@ -1261,8 +1261,8 @@ fi
 
 **Otherwise (revised plans, not `## REVISION_CONFLICT`):** if this re-spawn followed a
 resolved conflict, close its record — nothing persists across fences, so export `REVIEWS_FILE`,
-`CONVERGENCE_ENABLED`, the same `CONFLICT_DIMENSION`/`CONFLICT_PLAN` used to open it, and `CONFLICT_RESOLUTION` (a
-one-line summary). Then run:
+`CONVERGENCE_ENABLED`, the `CONFLICT_DIMENSION`/`CONFLICT_PLAN` that opened it, and
+`CONFLICT_RESOLUTION` (one line). Then run:
 
 ```bash
 if [ "${CONVERGENCE_ENABLED}" = "true" ] && [ -n "${REVIEWS_FILE}" ]; then
