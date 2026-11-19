@@ -44,11 +44,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { runHook: runHookSeam, runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -491,9 +490,13 @@ describe('#5978 — symlinked Windsurf hooks.json honors GSD_ALLOW_SYMLINKED_DES
       fs.writeFileSync(sb.target, `${JSON.stringify(doc, null, 2)}\n`);
       const stale = fs.readFileSync(sb.target, 'utf8');
 
+      // The refusal comes before any write: a staged hook script removed beforehand stays removed.
+      const stagedScript = path.join(sb.cfg, 'hooks', GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT);
+      fs.unlinkSync(stagedScript);
       const refused = sb.run([], false);
       assert.notEqual(refused.status, 0, 'a refused reinstall exits non-zero');
       assert.match(`${refused.stdout}${refused.stderr}`, /symlink, refusing to change it/);
+      assert.equal(fs.existsSync(stagedScript), false, 'a refused reinstall writes nothing');
       assert.ok(isLink(sb.hooksJson), 'the link stays');
       assert.equal(fs.readFileSync(sb.target, 'utf8'), stale, 'the target is untouched');
 
@@ -528,6 +531,17 @@ describe('#5978 — symlinked Windsurf hooks.json honors GSD_ALLOW_SYMLINKED_DES
     assert.equal(r.status, 0, r.stderr);
     assert.ok(isLink(sb.hooksJson));
     assert.equal(fs.readFileSync(sb.target, 'utf8'), emptied);
+  });
+
+  test('uninstall of an unparseable hooks.json reports it before removing anything', (t) => {
+    const sb = sandbox(t);
+    assert.equal(sb.run([], false).status, 0);
+    fs.writeFileSync(sb.hooksJson, '{ not json');
+    const r = sb.run(['--uninstall'], false);
+    assert.notEqual(r.status, 0);
+    assert.match(`${r.stdout}${r.stderr}`, /Windsurf hooks\.json parse failed/);
+    assert.match(`${r.stdout}${r.stderr}`, /Nothing was uninstalled/);
+    assert.ok(fs.existsSync(path.join(sb.cfg, 'hooks', GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT)), 'nothing was removed');
   });
 
   test('a dangling link is refused even with the opt-in, and is never replaced', (t) => {

@@ -2534,8 +2534,11 @@ function resolveWindsurfHooksJsonDestination(hooksJsonPath: string): string {
   let stat: fs.Stats;
   try {
     stat = fs.lstatSync(hooksJsonPath);
-  } catch {
-    return hooksJsonPath;
+  } catch (err) {
+    // Nothing at the path yet: a fresh install creates the file. Any other failure (EACCES, ELOOP)
+    // cannot be classified as "not a link", so it is not written through.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return hooksJsonPath;
+    throw err;
   }
   if (!stat.isSymbolicLink()) return hooksJsonPath;
   if (!_installEngineSymlinkGuard().isSymlinkedDestOptIn()) {
@@ -2561,11 +2564,12 @@ function resolveWindsurfHooksJsonDestination(hooksJsonPath: string): string {
 function windsurfHooksJsonRemovalRefusal(targetDir: string): string | null {
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!fs.existsSync(hooksJsonPath)) return null;
-  if (!planWindsurfHooksJson(hooksJsonPath, null).shouldWrite) return null;
   try {
+    if (!planWindsurfHooksJson(hooksJsonPath, null).shouldWrite) return null;
     resolveWindsurfHooksJsonDestination(hooksJsonPath);
     return null;
   } catch (err) {
+    // An unparseable hooks.json would fail the removal partway through; report it before any removal.
     return (err as Error).message;
   }
 }
@@ -2603,6 +2607,35 @@ interface WriteWindsurfHooksJsonOpts {
 function writeWindsurfHooksJson(targetDir: string, src: string, opts?: WriteWindsurfHooksJsonOpts): { hooksJsonPath: string; changed: boolean; configuredEntrypoints: ConfiguredEntrypoint[] } {
   opts = opts || {};
   const hooksDir = path.join(targetDir, 'hooks');
+
+  // #5978 preflight: decide, before anything is written, whether hooks.json would change, and
+  // refuse a symlinked one that would (without GSD_ALLOW_SYMLINKED_DEST) while the install is
+  // still untouched, instead of throwing at the end with the hook scripts already staged.
+  {
+    const wouldInstall = new Set(
+      GSD_WINDSURF_HOOK_SCRIPTS.filter((script) => fs.existsSync(path.join(src, 'hooks', script))),
+    );
+    const preCommands: Record<string, string | null> = {};
+    for (const ev of WINDSURF_HOOK_EVENTS) {
+      const script = WINDSURF_EVENT_SCRIPT_MAP[ev];
+      preCommands[ev] = (script && wouldInstall.has(script))
+        ? buildHookCommand(targetDir, script, {
+            runtime: 'windsurf',
+            platform: opts.platform || process.platform,
+            configPath: path.join(targetDir, 'hooks.json'),
+            configuredEntrypoints: [],
+          })
+        : null;
+    }
+    const preEntries: WindsurfManagedEntries = {};
+    for (const ev of WINDSURF_HOOK_EVENTS) {
+      const cmd = preCommands[ev];
+      if (cmd) preEntries[ev] = buildWindsurfHookEntry(cmd);
+    }
+    const preHooksJson = path.join(targetDir, 'hooks.json');
+    if (planWindsurfHooksJson(preHooksJson, preEntries).shouldWrite) resolveWindsurfHooksJsonDestination(preHooksJson);
+  }
+
   fs.mkdirSync(hooksDir, { recursive: true });
 
   const srcHooksDir = path.join(src, 'hooks');
