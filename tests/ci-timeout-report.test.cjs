@@ -659,6 +659,7 @@ test('shard balance (#5101)', async (t) => {
     assert.equal(statusWithLastRun([1, 1, 2]), 'insufficient-data', 'shard 1 twice, shard 3 missing');
     assert.equal(statusWithLastRun([1, 2, baselineShardTotal + 1]), 'insufficient-data', 'an index past the total');
     assert.equal(statusWithLastRun([1, 2, 0]), 'insufficient-data', 'index zero');
+    assert.equal(statusWithLastRun([1, '01', 2]), 'insufficient-data', 'a zero-padded second spelling of shard 1');
     assert.equal(statusWithLastRun([1, 1, 2, 3]), 'baseline-mismatch', 'a duplicate beside a complete set');
   });
 
