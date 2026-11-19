@@ -1874,6 +1874,13 @@ export function readRecordedPlanTotal(content: string): number | null {
   return totalPos?.n ?? legacy?.m ?? planPos?.m ?? null;
 }
 
+/** A plan line of STATE.md is echoed in a refusal cut to this many characters (the cut precedes the escaping, so it never splits an escape). */
+const PLAN_ECHO_LIMIT = 120;
+const echoPlanText = (text: string | null): string => {
+  const raw = text ?? '';
+  return formatDiagnosticToken(raw.length > PLAN_ECHO_LIMIT ? `${raw.slice(0, PLAN_ECHO_LIMIT)}…` : raw);
+};
+
 /**
  * What `plannedPhaseCore` may write for `--plans <count>` (#5320): a refusal, or the new text of each
  * plan line `advancePlanCore` reads (`undefined`: leave the line as written). `Plan:` is never written
@@ -1900,7 +1907,7 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     if (samePhase && pos?.legacy && /^\d+\s+of(?:\s|$)/i.test(value ?? '')) {
       return { error: {
         reason: ERROR_REASON.PLANS_NO_LINE,
-        message: `state planned-phase: --plans cannot replace the total in ${formatDiagnosticToken(`${name}: ${value}`)}. ` +
+        message: `state planned-phase: --plans cannot replace the total in ${echoPlanText(`${name}: ${value}`)}. ` +
           `Write the line as \`${name}: N of M\` (or \`${name}: N of ?\`) and retry.`,
       } };
     }
@@ -1917,7 +1924,7 @@ function planLinesForPlanned(content: string, count: number, samePhase: boolean,
     if (lines.ambiguous) {
       return { error: {
         reason: ERROR_REASON.AMBIGUOUS_PLAN_POSITION,
-        message: `state planned-phase: Plan and Current Plan record different plan positions (Plan ${formatDiagnosticToken(lines.plan ?? '')}, Current Plan ${formatDiagnosticToken(lines.currentPlan ?? '')}). ` +
+        message: `state planned-phase: Plan and Current Plan record different plan positions (Plan ${echoPlanText(lines.plan)}, Current Plan ${echoPlanText(lines.currentPlan)}). ` +
           'Correct one of them and retry.',
       } };
     }

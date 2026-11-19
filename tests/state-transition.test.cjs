@@ -5579,6 +5579,9 @@ describe('#5320 plan-count / plan-position owner parity', () => {
       assert.ok([...message].every((ch) => ch.charCodeAt(0) > 0x1f && ch !== '‮'), JSON.stringify(message));
       assert.ok(message.includes('\\u0007\\u001b[31m\\u202e'), JSON.stringify(message));
     }
+    // a long line is echoed cut, so a refusal stays one short line
+    const long = planned(`Plan: 2 of 5.5${'x'.repeat(500)}`, 6).data.message;
+    assert.ok(long.length < 300 && long.includes('…'), long.length);
   });
 
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
