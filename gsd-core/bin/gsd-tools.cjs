@@ -2552,7 +2552,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // (the injection case above — the .toml surface never had to consider this
   // because TOML string-quoting isn't a shell argv boundary) is dropped with
   // a warning rather than ever reaching child_process argv.
-  // Single source of truth for the model-id "allowed characters" notion (owned by src/model-escalation.cts since #5328, which the Agent model guard also reads)
+  // Single source of truth for the model-id "allowed characters" notion (owned by src/model-catalog.cts since #5328, which the Agent model guard also reads)
   // (#3714 follow-up — "Generative Fix Divergence"): the accept regex
   // (MODEL_ID_CHARSET_RE, used to ADMIT a pin) and the sanitizer keep-class
   // (MODEL_ID_SANITIZE_STRIP_RE, used to RENDER a rejected pin into a
@@ -2568,7 +2568,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // (MODEL_ID_SANITIZE_STRIP_RE, `[^BODY]`) below — only plain characters
   // and `x-y` ranges are safe here. A class metacharacter (`^`, `]`, `\`)
   // would mean different things in the two derived regexes if ever added.
-  const { MODEL_ID_CHARSET_BODY } = require('./lib/model-escalation.cjs');
+  const { MODEL_ID_CHARSET_BODY } = require('./lib/model-catalog.cjs');
   // The first character must be alphanumeric (#3714 hardening): a leading
   // '.', '_', ':', '/', or '@' has no legitimate model-id use case and, for
   // resolveOrchestratorExec's documented role as a GENERAL descriptor→argv
