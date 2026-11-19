@@ -23,18 +23,18 @@ const { REASON_CODE, REASON_INTERPOLATION_MAX_LEN } = require('../hooks/lib/isol
 const { runHook, mkProject, writeConfig } = require('./helpers/agent-isolation-guard-fixtures.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
-describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved model', () => {
+describe('agent-model-check.js: #5328 — Agent() model vs resolved model', () => {
   const guardModule = require('../hooks/gsd-agent-isolation-guard.js');
   const { ESCALATION_WINDOW_MS, ESCALATION_SKEW_MS, escalationFile, sessionRoot, formatNotWritten, formatNotRecorded, writeEscalation } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const WIN32 = process.platform === 'win32';
   const stderrLines = (stderr) => stderr.split('\n');
-  // Parse process output; a failure shows the raw text, not an opaque SyntaxError or TypeError
-  // (RULESET.TESTS.diagnostics).
   // A runGsdTools result that must have succeeded, its error text in the failure.
   const succeeded = (r) => {
     assert.ok(r.success, r.error);
     return r;
   };
+  // Parse process output; a failure shows the raw text, not an opaque SyntaxError or TypeError
+  // (RULESET.TESTS.diagnostics).
   const parsedObject = (text) => {
     const shown = text.slice(0, 200);
     let value;
