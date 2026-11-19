@@ -12,6 +12,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const { extractManifestCreationBash } = require('./helpers/extract-manifest-creation-bash.cjs');
 const path = require('node:path');
 
 const fc = require('fast-check');
@@ -2161,10 +2162,7 @@ describe('#3302: the workflow-backend-dispatch doc bridges Workflow results into
     assert.match(c, /executor-isolation-dispatch\.md/, 'the creation script has one copy, in the step file');
     assert.match(c, /Durable wave manifest/);
     assert.match(c, /orchestrator_root/, 'the pointer must still name the #630 field');
-    const step = fs.readFileSync(
-      path.join(ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-isolation-dispatch.md'),
-      'utf8',
-    );
+    const step = extractManifestCreationBash();
     assert.match(step, /worktrees:\[\]/, 'initialised empty — then populated from outcomes');
     assert.match(step, /orchestrator_root/);
     assert.doesNotMatch(step, /mktemp/, 'durable manifests are phase-scoped files, not mktemp');

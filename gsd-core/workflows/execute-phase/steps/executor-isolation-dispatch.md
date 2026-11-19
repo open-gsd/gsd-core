@@ -506,7 +506,7 @@ if [ "${USE_WORKTREES:-true}" != "false" ] && [ "${USE_WORKTREES_FOR_PLAN:-true}
   _PA="${PHASE_NUMBER:-}"; [ -z "$_PA" ] && [ -n "${PHASE_DIR:-}" ] && { _PD="${PHASE_DIR//\\//}"; _PD="${_PD%/}"; _PA="${_PD##*/}"; }
   _INDEX=""; [ -n "$_PA" ] && _INDEX=$(gsd_run query phase-plan-index "$_PA" 2>/dev/null || true)
   WAVE_NUM=$(CURRENT_WAVE="${CURRENT_WAVE:-}" INDEX="$_INDEX" node -e '
-const cw=(process.env.CURRENT_WAVE||"").trim();let wave=cw&&cw!=="{N}"?cw:"",pw="";
+const cw=(process.env.CURRENT_WAVE||"").trim();let wave=cw&&!/^\{N\}$/.test(cw)?cw:"",pw="";
 try{const idx=JSON.parse(process.env.INDEX||"{}");const pl=idx.plans||[];
 if(wave&&pl.some(p=>String(p.wave)===wave&&!p.has_summary))pw=wave;
 else{const inc=pl.find(p=>!p.has_summary);if(inc?.wave!=null)pw=String(inc.wave);}
