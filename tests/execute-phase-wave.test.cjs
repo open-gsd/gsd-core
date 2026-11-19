@@ -1668,3 +1668,69 @@ describe('#6117: the stall probe counts a worktree executor\'s unmerged commits 
   });
 });
 }
+
+// A degrade from the base re-check lasts for the remaining waves of the run (#6049).
+// The tests extract the shipped shell fences and run them, so they assert what the shell does
+// and what it prints, never substrings of the source text.
+describe('wave base re-check: a degrade covers the remaining waves (#6049)', { skip: process.platform === 'win32' }, () => {
+  const { spawnSync } = require('child_process');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const REFS = path.join(__dirname, '..', 'gsd-core', 'references');
+
+  function fenceContaining(file, marker) {
+    const lines = fs.readFileSync(path.join(REFS, file), 'utf-8').split(/\r?\n/);
+    let open = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === '```bash') open = i;
+      else if (lines[i].trim() === '```' && open >= 0) {
+        const block = lines.slice(open + 1, i);
+        if (block.some(l => l.indexOf(marker) !== -1)) return block.join('\n');
+        open = -1;
+      }
+    }
+    throw new Error(`no bash fence in ${file} contains ${marker}`);
+  }
+
+  // gsd_run stub: every base-check says "degrade" and every call is counted.
+  function runWaves(script, waves) {
+    const prelude = [
+      'LOG=$(mktemp)',
+      // the guard calls gsd_run inside $(...), a subshell, so count through a file
+      'gsd_run() { echo call >> "$LOG"; case "$*" in *shouldDegrade*) echo true;; *) echo stub-base-check-message;; esac; }',
+      'CALLS=0',
+      'ISOLATION=harness-worktree',
+      'USE_WORKTREES=true',
+    ].join('\n');
+    const body = [];
+    for (let n = 1; n <= waves; n++) {
+      body.push(`N=${n}\n: > "$LOG"`, script, `echo "wave${n} calls=$(wc -l < "$LOG" | tr -d ' ') isolation=$ISOLATION worktrees=$USE_WORKTREES"`);
+    }
+    const r = spawnSync('bash', ['-c', `${prelude}\n${body.join('\n')}`], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS });
+    assert.equal(r.status, 0, r.stderr);
+    return r;
+  }
+
+  function degradeScope(stderr) {
+    const line = stderr.split('\n').find(l => /#1369/.test(l));
+    assert.ok(line, `no degrade line on stderr: ${stderr}`);
+    const m = line.match(/\b(this wave|remaining waves)\b/);
+    assert.ok(m, `degrade line names no scope: ${line}`);
+    return m[1];
+  }
+
+  const guard = fenceContaining('execute-phase-wave-guard.md', '_WAVE_DEGRADE=');
+  const reset = fenceContaining('execute-phase-between-wave-reset.md', '_BETWEEN_DEGRADE=');
+
+  test('after a degrade the next wave skips the re-check and stays sequential', () => {
+    const { stdout } = runWaves(guard, 2);
+    assert.match(stdout, /wave1 calls=2 isolation=none worktrees=false/);
+    assert.match(stdout, /wave2 calls=0 isolation=none worktrees=false/);
+  });
+
+  test('the wave guard and step 7c describe the degrade with the same scope', () => {
+    const guardScope = degradeScope(runWaves(guard, 1).stderr);
+    const resetScope = degradeScope(runWaves(reset, 1).stderr);
+    assert.equal(guardScope, resetScope);
+    assert.equal(resetScope, 'remaining waves');
+  });
+});
