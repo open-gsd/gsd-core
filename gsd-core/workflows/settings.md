@@ -579,9 +579,9 @@ AskUserQuestion([
 ])
 ```
 
-If "Yes": merge these settings into the global defaults store, `${GSD_HOME:-$HOME}/.gsd/defaults.json` (`~/.gsd/defaults.json` unless `GSD_HOME` is set). Do not write the file: `config-save-defaults` merges, so keys this flow does not set (`model_overrides`, `effort`, `runtime`, `resolve_model_ids`, unlisted `workflow` keys) survive, and machine-detected fields like `brave_search` are never copied (#5681).
+If "Yes": save with `config-save-defaults`, never by writing the file: it merges into `${GSD_HOME:-$HOME}/.gsd/defaults.json`, keeping keys this flow omits, and skips detected search flags.
 
-Replace each `<current>` with the current value as JSON (strings quoted; booleans and numbers bare). Omit a setting with no current value: `null` deletes the key, clearing a saved value. The quoted heredoc passes the object unchanged, so `'`, `$` or a backtick in a value needs no escaping:
+Fill each `<current>` with this run's value (the user's answer, else what `read_current` parsed) as JSON: strings JSON-escaped in double quotes, booleans and numbers bare. A setting with no value loses its line and any comma left before `}`. Never write `null`: it deletes the saved default.
 
 ```bash
 DEFAULTS_JSON=$(cat <<'JSON'
@@ -628,6 +628,8 @@ JSON
 )
 gsd_run query config-save-defaults "$DEFAULTS_JSON"
 ```
+
+Non-zero exit: show the error and report Saved as Defaults: No, unless the error reads "Error: Saved" (the save landed). A held lock can take 30 s.
 </step>
 
 <step name="confirm">
