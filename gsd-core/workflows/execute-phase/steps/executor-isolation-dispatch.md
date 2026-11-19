@@ -213,7 +213,7 @@ echo "PROMPT_FILE=$PROMPT_FILE"
 echo "TDD_APPLICABLE=$TDD_APPLICABLE"
 ```
 
-Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted. Resolve the conditional embed line of the template from the verdict line block 1 printed after `PROMPT_FILE=`: use `- tdd.md` when the verdict is `true` and the empty string otherwise, and never guess it. `mktemp` created that file empty, so a file tool that refuses to overwrite a file it has not read must read it first:
+Write the template below to the `PROMPT_FILE` path block 1 printed, with your file-writing tool and never through the shell, every build-time embed and placeholder substituted. Resolve the conditional embed line of the template from the verdict line block 1 printed after `PROMPT_FILE=`: replace the whole line, its trailing `#` comment included, with `- tdd.md` when the verdict is `true` and with nothing otherwise, and never guess it. `mktemp` created that file empty, so a file tool that refuses to overwrite a file it has not read must read it first:
 
 ```text
 <objective>

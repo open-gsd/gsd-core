@@ -23,7 +23,7 @@ const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { readFileNormalized } = require('./helpers.cjs');
-const { DISPATCH_STEP_PATH } = require('./qa/tdd-walk.cjs');
+const { DISPATCH_STEP_PATH, TDD_EMBED_TERNARY } = require('./qa/tdd-walk.cjs');
 const { substitutePlaceholders } = require('../scripts/lint-workflow-shellcheck.cjs');
 const { scanFencedBlocks, extractFencedBlock } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -126,6 +126,14 @@ test('#5531: the template carries the two markers that only the read-and-check g
   for (const marker of ['Inline the actual contents', '${TDD_APPLICABLE']) {
     assert.ok(body.includes(marker), `the template carries ${marker}, so a skipped compose step leaves it for a guard to find`);
   }
+});
+
+test('#5531: the instruction says the whole conditional line, its trailing comment included, is replaced', () => {
+  // The bash run cannot show what the file-writing model keeps: a comment left on the line reaches the executor prompt.
+  const embedLine = promptBody().split('\n').find((l) => l.startsWith(TDD_EMBED_TERNARY));
+  assert.ok(embedLine, 'the template holds the conditional embed line');
+  assert.match(embedLine, /\s#\s/, 'the conditional line carries a trailing comment');
+  assert.match(content, /replace the whole line, its trailing `#` comment included, with `- tdd\.md` when the verdict is `true` and with nothing otherwise/, 'the instruction replaces the whole line');
 });
 
 test('#5531: the wave name shape the prompt file carries is the one execute-phase.md gives the manifest', () => {
