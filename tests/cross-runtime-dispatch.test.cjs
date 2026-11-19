@@ -66,9 +66,13 @@ before(() => {
   fs.mkdirSync(binWithRuntimes);
   fs.mkdirSync(binEmpty);
   for (const name of ['codex', 'opencode']) {
-    fs.writeFileSync(path.join(binWithRuntimes, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    // Windows resolves a command through PATHEXT, so the stand-in is a .cmd there and a shell script elsewhere.
+    if (process.platform === 'win32') fs.writeFileSync(path.join(binWithRuntimes, `${name}.cmd`), '@echo off\r\nexit /b 0\r\n');
+    else fs.writeFileSync(path.join(binWithRuntimes, name), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   }
-  fs.symlinkSync(process.execPath, path.join(binEmpty, 'node'));
+  // The child is started by absolute path, so the empty bin directory only has to hold no runtime binary;
+  // a symlink needs a privilege Windows runners may lack.
+  try { fs.symlinkSync(process.execPath, path.join(binEmpty, 'node')); } catch { /* not required */ }
 });
 after(() => { cleanup(project); });
 
