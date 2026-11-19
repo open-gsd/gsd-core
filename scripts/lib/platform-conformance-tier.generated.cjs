@@ -303,6 +303,7 @@ module.exports = {
   "tests/settings-jsonc.test.cjs",
   "tests/sh-hook-paths.test.cjs",
   "tests/shared-hooks-dir-resolution.test.cjs",
+  "tests/shared-install-fixture.test.cjs",
   "tests/shell-command-projection-dispatch.test.cjs",
   "tests/shell-command-projection-md-normalize.test.cjs",
   "tests/ship-notes-wedged-pr.test.cjs",
