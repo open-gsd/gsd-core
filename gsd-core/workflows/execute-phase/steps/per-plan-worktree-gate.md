@@ -143,17 +143,20 @@ elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
   # `executorRuntime` and a null `fallback`; the orchestrator then dispatches THIS plan through the
   # orchestrator-worktree block of executor-isolation-dispatch.md (see cross-runtime-executor-dispatch.md)
   # whatever the phase-level ISOLATION is. Otherwise the plan's isolation is the host's, unchanged.
+  # Read only `executorRuntime` and `fallback` from PLAN_DISPATCH: its `isolation` can be a held `none`
+  # (#4904) that the force below replaces in the record the guard enforces.
   PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" --plan "$plan_id" 2>/dev/null) || PLAN_DISPATCH_JSON=""
   # #4904: this plan decided `true`, so an earlier `none` of its own must not stand: the plain
-  # query above holds it, and the guard would then allow a dispatch that omits the flag. Unless the
-  # plan goes to another runtime (a force would turn that into a `forced_isolation` fallback),
-  # re-record with the host's declared capability, read from `inspect-dispatch-isolation`, which no
-  # hold reaches. Only with a plan id: an empty one records at phase level, where the override would
-  # reach every plan of the phase. A failed read, or a host that declares `none`, keeps the plain
-  # record. PLAN_DISPATCH stays the plain answer, which carries the plan's executorRuntime/fallback.
-  _PLAN_FOREIGN=$(printf '%s' "$PLAN_DISPATCH_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j&&j.isolation==="orchestrator-worktree"&&j.executorRuntime&&j.fallback===null?"true":"false")}catch{process.stdout.write("false")}})')
+  # query above holds it, and the guard would then allow a dispatch that omits the flag, past the
+  # hold's ten minutes too (an aged `none` governs its own plan). Re-record with the host's declared
+  # capability, read from `inspect-dispatch-isolation`, which no hold reaches, for a plan that goes to
+  # another runtime as well: PLAN_DISPATCH stays the plain answer, so that plan still dispatches to
+  # its runtime, and the exec read of executor-isolation-dispatch.md, which a non-`none` record does
+  # not hold, records the foreign decision. Only with a plan id: an empty one records at phase level,
+  # where the override would reach every plan of the phase. A failed read, or a host that declares
+  # `none`, keeps the plain record.
   _PLAN_CAPABILITY=""
-  if [ -n "${plan_id:-}" ] && [ "$_PLAN_FOREIGN" != "true" ]; then
+  if [ -n "${plan_id:-}" ]; then
     _PLAN_CAPABILITY=$(gsd_run query inspect-dispatch-isolation --raw 2>/dev/null) || _PLAN_CAPABILITY=""
     [ "$_PLAN_CAPABILITY" = "none" ] && _PLAN_CAPABILITY=""
   fi

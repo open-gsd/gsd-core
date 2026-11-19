@@ -19,6 +19,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempGitProject, createTempDir, homeSandboxEnv, cleanup, TOOLS_PATH } = require('./helpers.cjs');
@@ -28,6 +29,8 @@ const sentinel = require('../hooks/lib/isolation-sentinel.js');
 const executorType = require('../gsd-core/bin/lib/executor-type.cjs');
 const { REASON_CODE } = require('../hooks/lib/isolation-deny-reason.js');
 const guard = require('../hooks/gsd-agent-isolation-guard.js');
+const { span } = require('./helpers/doc-bash-span.cjs');
+const { skipUnless } = require('./helpers/bash-probe.cjs');
 
 const {
   SENTINEL_RELATIVE_PATH, KEYED_SENTINEL_DIR, IDENTITY_RECORD_DIR, IDENTITY_MAX_EXECUTOR_TYPES,
@@ -486,5 +489,78 @@ describe('#4904 the reader takes the union of the scopes\' latest snapshots (pro
         }
       },
     ), { numRuns: 60 });
+  });
+});
+
+// #6303 x #4904: a held caller `none` of a plan that goes to another runtime must not outlive the hold. The
+// per-plan gate forces the host's capability for it, so the exec read (never held by a non-`none` record)
+// records `next`'s foreign decision, which the guard requires the flag under once it is stale. Run through
+// the documented gate block and the real resolver; times come from GSD_NOW_MS and the guard's clock seam.
+describe('#4904 a held foreign plan\'s caller none does not outlive the hold', {
+  skip: process.platform === 'win32' ? 'runs the gate block under bash with a POSIX stand-in runtime binary' : skipUnless('bash'),
+}, () => {
+  const PHASE = '03';
+  const PLAN = '03-05';
+  const GATE_DOC = 'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md';
+  const GATE_AT = WRITTEN_AT + 60_000;
+  const ELEVEN_MIN_LATER = { now: () => GATE_AT + 11 * 60_000 };
+  let root;
+  let bin;
+  const envAt = (now) => ({
+    ...homeSandboxEnv(root), GSD_TEST_MODE: '1', GSD_RUNTIME: 'claude', GSD_NOW_MS: String(now),
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+  });
+  const gsd = (args, now) => {
+    const r = runGsdTools(args, root, envAt(now));
+    assert.ok(r.success, r.error);
+    return r.output;
+  };
+  const keyedRecord = () => JSON.parse(fs.readFileSync(path.join(root, KEYED_SENTINEL_DIR, `${PHASE}--${PLAN}.json`), 'utf8'));
+
+  before(() => {
+    root = createTempGitProject('gsd-4904-foreign-');
+    bin = path.join(root, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(root, '.planning', 'config.json'),
+      JSON.stringify({ runtime: 'claude', workflow: { cross_runtime_execution: true } }));
+    const dir = path.join(root, '.planning', 'phases', '03-x');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '03-05-PLAN.md'),
+      '---\nphase: 03-x\nplan: "05"\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nexecutor_runtime: codex\n---\n# plan\n');
+  });
+  after(() => { cleanup(root); });
+
+  test('after the gate and the exec read, a flag-less spawn of that plan\'s executor is blocked eleven minutes later', () => {
+    gsd(['dispatch-isolation', '--raw', '--phase', PHASE, '--force-isolation', 'harness-worktree'], WRITTEN_AT);
+    gsd(['dispatch-isolation', '--raw', '--phase', PHASE, '--plan', PLAN, '--force-isolation', 'none'], WRITTEN_AT);
+    const block = span(GATE_DOC, 'if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]', '# An EMPTY value');
+    const script = ['set -e', `gsd_run() { "${process.execPath}" "${TOOLS_PATH}" "$@"; }`,
+      `PHASE_NUMBER=${PHASE}; plan_id=${PLAN}; USE_WORKTREES_FOR_PLAN=true`, ...block, ''].join('\n');
+    const g = spawnSync('bash', ['-c', script], { cwd: root, env: envAt(GATE_AT), encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+    assert.equal(g.status, 0, g.stderr);
+    const planDispatch = JSON.parse(g.stdout.slice(g.stdout.indexOf('PLAN_DISPATCH=') + 'PLAN_DISPATCH='.length));
+    const afterGate = keyedRecord();
+
+    const wt = path.join(root, 'wt');
+    fs.mkdirSync(wt, { recursive: true });
+    const exec = JSON.parse(gsd(['dispatch-isolation', '--json', '--phase', PHASE, '--plan', PLAN, '--cwd-target', wt, '--prompt', 'go'], GATE_AT));
+    const rec = keyedRecord();
+    const d = guard.evaluateDispatch({
+      tool_name: 'Agent', cwd: root,
+      tool_input: { subagent_type: 'gsd-executor', prompt: `[gsd:dispatch phase="${PHASE}" plan="${PLAN}"]\nrun` },
+    }, { clock: ELEVEN_MIN_LATER });
+    assert.equal(d.action, 'block', `the guard allowed the flag-less spawn (plan record ${rec.isolation}/${rec.decided_by})`);
+    assert.equal(d.reasonCode, REASON_CODE.HARNESS_FLAG_MISSING);
+
+    assert.equal(planDispatch.held, true, 'precondition: the gate\'s plain query held the caller\'s none');
+    assert.equal(planDispatch.executorRuntime, 'codex');
+    assert.equal(planDispatch.fallback, null, 'the plan still goes to its runtime');
+    assert.notEqual(afterGate.isolation, 'none', 'the gate replaced the held none');
+    assert.equal(exec.held, false, 'the exec read is not held');
+    assert.equal(exec.isolation, 'orchestrator-worktree');
+    assert.equal(exec.exec.command, 'codex');
+    assert.equal(rec.isolation, 'orchestrator-worktree', 'the exec read recorded the foreign decision');
+    assert.equal(rec.producer, 'dispatch-isolation');
   });
 });

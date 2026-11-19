@@ -3206,10 +3206,10 @@ describe('#2652 dispatch-site parity — isolation gates on capability, not runt
     // dispatch sites @-reference the gate and merely re-record a degrade
     // (`--force-isolation …` with no assignment), which carries no verdict of
     // its own — matching those too would flag files that have nothing to fix.
-    // --raw or --json: since #4904 the blocks read `held` too, from the --json form. A query that names
-    // `--plan` on its own line is a plan's own decision (#6303's cross-runtime answer in
+    // --raw or --json: since #4904 the blocks read `held` too, from the --json form. A --json query that
+    // names `--plan` on its own line is a plan's own decision (#6303's cross-runtime answer in
     // per-plan-worktree-gate.md), not the ISOLATION resolver, and keeps its own failure rule.
-    const INLINE_RESOLVE = /\w+=\$\(gsd_run query dispatch-isolation --(?:raw|json)(?![^)\n]*--plan)/;
+    const INLINE_RESOLVE = /\w+=\$\(gsd_run query dispatch-isolation --(?:raw|json(?![^)\n]*--plan))/;
     // Dedupe: SCAN_ROOTS already yields the gate reference, so appending it
     // again made `length >= 2` satisfiable by the gate alone — the executor
     // site could drop out of the predicate entirely and this would still pass.

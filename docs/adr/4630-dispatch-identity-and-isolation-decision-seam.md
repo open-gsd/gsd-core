@@ -293,13 +293,18 @@ it derives, and nothing else, to an executor-identity record:
 **A held query and a foreign dispatch (#6303).** A plan that declares `executor_runtime` resolves to
 the target runtime's exec in `dispatch-isolation` (ADR-3711). A query that holds a caller's `none`
 still resolves it: its stdout and `--json` carry the foreign dispatch, with `held: true`, and it writes
-no decision record, so the guards keep reading the caller's `none`; the foreign plan runs as a process
-they do not see. The per-plan gate's `true` branch forces the host's capability only for a plan that
-does not go to another runtime, because a forced decision turns the foreign dispatch into a
-`forced_isolation` fallback. `inspect-dispatch-isolation --json` reports `held: false` and
+no decision record, so the caller's `none` stays that plan's record. Left there it would outlive the
+hold: an aged `none` governs its own plan for 24 hours, so a flag-less spawn of that plan's executor
+would be allowed where `next`'s foreign record, once stale, requires the flag. So the per-plan gate's
+`true` branch forces the host's capability for every plan with a plan id, one that goes to another
+runtime included. The force makes that query's own answer a `forced_isolation` fallback, but the gate
+passes on its plain answer, so the plan still goes to its runtime, and the orchestrator-worktree exec
+read, which a non-`none` record does not hold, records `next`'s foreign decision.
+`inspect-dispatch-isolation --json` reports `held: false` and
 `decidedAt: null` beside `executorRuntime: null` and `fallback: null`, so the two verbs keep one key
 set. The orchestrator-worktree exec read names its plan, as #6303 requires, so a hold reaches it only
-through that plan's own caller `none`.
+through that plan's own caller `none`, which the gate has replaced unless a caller records a new one in
+between; a held host answer there is `exec: null` and halts the wave.
 
 ### Decision 3 — a copy that must exist is pinned by a parity test, never merely tolerated
 

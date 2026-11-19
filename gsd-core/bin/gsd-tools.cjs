@@ -2452,12 +2452,14 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //
     // Output:
     //   --raw   → prints exactly harness-worktree | orchestrator-worktree | none
-    //   --json  → prints { runtime, isolation, exec, harnessFlag, held, decidedAt }
+    //   --json  → prints { runtime, executorRuntime, isolation, exec, harnessFlag,
+    //             fallback, held, decidedAt }
     //   default → same as --raw
     //
     // `held` is true when a plain query is holding a recorded degrade (#4561,
-    // below); `isolation` is then that degrade's `none`, and `decidedAt` the
-    // epoch ms it was decided (null whenever `held` is false).
+    // below); `isolation` is then that degrade's `none`, unless the plan goes to
+    // another runtime (#6303, below), and `decidedAt` the epoch ms it was
+    // decided (null whenever `held` is false).
     //
     // `exec` is the resolved orchestratorExec argv/cwd shape, present only for
     // `orchestrator-worktree`. It requires `--cwd-target` (the GSD-created

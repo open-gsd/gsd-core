@@ -80,8 +80,9 @@ describe('#6213 execute-phase records the routed executor without a carried shel
     assert.deepEqual(calls(log), []);
   });
 
-  // #6303 x #4904: the `true` branch forces the host's capability only for a plan that does not go to
-  // another runtime, since a forced decision turns a foreign dispatch into a `forced_isolation` fallback.
+  // #6303 x #4904: the `true` branch forces the host's capability for every plan with an id, one that goes
+  // to another runtime included, so a held `none` of its own never outlives the hold; PLAN_DISPATCH stays
+  // the plain answer, which is where the orchestrator reads executorRuntime and fallback.
   // This stub answers the plain --json query with the given JSON and the capability read with a mode.
   const answeringStub = (dispatchJson) => [
     `gsd_run() { { for a in "$@"; do printf '%s\\037' "$a"; done; printf '\\n'; } >> '${log}'; ` +
@@ -95,15 +96,9 @@ describe('#6213 execute-phase records the routed executor without a carried shel
   };
   const plainJson = ['query', 'dispatch-isolation', '--json', '--phase', '02', '--plan', '02-01-api'];
 
-  test('a plan that goes to another runtime is not forced, and PLAN_DISPATCH is its answer', () => {
-    const json = '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":null,"held":false}';
-    const r = runTrue(json);
-    assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(calls(log), [plainJson]);
-    assert.ok(r.stdout.includes(`PLAN_DISPATCH=${json}`), r.stdout);
-  });
-
   for (const [label, json] of [
+    ['goes to another runtime', '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":null,"held":false}'],
+    ['goes to another runtime, held', '{"isolation":"orchestrator-worktree","executorRuntime":"codex","fallback":null,"held":true}'],
     ['stays on the host', '{"isolation":"harness-worktree","executorRuntime":null,"fallback":null,"held":false}'],
     ['falls back, held', '{"isolation":"none","executorRuntime":"codex","fallback":"binary_absent","held":true}'],
     // Any fallback reason means the host dispatches, whatever isolation field sits beside it.
