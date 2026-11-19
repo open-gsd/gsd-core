@@ -3296,36 +3296,40 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.equal(scanBashCommand(cmd, BIG, separators + 1), null, 'limit + 1');
     });
 
-    test('in process: a case-block script a shell reads from a heredoc is denied between 30,000 and 40,000 characters', () => {
-      // One of the reaches the hook comment and the user guide give. Every pass
-      // re-tokenizes the script, so with a reading trigger (the `$((` beside a
-      // quote) each character is charged several separators, and the separator
-      // budget stops it before the character budget would. Pinned either side.
+    test('in process: a case-block script a shell reads from a heredoc is denied between 24,000 and 29,000 characters', () => {
+      // One of the reaches the user guide gives. Every pass re-tokenizes the
+      // script, so with a reading trigger (the `$((` beside a quote) each
+      // character is charged several separators, and the separator budget stops
+      // it before the character budget would. The `$((` also starts the grammar
+      // scan (#5267), so the verdict is main()'s (checkBashCommand): first denied
+      // at 26,539 characters, against 35,457 without that scan. Pinned either side.
       const block = (i) => `case "$x" in\n  a${i}) y=1 ;;\n  b${i}) y=2 ;;\n  *) y=0 ;;\nesac\n[ "$y" -gt 0 ] && echo "$((y * ${i}))"\n`;
       const script = (chars) => {
         let body = '';
         for (let i = 0; body.length < chars; i++) body += block(i);
         return `bash <<'EOF'\n${body}EOF\n`;
       };
-      const allowed = (cmd) => scanBashCommand(cmd) === null && scanDebuggerSpawn(cmd) === null;
-      assert.ok(allowed(script(30000)), '30,000 characters');
-      assert.ok(!allowed(script(40000)), '40,000 characters');
+      const allowed = (cmd) => checkBashCommand(cmd) === null;
+      assert.ok(allowed(script(24000)), '24,000 characters');
+      assert.ok(!allowed(script(29000)), '29,000 characters');
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
     });
 
-    test('in process: the same kind of script inside `$( )` is denied between 3,000 and 5,000 characters', () => {
-      // The lowest reach the hook comment and the user guide give. A body nested
-      // one level deeper is read again at each outer pass, so a strict-mode
-      // script of `(( n += K ))` lines given to `bash <<'EOF'` inside `$( )` is
-      // charged about 130 separators a character. `next` scans it to the end.
+    test('in process: the same kind of script inside `$( )` is denied between 2,500 and 3,500 characters', () => {
+      // The lowest reach the user guide gives. A body nested one level deeper is
+      // read again at each outer pass, so a strict-mode script of `(( n += K ))`
+      // lines given to `bash <<'EOF'` inside `$( )` is charged about 130
+      // separators a character, and the `$( )` adds the grammar scan (#5267):
+      // main()'s verdict (checkBashCommand) first denies it at 3,031 characters,
+      // against 4,051 without that scan.
       const script = (chars) => {
         let body = "set -euo pipefail\nIFS=$'\\n\\t'\n";
         for (let k = 0; body.length < chars; k++) body += `(( n += ${k} ))\n`;
         return `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"`;
       };
-      const allowed = (cmd) => scanBashCommand(cmd) === null && scanDebuggerSpawn(cmd) === null;
-      assert.ok(allowed(script(3000)), '3,000 characters');
-      assert.ok(!allowed(script(5000)), '5,000 characters');
+      const allowed = (cmd) => checkBashCommand(cmd) === null;
+      assert.ok(allowed(script(2500)), '2,500 characters');
+      assert.ok(!allowed(script(3500)), '3,500 characters');
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
     });
 
@@ -3357,13 +3361,14 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
     });
 
-    test('in process: a commit message holding a reading trigger is scanned to about 70,000 characters', () => {
-      // The user guide's figure: two levels, eight scans each, and #5513's
-      // heredoc passes put the boundary near 69,900 characters. Pinned at
-      // 10% either side, so the guide's "about" stays true.
+    test('in process: a commit message holding a reading trigger is scanned to about 52,000 characters', () => {
+      // The user guide's figure: two levels, eight scans each, #5513's heredoc
+      // passes, and the grammar scan the `$( )` starts (#5267) put main()'s
+      // boundary (checkBashCommand) at 52,445 characters, against 69,921 without
+      // that scan. Pinned at 10% either side, so the guide's "about" stays true.
       const message = (n) => `git commit -m "$(cat <<'EOF'\nsubject $'\\t'\n\n${'a'.repeat(n)}\nEOF\n)"`;
-      assert.equal(scanBashCommand(message(63000)), null);
-      assert.deepEqual(scanBashCommand(message(77000)), TOO_COMPLEX);
+      assert.equal(checkBashCommand(message(47000)), null);
+      assert.deepEqual(checkBashCommand(message(58000)), TOO_COMPLEX);
     });
 
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
