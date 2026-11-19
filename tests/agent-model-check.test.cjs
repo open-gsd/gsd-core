@@ -402,7 +402,9 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const warned = (session_id) => {
       const r = runHook({ ...dispatch('gsd-executor', 'opus', WORKTREE), session_id }, project, PINNED);
       assert.equal(r.status, 0, r.stderr);
-      const ctx = r.stdout.trim() ? JSON.parse(r.stdout).hookSpecificOutput?.additionalContext : undefined;
+      const out = r.stdout.trim() ? JSON.parse(r.stdout) : undefined;
+      assert.ok(out === undefined || (out !== null && typeof out === 'object'), r.stdout);
+      const ctx = out?.hookSpecificOutput?.additionalContext;
       return typeof ctx === 'string' && ctx.length > 0;
     };
     assert.equal(warned('sess-x'), false);
@@ -758,13 +760,17 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const W = carryStore().INIT_WORKSTREAM_MAX_AGE_MS;
     assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + W - 1 }).action, 'allow');
     assert.equal(evaluate(inSession('sonnet', 'sess-ws'), { now: () => PIN + W - 1 }).action, 'block', 'positive control: a live carry still judges');
-    assert.equal(evaluate(inSession('sonnet', 'sess-ws'), { now: () => PIN + W }).action, 'allow');
-    assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => PIN + W }).action, 'allow');
+    for (const now of [PIN + W, PIN + W + 1]) {
+      assert.equal(evaluate(inSession('sonnet', 'sess-ws'), { now: () => now }).action, 'allow', `now ${now - PIN}`);
+      assert.equal(evaluate(inSession('haiku', 'sess-ws'), { now: () => now }).action, 'allow', `now ${now - PIN}`);
+    }
     // alpha expired but a read-only init --ws beta is fresh: still cannot tell the run's workstream, so allow
     fs.mkdirSync(path.join(project, '.planning', 'workstreams', 'beta'), { recursive: true });
     assert.equal(carryStore().recordInitWorkstream(project, 'sess-ws', 'beta', PIN + W - 1), true);
     assert.equal(evaluate(inSession('gpt-9', 'sess-ws'), { now: () => PIN + W - 1 }).action, 'block', 'positive control: both entries still fresh');
-    assert.equal(evaluate(inSession('gpt-9', 'sess-ws'), { now: () => PIN + W }).action, 'allow');
+    for (const now of [PIN + W, PIN + W + 1]) {
+      assert.equal(evaluate(inSession('gpt-9', 'sess-ws'), { now: () => now }).action, 'allow', `now ${now - PIN}`);
+    }
   });
 
   test('a forged carry (no valid entry, or an entry the resolver cannot use) allows instead of failing the dispatch', (t) => {
@@ -884,6 +890,9 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     };
     for (const w of Object.values(writers)) {
       setup(t);
+      w.run();
+      assert.equal(fs.existsSync(path.join(project, '.gsd', w.file)), true, `positive control: ${w.file} is written without a symlink`);
+      setup(t);
       fs.symlinkSync(outside, path.join(project, '.gsd'));
       w.run();
       assert.equal(fs.existsSync(path.join(outside, w.file)), false, `.gsd symlink: ${w.file}`);
@@ -981,7 +990,8 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(typeof out.hookSpecificOutput?.additionalContext, 'string', w.stdout);
     writeConfig(project, JSON.stringify({ ...ISSUE_CONFIG, hooks: { agent_model_guard: 'deny' } }));
     const d = runHook(dispatch('gsd-planner', 'sonnet'), project);
-    assert.equal(d.status, 2);
-    assert.equal(JSON.parse(d.stdout).reason_code, REASON_CODE.AGENT_MODEL_MISMATCH);
+    assert.equal(d.status, 2, d.stderr);
+    const denied = JSON.parse(d.stdout);
+    assert.equal(denied?.reason_code, REASON_CODE.AGENT_MODEL_MISMATCH, d.stdout);
   });
 });
