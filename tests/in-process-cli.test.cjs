@@ -448,6 +448,36 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     assert.deepEqual(JSON.parse(result.stdout), { ok: true, migrated: false });
   });
 
+  // The same loop, after the call: a wrapper that was layered over the
+  // stand-in outlives the call and is installed again. The stand-in is stale
+  // and defers to what is installed, which is the wrapper that calls it.
+  await t.test('a wrapper over a stale stand-in, installed again after the call, still reaches the real function', async (t2) => {
+    const file = path.join(tempDir(t2), 'stale-layered.txt');
+    const real = fs.writeSync;
+    let wrapper;
+    let wrapperCalls = 0;
+    await runInProcess(() => {
+      const below = fs.writeSync;
+      wrapper = (fd, data, ...rest) => {
+        wrapperCalls += 1;
+        return below.call(fs, fd, data, ...rest);
+      };
+    });
+
+    t2.after(() => { fs.writeSync = real; });
+    fs.writeSync = wrapper;
+    const fd = fs.openSync(file, 'w');
+    try {
+      assert.equal(fs.writeSync(fd, 'once'), 4);
+    } finally {
+      fs.closeSync(fd);
+      fs.writeSync = real;
+    }
+
+    assert.equal(fs.readFileSync(file, 'utf8'), 'once');
+    assert.equal(wrapperCalls, 2, 'the wrapper is entered once by the caller and once by the stale stand-in');
+  });
+
   // A module first loaded inside main may keep a reference to a stand-in
   // (`const { exit } = process`). Used during a later call, that stale
   // reference must act for the later call, never reach the real function.
