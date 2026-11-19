@@ -68,7 +68,8 @@ describe('ci-test-scope.cjs', () => {
   // Near misses: same basename elsewhere, a sibling, a nested path, a similar test name, a neighbour helper.
   for (const file of ['gsd-core/workflows/new-project.md', 'tests/commands.test.cjs', 'docs/usage.md',
     'gsd-core/insert-phase.md', 'gsd-core/workflows/add-phase.md', 'gsd-core/workflows/insert-phase/x.md',
-    'tests/insert-phase.test.cjs', 'tests/helpers/timeouts.cjs']) {
+    'tests/insert-phase.test.cjs', 'tests/helpers/timeouts.cjs', 'gsd-core/workflows/insert-phase.md.bak',
+    'tests/insert-phase-sibling-docs.test.cjs.bak', 'tests/helpers/doc-bash-span.cjs.bak']) {
     test(`zsh_changed is false for ${file}`, () => {
       assert.strictEqual(scopeFor([file]).zsh_changed, false);
     });
