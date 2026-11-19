@@ -2043,8 +2043,8 @@ function isRawNameBefore(str, i, len) {
 // A scan that meets a quote no character closes walks to the end of the string
 // and records nothing for the `((` after it, so each of those walks again: a run
 // of `((x "${"(` cost a scan per `((`, 139 s at 990 KB. So each scan charges the
-// distance it walked to the command's reader budget (chargeReader), the one
-// scanBashCommand sets, and a command that spends it is unfinished, which the
+// distance it walked to the reader budget (chargeReader), the further reading's
+// own (scanFurtherReading), and a command that spends it is unfinished, which the
 // guard denies as `command-too-complex` (findSecretRead). The same holds for an
 // overflow: the further reading's scanners (dparenClose, subscriptClose) can
 // reach findParenClose inside a `${…}`, which the plain tokenizer skips whole,
@@ -3393,20 +3393,34 @@ function scanDebuggerSpawn(command) {
 // The further reading of `command` (#5779, furtherReading): the secret scan and
 // the debugger-spawn scan again, with the command resolved past the words the
 // plain walk stops at. main runs it last, after scanBashCommand and
-// scanDebuggerSpawn allowed, on what they left of the command's budget, so it
-// can add a denial and cannot lose one. It runs once without bash's subscript
-// joins and, only when that pass saw a place a join could start, once more with
-// them. Its verdict is a block or null:
+// scanDebuggerSpawn allowed, so it can add a denial and cannot lose one. It
+// runs once without bash's subscript joins and, only when that pass saw a
+// place a join could start, once more with them.
+// It has a budget of its own, the size scanBashCommand gives the plain scans,
+// set here: on what the plain scans leave, a prefix that costs them just under
+// the budget leaves this reading nothing, so whether it reads a line would turn
+// on what the plain scans spent. The work on a command is so bounded at twice
+// the plain scans'. `budget` and `separatorBudget` are for tests, as for
+// scanBashCommand. Its verdict is a block or null:
 //   - a stack overflow is `command-too-complex`, as for the plain scans:
 //     findSecretRead returns that block for its own, and one in the spawn scan
 //     is thrown, as from scanDebuggerSpawn, for main to deny;
-//   - a spent budget is null, so next's verdict stands, which next reached on
-//     the same budget: the budget bounds the work on a command, and the plain
-//     scans spent their share first;
+//   - a spent budget is `command-too-complex` too, as in scanBashCommand and
+//     scanDebuggerSpawn: a line this reading could not finish is a line it has
+//     not read, and the plain scans' allow says nothing about what it would
+//     find. Both passes share this reading's budget, so a line that needs the
+//     second pass is denied from about half the size the plain scans finish;
 //   - any other error is a reading's bug (readingBug), and null.
 // What a hook timeout does is the adapter's: Claude Code reads it as no
 // decision; Pi fails this guard closed on a timeout and refuses the command.
-function scanFurtherReading(command) {
+function scanFurtherReading(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
+  scanBudget = budget;
+  readerSteps = budget;
+  budgetSize = budget;
+  separatorSteps = separatorBudget;
+  separatorSize = separatorBudget;
+  readerSpent = false;
+  scanSpent = false;
   budgetHeld = true;
   furtherReading = true;
   joinCandidate = false;
@@ -3415,7 +3429,6 @@ function scanFurtherReading(command) {
       if (joins && !joinCandidate) break;
       subscriptJoins = joins;
       const hit = findSecretRead(command, 0) || findSecretReadUnderOtherReadings(command);
-      if (hit !== null && hit.code === 'command-too-complex' && (readerSpent || scanSpent)) return null;
       if (hit !== null) return hit;
       const spawn = findDebuggerCliSpawnEitherWay(command);
       if (spawn !== null) return { code: 'debugger-cli-spawn', text: spawn };
@@ -3423,7 +3436,8 @@ function scanFurtherReading(command) {
     return null;
   } catch (e) {
     if (e instanceof RangeError) throw e;
-    if (e !== SCAN_BUDGET_SPENT && readingBug === null) readingBug = e;
+    if (e === SCAN_BUDGET_SPENT) return { code: 'command-too-complex', text: '' };
+    if (readingBug === null) readingBug = e;
     return null;
   } finally {
     budgetHeld = false;
