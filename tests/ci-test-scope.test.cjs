@@ -11,6 +11,7 @@ const { cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { parseArgs } = require('../scripts/run-tests.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'ci-test-scope.cjs');
@@ -56,13 +57,17 @@ describe('ci-test-scope.cjs', () => {
   });
 
   // The test-insert-shell job (test.yml) runs only when zsh_changed is true: the insert-phase
-  // test or the workflow it pins, so a change elsewhere never starts the zsh install.
-  for (const file of ['tests/insert-phase-sibling-docs.test.cjs', 'gsd-core/workflows/insert-phase.md']) {
+  // test, the workflow it pins or a helper its rows run through, so a change elsewhere never starts the zsh install.
+  for (const file of ['tests/insert-phase-sibling-docs.test.cjs', 'gsd-core/workflows/insert-phase.md',
+    'tests/helpers/doc-bash-span.cjs', 'tests/helpers/bash-probe.cjs']) {
     test(`zsh_changed is true for ${file}`, () => {
       assert.strictEqual(scopeFor([file]).zsh_changed, true);
     });
   }
-  for (const file of ['gsd-core/workflows/new-project.md', 'tests/commands.test.cjs', 'docs/usage.md']) {
+  // Near misses: same basename elsewhere, a sibling, a nested path, a similar test name, a neighbour helper.
+  for (const file of ['gsd-core/workflows/new-project.md', 'tests/commands.test.cjs', 'docs/usage.md',
+    'gsd-core/insert-phase.md', 'gsd-core/workflows/add-phase.md', 'gsd-core/workflows/insert-phase/x.md',
+    'tests/insert-phase.test.cjs', 'tests/helpers/timeouts.cjs']) {
     test(`zsh_changed is false for ${file}`, () => {
       assert.strictEqual(scopeFor([file]).zsh_changed, false);
     });
@@ -72,13 +77,16 @@ describe('ci-test-scope.cjs', () => {
     const doc = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8'));
     assert.match(doc.jobs.changes.outputs.zsh_changed, /steps\.scope\.outputs\.zsh_changed/);
     assert.strictEqual(doc.jobs['test-insert-shell'].if, "needs.changes.outputs.zsh_changed == 'true'");
-    assert.ok(doc.jobs['test-insert-shell'].steps.some(s => /apt-get install .*\bzsh\b/.test(s.run || '')), 'test-insert-shell installs zsh');
-    // The guards that make a skipped or missing row fail the job.
-    const run = doc.jobs['test-insert-shell'].steps.map(s => s.run || '').find(r => r.includes('--test-name-pattern'));
-    assert.ok(run, 'test-insert-shell has a step that runs the filtered rows');
-    for (const part of ['set -euo pipefail', "--test-name-pattern='zsh split'", "'^# skipped 0$'", "'^# pass [1-9][0-9]*$'"]) {
-      assert.ok(run.includes(part), `the run step keeps ${part}`);
-    }
+    // Behaviour of the steps: zsh is installed before the test runs (a failed install fails the job, so no
+    // row skips), and the run goes through run-tests.cjs, which accepts the arguments and selects exactly
+    // the insert-phase test.
+    const steps = doc.jobs['test-insert-shell'].steps;
+    const install = steps.findIndex(s => /apt-get install .*\bzsh\b/.test(s.run || ''));
+    const runStep = steps.findIndex(s => /scripts\/run-tests\.cjs/.test(s.run || ''));
+    assert.ok(install >= 0 && runStep > install, 'test-insert-shell installs zsh, then runs run-tests.cjs');
+    const parsed = parseArgs(steps[runStep].run.trim().split(/\s+/).slice(2));
+    assert.strictEqual(parsed.error, undefined, 'run-tests.cjs accepts the job arguments');
+    assert.deepStrictEqual(parsed.files.split(/\s+/), ['tests/insert-phase-sibling-docs.test.cjs']);
     // Push, merge-group and dispatch runs have no changed-file list: the job stays skipped there.
     assert.match(doc.jobs.changes.steps.find(s => s.id === 'scope').run, /echo "zsh_changed=false"/);
     assert.ok(doc.jobs['required-tests'].needs.includes('test-insert-shell'), 'required-tests waits for test-insert-shell');

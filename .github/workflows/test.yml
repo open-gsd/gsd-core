@@ -648,9 +648,9 @@ jobs:
 
   # zsh rows of tests/insert-phase-sibling-docs.test.cjs: ubuntu runners ship no
   # zsh, so the `test` job skips them, and test-conformance (macOS, whose shell
-  # is zsh) runs only on full_matrix. This job installs zsh and runs only those
-  # rows, when scripts/ci-test-scope.cjs sets zsh_changed (ZSH_JOB_FILES). The
-  # tap summary check fails the job when a row was skipped or none ran.
+  # is zsh) runs only on full_matrix. This job installs zsh (a failed install
+  # fails the job, so no row can skip) and runs that one test file through
+  # run-tests.cjs, when scripts/ci-test-scope.cjs sets zsh_changed (ZSH_JOB_FILES).
   test-insert-shell:
     name: insert-phase shell test
     needs: [changes, preflight]
@@ -677,12 +677,8 @@ jobs:
         run: npm ci
       - name: Install zsh
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
-      - name: Run the zsh rows
-        run: |
-          set -euo pipefail
-          node --test --test-name-pattern='zsh split' --test-reporter=tap tests/insert-phase-sibling-docs.test.cjs | tee zsh-rows.tap
-          grep -Eq '^# skipped 0$' zsh-rows.tap
-          grep -Eq '^# pass [1-9][0-9]*$' zsh-rows.tap
+      - name: Run the insert-phase test
+        run: node scripts/run-tests.cjs --files tests/insert-phase-sibling-docs.test.cjs
 
   # #4591 (epic #4589 Phase 2): runs ONLY the platform-conformance-tier file
   # list (scripts/lib/platform-conformance-tier.generated.cjs) on real

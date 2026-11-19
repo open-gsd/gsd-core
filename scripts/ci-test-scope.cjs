@@ -91,9 +91,12 @@ const DATA_LOG_FILES = new Set([
 
 // Files whose change runs the `test-insert-shell` job (.github/workflows/test.yml): the
 // zsh rows of the insert-phase test skip on every runner without zsh, so they
-// get their own small job instead of the conformance lane.
+// get their own small job instead of the conformance lane. The set holds the test,
+// the workflow it pins and the two helpers that run the fence and probe for zsh.
 const ZSH_JOB_FILES = new Set([
   'gsd-core/workflows/insert-phase.md',
+  'tests/helpers/bash-probe.cjs',
+  'tests/helpers/doc-bash-span.cjs',
   'tests/insert-phase-sibling-docs.test.cjs',
 ]);
 
