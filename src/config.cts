@@ -444,7 +444,8 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
       // Migrate deprecated "depth" key to "granularity"
       if ('depth' in userDefaults && !('granularity' in userDefaults)) {
         const depthToGranularity: Record<string, string> = { quick: 'coarse', standard: 'standard', comprehensive: 'fine' };
-        userDefaults['granularity'] = depthToGranularity[userDefaults['depth'] as string] || userDefaults['depth'];
+        const depth = userDefaults['depth'] as string;
+        userDefaults['granularity'] = (Object.prototype.hasOwnProperty.call(depthToGranularity, depth) && depthToGranularity[depth]) || depth;
         delete userDefaults['depth'];
         // The migrated value is used for this build whether or not the
         // rewrite is ever persisted.

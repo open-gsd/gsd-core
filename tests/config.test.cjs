@@ -4437,6 +4437,21 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.strictEqual(loaded.research_before_questions, false);
   });
 
+  // Found with Nit 1's sweep: a hand-written `depth` naming an Object.prototype
+  // member read that member from the depth-to-granularity table, and the new
+  // project got no granularity. It is now an unknown depth, kept as given.
+  test('a stored depth named like an Object.prototype member is kept as the granularity', (t) => {
+    const gsdHome = createTempDir('gsd-5681-home-');
+    const projectDir = createTempDir('gsd-5681-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ depth: 'constructor' }));
+    const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
+    assert.ok(created.success, created.error);
+    const config = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
+    assert.strictEqual(config.granularity, 'constructor');
+  });
+
   test('clearing a setting with null removes it and its legacy spelling, so the default applies', (t) => {
     const { config, store } = newProjectAfterSave(
       t,
