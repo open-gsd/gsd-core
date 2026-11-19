@@ -139,8 +139,6 @@ test('#5531: the wave name shape the prompt file carries is the one execute-phas
 const QUICK_STEP = path.join(
   __dirname, '..', 'gsd-core', 'workflows', 'quick-batch', 'steps', 'worktree-dispatch.md',
 );
-// allow-test-rule: source-text-is-the-product the quick-batch dispatch step is runtime-loaded workflow text (#5934)
-const quickContent = fs.readFileSync(QUICK_STEP, 'utf8');
 
 /** The placeholders the fragment itself says the orchestrator substitutes ("Substitute this plan's ... placeholders"). */
 function substitutedPlaceholders() {
@@ -153,6 +151,8 @@ function substitutedPlaceholders() {
 
 /** The quick-batch step's `orchestrator-worktree` bullet. */
 function quickOrchestratorWorktreeBullet() {
+  // allow-test-rule: source-text-is-the-product the quick-batch dispatch step is runtime-loaded workflow text (#5934)
+  const quickContent = readFileNormalized(QUICK_STEP);
   const start = quickContent.indexOf('**`isolation == "orchestrator-worktree"`:**');
   const end = quickContent.indexOf('**`isolation == "none"`:**', start);
   assert.ok(start !== -1 && end !== -1, 'the quick-batch orchestrator-worktree bullet must exist');
