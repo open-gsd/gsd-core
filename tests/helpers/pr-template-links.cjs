@@ -1,6 +1,6 @@
 // Link guard for #5427: a PR body renders a relative href against /pull/N, so it 404s.
 // Checked: inline links, reference definitions and href/src/srcset attributes of HTML
-// open tags, outside code and HTML comments. A repo link must name no ref, or
+// open tags, outside fenced code, code spans and HTML comments. A repo link must name no ref, or
 // blob|tree|raw|blame on `next` to a path (and a heading or line anchor) that exists.
 // `?template=` links stay (maintainer ruling on #5427).
 // Every link to another host is bad too (an allowlist, not only relative links): a template
