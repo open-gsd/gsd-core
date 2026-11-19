@@ -233,6 +233,10 @@ describe('next-ref existence and anchors (#5427)', () => {
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#`], 'tpl.md'), []);
     assert.deepEqual(unresolvedAnchors([`${REPO}raw/next/CONTRIBUTING.md#nope`], 'tpl.md'),
       ['CONTRIBUTING.md#nope']);
+    const real2 = `CONTRIBUTING.md#${real}`;
+    assert.deepEqual(unresolvedAnchors([`${REPO}raw/next/${real2}`,
+      `${REPO}blame/next/${real2}`], 'tpl.md'), [real2, real2]);
+    assert.deepEqual(unresolvedAnchors([`${REPO}tree/next/${real2}`], 'tpl.md'), []);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md`, `${NEXT}no-such.md#a`,
       `${REPO}issues/1#a`], 'tpl.md'), []);
   });
@@ -293,7 +297,9 @@ describe('link classification (#5427)', () => {
       `${REPO}blob/next/%2e%2e/x`, `${REPO}blob/next/./x`, `${REPO}blob/next/%2e/x`,
       `${REPO}issues/&#46;&#46;/x`, `${REPO}issues/\\.\\./x`,
       `${REPO}issues/../blob/main/x`, `${REPO}/blob/main/x`, `${REPO}blob/next//x`,
-      `${REPO}blob//next/x`, `${REPO}/`, `${NEXT}CONTRIBUTING.md/`, `${REPO}tree/next/docs/`];
+      `${REPO}blob//next/x`, 'https://github.com/open-gsd/gsd-coreissues/1',
+      `${REPO.slice(0, -1)}pull/1`, `${REPO}/`, `${NEXT}CONTRIBUTING.md/`,
+      `${REPO}tree/next/docs/`];
     assert.deepEqual(bad.filter(isBadLink), bad);
     const ok = [`${NEXT}a.md`, `${REPO}tree/next/docs`, `${REPO}raw/next/a.md`,
       `${NEXT}.../x`, `${NEXT}%2e%2e%2e/x`, `${REPO}blame/next/a.md`, `${REPO}discussions/1`,
@@ -358,11 +364,14 @@ describe('templateFiles (#5427)', () => {
     const sub = path.join(dir, '.github', 'PULL_REQUEST_TEMPLATE', 'sub');
     fs.mkdirSync(sub, { recursive: true });
     fs.mkdirSync(path.join(dir, 'docs'));
+    fs.mkdirSync(path.join(dir, 'PULL_REQUEST_TEMPLATE'));
     fs.writeFileSync(path.join(dir, '.github', 'PULL_REQUEST_TEMPLATE', 'fix.md'), '');
     fs.writeFileSync(path.join(sub, 'x.md'), '');
     fs.writeFileSync(path.join(dir, 'pull_request_template.md'), '');
-    assert.deepEqual(templateFiles(dir).sort(),
-      ['.github/PULL_REQUEST_TEMPLATE/fix.md', 'pull_request_template.md']);
+    fs.writeFileSync(path.join(dir, 'docs', 'pull_request_template.md'), '');
+    fs.writeFileSync(path.join(dir, 'PULL_REQUEST_TEMPLATE', 'x.md'), '');
+    assert.deepEqual(templateFiles(dir).sort(), ['.github/PULL_REQUEST_TEMPLATE/fix.md',
+      'PULL_REQUEST_TEMPLATE/x.md', 'docs/pull_request_template.md', 'pull_request_template.md']);
   });
 });
 
