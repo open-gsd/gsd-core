@@ -15,6 +15,10 @@ message. Only the first is fixed by this page.
 `pr-subrepo` prints a timeout as `git commit timed out after Ns in <repo> (...)` and a hook rejection as
 `Failed to commit in <repo>: ...`. Only the first message is a timeout.
 
+Wait for the killed hook to finish before you retry. Killing `git commit` can leave the hook process running,
+and a retry starts a second copy of it. The stale-lock hint above may not apply to your run: check that the lock
+file exists before you remove it.
+
 ## 2. Set the timeout
 
 ```bash
@@ -28,6 +32,11 @@ so a bad edit never removes the bound. These values are invalid:
 - zero, a negative number, or a fraction
 - a non-number, including a quoted number such as `"60000"`
 - a number above one hour
+
+A workstream's own config wins over the root config. An invalid workstream value shadows a valid root value: root
+`60000` with workstream `0` gives the 30 second default. To remove the key, run
+`gsd-tools config-set git.commit_timeout_ms null`. It deletes the key from the config file `config-set` targets (the
+active workstream's file when a workstream is active). The root value then applies, else the 30 second default.
 
 ## Notes
 
