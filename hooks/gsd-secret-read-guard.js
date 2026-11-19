@@ -3197,16 +3197,19 @@ let scanSpent = false;
 // nested body is read again at each outer pass, so the charge on a script a
 // shell reads from a heredoc is a fixed multiple of its length, set by its
 // nesting. With a reading trigger in it, each character of a `bash <<'EOF'`
-// script is scanned about 120 times and charged up to about 33 separators,
-// and such scripts are denied from about 16,000-70,000 characters by shape;
-// inside `$( )` or a second heredoc each is scanned about 500 times and
-// charged up to about 130, and they are denied from about 4,000-17,000. A
-// command holding a `$( )`, `$(( ))`, `<( )` or `>( )` is scanned once more
-// (scanBashByGrammar), on what those scans leave, so it is denied sooner: in
-// the heredoc scripts measured at about half to three quarters of the size,
-// and far sooner when it holds a long `case` arm inside `$( )`, which the
-// counting scans close at the pattern and the grammar scan reads whole. All of
-// these are measured shapes, not bounds: a denser script is denied sooner. The
+// script is scanned about 120 times and charged tens of separators (about 48
+// for a script of `:;` lines), and such scripts were denied from about
+// 11,000-70,000 characters in the shapes measured; inside `$( )` or a second
+// heredoc each is scanned about 500 times and charged a few hundred, and they
+// were denied from about 2,800-17,000. A command holding a `$( )`, `$(( ))`,
+// `<( )` or `>( )` the shell expands is scanned once more (scanBashByGrammar),
+// on what those scans leave, so it is denied sooner: at about three quarters
+// of the size in the heredoc scripts measured, about half in a long command of
+// separators, nearly the whole size in a script of short `$( )` lines with no
+// reading trigger, and far sooner when it holds a long `case` arm inside
+// `$( )`, which the counting scans close at the pattern and the grammar scan
+// reads whole. All of these are measured shapes, not bounds: a denser script
+// is denied sooner. The
 // most any of the 1,384,856 real agent commands above needs is 20,043 (a
 // 4,543-character heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;
