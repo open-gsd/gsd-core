@@ -42,7 +42,7 @@ const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-const { runMinimalInstall, installRuntimeFixture, INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
+const { runMinimalInstall, copyRuntimeFixture, installRuntimeFixture, INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 const { cleanup, createTempDir, toPosixPath } = require('./helpers.cjs');
 const {
   negotiateHostCapabilities,
@@ -131,7 +131,7 @@ test('kimi --global: native config.toml [[hooks]] bus wired at <HOME>/.kimi/conf
 });
 
 test('kimi --global: reinstalling is idempotent — the GSD [[hooks]] block is not duplicated', (t) => {
-  const { root } = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
+  const { root } = copyRuntimeFixture({ runtime: 'kimi', scope: 'global' });
   t.after(() => cleanup(root));
 
   const tomlPath = path.join(root, '.kimi', 'config.toml');

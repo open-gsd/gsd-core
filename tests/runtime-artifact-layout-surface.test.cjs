@@ -24,7 +24,7 @@ const { loadSkillsManifest, writeActiveProfile, resolveProfile } = require('../g
 const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const { CLUSTERS, allClusteredSkills } = require('../gsd-core/bin/lib/clusters.cjs');
 const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 
@@ -73,7 +73,7 @@ function surfaceBytesForTest(state) {
 
 describe('applySurface', () => {
   test('#4132: an unmanifested installed command cannot become a live instruction', (t) => {
-    const installed = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const installed = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     const configDir = installed.configDir;
     t.after(() => cleanup(installed.root));
     const rogueSource = path.join(configDir, 'gsd-core', 'commands', 'gsd', 'rogue.md');
@@ -91,7 +91,7 @@ describe('applySurface', () => {
   });
 
   test('#4132: a marker below rejected installed commands cannot promote instructions', (t) => {
-    const installed = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const installed = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     const configDir = installed.configDir;
     t.after(() => cleanup(installed.root));
 
@@ -1645,7 +1645,7 @@ describe('installOpencodeFamilySkills destination parity (#2911 sibling coverage
 // flat layout is preserved (not re-nested) rather than a nested one.
 describe('issue-69: applySurface preserves nested skill layout (no re-flatten)', () => {
   test('cline global full: applySurface keeps 6 router dirs and nested gsd-ns-manage/skills/help/SKILL.md', (t) => {
-    const installed = runMinimalInstall({ runtime: 'cline', scope: 'global' });
+    const installed = copyRuntimeFixture({ runtime: 'cline', scope: 'global' });
     const dir = installed.configDir;
     t.after(() => { try { cleanup(installed.root); } catch { /* best-effort */ } });
 
@@ -1694,7 +1694,7 @@ describe('issue-69: applySurface preserves nested skill layout (no re-flatten)',
 
   // #924 companion: Claude must use FLAT layout and applySurface must NOT re-nest it.
   test('claude global full: install produces flat layout and applySurface preserves it (#924)', (t) => {
-    const installed = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const installed = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     const dir = installed.configDir;
     t.after(() => { try { cleanup(installed.root); } catch { /* best-effort */ } });
 
@@ -1764,7 +1764,7 @@ describe('#4211: applySurface materializes the kimi-agents kind like a fresh ins
   }
 
   function installKimi(t) {
-    const installed = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
+    const installed = copyRuntimeFixture({ runtime: 'kimi', scope: 'global' });
     t.after(() => { try { cleanup(installed.root); } catch { /* best-effort */ } });
     return { configDir: installed.configDir, agentsDir: path.join(installed.configDir, 'agents') };
   }

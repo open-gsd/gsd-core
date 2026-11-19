@@ -327,8 +327,8 @@ describe('#2587: cursor hooks resolve the workspace from workspace_roots, not cw
     // that ships these hooks does. If writeCursorHooksJson stopped staging the
     // helper, each hook would throw at require time, BEFORE its own try/catch,
     // and wedge every Cursor session on the one runtime this fix exists for.
-    const { runMinimalInstall } = require('./helpers/install-shared.cjs');
-    const { configDir, root } = runMinimalInstall({ runtime: 'cursor', scope: 'global' });
+    const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'cursor', scope: 'global' });
     try {
       const staged = path.join(configDir, 'hooks', 'lib', 'cursor-workspace.js');
       assert.ok(

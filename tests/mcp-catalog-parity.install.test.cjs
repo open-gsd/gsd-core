@@ -63,7 +63,7 @@ const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const { cleanup } = require('./helpers.cjs');
-const { runMinimalInstall, installerEnv } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture, installerEnv } = require('./helpers/install-shared.cjs');
 const { buildOverlayRepo } = require('./helpers/overlay-repo.cjs');
 const { ensureHooksDist } = require('./helpers/hooks-dist.cjs');
 
@@ -157,7 +157,7 @@ function installOverlay(overlayRoot, runtime, extraArgs = []) {
 describe('the parity gate — real installer vs real catalog', () => {
   test('installer composition decision matches the served catalog for every file in the real installed tree (row 48/52)', (t) => {
     const catalog = buildCatalog({ root: REPO_ROOT });
-    const install = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const install = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     t.after(() => cleanup(install.root));
 
     // Anti-vacuity guard: the installer must actually have emitted files —

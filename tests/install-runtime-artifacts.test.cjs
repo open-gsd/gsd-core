@@ -69,7 +69,7 @@ const {
   MANIFEST_NAME,
   installerEnv,
   stripAnsi,
-  runMinimalInstall,
+  runMinimalInstall, copyRuntimeFixture,
   installRuntimeFixture,
   walk,
 } = require('./helpers/install-shared.cjs');
@@ -8378,7 +8378,7 @@ describe('installRuntimeArtifacts — G3: adapter calling-convention regression 
 
 describe('#2875: user-artifact-staging — call-site integration (C7 anti-inertness)', () => {
   test('an orphaned USER-PROFILE.md staged under the real gsd-core destDir is recovered by a subsequent real install() run', (t) => {
-    const first = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const first = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     t.after(() => cleanup(first.root));
 
     const gsdCoreDir = path.join(first.configDir, 'gsd-core');
@@ -8436,7 +8436,7 @@ describe('#3719: real global Claude install — agents/*.md @-refs must resolve 
 
   before(() => {
     claudeGlobal = installRuntimeFixture({ runtime: 'claude', scope: 'global' });
-    projectLocal = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+    projectLocal = copyRuntimeFixture({ runtime: 'claude', scope: 'local' });
   });
 
   after(() => {

@@ -30,7 +30,7 @@ const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { cleanup } = require('./helpers.cjs');
 const {
   BUILD_SCRIPT,
-  runMinimalInstall,
+  copyRuntimeFixture,
   buildEmittedSizes,
 } = require('./helpers/install-shared.cjs');
 const { evaluateEmittedCaps, formatCapReport } = require('./helpers/emitted-caps.cjs');
@@ -51,7 +51,7 @@ let fixture = null;
 let sizes = null;
 
 before(() => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'windsurf', scope: 'local' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'windsurf', scope: 'local' });
   fixture = { configDir, root };
   sizes = buildEmittedSizes(fixture.configDir, fixture.root);
 });

@@ -29,7 +29,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const {
   profileOf,
@@ -51,7 +51,7 @@ const NEWLY_WIRED_EVENTS = ['preToolUse', 'postToolUse', 'userPromptSubmitted', 
 const ALL_EXPECTED_EVENTS = ['sessionStart', ...NEWLY_WIRED_EVENTS];
 
 test('copilot --global: hooks/gsd-session.json wires sessionStart plus all 4 newly-added events (UPGRADE 1)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'copilot', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'copilot', scope: 'global' });
   t.after(() => cleanup(root));
 
   const hookPath = path.join(configDir, 'hooks', 'gsd-session.json');
@@ -76,7 +76,7 @@ test('copilot --global: hooks/gsd-session.json wires sessionStart plus all 4 new
 });
 
 test('each newly-wired event emits a distinct static advisory (no shared boilerplate, no node-runner invocation)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'copilot', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'copilot', scope: 'global' });
   t.after(() => cleanup(root));
 
   const hookPath = path.join(configDir, 'hooks', 'gsd-session.json');
@@ -96,7 +96,7 @@ test('each newly-wired event emits a distinct static advisory (no shared boilerp
 });
 
 test('a runtime whose hook config omits the new events does NOT get them (descriptor-gated, not a global default)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
   t.after(() => cleanup(root));
 
   // Claude uses settings.json, not hooks/gsd-session.json — the Copilot
@@ -134,7 +134,7 @@ test('negotiateHostCapabilities surfaces copilot\'s documented dispatch.backgrou
 });
 
 test('copilot .agent.md frontmatter has no background-dispatch field (negotiated contract only, sanity)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'copilot', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'copilot', scope: 'global' });
   t.after(() => cleanup(root));
 
   const agentsDir = path.join(configDir, 'agents');

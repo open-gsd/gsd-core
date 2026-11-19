@@ -82,7 +82,7 @@ const {
   walk,
   simulateHookCopy,
   installerEnv,
-  runMinimalInstall,
+  runMinimalInstall, copyRuntimeFixture,
   manifestSkillSet,
   manifestAgentCount,
   collectSkillBasenamesOnDisk,
@@ -3325,7 +3325,7 @@ describe('#3023 pi shared-hooks bundle avoids the host-reserved hooks/ directory
 
   for (const scope of ['local', 'global']) {
     test(`pi ${scope} install: no host-reserved hooks/ dir, bundle staged under ${PI_BUNDLE_DIR}/, manifested`, (t) => {
-      const { manifest, configDir, root } = runMinimalInstall({ runtime: 'pi', scope });
+      const { manifest, configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope });
       t.after(() => cleanup(root));
 
       const reserved = path.join(configDir, PI_RESERVED_DIR);
