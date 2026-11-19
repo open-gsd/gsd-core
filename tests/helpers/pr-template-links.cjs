@@ -113,7 +113,8 @@ const repoPathOf = (h, where) => decode(nextRel(h).split(/[?#]/)[0], h, where);
 // 404s) and the symlink-escape refusal.
 const REAL_ROOT = realRootOrFallback();
 const DIR_CACHE = new Map();
-const existsExact = (rel) => existsCaseExact(path.join(ROOT, rel), DIR_CACHE, REAL_ROOT).exists;
+const existsExact = (rel, cache = DIR_CACHE) => existsCaseExact(path.join(ROOT, rel), cache,
+  REAL_ROOT).exists;
 // An empty segment after decoding (`x.md%2F`) is as bad as a raw one (isBadLink).
 const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
   .map((h) => repoPathOf(h, where))
@@ -160,8 +161,10 @@ const headingSet = (source) => {
   return Object.assign(slugs, { stop });
 };
 // A repo file read through the gate's case-exact walk, which refuses a symlink out of the repo.
-const readRepoFile = (rel) => {
-  if (!existsExact(rel)) throw new Error(`${JSON.stringify(rel)}: no such file inside the repo`);
+const readRepoFile = (rel, cache) => {
+  if (!existsExact(rel, cache)) {
+    throw new Error(`${JSON.stringify(rel)}: no such file inside the repo`);
+  }
   return fs.readFileSync(path.join(ROOT, rel), 'utf8');
 };
 const headingsOfFile = (rel) => headingSet(readRepoFile(rel));

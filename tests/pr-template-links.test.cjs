@@ -341,6 +341,23 @@ describe('readRepoFile (#5427)', () => {
     assert.ok(fs.existsSync(path.join(ROOT, rel)), rel);
     assert.throws(() => readRepoFile(rel), /no such file inside the repo/);
   });
+  test('a symlink in the repo that leads out of it is refused', (t) => {
+    const dir = createTempDir();
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(path.join(dir, 'secret.md'), '# secret\n');
+    const name = `.link-5427-${process.pid}`;
+    try {
+      fs.symlinkSync(dir, path.join(ROOT, name), 'dir');
+    } catch (err) {
+      if (err.code === 'EPERM') return t.skip('cannot create symlinks on this platform');
+      throw err;
+    }
+    t.after(() => fs.unlinkSync(path.join(ROOT, name)));
+    assert.ok(fs.existsSync(path.join(ROOT, name, 'secret.md')));
+    // a fresh cache: the module cache lists the repo root before this link exists
+    assert.throws(() => readRepoFile(`${name}/secret.md`, new Map()),
+      /no such file inside the repo/);
+  });
 });
 
 const entries = (root, dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
