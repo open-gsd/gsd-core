@@ -3556,8 +3556,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     }
   });
   test('the three REQUIREMENTS.md fences match the staged path with the same regex, and the two merge guards share one parser', () => {
-    const el = 'gsd-core/workflows/complete-milestone/detail/elaboration.md';
-    const guard = (marker) => { const l = bashFenceAfter(el, marker); return l.slice(0, l.findIndex((x) => x.startsWith('git checkout'))).join('\n'); };
     const squash = guard('**Squash merge:**');
     const merge = guard('**Merge with history:**');
     const commit = bashFenceAfter('gsd-core/workflows/complete-milestone.md', '<step name="git_commit_milestone">', true).join('\n');
