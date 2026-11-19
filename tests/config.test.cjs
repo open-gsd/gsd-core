@@ -4147,6 +4147,15 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     assert.deepStrictEqual(read(), {});
   });
 
+  // RV6.5 review: config-set accepts `{}` as parallelization's value, and the
+  // merge took it for an empty section and deleted the stored `true`.
+  test('an empty object given as a setting value is saved, not taken for an empty section', (t) => {
+    const { save, read } = store(t, JSON.stringify({ parallelization: true, model_profile: 'quality' }));
+    const result = save({ parallelization: {} });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), { parallelization: {}, model_profile: 'quality' });
+  });
+
   test('a save with no search flags reports an empty skipped list', (t) => {
     const { save } = store(t);
     const result = save({ mode: 'yolo' });

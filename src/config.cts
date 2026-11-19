@@ -901,6 +901,12 @@ function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<st
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
       delete merged[key];
+    } else if (isPlainObject(value) && Object.keys(value).length === 0) {
+      // An empty object reaches here only for a setting config-set accepts `{}`
+      // for (`parallelization`): it is that setting's value, so it replaces a
+      // stored non-object as config-set would, and changes nothing in a
+      // stored object (#5681).
+      if (!isPlainObject(merged[key])) merged[key] = {};
     } else if (isPlainObject(value)) {
       const section = mergeIntoGlobalDefaults(isPlainObject(merged[key]) ? merged[key] : {}, value);
       if (Object.keys(section).length === 0) delete merged[key];
