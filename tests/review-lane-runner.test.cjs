@@ -869,6 +869,25 @@ describe('#5491 — antigravity proves it read each plan', () => {
     assert.deepEqual(r.readCheck, { complete: false, truncated: false, compacted: false, missing: ['12.6-01'], mismatched: {} });
   });
 
+  test('a blind review that fails the check keeps [reviewed-without-repo-access] as the leading marker (#6286 Major 1)', async () => {
+    const p = plan('antigravity');
+    const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: 'REVIEWED-WITHOUT-REPO-ACCESS\nLooks fine. see src/a.ts:3', stderr: '' }) });
+    await runLane(p, d, { repoRoot: ROOT });
+    const blocks = d.files[p.reviewPath].split('\n\n');
+    assert.ok(blocks[0].startsWith('> [reviewed-without-repo-access]'), blocks[0]);
+    assert.ok(blocks[1].startsWith('> [incomplete-read]'), blocks[1]);
+  });
+
+  test('an uncited review that fails the check carries both [incomplete-read] and [reviewed-without-source-citations]', async () => {
+    // The stamp's own text must not read as a file:line citation, or it would hide the ungrounded marker.
+    const p = plan('antigravity');
+    const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: 'Looks fine.', stderr: '' }) });
+    await runLane(p, d, { repoRoot: ROOT });
+    const review = d.files[p.reviewPath];
+    assert.ok(review.startsWith('> [reviewed-without-source-citations]'), review);
+    assert.ok(review.split('\n\n')[1].startsWith('> [incomplete-read]'), review);
+  });
+
   test('a correct restatement → no stamp, complete readCheck', async () => {
     const p = plan('antigravity');
     const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: RESTATED, stderr: '' }) });
@@ -1552,6 +1571,7 @@ describe('#3194 — evidence grounding is verified from review output, not decla
       step.includes('[reviewed-without-repo-access]'),
       'the existing blind-review recognition must survive alongside it',
     );
+    assert.ok(step.includes('[incomplete-read]'), 'the #5491 proof-of-reading marker must be recognized too');
   });
 });
 

@@ -2125,6 +2125,8 @@ describe('plan-review-convergence: cross-artifact fact-drift pass (#1956)', () =
 const WORKFLOW_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
 const REVIEWER_INSTANCES_2398 = path.join(__dirname, '..', 'gsd-core', 'references', 'reviewer-instances.md');
 const runner2398 = require('../gsd-core/bin/lib/review-lane-runner.cjs');
+const readCheck2398 = require('../gsd-core/bin/lib/review-read-check.cjs');
+const COMMANDS_2398 = path.join(__dirname, '..', 'docs', 'COMMANDS.md');
 
 const lf2398 = (t) => String(t == null ? '' : t).replace(/\r\n/g, '\n');
 
@@ -2151,9 +2153,9 @@ function consensusGate2398(text) {
   return countingAt === -1 ? body.slice(gateAt) : body.slice(gateAt, countingAt);
 }
 
-/** Every `[reviewed-without-*]` marker literal named in `text`, deduped and sorted. */
+/** Every discount-marker literal (`[reviewed-without-*]`, `[incomplete-read]`) named in `text`, deduped and sorted. */
 function markerNames2398(text) {
-  return [...new Set([...lf2398(text).matchAll(/\[reviewed-without-[a-z-]+\]/g)].map((m) => m[0]))].sort();
+  return [...new Set([...lf2398(text).matchAll(/\[(?:reviewed-without-[a-z-]+|incomplete-read)\]/g)].map((m) => m[0]))].sort();
 }
 
 /** Ordered positions of the contract landmarks the gate must sit between. */
@@ -2277,8 +2279,11 @@ describe('#2398 — marker parity: the gate names markers the runner actually PR
     const observed = new Set();
     const ungrounded = runner2398.stampUngroundedReview('HIGH: no idempotency on retried writes.');
     const blind = runner2398.stampBlindReview('REVIEWED-WITHOUT-REPO-ACCESS\nHIGH: something.');
-    for (const stamped of [ungrounded, blind]) {
-      const m = /^> (\[reviewed-without-[a-z-]+\])/.exec(stamped);
+    const unread = readCheck2398.stampIncompleteRead('HIGH: something.', readCheck2398.checkRead('', [
+      { id: '01-01', requirements: [], wave: 1, dependsOn: [], tasks: 1 },
+    ]));
+    for (const stamped of [ungrounded, blind, unread]) {
+      const m = /^> (\[(?:reviewed-without-[a-z-]+|incomplete-read)\])/.exec(stamped);
       if (m) observed.add(m[1]);
     }
     return [...observed].sort();
@@ -2312,11 +2317,33 @@ describe('#2398 — marker parity: the gate names markers the runner actually PR
   test('gate names only markers the runner actually produces', () => {
     const emitted = emittedMarkers2398();
     const named = markerNames2398(consensusGate2398(step5a2398(read2398(WORKFLOW_2398))));
-    assert.deepEqual(emitted, ['[reviewed-without-repo-access]', '[reviewed-without-source-citations]'],
-      'runner must produce both markers when invoked');
+    assert.deepEqual(emitted, ['[incomplete-read]', '[reviewed-without-repo-access]', '[reviewed-without-source-citations]'],
+      'runner must produce all three markers when invoked');
     assert.ok(named.length >= 1, 'the gate must name at least one concrete marker literal');
     assert.deepEqual(named.filter((m) => !emitted.includes(m)), [],
       'gate names a marker the runner never produces — the gate would be inert');
+  });
+
+  test('the gate names every marker the runner produces (#6286)', () => {
+    // The reverse direction: a marker the runner stamps but the gate does not name is counted at
+    // full weight, so the stamp would be inert.
+    const named = markerNames2398(consensusGate2398(step5a2398(read2398(WORKFLOW_2398))));
+    assert.deepEqual(emittedMarkers2398().filter((m) => !named.includes(m)), []);
+  });
+
+  test('the gate says FAIL OPEN counts [incomplete-read] like the other markers (#6286)', () => {
+    const gateText = consensusGate2398(step5a2398(read2398(WORKFLOW_2398)));
+    const failOpen = gateText.slice(gateText.indexOf('FAIL OPEN'));
+    assert.ok(gateText.includes('FAIL OPEN'), 'the gate must carry its FAIL OPEN rule');
+    assert.ok(markerNames2398(failOpen.slice(0, failOpen.indexOf('\n\n'))).includes('[incomplete-read]'),
+      'the FAIL OPEN paragraph must name [incomplete-read]');
+  });
+
+  test('reviewer-instances and the COMMANDS.md Judgment row name [incomplete-read] (#6286)', () => {
+    assert.ok(markerNames2398(read2398(REVIEWER_INSTANCES_2398)).includes('[incomplete-read]'));
+    const judgment = lf2398(read2398(COMMANDS_2398)).split('\n').find((l) => l.startsWith('| **Judgment**'));
+    assert.ok(judgment, 'COMMANDS.md must carry the Judgment row');
+    assert.ok(markerNames2398(judgment).includes('[incomplete-read]'));
   });
 
   test('parity fails when the gate names a marker the runner does not produce', () => {
