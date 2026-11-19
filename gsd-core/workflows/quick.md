@@ -282,7 +282,7 @@ Store `$QUICK_DIR` for use in orchestration.
 
 ---
 
-**Step 4 ordering (#3894):** Check whether `workflow.research_before_questions` is enabled in `.planning/config.json` (or the config from init context) — the same check `/gsd:discuss-phase` and `/gsd:new-project` already make. When **enabled**, execute the research-phase section BELOW BEFORE the discussion-phase section: a gray-area answer given without research is written to `<quick_id>-CONTEXT.md` as a locked decision downstream agents are told not to revisit, so the evidence must come first. When **false or unset**, keep the written order (discussion, then research) — behavior unchanged.
+**Step 4 ordering (#3894):** Check whether `workflow.research_before_questions` is enabled in `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`) (or the config from init context) — the same check `/gsd:discuss-phase` and `/gsd:new-project` already make. When **enabled**, execute the research-phase section BELOW BEFORE the discussion-phase section: a gray-area answer given without research is written to `<quick_id>-CONTEXT.md` as a locked decision downstream agents are told not to revisit, so the evidence must come first. When **false or unset**, keep the written order (discussion, then research) — behavior unchanged.
 
 <!-- gsd:section id="discussion-phase" when="flag:--discuss" -->
 If `section_manifest` is `null` or `"discussion-phase"` is in its `included` list: read and execute `gsd-core/workflows/quick/steps/discussion-phase.md`. Otherwise skip — do not read the file.
@@ -674,14 +674,22 @@ escaping the reader (`parseMarkdownTable`) requires, so a `${DESCRIPTION}` conta
 Do NOT use the Edit tool to write this row directly; that raw-interpolation path is the defect this
 step now avoids.
 
+STATE.md is a digest: the row names the task, the task's SUMMARY.md holds the detail (#5830). Set
+`TASK_TITLE` to a one-line title of at most 240 characters — `${DESCRIPTION}` itself when it is
+already one short line, otherwise a summary of it. Never paste the SUMMARY or a multi-sentence
+description into the row. A longer `--task` is still written in full, but the command reports a
+`warnings` entry; if it does, shorten the title next time rather than editing the row.
+
 **If `$VALIDATE_MODE` (or table has Status column):**
 ```bash
-gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${DESCRIPTION}" --status "${VERIFICATION_STATUS}"
+TASK_TITLE="${DESCRIPTION}"  # always this task's text; swap in a one-line summary only if it is long
+gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${TASK_TITLE}" --status "${VERIFICATION_STATUS}"
 ```
 
 **If NOT `$VALIDATE_MODE` (and table has no Status column):**
 ```bash
-gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${DESCRIPTION}"
+TASK_TITLE="${DESCRIPTION}"  # always this task's text; swap in a one-line summary only if it is long
+gsd_run quick-tasks-append --quick-id "${quick_id}" --slug "${slug}" --task "${TASK_TITLE}"
 ```
 
 Both forms emit the row this step previously authored by hand: `--quick-id`/`--slug` derive the same
@@ -696,7 +704,7 @@ a positional ordinal and `Directory` reads `—`.
 
 Use `date` from init:
 ```
-Last activity: ${date} - Completed quick task ${quick_id}: ${DESCRIPTION}
+Last activity: ${date} - Completed quick task ${quick_id}: ${TASK_TITLE}
 ```
 
 Use the Edit tool for 7a/7b/7d (section creation and the Last activity line). 7c above writes through `gsd_run quick-tasks-append`, not the Edit tool.
@@ -710,7 +718,7 @@ Stage and commit quick task artifacts. This step MUST always run — even if the
 Build file list:
 - `${QUICK_DIR}/${quick_id}-PLAN.md`
 - `${QUICK_DIR}/${quick_id}-SUMMARY.md`
-- `.planning/STATE.md`
+- `${STATE_PATH}`
 - If `$DISCUSS_MODE` and context file exists: `${QUICK_DIR}/${quick_id}-CONTEXT.md`
 - If `$RESEARCH_MODE` and research file exists: `${QUICK_DIR}/${quick_id}-RESEARCH.md`
 - If `$VALIDATE_MODE` and verification file exists: `${QUICK_DIR}/${quick_id}-VERIFICATION.md`

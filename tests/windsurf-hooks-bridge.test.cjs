@@ -44,9 +44,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
+const { runHook: runHookSeam, runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { QUICK_SPAWN_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { QUICK_SPAWN_TIMEOUT_MS, STAGED_HOOK_SCRIPT_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
@@ -406,5 +407,184 @@ describe('reconcileWindsurfHooksJson / removeWindsurfHooksJson', () => {
     const written = JSON.parse(fs.readFileSync(hooksJsonPath, 'utf8'));
     assert.equal(written.hooks.pre_write_code.length, 1);
     assert.equal(written.hooks.pre_write_code[0].command, 'echo user-write-hook');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5978: a symlinked hooks.json is refused without GSD_ALLOW_SYMLINKED_DEST and
+// written through (link kept) with it — real installer, install and uninstall.
+// ---------------------------------------------------------------------------
+
+describe('#5978 — symlinked Windsurf hooks.json honors GSD_ALLOW_SYMLINKED_DEST', () => {
+  const USER_HOOK = { command: 'echo user-owned' };
+
+  function sandbox(t) {
+    const root = createTempDir('gsd-windsurf-symlink-');
+    t.after(() => cleanup(root));
+    const cfg = path.join(root, '.codeium', 'windsurf');
+    const run = (args, optIn) => {
+      const env = installerEnv({ HOME: root, USERPROFILE: root, GSD_HOME: root });
+      delete env.GSD_ALLOW_SYMLINKED_DEST;
+      if (optIn) env.GSD_ALLOW_SYMLINKED_DEST = '1';
+      return runNode([INSTALL_SCRIPT, '--windsurf', '--global', ...args], { env, timeoutMs: INSTALL_TIMEOUT_MS });
+    };
+    return { root, cfg, hooksJson: path.join(cfg, 'hooks.json'), run };
+  }
+
+  /** Installs, then replaces hooks.json with a link to a dotfiles copy (optionally adding a user hook). */
+  function linked(t, { userHook }) {
+    const sb = sandbox(t);
+    const first = sb.run([], false);
+    assert.equal(first.exitCode, 0, first.stderr);
+    const target = path.join(sb.root, 'dotfiles-windsurf-hooks.json');
+    const parsed = JSON.parse(fs.readFileSync(sb.hooksJson, 'utf8'));
+    if (userHook) parsed.hooks.pre_run_command = [USER_HOOK, ...parsed.hooks.pre_run_command];
+    fs.writeFileSync(target, `${JSON.stringify(parsed, null, 2)}\n`);
+    fs.unlinkSync(sb.hooksJson);
+    try {
+      fs.symlinkSync(target, sb.hooksJson);
+    } catch (err) {
+      if (err.code === 'EPERM') return null; // Windows without symlink privilege
+      throw err;
+    }
+    return { ...sb, target };
+  }
+
+  const managed = (doc) => Object.values(doc.hooks || {}).flat().filter((e) => e && e[GSD_WINDSURF_HOOK_MARKER]);
+  const isLink = (p) => fs.lstatSync(p).isSymbolicLink();
+
+  for (const userHook of [false, true]) {
+    const label = userHook ? 'GSD + a user hook' : 'GSD hooks only';
+
+    test(`uninstall, opt-in unset, link with ${label}: refused, nothing removed, link and target unchanged`, (t) => {
+      const sb = linked(t, { userHook });
+      if (!sb) return t.skip('symlink privilege unavailable');
+      const before = fs.readFileSync(sb.target, 'utf8');
+      const r = sb.run(['--uninstall'], false);
+      assert.notEqual(r.exitCode, 0, 'a refused uninstall exits non-zero');
+      assert.match(`${r.stdout}${r.stderr}`, /symlink, refusing to change it/);
+      assert.match(`${r.stdout}${r.stderr}`, /GSD_ALLOW_SYMLINKED_DEST=1/);
+      assert.ok(isLink(sb.hooksJson), 'the link stays');
+      assert.equal(fs.readFileSync(sb.target, 'utf8'), before, 'the target is untouched');
+      assert.ok(fs.existsSync(path.join(sb.cfg, 'hooks', GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT)),
+        'refused before the first removal: the hook scripts are still installed');
+    });
+
+    test(`uninstall, opt-in set, link with ${label}: link kept, target loses the GSD entries`, (t) => {
+      const sb = linked(t, { userHook });
+      if (!sb) return t.skip('symlink privilege unavailable');
+      const r = sb.run(['--uninstall'], true);
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.ok(isLink(sb.hooksJson), 'the link must not be deleted');
+      const doc = JSON.parse(fs.readFileSync(sb.target, 'utf8'));
+      assert.equal(managed(doc).length, 0, 'no GSD entry is left in the target');
+      if (userHook) assert.deepEqual(doc.hooks.pre_run_command, [USER_HOOK], 'the user hook is preserved');
+      else assert.deepEqual(doc, {}, 'a GSD-only target is emptied, not deleted');
+    });
+
+    test(`reinstall with a change, link with ${label}: refused without the opt-in, written through with it`, (t) => {
+      const sb = linked(t, { userHook });
+      if (!sb) return t.skip('symlink privilege unavailable');
+      const doc = JSON.parse(fs.readFileSync(sb.target, 'utf8'));
+      for (const e of managed(doc)) e.command = 'stale-command';
+      fs.writeFileSync(sb.target, `${JSON.stringify(doc, null, 2)}\n`);
+      const stale = fs.readFileSync(sb.target, 'utf8');
+
+      // The refusal comes before any write: a staged hook script removed beforehand stays removed.
+      const stagedScript = path.join(sb.cfg, 'hooks', GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT);
+      fs.unlinkSync(stagedScript);
+      const refused = sb.run([], false);
+      assert.notEqual(refused.exitCode, 0, 'a refused reinstall exits non-zero');
+      assert.match(`${refused.stdout}${refused.stderr}`, /symlink, refusing to change it/);
+      assert.equal(fs.existsSync(stagedScript), false, 'a refused reinstall writes nothing');
+      assert.ok(isLink(sb.hooksJson), 'the link stays');
+      assert.equal(fs.readFileSync(sb.target, 'utf8'), stale, 'the target is untouched');
+
+      const allowed = sb.run([], true);
+      assert.equal(allowed.exitCode, 0, allowed.stderr);
+      assert.ok(isLink(sb.hooksJson), 'the link stays');
+      const next = JSON.parse(fs.readFileSync(sb.target, 'utf8'));
+      assert.ok(managed(next).length > 0 && managed(next).every((e) => e.command !== 'stale-command'), 'the target is updated');
+      if (userHook) assert.ok(next.hooks.pre_run_command.some((e) => e.command === USER_HOOK.command), 'the user hook is preserved');
+    });
+  }
+
+  test('a reinstall with nothing to change leaves a symlinked hooks.json alone, with or without the opt-in', (t) => {
+    const sb = linked(t, { userHook: false });
+    if (!sb) return t.skip('symlink privilege unavailable');
+    const before = fs.readFileSync(sb.target, 'utf8');
+    for (const optIn of [false, true]) {
+      const r = sb.run([], optIn);
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.ok(isLink(sb.hooksJson));
+      assert.equal(fs.readFileSync(sb.target, 'utf8'), before);
+    }
+  });
+
+  test('uninstall of a link holding no GSD entries is not refused and changes nothing', (t) => {
+    const sb = linked(t, { userHook: true });
+    if (!sb) return t.skip('symlink privilege unavailable');
+    assert.equal(sb.run(['--uninstall'], true).exitCode, 0);
+    const emptied = fs.readFileSync(sb.target, 'utf8');
+    // The link now holds only the user hook; a second, opt-in-less uninstall has nothing to change.
+    const r = sb.run(['--uninstall'], false);
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.ok(isLink(sb.hooksJson));
+    assert.equal(fs.readFileSync(sb.target, 'utf8'), emptied);
+  });
+
+  test('uninstall of an unparseable hooks.json reports it before removing anything', (t) => {
+    const sb = sandbox(t);
+    assert.equal(sb.run([], false).exitCode, 0);
+    fs.writeFileSync(sb.hooksJson, '{ not json');
+    const r = sb.run(['--uninstall'], false);
+    assert.notEqual(r.exitCode, 0);
+    assert.match(`${r.stdout}${r.stderr}`, /Windsurf hooks\.json parse failed/);
+    assert.match(`${r.stdout}${r.stderr}`, /Nothing was uninstalled/);
+    assert.ok(fs.existsSync(path.join(sb.cfg, 'hooks', GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT)), 'nothing was removed');
+  });
+
+  test('a dangling link is refused even with the opt-in, and is never replaced', (t) => {
+    const sb = sandbox(t);
+    fs.mkdirSync(sb.cfg, { recursive: true });
+    const gone = path.join(sb.root, 'missing-target.json');
+    try {
+      fs.symlinkSync(gone, sb.hooksJson);
+    } catch (err) {
+      if (err.code === 'EPERM') return t.skip('symlink privilege unavailable');
+      throw err;
+    }
+    const r = sb.run([], true);
+    assert.notEqual(r.exitCode, 0);
+    assert.match(`${r.stdout}${r.stderr}`, /dangling symlink/);
+    assert.ok(isLink(sb.hooksJson), 'the dangling link is not replaced');
+    assert.equal(fs.existsSync(gone), false, 'nothing is created through it');
+  });
+
+  test('regular-file behavior is unchanged: uninstall removes a GSD-only hooks.json, a no-change reinstall is a no-op', (t) => {
+    const sb = sandbox(t);
+    assert.equal(sb.run([], false).exitCode, 0);
+    const before = fs.readFileSync(sb.hooksJson, 'utf8');
+    assert.equal(sb.run([], false).exitCode, 0);
+    assert.equal(fs.readFileSync(sb.hooksJson, 'utf8'), before);
+    assert.equal(sb.run(['--uninstall'], false).exitCode, 0);
+    assert.equal(fs.existsSync(sb.hooksJson), false);
+  });
+
+  test('reconcile/remove refuse in-process too: a symlinked hooks.json is never replaced', (t) => {
+    const sb = linked(t, { userHook: false });
+    if (!sb) return t.skip('symlink privilege unavailable');
+    const saved = process.env.GSD_ALLOW_SYMLINKED_DEST;
+    delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    t.after(() => {
+      if (saved === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+      else process.env.GSD_ALLOW_SYMLINKED_DEST = saved;
+    });
+    assert.throws(() => removeWindsurfHooksJson(sb.cfg), /is a symlink, refusing to change it/);
+    assert.ok(isLink(sb.hooksJson));
+    process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+    assert.equal(removeWindsurfHooksJson(sb.cfg).changed, true);
+    assert.ok(isLink(sb.hooksJson), 'a removal never unlinks the link');
+    assert.deepEqual(JSON.parse(fs.readFileSync(sb.target, 'utf8')), {});
   });
 });

@@ -212,7 +212,7 @@ fix_hint: "Use 8px or 12px instead"
 - shadcn not initialized and no manual design system declared
 - No registry section present (section omitted entirely)
 
-> Skip this dimension entirely if `workflow.ui_safety_gate` is explicitly set to `false` in `.planning/config.json`. If the key is absent, treat as enabled.
+> Skip this dimension entirely if `workflow.ui_safety_gate` is explicitly set to `false` in `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`). If the key is absent, treat as enabled.
 
 **Example issues:**
 ```yaml

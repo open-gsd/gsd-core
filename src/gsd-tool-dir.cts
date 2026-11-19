@@ -32,6 +32,9 @@ export interface ToolOwnedGsdDirOptions {
 
 const SYMLINK_IGNORE_MESSAGE = '.gsd/.gitignore is a symlink';
 
+/** Rules the owner needs for the files it creates itself (#5856), appended for every caller. */
+const OWNER_RULES: readonly string[] = ['/.gitignore.tmp-*'];
+
 /** Stable `code` values on the refusal errors; callers translate by code, never by message. */
 export const GSD_DIR_UNSAFE = 'GSD_DIR_UNSAFE';
 export const GSD_IGNORE_SYMLINK = 'GSD_IGNORE_SYMLINK';
@@ -51,8 +54,15 @@ function hasLine(text: string, line: string): boolean {
  */
 export function ignoreAdditions(current: string, { marker, rules }: ToolOwnedGsdDirOptions): string {
   if (hasLine(current, '*')) return '';
-  const missing = rules.filter((rule) => !hasLine(current, rule));
-  if (missing.length === 0) return '';
+  const callerMissing = rules.filter((rule) => !hasLine(current, rule));
+  // A file that already carries every caller rule is left as it is.
+  if (callerMissing.length === 0) return '';
+  // #5856: whenever the merge writes, the owner's own staging name is covered too,
+  // whatever rules the caller passes.
+  const missing = [
+    ...callerMissing,
+    ...OWNER_RULES.filter((rule) => !rules.includes(rule) && !hasLine(current, rule)),
+  ];
   const lead = current === '' || current.endsWith('\n') ? '' : '\n';
   const markerLine = current.includes(marker) ? '' : `${marker}\n`;
   return `${lead}${markerLine}${missing.join('\n')}\n`;
@@ -66,24 +76,47 @@ function isLinkError(err: unknown): boolean {
 function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions): void {
   let fd: number | undefined;
   let tmpPath: string | null = null;
+  let stageDir: string | null = null;
+  let stageIgnore: string | null = null;
   try {
     if (fs.lstatSync(ignorePath).isSymbolicLink()) throw new Error(SYMLINK_IGNORE_MESSAGE);
     // Read through an fd opened without following links where supported
     // (O_NOFOLLOW is absent on Windows, hence `|| 0`), then replace by rename
     // rather than append through the path, so a link swapped in after the
-    // check cannot redirect a write elsewhere.
-    fd = fs.openSync(ignorePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    // check cannot redirect a write elsewhere. O_NONBLOCK (#5857, also absent
+    // on Windows) makes the open of a FIFO with no writer return at once; the
+    // `isFile()` check below then skips it instead of the open blocking forever.
+    fd = fs.openSync(
+      ignorePath,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOCTTY || 0),
+    );
     if (!fs.fstatSync(fd).isFile()) throw new Error('.gsd/.gitignore is not a regular file');
     const current = fs.readFileSync(fd, 'utf8');
     fs.closeSync(fd);
     fd = undefined;
     const additions = ignoreAdditions(current, options);
     if (additions === '') return;
-    // `tmpPath` is assigned only once the exclusive create succeeded, so an
-    // EEXIST never unlinks an entry this process did not create.
-    const candidateTmp = `${ignorePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
-    const tmpFd = fs.openSync(candidateTmp, 'wx');
-    tmpPath = candidateTmp;
+    // #5856: the live ignore file does not carry a rule for its own temp until the
+    // rename below lands, so a temp file beside it would show as untracked after a
+    // hard kill (no `finally` runs on SIGKILL or power loss). Stage the content in
+    // a directory whose own `.gitignore` ignores everything, itself included, so
+    // git sees nothing at any point of the window except the one syscall pair
+    // between creating that inner file and writing `*` into it. `mkdir` without `recursive`
+    // and `wx` creates fail closed on a planted entry, and `stageDir` is assigned
+    // only after this process created the directory, so cleanup never touches an
+    // entry it did not create.
+    const candidateStage = `${ignorePath}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+    fs.mkdirSync(candidateStage);
+    stageDir = candidateStage;
+    // Each file is recorded for cleanup only once its exclusive create succeeded.
+    const innerIgnore = path.join(stageDir, '.gitignore');
+    // One create-and-write call keeps the window where this file is empty (and so
+    // visible to git) to a single syscall pair.
+    fs.writeFileSync(innerIgnore, '*\n', { flag: 'wx' });
+    stageIgnore = innerIgnore;
+    const stagedContent = path.join(stageDir, 'content');
+    const tmpFd = fs.openSync(stagedContent, 'wx');
+    tmpPath = stagedContent;
     try {
       fs.writeFileSync(tmpFd, current + additions);
     } finally {
@@ -98,8 +131,13 @@ function mergeExistingIgnore(ignorePath: string, options: ToolOwnedGsdDirOptions
     // this path cannot be read or updated.
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
-    if (tmpPath) {
-      try { fs.unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+    if (stageDir) {
+      for (const leftover of [tmpPath, stageIgnore]) {
+        if (leftover) {
+          try { fs.unlinkSync(leftover); } catch { /* best-effort cleanup */ }
+        }
+      }
+      try { fs.rmdirSync(stageDir); } catch { /* best-effort cleanup */ }
     }
   }
 }

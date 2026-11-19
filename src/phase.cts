@@ -150,7 +150,7 @@ import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from 
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore, isStatePastPhase } from './state-transition.cjs';
-import { updateTableCell, updateTraceabilityCell, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
+import { updateTableCell, updateTraceabilityCell, leadingRequirementStatus, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
@@ -785,6 +785,8 @@ interface RawPlan {
   halted: boolean;
   /** #1689: optional per-plan specialist executor hint (frontmatter `agent_hint:`). null when unset. */
   agentHint: string | null;
+  /** #6302: optional foreign executor runtime id (frontmatter `executor_runtime:`). null when unset. */
+  executorRuntime: string | null;
   /** #4924: frontmatter `gap_closure: true` — the field execute-phase `--gaps-only` selects on. */
   gapClosure: boolean;
 }
@@ -1200,6 +1202,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       filesModified: planDoc.filesModified,
       filesDeleted: planDoc.filesDeleted,
       agentHint: planDoc.agentHint,
+      executorRuntime: planDoc.executorRuntime,
       gapClosure: planDoc.gapClosure,
       taskCount: planDoc.taskCount,
       hasSummary,
@@ -1369,6 +1372,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       files_modified: rawPlan.filesModified,
       files_deleted: rawPlan.filesDeleted,
       agent_hint: rawPlan.agentHint,
+      executor_runtime: rawPlan.executorRuntime,
       task_count: rawPlan.taskCount,
       has_summary: rawPlan.hasSummary,
       // #2830: additive fields — halted is this plan's OWN status; blocked_by
@@ -7450,7 +7454,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               const reqUpdate = updateTraceabilityCell(reqContent, reqRowMatch, 'Status', (current) => {
                 // #2788: accept `Gaps Found` too so a phase stranded by revert-phase (the
                 // gaps_found response) can complete without hand-editing the table.
-                if (/^(?:pending|in progress|gaps found)$/i.test(current.trim())) {
+                // #6238: read the status word, so `Pending (note)` advances like `Pending`.
+                if (leadingRequirementStatus(current, ['pending', 'in progress', 'gaps found']) !== null) {
                   tableHit = true;
                   return ' Complete ';
                 }
