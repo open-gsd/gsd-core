@@ -943,7 +943,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
 5.7. **Post-wave shared artifact update (when at least one plan used worktrees, skip if tests failed):**
 
-   When **any** executor agent in this wave ran with `isolation="worktree"`, that agent skipped STATE.md and ROADMAP.md updates to avoid last-merge-wins overwrites. The orchestrator is the single writer for these files. After worktrees are merged back, update shared artifacts once for every completed plan in the wave (worktree-mode plans **and** sequential plans that ran on the main tree but deferred to the orchestrator for tracking writes).
+   When **any** executor in this wave ran with `isolation="worktree"`, it skipped STATE.md and ROADMAP.md updates (last-merge-wins). The orchestrator is the single writer: after the merge, update shared artifacts once for every completed plan in the wave (worktree plans **and** sequential plans that deferred tracking writes).
 
    **Only update tracking when tests passed (TEST_EXIT=0).**
    If tests failed or timed out, skip the tracking update — plans should
@@ -969,7 +969,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    fi
    ```
 
-   Where `WAVE_PLAN_IDS` is the space-separated list of plan IDs that completed in this wave.
+   Where `WAVE_PLAN_IDS` is the space-separated list of plan IDs that completed in this wave. Then read and execute `execute-phase/steps/post-wave-requirements.md` (shared requirement IDs, #6102).
 
    **If no plan in this wave used worktrees** (project-level `USE_WORKTREES=false` OR `WAVE_WORKTREE_PLANS` is empty): sequential agents already updated STATE.md and ROADMAP.md themselves — skip this step.
 

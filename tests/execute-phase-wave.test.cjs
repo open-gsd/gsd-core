@@ -1367,3 +1367,148 @@ describe('execute-phase: stall surveillance must not steer a working executor (#
     }
   });
 });
+
+// ─── #6102 — shared requirements in a parallel worktree wave are marked after the merge ───────────────────
+//
+// A worktree executor's `update_requirements` gate sees only its own SUMMARY, so a requirement ID declared by two
+// plans of one wave is blocked in every executor and none marks it. The orchestrator's post-wave step evaluates
+// the same gate once on the merged tree. The real fence of the step fragment runs here against a real project,
+// real `requirements ready-ids` / `mark-complete` / `commit`, with only `jq` replaced (the Tester Image has none).
+{
+const { spawnSync: spawnPostWave } = require('node:child_process');
+const { createTempGitProject: postWaveProject, cleanup: postWaveCleanup, TOOLS_PATH: POST_WAVE_TOOLS } = require('./helpers.cjs');
+const { HOOK_FANOUT_TIMEOUT_MS: POST_WAVE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { splitLines: postWaveSplitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+const FRAGMENT = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'post-wave-requirements.md');
+
+// The two filters the fence uses, with jq's semantics for them; any other filter fails loudly.
+const JQ_STUB = [
+  'const f = process.argv[process.argv.length - 1];',
+  "let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => {",
+  '  const doc = JSON.parse(s);',
+  "  const table = { '.requirements[]?': doc.requirements, '.ready[]': doc.ready };",
+  '  if (!Object.prototype.hasOwnProperty.call(table, f)) { process.stderr.write("jq stub: unsupported filter " + f); process.exit(3); }',
+  "  for (const v of table[f] || []) process.stdout.write(v + '\\n');",
+  '});',
+].join('\n');
+
+function fenceOf() {
+  const text = fs.readFileSync(FRAGMENT, 'utf8');
+  const open = text.indexOf('```bash\n');
+  assert.ok(open >= 0, 'the fragment must carry its bash fence');
+  const close = text.indexOf('\n```', open + 8);
+  // the launcher preamble `sync-runtime-launcher` prepends defines the real `gsd_run`; the test supplies its own
+  return postWaveSplitLines(text.slice(open + 8, close)).filter((line) => !line.startsWith('_GSD_SHIM_NAME=')).join('\n');
+}
+
+// Plan layouts the orchestrator meets: root plans named by stem, and a slug id plus a nested `plans/PLAN-<n>.md`.
+const POST_WAVE_LAYOUTS = {
+  root: { one: { id: '01-01', plan: '01-01-PLAN.md', summary: '01-01-SUMMARY.md' }, two: { id: '01-02', plan: '01-02-PLAN.md', summary: '01-02-SUMMARY.md' } },
+  slugAndNested: {
+    one: { id: '01-01-api', plan: '01-01-api-PLAN.md', summary: '01-01-api-SUMMARY.md' },
+    two: { id: 'plans/PLAN-2.md', plan: 'plans/PLAN-2.md', summary: 'plans/SUMMARY-2.md' },
+  },
+};
+
+function waveFixture(t, { summaries, layout = 'root' }) {
+  const proj = postWaveProject();
+  t.after(() => postWaveCleanup(proj));
+  const phaseDir = path.join(proj, '.planning', 'phases', '01-alpha');
+  fs.mkdirSync(path.join(phaseDir, 'plans'), { recursive: true });
+  const { one, two } = POST_WAVE_LAYOUTS[layout];
+  const plan = (n, reqs) => `---\nphase: 01-alpha\nplan: ${n}\nwave: 1\nrequirements: [${reqs}]\n---\n# Plan ${n}\n`;
+  fs.writeFileSync(path.join(phaseDir, one.plan), plan('01', 'REQ-01, REQ-02'));
+  fs.writeFileSync(path.join(phaseDir, two.plan), plan('02', 'REQ-01'));
+  for (const n of summaries) fs.writeFileSync(path.join(phaseDir, n === '01' ? one.summary : two.summary), '# Summary\n');
+  fs.writeFileSync(path.join(proj, '.planning', 'REQUIREMENTS.md'), [
+    '# Requirements', '', '- [ ] **REQ-01**: shared by both plans', '- [ ] **REQ-02**: plan one only', '',
+    '## Traceability', '', '| Requirement | Phase | Status |', '|---|---|---|',
+    '| REQ-01 | Phase 1 | Pending |', '| REQ-02 | Phase 1 | Pending |', '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(proj, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Alpha\n\n**Goal**: g\n');
+  fs.writeFileSync(path.join(proj, '.planning', 'config.json'), '{}');
+  gitInProject(proj, ['add', '-A']);
+  gitInProject(proj, ['commit', '-q', '-m', 'seed']);
+  return { proj, phaseDir };
+}
+function gitInProject(proj, args) {
+  const r = spawnPostWave('git', args, { cwd: proj, encoding: 'utf8', timeout: POST_WAVE_TIMEOUT_MS });
+  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout;
+}
+
+function runFence(proj, phaseDir, testExit, wavePlanIds = '01-01 01-02') {
+  // the fence loops over `{completed_plan_ids}`: the orchestrator writes the completed plans out as a literal list
+  const requirementsPath = path.join(proj, '.planning', 'REQUIREMENTS.md');
+  const script = [
+    `gsd_run() { node '${POST_WAVE_TOOLS}' "$@"; }`,
+    `jq() { node -e '${JQ_STUB.replace(/'/g, "'\\''")}' -- "$@"; }`,
+    `TEST_EXIT=${testExit} PHASE_DIR='${phaseDir}' PHASE_NUMBER=1 N=1`,
+    fenceOf().split('{requirements_path}').join(requirementsPath).split('{completed_plan_ids}').join(wavePlanIds),
+  ].join('\n');
+  const r = spawnPostWave('bash', ['-c', script], { cwd: proj, encoding: 'utf8', timeout: POST_WAVE_TIMEOUT_MS });
+  assert.equal(r.status, 0, `the fence must run clean: ${r.stderr}`);
+  const text = fs.readFileSync(requirementsPath, 'utf8');
+  return (id) => new RegExp(`- \\[x\\] \\*\\*${id}\\*\\*`).test(text);
+}
+
+describe('#6102: the orchestrator marks shared requirements complete once the wave has merged', () => {
+  test('two plans declaring the same ID, both summarized: the shared ID and the single-plan ID are marked and committed', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+    const marked = runFence(proj, phaseDir, 0);
+    assert.equal(marked('REQ-01'), true, 'the shared ID is complete');
+    assert.equal(marked('REQ-02'), true, 'the single-plan ID is complete');
+    assert.match(gitInProject(proj, ['log', '-1', '--format=%s']), /mark shared requirements complete after wave 1/);
+    assert.equal(gitInProject(proj, ['status', '--porcelain', '--', '.planning/REQUIREMENTS.md']).trim(), '', 'the marked file is committed');
+  });
+
+  test('an ID with a declaring plan that has no summary is not marked; the ready ID still is', (t) => {
+    // WAVE_PLAN_IDS lists the plans that COMPLETED in the wave: plan 02 produced no summary, so it is not in it
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01'] });
+    const marked = runFence(proj, phaseDir, 0, '01-01');
+    assert.equal(marked('REQ-01'), false, 'plan 02 has no summary yet');
+    assert.equal(marked('REQ-02'), true);
+  });
+
+  test('a slug plan id and a nested plan path resolve to their plan files: the shared ID is marked', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'], layout: 'slugAndNested' });
+    const marked = runFence(proj, phaseDir, 0, '01-01-api plans/PLAN-2.md');
+    assert.equal(marked('REQ-01'), true, 'the shared ID is complete');
+    assert.equal(marked('REQ-02'), true, 'the single-plan ID is complete');
+  });
+
+  test('a completed plan whose file cannot be found is skipped, never aborting the pass', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+    const marked = runFence(proj, phaseDir, 0, '09-99 01-01 01-02');
+    assert.equal(marked('REQ-01'), true, 'the plans that exist are still settled');
+    assert.equal(marked('REQ-02'), true);
+  });
+
+  test('nothing is marked when the post-merge tests failed or timed out', (t) => {
+    for (const testExit of [1, 124]) {
+      const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+      const marked = runFence(proj, phaseDir, testExit);
+      assert.equal(marked('REQ-01') || marked('REQ-02'), false, `TEST_EXIT=${testExit}`);
+      assert.equal(gitInProject(proj, ['log', '-1', '--format=%s']).trim(), 'seed', 'no commit either');
+    }
+  });
+
+  test('a gaps_found revert still reverts what the post-wave pass marked', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+    runFence(proj, phaseDir, 0);
+    const revert = spawnPostWave('node', [POST_WAVE_TOOLS, 'query', 'requirements.revert-phase', 'REQ-01', 'REQ-02'], { cwd: proj, encoding: 'utf8', timeout: POST_WAVE_TIMEOUT_MS });
+    assert.equal(revert.status, 0, revert.stderr);
+    const text = fs.readFileSync(path.join(proj, '.planning', 'REQUIREMENTS.md'), 'utf8');
+    assert.equal(/- \[x\] \*\*REQ-0[12]\*\*/.test(text), false, 'both IDs are unchecked again');
+  });
+
+  test('the host step and execute-plan point at the fragment, and execute-plan no longer promises a worktree re-evaluation', () => {
+    const host = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(host.includes('execute-phase/steps/post-wave-requirements.md'), 'step 5.7 must read the fragment');
+    const executePlan = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md'), 'utf-8');
+    assert.ok(executePlan.includes('in the same tree'), 'the re-evaluation claim is qualified to one tree');
+    assert.ok(executePlan.includes('post-wave-requirements.md'), 'execute-plan names the orchestrator pass that settles worktree-mode shared IDs');
+  });
+});
+}
