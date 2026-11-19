@@ -3555,6 +3555,22 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(runFence(dir, g).exitCode, 0, 'a backslash, quote and tab in the directory name does not make git quote the path past the guard');
     }
   });
+  test('property: any directory name (newline, backslash, glob, space, non-ASCII) is accepted alone by the squash and merge guards and refused beside a stray path', { skip: process.platform === 'win32' && 'a newline is not a legal Windows path character' }, (t) => {
+    const piece = fc.constantFrom('a', ' ', '\n', '\\', '[', ']', '*', '?', 'é', '"');
+    for (const g of [guard('**Squash merge:**'), guard('**Merge with history:**')]) {
+      fc.assert(fc.property(fc.array(piece, { minLength: 1, maxLength: 4 }), (parts) => {
+        const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489p-');
+        const rel = `d${parts.join('')}/.planning/REQUIREMENTS.md`;
+        fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        fs.writeFileSync(path.join(dir, rel), 'r');
+        git('add', '-A'); git('commit', '-q', '-m', 'seed');
+        git('rm', '-q', rel);
+        assert.equal(runFence(dir, g).exitCode, 0, JSON.stringify(rel));
+        fs.writeFileSync(path.join(dir, 'stray'), 'x'); git('add', 'stray');
+        assert.equal(runFence(dir, g).exitCode, 1, JSON.stringify(rel));
+      }), { seed: 5211, numRuns: 8 });
+    }
+  });
   test('the three REQUIREMENTS.md fences match the staged path with the same regex, and the two merge guards share one parser', () => {
     const squash = guard('**Squash merge:**');
     const merge = guard('**Merge with history:**');
@@ -3686,7 +3702,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(tails.length, 3, f);
     for (const t of tails) {
       // allow-test-rule: docs-parity (#5211)
-      assert.match(t, /^(":\(literal\)[^" ]+" ?)+$/, `${f}: ${t}`);
+      assert.match(t, /^(':\(literal\)[^' ]+' ?)+$/, `${f}: ${t}`);
     }
   });
 
