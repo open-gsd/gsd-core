@@ -726,8 +726,8 @@ jobs:
           #
           # Sharding is not free per shard. The #5029 projection in the same
           # test file fits each run's long pole as a fixed cost per shard plus
-          # the shard's share of the tier. Steps outside the test step are one
-          # to two and a half minutes of that cost (50-151s, median 97s, over the 72
+          # the shard's share of the tier. Steps outside the test step are 50
+          # to 151 seconds of that cost (median 97s, over the 72
           # Windows jobs of the twelve fork runs SHARD_BALANCE's baselines were
           # measured on, listed in docs/how-to/read-ci-timeout-signals.md); the rest
           # sits inside the test step and is unattributed. So each added shard

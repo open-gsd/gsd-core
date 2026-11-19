@@ -818,9 +818,17 @@ function evaluateShardBalance(samples, config) {
     // layout, which needs that layout to have run: while it has fewer than
     // minRuns runs here, report insufficient-data rather than file an issue
     // against the re-shard that just landed.
-    const baselineLayoutRuns = new Set(
-      samples.filter((s) => s.total === config.baselineShardTotal).map((s) => s.runId),
-    ).size;
+    // #6329: only a complete run counts, one with a sample for every shard of
+    // the baseline layout. A run that lost a shard (cancelled before it got a
+    // runner, say) does not show the layout ran.
+    const baselineShardsByRun = new Map();
+    for (const s of samples) {
+      if (s.total !== config.baselineShardTotal) continue;
+      if (!baselineShardsByRun.has(s.runId)) baselineShardsByRun.set(s.runId, new Set());
+      baselineShardsByRun.get(s.runId).add(s.shard);
+    }
+    const baselineLayoutRuns = [...baselineShardsByRun.values()]
+      .filter((shards) => shards.size === config.baselineShardTotal).length;
     const status = baselineLayoutRuns < config.minRuns ? 'insufficient-data' : 'baseline-mismatch';
     return {
       status, runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
