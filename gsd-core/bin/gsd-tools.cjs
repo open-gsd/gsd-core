@@ -2745,7 +2745,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // exec:null -> a FATAL wave abort (executor-isolation-dispatch.md:299-303),
   // even on hosts (e.g. kimi-code) that declare no modelFlag at all and
   // previously ignored the pin entirely. This check MUST run BEFORE
-  // MODEL_ID_CHARSET_RE below: the charset is anchored to `[A-Za-z0-9]` at
+  // the `charsetRe` test below: the charset is anchored to `[A-Za-z0-9]` at
   // the first character, so every dash-leading value already fails the
   // charset test and would otherwise be swallowed by the generic "unsafe
   // characters" message, losing the more specific and more actionable
