@@ -717,7 +717,8 @@ describe('#2284 all three real corpus Agent(...) call-argument shapes', () => {
     assert.ok(!/Only include model=/.test(out), 'dead explanatory comment (line 1) removed');
     assert.ok(!/omit this parameter entirely/.test(out), 'dead explanatory comment (line 2) removed');
     assert.ok(!/inherits the orchestrator model/.test(out), 'dead explanatory comment (line 3) removed');
-    assert.ok(out.includes('isolation="worktree"'), 'unrelated surrounding arguments preserved');
+    assert.ok(out.includes('goal="Execute the plan."'), 'unrelated surrounding arguments preserved (prompt becomes goal)');
+    assert.ok(!/\bisolation\s*[=:]/.test(out), 'isolation= is dropped: delegate_task has no isolation parameter (#6066)');
   });
 });
 
