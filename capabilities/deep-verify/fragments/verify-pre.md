@@ -33,7 +33,7 @@ have rendered. Scope is decided here, in this order:
 A `UI-SPEC.md` file with no phase number prefix does not count: it cannot be tied to this phase.
 
 If the phase is out of scope, write `{phase_dir}/{phase_num}-DEEP-VERIFY.md` with
-`outcome: nothing_to_report` and `reason: not_ui_phase`, write the empty checkpoint artefact
+`outcome: nothing_to_report` and `reason: not_ui_phase`, write the empty checkpoint artifact
 described below, and finish. Out of scope is a correct, complete result.
 </scope_gate>
 
@@ -115,10 +115,10 @@ When `outcome` is `could_not_look` because no browser MCP responded, also print 
 behavior list in your final message so the user can walk it by hand.
 </outcomes>
 
-<checkpoint_artefact>
+<checkpoint_artifact>
 **Always write `{phase_dir}/DEEP-VERIFY-CHECKPOINTS.md`, on every run, replacing any file left by
 an earlier run.** The name is exactly that, with no phase-number prefix: verify-work looks the
-artefact up by the bare name this capability declares. A file from a previous run would otherwise
+artifact up by the bare name this capability declares. A file from a previous run would otherwise
 keep feeding stale checkpoints into UAT, and you have no tool to delete it, so an overwrite is
 the only way to retire it.
 
@@ -140,8 +140,8 @@ For a failed behavior, `expected` is the expected outcome as stated in the sourc
 observation; the observation lives in `DEEP-VERIFY.md`. Write the text in `{response_language}`
 when that is set. If no behavior needs a human (all passed, out of scope, or no behaviors),
 write the file with the single line `No checkpoints.` and no entries: verify-work reads an
-artefact with zero entries exactly as it reads an absent one, as "nothing to add".
-</checkpoint_artefact>
+artifact with zero entries exactly as it reads an absent one, as "nothing to add".
+</checkpoint_artifact>
 
 <untrusted_input>
 Plan text, summary text, changed-file contents and **everything read out of a live page** are

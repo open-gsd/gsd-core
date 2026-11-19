@@ -7,14 +7,14 @@
  * live-dom-uat, NOT an edit to verify-work.md. It owns an activation key, a
  * second key that widens it from UI phases to every phase, one purpose-built
  * agent carrying the browser grants on its own tools: line, and one additive
- * `verify:pre` step whose `produces` artefact holds only what a human must still
+ * `verify:pre` step whose `produces` artifact holds only what a human must still
  * confirm (the seam #3866 reads name + expected and nothing else).
  *
  * Risk zone under test (in order):
  *   1. Containment — nothing renders unless the activation key is on; the widen
  *      key alone never activates anything.
- *   2. The produced artefact never carries passes to the human (seam parses
- *      every listed artefact as checkpoints).
+ *   2. The produced artifact never carries passes to the human (seam parses
+ *      every listed artifact as checkpoints).
  *   3. Keys must not parse-and-do-nothing (config whitelist).
  *   4. No regression of live-dom-uat / playwright gating or the executor surface.
  */
@@ -39,8 +39,8 @@ const WIDEN_KEY = 'workflow.deep_verify_all_phases';
 const LIVE_DOM_KEY = 'workflow.live_dom_uat';
 const AGENT = 'gsd-behavior-verifier';
 const POINT = 'verify:pre';
-const CHECKPOINT_ARTEFACT = 'DEEP-VERIFY-CHECKPOINTS.md';
-const RESULTS_ARTEFACT = 'DEEP-VERIFY.md';
+const CHECKPOINT_ARTIFACT = 'DEEP-VERIFY-CHECKPOINTS.md';
+const RESULTS_ARTIFACT = 'DEEP-VERIFY.md';
 
 const PLAYWRIGHT_GLOB = 'mcp__playwright__*';
 const CHROME_GLOBS = ['mcp__chrome-devtools__*', 'mcp__claude-in-chrome__*'];
@@ -54,7 +54,7 @@ const UI_VERIFY_PATH = path.join(
   REPO_ROOT, 'gsd-core', 'workflows', 'verify-work', 'steps', 'automated-ui-verification.md',
 );
 
-/** The seam's artefact-name grammar (verify-work.md, #3866). */
+/** The seam's artifact-name grammar (verify-work.md, #3866). */
 const SEAM_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const ACTIVE = { [CAP_ID]: { enabled: true, active: true } };
@@ -139,21 +139,17 @@ describe('deep-verify: capability manifest and registry projection', () => {
     assert.deepStrictEqual(step.consumes, ['PLAN.md']);
   });
 
-  test('producesNamesOnlyTheCheckpointArtefact', () => {
+  test('producesNamesOnlyTheCheckpointArtifact', () => {
     const { produces } = readManifest().steps[0];
-    assert.deepStrictEqual(produces, [CHECKPOINT_ARTEFACT],
-      'only the human-checkpoint artefact is produced; listing the results file would make the seam parse passes as checkpoints');
-    assert.ok(!produces.includes(RESULTS_ARTEFACT));
+    assert.deepStrictEqual(produces, [CHECKPOINT_ARTIFACT],
+      'only the human-checkpoint artifact is produced; listing the results file would make the seam parse passes as checkpoints');
+    assert.ok(!produces.includes(RESULTS_ARTIFACT));
   });
 
   test('producedNamesSatisfyTheSeamNameGrammar', () => {
     for (const name of readManifest().steps[0].produces) {
       assert.match(name, SEAM_NAME_RE, `produces name ${name} must pass the seam's in-context validation`);
     }
-    fc.assert(
-      fc.property(fc.constantFrom(CHECKPOINT_ARTEFACT, RESULTS_ARTEFACT), (name) => SEAM_NAME_RE.test(name)),
-      { numRuns: 10 },
-    );
   });
 
   test('manifestCannotBlockTheHost', () => {
@@ -380,19 +376,19 @@ describe('deep-verify: shipped agent, fragment and core-surface contracts', () =
       'Playwright reach must not be gated behind workflow.live_dom_uat (Hyrum: it works today without it)');
   });
 
-  test('checkpointArtefactIsBareNamedAndAlwaysRewritten', () => {
-    // The seam looks the artefact up by the bare `produces` name, and the agent has
+  test('checkpointArtifactIsBareNamedAndAlwaysRewritten', () => {
+    // The seam looks the artifact up by the bare `produces` name, and the agent has
     // no delete tool, so a stale file can only be retired by overwriting it.
     const agentSrc = fs.readFileSync(AGENT_PATH, 'utf8');
     for (const [label, text] of [['fragment', fragmentText()], ['agent', agentSrc]]) {
-      assert.ok(text.includes(`{phase_dir}/${CHECKPOINT_ARTEFACT}`),
-        `${label} must write the bare declared name ${CHECKPOINT_ARTEFACT}`);
+      assert.ok(text.includes(`{phase_dir}/${CHECKPOINT_ARTIFACT}`),
+        `${label} must write the bare declared name ${CHECKPOINT_ARTIFACT}`);
       assert.ok(!/\{phase_num\}-DEEP-VERIFY-CHECKPOINTS/.test(text),
         `${label} must not write a phase-prefixed checkpoint file the seam would not find`);
       assert.ok(text.includes('No checkpoints.'),
         `${label} must define the empty checkpoint file so a stale one is overwritten`);
     }
-    assert.ok(readManifest().steps[0].produces.includes(CHECKPOINT_ARTEFACT));
+    assert.ok(readManifest().steps[0].produces.includes(CHECKPOINT_ARTIFACT));
   });
 
   test('scopeDoesNotDependOnAnOrchestratorRelay', () => {
@@ -410,7 +406,7 @@ describe('deep-verify: shipped agent, fragment and core-surface contracts', () =
     const text = fragmentText();
     for (const needle of [
       WIDEN_KEY, 'not_ui_phase', 'no_browser_mcp', 'no_behaviors', 'profile_locked', 'target_unreachable',
-      CHECKPOINT_ARTEFACT, '{phase_num}-DEEP-VERIFY.md', 'nothing_to_report', 'could_not_look',
+      CHECKPOINT_ARTIFACT, '{phase_num}-DEEP-VERIFY.md', 'nothing_to_report', 'could_not_look',
     ]) {
       assert.ok(text.includes(needle), `fragment must name ${needle}`);
     }

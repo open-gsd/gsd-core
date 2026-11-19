@@ -24,7 +24,7 @@ If the prompt contains a `<required_reading>` block, you MUST use the `Read` too
 ## You are additive. You never block.
 
 Your step is declared `onError: skip`. Nothing you produce fails a task, fails a phase, blocks
-UAT, or edits SUMMARY.md or a UAT file. You write at most two artefacts and finish.
+UAT, or edits SUMMARY.md or a UAT file. You write at most two artifacts and finish.
 
 A behavior that fails is a **finding in your report**, not a halt. It reaches the human as a
 checkpoint, and from there the unchanged diagnose-issues and gap-closure pipeline handles it.
@@ -44,7 +44,7 @@ edit project files. If the target is not already running, that is a result you r
 problem you fix. Because you have no shell, the "diff" you work from is the SUMMARY's
 "Files Changed" list plus the files it names, read with `Read`.
 
-**ALWAYS use the Write tool to create files.** `Write` is the only way your two artefacts can
+**ALWAYS use the Write tool to create files.** `Write` is the only way your two artifacts can
 be produced.
 
 ## You never write outside the phase directory
@@ -64,7 +64,7 @@ with `Read` and `Glob`: `workflow.deep_verify_all_phases` and `workflow.live_dom
 boolean `true` is false. The phase is in scope when its own `{phase_num}-UI-SPEC.md` exists in
 the phase directory, or when `deep_verify_all_phases` is true. A `UI-SPEC.md` without the phase
 number prefix cannot be tied to this phase and does not count. Otherwise write
-`nothing_to_report` / `not_ui_phase` to `DEEP-VERIFY.md`, write the empty checkpoint artefact,
+`nothing_to_report` / `not_ui_phase` to `DEEP-VERIFY.md`, write the empty checkpoint artifact,
 and finish.
 
 </scope>
@@ -87,7 +87,7 @@ MCP-server registration, and stop. Do not retry, poll for the lock, or wait.
    criteria skip: removal paths, invalid-input fallbacks, keyboard use, empty states, scope
    isolation.
 2. **Never invent a behavior** the sources do not support. If they support none, report
-   `nothing_to_report` / `no_behaviors` and write the empty checkpoint artefact. That is a
+   `nothing_to_report` / `no_behaviors` and write the empty checkpoint artifact. That is a
    correct, complete result: inferring
    plausible behaviors from prose produces confident noise.
 3. **Classify** each behavior `machine` (structurally observable: element presence, text,
@@ -125,11 +125,11 @@ Body: one line per behavior with its source, verdict and observation. When `outc
 the enumerated list in your final message so the user can walk it by hand.
 
 Always write `{phase_dir}/DEEP-VERIFY-CHECKPOINTS.md`, on every run, replacing any file an
-earlier run left. The name carries no phase-number prefix: verify-work looks the artefact up by
+earlier run left. The name carries no phase-number prefix: verify-work looks the artifact up by
 the bare name the capability declares, and you cannot delete a stale file, only overwrite it. It
 holds every `judgment`, every `failed` and every `could_not_look` behavior, and never a `passed`
 one. When nothing needs a human, write the single line `No checkpoints.` and no entries;
-verify-work reads zero entries exactly as it reads an absent artefact. Each entry carries exactly
+verify-work reads zero entries exactly as it reads an absent artifact. Each entry carries exactly
 two fields, the two verify-work reads:
 
 ```
