@@ -283,6 +283,20 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     assert.equal(r.stderr.includes('\u001b'), false, 'no raw escape byte reaches stderr');
   });
 
+  test('the not-written warning prints a hostile session directory name on one line', (t) => {
+    const escalating = { ...ISSUE_CONFIG, dynamic_routing: { ...ISSUE_CONFIG.dynamic_routing, provider_escalation: ['gpt-5'] } };
+    const parent = createTempDir('gsd-aig-hostile-dir-');
+    t.after(() => cleanup(parent));
+    const elsewhere = path.join(parent, 'a\n\u001b[2K FORGED');
+    fs.mkdirSync(elsewhere);
+    setup(t, escalating);
+    const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.ok(r.stderr.includes('model-escalation record not written'), `positive control: the warning prints: ${r.stderr}`);
+    assert.equal(r.stderr.includes('\u001b'), false, 'no raw escape byte reaches stderr');
+    assert.equal(r.stderr.split('\n').filter((l) => l.includes('FORGED')).every((l) => l.includes('model-escalation record not written')), true, 'the directory name does not start a forged line');
+  });
+
   test('family match is token-bounded: substrings of custom model names do not collide', (t) => {
     setup(t);
     assert.equal(evaluate(dispatch('gsd-planner', 'noopus-1')).action, 'warn');
