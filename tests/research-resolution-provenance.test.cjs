@@ -25,8 +25,9 @@
  *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself. The
  *   shared Resolve step (`revision-loop.md`) asks the user and records each answer as a `D-NN`,
  *   so the blocker clears inside the loop. With no CONTEXT.md the user leaves the loop for discuss-phase;
- *   in a pipeline run (`AUTO_CHAIN`, or `--auto`/`--chain` passed) no answer is recorded, the planner is not
- *   re-spawned, and the workflow stops at the escalation.
+ *   where no one can be asked (`--auto`, or a background or nested agent) no answer is recorded, the planner
+ *   is not re-spawned, the workflow stops at the escalation with a marker line, and autonomous never executes
+ *   plans whose run carries it.
  * - verify-work's gap-closure checker skips Dimension 11: that loop has no CONTEXT.md and no route
  *   to record a ruling, so the spine and the checker prompt both scope the dimension out.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape, and a real
@@ -350,31 +351,50 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   // A re-spawn under --auto can only return the same conflict, and the cap gate has no --auto choice of its
   // own; proceeding there would ship the plans with the blocker open, the opposite of what the docs promise.
   test('under --auto nothing is recorded and nothing re-spawns: the blocker escalates at once and the workflow stops', () => {
-    assert.match(resolve(), /Record only what the user said\. In a pipeline run no one is asked: .* There, record no answer and do not re-spawn/);
+    assert.match(resolve(), /Record only what the user said\. No one can be asked when .* There, record no answer and do not re-spawn/);
     assert.match(resolve(), /Escalate at once, and at that gate stop the workflow rather than proceed/);
     assert.doesNotMatch(resolve(), /Repeat rule/, 'the --auto route no longer spends a planner run to reach the Repeat rule, in any wording');
     // The section's closing rule must agree, or "asking is the route everywhere" contradicts the --auto clause.
     const route = read('gsd-core/references/revision-loop.md').replace(/\s+/g, ' ');
-    assert.match(route, /Asking the user is the route everywhere but a pipeline run \(`AUTO_CHAIN`, Resolve above\), where a `research_resolution` conflict escalates and stops/);
+    assert.match(route, /Asking the user is the route everywhere but where no one can be asked \(Resolve, above\), where a `research_resolution` conflict escalates and stops/);
     // Step 2 still writes the REVIEWS.md conflict line under --auto; what --auto skips is recording an answer.
     assert.match(route, /recording is in addition to asking, never instead of it/);
   });
 
-  // gsd-autonomous calls plan-phase with no --auto, and a chained run carries its mode in
-  // workflow._auto_chain_active, which plan-phase reads as AUTO_CHAIN. A rule keyed to the literal flag misses
-  // chained runs; one keyed to the flag alone misses a direct --auto call, which sets it only after the loop.
-  test('the no-one-is-asked clause cites AUTO_CHAIN and the flags that set it, and the docs name it', () => {
-    assert.match(resolve(), /In a pipeline run no one is asked: plan-phase's `AUTO_CHAIN` \(init `auto_chain_active`, the `workflow\._auto_chain_active` flag a chained run sets\) is true, or its arguments carry `--auto` or `--chain`, which set that flag only after this loop\./);
-    // The flag the clause cites must be the one plan-phase actually derives, and the step that sets it from
-    // --auto/--chain must sit after the revision loop, or the clause names a flag the loop never sees.
+  // Every chained caller passes --auto to plan-phase, and gsd-autonomous passes nothing but runs plan-phase as a
+  // background agent when it does not flatten. Keyed to AUTO_CHAIN, a flag an interrupted chain left set would
+  // refuse a present user, and autonomous would still never stop; so the key is --auto or a background agent.
+  test('no one is asked under --auto or in a background agent; AUTO_CHAIN is named as not the key', () => {
+    assert.match(resolve(), /No one can be asked when plan-phase's arguments carry `--auto`, as every chained caller passes, or when it runs as a background or nested agent, where AskUserQuestion cannot reach the user, as `\/gsd:autonomous` dispatches it when it does not flatten\./);
+    assert.match(resolve(), /`AUTO_CHAIN` \(`workflow\._auto_chain_active`\) is not the key: a chained run passes `--auto` anyway, and a flag an interrupted chain left set, which only plan-phase's step 15 clears, would refuse a user who is present\./);
+    assert.doesNotMatch(resolve(), /--chain/, 'plan-phase does not advertise --chain, so the rule does not name it');
+    // The grounds the clause states: each chained caller passes --auto; autonomous passes none and backgrounds it.
+    assert.match(read('gsd-core/workflows/discuss-phase/modes/chain.md'), /Skill\(skill="gsd-plan-phase", args="\$\{PHASE\} --auto/);
+    assert.match(read('gsd-core/workflows/discuss-phase-assumptions/steps/auto-advance-dispatch.md'), /Skill\(skill="gsd-plan-phase", args="\$\{PHASE\} --auto"\)/);
+    assert.match(read('gsd-core/workflows/transition.md'), /\/gsd:plan-phase \[X\+1\] --auto/);
+    const auto = read('gsd-core/workflows/autonomous.md');
+    const calls = auto.split('\n').filter((l) => /gsd-plan-phase\\?", args=\\?"\$\{PHASE_NUM\}/.test(l));
+    assert.ok(calls.length >= 3, 'autonomous invokes plan-phase');
+    for (const l of calls) assert.doesNotMatch(l, /--auto|--chain/, l);
+    assert.match(auto.replace(/\s+/g, ' '), /run_in_background=true, prompt="Run plan-phase for phase \$\{PHASE_NUM\}/);
+    // Only step 15 clears a leftover flag, and it runs after the revision loop.
+    assert.match(read('gsd-core/workflows/plan-phase/steps/auto-advance-check.md'), /gsd_run query config-set workflow\._auto_chain_active false/);
     const spine = read('gsd-core/workflows/plan-phase.md');
-    assert.match(spine, /AUTO_CHAIN=\$\(gsd_run query check auto-mode --pick auto_chain_active/);
-    assert.match(read('gsd-core/workflows/plan-phase/steps/auto-advance-check.md'), /gsd_run query config-set workflow\._auto_chain_active true/);
-    assert.ok(spine.indexOf('plan-phase/steps/auto-advance-check.md') > spine.indexOf('## 12. Revision Loop'), 'auto-advance-check runs after the revision loop');
+    const loop = spine.indexOf('## 12. Revision Loop');
+    const step15 = spine.indexOf('plan-phase/steps/auto-advance-check.md');
+    assert.ok(loop !== -1 && step15 !== -1 && step15 > loop, 'auto-advance-check runs after the revision loop');
     for (const doc of ['docs/features/research-gate.md', 'docs/FEATURES.md']) {
-      assert.match(read(doc), /In a pipeline run \(plan-phase's `AUTO_CHAIN`: the `workflow\._auto_chain_active` flag a chained run sets, or `--auto`\/`--chain` passed\) no answer is recorded/, doc);
+      assert.match(read(doc), /Where no one can be asked \(`--auto`, or plan-phase running as a background agent, as `\/gsd-autonomous` runs it\) no answer is recorded: plan-phase escalates at once and stops there, and `\/gsd-autonomous` does not execute the plans/, doc);
       assert.match(read(doc), /the user leaves to run `\/gsd-discuss-phase <N>` or `\/gsd-plan-phase <N> --research`\./, doc);
     }
+  });
+
+  // Resolve leaves the plans on disk when it stops, and autonomous checked only has_plans before executing.
+  test('both stops end plan-phase with a marker line, and autonomous never executes plans whose run carries it', () => {
+    assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, so a caller never executes the plans\./);
+    const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
+    assert.match(auto, /check `has_plans`\. If false → go to handle_blocker: "Plan phase \$\{PHASE_NUM\} did not produce any plans\." If the plan run's output or return carries `PLANNING STOPPED: research questions need a user ruling`, go to handle_blocker with that line/);
+    assert.match(auto, /Wait for the plan agent to complete \(if not already\) and verify plans exist and its return carries no `PLANNING STOPPED` line \(else handle_blocker, as in 3b\)/);
   });
 });
 

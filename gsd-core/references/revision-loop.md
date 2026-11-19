@@ -159,12 +159,16 @@ so they restate the operative rules inline; this section is the authority they m
    Dimension 11, so it must stop, never converge over the open question. No re-spawn follows, so
    close this conflict's line now (Close, below) with ` | resolved: user left the loop for
    {command}`, and leave the plans on disk as they are. A later checker run raises Dimension 11
-   again for any question still open. Record only what the user said. In a pipeline run no one is
-   asked: plan-phase's `AUTO_CHAIN` (init `auto_chain_active`, the `workflow._auto_chain_active`
-   flag a chained run sets) is true, or its arguments carry `--auto` or `--chain`, which set that
-   flag only after this loop. There, record no answer and do not re-spawn: the planner could only
-   return the same conflict. Escalate at once, and at that gate stop the workflow rather than
-   proceed, which would ship the plans with this blocker open.
+   again for any question still open. Record only what the user said. No one can be asked when
+   plan-phase's arguments carry `--auto`, as every chained caller passes, or when it runs as a
+   background or nested agent, where AskUserQuestion cannot reach the user, as `/gsd:autonomous`
+   dispatches it when it does not flatten. There, record no answer and do not re-spawn: the
+   planner could only return the same conflict. Escalate at once, and at that gate stop the
+   workflow rather than proceed, which would ship the plans with this blocker open. `AUTO_CHAIN`
+   (`workflow._auto_chain_active`) is not the key: a chained run passes `--auto` anyway, and a
+   flag an interrupted chain left set, which only plan-phase's step 15 clears, would refuse a user
+   who is present. This stop and leaving the loop both end plan-phase with the line
+   `PLANNING STOPPED: research questions need a user ruling`, so a caller never executes the plans.
 4. **Close** — the workflow that wrote the line owns flipping it to `- [x]` once the resolution
    has been applied, appending ` | resolved: {chosen resolution}`. Readers only read. A line left
    open is a live blocker, never a stale artifact.
@@ -187,7 +191,7 @@ revision iteration — the cap on conflicts is separate from, and additional to,
 revisions.
 
 **No workflow hands a conflict to a loop and returns.** Asking the user is the route everywhere but
-a pipeline run (`AUTO_CHAIN`, Resolve above), where a `research_resolution` conflict escalates and
+where no one can be asked (Resolve, above), where a `research_resolution` conflict escalates and
 stops; recording is in addition to asking, never instead of it. `plan-phase` in particular never
 invokes `/gsd:plan-review-convergence` — it runs *inside* that loop, so invoking it would be a
 cycle, and "was I invoked by convergence?" is not a question the orchestrator can answer at
