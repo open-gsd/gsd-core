@@ -26,6 +26,8 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
   // without an agent_hint field, so existing dispatch is byte-identical.
   'workflow.agent_hint_routing': true,
+  // #6302 (ADR-3711 D1): the opt-in gate for dispatching a plan to a foreign executor; off unless set.
+  'workflow.cross_runtime_execution': false,
   // #4401: Compact Content mode gate — derived from the defaults manifest via
   // CONFIG_DEFAULTS (added in config-loader.cts) so the manifest stays the
   // single source of truth, matching workflow.smart_zone_tokens /
