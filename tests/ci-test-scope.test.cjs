@@ -73,6 +73,13 @@ describe('ci-test-scope.cjs', () => {
       assert.strictEqual(scopeFor([file]).zsh_changed, true);
     });
   }
+  // A PR lists many files: one trigger file anywhere in the list starts the job, whatever its position.
+  for (const files of [['gsd-core/workflows/insert-phase.md', 'docs/usage.md'], ['docs/usage.md', 'gsd-core/workflows/insert-phase.md'],
+    ['docs/usage.md', 'gsd-core/workflows/insert-phase.md', 'tests/commands.test.cjs']]) {
+    test(`zsh_changed is true for the mixed list ${files.join(' ')}`, () => {
+      assert.strictEqual(scopeFor(files).zsh_changed, true);
+    });
+  }
   // Near misses: same basename elsewhere, a sibling, a nested path, a similar test name, a neighbour helper.
   for (const file of ['gsd-core/workflows/new-project.md', 'tests/commands.test.cjs', 'docs/usage.md',
     'gsd-core/insert-phase.md', 'gsd-core/workflows/add-phase.md', 'gsd-core/workflows/insert-phase/x.md',
