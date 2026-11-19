@@ -60,7 +60,7 @@ module.exports = {
   "tests/command-arguments-block.test.cjs",
   "tests/commands.platform.test.cjs",
   "tests/commit-files-deletion.test.cjs",
-  "tests/commit-files-pathspec-property.test.cjs",
+  "tests/commit-files-pathspec.property.test.cjs",
   "tests/commit-files-pathspec.test.cjs",
   "tests/commonjs-marker.test.cjs",
   "tests/complete-milestone-release-map-routing.test.cjs",

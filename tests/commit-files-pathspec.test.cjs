@@ -3496,6 +3496,14 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.ok(blk, `${rel}: bash fence after ${marker}`);
     return scope.slice(blk.openLineIdx + 1, blk.closeLineIdx);
   };
+  // The elaboration.md merge guard: the bash fence after `marker`, cut before its `git checkout`.
+  const guard = (marker) => {
+    const l = bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker);
+    const cut = l.findIndex((x) => x.startsWith('git checkout'));
+    // allow-test-rule: source-text-is-the-product (#5211)
+    assert.notEqual(cut, -1, `elaboration.md: git checkout follows the guard after ${marker}`);
+    return l.slice(0, cut).join('\n');
+  };
 
   test('fast.md commit fence (scratch repo): commit_docs=true commits .planning, commit_docs=false excludes it', (t) => {
     const body = bashFenceAfter('gsd-core/workflows/fast.md', '<step name="commit">');
@@ -3516,7 +3524,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
   test('the squash and merge-with-history guards accept exactly one staged .planning REQUIREMENTS.md deletion and refuse anything else, also from a subdirectory under diff.relative', (t) => {
     // The guard is every fence line before the branch switch.
-    const guard = (marker) => { const l = bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker); return l.slice(0, l.findIndex((x) => x.startsWith('git checkout'))).join('\n'); };
     for (const g of [guard('**Squash merge:**'), guard('**Merge with history:**')]) {
       const { dir, git } = initFixtureRepo((f) => t.after(f), 'gsd-5489g-');
       for (const d of ['.planning', 'app', 'other', 'app/.planning']) fs.mkdirSync(path.join(dir, d), { recursive: true });
@@ -3564,7 +3571,6 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(loop(squash), loop(merge), 'the squash and merge guards run the same parser');
   });
   test('the staged-path guards refuse a staged submodule bump under diff.ignoreSubmodules=all', (t) => {
-    const guard = (marker) => { const l = bashFenceAfter('gsd-core/workflows/complete-milestone/detail/elaboration.md', marker); return l.slice(0, l.findIndex((x) => x.startsWith('git checkout'))).join('\n'); };
     const recipe = bashFenceAfter('gsd-core/references/planning-config.md', '**Existing tracked files:**').join('\n');
     const gitlink = (git, sha) => git('update-index', '--add', '--cacheinfo', `160000,${sha},sub`);
     for (const fence of [guard('**Squash merge:**'), guard('**Merge with history:**'), recipe]) {
