@@ -47,6 +47,8 @@ const STEP_WORKFLOWS = [
     auxiliaryHosts: [
       { file: 'execute-phase/steps/pre-execute-gate-hooks.md', point: 'execute:pre', kinds: ['contribution', 'step', 'gate'] },
       { file: 'execute-phase/steps/verify-phase-goal.md', point: 'execute:post', kinds: ['step', 'gate'] },
+      // #5984: the verifier's landing site — `verifier_dispatch` hands `into: verifier` contributions to gsd-verifier.
+      { file: 'execute-phase/steps/verify-phase-goal.md', point: 'execute:post', kinds: ['contribution'], into: 'verifier' },
     ],
   },
   { file: 'verify-work.md',   step: 'verify' },

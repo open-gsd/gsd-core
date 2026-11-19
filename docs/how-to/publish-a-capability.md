@@ -4,6 +4,10 @@ This guide is for capability authors who want to distribute their work so other 
 
 Before publishing, make sure your capability works locally by following [Develop a Capability](./develop-a-capability.md).
 
+When publishing a Git SHA pin, use a complete 40- or 64-hex object ID and a server
+that permits fetching that object under its unadvertised-object policy. Typed pins
+fail without fallback when the server refuses the fetch.
+
 ---
 
 ## Add the required publishing fields
@@ -107,7 +111,7 @@ gsd capability install https://github.com/your-org/gsd-cap-example.git#v1.0.0
 For a reproducible pin that cannot be moved, consumers can use a commit SHA instead:
 
 ```bash
-gsd capability install https://github.com/your-org/gsd-cap-example.git#sha:abc123def456...
+gsd capability install https://github.com/your-org/gsd-cap-example.git#sha:0123456789abcdef0123456789abcdef01234567
 ```
 
 Publish release notes on your Git host so users know what changed between versions.

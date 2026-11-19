@@ -68,6 +68,15 @@ For up to 24 hours after any record names a specialist, ad-hoc use of that speci
 
 `agent_hint: gsd-verifier` would make the verifier the plan's executor: it would write code, and it would be recorded and guarded as the executor. GSD's own roles have their own contracts, so routing refuses any GSD role other than `gsd-executor`, prints a warning, and uses `gsd-executor`. `record-dispatch-isolation --executor-type` refuses them the same way (it prints the warning and records no executor), and the reader never classifies a GSD role as an executor even when a hand-written record names one.
 
+## The executor policy
+
+Whether hints are honoured at all is a project setting, `workflow.agent_hint_routing`, asked as the **Executor** question by `/gsd-new-project` and `/gsd-settings` ([how to choose it](../how-to/choose-the-executor-policy.md)). It has two answers.
+
+- **Allow installed executors**, the default. A plan's `agent_hint:` may name an executor agent installed on the active runtime, and that agent runs the plan. "Installed" means an agent file the runtime resolves; GSD's own non-executor roles are excluded ([see above](#why-gsd-roles-are-refused-as-hints)). A plan without a hint runs on `gsd-executor`, so for a project that never writes hints this answer changes nothing.
+- **gsd-executor only**. Every plan runs on `gsd-executor` and hints are ignored. Choose it when plans may carry hints you do not want honoured, for example plans imported from another project, or when you want one executor contract for the whole project.
+
+Allowing is the default because a hint is an explicit statement in a plan, and a routed executor is not a weaker executor: it is recorded and held to the same worktree isolation guard as `gsd-executor`, and its model is chosen as described next. The policy decides only who runs the plan, never whether the guard applies.
+
 ## Model and effort
 
 A specialist is usually not in GSD's model catalog, and an uncatalogued agent would otherwise resolve to a generic profile default. So the specialist's model resolves from its own `model_overrides` entry when it has one, and otherwise from what `gsd-executor` would get. That keeps a cheap-executor profile cheap for specialists too. Effort is left to the specialist's own frontmatter. A `gsd-executor` effort fallback is tracked separately in #5330.

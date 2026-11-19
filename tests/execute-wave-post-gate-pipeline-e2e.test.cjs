@@ -674,11 +674,13 @@ describe('F. Real registry execute:wave:post shape — guard against accidental 
     // #4740: claude-orchestration never contributed here (external-job +
     // mempalace are unrelated capabilities), so this assertion is unaffected
     // by #4740 removing claude-orchestration's execute:wave:pre contribution.
-    assert.strictEqual(point.contributions.length, 2,
-      `execute:wave:post must have 2 contributions (external-job + mempalace); got ${point.contributions.length}`);
+    // #5984: mempalace's into:verifier contribution moved to execute:post — the only point where a
+    // verifier is spawned and its prompt delivers contributions — so only external-job remains here.
+    assert.strictEqual(point.contributions.length, 1,
+      `execute:wave:post must have 1 contribution (external-job); got ${point.contributions.length}`);
     const capIds = point.contributions.map(c => c.capId).sort();
-    assert.deepStrictEqual(capIds, ['external-job', 'mempalace'],
-      `execute:wave:post contributions must be external-job + mempalace; got ${capIds.join(',')}`);
+    assert.deepStrictEqual(capIds, ['external-job'],
+      `execute:wave:post contributions must be external-job only; got ${capIds.join(',')}`);
   });
 
   test('[happy] real registry: execute:wave:pre has 0 contributions (#4740 removed claude-orchestration\'s)', () => {
