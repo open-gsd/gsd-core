@@ -24,7 +24,7 @@ const { runNode } = require('./helpers/process-seam.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { openWorkYamlFields } = require('./helpers/audit-milestone-step.cjs');
+const { openWorkYamlFields, openWorkStep, codeSpans } = require('./helpers/audit-milestone-step.cjs');
 const { seedWorkstream } = require('./fixtures/index.cjs');
 const { findTableBySchema } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { buildQuickArchiveIndex } = require('../gsd-core/bin/lib/milestone.cjs');
@@ -1681,6 +1681,20 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     assert.deepEqual(warnings, [{ kind: 'capability_load_failed', cap_id: 'open-work' }]);
     const r = completeRaw();
     assert.equal(r.exitCode, 0, r.stderr);
+  });
+
+  // The audit must tell an agent where a gate_warnings entry goes: step 5.6 names every key an entry carries
+  // (kind, cap_id, phase, detail; the real entry below) and each open_work key it fills from them.
+  test('G16d audit step 5.6 maps every key of a gate_warnings entry to an open_work key', () => {
+    writeGateCap(home, { command: 'exit 3' });
+    const manifest = path.join(home, '.gsd', 'capabilities', 'open-work', 'capability.json');
+    const cap = JSON.parse(fs.readFileSync(manifest, 'utf-8'));
+    cap.engines = { gsd: '>=999.0.0' };
+    fs.writeFileSync(manifest, JSON.stringify(cap));
+    const [entry] = gateResult().warnings;
+    const spans = codeSpans(openWorkStep());
+    for (const key of [...Object.keys(entry), 'phase', 'detail']) assert.ok(spans.includes(key), `step 5.6 names the gate_warnings key \`${key}\``);
+    for (const key of openWorkYamlFields()) assert.ok(spans.includes(key), `step 5.6 names the open_work key \`${key}\``);
   });
 
   test('G17 --no-archive-phases still gates the milestone phases', () => {

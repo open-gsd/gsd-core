@@ -401,8 +401,10 @@ const ERROR_REASON = Object.freeze({
   // human_needed`) — verification.cts's VerificationStatusError, translated
   // once, centrally, by gsd-tools.cjs. Never read as "no result" at exit 0.
   VERIFICATION_STATUS_INVALID: 'verification_status_invalid',
-  // milestone complete (#5482): a blocking ship:pre predicate gate re-checked
-  // per milestone phase refused the one-way door; `blocked` lists each gate.
+  // milestone complete (#5482): a blocking ship:pre predicate gate refused the
+  // one-way door; `blocked` lists each gate. A gate is re-checked once per
+  // milestone phase when the phases are readable; when they are not, only an
+  // `onError: halt` gate refuses, once, with phase `*`.
   MILESTONE_GATE_BLOCKED: 'milestone_gate_blocked',
   // generic
   USAGE: 'usage',
