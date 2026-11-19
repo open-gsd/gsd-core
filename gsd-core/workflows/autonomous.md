@@ -384,11 +384,11 @@ If `PLAN_STRATEGY=local`, run the regular planner:
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM}")
 ```
 
-Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans."
+Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans." If the plan run's output or return carries `PLANNING STOPPED: research questions need a user ruling`, go to handle_blocker with that line: plan-phase stopped with a research question open, so never execute the plans on disk.
 
 **3c. Execute**
 
-**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist. Same rule as the plan dispatch above (#1708): run **inline** unless `dispatch-should-flatten` returns `false`. Resolve first:
+**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist and its return carries no `PLANNING STOPPED` line (else handle_blocker, as in 3b). Same rule as the plan dispatch above (#1708): run **inline** unless `dispatch-should-flatten` returns `false`. Resolve first:
 
 ```bash
 FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
