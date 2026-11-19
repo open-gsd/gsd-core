@@ -2261,6 +2261,141 @@ function cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw
   output(result, raw);
 }
 
+// ─── The all-plans-summarized decision (#6096) ───────────────────────────────────
+
+/**
+ * What execute-phase does when no plan work is left to dispatch. One closed set, computed here instead of left to
+ * the orchestrating model's reading of prose: a judgment such as "this change is test-only" must not be able to
+ * override the owner's staleness verdict.
+ */
+const ALL_SUMMARIZED_DECISION = Object.freeze({
+  /** A filter (`--gaps-only`, a wave filter) is active: its slice is empty; says nothing about the phase. */
+  EXIT_FILTERED: 'exit-filtered',
+  /** A plan was skipped because it is blocked by a halted plan: the phase is stuck, not finished. */
+  EXIT_BLOCKED: 'exit-blocked',
+  /** A plan was skipped because `ready: false`: the phase is waiting on predecessors. */
+  EXIT_NOT_READY: 'exit-not-ready',
+  /** The owner routes to execute-phase (no report, or stale): resume at the verification gates. */
+  RESUME_AT_GATES: 'resume-at-gates',
+  /** Verified and the roadmap phase is not yet marked complete: resume at update_roadmap. */
+  UPDATE_ROADMAP: 'update-roadmap',
+  /** Verified and marked complete: nothing to do. */
+  EXIT_UNCHANGED: 'exit-unchanged',
+  /** Any other route (gaps_found, human_needed, unparseable, phase_dir_not_found): present the owner's route. */
+  PRESENT_ROUTE: 'present-route',
+} as const);
+
+type AllSummarizedDecision = (typeof ALL_SUMMARIZED_DECISION)[keyof typeof ALL_SUMMARIZED_DECISION];
+
+/** The plan-index facts the decision needs besides the owner's status (they are not derivable from the report). */
+interface AllSummarizedFacts {
+  filterActive: boolean;
+  blockedSkip: boolean;
+  notReadySkip: boolean;
+  /** `roadmap.analyze`'s `roadmap_complete` for this phase (the checkbox, #3684). */
+  phaseMarked: boolean;
+}
+
+/**
+ * The branch, in the workflow's order (the first matching condition decides). The verification arms branch on the
+ * owner's `route` from VERIFICATION_ROUTES, never on a status word (#5118): a stale or missing report routes to
+ * execute-phase on both sides of `phaseMarked`, whatever the report's own `status` field says. `result` is null
+ * for the three plan-index exits, which never read the report.
+ */
+function decideAllSummarized(
+  facts: AllSummarizedFacts,
+  result: Pick<VerificationStatusResult, 'status' | 'route'> | null,
+): AllSummarizedDecision {
+  if (facts.filterActive) return ALL_SUMMARIZED_DECISION.EXIT_FILTERED;
+  if (facts.blockedSkip) return ALL_SUMMARIZED_DECISION.EXIT_BLOCKED;
+  if (facts.notReadySkip) return ALL_SUMMARIZED_DECISION.EXIT_NOT_READY;
+  if (result === null) throw new TypeError('decideAllSummarized: the owner status is required when no plan-index exit applies');
+  if (result.route === 'execute-phase') return ALL_SUMMARIZED_DECISION.RESUME_AT_GATES;
+  if (result.status === VERIFICATION_STATUS.PASSED) {
+    return facts.phaseMarked ? ALL_SUMMARIZED_DECISION.EXIT_UNCHANGED : ALL_SUMMARIZED_DECISION.UPDATE_ROADMAP;
+  }
+  return ALL_SUMMARIZED_DECISION.PRESENT_ROUTE;
+}
+
+/** `blocked_by` non-empty / `ready: false` on an incomplete plan: the two plan-index skips the decision orders first. */
+function planIndexSkipFacts(planIndex: unknown): { blockedSkip: boolean; notReadySkip: boolean } {
+  const plans = planIndex !== null && typeof planIndex === 'object' && Array.isArray((planIndex as { plans?: unknown }).plans)
+    ? (planIndex as { plans: unknown[] }).plans
+    : [];
+  let blockedSkip = false;
+  let notReadySkip = false;
+  for (const plan of plans) {
+    if (plan === null || typeof plan !== 'object') continue;
+    const p = plan as { has_summary?: unknown; blocked_by?: unknown; ready?: unknown };
+    if (p.has_summary === true) continue;
+    if (Array.isArray(p.blocked_by) && p.blocked_by.length > 0) blockedSkip = true;
+    if (p.ready === false) notReadySkip = true;
+  }
+  return { blockedSkip, notReadySkip };
+}
+
+/**
+ * Parse `[--filter-active] [--plan-index <json|@file:path>] [--phase-marked <true|false>]`. The plan index is
+ * `phase-plan-index`'s own output (inline JSON, or the `@file:` form it prints for a large one); the blocked and
+ * not-ready skips are derived from it here, not asserted by the caller. It is required unless `--filter-active`
+ * already decides. A `--phase-marked` value other than `true` (including an empty one: `jq` prints nothing for an
+ * unknown phase) is not marked. An unknown token is an error, never ignored.
+ */
+function parseAllSummarizedFacts(tokens: readonly string[]): AllSummarizedFacts | { error: string } {
+  const facts: AllSummarizedFacts = { filterActive: false, blockedSkip: false, notReadySkip: false, phaseMarked: false };
+  let planIndexArg: string | undefined;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === '--filter-active') {
+      facts.filterActive = true;
+    } else if (token === '--phase-marked' || token === '--plan-index') {
+      const value = tokens[i + 1];
+      if (value === undefined || (value.startsWith('--') && token === '--phase-marked')) return { error: `${token} needs a value` };
+      if (token === '--phase-marked') facts.phaseMarked = value === 'true';
+      else planIndexArg = value;
+      i += 1;
+    } else {
+      return { error: `unknown option ${io.formatDiagnosticToken(token)}` };
+    }
+  }
+  if (planIndexArg === undefined) {
+    return facts.filterActive ? facts : { error: '--plan-index is required unless --filter-active is given' };
+  }
+  let planIndex: unknown;
+  try {
+    const text = planIndexArg.startsWith('@file:') ? fs.readFileSync(planIndexArg.slice('@file:'.length), 'utf8') : planIndexArg;
+    planIndex = JSON.parse(text);
+  } catch {
+    return { error: '--plan-index is not valid phase-plan-index JSON (inline or @file:<path>)' };
+  }
+  return { ...facts, ...planIndexSkipFacts(planIndex) };
+}
+
+/**
+ * CLI command handler: `verification all-summarized <phaseDir> [--filter-active] [--plan-index <json|@file:path>]
+ * [--phase-marked <true|false>]` (#6096). Prints `{ decision }`, plus the owner's full status
+ * result when the decision needed it, so a caller can `--pick decision` and, for `present-route`, read
+ * `next_action` / `next_command` from the same call. The three plan-index exits never read the report.
+ */
+function cmdVerificationAllSummarized(cwd: string, phaseDirArg: string | undefined, tokens: string[], raw: boolean): void {
+  if (!phaseDirArg) {
+    error('phase directory required for verification.all-summarized');
+    return;
+  }
+  const facts = parseAllSummarizedFacts(tokens);
+  if ('error' in facts) {
+    error(`verification.all-summarized: ${facts.error}`);
+    return;
+  }
+  if (facts.filterActive || facts.blockedSkip || facts.notReadySkip) {
+    output({ decision: decideAllSummarized(facts, null) }, raw);
+    return;
+  }
+  const phaseDir = path.resolve(cwd, phaseDirArg);
+  const result = readVerificationStatus(phaseDir, { runtime: resolveRuntime(cwd) });
+  output({ decision: decideAllSummarized(facts, result), ...result }, raw);
+}
+
 /**
  * CLI command handler: resolve which `*-VERIFICATION.md` in `phaseDirArg` is
  * the phase's own report, via the shared `resolveVerificationFile` seam, and
@@ -2806,6 +2941,10 @@ const verificationModule = {
   readVerificationStatus,
   isPhaseComplete,
   cmdVerificationStatus,
+  ALL_SUMMARIZED_DECISION,
+  decideAllSummarized,
+  parseAllSummarizedFacts,
+  cmdVerificationAllSummarized,
   cmdVerificationResolveFile,
   computeCoveredDigest,
   sharedPlanningRoots,

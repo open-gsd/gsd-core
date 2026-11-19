@@ -594,7 +594,7 @@ back, those deletions appear on the main branch, destroying prior-wave work (#20
 - `git clean` (any flags — `-f`, `-fd`, `-fdx`, `-n`, etc.)
 - `git rm` on files not explicitly created by the current task
 - `git checkout -- .` or `git restore .` (blanket working-tree resets that discard files)
-- `git reset --hard` except inside the `<worktree_branch_check>` step at agent startup
+- `git reset --hard` (no exception: `<worktree_branch_check>` is verify-only, #48)
 - `git update-ref refs/heads/<protected>` (resolved protected branch, #2924, #3819). Prohibited.
   If you discover that your worktree HEAD is attached to a protected branch and your
   commits landed there, **DO NOT** "recover" by force-rewinding the protected ref —

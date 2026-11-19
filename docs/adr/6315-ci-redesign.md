@@ -102,7 +102,7 @@ These hold for every item in the epic.
 - **I8 — Checks on code shape are ESLint rules, and a new rule ships at `error`.** `npm run lint` runs with `--max-warnings 0`, so a `warn` rule already fails CI; the cleanup lands in the PR that adds the rule (I9). Workflow YAML is checked by actionlint and zizmor, and other non-JavaScript content by the static content lane (item 19).
 - **I9 — First-run findings are fixed in the PR that adds the check.** A new linter does not land with a backlog. A false positive is suppressed in the tool's config with a recorded reason.
 - **I10 — Every new third-party binary or action is pinned** to a version and a checksum or commit SHA.
-- **I11 — The testing standards change in the PR that changes the rules.** When an item adds or changes a requirement on test authors, or on product code for the sake of testability, the same PR states it in `CONTRIBUTING.md` ("Testing Standards") and, for placement and naming, in `docs/TESTING-SUITES.md`: the rule, its reason, and what enforces it. A rule known only from a PR description or a review thread is not a rule the next contributor can follow (maintainer instruction, 2026-11-19; [#6367](https://github.com/open-gsd/gsd-core/issues/6367)).
+- **I11 — The testing standards change in the PR that changes the rules.** When an item adds or changes a requirement on test authors, or on product code for the sake of testability, the same PR states it in `TESTING-STANDARDS.md`, under "Test architecture policies (ADR 6315)", and, for placement and naming, in `docs/TESTING-SUITES.md`: the rule, its reason, and what enforces it. `CONTRIBUTING.md` ("Testing Standards") keeps the helper tables and setup patterns and points there. A rule known only from a PR description or a review thread is not a rule the next contributor can follow (maintainer instruction, 2026-11-19; [#6367](https://github.com/open-gsd/gsd-core/issues/6367); the file named here was corrected by [#6383](https://github.com/open-gsd/gsd-core/issues/6383)).
 
 ### 3. Phases
 
@@ -309,7 +309,7 @@ Every CLI call spawns `git rev-parse --show-toplevel --git-dir --git-common-dir`
 Files: `tests/helpers/install-shared.cjs`, the `*.install.test.cjs` files, `bin/install.js` (generated from its source).
 79 files run the installer and hold 26.8% of Linux time. On Windows a single installer spawn averages at least 2.8 s.
 
-- AC1: emitted-content tests call `install()` in-process (it is already exported) into a fixture built once per runtime and scope and shared through `createRuntimeFixtureCache`. A test that needs a changed tree copies the fixture.
+- AC1: emitted-content tests read a fixture built once per runtime and scope for the whole run. A test that needs a changed tree copies the fixture. (As first written this said the fixture is built by calling `install()` in-process; measurement replaced that, see "Item 17: the saving is in not installing again" under Decision-rule outcomes.)
 - AC2: the real-process installer runs once per runtime in one install-contract file, plus the tarball smoke test.
 - AC3: `fragment-single-edit-propagation.install.test.cjs` (575 s) builds its 18-runtime install once and derives each row from it.
 - AC4: summed Linux time of the install class drops from 33.2 min to under 10 min, and the count of installer spawns of 2 s or more on a Windows shard drops by at least 80%.
@@ -515,7 +515,7 @@ Single runs, and job time includes checkout, install and build. The difference i
 3. Another PR merged while it was queued and added a synchronous helper call to an asynchronous command, which the new helper refuses.
 4. `next`'s own last Tests run was not green at that moment (a cancelled Windows shard), so the base-branch health gate refused every merge.
 
-The first two are Windows-only mistakes in test code, and the Windows lanes run only in the queue, so each cost a full queue cycle to find. Rule 6 of "In-process CLI tests: the rules" in `CONTRIBUTING.md` and the mask's own test exist because of them. Nothing in this ADR would have caught them earlier, so item 26 is added ([#6369](https://github.com/open-gsd/gsd-core/issues/6369)): a PR runs the test files it adds or changes on Windows before it can be queued.
+The first two are Windows-only mistakes in test code, and the Windows lanes run only in the queue, so each cost a full queue cycle to find. Rule 6 of "In-process CLI tests: the rules" in `TESTING-STANDARDS.md` and the mask's own test exist because of them. Nothing in this ADR would have caught them earlier, so item 26 is added ([#6369](https://github.com/open-gsd/gsd-core/issues/6369)): a PR runs the test files it adds or changes on Windows before it can be queued.
 
 ### 2026-11-18 — Item 25 added: the git probe is 90% of an in-process call
 
@@ -529,3 +529,30 @@ Profiling 100 in-process calls per case, with every subprocess call timed, on ma
 | `state json` | temp dir, no git | 9.9 ms | 1 | 9.0 ms | 0.9 ms |
 
 A spawned call of the same command takes about 147 ms on the same machine. Item 15 removes the Node spawn; item 25 removes what is left.
+
+### 2026-11-19 — Item 17: the saving is in not installing again
+
+Item 17's first acceptance criterion named a mechanism: call `install()` in-process. Measurement before any code changed the mechanism and kept the goal.
+
+**What was measured.** A commit that logged every installer call (process-seam spawns of `bin/install.js`, and in-process `install()`) ran once on the Linux bench.
+
+| | |
+|---|---|
+| Installer calls in one run | 1,553 (1,181 spawned, 372 in-process), in 89 test files |
+| Time in those calls | 1,568 s of 5,201 s summed file time |
+| One call, median | 1.07 s spawned, 0.86 s in-process |
+| Distinct configurations (runtime, scope, flags) | 187 |
+| Time spent on a repeat of a configuration already installed in that run | 1,383 s |
+| A load-only installer process (local) | 0.12 s of a 0.48 to 0.71 s install |
+| A copy of an installed tree (local) | 0.11 s against 0.46 s for an install |
+
+**Decision.**
+
+1. An in-process install is still an install. It saves the process start, about a fifth. `bin/install.js` also reads its flags from `process.argv` when the module loads, so one process cannot run two installs with different flags without loading the module again. The in-process route is not taken.
+2. The installed tree for a configuration is built once per run by a real spawned install, and every test file reads that tree. `installRuntimeFixture` already did this within one file; it now does it across the run, under the run's temp root. No process waits on another: a process that finds no tree builds one and publishes it with a hard link, and the loser of a race discards its own.
+3. A test that changes its tree copies the shared one (`copyRuntimeFixture`). A copy is held equal to a fresh install by a test over every runtime family.
+4. A shared tree is read-only, and that is checked: a test process that leaves one changed fails at exit, and a file that starts later and finds it changed fails before reading it. The check is a digest of paths, permission bits, modification times and sizes, not a rule in prose.
+5. A shared tree holds the same thing whichever file built it: the helper completes the hooks build first (`ensureHooksDist`), since the installer installs no hooks, or only some, without it.
+6. The store adds about 20 MB on disk per shared configuration to the run's temp root for the whole run (410 MB measured for the 19 families; a private copy or a tree that lost a build race is extra until its test or the run ends). The runner's between-chunk sweep spares it and the end-of-run removal takes it. Sharing all 187 configurations would hold about 4 GB, on benches whose temp filesystem has filled before (#4020), so a configuration is shared only when several files read it. The count of shared configurations is a number to watch as files are converted.
+
+**What it does not cover.** A test that puts files in place before installing, or that asserts on the installer's own run, still installs. Those are the upgrade and configuration-merge suites, and they are most of the 372 in-process calls (156 of them `codex` global, in nine files). Converting each remaining file is per-file work that follows this change, measured against the table above.
