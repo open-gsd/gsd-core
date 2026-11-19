@@ -84,6 +84,9 @@ describe('ci-test-scope.cjs', () => {
     const install = steps.findIndex(s => /apt-get install .*\bzsh\b/.test(s.run || ''));
     const runStep = steps.findIndex(s => /scripts\/run-tests\.cjs/.test(s.run || ''));
     assert.ok(install >= 0 && runStep > install, 'test-insert-shell installs zsh, then runs run-tests.cjs');
+    // The install keeps its failure status: a fail-open install lets the job pass with every row skipped.
+    assert.ok(!('continue-on-error' in steps[install]), 'the zsh install step is not continue-on-error');
+    assert.doesNotMatch(steps[install].run, /\|\||;/, 'the zsh install command swallows no failure');
     const parsed = parseArgs(steps[runStep].run.trim().split(/\s+/).slice(2));
     assert.strictEqual(parsed.error, undefined, 'run-tests.cjs accepts the job arguments');
     assert.deepStrictEqual(parsed.files.split(/\s+/), ['tests/insert-phase-sibling-docs.test.cjs']);
