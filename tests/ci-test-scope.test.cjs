@@ -75,7 +75,8 @@ describe('ci-test-scope.cjs', () => {
 
   // One parse of test.yml, one table: every guard property of the test-insert-shell job. A fail-open
   // install or run (`|| true`, `continue-on-error`, a step `if`), a dropped `needs`, or a dropped
-  // result check in required-tests lets the job pass with the insert-phase rows never run.
+  // result mapping in required-tests lets the job pass with the insert-phase rows never run. The refusal
+  // itself is run, not text-pinned, by ci-conformance-pr-gating.test.cjs.
   test('test.yml: every guard property of the test-insert-shell job holds', () => {
     const doc = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8'));
     const job = doc.jobs['test-insert-shell'];
@@ -83,7 +84,6 @@ describe('ci-test-scope.cjs', () => {
     const install = steps.findIndex(s => /apt-get install .*\bzsh\b/.test(s.run || ''));
     const runStep = steps.findIndex(s => /scripts\/run-tests\.cjs/.test(s.run || ''));
     const gate = doc.jobs['required-tests'];
-    const REFUSAL = '[ "$TEST_INSERT_SHELL_RESULT" != "success" ] && [ "$TEST_INSERT_SHELL_RESULT" != "skipped" ]';
     const table = [
       ['job if', job.if, "needs.changes.outputs.zsh_changed == 'true'"],
       ['job needs', [...job.needs].sort(), ['changes', 'preflight']],
@@ -100,7 +100,6 @@ describe('ci-test-scope.cjs', () => {
       ['non-PR runs skip the job', /echo "zsh_changed=false"/.test(doc.jobs.changes.steps.find(s => s.id === 'scope').run), true],
       ['required-tests needs the job', gate.needs.includes('test-insert-shell'), true],
       ['required-tests result env', gate.steps[0].env.TEST_INSERT_SHELL_RESULT, '${{ needs.test-insert-shell.result }}'],
-      ['required-tests refuses a failed job', gate.steps[0].run.includes(`${REFUSAL}; then\n  echo "::error::test-insert-shell did not pass"\n  exit 1`), true],
     ];
     for (const [label, actual, expected] of table) assert.deepStrictEqual(actual, expected, label);
     // The run goes through run-tests.cjs, which accepts the arguments and selects exactly the insert-phase test.
