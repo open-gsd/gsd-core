@@ -2472,7 +2472,10 @@ interface WindsurfManagedEntries {
  * top-level-array lift — Cascade's hooks.json is a brand-new surface with no
  * prior shape to migrate from).
  */
-function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: WindsurfManagedEntries | null): ReconcileResult {
+function planWindsurfHooksJson(
+  hooksJsonPath: string,
+  managedEntries: WindsurfManagedEntries | null,
+): { nextContent: string; changed: boolean; shouldWrite: boolean } {
   let parsed: Record<string, unknown> = {};
   let currentContent: string | null = null;
 
@@ -2515,8 +2518,63 @@ function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: Winds
   const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
   const changed = currentContent !== nextContent;
   const shouldWrite = changed && (currentContent !== null || Object.keys(parsed).length > 0);
+  return { nextContent, changed, shouldWrite };
+}
+
+/**
+ * #5978: the path a Windsurf hooks.json write must target. `atomicWriteFileSync` ends in a
+ * rename(2) that REPLACES a symlink at the destination and the empty-file removal below
+ * `unlinkSync`s it, so a dotfiles-managed `hooks.json -> ~/dotfiles/windsurf-hooks.json` was
+ * replaced or deleted unasked while its target kept GSD's entries. Same policy as the Kimi
+ * config.toml (`resolveKimiConfigDestination`) and the Codex hooks.json writer: refuse a symlink
+ * without GSD_ALLOW_SYMLINKED_DEST, with it resolve to the real target so the link is kept. A
+ * dangling link has no target to follow, so it is refused whatever the opt-in says.
+ */
+function resolveWindsurfHooksJsonDestination(hooksJsonPath: string): string {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(hooksJsonPath);
+  } catch {
+    return hooksJsonPath;
+  }
+  if (!stat.isSymbolicLink()) return hooksJsonPath;
+  if (!_installEngineSymlinkGuard().isSymlinkedDestOptIn()) {
+    throw new Error(
+      `Windsurf hooks.json at "${hooksJsonPath}" is a symlink, refusing to change it. ` +
+        'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1 (the link is kept).',
+    );
+  }
+  if (!fs.existsSync(hooksJsonPath)) {
+    throw new Error(
+      `Windsurf hooks.json at "${hooksJsonPath}" is a dangling symlink, refusing to replace it or write through it.`,
+    );
+  }
+  return fs.realpathSync(hooksJsonPath);
+}
+
+/**
+ * #5978: the refusal message when removing GSD's entries would change a symlinked Windsurf
+ * hooks.json without GSD_ALLOW_SYMLINKED_DEST, else null. The uninstall runs it before its first
+ * removal so a refused run leaves the whole install, the link and its target as they were. A link
+ * the removal would leave unchanged (no GSD entries) is not refused.
+ */
+function windsurfHooksJsonRemovalRefusal(targetDir: string): string | null {
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  if (!fs.existsSync(hooksJsonPath)) return null;
+  if (!planWindsurfHooksJson(hooksJsonPath, null).shouldWrite) return null;
+  try {
+    resolveWindsurfHooksJsonDestination(hooksJsonPath);
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: WindsurfManagedEntries | null): ReconcileResult {
+  const { nextContent, changed, shouldWrite } = planWindsurfHooksJson(hooksJsonPath, managedEntries);
   if (shouldWrite) {
-    atomicWriteFileSync(hooksJsonPath, nextContent, 'utf8');
+    // Reading followed the link harmlessly; the policy applies where the write lands.
+    atomicWriteFileSync(resolveWindsurfHooksJsonDestination(hooksJsonPath), nextContent, 'utf8');
   }
 
   return { changed: changed, wrote: shouldWrite, path: hooksJsonPath };
@@ -2640,7 +2698,9 @@ function removeWindsurfHooksJson(targetDir: string): { changed: boolean } {
         (k) => Array.isArray(hookTable[k]) && (hookTable[k] as unknown[]).length > 0,
       );
       if (!hasAnyEvents) {
-        fs.unlinkSync(hooksJsonPath);
+        // #5978: behind a symlink the reconcile above already emptied the file the link points
+        // at; unlinking the link path would delete the user's link, so it is kept.
+        if (!fs.lstatSync(hooksJsonPath).isSymbolicLink()) fs.unlinkSync(hooksJsonPath);
         // #2717: also remove the CommonJS marker GSD wrote into hooks/ — but
         // only if it still carries GSD's exact content (a user-authored
         // package.json is never deleted). Best-effort.
@@ -3653,6 +3713,7 @@ export = {
   reconcileWindsurfHooksJson,
   writeWindsurfHooksJson,
   removeWindsurfHooksJson,
+  windsurfHooksJsonRemovalRefusal,
   WINDSURF_HOOK_EVENTS,
   WINDSURF_EVENT_SCRIPT_MAP,
   GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
