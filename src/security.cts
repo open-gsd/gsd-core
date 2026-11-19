@@ -21,9 +21,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
-import configFileReadMod = require('./config-file-read.cjs');
-const { printablePath } = configFileReadMod;
 
 // ─── Path Traversal Prevention ──────────────────────────────────────────────
 
@@ -585,13 +582,10 @@ export function sanitizeForDisplay(text: unknown): string {
  * "0 open items require decisions." as its own line, and the raw ESC bytes
  * reach the terminal.
  *
- * This helper closes that hole by ESCAPING (never silently stripping) every
- * character that breaks or disguises one line of output — Unicode categories
- * Cc (C0 0x00–0x1F including ESC, CR, LF; DEL; C1 0x80–0x9F), Zl and Zp
- * (U+2028, U+2029), and Cf (zero-width, bidi-override and BOM characters) —
- * into a visible representation (`\n`, `\x1b`, `\u2028`, `\u{e0001}`, ...);
- * `printablePath` (config-file-read.cts) owns the class and the hex forms.
- * Escaping rather than stripping is deliberate: a reviewer reading the
+ * This helper closes that hole by ESCAPING (never silently stripping) the
+ * C0 control range (0x00–0x1F, including ESC 0x1B, CR, LF), DEL (0x7F), and
+ * the C1 range (0x80–0x9F) into a visible representation (`\n`, `\x1b`,
+ * ...). Escaping rather than stripping is deliberate: a reviewer reading the
  * report should be able to SEE that a name was doctored, not have it quietly
  * normalized away as if nothing happened. Every other character — including
  * all ordinary printable and non-ASCII text — passes through byte-identical.
@@ -611,8 +605,19 @@ export function sanitizeLabel(text: unknown): string {
     0x1b: '\\x1b',
   };
 
-  // The named escapes keep their pinned form; printablePath (the one owner of the class) escapes the rest.
-  return printablePath(text.replace(/[\0\x07-\x0d\x1b]/g, (ch) => NAMED_ESCAPES[ch.charCodeAt(0)]));
+  let out = '';
+  for (const ch of text) {
+    const code = ch.codePointAt(0) as number;
+    const isC0 = code <= 0x1f;
+    const isDel = code === 0x7f;
+    const isC1 = code >= 0x80 && code <= 0x9f;
+    if (isC0 || isDel || isC1) {
+      out += NAMED_ESCAPES[code] ?? `\\x${code.toString(16).padStart(2, '0')}`;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 // ─── Shell Safety ───────────────────────────────────────────────────────────────────────

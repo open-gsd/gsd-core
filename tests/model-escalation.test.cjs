@@ -149,9 +149,9 @@ test('escalationRoot degrades to the raw cwd on a resolution error, as resolveSe
 
 test('property: both guard warnings print one line whatever the workstream name, reason or model holds', () => {
   const { formatNotWritten, formatNotRecorded } = require('../gsd-core/bin/lib/model-escalation.cjs');
-  const broken = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
-  // the class's boundary characters: line separators, NEL, bidi override, zero-width space, NUL
-  const boundary = ['\u2028', '\u2029', '\u0085', '\u202e', '\u200b', '\0'];
+  const broken = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
+  // the class's boundary characters: line separators, NEL, bidi override, zero-width space, NUL, a lone surrogate
+  const boundary = ['\u2028', '\u2029', '\u0085', '\u202e', '\u200b', '\0', '\ud800'];
   const text = fc.oneof(fc.string({ unit: 'binary', maxLength: 200 }), fc.array(fc.constantFrom(...boundary, 'a'), { maxLength: 40 }).map((cs) => cs.join('')));
   fc.assert(fc.property(text, text, (a, b) => {
     return [formatNotRecorded(a), formatNotRecorded(a, b), formatNotWritten(a, b)].every((line) => !broken.test(line));

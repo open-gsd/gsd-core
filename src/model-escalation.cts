@@ -17,7 +17,6 @@ import { retryRenameSync, readBoundedRegularFile } from './shell-command-project
 import { resolveProjectContext } from './project-context.cjs';
 import { CLAUDE_AGENT_ALIASES, MODEL_ID_CHARSET_BODY, sanitizeModelForMessage } from './model-catalog.cjs';
 import { escapeRegex } from './pattern.cjs';
-import { sanitizeLabel } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configFileReadMod = require('./config-file-read.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -39,9 +38,9 @@ export { MODEL_ID_CHARSET_BODY, sanitizeModelForMessage };
  * formatter's output. Every interpolated value is filtered on the way in, as in the hook's reason.
  */
 export const formatNotWritten = (reason: string, model: string): string =>
-  `gsd: model-escalation record not written: ${sanitizeLabel(reason)}; under hooks.agent_model_guard "deny" the guard blocks ${sanitizeModelForMessage(model)}`;
+  `gsd: model-escalation record not written: ${configFileReadMod.printablePath(reason)}; under hooks.agent_model_guard "deny" the guard blocks ${sanitizeModelForMessage(model)}`;
 export const formatNotRecorded = (ws: string, reason?: string): string =>
-  `gsd: --ws ${sanitizeLabel(ws)} not recorded for the Agent model guard${reason === undefined ? '' : `: ${sanitizeLabel(reason)}`}`;
+  `gsd: --ws ${configFileReadMod.printablePath(ws)} not recorded for the Agent model guard${reason === undefined ? '' : `: ${configFileReadMod.printablePath(reason)}`}`;
 
 /** The agent types the guard checks; also the only ones an escalation record is written for. */
 export const GUARDED_AGENT_TYPES: ReadonlySet<string> = new Set(['gsd-executor', 'gsd-verifier', 'gsd-plan-checker', 'gsd-planner']);
