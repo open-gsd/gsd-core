@@ -6314,11 +6314,44 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
   // `--hard` reset"), the two words apart (hard-reset, "a hard git reset"), joined with "hard" first (hardreset,
   // hardReset), the word first ("reset hard to the last task") and inflections (hard-resets, hard-resetting).
   // Any other line holding such a pair fails too, "a hardware reset" included; reword it. The first two
-  // alternatives also let the whole-file check below catch "hard" and "reset" split across a line break, in
-  // either order ("hard\nreset", "git reset\n--hard"), when only non-word characters (`\W`: spaces, newlines,
-  // backticks, hyphens; not an underscore) sit between them and the word before the break is exactly "hard" or
-  // "reset".
+  // alternatives also match "hard" and "reset" split across a line break, in either order ("hard\nreset",
+  // "git reset\n--hard"), when only non-word characters (`\W`: spaces, newlines, backticks, hyphens; not an
+  // underscore) sit between them and the word before the break is exactly "hard" or "reset". Only the
+  // git-integration.md check below runs the pattern over the whole file, so only it catches such a wrap. The
+  // executor check runs it one line at a time: a re-grant wrapped across two lines there is not caught.
   const HARD_RESET_SPELLING = /\bhard\W*reset|\breset\W+hard|\bhard.*\breset|\breset.*\bhard/i;
+
+  // The pattern itself, pinned on both sides. The file checks below only try the pattern on today's files,
+  // so without these rows an edit to it could drop a spelling those files do not contain and the suite would
+  // stay green.
+  const HARD_RESET_SPELLING_CASES = [
+    ['hardreset', true],
+    ['Use hardReset() at startup', true],
+    ['reset\n--hard', true],
+    ['reset\nhard', true],
+    ['git reset -q --hard', true],
+    ['a `--hard` reset is allowed at startup', true],
+    // The line this PR removed from git-integration.md, hard-wrapped inside its code span.
+    ['- Can `git reset\n  --hard` to last successful task', true],
+    ['`git reset` with `--hard`', true],
+    ['a hard-reset', true],
+    ['a hard git reset is fine', true],
+    ['reset hard to the last task', true],
+    ['Hard-resetting the worktree is allowed', true],
+    ['the executor hard-resets the branch', true],
+    ['hard\nreset', true],
+    ['git reset\n--hard', true],
+    ['git reset\r\n--hard', true],
+    ['reset the counter\nhard cap', false],
+    ['git reset --soft HEAD~1', false],
+    ['the fix-attempt limit is a hard cap', false],
+  ];
+  for (const [text, matches] of HARD_RESET_SPELLING_CASES) {
+    test(`HARD_RESET_SPELLING ${matches ? 'matches' : 'does not match'} ${JSON.stringify(text)} (#5310)`, () => {
+      if (matches) assert.match(text, HARD_RESET_SPELLING);
+      else assert.doesNotMatch(text, HARD_RESET_SPELLING);
+    });
+  }
 
   test('executor prohibits `git reset --hard` with no exception (#5310)', () => {
     // The exemption named the startup <worktree_branch_check> step, which has been verify-only
@@ -6364,8 +6397,9 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
       stripFencedCode(executorSource).text.split(/\r?\n/).includes(resetBullets[0]),
       'the `git reset --hard` prohibition must not sit inside a fenced code block'
     );
-    // A re-grant elsewhere in the file (a later bullet or paragraph, in any spelling) would bypass the
-    // bullet itself.
+    // A re-grant elsewhere in the file (a later bullet or paragraph, in any spelling on one line) would
+    // bypass the bullet itself. This filter tests one line at a time, so it does not see a re-grant wrapped
+    // across two lines.
     assert.deepEqual(
       lines.filter((line) => HARD_RESET_SPELLING.test(line)),
       [resetBullets[0]],
