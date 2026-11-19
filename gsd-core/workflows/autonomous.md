@@ -354,7 +354,7 @@ FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true"
   Agent(
     description="Plan phase ${PHASE_NUM}: ${PHASE_NAME}",
     run_in_background=true,
-    prompt="Run plan-phase for phase ${PHASE_NUM}: Skill(skill=\"gsd-plan-phase\", args=\"${PHASE_NUM}\")"
+    prompt="You are running in the background. Do NOT use AskUserQuestion. Run plan-phase for phase ${PHASE_NUM}: Skill(skill=\"gsd-plan-phase\", args=\"${PHASE_NUM}\")"
   )
   ```
 
@@ -499,7 +499,7 @@ On **"Run gap closure"**: one gap-closure attempt:
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM} --gaps")
 ```
 
-Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans."
+Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans." If the plan run's output carries `PLANNING STOPPED: research questions need a user ruling`, handle_blocker with that line and do not re-execute.
 
 Re-execute:
 ```
