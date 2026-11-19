@@ -30,7 +30,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 # canonical, so it must not carry the older collapsing shape. Both outcomes fail
 # closed, which is right, but only one of them may claim the host declared no
 # primitive (#2652 review).
-_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" 2>/dev/null)
+_ISOLATION_RAW=$(gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}")
 _ISOLATION_RC=$?
 if [ $_ISOLATION_RC -ne 0 ] || [ -z "$_ISOLATION_RAW" ]; then
   ISOLATION=none
@@ -159,8 +159,13 @@ Assign the composed prompt to a shell variable so it can be passed as one argume
 #      An unreadable source file is a halt condition (#3637 fail-closed),
 #      never a skip — a child without these texts is not a gsd-executor.
 #   2. Substitute this plan's {plan_number}, {phase_number}, {phase_name},
-#      {phase_dir}, {plan_file}, {plan_id}, and {plan_padded} placeholders (same values the
-#      harness path substitutes into its Agent() prompt). {plan_id} is this
+#      {phase_dir}, {plan_file}, {plan_id}, {plan_padded}, {project_rel},
+#      {state_rel}, and {config_rel} placeholders (same values the
+#      harness path substitutes into its Agent() prompt). {state_rel}, {config_rel} and
+#      {project_rel} are the scope-resolved (flat root, GSD_PROJECT, or workstream) repo-relative
+#      paths: `${state_path#"${project_root}"/}` and `${config_path#"${project_root}"/}` from
+#      init.execute-phase, and `${project_path#"${project_root}"/}` with `init.resume --pick
+#      project_path`, so `${PROJECT_ROOT}/` never doubles an absolute path. {plan_id} is this
 #      plan's `id` field from the phase-plan-index JSON — the guard hooks
 #      compare it verbatim against the sentinel the per-plan gate wrote, so a
 #      paraphrase or omission costs the dispatch its recorded isolation
@@ -226,9 +231,9 @@ Read these files at execution start using the Read tool.
 First resolve repo root so every path is anchored:
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 - ${PROJECT_ROOT}/{phase_dir}/{plan_file} (Plan — THE plan you are executing)
-- ${PROJECT_ROOT}/.planning/PROJECT.md (Project context — core value, requirements, evolution rules)
-- ${PROJECT_ROOT}/.planning/STATE.md (State)
-- ${PROJECT_ROOT}/.planning/config.json (Config, if exists)
+- ${PROJECT_ROOT}/{project_rel} (Project context — core value, requirements, evolution rules)
+- ${PROJECT_ROOT}/{state_rel} (State)
+- ${PROJECT_ROOT}/{config_rel} (Config, if exists)
 - ${PROJECT_ROOT}/CLAUDE.md (Project instructions, if exists — follow project-specific guidelines and coding conventions)
 - ${PROJECT_ROOT}/.claude/skills/ or ${PROJECT_ROOT}/.agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
 - ${PROJECT_ROOT}/{phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices; skip silently when none exist)

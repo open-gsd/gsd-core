@@ -57,7 +57,9 @@ Decimal phase directories use the full decimal number:
 
 ```bash
 SLUG=$(gsd_run query generate-slug "$DESCRIPTION" --raw)
-PHASE_DIR=".planning/phases/${DECIMAL_PHASE}-${SLUG}"
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+PHASE_DIR="${PLANNING_ROOT}/phases/${DECIMAL_PHASE}-${SLUG}"
 mkdir -p "$PHASE_DIR"
 ```
 

@@ -77,8 +77,8 @@ If yes, spawn a research agent:
 
 Resolve the researcher's **tier** and its model before dispatching. `--pick tier` returns the effective
 tier GSD resolved (`opus` | `sonnet` | `haiku` | `fable` | `inherit` | `unknown`) and is what arms the tier-floor
-guard below. `--pick model` answers a different question — which model id to hand `Agent()` — and is
-**not** a tier signal: it is blank on runtimes installed with `resolve_model_ids: "omit"`, and a
+guard below. `--pick model` answers which model id to hand `Agent()`, and is
+**not** a tier signal: it is blank under `resolve_model_ids: "omit"` without native tier aliases or a tier map, and a
 runtime-substituted name (`gpt-5.6-luna` on codex) where a tier map exists. `--raw` would drop both:
 
 ```bash
@@ -246,7 +246,7 @@ For each selected output, write the file:
 - **Todos:** Create `.planning/todos/pending/{slug}.md` with frontmatter (title, date, priority)
 - **Seeds:** Use the existing `/gsd:capture --seed` command via SlashCommand, passing the idea with its trigger in the text (#4648) — capture routes to the plant-seed workflow, which mints the next `SEED-` id and writes the canonical frontmatter (`status`, `trigger_when`, `planted_during`, `scope`) that `list-seeds`, `audit-open` and `/gsd:new-milestone` read. Carry the #2543 B3 untrusted-input fence rules into the idea text you pass. Do NOT hand-write `.planning/seeds/{slug}.md`: that shape has no `SEED-` prefix, `status`, or `trigger_when`, so every seed reader misses it
 - **Research questions:** Append to `.planning/research/questions.md`
-- **Requirements:** Append to `.planning/REQUIREMENTS.md` with next available REQ ID
+- **Requirements:** Append to `{planning_root}/REQUIREMENTS.md` (`{planning_root}`: the active scope's root, from `planning.inspect`) with next available REQ ID
 - **Phases:** Use the existing `/gsd:phase` command via SlashCommand, passing the phase description
 
 Commit if `commit_docs` is enabled:

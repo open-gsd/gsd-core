@@ -2,7 +2,8 @@
 // The workflow .md IS the product: its embedded bash/node snippets are loaded
 // and executed verbatim by the agent host at runtime. Testing that the deployed
 // commit-fix step exports the env var its own inline `node -e` body reads, and
-// that the docs commit stages the converged REVIEW.md alongside REVIEW-FIX.md,
+// that the docs commit stages the converged REVIEW.md alongside REVIEW-FIX.md
+// (#3190), and alone when the fix report is invalid or missing (#5527),
 // asserts the deployed contract — not an implementation detail. There is no
 // runtime API that exposes these inlined snippets; the text IS the spec.
 //
@@ -17,7 +18,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { PROBE_TIMEOUT_MS, SEAM_DEFAULT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Same gate the shipped fences carry everywhere in this suite: bash is not assumed on win32.
 const HAS_BASH = process.platform !== 'win32';
 
@@ -38,7 +39,9 @@ function stepFence(src, name) {
   }
   assert.fail(`step "${name}" carries no bash fence`);
 }
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, createTempGitProject, cleanup, TOOLS_PATH } = require('./helpers.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review-fix.md');
@@ -267,6 +270,117 @@ describe('#3190 — code-review-fix --auto REVIEW.md commit + FIX_REPORT_PATH en
     const unknown = drive('');
     assert.strictEqual(unknown.review, true, 'an unparseable status must retain, never remove');
   });
+
+  // Shared by T7/T8: strict-mode header, `head` lines (cd/stub), the step's input vars, the
+  // workflow fence, then `trailer` lines.
+  const fenceScript = (fence, vars, head, trailer = []) => [
+    'set -uo pipefail',
+    ...head,
+    ...Object.entries(vars).map(([k, v]) => k + '=' + v),
+    fence,
+    ...trailer,
+  ].join('\n');
+
+  // #5527: the converged REVIEW.md must be committed even when the fix report is invalid or
+  // missing, else a tracked rewritten REVIEW.md stays dirty and /gsd-ship asks to commit or
+  // stash. The fence is EXECUTED with a stub gsd_run that records its argv.
+  test('T7 — commit_fix_report EXECUTED: --auto REVIEW.md committed when fix report is invalid/missing/valid', { skip: !HAS_BASH }, (t) => {
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const fence = stepFence(src, 'commit_fix_report');
+
+    const drive = ({ report, auto = 'true', docs = 'true' }) => {
+      const dir = createTempDir('gsd-5527-');
+      t.after(() => cleanup(dir));
+      const reviewPath = path.join(dir, '01-REVIEW.md');
+      const fixPath = path.join(dir, '01-REVIEW-FIX.md');
+      const log = path.join(dir, 'argv.log');
+      fs.writeFileSync(reviewPath, '---\nstatus: clean\n---\n');
+      if (report !== null) fs.writeFileSync(fixPath, report);
+      const script = fenceScript(fence, {
+        AUTO_MODE: auto,
+        COMMIT_DOCS: docs,
+        PADDED_PHASE: '01',
+        REVIEW_PATH: '"' + reviewPath + '"',
+        FIX_REPORT_PATH: '"' + fixPath + '"',
+      }, ['gsd_run() { { printf "%s\\n" "$@"; echo "--"; } >> "' + log + '"; }']);
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+      assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
+      const calls = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '').split('--\n').filter(Boolean);
+      assert.ok(calls.length <= 1, 'at most one query commit call');
+      return { argv: calls.length ? calls[0].split('\n') : null, reviewPath, fixPath };
+    };
+
+    // AC1: fix report lacks status => REVIEW.md still committed, the malformed report is not (AC3).
+    const invalid = drive({ report: '---\nfoo: bar\n---\n' });
+    assert.ok(invalid.argv, 'invalid frontmatter in --auto must still commit REVIEW.md');
+    assert.ok(invalid.argv.includes(invalid.reviewPath), 'REVIEW.md staged');
+    assert.ok(!invalid.argv.includes(invalid.fixPath), 'malformed fix report must NOT be staged');
+    assert.ok(invalid.argv.includes('docs(01): update code review report'), 'invalid: report-only message');
+
+    // AC2: fix report absent.
+    const missing = drive({ report: null });
+    assert.ok(missing.argv, 'missing fix report in --auto must still commit REVIEW.md');
+    assert.ok(missing.argv.includes(missing.reviewPath), 'REVIEW.md staged');
+    assert.ok(!missing.argv.includes(missing.fixPath), 'absent fix report must NOT be staged');
+    assert.ok(missing.argv.includes('docs(01): update code review report'), 'missing: report-only message');
+
+    // Valid path unchanged: both staged.
+    const valid = drive({ report: VALID_FIX_REPORT });
+    assert.ok(valid.argv.includes(valid.fixPath) && valid.argv.includes(valid.reviewPath), 'valid: both staged');
+    assert.ok(valid.argv.includes('docs(01): add code review fix report'), 'valid keeps its message');
+
+    // Out of scope stays out: non-auto and COMMIT_DOCS=false commit no REVIEW.md.
+    assert.ok(!drive({ report: '---\nfoo: bar\n---\n', auto: 'false' }).argv, 'non-auto invalid commits nothing');
+    assert.ok(!drive({ report: null, docs: 'false' }).argv, 'COMMIT_DOCS=false commits nothing');
+  });
+
+  // #5527 observable: run the fence against a real repo and the real `query commit`, then read
+  // `git status`. A stubbed argv proves the call, not that REVIEW.md lands or what stays dirty.
+  test('T8 — commit_fix_report EXECUTED against real git: REVIEW.md lands; only a malformed report stays', { skip: !HAS_BASH }, (t) => {
+    const fence = stepFence(fs.readFileSync(WORKFLOW_PATH, 'utf8'), 'commit_fix_report');
+    const git = (cwd, ...args) => gitOrThrow(args, { cwd });
+    const REVIEW = '.planning/01-REVIEW.md';
+    const FIX = '.planning/01-REVIEW-FIX.md';
+
+    const drive = (report, { ignored = false } = {}) => {
+      const dir = createTempGitProject('gsd-5527-');
+      t.after(() => cleanup(dir));
+      if (ignored) fs.writeFileSync(path.join(dir, '.gitignore'), '.planning/\n');
+      fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{"commit_docs": true}\n');
+      fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: issues_found\n---\n');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'seed');
+      fs.writeFileSync(path.join(dir, REVIEW), '---\nstatus: clean\n---\n'); // the --auto re-review rewrite
+      fs.writeFileSync(path.join(dir, FIX), report);
+      const script = fenceScript(fence, {
+        AUTO_MODE: 'true',
+        COMMIT_DOCS: 'true',
+        PADDED_PHASE: '01',
+        REVIEW_PATH: REVIEW,
+        FIX_REPORT_PATH: FIX,
+      }, [
+        'cd ' + JSON.stringify(dir),
+        'gsd_run() { ' + JSON.stringify(process.execPath) + ' ' + JSON.stringify(TOOLS_PATH) + ' "$@"; }',
+      ], [
+        // Typed seam: the value the dirty-tree warning is gated on, not the warning's wording.
+        'printf "\\n@@DIRTY=%s@@" "${FIX_REPORT_DIRTY-UNSET}"',
+      ]);
+      const res = runHook('-c', [script], { interpreter: 'bash', timeoutMs: SEAM_DEFAULT_TIMEOUT_MS });
+      assert.strictEqual(res.exitCode, 0, 'step must not abort: ' + res.stderr);
+      return { status: git(dir, 'status', '--porcelain'), dirty: /@@DIRTY=(.*)@@/.exec(res.stdout)[1] };
+    };
+
+    const invalid = drive('---\nfoo: bar\n---\n');
+    assert.strictEqual(invalid.dirty, '?? ' + FIX, 'git sees the malformed report: the warning gate is set');
+    assert.strictEqual(invalid.status.trim(), '?? ' + FIX, 'REVIEW.md committed; only the malformed report remains');
+
+    const ignoredRun = drive('---\nfoo: bar\n---\n', { ignored: true });
+    assert.strictEqual(ignoredRun.status, '', 'gitignored .planning/: tree stays clean');
+    assert.strictEqual(ignoredRun.dirty, '', 'git ignores the report: the warning gate is empty');
+
+    const valid = drive(VALID_FIX_REPORT);
+    assert.strictEqual(valid.status, '', 'valid report: both committed, tree clean');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -371,4 +485,135 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
     assert.ok(!zero.includes('All issues resolved.'), 'and does not claim resolution');
     assert.ok(run('2').includes('All issues resolved.'), 'a real all_fixed run is unchanged');
   });
+});
+
+// ---------------------------------------------------------------------------
+// #5876 — gsd-code-fixer fast-forwards the branch the fixes were made for, in the
+// worktree that has it checked out, not in the first `git worktree list` entry
+// (the main checkout). The shipped setup_worktree and cleanup-tail fences run
+// verbatim against a real repo with a linked worktree.
+// ---------------------------------------------------------------------------
+describe('#5876 — gsd-code-fixer cleanup fast-forwards the worktree that owns $branch', () => {
+  const FIXER_COPIES = [
+    path.join('agents', 'gsd-code-fixer.md'),
+    path.join('agents', 'gsd-code-fixer.compact.md'),
+    path.join('pi', 'package-agents', 'gsd-code-fixer.md'),
+  ];
+  const GIT_ENV = {
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid',
+    GIT_TERMINAL_PROMPT: '0',
+  };
+
+  /** Every bash fence of <step name="setup_worktree">, in order: [setup, cleanup tail]. */
+  function setupFences(rel) {
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
+    const open = src.indexOf('<step name="setup_worktree">');
+    assert.notStrictEqual(open, -1, `${rel}: setup_worktree step not found`);
+    const lines = splitLines(src.slice(open, src.indexOf('</step>', open)));
+    const fences = [];
+    let start = -1;
+    lines.forEach((line, i) => {
+      if (start === -1 && /^```bash\s*$/.test(line)) start = i + 1;
+      else if (start !== -1 && /^```\s*$/.test(line)) { fences.push(lines.slice(start, i).join('\n')); start = -1; }
+    });
+    assert.ok(fences.length >= 2, `${rel}: expected a setup fence and a cleanup-tail fence, got ${fences.length}`);
+    return fences;
+  }
+
+  const runBash = (cwd, script) => runHook('-c', [script], {
+    interpreter: 'bash', cwd, timeoutMs: SEAM_DEFAULT_TIMEOUT_MS, env: { ...process.env, ...GIT_ENV },
+  });
+  /** Run one git command in `cwd` and return its trimmed stdout. */
+  const gitOut = (cwd, args) => runBash(cwd, `git ${args}`).stdout.trim();
+
+  /** repo (main, on `main`) + a linked worktree on `feature`; the root name carries a space. */
+  function fixture() {
+    const base = createTempDir('gsd-5876-');
+    const root = path.join(base, 'with space');
+    fs.mkdirSync(root);
+    const repo = path.join(root, 'repo');
+    const featureWt = path.join(root, 'feature-wt');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '--allow-empty', '-m', 'base'], { cwd: repo, env: { ...process.env, ...GIT_ENV } });
+    gitOrThrow(['worktree', 'add', '-q', '-b', 'feature', featureWt], { cwd: repo });
+    gitOrThrow(['commit', '-q', '--allow-empty', '-m', 'feature work'], { cwd: featureWt, env: { ...process.env, ...GIT_ENV } });
+    const phaseDir = path.join(root, 'phase');
+    fs.mkdirSync(phaseDir);
+    return { base, root, repo, featureWt, phaseDir };
+  }
+
+  function run(rel, cwd, phaseDir, featureWt, between) {
+    const [setup, cleanup] = setupFences(rel);
+    const script = `padded_phase=06\nphase_dir=${JSON.stringify(phaseDir)}\nFEATURE_WT=${JSON.stringify(featureWt)}\n${setup}\n`
+      + 'git commit -q --allow-empty -m "fix(06): CR-01"\n'
+      + `${between || ''}\n${cleanup}\n`;
+    return runBash(cwd, script);
+  }
+
+  for (const rel of FIXER_COPIES) {
+    describe(rel, { skip: !HAS_BASH }, () => {
+      test('from a linked worktree, the fixes land on $branch and the main checkout is untouched', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.featureWt, f.phaseDir, f.featureWt);
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.strictEqual(gitOut(f.featureWt, 'log -1 --format=%s feature'), 'fix(06): CR-01', '$branch gets the fix commit');
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'base', 'main is not fast-forwarded');
+          assert.strictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '', 'the temp branch is deleted after the fast-forward');
+        } finally { cleanup(f.base); }
+      });
+
+      test('the fixer worktree is placed inside the session checkout, also when started from a subdirectory', () => {
+        const f = fixture();
+        try {
+          const sub = path.join(f.featureWt, 'src', 'deep');
+          fs.mkdirSync(sub, { recursive: true });
+          const r = run(rel, sub, f.phaseDir, f.featureWt, 'echo "WT_PATH=$wt"');
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          const printed = /^WT_PATH=(.*)$/m.exec(r.stdout);
+          assert.ok(printed, `the fence exposes $wt: ${r.stdout}`);
+          assert.ok(fs.realpathSync(path.dirname(printed[1])).startsWith(fs.realpathSync(path.join(f.featureWt, '.claude', 'worktrees'))),
+            `$wt lives under the session worktree's .claude/worktrees, got ${printed[1]}`);
+          assert.strictEqual(gitOut(f.featureWt, 'log -1 --format=%s feature'), 'fix(06): CR-01');
+        } finally { cleanup(f.base); }
+      });
+
+      test('with no worktree holding $branch, nothing is merged, the temp branch is preserved and the warning says so', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.featureWt, f.phaseDir, f.featureWt, 'git -C "$FEATURE_WT" checkout -q --detach');
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.ok(r.stdout.includes('WARN: could not fast-forward feature to gsd-reviewfix/06-'), `warning names $branch: ${r.stdout}`);
+          assert.ok(r.stdout.includes('<no worktree has it checked out>'), `warning says no worktree owns it: ${r.stdout}`);
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'base', 'main is not touched');
+          assert.notStrictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '', 'the temp branch is preserved');
+        } finally { cleanup(f.base); }
+      });
+
+      test('from the primary checkout, the outcome is unchanged', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.repo, f.phaseDir, f.featureWt);
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'fix(06): CR-01');
+          assert.strictEqual(gitOut(f.featureWt, 'log -1 --format=%s feature'), 'feature work', 'the linked branch is untouched');
+          assert.strictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '');
+        } finally { cleanup(f.base); }
+      });
+
+      test('a diverged $branch preserves the temp branch and the warning names the branch and its worktree', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.featureWt, f.phaseDir, f.featureWt, 'git -C "$FEATURE_WT" commit -q --allow-empty -m concurrent');
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.ok(r.stdout.includes('WARN: could not fast-forward feature to gsd-reviewfix/06-'), `warning names $branch: ${r.stdout}`);
+          assert.ok(r.stdout.includes(fs.realpathSync(f.featureWt)), `warning names the worktree the merge was tried in: ${r.stdout}`);
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'base', 'main is not touched');
+          assert.notStrictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '', 'the temp branch is preserved for a manual merge');
+        } finally { cleanup(f.base); }
+      });
+    });
+  }
 });

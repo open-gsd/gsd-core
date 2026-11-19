@@ -295,6 +295,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-1953](1953-complexity-triggered-refactor.md) | Complexity-triggered refactor — the loop measures the entropy it just added | Proposed | — |
 | [ADR-3128](3128-adaptive-runtime-evidence.md) | Adaptive runtime evidence for GSD Debug | Proposed | — |
 | [ADR-3646](3646-per-task-content-resolution-seam.md) | Per-task external-tracker content-resolution seam | Proposed | — |
+| [ADR-3711](3711-cross-runtime-plan-execution.md) | Cross-runtime plan execution — a per-plan `executor_runtime` on the `orchestrator-worktree` backend | Proposed | — |
 | [ADR-3889](3889-process-exit-contract.md) | One exit-code registry — 0 and 1 are free, everything else is allocated | Proposed | — |
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |
 | [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) | STATE.md write intent beyond frontmatter — bounded, verified writes | Proposed | — |
@@ -303,6 +304,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-4909](4909-shipped-surface-contract-seam.md) | Shipped workflow bodies are a compiled artifact — two generated manifests and one extractor | Proposed | — |
 | [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md) | OpenCode 2.x support as a version-gated target of the `opencode` runtime, and sunset of OpenCode 1.x support | Proposed | — |
 | [ADR-5812](5812-worktree-residue-removal-guards.md) | Residue-removal guard standard for `worktree.reap-orphans` | Proposed | — |
+| [ADR-6315](6315-ci-redesign.md) | CI redesign — a fast static tier, a sharded critical path, one full matrix per merge, and feedback loops that keep it fast | Proposed | — |
 
 ### Superseded, Retired, and Legacy
 

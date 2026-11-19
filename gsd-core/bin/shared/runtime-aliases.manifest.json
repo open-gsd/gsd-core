@@ -75,5 +75,14 @@
   "cline": [
     "cline",
     "cline-cli"
+  ],
+  "pi": [
+    "pi"
+  ],
+  "vscode": [
+    "vscode"
+  ],
+  "zcode": [
+    "zcode"
   ]
 }
