@@ -16,7 +16,7 @@ starts.
 - A browser MCP server registered in your runtime. `mcp__playwright__*` is driven whenever it
   responds. `chrome-devtools-mcp` (`mcp__chrome-devtools__*`) and Claude-in-Chrome
   (`mcp__claude-in-chrome__*`) are driven only while `workflow.live_dom_uat` is also `true`: the
-  agent reads that key from `.planning/config.json` and is instructed to leave Chrome-family
+  agent reads that key from `{planning_root}/config.json` and is instructed to leave Chrome-family
   tools alone otherwise.
 - Something serving your UI: a dev server, a preview deployment, any reachable URL named in the
   plan or UI-SPEC.

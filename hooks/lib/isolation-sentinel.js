@@ -131,6 +131,7 @@ const GSD_ROLE_NAMES = Object.freeze(new Set([
   'gsd-doc-writer',
   'gsd-doc-verifier',
   'gsd-dom-verifier',
+  'gsd-behavior-verifier',
   'gsd-advisor-researcher',
   'gsd-ai-researcher',
   'gsd-assumptions-analyzer',

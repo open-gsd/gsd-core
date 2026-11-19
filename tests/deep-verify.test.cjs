@@ -397,7 +397,8 @@ describe('deep-verify: shipped agent, fragment and core-surface contracts', () =
     const agentSrc = fs.readFileSync(AGENT_PATH, 'utf8');
     for (const [label, text] of [['fragment', fragmentText()], ['agent', agentSrc]]) {
       assert.ok(!text.includes('ui_phase_active'), `${label} must not depend on a relayed ui_phase_active`);
-      assert.ok(text.includes('.planning/config.json'), `${label} must read the two keys from config itself`);
+      assert.ok(text.includes('{planning_root}/config.json'), `${label} must read the two keys from the scoped config itself`);
+      assert.ok(!text.includes('.planning/config.json'), `${label} must not name the root config path (workstream-scoped runs)`);
       assert.ok(text.includes('UI-SPEC.md'), `${label} must derive a UI phase from the phase-scoped UI-SPEC`);
     }
   });

@@ -13,8 +13,9 @@ does not, or the directory does not exist, write nothing and finish.
 
 Nothing else is relayed to you. Resolve the remaining inputs yourself, with `Read` and `Glob`:
 
-- `deep_verify_all_phases` — `workflow.deep_verify_all_phases` in `.planning/config.json`
-  (`workflow` object, key `deep_verify_all_phases`).
+- `deep_verify_all_phases` — `workflow.deep_verify_all_phases` in `{planning_root}/config.json`
+  (`workflow` object, key `deep_verify_all_phases`). `{planning_root}` is the directory that holds
+  the `phases/` directory containing `{phase_dir}`.
 - `live_dom_uat` — `workflow.live_dom_uat` in the same file.
 
 Treat any value other than the literal boolean `true`, and a missing or unreadable file, as
