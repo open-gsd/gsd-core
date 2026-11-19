@@ -324,7 +324,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     fs.symlinkSync(project, link, 'dir');
     const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', link], { cwd: project, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.equal(stderrLines(r.stderr).some((l) => l.includes('model-escalation record not written')), false, 'the same directory through a symlink is not another root');
+    assert.deepEqual(stderrLines(r.stderr).filter(Boolean), [], 'the same directory through a symlink is not another root: no warning of any wording');
     assert.equal(fs.existsSync(escalationFile(project, 'gsd-executor')), true);
   });
 
