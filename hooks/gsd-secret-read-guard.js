@@ -3311,6 +3311,57 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
+// The Bash path's scans of `command`: one pass per reading of ENV_S_READINGS, in
+// its order (#5514), all on the one budget set here for the command, so the
+// readings together do no more work than one scan may. Returns the block the
+// hook emits (null when none) and whether a scan threw. A read or a launch a pass
+// finds is returned before the next reading runs, so nothing a later reading does
+// can lose it. Any other block (`command-too-complex`, an undecodable `$'…'` word)
+// is returned at once too while no split option has been met, as `next` emits it;
+// once one has, it is held and returned after the last reading, unless a later one
+// names a read or a launch, as findSecretRead ranks its own readings. Each of the
+// two scans (the secret scan with its heredoc readings, then the spawn check) runs
+// under its own catch. A stack overflow there is held as `command-too-complex`, the
+// deny main's catch gives one; any other error finds nothing. Either way the scans
+// after it still run, and the command gets the crash verdict only when nothing
+// denies it (main). Tests call it in process with a small budget.
+function scanBashReadings(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
+  setCommandBudget(budget, separatorBudget);
+  splitSeen = false;
+  splitTooDeep = false;
+  let threw = false;
+  let held = null;
+  const attempt = (scan) => {
+    try {
+      return scan();
+    } catch (e) {
+      threw = true;
+      return e instanceof RangeError ? { code: 'command-too-complex', text: '' } : null;
+    }
+  };
+  try {
+    for (const r of ENV_S_READINGS) {
+      if (r.runs === 'split' && !splitSeen) continue;
+      if (r.runs === 'split-or-throw' && !splitSeen && !threw) continue;
+      envSReading = r;
+      // The #4432 exemption's read-only line (F3) is judged under this reading,
+      // never under the reading that ran first: a split string can hold a
+      // command that writes or runs a program where the unsplit reading saw `cat`.
+      exemption.bashReadOnly = null;
+      for (const scan of [scanBashReading, scanDebuggerSpawn]) {
+        const block = attempt(() => scan(command));
+        if (block === null) continue;
+        if (block.code === 'secret-read' || block.code === 'debugger-cli-spawn' || !splitSeen) return { block, threw };
+        if (held === null) held = block;
+      }
+      if (splitTooDeep) return { block: { code: 'split-string-too-deep', text: '' }, threw };
+    }
+    return { block: held, threw };
+  } finally {
+    envSReading = ENV_S_READINGS[1];
+  }
+}
+
 // The PreToolUse entry. Tests load the scanners in-process (module.exports
 // below); the hook body runs only when the file is executed as the hook.
 function main() {
@@ -3369,49 +3420,8 @@ function main() {
       if (command === '') allow(undefined);
       if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
       exemption.bashLine = command;
-      // One pass per reading of ENV_S_READINGS, in its order (#5514), all on the
-      // one budget set here for the command, so the readings together do no more
-      // work than one scan may. A read or a launch a pass finds is emitted before
-      // the next reading runs, so nothing a later reading does can lose it. Any
-      // other block (`command-too-complex`, an undecodable `$'…'` word) is
-      // emitted at once too while no split option has been met, as `next` emits
-      // it; once one has, it is held and emitted after the last reading, unless a
-      // later one names a read or a launch, as findSecretRead ranks its own
-      // readings. Each of the two scans
-      // (the secret scan with its heredoc readings, then the spawn check) runs
-      // under its own catch. A stack overflow there is held as
-      // `command-too-complex`, the deny the catch below gives one; any other
-      // error finds nothing. Either way the scans after it still run, and the
-      // command gets the crash verdict only when nothing denies it.
-      setCommandBudget();
-      let threw = false;
-      let held = null;
-      const deny = (block) => {
-        if (block === null) return;
-        if (block.code === 'secret-read' || block.code === 'debugger-cli-spawn' || !splitSeen) emitBlock(block.code, tool, block.text);
-        if (held === null) held = block;
-      };
-      const attempt = (scan) => {
-        try {
-          return scan();
-        } catch (e) {
-          threw = true;
-          return e instanceof RangeError ? { code: 'command-too-complex', text: '' } : null;
-        }
-      };
-      for (const r of ENV_S_READINGS) {
-        if (r.runs === 'split' && !splitSeen) continue;
-        if (r.runs === 'split-or-throw' && !splitSeen && !threw) continue;
-        envSReading = r;
-        // The #4432 exemption's read-only line (F3) is judged under this reading,
-        // never under the reading that ran first: a split string can hold a
-        // command that writes or runs a program where the unsplit reading saw `cat`.
-        exemption.bashReadOnly = null;
-        deny(attempt(() => scanBashReading(command)));
-        deny(attempt(() => scanDebuggerSpawn(command)));
-        if (splitTooDeep) emitBlock('split-string-too-deep', tool, '');
-      }
-      if (held !== null) emitBlock(held.code, tool, held.text);
+      const { block, threw } = scanBashReadings(command);
+      if (block !== null) emitBlock(block.code, tool, block.text);
       if (readingBug !== null) {
         process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
       }
@@ -3432,7 +3442,7 @@ function main() {
 }
 
 module.exports = {
-  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
+  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanBashReadings, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
   MAX_SCAN_CHARACTERS,
 };
 
