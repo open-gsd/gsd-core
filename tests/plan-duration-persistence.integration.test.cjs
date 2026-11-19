@@ -184,7 +184,16 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
     }
     const executor = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan', 'steps', 'executor-state-updates.md');
     const inline = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan', 'steps', 'update-current-position.md');
-    assert.deepEqual(metricPrelude(inline, 'update_current_position'), metricPrelude(executor, 'state_updates'));
+    // #5861 scopes the inline workflow's STATE writes to the active workstream; the
+    // executor's STATE writes stay unscoped upstream. Apart from that one token the
+    // two preludes must stay identical, so both surfaces measure the same duration.
+    const WS_SCOPE = ' ' + '$' + '{GSD_WS:+--ws=$' + '{GSD_WS##* }}';
+    const inlinePrelude = metricPrelude(inline, 'update_current_position');
+    assert.deepEqual(
+      inlinePrelude.filter((line) => line.includes(WS_SCOPE)).map((line) => line.split(' ').slice(0, 3).join(' ')),
+      ['gsd_run query state.advance-plan', 'gsd_run query state.update-progress', 'gsd_run query state.record-metric'],
+    );
+    assert.deepEqual(inlinePrelude.map((line) => line.replace(WS_SCOPE, '')), metricPrelude(executor, 'state_updates'));
   });
 
   for (const surface of surfaces) {
