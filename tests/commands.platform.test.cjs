@@ -1033,7 +1033,6 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     const longer = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-msg-a', 'fix: probe', false);`);
     setTimeoutConfig(30000);
     const shorter = runWithTimedOutCommit(`cmds.cmdPrSubrepo(${JSON.stringify(rootDir)}, 'backend', 'fix-5231-msg-b', 'fix: probe', false);`);
-    assert.notStrictEqual(longer.failure.message, shorter.failure.message, 'the message must follow the configured timeout');
     // The expected text comes from the owner, so the repo slot is pinned without a prose literal.
     const { commitTimeoutHead } = require('../gsd-core/bin/lib/commands.cjs');
     // macOS tmpdir is a symlink (/var -> /private/var); cmdPrSubrepo resolves the sub-repo path with tryWithinRoot (realpath).

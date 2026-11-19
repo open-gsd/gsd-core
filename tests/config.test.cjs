@@ -2639,6 +2639,18 @@ describe('#5231: git.commit_timeout_ms config key', () => {
     assert.strictEqual(runGsdTools(['config-get', 'git.commit_timeout_ms'], tmpDir, env).output.trim(), '3600000');
   });
 
+  test('config-set null deletes the key and config-get returns the default again', (t) => {
+    const tmpDir = createTempProject('gsd-5231-null-');
+    t.after(() => cleanup(tmpDir));
+    const env = homeSandboxEnv(tmpDir);
+    assert.ok(runGsdTools(['config-set', 'git.commit_timeout_ms', '60000'], tmpDir, env).success);
+    const r = runGsdTools(['config-set', 'git.commit_timeout_ms', 'null'], tmpDir, env);
+    assert.ok(r.success, `config-set null failed:\n${r.error}`);
+    const git = JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf8')).git ?? {};
+    assert.ok(!('commit_timeout_ms' in git), 'the key must be gone from config.json');
+    assert.strictEqual(runGsdTools(['config-get', 'git.commit_timeout_ms'], tmpDir, env).output.trim(), '30000');
+  });
+
   test('config-get prints the stored value raw and emits no diagnostics for an invalid hand-edited value (own or root-inherited)', (t) => {
     const tmpDir = createTempProject('gsd-5231-handedit-');
     t.after(() => cleanup(tmpDir));
