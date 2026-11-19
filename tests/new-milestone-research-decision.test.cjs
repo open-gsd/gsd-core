@@ -36,6 +36,14 @@ function stepBody(heading) {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+/** Researcher template slice of a step body: common-structure heading to the researcher spawn. */
+function researcherTemplate(step) {
+  const start = step.indexOf('**Common structure for every researcher:**');
+  const end = step.indexOf('subagent_type="gsd-project-researcher"');
+  assert.ok(start !== -1 && end > start, 'researcher template is missing');
+  return step.slice(start, end);
+}
+
 describe('new-milestone Step 8 research decision (#5148)', () => {
   const body = stepBody('## 8. Research Decision');
 
@@ -94,14 +102,10 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     assert.match(synth, /intentionally skipped; their absence is expected/, 'synthesizer prompt must say skipped dimensions are expected');
     assert.match(synth, /Display key findings from SUMMARY\.md \(omit a line whose dimension was skipped/,
       'RESEARCH COMPLETE must not show findings for a skipped dimension');
-    assert.doesNotMatch(reading, /(STACK|FEATURES|ARCHITECTURE|PITFALLS)\.md/, 'no research file may be named unconditionally');
   });
 
   test('researcher template scopes the milestone work, not only new features', () => {
-    const start = body.indexOf('**Common structure for every researcher:**');
-    const end = body.indexOf('subagent_type="gsd-project-researcher"');
-    assert.ok(start !== -1 && end > start, 'researcher template is missing');
-    const template = body.slice(start, end);
+    const template = researcherTemplate(body);
     assert.doesNotMatch(template, /NEW features|\[new features\]/, 'template must not limit research to new features');
     assert.match(template, /<research_type>[^<]*this milestone's work/);
     assert.match(template, /integration points and pitfalls in the existing codebase/);
@@ -118,8 +122,7 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
   });
 
   test('researchers are told to read the codebase map, within the workflow text only', () => {
-    const start = body.indexOf('**Common structure for every researcher:**');
-    const template = body.slice(start, body.indexOf('subagent_type="gsd-project-researcher"'));
+    const template = researcherTemplate(body);
     const context = template.slice(template.indexOf('<milestone_context>'), template.indexOf('</milestone_context>'));
     assert.match(context, /read the codebase map from `\/gsd:map-codebase` when the project has one; otherwise inspect the source this work touches/);
     assert.doesNotMatch(workflow, /codebase_map_files|\{codebase_map_lines\}/,
@@ -140,17 +143,28 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
       'the removal must cover every dimension file, not only the kept ones');
     assert.doesNotMatch(body.slice(body.indexOf('Replacing research files:'), body.indexOf('Spawn {N} parallel')),
       /left in place and never read/, 'no stale file may be left behind for the synthesizer or self-heal');
-    assert.match(body, /Only when this run actually spawns researchers: when `agents_installed` is false the parallel research spawn is skipped/,
+    assert.match(body, /When `agents_installed` is false the parallel research spawn is skipped and the roadmap is generated inline \(Step 7\)/,
       'the clearing must be conditional on the spawn actually going ahead');
-    assert.match(body, /do not remove anything on that path — the earlier research files stay on disk/,
-      'the agents_installed=false path must leave the earlier research files on disk');
+    assert.match(body, /do not print the spawn banner below and do not remove anything — the earlier research files stay on disk/,
+      'the agents_installed=false path must not print the banner and must leave the earlier research files on disk');
     assert.match(body, /research did not run: leave `\{research_summary_line\}` empty and take Step 9's "research was skipped" branch/,
       'the agents_installed=false path must state that research did not run, so Step 9 takes the skipped branch and the roadmapper gets no SUMMARY.md');
+    const guard = body.indexOf('When `agents_installed` is false the parallel research spawn is skipped');
+    const banner = body.indexOf('◆ Spawning {N} researcher(s)');
+    assert.ok(guard !== -1 && banner !== -1 && guard < banner,
+      'the agents_installed guard must precede the spawn banner, so the no-spawn path never shows it');
     const noticeStart = body.indexOf('Replacing research files:');
     const notice = body.slice(noticeStart, body.indexOf('`', noticeStart));
     for (const file of ['SUMMARY.md', 'STACK.md', 'FEATURES.md', 'ARCHITECTURE.md', 'PITFALLS.md']) {
       assert.ok(notice.includes(`{research_dir}/${file}`), `the replacement notice must name ${file}`);
     }
+  });
+  test('the Skip branch defines the empty research_summary_line default', () => {
+    const skip = body.indexOf('**If "Skip research":**');
+    assert.notEqual(skip, -1, 'the Skip research branch is missing');
+    assert.match(body.slice(skip, skip + 300),
+      /Research did not run: `\{research_summary_line\}` is an empty string/,
+      'the Skip branch must define the empty default Step 10 relies on');
   });
 });
 

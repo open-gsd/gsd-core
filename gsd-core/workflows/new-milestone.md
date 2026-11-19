@@ -361,6 +361,8 @@ AskUserQuestion: "Research the domain ecosystem for this milestone's work — ne
 
 Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{dimensions kept}` is the list of dimensions that will run, in the order stack, features, architecture, pitfalls, and `{N}` is its count. `{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension in `{dimensions kept}`, with `{FILE}` from the FILE row of the table below. `{research_summary_line}` is `- {research_dir}/SUMMARY.md` when research ran and an empty string when it did not.
 
+When `agents_installed` is false the parallel research spawn is skipped and the roadmap is generated inline (Step 7). On that path research did not run: leave `{research_summary_line}` empty and take Step 9's "research was skipped" branch — do not print the spawn banner below and do not remove anything — the earlier research files stay on disk.
+
 ```
 ### GSD ► RESEARCHING
 
@@ -372,7 +374,7 @@ Run one researcher per dimension (stack, features, architecture, pitfalls) by de
 mkdir -p "{research_dir}"
 ```
 
-Only when this run actually spawns researchers: when `agents_installed` is false the parallel research spawn is skipped and the roadmap is generated inline (Step 7), so do not remove anything on that path — the earlier research files stay on disk. On that path research did not run: leave `{research_summary_line}` empty and take Step 9's "research was skipped" branch. Otherwise remove what this run will rewrite, so a file left from an earlier run cannot pass for this run's output: not read by the synthesizer, not committed by self-heal, not mistaken for fresh research. The four dimension files and `SUMMARY.md` are always cleared, because a skipped dimension writes no replacement and its stale file must not survive. First display the files being replaced (`Replacing research files: {research_dir}/SUMMARY.md, {research_dir}/STACK.md, {research_dir}/FEATURES.md, {research_dir}/ARCHITECTURE.md, {research_dir}/PITFALLS.md — earlier contents will be lost; only committed copies remain in git`), then run `rm -f "{research_dir}/SUMMARY.md"`, `rm -f "{research_dir}/STACK.md"`, `rm -f "{research_dir}/FEATURES.md"`, `rm -f "{research_dir}/ARCHITECTURE.md"`, and `rm -f "{research_dir}/PITFALLS.md"`.
+Only when this run actually spawns researchers, remove what this run will rewrite, so a file left from an earlier run cannot pass for this run's output: not read by the synthesizer, not committed by self-heal, not mistaken for fresh research. The four dimension files and `SUMMARY.md` are always cleared, because a skipped dimension writes no replacement and its stale file must not survive. First display the files being replaced (`Replacing research files: {research_dir}/SUMMARY.md, {research_dir}/STACK.md, {research_dir}/FEATURES.md, {research_dir}/ARCHITECTURE.md, {research_dir}/PITFALLS.md — earlier contents will be lost; only committed copies remain in git`), then run `rm -f "{research_dir}/SUMMARY.md"`, `rm -f "{research_dir}/STACK.md"`, `rm -f "{research_dir}/FEATURES.md"`, `rm -f "{research_dir}/ARCHITECTURE.md"`, and `rm -f "{research_dir}/PITFALLS.md"`.
 
 Spawn {N} parallel gsd-project-researcher agents (one per dimension kept). Each uses this template with dimension-specific fields:
 
@@ -466,7 +468,7 @@ Display key findings from SUMMARY.md (omit a line whose dimension was skipped �
 **Watch Out For:** [from SUMMARY.md]
 ```
 
-**If "Skip research":** Continue to Step 9.
+**If "Skip research":** Continue to Step 9. Research did not run: `{research_summary_line}` is an empty string, so Step 10's required_reading has no SUMMARY.md line.
 
 ## 9. Define Requirements
 
