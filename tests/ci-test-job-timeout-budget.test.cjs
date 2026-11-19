@@ -377,6 +377,19 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
     assert.equal(isNearCap(slowRunnerCapShare(1, line + 1, 45, unit)), true);
   });
 
+  // #6329: a cap that is not a finite positive number used to give a NaN (or
+  // infinite, or negative) share, and isNearCap reads NaN as clear, so the
+  // projection passed without a cap to compare against.
+  await t.test('a cap that is not a finite positive number is refused (#6329)', () => {
+    const refused = { code: 'PROJECTION_CAP_INVALID' };
+    for (const cap of [undefined, null, '45', 'not-a-number', Number.NaN, Number.POSITIVE_INFINITY, -1, 0]) {
+      assert.throws(() => slowRunnerCapShare(6, 330, cap), refused, `cap ${String(cap)} must be refused`);
+    }
+    // The limit is exclusive at zero: a positive finite cap is accepted.
+    assert.equal(Number.isFinite(slowRunnerCapShare(6, 330, 0.5)), true);
+    assert.equal(Number.isFinite(slowRunnerCapShare(6, 330, 1)), true);
+  });
+
   // The budget-limit invariant (CONTEXT.md, RULESET.TESTS.property-based-testing):
   // for any tier and cap, adding shards never raises the share, so a count that
   // clears the near-cap line also clears it at every higher count.
