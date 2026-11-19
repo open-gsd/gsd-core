@@ -471,11 +471,11 @@ describe('sanitizeLabel', () => {
 
   test('escapes the line separators, format and bidi characters at the boundaries', () => {
     const rows = [
-      [' ', '\\u2028'], // Zl
-      [' ', '\\u2029'], // Zp
+      ['\u2028', '\\u2028'], // Zl
+      ['\u2029', '\\u2029'], // Zp
       ['\u0085', '\\x85'], // C1 NEL
-      ['‮', '\\u202e'], // Cf bidi override
-      ['​', '\\u200b'], // Cf zero-width space
+      ['\u202e', '\\u202e'], // Cf bidi override
+      ['\u200b', '\\u200b'], // Cf zero-width space
       ['\u{e0001}', '\\u{e0001}'], // Cf, outside the BMP
       ['\0', '\\0'],
     ];

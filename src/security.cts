@@ -21,6 +21,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { printablePath } = configFileReadMod;
 
 // ─── Path Traversal Prevention ──────────────────────────────────────────────
 
@@ -586,7 +589,8 @@ export function sanitizeForDisplay(text: unknown): string {
  * character that breaks or disguises one line of output — Unicode categories
  * Cc (C0 0x00–0x1F including ESC, CR, LF; DEL; C1 0x80–0x9F), Zl and Zp
  * (U+2028, U+2029), and Cf (zero-width, bidi-override and BOM characters) —
- * into a visible representation (`\n`, `\x1b`, ` `, `\u{e0001}`, ...).
+ * into a visible representation (`\n`, `\x1b`, `\u2028`, `\u{e0001}`, ...);
+ * `printablePath` (config-file-read.cts) owns the class and the hex forms.
  * Escaping rather than stripping is deliberate: a reviewer reading the
  * report should be able to SEE that a name was doctored, not have it quietly
  * normalized away as if nothing happened. Every other character — including
@@ -607,11 +611,8 @@ export function sanitizeLabel(text: unknown): string {
     0x1b: '\\x1b',
   };
 
-  return text.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (ch) => {
-    const code = ch.codePointAt(0) as number;
-    if (code <= 0xff) return NAMED_ESCAPES[code] ?? `\\x${code.toString(16).padStart(2, '0')}`;
-    return code <= 0xffff ? `\\u${code.toString(16).padStart(4, '0')}` : `\\u{${code.toString(16)}}`;
-  });
+  // The named escapes keep their pinned form; printablePath (the one owner of the class) escapes the rest.
+  return printablePath(text.replace(/[\0\x07-\x0d\x1b]/g, (ch) => NAMED_ESCAPES[ch.charCodeAt(0)]));
 }
 
 // ─── Shell Safety ───────────────────────────────────────────────────────────────────────

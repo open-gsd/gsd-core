@@ -151,7 +151,7 @@ test('property: both guard warnings print one line whatever the workstream name,
   const { formatNotWritten, formatNotRecorded } = require('../gsd-core/bin/lib/model-escalation.cjs');
   const broken = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
   // the class's boundary characters: line separators, NEL, bidi override, zero-width space, NUL
-  const boundary = [' ', ' ', '\u0085', '‮', '​', '\0'];
+  const boundary = ['\u2028', '\u2029', '\u0085', '\u202e', '\u200b', '\0'];
   const text = fc.oneof(fc.string({ unit: 'binary', maxLength: 200 }), fc.array(fc.constantFrom(...boundary, 'a'), { maxLength: 40 }).map((cs) => cs.join('')));
   fc.assert(fc.property(text, text, (a, b) => {
     return [formatNotRecorded(a), formatNotRecorded(a, b), formatNotWritten(a, b)].every((line) => !broken.test(line));
