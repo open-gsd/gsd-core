@@ -31,7 +31,7 @@ const {
 } = require('../gsd-core/bin/lib/host-integration.cjs');
 const { createDeclarativeAdapter } = require('../gsd-core/bin/lib/adapter-declarative.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { walk, runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { walk, copyRuntimeFixture, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 
 const DESC = path.join(__dirname, '..', 'capabilities', 'augment', 'capability.json');
 const AUGMENT_CAP = JSON.parse(fs.readFileSync(DESC, 'utf8'));
@@ -62,7 +62,7 @@ test('the public declarative adapter classifies Augment as a declarative host', 
 });
 
 test('a real Augment install emits a gsd command/skill surface (invocable)', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'augment', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'augment', scope: 'global' });
   try {
     const files = walk(configDir);
     assert.ok(files.length > 0, 'install must emit artifacts');
