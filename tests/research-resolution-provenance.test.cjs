@@ -352,7 +352,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   // A re-spawn under --auto can only return the same conflict, and the cap gate has no --auto choice of its
   // own; proceeding there would ship the plans with the blocker open, the opposite of what the docs promise.
   test('under --auto nothing is recorded and nothing re-spawns: the blocker escalates at once and the workflow stops', () => {
-    assert.match(resolve(), /Record only what the user said\. No one can be asked when .* There, record no answer and do not re-spawn/);
+    assert.match(resolve(), /Record only what the user said\. No one can be asked when .* Where no one can be asked, record no answer and do not re-spawn/);
     assert.match(resolve(), /Escalate at once, and at that gate stop the workflow rather than proceed/);
     assert.doesNotMatch(resolve(), /Repeat rule/, 'the --auto route no longer spends a planner run to reach the Repeat rule, in any wording');
     // The section's closing rule must agree, or "asking is the route everywhere" contradicts the --auto clause.
@@ -366,8 +366,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   // background agent when it does not flatten. Keyed to AUTO_CHAIN, a flag an interrupted chain left set would
   // refuse a present user, and autonomous would still never stop; so the key is --auto or a background agent.
   test('no one is asked under --auto or in a background agent; AUTO_CHAIN is named as not the key', () => {
-    assert.match(resolve(), /No one can be asked when plan-phase's arguments carry `--auto`, as every chained caller passes, or when it runs as a background or nested agent, where AskUserQuestion cannot reach the user, as `\/gsd:autonomous` dispatches it when it does not flatten\./);
-    assert.match(resolve(), /`AUTO_CHAIN` \(`workflow\._auto_chain_active`\) is not the key: a chained run passes `--auto` anyway, and a flag an interrupted chain left set, which only plan-phase's step 15 clears, would refuse a user who is present\./);
+    assert.match(resolve(), /No one can be asked when plan-phase's arguments carry `--auto`, as discuss-phase's chain and transition pass, or when it runs as a background or nested agent, where AskUserQuestion cannot reach the user, as `\/gsd:autonomous` dispatches it when it does not flatten\. A run that calls plan-phase inline without `--auto` asks, and waits for the answer\./);
+    assert.doesNotMatch(resolve(), /every chained caller/, 'next.md and plan-review-convergence call plan-phase without --auto');
+    assert.match(resolve(), /`AUTO_CHAIN` \(`workflow\._auto_chain_active`\) is not the key: a chained run passes `--auto` anyway, and a flag an interrupted chain left set, which a manual plan-phase clears only at its step 15, after this loop, would refuse a user who is present\./);
+    assert.doesNotMatch(resolve(), /only plan-phase's step 15 clears/, 'execute-phase, discuss-phase and transition clear the flag too');
     assert.doesNotMatch(resolve(), /--chain/, 'plan-phase does not advertise --chain, so the rule does not name it');
     // The grounds the clause states: each chained caller passes --auto; autonomous passes none and backgrounds it.
     assert.match(read('gsd-core/workflows/discuss-phase/modes/chain.md'), /Skill\(skill="gsd-plan-phase", args="\$\{PHASE\} --auto/);
@@ -377,25 +379,30 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     const calls = auto.split('\n').filter((l) => /gsd-plan-phase\\?", args=\\?"\$\{PHASE_NUM\}/.test(l));
     assert.ok(calls.length >= 3, 'autonomous invokes plan-phase');
     for (const l of calls) assert.doesNotMatch(l, /--auto|--chain/, l);
-    assert.match(auto.replace(/\s+/g, ' '), /run_in_background=true, prompt="Run plan-phase for phase \$\{PHASE_NUM\}/);
-    // Only step 15 clears a leftover flag, and it runs after the revision loop.
+    assert.match(auto.replace(/\s+/g, ' '), /run_in_background=true, prompt="You are running in the background\. Do NOT use AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
+    // Within plan-phase, only step 15 clears a leftover flag, and it runs after the revision loop.
     assert.match(read('gsd-core/workflows/plan-phase/steps/auto-advance-check.md'), /gsd_run query config-set workflow\._auto_chain_active false/);
     const spine = read('gsd-core/workflows/plan-phase.md');
     const loop = spine.indexOf('## 12. Revision Loop');
     const step15 = spine.indexOf('plan-phase/steps/auto-advance-check.md');
     assert.ok(loop !== -1 && step15 !== -1 && step15 > loop, 'auto-advance-check runs after the revision loop');
     for (const doc of ['docs/features/research-gate.md', 'docs/FEATURES.md']) {
-      assert.match(read(doc), /Where no one can be asked \(`--auto`, or plan-phase running as a background agent, as `\/gsd-autonomous` runs it\) no answer is recorded: plan-phase escalates at once and stops there, and `\/gsd-autonomous` does not execute the plans/, doc);
+      assert.match(read(doc), /Where no one can be asked \(`--auto`, or plan-phase running as a background or nested agent, as `\/gsd-autonomous` runs it when it does not flatten\) no answer is recorded: plan-phase escalates at once and stops there rather than proceeding, and `\/gsd-autonomous` does not execute the plans; they stay on disk, where `\/gsd-progress --next` or `\/gsd-execute-phase` can still run them/, doc);
       assert.match(read(doc), /the user leaves to run `\/gsd-discuss-phase <N>` or `\/gsd-plan-phase <N> --research`\./, doc);
     }
   });
 
   // Resolve leaves the plans on disk when it stops, and autonomous checked only has_plans before executing.
   test('both stops end plan-phase with a marker line, and autonomous never executes plans whose run carries it', () => {
-    assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, so a caller never executes the plans\./);
+    assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous` reads so that it does not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
+    assert.doesNotMatch(resolve(), /a caller never executes/, 'only autonomous reads the marker');
     const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
     assert.match(auto, /check `has_plans`\. If false → go to handle_blocker: "Plan phase \$\{PHASE_NUM\} did not produce any plans\." If the plan run's output or return carries `PLANNING STOPPED: research questions need a user ruling`, go to handle_blocker with that line/);
     assert.match(auto, /Wait for the plan agent to complete \(if not already\) and verify plans exist and its return carries no `PLANNING STOPPED` line \(else handle_blocker, as in 3b\)/);
+    // The background planner is told it cannot ask, so the no-one-can-be-asked stop is observable to it.
+    assert.match(auto, /prompt="You are running in the background\. Do NOT use AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
+    // Gap closure re-plans with the phase's RESEARCH.md still in Dimension 11's reach, then re-executes.
+    assert.match(auto, /Gap closure planning for phase \$\{PHASE_NUM\} did not produce plans\." If the plan run's output carries `PLANNING STOPPED: research questions need a user ruling`, handle_blocker with that line and do not re-execute\./);
   });
 });
 
