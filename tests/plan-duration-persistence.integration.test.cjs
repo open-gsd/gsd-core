@@ -378,6 +378,14 @@ const AGENT = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
           fs.writeFileSync(path.resolve(dir, timingFile), '99999999999999999999\ninvalid\n');
           assert.throws(() => runFresh(dir, finish(), 1000), (error) => error.exitCode === 1);
           assert.equal(fs.existsSync(path.resolve(dir, `${timingFile}.result`)), false);
+
+          // A zero-padded epoch is octal to (( )); it must be reported as malformed, not as future.
+          fs.writeFileSync(path.resolve(dir, timingFile), '0000000009\n1970-01-01T00:00:09Z\n');
+          assert.throws(
+            () => runFresh(dir, finish(), 1000),
+            (error) => error.exitCode === 1 && /malformed/.test(error.stderr) && !/in the future/.test(error.stderr),
+          );
+          assert.equal(fs.existsSync(path.resolve(dir, `${timingFile}.result`)), false);
         } finally { cleanup(dir); }
       });
 

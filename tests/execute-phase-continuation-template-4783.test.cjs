@@ -12,11 +12,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { readFileNormalized } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.join(__dirname, '..', 'gsd-core');
 const EXECUTE = path.join(ROOT, 'workflows', 'execute-phase.md');
 const EXECUTOR = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
 const CONTINUATION_PART = path.join(ROOT, 'workflows', 'execute-phase', 'steps', 'checkpoint-continuation.md');
+const PI_EXECUTOR = path.join(__dirname, '..', 'pi', 'package-agents', 'gsd-executor.md');
+const START_PART = path.join(ROOT, 'workflows', 'execute-plan', 'steps', 'record-start-time.md');
 
 function shippedFileNames(dir, out = new Set()) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -63,5 +66,14 @@ describe('#4783 execute-phase continuation spawn does not point at a missing tem
     assert.match(checkpoint, /"worktree_path":"\{captured_worktree_path\}"/);
     assert.match(checkpoint, /"branch":"\{captured_branch\}"/);
     assert.match(checkpoint, /"expected_base":"\{captured_expected_base\}"/);
+  });
+
+  test('the executor and the start-time part select continuation by the tag, so an empty tag still continues', () => {
+    for (const file of [EXECUTOR, PI_EXECUTOR, START_PART]) {
+      const rule = splitLines(readFileNormalized(file)).find((line) => line.includes('{timing_attempt}') && line.includes('<completed_tasks>'));
+      assert.ok(rule, `${path.basename(path.dirname(file))}/${path.basename(file)} must state the {timing_attempt} rule next to the <completed_tasks> tag`);
+      assert.match(rule, /even an empty/, 'an empty <completed_tasks></completed_tasks> must still select continuation');
+      assert.doesNotMatch(rule, /payload/, 'the rule keys on the tag, not on whether it carries rows');
+    }
   });
 });

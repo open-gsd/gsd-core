@@ -1,5 +1,5 @@
 <step name="record_start_time">
-Replace `{timing_attempt}` with exactly `fresh` when this invocation has no continuation payload, or `continuation` when it carries completed-task/checkpoint state. Replace `{timing_phase}` and `{timing_plan}` with JSON string literals, never raw shell text. The shell guard is authoritative: a fresh attempt replaces an abandoned marker, while a continuation preserves it. A continuation must resume in the original worktree; if its marker is missing, stop and resume there or deliberately restart as `fresh`.
+Replace `{timing_attempt}` with exactly `continuation` when the prompt has a `<completed_tasks>` tag, even an empty `<completed_tasks></completed_tasks>`, and with `fresh` only when the tag is absent. Replace `{timing_phase}` and `{timing_plan}` with JSON string literals, never raw shell text. The shell guard is authoritative: a fresh attempt replaces an abandoned marker, while a continuation preserves it. Every worktree of the repository shares the marker in the common Git directory; if a continuation finds it missing (cleared or never written), stop and deliberately restart as `fresh`.
 ```bash
 # Substitute {timing_phase} and {timing_plan} with JSON string literals for the raw
 # phase and plan IDs. CANONICAL_PHASE_ID/CANONICAL_PLAN_ID below are canonical IDs; PHASE_VALUE/PLAN_VALUE
@@ -46,7 +46,7 @@ case "$GSD_TIMING_ATTEMPT" in
     ;;
   continuation)
     if [ ! -s "$TIMING_FILE" ]; then
-      echo "ERROR: continuation timing marker is missing; resume in the original worktree or restart explicitly as fresh." >&2
+      echo "ERROR: continuation timing marker is missing from the shared Git directory (cleared or never written); restart explicitly as fresh." >&2
       exit 1
     fi
     ;;

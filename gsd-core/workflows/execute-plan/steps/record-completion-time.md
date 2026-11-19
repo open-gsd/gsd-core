@@ -39,11 +39,12 @@ TIMING_KEY=$(printf '%s\0%s' "$CANONICAL_PHASE_ID" "$CANONICAL_PLAN_ID" | git ha
 TIMING_FILE="$(git rev-parse --path-format=absolute --git-common-dir)/gsd-plan-timing-$TIMING_KEY" || exit 1
 # plan-timing-key:end
 if [ ! -r "$TIMING_FILE" ]; then
-  echo "ERROR: timing marker is missing; resume in the original worktree or restart explicitly as fresh." >&2
+  echo "ERROR: timing marker is missing from the shared Git directory (cleared or never written); restart explicitly as fresh." >&2
   exit 1
 fi
 { read -r PLAN_START_EPOCH; read -r PLAN_START_TIME; } < "$TIMING_FILE" || exit 1
-[[ "$PLAN_START_EPOCH" =~ ^[0-9]+$ && ${#PLAN_START_EPOCH} -le 10 ]] || exit 1
+# A leading zero would make (( )) read the epoch as octal and misreport the cause.
+[[ "$PLAN_START_EPOCH" =~ ^(0|[1-9][0-9]*)$ && ${#PLAN_START_EPOCH} -le 10 ]] || { echo "ERROR: plan timing marker epoch is malformed." >&2; exit 1; }
 PLAN_END_EPOCH=$(date +%s)
 [[ "$PLAN_END_EPOCH" =~ ^[0-9]+$ && ${#PLAN_END_EPOCH} -le 10 ]] || exit 1
 (( PLAN_START_EPOCH <= PLAN_END_EPOCH )) || { echo "ERROR: plan timing marker is in the future." >&2; exit 1; }

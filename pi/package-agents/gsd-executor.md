@@ -97,7 +97,7 @@ Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective,
 </step>
 
 <step name="record_start_time">
-Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-start-time.md`. Replace `{timing_attempt}` with `fresh` when this prompt has no `<completed_tasks>` payload, or `continuation` when it does. The part's shell guard, not step-skipping prose, decides whether the marker is replaced or preserved (#5212).
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-start-time.md`. Set `{timing_attempt}` to `continuation` when this prompt has a `<completed_tasks>` tag, even an empty one; else `fresh` (#5212).
 </step>
 
 <worktree_metadata_capture>
@@ -381,7 +381,7 @@ When hitting checkpoint or auth gate, return this structure:
 </worktree_metadata>
 ```
 
-Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point. The worktree block gives the orchestrator the cwd that owns continuation metadata; an empty path means this executor is already in the main checkout.
+Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point. The worktree block gives the orchestrator the cwd holding the code to resume; empty means the main checkout.
 </checkpoint_return_format>
 
 <continuation_handling>
@@ -642,7 +642,7 @@ file individually. If a file appears untracked but is not part of your task, lea
 </destructive_git_prohibition>
 
 <step name="record_completion_time">
-After verification, before SUMMARY, read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-completion-time.md`; rerun it after more work to refresh completion. A continuation must use the original worktree whose Git metadata owns the marker; follow the part's recovery diagnostic instead of creating a new start.
+After verification, before SUMMARY, read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/record-completion-time.md`; rerun it after more work to refresh completion. If its marker is missing, follow the part's diagnostic; never create a new start.
 </step>
 
 <summary_creation>
@@ -779,7 +779,7 @@ PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}") && REAS
 ```
 
 Then update STATE.md using `gsd-tools query` state handlers (named flags).
-Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/executor-state-updates.md`. Supply measured `{task_count}`, `{file_count}`, and the just-written `{summary_path}`. The part validates cached duration before writing STATE, then records metrics, SUMMARY decisions and session in a fresh shell.
+Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/executor-state-updates.md`. Supply measured `{task_count}`, `{file_count}`, and the just-written `{summary_path}`.
 
 ```bash
 # Mark completed requirements from PLAN.md frontmatter
