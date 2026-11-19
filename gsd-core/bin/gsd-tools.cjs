@@ -1786,11 +1786,12 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             redirect: 'manual',
             signal: AbortSignal.timeout(opts.timeoutMs),
           });
-          // probe:true marks a reachability probe (returns status only, body ''): the status line is the answer, so do not
-          // let a stalled body turn a replying server into `missing`.
+          // probe:true marks a reachability probe: the status line is the answer (body '', so a stalled
+          // body cannot turn a replying server into `missing`), except readBody:true on a 2xx.
           if (opts.probe) {
-            res.body?.cancel().catch(() => {});
-            return { ok: res.ok, status: res.status, body: '' };
+            // #5963: a default-host probe may judge a 2xx body's shape (size-capped); see probeBody.
+            const body = await require('./lib/http-body-cap.cjs').probeBody(res, opts.readBody === true);
+            return { ok: res.ok, status: res.status, body };
           }
           if (res.status >= 300 && res.status < 400) {
             res.body?.cancel().catch(() => {});

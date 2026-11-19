@@ -478,6 +478,7 @@
       "host-integration-sdk.cjs",
       "host-integration.cjs",
       "host-runtime-detection.cjs",
+      "http-body-cap.cjs",
       "init-command-router.cjs",
       "init.cjs",
       "install-effort-resolver.cjs",
