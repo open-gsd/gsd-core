@@ -397,8 +397,8 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
     for (const cap of [undefined, null, '45', 'not-a-number', Number.NaN, Number.POSITIVE_INFINITY, -1, 0]) {
       assert.throws(() => slowRunnerCapShare(6, 330, cap), refused, `cap ${String(cap)} must be refused`);
     }
-    // The limit is exclusive at zero: a positive finite cap is accepted.
-    assert.equal(Number.isFinite(slowRunnerCapShare(6, 330, 0.5)), true);
+    // The limit is exclusive at zero: a finite cap just above it is accepted.
+    assert.equal(Number.isFinite(slowRunnerCapShare(6, 330, 1e-9)), true);
     assert.equal(Number.isFinite(slowRunnerCapShare(6, 330, 1)), true);
   });
 
@@ -426,7 +426,7 @@ test('the Windows conformance worst shard clears its cap on a slow runner (#5029
     ));
   });
 
-  // Neither property can tell a good fit from one that is merely monotone.
+  // The property above cannot tell a good fit from one that is merely monotone.
   // This can: the projection at the slow-runner skew must cover the slowest
   // Windows row observed at each layout, at that run's own tier size. A refit
   // that lands too low fails here. Add a row when a run sets a new worst.
