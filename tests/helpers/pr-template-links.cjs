@@ -1,18 +1,20 @@
 // Link guard for #5427: a PR body renders a relative href against /pull/N, so it 404s.
-// Checked: inline links, reference definitions and href/src/srcset attributes of HTML
-// open tags, outside fenced code, code spans and HTML comments. A repo link must name no ref, or
-// blob|tree|raw|blame on `next` to a path (and a heading or line anchor) that exists.
-// `?template=` links stay (maintainer ruling on #5427).
+// Links: every inline link and image, read line by line with the ADR gate's extractLinks, so a
+// link in a code block, a comment, a quote or an HTML block is checked too (a template holds no
+// relative link, not even in an example); only an inline code span hides one (extractLinks).
+// A form this guard does not read exactly is refused, not read (unreadForms): a reference
+// definition (any `]:`), a href/src/srcset attribute once an HTML tag has opened, and a line
+// with a `](` that extractLinks does not read as a link (a nested bracket, an image inside a
+// link, a line break or a parenthesis in a link) or an escaped backtick.
+// A repo link must name no ref, or blob|tree|raw|blame on `next` to a path (and a heading or
+// line anchor) that exists. `?template=` links stay (maintainer ruling on #5427).
 // Every link to another host is bad too (an allowlist, not only relative links): a template
 // links this repo and nothing else, so a lookalike host cannot pass.
-// Out of scope: autolinks (<https://...>) and bare URLs always carry a scheme, so they
-// are never relative.
-// Anchors use scripts/gen-features.cjs `slugify` on the raw heading text. A heading it
-// cannot reproduce (a non-ASCII letter or digit, a link, an HTML tag or entity, `_` emphasis)
-// gets no anchor, so a link to it fails. Blockquote headings and `<a id>`/`<a name>` anchors count.
-// Owners: the sectionizer reads fences, code spans and ATX headings; the ADR gate reads inline
-// link syntax (extractLinks) and the case-exact path walk; scanHtml below reads HTML comments and
-// tag attributes, which neither owner covers.
+// Autolinks (<https://...>) and bare URLs always carry a scheme, so they are never relative.
+// Anchors: ATX headings outside fences (sectionizer), slugged with gen-features `slugify`. A
+// heading the guard cannot place for sure gives no anchor, so a link to it fails: one in a
+// block quote or after a list marker, one slugify cannot reproduce, an `<a id>`, and each
+// heading after a line that may open code or HTML in a list item or an HTML block (unplaced).
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -21,134 +23,62 @@ const {
   extractLinks, existsCaseExact, realRootOrFallback,
 } = require('../../scripts/gen-adr-index.cjs');
 const {
-  stripFencedCode, stripInlineCode, scanInlineCodeSpans, tokenizeHeadings,
+  stripInlineCode, scanFencedBlocks, tokenizeHeadings,
 } = require('../../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 const REPO = 'https://github.com/open-gsd/gsd-core/';
 const NEXT = `${REPO}blob/next/`;
 
-// One linear pass (ADR-3212 section 5) after the WHATWG tokenizer: it drops HTML comments and
-// reads the attributes of open tags. A comment ends at the first `-->`, so `<!-->` is empty and
-// an unclosed one hides the rest. A tag takes an attribute right after a quoted value and keeps
-// an `=` inside an unquoted value; a quote with no partner ends the tag, which yields none.
-const eat = (re, s, at) => {
-  re.lastIndex = at;
-  return re.exec(s)?.[0] ?? '';
+// A destination is `<...>`, or the first run with no ASCII control or space (a non-ASCII space
+// stays in it). 999 is this guard's own scan bound for the angle form.
+const destOf = (raw) => {
+  const rest = raw.slice(raw.search(/[^ \t]|$/));
+  return /^<([^<>]{0,999})>/.exec(rest)?.[1] ?? rest.split(/[^!-~\u0080-￿]/)[0];
 };
-const SKIP = /[\s/]*/y;
-const SPACE = /\s*/y;
-const TAG_NAME = /[A-Za-z][^\s/>]*/y;
-const ATTR_NAME = /=?[^\s/>=]*/y;
-const UNQUOTED = /[^\s>]*/y;
-// `shown` is `s` before its code spans were masked to spaces (same length): a `<!--` in a code
-// span is no comment, but the text kept for headings still holds the span.
-const scanHtml = (s, shown = s) => {
-  const attrs = [];
-  const unclosed = new Set(); // a quote with no partner after one point has none after a later one
-  const close = (q, at) => {
-    const end = unclosed.has(q) ? -1 : s.indexOf(q, at);
-    if (end < 0) unclosed.add(q);
-    return end;
-  };
-  const tag = (start) => {
-    const found = [];
-    const name = eat(TAG_NAME, s, start + 1);
-    let i = start + 1 + name.length;
-    for (;;) {
-      i += eat(SKIP, s, i).length;
-      if (i >= s.length) return i;
-      if (s[i] === '>') {
-        attrs.push(...found);
-        return i + 1;
-      }
-      const key = eat(ATTR_NAME, s, i);
-      i += key.length;
-      let j = i + eat(SPACE, s, i).length;
-      let value;
-      if (s[j] === '=') {
-        j += 1 + eat(SPACE, s, j + 1).length;
-        const q = s[j];
-        if (q === '"' || q === "'") {
-          const end = close(q, j + 1);
-          if (end < 0) return j;
-          value = s.slice(j + 1, end);
-          i = end + 1;
-        } else {
-          value = eat(UNQUOTED, s, j);
-          i = j + value.length;
-        }
-      }
-      found.push({ tag: name.toLowerCase(), name: key.toLowerCase(), value });
-    }
-  };
-  let text = '';
-  let from = 0;
-  for (let i = s.indexOf('<'); i >= 0; i = s.indexOf('<', i)) {
-    if (s.startsWith('<!--', i)) {
-      const end = s.indexOf('-->', i + 2);
-      text += shown.slice(from, i);
-      if (end < 0) return { text, attrs };
-      from = i = end + 3;
-    } else {
-      i = /[A-Za-z]/.test(s[i + 1] ?? '') ? tag(i) : i + 1;
-    }
-  }
-  return { text: text + shown.slice(from), attrs };
-};
-// What a reader sees: a quote marker is no content, and neither is a fence or a comment.
-const unfenced = (text) => stripFencedCode(text.replace(/^(?: {0,3}>[ \t]?)+/gm, '')).text;
-const prose = (text) => scanHtml(stripInlineCode(unfenced(text)));
-// The text with each code span (delimiters included) blanked to spaces: offsets stay the same.
-const blankCode = (text) => {
-  let out = '';
-  let at = 0;
-  for (const { start, end } of scanInlineCodeSpans(text)) {
-    out += text.slice(at, start) + ' '.repeat(end - start);
-    at = end;
-  }
-  return out + text.slice(at);
+// Line by line: the gate's fence mask spans lines, and this guard checks code blocks too.
+const hrefsIn = (text) => splitLines(text)
+  .flatMap((line) => extractLinks(line).map(({ target }) => destOf(target)));
+// A name WHATWG reads as an href, src or srcset attribute (any case).
+const URL_ATTR = /(?:^|[\s"'/])(?:href|src|srcset)(?=[\s/>=]|$)/i;
+// The lines this guard refuses instead of reading, as `N: "line"`: see the header.
+const unreadForms = (text) => {
+  let tagged = false;
+  return splitLines(text).flatMap((line, i) => {
+    const tag = tagged ? 0 : line.search(/<[A-Za-z]/);
+    tagged = tag >= 0; // an HTML block may span blank lines, so a tag marks the rest
+    const refused = line.includes(']:') || (tagged && URL_ATTR.test(line.slice(tag)))
+      || stripInlineCode(line).split('](').length - 1 > extractLinks(line).length
+      || line.includes('\\`');
+    return refused ? [`${i + 1}: ${JSON.stringify(line)}`] : [];
+  });
 };
 
-const URL_ATTRS = new Set(['href', 'src', 'srcset']);
-const firstCandidate = (c) => c.trim().split(/\s+/)[0];
-const attrUrls = (attrs) => attrs
-  .filter(({ name, value }) => URL_ATTRS.has(name) && value !== undefined)
-  .flatMap(({ name, value }) =>
-    name === 'srcset' ? value.split(',').map(firstCandidate).filter(Boolean) : [value]);
-
-// A link destination is the first word of the parentheses, or the whole of an `<...>` form.
-// A label takes the CommonMark limit of 999 characters. The angle destination takes the same
-// number as this guard's own scan bound: it keeps the scan linear.
-const destOf = (raw) => /^\s*<([^<>]{0,999})>/.exec(raw)?.[1] ?? raw.trim().split(/\s+/)[0];
-// A reference label may span lines (no blank line) and one line ending may follow the colon.
-const REF_LABEL = String.raw`\[(?:[^\]\n]|\n(?![ \t]*\r?\n)){1,999}\]`;
-const REF_DEF = new RegExp(
-  String.raw`^ {0,3}${REF_LABEL}:[ \t]*(?:\r?\n[ \t]*)?(?:<([^<>\n]{0,999})>|(\S+))`, 'gm');
-const hrefsIn = (text) => {
-  const { text: src, attrs } = prose(text);
-  const refs = [...src.matchAll(REF_DEF)].map((m) => m[1] ?? m[2]);
-  return [...extractLinks(src).map(({ target }) => destOf(target)), ...attrUrls(attrs), ...refs];
-};
-
-// Host and owner/name are case-insensitive on GitHub, the view and the ref are not.
-const REPO_URL = /^https:\/\/github\.com\/open-gsd\/gsd-core(?:\/([^?#]*))?([?#].*)?$/i;
+const REPO_BASE = REPO.slice(0, -1);
 const DOT_SEG = /^(?:\.|%2e){1,2}$/i;
 // The one rule for path segments, on the raw link (isBadLink) and on the decoded path
-// (missingNext): a dot segment, or an empty one (`gsd-core//blob/main/x`, `x/`, `x.md%2F`)
-// in a path of more than one segment.
-const badSegs = (segs) =>
-  segs.some((s) => DOT_SEG.test(s)) || (segs.length > 1 && segs.includes(''));
+// (missingNext): a dot segment, a segment with `&` or `\` (CommonMark decodes an entity or an
+// escape, so either can spell `..`), or an empty one (`gsd-core//blob/main/x`, `x/`,
+// `x.md%2F`) in a path of more than one segment.
+const badSegs = (segs) => segs.some((s) => DOT_SEG.test(s) || /[&\\]/.test(s))
+  || (segs.length > 1 && segs.includes(''));
 // The views whose path the existence check reads.
 const REF_PAGE = new Set(['blob', 'tree', 'raw', 'blame']);
 const NO_REF = new Set([
   '', 'issues', 'pull', 'pulls', 'discussions', 'actions', 'releases', 'wiki', 'security',
   'projects', 'labels', 'milestones', 'tags', 'branches', 'compare',
 ]);
-// The one parse of a link into this repo; undefined for any other link.
+// The one parse of a link into this repo; undefined for any other link. Host and owner/name
+// are case-insensitive on GitHub, the view and the ref are not.
 const repoLink = (h) => {
-  const m = REPO_URL.exec(h);
-  return m && { segs: (m[1] ?? '').split('/'), tail: m[2] ?? '' };
+  const rest = h.slice(REPO_BASE.length);
+  if (h.slice(0, REPO_BASE.length).toLowerCase() !== REPO_BASE || !/^(?:[/?#]|$)/.test(rest)) {
+    return undefined;
+  }
+  const cut = rest.search(/[?#]|$/);
+  const route = rest.slice(rest.startsWith('/') ? 1 : 0, cut);
+  return { segs: route.split('/'), tail: rest.slice(cut) };
 };
 // Ok: `?template=`, `#`, a repo link naming no ref, or a checkable view on `next`.
 // Never ok: a dot segment, or an empty segment (a doubled or trailing slash) in a path.
@@ -189,32 +119,45 @@ const missingNext = (hs, where) => hs.filter((h) => nextRel(h) !== undefined)
   .map((h) => repoPathOf(h, where))
   .filter((rel) => badSegs(rel.split('/')) || !existsExact(rel));
 
-// GitHub anchors: ATX headings and `<a id>`/`<a name>` outside code and comments count; a
-// repeated slug gets -1, -2, ...
-// GitHub keeps non-ASCII letters and slugs the rendered text; slugify keeps neither, so
-// such a heading gets no anchor and a link to it fails.
+// GitHub keeps non-ASCII letters and slugs the rendered text; slugify keeps neither, so such
+// a heading gets no anchor and a link to it fails. So do a link, an HTML tag or entity, `_`
+// emphasis, and any whitespace but U+0020 (GitHub drops it, slugify makes it `-`).
 const unslugable = (text) => {
   const bare = stripInlineCode(text);
   return /(?!\p{ASCII})[\p{L}\p{N}]/u.test(text) || /\]\(|\]\[/.test(bare)
-    || /<[A-Za-z/!]|&[A-Za-z0-9#]+;/.test(bare) // an HTML tag or entity renders to other text
-    || /(?:^|\W)_|_(?:\W|$)/.test(bare);
+    || /<[A-Za-z/!]|&[A-Za-z0-9#]{1,32};/.test(bare) // an HTML tag or entity renders other text
+    || /(?:^|\W)_|_(?:\W|$)/.test(bare) || /[^\S ]/.test(text);
 };
-const anchorIds = (attrs) => attrs
-  .filter(({ tag, name, value }) => tag === 'a' && (name === 'id' || name === 'name') && value
-    && !/\s/.test(value))
-  .map(({ value }) => value);
+// A line that may open code or HTML inside a list item or an HTML block, where the sectionizer
+// cannot place what follows: an HTML block start (`<` + letter, `/`, `!` or `?`, CommonMark 4.6)
+// after any indentation or list marker, or a fence after them.
+const unplaced = (line) => {
+  const rest = line.slice(line.search(/[^ \t*+.)0-9-]|$/));
+  return /^<[A-Za-z/!?]/.test(rest)
+    || (rest.length < line.length && /^(?:`{3}|~{3})/.test(rest));
+};
+// GitHub anchors: ATX headings outside fences, up to the first unplaced line outside fence
+// content (or a front matter `---` on line 1); a repeated slug gets -1, -2, ...
 const headingSet = (source) => {
+  const lines = splitLines(source);
+  const code = new Set();
+  for (const { openLineIdx: from, closeLineIdx: to } of scanFencedBlocks(lines)) {
+    for (let i = from + 1; i <= (to < 0 ? lines.length - 1 : to); i++) code.add(i);
+  }
+  const at = lines.findIndex((l, i) => !code.has(i)
+    && (unplaced(l) || (i === 0 && l.startsWith('---'))));
   const seen = new Map();
-  const plain = unfenced(source);
-  const slugs = tokenizeHeadings(scanHtml(blankCode(plain), plain).text)
-    .filter(({ text }) => !unslugable(text))
+  const slugs = new Set(tokenizeHeadings(source)
+    .filter(({ line, text }) => (at < 0 || line <= at) && !unslugable(text))
     .map(({ text }) => {
       const s = slugify(text);
       const n = seen.get(s) ?? 0;
       seen.set(s, n + 1);
       return n ? `${s}-${n}` : s;
-    });
-  return new Set([...slugs, ...anchorIds(prose(source).attrs)]);
+    }));
+  // the stop line goes into the unresolved-anchor message, so a refusal names its cause
+  const stop = at < 0 ? '' : `line ${at + 1}: ${JSON.stringify(lines[at])}`;
+  return Object.assign(slugs, { stop });
 };
 // A repo file read through the gate's case-exact walk, which refuses a symlink out of the repo.
 const readRepoFile = (rel) => {
@@ -223,7 +166,7 @@ const readRepoFile = (rel) => {
 };
 const headingsOfFile = (rel) => headingSet(readRepoFile(rel));
 
-const LINE_ANCHOR = /^L(\d+)(?:C\d+)?(?:-L(\d+)(?:C\d+)?)?$/;
+const LINE_ANCHOR = /^L(\d{1,9})(?:C\d{1,9})?(?:-L(\d{1,9})(?:C\d{1,9})?)?$/;
 // heading: rendered markdown (blob or tree, no ?plain=1).
 // line: blame, ?plain=1 and non-markdown blob. none: raw.
 const anchorKind = ({ segs, tail }, rel) => {
@@ -254,13 +197,14 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
     const anchor = decode(h.slice(h.indexOf('#') + 1), h, where);
     if (!existsExact(rel) || anchor === '') return [];
     const kind = anchorKind(repoLink(h), rel);
-    const ok = kind === 'heading' ? headingsOf(rel).has(anchor)
+    const set = kind === 'heading' ? headingsOf(rel) : new Set();
+    const ok = kind === 'heading' ? set.has(anchor)
       : kind === 'line' && lineAnchorOk(anchor, linesOf(rel));
-    return ok ? [] : [`${rel}#${anchor}`];
+    return ok ? [] : [`${rel}#${anchor}${set.stop ? ` (anchors stop at ${set.stop})` : ''}`];
   });
 };
 
 module.exports = {
-  REPO, NEXT, hrefsIn, isBadLink, repoPathOf, missingNext,
+  REPO, NEXT, hrefsIn, unreadForms, isBadLink, repoPathOf, missingNext,
   unresolvedAnchors, headingSet, anchorKind, lineCountOf, readRepoFile,
 };

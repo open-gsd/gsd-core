@@ -5,12 +5,11 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const assert = require('node:assert/strict');
 
 const {
-  REPO, NEXT, hrefsIn, isBadLink, unresolvedAnchors,
+  REPO, NEXT, hrefsIn, unreadForms, isBadLink, unresolvedAnchors, headingSet,
 } = require('./helpers/pr-template-links.cjs');
 
 const seg = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,19}$/); // never `.` or `..`
 const rel = fc.array(seg, { minLength: 1, maxLength: 3 }).map((a) => a.join('/'));
-const title = fc.constantFrom('', ' "t"', " 't'");
 
 describe('repo link grammar (#5427)', () => {
   const checked = ['blob', 'tree', 'raw', 'blame'];
@@ -33,6 +32,9 @@ describe('repo link grammar (#5427)', () => {
     bad(fc.tuple(fc.constantFrom(...noRef), rel).map(([v, p]) => `${REPO}${v}/../${p}`)),
     bad(fc.tuple(fc.constantFrom('.', '..', '%2e%2e', '.%2e'), rel)
       .map(([d, p]) => `${NEXT}${d}/${p}`)),
+    // CommonMark decodes an entity or an escape in a destination: either can spell `..`
+    bad(rel.map((p) => `${REPO}issues/&#46;&#46;/${p}`)),
+    bad(rel.map((p) => `${REPO}issues/\\.\\./${p}`)),
     bad(rel.map((p) => `https://github.com/open-gsd/gsd-corex/blob/next/${p}`)),
     bad(rel.map((p) => `http://github.com/open-gsd/gsd-core/blob/next/${p}`)),
     bad(rel.map((p) => `https://github.com.evil/open-gsd/gsd-core/blob/next/${p}`)),
@@ -68,107 +70,94 @@ describe('line anchors (#5427)', () => {
   });
 });
 
+// Each form sits in each block context; the guard reads the link or refuses the line. The
+// contexts are written by hand, never derived from the guard.
 describe('link extractor properties (#5427)', () => {
   const dest = fc.stringMatching(/^[A-Za-z0-9._/-]{1,20}$/);
-  const forms = (d, t) => [`[a](${d}${t})`, `[a](<${d}>${t})`, `<a href="${d}">`, `<a href='${d}'>`,
-    `<a href=${d}>`, `<img src="${d}">`, `[a]: ${d}${t}`, `[a]: <${d}>${t}`, `> [a]: ${d}${t}`,
-    `> > [a]: ${d}${t}`, `[a]:\n${d}${t}`];
-  test('property: every destination form yields the generated destination, CRLF included', () => {
-    fc.assert(fc.property(dest, title, (d, t) => {
-      for (const text of forms(d, t)) {
-        assert.deepEqual(hrefsIn(text), [d], JSON.stringify(text));
-        assert.deepEqual(hrefsIn(`${text}\r\n${text}\r\n`), [d, d], JSON.stringify(text));
+  const contexts = [(x) => x, (x) => `\`\`\`\n${x}\n\`\`\``, (x) => `~~~\n${x}`,
+    (x) => `<!--\n${x}\n-->`, (x) => `<!--\n\`\`\`\n-->\n${x}`, (x) => `<!-- ${x}`,
+    (x) => `> ${x}`, (x) => `> > \`\`\`\n> ${x}`, (x) => `- ${x}`, (x) => `    ${x}`,
+    (x) => `<details>\n${x}\n</details>`, (x) => `<b title="x ${x}`];
+  const read = (d) => [`[a](${d})`, `[a](<${d}>)`, `![i](${d} "t")`, `[a](${d} 't')`];
+  const unread = (d) => [`[a]: ${d}`, `[a]:\n${d}`, `<a href="${d}">`, `<img src=${d}>`,
+    `<img srcset="${d} 1x">`, `[![i](a.png)](${d})`, `[a [b]](${d})`, `[a](${d}_(b))`];
+  const oneLine = (d) => [`[a]: ${d}`, `<a href='${d}'>`, `<img src=${d}>`];
+  test('property: every inline form is read in every block context, CRLF included', () => {
+    fc.assert(fc.property(dest, (d) => {
+      for (const form of read(d)) {
+        for (const wrap of contexts) {
+          const text = wrap(form);
+          assert.ok(hrefsIn(text).includes(d), JSON.stringify(text));
+          assert.ok(hrefsIn(text.replaceAll('\n', '\r\n')).includes(d), JSON.stringify(text));
+        }
       }
     }));
   });
+  test('property: a form the guard cannot read exactly is refused in every context', () => {
+    fc.assert(fc.property(dest, (d) => {
+      for (const form of unread(d)) {
+        for (const wrap of contexts) {
+          const text = wrap(form);
+          assert.ok(unreadForms(text).length > 0, JSON.stringify(text));
+          assert.ok(unreadForms(text.replaceAll('\n', '\r\n')).length > 0, JSON.stringify(text));
+        }
+      }
+    }));
+  });
+  test('property: a code span hides an inline link; a definition or attribute in one stays refused',
+    () => {
+      fc.assert(fc.property(dest, (d) => {
+        for (const form of read(d)) assert.deepEqual(hrefsIn(`\`${form}\``), [], form);
+        for (const form of oneLine(d)) {
+          assert.ok(unreadForms(`\`${form}\``).length > 0, form);
+        }
+      }));
+    });
   test('property: an angle destination keeps its spaces, with or without space before it', () => {
     const words = fc.array(dest, { minLength: 2, maxLength: 3 }).map((w) => w.join(' '));
-    fc.assert(fc.property(words, fc.constantFrom('', ' '), title, (d, pad, t) => {
-      assert.deepEqual(hrefsIn(`[a](${pad}<${d}>${t})`), [d]);
-      assert.deepEqual(hrefsIn(`[a]: ${pad}<${d}>${t}`), [d]);
-    }));
-  });
-  test('property: nothing is extracted from fenced code, inline code or HTML comments', () => {
-    fc.assert(fc.property(dest, title, (d, t) => {
-      for (const text of forms(d, t)) {
-        const wrapped = [`\`\`\`\n${text}\n\`\`\``, `~~~\n${text}\n~~~`, `\`${text}\``,
-          `<!-- ${text} -->`, `<!--\n${text}\n-->`];
-        for (const w of wrapped) assert.deepEqual(hrefsIn(w), [], JSON.stringify(w));
-        assert.deepEqual(hrefsIn(`<!-- c -->\n${text}`), hrefsIn(text), JSON.stringify(text));
-      }
-    }));
-  });
-  test('property: attributes are read only inside open tags', () => {
-    fc.assert(fc.property(dest, dest, (d, e) => {
-      assert.deepEqual(hrefsIn(`prose href="${d}" and src='${d}'`), [], 'prose');
-      assert.deepEqual(hrefsIn(`<a title="href=${e}" href="${d}">`), [d], 'inside a quoted value');
-      assert.deepEqual(hrefsIn(`<a title='src=${e}' src='${d}'>`), [d], 'single-quoted value');
-    }));
-  });
-  test('property: a quoted value keeps `>`, `<!--` and the other quote', () => {
-    const decoy = fc.constantFrom('a>b', '<!-- c', 'x <!-- y > z', '>', '<');
-    fc.assert(fc.property(dest, decoy, (d, x) => {
-      assert.deepEqual(hrefsIn(`<a title="${x}" href="${d}">`), [d], x);
-      assert.deepEqual(hrefsIn(`<a title='${x}' href='${d}'> [l](${d})`), [d, d], x);
-      assert.deepEqual(hrefsIn(`<a title="it's ${x}" href=${d}>`), [d], x);
-    }));
+    fc.assert(fc.property(words, fc.constantFrom('', ' '), fc.constantFrom('', ' "t"'),
+      (d, pad, t) => assert.deepEqual(hrefsIn(`[a](${pad}<${d}>${t})`), [d])));
   });
   test('property: an empty destination yields one empty string', () => {
     fc.assert(fc.property(fc.constantFrom('', ' ', '  ', '<>', ' <>'), (ws) => {
       assert.deepEqual(hrefsIn(`[a](${ws})`), ['']);
     }));
-    fc.assert(fc.property(fc.constantFrom('<>', ' <>', '\t<>'), (ws) => {
-      assert.deepEqual(hrefsIn(`[a]:${ws}`), ['']);
-    }));
   });
 });
 
-// The tag shapes follow the WHATWG tokenizer (states "attribute value (double-quoted)",
-// "(single-quoted)", "(unquoted)", "after attribute value (quoted)"). The expected URLs come
-// from the generated attribute list, never from the scanner.
-describe('tag scanner properties (#5427)', () => {
-  const value = fc.stringMatching(/^[A-Za-z0-9._/-]{1,12}$/);
-  const attr = fc.record({
-    name: fc.constantFrom('href', 'src', 'title', 'data-x', 'alt'),
-    form: fc.constantFrom('dq', 'sq', 'unquoted', 'unquoted-eq', 'boolean'),
-    value,
-    more: value,
-    gap: fc.constantFrom(' ', '  ', '\n', '\t'),
-  });
-  const render = ({ name, form, value: v, more }) => ({
-    dq: `${name}="${v}"`, sq: `${name}='${v}'`, unquoted: `${name}=${v}`,
-    'unquoted-eq': `${name}=${v}=${more}`, boolean: name,
-  })[form];
-  const expected = ({ name, form, value: v, more }) => {
-    if (!['href', 'src'].includes(name) || form === 'boolean') return [];
-    return [form === 'unquoted-eq' ? `${v}=${more}` : v];
+// The expected anchors come from the generated blocks: the real headings before the first block
+// that opens code or HTML in a way the sectionizer cannot place. A code, quoted or list-marker
+// heading is never an anchor.
+describe('heading anchors by construction (#5427)', () => {
+  const word = fc.stringMatching(/^[a-z]{3,8}$/);
+  const real = ['real', 'indented'];
+  const blocks = {
+    real: (w) => `## ${w}`,
+    indented: (w) => `   ## ${w}`,
+    fenced: (w) => `\`\`\`\n## ${w}\n> \`\`\`\n\`\`\``,
+    tilde: (w) => `~~~\n## ${w}\n~~~`,
+    quoted: (w) => `> ## ${w}`,
+    marked: (w) => `- ## ${w}`,
+    listFence: () => '- ```',
+    html: () => '<details>',
+    comment: () => '<!--',
+    indentFence: () => '    ```',
   };
-  test('property: each attribute of a tag is read, whatever its neighbours look like', () => {
-    fc.assert(fc.property(fc.array(attr, { minLength: 1, maxLength: 6 }), (attrs) => {
-      const quoted = (a) => a.form === 'dq' || a.form === 'sq';
-      // after a quoted value the next attribute may follow with no space at all
-      const body = attrs.map((a, i) => (i > 0 && quoted(attrs[i - 1]) && a.gap === ' ' ? '' : a.gap)
-        + render(a)).join('');
-      const tag = `<a${attrs[0].gap}${body.replace(/^\s+/, '')}>`;
-      assert.deepEqual(hrefsIn(tag), attrs.flatMap(expected), JSON.stringify(tag));
-    }));
+  test('property: a heading counts only where the sectionizer places it', () => {
+    const entry = fc.tuple(word, fc.constantFrom(...Object.keys(blocks)));
+    fc.assert(fc.property(fc.uniqueArray(entry, { selector: ([w]) => w, maxLength: 8 }),
+      (entries) => {
+        const md = entries.map(([w, kind]) => blocks[kind](w)).join('\n\n');
+        const stop = entries.findIndex(([, kind]) => !blocks[kind]('x').includes('##'));
+        const placed = stop < 0 ? entries : entries.slice(0, stop);
+        const expected = placed.filter(([, kind]) => real.includes(kind)).map(([w]) => w);
+        assert.deepEqual([...headingSet(md)], expected, JSON.stringify(md));
+      }));
   });
-  // Linear time is a property of the scan, not of a clock (RULESET.TESTS.no-timing-assertion):
-  // each attack has a result known by construction at any size; a quadratic scan hangs the run.
-  const N = 30000;
-  const attacks = [
-    ['unclosed comments', '<!--'],
-    ['open tags without end', '<a '],
-    ['quotes without partner', '<a href="'],
-    ['values without partner', '<a href=\'x\' b="'],
-  ];
-  for (const [label, unit] of attacks) {
-    test(`scan attack stays linear: ${label}`, () => {
-      assert.deepEqual(hrefsIn(unit.repeat(N)), []);
-      assert.deepEqual(hrefsIn(`[a](../x.md) ${unit.repeat(N)}`), ['../x.md']);
-    });
-  }
-  test('scan attack stays linear: one tag with many attributes', () => {
-    assert.deepEqual(hrefsIn(`<a ${'href=x '.repeat(N)}>`), Array(N).fill('x'));
+  test('property: a heading after a stop line is never an anchor', () => {
+    const stops = ['- ```', '<details>', '<!--', '    ```', '1. <b>'];
+    fc.assert(fc.property(word, fc.constantFrom(...stops), (w, stop) => {
+      assert.deepEqual([...headingSet(`## ${w}\n${stop}\n## after`)], [w]);
+    }));
   });
 });
