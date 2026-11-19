@@ -820,10 +820,13 @@ function evaluateShardBalance(samples, config) {
     // against the re-shard that just landed.
     // #6329: only a complete run counts, one with a sample for every shard of
     // the baseline layout. A run that lost a shard (cancelled before it got a
-    // runner, say) does not show the layout ran.
+    // runner, say) does not show the layout ran. A sample whose index is
+    // outside 1..total names no shard of the layout, so it cannot stand in for
+    // a missing one, and a shard sampled twice in one run counts once.
     const baselineShardsByRun = new Map();
     for (const s of samples) {
       if (s.total !== config.baselineShardTotal) continue;
+      if (!Number.isInteger(s.index) || s.index < 1 || s.index > s.total) continue;
       if (!baselineShardsByRun.has(s.runId)) baselineShardsByRun.set(s.runId, new Set());
       baselineShardsByRun.get(s.runId).add(s.shard);
     }
