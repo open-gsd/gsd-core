@@ -281,7 +281,9 @@ describe('#5583 insert-phase --sibling', () => {
           probe: 'true',
         });
         assert.equal(r.status, 0, r.stderr);
-        assert.ok(r.stdout.includes('[--note]\n[' + d + ']\n'), r.stdout);
+        const argv = r.stdout.split(/\r?\n/);
+        const at = argv.indexOf('[--note]');
+        assert.deepEqual(argv.slice(at, at + 2), ['[--note]', '[' + d + ']'], r.stdout);
       });
     }
     test('a table row reads a workstream in all three blocks', () => {

@@ -7,7 +7,8 @@ const path = require('path');
 const fs = require('fs');
 const os = require('node:os');
 const yaml = require('js-yaml');
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -75,15 +76,24 @@ describe('ci-test-scope.cjs', () => {
 
   // writeOutputs puts zsh_changed on $GITHUB_OUTPUT, the channel test.yml reads; the JSON rows above never run it.
   for (const [file, expected] of [['gsd-core/workflows/insert-phase.md', 'true'], ['docs/usage.md', 'false']]) {
-    test(`GITHUB_OUTPUT holds zsh_changed=${expected} for ${file}`, () => {
-      const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ci-scope-out-')), 'github-output');
-      try {
-        const r = runNode([SCRIPT, '--files', file], { cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS, env: { ...process.env, GITHUB_OUTPUT: out } });
-        assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
-        assert.ok(fs.readFileSync(out, 'utf8').includes(`zsh_changed=${expected}\n`));
-      } finally {
-        cleanup(path.dirname(out));
-      }
+    test(`GITHUB_OUTPUT holds zsh_changed=${expected} for ${file}`, (t) => {
+      const dir = createTempDir('ci-scope-out-');
+      t.after(() => cleanup(dir));
+      const out = path.join(dir, 'github-output');
+      const r = runNode([SCRIPT, '--files', file], {
+        cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS, env: isolatedEnv({ home: dir, override: { GITHUB_OUTPUT: out } }),
+      });
+      assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
+      const result = JSON.parse(r.stdout);
+      const written = Object.fromEntries(fs.readFileSync(out, 'utf8').split(/\r?\n/).filter(Boolean)
+        .map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+      assert.deepStrictEqual(written, {
+        code_changed: String(result.code_changed),
+        product_changed: String(result.product_changed),
+        full_matrix: String(result.full_matrix),
+        zsh_changed: expected,
+        targeted_tests: result.targeted_tests.join(' '),
+      });
     });
   }
 
