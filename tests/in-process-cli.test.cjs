@@ -405,6 +405,49 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     assert.deepEqual(outside, ['stream:in-process-marker:outside', 'sync:in-process-marker:outside']);
   });
 
+  // Found by comparing every command in-process against the spawned binary:
+  // main wraps its work in io.cts's stdout capture, which layers its own
+  // fs.writeSync on top of the call's stand-in and calls back down into it. A
+  // write to any other descriptor then went up to the wrapper, down to the
+  // stand-in and up again without end ("Maximum call stack size exceeded").
+  await t.test('a wrapper layered over a stand-in inside the call still reaches the real function', async (t2) => {
+    const file = path.join(tempDir(t2), 'layered.txt');
+    const result = await runInProcess(() => {
+      const below = fs.writeSync;
+      const seenByWrapper = [];
+      fs.writeSync = (fd, data, ...rest) => {
+        seenByWrapper.push(fd);
+        return below.call(fs, fd, data, ...rest);
+      };
+      try {
+        const fd = fs.openSync(file, 'w');
+        try {
+          fs.writeSync(fd, 'through-the-wrapper');
+        } finally {
+          fs.closeSync(fd);
+        }
+        fs.writeSync(1, 'captured');
+      } finally {
+        fs.writeSync = below;
+      }
+      return seenByWrapper.length;
+    });
+
+    assert.deepEqual(result, { exitCode: 2, stdout: 'captured', stderr: '' });
+    assert.equal(fs.readFileSync(file, 'utf8'), 'through-the-wrapper');
+  });
+
+  await t.test('a command that writes a file through fs.writeSync runs in-process', async (t2) => {
+    const project = tempDir(t2);
+    fs.mkdirSync(path.join(project, '.planning'));
+    fs.writeFileSync(path.join(project, '.planning', 'STATE.md'), '# State\n');
+
+    const result = await runCli({ argv: ['quick-tasks-migrate', '--cwd', project] });
+
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), { ok: true, migrated: false });
+  });
+
   // A module first loaded inside main may keep a reference to a stand-in
   // (`const { exit } = process`). Used during a later call, that stale
   // reference must act for the later call, never reach the real function.

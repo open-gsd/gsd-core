@@ -265,13 +265,21 @@ function swapProperty(target: object, key: string, replacement: unknown): { orig
 }
 
 /**
- * Where a stand-in sends a call it does not own. While it is still the
- * installed function, that is the function it replaced. Once it has been
- * restored away and something still holds a reference to it, that is whatever
- * is installed now, so a stale reference can never reach past a later call's
- * stand-in to the real function.
+ * Where a stand-in sends a call it does not own.
+ *
+ * While its call is open, that is the function it replaced. It must not look
+ * at what is installed now: code inside the call may have layered its own
+ * wrapper on top (io.cts's stdout capture does), and that wrapper calls back
+ * down into this stand-in, so sending the call up to it would never return.
+ *
+ * Once its call has closed, the stand-in is stale: something kept a reference
+ * to it. Then it defers to whatever is installed now, so the reference can
+ * never reach past a later call's stand-in to the real function.
  */
-function passThrough(target: object, key: string, standIn: unknown, original: unknown): (...a: unknown[]) => unknown {
+function passThrough(
+  target: object, key: string, standIn: unknown, original: unknown, callOpen: boolean,
+): (...a: unknown[]) => unknown {
+  if (callOpen) return original as (...a: unknown[]) => unknown;
   const live: unknown = Reflect.get(target, key);
   return (live === standIn ? original : live) as (...a: unknown[]) => unknown;
 }
@@ -339,6 +347,8 @@ async function runOne(
   const capturedBytes = { 1: 0, 2: 0 };
   let overflowed: 1 | 2 | undefined;
   let firstExit: number | undefined;
+  // True until the restore starts. See passThrough.
+  let open = true;
 
   const capture = (fd: 1 | 2, bytes: Buffer): void => {
     // A real process is gone once it has asked to exit. Whatever a catch
@@ -355,7 +365,7 @@ async function runOne(
   const streamWrite = (fd: 1 | 2, stream: object, real: () => unknown) => (
     function write(this: unknown, chunk: unknown, encodingOrCallback?: unknown, callback?: unknown): boolean {
       if (!ownsCurrentContext()) {
-        return passThrough(stream, 'write', write, real()).call(this, chunk, encodingOrCallback, callback) as boolean;
+        return passThrough(stream, 'write', write, real(), open).call(this, chunk, encodingOrCallback, callback) as boolean;
       }
       capture(fd, streamWriteBytes(chunk, encodingOrCallback));
       const done = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
@@ -408,7 +418,7 @@ async function runOne(
     undo.push(stderrWrite.restore);
     const writeSyncStandIn = (fd: number, data: unknown, ...rest: unknown[]): number => {
       if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) {
-        return passThrough(fs, 'writeSync', writeSyncStandIn, writeSync.original).call(fs, fd, data, ...rest) as number;
+        return passThrough(fs, 'writeSync', writeSyncStandIn, writeSync.original, open).call(fs, fd, data, ...rest) as number;
       }
       const bytes = writeSyncBytes(data, rest[0], rest[1]);
       capture(fd, bytes);
@@ -421,7 +431,7 @@ async function runOne(
     // so a code Node refuses is refused here with Node's own error.
     const exitStandIn = (...args: unknown[]): never => {
       if (!ownsCurrentContext()) {
-        return passThrough(process, 'exit', exitStandIn, exit.original).call(process, ...args) as never;
+        return passThrough(process, 'exit', exitStandIn, exit.original, open).call(process, ...args) as never;
       }
       if (args.length > 0) process.exitCode = args[0] as number | undefined;
       const requested = exitStatus(process.exitCode);
@@ -443,6 +453,7 @@ async function runOne(
     failure = { error };
   }
 
+  open = false;
   const restoreErrors: unknown[] = [];
   for (const step of undo.reverse()) {
     try {
