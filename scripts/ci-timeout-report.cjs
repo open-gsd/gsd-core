@@ -828,10 +828,12 @@ function evaluateShardBalance(samples, config) {
       if (s.total !== config.baselineShardTotal) continue;
       if (!Number.isInteger(s.index) || s.index < 1 || s.index > s.total) continue;
       if (!baselineShardsByRun.has(s.runId)) baselineShardsByRun.set(s.runId, new Set());
-      baselineShardsByRun.get(s.runId).add(s.shard);
+      // Keyed on the numeric index, so two spellings of one shard ("1/3" and
+      // "01/3") are one shard.
+      baselineShardsByRun.get(s.runId).add(s.index);
     }
     const baselineLayoutRuns = [...baselineShardsByRun.values()]
-      .filter((shards) => shards.size === config.baselineShardTotal).length;
+      .filter((indexes) => indexes.size === config.baselineShardTotal).length;
     const status = baselineLayoutRuns < config.minRuns ? 'insufficient-data' : 'baseline-mismatch';
     return {
       status, runs: runsCount, total: newestTotal, window: config.windowRuns, perShard, gapMs: null, breaches: [],
