@@ -6042,3 +6042,163 @@ describe('#5931: a project-coded or unpadded phase dir resolves the scaffolder-w
     });
   }
 });
+
+// ─── #6078: a gaps_found report is checked against its covered-input fingerprint ──
+//
+// `readVerificationStatus` used to return `gaps_found` before the covered-digest check, so a gap closed
+// outside a gap-closure plan (a fix touching the report's covered files) never read stale and no route
+// re-ran the verifier. A `passed` report in the same situation reads `stale` and routes to execute-phase.
+
+describe('#6078: gaps_found with a covered-input fingerprint', () => {
+  /** A git project with one covered file and a report of `status` carrying its v4 fingerprint. */
+  function project(t, status, extraFrontmatter = null) {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    const covered = path.join(projectDir, 'src', 'a.ts');
+    fs.writeFileSync(covered, 'export const a = 1;\n');
+    const past = new Date(Date.now() - 120000);
+    fs.utimesSync(covered, past, past);
+    const digest = computeCoveredDigest(projectDir, ['src/a.ts'], undefined, { phaseDir });
+    const report = path.join(phaseDir, '01-VERIFICATION.md');
+    const fingerprint = extraFrontmatter ?? `covered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n`;
+    fs.writeFileSync(report, `---\nstatus: ${status}\n${fingerprint}---\n`);
+    const reportTime = new Date(Date.now() - 60000);
+    fs.utimesSync(report, reportTime, reportTime);
+    return { projectDir, phaseDir, covered };
+  }
+  const read = (phaseDir) => readVerificationStatus(phaseDir, { phaseCleanCommitTimesMs: () => new Map() });
+
+  test('a matching fingerprint keeps gaps_found and its gap-planning route', (t) => {
+    const { phaseDir } = project(t, 'gaps_found');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'gaps_found');
+    assert.equal(r.route, 'plan-phase');
+    assert.match(r.next_command, /plan-phase 01 --gaps/);
+    assert.equal(r.moved_files, undefined);
+  });
+
+  test('a moved fingerprint reads stale, names the moved file, and routes to the verifier re-run', (t) => {
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+    assert.match(r.next_command, /execute-phase 01/);
+    assert.deepEqual(r.moved_files, ['src/a.ts']);
+    assert.match(r.next_action, /re-runs the verifier/);
+  });
+
+  test('control: a passed report with the same moved file still reads stale and routes to execute-phase', (t) => {
+    const { phaseDir, covered } = project(t, 'passed');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+  });
+
+  test('a gaps_found report with no fingerprint and a newer SUMMARY still reads gaps_found', (t) => {
+    const { phaseDir } = project(t, 'gaps_found', '');
+    const summary = path.join(phaseDir, '01-01-SUMMARY.md');
+    fs.writeFileSync(summary, '# Summary\n');
+    const newer = new Date(Date.now() + 60000);
+    fs.utimesSync(summary, newer, newer);
+    const r = read(phaseDir);
+    assert.equal(r.status, 'gaps_found');
+    assert.equal(r.route, 'plan-phase');
+  });
+
+  test('a malformed or unknown-version fingerprint does not fail a gaps_found report closed to stale', (t) => {
+    const cases = {
+      'covered_files without a digest': 'covered_files:\n  - src/a.ts\n',
+      'a digest without covered_files': 'covered_digest: "v4:sha256:abc"\n',
+      'an empty covered_files array': 'covered_files: []\ncovered_digest: "v4:sha256:abc"\n',
+      'an unknown digest version': 'covered_files:\n  - src/a.ts\ncovered_digest: "v99:sha256:abc"\n',
+    };
+    for (const [label, fingerprint] of Object.entries(cases)) {
+      const { phaseDir } = project(t, 'gaps_found', fingerprint);
+      assert.equal(read(phaseDir).status, 'gaps_found', label);
+    }
+  });
+
+  test('a gap-closure plan and summary added after verification (no covered file edited) read stale with no moved files', (t) => {
+    const { phaseDir } = project(t, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Gap closure plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-SUMMARY.md'), '# Gap closure summary\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+    assert.equal(r.moved_files, undefined);
+  });
+
+  test('a v2 digest on a gaps_found report: an undeclared plan added after verification reads stale; unchanged reads gaps_found', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'a.ts'), 'export const a = 1;\n');
+    const digest = computeCoveredDigest(projectDir, ['src/a.ts'], 2, { phaseDir });
+    assert.match(digest, /^v2:/);
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: gaps_found\ncovered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n---\n`,
+    );
+    assert.equal(read(phaseDir).status, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan added after verification\n');
+    assert.equal(read(phaseDir).status, 'stale');
+  });
+
+  test('table: {known version, unknown version, malformed} x {unchanged, moved} for gaps_found vs passed', (t) => {
+    const rows = [
+      // [label, fingerprint builder key, unchangedStatus(gaps_found), movedStatus(gaps_found), unchangedStatus(passed), movedStatus(passed)]
+      ['known version', 'known', 'gaps_found', 'stale', 'passed', 'stale'],
+      ['unknown version', 'unknown', 'gaps_found', 'gaps_found', 'stale', 'stale'],
+      ['malformed pair', 'malformed', 'gaps_found', 'gaps_found', 'stale', 'stale'],
+    ];
+    const fingerprints = (digest) => ({
+      known: `covered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n`,
+      unknown: 'covered_files:\n  - src/a.ts\ncovered_digest: "v99:sha256:abc"\n',
+      malformed: 'covered_files:\n  - src/a.ts\n',
+    });
+    for (const [label, key, gUnchanged, gMoved, pUnchanged, pMoved] of rows) {
+      for (const [status, unchanged, moved] of [['gaps_found', gUnchanged, gMoved], ['passed', pUnchanged, pMoved]]) {
+        const base = project(t, status);
+        const digest = computeCoveredDigest(base.projectDir, ['src/a.ts'], undefined, { phaseDir: base.phaseDir });
+        const report = path.join(base.phaseDir, '01-VERIFICATION.md');
+        fs.writeFileSync(report, `---\nstatus: ${status}\n${fingerprints(digest)[key]}---\n`);
+        const reportTime = new Date(Date.now() - 60000);
+        fs.utimesSync(report, reportTime, reportTime);
+        assert.equal(read(base.phaseDir).status, unchanged, `${label} / ${status} / unchanged`);
+        fs.writeFileSync(base.covered, 'export const a = 2;\n');
+        assert.equal(read(base.phaseDir).status, moved, `${label} / ${status} / moved`);
+      }
+    }
+  });
+
+  test('a stale gaps_found phase keeps the phase status a gaps_found phase has today (EXECUTED)', (t) => {
+    const { phaseStatusFromFacts, PHASE_STATUS } = require('../gsd-core/bin/lib/phase-status.cjs');
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const statusOf = () => {
+      const v = isPhaseComplete(phaseDir, { phaseCleanCommitTimesMs: () => new Map() }).value;
+      return phaseStatusFromFacts({ planCount: 1, summaryCount: 1, complete: v.complete, verificationStatus: v.verification.status });
+    };
+    // a v4 digest unions the live plan/summary, so the report written above (before them) already reads stale
+    const staleStatus = statusOf();
+    fs.writeFileSync(covered, 'export const a = 3;\n');
+    assert.equal(statusOf(), PHASE_STATUS.EXECUTED);
+    assert.equal(staleStatus, PHASE_STATUS.EXECUTED);
+  });
+
+  test('a stale gaps_found phase is not complete', (t) => {
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = isPhaseComplete(phaseDir, { phaseCleanCommitTimesMs: () => new Map() });
+    assert.equal(r.value.complete, false);
+    assert.equal(r.value.verification.status, 'stale');
+  });
+});
