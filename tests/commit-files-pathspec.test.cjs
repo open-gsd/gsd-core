@@ -34,6 +34,7 @@ const {
   ISSUE_REF_RE, declarationReason, isDeclared, isUntrackedDeclaration, unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_PREFIX_ORACLE, GIT_VALUE_FLAGS,
 } = require('./helpers/shipped-command-scan.cjs');
 const { SCAN_ROOTS, listScanFiles } = require('./helpers/planning-add-guard.cjs');
+const { GIT_GLOBAL_VALUE_OPTIONS } = require('../hooks/gsd-secret-read-guard.js');
 
 describe('commit --files: pathspec honors declared scope (#2112)', () => {
   let tmpDir;
@@ -3368,13 +3369,12 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
       assert.equal(hook(`bash ${flag} 'cat .env'`), 2, `hook blocks bash ${flag}`);
       assert.equal(shellDashCPayloads(`bash ${flag} 'git commit -m x'`).length, 1, `scanner reads bash ${flag}`);
     }
-    // A value option the hook skips (exit 0) must be a value option of the scanner too; `--super-prefix` fails closed in the hook.
-    const probed = ['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--attr-source', '--shallow-file', '--super-prefix'];
-    assert.deepStrictEqual([...GIT_VALUE_FLAGS].sort(), [...probed].sort(), 'every scanner value option is probed against the hook, and the reverse');
-    const skipped = probed
-      .filter((opt) => hook(`git ${opt} '-calias.x=!cat .env' status`) === 0);
-    for (const opt of skipped) assert.ok(GIT_VALUE_FLAGS.has(opt), `${opt} is a hook value option but not a scanner one`);
-    assert.ok(skipped.includes('-C') && skipped.includes('--git-dir'), `the hook skips -C and --git-dir (got ${skipped})`);
+    // Every value option the hook skips (read from its export) is a value option of the scanner too; `--super-prefix` is the scanner's only extra option.
+    for (const opt of GIT_GLOBAL_VALUE_OPTIONS) {
+      assert.ok(GIT_VALUE_FLAGS.has(opt), `${opt} is a hook value option but not a scanner one`);
+      assert.equal(hook(`git ${opt} '-calias.x=!cat .env' status`), 0, `the hook skips ${opt}`);
+    }
+    assert.deepStrictEqual([...GIT_VALUE_FLAGS].filter((opt) => !GIT_GLOBAL_VALUE_OPTIONS.has(opt)), ['--super-prefix']);
   });
 
   test('git -C / -c global options do not hide a commit', () => {
