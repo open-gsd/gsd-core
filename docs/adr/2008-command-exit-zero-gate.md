@@ -177,4 +177,4 @@ The evaluator throws (`unevaluable`) unless every `GSD_PHASE_*` variable is prov
 - `printf '%s\0' "${GSD_PHASE_DIR}" | xargs -0 ls` replaces `echo "${GSD_PHASE_DIR}" | xargs ls`.
 - `test -d "${GSD_PHASE_DIR}" # note` replaces a comment line before the variable.
 
-A fifth dispatch site joins the three generic workflow sites listed under Evaluation path and the generic `ship:pre` site (#3559): the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase.
+A fifth dispatch site joins the three generic workflow sites listed under Evaluation path and the generic `ship:pre` site (#3559): the engine backstop in `milestone complete` (`milestone.cts:findBlockingShipGates`). It re-runs blocking `ship:pre` predicate gates per milestone phase when the phases are readable; when they cannot be read, only an `onError: halt` gate refuses (one block, phase `*`) and the others warn.

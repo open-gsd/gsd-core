@@ -565,7 +565,8 @@ function milestoneWindow(cwd: string, roadmap: string, version: string): string 
 
 /**
  * #5482: engine backstop for the one-way door. Re-runs every blocking ship:pre
- * check.predicate gate once per milestone phase dir through
+ * check.predicate gate once per milestone phase dir (when the phases are
+ * readable; else only an onError:'halt' gate blocks, once) through
  * evaluateCheckPredicate (gate-predicate.cts, the one owner ship.md step 6's
  * generic arm uses, incl. project-root confinement). Returns every block; gate
  * output is untrusted, so callers render it via formatDiagnosticToken.
@@ -1076,7 +1077,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       dry_run: true,
       // #5482: what --confirm would refuse with MILESTONE_GATE_BLOCKED ([] when nothing blocks).
       would_refuse: gateBlocks,
-      // Typed warnings: a gate that was NOT evaluated (so `would_refuse: []` is not 'no open work').
+      // Typed warnings: a gate skipped WITHOUT refusing (so `would_refuse: []` with warnings is not 'no open work').
       gate_warnings: gateWarnings,
       version,
       name: milestoneName,
