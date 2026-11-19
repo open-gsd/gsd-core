@@ -2474,12 +2474,26 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       exec = null;
     }
 
+    // #6303 (ADR-3711): a plan that declares `executor_runtime` resolves to the target runtime's
+    // exec when the gate and every precondition hold, else to `fallback` (one reason) with the host
+    // decision untouched. The single sentinel write below records whichever decision stands.
+    const cross = resolveCrossRuntimeDispatch({ cwd, parsed, hostRuntimeId: runtimeId });
+    const foreign = cross.isolation !== null;
+    if (foreign) {
+      isolation = cross.isolation;
+      exec = cross.exec;
+      harnessFlag = null;
+    } else if (cross.fallback) {
+      process.stderr.write(`note: plan ${planArg} declares executor_runtime${cross.executorRuntime ? ` '${cross.executorRuntime}'` : ''} but is dispatched on the host (${cross.fallback}).\n`);
+    }
+
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
     let truncatedRecord = false;
     try {
       const written = writeDispatchIsolationSentinel(cwd, {
         isolation, harnessFlag, phase: phaseArg, plan: planArg,
+        ...(foreign ? { producer: 'dispatch-isolation', executorRuntime: cross.executorRuntime } : {}),
         // #6213: a plan-scoped record names its own executor (`executor_type`); a phase-level record
         // (no plan) names every routable hinted executor of its phase (`executor_types`).
         executorType: deriveRecordedExecutor(cwd, phaseArg, planArg).resolved,
@@ -2495,7 +2509,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
 
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
+      output({ runtime: runtimeId, executorRuntime: cross.executorRuntime, isolation, exec, harnessFlag, fallback: cross.fallback, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2732,13 +2746,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * documented desired behavior of falling back to the session model rather
    * than aborting the wave.
    */
-  function resolveDispatchModelPin(agentName, rawValue) {
+  function resolveDispatchModelPin(agentName, rawValue, { foreignTarget = false } = {}) {
     if (typeof rawValue !== 'string') return undefined; // not a string -> no model
     const trimmed = rawValue.trim();
     if (trimmed === '') return undefined; // whitespace-only -> no model, no warning (#3241)
     if (trimmed.toLowerCase() === 'inherit') return undefined; // sentinel -> no model, no warning
     const { isAnthropicFlavoredModel } = require('./lib/model-catalog.cjs');
-    if (isAnthropicFlavoredModel(trimmed)) {
+    // #6303: the Anthropic-flavored rule guards a Codex host's passive model posture. A foreign target
+    // is chosen by the operator under `execute.models.<runtime>`, and a runtime such as opencode
+    // legitimately takes `anthropic/claude-...`, so only the charset, length and leading-dash rules apply.
+    if (!foreignTarget && isAnthropicFlavoredModel(trimmed)) {
       _warnDispatchModelPinDropped(agentName, rawValue, 'is an Anthropic-flavored model/alias, not a valid Codex model');
       return undefined;
     }
@@ -2817,7 +2834,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         const cwdTarget = parsed['cwd-target'];
         if (cwdTarget) {
           const promptArg = parsed.prompt ?? undefined;
-          const hostIntegration = require('./lib/host-integration.cjs');
           // #3714: resolve an EXPLICIT, non-sentinel per-agent model pin for the
           // spawned worktree executor. Passing `null` as the runtime resolver
           // (3rd arg) is LOAD-BEARING, not an oversight — it is what keeps
@@ -2862,19 +2878,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               'gsd-executor', readGsdEffectiveModelOverrides(cwd), null);
             model = resolveDispatchModelPin('gsd-executor', pinned);
           }
-          let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
-          // eslint-disable-next-line local/named-args-spec-from-registry -- compares a runtime descriptor's cwd flag for the host process argv gsd-tools builds, not a gsd-tools CLI flag
-          if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
-            // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
-            const ocv = require('./lib/opencode-version.cjs');
-            orchestratorExec = ocv.adaptOrchestratorExecForGeneration(orchestratorExec, ocv.detectOpencodeGeneration().generation);
-          }
-          const resolution = hostIntegration.resolveOrchestratorExec(
-            orchestratorExec,
-            cwdTarget,
-            promptArg,
-            model,
-          );
+          const resolution = resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model);
           // A host declaring orchestrator-worktree whose exec descriptor does not
           // resolve halts THIS wave's dispatch: isolation is forced to 'none' here,
           // and executor-isolation-dispatch.md:299-303 treats a null exec as FATAL
@@ -2899,6 +2903,82 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harnessFlag = null;
     }
     return { runtimeId, isolation, exec, harnessFlag };
+  }
+
+  /** Resolve one runtime descriptor's `orchestratorExec` against a worktree, prompt and model (shared by the host and the #6303 foreign path). */
+  function resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model) {
+    const hostIntegration = require('./lib/host-integration.cjs');
+    let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
+    // eslint-disable-next-line local/named-args-spec-from-registry -- compares a runtime descriptor's cwd flag for the host process argv gsd-tools builds, not a gsd-tools CLI flag
+    if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
+      // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
+      const ocv = require('./lib/opencode-version.cjs');
+      orchestratorExec = ocv.adaptOrchestratorExecForGeneration(orchestratorExec, ocv.detectOpencodeGeneration().generation);
+    }
+    return hostIntegration.resolveOrchestratorExec(orchestratorExec, cwdTarget, promptArg, model);
+  }
+
+  /** True when `command` is a bare name that resolves to an executable file on PATH, through the shared binary-resolution seam. */
+  function commandOnPath(command) {
+    if (typeof command !== 'string' || command.length === 0 || command.includes('/') || command.includes('\\')) return false;
+    return require('./lib/shell-command-projection.cjs').resolveExecutableBinary(command, { requireExecutable: true }) !== null;
+  }
+
+  /**
+   * #6303 (ADR-3711 D1-D3, D7): resolve a plan's `executor_runtime` into a foreign dispatch, or the one
+   * reason it degrades to the host's own dispatch. Returns `{ executorRuntime, fallback, isolation, exec }`;
+   * `isolation`/`exec` are set only when the foreign dispatch is in effect. The branch is the TARGET
+   * descriptor's declared `dispatch.isolation`, never a runtime id; the model is `execute.models.<target>`
+   * only, so the host's pin cannot reach the spawned argv. Never throws.
+   */
+  function resolveCrossRuntimeDispatch({ cwd, parsed, hostRuntimeId }) {
+    const none = { executorRuntime: null, fallback: null, isolation: null, exec: null };
+    try {
+      if (!parsed.plan) return none;
+      const declared = require('./lib/phase.cjs').resolvePlanExecutorRuntime(cwd, parsed.phase || null, parsed.plan);
+      if (declared === null) return none;
+      const target = declared.trim();
+      // The value is plan text. Only a bare runtime id is ever echoed or looked up (verify plan-structure
+      // holds the same grammar); anything else is an unknown runtime reported without its text.
+      const isId = /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(target);
+      const degrade = (fallback) => ({ executorRuntime: isId ? target : null, fallback, isolation: null, exec: null });
+      if (!isId) return degrade('unknown_runtime');
+      const { readScopedConfigValue } = require('./lib/planning-workspace.cjs');
+      const gate = readScopedConfigValue(cwd, ['workflow', 'cross_runtime_execution']);
+      if (!gate.present || gate.value !== true) return degrade('gate_off');
+      if (projectWorktreesOptedOut(cwd)) return degrade('worktrees_off');
+      // A caller that forced this plan's isolation (the #2474 submodule gate, the #683 base-check
+      // degrade) has decided it with context this resolver cannot see; the foreign dispatch never overrides it.
+      if (parsed['force-isolation'] && DISPATCH_ISOLATION_VOCABULARY.has(parsed['force-isolation'])) return degrade('forced_isolation');
+      const runtimes = require('./lib/capability-registry.cjs').runtimes;
+      if (!runtimes || !Object.hasOwn(runtimes, target)) return degrade('unknown_runtime');
+      if (target === hostRuntimeId) return degrade('same_runtime');
+      const entry = runtimes[target];
+      const declaredIsolation = entry?.runtime?.hostIntegration?.dispatch?.isolation;
+      const descriptor = entry?.runtime?.orchestratorExec;
+      if (declaredIsolation !== 'orchestrator-worktree' || !descriptor || typeof descriptor.command !== 'string') return degrade('descriptor_unresolved');
+      // Probe PATH before anything that may spawn (the opencode generation probe runs `opencode --version`).
+      if (!commandOnPath(descriptor.command)) return degrade('binary_absent');
+      // Model: the target runtime's own key only, applied only when its descriptor declares a modelFlag.
+      let model;
+      if (typeof descriptor.modelFlag === 'string' && descriptor.modelFlag.length > 0) {
+        const pin = readScopedConfigValue(cwd, ['execute', 'models', target]);
+        model = resolveDispatchModelPin('gsd-executor', pin.present ? pin.value : null, { foreignTarget: true });
+      }
+      // Without a worktree yet (the per-plan decision is taken before it is created) the descriptor is
+      // proven resolvable against the project directory and no exec is returned.
+      const cwdTarget = parsed['cwd-target'] || cwd;
+      const resolution = resolveRuntimeOrchestratorExec(target, entry, cwdTarget, parsed.prompt ?? undefined, model);
+      if (!resolution.ok) return degrade('descriptor_unresolved');
+      return {
+        executorRuntime: target,
+        fallback: null,
+        isolation: 'orchestrator-worktree',
+        exec: parsed['cwd-target'] ? { command: resolution.command, args: resolution.args, cwd: resolution.cwd } : null,
+      };
+    } catch {
+      return none;
+    }
   }
 
   function routeInspectDispatchIsolation({ args, cwd, raw }) {
@@ -2947,7 +3027,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //     read has nothing to record.
     const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ parsed, cwd });
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      // #6303: the same key set as `dispatch-isolation --json`, so a consumer written against either verb
+      // reads the other verbatim. This read has no plan (--plan is refused above), so it declares no
+      // executor runtime and never reports a fallback.
+      output({ runtime: runtimeId, executorRuntime: null, isolation, exec, harnessFlag, fallback: null }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -3011,7 +3094,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, executorType = null, executorTypes = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, executorType = null, executorTypes = null, producer = null, executorRuntime = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -3024,6 +3107,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // #6213: a type the guards would refuse to read back is recorded as null (resolved just below).
       executor_type: null,
       written_at: clock.now(),
+      // #6303 (ADR-3711 D8): present only on a foreign dispatch's record, so every other record is unchanged.
+      ...(producer ? { producer } : {}),
+      ...(executorRuntime ? { executor_runtime: executorRuntime } : {}),
     };
     let droppedExecutorTypes = [];
     // A validator that fails to load records no executor type; it never prevents the rest of the
