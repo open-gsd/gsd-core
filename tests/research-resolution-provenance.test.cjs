@@ -320,10 +320,11 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(resolve(), /commit CONTEXT\.md at once \(`gsd_run query commit "docs\(\{phase\}\): record research rulings" --files \{context_path\}`\): the planner's Step 6 commit does not run when the loop escalates/);
     assert.match(resolve(), /The re-spawned planner cites it in RESEARCH\.md and in the `<action>` of the task that implements it/);
     assert.match(resolve(), /record each answer under the checker's CONTEXT\.md `<decisions>`, outside Claude's Discretion, as the next unused `D-NN`/);
-    assert.match(resolve(), /`\/gsd:discuss-phase \{phase\}` or `\/gsd:plan-phase \{phase\} --research`/, 'leaving the loop stays open to the user');
+    assert.match(resolve(), /`\/gsd:discuss-phase \{phase\} \$\{GSD_WS\}` or `\/gsd:plan-phase \{phase\} --research \$\{GSD_WS\}`/, 'leaving the loop stays open to the user, in the same workstream');
     assert.doesNotMatch(resolve(), /`\/gsd:(discuss|plan)-phase( --research)?`/, 'every command the Resolve step names carries {phase}');
+    assert.doesNotMatch(resolve(), /`\/gsd:(discuss-phase \{phase\}|plan-phase \{phase\} --research)`/, 'every command the Resolve step names carries ${GSD_WS}');
     // The checker reads the CONTEXT.md path plan-phase resolved at init; a file created mid-loop never reaches it.
-    assert.match(resolve(), /With no CONTEXT\.md there is nowhere to record, so the user leaves the loop for `\/gsd:discuss-phase \{phase\}`, which writes one/);
+    assert.match(resolve(), /With no CONTEXT\.md there is nowhere to record, so the user leaves the loop for `\/gsd:discuss-phase \{phase\} \$\{GSD_WS\}`, which writes one/);
   });
 
   // Close fires only once a resolution is applied, and plan-phase closes a line only on the revised plans a

@@ -152,8 +152,9 @@ so they restate the operative rules inline; this section is the authority they m
    "docs({phase}): record research rulings" --files {context_path}`): the planner's Step 6 commit
    does not run when the loop escalates. The re-spawned planner cites it in RESEARCH.md and in the
    `<action>` of the task that implements it. With no CONTEXT.md there is nowhere to record, so the
-   user leaves the loop for `/gsd:discuss-phase {phase}`, which writes one; with one, the user
-   may still leave for `/gsd:discuss-phase {phase}` or `/gsd:plan-phase {phase} --research`.
+   user leaves the loop for `/gsd:discuss-phase {phase} ${GSD_WS}`, which writes one; with one,
+   the user may still leave for `/gsd:discuss-phase {phase} ${GSD_WS}` or
+   `/gsd:plan-phase {phase} --research ${GSD_WS}`.
    Leaving ends the workflow once it names the command, without `## PLANNING COMPLETE`, and ends
    any `/gsd:plan-review-convergence` run around it too: that run's reviewers never re-run
    Dimension 11, so it must stop, never converge over the open question. No re-spawn follows, so
