@@ -275,14 +275,31 @@ function swapProperty(target: object, key: string, replacement: unknown): { orig
  * Once its call has closed, the stand-in is stale: something kept a reference
  * to it. Then it defers to whatever is installed now, so the reference can
  * never reach past a later call's stand-in to the real function.
+ *
+ * What is installed now may itself be a wrapper that was layered over this
+ * stand-in during its call and installed again afterwards. It calls back down
+ * here, so a stale stand-in that is entered while it is already deferring
+ * goes to the function it replaced: the same loop as above, ended the same way.
  */
 function passThrough(
-  target: object, key: string, standIn: unknown, original: unknown, callOpen: boolean,
+  target: object, key: string, standIn: object, original: unknown, callOpen: boolean,
 ): (...a: unknown[]) => unknown {
-  if (callOpen) return original as (...a: unknown[]) => unknown;
-  const live: unknown = Reflect.get(target, key);
-  return (live === standIn ? original : live) as (...a: unknown[]) => unknown;
+  const replaced = original as (...a: unknown[]) => unknown;
+  if (callOpen) return replaced;
+  const live = Reflect.get(target, key) as (...a: unknown[]) => unknown;
+  if (live === standIn || deferring.has(standIn)) return replaced;
+  return function deferToInstalled(this: unknown, ...a: unknown[]): unknown {
+    deferring.add(standIn);
+    try {
+      return live.apply(this, a);
+    } finally {
+      deferring.delete(standIn);
+    }
+  };
 }
+
+/** The stale stand-ins that are, right now, inside a call to what is installed. See passThrough. */
+const deferring = new WeakSet<object>();
 
 /**
  * Marks the async context of a call, so a call made from inside `main` is
