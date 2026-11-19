@@ -25,6 +25,10 @@ const path = require('node:path');
 // with its retry and legacy-shape rules, is runGsdToolsProcess.
 const { createTempDir, cleanup, runGsdToolsProcess, TOOLS_PATH } = require('./helpers.cjs');
 const processSeam = require('./helpers/process-seam.cjs');
+const { assertNoLeftoverStall } = require('./helpers/stall-leftovers.cjs');
+
+/** The stall the bash-timeout test plants; a duration no other fixture uses, so a leftover is attributable (#6086). */
+const SEAM_STALL_COMMAND = 'sleep 5.0862';
 const { runNode, runGit, runHook, OUTCOME, toSeamResult } = processSeam;
 const {
   SEAM_DEFAULT_TIMEOUT_MS,
@@ -540,13 +544,15 @@ describe('runHook interpreter option', () => {
       scriptPath,
       [
         '#!/usr/bin/env bash',
-        'sleep 5',
+        // `exec` so the timeout kills the stall itself, not the bash above it (#6086).
+        `exec ${SEAM_STALL_COMMAND}`,
       ].join('\n')
     );
     const result = runHook(scriptPath, [], { interpreter: 'bash', timeoutMs: SEAM_SHORT_TIMEOUT_MS });
     assert.equal(result.outcome, OUTCOME.TIMED_OUT);
     assert.equal(result.timedOut, true);
     assert.equal(result.exitCode, null);
+    assertNoLeftoverStall(assert, SEAM_STALL_COMMAND, 'runHook bash stall');
   });
 });
 
