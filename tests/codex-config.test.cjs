@@ -1128,6 +1128,7 @@ describe('#3897 rung 3: sandbox_mode derivation and the hold list', () => {
     'gsd-doc-verifier': 'workspace-write',
     'gsd-doc-writer': 'workspace-write',
     'gsd-dom-verifier': 'workspace-write',
+    'gsd-behavior-verifier': 'workspace-write',
     'gsd-domain-researcher': 'workspace-write',
     'gsd-eval-auditor': 'workspace-write',
     'gsd-eval-planner': 'workspace-write',
