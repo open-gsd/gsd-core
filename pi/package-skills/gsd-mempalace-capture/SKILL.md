@@ -28,9 +28,9 @@ Then proceed to Step 1.
 
 ## Step 1 -- Config Gate
 
-Check whether the MemPalace capability is enabled by reading `.planning/config.json` directly with the Read tool.
+Check whether the MemPalace capability is enabled by reading `{planning_root}/config.json` directly with the Read tool. (`{planning_root}`: the active scope's root, from `planning.inspect`)
 
-1. Read `.planning/config.json` with the Read tool.
+1. Read `{planning_root}/config.json` with the Read tool.
 2. If the file does not exist, or `config.mempalace` is absent, or `config.mempalace.enabled !== true`, or `config.mempalace.capture_artifacts === false`: display the disabled message and **STOP**.
 3. Otherwise proceed to Step 2.
 

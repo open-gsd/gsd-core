@@ -62,7 +62,7 @@ Exit workflow.
 Extract phase number from $ARGUMENTS. If not provided, this orchestrator (not `gsd-tools.cjs`) detects the next unplanned phase: run `gsd_run query roadmap.analyze` and read its `next_phase` field (the first phase whose `disk_status` is `no_directory`, `empty`, `discussed`, or `researched` — i.e. not yet planned). `query roadmap.get-phase` below hard-requires an explicit `${PHASE}` and does not auto-detect.
 
 ```bash
-PHASE_INFO=$(gsd_run query roadmap.get-phase "${PHASE}")
+PHASE_INFO=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}")
 ```
 
 **If `found` is false:** Error with available phases.

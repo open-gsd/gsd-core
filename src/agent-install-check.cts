@@ -135,7 +135,9 @@ function truncatePostureValue(value: string): string {
  *      <projectRoot>/<localConfigDir>/agents (or <projectRoot>/agents when
  *      the runtime's local install targets the project root). Requiring the
  *      GSD manifest prevents runtime-native project agents from shadowing a
- *      working global GSD install. Symlinked local agent directories are ignored.
+ *      working global GSD install. A local agents directory or manifest that is a
+ *      symlink (a junction on Windows) is followed (#5911); a dangling link falls
+ *      through to the global directory.
  *   4. For non-claude runtimes: getGlobalConfigDir(runtime)/agents
  *
  * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'
@@ -176,11 +178,16 @@ function getAgentsDir(runtime?: string, projectRoot?: string): string {
     const localAgentsDir = path.join(localConfigDir, 'agents');
     const manifestPath = path.join(localConfigDir, 'gsd-file-manifest.json');
     try {
-      if (fs.lstatSync(localAgentsDir).isDirectory() && fs.lstatSync(manifestPath).isFile()) {
+      // #5911: stat, not lstat. A project that links one shared install into its config dir (a
+      // symlink, or a directory junction on Windows) must resolve to the linked agents dir the way
+      // the runtime itself loads it; lstat describes the link, so it reported neither a directory
+      // nor a file. The manifest requirement (#2602) still decides whether the local dir counts.
+      if (fs.statSync(localAgentsDir).isDirectory() && fs.statSync(manifestPath).isFile()) {
         return localAgentsDir;
       }
     } catch {
-      // Local discovery is best-effort; any probe failure preserves global fallback.
+      // Local discovery is best-effort; any probe failure (a dangling link included) preserves
+      // the global fallback.
     }
   }
   return path.join(getGlobalConfigDir(resolved), 'agents');
