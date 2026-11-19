@@ -123,8 +123,8 @@ describe('execute-phase workflow: #2868 stranded-phase resume on discover_and_gr
       'discover_and_group_plans should consult VERIFY_STATUS before exiting on all-filtered'
     );
     assert.ok(
-      content.includes('verification status'),
-      'discover_and_group_plans should call the verification status query'
+      content.includes('verification all-summarized'),
+      'discover_and_group_plans should call the verification all-summarized decision (#6096)'
     );
   });
 
@@ -153,8 +153,8 @@ describe('execute-phase workflow: #2868 stranded-phase resume on discover_and_gr
     assert.ok(discoverIdx >= 0, 'discover_and_group_plans step should exist');
     const discoverSection = content.substring(discoverIdx, discoverEnd);
 
-    const filterIdx = discoverSection.indexOf('A filter is active');
-    assert.ok(filterIdx >= 0, 'discover_and_group_plans should describe a filter-active branch');
+    const filterIdx = discoverSection.indexOf('**`exit-filtered`**');
+    assert.ok(filterIdx >= 0, 'discover_and_group_plans should describe a filter-active branch (#6096: the exit-filtered decision)');
     // Both flags must be mentioned near the filter-active branch, not merely
     // anywhere in the step (e.g. in the pre-existing filtering prose above).
     const filterClause = discoverSection.substring(filterIdx, filterIdx + 200);
@@ -1081,8 +1081,10 @@ describe('execute-phase workflow: #3684 verified-unmarked resume', () => {
     const step = stepText();
     // #5118: the arm is keyed on `passed` — the old `≠ missing` arm collapsed
     // gaps_found / human_needed / unparseable into "verified" (#4765).
-    const anchor = 'VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`';
-    assert.ok(step.includes(anchor), 'the verified-unmarked arm must be keyed on VERIFY_STATUS == passed');
+    // #6096: the arm is the `update-roadmap` decision, which the code computes from a fresh `passed` report and
+    // an unmarked phase (the #6096 block of tests/verification-status.test.cjs pins the computation).
+    const anchor = '**`update-roadmap`**';
+    assert.ok(step.includes(anchor), 'the verified-unmarked arm must be the update-roadmap decision');
     const branch = step.slice(step.indexOf(anchor));
     assert.ok(
       branch.includes('update_roadmap'),
