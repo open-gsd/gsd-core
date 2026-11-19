@@ -1401,7 +1401,8 @@ therefore scans the fenced blocks and inline code spans of every shipped prompt 
 `tests/helpers/planning-add-guard.cjs` plus `pi/package-skills` and `pi/package-agents`) with
 `unscopedGitCommits` (`tests/helpers/shipped-command-scan.cjs`), and fails on a `git commit`
 with no `-- <paths>` after it. A whole-tree pathspec (`.`, `:/`, `*`), `-i`/`--include` and a
-`$`-word pathspec count as unscoped too. Quote each pasted path as `':(literal)<path>'`.
+pathspec that is only unquoted `$`-words (`-- $FILES`) count as unscoped too. Quote each pasted
+path as `':(literal)<path>'`.
 
 A deliberate whole-index commit uses the same declaration as the `--files` guard, on the
 commit's own line:
