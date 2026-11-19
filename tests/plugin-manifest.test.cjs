@@ -1020,8 +1020,8 @@ describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
       const st = fs.lstatSync(linkPath);
       assert.ok(st.isSymbolicLink(), `${sub} must be a symlink`);
       assert.equal(
-        fs.realpathSync(linkPath),
-        fs.realpathSync(path.join(bundled, sub)),
+        fs.realpathSync.native(linkPath),
+        fs.realpathSync.native(path.join(bundled, sub)),
         `${sub} link must resolve to the bundled subdir`
       );
       // The @-include target now resolves to real bundled content.
@@ -1141,8 +1141,8 @@ describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
     assert.ok(result.prunedStale.includes('references'), 'stale references link must be pruned');
     // Now resolves to the CURRENT bundle.
     assert.equal(
-      fs.realpathSync(linkPath),
-      fs.realpathSync(path.join(pluginRoot, 'gsd-core', 'references')),
+      fs.realpathSync.native(linkPath),
+      fs.realpathSync.native(path.join(pluginRoot, 'gsd-core', 'references')),
       'references must now point at the current bundled tree'
     );
   });
@@ -1159,8 +1159,8 @@ describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
     const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
     assert.equal(result.status, 'ensured');
     assert.equal(
-      fs.realpathSync(path.join(canonical, 'workflows')),
-      fs.realpathSync(path.join(pluginRoot, 'gsd-core', 'workflows')),
+      fs.realpathSync.native(path.join(canonical, 'workflows')),
+      fs.realpathSync.native(path.join(pluginRoot, 'gsd-core', 'workflows')),
       'workflows must be repointed to the current bundle'
     );
   });
