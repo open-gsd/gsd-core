@@ -43,7 +43,7 @@ Parse the first token of the `<arguments>` block:
 - Otherwise: pass all of the `<arguments>` block as focus area to the map-codebase workflow.
 
 **Load project state if exists:**
-Check for .planning/STATE.md - loads context if project already initialized
+Check for {planning_root}/STATE.md - loads context if project already initialized (`{planning_root}`: the active scope's root, from `planning.inspect`)
 
 **This command can run:**
 - Via /gsd-onboard for first-time brownfield setup - creates codebase map first
