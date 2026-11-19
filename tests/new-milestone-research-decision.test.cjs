@@ -167,6 +167,20 @@ describe('new-milestone Step 10 roadmapper uses research from this run (#5148)',
   });
 });
 
+describe('new-milestone Step 11 banner uses the resolved research_dir (#5148)', () => {
+  const body = stepBody('## 11. Done');
+
+  test('the Research row names {research_dir} and appears only when research ran', () => {
+    assert.doesNotMatch(workflow, /\.planning\/research/,
+      'no research step may name the literal .planning/research path; init resolves the scoped {research_dir}');
+    const researchRow = body.split('\n').find((l) => l.startsWith('| Research'));
+    assert.ok(researchRow, 'the Step 11 artifact table must have a Research row');
+    assert.match(researchRow, /\`\{research_dir\}\/\`/);
+    assert.doesNotMatch(researchRow, /\.planning/);
+    assert.match(body, /Omit the Research row above when research did not run in Step 8/);
+  });
+});
+
 describe('new-milestone Step 9 requirements use research from this run (#5148)', () => {
   const body = stepBody('## 9. Define Requirements');
 
