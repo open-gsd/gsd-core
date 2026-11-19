@@ -183,8 +183,9 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | command-too-complex |
-//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
+//         env-file-secret | glob-too-complex | command-too-large |
+//         command-too-complex | ansi-c-unterminated | ansi-c-undecodable |
+//         debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
@@ -381,6 +382,13 @@ const NON_READING_COMMANDS = new Set([
 // segment is still checked, so the carve-out cannot launder a read.
 const CONTAINER_RUNTIMES = new Set(['docker', 'docker-compose', 'podman', 'nerdctl']);
 const ENV_FILE_FLAG_RE = /^--env-file(=|$)/;
+
+// #5885: runtimes that also take `--env-file <file>` but stay OUTSIDE the
+// #4639 exemption: the program they run is usually one the agent just wrote,
+// and it can print `process.env`. A secret value there is still denied, with
+// its own code (`env-file-secret`) so the message names that policy instead
+// of reporting a read. Nothing in this set is exempted.
+const ENV_FILE_RUNTIMES = new Set(['node', 'bun', 'deno', 'uv']);
 
 // #4856: git subcommands that report or drop a path's ignore / tracking
 // status and never print the file, so their pathspec operands are names —
@@ -2140,6 +2148,14 @@ function envFileValueIndices(operands) {
   return exempt;
 }
 
+// #5885: the hit for a secret `--env-file` value under ENV_FILE_RUNTIMES. Same
+// shape as every other hit; `text` is the file the flag names (the value
+// after `=`, or the bare flag's operand).
+function envFileHit(text) {
+  const eq = ENV_FILE_FLAG_RE.test(text) ? text.indexOf('=') : -1;
+  return { code: 'env-file-secret', text: eq === -1 ? text : text.slice(eq + 1) };
+}
+
 // True when `text` is a listed long option, or a short cluster (`-co`) whose
 // every letter is listed. `--opt=value`, an abbreviation, or a cluster
 // holding a value option (`-ciX`) is not.
@@ -2581,10 +2597,17 @@ const DIAGNOSTIC = Object.freeze({ READING_FAILED: 'reading-failed' });
 // either way, so what it costs is the name of a read only a later pass sees.
 let heldNested = null;
 
+// Whether `hit` names a secret file the command would read. An `--env-file`
+// denial (#5885) names one too, so it ranks with a secret read at both sites
+// below and its own message is the one reported.
+function namesRead(hit) {
+  return hit.code === 'secret-read' || hit.code === 'env-file-secret';
+}
+
 // The readings of `command`, then the plain scan, as described above.
 function readEachWay(command, depth) {
   const hit = scanEachWay(command, depth);
-  if (depth === 0 || hit === null || hit.code === 'secret-read') return hit;
+  if (depth === 0 || hit === null || namesRead(hit)) return hit;
   if (heldNested === null) heldNested = hit;
   return null;
 }
@@ -2610,7 +2633,7 @@ function scanEachWay(command, depth) {
       if (unfinishedBy(e)) scanUnfinished = true;
       else if (readingBug === null) readingBug = e;
     }
-    if (hit !== null && hit.code === 'secret-read') return hit;
+    if (hit !== null && namesRead(hit)) return hit;
     if (unreadable === null) unreadable = hit;
   }
   return scanCommand(command, depth, false) || unreadable;
@@ -2737,9 +2760,12 @@ function scanCommand(command, depth, reading) {
     if (NON_READING_COMMANDS.has(base)) continue;
 
     const nameOnly = nameOnlyOperandIndices(base, operands);
+    const envFile = ENV_FILE_RUNTIMES.has(base) ? envFileValueIndices(operands) : null;
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
+      if (!operandNamesSecret(operands[k].text)) continue;
+      if (envFile !== null && envFile.has(k)) return envFileHit(operands[k].text);
+      return secretRead(operands[k].text);
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
@@ -2957,6 +2983,12 @@ function reasonFor(code, tool, target) {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
       'alternatives, or holds too many brace groups to expand, and cannot be checked for ' +
       'secret-file matches. Use a narrower glob.';
+  }
+  if (code === 'env-file-secret') {
+    return `Secret read guard: --env-file loads the secret file '${target}' into the process environment, ` +
+      'and the program it starts can print that environment into the conversation. ' +
+      'Run the command with a non-secret file instead (for example --env-file .env.example), ' +
+      'or ask the user for the values you need.';
   }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
