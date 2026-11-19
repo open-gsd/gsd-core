@@ -813,7 +813,7 @@ case "$REVIEWER_POINT" in execute:post|execute:wave:post) ;; *) REVIEWER_POINT="
 REVIEWER_HOOKS_JSON=$(gsd_run loop render-hooks "${REVIEWER_POINT}" --raw 2>/dev/null) || REVIEWER_HOOKS_JSON=""
 if [[ "$REVIEWER_HOOKS_JSON" == @file:* ]]; then REVIEWER_HOOKS_JSON=$(cat "${REVIEWER_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
 # A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
-REVIEWER_CONTRIBUTIONS=$(printf '%s' "$REVIEWER_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="code-reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_review_rules>").join("<\\/capability_review_rules>"));if(h.length)process.stdout.write("<capability_review_rules>\n"+h.join("\n\n")+"\n</capability_review_rules>")}catch(e){}})' 2>/dev/null || true)
+REVIEWER_CONTRIBUTIONS=$(printf '%s' "$REVIEWER_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="code-reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_review_rules>").join("<"+String.fromCharCode(92)+"/capability_review_rules>"));if(h.length)process.stdout.write("<capability_review_rules>\n"+h.join("\n\n")+"\n</capability_review_rules>")}catch(e){}})' 2>/dev/null || true)
 ```
 
 Spawn the gsd-code-reviewer agent:
