@@ -25,7 +25,9 @@ test('shipped #5211 declarations: each marked file keeps its markers and no mark
   for (const f of MARKED) {
     // The scanner's own predicate decides what a declaration is, so this test holds no second copy of the marker grammar.
     const lines = splitLines(fs.readFileSync(path.join(__dirname, '..', f), 'utf8')).filter(isDeclared);
+    // allow-test-rule: source-text-is-the-product (#5211)
     assert.ok(lines.length > 0, `${f} declares no marker`);
+    // allow-test-rule: source-text-is-the-product (#5211)
     for (const l of lines) assert.deepEqual(unscopedGitCommits(l), [], `${f}: marked line still flagged: ${l}`);
   }
 });
