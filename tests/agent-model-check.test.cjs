@@ -298,7 +298,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
     const echoed = `gpt-5??[2K?FORGED?${'z'.repeat(REASON_INTERPOLATION_MAX_LEN - 'gpt-5??[2K?FORGED?'.length)}`;
-    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(t, project, elsewhere), echoed)],
+    assert.deepEqual(stderrLines(r.stderr).filter(Boolean), [formatNotWritten(rootMismatch(t, project, elsewhere), echoed)],
       'positive control: the warning prints once, on one line, with the model filtered and capped');
   });
 
@@ -311,7 +311,7 @@ describe('gsd-agent-isolation-guard.js: #5328 — Agent() model vs resolved mode
     setup(t, escalating);
     const r = runNode([TOOLS_PATH, 'resolve-execution', 'gsd-executor', '--attempt', '1', '--failure-class', 'quota-exceeded', '--cwd', project], { cwd: elsewhere, env: childEnv(t), timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.deepEqual(stderrLines(r.stderr).filter((l) => l.includes('FORGED')), [formatNotWritten(rootMismatch(t, project, elsewhere), 'gpt-5')],
+    assert.deepEqual(stderrLines(r.stderr).filter(Boolean), [formatNotWritten(rootMismatch(t, project, elsewhere), 'gpt-5')],
       'the directory name reaches stderr filtered, on the one warning line');
   });
 
