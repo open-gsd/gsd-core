@@ -27,7 +27,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempDir, cleanup, runGsdToolsAsync } = require('./helpers.cjs');
 
 const TEST_INSTRUCTIONS = [
   '# Cross-AI Plan Review Request',
@@ -58,8 +58,8 @@ const TEST_RESEARCH = 'a'.repeat(8000); // ~2000 tokens — large enough to forc
  * Run gsd-tools with args as an array (safe for paths with spaces/dollars).
  * Returns { exitCode, stdout, stderr }.
  */
-function runCli(args, cwd) {
-  const result = runGsdTools(args, cwd);
+async function runCli(args, cwd) {
+  const result = await runGsdToolsAsync(args, cwd);
   return {
     exitCode: result.exitCode ?? (result.success ? 0 : 1),
     stdout: result.output ?? '',
@@ -69,7 +69,7 @@ function runCli(args, cwd) {
 
 describe('prompt-budget CLI', () => {
   // ── Cycle 1: happy path — small budget that trims research ────────────────
-  test('happy path: trims research when budget is small, exit 0', () => {
+  test('happy path: trims research when budget is small, exit 0', async () => {
     const dir = createTempDir('pb-cli-happy-');
     try {
       // Write input files
@@ -89,7 +89,7 @@ describe('prompt-budget CLI', () => {
       // with 10% safety margin) but not the ~2000-token research blob.
       // effectiveBudget = floor(800 * 0.9) = 720.
       // contentBudget = 720 - 80 (note reserve) = 640. Research (~2000 tokens) won't fit.
-      const { exitCode, stderr } = runCli([
+      const { exitCode, stderr } = await runCli([
         'prompt-budget',
         '--budget', '800',
         '--instructions-file', instrFile,
@@ -124,7 +124,7 @@ describe('prompt-budget CLI', () => {
   });
 
   // ── Cycle 2: no-trim path — huge budget, nothing dropped ──────────────────
-  test('no-trim path: huge budget returns all sections, exit 0', () => {
+  test('no-trim path: huge budget returns all sections, exit 0', async () => {
     const dir = createTempDir('pb-cli-notrim-');
     try {
       const instrFile = path.join(dir, 'instructions.md');
@@ -139,7 +139,7 @@ describe('prompt-budget CLI', () => {
       fs.writeFileSync(planFile, TEST_PLAN);
       fs.writeFileSync(researchFile, 'Some research findings.');
 
-      const { exitCode } = runCli([
+      const { exitCode } = await runCli([
         'prompt-budget',
         '--budget', '1000000',
         '--instructions-file', instrFile,
@@ -168,7 +168,7 @@ describe('prompt-budget CLI', () => {
   });
 
   // ── Cycle 3: hard-fail path — budget is impossibly small ──────────────────
-  test('hard-fail path: exit 2 when minimum set exceeds budget, metadata written, prompt empty', () => {
+  test('hard-fail path: exit 2 when minimum set exceeds budget, metadata written, prompt empty', async () => {
     const dir = createTempDir('pb-cli-hardfail-');
     try {
       const instrFile = path.join(dir, 'instructions.md');
@@ -183,7 +183,7 @@ describe('prompt-budget CLI', () => {
       fs.writeFileSync(planFile, TEST_PLAN);
 
       // Budget of 5 tokens is far below the minimum set
-      const { exitCode, stderr } = runCli([
+      const { exitCode, stderr } = await runCli([
         'prompt-budget',
         '--budget', '5',
         '--instructions-file', instrFile,
@@ -210,7 +210,7 @@ describe('prompt-budget CLI', () => {
   });
 
   // ── Cycle 4: missing required arg — exit 1, stderr has error ──────────────
-  test('missing required arg: exit 1, stderr contains error message', () => {
+  test('missing required arg: exit 1, stderr contains error message', async () => {
     const dir = createTempDir('pb-cli-missingarg-');
     try {
       const instrFile = path.join(dir, 'instructions.md');
@@ -224,7 +224,7 @@ describe('prompt-budget CLI', () => {
       fs.writeFileSync(planFile, TEST_PLAN);
 
       // Omit --budget (required)
-      const { exitCode, stderr } = runCli([
+      const { exitCode, stderr } = await runCli([
         'prompt-budget',
         '--instructions-file', instrFile,
         '--roadmap-file', roadmapFile,
@@ -241,7 +241,7 @@ describe('prompt-budget CLI', () => {
   });
 
   // ── Cycle 5: missing input file — exit 1 ──────────────────────────────────
-  test('missing input file: exit 1', () => {
+  test('missing input file: exit 1', async () => {
     const dir = createTempDir('pb-cli-missingfile-');
     try {
       const roadmapFile = path.join(dir, 'roadmap.md');
@@ -253,7 +253,7 @@ describe('prompt-budget CLI', () => {
       fs.writeFileSync(planFile, TEST_PLAN);
 
       // Instructions file doesn't exist
-      const { exitCode } = runCli([
+      const { exitCode } = await runCli([
         'prompt-budget',
         '--budget', '10000',
         '--instructions-file', path.join(dir, 'nonexistent.md'),

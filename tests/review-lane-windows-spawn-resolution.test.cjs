@@ -29,7 +29,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { runGsdTools, createTempDir, cleanup, TOOLS_PATH } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempDir, cleanup, TOOLS_PATH } = require('./helpers.cjs');
 const { resolveSpawnBinary } = require('../gsd-core/bin/gsd-tools.cjs');
 
 const WIN32 = { PATH: '', PATHEXT: '.COM;.EXE;.BAT;.CMD' };
@@ -167,8 +167,8 @@ describe('review-lane invoke on Windows (#3275)', () => {
   }
 
   /** Run the real `gsd-tools review-lane invoke` for one slug and parse its JSON result. */
-  function invokeLane({ slug, binDir, runDir, repoRoot }) {
-    const r = runGsdTools(
+  async function invokeLane({ slug, binDir, runDir, repoRoot }) {
+    const r = await runGsdToolsAsync(
       [
         'review-lane', 'invoke',
         '--selected', slug,
@@ -184,7 +184,7 @@ describe('review-lane invoke on Windows (#3275)', () => {
     return { result: JSON.parse(r.output), stdout: r.output };
   }
 
-  test('W1: codex lane runs to completion through a staged codex.CMD shim (primary invocation path)', { skip: !isWin }, () => {
+  test('W1: codex lane runs to completion through a staged codex.CMD shim (primary invocation path)', { skip: !isWin }, async () => {
     const binDir = createTempDir('gsd-3275-w1-bin-');
     const runDir = createTempDir('gsd-3275-w1-run-');
     const repoRoot = createTempDir('gsd-3275-w1-repo-');
@@ -207,7 +207,7 @@ describe('review-lane invoke on Windows (#3275)', () => {
           'exit /b 0',
         ].join('\r\n'),
       });
-      const { result } = invokeLane({ slug: 'codex', binDir, runDir, repoRoot });
+      const { result } = await invokeLane({ slug: 'codex', binDir, runDir, repoRoot });
 
       assert.equal(result.ok, true, `lane failed: ${result.reason} ${result.detail}`);
       assert.equal(result.stubbed, false, `review was stubbed: ${JSON.stringify(result)}`);
@@ -226,7 +226,7 @@ describe('review-lane invoke on Windows (#3275)', () => {
     }
   });
 
-  test('W2: kimi-code lane passes its capability probe and runs through a staged kimi.CMD shim', { skip: !isWin }, () => {
+  test('W2: kimi-code lane passes its capability probe and runs through a staged kimi.CMD shim', { skip: !isWin }, async () => {
     const binDir = createTempDir('gsd-3275-w2-bin-');
     const runDir = createTempDir('gsd-3275-w2-run-');
     const repoRoot = createTempDir('gsd-3275-w2-repo-');
@@ -243,7 +243,7 @@ describe('review-lane invoke on Windows (#3275)', () => {
           'exit /b 0',
         ].join('\r\n'),
       });
-      const { result } = invokeLane({ slug: 'kimi-code', binDir, runDir, repoRoot });
+      const { result } = await invokeLane({ slug: 'kimi-code', binDir, runDir, repoRoot });
 
       assert.equal(result.ok, true, `lane failed: ${result.reason} ${result.detail}`);
       assert.equal(result.stubbed, false, `review was stubbed: ${JSON.stringify(result)}`);

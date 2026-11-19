@@ -2472,7 +2472,10 @@ interface WindsurfManagedEntries {
  * top-level-array lift — Cascade's hooks.json is a brand-new surface with no
  * prior shape to migrate from).
  */
-function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: WindsurfManagedEntries | null): ReconcileResult {
+function planWindsurfHooksJson(
+  hooksJsonPath: string,
+  managedEntries: WindsurfManagedEntries | null,
+): { nextContent: string; changed: boolean; shouldWrite: boolean } {
   let parsed: Record<string, unknown> = {};
   let currentContent: string | null = null;
 
@@ -2515,8 +2518,67 @@ function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: Winds
   const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
   const changed = currentContent !== nextContent;
   const shouldWrite = changed && (currentContent !== null || Object.keys(parsed).length > 0);
+  return { nextContent, changed, shouldWrite };
+}
+
+/**
+ * #5978: the path a Windsurf hooks.json write must target. `atomicWriteFileSync` ends in a
+ * rename(2) that REPLACES a symlink at the destination and the empty-file removal below
+ * `unlinkSync`s it, so a dotfiles-managed `hooks.json -> ~/dotfiles/windsurf-hooks.json` was
+ * replaced or deleted unasked while its target kept GSD's entries. Same policy as the Kimi
+ * config.toml (`resolveKimiConfigDestination`) and the Codex hooks.json writer: refuse a symlink
+ * without GSD_ALLOW_SYMLINKED_DEST, with it resolve to the real target so the link is kept. A
+ * dangling link has no target to follow, so it is refused whatever the opt-in says.
+ */
+function resolveWindsurfHooksJsonDestination(hooksJsonPath: string): string {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(hooksJsonPath);
+  } catch (err) {
+    // Nothing at the path yet: a fresh install creates the file. Any other failure (EACCES, ELOOP)
+    // cannot be classified as "not a link", so it is not written through.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return hooksJsonPath;
+    throw err;
+  }
+  if (!stat.isSymbolicLink()) return hooksJsonPath;
+  if (!_installEngineSymlinkGuard().isSymlinkedDestOptIn()) {
+    throw new Error(
+      `Windsurf hooks.json at "${hooksJsonPath}" is a symlink, refusing to change it. ` +
+        'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1 (the link is kept).',
+    );
+  }
+  if (!fs.existsSync(hooksJsonPath)) {
+    throw new Error(
+      `Windsurf hooks.json at "${hooksJsonPath}" is a dangling symlink, refusing to replace it or write through it.`,
+    );
+  }
+  return fs.realpathSync(hooksJsonPath);
+}
+
+/**
+ * #5978: the refusal message when removing GSD's entries would change a symlinked Windsurf
+ * hooks.json without GSD_ALLOW_SYMLINKED_DEST, else null. The uninstall runs it before its first
+ * removal so a refused run leaves the whole install, the link and its target as they were. A link
+ * the removal would leave unchanged (no GSD entries) is not refused.
+ */
+function windsurfHooksJsonRemovalRefusal(targetDir: string): string | null {
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  if (!fs.existsSync(hooksJsonPath)) return null;
+  try {
+    if (!planWindsurfHooksJson(hooksJsonPath, null).shouldWrite) return null;
+    resolveWindsurfHooksJsonDestination(hooksJsonPath);
+    return null;
+  } catch (err) {
+    // An unparseable hooks.json would fail the removal partway through; report it before any removal.
+    return (err as Error).message;
+  }
+}
+
+function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: WindsurfManagedEntries | null): ReconcileResult {
+  const { nextContent, changed, shouldWrite } = planWindsurfHooksJson(hooksJsonPath, managedEntries);
   if (shouldWrite) {
-    atomicWriteFileSync(hooksJsonPath, nextContent, 'utf8');
+    // Reading followed the link harmlessly; the policy applies where the write lands.
+    atomicWriteFileSync(resolveWindsurfHooksJsonDestination(hooksJsonPath), nextContent, 'utf8');
   }
 
   return { changed: changed, wrote: shouldWrite, path: hooksJsonPath };
@@ -2545,6 +2607,35 @@ interface WriteWindsurfHooksJsonOpts {
 function writeWindsurfHooksJson(targetDir: string, src: string, opts?: WriteWindsurfHooksJsonOpts): { hooksJsonPath: string; changed: boolean; configuredEntrypoints: ConfiguredEntrypoint[] } {
   opts = opts || {};
   const hooksDir = path.join(targetDir, 'hooks');
+
+  // #5978 preflight: decide, before anything is written, whether hooks.json would change, and
+  // refuse a symlinked one that would (without GSD_ALLOW_SYMLINKED_DEST) while the install is
+  // still untouched, instead of throwing at the end with the hook scripts already staged.
+  {
+    const wouldInstall = new Set(
+      GSD_WINDSURF_HOOK_SCRIPTS.filter((script) => fs.existsSync(path.join(src, 'hooks', script))),
+    );
+    const preCommands: Record<string, string | null> = {};
+    for (const ev of WINDSURF_HOOK_EVENTS) {
+      const script = WINDSURF_EVENT_SCRIPT_MAP[ev];
+      preCommands[ev] = (script && wouldInstall.has(script))
+        ? buildHookCommand(targetDir, script, {
+            runtime: 'windsurf',
+            platform: opts.platform || process.platform,
+            configPath: path.join(targetDir, 'hooks.json'),
+            configuredEntrypoints: [],
+          })
+        : null;
+    }
+    const preEntries: WindsurfManagedEntries = {};
+    for (const ev of WINDSURF_HOOK_EVENTS) {
+      const cmd = preCommands[ev];
+      if (cmd) preEntries[ev] = buildWindsurfHookEntry(cmd);
+    }
+    const preHooksJson = path.join(targetDir, 'hooks.json');
+    if (planWindsurfHooksJson(preHooksJson, preEntries).shouldWrite) resolveWindsurfHooksJsonDestination(preHooksJson);
+  }
+
   fs.mkdirSync(hooksDir, { recursive: true });
 
   const srcHooksDir = path.join(src, 'hooks');
@@ -2640,7 +2731,9 @@ function removeWindsurfHooksJson(targetDir: string): { changed: boolean } {
         (k) => Array.isArray(hookTable[k]) && (hookTable[k] as unknown[]).length > 0,
       );
       if (!hasAnyEvents) {
-        fs.unlinkSync(hooksJsonPath);
+        // #5978: behind a symlink the reconcile above already emptied the file the link points
+        // at; unlinking the link path would delete the user's link, so it is kept.
+        if (!fs.lstatSync(hooksJsonPath).isSymbolicLink()) fs.unlinkSync(hooksJsonPath);
         // #2717: also remove the CommonJS marker GSD wrote into hooks/ — but
         // only if it still carries GSD's exact content (a user-authored
         // package.json is never deleted). Best-effort.
@@ -3300,6 +3393,48 @@ function stripKimiHooksTomlBlock(content: string): string | null {
 }
 
 /**
+ * #5949: the path a Kimi config.toml read or write must target. `atomicWriteFileSync` ends in
+ * a rename(2) that REPLACES a symlink at the destination and `unlinkSync` removes it, so a
+ * dotfiles-managed `config.toml -> ~/dotfiles/kimi.toml` was destroyed unasked. Same policy as
+ * the Codex hooks.json writer (`resolveCodexHooksJsonDestination`): refuse a symlink without
+ * GSD_ALLOW_SYMLINKED_DEST, with it resolve to the real target. A dangling link has no target
+ * to follow, so it is refused whatever the opt-in says rather than replaced or created through.
+ */
+function resolveKimiConfigDestination(configPath: string): string {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(configPath);
+  } catch {
+    return configPath;
+  }
+  if (!stat.isSymbolicLink()) return configPath;
+  if (!_installEngineSymlinkGuard().isSymlinkedDestOptIn()) {
+    throw new Error(
+      `Kimi config.toml at "${configPath}" is a symlink — refusing to read or write it. ` +
+        'If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.',
+    );
+  }
+  if (!fs.existsSync(configPath)) {
+    throw new Error(
+      `Kimi config.toml at "${configPath}" is a dangling symlink — refusing to replace it or write through it.`,
+    );
+  }
+  return fs.realpathSync(configPath);
+}
+
+/**
+ * A GSD-only config.toml is removed when it is a regular file; behind a symlink its target is
+ * emptied instead, because unlinking the link path would delete the user's link (#5949).
+ */
+function removeOrEmptyKimiConfig(configPath: string, writePath: string): void {
+  if (writePath !== configPath) {
+    atomicWriteFileSync(writePath, '', 'utf8');
+  } else if (fs.existsSync(configPath)) {
+    fs.unlinkSync(configPath);
+  }
+}
+
+/**
  * Idempotently (re)write kimi's GSD-owned [[hooks]] block into its native
  * config.toml at `configPath` (resolved by the caller via
  * resolveKimiHooksTomlDir). No-ops (`{changed:false}`) when the computed
@@ -3320,6 +3455,9 @@ function writeKimiHooksToml(
       configuredEntrypoints,
     },
   };
+  // #5949: reading follows a link harmlessly; the policy applies where a write would land. A
+  // symlinked config.toml is refused (resolveKimiConfigDestination) only when a write is needed,
+  // and with the opt-in the write lands on the link's real target, never replacing the link.
   const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
   const stripped = stripKimiHooksTomlBlock(existing) ?? '';
   const block = buildKimiHooksTomlBlock(targetDir, trackedOpts);
@@ -3327,11 +3465,12 @@ function writeKimiHooksToml(
 
   if (!block) {
     if (stripped === existing) return { changed: false, path: configPath, entryCount: 0, configuredEntrypoints };
+    const writePath = resolveKimiConfigDestination(configPath);
     if (stripped.trim() === '') {
-      if (fs.existsSync(configPath)) fs.unlinkSync(configPath);
+      removeOrEmptyKimiConfig(configPath, writePath);
     } else {
-      fs.mkdirSync(path.dirname(configPath), { recursive: true });
-      atomicWriteFileSync(configPath, stripped, 'utf8');
+      fs.mkdirSync(path.dirname(writePath), { recursive: true });
+      atomicWriteFileSync(writePath, stripped, 'utf8');
     }
     return { changed: true, path: configPath, entryCount: 0, configuredEntrypoints };
   }
@@ -3340,8 +3479,9 @@ function writeKimiHooksToml(
   const next = stripped.trim() === '' ? `${block}\n` : `${stripped}${separator}${block}\n`;
   if (next === existing) return { changed: false, path: configPath, entryCount, configuredEntrypoints };
 
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  atomicWriteFileSync(configPath, next, 'utf8');
+  const writePath = resolveKimiConfigDestination(configPath);
+  fs.mkdirSync(path.dirname(writePath), { recursive: true });
+  atomicWriteFileSync(writePath, next, 'utf8');
   return { changed: true, path: configPath, entryCount, configuredEntrypoints };
 }
 
@@ -3350,14 +3490,18 @@ function writeKimiHooksToml(
  * deletes the file if nothing but GSD's own block was ever in it.
  */
 function removeKimiHooksToml(configPath: string): { changed: boolean } {
+  // A dangling link has no content to strip: existsSync follows links and is false for it.
   if (!fs.existsSync(configPath)) return { changed: false };
   const existing = fs.readFileSync(configPath, 'utf8');
   const stripped = stripKimiHooksTomlBlock(existing);
   if (stripped === existing) return { changed: false };
+  // #5949: a symlinked config.toml holding a GSD block is refused without the opt-in; with it the
+  // strip lands on the link's real target and the link is kept (a GSD-only target is emptied).
+  const writePath = resolveKimiConfigDestination(configPath);
   if (stripped === null || stripped.trim() === '') {
-    fs.unlinkSync(configPath);
+    removeOrEmptyKimiConfig(configPath, writePath);
   } else {
-    atomicWriteFileSync(configPath, stripped, 'utf8');
+    atomicWriteFileSync(writePath, stripped, 'utf8');
   }
   return { changed: true };
 }
@@ -3602,6 +3746,7 @@ export = {
   reconcileWindsurfHooksJson,
   writeWindsurfHooksJson,
   removeWindsurfHooksJson,
+  windsurfHooksJsonRemovalRefusal,
   WINDSURF_HOOK_EVENTS,
   WINDSURF_EVENT_SCRIPT_MAP,
   GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
@@ -3636,6 +3781,7 @@ export = {
   // Kimi hooks.toml
   buildKimiHooksTomlBlock,
   stripKimiHooksTomlBlock,
+  resolveKimiConfigDestination,
   writeKimiHooksToml,
   removeKimiHooksToml,
   KIMI_HOOKS_TOML_MARKER_BEGIN,

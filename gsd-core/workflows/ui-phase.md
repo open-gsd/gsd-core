@@ -68,7 +68,7 @@ Exit workflow.
 Extract phase number from $ARGUMENTS. If not provided, detect next unplanned phase.
 
 ```bash
-PHASE_INFO=$(gsd_run query roadmap.get-phase "${PHASE}")
+PHASE_INFO=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}")
 ```
 
 **If `found` is false:** Error with available phases.
@@ -516,7 +516,7 @@ gsd_run query commit "docs(${padded_phase}): UI design contract" --files "${PHAS
 ## 12. Update State
 
 ```bash
-gsd_run query state.record-session \
+gsd_run query state.record-session ${GSD_WS:+--ws=${GSD_WS##* }} \
   --stopped-at "Phase ${PHASE} UI-SPEC approved" \
   --resume-file "${PHASE_DIR}/${PADDED_PHASE}-UI-SPEC.md"
 ```

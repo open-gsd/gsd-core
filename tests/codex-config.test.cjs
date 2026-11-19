@@ -1128,6 +1128,7 @@ describe('#3897 rung 3: sandbox_mode derivation and the hold list', () => {
     'gsd-doc-verifier': 'workspace-write',
     'gsd-doc-writer': 'workspace-write',
     'gsd-dom-verifier': 'workspace-write',
+    'gsd-behavior-verifier': 'workspace-write',
     'gsd-domain-researcher': 'workspace-write',
     'gsd-eval-auditor': 'workspace-write',
     'gsd-eval-planner': 'workspace-write',
@@ -1223,7 +1224,7 @@ describe('#3897 rung 3: sandbox_mode derivation and the hold list', () => {
       [],
       'CODEX_SANDBOX_HOLDS must be empty after the #4770 lift — a re-hold requires a new recorded decision',
     );
-    assert.equal(measuredWideningRoles.length, 17, 'sanity: 17 widening roles against the current agents/ tree');
+    assert.equal(measuredWideningRoles.length, 18, 'sanity: 18 widening roles against the current agents/ tree');
     for (const role of measuredWideningRoles) {
       assert.equal(
         EXPECTED_SANDBOX_BY_ROLE[role],

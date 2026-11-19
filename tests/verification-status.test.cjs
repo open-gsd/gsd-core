@@ -5892,3 +5892,313 @@ describe('#5118 G: workflows surface verification-status errors instead of readi
     }
   });
 });
+
+// ─── #5931: the exact tier also tries the scaffolder's own file-name token ────
+//
+// `extractPhaseToken` keeps a project code and the padding as written (`XR-03`, `5`) while
+// `cmdScaffold` names files with `normalizePhaseName` (`03`, `05`). The exact tier compared only the
+// literal token, so a project-coded or unpadded directory's own `NN-UAT.md` / `NN-VERIFICATION.md`
+// lost to a sibling that sorts first (`NN-HUMAN-UAT.md`, `NN-CORRECTION-VERIFICATION.md`).
+describe('#5931: a project-coded or unpadded phase dir resolves the scaffolder-written artifact name', () => {
+  const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+  const optionsFor = (dirName) => ({ phaseToken: phaseId.extractPhaseToken(dirName), phaseDirName: dirName });
+
+  test('XR-03-demo: 03-UAT.md wins over 03-HUMAN-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['03-HUMAN-UAT.md', '03-UAT.md'], optionsFor('XR-03-demo')),
+      '03-UAT.md',
+    );
+  });
+
+  test('XR-03-demo: 03-VERIFICATION.md wins over 03-CORRECTION-VERIFICATION.md', () => {
+    assert.strictEqual(
+      resolveVerificationFile(['03-CORRECTION-VERIFICATION.md', '03-VERIFICATION.md'], optionsFor('XR-03-demo')),
+      '03-VERIFICATION.md',
+    );
+  });
+
+  test('XR-03-demo: a literal code-carrying XR-03-UAT.md still wins over 03-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['03-UAT.md', 'XR-03-UAT.md', '03-HUMAN-UAT.md'], optionsFor('XR-03-demo')),
+      'XR-03-UAT.md',
+    );
+  });
+
+  test('5-demo: the padded 05-UAT.md wins over 05-HUMAN-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['05-HUMAN-UAT.md', '05-UAT.md'], optionsFor('5-demo')),
+      '05-UAT.md',
+    );
+  });
+
+  test('03-demo (no code, padded) is unchanged: 03-UAT.md wins over 03-HUMAN-UAT.md', () => {
+    assert.strictEqual(
+      resolveUatFile(['03-HUMAN-UAT.md', '03-UAT.md'], optionsFor('03-demo')),
+      '03-UAT.md',
+    );
+  });
+
+  test('XR-03-demo holding only 03-HUMAN-UAT.md still falls back to it', () => {
+    assert.strictEqual(resolveUatFile(['03-HUMAN-UAT.md'], optionsFor('XR-03-demo')), '03-HUMAN-UAT.md');
+  });
+
+  test('XR-03-demo: a cross-phase stray 04-UAT.md stays excluded', () => {
+    assert.strictEqual(
+      resolveUatFile(['04-UAT.md', '03-HUMAN-UAT.md'], optionsFor('XR-03-demo')),
+      '03-HUMAN-UAT.md',
+    );
+    assert.strictEqual(resolveUatFile(['04-UAT.md'], optionsFor('XR-03-demo')), null);
+  });
+
+  test('XR-03-demo: a literal XR-03-VERIFICATION.md still wins over 03-VERIFICATION.md', () => {
+    assert.strictEqual(
+      resolveVerificationFile(['03-VERIFICATION.md', 'XR-03-VERIFICATION.md', '03-CORRECTION-VERIFICATION.md'], optionsFor('XR-03-demo')),
+      'XR-03-VERIFICATION.md',
+    );
+  });
+
+  test('XR-03-demo: a cross-phase stray 04-VERIFICATION.md stays excluded', () => {
+    assert.strictEqual(
+      resolveVerificationFile(['04-VERIFICATION.md', '03-CORRECTION-VERIFICATION.md'], optionsFor('XR-03-demo')),
+      '03-CORRECTION-VERIFICATION.md',
+    );
+    assert.strictEqual(resolveVerificationFile(['04-VERIFICATION.md'], optionsFor('XR-03-demo')), null);
+  });
+
+  // End to end through readVerificationStatus: a passed phase must not read as another report's status
+  // because a sibling sorts first. Same file set with and without a project code gives the same answer.
+  for (const dirName of ['XR-03-demo', '03-demo', '5-demo']) {
+    test(`readVerificationStatus: ${dirName} reads its own passed report, not the correction sibling`, () => {
+      const dir = mkPhaseDir('5931-status', dirName);
+      try {
+        const written = phaseId.normalizePhaseName(phaseId.extractPhaseToken(dirName));
+        writeVerificationMd(dir, `${written}-VERIFICATION.md`, 'passed');
+        writeVerificationMd(dir, `${written}-CORRECTION-VERIFICATION.md`, 'gaps_found');
+        const result = readVerificationStatus(dir);
+        assert.equal(result.status, 'passed');
+        assert.equal(result.next_command, '');
+      } finally {
+        cleanup(path.dirname(dir));
+      }
+    });
+  }
+
+  // PARITY against the real scaffolder: `scaffold uat|verification` writes the file, and the resolver
+  // selects exactly that file over a sibling that sorts first, for a project-coded and an unpadded dir.
+  for (const [dirName, projectCode] of [['XR-03-demo', 'XR'], ['03-demo', null], ['3-demo', null]]) {
+    test(`parity (real scaffold): dir ${dirName}, scaffold --phase 3 writes the file the resolver selects`, () => {
+      const { runGsdTools } = require('./helpers.cjs');
+      const project = createTempGitProject();
+      try {
+        if (projectCode) {
+          fs.writeFileSync(path.join(project, '.planning', 'config.json'), JSON.stringify({ project_code: projectCode }));
+        }
+        const phaseDir = path.join(project, '.planning', 'phases', dirName);
+        fs.mkdirSync(phaseDir, { recursive: true });
+        const scaffold = (kind) => {
+          const result = runGsdTools(['scaffold', kind, '--phase', '3'], project);
+          assert.ok(result.success, `scaffold ${kind} failed: ${result.error}`);
+          return JSON.parse(result.output).path;
+        };
+        const writtenUat = scaffold('uat');
+        const writtenVerification = scaffold('verification');
+        // Siblings of the SAME phase that sort ahead of the scaffolded names, built from the prefix
+        // the scaffolder itself wrote (so they belong to the phase under every spelling).
+        const prefix = path.basename(writtenUat).replace(/-UAT\.md$/, '');
+        assert.notStrictEqual(prefix, path.basename(writtenUat), 'the scaffolder wrote an NN-UAT.md name');
+        fs.writeFileSync(path.join(phaseDir, `${prefix}-HUMAN-UAT.md`), '# sibling\n');
+        fs.writeFileSync(path.join(phaseDir, `${prefix}-CORRECTION-VERIFICATION.md`), '# sibling\n');
+        const written = fs.readdirSync(phaseDir);
+        const uat = resolveUatFile(written, optionsFor(dirName));
+        const verification = resolveVerificationFile(written, optionsFor(dirName));
+        assert.ok(path.basename(writtenUat) === uat, `resolver picked ${uat}, scaffolder wrote ${path.basename(writtenUat)}`);
+        assert.ok(path.basename(writtenVerification) === verification, `resolver picked ${verification}, scaffolder wrote ${path.basename(writtenVerification)}`);
+      } finally {
+        cleanup(project);
+      }
+    });
+  }
+
+  // PARITY: for every directory spelling, the name the scaffolder writes (`normalizePhaseName` of the
+  // phase argument, `src/commands.cts` cmdScaffold) is the one the resolver selects over a sibling.
+  for (const [dirName, phaseArg] of [
+    ['XR-03-demo', '3'],
+    ['XR-03-demo', 'XR-03'],
+    ['5-demo', '5'],
+    ['05-demo', '5'],
+    ['03-demo', '3'],
+    ['7A-demo', '7A'],
+  ]) {
+    test(`parity: dir ${dirName}, scaffold --phase ${phaseArg}: the scaffolder's file names are selected`, () => {
+      const written = phaseId.normalizePhaseName(phaseArg);
+      assert.strictEqual(
+        resolveUatFile([`${written}-HUMAN-UAT.md`, `${written}-UAT.md`], optionsFor(dirName)),
+        `${written}-UAT.md`,
+      );
+      assert.strictEqual(
+        resolveVerificationFile([`${written}-CORRECTION-VERIFICATION.md`, `${written}-VERIFICATION.md`], optionsFor(dirName)),
+        `${written}-VERIFICATION.md`,
+      );
+    });
+  }
+});
+
+// ─── #6078: a gaps_found report is checked against its covered-input fingerprint ──
+//
+// `readVerificationStatus` used to return `gaps_found` before the covered-digest check, so a gap closed
+// outside a gap-closure plan (a fix touching the report's covered files) never read stale and no route
+// re-ran the verifier. A `passed` report in the same situation reads `stale` and routes to execute-phase.
+
+describe('#6078: gaps_found with a covered-input fingerprint', () => {
+  /** A git project with one covered file and a report of `status` carrying its v4 fingerprint. */
+  function project(t, status, extraFrontmatter = null) {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    const covered = path.join(projectDir, 'src', 'a.ts');
+    fs.writeFileSync(covered, 'export const a = 1;\n');
+    const past = new Date(Date.now() - 120000);
+    fs.utimesSync(covered, past, past);
+    const digest = computeCoveredDigest(projectDir, ['src/a.ts'], undefined, { phaseDir });
+    const report = path.join(phaseDir, '01-VERIFICATION.md');
+    const fingerprint = extraFrontmatter ?? `covered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n`;
+    fs.writeFileSync(report, `---\nstatus: ${status}\n${fingerprint}---\n`);
+    const reportTime = new Date(Date.now() - 60000);
+    fs.utimesSync(report, reportTime, reportTime);
+    return { projectDir, phaseDir, covered };
+  }
+  const read = (phaseDir) => readVerificationStatus(phaseDir, { phaseCleanCommitTimesMs: () => new Map() });
+
+  test('a matching fingerprint keeps gaps_found and its gap-planning route', (t) => {
+    const { phaseDir } = project(t, 'gaps_found');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'gaps_found');
+    assert.equal(r.route, 'plan-phase');
+    assert.match(r.next_command, /plan-phase 01 --gaps/);
+    assert.equal(r.moved_files, undefined);
+  });
+
+  test('a moved fingerprint reads stale, names the moved file, and routes to the verifier re-run', (t) => {
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+    assert.match(r.next_command, /execute-phase 01/);
+    assert.deepEqual(r.moved_files, ['src/a.ts']);
+    assert.match(r.next_action, /re-runs the verifier/);
+  });
+
+  test('control: a passed report with the same moved file still reads stale and routes to execute-phase', (t) => {
+    const { phaseDir, covered } = project(t, 'passed');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+  });
+
+  test('a gaps_found report with no fingerprint and a newer SUMMARY still reads gaps_found', (t) => {
+    const { phaseDir } = project(t, 'gaps_found', '');
+    const summary = path.join(phaseDir, '01-01-SUMMARY.md');
+    fs.writeFileSync(summary, '# Summary\n');
+    const newer = new Date(Date.now() + 60000);
+    fs.utimesSync(summary, newer, newer);
+    const r = read(phaseDir);
+    assert.equal(r.status, 'gaps_found');
+    assert.equal(r.route, 'plan-phase');
+  });
+
+  test('a malformed or unknown-version fingerprint does not fail a gaps_found report closed to stale', (t) => {
+    const cases = {
+      'covered_files without a digest': 'covered_files:\n  - src/a.ts\n',
+      'a digest without covered_files': 'covered_digest: "v4:sha256:abc"\n',
+      'an empty covered_files array': 'covered_files: []\ncovered_digest: "v4:sha256:abc"\n',
+      'an unknown digest version': 'covered_files:\n  - src/a.ts\ncovered_digest: "v99:sha256:abc"\n',
+    };
+    for (const [label, fingerprint] of Object.entries(cases)) {
+      const { phaseDir } = project(t, 'gaps_found', fingerprint);
+      assert.equal(read(phaseDir).status, 'gaps_found', label);
+    }
+  });
+
+  test('a gap-closure plan and summary added after verification (no covered file edited) read stale with no moved files', (t) => {
+    const { phaseDir } = project(t, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Gap closure plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-SUMMARY.md'), '# Gap closure summary\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+    assert.equal(r.moved_files, undefined);
+  });
+
+  test('a v2 digest on a gaps_found report: an undeclared plan added after verification reads stale; unchanged reads gaps_found', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'a.ts'), 'export const a = 1;\n');
+    const digest = computeCoveredDigest(projectDir, ['src/a.ts'], 2, { phaseDir });
+    assert.match(digest, /^v2:/);
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: gaps_found\ncovered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n---\n`,
+    );
+    assert.equal(read(phaseDir).status, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan added after verification\n');
+    assert.equal(read(phaseDir).status, 'stale');
+  });
+
+  test('table: {known version, unknown version, malformed} x {unchanged, moved} for gaps_found vs passed', (t) => {
+    const rows = [
+      // [label, fingerprint builder key, unchangedStatus(gaps_found), movedStatus(gaps_found), unchangedStatus(passed), movedStatus(passed)]
+      ['known version', 'known', 'gaps_found', 'stale', 'passed', 'stale'],
+      ['unknown version', 'unknown', 'gaps_found', 'gaps_found', 'stale', 'stale'],
+      ['malformed pair', 'malformed', 'gaps_found', 'gaps_found', 'stale', 'stale'],
+    ];
+    const fingerprints = (digest) => ({
+      known: `covered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n`,
+      unknown: 'covered_files:\n  - src/a.ts\ncovered_digest: "v99:sha256:abc"\n',
+      malformed: 'covered_files:\n  - src/a.ts\n',
+    });
+    for (const [label, key, gUnchanged, gMoved, pUnchanged, pMoved] of rows) {
+      for (const [status, unchanged, moved] of [['gaps_found', gUnchanged, gMoved], ['passed', pUnchanged, pMoved]]) {
+        const base = project(t, status);
+        const digest = computeCoveredDigest(base.projectDir, ['src/a.ts'], undefined, { phaseDir: base.phaseDir });
+        const report = path.join(base.phaseDir, '01-VERIFICATION.md');
+        fs.writeFileSync(report, `---\nstatus: ${status}\n${fingerprints(digest)[key]}---\n`);
+        const reportTime = new Date(Date.now() - 60000);
+        fs.utimesSync(report, reportTime, reportTime);
+        assert.equal(read(base.phaseDir).status, unchanged, `${label} / ${status} / unchanged`);
+        fs.writeFileSync(base.covered, 'export const a = 2;\n');
+        assert.equal(read(base.phaseDir).status, moved, `${label} / ${status} / moved`);
+      }
+    }
+  });
+
+  test('a stale gaps_found phase keeps the phase status a gaps_found phase has today (EXECUTED)', (t) => {
+    const { phaseStatusFromFacts, PHASE_STATUS } = require('../gsd-core/bin/lib/phase-status.cjs');
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const statusOf = () => {
+      const v = isPhaseComplete(phaseDir, { phaseCleanCommitTimesMs: () => new Map() }).value;
+      return phaseStatusFromFacts({ planCount: 1, summaryCount: 1, complete: v.complete, verificationStatus: v.verification.status });
+    };
+    // a v4 digest unions the live plan/summary, so the report written above (before them) already reads stale
+    const staleStatus = statusOf();
+    fs.writeFileSync(covered, 'export const a = 3;\n');
+    assert.equal(statusOf(), PHASE_STATUS.EXECUTED);
+    assert.equal(staleStatus, PHASE_STATUS.EXECUTED);
+  });
+
+  test('a stale gaps_found phase is not complete', (t) => {
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = isPhaseComplete(phaseDir, { phaseCleanCommitTimesMs: () => new Map() });
+    assert.equal(r.value.complete, false);
+    assert.equal(r.value.verification.status, 'stale');
+  });
+});
