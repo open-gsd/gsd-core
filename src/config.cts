@@ -950,12 +950,23 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
     // lock with a zero timeout instead of the 30 s default.
     release = installerMigrations.acquireInstallMigrationLock(gsdDir);
   } catch (err) {
-    const holder = (err as { lockHolder?: { pid: number; acquiredAt: string } | null }).lockHolder;
-    return error(
-      `Cannot save ${defaultsPath}: ${(err as Error).message}`,
-      ERROR_REASON.CONFIG_DEFAULTS_LOCK_UNAVAILABLE,
-      holder ? { holder_pid: holder.pid, holder_since: holder.acquiredAt } : undefined,
-    );
+    // A lock that was waited on carries `lockHolder`: the owner it names, or null
+    // when its contents name none. The installer reclaims a lock whose owner has
+    // exited when it can remove the file, never one it cannot read, so the
+    // refusal says when the user should remove it (#5681).
+    const lockPath = path.join(gsdDir, installerMigrations.INSTALL_MIGRATION_LOCK_NAME);
+    const waited = Object.prototype.hasOwnProperty.call(err, 'lockHolder');
+    const holder = (err as { lockHolder?: { pid: number; acquiredAt?: unknown } | null }).lockHolder;
+    let message = `Cannot save ${defaultsPath}: ${(err as Error).message}.`;
+    const fields: Record<string, unknown> = { lock_path: lockPath };
+    if (holder) {
+      message = `Cannot save ${defaultsPath}: ${lockPath} is held by pid ${holder.pid}. Save again when that GSD install or settings save has finished; if pid ${holder.pid} is not running, remove ${lockPath} and save again.`;
+      fields['holder_pid'] = holder.pid;
+      if (typeof holder.acquiredAt === 'string') fields['holder_since'] = holder.acquiredAt;
+    } else if (waited) {
+      message = `Cannot save ${defaultsPath}: ${lockPath} names no owner, so it is never reclaimed. If no GSD install or settings save is running, remove ${lockPath} and save again.`;
+    }
+    return error(message, ERROR_REASON.CONFIG_DEFAULTS_LOCK_UNAVAILABLE, fields);
   }
   // The store is read and written under the lock, and the lock is released
   // before anything is reported, so a release failure cannot replace the save's

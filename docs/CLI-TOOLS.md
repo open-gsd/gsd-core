@@ -815,7 +815,11 @@ opened.
 
 A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
 so two saves, or a save and an install, run one after the other and neither loses the other's
-keys.
+keys. A save waits up to 30 s for the lock. A lock whose owner has exited is reclaimed; a lock
+file that names no owner (`$GSD_HOME/.gsd/gsd-install-migration.lock`, left by a crash before
+its owner was written) is not, and neither is one whose owner has exited when the file cannot be
+removed. The refusal names the file: remove it when no install or save is running, or, when it
+names an owner, when that pid is not running.
 
 With `--json-errors`, each refusal carries a typed reason
 ([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):

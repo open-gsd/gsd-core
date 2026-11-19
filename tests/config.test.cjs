@@ -4766,8 +4766,46 @@ describe('#5681: config-save-defaults reports lock failures through error()', ()
     assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
     assert.deepStrictEqual({ pid: result.error.holder_pid, since: result.error.holder_since },
       { pid: process.ppid, since: '2026-11-07T00:00:00.000Z' }, 'the refusal names the lock holder');
+    assert.strictEqual(result.error.lock_path, lockPath);
+    // RV6.5 review: the same refusal reaches a lock whose owner has exited but
+    // could not be reclaimed (a read-only .gsd/), so it also says when to remove it.
+    assert.ok(result.error.message.includes('Save again when that GSD install or settings save has finished'), result.error.message);
+    assert.ok(result.error.message.includes(`if pid ${process.ppid} is not running, remove ${lockPath} and save again`), result.error.message);
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
     assert.ok(fs.existsSync(lockPath), "another process's lock is left in place");
+  });
+
+  test('a lock that names a pid but no start time is refused without an undefined field or text', async (t) => {
+    const { lockPath, save } = inProcessHome(t, '{"mode":"interactive"}');
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.ppid }) + '\n');
+    const LOCK_WAIT_NONE_MS = 0;
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
+    const result = await save();
+    assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
+    assert.strictEqual(result.error.holder_pid, process.ppid);
+    assert.strictEqual(Object.hasOwn(result.error, 'holder_since'), false);
+    assert.doesNotMatch(result.error.message, /undefined/);
+  });
+
+  // Review 2026-11-18, Minor 5: a lock file whose contents name no owner (a
+  // crash between creating it and writing its payload) is never reclaimed, so
+  // the refusal names the file and when to remove it.
+  test('a lock file that names no owner is refused with its path and the remedy, and left in place', async (t) => {
+    const before = '{"mode":"interactive"}';
+    const { defaultsPath, lockPath, save } = inProcessHome(t, before);
+    fs.writeFileSync(lockPath, '');
+    const LOCK_WAIT_NONE_MS = 0;
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
+    const result = await save();
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
+    assert.strictEqual(result.error.lock_path, lockPath);
+    assert.strictEqual(result.error.holder_pid, undefined);
+    assert.ok(result.error.message.includes(`remove ${lockPath} and save again`), result.error.message);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.ok(fs.existsSync(lockPath), 'the lock file is left for the user');
   });
 });
 
