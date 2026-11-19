@@ -60,9 +60,9 @@ PLAN!FILES!5212
 )
   [[ "$TASK_COUNT_VALUE" =~ ^[0-9]+$ && "$FILE_COUNT_VALUE" =~ ^[0-9]+$ ]] || { echo "ERROR: plan task/file counts are missing or invalid; provide the measured counts before STATE updates." >&2; exit 1; }
 
-  gsd_run query state.advance-plan
-  gsd_run query state.update-progress
-  gsd_run query state.record-metric \
+  gsd_run query state.advance-plan ${GSD_WS:+--ws=${GSD_WS##* }}
+  gsd_run query state.update-progress ${GSD_WS:+--ws=${GSD_WS##* }}
+  gsd_run query state.record-metric ${GSD_WS:+--ws=${GSD_WS##* }} \
     --phase "$PHASE_VALUE" --plan "$PLAN_VALUE" --duration "${DURATION}" \
     --tasks "$TASK_COUNT_VALUE" --files "$FILE_COUNT_VALUE"
 fi

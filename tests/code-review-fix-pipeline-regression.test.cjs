@@ -41,6 +41,7 @@ function stepFence(src, name) {
 }
 const { createTempDir, createTempGitProject, cleanup, TOOLS_PATH } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review-fix.md');
@@ -484,4 +485,135 @@ describe('#4100 — code-review-fix --auto zero-scope convergence', () => {
     assert.ok(!zero.includes('All issues resolved.'), 'and does not claim resolution');
     assert.ok(run('2').includes('All issues resolved.'), 'a real all_fixed run is unchanged');
   });
+});
+
+// ---------------------------------------------------------------------------
+// #5876 — gsd-code-fixer fast-forwards the branch the fixes were made for, in the
+// worktree that has it checked out, not in the first `git worktree list` entry
+// (the main checkout). The shipped setup_worktree and cleanup-tail fences run
+// verbatim against a real repo with a linked worktree.
+// ---------------------------------------------------------------------------
+describe('#5876 — gsd-code-fixer cleanup fast-forwards the worktree that owns $branch', () => {
+  const FIXER_COPIES = [
+    path.join('agents', 'gsd-code-fixer.md'),
+    path.join('agents', 'gsd-code-fixer.compact.md'),
+    path.join('pi', 'package-agents', 'gsd-code-fixer.md'),
+  ];
+  const GIT_ENV = {
+    GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid',
+    GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid',
+    GIT_TERMINAL_PROMPT: '0',
+  };
+
+  /** Every bash fence of <step name="setup_worktree">, in order: [setup, cleanup tail]. */
+  function setupFences(rel) {
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
+    const open = src.indexOf('<step name="setup_worktree">');
+    assert.notStrictEqual(open, -1, `${rel}: setup_worktree step not found`);
+    const lines = splitLines(src.slice(open, src.indexOf('</step>', open)));
+    const fences = [];
+    let start = -1;
+    lines.forEach((line, i) => {
+      if (start === -1 && /^```bash\s*$/.test(line)) start = i + 1;
+      else if (start !== -1 && /^```\s*$/.test(line)) { fences.push(lines.slice(start, i).join('\n')); start = -1; }
+    });
+    assert.ok(fences.length >= 2, `${rel}: expected a setup fence and a cleanup-tail fence, got ${fences.length}`);
+    return fences;
+  }
+
+  const runBash = (cwd, script) => runHook('-c', [script], {
+    interpreter: 'bash', cwd, timeoutMs: SEAM_DEFAULT_TIMEOUT_MS, env: { ...process.env, ...GIT_ENV },
+  });
+  /** Run one git command in `cwd` and return its trimmed stdout. */
+  const gitOut = (cwd, args) => runBash(cwd, `git ${args}`).stdout.trim();
+
+  /** repo (main, on `main`) + a linked worktree on `feature`; the root name carries a space. */
+  function fixture() {
+    const base = createTempDir('gsd-5876-');
+    const root = path.join(base, 'with space');
+    fs.mkdirSync(root);
+    const repo = path.join(root, 'repo');
+    const featureWt = path.join(root, 'feature-wt');
+    fs.mkdirSync(repo);
+    gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repo });
+    gitOrThrow(['commit', '-q', '--allow-empty', '-m', 'base'], { cwd: repo, env: { ...process.env, ...GIT_ENV } });
+    gitOrThrow(['worktree', 'add', '-q', '-b', 'feature', featureWt], { cwd: repo });
+    gitOrThrow(['commit', '-q', '--allow-empty', '-m', 'feature work'], { cwd: featureWt, env: { ...process.env, ...GIT_ENV } });
+    const phaseDir = path.join(root, 'phase');
+    fs.mkdirSync(phaseDir);
+    return { base, root, repo, featureWt, phaseDir };
+  }
+
+  function run(rel, cwd, phaseDir, featureWt, between) {
+    const [setup, cleanup] = setupFences(rel);
+    const script = `padded_phase=06\nphase_dir=${JSON.stringify(phaseDir)}\nFEATURE_WT=${JSON.stringify(featureWt)}\n${setup}\n`
+      + 'git commit -q --allow-empty -m "fix(06): CR-01"\n'
+      + `${between || ''}\n${cleanup}\n`;
+    return runBash(cwd, script);
+  }
+
+  for (const rel of FIXER_COPIES) {
+    describe(rel, { skip: !HAS_BASH }, () => {
+      test('from a linked worktree, the fixes land on $branch and the main checkout is untouched', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.featureWt, f.phaseDir, f.featureWt);
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.strictEqual(gitOut(f.featureWt, 'log -1 --format=%s feature'), 'fix(06): CR-01', '$branch gets the fix commit');
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'base', 'main is not fast-forwarded');
+          assert.strictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '', 'the temp branch is deleted after the fast-forward');
+        } finally { cleanup(f.base); }
+      });
+
+      test('the fixer worktree is placed inside the session checkout, also when started from a subdirectory', () => {
+        const f = fixture();
+        try {
+          const sub = path.join(f.featureWt, 'src', 'deep');
+          fs.mkdirSync(sub, { recursive: true });
+          const r = run(rel, sub, f.phaseDir, f.featureWt, 'echo "WT_PATH=$wt"');
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          const printed = /^WT_PATH=(.*)$/m.exec(r.stdout);
+          assert.ok(printed, `the fence exposes $wt: ${r.stdout}`);
+          assert.ok(fs.realpathSync(path.dirname(printed[1])).startsWith(fs.realpathSync(path.join(f.featureWt, '.claude', 'worktrees'))),
+            `$wt lives under the session worktree's .claude/worktrees, got ${printed[1]}`);
+          assert.strictEqual(gitOut(f.featureWt, 'log -1 --format=%s feature'), 'fix(06): CR-01');
+        } finally { cleanup(f.base); }
+      });
+
+      test('with no worktree holding $branch, nothing is merged, the temp branch is preserved and the warning says so', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.featureWt, f.phaseDir, f.featureWt, 'git -C "$FEATURE_WT" checkout -q --detach');
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.ok(r.stdout.includes('WARN: could not fast-forward feature to gsd-reviewfix/06-'), `warning names $branch: ${r.stdout}`);
+          assert.ok(r.stdout.includes('<no worktree has it checked out>'), `warning says no worktree owns it: ${r.stdout}`);
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'base', 'main is not touched');
+          assert.notStrictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '', 'the temp branch is preserved');
+        } finally { cleanup(f.base); }
+      });
+
+      test('from the primary checkout, the outcome is unchanged', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.repo, f.phaseDir, f.featureWt);
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'fix(06): CR-01');
+          assert.strictEqual(gitOut(f.featureWt, 'log -1 --format=%s feature'), 'feature work', 'the linked branch is untouched');
+          assert.strictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '');
+        } finally { cleanup(f.base); }
+      });
+
+      test('a diverged $branch preserves the temp branch and the warning names the branch and its worktree', () => {
+        const f = fixture();
+        try {
+          const r = run(rel, f.featureWt, f.phaseDir, f.featureWt, 'git -C "$FEATURE_WT" commit -q --allow-empty -m concurrent');
+          assert.strictEqual(r.exitCode, 0, `fixer shell failed: ${r.stderr}${r.stdout}`);
+          assert.ok(r.stdout.includes('WARN: could not fast-forward feature to gsd-reviewfix/06-'), `warning names $branch: ${r.stdout}`);
+          assert.ok(r.stdout.includes(fs.realpathSync(f.featureWt)), `warning names the worktree the merge was tried in: ${r.stdout}`);
+          assert.strictEqual(gitOut(f.repo, 'log -1 --format=%s main'), 'base', 'main is not touched');
+          assert.notStrictEqual(gitOut(f.repo, 'branch --list "gsd-reviewfix/*"'), '', 'the temp branch is preserved for a manual merge');
+        } finally { cleanup(f.base); }
+      });
+    });
+  }
 });

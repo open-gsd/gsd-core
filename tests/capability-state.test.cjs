@@ -18,7 +18,11 @@ const fc = require('fast-check');
 
 const { cleanup, runGsdTools, installSpawnEnv } = require('./helpers.cjs');
 const { runNode, assertSeamExit } = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const {
+  PROBE_TIMEOUT_MS,
+  INSTALL_TIMEOUT_MS,
+  GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
+} = require('./helpers/timeouts.cjs');
 
 const {
   resolveCapabilityState,
@@ -783,10 +787,16 @@ describe('resolveCapabilityState — prototype pollution guard', () => {
 
 const gsdToolsPath = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
+// This helper's `capability state` spawns run at
+// GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS, not PROBE_TIMEOUT_MS (#5955): a block's
+// first spawn on a cold windows-latest runner was killed at the 15000ms probe
+// bound with no output, while the spawns after it took 0.5-2.4s. The bound is
+// a hang backstop, and the first-spawn latency stays visible in the test's
+// duration.
 function runCapabilityState(cwd, configDir) {
   return runNode(
     [gsdToolsPath, 'capability', 'state', '--config-dir', configDir, '--raw', '--cwd', cwd],
-    { timeoutMs: PROBE_TIMEOUT_MS },
+    { timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS },
   );
 }
 
@@ -1564,7 +1574,9 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--cwd', installedProjectDir,
           '--raw',
         ],
-        { timeoutMs: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
+        // #5955: killed at the 20000ms bound on windows-latest, with its full
+        // JSON already written. Same backstop as runCapabilityState above.
+        { timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS },
       );
       assertSeamExit(assert, result, 0, `gsd-tools exited ${result.exitCode}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
