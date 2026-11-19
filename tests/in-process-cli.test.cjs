@@ -475,14 +475,15 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     }
 
     assert.equal(fs.readFileSync(file, 'utf8'), 'once');
-    assert.equal(wrapperCalls, 2, 'the wrapper is entered once by the caller and once by the stale stand-in');
+    assert.equal(wrapperCalls, 1, 'the stale stand-in goes down to what it replaced, never back up to the wrapper');
   });
 
-  // The stale stand-in marks itself while it defers to the wrapper. A wrapper
-  // that throws must not leave the mark behind: the next use would skip the
-  // wrapper.
-  await t.test('a stale wrapper that throws while the stand-in defers to it is used again next time', async (t2) => {
-    const file = path.join(tempDir(t2), 'stale-throws.txt');
+  // The wrapper is still installed when a LATER call opens, so that call's
+  // stand-in replaces the wrapper and forwards down to it; the wrapper calls
+  // the earlier call's stale stand-in, which offers the write to the open call
+  // and, declined, goes down again. Nothing may send it back up.
+  await t.test('a wrapper over a stale stand-in that is still installed when the next call opens', async (t2) => {
+    const file = path.join(tempDir(t2), 'stale-under-next.txt');
     const real = fs.writeSync;
     let wrapper;
     let wrapperCalls = 0;
@@ -490,25 +491,34 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
       const below = fs.writeSync;
       wrapper = (fd, data, ...rest) => {
         wrapperCalls += 1;
-        // Entry 1 is the caller, entry 2 is the stale stand-in deferring.
-        if (wrapperCalls === 2) throw new Error('wrapper failed');
         return below.call(fs, fd, data, ...rest);
       };
     });
 
     t2.after(() => { fs.writeSync = real; });
     fs.writeSync = wrapper;
-    const fd = fs.openSync(file, 'w');
+    let result;
     try {
-      assert.throws(() => fs.writeSync(fd, 'lost'), /wrapper failed/);
-      assert.equal(fs.writeSync(fd, 'kept'), 4);
+      result = await runInProcess(() => {
+        const fd = fs.openSync(file, 'w');
+        try {
+          fs.writeSync(fd, 'to-the-file');
+        } finally {
+          fs.closeSync(fd);
+        }
+        fs.writeSync(1, 'captured');
+        // The stale stand-in, reached through the wrapper from inside this
+        // call, acts for this call: the write is captured, not printed.
+        wrapper(2, 'through-the-stale-one');
+      });
+      assert.equal(fs.writeSync, wrapper, 'the call puts back what it found installed');
     } finally {
-      fs.closeSync(fd);
       fs.writeSync = real;
     }
 
-    assert.equal(fs.readFileSync(file, 'utf8'), 'kept');
-    assert.equal(wrapperCalls, 4, 'the second write goes caller, wrapper, stand-in, wrapper again');
+    assert.deepEqual(result, { exitCode: 0, stdout: 'captured', stderr: 'through-the-stale-one' });
+    assert.equal(fs.readFileSync(file, 'utf8'), 'to-the-file');
+    assert.equal(wrapperCalls, 2, 'once for the file write forwarded down, once called directly');
   });
 
   // The same loop with a wrapper that calls down after an await: the stale
@@ -539,7 +549,7 @@ test('runInProcess runs one call at a time (#6332)', async (t) => {
     }
 
     assert.equal(fs.readFileSync(file, 'utf8'), 'once');
-    assert.equal(wrapperCalls, 2);
+    assert.equal(wrapperCalls, 1);
   });
 
   // A module first loaded inside main may keep a reference to a stand-in

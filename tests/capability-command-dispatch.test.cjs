@@ -689,6 +689,8 @@ describe('dispatchCapabilityCommand — a router its module declares asynchronou
         assert.ok(registered.has(name), `${moduleName}: asyncRouters names "${name}", which no command family routes to`);
       }
     }
+    // Pinned on purpose: with no declaring module the loop above checks nothing.
+    // A second module that declares asyncRouters is added here with it.
     assert.deepEqual(declaring, ['profile-pipeline-command-router.cjs']);
   });
 
