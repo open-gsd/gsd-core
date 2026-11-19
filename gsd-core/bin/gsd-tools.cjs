@@ -534,7 +534,9 @@ function _dispatchNonFamily({ registryCommand, registryArgs, legacyCommand, lega
  * @param {Function} opts.error          Error reporter (io.error)
  * @param {object}   [opts.registry]     Injectable registry (for tests)
  * @param {Function} [opts.requireModule] Injectable module loader (for tests)
- * @returns {boolean} true if the command was dispatched, false otherwise
+ * @returns {boolean | Promise<true>} true if the command was dispatched, false otherwise;
+ *   a promise of true when the router is one its module declares in `asyncRouters` and it
+ *   returned a promise (#6332)
  */
 function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, requireModule }) {
   // Prototype-pollution guard: reject reserved property names as command keys
@@ -616,6 +618,13 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     );
   }
   if (_result && typeof _result.then === 'function') {
+    // #6332: a first-party router its own module declares asynchronous is
+    // waited for. The caller gets a promise of `true` and main() awaits it, so
+    // an in-process call (runCli) ends when the command has, as the binary does.
+    const declared = Object.prototype.hasOwnProperty.call(mod, 'asyncRouters') ? mod.asyncRouters : undefined;
+    if (Array.isArray(declared) && declared.includes(entry.router)) {
+      return _result.then(() => true);
+    }
     error(
       'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" must be synchronous (returned a Promise); async capability routers are not supported.',
       ERROR_REASON.SDK_FAIL_FAST,
@@ -5846,7 +5855,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // dispatchCapabilityCommand routes it to the capability's registered router.
       // commandFamilies now includes migrated capabilities (e.g. graphify → graphify-command-router.cjs);
       // this returns true when a registered capability owns the command, false otherwise.
-      if (dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
+      if (await dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
 
       // ADR-1244 Phase 5 (D7): if no first-party family owns the command, try an INSTALLED
       // THIRD-PARTY (overlay) capability — dispatched only if committed/consented and only by
@@ -5885,6 +5894,20 @@ if (require.main === module) {
   runMain(main);
 }
 
+/**
+ * Run this CLI in-process (#6332, ADR-6315 item 14): the same `main` the
+ * entry point above runs, behind the in-process seam. Resolves to
+ * `{ exitCode, stdout, stderr }`, writes nothing to the real streams and
+ * leaves process state as it found it. `argv` is what follows the script path.
+ *
+ * @param {{ argv?: readonly string[], cwd?: string, env?: Record<string, string | undefined> }} [options]
+ * @returns {Promise<{ exitCode: number, stdout: string, stderr: string }>}
+ */
+function runCli(options = {}) {
+  const { runInProcess } = require('./lib/in-process-cli.cjs');
+  return runInProcess(main, { ...options, scriptPath: __filename });
+}
+
 // ─── Exports (for tests) ──────────────────────────────────────────────────────
 // ADR-959: export dispatchCapabilityCommand so tests can exercise it with
 // synthetic registry + requireModule injections.
@@ -5896,6 +5919,7 @@ function hostCommandNames() {
 }
 
 module.exports = {
+  runCli,
   hostCommandNames,
   dispatchCapabilityCommand,
   dispatchOverlayCapabilityCommand,

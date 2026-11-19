@@ -147,6 +147,7 @@ module.exports = {
   "tests/hooks-crash-policy.test.cjs",
   "tests/hooks-opt-in.test.cjs",
   "tests/host-integration.test.cjs",
+  "tests/in-process-cli.test.cjs",
   "tests/in-tier-msys-fork-stress.test.cjs",
   "tests/in-tier-sh-pipeline-timing.test.cjs",
   "tests/init-manager.test.cjs",

@@ -238,7 +238,7 @@ Every item starts now. The phases are a priority order, not a queue. Sections 5 
 | 16 | [#6334](https://github.com/open-gsd/gsd-core/issues/6334) | 22 | [#6340](https://github.com/open-gsd/gsd-core/issues/6340) |
 | 17 | [#6335](https://github.com/open-gsd/gsd-core/issues/6335) | 23 | [#6341](https://github.com/open-gsd/gsd-core/issues/6341) |
 | 18 | [#6336](https://github.com/open-gsd/gsd-core/issues/6336) | 24 | [#6342](https://github.com/open-gsd/gsd-core/issues/6342) |
-| 19 | [#6337](https://github.com/open-gsd/gsd-core/issues/6337) | | |
+| 19 | [#6337](https://github.com/open-gsd/gsd-core/issues/6337) | 14b | [#6354](https://github.com/open-gsd/gsd-core/issues/6354) |
 
 - **Real dependencies:** item 15 needs item 14's entry point; item 16 needs item 15; item 20 needs items 15 and 19; the second half of item 24 needs item 19; the macOS concurrency measurement in item 5b needs the sharded lane from item 5a, which has merged.
 - **Item 5a is done:** PR #5053 merged on 2026-11-18. Its review findings are tracked in [#6329](https://github.com/open-gsd/gsd-core/issues/6329).
@@ -436,3 +436,12 @@ For the 14 most recent green `merge_group` runs of `test.yml`, the run's head SH
 Result: 14 of 14 had the same commit SHA, and therefore the same tree. PRs sampled: 6305, 6309, 6311, 6307, 6308, 6306, 6304, 6290, 6183, 5871, 5639, 5502, 5408, 6094.
 
 Arm applied: continue. Item 8 keys its skip on SHA equality with a green `merge_group` run.
+
+### 2026-11-18 — Item 14: the entry point ships first, as an ambient swap
+
+Item 14 is split in two.
+
+- **Item 14 ([#6332](https://github.com/open-gsd/gsd-core/issues/6332)) delivers AC1, AC2 and AC4.** `runCli` runs the CLI's own `main` in-process. It does not thread a context object. It swaps `process.argv`, the working directory, the environment, the two output streams and `process.exit` for one call and restores them, and it resets the module-level caches that registered with `src/invocation-scope.cts`. That needed no change to any handler, so item 15 can start on it.
+- **Item 14b ([#6354](https://github.com/open-gsd/gsd-core/issues/6354)) delivers AC3.** The process-context object, the `local/no-process-global-outside-context` ratchet, and a second ratchet, `local/no-unregistered-module-state`, over the 162 module-level state declarations a scan of `src/` finds.
+
+Two consequences of the swap hold until item 14b lands: in-process calls run one at a time (concurrent calls queue), and a module-level cache that no module registered can carry from one call to the next. Item 15's parity suite is the check on the second.
