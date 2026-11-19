@@ -244,6 +244,7 @@ module.exports = {
   "tests/policy-160-route0-resume.test.cjs",
   "tests/policy-shell-pinning.test.cjs",
   "tests/pr-branch-planning-filter.test.cjs",
+  "tests/pr-template-links.test.cjs",
   "tests/precommit-alias-drift-hook.test.cjs",
   "tests/prepush-enterprise-email-hook.test.cjs",
   "tests/process-seam.process.test.cjs",

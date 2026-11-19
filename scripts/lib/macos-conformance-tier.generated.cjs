@@ -206,6 +206,7 @@ module.exports = {
   "tests/platform-conformance-tier.test.cjs",
   "tests/plugin-manifest.test.cjs",
   "tests/policy-shell-pinning.test.cjs",
+  "tests/pr-template-links.test.cjs",
   "tests/precommit-alias-drift-hook.test.cjs",
   "tests/prepush-enterprise-email-hook.test.cjs",
   "tests/process-seam.process.test.cjs",
