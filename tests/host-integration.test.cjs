@@ -2697,7 +2697,7 @@ describe('#3714 dispatch-isolation CLI — model policy end-to-end (RED pre-fix 
   // passed MODEL_ID_CHARSET_RE silently (it permits '-'), reached
   // resolveOrchestratorExec, tripped its `unsafe_leading_dash_model` guard,
   // and turned the WHOLE resolution to exec:null — a wave-fatal abort per
-  // the EXEC_OK fail-closed halt of executor-isolation-dispatch.md, with no warning at all. The fix
+  // executor-isolation-dispatch.md:299-303, with no warning at all. The fix
   // rejects a leading '-' inside resolveDispatchModelPin itself so it
   // degrades like every other rejected shape: no --model, a warning, exec
   // still resolves.
