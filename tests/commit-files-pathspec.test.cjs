@@ -3271,7 +3271,7 @@ describe('commit timeout reporting (#3886)', () => {
     assert.ok(other.result.error.startsWith(commitTimeoutHead(tmpDir, 30000)), other.result.error);
   });
 
-  test('#5231: an active workstream config wins over the root config for the commit timeout', () => {
+  test('#5231: an active workstream config wins over the root config, and an invalid workstream value shadows a valid root value', () => {
     writeGitConfig({ commit_timeout_ms: 45000 });
     const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'ws');
     fs.mkdirSync(wsDir, { recursive: true });

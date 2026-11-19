@@ -977,8 +977,8 @@ describe('#5231: git.commit_timeout_ms reaches commit-to-subrepo and pr-subrepo'
     const shorter = JSON.parse(runWithTimedOutCommit(call).stdout).repos.backend.error;
     // The expected head comes from the owner, so no prose literal is compared (ADR-456).
     const { commitTimeoutHead } = require('../gsd-core/bin/lib/commands.cjs');
-    // macOS tmpdir is a symlink (/var -> /private/var); the sub-repo path resolves through realpath.
-    const repoCwd = fs.realpathSync(path.join(rootDir, 'backend'));
+    // cmdCommitToSubrepo builds the sub-repo path as path.join(cwd, repo), with no realpath.
+    const repoCwd = path.join(rootDir, 'backend');
     assert.ok(longer.startsWith(commitTimeoutHead(repoCwd, 60000)), longer);
     assert.ok(shorter.startsWith(commitTimeoutHead(repoCwd, 30000)), shorter);
   });
