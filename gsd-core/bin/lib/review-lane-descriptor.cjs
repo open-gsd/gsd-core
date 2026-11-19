@@ -1,0 +1,1118 @@
+"use strict";
+/**
+ * Reviewer Lane Descriptor Module (ADR-2782 Phase 1, #2794 — closes #2690).
+ *
+ * ONE place where the cross-AI reviewer lane contract is declared as data.
+ *
+ * Before this module the contract lived in three unrelated surfaces: the roster
+ * in `review-reviewer-selection.cts`, ~640 lines of hand-authored per-CLI bash in
+ * `gsd-core/workflows/review.md` `invoke_reviewers`, and the hardcoded section
+ * headings in `write_reviews`. A cross-cutting fix therefore landed per-leg —
+ * #2494 and #2605 were the same empty-output defect filed twice, and #2475 /
+ * #2295 / #2272 are the same shape.
+ *
+ * SCOPE (ADR-2782's phase table). This module DECLARES; it does not execute.
+ * `invoke_reviewers` still runs hand-authored legs until Phase 5b (#2799) makes
+ * it iterate. What Phase 1 buys is that a leg can no longer be added, removed,
+ * or renamed without the table and the REVIEWS.md section moving with it —
+ * `checkReviewerLaneParity` below is the `DEFECT.GENERATIVE-FIX` assertion
+ * (`CONTEXT.md:797`) that the roster has never had.
+ *
+ * The descriptor deliberately does NOT promise uniformity. Lane divergence is
+ * real and frequently correct (measured timeout floors differ; three lanes are
+ * HTTP endpoints with no binary; Antigravity needs a three-layer fallback for an
+ * upstream stdout bug). The value is one place where divergence is DECLARED.
+ * Behaviour that data cannot express is delegated to a named `handler`
+ * (ADR-2782 D6 closed enum) — never to conditionals inside the table.
+ *
+ * Field names, nesting, and enum members track ADR-2782 D1/D2/D6/D7 so Phase 2
+ * (#2795) harvests this shape into the capability manifest without a translation
+ * layer — INCLUDING `transport`'s placement at the lane level (see SpawnLane).
+ *
+ * Building this table against all eleven shipped legs surfaced four cases the
+ * ADR's original survey did not cover. Rather than diverge silently — which is
+ * exactly the translation layer this module exists to avoid — ADR-2782 was
+ * AMENDED in the same PR (see its Amendments section, 2026-07-29). All four are
+ * additive widenings of closed enums, each forced by a lane that exists today:
+ *
+ *   1. `promptChannel: 'none'` — CodeRabbit reviews the working-tree diff and is
+ *      fed no prompt at all.
+ *   2. `outputChannel: 'file-arg'` — Codex writes the review via its own
+ *      `-o/--output-last-message <FILE>` and discards stdout (#1698), because on
+ *      Windows it emits teardown noise to stdout after the final message.
+ *   3. `outputArg` — the companion to (2): knowing the review lands in a file is
+ *      useless without the argument that names the file.
+ *   4. `flags: string[]` — Antigravity is selected by BOTH `--antigravity` and
+ *      `--agy`, which a single-valued field cannot express. This also flattens
+ *      D8's uniqueness invariant across every lane's flags.
+ *   5. `NATIVE_TIMEOUT` — a lane whose CLI takes its own native inner timeout flag (today only
+ *      antigravity's `--print-timeout`) declares where the resolved value goes; `resolveLanePlan`
+ *      computes what it is from the same resolved outer `timeoutMs` (#3274).
+ *
+ * Phase 2 (#2795) implements the manifest validator against the amended
+ * vocabulary, which is the point of amending rather than leaving it to be
+ * rediscovered.
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.DOCS_PARITY_VIOLATION = exports.LANE_SLUG_RE = exports.PARITY_VIOLATION = exports.REVIEWER_LANES = exports.ARGV_PLACEHOLDER = void 0;
+exports.mergeReviewerLanes = mergeReviewerLanes;
+exports.checkReviewerLaneParity = checkReviewerLaneParity;
+exports.checkReviewerDocsParity = checkReviewerDocsParity;
+const text_lines_cjs_1 = require("./text-lines.cjs");
+/**
+ * Argv placeholders (Phase 5b, #2799).
+ *
+ * `args` is an argv TEMPLATE, not a prefix. The injected pieces — model, effort, output file,
+ * argv-borne prompt — do not all go in the same place, and no positional rule expresses that:
+ * `codex` injects the model in the MIDDLE (after the `exec --ephemeral` subcommand) and the output
+ * file later still, while `kimi-code` injects the model first and five lanes end with a bare `-` that
+ * must stay last. Splicing by position silently produced
+ * `codex --model M -o F exec --ephemeral …`, which is not a valid codex invocation.
+ *
+ * So each lane declares WHERE each piece goes. A placeholder expands to zero or more argv elements
+ * and vanishes when it has nothing to contribute (no model configured, no effort channel, prompt on
+ * stdin), which is what lets one template serve the configured and unconfigured cases.
+ *
+ * This is a closed five-member vocabulary with no expressions, no nesting and no conditionals — a
+ * placeholder set, deliberately not a template language. The moment it needs a conditional, the
+ * lane wants a `handler` instead (D6).
+ */
+exports.ARGV_PLACEHOLDER = Object.freeze({
+    /** `modelArg` + the resolved model, or nothing. */
+    MODEL: '{{model}}',
+    /** The host's effort argv, or nothing unless `effortChannel` is `argv`. */
+    EFFORT: '{{effort}}',
+    /** `outputArg` + the review path, or nothing unless `outputChannel` is `file-arg`. */
+    OUTPUT: '{{output}}',
+    /** The argv-borne prompt, or nothing unless `promptChannel` is `argv`/`argv-file-ref`. */
+    PROMPT: '{{prompt}}',
+    /** A lane's own CLI-native inner timeout duration, derived from the resolved outer `timeoutMs`
+     * (never independently configured) — see `resolveLanePlan`'s expansion of this token. */
+    NATIVE_TIMEOUT: '{{nativeTimeout}}',
+});
+const SPAWN_STDIN_STDOUT = {
+    promptChannel: 'stdin',
+    outputChannel: 'stdout',
+};
+/**
+ * The eleven declared lanes, in `write_reviews` order.
+ *
+ * The `gemini` lane was retired by #4709: Google sunset Gemini CLI on 2026-06-18 (the same
+ * sunset that removed the gemini RUNTIME in #1928/1.8.0), so the lane spawned a binary that no
+ * longer serves the free/Pro/Ultra tiers that are GSD's audience.
+ *
+ * `kimi-code` joined in Phase 5b (#2799, closes #2718) — ADR-2782's phase table lands it here
+ * rather than in 5a precisely so it arrives together with the iteration that can invoke it.
+ */
+exports.REVIEWER_LANES = Object.freeze([
+    {
+        // 1_200_000 rather than the 900_000 floor: headless Claude measured ~525 s
+        // on a large plan set (review.md:304).
+        slug: 'claude',
+        flags: ['--claude'],
+        transport: 'spawn',
+        probe: { kind: 'command-exists', binary: 'claude' },
+        invoke: {
+            binary: 'claude',
+            args: ['{{model}}', '{{effort}}', '-p', '-'],
+            ...SPAWN_STDIN_STDOUT,
+            modelArg: '--model',
+            effortChannel: 'argv',
+            // #2483: without these the claude leg is the only reviewer that additionally inherits the
+            // invoking user's global CLAUDE.md, the project CLAUDE.md, and Claude Code auto-memory —
+            // a context asymmetry against the independent-review premise (codex sees only the
+            // assembled prompt and runs --ephemeral). Both flags, not just the first: CLAUDE.md
+            // loading and auto-memory are independently-toggled mechanisms, and an environment
+            // exporting CLAUDE_CODE_DISABLE_AUTO_MEMORY=0 forces auto-memory back ON — the explicit
+            // pair is robust against that. Applies when /gsd:review runs from a non-Claude-Code host;
+            // inside Claude Code the claude lane self-skips for independence.
+            env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1', CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' },
+        },
+        timeoutFloorMs: 1_200_000,
+        timeoutConfigKey: 'review.timeouts.claude',
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'Claude',
+        evidenceClass: 'source-grounded',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.claude',
+        contextWindowTokens: 200000,
+        contextWindowConfigKey: 'review.context_window_tokens.claude',
+        modelConfigKey: 'review.models.claude',
+        effortConfigKey: 'review.effort.claude',
+        defaultEffort: 'high',
+        handler: null,
+    },
+    {
+        // Codex captures the review through its own `-o/--output-last-message` and
+        // discards stdout, because on Windows it writes process-teardown noise to
+        // stdout AFTER the final message, which a stdout redirect would append to a
+        // non-empty file and slip past the empty-output guard (#1698).
+        slug: 'codex',
+        flags: ['--codex'],
+        transport: 'spawn',
+        probe: { kind: 'command-exists', binary: 'codex' },
+        invoke: {
+            binary: 'codex',
+            // Leg order exactly: codex exec --ephemeral --model M $EFFORT --skip-git-repo-check -o F -
+            args: ['exec', '--ephemeral', '{{model}}', '{{effort}}', '--skip-git-repo-check', '{{output}}', '-'],
+            promptChannel: 'stdin',
+            outputChannel: 'file-arg',
+            outputArg: '-o',
+            modelArg: '--model',
+            effortChannel: 'argv',
+        },
+        timeoutFloorMs: 1_200_000,
+        timeoutConfigKey: 'review.timeouts.codex',
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'Codex',
+        evidenceClass: 'source-grounded',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.codex',
+        contextWindowTokens: 272000,
+        contextWindowConfigKey: 'review.context_window_tokens.codex',
+        modelConfigKey: 'review.models.codex',
+        effortConfigKey: 'review.effort.codex',
+        defaultEffort: 'high',
+        handler: null,
+    },
+    {
+        // Fed no prompt: CodeRabbit reviews the working-tree diff and accepts
+        // neither a prompt nor a model flag (review.md:367). Its findings are
+        // deliberately down-weighted in the consensus step.
+        slug: 'coderabbit',
+        flags: ['--coderabbit'],
+        transport: 'spawn',
+        probe: { kind: 'command-exists', binary: 'coderabbit' },
+        invoke: {
+            binary: 'coderabbit',
+            args: ['review', '--prompt-only'],
+            promptChannel: 'none',
+            outputChannel: 'stdout',
+            modelArg: null,
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 360_000,
+        timeoutConfigKey: null,
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'CodeRabbit',
+        evidenceClass: 'diff-only',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.coderabbit',
+        contextWindowTokens: null,
+        contextWindowConfigKey: null,
+        // Accepts no model flag at all (review.md:367) — not merely "none configured".
+        modelConfigKey: null,
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: null,
+    },
+    {
+        // `--format json` is the primary invocation, not a fallback: the review text
+        // lives in assistant `text` parts, which the default formatter drops when the
+        // agent stops with no final message (#1936). Reconstruction needs jq.
+        slug: 'opencode',
+        flags: ['--opencode'],
+        transport: 'spawn',
+        probe: { kind: 'command-exists', binary: 'opencode' },
+        invoke: {
+            binary: 'opencode',
+            args: ['run', '{{model}}', '{{effort}}', '--format', 'json', '-'],
+            ...SPAWN_STDIN_STDOUT,
+            modelArg: '--model',
+            effortChannel: 'argv',
+        },
+        timeoutFloorMs: 660_000,
+        timeoutConfigKey: 'review.timeouts.opencode',
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'OpenCode',
+        evidenceClass: 'source-grounded',
+        // Phase 5b: the handler reconstructs from the JSON stream with JSON.parse, so `jq` — absent on
+        // stock Windows/Git-Bash (#2589) — is no longer a prerequisite for this lane.
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.opencode',
+        contextWindowTokens: null,
+        contextWindowConfigKey: 'review.context_window_tokens.opencode',
+        modelConfigKey: 'review.models.opencode',
+        effortConfigKey: 'review.effort.opencode',
+        defaultEffort: 'high',
+        // Phase 5b (#2799): was `null`. The review is REBUILT from assistant `text` parts; a plain
+        // stdout copy would write the raw JSON envelope as the review (#1936). See LaneHandler.
+        handler: 'opencode',
+    },
+    {
+        slug: 'qwen',
+        flags: ['--qwen'],
+        transport: 'spawn',
+        probe: { kind: 'command-exists', binary: 'qwen' },
+        invoke: {
+            binary: 'qwen',
+            args: ['-'],
+            ...SPAWN_STDIN_STDOUT,
+            modelArg: null,
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 900_000,
+        timeoutConfigKey: null,
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'Qwen',
+        evidenceClass: 'source-grounded',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.qwen',
+        contextWindowTokens: 131072,
+        contextWindowConfigKey: 'review.context_window_tokens.qwen',
+        modelConfigKey: null,
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: null,
+    },
+    {
+        // `cursor-agent` is a SEPARATE binary from the `cursor` IDE launcher. Print
+        // mode takes the prompt as an ARGUMENT, so a full plan set is passed by file
+        // reference to stay clear of the 32,767-char Windows execFileSync ceiling.
+        slug: 'cursor',
+        flags: ['--cursor'],
+        transport: 'spawn',
+        probe: { kind: 'command-exists', binary: 'cursor-agent' },
+        invoke: {
+            binary: 'cursor-agent',
+            args: ['-p', '{{model}}', '--mode', 'ask', '--trust', '--output-format', 'text', '{{prompt}}'],
+            promptChannel: 'argv-file-ref',
+            outputChannel: 'stdout',
+            modelArg: '--model',
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 900_000,
+        timeoutConfigKey: null,
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'Cursor',
+        evidenceClass: 'source-grounded',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.cursor',
+        contextWindowTokens: null,
+        contextWindowConfigKey: 'review.context_window_tokens.cursor',
+        // #3653: cursor-agent exposes --model (204 selectable models); wired the same as codex.
+        modelConfigKey: 'review.models.cursor',
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: null,
+    },
+    {
+        // Handler-owned: a three-layer fallback for an upstream stdout bug, a
+        // two-level timeout (600 s external cap over a 540 s native --print-timeout),
+        // and a stale-response watermark guard. `timeoutFloorMs` carries the OUTER
+        // bound only; the inner one lives in the handler (ADR-2782 D6).
+        slug: 'antigravity',
+        flags: ['--antigravity', '--agy'],
+        transport: 'spawn',
+        probe: { kind: 'command-exists', binary: 'agy' },
+        invoke: {
+            binary: 'agy',
+            // `{{nativeTimeout}}` is the fifth ARGV_PLACEHOLDER member (#3274) — `resolveLanePlan`
+            // (review-lane-invocation.cts) expands it to a value DERIVED from this same lane's resolved
+            // outer `timeoutMs`, so the native `--print-timeout` and the outer wall-clock cap can never
+            // drift apart. No other shipped lane's `args` template contains this token, so the expansion
+            // is inert everywhere else.
+            args: ['--print-timeout', '{{nativeTimeout}}', '{{model}}', '-p', '{{prompt}}'],
+            promptChannel: 'argv-file-ref',
+            outputChannel: 'stdout',
+            modelArg: '--model',
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 600_000,
+        timeoutConfigKey: 'review.timeouts.antigravity',
+        emptyOutput: 'handler-owned',
+        reviewsSection: 'Antigravity',
+        evidenceClass: 'source-grounded',
+        // Phase 5b: the handler reads the transcript with JSON.parse per line, not `jq`.
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.antigravity',
+        contextWindowTokens: null,
+        contextWindowConfigKey: 'review.context_window_tokens.antigravity',
+        // NOT `review.models.antigravity` — the shipped key is `review.models.agy` (review.md:291) and
+        // Phase 4 federated it under that name. This lane is why the key is declared, not derived.
+        modelConfigKey: 'review.models.agy',
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: 'antigravity',
+    },
+    {
+        slug: 'ollama',
+        flags: ['--ollama'],
+        transport: 'openai-http',
+        probe: {
+            kind: 'http-reachable',
+            hostConfigKey: 'review.ollama_host',
+            path: '/v1/models',
+            timeoutMs: 2_000,
+        },
+        invoke: {
+            hostConfigKey: 'review.ollama_host',
+            defaultHost: 'http://localhost:11434',
+            path: '/v1/chat/completions',
+            modelDiscovery: 'first-from-models-endpoint',
+            fallbackModel: 'llama3',
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 120_000,
+        timeoutConfigKey: 'review.timeouts.ollama',
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'Ollama',
+        evidenceClass: 'source-grounded',
+        // Phase 5b: the openai-compatible handler speaks HTTP directly and parses with JSON.parse, so
+        // neither `jq` nor `curl` is a prerequisite any more (#2589's stated Windows hazard).
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.ollama',
+        contextWindowTokens: null,
+        contextWindowConfigKey: 'review.context_window_tokens.ollama',
+        modelConfigKey: 'review.models.ollama',
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: 'openai-compatible',
+    },
+    {
+        slug: 'lm_studio',
+        flags: ['--lm-studio'],
+        transport: 'openai-http',
+        probe: {
+            kind: 'http-reachable',
+            hostConfigKey: 'review.lm_studio_host',
+            path: '/v1/models',
+            timeoutMs: 2_000,
+        },
+        invoke: {
+            hostConfigKey: 'review.lm_studio_host',
+            defaultHost: 'http://localhost:1234',
+            path: '/v1/chat/completions',
+            modelDiscovery: 'first-from-models-endpoint',
+            fallbackModel: 'local-model',
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 120_000,
+        timeoutConfigKey: 'review.timeouts.lm_studio',
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'LM Studio',
+        evidenceClass: 'source-grounded',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.lm_studio',
+        contextWindowTokens: null,
+        contextWindowConfigKey: 'review.context_window_tokens.lm_studio',
+        modelConfigKey: 'review.models.lm_studio',
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: 'openai-compatible',
+    },
+    {
+        slug: 'llama_cpp',
+        flags: ['--llama-cpp'],
+        transport: 'openai-http',
+        probe: {
+            kind: 'http-reachable',
+            hostConfigKey: 'review.llama_cpp_host',
+            path: '/v1/models',
+            timeoutMs: 2_000,
+        },
+        invoke: {
+            hostConfigKey: 'review.llama_cpp_host',
+            defaultHost: 'http://localhost:8080',
+            path: '/v1/chat/completions',
+            modelDiscovery: 'first-from-models-endpoint',
+            fallbackModel: 'local-model',
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 120_000,
+        timeoutConfigKey: 'review.timeouts.llama_cpp',
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'llama.cpp',
+        evidenceClass: 'source-grounded',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.llama_cpp',
+        contextWindowTokens: null,
+        contextWindowConfigKey: 'review.context_window_tokens.llama_cpp',
+        modelConfigKey: 'review.models.llama_cpp',
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: 'openai-compatible',
+    },
+    {
+        // Phase 5b (#2799) — closes #2718. Net-new in this phase BY DESIGN (ADR-2782's phase table):
+        // declaring it in 5a would have made it selectable but not invocable, producing an empty
+        // section for the whole 5a → 5b window.
+        //
+        // The probe is `command-capability`, not `command-exists`, and that is the entire reason D7's
+        // vocabulary ships wider than existence: `kimi` is claimed by BOTH the Kimi Code CLI (Node) and
+        // the legacy Python kimi-cli, which is a separate first-party runtime capability in this repo.
+        // An existence-only probe registers the wrong tool. The needle `--output-format` appears in
+        // Kimi Code's `--help` and is absent from the legacy CLI (whose headless flags are `--print` /
+        // `--work-dir`). Verified in both directions against Kimi Code CLI 0.29.2 and a stub legacy
+        // binary in closed PR #2776 — analysis carried forward with credit to @drungrin.
+        //
+        // The original probe there was an UNBOUNDED `kimi --help | grep` that ran on EVERY /gsd:review
+        // regardless of flags: a live instance of this repo's named Unbounded Subprocesses defect, and
+        // the review blocker. Here the bound is declared (`timeoutMs`) and the runner enforces it, and
+        // the probe runs only for a SELECTED lane.
+        slug: 'kimi-code',
+        flags: ['--kimi-code'],
+        transport: 'spawn',
+        probe: {
+            kind: 'command-capability',
+            binary: 'kimi',
+            needle: '--output-format',
+            timeoutMs: 5_000,
+        },
+        invoke: {
+            // Print mode takes the prompt as an ARGUMENT, so the full plan set goes by file reference to
+            // stay clear of the 32,767-char Windows execFileSync ceiling — same shape as cursor.
+            binary: 'kimi',
+            args: ['{{model}}', '-p', '{{prompt}}'],
+            promptChannel: 'argv-file-ref',
+            outputChannel: 'stdout',
+            modelArg: '-m',
+            effortChannel: 'none',
+        },
+        timeoutFloorMs: 900_000,
+        timeoutConfigKey: 'review.timeouts.kimi-code',
+        emptyOutput: 'stub-with-stderr',
+        reviewsSection: 'Kimi Code',
+        evidenceClass: 'source-grounded',
+        requiresBinaries: [],
+        promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.kimi-code',
+        contextWindowTokens: 262144,
+        contextWindowConfigKey: 'review.context_window_tokens.kimi-code',
+        modelConfigKey: 'review.models.kimi-code',
+        effortConfigKey: null,
+        defaultEffort: null,
+        handler: null,
+    },
+].map((lane) => Object.freeze(lane)));
+/**
+ * Merge the first-party lane set with installed overlay `reviewer` bodies
+ * (ADR-2782 D8: first-party ∪ overlay, first-party wins on slug collision).
+ *
+ * `routeReviewLane` (gsd-core/bin/gsd-tools.cjs) consumes this to build the lane
+ * map its `sections`/`flags`/`plan`/`invoke` subcommands resolve against, so an
+ * installed, consented third-party reviewer capability (`role:"reviewer"` with a
+ * declared `reviewer` body) becomes selectable, plannable, and invocable through
+ * the same surface as a built-in lane — closing #2927, where the overlay was
+ * roster-visible (`deriveReviewerSlugs`) and disclosed at install
+ * (`collectReviewerLaneSurfaces`) but never reached the invocation path.
+ *
+ * ADR-2782 D1 deliberately made the manifest `reviewer` body field-identical to
+ * `ReviewerLaneCommon` so "Phase 2 harvests the shape into the capability manifest
+ * with no translation layer" (CONTEXT.md reviewer-lane-descriptor predicate). The
+ * overlay body IS already `ReviewerLane`-shaped; this function MERGES, it does not
+ * PROJECT — there is no field renaming, no vocabulary translation. That is the
+ * design decision the bug violated by simply never calling anything.
+ *
+ * Pure and TOTAL — never throws on any input, because third-party overlay
+ * manifests are untrusted data reaching this seam at load time. A cap whose
+ * `reviewer` body is absent, non-object, or carries an empty/grammar-invalid slug
+ * is SKIPPED (contributes no lane) rather than crashing, so one malformed overlay
+ * cannot take the whole `review-lane` surface (and every first-party lane with it)
+ * down. The slug grammar (`LANE_SLUG_RE`) is enforced HERE even though
+ * `resolveLanePlan`'s trust boundary re-checks it, because `sections`/`flags` read
+ * lane fields before reaching `resolveLanePlan` — defense in depth against the
+ * path-traversal class the invocation boundary exists for.
+ *
+ * First-party wins: an overlay declaring a slug that already names a first-party
+ * lane is silently superseded (the first-party entry is kept, identity-stable),
+ * never overwritten. The first-party object is returned by reference, not copied.
+ *
+ * @param firstParty The frozen first-party lane set (`REVIEWER_LANES`).
+ * @param registry   The merged capability registry
+ *                   (`loadRegistry({ includeInstalled: true })`); only its
+ *                   `capabilities` map is read. A cap contributes a lane iff it
+ *                   carries an object `reviewer` body with a non-empty,
+ *                   grammar-valid `slug`. The `role:"runtime"` `reviewerCli`
+ *                   alias never contributed a lane here, and as of #2801 it no
+ *                   longer contributes to the selection roster
+ *                   (`deriveReviewerSlugs`) either — the two surfaces now agree.
+ * @returns A NEW array: first-party lanes (in order) followed by accepted overlay
+ *          lanes (in registry iteration order). Callers must not mutate it.
+ */
+function mergeReviewerLanes(firstParty, registry) {
+    // First-party always wins and is returned by reference (identity-stable), so a
+    // collision cannot perturb the first-party entry a consumer already holds.
+    const bySlug = new Map();
+    const ordered = [];
+    for (const lane of firstParty) {
+        const slug = typeof lane.slug === 'string' ? lane.slug.trim() : '';
+        if (!slug)
+            continue; // unreachable for the shipped frozen set, but this is exported
+        if (!bySlug.has(slug)) {
+            bySlug.set(slug, lane);
+            ordered.push(lane);
+        }
+    }
+    const capabilities = (registry && registry.capabilities) || {};
+    for (const cap of Object.values(capabilities)) {
+        if (cap === null || typeof cap !== 'object' || Array.isArray(cap))
+            continue;
+        const body = cap.reviewer;
+        // C1/C2 (mirroring collectReviewerLaneSurfaces): a missing, null, or
+        // non-object reviewer body declares no lane — never an error at this layer.
+        if (body === null || typeof body !== 'object' || Array.isArray(body))
+            continue;
+        const rawSlug = body.slug;
+        const slug = typeof rawSlug === 'string' ? rawSlug.trim() : '';
+        // Empty/whitespace slug: nothing to key on. Grammar-invalid slug: the
+        // path-traversal class — skip rather than admit, even though resolveLanePlan
+        // would reject it downstream. Both are skips, not throws.
+        if (!slug || !exports.LANE_SLUG_RE.test(slug))
+            continue;
+        if (bySlug.has(slug))
+            continue; // D8: first-party (or an earlier overlay) wins
+        // The body is already ReviewerLane-shaped per ADR-2782 D1. We do NOT
+        // deep-validate every field here: the invocation trust boundary
+        // (resolveLanePlan) is the seam that re-validates a lane before it runs, and
+        // `sections`/`flags` are both tolerant of a partial body (flags filters by
+        // shape; sections reads slug/reviewsSection which a non-string cap simply
+        // renders as undefined). Admitting the body keeps the merge a pure merge.
+        //
+        // The slug is normalized to its trimmed value on the stored lane so the merge
+        // and the selection roster (`deriveReviewerSlugs`, which trims before adding)
+        // agree on the canonical key — otherwise a body declaring `slug: '  x  '`
+        // would key the map on `'x'` but emit the raw `'  x  '` in `sections` and fail
+        // to match a `--selected` value coming from the roster. (The capability
+        // validator's grammar check rejects surrounding whitespace before this is
+        // reachable through a real install, so this is belt-and-braces parity with the
+        // roster, not a live-input guard.)
+        const lane = { ...body, slug };
+        bySlug.set(slug, lane);
+        ordered.push(lane);
+    }
+    return ordered;
+}
+/* ------------------------------------------------------------------ *
+ * DEFECT.GENERATIVE-FIX parity (CONTEXT.md:797)
+ * ------------------------------------------------------------------ */
+/**
+ * Frozen reason enum. Tests assert on these values, never on rendered prose —
+ * CONTRIBUTING.md "Tests assert on typed structured values". Adding a reason is
+ * three coordinated changes: this enum, the emitting site, and the test locking
+ * `Object.keys(...).sort()`.
+ */
+exports.PARITY_VIOLATION = Object.freeze({
+    MALFORMED_LANE: 'malformed_lane',
+    INVALID_SLUG: 'invalid_slug',
+    ROSTER_SLUG_UNDECLARED: 'roster_slug_undeclared',
+    DESCRIPTOR_LANE_NOT_IN_ROSTER: 'descriptor_lane_not_in_roster',
+    REGISTRY_LANE_UNDECLARED: 'registry_lane_undeclared',
+    DESCRIPTOR_LANE_NOT_IN_REGISTRY: 'descriptor_lane_not_in_registry',
+    BESPOKE_LEG_PRESENT: 'bespoke_leg_present',
+    AVAILABILITY_FALLBACK_MISMATCH: 'availability_fallback_mismatch',
+    DUPLICATE_SLUG: 'duplicate_slug',
+    DUPLICATE_FLAG: 'duplicate_flag',
+    DUPLICATE_SECTION: 'duplicate_section',
+});
+/**
+ * The marker that used to make a hand-authored `invoke_reviewers` leg identifiable.
+ *
+ * Phase 5b (#2799) deleted every bespoke leg, so this regex flipped polarity: matching one is now
+ * the VIOLATION (`BESPOKE_LEG_PRESENT`) rather than the requirement. It is retained precisely
+ * because deleting it would leave nothing stopping a future contributor from quietly re-adding a
+ * per-CLI block — which is the drift (#2718 → #2781) this whole epic exists to end.
+ */
+const LEG_MARKER_RE = /<!--\s*reviewer-lane:\s*([a-z0-9_-]+)\s*-->/g;
+/**
+ * The slug grammar, and the reason it is enforced rather than assumed.
+ *
+ * `LEG_MARKER_RE` can only capture `[a-z0-9_-]`. A lane whose slug falls outside
+ * that class is therefore UNMATCHABLE in the workflow: its marker can be present
+ * and correct and the scan will still never see it, so the lane reports
+ * `LEG_MARKER_MISSING` forever with no indication why. All twelve shipped slugs
+ * sit inside the class (`lm_studio`, `llama_cpp` use the underscore), so this
+ * never bites today — but Phase 2 (#2795) admits third-party overlay lanes, and
+ * a slug like `acme.reviewer` would silently vanish from a review.
+ *
+ * ADR-2782 does not specify a slug grammar. Rather than widen the marker regex —
+ * which would make an HTML comment scanned out of prose more ambiguous, not less
+ * — the grammar is pinned here and a violating slug is reported as
+ * `INVALID_SLUG`. A loud, named violation beats a silent miss; that is the whole
+ * design principle of this module.
+ */
+exports.LANE_SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
+/** The workflow's availability call: `gsd_run review-lane availability ...` at command position. */
+const AVAILABILITY_CALL_RE = /^\s*gsd_run review-lane availability(?:\s|$)/;
+/** One `<slug>:missing` row in the printf fallback; slug is LANE_SLUG_RE's grammar capped at 32 chars. */
+const AVAILABILITY_FALLBACK_ROW_RE = /(?:'|\\n)([a-z0-9][a-z0-9_-]{0,31}):missing/g;
+/** Bounds of the step a bespoke leg marker could appear inside. */
+const INVOKE_STEP_RE = /<step name="invoke_reviewers">([\s\S]*?)<\/step>/;
+function sliceStep(workflowText, re) {
+    const m = workflowText.match(re);
+    return m ? m[1] : '';
+}
+function countOccurrences(haystack, re) {
+    const counts = new Map();
+    // Fresh lastIndex per call — a module-level /g regex carries state between
+    // calls and would silently skip matches on the second invocation.
+    const scanner = new RegExp(re.source, re.flags);
+    let m;
+    while ((m = scanner.exec(haystack)) !== null) {
+        const key = m[1].trim();
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+}
+/**
+ * Bidirectional parity across three surfaces: the descriptor, the roster
+ * (`KNOWN_REVIEWER_SLUGS`), and the generated capability **registry** — plus two assertions
+ * against the workflow: the anti-parity check, and the availability-fallback check (the workflow
+ * makes the availability call, has a fallback row per lane, and the fallback slug set equals the
+ * openai-http lanes).
+ *
+ * **Re-pointed by Phase 5b (#2799).** Through Phase 5a this function also required a literal
+ * `<!-- reviewer-lane: <slug> -->` per lane inside `invoke_reviewers` and a literal
+ * `## <Section> Review` per lane inside `write_reviews`. Phase 5b deletes exactly that text: the
+ * workflow now iterates declared lanes and renders sections from `reviewsSection`, so there is no
+ * per-lane text left to scan. Those two families could not be kept without keeping the
+ * hand-maintained per-lane blocks this epic exists to delete.
+ *
+ * What replaced them is the parity that is actually load-bearing once lanes are data: the registry
+ * is what decides which lanes exist at runtime, so `descriptor ↔ registry` is checked in both
+ * directions. That is also the mechanical single source #2781/Phase 6 needs for its docs and locale
+ * gate, which per-leg text could never provide.
+ *
+ * Bidirectional is still the point. A forward-only check ("does each declared lane resolve?")
+ * misses the failure this exists to catch: #2718 added a lane and #2781 was the documentation drift
+ * that followed. A registry lane nobody declared must fail, and so must a re-added bespoke leg.
+ *
+ * Pure and total: never reads the filesystem, never throws. Empty or malformed `workflowText` /
+ * `registry` degrades to violations, so a caller cannot mistake a read failure for a clean bill of
+ * health.
+ *
+ * CRLF-insensitive: `\r` is stripped before matching, because a Windows autocrlf checkout would
+ * otherwise leave every marker unmatched.
+ */
+function checkReviewerLaneParity(input) {
+    const { descriptor, roster } = input;
+    const workflowText = String(input.workflowText ?? '').replace(/\r\n/g, '\n');
+    const violations = [];
+    const add = (reason, subject) => {
+        violations.push({ reason, subject });
+    };
+    // --- D8 uniqueness within the descriptor itself ---
+    //
+    // Every field is validated before use rather than trusted. In Phase 1 the
+    // descriptor is a frozen in-source table and none of these guards can fire,
+    // but Phase 2 (#2795) feeds this same function manifest-derived data from
+    // third-party overlays — which is precisely where a malformed entry arrives.
+    // A checker that throws on bad input cannot report on it, and a parity gate
+    // that crashes is indistinguishable from one that was never run.
+    const seenSlug = new Set();
+    const seenFlag = new Set();
+    const seenSection = new Set();
+    const httpSlugs = new Set();
+    // The declared parameter type says `ReviewerLane[]`, but this function is a
+    // trust boundary — narrow from `unknown` rather than believing the annotation.
+    const rawLanes = Array.isArray(descriptor) ? descriptor : [];
+    for (const raw of rawLanes) {
+        if (raw === null || typeof raw !== 'object') {
+            add(exports.PARITY_VIOLATION.MALFORMED_LANE, String(raw));
+            continue;
+        }
+        const lane = raw;
+        const slug = lane.slug;
+        if (typeof slug !== 'string' || !exports.LANE_SLUG_RE.test(slug)) {
+            add(exports.PARITY_VIOLATION.INVALID_SLUG, String(slug));
+            continue;
+        }
+        const section = typeof lane.reviewsSection === 'string' ? lane.reviewsSection : null;
+        if (seenSlug.has(slug))
+            add(exports.PARITY_VIOLATION.DUPLICATE_SLUG, slug);
+        seenSlug.add(slug);
+        if (lane.transport === 'openai-http')
+            httpSlugs.add(slug);
+        const flags = Array.isArray(lane.flags) ? lane.flags : [];
+        for (const flag of flags) {
+            if (typeof flag !== 'string')
+                continue;
+            if (seenFlag.has(flag))
+                add(exports.PARITY_VIOLATION.DUPLICATE_FLAG, flag);
+            seenFlag.add(flag);
+        }
+        // Two lanes sharing a heading would silently MERGE their output in
+        // REVIEWS.md, producing a review that appears to have consensus it does
+        // not have (ADR-2782 D8).
+        if (section !== null) {
+            if (seenSection.has(section))
+                add(exports.PARITY_VIOLATION.DUPLICATE_SECTION, section);
+            seenSection.add(section);
+        }
+    }
+    // --- descriptor <-> roster ---
+    const rosterSet = new Set((Array.isArray(roster) ? roster : []).filter((x) => typeof x === 'string'));
+    for (const slug of rosterSet) {
+        if (!seenSlug.has(slug))
+            add(exports.PARITY_VIOLATION.ROSTER_SLUG_UNDECLARED, slug);
+    }
+    for (const slug of seenSlug) {
+        if (!rosterSet.has(slug))
+            add(exports.PARITY_VIOLATION.DESCRIPTOR_LANE_NOT_IN_ROSTER, slug);
+    }
+    // --- descriptor <-> registry ---
+    //
+    // The registry is what decides which lanes exist at runtime once the workflow iterates, so this
+    // replaces the per-leg text checks Phase 5b deleted. A non-array degrades to an empty set, which
+    // then reports every descriptor lane as missing — loud, not silent.
+    const registrySet = new Set((Array.isArray(input.registry) ? input.registry : []).filter((x) => typeof x === 'string'));
+    for (const slug of registrySet) {
+        if (!seenSlug.has(slug))
+            add(exports.PARITY_VIOLATION.REGISTRY_LANE_UNDECLARED, slug);
+    }
+    for (const slug of seenSlug) {
+        if (!registrySet.has(slug))
+            add(exports.PARITY_VIOLATION.DESCRIPTOR_LANE_NOT_IN_REGISTRY, slug);
+    }
+    // --- anti-parity: no bespoke leg may return ---
+    //
+    // Phase 5b deleted every hand-authored per-CLI block. Nothing in the type system stops a future
+    // contributor from adding one back, and a re-added block is invisible to every other check here
+    // (it would still be declared, still be in the roster, still be in the registry). Matching a leg
+    // marker is therefore now the violation.
+    const markerSlugs = countOccurrences(sliceStep(workflowText, INVOKE_STEP_RE), LEG_MARKER_RE);
+    for (const slug of markerSlugs.keys()) {
+        add(exports.PARITY_VIOLATION.BESPOKE_LEG_PRESENT, slug);
+    }
+    // --- the availability call's `||` fallback must name exactly the openai-http lanes ---
+    //
+    // review.md prints these rows only when an older gsd-tools lacks `review-lane availability`, so
+    // they are a second hand-kept copy of the roster. Checked only when the call is present.
+    // Anchored to the command position so a comment or prose mention cannot shadow the real call;
+    // a missing call is itself a violation (otherwise deleting it would silently skip this check).
+    const availabilityLine = (0, text_lines_cjs_1.splitLines)(workflowText).find((line) => AVAILABILITY_CALL_RE.test(line));
+    if (availabilityLine === undefined) {
+        add(exports.PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, 'no-call');
+    }
+    else {
+        if (!availabilityLine.includes('review-lane availability ||')) {
+            add(exports.PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, 'no-fallback');
+        }
+        const fallback = new Set(Array.from(availabilityLine.matchAll(AVAILABILITY_FALLBACK_ROW_RE), (m) => m[1]));
+        for (const slug of fallback)
+            if (!httpSlugs.has(slug))
+                add(exports.PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, slug);
+        for (const slug of httpSlugs)
+            if (!fallback.has(slug))
+                add(exports.PARITY_VIOLATION.AVAILABILITY_FALLBACK_MISMATCH, slug);
+    }
+    return { ok: violations.length === 0, violations };
+}
+/* ------------------------------------------------------------------ *
+ * Documentation parity (ADR-2782 Phase 6, #2800 — closes #2781/#2272)
+ * ------------------------------------------------------------------ */
+/**
+ * Frozen reason enum for the DOCUMENTATION arm.
+ *
+ * Deliberately separate from `PARITY_VIOLATION` rather than an extension of it. The two functions
+ * answer different questions — `checkReviewerLaneParity` asks *what runs* (descriptor ↔ roster ↔
+ * registry), this asks *what is documented*. Fusing them would change the signature of a function
+ * with seven dependents and would let a stale doc make the runtime checker look red.
+ *
+ * Same three-coordinated-changes rule as its sibling: this enum, the emitting site, and the test
+ * locking `Object.keys(...).sort()`.
+ */
+exports.DOCS_PARITY_VIOLATION = Object.freeze({
+    MALFORMED_LANE: 'malformed_lane',
+    DOC_FLAG_MISSING: 'doc_flag_missing',
+    DOC_FLAG_UNDECLARED: 'doc_flag_undeclared',
+    DOC_TITLE_MISSING: 'doc_title_missing',
+    SIGNATURE_FLAG_MISSING: 'signature_flag_missing',
+    DOC_UNREADABLE: 'doc_unreadable',
+    TABLE_ROW_MISSING: 'table_row_missing',
+});
+/**
+ * Non-lane tokens that legitimately share the `/gsd-review` signature line.
+ *
+ * `--all` is a selection control, not a reviewer lane. Without this allow-list the undeclared-flag
+ * arm would fire on correct documentation — the gate failing on a doc that is right is the fastest
+ * way to get a gate deleted.
+ */
+const NON_LANE_SIGNATURE_FLAGS = new Set(['--all']);
+/**
+ * Is `flag` documented in `text` under one of the two structural shapes docs actually use?
+ *
+ * Backticked is the `COMMANDS.md` table-cell shape; bracketed (`[--codex]`) is the
+ * `FEATURES.md` signature shape. Requiring one of those two delimiters — rather than a bare
+ * substring — is what keeps prose and fenced examples from satisfying the gate, and it bounds the
+ * token for free: a backticked `--claude` demands its closing backtick, so a backticked
+ * `--claude-foo` cannot satisfy it.
+ *
+ * Literal `includes`, deliberately NOT a RegExp. `new RegExp` throws `SyntaxError` on a pattern
+ * beyond ~100k chars, and Phase 2 (#2795) admits third-party overlay lanes whose declared strings
+ * are untrusted in length — a parity gate that throws on its own input is indistinguishable from
+ * one that never ran. Literal matching also removes the need to escape metacharacters, which is
+ * what `llama.cpp` needed.
+ */
+function flagIsDocumented(text, flag) {
+    return text.includes('`' + flag + '`') || text.includes('[' + flag + ']');
+}
+/**
+ * Strip fenced code blocks and HTML comments before parity matching.
+ *
+ * Both are places a flag can be *mentioned* without being *documented*: a fenced block showing
+ * markdown syntax, or a commented-out row left behind by an edit. Counting either is a false pass
+ * — the gate would report a lane as documented when a reader never sees it.
+ *
+ * Lines are replaced with empty strings rather than removed so that every downstream line index
+ * (the signature line, the Purpose paragraph beneath it) still refers to the same physical line.
+ */
+function stripNonProse(text) {
+    const lines = text.split('\n');
+    const out = [];
+    let inFence = false;
+    let inComment = false;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!inComment && /^(`{3,}|~{3,})/.test(trimmed)) {
+            inFence = !inFence;
+            out.push('');
+            continue;
+        }
+        if (inFence) {
+            out.push('');
+            continue;
+        }
+        let working = line;
+        if (!inComment && working.includes('<!--') && !working.includes('-->')) {
+            inComment = true;
+            working = working.slice(0, working.indexOf('<!--'));
+            out.push(working);
+            continue;
+        }
+        if (inComment) {
+            if (working.includes('-->')) {
+                inComment = false;
+                working = working.slice(working.indexOf('-->') + 3);
+                out.push(working);
+            }
+            else {
+                out.push('');
+            }
+            continue;
+        }
+        // Single-line comments: strip to a FIXED POINT, then honor any unterminated opener.
+        //
+        // One pass is not enough. `<!--<!---->-->` strips the inner span and leaves a live `<!--`
+        // behind, so a commented-out row could survive and be counted as documented — the exact
+        // false pass this helper exists to prevent. (CodeQL flags the single-pass form as
+        // js/incomplete-multi-character-sanitization; here the consequence is a wrong verdict rather
+        // than an injection, but the fix is the same.) Iterating to a fixed point terminates because
+        // every pass strictly shortens the string.
+        let previous;
+        do {
+            previous = working;
+            working = working.replace(/<!--[\s\S]*?-->/g, '');
+        } while (working !== previous);
+        // Whatever `<!--` remains after that is unterminated, so it opens a multi-line comment that
+        // the `inComment` branch above will close on a later line.
+        const danglingOpen = working.indexOf('<!--');
+        if (danglingOpen !== -1) {
+            inComment = true;
+            working = working.slice(0, danglingOpen);
+        }
+        out.push(working);
+    }
+    return out.join('\n');
+}
+/** Every bracketed `--token` on a signature line — the line's claimed reviewer flag set. */
+const BRACKETED_FLAG_RE = /\[(--[a-z0-9][a-z0-9-]*)\]/g;
+/**
+ * Declared flags that appear in the FIRST cell of a markdown table row.
+ *
+ * The distinction is load-bearing, not cosmetic. `docs/COMMANDS.md` and every locale mirror carry
+ * BOTH a per-lane reviewer table (flag in cell 1) and a forwarding row that lists all 13 flags in
+ * cell 3. A file-scoped check is therefore satisfied by the forwarding row alone, so deleting a
+ * lane's actual table row — the exact #2781 regression — passes. Keying on cell 1 separates the
+ * two: `| `--agy` / `--antigravity` | … |` is one lane row declaring two flags, while
+ * `| Reviewer flags | No | … `--codex`, `--claude` … |` is not a lane row at all.
+ */
+function flagsInFirstTableCell(lines, declared) {
+    const found = new Set();
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('|'))
+            continue;
+        const cells = trimmed.split('|');
+        // split('|') on "| a | b |" yields ['', ' a ', ' b ', ''] — cell 1 is index 1.
+        if (cells.length < 2)
+            continue;
+        const firstCell = cells[1];
+        for (const flag of declared) {
+            if (flagIsDocumented(firstCell, flag))
+                found.add(flag);
+        }
+    }
+    return found;
+}
+/**
+ * The `**Command:** ... /gsd-review ... [--flag]` signature line, if the doc carries one.
+ *
+ * Anchored on `/gsd-review` plus a bracketed flag rather than on the bolded label, because the
+ * label is translated in every mirror. Structure survives translation; prose does not.
+ */
+function findSignatureLine(lines) {
+    return lines.findIndex((l) => /\/gsd[-:]review\b/.test(l) && l.includes('[--'));
+}
+/**
+ * Documentation parity for the declared reviewer roster (#2800; closes #2781, #2272).
+ *
+ * Gates `docs/COMMANDS.md`, its four locale mirrors, `docs/FEATURES.md` and its mirrors against
+ * the one declared source of truth. This is the `DEFECT.GENERATIVE-FIX` parity assertion
+ * `CONTEXT.md:806` requires for this roster and which has never existed for it — only the Cursor
+ * lane ever had one (`tests/cursor-reviewer.test.cjs`).
+ *
+ * Three arms, deliberately independent so that gaming one does not green the build:
+ *
+ *  1. **flag** — every declared flag appears, delimited, somewhere in the doc. This is the arm
+ *     that catches #2781 (`--kimi-code` present in `docs/COMMANDS.md` and absent from all four
+ *     mirrors).
+ *  2. **signature** — where a `Command:` signature line exists it is held to the FULL roster, and
+ *     any bracketed non-lane token on it is reported. This restores per-site strictness the
+ *     file-wide arm cannot provide.
+ *  3. **title** — every declared `reviewsSection` appears in the Purpose paragraph. This is the
+ *     arm that catches the class #2800 names: the `Command:` line updated and the `Purpose:` line
+ *     one row below not.
+ *  4. **table row** — a doc carrying a per-lane table must carry a row for EVERY lane, keyed on
+ *     the FIRST cell. Without this the file-wide flag arm is satisfied by the forwarding row that
+ *     lists all flags in cell 3, and deleting a lane's own row — the #2781 regression itself —
+ *     goes undetected.
+ *
+ * A doc carrying no `/gsd-review` surface is **skipped, not failed** — a partial mirror that never
+ * claimed to document the command is not drift.
+ *
+ * Pure and total: no filesystem, no clock, never throws. A non-string document is reported as
+ * `DOC_UNREADABLE` rather than coerced or skipped; an empty or absent `docs` map degrades to
+ * violations rather than a clean bill of health, because a checker that cannot distinguish
+ * "nothing to read" from "everything agrees" is worse than no checker.
+ *
+ * CRLF-insensitive: a Windows `autocrlf` checkout must produce an identical verdict.
+ */
+function checkReviewerDocsParity(input) {
+    const violations = [];
+    const skipped = [];
+    const add = (reason, doc, subject) => {
+        violations.push({ reason, doc, subject });
+    };
+    // Trust boundary: narrow from `unknown` rather than believing the annotation. Phase 2 (#2795)
+    // admits third-party overlay lanes into this same descriptor.
+    const declaredFlags = [];
+    const declaredTitles = [];
+    const rawLanes = Array.isArray(input?.descriptor)
+        ? input.descriptor
+        : [];
+    for (const raw of rawLanes) {
+        if (raw === null || typeof raw !== 'object') {
+            add(exports.DOCS_PARITY_VIOLATION.MALFORMED_LANE, '(descriptor)', String(raw));
+            continue;
+        }
+        const lane = raw;
+        const flags = Array.isArray(lane.flags) ? lane.flags : [];
+        for (const flag of flags) {
+            if (typeof flag === 'string' && flag.length > 0)
+                declaredFlags.push(flag);
+        }
+        if (typeof lane.reviewsSection === 'string' && lane.reviewsSection.length > 0) {
+            declaredTitles.push(lane.reviewsSection);
+        }
+    }
+    const declaredFlagSet = new Set(declaredFlags);
+    // An absent or non-object map is not "no docs to check" — it is every doc missing. Reported as
+    // such so the caller cannot read silence as success.
+    const rawDocs = input?.docs !== null && typeof input?.docs === 'object'
+        ? input.docs
+        : {};
+    const docLabels = Object.keys(rawDocs);
+    if (docLabels.length === 0) {
+        for (const flag of declaredFlagSet) {
+            add(exports.DOCS_PARITY_VIOLATION.DOC_FLAG_MISSING, '(no documents supplied)', flag);
+        }
+        return { ok: violations.length === 0, violations, skipped };
+    }
+    for (const label of docLabels) {
+        // A document value that is not a string is REPORTED, not coerced and not skipped.
+        //
+        // The earlier version called `String(rawValue)`, which (a) throws outright on an object with
+        // an own non-callable `toString` and (b) — worse — turns any other object into
+        // `[object Object]`, a "document" with no `/gsd-review` marker that then lands in `skipped`.
+        // That is a silent pass: the gate would report success for input it never actually read.
+        // `@typescript-eslint/no-base-to-string` flags exactly this, and it is right to.
+        const rawValue = rawDocs[label];
+        if (typeof rawValue !== 'string') {
+            add(exports.DOCS_PARITY_VIOLATION.DOC_UNREADABLE, label, typeof rawValue);
+            continue;
+        }
+        const text = rawValue.replace(/\r\n/g, '\n');
+        // Fenced examples and commented-out rows mention a flag without documenting it. Stripped
+        // BEFORE the `/gsd-review` skip check too, so a doc whose only mention is inside a fence is
+        // correctly treated as not documenting the command at all.
+        const prose = stripNonProse(text);
+        // Skip-if-absent. A mirror that does not document /gsd-review is a partial translation, not
+        // drift — gating it would make this change responsible for authoring one.
+        if (!/\/gsd[-:]review\b/.test(prose)) {
+            skipped.push(label);
+            continue;
+        }
+        const lines = prose.split('\n');
+        // --- arm 1: every declared flag is documented somewhere in the doc ---
+        for (const flag of declaredFlagSet) {
+            if (!flagIsDocumented(prose, flag)) {
+                add(exports.DOCS_PARITY_VIOLATION.DOC_FLAG_MISSING, label, flag);
+            }
+        }
+        // --- arm 4: a doc that carries a per-lane table must carry a row for EVERY lane ---
+        //
+        // Only applies when the doc actually has a lane table (>=1 declared flag in a first cell);
+        // FEATURES-shaped docs carry a signature line instead and are covered by arms 2 and 3.
+        const rowFlags = flagsInFirstTableCell(lines, declaredFlagSet);
+        if (rowFlags.size > 0) {
+            for (const flag of declaredFlagSet) {
+                if (!rowFlags.has(flag)) {
+                    add(exports.DOCS_PARITY_VIOLATION.TABLE_ROW_MISSING, label, flag);
+                }
+            }
+        }
+        const sigIdx = findSignatureLine(lines);
+        if (sigIdx === -1)
+            continue; // COMMANDS.md-shaped docs carry a table, not a signature.
+        // --- arm 2: the signature line carries the FULL roster and nothing undeclared ---
+        const sigLine = lines[sigIdx];
+        for (const flag of declaredFlagSet) {
+            if (!flagIsDocumented(sigLine, flag)) {
+                add(exports.DOCS_PARITY_VIOLATION.SIGNATURE_FLAG_MISSING, label, flag);
+            }
+        }
+        // Fresh RegExp per line — a module-level /g literal carries `lastIndex` between calls and
+        // would silently skip matches on the second document scanned.
+        const scanner = new RegExp(BRACKETED_FLAG_RE.source, BRACKETED_FLAG_RE.flags);
+        const seenUndeclared = new Set();
+        let m;
+        while ((m = scanner.exec(sigLine)) !== null) {
+            const token = m[1];
+            if (typeof token !== 'string')
+                continue;
+            if (declaredFlagSet.has(token) || NON_LANE_SIGNATURE_FLAGS.has(token))
+                continue;
+            if (seenUndeclared.has(token))
+                continue;
+            seenUndeclared.add(token);
+            add(exports.DOCS_PARITY_VIOLATION.DOC_FLAG_UNDECLARED, label, token);
+        }
+        // --- arm 3: the Purpose paragraph names every declared section title ---
+        //
+        // The Purpose paragraph is the next non-blank line after the signature. Structural, so it
+        // survives every translated label. Absent (signature is the last line) => title arm skipped,
+        // the flag arms still stand.
+        let p = sigIdx + 1;
+        while (p < lines.length && lines[p].trim() === '')
+            p += 1;
+        if (p >= lines.length)
+            continue;
+        const purpose = lines[p];
+        for (const title of declaredTitles) {
+            if (!purpose.includes(title)) {
+                add(exports.DOCS_PARITY_VIOLATION.DOC_TITLE_MISSING, label, title);
+            }
+        }
+    }
+    return { ok: violations.length === 0, violations, skipped };
+}

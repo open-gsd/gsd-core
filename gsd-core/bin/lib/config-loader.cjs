@@ -1,0 +1,1243 @@
+"use strict";
+/**
+ * Config Loader — Project configuration loading
+ *
+ * ADR-857 rollout phase 2e: extracted from core.cts (issue #885).
+ * Owns project configuration loading: reads `.planning/config.json`,
+ * merges built-in defaults (`CONFIG_DEFAULTS`/`CANONICAL_CONFIG_DEFAULTS`),
+ * normalizes legacy keys, applies the active-workstream overlay, validates
+ * against the config schema, and warns on unknown keys/profile overrides.
+ * Behaviour is preserved byte-for-behaviour from the prior location; only
+ * the module boundary moved. The core.cjs re-export spine was retired in
+ * epic #1267; callers import loadConfig from config-loader.cjs directly.
+ *
+ * Dependencies (leaf modules only):
+ *   - node:fs / node:os / node:path (stdlib)
+ *   - ./configuration.cjs    (normalizeLegacyKeys, isConfigSection, CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
+ *   - ./unusable-input.cjs   (warnUnusableInput, UNUSABLE_REASON — #3760)
+ *   - ./config-schema.cjs    (VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS)
+ *   - ./planning-workspace.cjs (planningDir, planningRoot)
+ *   - ./shell-command-projection.cjs (execGit, platformWriteSync)
+ *   - ./config-file-read.cjs (CONFIG_MAX_BYTES, readConfigFileBounded — bounded regular-file read, #5759)
+ *   - ./core-utils.cjs       (detectSubRepos)
+ *   - ./model-catalog.cjs    (KNOWN_RUNTIMES, KNOWN_PROVIDERS, ADAPTIVE_TIER_VALUES)
+ */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+const shell_command_projection_cjs_1 = require("./shell-command-projection.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const configFileReadMod = require("./config-file-read.cjs");
+const { CONFIG_MAX_BYTES, readConfigFileBounded, printablePath } = configFileReadMod;
+// #4717: runtime-identity fill — env rung + per-install marker rung.
+const runtime_slash_cjs_1 = require("./runtime-slash.cjs");
+const runtime_homes_cjs_1 = require("./runtime-homes.cjs");
+const runtime_name_policy_cjs_1 = require("./runtime-name-policy.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const planningWorkspace = require("./planning-workspace.cjs");
+const { planningDir, planningRoot } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const coreUtilsModule = require("./core-utils.cjs");
+const { detectSubRepos } = coreUtilsModule;
+// ─── Configuration Module (generated CJS mirror) ────────────────────────────
+const configuration_cjs_1 = require("./configuration.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const configSchema = require("./config-schema.cjs");
+const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isCentralConfigKey: _isCentralConfigKeyFn } = configSchema;
+const model_catalog_cjs_1 = require("./model-catalog.cjs");
+// #3760: the ADR-1411 out-of-band diagnostic seam. loadConfig returns `.config`
+// alone, so an in-band `skipped` record would be unreachable to nearly every
+// caller — "a reason no caller reads is an unreachable field" (ADR-1411).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const unusableInputModule = require("./unusable-input.cjs");
+const { UNUSABLE_REASON: _UNUSABLE_REASON, warnUnusableInput: _warnUnusableInput } = unusableInputModule;
+// ─── Federated Config (ADR-857 phase 3b) ─────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const federatedConfigModule = require("./federated-config.cjs");
+const { mergeFederatedConfig } = federatedConfigModule;
+// The capability-registry.cjs is generated and lives in the same gsd-core/bin/lib/ output dir.
+// Both config-loader.cjs and capability-registry.cjs land in gsd-core/bin/lib/ at build time.
+// This is the FROZEN first-party registry — used as the test-seam default and the
+// fallback. Overlay (installed third-party) config-key federation is cwd-dependent
+// and composed PER loadConfig CALL by _federatedConfigSchema(cwd) below (ADR-1244 D2),
+// never eagerly at module load.
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+const _capabilityRegistryReal = require('./capability-registry.cjs');
+// Module-level registry reference. Defaults to the real generated registry.
+// Overridable for tests via _setFederatedRegistryForTests.
+let _capabilityRegistry = _capabilityRegistryReal;
+/** Test-only seam: inject a synthetic registry. Call _resetFederatedRegistryForTests() to restore. */
+function _setFederatedRegistryForTests(reg) {
+    _capabilityRegistry = reg;
+}
+/** Test-only seam: restore the real generated registry. */
+function _resetFederatedRegistryForTests() {
+    _capabilityRegistry = _capabilityRegistryReal;
+}
+// ─── File & Config utilities ──────────────────────────────────────────────────
+/**
+ * Canonical config defaults — flat-key projection for CJS consumers.
+ *
+ * Cycle 4: Values are sourced from CANONICAL_CONFIG_DEFAULTS (the nested
+ * manifest loaded by configuration.generated.cjs). The flat shape is
+ * preserved here so legacy consumers (config.cjs, verify.cjs, tests that
+ * regex-parse this source) continue to work without changes. The key names
+ * and the `const CONFIG_DEFAULTS = {` pattern are intentionally kept.
+ *
+ * Mapping notes:
+ *  - workflow.plan_check  → plan_checker (CJS flat name; verify.cjs uses this)
+ *  - git.*               → flat git keys (branching_strategy, templates)
+ *  - workflow.*          → flat names (research, verifier, …)
+ *  - planning.sub_repos  → sub_repos
+ *  - planning.pr_strict  → pr_strict
+ *  - planning.commit_docs / search_gitignored → top-level flat keys
+ */
+// CANONICAL_CONFIG_DEFAULTS is typed as Record<string, unknown> from configuration.cjs;
+// we use a typed accessor to avoid repeated casts.
+function _getConfigDefault(key) {
+    return (configuration_cjs_1.CONFIG_DEFAULTS)[key];
+}
+function _getNestedConfigDefault(section, field) {
+    const sec = (configuration_cjs_1.CONFIG_DEFAULTS)[section];
+    if (sec && typeof sec === 'object' && !Array.isArray(sec)) {
+        return sec[field];
+    }
+    return undefined;
+}
+/** Shared flat-then-nested config lookup; exported for parity tests. */
+function _getConfigValue(parsed, key, nested) {
+    if (parsed[key] !== undefined)
+        return parsed[key];
+    if (nested && parsed[nested.section] && typeof parsed[nested.section] === 'object' && parsed[nested.section] !== null) {
+        return parsed[nested.section][nested.field];
+    }
+    return undefined;
+}
+/** Shared nested-only config lookup; exported for parity tests. */
+function _getConfigNested(parsed, section, field) {
+    const sec = parsed[section];
+    if (sec !== null && typeof sec === 'object' && !Array.isArray(sec)) {
+        return sec[field];
+    }
+    return undefined;
+}
+/**
+ * #5470: every key the project-config branch of the loader reads from two
+ * spellings — the flat top-level key and its nested `<section>.<field>` alias.
+ * (With no `.planning/`, the global-defaults branch below projects its own
+ * keys from `~/.gsd/defaults.json` and does not use this table.) The flat key
+ * wins, except for `branching_strategy`, `base_branch` and `sub_repos`:
+ * normalizeLegacyKeys hoists those legacy flat keys under their section first,
+ * and an existing nested value wins there. `_baseConfig` reads them through
+ * this table (`getAliased`); its plain `get` takes one spelling, so the
+ * two-spelling `get(key, nested)` form cannot bypass the table.
+ *
+ * `configGet` says how `config-get` (`src/config.cts`) answers the entry.
+ * `loader`: both spellings print the value the loader resolves, because a
+ * shipped workflow reads the setting through config-get under a spelling the
+ * docs do not write it in. `resolver`: each spelling reads only itself, through
+ * config-get's key resolver, which ADR-5057 (Phase 6, #5139) makes the
+ * authority for gate config; a top-level alias it rejects stays rejected, and
+ * `check auto-mode` answers what config-get answers. `resolvedAt` is where the
+ * loader publishes the value: the flat key, except `max_prompt_tokens`, which
+ * is published under `review`. `parallelization` is a boolean, or an object
+ * whose `enabled` field holds it.
+ */
+const CONFIG_KEY_ALIASES = Object.freeze([
+    { key: 'commit_docs', section: 'planning', field: 'commit_docs', resolvedAt: 'commit_docs', configGet: 'loader' },
+    { key: 'search_gitignored', section: 'planning', field: 'search_gitignored', resolvedAt: 'search_gitignored', configGet: 'loader' },
+    { key: 'sub_repos', section: 'planning', field: 'sub_repos', resolvedAt: 'sub_repos', configGet: 'resolver' },
+    { key: 'pr_strict', section: 'planning', field: 'pr_strict', resolvedAt: 'pr_strict', configGet: 'resolver' },
+    { key: 'branching_strategy', section: 'git', field: 'branching_strategy', resolvedAt: 'branching_strategy', configGet: 'resolver' },
+    { key: 'base_branch', section: 'git', field: 'base_branch', resolvedAt: 'base_branch', configGet: 'resolver' },
+    { key: 'phase_branch_template', section: 'git', field: 'phase_branch_template', resolvedAt: 'phase_branch_template', configGet: 'resolver' },
+    { key: 'milestone_branch_template', section: 'git', field: 'milestone_branch_template', resolvedAt: 'milestone_branch_template', configGet: 'resolver' },
+    { key: 'quick_branch_template', section: 'git', field: 'quick_branch_template', resolvedAt: 'quick_branch_template', configGet: 'resolver' },
+    { key: 'research', section: 'workflow', field: 'research', resolvedAt: 'research', configGet: 'resolver' },
+    { key: 'plan_checker', section: 'workflow', field: 'plan_check', resolvedAt: 'plan_checker', configGet: 'resolver' },
+    { key: 'verifier', section: 'workflow', field: 'verifier', resolvedAt: 'verifier', configGet: 'resolver' },
+    { key: 'nyquist_validation', section: 'workflow', field: 'nyquist_validation', resolvedAt: 'nyquist_validation', configGet: 'resolver' },
+    { key: 'post_planning_gaps', section: 'workflow', field: 'post_planning_gaps', resolvedAt: 'post_planning_gaps', configGet: 'resolver' },
+    { key: 'mvp_mode', section: 'workflow', field: 'mvp_mode', resolvedAt: 'mvp_mode', configGet: 'resolver' },
+    { key: 'text_mode', section: 'workflow', field: 'text_mode', resolvedAt: 'text_mode', configGet: 'resolver' },
+    { key: 'auto_advance', section: 'workflow', field: 'auto_advance', resolvedAt: 'auto_advance', configGet: 'resolver' },
+    { key: '_auto_chain_active', section: 'workflow', field: '_auto_chain_active', resolvedAt: '_auto_chain_active', configGet: 'resolver' },
+    { key: 'subagent_timeout', section: 'workflow', field: 'subagent_timeout', resolvedAt: 'subagent_timeout', configGet: 'resolver' },
+    { key: 'max_prompt_tokens', section: 'review', field: 'max_prompt_tokens', resolvedAt: 'review.max_prompt_tokens', configGet: 'resolver' },
+    { key: 'parallelization', section: 'parallelization', field: 'enabled', resolvedAt: 'parallelization', configGet: 'resolver' },
+]);
+/**
+ * The alias entry a `config-get` key path names — by its flat key or by its
+ * `<section>.<field>` spelling — or `undefined` when the loader reads that
+ * path from one spelling only. Its `configGet` field says whether config-get
+ * routes it through the loader.
+ */
+function configKeyAliasFor(keyPath) {
+    return CONFIG_KEY_ALIASES.find((alias) => keyPath === alias.key || keyPath === `${alias.section}.${alias.field}`);
+}
+/**
+ * The value a resolved config (`loadConfig`'s result) holds for an alias entry,
+ * read at the entry's `resolvedAt` path. A stored `null` is returned as `null`;
+ * `undefined` means the resolved config has no value there.
+ */
+function readResolvedAlias(config, alias) {
+    let value = config;
+    for (const segment of alias.resolvedAt.split('.')) {
+        value = value !== null && typeof value === 'object'
+            ? value[segment]
+            : undefined;
+    }
+    return value;
+}
+const CONFIG_DEFAULTS = {
+    model_profile: _getConfigDefault('model_profile'),
+    commit_docs: _getConfigDefault('commit_docs'),
+    search_gitignored: _getConfigDefault('search_gitignored'),
+    branching_strategy: _getNestedConfigDefault('git', 'branching_strategy'),
+    phase_branch_template: _getNestedConfigDefault('git', 'phase_branch_template'),
+    milestone_branch_template: _getNestedConfigDefault('git', 'milestone_branch_template'),
+    quick_branch_template: _getNestedConfigDefault('git', 'quick_branch_template'),
+    research: _getNestedConfigDefault('workflow', 'research'),
+    plan_checker: _getNestedConfigDefault('workflow', 'plan_check'), // flat CJS name maps to workflow.plan_check
+    verifier: _getNestedConfigDefault('workflow', 'verifier'),
+    nyquist_validation: _getNestedConfigDefault('workflow', 'nyquist_validation'),
+    ai_integration_phase: _getNestedConfigDefault('workflow', 'ai_integration_phase'),
+    api_coverage_gate: _getNestedConfigDefault('workflow', 'api_coverage_gate'),
+    parallelization: _getConfigDefault('parallelization'),
+    brave_search: _getConfigDefault('brave_search'),
+    firecrawl: _getConfigDefault('firecrawl'),
+    exa_search: _getConfigDefault('exa_search'),
+    text_mode: _getNestedConfigDefault('workflow', 'text_mode'),
+    compact_content: _getNestedConfigDefault('workflow', 'compact_content'),
+    sub_repos: _getNestedConfigDefault('planning', 'sub_repos'),
+    pr_strict: _getNestedConfigDefault('planning', 'pr_strict'),
+    resolve_model_ids: _getConfigDefault('resolve_model_ids'),
+    context_window: _getConfigDefault('context_window'),
+    phase_naming: _getConfigDefault('phase_naming'),
+    project_code: _getConfigDefault('project_code'),
+    subagent_timeout: _getNestedConfigDefault('workflow', 'subagent_timeout'),
+    security_enforcement: _getNestedConfigDefault('workflow', 'security_enforcement'),
+    security_asvs_level: _getNestedConfigDefault('workflow', 'security_asvs_level'),
+    security_block_on: _getNestedConfigDefault('workflow', 'security_block_on'),
+    post_planning_gaps: _getNestedConfigDefault('workflow', 'post_planning_gaps'),
+    research_before_questions: _getNestedConfigDefault('workflow', 'research_before_questions'), // #3894
+    smart_zone_tokens: _getNestedConfigDefault('workflow', 'smart_zone_tokens'),
+    inline_plan_threshold: _getNestedConfigDefault('workflow', 'inline_plan_threshold'), // #3801
+    planner_stall_detection_enabled: _getNestedConfigDefault('planner', 'stall_detection_enabled'),
+    max_prompt_tokens: _getNestedConfigDefault('review', 'max_prompt_tokens'),
+};
+/**
+ * Resolve `git.repo_tagging` (#5706) from hand-edited configuration. Only the
+ * two documented enum members are honored; any other stored value (a number,
+ * null, an unknown string, a wrong-case spelling) reads as the default `single`
+ * and never throws, so a bad hand edit cannot enable per-repository tagging.
+ */
+function resolveRepoTagging(value) {
+    return value === 'per_repo' ? 'per_repo' : 'single';
+}
+/**
+ * Resolve the planner watchdog policy from hand-edited configuration.
+ * Only a real JSON boolean may override the default; strings/numbers/null
+ * fail safe to the manifest-owned default-on behavior (#4570).
+ */
+function resolvePlannerStallDetectionEnabled(value) {
+    if (typeof value === 'boolean')
+        return value;
+    // A missing or skewed manifest must never convert an absent override into
+    // permission to disable the watchdog. The documented contract is default-on.
+    return true;
+}
+/**
+ * Deep-merge two plain config objects. `overlay` wins on key conflict.
+ * Explicit `null` in overlay overrides base (null means "unset this key").
+ * Arrays are replaced, not merged. Non-object primitives use overlay value.
+ *
+ * Note: `undefined` in overlay is treated as "no value provided" and falls
+ * back to base (preserves inheritance). Explicit `null` overrides base.
+ */
+function _deepMergeConfig(base, overlay) {
+    if (overlay === null || overlay === undefined)
+        return overlay;
+    if (typeof base !== 'object' || typeof overlay !== 'object')
+        return overlay;
+    const result = { ...base };
+    for (const key of Object.keys(overlay)) {
+        // Prototype-pollution guard — mirrors the four sibling guards in this file
+        // (lines ~315/319/331/341/549). Without it a workstream/root config.json with
+        // {"__proto__": {...}} pollutes this merged object's prototype chain and can
+        // spoof unset config flags. (Per-object pollution, not global Object.prototype.)
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype')
+            continue;
+        if (overlay[key] !== null && typeof overlay[key] === 'object' && !Array.isArray(overlay[key])) {
+            result[key] = _deepMergeConfig((base[key] ?? {}), overlay[key]);
+        }
+        else {
+            result[key] = overlay[key];
+        }
+    }
+    return result;
+}
+// Module-level deduplication for unknown-key warnings (#3523).
+// A single `init phase-op N` call invokes loadConfig more than once; this Set
+// prevents the same warning from being echoed on each invocation.
+const _warnedUnknownConfigKeys = new Set();
+// ─── Git utilities ────────────────────────────────────────────────────────────
+const _gitIgnoredCache = new Map();
+function isGitIgnored(cwd, targetPath, env) {
+    // #2206: strip trailing slashes — `git check-ignore` has a quirk where a
+    // CRLF .gitignore with blank lines falsely reports a trailing-slash path
+    // (e.g. `.planning/`) as ignored. Normalizing here protects every call site.
+    const normalized = targetPath.replace(/\/+$/, '');
+    const key = cwd + '::' + normalized + (env ? '::env:' + JSON.stringify(Object.entries(env).sort()) : '');
+    if (_gitIgnoredCache.has(key))
+        return _gitIgnoredCache.get(key);
+    // --no-index checks .gitignore rules regardless of whether the file is tracked.
+    const result = (0, shell_command_projection_cjs_1.execGit)(['check-ignore', '-q', '--no-index', '--', normalized], { cwd, env });
+    const ignored = result.exitCode === 0;
+    _gitIgnoredCache.set(key, ignored);
+    return ignored;
+}
+// ─── Model alias resolution ───────────────────────────────────────────────────
+// Catalog-derived (model-catalog.cts) so this vocabulary can never drift from
+// VALID_TIERS in verify.cts — see #2070 "Generative Fix Divergence". Excludes
+// 'inherit' (unlike VALID_TIERS): runtime overrides always resolve to a
+// concrete tier, never the adaptive sentinel.
+const RUNTIME_OVERRIDE_TIERS = model_catalog_cjs_1.ADAPTIVE_TIER_VALUES;
+const _warnedConfigKeys = new Set();
+function _warnUnknownProfileOverrides(parsed, configLabel) {
+    if (!parsed || typeof parsed !== 'object')
+        return;
+    const runtime = parsed['runtime'];
+    if (runtime && typeof runtime === 'string' && !(model_catalog_cjs_1.KNOWN_RUNTIMES).has(runtime)) {
+        const key = `${configLabel}::runtime::${runtime}`;
+        if (!_warnedConfigKeys.has(key)) {
+            _warnedConfigKeys.add(key);
+            try {
+                process.stderr.write(`gsd: warning — config key "runtime" has unknown value "${runtime}". ` +
+                    `Known runtimes: ${[...(model_catalog_cjs_1.KNOWN_RUNTIMES)].sort().join(', ')}. ` +
+                    `Resolution will fall back to safe defaults. (#2517)\n`);
+            }
+            catch { /* stderr might be closed in some test harnesses */ }
+        }
+    }
+    const overrides = parsed['model_profile_overrides'];
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+        for (const [overrideRuntime, tierMap] of Object.entries(overrides)) {
+            if (!(model_catalog_cjs_1.KNOWN_RUNTIMES).has(overrideRuntime)) {
+                const key = `${configLabel}::override-runtime::${overrideRuntime}`;
+                if (!_warnedConfigKeys.has(key)) {
+                    _warnedConfigKeys.add(key);
+                    try {
+                        process.stderr.write(`gsd: warning — model_profile_overrides.${overrideRuntime}.* uses ` +
+                            `unknown runtime "${overrideRuntime}". Known runtimes: ` +
+                            `${[...(model_catalog_cjs_1.KNOWN_RUNTIMES)].sort().join(', ')}. (#2517)\n`);
+                    }
+                    catch { /* ok */ }
+                }
+            }
+            if (!tierMap || typeof tierMap !== 'object')
+                continue;
+            for (const tierName of Object.keys(tierMap)) {
+                if (!RUNTIME_OVERRIDE_TIERS.has(tierName)) {
+                    const key = `${configLabel}::override-tier::${overrideRuntime}.${tierName}`;
+                    if (!_warnedConfigKeys.has(key)) {
+                        _warnedConfigKeys.add(key);
+                        try {
+                            process.stderr.write(`gsd: warning — model_profile_overrides.${overrideRuntime}.${tierName} ` +
+                                `uses unknown tier "${tierName}". Allowed tiers: opus, sonnet, haiku. (#2517)\n`);
+                        }
+                        catch { /* ok */ }
+                    }
+                }
+            }
+        }
+    }
+    const policy = parsed['model_policy'];
+    if (policy && typeof policy === 'object' && !Array.isArray(policy)) {
+        const policyObj = policy;
+        const provider = policyObj['provider'];
+        const _POLICY_SENTINEL_PROVIDERS = new Set(['generic', 'custom']);
+        if (provider && typeof provider === 'string' &&
+            !(model_catalog_cjs_1.KNOWN_PROVIDERS).has(provider) && !_POLICY_SENTINEL_PROVIDERS.has(provider)) {
+            const pkey = `${configLabel}::model_policy::provider::${provider}`;
+            if (!_warnedConfigKeys.has(pkey)) {
+                _warnedConfigKeys.add(pkey);
+                try {
+                    process.stderr.write(`gsd: warning — model_policy.provider has unknown value "${provider}". ` +
+                        `Known providers: ${[...(model_catalog_cjs_1.KNOWN_PROVIDERS)].sort().join(', ')}. ` +
+                        `For manual model IDs use provider="custom". (#49)\n`);
+                }
+                catch { /* ok */ }
+            }
+        }
+        const rtOverrides = policyObj['runtime_tiers'];
+        if (rtOverrides && typeof rtOverrides === 'object' && !Array.isArray(rtOverrides)) {
+            for (const [pruntime, tierMap] of Object.entries(rtOverrides)) {
+                if (!(model_catalog_cjs_1.KNOWN_RUNTIMES).has(pruntime)) {
+                    const key = `${configLabel}::model_policy.runtime_tiers::${pruntime}`;
+                    if (!_warnedConfigKeys.has(key)) {
+                        _warnedConfigKeys.add(key);
+                        try {
+                            process.stderr.write(`gsd: warning — model_policy.runtime_tiers.${pruntime}.* uses ` +
+                                `unknown runtime "${pruntime}". Known runtimes: ` +
+                                `${[...(model_catalog_cjs_1.KNOWN_RUNTIMES)].sort().join(', ')}. (#49)\n`);
+                        }
+                        catch { /* ok */ }
+                    }
+                }
+                if (!tierMap || typeof tierMap !== 'object')
+                    continue;
+                for (const tierName of Object.keys(tierMap)) {
+                    if (!RUNTIME_OVERRIDE_TIERS.has(tierName)) {
+                        const key = `${configLabel}::model_policy.runtime_tiers::${pruntime}.${tierName}`;
+                        if (!_warnedConfigKeys.has(key)) {
+                            _warnedConfigKeys.add(key);
+                            try {
+                                process.stderr.write(`gsd: warning — model_policy.runtime_tiers.${pruntime}.${tierName} ` +
+                                    `uses unknown tier "${tierName}". Allowed: opus, sonnet, haiku. (#49)\n`);
+                            }
+                            catch { /* ok */ }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+// Internal helper exposed for tests so per-process warning state can be reset
+// between cases that intentionally exercise the warning path repeatedly.
+// Clears BOTH dedup sets: _warnedConfigKeys (runtime/model-policy/tier warnings)
+// and _warnedUnknownConfigKeys (unknown top-level keys). Omitting the latter made
+// this a silent no-op for the suite that exists to test it — the leaked state
+// suppressed any later case reusing a key, and the existing cases only passed
+// because each picked a key name no other case reused (#2674).
+function _resetRuntimeWarningCacheForTests() {
+    _warnedConfigKeys.clear();
+    _warnedUnknownConfigKeys.clear();
+    _warnedUnusableConfig.clear();
+    _warnedShadowedGlobalKeys.clear();
+}
+// ─── #3532 (10b): shadowed global-defaults diagnostic ────────────────────────
+// The keys Branch D's `_globalBaseCfg` demonstrably honors from
+// ~/.gsd/defaults.json when no project config exists. Under a project
+// .planning/config.json (Branch A — every real project) the global file is
+// never opened, so each of these set globally is silently inert for resolution.
+// `effort` is in Branch D's honored set but is EXCLUDED from the shadow warning:
+// the install-time effort sync (readGsdEffectiveEffortConfig) DOES merge the
+// global file, so warning on it would be false for the channel users actually
+// control via `effort sync`. Keep this list in lockstep with `_globalBaseCfg`
+// below — the per-key canary in tests/config-loader.test.cjs fails first on
+// drift in either direction.
+const GLOBAL_DEFAULTS_RESOLUTION_KEYS = [
+    'model_profile', 'commit_docs', 'research', 'plan_checker', 'verifier',
+    'nyquist_validation', 'post_planning_gaps', 'research_before_questions', 'parallelization', 'text_mode',
+    'resolve_model_ids', 'context_window', 'subagent_timeout', 'model_overrides',
+    'models', 'granularity', 'granularities', 'planning', 'dynamic_routing',
+    'effort', 'fast_mode', 'agent_skills', 'response_language', 'runtime',
+    'model_profile_overrides', 'model_policy',
+];
+// Module-level dedup keyed on the SORTED shadowed-key set: a later call with
+// the same shadowed set stays quiet, while a config that grows a new shadowed
+// key re-arms the warning. Stronger than _warnedUnknownConfigKeys (which keys
+// on insertion order) — same discipline, order-independent key.
+const _warnedShadowedGlobalKeys = new Set();
+function _warnShadowedGlobalDefaults(globalDefaults, globalPath) {
+    const shadowed = GLOBAL_DEFAULTS_RESOLUTION_KEYS.filter(k => k !== 'effort' && Object.prototype.hasOwnProperty.call(globalDefaults, k));
+    // Branch D also honors the nested alias workflow.post_planning_gaps (the
+    // `?? globalDefaults['workflow']?.['post_planning_gaps']` fallback in
+    // _globalBaseCfg) — a global file using only the nested form is equally
+    // shadowed, so it reports under its dotted name.
+    // #3894: research_before_questions gets the same nested-alias reporting.
+    const nestedAliasKeys = ['post_planning_gaps', 'research_before_questions'];
+    const wf = globalDefaults['workflow'];
+    if (wf && typeof wf === 'object' && !Array.isArray(wf)) {
+        for (const k of nestedAliasKeys) {
+            if (!shadowed.includes(k) && Object.prototype.hasOwnProperty.call(wf, k)) {
+                shadowed.push(`workflow.${k}`);
+            }
+        }
+    }
+    if (shadowed.length === 0)
+        return;
+    const dedupKey = shadowed.slice().sort().join(',');
+    if (_warnedShadowedGlobalKeys.has(dedupKey))
+        return;
+    _warnedShadowedGlobalKeys.add(dedupKey);
+    try {
+        process.stderr.write(`gsd-tools: warning: ${globalPath} sets ${shadowed.join(', ')} but a project config ` +
+            `takes precedence here — those global keys are ignored for model resolution. (#3532)\n`);
+    }
+    catch { /* stderr might be closed in some test harnesses */ }
+}
+// ─── FIX 2: Federated overlay helpers ────────────────────────────────────────
+/**
+ * Apply federated key values into a mutable config object.
+ * Handles N-level dotted keys (e.g. "a.b.c" → obj.a.b.c).
+ * Only adds keys that are not already present (does not clobber).
+ * Inline prototype-pollution guards at every segment.
+ */
+function _applyFederatedValues(obj, values, validKeys) {
+    for (const dottedKey of validKeys) {
+        // S2: inline literal guard on full key
+        if (dottedKey === '__proto__' || dottedKey === 'constructor' || dottedKey === 'prototype')
+            continue;
+        const parts = dottedKey.split('.');
+        if (parts.length === 1) {
+            const topKey = parts[0];
+            if (topKey !== '__proto__' && topKey !== 'constructor' && topKey !== 'prototype') {
+                if (!Object.prototype.hasOwnProperty.call(obj, topKey)) {
+                    obj[topKey] = values[dottedKey];
+                }
+            }
+        }
+        else {
+            // N-level nested key: traverse/create intermediate objects
+            let cur = obj;
+            let ok = true;
+            for (let i = 0; i < parts.length - 1; i++) {
+                const seg = parts[i];
+                // S2: inline literal guard on each segment
+                if (seg === '__proto__' || seg === 'constructor' || seg === 'prototype') {
+                    ok = false;
+                    break;
+                }
+                if (!Object.prototype.hasOwnProperty.call(cur, seg) || cur[seg] === null) {
+                    cur[seg] = {};
+                }
+                if (typeof cur[seg] !== 'object' || Array.isArray(cur[seg])) {
+                    ok = false;
+                    break;
+                }
+                cur = cur[seg];
+            }
+            if (!ok)
+                continue;
+            const leafKey = parts[parts.length - 1];
+            // S2: inline literal guard on leaf
+            if (leafKey === '__proto__' || leafKey === 'constructor' || leafKey === 'prototype')
+                continue;
+            if (!Object.prototype.hasOwnProperty.call(cur, leafKey)) {
+                cur[leafKey] = values[dottedKey];
+            }
+        }
+    }
+}
+/**
+ * FIX 2: Apply the federated overlay to a base config object.
+ * When validKeys is empty (current registry — all keys are central),
+ * returns the baseConfig UNCHANGED (true no-op, preserves reference identity).
+ * When validKeys is non-empty, applies values into a shallow clone to avoid
+ * mutating shared CONFIG_DEFAULTS/module constants.
+ */
+// Resolve the federated capability config-schema for a project (ADR-1244 D2).
+// A test override (via _setFederatedRegistryForTests) wins; otherwise, when a
+// project cwd is available, compose the installed overlay for THAT project —
+// LAZILY (never at module load, so a bare require never scans the filesystem and
+// the result is never cached for the wrong cwd) — falling back to the frozen
+// first-party schema when there is no cwd or the loader is unavailable.
+function _federatedConfigSchema(cwd) {
+    if (_capabilityRegistry !== _capabilityRegistryReal) {
+        return _capabilityRegistry.configSchema; // explicit test override
+    }
+    if (typeof cwd === 'string' && cwd) {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+            const loaderMod = require('./capability-loader.cjs');
+            // #1459 IC-04: thread the consent home explicitly so a consented project cap's federated config
+            // key resolves at the SAME user-owned home that gated its activation (never the wrong home).
+            const schema = loaderMod.loadRegistry({ includeInstalled: true, cwd, gsdHome: process.env['GSD_HOME'] }).configSchema;
+            if (schema && typeof schema === 'object')
+                return schema;
+        }
+        catch { /* fall back to first-party */ }
+    }
+    return _capabilityRegistryReal.configSchema;
+}
+function _applyFederatedOverlay(baseConfig, userConfig, cwd) {
+    const _fedRegistrySchema = _federatedConfigSchema(cwd);
+    if (!_fedRegistrySchema || typeof _fedRegistrySchema !== 'object')
+        return baseConfig;
+    const _fedOverlay = mergeFederatedConfig({
+        configSchema: _fedRegistrySchema,
+        isCentralKey: (key) => _isCentralConfigKeyFn(key),
+        userConfig,
+    });
+    // True no-op: if no federated keys, return UNCHANGED (byte-identical, no clone)
+    if (_fedOverlay.validKeys.length === 0)
+        return baseConfig;
+    // Clone shallowly to avoid mutating shared constants, then apply nested values
+    const cloned = { ...baseConfig };
+    _applyFederatedValues(cloned, _fedOverlay.values, _fedOverlay.validKeys);
+    return cloned;
+}
+/**
+ * Result of loadConfigResolved — wraps the config object with provenance metadata.
+ * - source: which layer supplied the config
+ * - degraded: true when the resolution did not deliver the configuration it
+ *             should have — either a workstream was requested but its
+ *             config.json was absent (fell back to root), or a file on the
+ *             resolution path exists but is unusable (#1880). `reason` says which.
+ */
+/**
+ * Machine-readable outcome of a config resolution (#1880, ADR-1411 amendment
+ * "corrupt is not absent"). `Resolution<T>`'s four documented values all
+ * describe a resolution *miss*; the two `config_un*` values below are the
+ * unusable-input class that amendment introduced, and they are what makes a
+ * corrupt file distinguishable from an absent one.
+ *
+ * Frozen enum rather than bare strings so tests assert on the typed surface
+ * instead of diagnostic prose (CONTRIBUTING.md — Prohibited: Raw Text Matching
+ * on Test Outputs).
+ */
+const CONFIG_REASON = Object.freeze({
+    /** A config file was found, parsed, and supplied at least one setting. */
+    RESOLVED: 'resolved',
+    /** No config file exists at the resolved path. Genuine absence — NOT degraded. */
+    NOT_CONFIGURED: 'not_configured',
+    /** A config file exists and parsed, but carried no settings (`{}`). */
+    CONFIGURED_EMPTY: 'configured_empty',
+    /** A workstream was requested but had no config; fell back to root. */
+    WORKSTREAM_FALLBACK: 'workstream_fallback',
+    /** The file exists but is not valid JSON — settings were NOT applied. */
+    CONFIG_UNPARSEABLE: 'config_unparseable',
+    /** The file exists but could not be read (EACCES/EIO/…) — NOT applied. */
+    CONFIG_UNREADABLE: 'config_unreadable',
+});
+// CONFIG_MAX_BYTES and readConfigFileBounded live in ./config-file-read.cjs (#5759), the leaf
+// every config.json reader shares; they are re-exported below for existing importers.
+/**
+ * Read + JSON-parse a config file, keeping *absent* distinguishable from
+ * *unusable*. `readConfigFileBounded` returns null on ENOENT and throws an error
+ * carrying `.code` for every other condition — a FIFO/device (ENXIO), a directory
+ * (EISDIR), an oversized file (EFBIG) or an errno — which is the seam that makes
+ * this separable at all.
+ */
+function _readConfigFile(filePath) {
+    let raw;
+    try {
+        raw = readConfigFileBounded(filePath);
+    }
+    catch (err) {
+        const code = err.code ?? 'EUNKNOWN';
+        return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNREADABLE, path: filePath, code } };
+    }
+    if (raw === null)
+        return { kind: 'absent' };
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch {
+        return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNPARSEABLE, path: filePath, code: '' } };
+    }
+    // Shape, not just parseability (ADR-227). `0`, `"x"`, `[]` and `null` are all
+    // valid JSON but are not a config object. Accepting them let a PRESENT file
+    // parse "ok", then throw downstream, and be reported not_configured by the
+    // outer catch — a corrupt file indistinguishable from an absent one, which is
+    // the exact defect this change closes. Caught by the fast-check property.
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { kind: 'fault', fault: { reason: CONFIG_REASON.CONFIG_UNPARSEABLE, path: filePath, code: '' } };
+    }
+    return { kind: 'ok', data: parsed };
+}
+/**
+ * Dedup set for the unusable-config diagnostic. Keyed on resolved path + errno
+ * per the ADR-1411 amendment — never on message text, which would couple the
+ * guard to wording, and never on the errno alone, which would suppress a
+ * genuine second failure in a different file.
+ */
+const _warnedUnusableConfig = new Set();
+function _warnUnusableConfig(fault, fallback = 'defaults') {
+    // The NUL separators are load-bearing: without them `path`+`reason`+`code` is bare
+    // concatenation and two distinct faults can key alike. They are written as escapes rather
+    // than literal 0x00 bytes because a literal NUL makes the whole file binary to file(1) and
+    // grep(1), which silently skipped it — RULESET.AUDIT.search-source-not-generated tells
+    // agents to search this exact source to confirm an invariant exists, and it was returning
+    // nothing. Same runtime string, still greppable.
+    const key = `${fault.path}\u0000${fault.reason}\u0000${fault.code}`;
+    if (_warnedUnusableConfig.has(key))
+        return;
+    _warnedUnusableConfig.add(key);
+    const what = fault.reason === CONFIG_REASON.CONFIG_UNPARSEABLE
+        ? 'is not valid JSON'
+        : `could not be read (${fault.code})`;
+    const instead = fallback === 'root' ? '; using the root config instead'
+        : fallback === 'defaults' ? '; using defaults instead'
+            : '';
+    process.stderr.write(`gsd-tools: warning: ${printablePath(fault.path)} ${what} — its settings were NOT applied${instead}\n`);
+}
+/**
+ * loadConfigResolved — provenance-aware config loading (#1415, ADR-1411 P2).
+ *
+ * Identical to loadConfig in every observable way except it returns
+ * { config, source, degraded } instead of just the config object.
+ * loadConfig now delegates to this function (byte-identical back-compat).
+ *
+ * Branch → source/degraded/reason mapping:
+ *   A1: ws set + ws config.json found → source:'workstream', degraded:false, reason:'resolved'|'configured_empty'
+ *   A2: ws null + config.json found   → source:'root',       degraded:false, reason:'resolved'|'configured_empty'
+ *   B:  catch + .planning/ + rootParsed set (ws fallback) → source:'root', degraded:true, reason:'workstream_fallback'
+ *   C:  catch + .planning/ + rootParsed null (federated defaults) → source:'builtin-defaults', degraded:false, reason:'not_configured'
+ *   D:  catch + no .planning/ + ~/.gsd/defaults.json readable → source:'global-defaults', degraded:false, reason:'not_configured'
+ *   E:  catch + no .planning/ + no global → source:'builtin-defaults', degraded:false, reason:'not_configured'
+ *
+ * ORTHOGONAL to all of the above (#1880, ADR-1411 "corrupt is not absent"): if
+ * any config file on the resolution path exists but is UNUSABLE — invalid JSON,
+ * or an errno such as EACCES — every branch instead returns degraded:true with
+ * reason:'config_unparseable'|'config_unreadable', and a deduplicated stderr
+ * diagnostic names the file. Before this, a trailing comma in config.json was
+ * byte-identical to the file not existing: builtin defaults, degraded:false,
+ * and the user's entire configuration silently discarded.
+ *
+ * `options.persist: false` (#3648) suppresses the two normalize-then-write-back
+ * side effects below. Resolution is otherwise identical — same precedence, same
+ * returned object — the migrated shape simply stays in memory. Callers that only
+ * ASK the config something (a predicate, a status readout) pass it so that a read
+ * cannot dirty the working tree; the ~30 callers that omit it keep persisting, so
+ * a legacy config is still migrated exactly once by ordinary use.
+ */
+function loadConfigResolvedInternal(cwd, options = {}) {
+    // Opt-OUT, not opt-in: omitting the option must preserve the historical
+    // write-back for every existing caller.
+    const persist = options['persist'] !== false;
+    // NOTE: loadConfigResolved resolves from cwd AS-IS (no walk-up).
+    // Callers that need ancestor-anchoring (e.g. cmdAgentSkills) must do so
+    // themselves via findProjectRoot() before calling this function.
+    // This preserves back-compat for the ~30 other loadConfig callers (#1415).
+    const activeWorkstream = Object.prototype.hasOwnProperty.call(options, 'workstream')
+        ? options['workstream']
+        : (options['workstreamContext'] && Object.prototype.hasOwnProperty.call(options['workstreamContext'], 'ws'))
+            ? options['workstreamContext']['ws']
+            : (process.env['GSD_WORKSTREAM'] || null);
+    const ws = typeof activeWorkstream === 'string' ? activeWorkstream.trim() || null : null;
+    // wsRequested: true when caller explicitly requested a non-empty workstream.
+    // Used for source labeling (Fix 4) and early absent-dir intercept (Fix 2).
+    const wsRequested = ws != null && ws !== '';
+    let cachedSubRepos;
+    const getDetectedSubRepos = () => {
+        if (cachedSubRepos === undefined)
+            cachedSubRepos = detectSubRepos(cwd);
+        return cachedSubRepos.slice();
+    };
+    // Faults are captured, not thrown: the existing control flow (one broad catch
+    // that falls back to defaults) is preserved exactly — see #1880. All that is
+    // added is knowing WHY the fallback fired, which is the whole defect.
+    let configFault = null;
+    /**
+     * Stamp a fallback return with its reason. Every branch below reaches defaults
+     * (or the root config) — what differs is WHY, and before #1880 that was
+     * unrecoverable: a corrupt file and an absent one produced identical objects.
+     *
+     * An unusable file always wins and always sets `degraded:true`; genuine
+     * absence keeps whatever `degraded` the branch already decided, so the
+     * existing #1366 workstream-fallback semantics are untouched.
+     */
+    const fallback = (r) => {
+        if (configFault)
+            return { ...r, degraded: true, reason: configFault.reason };
+        return {
+            ...r,
+            reason: r.degraded ? CONFIG_REASON.WORKSTREAM_FALLBACK : CONFIG_REASON.NOT_CONFIGURED,
+        };
+    };
+    let rootParsed = null;
+    if (ws) {
+        const rootConfigPath = node_path_1.default.join(planningRoot(cwd), 'config.json');
+        try {
+            const rootRead = _readConfigFile(rootConfigPath);
+            if (rootRead.kind === 'fault') {
+                configFault = rootRead.fault;
+                // The workstream config below may still apply, so no replacement is claimed.
+                _warnUnusableConfig(rootRead.fault, null);
+            }
+            if (rootRead.kind !== 'ok')
+                throw new Error('root config absent or unusable');
+            rootParsed = rootRead.data;
+            const { parsed: rootNormalized, normalizations: rootNorms, skipped: rootSkipped } = (0, configuration_cjs_1.normalizeLegacyKeys)(rootParsed);
+            if (rootSkipped.length > 0) {
+                _warnUnusableInput({ reason: _UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: rootConfigPath });
+            }
+            if (rootNorms.length > 0) {
+                for (const norm of rootNorms) {
+                    if (norm.requiresFilesystem && !rootNormalized.planning?.['sub_repos']) {
+                        const detected = getDetectedSubRepos();
+                        if (detected.length > 0) {
+                            // #3760: `if (!planning) planning = {}` treated a non-empty STRING as an
+                            // already-present section, and the next line then assigned onto a
+                            // primitive — a strict-mode TypeError the enclosing catch swallowed,
+                            // discarding the user's whole config. `requiresFilesystem` now only
+                            // reaches here when the section is absent or an object (configuration.cts
+                            // block 3 refuses otherwise and reports it via `skipped`), so this
+                            // narrowing chooses between merge and create and never discards.
+                            if (!(0, configuration_cjs_1.isConfigSection)(rootNormalized.planning)) {
+                                rootNormalized.planning = {};
+                            }
+                            rootNormalized.planning['sub_repos'] = detected;
+                            rootNormalized.planning['commit_docs'] = false;
+                        }
+                    }
+                }
+                rootParsed = rootNormalized;
+                if (persist) {
+                    try {
+                        (0, shell_command_projection_cjs_1.platformWriteSync)(rootConfigPath, JSON.stringify(rootParsed, null, 2));
+                    }
+                    catch { /* ignore */ }
+                }
+            }
+            else {
+                rootParsed = rootNormalized;
+            }
+        }
+        catch {
+            // Root config missing or unparseable — workstream config stands alone
+        }
+    }
+    const configPath = node_path_1.default.join(planningDir(cwd, ws), 'config.json');
+    const defaults = CONFIG_DEFAULTS;
+    try {
+        const read = _readConfigFile(configPath);
+        if (read.kind === 'fault') {
+            // The workstream/root config that ACTUALLY governs this resolution is
+            // unusable. This outranks any earlier root-config fault for reporting.
+            configFault = read.fault;
+            // With a workstream active and a usable root config, the root config is what applies.
+            _warnUnusableConfig(read.fault, ws && rootParsed ? 'root' : 'defaults');
+        }
+        if (read.kind !== 'ok')
+            throw new Error('config absent or unusable');
+        const fileData = read.data;
+        // Snapshot BEFORE normalizeLegacyKeys mutates fileData in place.
+        const fileHadKeys = Object.keys(read.data).length > 0;
+        let configDirty = false;
+        {
+            const { parsed: normalized, normalizations, skipped } = (0, configuration_cjs_1.normalizeLegacyKeys)(fileData);
+            if (skipped.length > 0) {
+                _warnUnusableInput({ reason: _UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: configPath });
+            }
+            if (normalizations.length > 0) {
+                Object.keys(fileData).forEach(k => delete fileData[k]);
+                Object.assign(fileData, normalized);
+                configDirty = true;
+                for (const norm of normalizations) {
+                    if (norm.requiresFilesystem && !fileData.planning?.['sub_repos']) {
+                        const detected = getDetectedSubRepos();
+                        if (detected.length > 0) {
+                            // #3760 — see the identical guard on the root-config path above.
+                            if (!(0, configuration_cjs_1.isConfigSection)(fileData.planning))
+                                fileData.planning = {};
+                            fileData.planning['sub_repos'] = detected;
+                            fileData.planning['commit_docs'] = false;
+                        }
+                    }
+                }
+            }
+        }
+        const currentSubRepos = fileData.planning?.['sub_repos'] || [];
+        if (Array.isArray(currentSubRepos) && currentSubRepos.length > 0) {
+            const detected = getDetectedSubRepos();
+            if (detected.length > 0) {
+                const sorted = [...currentSubRepos].sort();
+                if (JSON.stringify(sorted) !== JSON.stringify(detected)) {
+                    // #3760 — reachable only when `planning` already yielded a non-empty
+                    // sub_repos array, so it is an object here; the narrowing keeps the
+                    // assignment total rather than relying on that from three frames away.
+                    if (!(0, configuration_cjs_1.isConfigSection)(fileData.planning))
+                        fileData.planning = {};
+                    fileData.planning['sub_repos'] = detected;
+                    configDirty = true;
+                }
+            }
+        }
+        if (configDirty && persist) {
+            try {
+                (0, shell_command_projection_cjs_1.platformWriteSync)(configPath, JSON.stringify(fileData, null, 2));
+            }
+            catch { /* ignore */ }
+        }
+        const parsed = rootParsed
+            ? (_deepMergeConfig(rootParsed, fileData) ?? fileData)
+            : fileData;
+        const KNOWN_TOP_LEVEL = new Set([
+            ...[...VALID_CONFIG_KEYS].map((k) => k.split('.')[0]),
+            ...DYNAMIC_KEY_PATTERNS.map(p => p.topLevel),
+            'model_overrides', 'context_window', 'resolve_model_ids', 'claude_md_path', 'effort', 'fast_mode',
+            'depth', 'multiRepo', 'branching_strategy', 'research',
+        ]);
+        let _preWarningFedValidKeys = [];
+        try {
+            const _fedRegistrySchemaEarly = _federatedConfigSchema(cwd);
+            if (_fedRegistrySchemaEarly && typeof _fedRegistrySchemaEarly === 'object') {
+                const _earlyOverlay = mergeFederatedConfig({
+                    configSchema: _fedRegistrySchemaEarly,
+                    isCentralKey: (key) => _isCentralConfigKeyFn(key),
+                    userConfig: parsed,
+                });
+                _preWarningFedValidKeys = _earlyOverlay.validKeys;
+                for (const dottedKey of _preWarningFedValidKeys) {
+                    const topKey = dottedKey.split('.')[0];
+                    if (topKey !== '__proto__' && topKey !== 'constructor' && topKey !== 'prototype') {
+                        KNOWN_TOP_LEVEL.add(topKey);
+                    }
+                }
+            }
+        }
+        catch {
+            // Defensive
+        }
+        const unknownKeys = Object.keys(parsed).filter(k => !KNOWN_TOP_LEVEL.has(k));
+        if (unknownKeys.length > 0) {
+            const warnKey = unknownKeys.join(',');
+            if (!_warnedUnknownConfigKeys.has(warnKey)) {
+                _warnedUnknownConfigKeys.add(warnKey);
+                process.stderr.write(`gsd-tools: warning: unknown config key(s) in .planning/config.json: ${unknownKeys.join(', ')} — these will be ignored\n`);
+            }
+        }
+        _warnUnknownProfileOverrides(parsed, '.planning/config.json');
+        // One spelling only: a key read from a second spelling goes through
+        // `getAliased` and CONFIG_KEY_ALIASES, so config-get can answer it (#5470).
+        const get = (key) => _getConfigValue(parsed, key);
+        /**
+         * Nested-ONLY read — no top-level fallback (#3648).
+         *
+         * `get()`'s flat-then-nested order exists for keys that have a legacy flat
+         * spelling `normalizeLegacyKeys` migrates (`branching_strategy`,
+         * `base_branch`, …); for those, honouring the flat key is back-compat. A key
+         * introduced with no legacy form has nothing to be compatible WITH, so
+         * routing it through `get()` would invent an undocumented top-level alias
+         * that silently outranks the canonical nested key. Use this instead for new
+         * `<section>.<field>` keys (round-4 external review).
+         */
+        const getNested = (section, field) => _getConfigNested(parsed, section, field);
+        /** Flat-then-nested read of a `CONFIG_KEY_ALIASES` entry (#5470). */
+        const getAliased = (key) => {
+            const { section, field } = CONFIG_KEY_ALIASES.find((alias) => alias.key === key);
+            return _getConfigValue(parsed, key, { section, field });
+        };
+        const parallelization = (() => {
+            const val = getAliased('parallelization');
+            if (typeof val === 'boolean')
+                return val;
+            if (typeof val === 'object' && val !== null && 'enabled' in (val))
+                return val['enabled'];
+            return defaults.parallelization;
+        })();
+        const _baseConfig = {
+            model_profile: get('model_profile') ?? defaults.model_profile,
+            commit_docs: (() => {
+                const explicit = getAliased('commit_docs');
+                if (explicit !== undefined)
+                    return explicit;
+                if (isGitIgnored(cwd, '.planning/'))
+                    return false;
+                return defaults.commit_docs;
+            })(),
+            search_gitignored: getAliased('search_gitignored') ?? defaults.search_gitignored,
+            branching_strategy: getAliased('branching_strategy') ?? defaults.branching_strategy,
+            base_branch: getAliased('base_branch'),
+            protected_branches: getNested('git', 'protected_branches'),
+            allow_default_branch_commits: getNested('git', 'allow_default_branch_commits'),
+            repo_tagging: resolveRepoTagging(getNested('git', 'repo_tagging')),
+            phase_branch_template: getAliased('phase_branch_template') ?? defaults.phase_branch_template,
+            milestone_branch_template: getAliased('milestone_branch_template') ?? defaults.milestone_branch_template,
+            quick_branch_template: getAliased('quick_branch_template') ?? defaults.quick_branch_template,
+            research: getAliased('research') ?? defaults.research,
+            plan_checker: getAliased('plan_checker') ?? defaults.plan_checker,
+            verifier: getAliased('verifier') ?? defaults.verifier,
+            nyquist_validation: getAliased('nyquist_validation') ?? defaults.nyquist_validation,
+            post_planning_gaps: getAliased('post_planning_gaps') ?? defaults.post_planning_gaps,
+            parallelization,
+            brave_search: get('brave_search') ?? defaults.brave_search,
+            firecrawl: get('firecrawl') ?? defaults.firecrawl,
+            exa_search: get('exa_search') ?? defaults.exa_search,
+            mvp_mode: getAliased('mvp_mode') ?? false,
+            tdd_mode: getNested('workflow', 'tdd_mode') ?? false,
+            text_mode: getAliased('text_mode') ?? defaults.text_mode,
+            auto_advance: getAliased('auto_advance') ?? false,
+            _auto_chain_active: getAliased('_auto_chain_active') ?? false,
+            mode: get('mode') ?? 'interactive',
+            sub_repos: getAliased('sub_repos') ?? defaults.sub_repos,
+            pr_strict: getAliased('pr_strict') ?? defaults.pr_strict,
+            resolve_model_ids: get('resolve_model_ids') ?? defaults.resolve_model_ids,
+            context_window: get('context_window') ?? defaults.context_window,
+            phase_naming: get('phase_naming') ?? defaults.phase_naming,
+            project_code: get('project_code') ?? defaults.project_code,
+            subagent_timeout: getAliased('subagent_timeout') ?? defaults.subagent_timeout,
+            planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(getNested('planner', 'stall_detection_enabled')),
+            model_overrides: (parsed['model_overrides']) || null,
+            agent_tools: (parsed['agent_tools']) || null,
+            models: (parsed['models']) || null,
+            granularity: parsed['granularity'] !== undefined ? parsed['granularity'] : null,
+            granularities: (parsed['granularities']) || null,
+            planning: (parsed['planning']) || null,
+            dynamic_routing: (parsed['dynamic_routing']) || null,
+            runtime: (parsed['runtime']) || null,
+            model_profile_overrides: (parsed['model_profile_overrides']) || null,
+            model_policy: (parsed['model_policy']) || null,
+            effort: (parsed['effort']) || null,
+            fast_mode: (parsed['fast_mode']) || null,
+            agent_skills: (parsed['agent_skills']) || {},
+            agent_skills_security: (parsed['agent_skills_security']) || null,
+            // #3587: phase_commit_docs.<phase-id> — a dynamic-key family shaped like
+            // agent_skills above (`{ "<phase-id>": boolean }`). Must be threaded here
+            // explicitly: `_baseConfig` is a hand-maintained allowlist, so a key that
+            // is only in config-schema.manifest.json's dynamicKeyPatterns (and not
+            // projected here) is silently dropped on read — the exact `features`-key
+            // failure mode this module's own A3 test guards against.
+            phase_commit_docs: (parsed['phase_commit_docs']) || {},
+            manager: (parsed['manager']) || {},
+            response_language: get('response_language') || null,
+            claude_md_path: get('claude_md_path') || null,
+            claude_md_assembly: (parsed['claude_md_assembly']) || null,
+            phase_id_convention: get('phase_id_convention') ?? null,
+            // #3691: the documented central review key. Declared here (not federated —
+            // it is central, see config-schema.manifest.json validKeys) so the existing
+            // `review.*` per-lane keys the federated overlay below adds land as SIBLINGS
+            // on this same object rather than being clobbered by it.
+            review: {
+                max_prompt_tokens: getAliased('max_prompt_tokens') ?? defaults.max_prompt_tokens,
+            },
+        };
+        // ADR-857 phase 3b: federated config overlay
+        try {
+            if (_preWarningFedValidKeys.length > 0) {
+                const _fedRegistrySchema = _federatedConfigSchema(cwd);
+                if (_fedRegistrySchema && typeof _fedRegistrySchema === 'object') {
+                    const _fedOverlay = mergeFederatedConfig({
+                        configSchema: _fedRegistrySchema,
+                        isCentralKey: (key) => _isCentralConfigKeyFn(key),
+                        userConfig: parsed,
+                    });
+                    _applyFederatedValues(_baseConfig, _fedOverlay.values, _fedOverlay.validKeys);
+                }
+            }
+        }
+        catch {
+            // Defensive: keep no-throw contract
+        }
+        // A1 vs A2: disambiguate by whether a real workstream was requested.
+        // Fix 4: empty-string ws ('') resolves the root path → source:'root'.
+        const source = wsRequested ? 'workstream' : 'root';
+        // #3532 (10b): a parsed project config means Branch D never runs, so every
+        // key ~/.gsd/defaults.json sets that Branch D would honor is silently inert
+        // here. Observation only — one deduped stderr warning; precedence is
+        // untouched. Faults in the global file stay silent in this branch (the
+        // project config governs; the nearer file is the actionable one).
+        try {
+            const shadowHome = (0, runtime_homes_cjs_1.resolveGsdHome)();
+            const shadowPath = node_path_1.default.join(shadowHome, '.gsd', 'defaults.json');
+            const shadowRead = _readConfigFile(shadowPath);
+            if (shadowRead.kind === 'ok') {
+                _warnShadowedGlobalDefaults(shadowRead.data, shadowPath);
+            }
+        }
+        catch {
+            // Observation only — never let the diagnostic perturb resolution.
+        }
+        // This config parsed — but a DIFFERENT file on the resolution path may not
+        // have. A workstream config that loads cleanly while the root config it
+        // inherits from is corrupt is still a degraded resolution: the root's
+        // settings were silently dropped. Reporting `resolved` here would reopen
+        // the exact hole this change closes, for the common case of a project that
+        // uses workstreams at all.
+        if (configFault) {
+            return { config: _baseConfig, source, degraded: true, reason: configFault.reason };
+        }
+        // Emptiness is judged on the FILE THAT WAS READ, not on `parsed` (the
+        // root+workstream merge). An empty workstream file inheriting a non-empty
+        // root would otherwise report `resolved` while carrying no settings of its
+        // own — the opposite of the not-configured/configured-empty distinction
+        // ADR-1411 rule 3 requires.
+        const reason = fileHadKeys
+            ? CONFIG_REASON.RESOLVED
+            : CONFIG_REASON.CONFIGURED_EMPTY;
+        return { config: _baseConfig, source, degraded: false, reason };
+    }
+    catch {
+        // Fix 2: Early intercept — workstream requested but ws config.json absent (or dir absent)
+        // AND root config was loaded. Covers BOTH "dir exists, no config.json" AND "dir absent".
+        // This delivers the #1366 acceptance criterion: nonexistent GSD_WORKSTREAM yields root, degraded.
+        //
+        // Both fallback recursions below forward `options` and override ONLY `workstream`.
+        // A bare `{ workstream: null }` silently dropped every other option, so a caller's
+        // `persist: false` was discarded on exactly this path and the root config was
+        // rewritten by a read (#3648, found by external review). The explicit
+        // `workstream: null` still wins the `hasOwnProperty` check at the top of this
+        // function, so spreading cannot let `workstreamContext` reintroduce a workstream.
+        if (wsRequested && rootParsed) {
+            const fb = loadConfigResolvedInternal(cwd, { ...options, workstream: null });
+            return fallback({ config: fb.config, source: 'root', degraded: true });
+        }
+        // Branch B, C, D, E
+        if (node_fs_1.default.existsSync(planningDir(cwd, ws))) {
+            if (rootParsed) {
+                // Branch B: workstream requested but ws config.json absent; root config present.
+                // (Only reached when wsRequested is false — e.g. ws='' with .planning/workstreams//config.json)
+                const fb = loadConfigResolvedInternal(cwd, { ...options, workstream: null });
+                return fallback({ config: fb.config, source: 'root', degraded: true });
+            }
+            // Branch C: .planning/ exists but no config.json and no root config — federated/builtin defaults
+            try {
+                return fallback({ config: _applyFederatedOverlay(defaults, {}, cwd), source: 'builtin-defaults', degraded: false });
+            }
+            catch {
+                return fallback({ config: defaults, source: 'builtin-defaults', degraded: false });
+            }
+        }
+        // Branch D or E: no .planning/
+        try {
+            const home = (0, runtime_homes_cjs_1.resolveGsdHome)();
+            const globalDefaultsPath = node_path_1.default.join(home, '.gsd', 'defaults.json');
+            const globalRead = _readConfigFile(globalDefaultsPath);
+            if (globalRead.kind === 'fault') {
+                // ~/.gsd/defaults.json is present but unusable. Only report it when the
+                // project config did not already fail — the nearer file is the one the
+                // user is most likely to be able to act on.
+                if (!configFault)
+                    configFault = globalRead.fault;
+                _warnUnusableConfig(globalRead.fault);
+            }
+            if (globalRead.kind !== 'ok')
+                throw new Error('global defaults absent or unusable');
+            const globalDefaults = globalRead.data;
+            const _globalBaseCfg = {
+                ...defaults,
+                model_profile: (globalDefaults['model_profile']) ?? defaults.model_profile,
+                commit_docs: (globalDefaults['commit_docs']) ?? defaults.commit_docs,
+                research: (globalDefaults['research']) ?? defaults.research,
+                plan_checker: (globalDefaults['plan_checker']) ?? defaults.plan_checker,
+                verifier: (globalDefaults['verifier']) ?? defaults.verifier,
+                nyquist_validation: (globalDefaults['nyquist_validation']) ?? defaults.nyquist_validation,
+                post_planning_gaps: (globalDefaults['post_planning_gaps'])
+                    ?? globalDefaults['workflow']?.['post_planning_gaps']
+                    ?? defaults.post_planning_gaps,
+                // #3894: same nested-alias shape as post_planning_gaps above — the key
+                // was silently dropped from global defaults, so it was unavailable at
+                // user scope AND inert at project scope on the /gsd-quick path.
+                research_before_questions: (globalDefaults['research_before_questions'])
+                    ?? globalDefaults['workflow']?.['research_before_questions']
+                    ?? defaults.research_before_questions,
+                parallelization: (globalDefaults['parallelization']) ?? defaults.parallelization,
+                text_mode: (globalDefaults['text_mode']) ?? defaults.text_mode,
+                resolve_model_ids: (globalDefaults['resolve_model_ids']) ?? defaults.resolve_model_ids,
+                context_window: (globalDefaults['context_window']) ?? defaults.context_window,
+                subagent_timeout: (globalDefaults['subagent_timeout']) ?? defaults.subagent_timeout,
+                planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(globalDefaults['planner']?.['stall_detection_enabled']),
+                model_overrides: (globalDefaults['model_overrides']) || null,
+                models: (globalDefaults['models']) || null,
+                granularity: (globalDefaults['granularity']) !== undefined ? globalDefaults['granularity'] : null,
+                granularities: (globalDefaults['granularities']) || null,
+                planning: (globalDefaults['planning']) || null,
+                dynamic_routing: (globalDefaults['dynamic_routing']) || null,
+                effort: (globalDefaults['effort']) || null,
+                fast_mode: (globalDefaults['fast_mode']) || null,
+                agent_skills: (globalDefaults['agent_skills']) || {},
+                response_language: (globalDefaults['response_language']) || null,
+                // #2069: forward model_policy / model_profile_overrides / runtime so the global-defaults
+                // path is at parity with the project-config path (which forwards these three from
+                // parsed['…'] at the top of this function). Without these entries, ~/.gsd/defaults.json
+                // silently drops them — model_policy/provider/budget etc. are honored when set in a
+                // project but ignored when set globally.
+                runtime: (globalDefaults['runtime']) || null,
+                model_profile_overrides: (globalDefaults['model_profile_overrides']) || null,
+                model_policy: (globalDefaults['model_policy']) || null,
+            };
+            // Branch D: global-defaults
+            try {
+                return fallback({ config: _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd), source: 'global-defaults', degraded: false });
+            }
+            catch {
+                return fallback({ config: _globalBaseCfg, source: 'global-defaults', degraded: false });
+            }
+        }
+        catch {
+            // Branch E: no global defaults
+            try {
+                return fallback({ config: _applyFederatedOverlay(defaults, {}, cwd), source: 'builtin-defaults', degraded: false });
+            }
+            catch {
+                return fallback({ config: defaults, source: 'builtin-defaults', degraded: false });
+            }
+        }
+    }
+}
+/**
+ * #4717 — fill an empty `runtime` from the environment, then the per-install
+ * marker. writeNonClaudeDefaults stamps `runtime` into the SHARED
+ * ~/.gsd/defaults.json with whichever non-Claude runtime installed first, so
+ * direct readers of config.runtime saw another runtime's identity (or
+ * nothing) on a multi-runtime machine. Copy-on-write: the builtin-defaults
+ * branch returns a shared object, so never assign into it. An explicit
+ * config.runtime is never overridden.
+ */
+function fillRuntimeIdentity(resolved) {
+    const cfg = resolved?.config;
+    if (!cfg)
+        return resolved;
+    const runtime = (0, runtime_name_policy_cjs_1.resolveRuntimeNameFromCandidates)(process.env['GSD_RUNTIME'], (0, runtime_slash_cjs_1.readInstallRuntimeMarker)());
+    // Only a runtime the name policy can canonicalize is an identity. Unknown
+    // tokens pass THROUGH resolveRuntimeNameFromCandidates (future-runtime
+    // tolerance) and must not be materialized into config.runtime, where ~30
+    // consumers would read them — fail safe to no identity (#4717 review).
+    const canonicalRuntime = runtime ? (0, runtime_name_policy_cjs_1.canonicalizeRuntimeName)(runtime) : null;
+    if (!canonicalRuntime)
+        return resolved;
+    // Rung 1 — empty runtime: materialize THIS install's identity (env, then
+    // the per-install marker). An explicit runtime is never overridden.
+    if (!cfg['runtime']) {
+        return { ...resolved, config: { ...cfg, runtime: canonicalRuntime } };
+    }
+    // Rung 2 (#4717 stamped-defaults leg): the global-defaults branch forwards
+    // the SHARED ~/.gsd/defaults.json's runtime verbatim — whichever non-Claude
+    // runtime installed FIRST stamped that machine-wide file, and every other
+    // runtime's resolution inherited its identity (the issue's second failure
+    // shape). When THIS install carries its own identity (GSD_RUNTIME or the
+    // marker), the stamp — not the operator — is speaking: correct it. Project
+    // and workstream configs are explicit operator intent and are never touched;
+    // with no install identity of its own the stamped value stays (status quo).
+    if (resolved.source === 'global-defaults') {
+        return { ...resolved, config: { ...cfg, runtime: canonicalRuntime } };
+    }
+    return resolved;
+}
+function loadConfigResolved(cwd, options = {}) {
+    return fillRuntimeIdentity(loadConfigResolvedInternal(cwd, options));
+}
+/**
+ * loadConfig — backwards-compatible config loading, now a thin wrapper over loadConfigResolved.
+ * Returns the config object only; for provenance metadata use loadConfigResolved.
+ */
+function loadConfig(cwd, options = {}) {
+    return loadConfigResolved(cwd, options).config;
+}
+module.exports = {
+    loadConfig,
+    loadConfigResolved,
+    CONFIG_REASON,
+    CONFIG_MAX_BYTES,
+    readConfigFileBounded,
+    _warnedUnusableConfig,
+    isGitIgnored,
+    CONFIG_DEFAULTS,
+    CONFIG_KEY_ALIASES,
+    configKeyAliasFor,
+    readResolvedAlias,
+    _getConfigDefault,
+    _getNestedConfigDefault,
+    _getConfigValue,
+    _getConfigNested,
+    resolvePlannerStallDetectionEnabled,
+    _deepMergeConfig,
+    _warnedUnknownConfigKeys,
+    _warnedShadowedGlobalKeys,
+    GLOBAL_DEFAULTS_RESOLUTION_KEYS,
+    _warnUnknownProfileOverrides,
+    _resetRuntimeWarningCacheForTests,
+    _warnedConfigKeys,
+    _gitIgnoredCache,
+    RUNTIME_OVERRIDE_TIERS,
+    _setFederatedRegistryForTests,
+    _resetFederatedRegistryForTests,
+};

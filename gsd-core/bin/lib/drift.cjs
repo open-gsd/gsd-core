@@ -1,0 +1,499 @@
+/**
+ * Codebase Drift Detection (#2003)
+ *
+ * Detects structural drift between a committed codebase and the
+ * `.planning/codebase/STRUCTURE.md` map produced by `gsd-codebase-mapper`.
+ *
+ * Six categories of drift element:
+ *   - new_dir    → a newly-added file whose directory prefix does not appear
+ *                  in any generated document
+ *   - barrel     → a newly-added barrel export at
+ *                  (packages|apps)/<name>/src/index.(ts|tsx|js|mjs|cjs)
+ *   - migration  → a newly-added migration file under one of the recognized
+ *                  migration directories (supabase, prisma, drizzle, src/migrations, …)
+ *   - route      → a newly-added route module under a `routes/` or `api/` dir
+ *   - modified   → a modified file whose directory prefix IS mapped
+ *   - deleted    → a deleted file whose directory prefix IS mapped
+ *
+ * Inverse-territory rule (#4886, #5134): an addition is drift OUTSIDE mapped
+ * territory (the map cannot describe what did not exist); a modification or
+ * deletion is drift INSIDE mapped territory (the map describes it and it
+ * changed). A rename is a deletion of the old path plus an addition of the new
+ * path; a copy is an addition of the new path. Mapped territory is any
+ * directory prefix named in ANY provided generated document.
+ *
+ * Each file is counted at most once; when a file matches multiple categories
+ * the most specific category wins
+ * (deleted > modified > migration > route > barrel > new_dir).
+ *
+ * Every path that leaves this module (`affectedPaths`, the `--paths` argument,
+ * message bullets) passes `sanitizePaths` (#4923); dropped paths are reported
+ * as data in `withheldPaths`, never interpolated into the message.
+ *
+ * Design decisions (see PR for full rubber-duck):
+ *   - The library is pure. It takes parsed git diff output and returns a
+ *     structured result. The CLI/workflow layer is responsible for running
+ *     git and for spawning mappers.
+ *   - `last_mapped_commit` is stored as YAML-style frontmatter at the top of
+ *     each `.planning/codebase/*.md` file. This keeps the baseline attached
+ *     to the file, survives git moves, and avoids a sidecar JSON.
+ *   - The detector NEVER throws on malformed input — it returns a
+ *     `{ skipped: true }` result. The phase workflow depends on this
+ *     non-blocking guarantee.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/drift.cjs collapsed to
+ * a TypeScript source of truth. Behaviour is preserved byte-for-behaviour from
+ * the prior hand-written .cjs; only types are added.
+ */
+'use strict';
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+const node_fs_1 = __importDefault(require("node:fs"));
+const shell_command_projection_cjs_1 = require("./shell-command-projection.cjs");
+const runtime_slash_cjs_1 = require("./runtime-slash.cjs");
+const frontmatter_fence_cjs_1 = require("./frontmatter-fence.cjs");
+// ─── Constants ───────────────────────────────────────────────────────────────
+const DRIFT_CATEGORIES = Object.freeze(['new_dir', 'barrel', 'migration', 'route', 'modified', 'deleted']);
+// Category priority when a single file matches multiple rules.
+// Higher index = more specific = wins.
+const CATEGORY_PRIORITY = {
+    new_dir: 0, barrel: 1, route: 2, migration: 3, modified: 4, deleted: 5,
+};
+const BARREL_RE = /^(packages|apps)\/[^/]+\/src\/index\.(ts|tsx|js|mjs|cjs)$/;
+const MIGRATION_RES = [
+    /^supabase\/migrations\/.+\.sql$/,
+    /^prisma\/migrations\/.+/,
+    /^drizzle\/meta\/.+/,
+    /^drizzle\/migrations\/.+/,
+    /^src\/migrations\/.+\.(ts|js|sql)$/,
+    /^db\/migrations\/.+\.(sql|ts|js)$/,
+    /^migrations\/.+\.(sql|ts|js)$/,
+];
+const ROUTE_RES = [
+    /^(apps|packages)\/[^/]+\/src\/routes\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/,
+    /^src\/routes\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/,
+    /^src\/api\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/,
+    /^(apps|packages)\/[^/]+\/src\/api\/.+\.(ts|tsx|js|jsx|mjs|cjs)$/,
+];
+// A conservative allowlist for `--paths` arguments passed to the mapper:
+// repo-relative path components separated by /, containing only
+// alphanumerics, dash, underscore, and dot (no `..`, no `/..`).
+const SAFE_PATH_RE = /^(?!.*\.\.)(?:[A-Za-z0-9_.][A-Za-z0-9_.\-]*)(?:\/[A-Za-z0-9_.][A-Za-z0-9_.\-]*)*$/;
+/**
+ * Classify a single file path into a drift category or null.
+ */
+function classifyFile(file) {
+    if (typeof file !== 'string' || !file)
+        return null;
+    const norm = (0, shell_command_projection_cjs_1.posixNormalize)(file);
+    if (MIGRATION_RES.some((r) => r.test(norm)))
+        return 'migration';
+    if (ROUTE_RES.some((r) => r.test(norm)))
+        return 'route';
+    if (BARREL_RE.test(norm))
+        return 'barrel';
+    return null;
+}
+// Characters that continue a path component: a prefix occurrence directly
+// preceded by one of `BEFORE_CONT` or followed by one of `AFTER_CONT` is a
+// fragment of a longer word or name, not the prefix itself.
+const BEFORE_CONT_RE = /[A-Za-z0-9_.-]/;
+const AFTER_CONT_RE = /[A-Za-z0-9_-]/;
+/**
+ * True iff `needle` occurs in `corpus` at path-component boundaries: the
+ * character before it (or the start) is not a path-component character, and
+ * the character after it (or the end) is not one either. `.` may follow (a
+ * sentence end) but may not precede (`x.src`). Linear scan, no regex built
+ * from `needle`.
+ */
+function occursAtBoundary(corpus, needle) {
+    if (!needle)
+        return false;
+    let from = 0;
+    for (;;) {
+        const at = corpus.indexOf(needle, from);
+        if (at === -1)
+            return false;
+        const end = at + needle.length;
+        const beforeOk = at === 0 || !BEFORE_CONT_RE.test(corpus[at - 1]);
+        const afterOk = end >= corpus.length || !AFTER_CONT_RE.test(corpus[end]);
+        if (beforeOk && afterOk)
+            return true;
+        from = at + 1;
+    }
+}
+/**
+ * True iff any prefix of `file` (dir1, dir1/dir2, …) appears in `corpus` (the
+ * provided generated documents joined) at path-component boundaries. Used to
+ * decide whether a file is in "mapped territory".
+ *
+ * The documents are free-form markdown, not a structured manifest, so the
+ * match is textual — but it is component-aware: `src/lib/` and `` `src/lib` ``
+ * map `src/lib`; the word `library` does not map `lib` and `capital` does not
+ * map `api`. The `name/` and `` `name` `` forms of the top-level directory
+ * fall out of the same boundary rule.
+ */
+function isPathMapped(file, corpus) {
+    const norm = (0, shell_command_projection_cjs_1.posixNormalize)(file);
+    const parts = norm.split('/');
+    // A path with an empty component (`/x`, `a//b`) has no mappable prefix at
+    // that depth; never search for the empty string.
+    for (let i = parts.length - 1; i >= 1; i--) {
+        const prefixParts = parts.slice(0, i);
+        if (prefixParts.some((part) => part === ''))
+            continue;
+        if (occursAtBoundary(corpus, prefixParts.join('/')))
+            return true;
+    }
+    // A single-component path (a root-level file) has no directory prefix; the
+    // documented forms name the component itself as a directory.
+    if (parts.length === 1 && parts[0] !== '') {
+        if (occursAtBoundary(corpus, parts[0] + '/'))
+            return true;
+        if (corpus.includes('`' + parts[0] + '`'))
+            return true;
+    }
+    return false;
+}
+// Characters that would let a path rewrite a terminal or the reader's view of
+// it: C0 controls, DEL, C1 controls, bidi controls, zero-width characters and
+// the line/paragraph separators.
+const DISPLAY_UNSAFE_RE = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060\u2066-\u2069\ufeff]/;
+const DISPLAY_MAX_UNITS = 200;
+/**
+ * Render an attacker-controlled path for a display surface. Display-unsafe
+ * characters become `\uXXXX` (lowercase hex); every other character —
+ * including ordinary non-ASCII — is left alone. A result longer than 200
+ * UTF-16 code units is cut on a code-point (and escape) boundary so that the
+ * result, with its trailing `…`, is exactly 200 code units or fewer.
+ */
+function displaySafePath(p) {
+    const pieces = [];
+    let total = 0;
+    for (const ch of String(p)) {
+        const piece = DISPLAY_UNSAFE_RE.test(ch)
+            ? '\\u' + ch.codePointAt(0).toString(16).padStart(4, '0')
+            : ch;
+        pieces.push(piece);
+        total += piece.length;
+    }
+    if (total <= DISPLAY_MAX_UNITS)
+        return pieces.join('');
+    let out = '';
+    for (const piece of pieces) {
+        if (out.length + piece.length > DISPLAY_MAX_UNITS - 1)
+            break;
+        out += piece;
+    }
+    return out + '…';
+}
+// ─── Main detection ──────────────────────────────────────────────────────────
+/**
+ * Detect codebase drift.
+ */
+function detectDrift(input) {
+    try {
+        if (!input || typeof input !== 'object') {
+            return skipped('invalid-input');
+        }
+        const inp = input;
+        const { addedFiles, modifiedFiles, deletedFiles, documents, } = inp;
+        const threshold = Number.isInteger(inp.threshold) && inp.threshold >= 1
+            ? inp.threshold
+            : 3;
+        const action = inp.action === 'auto-remap' ? 'auto-remap' : 'warn';
+        // STRUCTURE.md is the one required document; the other six only widen the
+        // mapped territory and are ignored when absent or not text.
+        const docs = documents !== null && typeof documents === 'object'
+            ? documents
+            : {};
+        const structureMd = docs['STRUCTURE.md'];
+        if (structureMd === null || structureMd === undefined) {
+            return skipped('missing-structure-md');
+        }
+        if (typeof structureMd !== 'string') {
+            return skipped('invalid-structure-md');
+        }
+        const corpus = Object.values(docs)
+            .filter((doc) => typeof doc === 'string')
+            .join('\n');
+        const added = Array.isArray(addedFiles) ? addedFiles.filter((x) => typeof x === 'string') : [];
+        const modified = Array.isArray(modifiedFiles) ? modifiedFiles : [];
+        const deleted = Array.isArray(deletedFiles) ? deletedFiles : [];
+        // Build elements. One element per file, highest-priority category wins.
+        const elements = [];
+        const seen = new Map();
+        const count = (file, category) => {
+            // Dedup: if we've already counted this path at higher-or-equal priority, skip
+            const prior = seen.get(file);
+            if (prior && CATEGORY_PRIORITY[prior] >= CATEGORY_PRIORITY[category])
+                return;
+            seen.set(file, category);
+        };
+        for (const rawFile of added) {
+            const file = (0, shell_command_projection_cjs_1.posixNormalize)(rawFile);
+            const specific = classifyFile(file);
+            let category = specific;
+            if (!category) {
+                if (!isPathMapped(file, corpus)) {
+                    category = 'new_dir';
+                }
+                else {
+                    continue; // mapped, known, ordinary file — not drift
+                }
+            }
+            count(file, category);
+        }
+        // Inverse territory: an edit is drift only where the map describes the file.
+        for (const [rawFiles, category] of [[modified, 'modified'], [deleted, 'deleted']]) {
+            for (const rawFile of rawFiles) {
+                if (typeof rawFile !== 'string')
+                    continue;
+                const file = (0, shell_command_projection_cjs_1.posixNormalize)(rawFile);
+                if (file && isPathMapped(file, corpus))
+                    count(file, category);
+            }
+        }
+        for (const [file, category] of seen.entries()) {
+            elements.push({ category, path: file });
+        }
+        // Sort for stable output.
+        elements.sort((a, b) => a.category === b.category
+            ? a.path.localeCompare(b.path)
+            : a.category.localeCompare(b.category));
+        const actionRequired = elements.length >= threshold;
+        let directive = 'none';
+        let spawnMapper = false;
+        let affectedPaths = [];
+        let withheldPaths = [];
+        let message = '';
+        if (actionRequired) {
+            directive = action;
+            // The one egress seam (#4923): `affectedPaths` is the only path list
+            // that reaches the result, the auto-remap line and `--paths`.
+            const elementPaths = elements.map((e) => e.path);
+            const chosen = chooseAffectedPaths(elementPaths);
+            affectedPaths = sanitizePaths(chosen);
+            const kept = new Set([...sanitizePaths(elementPaths), ...affectedPaths]);
+            withheldPaths = [...new Set([...elementPaths, ...chosen].filter((p) => !kept.has(p)))].sort();
+            // An empty `--paths` would remap the whole repo (#3418).
+            spawnMapper = action === 'auto-remap' && affectedPaths.length > 0;
+            message = buildMessage(elements, affectedPaths, withheldPaths.length, action, inp.runtime);
+        }
+        return {
+            skipped: false,
+            elements,
+            actionRequired,
+            directive,
+            spawnMapper,
+            affectedPaths,
+            withheldPaths,
+            threshold,
+            action,
+            message,
+            counts: {
+                added: added.length,
+                modified: modified.length,
+                deleted: deleted.length,
+            },
+        };
+    }
+    catch (err) {
+        // Non-blocking: never throw from this function.
+        const errMsg = err?.message ? err.message : String(err);
+        return skipped('exception:' + errMsg);
+    }
+}
+function skipped(reason) {
+    return {
+        skipped: true,
+        reason,
+        elements: [],
+        actionRequired: false,
+        directive: 'none',
+        spawnMapper: false,
+        affectedPaths: [],
+        withheldPaths: [],
+        message: '',
+    };
+}
+function buildMessage(elements, affectedPaths, withheldCount, action, runtime) {
+    const byCat = {};
+    const listable = new Set(sanitizePaths(elements.map((e) => e.path)));
+    for (const e of elements) {
+        if (!listable.has(e.path))
+            continue;
+        if (!byCat[e.category])
+            byCat[e.category] = [];
+        byCat[e.category].push(e.path);
+    }
+    const lines = [
+        `Codebase drift detected: ${elements.length} structural element(s) since last mapping.`,
+        '',
+    ];
+    const labels = {
+        new_dir: 'New directories',
+        barrel: 'New barrel exports',
+        migration: 'New migrations',
+        route: 'New route modules',
+        modified: 'Modified files in mapped directories',
+        deleted: 'Deleted files in mapped directories',
+    };
+    for (const cat of DRIFT_CATEGORIES) {
+        if (byCat[cat]) {
+            lines.push(`${labels[cat]}:`);
+            for (const p of byCat[cat])
+                lines.push(`  - ${p}`);
+        }
+    }
+    lines.push('');
+    // Dropped paths are counted, never named: the names are data in `withheldPaths`.
+    if (withheldCount > 0) {
+        lines.push(`${withheldCount} path(s) withheld: not passed to the mapper or listed (absolute, traversal, whitespace, non-ASCII or shell-metacharacter characters)`);
+    }
+    // Nothing safe to scope a refresh to (empty `affectedPaths`): an empty
+    // `--paths` would remap the whole repo (#3418), so no command line is emitted.
+    if (affectedPaths.length > 0 && action === 'auto-remap') {
+        lines.push(`Auto-remap scheduled for paths: ${affectedPaths.join(', ')}`);
+    }
+    else if (affectedPaths.length > 0) {
+        // drift.cts is a pure library — it must never read env/config. The
+        // caller (gate-codebase-drift.cts) resolves the runtime once and
+        // passes it in via input.runtime so emitted commands match the project
+        // the caller is targeting, not the current process directory.
+        const mapCmd = (0, runtime_slash_cjs_1.formatGsdSlash)('map-codebase', runtime || 'claude');
+        lines.push(`Run ${String(mapCmd)} --paths ${affectedPaths.join(',')} to refresh planning context.`);
+    }
+    return lines.join('\n');
+}
+// ─── Affected paths ──────────────────────────────────────────────────────────
+/**
+ * Collapse a list of drifted file paths into a sorted, deduplicated list of
+ * the top-level directory prefixes (depth 2 when the repo uses an
+ * `<apps|packages>/<name>/…` layout; depth 1 otherwise).
+ */
+function chooseAffectedPaths(paths) {
+    const out = new Set();
+    for (const raw of paths || []) {
+        if (typeof raw !== 'string' || !raw)
+            continue;
+        const file = (0, shell_command_projection_cjs_1.posixNormalize)(raw);
+        const parts = file.split('/');
+        if (parts.length === 0)
+            continue;
+        const top = parts[0];
+        if (!top)
+            continue; // an empty first component (`/x`) names no directory
+        if ((top === 'apps' || top === 'packages') && parts.length >= 2) {
+            out.add(`${top}/${parts[1]}`);
+        }
+        else {
+            out.add(top);
+        }
+    }
+    return [...out].sort();
+}
+/**
+ * Filter `paths` to only those that are safe to splice into a mapper prompt.
+ * Any path that is absolute, contains traversal, or includes shell
+ * metacharacters is dropped.
+ */
+function sanitizePaths(paths) {
+    if (!Array.isArray(paths))
+        return [];
+    const out = [];
+    for (const p of paths) {
+        if (typeof p !== 'string')
+            continue;
+        if (p.startsWith('/'))
+            continue;
+        if (!SAFE_PATH_RE.test(p))
+            continue;
+        // A `.` component would make `--paths .` (the whole repo) producible (#3418).
+        if (p.split('/').some((component) => component === '.'))
+            continue;
+        out.push(p);
+    }
+    return out;
+}
+/**
+ * The block is the one the one fence owner finds (`locateFrontmatterFence`); `body` is
+ * everything after the closing fence line and its line ending.
+ */
+function parseFrontmatter(content) {
+    if (typeof content !== 'string')
+        return { data: {}, body: '' };
+    const fence = (0, frontmatter_fence_cjs_1.locateFrontmatterFence)(content);
+    if (!fence?.closed)
+        return { data: {}, body: content };
+    const data = {};
+    for (const line of content.slice(fence.openEnd, fence.bodyEnd).split(/\r?\n/)) {
+        const kv = line.match(/^([A-Za-z0-9_][A-Za-z0-9_-]*):\s*(.*)$/);
+        if (!kv)
+            continue;
+        data[kv[1]] = kv[2];
+    }
+    return { data, body: content.slice(fence.closingFenceEnd).replace(/^\r?\n/, '') };
+}
+function serializeFrontmatter(data, body) {
+    const keys = Object.keys(data);
+    if (keys.length === 0)
+        return body;
+    const lines = ['---'];
+    for (const k of keys)
+        lines.push(`${k}: ${data[k]}`);
+    lines.push('---');
+    return lines.join('\n') + '\n' + body;
+}
+/**
+ * Read `last_mapped_commit` from the frontmatter of a `.planning/codebase/*.md`
+ * file. Returns null if the file does not exist or has no frontmatter.
+ */
+function readMappedCommit(filePath) {
+    let content;
+    try {
+        content = node_fs_1.default.readFileSync(filePath, 'utf8');
+    }
+    catch {
+        return null;
+    }
+    const { data } = parseFrontmatter(content);
+    const sha = data['last_mapped_commit'];
+    return typeof sha === 'string' && sha.length > 0 ? sha : null;
+}
+/**
+ * Upsert `last_mapped_commit` and `last_mapped_at` into the frontmatter of
+ * the given file, preserving any other frontmatter keys and the body.
+ */
+function writeMappedCommit(filePath, commitSha, isoDate) {
+    // Symmetric with readMappedCommit (which returns null on missing files):
+    // tolerate a missing target by creating a minimal frontmatter-only file
+    // rather than throwing ENOENT. This matters when a mapper produces a new
+    // doc and the caller stamps it before any prior content existed.
+    let content = '';
+    try {
+        content = node_fs_1.default.readFileSync(filePath, 'utf8');
+    }
+    catch (err) {
+        if (err.code !== 'ENOENT')
+            throw err;
+    }
+    const { data, body } = parseFrontmatter(content);
+    data['last_mapped_commit'] = commitSha;
+    if (isoDate)
+        data['last_mapped_at'] = isoDate;
+    (0, shell_command_projection_cjs_1.platformWriteSync)(filePath, serializeFrontmatter(data, body));
+}
+module.exports = {
+    DRIFT_CATEGORIES,
+    classifyFile,
+    detectDrift,
+    chooseAffectedPaths,
+    sanitizePaths,
+    displaySafePath,
+    readMappedCommit,
+    writeMappedCommit,
+    // Exposed for the CLI layer to reuse the same parser.
+    parseFrontmatter,
+};

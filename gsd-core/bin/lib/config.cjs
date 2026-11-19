@@ -1,0 +1,1693 @@
+"use strict";
+/**
+ * Config — Planning config CRUD operations
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/config.cjs collapsed
+ * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only strict types are added.
+ */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+const node_os_1 = __importDefault(require("node:os"));
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const io = require("./io.cjs");
+const { output, error, ERROR_REASON } = io;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const cliExitMod = require("./cli-exit.cjs");
+const { ExitError } = cliExitMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const configLoader = require("./config-loader.cjs");
+const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
+const shell_command_projection_cjs_1 = require("./shell-command-projection.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const planningWorkspace = require("./planning-workspace.cjs");
+const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const modelProfiles = require("./model-profiles.cjs");
+const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const configSchema = require("./config-schema.cjs");
+const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
+const secrets_cjs_1 = require("./secrets.cjs");
+const review_reviewer_selection_cjs_1 = require("./review-reviewer-selection.cjs");
+const configuration_cjs_1 = require("./configuration.cjs");
+// #3760: the ADR-1411 out-of-band diagnostic. It lives here rather than inside
+// `migrateOnDisk` because `configuration.cjs` must stay loadable from an install
+// layout holding only itself plus its manifests (#3571) — see the note at the top
+// of configuration.cts.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const unusableInputModule = require("./unusable-input.cjs");
+const { UNUSABLE_REASON, warnUnusableInput } = unusableInputModule;
+// ─── Constants ────────────────────────────────────────────────────────────────
+const CONFIG_KEY_SUGGESTIONS = {
+    'workflow.nyquist_validation_enabled': 'workflow.nyquist_validation',
+    'agents.nyquist_validation_enabled': 'workflow.nyquist_validation',
+    'nyquist.validation_enabled': 'workflow.nyquist_validation',
+    'hooks.research_questions': 'workflow.research_before_questions',
+    'workflow.research_questions': 'workflow.research_before_questions',
+    'workflow.codereview': 'workflow.code_review',
+    'workflow.review_command': 'workflow.code_review_command',
+    'workflow.review': 'workflow.code_review',
+    'workflow.code_review_level': 'workflow.code_review_depth',
+    'workflow.review_depth': 'workflow.code_review_depth',
+    'review.model': 'review.models.<cli-name>',
+    'sub_repos': 'planning.sub_repos',
+    'plan_checker': 'workflow.plan_check',
+};
+const SHIP_PR_BODY_SECTION_KEYS = new Set(['heading', 'enabled', 'source', 'fallback', 'template']);
+const SHIP_PR_BODY_TEMPLATE_TOKENS = new Set([
+    'phase_number',
+    'phase_name',
+    'phase_dir',
+    'base_branch',
+    'padded_phase',
+]);
+const SHIP_PR_BODY_SOURCE_RE = /^(ROADMAP|PLAN|SUMMARY|VERIFICATION|STATE|REQUIREMENTS|CONTEXT)\.md\s+##\s+[^\r\n#][^\r\n]*$/;
+/** Allowed values of `git.repo_tagging` (#5706): `single` is the default. */
+const VALID_REPO_TAGGING_MODES = Object.freeze(['single', 'per_repo']);
+// ADR-612 PR-5: configuration accepts every convention the runtime can read.
+// Keep this distinct from roadmap-upgrade's supported target set: sequential
+// is valid project configuration but is not a migration destination.
+const VALID_PHASE_ID_CONVENTIONS = Object.freeze([
+    'sequential',
+    'milestone-prefixed',
+    'bracket',
+]);
+/**
+ * Schema-level defaults for well-known config keys.
+ * When a key is absent from config.json and no --default flag was supplied,
+ * cmdConfigGet checks here before emitting "Key not found".
+ */
+const SCHEMA_DEFAULTS = {
+    'context_window': 200000,
+    'executor.stall_detect_interval_minutes': 5,
+    'executor.stall_threshold_minutes': 10,
+    'planner.stall_detection_enabled': CONFIG_DEFAULTS.planner_stall_detection_enabled,
+    'planner.stall_detect_interval_minutes': 5,
+    'planner.stall_threshold_minutes': 10,
+    'git.create_tag': true,
+    // #5706 (epic #3628): per-repository milestone tagging mode. `single` is
+    // exactly the pre-existing behavior; `per_repo` is opt-in.
+    'git.repo_tagging': 'single',
+    // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
+    // without an agent_hint field, so existing dispatch is byte-identical.
+    'workflow.agent_hint_routing': true,
+    // #6302 (ADR-3711 D1): the opt-in gate for dispatching a plan to a foreign executor; off unless set.
+    'workflow.cross_runtime_execution': false,
+    // #4401: Compact Content mode gate — derived from the defaults manifest via
+    // CONFIG_DEFAULTS (added in config-loader.cts) so the manifest stays the
+    // single source of truth, matching workflow.smart_zone_tokens /
+    // planning.pr_strict / workflow.inline_plan_threshold below.
+    'workflow.compact_content': CONFIG_DEFAULTS.compact_content,
+    // Derived from the defaults manifest rather than restated, so the manifest
+    // stays the single source of truth for the smart-zone budget (#2630).
+    'workflow.smart_zone_tokens': CONFIG_DEFAULTS.smart_zone_tokens,
+    // #2971: /gsd:pr-branch reads this key directly; an absent key must resolve to the
+    // manifest default rather than "Key not found". Derived from the defaults manifest so
+    // the manifest stays the single source of truth.
+    'planning.pr_strict': CONFIG_DEFAULTS.pr_strict,
+    // #3801: execute-plan reads this key on every run; an absent key must resolve
+    // to the manifest default (2) rather than "Key not Found" — previously the
+    // effective default existed only as the workflow's shell fallback and the
+    // docs disagreed (settings-advanced said 3). Manifest stays the one owner.
+    'workflow.inline_plan_threshold': CONFIG_DEFAULTS.inline_plan_threshold,
+    // #4285 review: an absent threshold resolved to "Key not found" while the
+    // hook silently used 35/25 — the query surface disagreeing with the reader.
+    //
+    // Restated here rather than derived: `CONFIG_DEFAULTS` is re-exported with a
+    // FLATTENED shape that drops the manifest's nested blocks, so
+    // `CONFIG_DEFAULTS.hooks` is undefined at runtime and the manifest cannot
+    // feed these two rows the way `workflow.smart_zone_tokens` above is fed.
+    //
+    // Not added to `buildNewProjectConfig` either, and that one is deliberate
+    // rather than incidental: it writes a `hooks` object into every NEW project's
+    // config.json, which would freeze today's fire-points as an explicit
+    // per-project override everywhere — the opposite of this PR's premise that an
+    // absent key tracks the shipped default. (The manifest alone would NOT have
+    // that effect; `buildNewProjectConfig` builds its own literal. Correcting an
+    // earlier version of this comment that ran the two together.)
+    //
+    // That leaves ONE copy of 35/25 outside the hook — these two rows — and
+    // `tests/config.test.cjs` pins them against the hook's exported
+    // WARNING_THRESHOLD/CRITICAL_THRESHOLD so the copies cannot drift.
+    'hooks.context_warning_threshold': 35,
+    'hooks.context_critical_threshold': 25,
+    // #4974: gates.* confirmation toggles — an absent key must resolve to the
+    // documented default (true) rather than "Key not found", matching
+    // config-defaults.manifest.json's `gates` block. Literal here (like
+    // git.create_tag above) rather than derived from config-loader.cjs's flat
+    // CONFIG_DEFAULTS: that flat projection is enumerated 1:1 against
+    // gsd-core/references/planning-config.md by
+    // tests/config-field-docs.test.cjs, and these 3 keys are internal workflow
+    // wiring, not part of that public flat-key surface. Only the 3 keys
+    // actually read by workflow conditions are registered — see
+    // gsd-core/bin/shared/config-schema.manifest.json.
+    'gates.execute_next_plan': true,
+    'gates.confirm_transition': true,
+    'gates.confirm_milestone_scope': true,
+};
+/**
+ * Resolve a schema-level default for an absent key (#2256). Checks the legacy
+ * hardcoded SCHEMA_DEFAULTS first, then the capability-registry configSchema
+ * default — the same registry default the runtime's capability-activation
+ * resolver (resolveConfigKey Level 4, capability-activation.cts) already honors,
+ * so `query config-get` can no longer disagree with the runtime about an absent
+ * key's effective value.
+ */
+function resolveSchemaDefault(cwd, kp) {
+    if (Object.prototype.hasOwnProperty.call(SCHEMA_DEFAULTS, kp)) {
+        return { found: true, value: SCHEMA_DEFAULTS[kp] };
+    }
+    const capSchema = getCapabilityConfigSchema(cwd);
+    if (capSchema && typeof capSchema === 'object'
+        && Object.prototype.hasOwnProperty.call(capSchema, kp)) {
+        const entry = capSchema[kp];
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+            const def = entry['default'];
+            if (def !== undefined)
+                return { found: true, value: def };
+        }
+    }
+    return { found: false, value: undefined };
+}
+/**
+ * A decimal number literal as a person types it: optional sign, digits with an optional
+ * fraction (`5`, `5.`, `.5`, `5.0`, `007`), optional exponent. No surrounding whitespace and
+ * no `0x`/`0b`/`0o` prefix, so `' '`, `' 5'` and `'0x10'` stay strings (#6029, owner ruling
+ * 2026-11-08). `Number()` alone accepted all three.
+ */
+const DECIMAL_LITERAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+/**
+ * #6029 (ADR-1411 Decision 3): the single argv value parser at the config CLI
+ * boundary, shared by `config-set` and `config-get --default`. Type-directed
+ * only: per-key setter policy (project_code verbatim, validators) and the
+ * setter's `null` = unset action (#2046) stay in cmdConfigSet. The numeric
+ * branch is the DECIMAL_LITERAL rule above (the one deliberate change from the
+ * pre-#6029 setter parser).
+ */
+function parseConfigArgValue(val) {
+    if (val === 'true')
+        return true;
+    if (val === 'false')
+        return false;
+    if (val === 'null')
+        return null;
+    // #1581: Number.isFinite (not !isNaN) so 'Infinity' and an overflowing literal such as
+    // '1e400' are NOT coerced to non-finite numbers that JSON.stringify later renders as
+    // `null` (disk=null while the CLI echoed 'Infinity'). They stay strings, and in
+    // config-set the per-key validators then reject them with a non-zero exit.
+    if (DECIMAL_LITERAL.test(val) && Number.isFinite(Number(val)))
+        return Number(val);
+    if (val.startsWith('[') || val.startsWith('{')) {
+        try {
+            return JSON.parse(val);
+        }
+        catch { /* keep as string */ }
+    }
+    return val;
+}
+/**
+ * #6029 (ADR-1411 Decisions 3-4): the single emission projection for every
+ * `cmdConfigGet` arm. Order: the #4570 planner-watchdog resolver, then secret
+ * masking (the encoder never sees plaintext; getCapabilityConfigSchema is a
+ * federated, third-party-extensible surface (ADR-1244), so centralizing the
+ * masking here means it cannot be missed at a call site), then encoding.
+ * `json` is what JSON mode emits; `text` is what `--raw` emits. Raw is frozen:
+ * it is `sourceText` (the verbatim argv of `--default`) when the value reached
+ * here untransformed, else `String(value)`.
+ */
+function encodeConfigValue(kp, value, sourceText) {
+    const resolved = kp === 'planner.stall_detection_enabled'
+        ? resolvePlannerStallDetectionEnabled(value)
+        : value;
+    if ((0, secrets_cjs_1.isSecretKey)(kp)) {
+        const masked = (0, secrets_cjs_1.maskSecret)(resolved);
+        return { json: masked, text: masked };
+    }
+    const transformed = resolved !== value;
+    const text = sourceText !== undefined && !transformed ? sourceText : String(resolved);
+    return { json: resolved, text };
+}
+function emitConfigValue(kp, value, raw, sourceText) {
+    const { json, text } = encodeConfigValue(kp, value, sourceText);
+    output(json, raw, text);
+}
+// ─── Validation helpers ───────────────────────────────────────────────────────
+function validateKnownConfigKeyPath(keyPath) {
+    const suggested = CONFIG_KEY_SUGGESTIONS[keyPath];
+    if (suggested) {
+        error(`Unknown config key: ${keyPath}. Did you mean ${suggested}?`, ERROR_REASON.CONFIG_INVALID_KEY);
+    }
+}
+/**
+ * The key gate `config-set` and `config-new-project` share (#5268): a known
+ * misspelling gets its suggestion, and anything else outside the schema is
+ * refused with the valid-key list. One function, so the two verbs cannot
+ * disagree about which keys they accept or about the error text.
+ */
+function assertKnownConfigKey(cwd, kp) {
+    validateKnownConfigKeyPath(kp);
+    if (!isValidConfigKey(kp, cwd)) {
+        error(`Unknown config key: "${kp}". Valid keys: ${[...VALID_CONFIG_KEYS].sort().join(', ')}, agent_skills.<agent-type>, features.<feature_name>, phase_commit_docs.<phase-id>`, ERROR_REASON.CONFIG_INVALID_KEY);
+    }
+}
+/**
+ * Is `value` an acceptable `git.protected_branches` list (#3552)?
+ *
+ * A non-empty array whose every element is a string with non-whitespace
+ * content. Exported so a property test can pin this predicate against the
+ * resolver's own per-entry filter in `git-base-branch.cts` — `config-set` must
+ * only accept lists the resolver will honour in full, with nothing rejected.
+ * The two are deliberately different shapes (all-or-nothing here, per-entry
+ * there, because a direct file edit bypasses this check), so nothing keeps them
+ * agreeing except a test that asks both.
+ */
+function isValidProtectedBranches(value) {
+    if (!Array.isArray(value) || value.length === 0)
+        return false;
+    const entries = value;
+    // Index, do NOT use `.every()`. `.every()` SKIPS holes, so a sparse array
+    // (`["main", , "develop"]`) passed this check while the resolver's `for...of`
+    // — which yields `undefined` for a hole — rejected that element. The two
+    // surfaces then disagreed about the same value. JSON cannot express a hole,
+    // so neither surface meets one in production, but "unreachable" is not a
+    // reason to leave two definitions of the same predicate contradicting each
+    // other (round-4 external review).
+    for (let i = 0; i < entries.length; i += 1) {
+        const branch = entries[i];
+        if (typeof branch !== 'string' || branch.trim().length === 0)
+            return false;
+    }
+    return true;
+}
+function validateShipPrBodySections(value) {
+    if (!Array.isArray(value)) {
+        error('Invalid ship.pr_body_sections value. Expected a JSON array of section objects.');
+    }
+    value.forEach((section, index) => {
+        const prefix = `Invalid ship.pr_body_sections[${index}]`;
+        if (!section || typeof section !== 'object' || Array.isArray(section)) {
+            error(`${prefix}. Expected an object.`);
+        }
+        const sectionObj = section;
+        const unknownKeys = Object.keys(sectionObj).filter((key) => !SHIP_PR_BODY_SECTION_KEYS.has(key));
+        if (unknownKeys.length > 0) {
+            error(`${prefix}. Unknown field(s): ${unknownKeys.join(', ')}.`);
+        }
+        if (typeof sectionObj['heading'] !== 'string' || sectionObj['heading'].trim() === '') {
+            error(`${prefix}. heading must be a non-empty string.`);
+        }
+        if (/[\r\n]/.test(sectionObj['heading'])) {
+            error(`${prefix}. heading must be a single line.`);
+        }
+        if ('enabled' in sectionObj && typeof sectionObj['enabled'] !== 'boolean') {
+            error(`${prefix}. enabled must be true or false.`);
+        }
+        for (const field of ['source', 'fallback', 'template']) {
+            if (field in sectionObj && typeof sectionObj[field] !== 'string') {
+                error(`${prefix}. ${field} must be a string.`);
+            }
+        }
+        const hasContent = ['source', 'fallback', 'template'].some((field) => {
+            const v = sectionObj[field];
+            return typeof v === 'string' && v.trim() !== '';
+        });
+        if (!hasContent) {
+            error(`${prefix}. Provide at least one of source, fallback, or template.`);
+        }
+        if (typeof sectionObj['source'] === 'string' && sectionObj['source'].trim() !== '') {
+            const selectors = sectionObj['source'].split('||').map((selector) => selector.trim()).filter(Boolean);
+            if (selectors.length === 0 || selectors.some((selector) => !SHIP_PR_BODY_SOURCE_RE.test(selector))) {
+                error(`${prefix}. source must use selectors like "PLAN.md ## Risks", separated with "||".`);
+            }
+        }
+        if (typeof sectionObj['template'] === 'string') {
+            const tokens = sectionObj['template'].matchAll(/\{([a-zA-Z][a-zA-Z0-9_]*)\}/g);
+            for (const match of tokens) {
+                if (!SHIP_PR_BODY_TEMPLATE_TOKENS.has(match[1])) {
+                    error(`${prefix}. Unsupported template token: {${match[1]}}.`);
+                }
+            }
+        }
+    });
+}
+/**
+ * Plan a fully-materialized config object for a new project. Writes nothing:
+ * the user defaults rewrite comes back as data, for the caller to persist once
+ * it has decided to write at all (#5268: a `--dry-run` never does, and a
+ * refused build never gets that far).
+ *
+ * Merges (increasing priority):
+ *   1. Hardcoded defaults — every key that loadConfig() resolves, plus mode/granularity
+ *   2. User-level defaults from $GSD_HOME/.gsd/defaults.json (if present;
+ *      GSD_HOME defaults to the home directory, as in the config loader)
+ *   3. userChoices — the settings the user explicitly selected during /gsd:new-project
+ *
+ * Uses the canonical `git` namespace for branching keys (consistent with VALID_CONFIG_KEYS
+ * and the settings workflow). loadConfig() handles both flat and nested formats, so this
+ * is backward-compatible with existing projects that have flat keys.
+ */
+function planNewProjectConfig(userChoices) {
+    const choices = userChoices || {};
+    let defaultsRewrite = null;
+    // #4976: the GSD-owned store resolves exactly as the config loader resolves
+    // it (`GSD_HOME || homedir()`), so the defaults.json seeding this project is
+    // the one the loader and its #3532 shadow warning read in the same run.
+    const gsdHome = process.env['GSD_HOME'] || node_os_1.default.homedir();
+    // Detect API key availability
+    const braveKeyFile = node_path_1.default.join(gsdHome, '.gsd', 'brave_api_key');
+    const hasBraveSearch = !!(process.env['BRAVE_API_KEY'] || node_fs_1.default.existsSync(braveKeyFile));
+    const firecrawlKeyFile = node_path_1.default.join(gsdHome, '.gsd', 'firecrawl_api_key');
+    const hasFirecrawl = !!(process.env['FIRECRAWL_API_KEY'] || node_fs_1.default.existsSync(firecrawlKeyFile));
+    const exaKeyFile = node_path_1.default.join(gsdHome, '.gsd', 'exa_api_key');
+    const hasExaSearch = !!(process.env['EXA_API_KEY'] || node_fs_1.default.existsSync(exaKeyFile));
+    const tavilyKeyFile = node_path_1.default.join(gsdHome, '.gsd', 'tavily_api_key');
+    const hasTavilySearch = !!(process.env['TAVILY_API_KEY'] || node_fs_1.default.existsSync(tavilyKeyFile));
+    const refKeyFile = node_path_1.default.join(gsdHome, '.gsd', 'ref_api_key');
+    const hasRefSearch = !!(process.env['REF_API_KEY'] || node_fs_1.default.existsSync(refKeyFile));
+    const perplexityKeyFile = node_path_1.default.join(gsdHome, '.gsd', 'perplexity_api_key');
+    const hasPerplexity = !!(process.env['PERPLEXITY_API_KEY'] || node_fs_1.default.existsSync(perplexityKeyFile));
+    const jinaKeyFile = node_path_1.default.join(gsdHome, '.gsd', 'jina_api_key');
+    const hasJina = !!(process.env['JINA_API_KEY'] || node_fs_1.default.existsSync(jinaKeyFile));
+    // Load user-level defaults from $GSD_HOME/.gsd/defaults.json if available
+    const globalDefaultsPath = node_path_1.default.join(gsdHome, '.gsd', 'defaults.json');
+    let userDefaults = {};
+    try {
+        if (node_fs_1.default.existsSync(globalDefaultsPath)) {
+            userDefaults = JSON.parse(node_fs_1.default.readFileSync(globalDefaultsPath, 'utf-8'));
+            // Migrate deprecated "depth" key to "granularity"
+            if ('depth' in userDefaults && !('granularity' in userDefaults)) {
+                const depthToGranularity = { quick: 'coarse', standard: 'standard', comprehensive: 'fine' };
+                userDefaults['granularity'] = depthToGranularity[userDefaults['depth']] || userDefaults['depth'];
+                delete userDefaults['depth'];
+                // The migrated value is used for this build whether or not the
+                // rewrite is ever persisted.
+                defaultsRewrite = { path: globalDefaultsPath, contents: JSON.stringify(userDefaults, null, 2) };
+            }
+        }
+    }
+    catch {
+        // Ignore malformed global defaults
+    }
+    const hardcoded = {
+        model_profile: CONFIG_DEFAULTS.model_profile,
+        commit_docs: CONFIG_DEFAULTS.commit_docs,
+        parallelization: CONFIG_DEFAULTS.parallelization,
+        search_gitignored: CONFIG_DEFAULTS.search_gitignored,
+        brave_search: hasBraveSearch,
+        firecrawl: hasFirecrawl,
+        exa_search: hasExaSearch,
+        tavily_search: hasTavilySearch,
+        ref_search: hasRefSearch,
+        perplexity: hasPerplexity,
+        jina: hasJina,
+        git: {
+            branching_strategy: CONFIG_DEFAULTS.branching_strategy,
+            create_tag: true,
+            repo_tagging: 'single',
+            phase_branch_template: CONFIG_DEFAULTS.phase_branch_template,
+            milestone_branch_template: CONFIG_DEFAULTS.milestone_branch_template,
+            quick_branch_template: CONFIG_DEFAULTS.quick_branch_template,
+        },
+        workflow: {
+            research: true,
+            plan_check: true,
+            verifier: true,
+            nyquist_validation: true,
+            auto_advance: false,
+            node_repair: true,
+            node_repair_budget: 2,
+            ui_phase: true,
+            ui_safety_gate: true,
+            ai_integration_phase: true,
+            api_coverage_gate: true,
+            human_verify_mode: 'end-of-phase',
+            context_guard_mode: 'warn',
+            text_mode: false,
+            compact_content: false,
+            agent_hint_routing: true, // #6211: parity with the defaults manifest is tested
+            research_before_questions: false,
+            discuss_mode: 'discuss',
+            skip_discuss: false,
+            code_review: true,
+            code_review_depth: 'standard',
+            code_review_command: null,
+            pattern_mapper: true,
+            plan_bounce: false,
+            plan_bounce_script: null,
+            plan_bounce_passes: 2,
+            auto_prune_state: false,
+            post_planning_gaps: CONFIG_DEFAULTS.post_planning_gaps,
+            security_enforcement: CONFIG_DEFAULTS.security_enforcement,
+            security_asvs_level: CONFIG_DEFAULTS.security_asvs_level,
+            security_block_on: CONFIG_DEFAULTS.security_block_on,
+        },
+        ship: {
+            pr_body_sections: [],
+        },
+        hooks: {
+            context_warnings: true,
+        },
+        project_code: null,
+        phase_naming: 'sequential',
+        agent_skills: {},
+        claude_md_path: './.claude/CLAUDE.md',
+        plan_review: {
+            source_grounding: true,
+            source_grounding_authority: 'grep',
+        },
+    };
+    const ud = userDefaults;
+    const ch = choices;
+    const hd = hardcoded;
+    // #2840: `runtime` is host-specific (written by the installer for whichever
+    // runtime's install ran last). On a machine with 2+ runtimes, it poisons every
+    // new project config — e.g. a Codex install's `runtime:"codex"` leaks into
+    // Claude Code projects, resolving agents to wrong model IDs. `resolve_model_ids`
+    // already has a per-install guard (#2297); `runtime` gets the same treatment
+    // by excluding it from the defaults spread. Projects detect the runtime from
+    // the install path / .gsd-runtime marker, not from a copied config key.
+    const safeDefaults = { ...userDefaults };
+    delete safeDefaults['runtime'];
+    // Three-level deep merge: hardcoded <- userDefaults <- choices
+    const config = {
+        ...hardcoded,
+        ...safeDefaults,
+        ...choices,
+        git: {
+            ...hd['git'],
+            ...(ud['git'] || {}),
+            ...(ch['git'] || {}),
+        },
+        workflow: {
+            ...hd['workflow'],
+            ...(ud['workflow'] || {}),
+            ...(ch['workflow'] || {}),
+        },
+        ship: {
+            ...hd['ship'],
+            ...(ud['ship'] || {}),
+            ...(ch['ship'] || {}),
+        },
+        hooks: {
+            ...hd['hooks'],
+            ...(ud['hooks'] || {}),
+            ...(ch['hooks'] || {}),
+        },
+        agent_skills: {
+            ...hd['agent_skills'],
+            ...(ud['agent_skills'] || {}),
+            ...(ch['agent_skills'] || {}),
+        },
+        plan_review: {
+            ...hd['plan_review'],
+            ...(ud['plan_review'] || {}),
+            ...(ch['plan_review'] || {}),
+        },
+    };
+    validateShipPrBodySections(config['ship']['pr_body_sections']);
+    return { config, defaultsRewrite };
+}
+/** Persist a plan's user defaults rewrite, best-effort as it always was. */
+function persistDefaultsRewrite(plan) {
+    if (plan.defaultsRewrite === null)
+        return;
+    try {
+        (0, shell_command_projection_cjs_1.platformWriteSync)(plan.defaultsRewrite.path, plan.defaultsRewrite.contents);
+    }
+    catch { /* intentionally empty */ }
+}
+/**
+ * Build a new project's config and persist the user defaults rewrite its plan
+ * carries. For callers that write the config unconditionally; one that may not
+ * (a `--dry-run`) plans with `planNewProjectConfig` and persists only on write.
+ */
+function buildNewProjectConfig(userChoices) {
+    const plan = planNewProjectConfig(userChoices);
+    persistDefaultsRewrite(plan);
+    return plan.config;
+}
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+/**
+ * Does any schema key live under `keyPath`? True for a section (`workflow`),
+ * for the top level of a dynamic key family (`agent_skills`, whose keys are
+ * `agent_skills.<agent-type>`), and for the settings that are also parents
+ * (`review.max_prompt_tokens_per_reviewer` and its per-reviewer keys;
+ * `agent_tools`, a setting whose entries are the `agent_tools.<selector>`
+ * family).
+ */
+function hasChildConfigKeys(cwd, keyPath) {
+    const childPrefix = `${keyPath}.`;
+    for (const known of VALID_CONFIG_KEYS) {
+        if (known.startsWith(childPrefix))
+            return true;
+    }
+    if (DYNAMIC_KEY_PATTERNS.some((family) => family['topLevel'] === keyPath))
+        return true;
+    return Object.keys(getCapabilityConfigSchema(cwd)).some((known) => known.startsWith(childPrefix));
+}
+/**
+ * Is `keyPath` a section a choice may nest settings under? The same test as
+ * `hasChildConfigKeys`. A dynamic family's deeper levels
+ * (`model_profile_overrides.<runtime>`) are not recognised; an empty object
+ * there is refused as an unknown key, and it would set nothing anyway.
+ */
+function isConfigSection(cwd, keyPath) {
+    return hasChildConfigKeys(cwd, keyPath);
+}
+/**
+ * Hold `config-new-project` choices to the rules `config-set` applies (#5268).
+ *
+ * Choices arrive nested (`{"workflow":{"research":true}}`) while the schema
+ * and `config-set` address dotted leaf paths (`workflow.research`), so the
+ * walk descends through section objects and checks each leaf under its dotted
+ * path: the key through `assertKnownConfigKey`, the value through
+ * `validateConfigValue`. An object whose own path is a settable key with
+ * nothing under it (`model_overrides.<agent>`) is a leaf, as it is for
+ * `config-set`.
+ *
+ * Returns the checked choices as a new object and leaves `choices` as given:
+ * each value is the one `config-set` would persist (a normalizing rule's
+ * result where one applies). An empty object is a section with nothing set:
+ * refused as an unknown key unless its name is a real section, and left out
+ * of the result either way.
+ */
+function validateNewProjectChoices(cwd, choices, prefix = '') {
+    const checked = {};
+    for (const key of Object.keys(choices)) {
+        const kp = prefix ? `${prefix}.${key}` : key;
+        // An empty key names no setting. Refused here because an empty section
+        // name would otherwise be walked as if its contents sat one level up.
+        if (key === '')
+            assertKnownConfigKey(cwd, kp);
+        // A key is one path segment. A dot inside it spells a deeper path, which
+        // would pass the key gate while the merge wrote it as one literal key no
+        // reader resolves. The exception is a dot inside an id: one dynamic key
+        // family admits both the path cut at the dot and the whole path, so the
+        // dot is part of what that family calls a single key (`phase_commit_docs`
+        // is a map keyed by phase id, and "2.1" is a phase id).
+        const dot = key.indexOf('.');
+        if (dot !== -1) {
+            const head = prefix ? `${prefix}.${key.slice(0, dot)}` : key.slice(0, dot);
+            const dotIsInsideAnId = prefix !== '' && DYNAMIC_KEY_PATTERNS.some((family) => family.test(head) && family.test(kp));
+            if (!dotIsInsideAnId) {
+                error(`Invalid choice key "${key}" for config-new-project. Nest it instead of using a dotted key, e.g. {"workflow":{"research":true}}.`, ERROR_REASON.CONFIG_INVALID_KEY);
+            }
+        }
+        const value = choices[key];
+        if (isPlainObject(value) && (!isValidConfigKey(kp, cwd) || hasChildConfigKeys(cwd, kp))) {
+            // A non-empty section has its name checked through its leaves. An empty
+            // one has no leaves, so its name is checked here: config-set refuses
+            // `bogus '{}'` as an unknown key, and so does this.
+            if (Object.keys(value).length === 0 && !isValidConfigKey(kp, cwd) && !isConfigSection(cwd, kp)) {
+                assertKnownConfigKey(cwd, kp);
+            }
+            const section = validateNewProjectChoices(cwd, value, kp);
+            // Empty as given, or emptied by null choices: it sets nothing.
+            if (Object.keys(section).length > 0)
+                checked[key] = section;
+            continue;
+        }
+        // A section given a value that is not an object. config-set would call
+        // the name unknown, which misdescribes a real section; say what is wrong.
+        if (!isValidConfigKey(kp, cwd) && isConfigSection(cwd, kp)) {
+            error(`Invalid choice "${kp}" for config-new-project: it is a section, so its value must be an object of settings, e.g. {"workflow":{"research":true}}.`, ERROR_REASON.CONFIG_INVALID_KEY);
+        }
+        assertKnownConfigKey(cwd, kp);
+        // `config-set <key> null` clears the key: it skips the typed rules and
+        // leaves the key to its default. A null choice is the same request, so it
+        // skips them too and is left unchosen, where it used to be written as a
+        // literal null that config-set can never store.
+        const checkedValue = value === null
+            ? null
+            : validateConfigValue(cwd, kp, value, typeof value === 'string' ? value : JSON.stringify(value));
+        // config-set's setter refuses these segments after the key and value
+        // rules have run (`_setNestedValue`); same refusal, same place in the order.
+        // It also runs before the assignment below, so no such key reaches `checked`.
+        if (kp.split('.').some((segment) => segment === '__proto__' || segment === 'prototype' || segment === 'constructor')) {
+            error('Invalid config key (prototype pollution guard): ' + kp, ERROR_REASON.CONFIG_PARSE_FAILED);
+        }
+        if (value === null)
+            continue;
+        checked[key] = checkedValue;
+    }
+    return checked;
+}
+/**
+ * Command: create a fully-materialized .planning/config.json for a new project.
+ *
+ * Accepts user-chosen settings as a JSON string (the keys the user explicitly
+ * configured during /gsd:new-project). All remaining keys are filled from
+ * hardcoded defaults and optional $GSD_HOME/.gsd/defaults.json.
+ *
+ * Choices are validated with `config-set`'s key and value rules before
+ * anything is written (#5268). With `dryRun`, prints the config that would be
+ * created and writes nothing.
+ *
+ * Idempotent: if config.json already exists, returns { created: false } once
+ * the choices have been checked; a refused choice is refused either way.
+ */
+function cmdConfigNewProject(cwd, choicesJson, raw, options = {}) {
+    const dryRun = options.dryRun === true;
+    const planningBase = planningDir(cwd);
+    const configPath = node_path_1.default.join(planningBase, 'config.json');
+    // Parse user choices
+    let userChoices = {};
+    if (choicesJson && choicesJson.trim() !== '') {
+        let parsedChoices;
+        try {
+            parsedChoices = JSON.parse(choicesJson);
+        }
+        catch (err) {
+            error('Invalid JSON for config-new-project: ' + err.message);
+        }
+        // #5268: an array or a string parses as JSON and was then spread into the
+        // config as index keys.
+        if (!isPlainObject(parsedChoices)) {
+            error('Invalid choices for config-new-project: expected a JSON object of config keys.', ERROR_REASON.USAGE);
+        }
+        userChoices = parsedChoices;
+    }
+    // #5268: refuse what config-set refuses, before the first write — and
+    // before the existing-config check, so a refused choice is reported
+    // whether or not the project already has a config.
+    const checkedChoices = validateNewProjectChoices(cwd, userChoices);
+    // Idempotent: don't overwrite existing config
+    if (node_fs_1.default.existsSync(configPath)) {
+        output({ created: false, reason: 'already_exists' }, raw, 'exists');
+        return;
+    }
+    const plan = planNewProjectConfig(checkedChoices);
+    const config = plan.config;
+    if (dryRun) {
+        // The preview is CLI output, so secret keys are masked exactly as
+        // config-set and config-get mask them. See lib/secrets.cjs.
+        const preview = { ...config };
+        for (const key of Object.keys(preview)) {
+            preview[key] = (0, secrets_cjs_1.maskIfSecret)(key, preview[key]);
+        }
+        output({ dry_run: true, would_create: true, path: '.planning/config.json', config: preview }, raw, 'would create (dry run)');
+        return;
+    }
+    // Ensure .planning directory exists
+    try {
+        (0, shell_command_projection_cjs_1.platformEnsureDir)(planningBase);
+    }
+    catch (err) {
+        error('Failed to create .planning directory: ' + err.message);
+    }
+    try {
+        (0, shell_command_projection_cjs_1.platformWriteSync)(configPath, JSON.stringify(config, null, 2));
+    }
+    catch (err) {
+        error('Failed to write config.json: ' + err.message);
+    }
+    // The user defaults rewrite follows the config it was planned for: a
+    // creation that fails before here leaves the defaults file as it was.
+    persistDefaultsRewrite(plan);
+    output({ created: true, path: '.planning/config.json' }, raw, 'created');
+}
+/**
+ * Ensures the config file exists (creates it if needed).
+ *
+ * Does not call `output()`, so can be used as one step in a command without triggering `exit(0)` in
+ * the happy path. But note that `error()` will still `exit(1)` out of the process.
+ */
+function ensureConfigFile(cwd) {
+    const planningBase = planningDir(cwd);
+    const configPath = node_path_1.default.join(planningBase, 'config.json');
+    // Ensure .planning directory exists
+    try {
+        (0, shell_command_projection_cjs_1.platformEnsureDir)(planningBase);
+    }
+    catch (err) {
+        error('Failed to create .planning directory: ' + err.message);
+    }
+    // Check if config already exists
+    if (node_fs_1.default.existsSync(configPath)) {
+        return { created: false, reason: 'already_exists' };
+    }
+    const config = buildNewProjectConfig({});
+    try {
+        (0, shell_command_projection_cjs_1.platformWriteSync)(configPath, JSON.stringify(config, null, 2));
+        return { created: true, path: '.planning/config.json' };
+    }
+    catch (err) {
+        error('Failed to create config.json: ' + err.message);
+    }
+}
+/**
+ * Command to ensure the config file exists (creates it if needed).
+ *
+ * Note that this exits the process (via `output()`) even in the happy path; use
+ * `ensureConfigFile()` directly if you need to avoid this.
+ */
+function cmdConfigEnsureSection(cwd, raw) {
+    const ensureConfigFileResult = ensureConfigFile(cwd);
+    if (ensureConfigFileResult && ensureConfigFileResult.created) {
+        output(ensureConfigFileResult, raw, 'created');
+    }
+    else {
+        output(ensureConfigFileResult, raw, 'exists');
+    }
+}
+/**
+ * Shared helper: write a single key-path into an in-memory config object.
+ *
+ * Prototype-pollution guard: reject dangerous segments via inline literal
+ * comparisons on the exact key used to index `current`, immediately before
+ * each write. The inline comparison is the barrier CodeQL's
+ * js/prototype-pollution-utility query recognises — the previous Set-based
+ * pre-loop check was functionally correct but not traced through, so
+ * code-scanning alert #26 kept firing. Behaviour is unchanged from #663.
+ *
+ * Returns the previous value at the leaf key (undefined if absent).
+ * Never writes to disk — callers handle persistence.
+ * Calls error() (process.exit(1)) on prototype-pollution attempts.
+ */
+function _setNestedValue(config, keyPath, parsedValue) {
+    const keys = keyPath.split('.');
+    let current = config;
+    for (let i = 0; i < keys.length - 1; i++) {
+        const key = keys[i];
+        if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+            error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+        }
+        const existingChild = current[key];
+        if (existingChild === undefined || existingChild === null || typeof existingChild !== 'object' || Array.isArray(existingChild)) {
+            current[key] = {};
+        }
+        current = current[key];
+    }
+    const lastKey = keys[keys.length - 1];
+    if (lastKey === '__proto__' || lastKey === 'prototype' || lastKey === 'constructor') {
+        error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const previousValue = current[lastKey];
+    current[lastKey] = parsedValue;
+    return previousValue;
+}
+/**
+ * Deletes a value from the config object, allowing nested values via dot
+ * notation (e.g., "review.models.codex"). Mirrors `_setNestedValue`'s
+ * prototype-pollution guard on every path segment (including intermediates).
+ *
+ * Unlike `_setNestedValue`, this NEVER creates missing intermediate objects —
+ * if any segment along the path is missing (or not a plain, non-array
+ * object), the key doesn't exist and we return early without mutating
+ * `config` at all.
+ *
+ * Does not prune now-empty parent objects after deletion (matches the
+ * conservative, structure-preserving behaviour callers expect from a bare
+ * unset).
+ *
+ * Returns { previousValue, existed } — existed is false when the leaf key
+ * (or an intermediate segment) was never present.
+ * Calls error() (process.exit(1)) on prototype-pollution attempts.
+ */
+function _unsetNestedValue(config, keyPath) {
+    const keys = keyPath.split('.');
+    let current = config;
+    for (let i = 0; i < keys.length - 1; i++) {
+        const key = keys[i];
+        if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+            error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+        }
+        const existingChild = current[key];
+        if (existingChild === undefined || existingChild === null || typeof existingChild !== 'object' || Array.isArray(existingChild)) {
+            // Path doesn't exist — nothing to unset, and we must not create it.
+            return { previousValue: undefined, existed: false };
+        }
+        current = existingChild;
+    }
+    const lastKey = keys[keys.length - 1];
+    if (lastKey === '__proto__' || lastKey === 'prototype' || lastKey === 'constructor') {
+        error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const existed = Object.prototype.hasOwnProperty.call(current, lastKey);
+    const previousValue = current[lastKey];
+    if (existed) {
+        delete current[lastKey];
+    }
+    return { previousValue, existed };
+}
+/**
+ * Deletes a key from the config file, allowing nested values via dot
+ * notation. Mirrors `setConfigValue`'s load/lock/write cycle.
+ *
+ * Does not call `output()`, so can be used as one step in a command without triggering `exit(0)` in
+ * the happy path. But note that `error()` will still `exit(1)` out of the process.
+ */
+/**
+ * Loads `.planning/config.json` as a plain object, or `{}` if the file does
+ * not exist. A parse failure calls `error()` (process-exiting) rather than
+ * throwing, matching every caller's existing behavior.
+ *
+ * Single source for this load+parse step — `setConfigValue`,
+ * `unsetConfigValue`, `setConfigValues`, `previewConfigValue`, and
+ * `previewUnsetConfigValue` all delegate here instead of each repeating the
+ * same try/catch (CLAUDE.md's "Generative Fix Divergence" known-defect
+ * pattern: independently-guessed copies of the same logic can silently
+ * drift apart).
+ */
+function loadConfigJson(cwd) {
+    const configPath = node_path_1.default.join(planningDir(cwd), 'config.json');
+    let config = {};
+    try {
+        // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws.
+        const raw = configLoader.readConfigFileBounded(configPath);
+        if (raw !== null) {
+            config = JSON.parse(raw);
+        }
+    }
+    catch (err) {
+        error('Failed to read config.json: ' + err.message, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    return config;
+}
+function unsetConfigValue(cwd, keyPath) {
+    const configPath = node_path_1.default.join(planningDir(cwd), 'config.json');
+    return withPlanningLock(cwd, () => {
+        const config = loadConfigJson(cwd);
+        const { previousValue, existed } = _unsetNestedValue(config, keyPath);
+        // Write back
+        try {
+            (0, shell_command_projection_cjs_1.platformWriteSync)(configPath, JSON.stringify(config, null, 2));
+            return { updated: existed, unset: true, key: keyPath, value: null, previousValue };
+        }
+        catch (err) {
+            error('Failed to write config.json: ' + err.message);
+        }
+    });
+}
+/**
+ * Sets a value in the config file, allowing nested values via dot notation (e.g.,
+ * "workflow.research").
+ *
+ * Does not call `output()`, so can be used as one step in a command without triggering `exit(0)` in
+ * the happy path. But note that `error()` will still `exit(1)` out of the process.
+ */
+function setConfigValue(cwd, keyPath, parsedValue) {
+    const configPath = node_path_1.default.join(planningDir(cwd), 'config.json');
+    return withPlanningLock(cwd, () => {
+        const config = loadConfigJson(cwd);
+        const previousValue = _setNestedValue(config, keyPath, parsedValue);
+        // Write back
+        try {
+            (0, shell_command_projection_cjs_1.platformWriteSync)(configPath, JSON.stringify(config, null, 2));
+            return { updated: true, key: keyPath, value: parsedValue, previousValue };
+        }
+        catch (err) {
+            error('Failed to write config.json: ' + err.message);
+        }
+    });
+}
+/**
+ * #4444: read-only preview counterpart to `setConfigValue` — loads config
+ * exactly like the real setter and reuses `_setNestedValue` (the SAME
+ * traversal/creation logic, including its prototype-pollution guards) on a
+ * throwaway in-memory copy that is NEVER written back to disk. This is what
+ * makes the dry-run preview provably identical to what the real write would
+ * compute, rather than a second, hand-maintained traversal that could drift
+ * from the real one.
+ */
+function previewConfigValue(cwd, keyPath, parsedValue) {
+    const config = loadConfigJson(cwd);
+    const previousValue = _setNestedValue(config, keyPath, parsedValue);
+    return { key: keyPath, value: parsedValue, previousValue };
+}
+/**
+ * #4444: read-only preview counterpart to `unsetConfigValue` — same pattern
+ * as `previewConfigValue`, reusing `_unsetNestedValue` on a throwaway copy.
+ */
+function previewUnsetConfigValue(cwd, keyPath) {
+    const config = loadConfigJson(cwd);
+    const { previousValue, existed } = _unsetNestedValue(config, keyPath);
+    return { key: keyPath, value: null, previousValue, existed };
+}
+/**
+ * Batched sibling of setConfigValue: apply multiple key-path writes in a
+ * single load → set-all → write cycle inside ONE withPlanningLock call.
+ *
+ * Returns { updated: true, results: SetConfigValueResult[] } on success.
+ * An empty entries array is a no-op and returns { updated: false, results: [] }.
+ *
+ * Prototype-pollution guards are enforced per entry (identical inline-literal
+ * guards as setConfigValue — CodeQL barrier requirement).
+ */
+function setConfigValues(cwd, entries) {
+    if (entries.length === 0) {
+        return { updated: false, results: [] };
+    }
+    const configPath = node_path_1.default.join(planningDir(cwd), 'config.json');
+    return withPlanningLock(cwd, () => {
+        const config = loadConfigJson(cwd);
+        const results = [];
+        for (const entry of entries) {
+            const previousValue = _setNestedValue(config, entry.keyPath, entry.value);
+            results.push({ updated: true, key: entry.keyPath, value: entry.value, previousValue });
+        }
+        // Write back once for all entries
+        try {
+            (0, shell_command_projection_cjs_1.platformWriteSync)(configPath, JSON.stringify(config, null, 2));
+            return { updated: true, results };
+        }
+        catch (err) {
+            error('Failed to write config.json: ' + err.message);
+        }
+    });
+}
+/**
+ * Type-safe enum guard for config-set string-enum keys.
+ *
+ * Rejects any parsedValue that is not a plain string AND a member of `allowed`.
+ * This closes the JSON-array coercion bypass: String(["val"]) === "val" satisfies
+ * a bare .includes(String(parsedValue)) check, but typeof parsedValue !== 'string'
+ * catches the array before the includes test.
+ *
+ * The `label` parameter is used verbatim in the error message so callers can
+ * preserve existing message text byte-for-byte.
+ */
+function assertEnumValue(parsedValue, rawVal, allowed, label) {
+    if (typeof parsedValue !== 'string' || !allowed.includes(parsedValue)) {
+        error(`Invalid ${label} '${rawVal}'. Valid values: ${allowed.join(', ')}`);
+    }
+}
+function cmdConfigSet(cwd, keyPath, value, raw, options = {}) {
+    const dryRun = options.dryRun === true;
+    if (!keyPath) {
+        error('Usage: config-set <key.path> <value>', ERROR_REASON.USAGE);
+    }
+    // #3593: reject the "key without value" form (e.g. `config-set
+    // model_profile` with args[2] === undefined). Without this guard the
+    // value passes through as undefined, the number/boolean/json branches
+    // all fall through, and the write either silently strips the key
+    // (JSON.stringify drops undefined values) or writes a corrupt entry.
+    // Typed reason so the negative-matrix test can assert on it instead
+    // of greppinng prose.
+    if (value === undefined) {
+        error('Usage: config-set <key.path> <value>', ERROR_REASON.USAGE);
+    }
+    // After the two error() guards above, keyPath and value are narrowed to string.
+    // TypeScript doesn't always infer never-return narrowing through error(), so we assert.
+    const kp = keyPath;
+    const val = value;
+    assertKnownConfigKey(cwd, kp);
+    // Parse value (handle booleans, numbers, and JSON arrays/objects) — #6029: shared with config-get --default.
+    let parsedValue = parseConfigArgValue(val);
+    // #2046: a bare `null` unsets (deletes) the key — the documented "Clear" action.
+    // Short-circuits before every typed per-key validator so clearing a typed key
+    // (enum/boolean/number) removes it rather than being rejected. Deleting (not
+    // persisting JSON null) is the correct "clear": a persisted null is still a
+    // present, truthy-adjacent value that consumers must special-case — worst for
+    // secret keys where a leftover value can be passed as a real credential.
+    if (parsedValue === null) {
+        if (dryRun) {
+            const preview = previewUnsetConfigValue(cwd, kp);
+            if ((0, secrets_cjs_1.isSecretKey)(kp)) {
+                const maskedPrev = preview.previousValue === undefined
+                    ? undefined
+                    : (0, secrets_cjs_1.maskSecret)(preview.previousValue);
+                output({ dry_run: true, would_unset: true, key: kp, value: null, previousValue: maskedPrev, masked: true }, raw, `${kp} unset (dry run)`);
+                return;
+            }
+            output({ dry_run: true, would_unset: true, key: kp, value: null, previousValue: preview.previousValue }, raw, `${kp} unset (dry run)`);
+            return;
+        }
+        const unsetResult = unsetConfigValue(cwd, kp);
+        if ((0, secrets_cjs_1.isSecretKey)(kp)) {
+            const maskedPrev = unsetResult.previousValue === undefined
+                ? undefined
+                : (0, secrets_cjs_1.maskSecret)(unsetResult.previousValue);
+            output({ ...unsetResult, value: null, previousValue: maskedPrev, masked: true }, raw, `${kp} unset`);
+            return;
+        }
+        output(unsetResult, raw, `${kp} unset`);
+        return;
+    }
+    // #1581: project_code is an identifier string — never number-coerce it. A
+    // leading-zero code like '007' must persist verbatim (not collapse to 7).
+    if (kp === 'project_code') {
+        parsedValue = val;
+    }
+    parsedValue = validateConfigValue(cwd, kp, parsedValue, val);
+    if (dryRun) {
+        const preview = previewConfigValue(cwd, kp, parsedValue);
+        if ((0, secrets_cjs_1.isSecretKey)(kp)) {
+            const masked = (0, secrets_cjs_1.maskSecret)(parsedValue);
+            const maskedPrev = preview.previousValue === undefined
+                ? undefined
+                : (0, secrets_cjs_1.maskSecret)(preview.previousValue);
+            output({ dry_run: true, would_update: true, key: kp, value: masked, previousValue: maskedPrev, masked: true }, raw, `${kp}=${masked} (dry run)`);
+            return;
+        }
+        output({ dry_run: true, would_update: true, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
+        return;
+    }
+    const setConfigValueResult = setConfigValue(cwd, kp, parsedValue);
+    // Mask secrets in both JSON and text output. The plaintext is written
+    // to config.json (that's where secrets live on disk); the CLI output
+    // must never echo it. See lib/secrets.cjs.
+    if ((0, secrets_cjs_1.isSecretKey)(kp)) {
+        // parsedValue is unknown at this point; maskSecret accepts MaskableValue
+        const masked = (0, secrets_cjs_1.maskSecret)(parsedValue);
+        const maskedPrev = setConfigValueResult.previousValue === undefined
+            ? undefined
+            : (0, secrets_cjs_1.maskSecret)(setConfigValueResult.previousValue);
+        const maskedResult = {
+            ...setConfigValueResult,
+            value: masked,
+            previousValue: maskedPrev,
+            masked: true,
+        };
+        output(maskedResult, raw, `${kp}=${masked}`);
+        return;
+    }
+    output(setConfigValueResult, raw, `${kp}=${String(parsedValue)}`);
+}
+/**
+ * #4432: one `hooks.secret_read_exempt` entry as a POSIX repo-relative file
+ * path, or null when it is not one. The secret-read guard
+ * (hooks/lib/secret-read-exemptions.js `normalizeExemptEntry`) applies the SAME
+ * rules when it reads the list, and is standalone because an installed hook
+ * cannot require `src/`. The duplication is deliberate and pinned: a parity test
+ * (tests/secret-read-exemptions.test.cjs) drives one corpus and a seeded
+ * property through both, so a value accepted here is a value the hook honors.
+ */
+function normalizeSecretReadExemptEntry(entry) {
+    if (typeof entry !== 'string')
+        return null;
+    let s = entry.replace(/\\/g, '/');
+    while (s.startsWith('./'))
+        s = s.slice(2);
+    if (s === '' || s === '.')
+        return null;
+    if (s.startsWith('/') || s.endsWith('/'))
+        return null;
+    if (/^[A-Za-z]:/.test(s))
+        return null;
+    if (s.includes('\0'))
+        return null;
+    if (s.split('/').includes('..'))
+        return null;
+    return s;
+}
+/**
+ * The per-key VALUE rules, shared by `config-set` and `config-new-project`
+ * (#5268). They were inline in `cmdConfigSet`, so `config-new-project` had no
+ * way to apply them and wrote values `config-set` refuses for the same key.
+ *
+ * `parsedValue` is the typed value about to be persisted and `val` its text
+ * form, used only in error messages. Returns the value to persist for `kp`:
+ * the input itself, or its normalized form where a rule normalizes
+ * (`review.default_reviewers`). A value the key does not accept has no value
+ * to persist, so it is refused through `error()` instead.
+ */
+function validateConfigValue(cwd, kp, parsedValue, val) {
+    // #1581: project_code is an identifier, and config-set stores it as the text
+    // typed. Through config-set this never fires; it holds a JSON choice (#5268)
+    // to the type config-set stores, rather than writing a number readers cast
+    // to string.
+    if (kp === 'project_code' && typeof parsedValue !== 'string') {
+        error(`Invalid project_code '${val}'. Must be a string identifier, e.g. "PROJ".`);
+    }
+    const VALID_CONTEXT_VALUES = ['dev', 'research', 'review'];
+    if (kp === 'context')
+        assertEnumValue(parsedValue, val, VALID_CONTEXT_VALUES, 'context value');
+    // #4974: `mode` was never enum-validated — `config-set mode custom` (or any
+    // other string) silently succeeded, even though only "interactive" and
+    // "yolo" are documented/read values (gsd-core/references/planning-config.md,
+    // docs/CONFIGURATION.md, pinned by tests/config-field-docs.test.cjs).
+    const VALID_MODE_VALUES = ['interactive', 'yolo'];
+    if (kp === 'mode')
+        assertEnumValue(parsedValue, val, VALID_MODE_VALUES, 'mode');
+    if (kp === 'phase_id_convention') {
+        assertEnumValue(parsedValue, val, VALID_PHASE_ID_CONVENTIONS, 'phase_id_convention');
+    }
+    // Codebase drift detector (#2003)
+    const VALID_DRIFT_ACTIONS = ['warn', 'auto-remap'];
+    if (kp === 'workflow.drift_action')
+        assertEnumValue(parsedValue, val, VALID_DRIFT_ACTIONS, 'workflow.drift_action');
+    if (kp === 'workflow.drift_threshold') {
+        if (typeof parsedValue !== 'number' || !Number.isInteger(parsedValue) || parsedValue < 1) {
+            error(`Invalid workflow.drift_threshold '${val}'. Must be a positive integer.`);
+        }
+    }
+    // #1581: context_window must be a finite positive integer. 'Infinity' is no
+    // longer number-coerced (see the parse block above) so it reaches here as a
+    // string and is rejected; '0', negatives, and non-integers are also rejected.
+    if (kp === 'context_window') {
+        if (typeof parsedValue !== 'number' || !Number.isFinite(parsedValue) || !Number.isInteger(parsedValue) || parsedValue < 1) {
+            error(`Invalid context_window '${val}'. Must be a positive integer (token count).`, ERROR_REASON.USAGE);
+        }
+    }
+    // Smart-zone token budget (#2630, ADR-2629). Same shape as context_window:
+    // a positive integer token count. A POLICY default, not a benchmark constant.
+    // Number.isSafeInteger, NOT Number.isInteger: the read side
+    // (estimate-cli readSmartZoneBudget) accepts only safe integers, so an
+    // isInteger-only gate would let config-set 'succeed' on a value past 2^53
+    // that estimate-check then silently ignores in favour of the default.
+    // Accept and honour must agree.
+    if (kp === 'workflow.smart_zone_tokens') {
+        if (typeof parsedValue !== 'number' || !Number.isSafeInteger(parsedValue) || parsedValue < 1) {
+            error(`Invalid workflow.smart_zone_tokens '${val}'. Must be a positive integer (token count).`, ERROR_REASON.USAGE);
+        }
+    }
+    // Post-planning gap checker (#2493)
+    if (kp === 'workflow.post_planning_gaps') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid workflow.post_planning_gaps '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // Compact Content mode gate (#4139)
+    if (kp === 'workflow.compact_content') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid workflow.compact_content '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // Per-plan executor routing via agent_hint frontmatter (#1689)
+    if (kp === 'workflow.agent_hint_routing') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid workflow.agent_hint_routing '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // Planner watchdog opt-out (#4570) — only a real boolean may change the
+    // default-on policy. In particular, string "false" must not disable it.
+    if (kp === 'planner.stall_detection_enabled') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid planner.stall_detection_enabled '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // Dispatch audit-trail opt-in (#4975) — boolean only. The live seams honour
+    // only a real `true`, so any other stored value would be silently ignored.
+    if (kp === 'audit.enabled') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid audit.enabled '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // #3086 — git.create_tag: boolean only
+    if (kp === 'git.create_tag') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid git.create_tag '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // #5706 (epic #3628): per-repository milestone tagging mode, enum only.
+    if (kp === 'git.repo_tagging')
+        assertEnumValue(parsedValue, val, VALID_REPO_TAGGING_MODES, 'git.repo_tagging');
+    if (kp === 'git.protected_branches') {
+        if (!isValidProtectedBranches(parsedValue)) {
+            error(`Invalid git.protected_branches '${val}'. Must be a non-empty array of non-empty branch names.`);
+        }
+    }
+    if (kp === 'ship.pr_body_sections') {
+        validateShipPrBodySections(parsedValue);
+    }
+    // Human verification checkpoint mode (#3309)
+    const VALID_HUMAN_VERIFY_MODES = ['mid-flight', 'end-of-phase'];
+    if (kp === 'workflow.human_verify_mode')
+        assertEnumValue(parsedValue, val, VALID_HUMAN_VERIFY_MODES, 'workflow.human_verify_mode');
+    // Context exhaustion guard mode (#1452)
+    const VALID_CONTEXT_GUARD_MODES = ['auto', 'warn', 'off'];
+    if (kp === 'workflow.context_guard_mode')
+        assertEnumValue(parsedValue, val, VALID_CONTEXT_GUARD_MODES, 'workflow.context_guard_mode');
+    // Context position enum validation (#2937)
+    const VALID_CONTEXT_POSITIONS = ['front', 'end'];
+    if (kp === 'statusline.context_position')
+        assertEnumValue(parsedValue, val, VALID_CONTEXT_POSITIONS, 'statusline.context_position');
+    // statusline.show_context_tokens — boolean only
+    if (kp === 'statusline.show_context_tokens') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid statusline.show_context_tokens '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // Statusline GSD-state format enum validation
+    const VALID_STATE_FORMATS = ['full', 'compact'];
+    if (kp === 'statusline.state_format')
+        assertEnumValue(parsedValue, val, VALID_STATE_FORMATS, 'statusline.state_format');
+    // statusline.show_git — boolean only
+    if (kp === 'statusline.show_git') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid statusline.show_git '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // Context-monitor fire-points (#4285) — a percentage of the context window
+    // REMAINING, so the domain is 0-100 and the hook compares them against
+    // `remaining_percentage`. Rejecting an out-of-domain value here keeps accept
+    // and honour in agreement ON THE DOMAIN: the hook falls back to its default
+    // for a value outside it, so reporting success would be a lie. That agreement
+    // is per-key and no wider — a value accepted here can still be superseded at
+    // read time by the hook's pair check, and a scoped write (GSD_PROJECT /
+    // GSD_WORKSTREAM) lands in a config the hook does not read at all. The PAIR
+    // (critical < warning) is deliberately NOT enforced here: config-set writes
+    // one key per call, so a two-step retune can be transiently inconsistent on
+    // disk and a check here would reject that intermediate write.
+    if (kp === 'hooks.context_warning_threshold' || kp === 'hooks.context_critical_threshold') {
+        if (typeof parsedValue !== 'number' || !Number.isFinite(parsedValue) || parsedValue < 0 || parsedValue > 100) {
+            error(`Invalid ${kp} '${val}'. Must be a number between 0 and 100 (percent of context window remaining).`);
+        }
+        // The two ENDPOINTS that are in range but can never form a valid pair are
+        // refused here rather than stored (#4285 review). `critical < warning` must
+        // hold at read time and BOTH sides are clamped to 0-100, so `warning: 0`
+        // has no legal partner (nothing is below 0) and `critical: 100` has none
+        // either (nothing above 100). Either one is silently discarded by the hook
+        // for EVERY value of the other key — verified: both resolve to the 35/25
+        // defaults against a present, absent, or extreme partner, while 0.001 and
+        // 99.999 are honoured.
+        //
+        // Storing a value the reader can never honour is exactly the
+        // accept-then-discard shape this codebase refuses elsewhere, so this fails
+        // at write time where the operator can see it. The pair itself is still NOT
+        // checked here — config-set writes one key per call, so a two-step retune
+        // is legitimately inconsistent on disk in between.
+        if (kp === 'hooks.context_warning_threshold' && parsedValue === 0) {
+            error(`Invalid ${kp} '${val}'. 0 is in range but unusable: the monitor requires `
+                + `hooks.context_critical_threshold < hooks.context_warning_threshold, and no valid `
+                + `critical value is below 0, so a warning of 0 would always fall back to the 35/25 `
+                + `defaults. Use a value above 0.`);
+        }
+        if (kp === 'hooks.context_critical_threshold' && parsedValue === 100) {
+            error(`Invalid ${kp} '${val}'. 100 is in range but unusable: the monitor requires `
+                + `hooks.context_critical_threshold < hooks.context_warning_threshold, and no valid `
+                + `warning value is above 100, so a critical of 100 would always fall back to the `
+                + `35/25 defaults. Use a value below 100.`);
+        }
+    }
+    // #4432: files the secret-read guard may let agents read. Every entry must be
+    // a repo-relative file path; the guard drops anything else when it reads the
+    // list, so storing it would be accept-then-discard.
+    if (kp === 'hooks.secret_read_exempt') {
+        if (!Array.isArray(parsedValue) || parsedValue.some((entry) => normalizeSecretReadExemptEntry(entry) === null)) {
+            error(`Invalid hooks.secret_read_exempt '${val}'. Must be an array of repo-relative file paths `
+                + `(no leading '/', drive prefix, '..' segment or trailing '/'), e.g. [".env.production"].`);
+        }
+    }
+    // Fallow scope + profile enum validation (#3424)
+    const VALID_FALLOW_SCOPES = ['phase', 'repo'];
+    if (kp === 'code_quality.fallow.scope')
+        assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');
+    const VALID_FALLOW_PROFILES = ['minimal', 'standard', 'strict'];
+    if (kp === 'code_quality.fallow.profile')
+        assertEnumValue(parsedValue, val, VALID_FALLOW_PROFILES, 'code_quality.fallow.profile');
+    // plan_review.source_grounding (#22) — boolean only
+    if (kp === 'plan_review.source_grounding') {
+        if (typeof parsedValue !== 'boolean') {
+            error(`Invalid plan_review.source_grounding '${val}'. Must be a boolean (true or false).`);
+        }
+    }
+    // plan_review.source_grounding_authority (#22) — enum
+    const VALID_SOURCE_GROUNDING_AUTHORITIES = ['grep', 'intel', 'treesitter', 'lsp', 'scip'];
+    if (kp === 'plan_review.source_grounding_authority')
+        assertEnumValue(parsedValue, val, VALID_SOURCE_GROUNDING_AUTHORITIES, 'plan_review.source_grounding_authority');
+    // Generic capability-registry validation (#1628). Capability-owned keys declare
+    // their type/values in the registry but most lack a hardcoded guard, so out-of-
+    // domain values (including JSON array/object coercion) were stored silently.
+    const capDef = getCapabilityConfigSchema(cwd)[kp];
+    if (capDef && typeof capDef.type === 'string') {
+        switch (capDef.type) {
+            case 'enum':
+                if (Array.isArray(capDef.values)) {
+                    assertEnumValue(parsedValue, val, capDef.values.map((v) => String(v)), kp);
+                }
+                break;
+            case 'boolean':
+                if (typeof parsedValue !== 'boolean') {
+                    error(`Invalid ${kp} '${val}'. Must be a boolean (true or false).`);
+                }
+                break;
+            case 'number':
+                if (typeof parsedValue !== 'number' || !Number.isFinite(parsedValue)) {
+                    error(`Invalid ${kp} '${val}'. Must be a number.`);
+                }
+                break;
+            case 'string':
+                if (typeof parsedValue !== 'string') {
+                    error(`Invalid ${kp} '${val}'. Must be a string.`);
+                }
+                break;
+        }
+    }
+    // Security — ASVS level range (#1628)
+    // Must be an integer in {1, 2, 3} (OWASP ASVS levels).
+    if (kp === 'workflow.security_asvs_level') {
+        if (typeof parsedValue !== 'number' || !Number.isInteger(parsedValue) || parsedValue < 1 || parsedValue > 3) {
+            error(`Invalid workflow.security_asvs_level '${val}'. Must be an integer 1, 2, or 3.`);
+        }
+    }
+    if (kp === 'review.default_reviewers') {
+        const normalized = (0, review_reviewer_selection_cjs_1.normalizeConfiguredDefaultReviewers)(parsedValue);
+        if (normalized.errors.length > 0) {
+            error(normalized.errors[0]);
+        }
+        parsedValue = normalized.values;
+    }
+    // #1517: validate review.reviewer_instances.<name>.<field> leaves at the
+    // invocation boundary (Postel/Kerckhoffs — strict at accept). The config
+    // schema dynamic pattern admits the path; this block validates the name + the
+    // field value so a misconfigured instance is rejected at config-set time, not
+    // silently at review time. Single-source validators live in
+    // review-reviewer-selection.cjs (INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS).
+    const instanceLeaf = kp.match(/^review\.reviewer_instances\.([a-zA-Z0-9_-]+)\.(cli|model|agent)$/);
+    if (instanceLeaf) {
+        const [, instanceName, field] = instanceLeaf;
+        if (!review_reviewer_selection_cjs_1.INSTANCE_NAME_PATTERN.test(instanceName)) {
+            error(`Invalid reviewer instance name '${instanceName}'. Must match ^[a-z0-9][a-z0-9-]*$.`);
+        }
+        if (review_reviewer_selection_cjs_1.KNOWN_REVIEWER_SLUGS.includes(instanceName)) {
+            error(`Reviewer instance name '${instanceName}' must not equal a built-in reviewer slug.`);
+        }
+        if (field === 'cli') {
+            if (typeof parsedValue !== 'string' || !review_reviewer_selection_cjs_1.KNOWN_REVIEWER_SLUGS.includes(parsedValue)) {
+                error(`Invalid reviewer_instances.${instanceName}.cli '${val}'. Must be a known reviewer adapter: ${review_reviewer_selection_cjs_1.KNOWN_REVIEWER_SLUGS.join(', ')}.`);
+            }
+        }
+        else {
+            // model | agent — opaque pass-through strings (never interpolated into shell).
+            if (typeof parsedValue !== 'string') {
+                error(`Invalid reviewer_instances.${instanceName}.${field} '${val}'. Must be a string.`);
+            }
+        }
+    }
+    return parsedValue;
+}
+function cmdConfigGet(cwd, keyPath, raw, defaultValue) {
+    const configPath = node_path_1.default.join(planningDir(cwd), 'config.json');
+    if (!keyPath) {
+        error('Usage: config-get <key.path> [--default <value>]');
+    }
+    // After the error() guard, keyPath is narrowed to string.
+    const kp = keyPath;
+    /**
+     * #2702 / #1893 / #2256: an absent key resolves root config first (a present root key wins
+     * over --default), then --default (parsed by the config-set parser, raw bytes kept), then the
+     * schema default. With none of them, fail with the caller's reason.
+     */
+    const emitAbsentKey = (message, reason) => {
+        const rootVal = resolveFromRootConfig(cwd, kp);
+        if (rootVal.found) {
+            emitConfigValue(kp, rootVal.value, raw);
+            return;
+        }
+        if (defaultValue !== undefined) {
+            emitConfigValue(kp, parseConfigArgValue(defaultValue), raw, defaultValue);
+            return;
+        }
+        const sd = resolveSchemaDefault(cwd, kp);
+        if (sd.found) {
+            emitConfigValue(kp, sd.value, raw);
+            return;
+        }
+        error(message, reason);
+    };
+    // #5470: `commit_docs` and `search_gitignored` answer, under either
+    // spelling, with the value the runtime resolves, not a literal path walk
+    // (their CONFIG_KEY_ALIASES entries say `configGet: 'loader'`). Shipped
+    // workflows read both through the flat key while the docs write the nested
+    // one, so after `config-set planning.commit_docs false` (the
+    // keep-planning-docs-private how-to) a `config-get commit_docs` read was
+    // "Key not found", and every workflow gate's `|| echo "true"` fallback
+    // committed `.planning/`. The loader also derives values the walk cannot
+    // (a gitignored `.planning/` resolves `commit_docs` to false). Same
+    // invariant as #2256: config-get must not disagree with the runtime. A value
+    // the loader resolves, null included, is printed and `--default` does not
+    // apply. The other loader aliases stay on the walk below, which ADR-5057
+    // makes the authority for gate config. `persist: false` because a read must
+    // not rewrite config.json (#3648).
+    // A config file the loader reports unusable (CONFIG_UNPARSEABLE /
+    // CONFIG_UNREADABLE) is not reported as a value: the loader discards it and
+    // resolves defaults, so `true` would read as the user's setting. config-get
+    // fails with CONFIG_PARSE_FAILED instead (ADR-1411: corrupt is not absent).
+    // The file can be, for example, the scoped config.json, the root config.json
+    // a workstream inherits from, or ~/.gsd/defaults.json when there is no
+    // .planning/; the loader has already named it on stderr. The loader's
+    // workstream fallback (GSD_PROJECT and GSD_WORKSTREAM both set, a usable
+    // root) reports no fault in what it falls back to (the GSD_PROJECT
+    // config.json, or ~/.gsd/defaults.json when that project has no directory),
+    // so there config-get prints the defaults the runtime resolves.
+    const loaderAlias = configLoader.configKeyAliasFor(kp);
+    if (loaderAlias?.configGet === 'loader') {
+        const resolution = configLoader.loadConfigResolved(cwd, { persist: false });
+        if (resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNPARSEABLE
+            || resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNREADABLE) {
+            error(`Failed to read config: ${resolution.reason} (the file named in the warning above)`, ERROR_REASON.CONFIG_PARSE_FAILED);
+        }
+        const resolved = configLoader.readResolvedAlias(resolution.config, loaderAlias);
+        if (resolved !== undefined) {
+            emitConfigValue(kp, resolved, raw);
+            return;
+        }
+    }
+    let config = {};
+    try {
+        // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws and
+        // is reported as an unreadable config below, never waited on.
+        const rawConfig = configLoader.readConfigFileBounded(configPath);
+        if (rawConfig !== null) {
+            config = JSON.parse(rawConfig);
+        }
+        else {
+            emitAbsentKey('No config.json found at ' + configPath, ERROR_REASON.CONFIG_NO_FILE);
+            return;
+        }
+    }
+    catch (err) {
+        // ADR-3889: error() now throws ExitError (carries no message) instead of
+        // calling process.exit() directly. The message-sniffing check below
+        // (`.startsWith('No config.json')`) can never match an ExitError raised
+        // by the "no config.json" error() call above it — ExitError.message
+        // defaults to `process exit ${code}` when no message is passed — so
+        // without this unconditional guard that ExitError falls through and gets
+        // re-wrapped as a WRONG reason (CONFIG_PARSE_FAILED instead of
+        // CONFIG_NO_FILE) with a nonsense message, plus a duplicate stderr write.
+        if (err instanceof ExitError)
+            throw err;
+        if (err.message.startsWith('No config.json'))
+            throw err;
+        error('Failed to read config.json: ' + err.message, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    // Traverse dot-notation path (e.g., "workflow.auto_advance")
+    const keys = kp.split('.');
+    let current = config;
+    for (const key of keys) {
+        if (current === undefined || current === null || typeof current !== 'object') {
+            emitAbsentKey(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+            return;
+        }
+        // Own-property gate: bracket access on a plain object walks the
+        // prototype chain, so an unqualified `current[key]` would resolve
+        // '__proto__' / 'constructor' / 'hasOwnProperty' (and other
+        // Object.prototype members) to their inherited values instead of
+        // correctly reporting them as absent. hasOwnProperty.call only
+        // returns true for a key JSON.parse actually assigned as data on
+        // this object (including a literal "__proto__" JSON key, which
+        // JSON.parse defines as an own data property, not the accessor) —
+        // never for something inherited from the prototype chain.
+        current = Object.prototype.hasOwnProperty.call(current, key)
+            ? current[key]
+            : undefined;
+    }
+    if (current === undefined) {
+        emitAbsentKey(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+        return;
+    }
+    // #6029: the present-key arm uses the same projection as every other arm
+    // (planner resolver and secret masking included).
+    emitConfigValue(kp, current, raw);
+}
+/**
+ * #2702: resolve a dot-notation key against the project ROOT config
+ * (`.planning/config.json`), ignoring any active workstream scope. Returns
+ * `{found:false}` when the root config is absent, unparseable, or does not
+ * contain the key. This is the inheritance rung `cmdConfigGet` was missing —
+ * when a workstream's own config doesn't set a key, the project root value
+ * must show through (workstream overrides root; it never fully replaces it),
+ * exactly as `loadConfigResolved`'s root+workstream merge already does for
+ * every other config consumer. No-op (found:false) when no workstream is
+ * active, because `planningDir === planningRoot` and the caller already read
+ * that file directly.
+ */
+function resolveFromRootConfig(cwd, kp) {
+    // Only meaningful when a workstream is active (GSD_WORKSTREAM set) — that is what
+    // redirects planningDir away from root AND what loadConfigResolved gates root-reading
+    // on. Gating on `process.env.GSD_WORKSTREAM` (not on a planningDir !== planningRoot
+    // path inequality) avoids a false trigger under GSD_PROJECT alone, where planningDir
+    // diverges from planningRoot without a workstream and loadConfigResolved does NOT
+    // inherit root — matching the runtime's own `if (ws)` gate keeps the two surfaces
+    // from diverging on the project-scoped (non-workstream) case.
+    if (!resolveEnvWorkstream())
+        return { found: false, value: undefined };
+    const root = planningRoot(cwd);
+    const rootConfigPath = node_path_1.default.join(root, 'config.json');
+    let rootConfig;
+    try {
+        // Bounded read (#5759): null is an absent root config; a FIFO/device/oversized one throws.
+        const rawRoot = configLoader.readConfigFileBounded(rootConfigPath);
+        if (rawRoot === null)
+            return { found: false, value: undefined };
+        rootConfig = JSON.parse(rawRoot);
+    }
+    catch {
+        // Unparseable root config → don't inherit (do not let a corrupt root file
+        // change config-get's verdict). Fall through to schema default / error.
+        return { found: false, value: undefined };
+    }
+    let current = rootConfig;
+    for (const key of kp.split('.')) {
+        if (current === undefined || current === null || typeof current !== 'object') {
+            return { found: false, value: undefined };
+        }
+        current = Object.prototype.hasOwnProperty.call(current, key)
+            ? current[key]
+            : undefined;
+    }
+    if (current === undefined)
+        return { found: false, value: undefined };
+    return { found: true, value: current };
+}
+/**
+ * Command to set the model profile in the config file.
+ *
+ * Note that this exits the process (via `output()`) even in the happy path.
+ */
+function cmdConfigSetModelProfile(cwd, profile, raw) {
+    if (!profile) {
+        error(`Usage: config-set-model-profile <${VALID_PROFILES.join('|')}>`);
+    }
+    const normalizedProfile = profile.toLowerCase().trim();
+    if (!VALID_PROFILES.includes(normalizedProfile)) {
+        error(`Invalid profile '${String(profile)}'. Valid profiles: ${VALID_PROFILES.join(', ')}`);
+    }
+    // Ensure config exists (create if needed)
+    ensureConfigFile(cwd);
+    // Set the model profile in the config
+    const { previousValue } = setConfigValue(cwd, 'model_profile', normalizedProfile);
+    const previousProfile = typeof previousValue === 'string' ? previousValue : 'balanced';
+    // Build result value / message and return
+    const agentToModelMap = getAgentToModelMapForProfile(normalizedProfile);
+    const result = {
+        updated: true,
+        profile: normalizedProfile,
+        previousProfile,
+        agentToModelMap,
+    };
+    const rawValue = getCmdConfigSetModelProfileResultMessage(normalizedProfile, previousProfile, agentToModelMap);
+    output(result, raw, rawValue);
+}
+/**
+ * Returns the message to display for the result of the `config-set-model-profile` command when
+ * displaying raw output.
+ */
+function getCmdConfigSetModelProfileResultMessage(normalizedProfile, previousProfile, agentToModelMap) {
+    const agentToModelTable = formatAgentToModelMapAsTable(agentToModelMap);
+    const didChange = previousProfile !== normalizedProfile;
+    const paragraphs = didChange
+        ? [
+            `✓ Model profile set to: ${normalizedProfile} (was: ${previousProfile})`,
+            'Agents will now use:',
+            agentToModelTable,
+            'Next spawned agents will use the new profile.',
+        ]
+        : [
+            `✓ Model profile is already set to: ${normalizedProfile}`,
+            'Agents are using:',
+            agentToModelTable,
+        ];
+    return paragraphs.join('\n\n');
+}
+/**
+ * Print the resolved config.json path (workstream-aware). Used by settings.md
+ * so the workflow writes/reads the correct file when a workstream is active (#2282).
+ */
+function cmdConfigPath(cwd, _raw, workstreamContext = null) {
+    // Always emit as plain text — a file path is used via shell substitution,
+    // never consumed as JSON. Passing raw=true forces plain-text output.
+    const configPath = workstreamContext && workstreamContext.configPath
+        ? workstreamContext.configPath
+        : node_path_1.default.join(planningDir(cwd), 'config.json');
+    output(configPath, true, configPath);
+}
+/**
+ * Explicit on-disk migration of legacy config keys to canonical nested shape.
+ *
+ * Wraps the Configuration Module's migrateOnDisk() for the CLI surface. This
+ * is the Phase 2 acceptance-criteria deliverable for opt-in migration (#3536):
+ * users can run `gsd-tools migrate-config` to apply all four legacy-key
+ * migrations to their .planning/config.json without having to load any config
+ * implicitly via another command.
+ *
+ * Output: JSON object with { migrated, normalizations, wrote } or a human-readable
+ * summary when --raw is set. Exits 0 in all cases (including no-op).
+ *
+ * Note: migrateOnDisk() is synchronous; the original CJS used async for
+ * forward-compatibility but no await is needed. Dropped async per ADR-457 policy
+ * (caller uses `await` which is safe on a sync return value).
+ */
+function cmdMigrateConfig(cwd, raw) {
+    const ws = resolveEnvWorkstream();
+    // #3749: resolve the migration target through the project-aware resolver so
+    // GSD_PROJECT scopes the write; migrateOnDisk itself cannot (see its
+    // configPathOverride note).
+    const scopedConfigPath = node_path_1.default.join(planningDir(cwd, ws || undefined), 'config.json');
+    const report = (0, configuration_cjs_1.migrateOnDisk)(cwd, ws || undefined, scopedConfigPath);
+    // #3760: deduplicated on (path, reason), so a repeated invocation stays quiet.
+    if (report.skipped.length > 0) {
+        warnUnusableInput({
+            reason: UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT,
+            source: node_path_1.default.join(planningDir(cwd, ws || undefined), 'config.json'),
+        });
+    }
+    if (raw) {
+        // #3760: a refused migration is NOT an already-canonical config. Reporting
+        // "no legacy keys found" when a legacy key was found and declined would send
+        // the user away believing there is nothing to fix — and the thing to fix is
+        // the one thing only they can fix, by hand.
+        const declined = report.skipped;
+        const declinedLines = declined.map(s => `  ${s.from} → ${s.to}  SKIPPED: '${s.section}' holds a ${s.sectionType}, not an object`);
+        if (!report.migrated && declined.length === 0) {
+            const msg = 'No legacy keys found — config is already canonical.';
+            output(msg, true, msg);
+        }
+        else if (!report.migrated) {
+            const lines = [
+                'Not migrated — every legacy key found was left in place:',
+                ...declinedLines,
+                'Fix the section by hand, then re-run. Nothing was written.',
+            ].join('\n');
+            output(lines, true, lines);
+        }
+        else {
+            const lines = [
+                `Migrated: ${String(report.wrote)}`,
+                ...report.normalizations.map(n => `  ${n.from} → ${n.to}`),
+                ...declinedLines,
+            ].join('\n');
+            output(lines, true, lines);
+        }
+    }
+    else {
+        // output() JSON.stringify's its first arg when raw=false; pass the report object.
+        output(report, false, report);
+    }
+}
+module.exports = {
+    VALID_CONFIG_KEYS,
+    VALID_PHASE_ID_CONVENTIONS,
+    cmdConfigEnsureSection,
+    cmdConfigSet,
+    cmdConfigGet,
+    parseConfigArgValue,
+    encodeConfigValue,
+    cmdConfigSetModelProfile,
+    cmdConfigNewProject,
+    cmdConfigPath,
+    cmdMigrateConfig,
+    // Exported for programmatic use by capability-writer and tests
+    setConfigValue,
+    setConfigValues,
+    isValidProtectedBranches,
+    normalizeSecretReadExemptEntry,
+};

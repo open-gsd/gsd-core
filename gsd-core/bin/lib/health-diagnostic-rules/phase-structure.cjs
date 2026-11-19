@@ -1,0 +1,243 @@
+"use strict";
+/**
+ * Health Diagnostic — Phase directory structure rules (Phase 11, #3309,
+ * ADR-3180 §8.2/§8.3/§8.5).
+ *
+ * Group: "Phase directory structure" (design doc, "Rule table organization"
+ * table) — W005, W023, I001, W009, and W030 (#5118).
+ *
+ * Ported behavior-preserving from `cmdValidateHealth`
+ * (`src/verify.cts:1893-1990`, the exact call sites for W005/W023/I001/W009),
+ * with two disclosed fidelity reductions forced by `PlanningSnapshot`'s
+ * current shape (see each rule's own comment below):
+ *
+ * - I001 cannot name the individual unsummarized PLAN filename (`snapshot.
+ *   phases.value[i]` exposes only `planCount`/`summaryCount`, not per-plan
+ *   filenames) — this rule reports a coarser per-PHASE message instead.
+ * - W023's original "described" list called `determinePhaseStatus`
+ *   (`commands.cts:154`, since deleted, #5060). The label now comes from the
+ *   Phase Status Module's pure ladder (`phaseStatusFromFacts` +
+ *   `toDisplayLabel`, `../phase-status.cjs`) over the same `PhaseSnapshot`
+ *   facts this rule already had — `planCount`/`summaryCount`,
+ *   `complete`/`verificationStatus` (`isPhaseComplete`'s §7.4 disk-strict
+ *   routing of the SAME `*-VERIFICATION.md` file). §8.1 rule 1 (no ambient
+ *   I/O in `check`) still holds: the module's ladder is a pure function of
+ *   facts already on the snapshot, no new I/O or snapshot field is needed.
+ *
+ * W009's original message interpolates `${slash('plan-phase')}`
+ * (`verify.cts:1982`, ``Re-run ${slash('plan-phase')} with --research to
+ * regenerate``), a per-project runtime-resolved value (`formatGsdSlash`,
+ * `src/runtime-slash.cts`) this rule's `(snapshot) => Diagnostic[]`
+ * signature has no access to. Hardcodes the canonical `/gsd-plan-phase`
+ * hyphen form instead, mirroring the sibling "config.json validation"
+ * group's W016 rule (`src/health-diagnostic-rules/config-validation.cts`),
+ * which hardcodes `/gsd-ai-integration-phase` the same way for the
+ * identical reason.
+ *
+ * Design: .gsd/phase/refactor-3309-health-diagnostic-rule-table/40-design.md
+ *
+ * ADR-457 build-at-publish: source in
+ * src/health-diagnostic-rules/phase-structure.cts, compiled to
+ * gsd-core/bin/lib/health-diagnostic-rules/phase-structure.cjs (gitignored).
+ */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const healthDiagnosticMod = require("../health-diagnostic-types.cjs");
+const { SEVERITY, REMEDY_ACTION, REMEDY_RISK, adviseRemedy } = healthDiagnosticMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const validateMod = require("../validate.cjs");
+// #612: `isPhaseDirName` is the convention-SELECTED shape test wrapping
+// `phaseDirNameRe`. Handed no convention it delegates to that very regex, so a
+// legacy repo's W005 reading is byte-identical; handed 'bracket' it also
+// recognizes `{CODE}.{MM}-{PP}-slug`, which `phaseDirNameRe` rejects outright —
+// left un-threaded, W005 fires on EVERY phase directory of a repo that opted
+// into the convention, i.e. the check inverts on exactly the repos PR-2 widens.
+const { isPhaseDirName } = validateMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const phaseIdMod = require("../phase-id.cjs");
+const { extractPhaseToken, normalizePhaseName, phaseKeyFromDir, comparePhaseNum } = phaseIdMod;
+// #5060: the Phase Status Module owns the status-label ladder.
+const phase_status_cjs_1 = require("../phase-status.cjs");
+// #5291: W030 asks whether a raw report status has a known repair. The lookup is
+// a pure read of a frozen table, so `check` stays free of ambient I/O (§8.1 rule 1).
+const verification_cjs_1 = require("../verification.cjs");
+// ─── W005 — phase directory doesn't follow NN-name format (verify.cts:1893-1902) ─
+function checkW005(snapshot) {
+    const diagnostics = [];
+    const context = snapshot.directoryContext ?? phaseIdMod.phaseDirectoryContext(snapshot.config.value ?? {}, '', snapshot.roadmapDeclaredPhases.value.map(({ phaseId }) => phaseId));
+    for (const name of snapshot.phaseDirs.value) {
+        const custom = snapshot.phaseIdConvention === 'bracket' ? null : phaseIdMod.customPhaseQuery(name, context);
+        const owner = custom && phaseIdMod.customDirectoryOwner(name, custom);
+        if (!owner && !isPhaseDirName(name, snapshot.phaseIdConvention)) {
+            diagnostics.push({
+                code: 'W005',
+                severity: SEVERITY.WARNING,
+                message: `Phase directory "${name}" doesn't follow NN-name format`,
+                remedy: adviseRemedy('Rename to match pattern (e.g., 01-setup)'),
+            });
+        }
+    }
+    return diagnostics;
+}
+// ─── W023 — phase directories collide on normalized key (verify.cts:1904-1950) ─
+//
+// Groups directories by the canonical identity owner, preserving recorded
+// custom IDs instead of collapsing their shared token prefixes. Sorted with
+// contextual `comparePhaseNum` + a `localeCompare` tiebreak, mirroring
+// `verify.cts:1930-1932`'s deterministic-output rationale. See the file-level
+// comment for the disclosed "described" fidelity reduction.
+function checkW023(snapshot) {
+    const context = snapshot.directoryContext;
+    const groups = new Map();
+    for (const name of snapshot.phaseDirs.value) {
+        const key = context?.phaseNaming === 'custom'
+            ? phaseKeyFromDir(name, undefined, context)
+            : normalizePhaseName(extractPhaseToken(name));
+        const list = groups.get(key);
+        if (list)
+            list.push(name);
+        else
+            groups.set(key, [name]);
+    }
+    const phaseByDir = new Map(snapshot.phases.value.map((p) => [p.dir, p]));
+    const diagnostics = [];
+    for (const [key, dirs] of groups) {
+        if (dirs.length < 2)
+            continue;
+        const described = dirs
+            .slice()
+            .sort((a, b) => comparePhaseNum(a, b, context) || String(a).localeCompare(String(b)))
+            .map((d) => {
+            const phase = phaseByDir.get(d);
+            const plans = phase ? phase.planCount : 0;
+            const summaries = phase ? phase.summaryCount : 0;
+            const complete = phase ? phase.complete : false;
+            const verificationStatus = phase ? phase.verificationStatus : null;
+            const status = (0, phase_status_cjs_1.toDisplayLabel)((0, phase_status_cjs_1.phaseStatusFromFacts)({ planCount: plans, summaryCount: summaries, complete, verificationStatus }), { pendingWord: 'Not Started' });
+            return `${d} (${status})`;
+        })
+            .join(', ');
+        diagnostics.push({
+            code: 'W023',
+            severity: SEVERITY.WARNING,
+            message: `Phase directories collide on normalized key "${key}": ${described}`,
+            remedy: adviseRemedy('Inspect each directory; rename or remove the duplicate so only one directory maps to this phase key'),
+        });
+    }
+    return diagnostics;
+}
+// ─── I001 — plan(s) without a matching SUMMARY.md (verify.cts:1952-1965) ───
+//
+// GENUINE FIDELITY GAP (see file-level comment): the original is PER-PLAN
+// (`${e.name}/${plan} has no SUMMARY.md`, `plan` an individual PLAN.md
+// filename from `findUnsummarizedPlans`). `PlanningSnapshot`'s
+// `phases.value[i]` carries only `planCount`/`summaryCount` NUMBERS per
+// phase — no per-plan filenames — so this rule cannot name which plan lacks
+// a summary without reading the phase directory directly inside `check`
+// (forbidden by §8.1 rule 1). This rule instead reports one coarser
+// per-PHASE diagnostic naming the deficit count, not the individual
+// filename(s).
+function checkI001(snapshot) {
+    const diagnostics = [];
+    for (const phase of snapshot.phases.value) {
+        const deficit = phase.planCount - phase.summaryCount;
+        if (deficit > 0) {
+            diagnostics.push({
+                code: 'I001',
+                severity: SEVERITY.INFO,
+                message: `Phase ${phase.dir} has ${deficit} plan(s) without a matching summary`,
+                remedy: adviseRemedy('May be in progress'),
+            });
+        }
+    }
+    return diagnostics;
+}
+// ─── W009 — Validation Architecture in RESEARCH.md but no VALIDATION.md ────
+// (verify.cts:1967-1990)
+function checkW009(snapshot) {
+    const diagnostics = [];
+    for (const entry of snapshot.researchValidationStatus.value) {
+        if (entry.hasValidationArchitecture && !entry.hasValidationMd) {
+            diagnostics.push({
+                code: 'W009',
+                severity: SEVERITY.WARNING,
+                message: `Phase ${entry.dir}: has Validation Architecture in RESEARCH.md but no VALIDATION.md`,
+                remedy: adviseRemedy('Re-run /gsd-plan-phase with --research to regenerate'),
+            });
+        }
+    }
+    return diagnostics;
+}
+// ─── W030 — verification report status outside the closed set (#5118) ─────
+//
+// `isPhaseComplete` absorbs an out-of-set report `status` (its no-throw
+// contract) and the snapshot carries the typed error's file and message. A
+// diagnostics surface must survive the defect it diagnoses, so health reports
+// the file instead of failing with `verification_status_invalid` like the
+// query surfaces do: `validate health` (exit 0) lists each such report as one
+// W030 finding, built from the error the snapshot carries.
+function checkW030(snapshot) {
+    const diagnostics = [];
+    for (const phase of snapshot.phases.value) {
+        const invalid = phase.verificationStatusError;
+        if (!invalid)
+            continue;
+        // #5291: a KNOWN legacy status is repairable (rewritten to its closed-set
+        // equivalent, original kept in `legacy_status`); any other value has no
+        // mapping and keeps the advise-only remedy — it stays refused.
+        const target = (0, verification_cjs_1.legacyStatusRepairTarget)(invalid.rawStatus);
+        diagnostics.push({
+            code: 'W030',
+            severity: SEVERITY.WARNING,
+            message: `Phase ${phase.dir}: ${invalid.message}`,
+            remedy: target === null
+                ? adviseRemedy('Set the report frontmatter `status` to one of passed | gaps_found | human_needed, or delete the report and re-run the phase verification')
+                : {
+                    action: REMEDY_ACTION.REPAIR_VERIFICATION_STATUS,
+                    risk: REMEDY_RISK.NONE,
+                    args: { file: invalid.file, from: invalid.rawStatus, to: target },
+                },
+        });
+    }
+    return diagnostics;
+}
+// ─── Exports ────────────────────────────────────────────────────────────────
+const RULES = [
+    {
+        code: 'W005',
+        severity: SEVERITY.WARNING,
+        description: 'Phase directory naming mismatch',
+        repairable: false,
+        check: checkW005,
+    },
+    {
+        code: 'W023',
+        severity: SEVERITY.WARNING,
+        description: 'Phase directories collide on normalized key',
+        repairable: false,
+        check: checkW023,
+    },
+    {
+        code: 'I001',
+        severity: SEVERITY.INFO,
+        description: 'Plan without SUMMARY (may be in progress)',
+        repairable: false,
+        check: checkI001,
+    },
+    {
+        code: 'W009',
+        severity: SEVERITY.WARNING,
+        description: 'Phase has Validation Architecture in RESEARCH.md but no VALIDATION.md',
+        repairable: false,
+        check: checkW009,
+    },
+    {
+        code: 'W030',
+        severity: SEVERITY.WARNING,
+        description: 'Phase verification report status is outside the closed set',
+        // #5291: repairable per finding — a KNOWN legacy status (`pass_with_caveats`)
+        // is rewritten by `--repair`; any other value stays advise-only.
+        repairable: true,
+        check: checkW030,
+    },
+];
+module.exports = { RULES };

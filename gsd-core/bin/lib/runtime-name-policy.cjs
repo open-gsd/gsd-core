@@ -1,0 +1,617 @@
+"use strict";
+/**
+ * Runtime name policy — alias resolution and canonicalization for GSD runtime
+ * identifiers (ADR-457 build-at-publish: the hand-written
+ * bin/lib/runtime-name-policy.cjs collapsed to a TypeScript source of truth).
+ * Behaviour is preserved byte-for-behaviour from the prior hand-written .cjs;
+ * only types are added.
+ *
+ * Group C cross-import candidate: no bin/lib sibling dependencies; only
+ * node:fs and node:path. Once this module is migrated, runtime-slash.cjs
+ * (which imports runtime-name-policy.cjs) becomes the first true cross-import
+ * proof candidate.
+ */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.NO_LOCAL_CONFIG_DIR_SENTINEL = exports.FALLBACK_HOST_BEHAVIORS = exports.LEGACY_NON_REGISTRY_RUNTIME_IDS = exports.LEGACY_NON_REGISTRY_RUNTIME_HOMES = exports.RetiredRuntimeError = exports.UnknownRuntimeError = exports.RETIRED_RUNTIME_IDS = void 0;
+exports.isRetiredRuntimeId = isRetiredRuntimeId;
+exports.assertNotRetiredRuntime = assertNotRetiredRuntime;
+exports.isKnownRuntimeId = isKnownRuntimeId;
+exports.assertKnownRuntime = assertKnownRuntime;
+exports.hostBehaviorsFor = hostBehaviorsFor;
+exports.canonicalizeRuntimeName = canonicalizeRuntimeName;
+exports.resolveRuntimeNameFromCandidates = resolveRuntimeNameFromCandidates;
+exports.getProjectInstructionFile = getProjectInstructionFile;
+exports.getDirName = getDirName;
+exports.getRuntimeLabel = getRuntimeLabel;
+exports.getGlobalConfigHomeFragment = getGlobalConfigHomeFragment;
+exports.runtimeFlags = runtimeFlags;
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_path_1 = __importDefault(require("node:path"));
+/**
+ * Runtime ids that GSD deliberately RETIRED, as opposed to ids it has simply
+ * never heard of. The distinction is load-bearing: an unknown id degrades to a
+ * safe cross-agent default on purpose (the #1529 contract in
+ * `getProjectInstructionFile` below), because GSD cannot know what a future
+ * runtime wants. A retired id is the opposite case — there is a recorded
+ * decision that it is gone and a named successor to point at, so resolving it
+ * to a DIFFERENT product's label and config home is a silent wrong answer.
+ *
+ * Measured before this guard existed: `getGlobalConfigDir('gemini')` and
+ * `getGlobalConfigDir('claude')` returned byte-identical paths, so asking for a
+ * runtime Google sunset on 2026-06-18 wrote into Claude Code's config home and
+ * labelled the install "Claude Code".
+ *
+ * Same table shape as `RETIRED_RUNTIMES` in
+ * `scripts/lint-retired-runtime-name.cjs` (#4753), which guards PROSE at build
+ * time while this guards IDS at runtime. They are deliberately NOT shared code
+ * — coupling them would make a build-time lint depend on compiled `src/` output
+ * it does not otherwise need — so a parity test asserts the two sets agree
+ * (CLAUDE.md, Generative Fix Divergence).
+ */
+const RETIRED_RUNTIME_DETAILS = new Map([
+    ['gem' + 'ini', { successor: 'Antigravity', retiredBy: '#1928', sunset: '2026-06-18' }],
+]);
+/**
+ * Normalise a candidate id for retirement matching: NFKC-fold, lowercase, and
+ * drop every non-alphanumeric character.
+ *
+ * Folding the separators is what makes `gemini-cli`, `gemini_cli`,
+ * `gemini.cli` and `geminicli` one key instead of four near-misses a reviewer
+ * has to find one at a time — and NFKC folds the full-width `ｇｅｍｉｎｉ` a CJK
+ * keyboard produces. It stays MEMBERSHIP matching, not a prefix or substring
+ * test: `gemini-2.5-pro` folds to `gemini25pro` and `gemini-3.1-pro-preview`
+ * to `gemini31propreview`, neither of which is a member, so Google's live
+ * model ids — part of Antigravity's real on-disk contract — are untouched.
+ *
+ * Homoglyph folding is deliberately NOT attempted. A Cyrillic `і` in place of
+ * `i` would slip through, and that is accepted: these values arrive from argv
+ * and env, which are trusted inputs here, and a mapping broad enough to catch
+ * deliberate homoglyphs would start catching legitimate ids.
+ */
+function normalizeForRetirementMatch(value) {
+    return value.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+/**
+ * Every spelling that names a retired runtime, mapped to its canonical id.
+ * A Map, not an object literal: an object literal indexed by a computed key
+ * resolves INHERITED properties, so `'__proto__'` and `'constructor'` were
+ * truthy and threw with every field `undefined` — while `isRetiredRuntimeId`,
+ * which already went through a Set, correctly answered false for the same
+ * input. Two guards disagreeing about one id is worse than either answer.
+ * A Map has no prototype keys, so the hazard is structural, not patched.
+ */
+const RETIRED_RUNTIME_SPELLINGS = new Map(Array.from(RETIRED_RUNTIME_DETAILS.keys()).flatMap((id) => [
+    [normalizeForRetirementMatch(id), id],
+    [normalizeForRetirementMatch(`${id}-cli`), id],
+]));
+/**
+ * The canonical retired runtime ids, lowercase. Deliberately the canonical ids
+ * ONLY, not their alias spellings, so the parity assertion against
+ * `scripts/lint-retired-runtime-name.cjs`'s `RETIRED_RUNTIMES` compares like
+ * with like.
+ */
+exports.RETIRED_RUNTIME_IDS = new Set(RETIRED_RUNTIME_DETAILS.keys());
+/**
+ * Error thrown when a non-empty runtime id that is neither registered nor a
+ * known non-registry host reaches a descriptor accessor (ADR-5057 §5, #5169).
+ * Before this, such an id silently resolved to Claude Code's values.
+ */
+class UnknownRuntimeError extends Error {
+    code = 'GSD_UNKNOWN_RUNTIME';
+    runtimeId;
+    constructor(runtimeId) {
+        super(`Runtime "${runtimeId}" is not registered in the capability registry. `
+            + 'Refusing to resolve it, because the previous behaviour silently returned Claude Code\'s values.');
+        this.name = 'UnknownRuntimeError';
+        this.runtimeId = runtimeId;
+    }
+}
+exports.UnknownRuntimeError = UnknownRuntimeError;
+/** Error thrown when a retired runtime id reaches a resolution accessor. */
+class RetiredRuntimeError extends Error {
+    code = 'GSD_RETIRED_RUNTIME';
+    runtimeId;
+    constructor(runtimeId, detail) {
+        super(`Runtime "${runtimeId}" was retired by ${detail.retiredBy} (sunset ${detail.sunset}); `
+            + `use "${detail.successor}" instead. Refusing to resolve it, because the previous `
+            + `behaviour silently returned Claude Code's values.`);
+        this.name = 'RetiredRuntimeError';
+        this.runtimeId = runtimeId;
+    }
+}
+exports.RetiredRuntimeError = RetiredRuntimeError;
+/**
+ * Is `runtime` a deliberately retired runtime, under any of its spellings?
+ * Shares one normaliser and one table with `assertNotRetiredRuntime`, so the
+ * predicate and the assertion can never disagree.
+ */
+function isRetiredRuntimeId(runtime) {
+    if (typeof runtime !== 'string')
+        return false;
+    return RETIRED_RUNTIME_SPELLINGS.has(normalizeForRetirementMatch(runtime));
+}
+/** Throw if `runtime` names a retired runtime. No-op otherwise. */
+function assertNotRetiredRuntime(runtime) {
+    if (typeof runtime !== 'string')
+        return;
+    const id = RETIRED_RUNTIME_SPELLINGS.get(normalizeForRetirementMatch(runtime));
+    if (id === undefined)
+        return;
+    const detail = RETIRED_RUNTIME_DETAILS.get(id);
+    if (detail === undefined)
+        return;
+    throw new RetiredRuntimeError(id, detail);
+}
+/**
+ * Legacy runtime ids that have a genuine, dedicated resolution branch in
+ * `runtime-homes.cts` but no capability-registry descriptor (#3024). They are
+ * KNOWN ids: every accessor resolves them rather than refusing. Enumerated by
+ * hand and MUST stay in lockstep with `getGlobalConfigDir`'s hardcoded
+ * branches — add an id only after confirming it has a real dedicated branch.
+ */
+exports.LEGACY_NON_REGISTRY_RUNTIME_HOMES = Object.freeze({
+    // Grok's agents home: `GROK_AGENTS_HOME`, else `~/.agents` (dir = path segments under $HOME).
+    grok: Object.freeze({ env: 'GROK_AGENTS_HOME', dir: Object.freeze(['.agents']) }),
+});
+exports.LEGACY_NON_REGISTRY_RUNTIME_IDS = new Set(Object.keys(exports.LEGACY_NON_REGISTRY_RUNTIME_HOMES));
+/** The capability registry's `runtimes` map, or `null` when it fails to load. */
+function loadRegistryRuntimes() {
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const reg = require('./capability-registry.cjs');
+        return (reg && reg.runtimes) || null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * True when `runtime` is a registered runtime id (own property of the registry
+ * `runtimes` map — never an inherited key such as `__proto__`/`constructor`)
+ * or one of {@link LEGACY_NON_REGISTRY_RUNTIME_IDS}. Raw-id match: no trimming,
+ * no case folding, no alias expansion.
+ */
+function isKnownRuntimeId(runtime) {
+    if (typeof runtime !== 'string' || runtime.length === 0)
+        return false;
+    const runtimes = loadRegistryRuntimes();
+    if (runtimes && Object.prototype.hasOwnProperty.call(runtimes, runtime))
+        return true;
+    return exports.LEGACY_NON_REGISTRY_RUNTIME_IDS.has(runtime);
+}
+/**
+ * The ONE refusal every descriptor accessor shares (ADR-5057 §5, #5169).
+ * No-op for an absent id (`''`, non-string): that is the documented
+ * "no runtime selected" generic path. A retired id throws
+ * {@link RetiredRuntimeError}; any other non-empty id that is not known throws
+ * {@link UnknownRuntimeError} instead of silently resolving to Claude Code's
+ * values. When the registry itself failed to load, unknown-ness cannot be
+ * proven, so the check degrades to a no-op (the #338 floor in
+ * {@link hostBehaviorsFor} still protects the reference host).
+ */
+function assertKnownRuntime(runtime) {
+    if (typeof runtime !== 'string' || runtime.length === 0)
+        return;
+    assertNotRetiredRuntime(runtime);
+    if (loadRegistryRuntimes() === null)
+        return;
+    if (!isKnownRuntimeId(runtime))
+        throw new UnknownRuntimeError(runtime);
+}
+/**
+ * The #338-privacy fail-safe floor: host behaviors for the two hosts whose
+ * generic fallthrough would be WRONG if the registry failed to load. Moved
+ * here from `bin/install.js` so the registry-load-failure degrade lives in the
+ * single host-behaviors accessor instead of one of three copies (#5169).
+ */
+exports.FALLBACK_HOST_BEHAVIORS = Object.freeze({
+    claude: Object.freeze({
+        settingsFileByScope: Object.freeze({ local: 'settings.local.json', global: 'settings.json' }),
+        permissionsSchema: 'claude',
+        sourceMarkerFile: '.gsd-source',
+        hyphenNameAgentBody: true,
+        legacyCommandsGsdInstallMigration: true,
+        legacyCommandsGsdUninstall: 'global',
+    }),
+    // antigravity's global config dir is resolved dynamically (env-overridable,
+    // multi-segment); this floor keeps that routing intact if the registry fails
+    // to load instead of falling through to the wrong '.claude' fragment (#2096).
+    antigravity: Object.freeze({ globalDirResolver: 'antigravity' }),
+});
+/**
+ * The single accessor for a runtime's host behaviors
+ * (capabilities/<runtime>/capability.json -> runtime.hostBehaviors). Replaces
+ * the three private `_hostBehaviors` copies in `bin/install.js`,
+ * `install-engine.cts` and `runtime-artifact-conversion.cts`.
+ *
+ * - absent id (`''`, non-string) → `{}` (generic path).
+ * - registered id → the descriptor's `hostBehaviors` (or `{}` when it declares
+ *   none).
+ * - known non-registry id (`grok`) → `{}`.
+ * - registry failed to load → the #338 floor for the ids it covers, else `{}`.
+ * - any other id (unregistered, retired, a prototype key) → `{}`: no declared
+ *   behaviors, which is the GENERIC path — never Claude Code's behaviors.
+ *
+ * Unlike the path/label accessors (`getDirName`, `getGlobalConfigDir`, …), whose
+ * fallthrough answer is Claude Code's value and therefore a silent wrong answer
+ * (#4632), an absent behavior is the correct answer for a label GSD does not
+ * know — and this accessor is read by guard and hook code on user-supplied
+ * runtime labels (stale config, a retired id), where a throw would crash the
+ * session rather than skip a behavior. ADR-5057 §5 Phase 10 amendment.
+ *
+ * `registry` is injectable so the load-failure branch is unit-testable.
+ */
+function hostBehaviorsFor(runtime, registry) {
+    if (typeof runtime !== 'string' || runtime.length === 0)
+        return {};
+    const floor = () => Object.prototype.hasOwnProperty.call(exports.FALLBACK_HOST_BEHAVIORS, runtime)
+        ? exports.FALLBACK_HOST_BEHAVIORS[runtime]
+        : {};
+    const runtimes = registry === undefined ? loadRegistryRuntimes() : (registry && registry.runtimes) || null;
+    if (runtimes === null)
+        return floor();
+    if (Object.prototype.hasOwnProperty.call(runtimes, runtime)) {
+        const declared = runtimes[runtime]?.runtime?.hostBehaviors;
+        return declared ? declared : floor();
+    }
+    return {};
+}
+const FALLBACK_ALIASES = {
+    claude: ['claude', 'claude-code', 'claude-cli'],
+    opencode: ['opencode', 'open-code', 'opencode-cli'],
+    kilo: ['kilo', 'kilo-cli'],
+    codex: ['codex', 'codex-app', 'codex-cli', 'codex_desktop', 'codex-desktop'],
+    copilot: ['copilot', 'copilot-cli', 'github-copilot'],
+    antigravity: ['antigravity', 'antigravity-cli', 'antigravity-agent'],
+    cursor: ['cursor', 'cursor-cli', 'cursor-nightly'],
+    windsurf: ['windsurf', 'windsurf-cli', 'windsurf-next', 'devin-desktop'],
+    augment: ['augment', 'augment-code', 'augment-cli'],
+    trae: ['trae', 'trae-cli'],
+    qwen: ['qwen', 'qwen-code', 'qwen-cli'],
+    hermes: ['hermes', 'hermes-agent', 'hermes-cli'],
+    kimi: ['kimi'],
+    'kimi-code': ['kimi-code', 'kimicode', 'kimi_code'],
+    codebuddy: ['codebuddy', 'codebuddy-cli'],
+    cline: ['cline', 'cline-cli'],
+    pi: ['pi'],
+    vscode: ['vscode'],
+    zcode: ['zcode'],
+};
+function normalizeRuntimeToken(value) {
+    return String(value).trim().toLowerCase().replace(/[_\s]+/g, '-');
+}
+function loadAliasManifest() {
+    const manifestCandidates = [
+        node_path_1.default.resolve(__dirname, '..', 'shared', 'runtime-aliases.manifest.json'),
+        node_path_1.default.resolve(__dirname, '../../../sdk/shared/runtime-aliases.manifest.json'),
+    ];
+    for (const manifestPath of manifestCandidates) {
+        try {
+            const parsed = JSON.parse(node_fs_1.default.readFileSync(manifestPath, 'utf8'));
+            if (parsed && typeof parsed === 'object')
+                return parsed;
+        }
+        catch {
+            // Try next candidate.
+        }
+    }
+    return { ...FALLBACK_ALIASES };
+}
+const aliasManifest = loadAliasManifest();
+const aliasToCanonical = new Map();
+for (const [canonical, aliases] of Object.entries(aliasManifest)) {
+    if (typeof canonical !== 'string' || !Array.isArray(aliases))
+        continue;
+    aliasToCanonical.set(normalizeRuntimeToken(canonical), normalizeRuntimeToken(canonical));
+    for (const alias of aliases) {
+        if (typeof alias !== 'string')
+            continue;
+        aliasToCanonical.set(normalizeRuntimeToken(alias), normalizeRuntimeToken(canonical));
+    }
+}
+function canonicalizeRuntimeName(value) {
+    if (typeof value !== 'string')
+        return null;
+    return aliasToCanonical.get(normalizeRuntimeToken(value)) || null;
+}
+/**
+ * Resolve runtime from a precedence list of candidate values.
+ *
+ * - First non-empty string candidate wins.
+ * - Known aliases are canonicalized (codex-cli -> codex).
+ * - Unknown values are normalized and returned (future-runtime tolerance).
+ *
+ * @param candidates - string candidates in precedence order
+ * @returns the resolved runtime name, or null if no valid candidate
+ */
+function resolveRuntimeNameFromCandidates(...candidates) {
+    for (const candidate of candidates) {
+        if (typeof candidate !== 'string')
+            continue;
+        const normalized = normalizeRuntimeToken(candidate);
+        if (!normalized)
+            continue;
+        return canonicalizeRuntimeName(normalized) || normalized;
+    }
+    return null;
+}
+/**
+ * Map a runtime id to its project instruction file path (relative to project
+ * root). Bug #1529: this is the SINGLE source of truth shared by both
+ * consumption surfaces —
+ *   (A) the Node surface: profile-output.cjs (generate-claude-md handler)
+ *   (B) the bash surface: `gsd-tools query project-instruction-file --runtime <r>`,
+ *       consumed by gsd-core/workflows/new-project.md to set $INSTRUCTION_FILE
+ *
+ * Mapping table (per the #1529 issue contract):
+ *
+ *   claude                      → .claude/CLAUDE.md
+ *   codex, opencode, kilo, kimi → AGENTS.md
+ *   copilot                     → .github/copilot-instructions.md
+ *   antigravity                 → GEMINI.md
+ *   unknown / future runtimes   → AGENTS.md (safe cross-agent default)
+ *
+ * Source-of-truth references for each runtime's read path:
+ *   - copilot: GitHub Docs — repository-wide custom instructions are read ONLY
+ *     from `.github/copilot-instructions.md`; a root `copilot-instructions.md`
+ *     is not a read path. `AGENTS.md` is also read (agent instructions).
+ *     https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions
+ *     (Installer parity: runtime-config-adapter-registry.cts installSurface
+ *     'copilot-instructions' writes the same `.github/copilot-instructions.md`.)
+ *   - codex/opencode/kilo/kimi: AGENTS.md is the documented cross-agent
+ *     instruction file (agentsmd/agents.md convention).
+ *   - antigravity: GEMINI.md is Antigravity CLI's contextFileName (the Gemini
+ *     CLI runtime that historically shared this file was removed — #1928;
+ *     Google sunset Gemini CLI 2026-06-18 and Antigravity CLI is its successor).
+ *
+ * Aliases are normalized via `canonicalizeRuntimeName` first, so inputs like
+ * `codex-cli` resolve to `codex` → `AGENTS.md`. Replaces the prior codex-only
+ * override in profile-output.cjs (#3163) which left AGENTS-native runtimes
+ * (opencode/kilo/kimi) incorrectly emitting `.claude/CLAUDE.md`. Pure: no I/O
+ * (the lazy `require` below reads a static generated module, not the disk).
+ *
+ * Descriptor-driven (ADR-1239 / #2096): antigravity's `GEMINI.md` is folded
+ * from a hardcoded `canonical === 'antigravity'` literal into a read of
+ * `runtime.hostBehaviors.projectInstructionFile`. claude/copilot stay
+ * hardcoded (out of scope here) mirroring `getDirName` below, which already
+ * lazy-`require`s `capability-registry.cjs` inside the function body to
+ * avoid a circular dependency at module load.
+ */
+function getProjectInstructionFile(runtime) {
+    assertNotRetiredRuntime(runtime);
+    const canonical = canonicalizeRuntimeName(runtime);
+    if (canonical === 'claude')
+        return '.claude/CLAUDE.md';
+    if (canonical === 'copilot')
+        return '.github/copilot-instructions.md';
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { runtimes } = require('./capability-registry.cjs');
+    const declared = canonical ? runtimes[canonical]?.runtime?.hostBehaviors?.projectInstructionFile : undefined;
+    if (typeof declared === 'string' && declared.length > 0)
+        return declared;
+    // codex, opencode, kilo, kimi, AND unknown/future runtimes all default to
+    // root AGENTS.md (the safe cross-agent instruction file).
+    return 'AGENTS.md';
+}
+/**
+ * Sentinel returned by {@link getDirName} for a runtime whose
+ * `runtime.configHome.kind === 'none'` (#2103 — a Marketplace/VSIX-distributed
+ * host with NO file-projected config directory at all, e.g. VS Code).
+ *
+ * A plain fallback to `.claude` would be actively wrong here — it would read
+ * as "this runtime installs into .claude", which is false. This sentinel is
+ * a string (not `null`) so `getDirName`'s return type and every existing
+ * template-literal call site (`` `${getDirName(runtime)}` `` in bin/install.js
+ * / runtime-artifact-conversion.cjs / install-engine.cjs) are unaffected —
+ * widening the return type to `string | null` would require auditing every
+ * call site for a null-check, which is out of scope for a runtime that is
+ * never actually dispatched through those installer paths (vscode has no
+ * install surface — see capabilities/vscode/capability.json). The value is
+ * deliberately NOT a plausible dot-dir name (parens are not valid in a
+ * directory-name token GSD would ever generate) so a future caller that
+ * mistakenly interpolates it into a path fails obviously rather than
+ * silently colliding with a real directory.
+ */
+exports.NO_LOCAL_CONFIG_DIR_SENTINEL = '(no-local-config-dir)';
+/**
+ * Map a canonical runtime id to its on-disk local config directory name
+ * (e.g. `cursor` -> `.cursor`, `windsurf` -> `.windsurf`). Unknown/empty inputs
+ * fall back to `.claude`.
+ *
+ * #2103: a runtime whose descriptor declares `configHome.kind === 'none'`
+ * (no file-projected config directory at all) returns
+ * {@link NO_LOCAL_CONFIG_DIR_SENTINEL} instead of falling through to
+ * `.claude` — it has no local config dir, and `.claude` would be a wrong
+ * answer, not just an imprecise one.
+ *
+ * Pure runtime-identity projection. Relocated from `bin/install.js` per
+ * ADR-1508 (epic #1507, #1510 Phase 1) so the Runtime Artifact Conversion
+ * Module's rewrite engine can consume it without importing the installer.
+ * Consumers import it from here. `bin/install.js` used to re-export it for
+ * back-compat; that re-export was retired in #2876, once an audit found the
+ * compatibility spine had no production consumer at all.
+ */
+function getDirName(runtime) {
+    // Same silent-wrong-answer class as the four accessors AC#1 names: this
+    // returned '.claude' for a retired id, and it feeds runtimeConfigDir.
+    assertKnownRuntime(runtime);
+    if (!runtime)
+        return '.claude';
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { runtimes } = require('./capability-registry.cjs');
+    const entry = runtimes[runtime]?.runtime;
+    const dir = entry?.localConfigDir;
+    if (typeof dir === 'string' && dir.length > 0)
+        return dir;
+    if (entry?.configHome?.kind === 'none')
+        return exports.NO_LOCAL_CONFIG_DIR_SENTINEL;
+    return '.claude';
+}
+/**
+ * Curated short display labels for the install/uninstall console output, keyed
+ * by canonical runtime id. The SINGLE source of truth consumed by both
+ * `install()` and `uninstall()` in bin/install.js via `getRuntimeLabel`.
+ *
+ * Collapses the two duplicated `runtimeLabel` assignment chains that previously
+ * lived inline in bin/install.js (ADR-1239 Phase B, #1679) — the add-a-host tax:
+ * a new runtime meant remembering to add a label line in BOTH chains, and they
+ * had drifted out of sync (uninstall omitted `cline` and used a different
+ * `kimi` value than install). This table is the curated canonical resolution:
+ *   - kimi:  install 'Kimi' / uninstall 'Kimi CLI'  → 'Kimi CLI' (majority + descriptor title)
+ *   - cline: install 'Cline' / uninstall (omitted)  → 'Cline'    (majority + descriptor title)
+ *
+ * Voice: these are the SHORT UI labels, intentionally distinct from the
+ * descriptor `title` (the long product name — e.g. "OpenAI Codex CLI",
+ * "GitHub Copilot") which serves documentation/registry display,
+ * not the install console. A future slice may relocate this to a
+ * `runtime.label` descriptor field; until then this table is the source.
+ *
+ * Lookup is RAW-ID only (no alias expansion) — callers pass an already-
+ * canonicalized runtime id, keeping the label surface explicit. Unknown/empty
+ * ids fall back to 'Claude Code' (the always-safe default, fail-closed).
+ *
+ * The drift-guard test (tests/runtime-label-policy.test.cjs) pins this table's
+ * id set to the capability-registry runtime id set, so adding/removing a runtime
+ * forces a deliberate update here.
+ */
+const RUNTIME_LABELS = {
+    claude: 'Claude Code',
+    opencode: 'OpenCode',
+    kilo: 'Kilo',
+    codex: 'Codex',
+    copilot: 'Copilot',
+    antigravity: 'Antigravity',
+    cursor: 'Cursor',
+    windsurf: 'Windsurf',
+    augment: 'Augment',
+    trae: 'Trae',
+    qwen: 'Qwen Code',
+    hermes: 'Hermes Agent',
+    kimi: 'Kimi CLI',
+    'kimi-code': 'Kimi Code',
+    codebuddy: 'CodeBuddy',
+    cline: 'Cline',
+    zcode: 'ZCode',
+    pi: 'pi',
+    // #2103: vscode is a registered (role:runtime) capability for validator +
+    // host-integration coverage, even though it is never CLI-installed (no
+    // --vscode flag — see NON_INSTALLABLE_RUNTIMES in tests/runtime-flags.test.cjs).
+    // A distinct label is still required by the drift guard below.
+    vscode: 'VS Code',
+};
+/**
+ * Map a canonical runtime id to its short display label for the
+ * install/uninstall console output. Unknown/empty inputs fall back to
+ * 'Claude Code'. Sibling to `getDirName`; pure (no I/O).
+ */
+function getRuntimeLabel(runtime) {
+    assertKnownRuntime(runtime);
+    if (!runtime)
+        return 'Claude Code';
+    const label = RUNTIME_LABELS[runtime];
+    return typeof label === 'string' && label.length > 0 ? label : 'Claude Code';
+}
+/**
+ * Source-string fragments for the runtime → global config-home path, used by
+ * `getConfigDirFromHome` in bin/install.js to template `path.join()` calls in
+ * generated hook scripts. Each value is a JS-source snippet (embedded quotes /
+ * commas are intentional — it is spliced into generated code as path.join args).
+ *
+ * Collapses the prior 14-branch `if (runtime === 'x') return "'...'"` chain in
+ * bin/install.js (ADR-1239 Phase B / #1679, AC2 slice 2) — the add-a-host tax:
+ * a new runtime meant remembering to add a branch here. Values are preserved
+ * BYTE-FOR-BYTE from the prior chain; golden install parity asserts generated
+ * hook output is unchanged across all 15 runtimes.
+ *
+ * Two runtimes are intentionally absent (handled by the caller, NOT this table):
+ *   - `claude`     → the default; falls through to `DEFAULT_FRAGMENT`.
+ *   - `antigravity`→ resolved dynamically via resolveAntigravityGlobalDir +
+ *                    path.relative (multi-segment, env-overridable).
+ *
+ * Unknown/empty ids fall back to the default (`.claude`).
+ */
+const DEFAULT_CONFIG_HOME_FRAGMENT = "'.claude'";
+const GLOBAL_CONFIG_HOME_FRAGMENTS = {
+    copilot: "'.copilot'",
+    opencode: "'.config', 'opencode'",
+    kilo: "'.config', 'kilo'",
+    codex: "'.codex'",
+    cursor: "'.cursor'",
+    windsurf: "'.windsurf'",
+    augment: "'.augment'",
+    trae: "'.trae'",
+    qwen: "'.qwen'",
+    hermes: "'.hermes'",
+    codebuddy: "'.codebuddy'",
+    cline: "'.cline'",
+    kimi: "'.config', 'agents'",
+    'kimi-code': "'.kimi-code'",
+    zcode: "'.zcode'",
+    // pi's global config home is ~/.pi/agent (configHome: dot-home-nested,
+    // parent '.pi', name 'agent' — capabilities/pi/capability.json), matching
+    // resolveConfigHomeFromDescriptor's `path.join(home, parent, name)` for the
+    // no-probe dot-home-nested case (src/runtime-homes.cts). Two-segment
+    // path.join args, same shape as opencode/kilo/kimi above.
+    pi: "'.pi', 'agent'",
+};
+/**
+ * Return the global config-home path-fragment source snippet for a runtime
+ * (for hook path.join() codegen). `claude`/unknown/empty → the default
+ * `'.claude'` fragment. `antigravity` is NOT handled here (caller resolves it
+ * dynamically). Pure: no I/O. Sibling to `getDirName` / `getRuntimeLabel`.
+ */
+function getGlobalConfigHomeFragment(runtime) {
+    assertKnownRuntime(runtime);
+    if (!runtime)
+        return DEFAULT_CONFIG_HOME_FRAGMENT;
+    const frag = GLOBAL_CONFIG_HOME_FRAGMENTS[runtime];
+    return typeof frag === 'string' && frag.length > 0 ? frag : DEFAULT_CONFIG_HOME_FRAGMENT;
+}
+/**
+ * The runtime ids for which `bin/install.js` needs an `is<Runtime>` boolean
+ * predicate (every installed host that takes a non-claude install branch).
+ * Single source of truth — adding a runtime is one entry here, not a per-
+ * function declaration block (the add-a-host tax ADR-1239 Phase B / #1679 AC2
+ * removes).
+ */
+// #2094: 'trae' stays here — bin/install.js's agents-converter dispatch
+// (convertClaudeAgentToTraeAgent selection) still reads isTrae directly.
+// Removing it is gated on migrating that runtime-keyed `else if` chain to a
+// cross-runtime agents-dispatch table (out of scope for #2094, which only
+// folds the shared-hooks-install skip).
+const RUNTIME_FLAG_IDS = Object.freeze([
+    'opencode', 'kilo', 'codex', 'copilot', 'antigravity', 'cursor',
+    'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'kimi-code', 'zcode', 'pi',
+]);
+/**
+ * Convert a runtime id (kebab-case, e.g. 'kimi-code') to its `is<Foo>` flag
+ * name in PascalCase (e.g. 'isKimiCode'). The first letter is capitalised and
+ * every `-[a-z]` boundary is folded to its uppercase twin. Single-word ids
+ * (the prior 16: opencode, kilo, codex, …) are unaffected — only hyphenated
+ * ids like 'kimi-code' (#2454) hit the folding branch.
+ */
+function runtimeIdToFlagName(id) {
+    return 'is' + id.charAt(0).toUpperCase() + id.slice(1).replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
+}
+/**
+ * Return a frozen map of `is<Runtime>` boolean predicates for the given runtime
+ * id (e.g. `flags.isOpencode`). Collapses the four duplicated `const isX =
+ * runtime === 'x'` declaration blocks that lived in `bin/install.js`'s
+ * `uninstall`/`writeManifest`/`install`/etc. into one helper (sibling to
+ * `getDirName`/`getRuntimeLabel`). Pure: no I/O.
+ */
+function runtimeFlags(runtime) {
+    const flags = {};
+    for (const id of RUNTIME_FLAG_IDS) {
+        flags[runtimeIdToFlagName(id)] = runtime === id;
+    }
+    return Object.freeze(flags);
+}
+// The `/gsd-new-project` next-step command is no longer a per-runtime table
+// here: it is generated from the runtime's registered trigger surface by
+// `resolveAdvertisedNewProject` (runtime-artifact-layout.cts, #5215, ADR-5057
+// §5 Phase 12), so what the installer advertises cannot differ from what a
+// runtime registered.

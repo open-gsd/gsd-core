@@ -1,0 +1,1142 @@
+"use strict";
+/**
+ * Model Resolver — Model and effort resolution policy
+ *
+ * ADR-857 rollout phase 2f: extracted from core.cts (issue #888).
+ * Owns model and effort resolution policy: resolves the model, runtime tier,
+ * planning granularity, reasoning effort, and fast-mode for a given agent by
+ * reading project config and resolving against the model profiles and catalog.
+ * Behaviour is preserved byte-for-behaviour from the prior location; only
+ * the module boundary moved. The core.cjs re-export spine was retired in
+ * epic #1267; callers import resolvers from model-resolver.cjs directly.
+ *
+ * Dependencies (leaf modules only):
+ *   - node:path (project config path for the #2297 omit gate; read via config-loader's bounded reader, #5759)
+ *   - ./runtime-name-policy.cjs (resolveRuntimeNameFromCandidates — canonicalize the active runtime)
+ *   - ./planning-workspace.cjs  (planningDir — workstream/project-aware project-config path)
+ *   - ./config-loader.cjs    (loadConfig)
+ *   - ./configuration.cjs    (CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
+ *   - ./model-profiles.cjs   (MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier)
+ *   - ./model-catalog.cjs    (MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS,
+ *                             CLAUDE_AGENT_ALIASES — re-exported below for back-compat, #3241)
+ */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const configLoaderModule = require("./config-loader.cjs");
+const { loadConfig, readConfigFileBounded } = configLoaderModule;
+// ─── Configuration Module (for CANONICAL_CONFIG_DEFAULTS used by effort/fast_mode resolvers) ─
+const configuration_cjs_1 = require("./configuration.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const modelProfiles = require("./model-profiles.cjs");
+const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
+const model_catalog_cjs_1 = require("./model-catalog.cjs");
+const node_path_1 = __importDefault(require("node:path"));
+const runtime_name_policy_cjs_1 = require("./runtime-name-policy.cjs");
+const runtime_slash_cjs_1 = require("./runtime-slash.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const planningWorkspaceMod = require("./planning-workspace.cjs");
+const { planningDir } = planningWorkspaceMod;
+// ─── #2297: per-install runtime identity for the resolve_model_ids:"omit" gate ─
+//
+// The installer writes `resolve_model_ids:"omit"` into the SHARED
+// ~/.gsd/defaults.json for every runtime that lacks native model aliases (#1156).
+// Because that file is machine-wide, a non-Claude install would otherwise poison
+// a Claude no-project resolution into returning '' — silently defeating Claude's
+// adaptive tier aliases. The "omit" must therefore apply only when a runtime that
+// genuinely lacks native aliases is the one resolving.
+//
+// In a no-project session there is no `.planning/config.json` (so config.runtime
+// is null) and GSD_RUNTIME is not exported by gsd-core, so the only reliable
+// current-runtime signal is the per-install marker the installer co-locates next
+// to VERSION at <install>/gsd-core/.gsd-runtime (this file's dir is
+// <install>/gsd-core/bin/lib). Precedence for the gate: project config.runtime →
+// GSD_RUNTIME env (manual/CI override + test seam) → install marker → 'claude'.
+//
+// Whether a runtime resolves tier aliases natively is a runtime-descriptor fact
+// (`hostBehaviors.nativeModelAliases`, #5169) — `claude` is currently the ONLY
+// runtime that declares it — not a hand-kept set in this module. A label that is
+// not a registered runtime (a future runtime named by env/config) has none.
+function hasNativeModelAliases(runtime) {
+    return (0, runtime_name_policy_cjs_1.hostBehaviorsFor)(runtime).nativeModelAliases === true;
+}
+// #3897 rung 2: the marker reader + its cache and test seams were promoted to
+// the canonical owner, `runtime-slash.cts` (imported above) — this module now
+// consumes that single implementation instead of holding its own copy. N5:
+// behaviour and the seam contract are unchanged by the move; the re-exports
+// below (`export =` at the bottom of this file) preserve every existing
+// caller's `require('./model-resolver.cjs')` surface byte-for-behaviour.
+// The runtime whose install is actually resolving — one chain, owned by
+// runtime-slash.cts's `resolveActiveRuntime` (#5169): GSD_RUNTIME env → project
+// config.runtime → per-install .gsd-runtime marker → 'claude', canonicalized so
+// an alias or case variant (e.g. "claude-code"/"Claude") cannot defeat the
+// native-alias check below (#2297 review).
+// Did the PROJECT's own config (root `.planning/config.json` or the active
+// workstream/project override) explicitly set resolve_model_ids to "omit"?
+// Project config takes precedence over the shared ~/.gsd/defaults.json (#2297
+// out-of-scope guard + #2517 finding #4): an explicit project "omit" is honored
+// regardless of runtime, whereas an "omit" that came only from the global
+// defaults is ignored by native-alias runtimes. Workstream/project-scope aware
+// via planningDir (mirrors loadConfig's precedence: workstream value wins over
+// root); a plain read avoids loadConfig's normalization side effects.
+function projectExplicitlySetsOmit(cwd) {
+    const wsDir = planningDir(cwd);
+    const rootDir = node_path_1.default.join(cwd, '.planning');
+    const layers = wsDir === rootDir ? [rootDir] : [wsDir, rootDir]; // workstream > root
+    for (const dir of layers) {
+        try {
+            // Same bounded regular-file reader as the loader (#5759): a FIFO/device/oversized
+            // layer throws instead of blocking, and an absent layer returns null.
+            const raw = readConfigFileBounded(node_path_1.default.join(dir, 'config.json'));
+            if (raw === null)
+                continue;
+            const parsed = JSON.parse(raw);
+            const value = parsed?.['resolve_model_ids'];
+            // First layer that sets the key wins (matches loadConfig's deep-merge
+            // precedence). A layer that omits the key falls through to the next.
+            if (value !== undefined)
+                return value === 'omit';
+        }
+        catch {
+            // Absent/unreadable layer — try the next.
+        }
+    }
+    return false;
+}
+/**
+ * #2517 — Resolve the runtime-aware tier entry for (runtime, tier).
+ */
+function resolveTierEntry({ runtime, tier, overrides }) {
+    if (!runtime || !tier)
+        return null;
+    const runtimeMap = model_catalog_cjs_1.RUNTIME_PROFILE_MAP;
+    const builtin = runtimeMap[runtime]?.[tier] || null;
+    const overridesMap = overrides;
+    const userRaw = overridesMap?.[runtime]?.[tier];
+    let userEntry = null;
+    if (userRaw) {
+        userEntry = typeof userRaw === 'string' ? { model: userRaw } : userRaw;
+    }
+    if (!builtin && !userEntry)
+        return null;
+    return { ...(builtin || {}), ...(userEntry || {}) };
+}
+/**
+ * Convenience wrapper used by resolveModelInternal.
+ */
+function _resolveRuntimeTier(config, tier) {
+    return resolveTierEntry({
+        // #4505/#4495: TIER SELECTION follows the runtime that is actually
+        // resolving, not whatever the config file happens to say. `config.runtime`
+        // is frequently absent (the runtime is normally known from GSD_RUNTIME or
+        // the per-install marker), and reading it raw made
+        // `model_profile_overrides.<runtime>.<tier>` silently inert for every
+        // install that did not also write the key by hand.
+        runtime: (0, runtime_slash_cjs_1.resolveActiveRuntime)(config),
+        tier,
+        overrides: config['model_profile_overrides'],
+    });
+}
+/**
+ * #4192 — Resolve the claude-runtime TIER OVERRIDE model for (config, tier).
+ *
+ * Step 3's runtime-aware resolution deliberately skips the claude runtime to
+ * preserve the alias-native posture (#1156/#2297): with no user override, the
+ * resolver must keep returning bare tier aliases, and the builtin claude tier
+ * map (`opus → claude-opus-4-8`, …) must never force full-ID emission on every
+ * default install. But `model_profile_overrides.<runtime>.<tier>` is a
+ * documented override point (docs/CONFIGURATION.md § Runtime-Aware Profiles)
+ * that `workflows/settings-advanced.md` actively writes for claude-runtime
+ * users — and #4192 Finding 1 measured the key inert on this runtime.
+ *
+ * This helper reads ONLY the user's override entry for the effective claude
+ * runtime and tier — never the builtin claude tier map — so an install with no
+ * override is byte-identical to before the fix.
+ *
+ * #4505 CHANGED how the runtime reaches here. #4192 originally passed
+ * `config['runtime']` and recorded that the value policy "must key off the
+ * config the operator wrote, NOT resolveActiveRuntime". That reading turned out
+ * to defeat #4192's own stated principle — that an explicit pin must not be
+ * silently UNPINNED. With `config.runtime` absent and GSD_RUNTIME=opencode, the
+ * config-keyed read treated the session as claude and collapsed an explicit
+ * `claude-opus-4-8` pin to the bare alias `opus`, which is a Claude-only token
+ * the actual runtime cannot spawn. The runtime is now the ACTIVE one, so the
+ * claude value policy applies exactly when claude is what is running. No test
+ * pinned the previous behaviour; the ones covering #4192's pins and the
+ * alias-native posture all still pass.
+ *
+ * Value policy mirrors the model_overrides path (#2041/#4192): an override
+ * value that maps to a current tier alias collapses to that alias
+ * (byte-equivalent resolution, alias-form emission); anything else — a pinned
+ * older generation (`claude-opus-4-7`), a bare alias/tier repoint (`sonnet`),
+ * or a non-Claude vendor id (`openai/o3`) — is emitted verbatim as pinned.
+ * Malformed entries (no usable `model` string) return null so the caller falls
+ * through to normal alias resolution (ADR-443 D1: invalid values fall through).
+ */
+function resolveClaudeTierOverrideModel(
+// The ACTIVE runtime (#4505), not the raw config key — see docblock.
+activeRuntime, tier, overrides) {
+    if (!tier || tier === 'inherit')
+        return null;
+    const effectiveRuntime = activeRuntime || 'claude';
+    if (effectiveRuntime !== 'claude')
+        return null; // non-claude runtimes resolve at step 3
+    const overridesMap = overrides;
+    if (!overridesMap || typeof overridesMap !== 'object')
+        return null;
+    // Own-property guards throughout: both levels are config-supplied plain
+    // objects, so a prototype-chain key ("constructor", "toString") must not
+    // resolve an inherited member instead of falling through (same hardening as
+    // every other config-keyed lookup in this module).
+    const runtimeEntry = Object.hasOwn(overridesMap, effectiveRuntime)
+        ? overridesMap[effectiveRuntime]
+        : undefined;
+    if (!runtimeEntry || typeof runtimeEntry !== 'object')
+        return null;
+    const userRaw = Object.hasOwn(runtimeEntry, tier) ? runtimeEntry[tier] : undefined;
+    if (userRaw === undefined || userRaw === null)
+        return null;
+    const entry = typeof userRaw === 'string'
+        ? { model: userRaw }
+        : userRaw;
+    if (!entry || typeof entry !== 'object')
+        return null;
+    const model = entry['model'];
+    if (typeof model !== 'string' || model.length === 0)
+        return null;
+    if (Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, model)) {
+        return CLAUDE_POLICY_ID_TO_ALIAS[model];
+    }
+    return model;
+}
+// Reverse of the Claude tier-default IDs, plus the Fable alias which Claude
+// Code's Agent tool accepts but which is not a GSD model-profile tier (#1133).
+const CLAUDE_POLICY_ID_TO_ALIAS = {
+    ...Object.fromEntries(Object.entries(model_catalog_cjs_1.MODEL_ALIAS_MAP)
+        .filter((e) => typeof e[1] === 'string')
+        .map(([aliasName, id]) => [id, aliasName])),
+    'claude-fable-5': 'fable',
+};
+// CLAUDE_AGENT_ALIASES moved to ./model-catalog.cts (#3241) — imported above
+// and re-exported below for back-compat (bin/install.js:474,
+// tests/codex-config.test.cjs:24 depend on the name being on this module).
+// Dedupe stderr warnings so repeated agent resolutions don't spam (#1133).
+const _modelPolicyUnmappableWarned = new Set();
+function warnModelPolicyUnmappable(agentType, policyModel, tier) {
+    const key = `${agentType}::${policyModel}::${tier}`;
+    if (_modelPolicyUnmappableWarned.has(key))
+        return;
+    _modelPolicyUnmappableWarned.add(key);
+    // MUST go to stderr — resolve-model's JSON result is parsed from stdout.
+    process.stderr.write(`gsd: warning — model_policy resolved "${policyModel}" for ${agentType}, ` +
+        `but it has no Claude agent alias; using "${tier}" instead.\n`);
+}
+// Test-only: reset the model_policy warn-dedupe cache between cases (#1133).
+function _resetModelPolicyWarningCacheForTests() {
+    _modelPolicyUnmappableWarned.clear();
+}
+// Dedupe stderr warnings for unmappable model_overrides Claude IDs (#2041 /
+// #4192). #2041 originally warned that such a value was being DROPPED to tier
+// resolution; #4192 keeps the warn-once breadcrumb but changes the behavior to
+// a verbatim pass-through, so the text now describes the pass-through.
+const _modelOverrideUnmappableWarned = new Set();
+function warnModelOverrideUnmappable(agentType, overrideValue) {
+    const key = `${agentType}::${overrideValue}`;
+    if (_modelOverrideUnmappableWarned.has(key))
+        return;
+    _modelOverrideUnmappableWarned.add(key);
+    // Cap emission length so an oversized or secret-shaped value cannot leak in
+    // full to stderr/logs (#2041 security review). MUST go to stderr — resolve-
+    // model's JSON result is parsed from stdout.
+    const safe = overrideValue.length > 64 ? overrideValue.slice(0, 64) + '…' : overrideValue;
+    process.stderr.write(`gsd: warning — model_overrides value "${safe}" for ${agentType} is a fully-qualified ` +
+        `Claude model ID with no tier alias; passing it through verbatim. Claude Code setups ` +
+        `whose Agent tool accepts only tier aliases will not honor it. (#4192)\n`);
+}
+// Test-only: reset the model_overrides warn-dedupe cache between cases (#2041).
+function _resetModelOverrideWarningCacheForTests() {
+    _modelOverrideUnmappableWarned.clear();
+}
+/**
+ * #2041 — Map a `model_overrides` value to its Claude Agent-tool alias on the
+ * claude runtime, mirroring the `model_policy` path (#1144). Claude Code's
+ * Agent tool `model` parameter documents tier aliases (opus/sonnet/haiku/
+ * fable) as the always-accepted form. Returns the value to emit verbatim, or
+ * null to signal "fall through to normal tier/dynamic-routing resolution".
+ * Non-Claude runtimes and non-Claude values always pass through verbatim.
+ *
+ * #4192 — an unmappable `claude-*` value (a pinned generation that is not the
+ * current catalog default, e.g. `claude-opus-4-7`) is now PASSED THROUGH
+ * VERBATIM with a warn-once stderr breadcrumb, instead of being dropped to
+ * tier resolution. #2041's drop was correct when the value was plausibly a
+ * mis-typed current default, but for an explicit pin it silently UNPINNED the
+ * operator's choice — the resolver would report a tier the config never asked
+ * for, the exact "profile can misrepresent what actually runs" defect #4192
+ * files. The documented contract ("any fully-qualified model ID",
+ * docs/CONFIGURATION.md § Per-Agent Overrides,
+ * gsd-core/references/model-profiles.md § Per-Agent Overrides) is restored:
+ * the pin is resolved as configured. Values that DO map to a current tier
+ * alias still collapse to that alias — byte-equivalent resolution, the #2041
+ * protection preserved — and a mappable pin never warns.
+ *
+ * Hardening (code+security review): a `typeof` guard preserves the pre-fix
+ * no-crash behavior if a malformed config surfaces a non-string value, and an
+ * `Object.hasOwn` lookup defeats `__proto__`/`constructor` lookups on the plain
+ * object literal so those reserved keys cannot return a truthy non-string.
+ */
+function mapClaudeOverrideForRuntime(override, 
+// The ACTIVE runtime (#4505). Previously the raw `config['runtime']`, which
+// made an explicit claude pin collapse to a bare alias whenever the runtime
+// was declared via GSD_RUNTIME or the install marker rather than the config —
+// handing a Claude-only token to a runtime that cannot spawn it.
+activeRuntime, agentType) {
+    // Defensive: model_overrides is typed Record<string,string> but a malformed
+    // config could surface a non-string; pass through verbatim (preserving the
+    // pre-fix no-crash behaviour) and let the downstream Agent tool reject it.
+    if (typeof override !== 'string')
+        return override;
+    const onClaude = !activeRuntime || activeRuntime === 'claude';
+    if (!onClaude)
+        return override;
+    // Object.hasOwn guards against __proto__/constructor returning a truthy
+    // non-string from the plain object literal (#2041 security review).
+    if (Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, override)) {
+        return CLAUDE_POLICY_ID_TO_ALIAS[override];
+    }
+    if (model_catalog_cjs_1.CLAUDE_AGENT_ALIASES.has(override))
+        return override;
+    if (override.startsWith('claude-')) {
+        // #4192: explicit generation pin — resolve as configured (see docblock).
+        warnModelOverrideUnmappable(agentType, override);
+        return override;
+    }
+    return override;
+}
+/**
+ * #49 — Provider-neutral model policy preset resolution.
+ */
+function resolveModelPolicy(policy, tier) {
+    if (!policy || typeof policy !== 'object')
+        return null;
+    if (!tier)
+        return null;
+    const runtime = policy['runtime'];
+    const rtOverrides = policy['runtime_tiers'];
+    if (runtime && typeof runtime === 'string' && rtOverrides && typeof rtOverrides === 'object') {
+        const rtOverridesMap = rtOverrides;
+        if (Object.hasOwn(rtOverridesMap, runtime)) {
+            const runtimeEntry = rtOverridesMap[runtime];
+            if (runtimeEntry && typeof runtimeEntry === 'object' && Object.hasOwn(runtimeEntry, tier)) {
+                const raw = runtimeEntry[tier];
+                if (raw != null) {
+                    const entry = typeof raw === 'string' ? { model: raw } : raw;
+                    if (entry && entry['model'])
+                        return entry['model'];
+                }
+            }
+        }
+    }
+    const provider = policy['provider'];
+    if (!provider || typeof provider !== 'string')
+        return null;
+    if (provider === 'generic' || provider === 'custom') {
+        const TIER_TO_POLICY_KEY = { opus: 'high', sonnet: 'medium', haiku: 'low' };
+        const policyKey = TIER_TO_POLICY_KEY[tier];
+        if (!policyKey)
+            return null;
+        const v = policy[policyKey];
+        return (v && typeof v === 'string') ? v : null;
+    }
+    const presetsMap = model_catalog_cjs_1.PROVIDER_PRESETS;
+    if (!Object.hasOwn(presetsMap, provider))
+        return null;
+    const presetForProvider = presetsMap[provider];
+    if (!presetForProvider || typeof presetForProvider !== 'object')
+        return null;
+    if (!Object.hasOwn(presetForProvider, tier))
+        return null;
+    const tierPresets = presetForProvider[tier];
+    if (!tierPresets || typeof tierPresets !== 'object')
+        return null;
+    const budget = (policy['budget'] && typeof policy['budget'] === 'string') ? policy['budget'] : 'medium';
+    if (!Object.hasOwn(tierPresets, budget))
+        return null;
+    const budgetEntry = tierPresets[budget];
+    if (!budgetEntry || !budgetEntry.model)
+        return null;
+    return budgetEntry.model;
+}
+/**
+ * #2229 — the profile/phase-type tier for (config, agentType).
+ *
+ * Extracted verbatim from resolveModelInternal's step 2 so the same expression can
+ * answer "which tier did GSD resolve?" without also resolving a model id. The
+ * extraction is behaviour-preserving by construction: resolveModelInternal calls
+ * straight back into it.
+ *
+ * Returns null when the agent has no catalog entry and the profile is not `inherit`.
+ */
+function computeProfileTier(config, agentType) {
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    const profile = String(config['model_profile'] || 'balanced').toLowerCase();
+    // Own-property guard: agentType is an unvalidated CLI positional (the
+    // `resolve-model <agent-type>` argument is never checked against a known
+    // agent list), so a prototype-chain agentType ("toString", "constructor")
+    // would otherwise return an inherited member from this plain object
+    // instead of undefined — verified reachable purely via the CLI.
+    const modelProfilesMap = MODEL_PROFILES;
+    const agentModels = Object.hasOwn(modelProfilesMap, agentType) ? modelProfilesMap[agentType] : undefined;
+    const phaseType = (AGENT_TO_PHASE_TYPE)[agentType];
+    const configModels = config['models'];
+    const phaseTypeTier = (phaseType && configModels && typeof configModels === 'object')
+        ? configModels[phaseType]
+        : undefined;
+    return (phaseTypeTier && model_catalog_cjs_1.VALID_TIERS.has(phaseTypeTier))
+        ? phaseTypeTier
+        : (profile === 'inherit'
+            ? 'inherit'
+            : (agentModels
+                // Own-property guard: `profile` is a config-supplied string
+                // (config['model_profile'], lower-cased); an already-lowercase
+                // prototype-chain key ("constructor", "__proto__") would otherwise
+                // return an inherited non-string member instead of falling back to
+                // 'balanced' (verified: profile:"constructor"/"__proto__" leaked a
+                // function/object through both the tier and model resolution paths).
+                ? ((Object.hasOwn(agentModels, profile) ? agentModels[profile] : undefined) || agentModels['balanced'])
+                : null));
+}
+/**
+ * #2229 — the effective model TIER for (config, agentType), as a signal a workflow can
+ * read: `gsd_run query resolve-model <agent> --pick tier`.
+ *
+ * Why this is not just "look at the resolved model": on every runtime the installer
+ * configures with `resolve_model_ids: "omit"` — which is every non-Claude runtime, see
+ * docs/CONFIGURATION.md — resolveModelInternal returns '' below unless the runtime
+ * declares native tier aliases (#3703). A guard keyed on the model id therefore
+ * cannot tell a budget-tier run from a top-tier one there, while the tier itself is
+ * computed ABOVE that early-return and stays knowable.
+ *
+ * Honesty contract — this never guesses, because a guard that reports a wrong tier is
+ * worse than one that reports none:
+ *   - a per-agent `model_overrides` pin naming a known alias (or a full Claude id that
+ *     maps to one) reports that alias;
+ *   - a pin that maps to nothing reports 'unknown' — a raw model id carries no tier;
+ *   - `model_profile: inherit` reports 'inherit' — the session model is not ours to name;
+ *   - an agent with no catalog entry reports 'unknown'.
+ *
+ * Callers must treat 'unknown' and 'inherit' as "cannot tell", never as "adequate".
+ */
+function resolveTierFromConfig(config, agentType) {
+    const rawOverrides = config['model_overrides'];
+    const modelOverrides = (rawOverrides && typeof rawOverrides === 'object' && !Array.isArray(rawOverrides))
+        ? rawOverrides
+        : null;
+    // Own-property guard: agentType is a caller-supplied string (the
+    // `resolve-model <agent-type>` CLI positional is not validated against a
+    // known agent list); a prototype-chain agentType ("toString",
+    // "constructor") against ANY model_overrides object — even `{}` — would
+    // otherwise return an inherited member instead of undefined.
+    const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+        ? modelOverrides[agentType]
+        : undefined;
+    if (override && typeof override === 'string') {
+        if (model_catalog_cjs_1.CLAUDE_AGENT_ALIASES.has(override))
+            return override;
+        // Own-property guard: this indexes a plain object with a config-supplied
+        // string, so a prototype-chain key ("toString", "constructor", "valueOf")
+        // would otherwise return an inherited member instead of undefined — and a
+        // function-valued tier is dropped entirely by JSON.stringify, silently
+        // removing the key a guard depends on.
+        const alias = Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, override)
+            ? CLAUDE_POLICY_ID_TO_ALIAS[override]
+            : undefined;
+        if (typeof alias === 'string' && alias)
+            return alias;
+        return 'unknown';
+    }
+    const profileTier = computeProfileTier(config, agentType);
+    // #3282 — mirror resolveModelInternal's step 2.5 (model_policy preset). The
+    // profile tier alone under-reports: model_policy can dispatch a DIFFERENT
+    // tier than the profile implies (e.g. a `balanced` profile's "sonnet" tier
+    // combined with `model_policy: {budget: 'low'}` actually spawns "haiku"),
+    // and reporting the profile tier there is exactly the under-report this
+    // fixes — a haiku-tier run must never be reported as "sonnet". Skipped
+    // under the same condition resolveModelInternal skips it (no tier, or
+    // "inherit" — the session model is not ours to name).
+    if (profileTier && profileTier !== 'inherit') {
+        const mergedPolicy = config['model_policy']
+            ? { ...config['model_policy'], runtime: config['runtime'] || 'claude' }
+            : null;
+        const policyModel = resolveModelPolicy(mergedPolicy, profileTier);
+        if (policyModel) {
+            // Map the policy-resolved id back to a tier alias with the same
+            // own-property-guarded lookups used above. If it maps, that alias IS
+            // the tier that actually runs — report it (the fix). If it does not
+            // map — including every non-Claude runtime, where resolveModelInternal
+            // returns the policy model verbatim with no tier meaning — the model
+            // carries no tier we can name; report 'unknown' rather than falling
+            // back to the profile tier, which would silently reintroduce the
+            // under-report this block exists to close.
+            const aliasForId = Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, policyModel)
+                ? CLAUDE_POLICY_ID_TO_ALIAS[policyModel]
+                : undefined;
+            if (typeof aliasForId === 'string' && aliasForId)
+                return aliasForId;
+            if (model_catalog_cjs_1.CLAUDE_AGENT_ALIASES.has(policyModel))
+                return policyModel;
+            return 'unknown';
+        }
+    }
+    return profileTier || 'unknown';
+}
+function resolveTierInternal(cwd, agentType) {
+    return resolveTierFromConfig(loadConfig(cwd), agentType);
+}
+/**
+ * The per-agent `model_overrides` entry resolveModelInternal would return for `agentType`, or null
+ * when it has none that applies (absent, empty/falsy, or an unmappable Claude ID). #6213: a caller
+ * that needs to know whether an override really governs the agent uses this one predicate.
+ */
+function resolveModelOverride(config, agentType) {
+    const modelOverrides = config['model_overrides'];
+    // Own-property guard (see resolveTierFromConfig): without it, an agentType of "toString" against
+    // `model_overrides: {}` returned the inherited Function.prototype.toString as the resolved "model".
+    const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+        ? modelOverrides[agentType]
+        : undefined;
+    if (!override)
+        return null;
+    return mapClaudeOverrideForRuntime(override, (0, runtime_slash_cjs_1.resolveActiveRuntime)(config), agentType);
+}
+function resolveModelInternal(cwd, agentType) {
+    const config = loadConfig(cwd);
+    // 1. Per-agent override (#2041: map Claude full IDs → Agent-tool aliases on
+    // the claude runtime, mirroring the model_policy path #1144; non-Claude
+    // runtimes and non-Claude values pass through verbatim). A truthy override
+    // that is unmappable falls through to tier resolution (matches model_policy).
+    const appliedOverride = resolveModelOverride(config, agentType);
+    if (appliedOverride !== null)
+        return appliedOverride;
+    // 2. Compute the tier (#2229: shared with resolveTierFromConfig so the tier a
+    // workflow reads and the tier a model is resolved from can never diverge).
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    const profile = String(config['model_profile'] || 'balanced').toLowerCase();
+    // Own-property guard (see computeProfileTier above): without it, agentType
+    // "toString" returned Function.prototype.toString as `agentModels`
+    // (truthy), which skipped the "unknown agent" fallback below and made
+    // resolveModelInternal return undefined instead of a tier-derived string.
+    const modelProfilesMapForModel = MODEL_PROFILES;
+    const agentModels = Object.hasOwn(modelProfilesMapForModel, agentType) ? modelProfilesMapForModel[agentType] : undefined;
+    const tier = computeProfileTier(config, agentType);
+    // 2.5. model_policy preset (#49, #1133)
+    // `configRuntime` is retained ONLY as the EXPLICIT-OPT-IN signal for step 3's
+    // precedence over the omit gate (see the note there). Every actual runtime
+    // question — which tier map to read, which value policy applies — now uses
+    // the active runtime (#4505).
+    const configRuntime = config['runtime'];
+    // #4505/#4495: GSD_RUNTIME -> config.runtime -> per-install marker -> 'claude'.
+    // Never undefined, so the "no runtime declared anywhere" case still resolves
+    // 'claude' and step 3's deliberate claude skip (#1156/#2297/#4192) is
+    // unchanged for every existing install.
+    const activeRuntime = (0, runtime_slash_cjs_1.resolveActiveRuntime)(config);
+    if (tier && tier !== 'inherit') {
+        const onClaude = activeRuntime === 'claude';
+        const effectiveRuntime = activeRuntime;
+        const mergedPolicy = config['model_policy']
+            ? { ...config['model_policy'], runtime: effectiveRuntime }
+            : null;
+        const policyModel = resolveModelPolicy(mergedPolicy, tier);
+        if (policyModel) {
+            // Non-Claude runtimes take full model IDs verbatim (unchanged behavior).
+            if (!onClaude)
+                return policyModel;
+            // Claude Code's Agent tool takes tier aliases (opus/sonnet/haiku/fable),
+            // not full model IDs — map the policy-resolved ID back to an alias (#1133).
+            const aliasForId = Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, policyModel)
+                ? CLAUDE_POLICY_ID_TO_ALIAS[policyModel]
+                : undefined;
+            if (typeof aliasForId === 'string' && aliasForId)
+                return aliasForId;
+            // The policy value may already be a bare Claude agent alias (e.g. "fable").
+            if (model_catalog_cjs_1.CLAUDE_AGENT_ALIASES.has(policyModel))
+                return policyModel;
+            // No Claude alias for this ID (e.g. a pinned minor version like
+            // claude-opus-4-5). Warn once and fall through to the tier alias rather
+            // than returning an ID Claude Code cannot spawn.
+            warnModelPolicyUnmappable(agentType, policyModel, tier);
+        }
+    }
+    // #4505: the omit DECISION is computed here, ahead of step 3, though the
+    // return still happens at step 4 below.
+    //
+    // Step 3 was previously unreachable unless the operator had written `runtime`
+    // into the config. Keying it off the ACTIVE runtime — the #4495 fix — makes it
+    // reachable for env- and marker-declared runtimes too, which newly exposes an
+    // ordering the corpus already decided, in two places that only coexisted
+    // because step 3 could not fire:
+    //
+    //   #2517  `runtime:"codex"` + resolve_model_ids:"omit"  -> the codex tier
+    //          model. "Explicit non-Claude opt-in wins" — the operator naming a
+    //          runtime in the project config outranks an omit.
+    //   #4717 (user-sanctioned decision a — supersedes #2297 acceptance #4):
+    //          a DETECTED runtime now constitutes that opt-in too. The identity
+    //          fill in config-loader materializes GSD_RUNTIME / the per-install
+    //          marker into `config.runtime` when it is empty, so a genuinely
+    //          installed non-Claude runtime resolves its own tier map instead of
+    //          the omit's "". The shared "omit" remains a Claude protection:
+    //          marker/env = claude still ignores it (native aliases), and
+    //          garbage runtime values still fail safe to "" (guard below).
+    //
+    // So the opt-in signal is the `runtime` KEY — written by the operator or
+    // materialized by the #4717 fill: step 3 reads the active runtime's tier
+    // map, but only outranks the omit gate when that key canonicalizes to a
+    // recognised non-Claude runtime.
+    const omitApplies = omitAppliesFor(cwd, config, activeRuntime);
+    // CANONICALIZED, not the raw field. Comparing the raw value against the literal
+    // 'claude' made every spelling that is not exactly that string count as a
+    // non-Claude opt-in and outrank the omit gate: `runtime:"Claude"`,
+    // `runtime:"claude-code"` and even `runtime:5` each emitted a model id where
+    // origin/next returned "". That is the #2297 acceptance-#4 case this very
+    // block claims to preserve, failing OPEN. (Security review of #4505.)
+    //
+    // null covers both "not a string" and "not a runtime we recognise", and both
+    // must read as NOT an opt-in: an unrecognised value is not evidence the
+    // operator deliberately chose a non-Claude runtime, so it must not buy an
+    // escalation past an explicit omit.
+    const configRuntimeCanonical = (0, runtime_name_policy_cjs_1.canonicalizeRuntimeName)(configRuntime);
+    const explicitNonClaudeOptIn = configRuntimeCanonical !== null && configRuntimeCanonical !== 'claude';
+    // 3. Runtime-aware resolution (#2517), keyed off the ACTIVE runtime (#4505).
+    if (activeRuntime !== 'claude' && tier && tier !== 'inherit'
+        && (explicitNonClaudeOptIn || !omitApplies)) {
+        const entry = _resolveRuntimeTier(config, tier);
+        if (entry?.model)
+            return entry.model;
+    }
+    // 4. resolve_model_ids: "omit" — runtime-aware (#2297). Honor "omit" when the
+    // PROJECT explicitly set it (user intent — project config wins, #2517 finding
+    // #4) OR when the active runtime genuinely lacks native model aliases. Only a
+    // native-alias runtime (Claude) ignores an "omit" that came solely from the
+    // SHARED ~/.gsd/defaults.json — the #2297 poisoning fix — and falls through to
+    // its tier aliases below. Active runtime: GSD_RUNTIME → config.runtime → the
+    // per-install .gsd-runtime marker → 'claude' (canonicalized).
+    // NOTE: a non-Claude runtime that HAS a populated runtime-tier map already
+    // returned its own model id at step 3 above, before this gate — for those the
+    // explicit-project-omit honoring here is moot (step 3 wins, by #2517 design).
+    if (omitApplies) {
+        // #3703: "omit" means "emit no concrete model id", not "emit nothing". On a
+        // runtime whose descriptor declares native tier aliases
+        // (hostBehaviors.nativeModelAliases — the Agent tool takes `opus`/`sonnet`/
+        // `haiku` directly), a blank hands the choice to the host instead of the
+        // profile: Claude Code then spawns on CLAUDE_CODE_SUBAGENT_MODEL when set,
+        // or the session model, and a mapper profiled cheap runs on the
+        // orchestrator's tier. So those runtimes get a tier alias (omitTierAlias).
+        // It sits ahead of steps 4.5/4.75 on purpose: a model_profile_overrides.claude
+        // pin and a dynamic_routing tier model both name concrete models, which omit
+        // rules out; dynamic_routing still picks WHICH tier, and the alias names it.
+        // Every other runtime keeps "" and the #2517 omit-`model=` rule, because a
+        // tier alias there fails the spawn.
+        return hasNativeModelAliases(activeRuntime) ? omitTierAlias(config, agentType, 0) : '';
+    }
+    // 4.5. Claude-runtime tier override (#4192 Finding 1). Sits AFTER the omit
+    // gate so an explicit project `resolve_model_ids:"omit"` still wins (#2297:
+    // explicit project omit is honored regardless of runtime), and BEFORE the
+    // alias return so a pinned generation is not re-collapsed to a tier alias or
+    // re-materialized to the LATEST catalog id by step 5's
+    // `resolve_model_ids:true` path. Fires ONLY when the user wrote a
+    // `model_profile_overrides.claude.<tier>` entry for this tier — see
+    // resolveClaudeTierOverrideModel for why the builtin map stays out.
+    if (tier && tier !== 'inherit') {
+        const claudeOverrideModel = resolveClaudeTierOverrideModel(activeRuntime, tier, config['model_profile_overrides']);
+        if (claudeOverrideModel !== null)
+            return claudeOverrideModel;
+    }
+    // 4.75 dynamic_routing.tier_models (#4505 / #3024).
+    //
+    // Position is the documented composition, not a convenience:
+    //   docs/features/dynamic-routing-with-failure-tier-escalation.md —
+    //   "model_overrides always wins; dynamic_routing.tier_models[<tier>] resolves
+    //    above models.<phase_type> and model_profile."
+    // So it sits BELOW model_overrides (step 1), the model_policy preset (2.5),
+    // the runtime tier map (3), the resolve_model_ids:"omit" gate (4) and the
+    // claude tier override (4.5) — and ABOVE the profile lookup (5).
+    //
+    // An earlier cut of this fix routed every call site through resolveModelForTier
+    // instead, which returns the tier model directly and therefore skipped steps 3,
+    // 4 and 4.5 entirely: with `resolve_model_ids:"omit"` and a non-Claude runtime
+    // it handed out a model id where the gate had returned "". Putting the step
+    // here keeps every higher-precedence layer reachable.
+    if (tier !== 'inherit') {
+        const routed = dynamicRoutingModel(config, agentType, 0);
+        if (routed !== null)
+            return routed;
+    }
+    // 5. Profile lookup (Claude-native default).
+    if (!agentModels) {
+        return profile === 'quality' ? 'opus'
+            : profile === 'budget' ? 'haiku'
+                : profile === 'inherit' ? 'inherit'
+                    : 'sonnet';
+    }
+    if (tier === 'inherit')
+        return 'inherit';
+    const alias = tier;
+    // Only the explicit `true` opt-in materializes full model IDs (#1569). Guard
+    // against the loose-truthy check catching a "omit" that a native-alias runtime
+    // ignored above (#2297): "omit" must fall through to the tier ALIAS here, not
+    // be materialized into a full ID Claude's Agent tool cannot spawn.
+    if (config['resolve_model_ids'] === true) {
+        return model_catalog_cjs_1.MODEL_ALIAS_MAP[alias] || alias;
+    }
+    return alias;
+}
+const VALID_GRANULARITIES = new Set(['coarse', 'standard', 'fine']);
+/**
+ * Resolve the planning granularity for a phase type (#68).
+ */
+function resolveGranularityInternal(cwd, phaseType, override) {
+    if (override !== undefined && override !== null && override !== '') {
+        if (VALID_GRANULARITIES.has(override)) {
+            return override;
+        }
+    }
+    const config = loadConfig(cwd);
+    const configGranularities = config['granularities'];
+    const perPhase = (phaseType && configGranularities && typeof configGranularities === 'object')
+        ? configGranularities[phaseType]
+        : undefined;
+    if (perPhase && VALID_GRANULARITIES.has(perPhase)) {
+        return perPhase;
+    }
+    if (config['granularity'] !== undefined && config['granularity'] !== null && config['granularity'] !== '') {
+        return config['granularity'];
+    }
+    const planning = config['planning'];
+    const planningGran = planning && planning['granularity'];
+    if (planningGran !== undefined && planningGran !== null && planningGran !== '') {
+        return planningGran;
+    }
+    return 'standard';
+}
+/**
+ * Validate a CLI granularity override at the command boundary. Empty/null/undefined
+ * are treated as "no override" (no-op). An invalid non-empty value calls `fail`.
+ */
+function assertValidGranularityOverride(override, fail) {
+    if (override !== undefined && override !== null && override !== '' && !VALID_GRANULARITIES.has(override)) {
+        fail(`invalid granularity '${override}' (valid: ${[...VALID_GRANULARITIES].join(', ')})`);
+    }
+}
+/**
+ * #3703 — the routing tier `dynamic_routing` picks for this agent at `attempt`
+ * (`light` / `standard` / `heavy`), or null when dynamic routing does not apply
+ * (same conditions as dynamicRoutingModel below, including a missing or empty
+ * `tier_models` entry for the routed tier). dynamicRoutingModel and the omit
+ * alias path (omitTierAlias) both start here, so the tier a routed model comes
+ * from and the tier an omit alias names cannot drift apart.
+ */
+function dynamicRoutingTier(config, agentType, attempt) {
+    const dr = config['dynamic_routing'];
+    if (!dr || typeof dr !== 'object' || dr['enabled'] !== true)
+        return null;
+    const tierModels = dr['tier_models'];
+    if (!tierModels || typeof tierModels !== 'object')
+        return null;
+    const defaultTier = (AGENT_DEFAULT_TIERS)[agentType];
+    if (!defaultTier || !(VALID_AGENT_TIERS).has(defaultTier))
+        return null;
+    const maxEscalations = Number.isInteger(dr['max_escalations']) && dr['max_escalations'] >= 0
+        ? dr['max_escalations']
+        : 1;
+    const escalationEnabled = dr['escalate_on_failure'] !== false;
+    const effectiveAttempt = escalationEnabled ? Math.min(attempt, maxEscalations) : 0;
+    let tier = defaultTier;
+    for (let i = 0; i < effectiveAttempt; i += 1) {
+        const next = (nextTier)(tier);
+        if (!next || next === tier)
+            break;
+        tier = next;
+    }
+    // Own-property guard: `tier_models` is a config-supplied plain object, so a
+    // prototype-chain key must not resolve an inherited member.
+    const model = Object.hasOwn(tierModels, tier) ? tierModels[tier] : undefined;
+    if (typeof model !== 'string' || model.length === 0)
+        return null;
+    return tier;
+}
+/**
+ * #4505 — the ONE implementation of `dynamic_routing.tier_models` lookup.
+ *
+ * Returns the configured model for this agent's routing tier at `attempt`, or
+ * null when dynamic routing does not apply (disabled, absent, no tier table, an
+ * agent with no default routing tier, or no entry for the tier). Both entry
+ * points call it, so the first-spawn value and the escalated value can never
+ * drift apart — the "Generative Fix Divergence" this repo names by name.
+ *
+ * `attempt` 0 means "no escalation yet", which is the documented FIRST-SPAWN
+ * case, NOT "skip dynamic routing":
+ *   docs/features/dynamic-routing-with-failure-tier-escalation.md —
+ *   "enabled: true — the resolver picks tier_models[default_tier] for the first
+ *    spawn and escalates one tier up on orchestrator-detected soft failure."
+ */
+function dynamicRoutingModel(config, agentType, attempt) {
+    const tier = dynamicRoutingTier(config, agentType, attempt);
+    if (tier === null)
+        return null;
+    const tierModels = config['dynamic_routing']['tier_models'];
+    return tierModels[tier];
+}
+/**
+ * #3703 — the ONE omit decision. resolveModelInternal (step 4) and
+ * resolveModelForTier both read it, and so does resolveProviderEscalation, so a
+ * first spawn, an escalated spawn and the provider ladder agree on whether the
+ * omit gate applies. An attempt that does not escalate the tier goes through
+ * resolveModelInternal outright (#6214). Honors "omit" when the PROJECT set it
+ * (#2517 finding #4) or when the active runtime lacks native model aliases; a
+ * native-alias runtime ignores an "omit" that came only from the shared
+ * ~/.gsd/defaults.json (#2297).
+ */
+function omitAppliesFor(cwd, config, activeRuntime) {
+    return config['resolve_model_ids'] === 'omit'
+        && (projectExplicitlySetsOmit(cwd) || !hasNativeModelAliases(activeRuntime));
+}
+/**
+ * #3703 — what a native-alias runtime emits when the omit gate applies: a tier
+ * alias, never a concrete model id. dynamic_routing still chooses the tier and
+ * escalates it on `attempt`, but the result is that tier's alias from the
+ * catalog's adaptiveTierMap, not the `tier_models` value. Without routing it is
+ * the profile tier. `inherit` and a tierless (unknown) agent return "": neither
+ * has an alias the profile can name.
+ */
+function omitTierAlias(config, agentType, attempt) {
+    const tier = computeProfileTier(config, agentType);
+    if (tier === 'inherit' || !model_catalog_cjs_1.VALID_TIERS.has(tier ?? ''))
+        return '';
+    const routingTier = dynamicRoutingTier(config, agentType, attempt);
+    if (routingTier === null)
+        return tier;
+    return model_catalog_cjs_1.catalog.adaptiveTierMap[routingTier];
+}
+/**
+ * #3024 — Resolve a model for a specific dynamic-routing attempt.
+ */
+function resolveModelForTier(cwd, agentType, attempt) {
+    const config = loadConfig(cwd);
+    const attemptN = Number.isInteger(attempt) && attempt > 0 ? attempt : 0;
+    // #6214: an attempt that does not move the dynamic_routing tier off the first
+    // spawn's tier IS the first spawn: attempt 0, a max_escalations cap of 0,
+    // escalate_on_failure:false, a saturated heavy tier, or routing off. It
+    // resolves through resolveModelInternal, so resolve-execution --attempt N, the
+    // provider ladder's `from` and the passive adapter report the model that
+    // resolve-model and init report. There model_overrides, model_policy, the
+    // runtime tier map, the omit gate and a model_profile_overrides.claude pin
+    // all outrank tier_models. Only a genuine escalation reaches the steps below.
+    const routedTier = dynamicRoutingTier(config, agentType, attemptN);
+    const firstSpawnTier = dynamicRoutingTier(config, agentType, 0);
+    if (routedTier === null || routedTier === firstSpawnTier) {
+        return resolveModelInternal(cwd, agentType);
+    }
+    const activeRuntime = (0, runtime_slash_cjs_1.resolveActiveRuntime)(config);
+    const modelOverrides = config['model_overrides'];
+    // Own-property guard (see resolveTierFromConfig above): without it, an
+    // agentType of "toString" against `model_overrides: {}` returned the
+    // inherited Function.prototype.toString as the resolved "model" — verified
+    // reachable purely via the CLI, no override value needed.
+    const override = (modelOverrides && Object.hasOwn(modelOverrides, agentType))
+        ? modelOverrides[agentType]
+        : undefined;
+    if (override) {
+        const mapped = mapClaudeOverrideForRuntime(override, activeRuntime, agentType);
+        if (mapped !== null)
+            return mapped;
+        // Unmappable Claude ID — fall through to dynamic_routing / model_policy resolution.
+    }
+    // #4505: same active-runtime rule as resolveModelInternal step 3.
+    if (config['model_policy'] && activeRuntime !== 'claude') {
+        return resolveModelInternal(cwd, agentType);
+    }
+    // #3703: the same omit decision as resolveModelInternal step 4, so an
+    // escalated attempt cannot hand out what the first spawn's gate ruled out.
+    // A native-alias runtime escalates by tier ALIAS; any other runtime whose
+    // gate produced "" stays "" (an explicit non-Claude opt-in that resolved its
+    // own tier map at step 3 keeps today's dynamic_routing escalation).
+    if (omitAppliesFor(cwd, config, activeRuntime)) {
+        if (hasNativeModelAliases(activeRuntime)) {
+            return omitTierAlias(config, agentType, attemptN);
+        }
+        else if (resolveModelInternal(cwd, agentType) === '') {
+            return '';
+        }
+    }
+    // routedTier is non-null past the #6214 guard, so tier_models names it.
+    return config['dynamic_routing']['tier_models'][routedTier];
+}
+/**
+ * Keep only usable model ids: non-empty strings. A malformed config can put
+ * anything in here (nulls, numbers, blank strings), and a blank model id would
+ * resolve to an unusable agent invocation rather than failing visibly. Invalid
+ * entries are dropped and the surviving order is preserved, so the ladder stays
+ * predictable (ADR 227 — validate shape, not just type).
+ */
+function sanitizeProviderEscalation(raw) {
+    if (!Array.isArray(raw))
+        return [];
+    return raw.filter((entry) => typeof entry === 'string' && entry.trim().length > 0);
+}
+/**
+ * #2296 — Resolve the model for one attempt of the PROVIDER escalation ladder.
+ *
+ * The tier ladder (`resolveModelForTier`) escalates within one provider's
+ * `tier_models`, which does not help when that provider is the thing that is
+ * throttled. This walks `dynamic_routing.provider_escalation` instead: an
+ * ordered list of alternative model ids, capped by
+ * `min(max_escalations, list length)`.
+ *
+ * `applicable` is the caller's policy decision (only a quota-exceeded
+ * classification should consult this ladder). It is a parameter rather than a
+ * class check here so this module keeps depending only on leaf modules, per
+ * CONTEXT.md's Model Resolution module contract.
+ *
+ * Attempt 0 — and every non-applicable call — stays on the source model.
+ * `exhausted` reports that the ladder is spent so the caller can fail loudly
+ * naming every model it tried.
+ */
+function resolveProviderEscalation(cwd, agentType, attempt, applicable) {
+    // The model that would be used with no provider escalation at all.
+    const from = resolveModelForTier(cwd, agentType, 0);
+    const stay = (exhausted = false) => ({
+        from,
+        to: from,
+        escalated: false,
+        exhausted,
+        attempted: [from],
+        index: 0,
+    });
+    if (!applicable)
+        return stay();
+    const config = loadConfig(cwd);
+    // #3703: provider_escalation entries are concrete model ids from other
+    // providers, which an applied omit rules out. A native-alias runtime keeps
+    // its tier alias and a runtime whose gate blanked the model stays blank; an
+    // explicit non-Claude opt-in that resolved its own tier map keeps the ladder.
+    const activeRuntime = (0, runtime_slash_cjs_1.resolveActiveRuntime)(config);
+    if (omitAppliesFor(cwd, config, activeRuntime) && (hasNativeModelAliases(activeRuntime) || from === '')) {
+        return stay();
+    }
+    const dr = config['dynamic_routing'];
+    if (!dr || typeof dr !== 'object' || dr['enabled'] !== true)
+        return stay();
+    if (dr['escalate_on_failure'] === false)
+        return stay();
+    const list = sanitizeProviderEscalation(dr['provider_escalation']);
+    if (list.length === 0)
+        return stay();
+    // Same default and same validity rule as the tier ladder above — a negative or
+    // non-integer max_escalations is invalid config, not a request for zero.
+    const maxEscalations = Number.isInteger(dr['max_escalations']) && dr['max_escalations'] >= 0
+        ? dr['max_escalations']
+        : 1;
+    const cap = Math.min(maxEscalations, list.length);
+    // An explicit cap of 0 means the ladder exists but is spent before it starts.
+    if (cap === 0)
+        return stay(true);
+    const attemptN = Number.isInteger(attempt) && attempt > 0 ? attempt : 0;
+    if (attemptN === 0)
+        return stay();
+    const index = Math.min(attemptN, cap);
+    return {
+        from,
+        to: list[index - 1],
+        escalated: true,
+        exhausted: attemptN > cap,
+        attempted: [from, ...list.slice(0, index)],
+        index,
+    };
+}
+// ─── #443 — Unified effort + fast_mode resolvers ─────────────────────────────
+const VALID_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+// #3533 (10d): the VOCABULARY carries one more member than the LADDER —
+// 'inherit' is a declarable effort choice ("follow the session", expressed by
+// OMITTING the effort key at the writer) but not a level nextEffort may step
+// into. Keeping it out of VALID_EFFORTS means escalation (resolveEffortForTier)
+// never walks past an explicit inherit: nextEffort('inherit') is null.
+const EFFORT_SET = new Set([...VALID_EFFORTS, 'inherit']);
+/**
+ * Walk one step up the effort ladder from `e`.
+ */
+function nextEffort(e) {
+    const i = VALID_EFFORTS.indexOf(e);
+    if (i < 0)
+        return null;
+    return VALID_EFFORTS[Math.min(i + 1, VALID_EFFORTS.length - 1)];
+}
+/**
+ * #443 — Resolve a universal effort string for (cwd, agentType).
+ */
+function resolveEffortInternal(cwd, agentType, opts) {
+    // Step 1: invocation override
+    if (opts && typeof opts.override === 'string' && EFFORT_SET.has(opts.override)) {
+        return opts.override;
+    }
+    const config = loadConfig(cwd);
+    const effortCfg = (config['effort'] && typeof config['effort'] === 'object' && !Array.isArray(config['effort']))
+        ? config['effort']
+        : null;
+    // Step 2: agent_overrides
+    if (effortCfg) {
+        const ao = effortCfg['agent_overrides'];
+        if (ao && typeof ao === 'object' && !Array.isArray(ao)) {
+            const v = ao[agentType];
+            if (typeof v === 'string' && EFFORT_SET.has(v))
+                return v;
+        }
+    }
+    else {
+        const canonicalEffort = (configuration_cjs_1.CONFIG_DEFAULTS)['effort'];
+        const mao = canonicalEffort && typeof canonicalEffort === 'object'
+            ? canonicalEffort['agent_overrides']
+            : undefined;
+        if (mao && typeof mao === 'object' && !Array.isArray(mao)) {
+            const v = mao[agentType];
+            if (typeof v === 'string' && EFFORT_SET.has(v))
+                return v;
+        }
+    }
+    // Step 3: routing_tier_defaults by agent's default tier.
+    // #3531 (10c): the config block merges OVER the manifest tier defaults
+    // rather than replacing them — an effort block without
+    // routing_tier_defaults (or missing this agent's tier) falls back to the
+    // manifest built-in for that tier instead of skipping to effort.default.
+    // Invalid config values are dropped by the merge, so the manifest value for
+    // the tier surfaces (the same "invalid falls through" rule every layer has).
+    const agentTier = (AGENT_DEFAULT_TIERS)[agentType];
+    if (agentTier) {
+        const canonicalEffort = (configuration_cjs_1.CONFIG_DEFAULTS)['effort'];
+        const manifestDefaults = canonicalEffort && typeof canonicalEffort === 'object'
+            ? canonicalEffort['routing_tier_defaults']
+            : undefined;
+        const isValidEffort = (v) => typeof v === 'string' && EFFORT_SET.has(v);
+        const merged = (0, model_catalog_cjs_1.mergeEffortTierDefaults)(manifestDefaults, effortCfg ? effortCfg['routing_tier_defaults'] : undefined, isValidEffort);
+        const v = merged[agentTier];
+        if (isValidEffort(v))
+            return v;
+    }
+    // Step 4: effort.default
+    if (effortCfg) {
+        const d = effortCfg['default'];
+        if (typeof d === 'string' && EFFORT_SET.has(d))
+            return d;
+    }
+    else {
+        const canonicalEffort = (configuration_cjs_1.CONFIG_DEFAULTS)['effort'];
+        const d = canonicalEffort && typeof canonicalEffort === 'object'
+            ? canonicalEffort['default']
+            : undefined;
+        if (typeof d === 'string' && EFFORT_SET.has(d))
+            return d;
+    }
+    // Step 5: hardcoded default
+    return 'high';
+}
+/**
+ * #443 — Resolve fast_mode boolean for (cwd, agentType).
+ */
+function resolveFastModeInternal(cwd, agentType, opts) {
+    // Step 1: invocation override
+    if (opts && typeof opts.override === 'boolean') {
+        return opts.override;
+    }
+    const config = loadConfig(cwd);
+    const fmCfg = (config['fast_mode'] && typeof config['fast_mode'] === 'object' && !Array.isArray(config['fast_mode']))
+        ? config['fast_mode']
+        : null;
+    // Step 2: agent_overrides
+    if (fmCfg) {
+        const ao = fmCfg['agent_overrides'];
+        if (ao && typeof ao === 'object' && !Array.isArray(ao)) {
+            const v = ao[agentType];
+            if (typeof v === 'boolean')
+                return v;
+        }
+    }
+    // Step 3: routing_tier_defaults by agent's default tier.
+    const agentTier = (AGENT_DEFAULT_TIERS)[agentType];
+    if (agentTier) {
+        if (fmCfg && fmCfg['routing_tier_defaults'] &&
+            typeof fmCfg['routing_tier_defaults'] === 'object' &&
+            !Array.isArray(fmCfg['routing_tier_defaults'])) {
+            const v = fmCfg['routing_tier_defaults'][agentTier];
+            if (typeof v === 'boolean')
+                return v;
+        }
+        else if (!fmCfg) {
+            const canonicalFm = (configuration_cjs_1.CONFIG_DEFAULTS)['fast_mode'];
+            const manifestDefaults = canonicalFm && typeof canonicalFm === 'object'
+                ? canonicalFm['routing_tier_defaults']
+                : undefined;
+            if (manifestDefaults && typeof manifestDefaults === 'object') {
+                const v = manifestDefaults[agentTier];
+                if (typeof v === 'boolean')
+                    return v;
+            }
+        }
+    }
+    // Step 4: fast_mode.enabled
+    if (fmCfg && typeof fmCfg['enabled'] === 'boolean') {
+        return fmCfg['enabled'];
+    }
+    // Step 5: hardcoded default
+    return false;
+}
+/**
+ * #443 — Resolve effort for a dynamic-routing attempt (with escalation).
+ */
+function resolveEffortForTier(cwd, agentType, attempt) {
+    const base = resolveEffortInternal(cwd, agentType);
+    const config = loadConfig(cwd);
+    const dr = config['dynamic_routing'];
+    if (!dr || typeof dr !== 'object' || dr['enabled'] !== true) {
+        return base;
+    }
+    if (dr['escalate_on_failure'] === false) {
+        return base;
+    }
+    const maxEscalations = Number.isInteger(dr['max_escalations']) && dr['max_escalations'] >= 0
+        ? dr['max_escalations']
+        : 1;
+    const attemptN = Number.isInteger(attempt) && attempt > 0 ? attempt : 0;
+    const effectiveAttempt = Math.min(attemptN, maxEscalations);
+    let current = base;
+    for (let i = 0; i < effectiveAttempt; i++) {
+        const next = nextEffort(current);
+        if (!next || next === current)
+            break;
+        current = next;
+    }
+    return current;
+}
+module.exports = {
+    resolveTierEntry,
+    CLAUDE_AGENT_ALIASES: model_catalog_cjs_1.CLAUDE_AGENT_ALIASES,
+    resolveModelPolicy,
+    resolveModelInternal,
+    resolveModelOverride,
+    resolveTierInternal,
+    resolveTierFromConfig,
+    computeProfileTier,
+    _resetModelPolicyWarningCacheForTests,
+    _resetModelOverrideWarningCacheForTests,
+    _setInstallRuntimeMarkerForTests: runtime_slash_cjs_1._setInstallRuntimeMarkerForTests,
+    _resetInstallRuntimeMarkerCacheForTests: runtime_slash_cjs_1._resetInstallRuntimeMarkerCacheForTests,
+    VALID_GRANULARITIES,
+    resolveGranularityInternal,
+    assertValidGranularityOverride,
+    resolveModelForTier,
+    resolveProviderEscalation,
+    VALID_EFFORTS,
+    EFFORT_SET,
+    nextEffort,
+    resolveEffortInternal,
+    resolveFastModeInternal,
+    resolveEffortForTier,
+};

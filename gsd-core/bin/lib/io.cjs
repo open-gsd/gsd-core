@@ -1,0 +1,567 @@
+"use strict";
+/**
+ * CLI I/O primitives — output(), error(), ERROR_REASON, JSON-error mode,
+ * and the temp-file helpers that output() depends on.
+ *
+ * Extracted from core.cts (ADR-857 rollout phase 1 / issue #859).
+ * The hand-written bodies are preserved byte-for-behaviour; only the module
+ * boundary moved. The core.cjs re-export spine was retired in epic #1267;
+ * callers import I/O primitives from io.cjs directly.
+ */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+const node_fs_1 = __importDefault(require("node:fs"));
+const node_os_1 = __importDefault(require("node:os"));
+const node_path_1 = __importDefault(require("node:path"));
+const shell_command_projection_cjs_1 = require("./shell-command-projection.cjs");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const cliExitModule = require("./cli-exit.cjs");
+const { setJsonErrorMode, getJsonErrorMode, EXIT_ENVELOPE_REASON, ExitError, setPendingOutcome, projectOutcome, getContractVersion, } = cliExitModule;
+// ─── Temp-file helpers (needed by output()) ──────────────────────────────────
+/**
+ * Dedicated GSD temp directory: path.join(os.tmpdir(), 'gsd').
+ * Created on first use. Keeps GSD temp files isolated from the system
+ * temp directory so reap scans only GSD files (#1975).
+ */
+const GSD_TEMP_DIR = node_path_1.default.join(node_os_1.default.tmpdir(), 'gsd');
+function ensureGsdTempDir() {
+    (0, shell_command_projection_cjs_1.platformEnsureDir)(GSD_TEMP_DIR);
+}
+/**
+ * Remove stale gsd-* temp files/dirs older than maxAgeMs (default: 5 minutes).
+ * Runs opportunistically before each new temp file write to prevent unbounded accumulation.
+ * @param prefix - filename prefix to match (e.g., 'gsd-')
+ * @param opts
+ * @param opts.maxAgeMs - max age in ms before removal (default: 5 min)
+ * @param opts.dirsOnly - if true, only remove directories (default: false)
+ */
+function reapStaleTempFiles(prefix = 'gsd-', { maxAgeMs = 5 * 60 * 1000, dirsOnly = false } = {}) {
+    try {
+        ensureGsdTempDir();
+        const now = Date.now();
+        const entries = node_fs_1.default.readdirSync(GSD_TEMP_DIR);
+        for (const entry of entries) {
+            if (!entry.startsWith(prefix))
+                continue;
+            const fullPath = node_path_1.default.join(GSD_TEMP_DIR, entry);
+            try {
+                const stat = node_fs_1.default.statSync(fullPath);
+                if (now - stat.mtimeMs > maxAgeMs) {
+                    if (stat.isDirectory()) {
+                        node_fs_1.default.rmSync(fullPath, { recursive: true, force: true });
+                    }
+                    else if (!dirsOnly) {
+                        node_fs_1.default.unlinkSync(fullPath);
+                    }
+                }
+            }
+            catch {
+                // File may have been removed between readdir and stat — ignore
+            }
+        }
+    }
+    catch {
+        // Non-critical — don't let cleanup failures break output
+    }
+}
+// ─── Output helpers ───────────────────────────────────────────────────────────
+/**
+ * Transient write errnos. When stdout/stderr is a NON-BLOCKING pipe — as it is
+ * under the parallel `node --test` runner on Linux CI — a full pipe buffer makes
+ * `fs.writeSync` throw EAGAIN, and a signal can interrupt it with EINTR. Both
+ * clear on retry once the reader drains. This is the same transient class the
+ * STATE.md lock path already retries (ACQUIRE_LOCK_RETRY_ERRNOS, #3776); #1008.
+ */
+const WRITE_RETRY_ERRNOS = new Set(['EAGAIN', 'EINTR']);
+// Bounded so a pathological never-draining fd cannot spin forever. Each retry
+// yields the thread for ~1ms via Atomics.wait (the project's sync-sleep idiom —
+// see clock.cts realClock.sleep), so the cap is ~1s of total back-pressure wait.
+const WRITE_MAX_RETRIES = 1000;
+const WRITE_RETRY_BACKOFF_MS = 1;
+// Sleep buffer is lazily allocated on the FIRST back-pressure retry (rare — only
+// when a non-blocking pipe is full) and then reused. Keeping it out of module
+// load costs nothing on the overwhelmingly common no-retry path and avoids
+// perturbing SharedArrayBuffer-allocation accounting in other modules (perf-316).
+let _writeSleepBuf = null;
+function backoffOnce() {
+    if (_writeSleepBuf === null)
+        _writeSleepBuf = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(_writeSleepBuf, 0, 0, WRITE_RETRY_BACKOFF_MS);
+}
+/**
+ * Write the entire payload to `fd`, tolerating non-blocking-pipe back-pressure.
+ *
+ * `fs.writeSync` does NOT block on a non-blocking pipe: a full buffer throws
+ * EAGAIN, and a partially-drained buffer returns a SHORT count (fewer bytes than
+ * requested). The previous bare `fs.writeSync(fd, string)` call assumed it always
+ * blocked until the kernel accepted every byte — false under load, which both
+ * threw spurious errors and risked silently truncating output (#1008).
+ *
+ * This loops on short counts (advancing the offset) and retries EAGAIN/EINTR with
+ * a brief Atomics.wait backoff that yields the thread so the reader can drain.
+ * Non-transient errors (e.g. EPIPE) propagate unchanged.
+ */
+function writeAllSync(fd, data) {
+    const buf = Buffer.from(data, 'utf8');
+    let offset = 0;
+    let retries = 0;
+    while (offset < buf.length) {
+        try {
+            offset += node_fs_1.default.writeSync(fd, buf, offset, buf.length - offset);
+        }
+        catch (err) {
+            const code = err.code ?? '';
+            if (WRITE_RETRY_ERRNOS.has(code) && retries < WRITE_MAX_RETRIES) {
+                retries += 1;
+                backoffOnce();
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+/**
+ * Temporarily patch `fs.writeSync` so everything written to fd 1 (stdout) is
+ * captured into a string instead of reaching the real stdout, run `run`, then
+ * restore the original `fs.writeSync` and resolve with what was captured.
+ *
+ * The ONE shared helper (#5105 S9) for "run a nested command and read its own
+ * JSON envelope back as data instead of letting it reach the real stdout" —
+ * used by gsd-tools.cjs's `--pick`/`@file:` resolution and by `uat.cts`'s
+ * `cmdUatCompleteSession` (which needs `cmdCommit`'s result object without
+ * emitting cmdCommit's own envelope as a second line of output). A single
+ * definition means both callers see the same Buffer/string/encoding handling
+ * and the same throw-mid-write flush behavior, rather than two hand-rolled
+ * monkeypatches drifting apart.
+ *
+ * On a throw from `run`, whatever was captured before the throw is flushed to
+ * the REAL stdout — the wrapped command may have already written its own
+ * JSON envelope and THEN thrown to set a non-zero exit code (e.g. a
+ * capability set/disable on an unknown id); without this flush that output
+ * would be silently discarded, since the success-path flush at the call site
+ * never runs on a throw. The error still propagates so the exit code is
+ * preserved.
+ */
+function captureStdoutSyncWrites(run) {
+    const originalWriteSync = node_fs_1.default.writeSync;
+    let captured = '';
+    node_fs_1.default.writeSync = ((fd, data, ...rest) => {
+        if (fd === 1) {
+            if (Buffer.isBuffer(data)) {
+                captured += data.toString('utf-8');
+                return data.length;
+            }
+            const text = String(data);
+            captured += text;
+            let encoding = 'utf-8';
+            if (typeof rest[1] === 'string')
+                encoding = rest[1];
+            return Buffer.byteLength(text, encoding);
+        }
+        return originalWriteSync.call(node_fs_1.default, fd, data, ...rest);
+    });
+    const restore = () => {
+        node_fs_1.default.writeSync = originalWriteSync;
+    };
+    return Promise.resolve()
+        .then(() => run())
+        .then(() => {
+        restore();
+        return captured;
+    }, (err) => {
+        restore();
+        if (captured) {
+            try {
+                originalWriteSync.call(node_fs_1.default, 1, captured);
+            }
+            catch { /* best-effort flush */ }
+        }
+        throw err;
+    });
+}
+/**
+ * Resolve `output()`'s `@file:<path>` redirection (emitted for a >50KB JSON
+ * payload) back to the real content, or return `captured` unchanged when it
+ * is not that shape.
+ *
+ * #5105 review finding 7: the ONE definition, shared by gsd-tools.cjs's
+ * `--pick`/CLI-passthrough resolution and by `uat.cts`'s
+ * `cmdUatCompleteSession` (which reads `cmdCommit`'s captured result back
+ * without emitting cmdCommit's own envelope as a second stdout line) — same
+ * reasoning as `captureStdoutSyncWrites` just below: one definition means
+ * both callers agree on the trailing-newline-free prefix and the read
+ * encoding, rather than two hand-rolled `startsWith('@file:')` checks
+ * drifting apart.
+ */
+function resolveAtFileOutput(captured) {
+    if (!captured.startsWith('@file:'))
+        return captured;
+    return node_fs_1.default.readFileSync(captured.slice('@file:'.length), 'utf-8');
+}
+/**
+ * The wire form of a JSON result: the exact bytes `output()` emits for it.
+ *
+ * Exported because a caller that has to reason about the size of its own
+ * response — graphify's `--budget` accounting (#2738) — must measure the string
+ * this function produces rather than a second, privately-maintained
+ * serialization that can drift from it. One definition, so estimator and
+ * emitter cannot disagree about indentation or shape.
+ *
+ * The `@file:` redirection in `output()` is a transport detail, not a payload
+ * change: the caller still consumes these bytes, so these are the right ones to
+ * measure.
+ */
+function serializeForOutput(result) {
+    return JSON.stringify(result, null, 2);
+}
+/**
+ * A payload-carried error, per ADR-2980's own definition (#3912, ADR-3889
+ * §4): `result` is an object carrying a SERIALIZABLE `error` property, in
+ * ANY key order — `{ found: false, error }` counts exactly the same as
+ * `{ error, found: false }`. The discriminator is a serializable error
+ * value, NOT mere key presence: `result.error`'s own truthiness is
+ * irrelevant (falsy `0`/`null`/`''` all count), and neither is `result`'s
+ * prototype (a plain object literal is all any call site here ever
+ * passes) — but `error: undefined` does NOT count, because
+ * `JSON.stringify` (the exact serializer `serializeForOutput` uses to
+ * build the payload the caller actually receives) drops an object
+ * property whose value is `undefined` entirely. A payload built as
+ * `{ found: false, error: undefined }` therefore reaches the wire as
+ * `{"found":false}` — no error at all — and recording DEGRADED for it
+ * would be a false verdict: exit 80 under v2 for output the user sees as
+ * clean. `hasOwnProperty` alone is not enough to answer "does this payload
+ * declare an error"; it must also survive `JSON.stringify`.
+ */
+function isPayloadCarriedError(result) {
+    return typeof result === 'object' && result !== null
+        && Object.prototype.hasOwnProperty.call(result, 'error')
+        && result.error !== undefined;
+}
+function output(result, raw, rawValue) {
+    // #3912 (ADR-3889 §4): a payload-carried error declares DEGRADED into the
+    // pending-outcome cell runMain reads. This is the ONLY new thing output()
+    // does — it still just writes fd 1 and returns; the exit code stays
+    // whatever it already was under v1 (DEGRADED projects to 0), and nothing
+    // here touches process.exitCode directly.
+    //
+    // LAST-WRITE-WINS (review fix): a clean (non-error-shaped) payload CLEARS
+    // the cell rather than leaving a prior degraded declaration in place. A
+    // handler that calls output() more than once per invocation — a
+    // diagnostic error payload followed by a clean final payload — must have
+    // its LATEST declaration win, not its first: the cell reflects "is a
+    // degraded outcome pending right now", not "was one ever declared".
+    if (isPayloadCarriedError(result)) {
+        setPendingOutcome('DEGRADED');
+    }
+    else {
+        setPendingOutcome(undefined);
+    }
+    let data;
+    if (raw && rawValue !== undefined) {
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string
+        data = String(rawValue);
+    }
+    else {
+        const json = serializeForOutput(result);
+        // Large payloads exceed Claude Code's Bash tool buffer (~50KB).
+        // Write to tmpfile and output the path prefixed with @file: so callers can detect it.
+        if (json.length > 50000) {
+            reapStaleTempFiles();
+            ensureGsdTempDir();
+            const tmpPath = node_path_1.default.join(GSD_TEMP_DIR, `gsd-${Date.now()}.json`);
+            (0, shell_command_projection_cjs_1.platformWriteSync)(tmpPath, json);
+            data = '@file:' + tmpPath;
+        }
+        else {
+            data = json;
+        }
+    }
+    // process.stdout.write() is async when stdout is a pipe — process.exit()
+    // can tear down the process before the reader consumes the buffer. writeAllSync
+    // pushes every byte synchronously (looping short counts, retrying EAGAIN/EINTR),
+    // and skipping process.exit() lets the event loop drain naturally.
+    writeAllSync(1, data);
+}
+/**
+ * Single owner of the "a no-op decline reports the real condition" pairing:
+ * a `[gsd-tools] WARNING:` stderr disclosure plus the matching
+ * `{ [flagKey]: false, ...computed, reason }` JSON payload (#3957, epic
+ * #3473 B9). Before this helper, each CLI command's no-op arm hand-wrote
+ * both halves independently, and #3957's own sweep found sites where one
+ * half drifted: a decline that discarded values it had already computed, a
+ * `reason` string naming a condition that hadn't actually fired, or no
+ * stderr disclosure at all (missing the `[gsd-tools] WARNING:` convention
+ * #3217, ADR-3180 §7.6 rule 4, established for exactly this situation —
+ * a JSON `reason` field alone is easy for a caller piping stdout through
+ * `--json` to never read). Routing every no-op decline through one call
+ * site makes the convention structural — a call site, not a habit a fifth
+ * arm can independently forget — rather than leaving it to per-site
+ * discipline.
+ *
+ * `disclosure` is written to stderr VERBATIM. Like `error()`'s `message`
+ * argument (see that function's own doc comment above `formatDiagnosticToken`),
+ * this function stays a dumb, faithful writer and does not sanitize it — a
+ * caller that interpolates an UNTRUSTED substring (a caller-supplied
+ * blocker/session-field string, an argv token) into `disclosure` MUST pass
+ * that substring through `formatDiagnosticToken` first. Skipping that step
+ * lets an embedded `\n` forge a second, attacker-authored
+ * `[gsd-tools] WARNING:` line — the same risk `error()`'s doc comment
+ * documents for its own stderr write.
+ */
+function declineNoOp(raw, flagKey, reason, disclosure, computed = {}) {
+    // `process.stderr.write`, matching the `[gsd-tools] WARNING:` call sites
+    // this helper replaces (state.cts's stateReplaceFieldWithFallback and the
+    // cmdStateUpdateProgress decline arms) — not the `writeAllSync(2, …)`
+    // primitive `error()` uses, which is reserved for the fatal-exit path.
+    process.stderr.write(`[gsd-tools] WARNING: ${disclosure}\n`);
+    output({ [flagKey]: false, ...computed, reason }, raw, 'false');
+}
+/**
+ * Frozen enum of typed reason codes used by error() for structured errors.
+ * Each subcommand contributes its own codes; the enum exists so tests can
+ * assert against typed values instead of grepping stderr (#2974).
+ *
+ * Adding a new code:
+ *   - Pick a snake_case lowercase value (the JSON wire form)
+ *   - Group by subsystem prefix (CONFIG_*, SDK_*, etc)
+ *   - Pass it to error(msg, ERROR_REASON.NEW_CODE) at the call site
+ */
+const ERROR_REASON = Object.freeze({
+    // config-get / config-set
+    CONFIG_KEY_NOT_FOUND: 'config_key_not_found',
+    CONFIG_NO_FILE: 'config_no_file',
+    CONFIG_PARSE_FAILED: 'config_parse_failed',
+    CONFIG_INVALID_KEY: 'config_invalid_key',
+    // SDK / gsd-tools dispatch
+    SDK_FAIL_FAST: EXIT_ENVELOPE_REASON,
+    SDK_UNKNOWN_COMMAND: 'sdk_unknown_command',
+    SDK_MISSING_ARG: 'sdk_missing_arg',
+    // workflow / phase
+    PHASE_NOT_FOUND: 'phase_not_found',
+    PHASE_ID_COLLISION: 'phase_id_collision',
+    AMBIGUOUS_PHASE_OWNER: 'ambiguous_phase_owner',
+    PHASE_NAMING_NOT_CUSTOM: 'phase_naming_not_custom',
+    PHASE_VERIFICATION_INCOMPLETE: 'phase_verification_incomplete',
+    PHASE_PLAN_COVERAGE_INCOMPLETE: 'phase_plan_coverage_incomplete',
+    SUMMARY_NO_PLANNING: 'summary_no_planning',
+    // #3579: workstream-mode fail-safe guards (init.progress, phase.complete) —
+    // distinguishes "no marker/pointer anywhere" from "a marker exists but
+    // didn't resolve" so a JSON-error-mode caller can branch on `reason`
+    // instead of regexing the human message.
+    WORKSTREAM_MODE_NONE_ACTIVE: 'workstream_mode_none_active',
+    WORKSTREAM_MODE_MARKER_UNRESOLVED: 'workstream_mode_marker_unresolved',
+    // graphify
+    GRAPHIFY_NO_GRAPH: 'graphify_no_graph',
+    GRAPHIFY_INVALID_QUERY: 'graphify_invalid_query',
+    // estimate-calibrate (#3882, ADR-3473 §8.2): the phases directory exists
+    // but could not be read — a NON-answer, distinct from a project that
+    // genuinely has zero completed phases yet.
+    ESTIMATE_PHASES_UNREADABLE: 'estimate_phases_unreadable',
+    // hooks
+    HOOKS_OPT_OUT: 'hooks_opt_out',
+    // commit-docs-guard (#3588)
+    COMMIT_DOCS_GUARD_NOT_A_REPO: 'commit_docs_guard_not_a_repo',
+    COMMIT_DOCS_GUARD_FOREIGN_HOOK: 'commit_docs_guard_foreign_hook',
+    COMMIT_DOCS_GUARD_HOOKS_PATH_SET: 'commit_docs_guard_hooks_path_set',
+    // commit verb (#6043, ADR-4908 §3): it commits in the worktree the process
+    // runs in, or refuses with one of these. Wire values are the typed `reason`.
+    COMMIT_NOT_GIT_REPO: 'not_git_repo',
+    COMMIT_OUTSIDE_WORKTREE: 'outside_worktree',
+    // security-scan
+    SECURITY_SCAN_FAILED: 'security_scan_failed',
+    // --pick (#3365 / #3358, ADR-3473 §8.4): an absent field or non-JSON
+    // command output is a failure, never a demotion to an empty answer at
+    // exit 0. See .gsd/phase/feat-3884-failure-is-a-value/40-design.md.
+    PICK_FIELD_ABSENT: 'pick_field_absent',
+    PICK_OUTPUT_NOT_JSON: 'pick_output_not_json',
+    // summary-extract (#5013): the SUMMARY's frontmatter fence exists but failed
+    // to parse (extractFrontmatter's FRONTMATTER_UNPARSEABLE marker) — a
+    // distinct failure from "no frontmatter"/"field absent", never a silent
+    // demotion to empty fields at exit 0.
+    SUMMARY_EXTRACT_UNPARSEABLE: 'summary_extract_unparseable',
+    // verification (#5118, ADR-5057 Phase 4): a *-VERIFICATION.md frontmatter
+    // `status` outside the closed writer set (`passed | gaps_found |
+    // human_needed`) — verification.cts's VerificationStatusError, translated
+    // once, centrally, by gsd-tools.cjs. Never read as "no result" at exit 0.
+    VERIFICATION_STATUS_INVALID: 'verification_status_invalid',
+    // generic
+    USAGE: 'usage',
+    UNKNOWN: 'unknown',
+});
+// setJsonErrorMode / getJsonErrorMode now live in cli-exit.cts (imported above)
+// and are re-exported here for the callers that already import them from io.
+/**
+ * Emit an error and exit. When the second argument is provided it must be
+ * a value from ERROR_REASON; tests can assert on `result.reason`. When the
+ * process is in JSON-error mode, stderr receives `{ ok: false, reason,
+ * message }` so callers can parse it; otherwise stderr keeps the plain
+ * text form for human operators.
+ *
+ * `extra` (optional) lets a caller attach additional structured fields
+ * (e.g. `{ verification_stale_check_indeterminate: true }`) onto the
+ * JSON-error-mode payload, spread alongside `ok`/`reason`/`message`, so a
+ * test can assert on the value directly instead of regexing `message`'s
+ * human-readable text. Ignored entirely in plain-text mode — the human
+ * message is the only thing an operator sees there.
+ */
+/**
+ * Render an UNTRUSTED string for embedding inside a human-readable,
+ * plain-text diagnostic (the `'Error: ' + message` line `error()` writes in
+ * non-JSON mode).
+ *
+ * WHY THIS EXISTS AND WHY `error()` DOES NOT DO IT ITSELF: `error()`
+ * deliberately writes its `message` argument verbatim — several callers in
+ * this repo intentionally emit multi-line diagnostics (e.g. the phase-gate
+ * messages), and `error()` has no way to distinguish a legitimate multi-line
+ * message from a hostile one, so it must not mangle newlines generically.
+ * That means any UNTRUSTED substring a caller interpolates into `message`
+ * (an argv token, a JSON key/value read back from a command's own output,
+ * etc.) can smuggle its own `\n` and forge a second `Error: ` line on
+ * stderr — a caller that parses stderr line-by-line would then see a second,
+ * attacker-authored error. Every call site that interpolates untrusted data
+ * into a diagnostic MUST pass that substring through this function first;
+ * `error()` itself stays a dumb, faithful writer.
+ *
+ * `JSON.stringify` is the primitive: it wraps the value in quotes and
+ * escapes control characters (`\n`, `\r`, `\t`, and the rest of the C0
+ * range, plus the quote character itself), so the result can never span
+ * more than one line or introduce an unescaped `"`. Callers embedding the
+ * result MUST NOT add their own surrounding quotes — that would
+ * double-quote it.
+ *
+ * #5118 security review: `JSON.stringify` leaves characters that render
+ * invisibly or reorder the text around them untouched — DEL and the C1
+ * controls (U+007F–U+009F), the line/paragraph separators (U+2028–U+2029),
+ * zero-width and directional marks (U+200B–U+200F), the bidi embeddings and
+ * overrides (U+202A–U+202E), the bidi isolates (U+2066–U+2069) and the BOM
+ * (U+FEFF). Each is escaped as `\uXXXX` so the token reads exactly as its
+ * code points are, whoever renders it.
+ */
+const INVISIBLE_OR_BIDI_RANGES = [
+    [0x7f, 0x9f],
+    [0x2028, 0x2029],
+    [0x200b, 0x200f],
+    [0x202a, 0x202e],
+    [0x2066, 0x2069],
+    [0xfeff, 0xfeff],
+];
+/** Code points as `\uXXXX` escape text (source stays ASCII; no literal invisible characters). */
+function toUnicodeEscape(codePoint) {
+    return `\\u${codePoint.toString(16).padStart(4, '0')}`;
+}
+const INVISIBLE_OR_BIDI_RE = new RegExp(`[${INVISIBLE_OR_BIDI_RANGES.map(([lo, hi]) => `${toUnicodeEscape(lo)}-${toUnicodeEscape(hi)}`).join('')}]`, 'g');
+function formatDiagnosticToken(value) {
+    return JSON.stringify(value).replace(INVISIBLE_OR_BIDI_RE, (ch) => toUnicodeEscape(ch.charCodeAt(0)));
+}
+/**
+ * Map an ERROR_REASON wire value onto a declared outcome name (#3912,
+ * ADR-3889 §4). Closed over the 27-member enum: every reason gets an
+ * explicit entry below, so a 28th member added without a mapping falls
+ * through to the `?? 'FAIL'` default rather than silently mis-projecting —
+ * and tests/A1 iterates `Object.values(ERROR_REASON)`, so that default is
+ * exactly what makes an unmapped addition visible instead of invisible.
+ *
+ * This function's result is ONLY consulted under v2 (see `error()` below) —
+ * it is deliberately never routed through `projectOutcome` under v1, which
+ * is what keeps the v1 pin intact (`projectOutcome` treats registered names
+ * as version-invariant, so e.g. USAGE would otherwise become 64 today).
+ *
+ * Each non-FAIL choice below is justified inline; `UNKNOWN` and anything
+ * with no clearly better fit stays `FAIL` — the honest default the design
+ * calls for, not a guess dressed up as a specific outcome.
+ */
+const REASON_TO_OUTCOME = Object.freeze({
+    // Bad argv/subcommand/argument — the caller, not the run, is at fault.
+    [ERROR_REASON.CONFIG_INVALID_KEY]: 'USAGE',
+    [ERROR_REASON.SDK_UNKNOWN_COMMAND]: 'USAGE',
+    [ERROR_REASON.SDK_MISSING_ARG]: 'USAGE',
+    [ERROR_REASON.GRAPHIFY_INVALID_QUERY]: 'USAGE',
+    [ERROR_REASON.USAGE]: 'USAGE',
+    [ERROR_REASON.PHASE_ID_COLLISION]: 'USAGE',
+    [ERROR_REASON.AMBIGUOUS_PHASE_OWNER]: 'USAGE',
+    [ERROR_REASON.PHASE_NAMING_NOT_CUSTOM]: 'USAGE',
+    // A specific, named thing does not exist / nothing was there to find —
+    // genuine, known emptiness rather than a broken prerequisite.
+    [ERROR_REASON.CONFIG_KEY_NOT_FOUND]: 'NO_INPUT',
+    [ERROR_REASON.SUMMARY_NO_PLANNING]: 'NO_INPUT',
+    [ERROR_REASON.WORKSTREAM_MODE_NONE_ACTIVE]: 'NO_INPUT',
+    // A prerequisite is absent, unreadable, or otherwise not in a state the
+    // run could proceed from — distinct from NO_INPUT's genuine emptiness.
+    [ERROR_REASON.CONFIG_NO_FILE]: 'UNAVAILABLE',
+    [ERROR_REASON.CONFIG_PARSE_FAILED]: 'UNAVAILABLE',
+    [ERROR_REASON.PHASE_NOT_FOUND]: 'UNAVAILABLE',
+    [ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE]: 'UNAVAILABLE',
+    [ERROR_REASON.PHASE_PLAN_COVERAGE_INCOMPLETE]: 'UNAVAILABLE',
+    // Its own docstring: "a marker exists but didn't resolve" — a broken
+    // prerequisite, not the "no marker anywhere" emptiness NONE_ACTIVE covers.
+    [ERROR_REASON.WORKSTREAM_MODE_MARKER_UNRESOLVED]: 'UNAVAILABLE',
+    [ERROR_REASON.GRAPHIFY_NO_GRAPH]: 'UNAVAILABLE',
+    // Its own docstring: "a NON-answer, distinct from a project that
+    // genuinely has zero completed phases yet" — UNAVAILABLE, not NO_INPUT.
+    [ERROR_REASON.ESTIMATE_PHASES_UNREADABLE]: 'UNAVAILABLE',
+    [ERROR_REASON.COMMIT_DOCS_GUARD_NOT_A_REPO]: 'UNAVAILABLE',
+    [ERROR_REASON.COMMIT_DOCS_GUARD_FOREIGN_HOOK]: 'UNAVAILABLE',
+    [ERROR_REASON.COMMIT_DOCS_GUARD_HOOKS_PATH_SET]: 'UNAVAILABLE',
+    [ERROR_REASON.COMMIT_NOT_GIT_REPO]: 'UNAVAILABLE',
+    [ERROR_REASON.COMMIT_OUTSIDE_WORKTREE]: 'FAIL',
+    // Its own docstring: "an absent field or non-JSON command output is a
+    // failure, never a demotion to an empty answer" — the field/output was
+    // supposed to be there and was not; a prerequisite of the query failed.
+    [ERROR_REASON.PICK_FIELD_ABSENT]: 'UNAVAILABLE',
+    [ERROR_REASON.PICK_OUTPUT_NOT_JSON]: 'UNAVAILABLE',
+    // #5013: the SUMMARY's frontmatter fence exists but failed to parse — the
+    // prerequisite of the query (readable frontmatter) is what's broken, same
+    // shape as PICK_FIELD_ABSENT/PICK_OUTPUT_NOT_JSON just above.
+    [ERROR_REASON.SUMMARY_EXTRACT_UNPARSEABLE]: 'UNAVAILABLE',
+    // #5118: the verification report exists but its `status` is not a verdict
+    // the reader accepts — a broken prerequisite of the query, the same shape
+    // as SUMMARY_EXTRACT_UNPARSEABLE just above.
+    [ERROR_REASON.VERIFICATION_STATUS_INVALID]: 'UNAVAILABLE',
+    // Self-failure: the run itself broke, not its inputs.
+    [ERROR_REASON.SDK_FAIL_FAST]: 'INTERNAL',
+    [ERROR_REASON.SECURITY_SCAN_FAILED]: 'INTERNAL',
+    // No clearly better fit — the honest default, per design.
+    [ERROR_REASON.HOOKS_OPT_OUT]: 'FAIL',
+    [ERROR_REASON.UNKNOWN]: 'FAIL',
+});
+function outcomeForReason(reason) {
+    return REASON_TO_OUTCOME[reason] ?? 'FAIL';
+}
+function error(message, reason = ERROR_REASON.UNKNOWN, extra) {
+    if (getJsonErrorMode()) {
+        const payload = JSON.stringify({ ok: false, reason, message, ...(extra || {}) }) + '\n';
+        writeAllSync(2, payload);
+    }
+    else {
+        writeAllSync(2, 'Error: ' + message + '\n');
+    }
+    // #3912 (ADR-3889 §4): the declaration is version-gated HERE, not inside
+    // projectOutcome — registered names are version-invariant there, so
+    // routing every reason through it unconditionally would change v1 exit
+    // codes today (e.g. USAGE -> 64) and break the pin. Under v1 the exit
+    // stays ExitError(1) unconditionally, byte-identical to every prior
+    // release; only v2 projects the declared outcome through the registry.
+    if (getContractVersion() === 'v2') {
+        throw new ExitError(projectOutcome(outcomeForReason(reason), 'v2'));
+    }
+    // No message passed to ExitError: the stderr write above is already done,
+    // byte-identical to the prior process.exit(1) behavior, and ExitError with
+    // no message means runMain's catch adds nothing further to stderr.
+    throw new ExitError(1);
+}
+module.exports = {
+    GSD_TEMP_DIR,
+    ensureGsdTempDir,
+    reapStaleTempFiles,
+    output,
+    declineNoOp,
+    serializeForOutput,
+    ERROR_REASON,
+    setJsonErrorMode,
+    getJsonErrorMode,
+    error,
+    formatDiagnosticToken,
+    captureStdoutSyncWrites,
+    resolveAtFileOutput,
+};

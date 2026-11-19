@@ -1,0 +1,2397 @@
+"use strict";
+/**
+ * Shell Command Projection Module
+ *
+ * Tracer-bullet seam for runtime-aware projection of serialized command text
+ * that GSD writes into runtime config or prints for copy/paste. This module
+ * does NOT execute commands; it only renders command text for external shells
+ * and runtimes.
+ *
+ * ADR-457 build-at-publish: the hand-written bin/lib/shell-command-projection.cjs
+ * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
+ * from the prior hand-written .cjs; only types are added.
+ */
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.scrubGitLocationEnv = exports.GIT_LOCATION_ENV_VARS = exports.PATH_ACTION_REASON = void 0;
+exports.toPosixPath = toPosixPath;
+exports.toNativePath = toNativePath;
+exports.posixNormalize = posixNormalize;
+exports.toComparablePathKey = toComparablePathKey;
+exports.hookCommandNeedsPowerShellCallOperator = hookCommandNeedsPowerShellCallOperator;
+exports.formatHookCommandForRuntime = formatHookCommandForRuntime;
+exports.shellHookOmitsBashRunner = shellHookOmitsBashRunner;
+exports.buildLocalShellHookCommand = buildLocalShellHookCommand;
+exports.formatManagedHookScriptToken = formatManagedHookScriptToken;
+exports.projectLocalHookPrefix = projectLocalHookPrefix;
+exports.projectPortableHookBaseDir = projectPortableHookBaseDir;
+exports.projectShellCommandText = projectShellCommandText;
+exports.projectManagedHookCommand = projectManagedHookCommand;
+exports.isManagedHookBasename = isManagedHookBasename;
+exports.isManagedHookCommand = isManagedHookCommand;
+exports.projectLegacySettingsHookCommand = projectLegacySettingsHookCommand;
+exports.escapeTomlDoubleQuotedString = escapeTomlDoubleQuotedString;
+exports.projectCodexHookTomlCommand = projectCodexHookTomlCommand;
+exports.escapePowerShellSingleQuoted = escapePowerShellSingleQuoted;
+exports.escapePosixDoubleQuoted = escapePosixDoubleQuoted;
+exports.escapeSingleQuotedShellLiteral = escapeSingleQuotedShellLiteral;
+exports.shellSingleQuote = shellSingleQuote;
+exports.projectPathExportLine = projectPathExportLine;
+exports.renderShellActionLines = renderShellActionLines;
+exports.projectPathActionProjection = projectPathActionProjection;
+exports.projectPersistentPathExportActions = projectPersistentPathExportActions;
+exports.isSpawnTimeout = isSpawnTimeout;
+exports.execGit = execGit;
+exports.execNpm = execNpm;
+exports.envGet = envGet;
+exports.resolveExecutableBinary = resolveExecutableBinary;
+exports.projectSpawnInvocation = projectSpawnInvocation;
+exports.execTool = execTool;
+exports.execArgvQuarantined = execArgvQuarantined;
+exports.resolveGsdToolsPath = resolveGsdToolsPath;
+exports.dispatchGsdCommand = dispatchGsdCommand;
+exports.probeTty = probeTty;
+exports.windowsDeviceNamespacePath = windowsDeviceNamespacePath;
+exports.normalizeContent = normalizeContent;
+exports.contentChangedAfterNormalize = contentChangedAfterNormalize;
+exports.retryRenameSync = retryRenameSync;
+exports.openExclusiveTempSync = openExclusiveTempSync;
+exports.platformWriteSync = platformWriteSync;
+exports.platformRestoreFileSync = platformRestoreFileSync;
+exports.platformReadBytesSync = platformReadBytesSync;
+exports.platformReadSync = platformReadSync;
+exports.platformEnsureDir = platformEnsureDir;
+const node_path_1 = __importDefault(require("node:path"));
+const node_fs_1 = __importDefault(require("node:fs"));
+// Use non-destructured namespace import so test-time mock.method(childProcess, 'spawnSync')
+// can intercept calls from this seam — destructured imports capture references
+// at load time and become un-mockable.
+const node_child_process_1 = __importDefault(require("node:child_process"));
+const node_crypto_1 = require("node:crypto");
+const pattern_cjs_1 = require("./pattern.cjs");
+const markdown_sectionizer_cjs_1 = require("./markdown-sectionizer.cjs");
+const frontmatter_fence_cjs_1 = require("./frontmatter-fence.cjs");
+const markdown_line_diff_cjs_1 = require("./markdown-line-diff.cjs");
+const runtime_name_policy_cjs_1 = require("./runtime-name-policy.cjs");
+const read_only_git_env_cjs_1 = require("./read-only-git-env.cjs");
+/**
+ * Convert a filesystem path to POSIX form (forward slashes) by translating the
+ * platform-native separator. Single seam for native→POSIX conversion.
+ *
+ * Prefer this over `p.replace(/\\/g, '/')`: the regex form hardcodes both
+ * separators and corrupts POSIX paths containing a literal backslash (a legal
+ * filename character). Splitting on `path.sep` only ever touches real
+ * separators — a no-op on POSIX, `\`→`/` on Windows.
+ */
+function toPosixPath(p) {
+    return p.split(node_path_1.default.sep).join(node_path_1.default.posix.sep);
+}
+/**
+ * Convert a filesystem path to the platform-native separator form. No-op on
+ * POSIX; `/`→`\` on Windows. Prefer this over a
+ * `process.platform === 'win32' ? p.replace(/\//g, '\\') : p` ternary.
+ */
+function toNativePath(p) {
+    return p.split(node_path_1.default.posix.sep).join(node_path_1.default.sep);
+}
+/**
+ * Normalize ALL backslashes to forward slashes, unconditionally and independent
+ * of the running OS. Use this when emitting a path into a POSIX/bash target
+ * (which may differ from the running platform — e.g. generating a Windows config
+ * on a Linux runner) or when parsing input whose separators are unpredictable.
+ *
+ * Contrast `toPosixPath`, which is running-OS-relative (splits on `path.sep`) and
+ * is for *this machine's* filesystem paths. Do NOT use `toPosixPath` for
+ * target-platform projection — on a Linux runner it would not convert a
+ * Windows-target path's backslashes.
+ */
+function posixNormalize(p) {
+    return p.replace(/\\/g, '/');
+}
+/**
+ * #3663 — comparison key for a path that must equal another path regardless
+ * of spelling: separator form (forward slashes via posixNormalize), relative
+ * segments and trailing separators (path.resolve + strip), and — ONLY on
+ * win32's case-insensitive filesystem — letter casing. POSIX stays
+ * case-sensitive: differently-cased paths are genuinely different
+ * directories there. This module owns the platform-conditional fold so the
+ * policy lives at the seam instead of accreting per-call-site copies (the
+ * class init.cts's normalizeForCompare/toComparableRaw predate).
+ */
+function toComparablePathKey(p, platform = process.platform) {
+    const normalized = posixNormalize(node_path_1.default.resolve(p)).replace(/\/+$/g, '');
+    return platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+/**
+ * Return true when a managed hook command must be prefixed with PowerShell's
+ * call operator so a quoted executable token is invokable by the target
+ * runtime/shell combination.
+ *
+ * The `&`/no-`&` decision is keyed on the **effective hook-execution shell**
+ * (`opts.hookShell`), not on runtime alone — a single runtime (Claude Code)
+ * can host either Git Bash or PowerShell on Windows, and no single static
+ * command string is valid in both (#2236):
+ * - Git Bash: `"node.exe" "hook.js"` works; `& "node.exe" …` → syntax error.
+ * - PowerShell: `& "node.exe" "hook.js"` works; bare `"node.exe" …` →
+ *   `Unexpected token`.
+ *
+ * Default is `false` (Git Bash form) for backward compatibility. Set
+ * `opts.hookShell = 'powershell'` to emit the PowerShell call-operator form.
+ */
+function hookCommandNeedsPowerShellCallOperator(opts = {}) {
+    return opts.hookShell === 'powershell';
+}
+/**
+ * Project a fully-assembled hook command string for the target runtime.
+ */
+function formatHookCommandForRuntime(command, opts = {}) {
+    return hookCommandNeedsPowerShellCallOperator(opts) ? `& ${command}` : command;
+}
+// #166/#580: Claude Code on Windows executes hook command strings inside Git
+// Bash. A `.sh` hook wrapped with an explicit bash.exe path makes bash try to
+// exec bash itself ("C:/.../bash.exe: cannot execute binary file"). Both install
+// paths — global (buildHookCommand) and local (buildLocalShellHookCommand) — must
+// drop the bash runner in this case and emit only the anchored script path.
+// Centralized here so the two paths cannot silently drift apart again: the local
+// path missed this guard and reintroduced the #166/#377 failure (#580).
+function shellHookOmitsBashRunner({ platform, runtime = 'generic', isShellHook = false } = {}) {
+    const p = platform ?? process.platform;
+    // #5169: descriptor-declared (`hostBehaviors.omitBashRunnerOnWindows`). The
+    // `'generic'` default and any other non-registered label declares nothing, so
+    // it never omits the runner, exactly as before.
+    return p === 'win32' && isShellHook && (0, runtime_name_policy_cjs_1.hostBehaviorsFor)(runtime).omitBashRunnerOnWindows === true;
+}
+// Builds the command string for a local-install managed `.sh` hook. Mirrors the
+// global buildHookCommand path but uses the $CLAUDE_PROJECT_DIR-anchored prefix
+// instead of an absolute configDir. On Claude/Windows the bash runner is dropped
+// (see shellHookOmitsBashRunner) and the anchored script path is emitted alone —
+// matching the global path. Elsewhere the resolved bash runner is required; a
+// null runner yields null so callers skip registration instead of emitting a
+// broken hook (#3393).
+function buildLocalShellHookCommand({ localPrefix, hookFile, bashRunner, runtime = 'generic', platform = process.platform }) {
+    if (!localPrefix || !hookFile)
+        return null;
+    const scriptPath = `${localPrefix}/hooks/${hookFile}`;
+    if (shellHookOmitsBashRunner({ platform, runtime, isShellHook: true })) {
+        return formatHookCommandForRuntime(scriptPath, { platform, runtime });
+    }
+    if (!bashRunner)
+        return null;
+    return projectShellCommandText({
+        runnerToken: bashRunner,
+        argTokens: [scriptPath],
+        runtime,
+        platform,
+    });
+}
+/**
+ * Project a managed hook script path token for serialized shell commands.
+ * Windows managed hook commands normalize to forward slashes so the same path
+ * survives JSON/TOML/config surfaces consistently.
+ */
+function formatManagedHookScriptToken(scriptPath, opts = {}) {
+    const platform = opts.platform || process.platform;
+    if (platform !== 'win32')
+        return null;
+    return JSON.stringify(posixNormalize(scriptPath));
+}
+function projectLocalHookPrefix({ runtime: _runtime = 'claude', dirName, hookPathStyle }) {
+    if (!dirName)
+        return dirName;
+    // Descriptor-driven (ADR-1239 / #2096): folded from a hardcoded
+    // `runtime === 'antigravity'` literal into the runtime's declared
+    // `hostBehaviors.hookPathStyle`. Runtimes that always run project hooks
+    // with the project dir as cwd (Antigravity today) declare 'raw' and get
+    // the bare dirName; every other runtime keeps the $CLAUDE_PROJECT_DIR-
+    // anchored prefix. `runtime` itself is now unused here but stays in the
+    // signature for call-site/back-compat parity (kept `_`-prefixed to
+    // satisfy no-unused-vars).
+    return (hookPathStyle === 'raw')
+        ? dirName
+        : `"$CLAUDE_PROJECT_DIR"/${dirName}`;
+}
+function projectPortableHookBaseDir({ configDir, homeDir }) {
+    const normalizedConfigDir = posixNormalize(String(configDir || ''));
+    const normalizedHome = posixNormalize(String(homeDir || ''));
+    if (!normalizedConfigDir || !normalizedHome)
+        return normalizedConfigDir;
+    // Boundary-checked: `/home/ux` is not under `/home/u`.
+    return (normalizedConfigDir.startsWith(normalizedHome) && (normalizedConfigDir.length === normalizedHome.length || normalizedConfigDir[normalizedHome.length] === '/'))
+        ? '$HOME' + normalizedConfigDir.slice(normalizedHome.length)
+        : normalizedConfigDir;
+}
+function projectShellCommandText({ runnerToken, argTokens = [], runtime = 'generic', platform = process.platform, hookShell, }) {
+    if (!runnerToken)
+        return null;
+    const parts = [runnerToken, ...argTokens.filter(Boolean)];
+    return formatHookCommandForRuntime(parts.join(' '), { platform, runtime, hookShell });
+}
+function projectManagedHookCommand({ absoluteRunner, scriptPath, runtime = 'generic', platform = process.platform, hookShell }) {
+    if (!absoluteRunner || !scriptPath)
+        return null;
+    const normalizedScriptPath = platform === 'win32' ? posixNormalize(scriptPath) : scriptPath;
+    return projectShellCommandText({
+        runnerToken: absoluteRunner,
+        argTokens: [JSON.stringify(normalizedScriptPath)],
+        runtime,
+        platform,
+        hookShell,
+    });
+}
+const MANAGED_HOOK_BASENAMES_BY_SURFACE = {
+    'settings-json': new Set([
+        'gsd-check-update.js',
+        'gsd-config-reload.js',
+        'gsd-statusline.js',
+        'gsd-context-monitor.js',
+        'gsd-prompt-guard.js',
+        'gsd-read-guard.js',
+        'gsd-read-injection-scanner.js',
+        'gsd-update-banner.js',
+        'gsd-workflow-guard.js',
+        // #3662: the three PreToolUse guards are GSD-managed JS hooks (registered
+        // only-if-absent by applySettingsJsonHooks) but sat outside this set, so
+        // the #2979 runner rewriter never reached them — the issue's reported
+        // mixed state lived on exactly these hooks.
+        'gsd-write-guard.js',
+        'gsd-agent-isolation-guard.js',
+        'gsd-worktree-path-guard.js',
+        // #4221: secret-file read guard (Read|Grep|Bash).
+        'gsd-secret-read-guard.js',
+        // #5465: SessionStart PATH persistence through $CLAUDE_ENV_FILE.
+        'gsd-path-export.js',
+    ]),
+    'codex-toml': new Set([
+        'gsd-check-update.js',
+    ]),
+};
+const MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE = {
+    'settings-json': new Set([
+        'gsd-check-update.js',
+        'gsd-config-reload.js',
+        'gsd-statusline.js',
+        'gsd-context-monitor.js',
+        'gsd-prompt-guard.js',
+        'gsd-read-guard.js',
+        'gsd-read-injection-scanner.js',
+        'gsd-update-banner.js',
+        'gsd-workflow-guard.js',
+        'gsd-session-state.sh',
+        'gsd-validate-commit.sh',
+        'gsd-phase-boundary.sh',
+        'gsd-graphify-update.sh',
+        // #3662: same three guards as MANAGED_HOOK_BASENAMES_BY_SURFACE above —
+        // their absence here meant isManagedHookCommand never recognized them, so
+        // the settings.json→settings.local.json migration filter (and uninstall
+        // cleanup) skipped GSD's own guard entries. Folded-in fix, surfaced by the
+        // #3662 issue thread.
+        'gsd-write-guard.js',
+        'gsd-agent-isolation-guard.js',
+        'gsd-worktree-path-guard.js',
+        // #4221: secret-file read guard (Read|Grep|Bash).
+        'gsd-secret-read-guard.js',
+        // #5465: SessionStart PATH persistence through $CLAUDE_ENV_FILE.
+        'gsd-path-export.js',
+    ]),
+    'codex-toml': new Set([
+        'gsd-check-update.js',
+    ]),
+    'codex-hooks-json': new Set([
+        'gsd-check-update.js',
+        // #3426: Windows .cmd shim for Codex hook — must be treated as managed so
+        // reconcileCodexHooksJsonSessionStart can replace stale node-runner commands
+        // with the .cmd shim on reinstall (and vice-versa on cross-platform moves).
+        'gsd-check-update.cmd',
+        // #772: context-monitor is now registered for Codex SubagentStart/Stop/PostToolUse.
+        'gsd-context-monitor.js',
+        // #772: Windows .cmd shim for gsd-context-monitor — same #3426 pattern.
+        'gsd-context-monitor.cmd',
+    ]),
+};
+const LEGACY_MANAGED_HOOK_ALIASES_BY_SURFACE = {
+    'codex-toml': new Set([
+        'gsd-update-check.js',
+    ]),
+    'codex-hooks-json': new Set([
+        'gsd-update-check.js',
+    ]),
+};
+function managedHookSurfaceSet(surface = 'settings-json') {
+    return MANAGED_HOOK_BASENAMES_BY_SURFACE[surface] || MANAGED_HOOK_BASENAMES_BY_SURFACE['settings-json'];
+}
+function isManagedHookBasename(scriptPathOrBasename, opts = {}) {
+    if (!scriptPathOrBasename)
+        return false;
+    const surface = opts.surface || 'settings-json';
+    const basename = String(scriptPathOrBasename).split(/[\\/]/).pop() || '';
+    return managedHookSurfaceSet(surface).has(basename);
+}
+function managedHookCommandSurfaceSet(surface = 'settings-json', includeLegacyAliases = false) {
+    const base = MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE[surface]
+        || MANAGED_HOOK_COMMAND_BASENAMES_BY_SURFACE['settings-json'];
+    if (!includeLegacyAliases)
+        return base;
+    const aliases = LEGACY_MANAGED_HOOK_ALIASES_BY_SURFACE[surface];
+    if (!aliases || aliases.size === 0)
+        return base;
+    return new Set([...base, ...aliases]);
+}
+function isManagedHookCommand(commandText, opts = {}) {
+    if (typeof commandText !== 'string')
+        return false;
+    const surface = opts.surface || 'settings-json';
+    const includeLegacyAliases = opts.includeLegacyAliases === true;
+    const managedBasenames = managedHookCommandSurfaceSet(surface, includeLegacyAliases);
+    if (!managedBasenames || managedBasenames.size === 0)
+        return false;
+    // args-form check: the managed hook filename may appear in args[] rather than
+    // in command when a windowless launcher wraps the Node invocation. (#976)
+    // Only treat as managed when an arg basename matches the managed hook set —
+    // prevents false-positives for non-GSD entries that happen to share a path segment.
+    if (Array.isArray(opts.args) && opts.args.length > 0) {
+        for (const arg of opts.args) {
+            if (typeof arg !== 'string')
+                continue;
+            const argBasename = posixNormalize(arg).split('/').pop() || '';
+            if (isManagedHookBasename(argBasename, { surface }))
+                return true;
+        }
+    }
+    const normalizedCommand = posixNormalize(commandText);
+    if (typeof opts.configDir === 'string' && opts.configDir.length > 0) {
+        const normalizedHooksDir = `${posixNormalize(node_path_1.default.join(opts.configDir, 'hooks'))}/`;
+        // #5850: a PowerShell single-quoted literal doubles every quote delimiter in
+        // the path, so a configDir containing one only matches once the doubling is undone.
+        // Only inside single-quoted literals, where the doubling is the escaping.
+        const collapsedCommand = normalizedCommand.replace(/'((?:[^']|'')*)'/g, (_literal, body) => `'${body.replace(/(['\u2018\u2019\u201A\u201B])\1/g, '$1')}'`);
+        if (!normalizedCommand.includes(normalizedHooksDir) && !collapsedCommand.includes(normalizedHooksDir))
+            return false;
+    }
+    for (const basename of managedBasenames) {
+        const escapedBasename = (0, pattern_cjs_1.escapeRegex)(basename);
+        const pattern = new RegExp(`(^|[\\\\/\\s"'` + '`' + `])${escapedBasename}(?=$|[\\s"'` + '`' + `])`);
+        if (pattern.test(normalizedCommand))
+            return true;
+    }
+    return false;
+}
+/**
+ * Detect a `"$VAR"/rest` anchored hook-script token — a path whose leading
+ * shell variable is already double-quoted with the remainder left bare (the
+ * shape `projectLocalHookPrefix` emits for local installs, e.g.
+ * `"$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-x.js`). Such a token is ALREADY a
+ * valid, correctly-quoted shell argument and must never be re-quoted.
+ */
+const ANCHORED_HOOK_SCRIPT_TOKEN = /^"\$[A-Za-z_][A-Za-z0-9_]*"\//;
+/**
+ * Projection helper for legacy settings.json hook rewrites.
+ *
+ * Non-Windows keeps the original script token shape when provided (single
+ * quote / bareword / quoted), while Windows normalizes to double-quoted
+ * forward-slash path tokens for stable cross-shell behavior.
+ *
+ * #3662: `runnerToken` is the runner the current install would emit — since
+ * #3662 that is the runtime-resolving chain token (see
+ * buildNodeRunnerChainToken), not a bare absolute path, so re-projected
+ * entries converge onto a runner that resolves in every environment sharing
+ * the config root.
+ */
+function projectLegacySettingsHookCommand({ runnerToken, scriptPath, scriptToken, runtime = 'generic', platform = process.platform, }) {
+    if (!runnerToken || !scriptPath)
+        return null;
+    const normalizedScriptPath = platform === 'win32' ? posixNormalize(scriptPath) : scriptPath;
+    // #1693: a script path already carrying a `"$CLAUDE_PROJECT_DIR"`-anchored
+    // quoted prefix (local installs) is already a valid shell token — only the
+    // variable is quoted, the rest is bare. JSON.stringify-ing it on Windows
+    // yields `"\"$CLAUDE_PROJECT_DIR\"/..."` (escaped quotes inside an outer
+    // quote); node then receives an argument that *starts* with a `"`, treats it
+    // as relative, and dies with MODULE_NOT_FOUND. Emit anchored tokens verbatim;
+    // only bare absolute paths (which may contain spaces, e.g. "Program Files")
+    // need the JSON.stringify quoting. Scoped to win32: the non-Windows branch
+    // already preserves the caller's `scriptToken` (which is the bare anchored
+    // token for these inputs), so it never had the double-quote bug.
+    const commandScriptToken = platform === 'win32'
+        ? (ANCHORED_HOOK_SCRIPT_TOKEN.test(normalizedScriptPath)
+            ? normalizedScriptPath
+            : JSON.stringify(normalizedScriptPath))
+        : (scriptToken || JSON.stringify(normalizedScriptPath));
+    return projectShellCommandText({
+        runnerToken,
+        argTokens: [commandScriptToken],
+        runtime,
+        platform,
+    });
+}
+// Implements the TOML v1.0.0 basic-string escaping grammar (toml.md, "Basic
+// strings" section, https://toml.io/en/v1.0.0#string): a basic string must
+// escape the quotation mark, backslash, and control characters other than
+// tab (U+0000-U+0008, U+000A-U+001F, U+007F). Compact escapes are used where
+// TOML defines them (\b \t \n \f \r \" \\); every other character in the
+// required ranges falls back to \uXXXX. See #3118 — an earlier version
+// escaped only backslash and quote, so a raw newline/CR/NUL in a value
+// produced an unparseable config.toml.
+const TOML_COMPACT_ESCAPES = {
+    '\x08': '\\b',
+    '\x09': '\\t',
+    '\x0A': '\\n',
+    '\x0C': '\\f',
+    '\x0D': '\\r',
+};
+// U+0000-U+0008, U+000A-U+001F, U+007F — control characters other than tab
+// (U+0009), which the grammar permits unescaped.
+const TOML_MUST_ESCAPE_CONTROL_CHARS = /[\x00-\x08\x0A-\x1F\x7F]/g;
+function escapeTomlDoubleQuotedString(value) {
+    return String(value)
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(TOML_MUST_ESCAPE_CONTROL_CHARS, (ch) => {
+        const compact = TOML_COMPACT_ESCAPES[ch];
+        if (compact)
+            return compact;
+        return `\\u${ch.codePointAt(0).toString(16).padStart(4, '0')}`;
+    });
+}
+function projectCodexHookTomlCommand({ absoluteRunner, scriptPath, platform = process.platform }) {
+    const command = projectManagedHookCommand({
+        absoluteRunner,
+        scriptPath,
+        runtime: 'codex',
+        platform,
+    });
+    return command === null ? null : escapeTomlDoubleQuotedString(command);
+}
+function escapePowerShellSingleQuoted(value) {
+    return String(value).replace(/'/g, "''");
+}
+function escapePosixDoubleQuoted(value) {
+    return String(value).replace(/[\\$"`]/g, '\\$&');
+}
+function escapeSingleQuotedShellLiteral(value) {
+    return String(value).replace(/'/g, "'\\''");
+}
+/**
+ * #1460 / #4039: POSIX single-quote an arbitrary string as ONE shell token. A path such as a
+ * hook script's absolute install location commonly sits under a home directory containing
+ * spaces or other metacharacters (e.g. "/Users/Bob Smith/.claude/..."); written unquoted it
+ * would word-split and, with a hostile prefix, could inject. Wrapping in single quotes — with
+ * each embedded `'` escaped as `'\''` by escapeSingleQuotedShellLiteral — makes the whole value a
+ * single token no metacharacter inside it can break. This is the one implementation of that rule;
+ * do not re-implement it in a caller.
+ */
+function shellSingleQuote(value) {
+    return "'" + escapeSingleQuotedShellLiteral(value) + "'";
+}
+/**
+ * The `export PATH="<dir>:$PATH"` line every persistence lane appends, plus the escaped directory
+ * token it embeds. One builder because three lanes emit this line: a lane that re-escapes it
+ * locally is how #3118 shipped a `$(…)` into ~/.bashrc, where it ran on every new shell. The
+ * escaping is for the line's FINAL context — a double-quoted string in an rc file — not for
+ * whatever transport (an `echo`, a paste) it passes through on the way there.
+ */
+function projectPathExportLine(targetDir) {
+    const escapedDir = escapePosixDoubleQuoted(String(targetDir));
+    return { escapedDir, line: `export PATH="${escapedDir}:$PATH"` };
+}
+/**
+ * Why a PATH suggestion produced no actions. An empty `shellActions` alone folds two different
+ * facts together — "no target directory was given" and "this target directory cannot be
+ * expressed as a shell command" — and a caller that cannot tell them apart prints a header with
+ * nothing under it (#3118).
+ */
+exports.PATH_ACTION_REASON = Object.freeze({
+    NO_TARGET_DIR: 'no_target_dir',
+    WIN32_RESERVED_QUOTE: 'win32_reserved_quote',
+});
+function renderShellActionLines(shellActions = []) {
+    return shellActions.map((action) => {
+        if (!action || !action.command)
+            return '';
+        return action.label ? `${action.label}: ${action.command}` : action.command;
+    }).filter(Boolean);
+}
+function projectPathActionProjection({ mode = 'repair', targetDir, platform = process.platform, }) {
+    if (!targetDir)
+        return { shellActions: [], actionLines: [], reason: exports.PATH_ACTION_REASON.NO_TARGET_DIR };
+    // #3118: `"` is reserved on Windows, so a path containing one cannot exist — and it would close
+    // cmd's quoted region in the `powershell -Command "…"` lane below, turning the rest into cmd
+    // input. There is no correct command to suggest for an impossible path: fail closed rather than
+    // emit one whose quoting can be broken.
+    if (platform === 'win32' && String(targetDir).includes('"'))
+        return { shellActions: [], actionLines: [], reason: exports.PATH_ACTION_REASON.WIN32_RESERVED_QUOTE };
+    const isWin32 = platform === 'win32';
+    let shellActions;
+    if (isWin32) {
+        const psTargetDir = escapePowerShellSingleQuoted(targetDir);
+        const bashExportLine = escapeSingleQuotedShellLiteral(projectPathExportLine(posixNormalize(String(targetDir))).line);
+        shellActions = [
+            {
+                label: 'PowerShell',
+                shell: 'powershell',
+                command: `[Environment]::SetEnvironmentVariable('PATH', '${psTargetDir};' + [Environment]::GetEnvironmentVariable('PATH', 'User'), 'User')`,
+            },
+            {
+                label: 'cmd.exe',
+                shell: 'cmd',
+                command: `powershell -Command "[Environment]::SetEnvironmentVariable('PATH', '${psTargetDir};' + [Environment]::GetEnvironmentVariable('PATH', 'User'), 'User')"`,
+            },
+            {
+                label: 'Git Bash',
+                shell: 'bash',
+                command: `echo '${bashExportLine}' >> ~/.bashrc`,
+            },
+        ];
+    }
+    else if (mode === 'persist') {
+        const exportLine = escapeSingleQuotedShellLiteral(projectPathExportLine(targetDir).line);
+        const fishTargetDir = escapeSingleQuotedShellLiteral(String(targetDir));
+        shellActions = [
+            {
+                label: 'zsh',
+                shell: 'zsh',
+                command: `echo '${exportLine}' >> ~/.zshrc`,
+            },
+            {
+                label: 'bash',
+                shell: 'bash',
+                command: `echo '${exportLine}' >> ~/.bashrc`,
+            },
+            // #323: fish has no `export`/`$PATH`-list syntax. `fish_add_path` is the
+            // fish-native API (>= fish 3.2, 2021) that persists to the universal
+            // variable store and de-duplicates. The directory is single-quoted with
+            // the same POSIX literal escaping as the zsh/bash siblings — `'\''` is
+            // also a valid escaped single quote in fish between quote spans.
+            //
+            // #3118 review MINOR: a `targetDir` with a leading `-` (e.g. `-v`) is a
+            // legal directory name, but fish's argparse-based option scanning
+            // treats a leading-dash token as a flag REGARDLESS of quoting, so
+            // `fish_add_path '-v'` misparses it and prints "No paths to add, not
+            // setting anything." (exit 1) instead of adding the path. `--` is
+            // fish's standard end-of-options separator; verified empirically
+            // against a real fish 4.8.1 install that `fish_add_path -- '-v'`
+            // succeeds where the unseparated form fails.
+            {
+                label: 'fish',
+                shell: 'fish',
+                command: `fish_add_path -- '${fishTargetDir}'`,
+            },
+        ];
+    }
+    else {
+        shellActions = [
+            {
+                label: null,
+                shell: 'posix',
+                command: projectPathExportLine(targetDir).line,
+            },
+        ];
+    }
+    return {
+        shellActions,
+        actionLines: renderShellActionLines(shellActions),
+    };
+}
+function projectPersistentPathExportActions({ targetDir, platform = process.platform }) {
+    const projected = projectPathActionProjection({
+        mode: 'persist',
+        targetDir,
+        platform,
+    });
+    return projected.reason === undefined
+        ? { shellActions: projected.shellActions }
+        : { shellActions: projected.shellActions, reason: projected.reason };
+}
+/**
+ * Returns true when a spawn/exec result indicates the subprocess was killed
+ * by a timeout, i.e. it never completed and reported a real answer. This is
+ * the single shared definition of "did this subprocess time out" — worktree
+ * safety (src/worktree-safety.cts) and worktree base-ref detection
+ * (src/worktree-base-ref.cts) both call this instead of maintaining their
+ * own copies (#3050 — "Generative Fix Divergence").
+ *
+ * Only `error.code === 'ETIMEDOUT'` is checked. Node.js guarantees this
+ * cross-platform when `spawnSync`'s `timeout` option fires. The `signal ===
+ * 'SIGTERM'` check some earlier code paired with it is platform-fragile —
+ * Windows does not necessarily report SIGTERM the same way — and pairing it
+ * in as a REQUIRED conjunct risks a false NEGATIVE (a timeout that silently
+ * fails to trip the guard) on that platform. There is no false-positive risk
+ * from dropping it: an externally-delivered SIGTERM (not a timeout) leaves
+ * `error` null, so `error.code === 'ETIMEDOUT'` alone still won't match it.
+ */
+function isSpawnTimeout(result) {
+    return result.error?.code === 'ETIMEDOUT';
+}
+function _spawnResult(result, program) {
+    if (result.error && result.error.code === 'ENOENT') {
+        return { exitCode: 127, stdout: '', stderr: `${program}: not found`, signal: null, error: result.error, timedOut: false };
+    }
+    const signal = result.signal ?? null;
+    const error = result.error ?? null;
+    return {
+        exitCode: result.status ?? 1,
+        stdout: (result.stdout ?? '').toString().trim(),
+        stderr: (result.stderr ?? '').toString().trim(),
+        signal,
+        error,
+        // Reuse the single shared timeout predicate (isSpawnTimeout, below) rather
+        // than re-deriving it here — see that function's docstring for why only
+        // error.code === 'ETIMEDOUT' is checked (not signal === 'SIGTERM').
+        timedOut: isSpawnTimeout({ error }),
+    };
+}
+// #5548: owned by read-only-git-env.cts (its default base is scrubbed); re-exported for callers.
+var read_only_git_env_cjs_2 = require("./read-only-git-env.cjs");
+Object.defineProperty(exports, "GIT_LOCATION_ENV_VARS", { enumerable: true, get: function () { return read_only_git_env_cjs_2.GIT_LOCATION_ENV_VARS; } });
+Object.defineProperty(exports, "scrubGitLocationEnv", { enumerable: true, get: function () { return read_only_git_env_cjs_2.scrubGitLocationEnv; } });
+function execGit(args, opts = {}) {
+    // Non-interactive defaults: a hung credential prompt or terminal-input
+    // probe must surface as a timeout, not block the tool forever. Callers
+    // can override via opts.env.
+    //
+    // #5048: readOnlyGitEnv() as well. execGit is the shared seam behind every
+    // git call the tool makes, including the read-only ones (`status`,
+    // `diff --cached`, `rev-parse`, `log`, …). By default git refreshes the index
+    // and takes an *optional* `.git/index.lock` to write the refreshed copy back,
+    // so a read can lose a race against a real `git add` / `git commit` and fail
+    // it with `Unable to create '.git/index.lock': File exists`. The owner is
+    // src/read-only-git-env.cts, shared with every other read-only seam, so this
+    // call site cannot drift from them. The variable disables only those optional
+    // index operations; a caller that genuinely needs one (a writing command, or a
+    // status whose freshness it wants persisted) can still set it back through
+    // opts.env, which is spread last on purpose.
+    const env = {
+        ...(0, read_only_git_env_cjs_1.readOnlyGitEnv)(),
+        GIT_TERMINAL_PROMPT: '0',
+        GCM_INTERACTIVE: 'never',
+        ...(opts.env || {}),
+    };
+    const result = node_child_process_1.default.spawnSync('git', args, {
+        cwd: opts.cwd,
+        env,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+        timeout: opts.timeout ?? 10_000,
+        windowsHide: true,
+    });
+    return _spawnResult(result, 'git');
+}
+function execNpm(args, opts = {}) {
+    const result = node_child_process_1.default.spawnSync('npm', args, {
+        cwd: opts.cwd,
+        shell: process.platform === 'win32',
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: opts.timeout ?? 15_000,
+        windowsHide: true,
+    });
+    return _spawnResult(result, 'npm');
+}
+/**
+ * Default PATHEXT when Windows does not supply one. Matches the value
+ * `gsd-tools.cjs`'s `resolveSpawnBinary` shipped in #3275; kept identical so the
+ * delegation is a behavior-preserving move rather than a redefinition.
+ */
+const DEFAULT_PATHEXT = '.EXE;.CMD;.BAT;.COM';
+/** Windows extensions that must be mediated through cmd.exe rather than spawned. */
+const CMD_MEDIATED_EXT = /\.(cmd|bat)$/i;
+function _isFile(candidate, requireExecutable = false, platform = process.platform) {
+    try {
+        if (!node_fs_1.default.statSync(candidate).isFile())
+            return false;
+        if (requireExecutable && platform !== 'win32')
+            node_fs_1.default.accessSync(candidate, node_fs_1.default.constants.X_OK);
+        return true;
+    }
+    catch {
+        // Missing, unreadable (EACCES), a broken link, or (when requireExecutable
+        // is set) not executable — all mean "not this one".
+        return false;
+    }
+}
+/**
+ * Read an environment variable by name, case-insensitively.
+ *
+ * Windows environment variable names are case-insensitive and conventionally
+ * cased `Path` / `ComSpec`, and `process.env` is a case-insensitive proxy that
+ * hides the difference. Spreading it (`{ ...process.env, ...opts.env }`, which
+ * `execTool` does whenever a caller supplies `opts.env`) produces a PLAIN object
+ * that keeps the OS's actual casing and loses the proxy — so an exact-case
+ * `env['PATH']` lookup returns undefined there and the PATH scan silently sees
+ * nothing. Caught by the Windows CI lane on #3617; the #3445 tests never hit it
+ * because they pass uppercase keys explicitly.
+ *
+ * Exact match wins when present, so a caller who sets the canonical name pays
+ * no scan.
+ *
+ * Exported so callers outside this seam can route an exact-case-sensitive env
+ * read through it instead of accessing a non-`process.env` object directly
+ * (see `local/no-exact-case-env-access`).
+ */
+function envGet(env, name) {
+    const exact = env[name];
+    if (exact !== undefined)
+        return exact;
+    const lower = name.toLowerCase();
+    for (const key of Object.keys(env)) {
+        if (key.toLowerCase() === lower)
+            return env[key];
+    }
+    return undefined;
+}
+/** cmd.exe's own quoting rule inside a `/c` string: a literal quote is doubled. */
+function _cmdQuoteToken(token) {
+    return `"${token.replace(/"/g, '""')}"`;
+}
+/**
+ * Build a single verbatim command-line string for `cmd.exe /c` where every
+ * token is force-quoted, then wrap the whole thing in one more outer pair.
+ * cmd.exe strips exactly one outer quote pair when the string begins with a
+ * quote and contains at least two — so the outer wrap disappears and what's
+ * left is a sequence of individually-quoted tokens. Force-quoting is the
+ * point: an unquoted `a&b` is split by cmd's own metacharacter parsing, but a
+ * quoted `"a&b"` is one literal argument.
+ */
+function _buildVerbatimCmdLine(target, args) {
+    return `"${[target, ...args].map(_cmdQuoteToken).join(' ')}"`;
+}
+/**
+ * #3411: resolve a DECLARED command name to the file a spawn can actually start.
+ * The single canonical answer to "where is this binary?" for the whole tree.
+ *
+ * This is the seam `CONTEXT.md` declares as "All OS-facing I/O; single platform
+ * seam". Four divergent implementations of this logic existed (#3411): `execNpm`'s
+ * `shell:true`, `execTool`'s absence of any handling, `gsd-tools.cjs`'s private
+ * scan, and `fallow-runner.cts`'s own candidate array. #3275 folded two of them
+ * together in `bin/`; this lifts that resolver into the seam so `bin/` delegates
+ * instead of owning a copy.
+ *
+ * **win32** tries PATHEXT entries ONLY — never the bare name. npm global installs
+ * drop an EXTENSIONLESS POSIX sh shim (`...\npm\codex`) next to `codex.CMD`; a
+ * bare-name-first scan resolves to it, the cmd.exe mediation gate sees no `.cmd`,
+ * and the ENOENT returns unchanged (field-reported on Windows 11 — see #3275).
+ * A name that ALREADY carries a PATHEXT-listed extension is tried as-is first, so
+ * `foo.exe` resolves to `foo.exe` rather than being probed as `foo.exe.EXE`; a
+ * suffix that is not in PATHEXT (`foo.txt`) is not an extension and only feeds the
+ * append loop.
+ *
+ * **POSIX** answers EXISTENCE by scanning PATH for the bare name. `execTool` does
+ * NOT consult this on POSIX — the bare name goes to spawnSync unchanged and Node's
+ * own PATH search does the work, so macOS/Linux behavior is untouched (#3275
+ * acceptance contract).
+ *
+ * Path-like names (any `/` or `\`) bypass the PATH scan: the name is already an
+ * address, so it passes through when it names an existing file.
+ *
+ * **`opts.prependPaths`** — directories searched BEFORE `env.PATH`, in array
+ * order (e.g. a project-local `node_modules/.bin`). Defaults to `[]`, so
+ * Phase 1's callers (`execTool`, and `gsd-tools.cjs`'s `resolveSpawnBinary` /
+ * `deps.spawn` / `hasBinary`), which set neither new option, are byte-identical
+ * to today. The existing per-directory candidate logic (win32 as-is-then-append-
+ * PATHEXT; POSIX bare name) applies to prepended directories exactly as it does
+ * to `PATH` segments — there is no special-casing.
+ *
+ * **`opts.requireExecutable`** — when `true` and the platform is not `win32`,
+ * a candidate must additionally pass `fs.accessSync(candidate, fs.constants.X_OK)`
+ * to count as a match. On `win32` this is a no-op (mode bits do not mean
+ * execute on Windows — the same carve-out `fallow-runner`'s prior private
+ * resolver already had). Defaults to `false`, so `accessSync` is never called
+ * unless a caller opts in. It is opt-in rather than the default because making
+ * `X_OK` unconditional would break #3445's suite: those tests stage candidates
+ * with plain `fs.writeFileSync` and never set an exec bit (the repo bans
+ * `chmod` in tests), so every one of them would resolve to `null` on POSIX.
+ *
+ * **`opts.pathOverride`** — "search THIS PATH, but read everything else —
+ * PATHEXT included — from the ambient environment." When set (`!== undefined`),
+ * the PATH search segments come from splitting `pathOverride` on `path.delimiter`
+ * instead of from `env.PATH`; `pathOverride: ''` means an explicit EMPTY search
+ * path (zero segments), never a fallback to `env.PATH` — use `!== undefined`,
+ * not truthiness, to tell "caller supplied a PATH string" apart from "caller
+ * supplied nothing". `opts.prependPaths` still comes first. PATHEXT resolution
+ * is UNAFFECTED by this option — it still reads from `env` (which defaults to
+ * `process.env`) exactly as it does when `pathOverride` is omitted. This exists
+ * so a caller that already has its own search path in hand (e.g.
+ * `resolveFallowBinary`'s `envPath`) does not have to hand-thread PATHEXT
+ * alongside it — a private PATHEXT read is the very shape
+ * `local/no-private-binary-resolution` forbids outside this seam.
+ *
+ * @returns the resolved path, or `null` when nothing matched. Callers fall back to
+ *   the declared name on `null` so a genuine ENOENT still surfaces (#3086).
+ */
+function resolveExecutableBinary(name, opts = {}) {
+    if (!name)
+        return null;
+    const requireExecutable = opts.requireExecutable ?? false;
+    const platform = opts.platform ?? process.platform;
+    if (name.includes('/') || name.includes('\\')) {
+        return _isFile(name, requireExecutable, platform) ? name : null;
+    }
+    const env = opts.env ?? process.env;
+    const rawPath = opts.pathOverride !== undefined ? opts.pathOverride : (envGet(env, 'PATH') || '');
+    const pathSegments = String(rawPath).split(node_path_1.default.delimiter).filter(Boolean);
+    const segments = [...(opts.prependPaths ?? []), ...pathSegments];
+    if (platform !== 'win32') {
+        for (const dir of segments) {
+            const candidate = node_path_1.default.join(dir, name);
+            if (_isFile(candidate, requireExecutable, platform))
+                return candidate;
+        }
+        return null;
+    }
+    const exts = String(envGet(env, 'PATHEXT') || DEFAULT_PATHEXT).split(';').filter(Boolean);
+    // A name already ending in a PATHEXT-listed extension is an address, not a stem:
+    // probing `foo.exe` as `foo.exe.EXE` would miss the file sitting right there.
+    // Compared case-insensitively because PATHEXT casing is not guaranteed.
+    const lower = name.toLowerCase();
+    const carriesKnownExt = exts.some((ext) => lower.endsWith(ext.toLowerCase()));
+    for (const dir of segments) {
+        if (carriesKnownExt) {
+            const asIs = node_path_1.default.join(dir, name);
+            if (_isFile(asIs, requireExecutable, platform))
+                return asIs;
+        }
+        for (const ext of exts) {
+            const candidate = node_path_1.default.join(dir, name + ext);
+            if (_isFile(candidate, requireExecutable, platform))
+                return candidate;
+        }
+    }
+    return null;
+}
+/**
+ * #3411: project a declared `(command, args)` into the pair `spawnSync` can
+ * actually execute on this platform.
+ *
+ * Resolution alone does not make Windows work: `CreateProcess` cannot execute a
+ * `.cmd`/`.bat` at all, so the cmd.exe mediation is inseparable from the lookup.
+ * Exporting only the resolver would leave every caller to re-derive that half —
+ * which is precisely how #3411's four copies accumulated.
+ *
+ * cmd.exe is invoked as an ordinary program with an EXPLICIT argv array, never via
+ * `shell: true`. `shell:true` on Windows is the mechanism behind CVE-2024-27980
+ * (argument injection through `.bat`/`.cmd`), and Node 26 deprecates it with an
+ * args array (DEP0190) because arguments are concatenated rather than escaped.
+ *
+ * Mediation fires when the target — the resolved path, or the declared name when
+ * resolution found nothing — carries a `.cmd`/`.bat` extension. A BARE name that
+ * resolved to nothing is passed through verbatim so the spawn fails with ENOENT;
+ * mediating it would turn `{exitCode:127, 'foo: not found'}` into cmd.exe's exit
+ * 9009 and silently change the not-found contract callers depend on.
+ *
+ * POSIX is a strict no-op: the declared command is returned unchanged and the
+ * environment is never consulted.
+ *
+ * The mediated command line is built VERBATIM rather than left to libuv: libuv's
+ * `quote_cmd_arg` only force-quotes an argument that contains a space, tab, or
+ * quote — it does not know about cmd.exe metacharacters (`&`, `|`, `>`, `<`,
+ * `^`, ...) at all, so an argument like `a&calc` reaches cmd.exe unquoted and
+ * gets re-parsed as two commands (the CVE-2024-27980 argument-injection class).
+ * Node's own CVE-2024-27980 escaping does not help here because it only fires
+ * when the spawned FILE itself is a `.bat`/`.cmd` — in this seam the spawned
+ * file is `cmd.exe`, not the target. Building the line ourselves and passing
+ * `windowsVerbatimArguments: true` (the shape Rust's std uses for the sibling
+ * CVE-2024-24576) means every token is force-quoted inside one outer pair, so
+ * a metacharacter inside a quoted token can never split the command line.
+ *
+ * KNOWN LIMIT: `%VAR%` still expands inside a cmd `/c` string, and there is no
+ * escape for `%` outside a batch file — an argument containing `%FOO%` is
+ * substituted with the environment value regardless of quoting. That is an
+ * information-disclosure limit, not arbitrary execution, and it's the same
+ * limit Rust's std documents for its own `CommandExt::raw_arg` escape hatch.
+ *
+ * CALLER CHOICE: this function's return value carries two independently
+ * adoptable pieces of information, and a caller may take either, both, or
+ * neither. `windowsVerbatimArguments: true` marks the cases where mediation
+ * was REQUIRED — the caller MUST adopt `command`+`args` together, since a
+ * `.cmd`/`.bat` genuinely cannot be spawned any other way. A merely-resolved
+ * `.exe` path (no mediation flag set) is only an OFFER: a caller may decline
+ * it and keep spawning the declared name instead, to hold its own observable
+ * contract stable. `execTool` (this file, below) is exactly such a caller —
+ * it adopts the mediated pair when `windowsVerbatimArguments` is set, but
+ * otherwise passes the declared `program`/`args` through untouched.
+ */
+function projectSpawnInvocation(command, args = [], opts = {}) {
+    const platform = opts.platform ?? process.platform;
+    if (platform !== 'win32')
+        return { command, args, resolved: null };
+    const env = opts.env ?? process.env;
+    const resolved = resolveExecutableBinary(command, { platform, env });
+    // Mediate against the resolved path when we have one, else against the declared
+    // name. An unresolved name is mediated ONLY when it already declares .cmd/.bat:
+    // PATH-only resolution misses a batch file sitting in the current directory,
+    // which `cmd.exe /c` still finds — the behavior gsd-tools.cjs shipped before
+    // this consolidation, preserved here rather than silently narrowed.
+    const target = resolved ?? command;
+    if (!CMD_MEDIATED_EXT.test(node_path_1.default.basename(target))) {
+        // A BARE name that resolved to nothing is passed through untouched so the
+        // spawn fails with ENOENT. Mediating it would turn {exitCode:127,
+        // '<name>: not found'} into cmd.exe's exit 9009 and silently change the
+        // not-found contract `_spawnResult` and its 53 dependent files rely on.
+        return resolved ? { command: resolved, args, resolved } : { command, args, resolved: null };
+    }
+    // A CR/LF cannot be represented inside a Windows command line at all — cmd.exe
+    // treats it as a line terminator, so mediating it would silently truncate the
+    // argument rather than pass it through. Fail visibly instead: fall back to the
+    // unmediated shape so the spawn either fails with ENOENT (bare unresolved name)
+    // or hands the raw string to CreateProcess, whichever the caller was already
+    // prepared to see for a non-.cmd/.bat target.
+    if (/[\r\n]/.test(target) || args.some((a) => /[\r\n]/.test(a))) {
+        return resolved ? { command: resolved, args, resolved } : { command, args, resolved: null };
+    }
+    return {
+        command: String(envGet(env, 'ComSpec') || 'cmd.exe'),
+        args: ['/d', '/s', '/c', _buildVerbatimCmdLine(target, args)],
+        resolved,
+        windowsVerbatimArguments: true,
+    };
+}
+function execTool(program, args, opts = {}) {
+    // #3411: Windows cannot spawn a .cmd/.bat at all — CreateProcess refuses it —
+    // so those are mediated through cmd.exe. Everything else keeps the DECLARED
+    // program name: libuv's CreateProcess path already performs PATH + PATHEXT
+    // search, so resolving a .exe here would buy nothing and would change what
+    // this seam's 167 dependents observe being spawned. `tests/graphify.test.cjs`
+    // pins that contract by spying on spawnSync's first argument. POSIX never
+    // reaches the mediation branch at all.
+    const spawnEnv = opts.env ? { ...process.env, ...opts.env } : undefined;
+    const invocation = projectSpawnInvocation(program, args, { env: spawnEnv ?? process.env });
+    const mediated = invocation.windowsVerbatimArguments === true;
+    const result = node_child_process_1.default.spawnSync(mediated ? invocation.command : program, mediated ? invocation.args : args, {
+        cwd: opts.cwd,
+        env: spawnEnv,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+        timeout: opts.timeout ?? 30_000,
+        windowsHide: true,
+        ...(mediated ? { windowsVerbatimArguments: true } : {}),
+    });
+    // Stamp the DECLARED name, never the resolved path: `_spawnResult` renders
+    // `${program}: not found`, and callers across 53 files match on the string they
+    // passed. Resolution must not leak an absolute path into that message.
+    return _spawnResult(result, program);
+}
+/**
+ * Seam primitive for running untrusted argv with no shell (#4310, ADR-4310).
+ * Refuses cmd.exe mediation: a `.cmd`/`.bat` target would run through a shell,
+ * so it is reported as `refused` and never spawned. Output is returned
+ * untrimmed; this function never throws.
+ */
+function execArgvQuarantined(program, args, opts) {
+    try {
+        const platform = opts.platform ?? process.platform;
+        const notFound = { outcome: 'not_found', exitCode: null, stdout: '', stderr: '', signal: null };
+        const isWin = platform === 'win32';
+        const pathApi = isWin ? node_path_1.default.win32 : node_path_1.default.posix;
+        const env = opts.env ?? process.env;
+        let resolved = null;
+        if (pathApi.isAbsolute(program)) {
+            // An absolute program is addressed directly: no PATH lookup is involved.
+            resolved = _isFile(program, true, platform) ? program : null;
+        }
+        else if (program.includes('/') || program.includes('\\')) {
+            // The quarantine passes bare names only; a relative path would resolve against the project cwd.
+            return notFound;
+        }
+        else {
+            // Only ABSOLUTE PATH entries are searched: an empty or relative entry would
+            // resolve against the project (the spawn cwd), so a committed ./git could run.
+            const segments = String(envGet(env, 'PATH') ?? '')
+                .split(isWin ? ';' : ':')
+                .filter((seg) => seg.length > 0 && pathApi.isAbsolute(seg));
+            if (isWin) {
+                const joined = segments.join(';');
+                resolved = resolveExecutableBinary(program, { platform, env: { ...env, PATH: joined, Path: joined } });
+            }
+            else {
+                for (const seg of segments) {
+                    const candidate = node_path_1.default.posix.join(seg, program);
+                    if (_isFile(candidate, true, platform)) {
+                        resolved = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        if (resolved === null || !pathApi.isAbsolute(resolved))
+            return notFound;
+        if (isWin && CMD_MEDIATED_EXT.test(node_path_1.default.win32.basename(resolved))) {
+            return { outcome: 'refused', exitCode: null, stdout: '', stderr: '', signal: null };
+        }
+        const result = node_child_process_1.default.spawnSync(resolved, args, {
+            cwd: opts.cwd,
+            env: opts.env,
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: opts.timeout,
+            maxBuffer: opts.maxBuffer,
+            windowsHide: true,
+            shell: false,
+        });
+        const stdout = (result.stdout ?? '').toString();
+        const stderr = (result.stderr ?? '').toString();
+        const signal = result.signal ?? null;
+        const spawnError = result.error;
+        const code = spawnError?.code;
+        let outcome;
+        if (code === 'ENOENT')
+            outcome = 'not_found';
+        else if (isSpawnTimeout({ error: result.error }))
+            outcome = 'timed_out';
+        else if (code === 'ENOBUFS')
+            outcome = 'overflow';
+        else if (result.error)
+            outcome = 'error';
+        else if (result.status === null && signal)
+            outcome = 'killed';
+        else
+            outcome = 'exited';
+        return { outcome, exitCode: outcome === 'exited' ? result.status : null, stdout, stderr, signal };
+    }
+    catch {
+        return { outcome: 'error', exitCode: null, stdout: '', stderr: '', signal: null };
+    }
+}
+/**
+ * Resolve the absolute path to gsd-tools.cjs relative to THIS module.
+ *
+ * This file compiles to gsd-core/bin/lib/shell-command-projection.cjs — a
+ * sibling of gsd-core/bin/gsd-tools.cjs — so the relative walk-up is stable
+ * regardless of install location (global/local/dev-repo layouts all ship
+ * gsd-core/bin/ as a unit).
+ */
+function resolveGsdToolsPath() {
+    return node_path_1.default.resolve(__dirname, '..', 'gsd-tools.cjs');
+}
+/**
+ * Subprocess-shim dispatch to gsd-tools.cjs (ADR-1239 #2102 Stage 2).
+ *
+ * No fully-populated in-process command-routing hub exists anywhere in the
+ * tree — every `createHub()` caller (cjs-command-router-adapter.cts,
+ * phase-command-router.cts, command-routing-hub.cts's own tests) builds a
+ * single-family hub for its own narrow purpose. The ONLY dispatch path that
+ * covers the FULL family/subcommand surface is the gsd-tools.cjs CLI itself.
+ * This mirrors the SUBPROCESS-REUSE precedent already established for the
+ * OpenCode/Kilo hook bridge (see .opencode/plugins/gsd-core.js header:
+ * "Architecture: SUBPROCESS REUSE ... spawns existing hook scripts as child
+ * processes") — the same pattern, applied to command dispatch instead of
+ * hook dispatch.
+ *
+ * Output-flag choice (verified by direct invocation — see #2102 dispatch
+ * notes for the sample invocations): always pass `--raw` (undecorated,
+ * programmatically-consumable stdout on success) and `--json-errors` (a
+ * structured `{ok:false,reason,message}` JSON object on stderr, with a
+ * non-zero exit, instead of a free-text "Error: ..." line). Both are global
+ * flags accepted by every gsd-tools.cjs family/subcommand, so passing them
+ * unconditionally is safe for the full command surface.
+ *
+ * `family` maps 1:1 onto gsd-tools.cjs's first positional argv token;
+ * `subcommand` (when present) onto the second — e.g.
+ * `{family:'phase', subcommand:'add'}` → `gsd-tools.cjs phase add`. An empty
+ * `subcommand` is omitted entirely (some families, e.g. `config-path`, take
+ * no subcommand).
+ *
+ * NEVER throws. Degrades to `{ ok:false, ... }` on:
+ *   - a missing/invalid "family" (validated locally, no subprocess spawned)
+ *   - ENOENT / a missing gsd-tools.cjs (via the injectable `gsdToolsPath`)
+ *   - a wall-clock timeout (`timedOut:true`, via the shared `isSpawnTimeout`
+ *     predicate defined above in this file — also used by worktree-safety.cts
+ *     and worktree-base-ref.cts)
+ *   - any other unanticipated throw from the underlying spawn (defensive
+ *     try/catch — execTool itself is spawnSync-based and does not throw).
+ */
+function dispatchGsdCommand({ family, subcommand, args = [], cwd, timeout = 30_000, gsdToolsPath, } = {}) {
+    if (typeof family !== 'string' || family.length === 0) {
+        return {
+            ok: false,
+            stdout: '',
+            stderr: 'dispatchGsdCommand requires a non-empty string "family".',
+            code: null,
+            timedOut: false,
+        };
+    }
+    const resolvedCwd = cwd || process.cwd();
+    const toolsPath = gsdToolsPath || resolveGsdToolsPath();
+    const argv = [
+        toolsPath,
+        family,
+        ...(subcommand ? [subcommand] : []),
+        ...(Array.isArray(args) ? args : []),
+        '--cwd', resolvedCwd,
+        '--raw',
+        '--json-errors',
+    ];
+    let result;
+    try {
+        result = execTool(process.execPath, argv, { cwd: resolvedCwd, timeout });
+    }
+    catch (e) {
+        // Defensive belt-and-suspenders: execTool is spawnSync-based and does not
+        // throw today, but a degraded result here keeps this seam's no-throw
+        // contract true even under an unanticipated future failure mode.
+        return {
+            ok: false,
+            stdout: '',
+            stderr: e instanceof Error ? e.message : String(e),
+            code: null,
+            timedOut: false,
+        };
+    }
+    // Delegates to the single shared predicate defined above in this file
+    // (#3050 — "Generative Fix Divergence") instead of a local inline copy.
+    const timedOut = isSpawnTimeout(result);
+    return {
+        ok: result.exitCode === 0 && !timedOut,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        code: result.exitCode,
+        timedOut,
+    };
+}
+function probeTty(opts = {}) {
+    const platform = opts.platform ?? process.platform;
+    if (platform === 'win32')
+        return null;
+    try {
+        const ttyPath = node_child_process_1.default.execFileSync('tty', [], {
+            encoding: 'utf-8',
+            stdio: ['inherit', 'pipe', 'ignore'],
+            timeout: 5_000,
+        }).trim();
+        if (!ttyPath || ttyPath === 'not a tty')
+            return null;
+        return ttyPath;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * How many leading lines of LF-only `text` are its closed YAML frontmatter block (opening
+ * fence through closing fence), or 0 when there is none (an unterminated block is not
+ * frontmatter). The fence is `locateFrontmatterFence`'s — the one owner the frontmatter reader
+ * and writer (`frontmatter.cts`) also read — so the normalizer skips exactly the block every
+ * reader sees (found while implementing #5105: this was a private mirror of the reader's
+ * fence rule, because `frontmatter.cts` imports this module, and the two drifted).
+ */
+function leadingFrontmatterLineCount(text) {
+    const fence = (0, frontmatter_fence_cjs_1.locateFrontmatterFence)(text);
+    if (!fence || !fence.closed)
+        return 0;
+    // The lines before the closing fence, plus the closing fence line itself.
+    return text.slice(0, fence.closingStart).split('\n').length;
+}
+/** A leading BOM is not part of the first line's content when aligning two documents. */
+function withoutBom(line) {
+    return line !== undefined && line.charCodeAt(0) === 0xFEFF ? line.slice(1) : (line ?? '');
+}
+function _normalizeMd(content, prior, preserveFencedStructure = false) {
+    if (!content || typeof content !== 'string')
+        return content;
+    let text = content.replace(/\r\n/g, '\n');
+    const lines = text.split('\n');
+    // #5165: when the document being replaced is known, only the junctions the
+    // write touched are normalized; every other region stays byte-identical.
+    let scope = null;
+    let priorLines = [];
+    if (typeof prior === 'string' && prior !== '') {
+        priorLines = prior.replace(/\r\n/g, '\n').split('\n');
+        // A BOM on either first line must not make an unchanged line look rewritten.
+        const alignPrior = [withoutBom(priorLines[0]), ...priorLines.slice(1)];
+        const alignNext = [withoutBom(lines[0]), ...lines.slice(1)];
+        const match = (0, markdown_line_diff_cjs_1.matchLines)(alignPrior, alignNext);
+        if (match)
+            scope = (0, markdown_line_diff_cjs_1.writeScope)(match, priorLines.length);
+    }
+    // The frontmatter block is YAML, not markdown: its lines are published exactly as written.
+    // A `# comment` is not a heading, and a blank line inserted into a multi-line quoted scalar
+    // or removed from a block scalar changes the value (found while implementing #5105).
+    const frontmatterLines = leadingFrontmatterLineCount(text);
+    const result = [];
+    // A separating blank the rules add. In scoped mode (#5165) two rules that fire on
+    // the same junction add ONE blank: the whole-document pass collapses them in its
+    // final blank-run regex, which scoped mode must not apply to runs the write kept.
+    const blank = () => {
+        if (scope === null || result[result.length - 1] !== '')
+            result.push('');
+    };
+    const fenceRegex = /^```/;
+    const insideFence = new Array(lines.length);
+    const insideSharedFence = new Array(lines.length).fill(false);
+    let fenceOpen = false;
+    for (let i = 0; i < lines.length; i++) {
+        if (i < frontmatterLines) {
+            insideFence[i] = false;
+            continue;
+        }
+        if (fenceRegex.test(lines[i].trimEnd())) {
+            if (fenceOpen) {
+                insideFence[i] = false;
+                fenceOpen = false;
+            }
+            else {
+                insideFence[i] = false;
+                fenceOpen = true;
+            }
+        }
+        else {
+            insideFence[i] = fenceOpen;
+        }
+    }
+    if (preserveFencedStructure) {
+        for (const block of (0, markdown_sectionizer_cjs_1.scanFencedBlocks)(lines)) {
+            const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
+            for (let i = block.openLineIdx + 1; i < end; i++)
+                insideSharedFence[i] = true;
+        }
+    }
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (i < frontmatterLines) {
+            result.push(line);
+            continue;
+        }
+        const prev = i > 0 ? lines[i - 1] : '';
+        const prevTrimmed = prev.trimEnd();
+        const trimmed = line.trimEnd();
+        const isFenceLine = fenceRegex.test(trimmed);
+        // Bracket writers preserve literal headings and lists inside fenced examples.
+        const normalizeStructuralLine = !preserveFencedStructure || !insideSharedFence[i];
+        // A heading or fence line the write authored brings its own separation, even
+        // where it replaced a prose line in place (#5165). One that replaced a heading
+        // or fence (a rename, a renumber) inherits the spacing around it instead.
+        const isStructural = (text) => /^#{1,6}\s/.test(text.trimEnd()) || fenceRegex.test(text.trimEnd());
+        const replacedPrior = scope !== null ? scope.replacedPriorIndex(i) : -1;
+        const authoredStructure = scope !== null && scope.lineWritten(i) && isStructural(line)
+            && !(replacedPrior >= 0 && isStructural(priorLines[replacedPrior] ?? ''));
+        const keptBefore = scope !== null && !authoredStructure && i > 0 && scope.junctionKept(i - 1);
+        const keptAfter = scope !== null && !authoredStructure && i < lines.length - 1 && scope.junctionKept(i);
+        // A blank-line run is collapsed only where the write made it (#5165).
+        if (scope !== null && line === '' && result.length > 0 && result[result.length - 1] === '' && !keptBefore)
+            continue;
+        if (normalizeStructuralLine && /^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---' && !keptBefore)
+            blank();
+        if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine) && !keptBefore) {
+            if (i === 0 || !insideFence[i - 1])
+                blank();
+        }
+        // No "separate a list from a preceding paragraph" rule (#3854, #4725).
+        // This pass re-normalizes the ENTIRE document on every .md write, so an
+        // inserted blank before a bullet whose previous line is ordinary prose
+        // reflowed text the command never touched (converting tight lists to
+        // loose ones); #3854 first guarded the indented-continuation predecessor,
+        // #4725 removed the rule outright. A paragraph→list transition stays
+        // exactly as the author wrote it; a heading→list separation still comes
+        // from the after-heading rule below. The after-a-bullet rule at the end
+        // of this loop is a different transition (list→prose) and is unaffected.
+        result.push(line);
+        if (normalizeStructuralLine && /^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '' && !keptAfter)
+            blank();
+        if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '' && !keptAfter)
+            blank();
+        if (normalizeStructuralLine && /^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1 && !keptAfter) {
+            const next = lines[i + 1];
+            if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next))
+                blank();
+        }
+    }
+    // The frontmatter lines are `result`'s first entries, unchanged; the blank-run collapse
+    // applies from the line ending that closes the block onward.
+    const head = result.slice(0, frontmatterLines).join('\n');
+    text = result.join('\n');
+    text = scope === null ? head + text.slice(head.length).replace(/\n{3,}/g, '\n\n') : text;
+    text = text.replace(/\n*$/, '\n');
+    return text;
+}
+/**
+ * #5759: the device-namespace path (`\\.\NUL`) to open for `target`, or null when `target` is not
+ * a spelling that names a device on every Windows. Two spellings qualify: an EXACT bare reserved
+ * stem (`NUL`, `CON`, `PRN`, `AUX`, `COM1`-`COM9`, `LPT1`-`LPT9`, `CONIN$`, `CONOUT$`, any case,
+ * optionally prefixed by `.\` or `./`), and an explicit `\\.\` / `\\?\` device form whose remainder
+ * is exactly such a stem. Everything else is null and takes the checked path: a name with an
+ * extension, trailing dot or space, `:stream` or superscript digit (`nul.txt`, `NUL.`, `NUL:s`,
+ * `COM¹`) is an ordinary file on Windows 11, and a reserved name inside a directory path
+ * (`sub\NUL`, `D:\x\NUL`, `C:NUL`, `\\?\C:\x\NUL`) is an ordinary file on 24H2 / Server 2025.
+ * The device is always opened through `\\.\<STEM>` (uppercase), never through a resolved path.
+ *
+ * Deliberate: on pre-Windows-11-24H2 systems a reserved name with a directory component
+ * (`<dir>\NUL`) is still the device, but it now takes the checked path (the device is never
+ * opened through a directory path), so a write there may fail rather than discard data.
+ */
+function windowsDeviceNamespacePath(target) {
+    const namespaced = /^\\\\[.?]\\/.test(target);
+    let rest = namespaced ? target.slice(4) : target;
+    if (!namespaced)
+        while (/^\.[\\/]/.test(rest))
+            rest = rest.slice(2);
+    // Only an exact stem qualifies: no extension, trailing dot/space, `:stream` or superscript
+    // COM¹/LPT² digit. On Windows 11 `nul.txt` / `con.txt` are ordinary creatable files, so routing
+    // them to the device would silently discard the data.
+    const m = /^(nul|con|prn|aux|com[1-9]|lpt[1-9]|conin\$|conout\$)$/i.exec(rest);
+    if (m === null)
+        return null;
+    return `\\\\.\\${m[1].toUpperCase()}`;
+}
+const DEVICE_OPEN_FALLTHROUGH = new Set(['ENOENT', 'EISDIR', 'EACCES', 'EPERM', 'EBUSY', 'EINVAL']);
+/**
+ * #5759: writes `normalized` in place when `filePath` is a bare reserved name or a `\\.\` / `\\?\`
+ * device form (see `windowsDeviceNamespacePath`) and the handle opened on `\\.\<NAME>` is a
+ * character device. Returns false (nothing written, handle closed untouched) for any other
+ * outcome so the caller takes the checked path: a path with a directory component (never opened,
+ * so a link or an ordinary file named NUL is never touched), a name that is an ordinary file on
+ * Windows 11 (open fails with ENOENT/EISDIR/EACCES/EPERM/EBUSY/EINVAL, or the handle is not a
+ * character device). The open is O_WRONLY only: no O_CREAT, no O_TRUNC.
+ */
+function writeWindowsDeviceInPlace(filePath, normalized, encoding, seams) {
+    if ((seams?.platform ?? process.platform) !== 'win32')
+        return false;
+    const device = windowsDeviceNamespacePath(filePath);
+    if (device === null)
+        return false;
+    const fsx = seams?.fs ?? node_fs_1.default;
+    // No lstat: the `\\.\<STEM>` device namespace path never resolves a cwd entry, so an ordinary
+    // file or link named like the stem in the cwd is not reachable through it.
+    let deviceFd;
+    try {
+        deviceFd = fsx.openSync(device, node_fs_1.default.constants.O_WRONLY);
+    }
+    catch (err) {
+        if (DEVICE_OPEN_FALLTHROUGH.has(err.code ?? ''))
+            return false;
+        throw err;
+    }
+    try {
+        if (!fsx.fstatSync(deviceFd).isCharacterDevice())
+            return false;
+        fsx.writeFileSync(deviceFd, normalized, encoding);
+        return true;
+    }
+    finally {
+        try {
+            fsx.closeSync(deviceFd);
+        }
+        catch { /* already closed */ }
+    }
+}
+function normalizeContent(filePath, content, opts = {}) {
+    const encoding = opts.encoding ?? 'utf-8';
+    if (opts.verbatim === true)
+        return { content: content ?? '', encoding };
+    const isMd = node_path_1.default.extname(filePath).toLowerCase() === '.md';
+    let normalized;
+    if (isMd) {
+        normalized = _normalizeMd(content, opts.prior, opts.preserveFencedMarkdownStructure === true);
+    }
+    else {
+        normalized = (content ?? '').replace(/\r\n/g, '\n').replace(/\n*$/, '\n');
+    }
+    return { content: normalized, encoding };
+}
+/**
+ * True iff persisting `after` via `platformWriteSync` would land different
+ * on-disk bytes than `before` already has (or would have, normalized the
+ * same way). `platformWriteSync` runs Markdown normalization (CRLF strip,
+ * blank-line-run collapse, single trailing newline) before writing, so a
+ * caller comparing raw pre-normalize strings (`after !== before`) can report
+ * `true` even when the persisted bytes are byte-identical — e.g. a
+ * transform that regenerates a section fresh on every call, including a
+ * genuine no-op re-run, in a different-but-equivalent raw shape than the
+ * already-normalized on-disk original (#3685 / #3691). Any "did this write
+ * change the file?" flag MUST go through this seam (or an equivalent
+ * post-write re-read of the actual on-disk bytes) instead of a raw `!==` —
+ * do not simplify this back to a direct string comparison.
+ */
+function contentChangedAfterNormalize(filePath, before, after, opts = {}) {
+    return normalizeContent(filePath, after, { ...opts, prior: before }).content !== normalizeContent(filePath, before, { ...opts, prior: before }).content;
+}
+// Rename errnos that are transient on Windows: a concurrent reader (or an AV
+// scanner / indexer) holding the target open makes renameSync fail briefly.
+// Same idiom as capability-ledger.cts / capability-consent.cts.
+const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_MAX_ATTEMPTS = 3;
+const RENAME_RETRY_BACKOFF_MS = 50;
+/** The exact identity of an open descriptor. */
+function identityOfFd(fd) {
+    const s = node_fs_1.default.fstatSync(fd, { bigint: true });
+    return { dev: s.dev, ino: s.ino };
+}
+/** The exact identity of the entry at `p` (a final symlink is not followed). */
+function identityOfPath(p) {
+    const s = node_fs_1.default.lstatSync(p, { bigint: true });
+    return { dev: s.dev, ino: s.ino };
+}
+/** Synchronous best-effort backoff sleep (Atomics.wait — same idiom as io.cts). */
+let _renameSleepBuf = null;
+function renameBackoff() {
+    if (_renameSleepBuf === null)
+        _renameSleepBuf = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(_renameSleepBuf, 0, 0, RENAME_RETRY_BACKOFF_MS);
+}
+/**
+ * Atomic publish with bounded retry on transient Windows lock errnos.
+ * Returns null on success, or the final error if every attempt failed.
+ */
+function atomicRenameWithRetry(tmpPath, filePath) {
+    let renameErr = null;
+    for (let attempt = 1; attempt <= RENAME_MAX_ATTEMPTS; attempt++) {
+        try {
+            node_fs_1.default.renameSync(tmpPath, filePath);
+            return null;
+        }
+        catch (err) {
+            renameErr = err;
+            if (attempt < RENAME_MAX_ATTEMPTS && RENAME_RETRY_ERRNOS.has(renameErr.code ?? '')) {
+                renameBackoff();
+                continue;
+            }
+            break;
+        }
+    }
+    return renameErr;
+}
+/**
+ * Drop-in replacement for `fs.renameSync(from, to)` that retries the transient
+ * Windows lock errnos (EPERM/EBUSY/EACCES — see DEFECT.WINDOWS-FS-OPS) a bounded
+ * number of times with a short backoff before rethrowing the final error.
+ *
+ * Idempotent on POSIX (the transient errnos do not occur), so callers retain
+ * identical semantics on macOS/Linux while gaining resilience on Windows where
+ * an antivirus scanner, indexer, or concurrent reader may briefly hold the
+ * target open. Enforced by local/require-fs-op-fallback (ADR-1703 Phase 6).
+ */
+function retryRenameSync(fromPath, toPath) {
+    const err = atomicRenameWithRetry(fromPath, toPath);
+    if (err !== null)
+        throw err;
+}
+/**
+ * Largest on-disk Markdown document read back as the `prior` of a scoped write.
+ * A larger file is normalized whole (the pre-#5165 behavior) rather than read and
+ * diffed on every write.
+ */
+const MAX_PRIOR_BYTES = 2 * 1024 * 1024;
+/**
+ * The Markdown document a write replaces, or undefined when there is none worth
+ * diffing against: no file, not a regular file (a FIFO or device reports size 0
+ * and would block or never end), unreadable, or larger than MAX_PRIOR_BYTES. The
+ * bound is enforced on the bytes actually read from one open descriptor, so a
+ * file that grows after the check cannot exceed it.
+ */
+function readPriorMarkdown(filePath, encoding) {
+    let fd;
+    try {
+        // O_NONBLOCK keeps opening a FIFO from waiting for a writer; it is absent on Windows.
+        fd = node_fs_1.default.openSync(filePath, node_fs_1.default.constants.O_RDONLY | (node_fs_1.default.constants.O_NONBLOCK ?? 0) | (node_fs_1.default.constants.O_NOCTTY ?? 0));
+        const stat = node_fs_1.default.fstatSync(fd);
+        if (!stat.isFile() || stat.size > MAX_PRIOR_BYTES)
+            return undefined;
+        // One byte of headroom: reading it means the file grew past what was measured.
+        const buffer = Buffer.alloc(stat.size + 1);
+        let length = 0;
+        while (length < buffer.length) {
+            const read = node_fs_1.default.readSync(fd, buffer, length, buffer.length - length, null);
+            if (read === 0)
+                break;
+            length += read;
+        }
+        if (length > stat.size)
+            return undefined;
+        return buffer.toString(encoding, 0, length);
+    }
+    catch {
+        return undefined; // no prior document (new file or unreadable): normalize it whole
+    }
+    finally {
+        if (fd !== undefined) {
+            try {
+                node_fs_1.default.closeSync(fd);
+            }
+            catch { /* already closed */ }
+        }
+    }
+}
+/** Collisions tolerated while creating a temp file before giving up (#5759). */
+const EXCLUSIVE_TEMP_ATTEMPTS = 5;
+/** Default temp-name suffix: pid plus 48 random bits, so a name cannot be predicted and planted. */
+function defaultTempSuffix() {
+    return `${process.pid}.${(0, node_crypto_1.randomBytes)(6).toString('hex')}`;
+}
+/**
+ * Create `<basePath>.tmp.<suffix>` exclusively and return its open write descriptor (#5759).
+ * `O_CREAT|O_EXCL` fails with EEXIST on ANY existing entry — a regular file, a FIFO, or a
+ * symlink (dangling or not) — so a planted entry is never opened, written through or blocked
+ * on; `O_NOFOLLOW` is added where the platform has it (absent on Windows). On EEXIST a new
+ * suffix is drawn, up to EXCLUSIVE_TEMP_ATTEMPTS times, then the EEXIST is thrown. On
+ * ENAMETOOLONG (a target whose name leaves no room for the default suffix) the suffix shrinks
+ * to 4 random bytes of hex, then to 2, before the error is thrown. Any
+ * other error is thrown at once. `nextSuffix` is a seam for tests; it applies until a shrink.
+ * `mode` is the creation mode (default 0o666, narrowed by the umask): a caller replacing a
+ * private file passes that file's mode so the temp is never briefly more readable than it.
+ * `label` names the temp (`<basePath>.<label>.<suffix>`; default `tmp`).
+ *
+ * Crash-orphaned temp files are named `<target>.tmp.<pid>.<12 hex>` and are NOT reaped: a
+ * process killed between the create and the rename leaves one beside its target, and a later
+ * write picks a fresh name rather than reusing it.
+ */
+function openExclusiveTempSync(basePath, nextSuffix = defaultTempSuffix, mode = 0o666, label = 'tmp') {
+    const flags = node_fs_1.default.constants.O_WRONLY | node_fs_1.default.constants.O_CREAT | node_fs_1.default.constants.O_EXCL | (node_fs_1.default.constants.O_NOFOLLOW ?? 0);
+    let collision;
+    let shrink = 0; // 0 = nextSuffix, 1 = 4 random bytes, 2 = 2 random bytes
+    for (let attempt = 0; attempt < EXCLUSIVE_TEMP_ATTEMPTS; attempt++) {
+        const suffix = shrink === 0 ? nextSuffix() : (0, node_crypto_1.randomBytes)(shrink === 1 ? 4 : 2).toString('hex');
+        const tmpPath = `${basePath}.${label}.${suffix}`;
+        try {
+            return { fd: node_fs_1.default.openSync(tmpPath, flags, mode), tmpPath };
+        }
+        catch (err) {
+            const code = err.code;
+            if (code === 'ENAMETOOLONG' && shrink < 2) {
+                shrink += 1;
+                attempt -= 1; // a shorter name is a retry of the same attempt, not a collision
+                continue;
+            }
+            if (code !== 'EEXIST')
+                throw err;
+            collision = err;
+        }
+    }
+    throw collision;
+}
+/**
+ * Restore limit: an existing target is captured for restore only up to MAX_PRIOR_BYTES (2 MiB);
+ * a larger one is refused with EFBIG BEFORE it is truncated. A failed write puts the old bytes
+ * back; if that restore itself fails the thrown error carries `restoreFailed = true`.
+ *
+ * Write `normalized` to the target path itself (the non-atomic fallback). Opens non-blocking
+ * and fstats the descriptor, so a FIFO or device at the target can neither block the open
+ * (a FIFO with no reader fails ENXIO) nor be written to: anything but a regular file is
+ * refused with code ENXIO.
+ */
+function writeTargetDirect(filePath, normalized, encoding, walked, afterLstat, checkParent = () => { }) {
+    // The walked parent is re-checked at the top and again right before each open that can create
+    // or modify the target; a swap refuses with ENXIO before anything is created or written.
+    checkParent();
+    const nonBlock = (node_fs_1.default.constants.O_NONBLOCK ?? 0) | (node_fs_1.default.constants.O_NOCTTY ?? 0);
+    const noFollow = node_fs_1.default.constants.O_NOFOLLOW ?? 0;
+    const refuse = (message, code) => {
+        throw Object.assign(new Error(`${code}: cannot write ${filePath}: ${message}`), { code });
+    };
+    const LINK_MESSAGE = 'a symlinked target cannot be replaced atomically, and is never written through — refusing';
+    // What an O_NOFOLLOW open of a final-component symlink fails with: ELOOP (Linux, macOS), EMLINK
+    // (FreeBSD) or EFTYPE (NetBSD). All mean "that is a link": refused like the lstat.
+    const refuseIfLinkOpen = (err) => {
+        const code = err.code;
+        if (code === 'ELOOP' || code === 'EMLINK' || code === 'EFTYPE')
+            refuse(LINK_MESSAGE, 'ENXIO');
+    };
+    const refuseMultiplyLinked = (st) => {
+        if (st.nlink > 1)
+            refuse('a multiply-linked target cannot be replaced atomically, and writing it in place would change every other name for it — refusing', 'ENXIO');
+    };
+    // Probe an existing target READ-ONLY and non-blocking, so a device or FIFO is never opened
+    // for write: it is classified by fstat, and the old bytes are captured for a restore.
+    // Returns null when the target is absent.
+    const probe = () => {
+        let fd;
+        try {
+            fd = node_fs_1.default.openSync(filePath, node_fs_1.default.constants.O_RDONLY | noFollow | nonBlock);
+        }
+        catch (err) {
+            if (err.code === 'ENOENT')
+                return null;
+            refuseIfLinkOpen(err);
+            throw err;
+        }
+        try {
+            const st = node_fs_1.default.fstatSync(fd);
+            if (st.isDirectory())
+                refuse('it is a directory', 'EISDIR');
+            if (!st.isFile())
+                refuse('not a regular file (FIFO/device) — refusing', 'ENXIO');
+            refuseMultiplyLinked(st);
+            // The truncate-then-write below needs the old bytes to put back on a failed write. A file
+            // too large to hold (or read short) is refused BEFORE anything is truncated. Remaining
+            // caveat: between the truncate and the first successful write the file is empty.
+            if (st.size > MAX_PRIOR_BYTES)
+                refuse(`existing file is larger than ${MAX_PRIOR_BYTES} bytes`, 'EFBIG');
+            const prior = Buffer.alloc(st.size);
+            let got = 0;
+            while (got < prior.length) {
+                const n = node_fs_1.default.readSync(fd, prior, got, prior.length - got, got);
+                if (n <= 0)
+                    break;
+                got += n;
+            }
+            if (got !== prior.length)
+                refuse('existing content could not be read back', 'EIO');
+            return { prior, ...identityOfFd(fd) };
+        }
+        finally {
+            try {
+                node_fs_1.default.closeSync(fd);
+            }
+            catch { /* already closed */ }
+        }
+    };
+    // A symlinked target is never written through: the atomic publish replaces the link entry, and
+    // where that is impossible the direct path must not open the link and modify whatever it points at.
+    try {
+        if (node_fs_1.default.lstatSync(filePath).isSymbolicLink())
+            refuse(LINK_MESSAGE, 'ENXIO');
+    }
+    catch (err) {
+        if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR')
+            throw err;
+    }
+    afterLstat?.();
+    let created = false;
+    let fd;
+    let prior = null;
+    checkParent();
+    const existing = probe();
+    if (existing !== null) {
+        // The path walk recorded what sat at the final physical target when it approved the path. A
+        // target the walk saw as absent, or as a different file than the one probed now, is refused
+        // before anything is opened for write: the path no longer leads where the walk looked.
+        if (walked === 'absent')
+            return refuse('it appeared after the path was checked', 'ENXIO');
+        if (existing.dev !== walked.dev || existing.ino !== walked.ino) {
+            refuse('the target is not the file the path check approved', 'ENXIO');
+        }
+        checkParent();
+        try {
+            fd = node_fs_1.default.openSync(filePath, node_fs_1.default.constants.O_WRONLY | noFollow | nonBlock);
+        }
+        catch (err) {
+            refuseIfLinkOpen(err);
+            throw err;
+        }
+        const st = node_fs_1.default.fstatSync(fd);
+        const opened = identityOfFd(fd);
+        if (!st.isFile() || opened.dev !== existing.dev || opened.ino !== existing.ino) {
+            try {
+                node_fs_1.default.closeSync(fd);
+            }
+            catch { /* already closed */ }
+            refuse('the target changed while it was being opened', 'ENXIO');
+        }
+        if (st.nlink > 1) {
+            try {
+                node_fs_1.default.closeSync(fd);
+            }
+            catch { /* already closed */ }
+            refuseMultiplyLinked(st);
+        }
+        prior = existing.prior;
+    }
+    else {
+        if (walked !== 'absent')
+            return refuse('the target vanished after the path was checked', 'ENXIO');
+        // Create exclusively and without following a link: anything at the path now (a symlink
+        // planted since the probe, a dangling one, a descriptor alias reached through a swapped
+        // directory) makes this EEXIST, never a file created through it or written to.
+        checkParent();
+        try {
+            fd = node_fs_1.default.openSync(filePath, node_fs_1.default.constants.O_WRONLY | node_fs_1.default.constants.O_CREAT | node_fs_1.default.constants.O_EXCL | (node_fs_1.default.constants.O_NOFOLLOW ?? 0) | nonBlock, 0o666);
+            created = true;
+        }
+        catch (err) {
+            if (err.code !== 'EEXIST')
+                throw err;
+            return refuse('something appeared at the target (a dangling symlink, or a file created since the check) — refusing to create through it', 'ENXIO');
+        }
+    }
+    // What guards this write, and what does not. The path walk in platformWriteSync resolves the
+    // physical parent directory of every link hop, refuses a descriptor alias, and records what sat
+    // at the final physical target ({dev, ino}, or absent). Here: a target the walk saw absent is
+    // only ever CREATED with O_CREAT|O_EXCL|O_NOFOLLOW (an alias or link appearing there fails
+    // EEXIST); a target the walk saw present must probe as the same dev/ino, and the descriptor
+    // opened for write must match the probe, or nothing is truncated or written. There is
+    // deliberately NO post-open /proc check: opening /dev/fd/N re-opens the underlying object, so
+    // the new descriptor never reads back as an alias. The probe and write opens add O_NOFOLLOW, so
+    // a link swapped in after the lstat above fails ELOOP and is refused. Remaining race: the
+    // walk-to-probe and probe-to-open steps are separate syscalls, so a swap that restores the very
+    // same file (same dev/ino) between them is indistinguishable from no swap, and a file replaced
+    // after the final fstat is written under its old identity. Nothing here defends a directory an attacker can
+    // rewrite at will beyond refusing every identity change it can observe.
+    let failure;
+    try {
+        // Truncate BEFORE writing so a partial write can never leave the new prefix followed by the
+        // old tail; the old bytes held above are put back if the write fails.
+        node_fs_1.default.ftruncateSync(fd, 0);
+        try {
+            node_fs_1.default.writeFileSync(fd, normalized, encoding);
+        }
+        catch (err) {
+            if (prior !== null) {
+                try {
+                    node_fs_1.default.ftruncateSync(fd, 0);
+                    let put = 0;
+                    while (put < prior.length)
+                        put += node_fs_1.default.writeSync(fd, prior, put, prior.length - put, put);
+                }
+                catch {
+                    // Best-effort restore; the original error is the one reported, flagged so the caller
+                    // knows the target may now hold neither the old nor the new content.
+                    const flagged = err instanceof Error ? err : new Error(String(err));
+                    flagged.restoreFailed = true;
+                    throw flagged;
+                }
+            }
+            throw err;
+        }
+    }
+    catch (err) {
+        failure = err instanceof Error ? err : new Error(String(err));
+    }
+    // The identity of the descriptor this write created, taken before it is closed: the cleanup
+    // unlinks the PATH only if it still names that same file, so a parent swapped after the create
+    // can never make it delete a same-named file elsewhere.
+    let createdIdentity = null;
+    if (failure !== undefined && created) {
+        try {
+            const st = node_fs_1.default.fstatSync(fd);
+            if (st.isFile())
+                createdIdentity = identityOfFd(fd);
+        }
+        catch { /* identity unknown: the file is left in place */ }
+    }
+    try {
+        node_fs_1.default.closeSync(fd);
+    }
+    catch { /* already closed */ }
+    if (failure !== undefined) {
+        if (created && createdIdentity !== null) {
+            try {
+                const now = node_fs_1.default.lstatSync(filePath);
+                const nowId = identityOfPath(filePath);
+                if (now.isFile() && nowId.dev === createdIdentity.dev && nowId.ino === createdIdentity.ino) {
+                    node_fs_1.default.unlinkSync(filePath);
+                }
+            }
+            catch { /* already gone */ }
+        }
+        throw failure;
+    }
+}
+/** Block the thread for `ms` milliseconds without a busy spin. */
+function defaultSleep(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+/**
+ * Write `data` to a special target — a FIFO with a reader, or a process-own descriptor alias —
+ * through ONE descriptor, never a reopen, so a reader that leaves cannot turn into a blocked
+ * open. For a FIFO the non-blocking open is the reader probe (ENXIO = no reader); an alias
+ * writes to the descriptor number it names. A full pipe (EAGAIN) backs off 1, 2, 4 … 50 ms through
+ * `sleep` (Atomics.wait, no busy spin) with no overall bound by default (a slow reader is the
+ * user's own pipeline); a test may set `maxWaitMs`, and once the summed back-off passes it the
+ * write throws ETIMEDOUT; a reader that went away (EPIPE — Node ignores SIGPIPE, so it surfaces as an error)
+ * is rethrown with a clear message. Both seams are for tests.
+ */
+function writeSpecialTargetWithBackoff(filePath, data, wait = {}, existingFd) {
+    const sleep = wait.sleep ?? defaultSleep;
+    // No bound by default: a slow existing reader is the user's own pipeline (`| less`).
+    const maxWaitMs = wait.maxWaitMs ?? Infinity;
+    // A descriptor alias (/dev/stdout …) is written through the fd the process already holds —
+    // never reopened by path, which fails on a Linux socketpair stdio and loses O_APPEND.
+    const fd = existingFd ?? node_fs_1.default.openSync(filePath, node_fs_1.default.constants.O_WRONLY | (node_fs_1.default.constants.O_NONBLOCK ?? 0) | (node_fs_1.default.constants.O_NOCTTY ?? 0));
+    try {
+        let off = 0;
+        let waited = 0;
+        let delay = 1;
+        while (off < data.length) {
+            try {
+                off += node_fs_1.default.writeSync(fd, data, off, data.length - off);
+                delay = 1;
+            }
+            catch (err) {
+                const code = err.code;
+                if (code === 'EAGAIN') {
+                    if (waited >= maxWaitMs) {
+                        throw Object.assign(new Error(`ETIMEDOUT: ${filePath}: the reader did not drain the pipe within ${maxWaitMs} ms`), { code: 'ETIMEDOUT' });
+                    }
+                    sleep(delay);
+                    waited += delay;
+                    delay = Math.min(delay * 2, 50);
+                    continue;
+                }
+                if (code === 'EPIPE') {
+                    throw Object.assign(new Error(`EPIPE: ${filePath}: the reader went away mid-write`), { code: 'EPIPE' });
+                }
+                throw err;
+            }
+        }
+    }
+    finally {
+        if (existingFd === undefined) {
+            try {
+                node_fs_1.default.closeSync(fd);
+            }
+            catch { /* already closed */ }
+        }
+    }
+}
+/** The descriptor number a process-own alias names (/dev/stdout -> 1 …), or null. */
+function descriptorAliasFd(resolvedTarget) {
+    if (resolvedTarget === '/dev/stdout')
+        return 1;
+    if (resolvedTarget === '/dev/stderr')
+        return 2;
+    // Only stdin/stdout/stderr: a larger N is some other descriptor the process happens to hold.
+    const m = /^\/(?:dev|proc\/self)\/fd\/(0|[1-9]\d*)$/.exec(resolvedTarget);
+    return m !== null && Number(m[1]) <= 2 ? Number(m[1]) : null;
+}
+/** A path component that is absent (ENOENT) or is not a directory (ENOTDIR). */
+function isMissing(err) {
+    const code = err.code;
+    return code === 'ENOENT' || code === 'ENOTDIR';
+}
+/**
+ * A guard on the directory that holds `filePath`: its identity is taken when the
+ * guard is made (null when the directory is absent; `record()` takes it again
+ * once the directory exists) and `changed()` re-stats and reports whether the
+ * directory is no longer that one (or is absent). A stat error other than a
+ * missing directory goes to `statFailed`, which must throw.
+ */
+function makeParentGuard(filePath, statFailed) {
+    const stat = () => {
+        try {
+            const s = node_fs_1.default.statSync(node_path_1.default.dirname(filePath), { bigint: true });
+            return { dev: s.dev, ino: s.ino };
+        }
+        catch (err) {
+            if (isMissing(err))
+                return null;
+            return statFailed(err);
+        }
+    };
+    let walked = stat();
+    return {
+        record() { walked ??= stat(); },
+        changed() {
+            const now = stat();
+            return now === null || walked === null || now.dev !== walked.dev || now.ino !== walked.ino;
+        },
+    };
+}
+/**
+ * Write `content` to `filePath` atomically: a sibling temp file (`<file>.tmp.<pid>.<12 hex>`,
+ * created exclusively, never following a link, never blocking on a planted FIFO) is renamed
+ * over the target. When that is impossible the write falls back to the target itself.
+ *
+ * The direct fallback refuses, with an error whose `code` is `ENXIO`: a target that is not a
+ * regular file (a FIFO, a character or block device such as `/dev/null`, a socket); every
+ * symlinked target (live or dangling; the final component is opened O_NOFOLLOW); and a
+ * multiply-linked target (nlink > 1; an in-place write would change every other name for it).
+ * The atomic path replaces whatever sits at the target by rename, a symlink or extra hard link
+ * included, never writing through it, and is otherwise unaffected. A crash between the temp
+ * create and the rename leaves `<file>.tmp.<pid>.<hex>` behind; such files are not reaped.
+ */
+function platformWriteSync(filePath, content, opts = {}) {
+    // #5759: a Windows device target (a bare NUL/CON/... name, or a \\.\ / \\?\ device form) has no
+    // real parent directory, so it is routed BEFORE the physical path walk below (which would refuse
+    // `\\.\nul` with ENXIO). Only under allowSpecialTarget; without it the walk refuses as before.
+    // The handle is opened on `\\.\<NAME>` and fstat must prove a character device before any byte
+    // is written; any other outcome (Windows 11 24H2+ treats a reserved name in a directory path as
+    // an ordinary file) falls through to the checked path.
+    if (opts.allowSpecialTarget === true && windowsDeviceNamespacePath(filePath) !== null) {
+        const device = normalizeContent(filePath, content, { ...opts, prior: opts.prior });
+        if (writeWindowsDeviceInPlace(filePath, device.content, device.encoding, opts.deviceSeams))
+            return;
+    }
+    // A descriptor beyond stdio names some other open file of this process (a log, a pipe, a
+    // regular file): never written through its /dev/fd or /proc alias, flag or no flag.
+    // A symlink to such an alias is refused too (every link hop is walked), a path reaching one
+    // through a symlinked directory is refused (the physical parent directory is resolved), and a
+    // non-canonical descriptor name (/dev/fd/01) is refused outright. Every classification is made
+    // on the PHYSICAL path: the kernel resolves `..` after following symlinks, so a lexical
+    // path.resolve/normalize would disagree with it and is never used for a decision here.
+    const refuseFdAlias = (candidate) => {
+        const m = /^\/(?:dev|proc\/(self|thread-self|\d+)(?:\/task\/\d+)?)\/fd\/(\d+)$/.exec(candidate);
+        if (m === null)
+            return;
+        // Only this process's own descriptors are ever written by alias: /proc/<another pid>/fd/N
+        // names a different process's file and is refused whatever N is.
+        if (m[1] !== undefined && m[1] !== 'self' && m[1] !== 'thread-self' && Number(m[1]) !== process.pid) {
+            throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: another process's descriptors are never written`), { code: 'ENXIO' });
+        }
+        if (!/^(?:0|[1-9]\d*)$/.test(m[2]) || Number(m[2]) > 2) {
+            throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: only descriptors 0-2 may be written by alias`), { code: 'ENXIO' });
+        }
+    };
+    // Only ENOENT (a component is absent) and ENOTDIR (a component is a non-directory) mean "nothing
+    // can exist there". Any other failure (EACCES, ELOOP, ENAMETOOLONG ...) leaves the path
+    // unclassified and is refused: guessing it harmless is the window an attacker needs.
+    const refuseUnresolved = (code, what = 'a directory on its path cannot be resolved') => {
+        throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: ${what} (${code ?? 'unknown error'}) — refusing`), { code: 'ENXIO' });
+    };
+    // The parent directory of a raw (un-normalised) path, resolved physically by the OS, or null
+    // when a component is absent (ENOENT/ENOTDIR); any other failure refuses with ENXIO.
+    // `fs.realpathSync` (JS) would collapse `..` lexically first;
+    // the native form hands the whole string to realpath(3). A /proc/<own pid> prefix is folded to
+    // /proc/self so the alias patterns see one spelling.
+    const physicalDir = (rawPath) => {
+        let real;
+        try {
+            real = node_fs_1.default.realpathSync.native(node_path_1.default.dirname(rawPath));
+        }
+        catch (err) {
+            if (isMissing(err))
+                return null;
+            return refuseUnresolved(err.code);
+        }
+        return real.replace(/^\/proc\/(\d+)\/(?=fd$|task\/)/, (m, pid) => (Number(pid) === process.pid ? '/proc/self/' : m));
+    };
+    // A path may reach an alias through a DIRECTORY symlink (/tmp/d -> /dev/fd, then /tmp/d/7), or
+    // through `..` after one (/tmp/b -> /dev/fd, then /tmp/b/../fd/7): classify a path by its
+    // physical parent directory.
+    const refuseViaRealDir = (rawPath) => {
+        const realDir = physicalDir(rawPath);
+        if (realDir !== null && /^(?:\/dev\/fd|\/proc\/(?:self|thread-self|\d+)(?:\/task\/\d+)?\/fd)$/.test(realDir)) {
+            refuseFdAlias(`${realDir}/${node_path_1.default.basename(rawPath)}`);
+        }
+    };
+    // The physical parent directory plus the final name, with the final component not followed
+    // (null when a parent component is absent, ENOENT/ENOTDIR; any other failure refuses).
+    const physicalPath = (rawPath) => {
+        const realDir = physicalDir(rawPath);
+        return realDir === null ? null : `${realDir === '/' ? '' : realDir}/${node_path_1.default.basename(rawPath)}`;
+    };
+    refuseFdAlias(node_path_1.default.resolve(filePath)); // a lexical match is an alias spelled out: refuse; never used to ALLOW
+    // realpath of the target itself is not used: on Linux it resolves /dev/fd/N through /proc to
+    // pipe:[..] or the file, losing the alias. Each link hop is read and resolved against the
+    // physical directory that holds it, bounded at 40 hops.
+    let hop = filePath;
+    for (let hops = 0; hops < 40; hops++) {
+        // Runs on EVERY write: one native realpath of the parent directory (about one lstat per path
+        // component), plus one lstat of the hop to see whether it is a link to follow. The realpath
+        // stays unconditional because the target's own lstat type cannot distinguish a descriptor alias
+        // reached through a symlinked directory (on macOS lstat of /dev/fd/N reports the underlying
+        // file's type), so skipping regular-looking targets would reopen that gap.
+        refuseViaRealDir(hop);
+        let isLink = false;
+        try {
+            isLink = node_fs_1.default.lstatSync(hop).isSymbolicLink();
+        }
+        catch (err) {
+            if (!isMissing(err))
+                refuseUnresolved(err.code);
+            /* absent: nothing to follow */
+        }
+        if (!isLink)
+            break;
+        let link;
+        try {
+            link = node_fs_1.default.readlinkSync(hop);
+        }
+        catch (err) {
+            return refuseUnresolved(err.code, 'a symbolic link on its path cannot be read');
+        }
+        let next = null;
+        // Kept raw (joined by string, never normalised): the next iteration's native realpath
+        // resolves any `..` in it against the symlinks it crosses.
+        if (node_path_1.default.isAbsolute(link)) {
+            next = link;
+        }
+        else {
+            const holder = physicalDir(hop);
+            if (holder !== null)
+                next = `${holder === '/' ? '' : holder}/${link}`;
+        }
+        if (next === null) {
+            // A relative link whose holding directory cannot be resolved cannot be classified: refuse.
+            throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: a relative link in an unresolvable directory — refusing`), { code: 'ENXIO' });
+        }
+        // physical, never lexical: `..` follows symlinks. A null result here means a component of the
+        // link target is absent; the final-target identity recorded below then reads it as absent.
+        const physicalNext = physicalPath(next);
+        if (physicalNext !== null)
+            refuseFdAlias(physicalNext);
+        refuseViaRealDir(next);
+        hop = next;
+    }
+    // The identity of the final physical target as the walk saw it: {dev, ino}, or 'absent'. The
+    // direct fallback write is tied to it (see writeTargetDirect).
+    let walked = 'absent';
+    const finalPath = physicalPath(hop);
+    if (finalPath !== null) {
+        let st = null;
+        try {
+            st = node_fs_1.default.lstatSync(finalPath);
+        }
+        catch (err) {
+            if (!isMissing(err))
+                refuseUnresolved(err.code, 'the target cannot be inspected');
+        }
+        if (st !== null) {
+            // Still a link after 40 hops: an unclassifiable chain.
+            if (st.isSymbolicLink())
+                refuseUnresolved('ELOOP', 'the symbolic link chain is circular or longer than 40 links');
+            walked = identityOfPath(finalPath);
+        }
+    }
+    // The identity of the directory that holds the target entry, taken by a separate stat of
+    // dirname(filePath) right after the walk (null when absent: it is then recorded right after
+    // mkdir below). The atomic publish creates its temp file in, and renames within, this
+    // directory, so it is re-checked against this identity before each step.
+    const parentGuard = makeParentGuard(filePath, (err) => refuseUnresolved(err.code, 'its directory cannot be inspected'));
+    const parentChanged = () => parentGuard.changed();
+    const refuseParentSwap = () => {
+        throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: its directory is not the one the path check approved — refusing`), { code: 'ENXIO' });
+    };
+    // Handed to the direct fallbacks, which re-run it before each open that can create or modify.
+    const checkParent = () => { if (parentChanged())
+        refuseParentSwap(); };
+    opts.writeSeams?.afterPathWalk?.();
+    // #5165: a Markdown write is scoped to what it changed relative to the file it replaces.
+    let prior = opts.prior;
+    if (prior === undefined && opts.verbatim !== true && node_path_1.default.extname(filePath).toLowerCase() === '.md') {
+        prior = readPriorMarkdown(filePath, opts.encoding ?? 'utf-8');
+    }
+    const { content: normalized, encoding } = normalizeContent(filePath, content, { ...opts, prior });
+    if (opts.allowSpecialTarget === true) {
+        // A user-chosen destination such as /dev/stdout: written in place, no temp file, no restore.
+        // Windows device targets (a bare NUL/CON/PRN/AUX/COM1-9/LPT1-9 name or a \\.\ form) were
+        // already tried at the top of this function, before the path walk. A reserved name inside a
+        // directory path is an ordinary file on Windows 11 24H2+ and takes the checked path here.
+        let special = null;
+        try {
+            special = node_fs_1.default.statSync(filePath);
+        }
+        catch { /* absent: the ordinary path below */ }
+        // The process's own descriptor aliases: /dev/stdout may resolve to a regular file
+        // (`> out.txt`) or a socket (its own stdio), which is then written in place. Any other
+        // regular file takes the atomic path.
+        // Classified on the physical path (parent resolved by the OS, `..` after a symlink included).
+        const physicalTarget = physicalPath(filePath);
+        if (special !== null && physicalTarget === null) {
+            // An existing target whose parent cannot be resolved cannot be classified: never guessed lexically.
+            throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: its directory cannot be resolved — refusing`), { code: 'ENXIO' });
+        }
+        const resolvedTarget = physicalTarget ?? node_path_1.default.resolve(filePath);
+        const isDescriptorAlias = descriptorAliasFd(resolvedTarget) !== null;
+        if (special !== null && (special.isBlockDevice() || (special.isSocket() && !isDescriptorAlias))) {
+            throw Object.assign(new Error(`ENXIO: cannot write ${filePath}: block devices and sockets are never written`), { code: 'ENXIO' });
+        }
+        if (special !== null && (special.isCharacterDevice() || special.isFIFO() || isDescriptorAlias)) {
+            const aliasFd = descriptorAliasFd(resolvedTarget);
+            if (aliasFd !== null) {
+                writeSpecialTargetWithBackoff(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait, aliasFd);
+                return;
+            }
+            if (special.isFIFO()) {
+                writeSpecialTargetWithBackoff(filePath, Buffer.from(normalized, encoding), opts.specialTargetWait);
+                return;
+            }
+            const fd = node_fs_1.default.openSync(filePath, node_fs_1.default.constants.O_WRONLY | (node_fs_1.default.constants.O_NOCTTY ?? 0) | (special.isFile() ? node_fs_1.default.constants.O_TRUNC : 0));
+            try {
+                node_fs_1.default.writeFileSync(fd, normalized, encoding);
+            }
+            finally {
+                try {
+                    node_fs_1.default.closeSync(fd);
+                }
+                catch { /* already closed */ }
+            }
+            return;
+        }
+    }
+    node_fs_1.default.mkdirSync(node_path_1.default.dirname(filePath), { recursive: true });
+    parentGuard.record();
+    if (opts.atomic === true) {
+        publishViaTempFile(filePath, normalized, encoding, 'tmp', {
+            checkParent: () => { if (parentChanged())
+                refuseParentSwap(); },
+            createTemp: opts.writeSeams?.createTemp,
+            onCreated: opts.onCreated,
+        });
+        return;
+    }
+    // Step 1: write the sibling tmp file, created exclusively under an unpredictable name so a
+    // planted symlink or FIFO is never followed or blocked on (#5759). If THIS fails, nothing
+    // was published, so a direct fallback write cannot truncate a concurrent reader of an
+    // existing file.
+    // An existing regular target keeps its permission bits (a 0600 config must not come back 0644
+    // after the rename): the temp file is CREATED with that mode, so it is never more permissive
+    // than the target it replaces, not even for an instant. Without one the temp is created 0o666
+    // and the kernel applies the umask (the process umask is never read or changed here).
+    let targetMode = null;
+    try {
+        const existing = node_fs_1.default.lstatSync(filePath);
+        if (existing.isFile())
+            targetMode = existing.mode & 0o777;
+    }
+    catch { /* no existing target, or no permission bits on this platform */ }
+    let tmpPath;
+    let tmpFd;
+    if (parentChanged())
+        refuseParentSwap();
+    try {
+        ({ fd: tmpFd, tmpPath } = (opts.writeSeams?.createTemp ?? openExclusiveTempSync)(filePath, undefined, targetMode ?? 0o666));
+    }
+    catch {
+        writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
+        return;
+    }
+    if (targetMode !== null) {
+        try {
+            node_fs_1.default.fchmodSync(tmpFd, targetMode);
+        }
+        catch { /* no permission bits on this platform */ }
+    }
+    let wrote = false;
+    try {
+        node_fs_1.default.writeFileSync(tmpFd, normalized, encoding);
+        wrote = true;
+    }
+    catch { /* fall back below */ }
+    try {
+        node_fs_1.default.closeSync(tmpFd);
+    }
+    catch {
+        wrote = false;
+    }
+    if (!wrote) {
+        try {
+            node_fs_1.default.unlinkSync(tmpPath);
+        }
+        catch { /* already gone */ }
+        writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
+        return;
+    }
+    // Step 2: atomic publish, retrying transient Windows locks. The directory is re-checked against
+    // the walked identity immediately before the rename: a parent swapped for a symlink to another
+    // directory would otherwise receive the rename. Remaining race: the stat and the rename are
+    // separate syscalls, so a swap landing between them (or during a retry) is not observed, and a
+    // temp file created before such a swap stays in the directory it was created in. That temp may
+    // therefore be orphaned in the old directory after a parent swap: a minor leak. What gets
+    // unlinked differs by path: the direct-write fallback unlinks only a file whose dev/ino match
+    // the descriptor this write created, while this temp cleanup is by NAME. After a parent swap
+    // that name resolves through the new parent, and deleting another file is avoided only because
+    // the temp name (pid plus 48 random bits, see defaultTempSuffix) is unpredictable and cannot
+    // pre-exist in a different directory. The same holds for the refusal just below: once the parent has been swapped, unlinkSync of
+    // the temp path resolves through the NEW parent, so the real temp stays orphaned in the original
+    // directory. Documented residual: a same-class race that needs write access to the parent
+    // directory; no further race machinery guards it.
+    if (parentChanged()) {
+        try {
+            node_fs_1.default.unlinkSync(tmpPath);
+        }
+        catch { /* already gone */ }
+        refuseParentSwap();
+    }
+    const renameErr = atomicRenameWithRetry(tmpPath, filePath);
+    if (renameErr === null)
+        return;
+    try {
+        node_fs_1.default.unlinkSync(tmpPath);
+    }
+    catch { /* already gone */ }
+    if (RENAME_RETRY_ERRNOS.has(renameErr.code ?? '')) {
+        // A live reader still holds the target open after every retry. A non-atomic
+        // direct write here would truncate that reader (the exact corruption this seam
+        // exists to prevent), so surface the error instead of falling back.
+        throw renameErr;
+    }
+    // Atomic publish is genuinely impossible here (e.g. EXDEV cross-device move):
+    // fall back to a direct write to preserve write availability.
+    writeTargetDirect(filePath, normalized, encoding, walked, opts.writeSeams?.afterDirectLstat, checkParent);
+}
+/**
+ * #5831: write `data` to `tmpPath` and rename it over `filePath`, with no
+ * direct-write fallback. The temp file is removed on any failure — also a
+ * write that created it and failed partway — and the error is thrown; the
+ * destination is then exactly as it was.
+ *
+ * The temp file is `<filePath>.<label>.<pid>.<random>`, created exclusively
+ * (O_EXCL, O_NOFOLLOW) and written through that descriptor, so an entry planted
+ * at any name is never opened or followed (#5759). It takes an existing regular
+ * target's permission bits, so a private file is never briefly more readable.
+ */
+function publishViaTempFile(filePath, data, encoding, label, hooks = {}) {
+    let mode = 0o666;
+    let hasTargetMode = false;
+    if (hooks.targetMode !== undefined) {
+        mode = hooks.targetMode & 0o777;
+        hasTargetMode = true;
+    }
+    else {
+        try {
+            const st = node_fs_1.default.lstatSync(filePath);
+            if (st.isFile()) {
+                mode = st.mode & 0o777;
+                hasTargetMode = true;
+            }
+        }
+        catch { /* absent: default mode */ }
+    }
+    hooks.checkParent?.();
+    const { fd, tmpPath } = hooks.createTemp !== undefined
+        ? hooks.createTemp(filePath, undefined, mode)
+        : openExclusiveTempSync(filePath, undefined, mode, label);
+    if (hasTargetMode) {
+        try {
+            node_fs_1.default.fchmodSync(fd, mode);
+        }
+        catch { /* no permission bits on this platform */ }
+    }
+    try {
+        let identity;
+        try {
+            if (typeof data === 'string')
+                node_fs_1.default.writeFileSync(fd, data, encoding);
+            else
+                node_fs_1.default.writeFileSync(fd, data);
+            if (hooks.onCreated !== undefined) {
+                identity = identityOfFd(fd);
+            }
+        }
+        finally {
+            try {
+                node_fs_1.default.closeSync(fd);
+            }
+            catch { /* already closed */ }
+        }
+        hooks.checkParent?.();
+        const renameErr = atomicRenameWithRetry(tmpPath, filePath);
+        if (renameErr !== null)
+            throw renameErr;
+        // Identity is captured from the open fd before the rename, but reported only once the rename
+        // succeeded: a failed rename unlinks the temp, freeing that inode, so nothing was published.
+        if (identity !== undefined)
+            hooks.onCreated?.(identity);
+    }
+    catch (err) {
+        // After a parent swap this path resolves through the swapped parent, so the real temp may be
+        // orphaned in the original directory (accepted residual); nothing is ever published or left in the attacker's.
+        try {
+            node_fs_1.default.unlinkSync(tmpPath);
+        }
+        catch { /* never created, or already gone */ }
+        throw err;
+    }
+}
+/**
+ * #5831: remove a file (absent is fine), retrying the transient Windows lock
+ * errnos (EPERM/EBUSY/EACCES — DEFECT.WINDOWS-FS-OPS) like the rename does.
+ */
+function removeFileWithRetry(filePath) {
+    for (let attempt = 1;; attempt++) {
+        try {
+            node_fs_1.default.rmSync(filePath, { force: true });
+            return;
+        }
+        catch (err) {
+            const code = err.code ?? '';
+            if (attempt >= RENAME_MAX_ATTEMPTS || !RENAME_RETRY_ERRNOS.has(code))
+                throw err;
+            renameBackoff();
+        }
+    }
+}
+/**
+ * #5831: put `filePath` back to an exact earlier state — `bytes` written
+ * verbatim (no normalization) through a temp file and rename, or the file
+ * removed when `bytes` is null (it did not exist). Throws on failure, leaving
+ * no temp file behind; the destination is then as it was before the call.
+ *
+ * `unlinkOnlyIf` (with `bytes` null): the file is removed only while `lstat`
+ * still reports that device and inode — the file this run created. Any other
+ * entry at the path (a file another process put there since) is left in place
+ * and the call throws ESTALE. Absent is fine either way. Remaining race: the
+ * `lstat` identity check and the `rmSync` are separate syscalls, so another
+ * process replacing the entry between them is not observed and its file is
+ * removed. Documented residual: it needs write access to the parent directory
+ * and lands inside a window of two syscalls; no further race machinery guards it.
+ *
+ * `mode` (with `bytes`): the permission bits the restored file gets, in place of
+ * those of whatever sits at the path now (the default when the path is absent).
+ *
+ * With `bytes`, the directory holding the file is re-checked against the identity
+ * it had at entry before the temp file is created and again before the rename,
+ * and a changed directory is refused with ENXIO. Remaining race: the stat and the
+ * following syscall are separate, so a swap landing between them is not observed;
+ * a temp file created before such a swap may be orphaned in the original directory
+ * (accepted residual, same class as the parent swap in `platformWriteSync`).
+ */
+function platformRestoreFileSync(filePath, bytes, opts = {}) {
+    if (bytes === null) {
+        const expected = opts.unlinkOnlyIf;
+        if (expected !== undefined) {
+            let nowId;
+            try {
+                nowId = identityOfPath(filePath);
+            }
+            catch (err) {
+                if (err.code === 'ENOENT')
+                    return;
+                throw err;
+            }
+            if (nowId.dev !== expected.dev || nowId.ino !== expected.ino) {
+                throw Object.assign(new Error(`ESTALE: ${filePath} is no longer the file this run created — left in place`), { code: 'ESTALE' });
+            }
+        }
+        removeFileWithRetry(filePath);
+        return;
+    }
+    node_fs_1.default.mkdirSync(node_path_1.default.dirname(filePath), { recursive: true });
+    const parentGuard = makeParentGuard(filePath, (err) => { throw err; });
+    const checkParent = () => {
+        if (parentGuard.changed()) {
+            throw Object.assign(new Error(`ENXIO: cannot restore ${filePath}: its directory is not the one it had at entry — refusing`), { code: 'ENXIO' });
+        }
+    };
+    publishViaTempFile(filePath, bytes, undefined, 'restore', { checkParent, targetMode: opts.mode });
+}
+/**
+ * #5831: a file's exact bytes, or null when it does not exist. Opened
+ * non-blocking and checked with fstat, so a FIFO or device at the path fails
+ * with ENXIO instead of blocking the caller (who may hold a lock); a directory
+ * fails with EISDIR. There is no size cap: the caller needs every byte. Other
+ * read errors throw. With `noFollow` the final component is opened O_NOFOLLOW, so
+ * a symlink there fails with ELOOP instead of being read through (no effect where
+ * the platform has no O_NOFOLLOW).
+ */
+function platformReadBytesSync(filePath, opts = {}) {
+    let fd;
+    try {
+        fd = node_fs_1.default.openSync(filePath, node_fs_1.default.constants.O_RDONLY | (node_fs_1.default.constants.O_NONBLOCK ?? 0) | (node_fs_1.default.constants.O_NOCTTY ?? 0) |
+            (opts.noFollow === true ? (node_fs_1.default.constants.O_NOFOLLOW ?? 0) : 0));
+    }
+    catch (err) {
+        if (err.code === 'ENOENT')
+            return null;
+        throw err;
+    }
+    try {
+        const st = node_fs_1.default.fstatSync(fd);
+        if (st.isDirectory())
+            throw Object.assign(new Error(`EISDIR: ${filePath} is a directory`), { code: 'EISDIR' });
+        if (!st.isFile())
+            throw Object.assign(new Error(`ENXIO: ${filePath} is not a regular file — refusing to read it`), { code: 'ENXIO' });
+        return node_fs_1.default.readFileSync(fd);
+    }
+    finally {
+        try {
+            node_fs_1.default.closeSync(fd);
+        }
+        catch { /* already closed */ }
+    }
+}
+function platformReadSync(filePath, opts = {}) {
+    const encoding = opts.encoding ?? 'utf-8';
+    try {
+        return node_fs_1.default.readFileSync(filePath, encoding);
+    }
+    catch (err) {
+        const e = err;
+        if (e.code === 'ENOENT') {
+            if (opts.required)
+                throw err;
+            return null;
+        }
+        throw err;
+    }
+}
+function platformEnsureDir(dirPath) {
+    node_fs_1.default.mkdirSync(dirPath, { recursive: true });
+}
