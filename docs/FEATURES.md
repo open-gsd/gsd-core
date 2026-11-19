@@ -2100,7 +2100,7 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 **Process:**
 1. **Scan** — Dimension 11 collects every question RESEARCH.md leaves open, under any heading
 2. **Gate** — Each one with no qualifying `D-NN` is a blocker; the planner can cite a decision already on record, but cannot add one
-3. **Surface** — With no such decision, the planner returns a conflict naming each question; plan-phase asks the user and records each answer as a `D-NN`, or the user leaves to run `/gsd-discuss-phase` or `/gsd-plan-phase --research`. Under `--auto` no answer is recorded: plan-phase escalates at once and stops there rather than proceeding
+3. **Surface** — With no such decision, the planner returns a conflict naming each question; plan-phase asks the user and records each answer as a `D-NN`, or the user leaves to run `/gsd-discuss-phase` or `/gsd-plan-phase --research`. In a pipeline run (plan-phase's `AUTO_CHAIN`: the `workflow._auto_chain_active` flag a chained run sets, or `--auto`/`--chain` passed) no answer is recorded: plan-phase escalates at once and stops there rather than proceeding
 
 ---
 

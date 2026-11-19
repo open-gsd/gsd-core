@@ -25,7 +25,8 @@
  *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself. The
  *   shared Resolve step (`revision-loop.md`) asks the user and records each answer as a `D-NN`,
  *   so the blocker clears inside the loop. With no CONTEXT.md the user leaves the loop for discuss-phase;
- *   under `--auto` no answer is recorded, the planner is not re-spawned, and the workflow stops at the escalation.
+ *   in a pipeline run (`AUTO_CHAIN`, or `--auto`/`--chain` passed) no answer is recorded, the planner is not
+ *   re-spawned, and the workflow stops at the escalation.
  * - verify-work's gap-closure checker skips Dimension 11: that loop has no CONTEXT.md and no route
  *   to record a ruling, so the spine and the checker prompt both scope the dimension out.
  * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape, and a real
@@ -348,14 +349,30 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   // A re-spawn under --auto can only return the same conflict, and the cap gate has no --auto choice of its
   // own; proceeding there would ship the plans with the blocker open, the opposite of what the docs promise.
   test('under --auto nothing is recorded and nothing re-spawns: the blocker escalates at once and the workflow stops', () => {
-    assert.match(resolve(), /Record only what the user said\. Under `--auto` no one is asked, so record no answer and do not re-spawn/);
+    assert.match(resolve(), /Record only what the user said\. In a pipeline run no one is asked: .* There, record no answer and do not re-spawn/);
     assert.match(resolve(), /Escalate at once, and at that gate stop the workflow rather than proceed/);
     assert.doesNotMatch(resolve(), /Repeat rule/, 'the --auto route no longer spends a planner run to reach the Repeat rule, in any wording');
     // The section's closing rule must agree, or "asking is the route everywhere" contradicts the --auto clause.
     const route = read('gsd-core/references/revision-loop.md').replace(/\s+/g, ' ');
-    assert.match(route, /Asking the user is the route everywhere but `--auto`, where a `research_resolution` conflict escalates and stops/);
+    assert.match(route, /Asking the user is the route everywhere but a pipeline run \(`AUTO_CHAIN`, Resolve above\), where a `research_resolution` conflict escalates and stops/);
     // Step 2 still writes the REVIEWS.md conflict line under --auto; what --auto skips is recording an answer.
     assert.match(route, /recording is in addition to asking, never instead of it/);
+  });
+
+  // gsd-autonomous calls plan-phase with no --auto, and a chained run carries its mode in
+  // workflow._auto_chain_active, which plan-phase reads as AUTO_CHAIN. A rule keyed to the literal flag misses
+  // chained runs; one keyed to the flag alone misses a direct --auto call, which sets it only after the loop.
+  test('the no-one-is-asked clause cites AUTO_CHAIN and the flags that set it, and the docs name it', () => {
+    assert.match(resolve(), /In a pipeline run no one is asked: plan-phase's `AUTO_CHAIN` \(init `auto_chain_active`, the `workflow\._auto_chain_active` flag a chained run sets\) is true, or its arguments carry `--auto` or `--chain`, which set that flag only after this loop\./);
+    // The flag the clause cites must be the one plan-phase actually derives, and the step that sets it from
+    // --auto/--chain must sit after the revision loop, or the clause names a flag the loop never sees.
+    const spine = read('gsd-core/workflows/plan-phase.md');
+    assert.match(spine, /AUTO_CHAIN=\$\(gsd_run query check auto-mode --pick auto_chain_active/);
+    assert.match(read('gsd-core/workflows/plan-phase/steps/auto-advance-check.md'), /gsd_run query config-set workflow\._auto_chain_active true/);
+    assert.ok(spine.indexOf('plan-phase/steps/auto-advance-check.md') > spine.indexOf('## 12. Revision Loop'), 'auto-advance-check runs after the revision loop');
+    for (const doc of ['docs/features/research-gate.md', 'docs/FEATURES.md']) {
+      assert.match(read(doc), /In a pipeline run \(plan-phase's `AUTO_CHAIN`: the `workflow\._auto_chain_active` flag a chained run sets, or `--auto`\/`--chain` passed\) no answer is recorded/, doc);
+    }
   });
 });
 
