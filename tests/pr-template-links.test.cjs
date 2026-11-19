@@ -83,7 +83,7 @@ describe('link extractor (#5427)', () => {
   });
   test('an unbalanced parenthesis is not a link', () => {
     for (const text of ['[a](x_(b)', '[a](x_(b "t")', '[a](x_((b))', '[a](']) {
-      assert.deepEqual(hrefsIn(text), [], text);
+      assert.deepEqual(hrefsIn(text), [], JSON.stringify(text));
     }
   });
   test('a `src=` or `href=` inside a URL is not an attribute', () => {
@@ -102,7 +102,7 @@ describe('link extractor (#5427)', () => {
     assert.deepEqual(hrefsIn('<a title="href=x" href="y">'), ['y']);
   });
   // Shapes of the WHATWG HTML tokenizer: an odd attribute drops only itself, never its siblings.
-  test('an attribute after a quoted value needs no space, and `=` stays in an unquoted value', () => {
+  test('an attribute may follow a quoted value with no space; `=` stays in an unquoted one', () => {
     assert.deepEqual(hrefsIn('<a title=a=b href="../x.md">'), ['../x.md']);
     assert.deepEqual(hrefsIn('<a href="../x.md"title="t" src=\'y.png\'>'), ['../x.md', 'y.png']);
     assert.deepEqual(hrefsIn('<a href=../x=1.md>'), ['../x=1.md']);
@@ -111,8 +111,29 @@ describe('link extractor (#5427)', () => {
   test('a tag with a quote that has no partner, or no closing `>`, yields nothing', () => {
     assert.deepEqual(hrefsIn('<a href="../x.md'), []);
     assert.deepEqual(hrefsIn('<a href="../x.md"'), []);
+    assert.deepEqual(hrefsIn('<a href="x <img src=\'y.png\'>'), ['y.png']);
   });
-  test('a comment ends at its first `-->`: `<!-->` is empty, an unclosed one hides the rest', () => {
+  test('a quoted value keeps `>`, `<!--` and the other quote; an unquoted one ends at `>`', () => {
+    assert.deepEqual(hrefsIn('<a title="a>b <!-- c" href="../x.md"> [l](../y.md)'),
+      ['../y.md', '../x.md']);
+    assert.deepEqual(hrefsIn('<a title="it\'s" href="../x.md">'), ['../x.md']);
+    assert.deepEqual(hrefsIn('<a title=\'say "x"\' href="../x.md">'), ['../x.md']);
+    assert.deepEqual(hrefsIn('<a title=a>b href="../x.md">'), []);
+  });
+  test('only an open tag starts a scan: end tags, `<` before a non-letter and bare `<`', () => {
+    for (const text of ['', '<', '<>', '</a href="../x.md">', '<1 href="../x.md">',
+      '< a href="../x.md">', 'a <']) {
+      assert.deepEqual(hrefsIn(text), [], JSON.stringify(text));
+    }
+  });
+  test('attribute names fold to lower case and may start with `=`; values may be empty', () => {
+    assert.deepEqual(hrefsIn('<A HREF="../x.md">'), ['../x.md']);
+    assert.deepEqual(hrefsIn('<a =x href="../x.md">'), ['../x.md']);
+    assert.deepEqual(hrefsIn('<a href="">'), ['']);
+    assert.deepEqual(hrefsIn('<a href=>'), ['']);
+    assert.deepEqual(hrefsIn('<img srcset=", ,">'), []);
+  });
+  test('a comment ends at its first `-->`; `<!-->` is empty; an open one hides the rest', () => {
     assert.deepEqual(hrefsIn('<!--> [a](../x.md)'), ['../x.md']);
     assert.deepEqual(hrefsIn('<!---> [a](../x.md)'), ['../x.md']);
     assert.deepEqual(hrefsIn('<!-- a --> [a](../x.md) <!-- [b](../y.md) -->'), ['../x.md']);
@@ -120,10 +141,30 @@ describe('link extractor (#5427)', () => {
   });
   test('labels and angle destinations stop at 999 characters', () => {
     const long = (n) => 'a'.repeat(n);
-    assert.deepEqual(hrefsIn(`[${long(999)}]: ../x.md`), ['../x.md']);
+    for (const n of [998, 999]) {
+      assert.deepEqual(hrefsIn(`[${long(n)}]: ../x.md`), ['../x.md'], `label ${n}`);
+      assert.deepEqual(hrefsIn(`[t](<${long(n)}>)`), [long(n)], `inline angle ${n}`);
+      assert.deepEqual(hrefsIn(`[t]: <${long(n)}>`), [long(n)], `definition angle ${n}`);
+    }
     assert.deepEqual(hrefsIn(`[${long(1000)}]: ../x.md`), []);
-    assert.deepEqual(hrefsIn(`[t](<${long(999)}>)`), [long(999)]);
     assert.deepEqual(hrefsIn(`[t](<${long(1000)}>)`), [`<${long(1000)}>`]);
+    assert.deepEqual(hrefsIn(`[t]: <${long(1000)}>`), [`<${long(1000)}>`]);
+  });
+  test('a label holds at least one character', () => {
+    assert.deepEqual(hrefsIn('[]: ../x.md'), []);
+    assert.deepEqual(hrefsIn('[a]: ../x.md'), ['../x.md']);
+  });
+  test('a heading code span is stripped up to 999 characters', () => {
+    // `_` inside a span is no emphasis; a span the strip does not reach leaves it, so no anchor
+    for (const [n, size] of [[998, 1], [999, 1], [1000, 0]]) {
+      const md = `## x \`_${'a'.repeat(n - 1)}\` y`;
+      assert.equal(headingSet(md).size, size, `span of ${n}`);
+      if (size) assert.deepEqual([...headingSet(md)], [slugify(md.slice(3))]);
+    }
+  });
+  test('a quote marker takes at most 3 spaces of indent', () => {
+    assert.deepEqual(hrefsIn('   > [a]: ../x.md'), ['../x.md']);
+    assert.deepEqual(hrefsIn('    > [a]: ../x.md'), []);
   });
   test('a reference definition is indented at most 3 spaces', () => {
     assert.deepEqual(hrefsIn('   [a]: ../x.md'), ['../x.md']);
@@ -212,7 +253,8 @@ describe('next-ref existence and anchors (#5427)', () => {
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#L5`], 'tpl.md'),
       ['CONTRIBUTING.md#L5']);
     for (const rel of ['X.md', 'X.MD', 'X.Md']) {
-      assert.equal(anchorKind({ segs: ['blob', 'next', rel], tail: '' }, rel), 'heading', rel);
+      const kind = anchorKind({ segs: ['blob', 'next', rel], tail: '' }, rel);
+      assert.equal(kind, 'heading', JSON.stringify(rel));
     }
     const heading = DOCS_ANCHOR.split('#')[1];
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#${heading}`], 'tpl.md'),
@@ -246,7 +288,9 @@ describe('link classification (#5427)', () => {
   test('an empty destination is reported by the guard', () => {
     assert.deepEqual(hrefsIn('[a]()'), ['']);
     assert.deepEqual(hrefsIn('[a](<>)'), ['']);
+    assert.deepEqual(hrefsIn('[a]: <>'), ['']);
     assert.ok(hrefsIn('[a]()').filter(isBadLink).length > 0);
+    assert.ok(hrefsIn('[a]: <>').filter(isBadLink).length > 0);
     assert.deepEqual(missingNext([''], 'x.md'), []);
     assert.deepEqual(missingNext([`${NEXT}CONTRIBUTING.md%2F`], 'x.md'), ['CONTRIBUTING.md/']);
     assert.deepEqual(missingNext([`${NEXT}.%2FCONTRIBUTING.md`], 'x.md'), ['./CONTRIBUTING.md']);
@@ -257,10 +301,10 @@ describe('link classification (#5427)', () => {
 describe('readRepoFile (#5427)', () => {
   // The refusal of a link out of the repo is the ADR gate's existsCaseExact, tested in
   // tests/adr-index-gate.test.cjs; this test pins that the helper reads through it.
-  test('reads a repo file; a missing name, a wrong case or a path out of the repo is refused', () => {
+  test('reads a repo file; a missing name, a wrong case or a path outside is refused', () => {
     assert.match(readRepoFile('CONTRIBUTING.md'), /^# /m);
     for (const rel of ['no-such-file.md', 'contributing.md', '../outside.md']) {
-      assert.throws(() => readRepoFile(rel), /no such file inside the repo/, rel);
+      assert.throws(() => readRepoFile(rel), /no such file inside the repo/, JSON.stringify(rel));
     }
   });
 });
@@ -297,8 +341,10 @@ describe('templateFiles (#5427)', () => {
 describe('PR template links (#5427)', () => {
   const eachTemplate = (check) => {
     const files = templateFiles();
-    assert.ok(files.length >= 5, `templates: ${files}`);
-    assert.ok(files.includes('.github/pull_request_template.md'), `templates: ${files}`);
+    // quoted: a file name is data, and a raw newline could forge a `::command::` log line
+    assert.ok(files.length >= 5, `templates: ${JSON.stringify(files)}`);
+    assert.ok(files.includes('.github/pull_request_template.md'),
+      `templates: ${JSON.stringify(files)}`);
     const failing = files.map((f) => [f, check(f, hrefsOf(f))]).filter(([, found]) => found.length);
     assert.deepEqual(Object.fromEntries(failing), {});
   };
@@ -313,11 +359,11 @@ describe('PR template links (#5427)', () => {
     for (const f of ['.github/pull_request_template.md', ...files]) {
       const values = hrefsOf(f).filter((h) => h.startsWith('?template='))
         .map((h) => h.slice('?template='.length));
-      assert.ok(values.length, f);
+      assert.ok(values.length, JSON.stringify(f));
       // GitHub resolves the value against .github/PULL_REQUEST_TEMPLATE/, or .github/ for a path
       const missing = values.filter((v) => !all.includes(`.github/PULL_REQUEST_TEMPLATE/${v}`)
         && !all.includes(`.github/${v}`));
-      assert.deepEqual(missing, [], f);
+      assert.deepEqual(missing, [], JSON.stringify(f));
     }
   });
   for (const n of ['feature', 'enhancement']) {

@@ -44,7 +44,8 @@ describe('repo link grammar (#5427)', () => {
       .map(([v, r, p]) => `${REPO}/${v}/${r}/${p}`)),
   );
   test('property: each link class is decided by construction', () => {
-    fc.assert(fc.property(classes, ([h, isBad]) => assert.equal(isBadLink(h), isBad, h)));
+    fc.assert(fc.property(classes,
+      ([h, isBad]) => assert.equal(isBadLink(h), isBad, JSON.stringify(h))));
   });
 });
 
@@ -59,7 +60,8 @@ describe('line anchors (#5427)', () => {
         const inRange = k >= 1 && k <= n;
         for (const anchor of [`L${k}`, `L1-L${k}`]) {
           const found = unresolvedAnchors([`${url}#${anchor}`], 'tpl.md', seams);
-          assert.equal(found.length === 0, inRange, `${url}#${anchor} n=${n}`);
+          assert.equal(found.length === 0, inRange,
+            JSON.stringify(`${url}#${anchor} n=${n}`));
         }
       }
     }));
@@ -74,8 +76,8 @@ describe('link extractor properties (#5427)', () => {
   test('property: every destination form yields the generated destination, CRLF included', () => {
     fc.assert(fc.property(dest, title, (d, t) => {
       for (const text of forms(d, t)) {
-        assert.deepEqual(hrefsIn(text), [d], text);
-        assert.deepEqual(hrefsIn(`${text}\r\n${text}\r\n`), [d, d], text);
+        assert.deepEqual(hrefsIn(text), [d], JSON.stringify(text));
+        assert.deepEqual(hrefsIn(`${text}\r\n${text}\r\n`), [d, d], JSON.stringify(text));
       }
     }));
   });
@@ -91,8 +93,8 @@ describe('link extractor properties (#5427)', () => {
       for (const text of forms(d, t)) {
         const wrapped = [`\`\`\`\n${text}\n\`\`\``, `~~~\n${text}\n~~~`, `\`${text}\``,
           `<!-- ${text} -->`, `<!--\n${text}\n-->`];
-        for (const w of wrapped) assert.deepEqual(hrefsIn(w), [], w);
-        assert.deepEqual(hrefsIn(`<!-- c -->\n${text}`), hrefsIn(text), text);
+        for (const w of wrapped) assert.deepEqual(hrefsIn(w), [], JSON.stringify(w));
+        assert.deepEqual(hrefsIn(`<!-- c -->\n${text}`), hrefsIn(text), JSON.stringify(text));
       }
     }));
   });
@@ -103,9 +105,20 @@ describe('link extractor properties (#5427)', () => {
       assert.deepEqual(hrefsIn(`<a title='src=${e}' src='${d}'>`), [d], 'single-quoted value');
     }));
   });
+  test('property: a quoted value keeps `>`, `<!--` and the other quote', () => {
+    const decoy = fc.constantFrom('a>b', '<!-- c', 'x <!-- y > z', '>', '<');
+    fc.assert(fc.property(dest, decoy, (d, x) => {
+      assert.deepEqual(hrefsIn(`<a title="${x}" href="${d}">`), [d], x);
+      assert.deepEqual(hrefsIn(`<a title='${x}' href='${d}'> [l](${d})`), [d, d], x);
+      assert.deepEqual(hrefsIn(`<a title="it's ${x}" href=${d}>`), [d], x);
+    }));
+  });
   test('property: an empty destination yields one empty string', () => {
     fc.assert(fc.property(fc.constantFrom('', ' ', '  ', '<>', ' <>'), (ws) => {
       assert.deepEqual(hrefsIn(`[a](${ws})`), ['']);
+    }));
+    fc.assert(fc.property(fc.constantFrom('<>', ' <>', '\t<>'), (ws) => {
+      assert.deepEqual(hrefsIn(`[a]:${ws}`), ['']);
     }));
   });
 });
@@ -137,7 +150,7 @@ describe('tag scanner properties (#5427)', () => {
       const body = attrs.map((a, i) => (i > 0 && quoted(attrs[i - 1]) && a.gap === ' ' ? '' : a.gap)
         + render(a)).join('');
       const tag = `<a${attrs[0].gap}${body.replace(/^\s+/, '')}>`;
-      assert.deepEqual(hrefsIn(tag), attrs.flatMap(expected), tag);
+      assert.deepEqual(hrefsIn(tag), attrs.flatMap(expected), JSON.stringify(tag));
     }));
   });
   // Linear time is a property of the scan, not of a clock (RULESET.TESTS.no-timing-assertion):

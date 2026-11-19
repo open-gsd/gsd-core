@@ -106,7 +106,8 @@ const attrUrls = (attrs) => attrs
     name === 'srcset' ? value.split(',').map(firstCandidate).filter(Boolean) : [value]);
 
 // A link destination is the first word of the parentheses, or the whole of an `<...>` form.
-// Labels and angle destinations take the CommonMark limit of 999 characters.
+// A label takes the CommonMark limit of 999 characters. The angle destination and the code span
+// of a heading take the same number as this guard's own scan bound: it keeps each scan linear.
 const destOf = (raw) => /^\s*<([^<>]{0,999})>/.exec(raw)?.[1] ?? raw.trim().split(/\s+/)[0];
 const REF_DEF = /^ {0,3}\[[^\]\n]{1,999}\]:[ \t]*(?:<([^<>\n]{0,999})>|(\S+))/gm;
 const hrefsIn = (text) => {
@@ -189,7 +190,8 @@ const anchorIds = (attrs) => attrs
   .map(({ value }) => value);
 const headingSet = (source) => {
   const seen = new Map();
-  const slugs = tokenizeHeadings(scanHtml(unfenced(source)).text).filter(({ text }) => !unslugable(text))
+  const slugs = tokenizeHeadings(scanHtml(unfenced(source)).text)
+    .filter(({ text }) => !unslugable(text))
     .map(({ text }) => {
       const s = slugify(text);
       const n = seen.get(s) ?? 0;
