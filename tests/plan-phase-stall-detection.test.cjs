@@ -40,6 +40,7 @@ const assert = require('node:assert/strict');
 // can observe what runBashScript actually passes to the seam. tests/helpers.cjs:221-224
 // documents this same pattern for runNode.
 const processSeam = require('./helpers/process-seam.cjs');
+const { assertNoLeftoverStall } = require('./helpers/stall-leftovers.cjs');
 const { runNode, OUTCOME } = processSeam;
 const { toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -944,11 +945,13 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
    */
   const RUN_BASH_SCRIPT_OVERRIDE_TIMEOUT_MS = 1234;
   /**
-   * Deliberately tiny (not generous headroom) to force a real `sleep 5`
+   * Deliberately tiny (not generous headroom) to force a real `sleep 5.0861`
    * command past the bound within this test's own lifetime, proving an
    * exceeded bound reports TIMED_OUT, not a bare null status.
    */
   const RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS = 250;
+  /** The forced stall; a duration no other fixture uses, so a leftover is attributable (#6086). */
+  const FORCED_STALL_COMMAND = 'sleep 5.0861';
   /** CLAUDE.md boundary-coverage triple (limit-1/limit/limit+1) on runBashScript's own timeoutMs value-domain validation: a negative bound must be rejected. */
   const RUN_BASH_SCRIPT_TIMEOUT_BOUNDARY_NEGATIVE_MS = -1;
   /** CLAUDE.md boundary-coverage triple (limit-1/limit/limit+1) on runBashScript's own timeoutMs value-domain validation: zero must be rejected, never read as unbounded. Used at both occurrences in this test (the throw assertion and the later leak-check re-throw). */
@@ -978,10 +981,13 @@ describe('#2650 follow-up: runBashScript bounds and reports a bash fan-out corre
   test('an exceeded bound reports TIMED_OUT, not a bare null status', () => {
     // A real sleep against a deliberately tiny bound. The assertion is on the
     // CLASSIFICATION, never on elapsed time.
-    const result = runBashScript('sleep 5\n', [], { timeoutMs: RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS });
+    // `exec` so the process the bound kills IS the stall: under a plain `sleep` the bound kills bash and the
+    // sleep is reparented and outlives the test (#6086).
+    const result = runBashScript(`exec ${FORCED_STALL_COMMAND}\n`, [], { timeoutMs: RUN_BASH_SCRIPT_FORCED_TIMEOUT_MS });
     assert.equal(result.outcome, OUTCOME.TIMED_OUT,
       `an exceeded bound must name itself; got outcome=${result.outcome} status=${result.status}`);
     assert.equal(result.timedOut, true, 'timedOut must be true when the bound is exceeded');
+    assertNoLeftoverStall(assert, FORCED_STALL_COMMAND, 'runBashScript forced-timeout stall');
   });
 
   test('a genuine non-zero exit is EXITED, never confused with a timeout', () => {

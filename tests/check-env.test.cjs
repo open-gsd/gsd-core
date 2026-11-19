@@ -1,236 +1,346 @@
 /**
- * Tests for scripts/check-env.cjs (issue #117).
+ * Tests for the checks of scripts/check-env.cjs (#117, #6375).
  *
- * Verifies the environment validator exits correctly and emits
- * structured output for every documented check:
- *   1. Node version vs engines.node constraint
- *   2. npm version vs engines.npm constraint (if present)
- *   3. Lockfile presence
- *   4. Lockfile sync (npm ci --dry-run)
- *   5. Version-manager pin file matches active Node major
- *   6. --json flag produces parseable JSON with documented shape
- *   7. Integration smoke: exits 0 on the live worktree root
+ * Every test calls `collectChecks` in this process with a stand-in for npm,
+ * so none of them starts the real npm: a cold npm on a Windows runner took
+ * longer than the 30 s the old spawned tests allowed (#6375). The stand-in
+ * also records its calls, which pins the two argument lists the script hands
+ * to npm.
  *
- * Sources:
- *   npm engines: https://docs.npmjs.com/cli/v10/configuring-npm/package-json#engines
- *   npm ci:      https://docs.npmjs.com/cli/v10/commands/npm-ci
+ * What only a process shows (exit code, report text, `--json` framing) is in
+ * tests/check-env.process.test.cjs.
  */
 
 'use strict';
 
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 const fs = require('node:fs');
-const { spawnSync } = require('node:child_process');
-const { GENERATOR_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const path = require('node:path');
 
-const SCRIPT = path.resolve(__dirname, '..', 'scripts', 'check-env.cjs');
-const FIXTURE_ROOT = path.resolve(__dirname, 'fixtures', 'check-env');
+const { createTempDir, cleanup } = require('./helpers.cjs');
+const fc = require('fast-check');
+
+const { collectChecks, satisfiesConstraint } = require('../scripts/check-env.cjs');
+const { describeNpmVersionCheckFailure } = require('../scripts/lib/npm-version-check-diagnosis.cjs');
+
 const LIVE_ROOT = path.resolve(__dirname, '..');
+const NODE = 'v24.3.0';
+
+const VERSION_ARGS = ['--version'];
+const SYNC_ARGS = ['ci', '--dry-run', '--ignore-scripts'];
 
 /**
- * Run check-env.cjs synchronously in `cwd` with optional extra args.
- * Returns { status, stdout, stderr }.
- * @param {string} cwd
- * @param {string[]} args
- * @param {Record<string,string>} [envOverrides] - optional env vars to overlay
- *   on process.env.  Pass { CI: '' } to suppress GitHub Actions CI detection
- *   so that version-manager-pin is exercised even inside CI runners.
+ * A stand-in for `spawnSync` that answers the script's two npm calls and
+ * throws on any other, so an unplanned call fails the test that made it.
  */
-function runScript(cwd, args = [], envOverrides = {}) {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
-    cwd,
-    encoding: 'utf8',
-    timeout: GENERATOR_SCRIPT_TIMEOUT_MS,
-    env: { ...process.env, ...envOverrides },
-  });
-  return {
-    status: result.status ?? 1,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+function fakeNpm({ version = { status: 0, stdout: '11.0.0\n' }, sync = { status: 0 } } = {}) {
+  const calls = [];
+  const answer = (reply) => (typeof reply === 'function' ? reply() : reply);
+  const run = (command, args, options) => {
+    calls.push({ command, args: [...args], options });
+    if (args.join(' ') === VERSION_ARGS.join(' ')) return answer(version);
+    if (args.join(' ') === SYNC_ARGS.join(' ')) return answer(sync);
+    throw new Error(`unplanned call: ${command} ${args.join(' ')}`);
   };
+  return { run, calls };
 }
 
-describe('check-env.cjs', () => {
-  // -------------------------------------------------------------------------
-  // Dynamic .nvmrc setup: write fixture .nvmrc files at test-run time so the
-  // tests are correct across all Node major versions in the CI matrix (Node 22,
-  // 24, 26, …).  A hardcoded value like "26" passes on Node 26 but fails on
-  // every other matrix row; using the active major makes the fixture portable.
-  //
-  // good/     → .nvmrc = active Node major  (should match → exit 0)
-  // bad-nvmrc/ → .nvmrc = active+99          (guaranteed mismatch → exit 1)
-  // -------------------------------------------------------------------------
-  const activeNodeMajor = parseInt(process.version.match(/^v(\d+)/)[1], 10);
-  const goodNvmrc = path.join(FIXTURE_ROOT, 'good', '.nvmrc');
-  const badNvmrc = path.join(FIXTURE_ROOT, 'bad-nvmrc', '.nvmrc');
-  let originalGoodNvmrc;
-  let originalBadNvmrc;
+const statusOf = (result, name) => {
+  const row = result.checks.find((c) => c.name === name);
+  assert.ok(row, `no "${name}" row in ${JSON.stringify(result.checks)}`);
+  return row.status;
+};
+const messageOf = (result, name) => result.checks.find((c) => c.name === name).message;
+
+describe('check-env.cjs checks', () => {
+  let root;
+  const dirs = {};
+
+  /** One project directory; `files` maps a file name to its text. */
+  function project(name, { engines, lockfile = true, files = {} }) {
+    const dir = path.join(root, name);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0', engines }));
+    if (lockfile) fs.writeFileSync(path.join(dir, 'package-lock.json'), JSON.stringify({ name, lockfileVersion: 3 }));
+    for (const [file, text] of Object.entries(files)) fs.writeFileSync(path.join(dir, file), text);
+    dirs[name] = dir;
+  }
 
   before(() => {
-    originalGoodNvmrc = fs.existsSync(goodNvmrc) ? fs.readFileSync(goodNvmrc, 'utf8') : null;
-    originalBadNvmrc = fs.existsSync(badNvmrc) ? fs.readFileSync(badNvmrc, 'utf8') : null;
-    fs.writeFileSync(goodNvmrc, `${activeNodeMajor}\n`);
-    fs.writeFileSync(badNvmrc, `${activeNodeMajor + 99}\n`);
+    root = createTempDir('gsd-check-env-');
+    const engines = { node: '>=22.0.0', npm: '>=9.0.0' };
+    project('good', { engines, files: { '.nvmrc': '24\n' } });
+    project('old-node-only', { engines: { node: '<14.0.0' } });
+    project('no-engines', { engines: undefined });
+    project('no-lockfile', { engines, lockfile: false });
+    project('no-pin', { engines });
+    project('nvmrc-other-major', { engines, files: { '.nvmrc': 'v23.1.0\n' } });
+    project('node-version-file', { engines, files: { '.node-version': '24.0.0\n' } });
+    project('tool-versions', { engines, files: { '.tool-versions': 'python 3.12.0\nnodejs 24.1.0\n' } });
+    project('tool-versions-no-node', { engines, files: { '.tool-versions': 'python 3.12.0\n' } });
+    project('node-engine-only', { engines: { node: '>=22.0.0' } });
+    project('pin-property', { engines });
   });
 
-  after(() => {
-    if (originalGoodNvmrc !== null) {
-      fs.writeFileSync(goodNvmrc, originalGoodNvmrc);
+  after(() => cleanup(root));
+
+  const check = (name, npm, overrides = {}) => collectChecks({
+    projectRoot: dirs[name], run: npm.run, nodeVersion: NODE, env: {}, platform: 'linux', ...overrides,
+  });
+
+  test('every check passes for matching engines, lockfile and .nvmrc', () => {
+    const npm = fakeNpm();
+    const result = check('good', npm);
+    assert.equal(result.pass, true);
+    assert.deepEqual(
+      result.checks.map((c) => [c.name, c.status]),
+      [
+        ['node-version', 'pass'],
+        ['npm-version', 'pass'],
+        ['lockfile-present', 'pass'],
+        ['lockfile-sync', 'pass'],
+        ['version-manager-pin', 'pass'],
+      ],
+    );
+  });
+
+  test('npm is called twice, with the version and lockfile-sync arguments', () => {
+    const npm = fakeNpm();
+    check('good', npm);
+    assert.deepEqual(npm.calls.map((c) => [c.command, c.args]), [['npm', VERSION_ARGS], ['npm', SYNC_ARGS]]);
+    assert.equal(npm.calls[0].options.shell, false);
+    assert.equal(npm.calls[1].options.shell, false);
+    assert.equal(npm.calls[1].options.cwd, dirs.good);
+    for (const call of npm.calls) assert.equal(call.options.encoding, 'utf8');
+    // The version call is bounded; the value is the script's to choose.
+    assert.ok(Number.isInteger(npm.calls[0].options.timeout) && npm.calls[0].options.timeout > 0);
+  });
+
+  test('a call without a runner throws instead of starting the real npm', () => {
+    assert.throws(() => collectChecks({ projectRoot: dirs.good }), TypeError);
+    assert.throws(() => collectChecks({ projectRoot: dirs.good, run: undefined }), TypeError);
+  });
+
+  test('on win32 npm is npm.cmd, run through the shell', () => {
+    const npm = fakeNpm();
+    const result = check('good', npm, { platform: 'win32' });
+    assert.equal(result.pass, true);
+    assert.deepEqual(npm.calls.map((c) => [c.command, c.options.shell]), [['npm.cmd', true], ['npm.cmd', true]]);
+  });
+
+  describe('node-version', () => {
+    test('fails when the running Node does not satisfy engines.node', () => {
+      const result = check('old-node-only', fakeNpm());
+      assert.equal(statusOf(result, 'node-version'), 'fail');
+      assert.equal(result.pass, false);
+    });
+
+    test('fails when package.json has no engines.node', () => {
+      const result = check('no-engines', fakeNpm());
+      assert.equal(statusOf(result, 'node-version'), 'fail');
+      assert.equal(result.pass, false);
+    });
+
+    for (const [nodeVersion, expected] of [['v21.9.9', 'fail'], ['v22.0.0', 'pass'], ['v22.0.1', 'pass']]) {
+      test(`Node ${nodeVersion} against >=22.0.0 is a ${expected}`, () => {
+        assert.equal(statusOf(check('no-pin', fakeNpm(), { nodeVersion }), 'node-version'), expected);
+      });
     }
-    if (originalBadNvmrc !== null) {
-      fs.writeFileSync(badNvmrc, originalBadNvmrc);
+  });
+
+  describe('npm-version', () => {
+    test('is skipped when package.json has no engines.npm', () => {
+      assert.equal(statusOf(check('node-engine-only', fakeNpm()), 'npm-version'), 'skip');
+    });
+
+    for (const [npmVersion, expected] of [['8.19.4', 'fail'], ['9.0.0', 'pass'], ['9.0.1', 'pass']]) {
+      test(`npm ${npmVersion} against >=9.0.0 is a ${expected}`, () => {
+        const npm = fakeNpm({ version: { status: 0, stdout: `${npmVersion}\n` } });
+        assert.equal(statusOf(check('no-pin', npm), 'npm-version'), expected);
+      });
     }
-  });
 
-  // -------------------------------------------------------------------------
-  // Test 1: Happy path — all checks green
-  // -------------------------------------------------------------------------
-  test('exits 0 in a fixture directory with engines, .nvmrc, and matching lockfile', () => {
-    const cwd = path.join(FIXTURE_ROOT, 'good');
-    const { status, stdout } = runScript(cwd);
-    assert.equal(
-      status, 0,
-      `Expected exit 0, got ${status}.\nstdout: ${stdout}`
-    );
-  });
-
-  // -------------------------------------------------------------------------
-  // Test 2: engines.node constraint not satisfied
-  // -------------------------------------------------------------------------
-  test('exits 1 when engines.node constraint is not satisfied by current Node', () => {
-    const cwd = path.join(FIXTURE_ROOT, 'bad-node-version');
-    // Fixture has engines.node: "<14.0.0"; current Node is much higher.
-    const { status, stdout } = runScript(cwd);
-    assert.equal(
-      status, 1,
-      `Expected exit 1 (bad node version), got ${status}.\nstdout: ${stdout}`
-    );
-  });
-
-  // -------------------------------------------------------------------------
-  // Test 3: Missing lockfile
-  // -------------------------------------------------------------------------
-  test('exits 1 when package-lock.json is missing', () => {
-    const cwd = path.join(FIXTURE_ROOT, 'missing-lockfile');
-    const { status, stdout } = runScript(cwd);
-    assert.equal(
-      status, 1,
-      `Expected exit 1 (missing lockfile), got ${status}.\nstdout: ${stdout}`
-    );
-  });
-
-  // -------------------------------------------------------------------------
-  // Test 4: .nvmrc major doesn't match active Node major
-  // -------------------------------------------------------------------------
-  test('exits 1 when .nvmrc major version does not match active Node major', () => {
-    const cwd = path.join(FIXTURE_ROOT, 'bad-nvmrc');
-    // Fixture .nvmrc is set to (activeNodeMajor + 99) by the before() hook above,
-    // guaranteeing a mismatch regardless of the CI matrix Node version.
-    // Override CI='' so the version-manager-pin check is not skipped even when
-    // this test runs inside a CI runner (GitHub Actions sets CI=true, which
-    // would otherwise turn the pin check into a skip and exit 0).
-    const { status, stdout } = runScript(cwd, [], { CI: '' });
-    assert.equal(
-      status, 1,
-      `Expected exit 1 (nvmrc mismatch), got ${status}.\nstdout: ${stdout}`
-    );
-  });
-
-  // -------------------------------------------------------------------------
-  // Test 5: --json flag produces parseable JSON with documented shape
-  // -------------------------------------------------------------------------
-  test('--json emits parseable JSON with pass and checks keys', () => {
-    const cwd = path.join(FIXTURE_ROOT, 'good');
-    const { status, stdout } = runScript(cwd, ['--json']);
-    let parsed;
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (err) {
-      assert.fail(`--json output was not valid JSON: ${err.message}\nstdout: ${stdout}`);
-    }
-    // Top-level shape
-    assert.equal(typeof parsed.pass, 'boolean', 'JSON must have boolean `pass` key');
-    assert.ok(Array.isArray(parsed.checks), 'JSON must have array `checks` key');
-    // The good fixture has engines.node, .nvmrc, and package-lock.json — expect
-    // at least the node-version, lockfile-present, lockfile-sync, and
-    // version-manager-pin checks to appear.
-    const checkNames = parsed.checks.map((c) => c.name);
-    assert.ok(
-      checkNames.includes('node-version'),
-      `Expected 'node-version' check in JSON, got: ${checkNames.join(', ')}`
-    );
-    assert.ok(
-      checkNames.includes('lockfile-present'),
-      `Expected 'lockfile-present' check in JSON, got: ${checkNames.join(', ')}`
-    );
-    // Every check item must have name, status, message fields with expected types
-    for (const check of parsed.checks) {
-      assert.equal(typeof check.name, 'string', `check.name must be string in ${JSON.stringify(check)}`);
-      assert.ok(
-        ['pass', 'fail', 'skip'].includes(check.status),
-        `check.status must be pass|fail|skip in ${JSON.stringify(check)}`
+    // The wording belongs to describeNpmVersionCheckFailure and is tested with
+    // it; these two pin that the check hands it what the runner returned.
+    test('a timed-out npm --version fails the check with the timed-out diagnosis', () => {
+      const error = Object.assign(new Error('spawnSync npm ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      const npm = fakeNpm({ version: { status: null, stdout: '', signal: 'SIGTERM', error } });
+      const result = check('no-pin', npm);
+      assert.equal(statusOf(result, 'npm-version'), 'fail');
+      assert.equal(
+        messageOf(result, 'npm-version'),
+        describeNpmVersionCheckFailure({ exitCode: 1, stdout: '', signal: 'SIGTERM', error, timedOut: true }),
       );
-      assert.equal(typeof check.message, 'string', `check.message must be string in ${JSON.stringify(check)}`);
-    }
-    // Good fixture: overall result must be pass:true
-    assert.equal(parsed.pass, true, 'good fixture must report pass:true');
-    assert.equal(
-      status, 0,
-      `Expected exit 0 in good fixture with --json, got ${status}`
-    );
+      assert.notEqual(
+        messageOf(result, 'npm-version'),
+        describeNpmVersionCheckFailure({ exitCode: 1, stdout: '', signal: 'SIGTERM', error, timedOut: false }),
+      );
+      assert.equal(result.pass, false);
+    });
+
+    test('a missing npm binary fails the check with the not-found diagnosis', () => {
+      const error = Object.assign(new Error('spawnSync npm ENOENT'), { code: 'ENOENT' });
+      const npm = fakeNpm({ version: { status: null, stdout: '', signal: null, error } });
+      const result = check('no-pin', npm);
+      assert.equal(statusOf(result, 'npm-version'), 'fail');
+      assert.equal(
+        messageOf(result, 'npm-version'),
+        describeNpmVersionCheckFailure({ exitCode: 1, stdout: '', signal: null, error, timedOut: false }),
+      );
+      assert.notEqual(
+        messageOf(result, 'npm-version'),
+        describeNpmVersionCheckFailure({ exitCode: 1, stdout: '', signal: 'SIGTERM', error: null, timedOut: true }),
+      );
+    });
   });
 
-  // -------------------------------------------------------------------------
-  // Test 5b: --json reports pass:false on failure fixtures (counter-test for 5)
-  // -------------------------------------------------------------------------
-  test('--json reports pass:false when a check fails', () => {
-    const cwd = path.join(FIXTURE_ROOT, 'bad-node-version');
-    const { status, stdout } = runScript(cwd, ['--json']);
-    let parsed;
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (err) {
-      assert.fail(`--json output was not valid JSON: ${err.message}\nstdout: ${stdout}`);
-    }
-    assert.equal(parsed.pass, false, 'failure fixture must report pass:false');
-    assert.equal(status, 1, `Expected exit 1 with --json on failure fixture, got ${status}`);
-    // The node-version check must be present and marked fail
-    const nodeCheck = parsed.checks.find((c) => c.name === 'node-version');
-    assert.ok(nodeCheck, 'node-version check must appear in JSON output');
-    assert.equal(nodeCheck.status, 'fail', `Expected node-version status=fail, got ${nodeCheck.status}`);
+  describe('lockfile', () => {
+    test('a missing package-lock.json fails presence, skips sync and never asks npm to sync', () => {
+      const npm = fakeNpm();
+      const result = check('no-lockfile', npm);
+      assert.equal(statusOf(result, 'lockfile-present'), 'fail');
+      assert.equal(statusOf(result, 'lockfile-sync'), 'skip');
+      assert.equal(result.pass, false);
+      assert.deepEqual(npm.calls.map((c) => c.args), [VERSION_ARGS]);
+    });
+
+    test('a non-zero npm ci --dry-run fails the sync check', () => {
+      const result = check('no-pin', fakeNpm({ sync: { status: 1 } }));
+      assert.equal(statusOf(result, 'lockfile-present'), 'pass');
+      assert.equal(statusOf(result, 'lockfile-sync'), 'fail');
+      assert.equal(result.pass, false);
+    });
+
+    test('an npm ci --dry-run that ends without an exit status fails the sync check', () => {
+      const result = check('no-pin', fakeNpm({ sync: { status: null, signal: 'SIGTERM' } }));
+      assert.equal(statusOf(result, 'lockfile-sync'), 'fail');
+    });
+
+    test('a runner that throws on npm ci --dry-run fails the sync check', () => {
+      const npm = fakeNpm({ sync: () => { throw new Error('spawn failed'); } });
+      assert.equal(statusOf(check('no-pin', npm), 'lockfile-sync'), 'fail');
+    });
   });
 
-  // -------------------------------------------------------------------------
-  // Test 6: Integration smoke — script runs without tool-error on live root
-  //
-  // Verifies the script executes against a real repo without a tool error (exit 2).
-  // Exit 0 or 1 are acceptable — local Node may differ from the .nvmrc pin (22).
-  // Uses --json for structured assertion, avoiding raw output-grep.
-  // -------------------------------------------------------------------------
-  test('script runs without tool error on the live worktree root (--json)', () => {
-    const { status, stdout, stderr } = runScript(LIVE_ROOT, ['--json']);
-    assert.notEqual(
-      status, 2,
-      `Expected exit 0 or 1 on live repo, got exit 2 (tool error).\nstdout: ${stdout}\nstderr: ${stderr}`
-    );
-    let parsed;
-    try {
-      parsed = JSON.parse(stdout);
-    } catch (err) {
-      assert.fail(`Live repo --json was not valid JSON: ${err.message}\nstdout: ${stdout}`);
+  describe('version-manager-pin', () => {
+    test('is skipped when no pin file exists', () => {
+      assert.equal(statusOf(check('no-pin', fakeNpm()), 'version-manager-pin'), 'skip');
+    });
+
+    test('fails when the .nvmrc major differs from the running Node', () => {
+      const result = check('nvmrc-other-major', fakeNpm());
+      assert.equal(statusOf(result, 'version-manager-pin'), 'fail');
+      assert.equal(result.pass, false);
+    });
+
+    test('is skipped under CI=true even when the pin differs', () => {
+      const result = check('nvmrc-other-major', fakeNpm(), { env: { CI: 'true' } });
+      assert.equal(statusOf(result, 'version-manager-pin'), 'skip');
+      assert.equal(result.pass, true);
+    });
+
+    test('reads .node-version', () => {
+      assert.equal(statusOf(check('node-version-file', fakeNpm()), 'version-manager-pin'), 'pass');
+      assert.equal(statusOf(check('node-version-file', fakeNpm(), { nodeVersion: 'v25.0.0' }), 'version-manager-pin'), 'fail');
+    });
+
+    test('reads the nodejs line of .tool-versions', () => {
+      assert.equal(statusOf(check('tool-versions', fakeNpm()), 'version-manager-pin'), 'pass');
+      assert.equal(statusOf(check('tool-versions', fakeNpm(), { nodeVersion: 'v25.0.0' }), 'version-manager-pin'), 'fail');
+    });
+
+    test('is skipped when .tool-versions has no nodejs line', () => {
+      assert.equal(statusOf(check('tool-versions-no-node', fakeNpm()), 'version-manager-pin'), 'skip');
+    });
+  });
+
+  test('a pin file passes exactly when its major is the running Node major', () => {
+    const dir = dirs['pin-property'];
+    // The running major is the pinned one or a neighbour, so both outcomes occur.
+    fc.assert(fc.property(
+      fc.integer({ min: 2, max: 99 }), fc.constantFrom(-1, 0, 0, 1), fc.constantFrom('', 'v'), fc.constantFrom('', '.4', '.4.2'),
+      fc.constantFrom('.nvmrc', '.node-version', '.tool-versions'),
+      (pinned, offset, prefix, rest, file) => {
+        const running = pinned + offset;
+        const version = `${prefix}${pinned}${rest}`;
+        fs.writeFileSync(path.join(dir, file), file === '.tool-versions' ? `nodejs ${version}\n` : `${version}\n`);
+        try {
+          const result = check('pin-property', fakeNpm(), { nodeVersion: `v${running}.0.0` });
+          assert.equal(statusOf(result, 'version-manager-pin'), pinned === running ? 'pass' : 'fail');
+        } finally {
+          fs.unlinkSync(path.join(dir, file));
+        }
+      },
+    ), { numRuns: 60 });
+  });
+
+  test('every row has a name, a known status and a message', () => {
+    for (const name of Object.keys(dirs)) {
+      for (const row of check(name, fakeNpm()).checks) {
+        assert.deepEqual(Object.keys(row).sort(), ['message', 'name', 'status']);
+        assert.equal(typeof row.name, 'string');
+        assert.equal(typeof row.message, 'string');
+        assert.ok(['pass', 'fail', 'skip'].includes(row.status), `status ${row.status} in ${name}`);
+      }
     }
-    assert.equal(typeof parsed.pass, 'boolean', 'Live repo JSON must have boolean pass');
-    assert.ok(Array.isArray(parsed.checks), 'Live repo JSON must have checks array');
-    // Node version check must be present and pass (Node >=24 is installed,
-    // per package.json engines.node)
-    const nodeCheck = parsed.checks.find((c) => c.name === 'node-version');
-    assert.ok(nodeCheck, 'node-version check must be present in live repo output');
-    assert.equal(nodeCheck.status, 'pass', `node-version should pass on live repo, got: ${nodeCheck.status} — ${nodeCheck.message}`);
-    // Lockfile checks must pass on the live repo
-    const lockfileCheck = parsed.checks.find((c) => c.name === 'lockfile-present');
-    assert.ok(lockfileCheck, 'lockfile-present check must appear in live output');
-    assert.equal(lockfileCheck.status, 'pass', `lockfile-present should pass on live repo`);
+  });
+
+  test('this repository passes the Node and lockfile checks with the running Node', () => {
+    const npm = fakeNpm();
+    const result = collectChecks({ projectRoot: LIVE_ROOT, run: npm.run });
+    assert.equal(statusOf(result, 'node-version'), 'pass', messageOf(result, 'node-version'));
+    assert.equal(statusOf(result, 'lockfile-present'), 'pass');
+    assert.equal(npm.calls.length, 2);
+  });
+});
+
+describe('satisfiesConstraint', () => {
+  // The oracle orders two versions as zero-padded text, so it shares no
+  // arithmetic with the code, which compares numbers part by part.
+  const padded = (parts) => parts.map((n) => String(n).padStart(8, '0')).join('.');
+  const order = (a, b) => (padded(a) === padded(b) ? 0 : padded(a) < padded(b) ? -1 : 1);
+  const holds = { '>=': (o) => o >= 0, '>': (o) => o > 0, '<=': (o) => o <= 0, '<': (o) => o < 0, '=': (o) => o === 0 };
+  const part = fc.oneof(fc.integer({ min: 0, max: 30 }), fc.integer({ min: 0, max: 99_999 }));
+  const triple = fc.tuple(part, part, part);
+  // Two independent triples almost never tie or differ in one part only, so
+  // half the pairs are a version and a neighbour of it (or itself).
+  const nudge = fc.tuple(fc.constantFrom(0, 1, 2), fc.constantFrom(-1, 0, 1));
+  const pair = fc.oneof(
+    fc.tuple(triple, triple),
+    fc.tuple(triple, nudge).map(([version, [index, by]]) => {
+      const required = [...version];
+      required[index] = Math.max(0, required[index] + by);
+      return [version, required];
+    }),
+  );
+
+  test('agrees with a part-by-part comparison for every operator', () => {
+    fc.assert(fc.property(
+      pair, fc.constantFrom('>=', '>', '<=', '<', '='), fc.boolean(), fc.constantFrom('', '-rc.1', '+build.5'),
+      ([version, required], op, vPrefix, suffix) => {
+        const text = `${vPrefix ? 'v' : ''}${version.join('.')}${suffix}`;
+        assert.equal(satisfiesConstraint(text, `${op}${required.join('.')}`), holds[op](order(version, required)));
+      },
+    ));
+  });
+
+  test('a constraint with no operator means equality', () => {
+    fc.assert(fc.property(pair, ([version, required]) => {
+      assert.equal(satisfiesConstraint(version.join('.'), required.join('.')), order(version, required) === 0);
+    }));
+  });
+
+  test('a part of 1000 or more does not carry into the next part', () => {
+    assert.equal(satisfiesConstraint('1.1000.0', '=2.0.0'), false);
+    assert.equal(satisfiesConstraint('1.1000.0', '<2.0.0'), true);
+    assert.equal(satisfiesConstraint('1.0.1000', '>=1.1.0'), false);
+  });
+
+  test('a missing minor or patch counts as zero', () => {
+    assert.equal(satisfiesConstraint('24', '>=24.0.0'), true);
+    assert.equal(satisfiesConstraint('24.1', '>24.0.9'), true);
+    assert.equal(satisfiesConstraint('24.0.0', '>=24'), true);
+    assert.equal(satisfiesConstraint('23.9.9', '>=24'), false);
   });
 });

@@ -296,7 +296,7 @@ try {
 
 const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.cjs');
 const io = require('./lib/io.cjs');
-const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites, resolveAtFileOutput } = io;
+const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutMaybeSync, resolveAtFileOutput } = io;
 const projectRoot = require('./lib/project-root.cjs');
 const { resolveProjectContext, legacyDispatchCwd } = require('./lib/project-context.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
@@ -606,6 +606,13 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     return true; // consumed — don't emit "Unknown command"
   }
 
+  // #6332: a first-party router its own module declares asynchronous is
+  // waited for. #6333: a synchronous call (runCliSync) refuses it here, before
+  // it runs, so no work is started that the call would not see the end of.
+  const declaredAsync = Object.prototype.hasOwnProperty.call(mod, 'asyncRouters')
+    && Array.isArray(mod.asyncRouters) && mod.asyncRouters.includes(entry.router);
+  refuseAsyncInSyncCall(command, declaredAsync);
+
   let _result;
   try {
     _result = fn({ args, cwd, raw, error });
@@ -618,13 +625,9 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     );
   }
   if (_result && typeof _result.then === 'function') {
-    // #6332: a first-party router its own module declares asynchronous is
-    // waited for. The caller gets a promise of `true` and main() awaits it, so
-    // an in-process call (runCli) ends when the command has, as the binary does.
-    const declared = Object.prototype.hasOwnProperty.call(mod, 'asyncRouters') ? mod.asyncRouters : undefined;
-    if (Array.isArray(declared) && declared.includes(entry.router)) {
-      return _result.then(() => true);
-    }
+    // The caller gets a promise of `true` and main() waits for it, so an
+    // in-process call (runCli) ends when the command has, as the binary does.
+    if (declaredAsync) return _result.then(() => true);
     error(
       'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" must be synchronous (returned a Promise); async capability routers are not supported.',
       ERROR_REASON.SDK_FAIL_FAST,
@@ -5100,7 +5103,7 @@ const HOST_COMMAND_ROUTERS = {
 // through. Prototype-pollution-safe: own-property lookup rejects
 // `__proto__`/`constructor`/`prototype` command keys (same guard as
 // dispatchCapabilityCommand).
-async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }) {
+function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }) {
   if (
     command === '__proto__' ||
     command === 'constructor' ||
@@ -5113,8 +5116,11 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
   }
   const router = HOST_COMMAND_ROUTERS[command];
   if (typeof router !== 'function') return false;
-  // `await` so async host routers (e.g. capability's install/upgrade ops)
-  // complete before runCommand returns; sync routers pass through unchanged.
+  // An async host router (e.g. capability's install/upgrade ops) returns a
+  // promise; this returns a promise of `true` for it, so runCommand waits. A
+  // sync router returns a plain value and this returns plain `true` (#6333):
+  // the whole chain up to main() finishes synchronously for those, which is
+  // what lets runCliSync serve them.
   // `invokingCwd` (#4906/#4465): the pre-worktree-remap cwd, for the rare
   // router (currently only `select-revert-commits`) whose own git operation
   // must see the INVOKING worktree's HEAD, never the main-worktree remap
@@ -5123,8 +5129,77 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
   // byte-unaffected.
   // `ctx` (#6043): the ProjectContext main() resolved once; routers that take a
   // named root (commit, project-context) read it, the rest ignore it.
-  await router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx });
+  refuseAsyncInSyncCall(command, isAsyncHostCommand(command));
+  const routed = router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx });
+  if (isThenable(routed)) {
+    if (syncOnlyCall) {
+      // A router that is not on the async list returned a promise during a
+      // synchronous call. Its work has started and may already have changed
+      // files, so this is not the clean refusal above: the call fails with
+      // `in_process_async_started`, which no caller may answer by running the
+      // command again. The remedy is to declare the router asynchronous. The
+      // cell is set first, so the call is reported as started whatever the
+      // thenable does next. Its outcome belongs to nobody: Promise.resolve
+      // adopts it (a `then` that throws becomes a rejection), and the
+      // rejection is handled so it cannot end the host as an unhandled one.
+      globalThis[SYNC_REFUSED_KEY] = { started: command };
+      Promise.resolve(routed).then(() => undefined, () => undefined);
+      throw new ExitError(1);
+    }
+    return routed.then(() => true);
+  }
   return true; // consumed — don't emit "Unknown command"
+}
+
+// ─── #6333: one dispatch chain, synchronous where the command is ─────────────
+
+function isThenable(value) {
+  return value !== null && typeof value === 'object' && typeof value.then === 'function';
+}
+
+function isAsyncFunction(fn) {
+  return typeof fn === 'function' && fn.constructor !== undefined && fn.constructor.name === 'AsyncFunction';
+}
+
+/** `fn(value)` now for a plain value, or after it for a promise. */
+function afterMaybe(value, fn) {
+  return isThenable(value) ? value.then(fn) : fn(value);
+}
+
+// True for the length of a runCliSync call and at no other time. A variable of
+// this module and not a global cell: nothing outside this file, a capability
+// module included, can make the binary refuse its own asynchronous commands.
+let syncOnlyCall = false;
+// How main tells runInProcessSync that it refused. A `gsd.*` cell, so the
+// in-process seam clears and restores it with the rest. Only that seam reads it.
+const SYNC_REFUSED_KEY = Symbol.for('gsd.cli.syncRefused');
+
+/**
+ * In a runCliSync call, refuse a command that cannot finish synchronously.
+ * Called before an async router runs, so no asynchronous work is started that
+ * would outlive the call; called again if a router that is not declared async
+ * returned a promise anyway, where the work has started and the refusal is
+ * the loud signal that the router belongs on the async list.
+ */
+function refuseAsyncInSyncCall(command, isAsync) {
+  if (!isAsync || !syncOnlyCall) return;
+  globalThis[SYNC_REFUSED_KEY] = command;
+  throw new ExitError(1);
+}
+
+// Routers that are not declared `async` but return a promise for some of
+// their subcommands. A command listed here is refused by runCliSync before
+// its router runs. The parity suite fails when a command that returned a
+// promise is missing from this list.
+const MAYBE_ASYNC_HOST_COMMANDS = new Set(['capability']);
+
+function isAsyncHostCommand(command) {
+  return MAYBE_ASYNC_HOST_COMMANDS.has(command) || isAsyncFunction(HOST_COMMAND_ROUTERS[command]);
+}
+
+/** Top-level commands runCliSync cannot serve (fresh array each call). */
+function asyncHostCommandNames() {
+  return Object.keys(HOST_COMMAND_ROUTERS).filter(isAsyncHostCommand);
 }
 
 // ─── Arg parsing helpers ──────────────────────────────────────────────────────
@@ -5465,16 +5540,24 @@ function isVerificationStatusError(err) {
   return err instanceof verification.VerificationStatusError;
 }
 
-async function captureTranslatingVerificationStatus(run) {
-  try {
-    return await captureStdoutSyncWrites(run);
-  } catch (err) {
+// Returns the captured text, or a promise of it when `run` returned a promise.
+function captureTranslatingVerificationStatus(run) {
+  const translate = (err) => {
     if (isVerificationStatusError(err)) verification.failOnVerificationStatusError(err);
     throw err;
+  };
+  let captured;
+  try {
+    captured = captureStdoutMaybeSync(run);
+  } catch (err) {
+    return translate(err);
   }
+  return isThenable(captured) ? captured.then((text) => text, translate) : captured;
 }
 
-async function main() {
+// Not an `async function` (#6333): it returns a promise only when the command
+// it dispatched did, so a synchronous command finishes before it returns.
+function main() {
   let args = process.argv.slice(2);
 
   // These two global-flag blocks (--json-errors, --exit-contract) MUST run
@@ -5541,6 +5624,7 @@ async function main() {
     let rwt = args;
     if (rwt[0] === 'query') rwt = rwt.slice(1);
     if (rwt[0] === 'run-with-timeout') {
+      refuseAsyncInSyncCall('run-with-timeout', true);
       // Return the child's exit code; runMain() maps it to process.exitCode.
       return runWithTimeout(rwt.slice(1));
     }
@@ -5770,32 +5854,32 @@ async function main() {
   // payloads (io.cjs output() writes these for JSON > 50KB) are not
   // themselves JSON text, so resolving late would make every large result a
   // false "output was not JSON" (negative space N8).
+  const runIt = () => runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
+
   if (pickField) {
-    const captured = await captureTranslatingVerificationStatus(async () => {
-      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
+    return afterMaybe(captureTranslatingVerificationStatus(runIt), (captured) => {
+      const resolved = resolveAtFileOutput(captured);
+      let obj;
+      try {
+        obj = JSON.parse(resolved);
+      } catch {
+        error(`--pick ${formatDiagnosticToken(pickField)}: command output was not JSON`, ERROR_REASON.PICK_OUTPUT_NOT_JSON);
+        return;
+      }
+      const { found, value } = extractField(obj, pickField);
+      if (!found) {
+        const rootDescription = isPlainRecord(obj)
+          ? `available top-level keys: ${Object.keys(obj).map(formatKeyForDiagnosticList).join(', ') || '(none)'}`
+          : `the command's output is a JSON ${describeJsonRootType(obj)}, not an object with that field`;
+        error(`--pick ${formatDiagnosticToken(pickField)}: field not found; ${rootDescription}`, ERROR_REASON.PICK_FIELD_ABSENT);
+        return;
+      }
+      // N1/N2: `null` and `''` are answers, not failures — an absent field
+      // above already exited non-zero, so reaching here means the field EXISTS
+      // and this is its real value (including `0` and `false`, #3365).
+      const result = value === null || value === undefined ? '' : String(value);
+      fs.writeSync(1, result);
     });
-    const resolved = resolveAtFileOutput(captured);
-    let obj;
-    try {
-      obj = JSON.parse(resolved);
-    } catch {
-      error(`--pick ${formatDiagnosticToken(pickField)}: command output was not JSON`, ERROR_REASON.PICK_OUTPUT_NOT_JSON);
-      return;
-    }
-    const { found, value } = extractField(obj, pickField);
-    if (!found) {
-      const rootDescription = isPlainRecord(obj)
-        ? `available top-level keys: ${Object.keys(obj).map(formatKeyForDiagnosticList).join(', ') || '(none)'}`
-        : `the command's output is a JSON ${describeJsonRootType(obj)}, not an object with that field`;
-      error(`--pick ${formatDiagnosticToken(pickField)}: field not found; ${rootDescription}`, ERROR_REASON.PICK_FIELD_ABSENT);
-      return;
-    }
-    // N1/N2: `null` and `''` are answers, not failures — an absent field
-    // above already exited non-zero, so reaching here means the field EXISTS
-    // and this is its real value (including `0` and `false`, #3365).
-    const result = value === null || value === undefined ? '' : String(value);
-    fs.writeSync(1, result);
-    return;
   }
 
   // Intercept stdout to transparently resolve @file: references (#1891).
@@ -5803,10 +5887,9 @@ async function main() {
   // already resolves this, but the normal path wrote @file: to stdout, forcing
   // every workflow to have a bash-specific `if [[ "$INIT" == @file:* ]]` check
   // that breaks on PowerShell and other non-bash shells.
-  const captured = await captureTranslatingVerificationStatus(async () => {
-    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
+  return afterMaybe(captureTranslatingVerificationStatus(runIt), (captured) => {
+    fs.writeSync(1, resolveAtFileOutput(captured));
   });
-  fs.writeSync(1, resolveAtFileOutput(captured));
 }
 
 // captureStdoutSyncWrites and resolveAtFileOutput moved to src/io.cts
@@ -5877,7 +5960,8 @@ function extractField(obj, fieldPath) {
   return { found: true, value: current };
 }
 
-async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd, ctx) {
+// Returns a promise only when the dispatched router did (#6333).
+function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd, ctx) {
   switch (command) {
 
     default: {
@@ -5887,7 +5971,10 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // dispatchCapabilityCommand routes it to the capability's registered router.
       // commandFamilies now includes migrated capabilities (e.g. graphify → graphify-command-router.cjs);
       // this returns true when a registered capability owns the command, false otherwise.
-      if (await dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
+      const viaCapability = dispatchCapabilityCommand({ command, args, cwd, raw, error });
+      // A router its module declares asynchronous: main() waits for its promise.
+      if (isThenable(viaCapability)) return viaCapability.then(() => undefined);
+      if (viaCapability) break;
 
       // ADR-1244 Phase 5 (D7): if no first-party family owns the command, try an INSTALLED
       // THIRD-PARTY (overlay) capability — dispatched only if committed/consented and only by
@@ -5898,27 +5985,33 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // commands (state, …) routed via their `route*Command` router instead of
       // a hardcoded `case` arm. Tried after capability/overlay dispatch and
       // before the unknown-command error.
-      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx })) break;
+      return afterMaybe(
+        dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }),
+        (consumed) => {
+          if (consumed) return;
 
-      // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
-      // above split it so `command` here is the head ("foo"). Use
-      // originalCommand to reconstruct the original dotted form and suggest
-      // the spaced equivalent — surfacing a useful diagnostic instead of just
-      // "Unknown command: foo".
-      const wasDotted =
-        typeof originalCommand === 'string' &&
-        originalCommand !== command &&
-        originalCommand.includes('.');
-      let suggestion = '';
-      if (wasDotted) {
-        const dotIdx = originalCommand.indexOf('.');
-        const head = originalCommand.slice(0, dotIdx);
-        const rest = originalCommand.slice(dotIdx + 1);
-        suggestion = ` — did you mean: "${head} ${rest}"?`;
-      }
-      error(`Unknown command: ${command}${suggestion}`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
+          // above split it so `command` here is the head ("foo"). Use
+          // originalCommand to reconstruct the original dotted form and suggest
+          // the spaced equivalent — surfacing a useful diagnostic instead of just
+          // "Unknown command: foo".
+          const wasDotted =
+            typeof originalCommand === 'string' &&
+            originalCommand !== command &&
+            originalCommand.includes('.');
+          let suggestion = '';
+          if (wasDotted) {
+            const dotIdx = originalCommand.indexOf('.');
+            const head = originalCommand.slice(0, dotIdx);
+            const rest = originalCommand.slice(dotIdx + 1);
+            suggestion = ` — did you mean: "${head} ${rest}"?`;
+          }
+          error(`Unknown command: ${command}${suggestion}`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        },
+      );
     }
   }
+  return undefined;
 }
 
 // ─── CLI entry point ──────────────────────────────────────────────────────────
@@ -5940,6 +6033,31 @@ function runCli(options = {}) {
   return runInProcess(main, { ...options, scriptPath: __filename });
 }
 
+/**
+ * runCli for a command that finishes synchronously (#6333, ADR-6315 item 15):
+ * returns `{ exitCode, stdout, stderr }` directly. A command whose router is
+ * async (asyncHostCommandNames()), and `run-with-timeout`, cannot be served
+ * this way: the call throws an error with code `in_process_async_command`
+ * and the command's name as `command`. Use runCli for those.
+ *
+ * @param {{ argv?: readonly string[], cwd?: string, env?: Record<string, string | undefined> }} [options]
+ * @returns {{ exitCode: number, stdout: string, stderr: string }}
+ */
+function runCliSync(options = {}) {
+  const { runInProcessSync } = require('./lib/in-process-cli.cjs');
+  // A synchronous call cannot be entered twice (the seam refuses a nested one
+  // as busy before main runs), so the flag is restored to what it was.
+  const before = syncOnlyCall;
+  try {
+    return runInProcessSync(() => {
+      syncOnlyCall = true;
+      return main();
+    }, { ...options, scriptPath: __filename, asyncRefusalKey: SYNC_REFUSED_KEY });
+  } finally {
+    syncOnlyCall = before;
+  }
+}
+
 // ─── Exports (for tests) ──────────────────────────────────────────────────────
 // ADR-959: export dispatchCapabilityCommand so tests can exercise it with
 // synthetic registry + requireModule injections.
@@ -5952,6 +6070,8 @@ function hostCommandNames() {
 
 module.exports = {
   runCli,
+  runCliSync,
+  asyncHostCommandNames,
   hostCommandNames,
   dispatchCapabilityCommand,
   dispatchOverlayCapabilityCommand,
