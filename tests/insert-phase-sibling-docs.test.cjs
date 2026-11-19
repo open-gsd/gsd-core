@@ -20,7 +20,16 @@ const ROOT = path.join(__dirname, '..');
 // runtime loads; the four docs pages are pinned as docs-parity with the same flag
 const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 
+const { GLOBAL_FLAGS } = require('../gsd-core/bin/lib/cli-surface.cjs');
+
 const SKIP = skipUnless('bash');
+// Descriptions the CLI reads as a flag: an `=`-form flag with a value, `--ws=`, and every one-word help or rejected token.
+const REFUSED_DESCRIPTIONS = [
+  ...[...GLOBAL_FLAGS.eqFlags, 'ws'].map((f) => '--' + f + '=1 y'),
+  ...GLOBAL_FLAGS.helpTokens,
+  ...GLOBAL_FLAGS.rejectedTokens,
+  '--raw',
+];
 const WF = 'gsd-core/workflows/insert-phase.md';
 const ROUTERS = [
   'commands/gsd/phase.md',
@@ -62,6 +71,7 @@ describe('#5583 insert-phase --sibling', () => {
     const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
     assert.match(fence, /<<'GSD_ARGS_END'/, 'the capture delimiter is quoted: typed text is never expanded');
     assert.doesNotMatch(WORKFLOW, /GSD_DESC_END/, 'GSD_ARGS_END stays the only capture terminator');
+    assert.match(WORKFLOW, /If the fence exits non-zero, print its error and stop; run no later step\./, 'a refused or failed insert stops the workflow');
   });
 
   // Run the shipped insert fence, capture included, over the typed arguments.
@@ -82,12 +92,12 @@ describe('#5583 insert-phase --sibling', () => {
     };
     // The CLI reads a one-word description such as -h or --raw, and any argument starting with
     // --cwd=, --project-dir=, --exit-contract= or --ws=, as a flag; so does an after-phase starting with `-`.
-    for (const args of ['5 -h', '5 --raw', '5 --cwd=/tmp x', '--insert 5 --project-dir=/tmp x', '5 --exit-contract=1 y', '5 --ws=feature x', '--insert --cwd=/tmp 5 x', '--raw 5 x', '15.2 --ws a --ws b Fix y']) {
+    // The refused words come from GLOBAL_FLAGS, the CLI's one owner of that grammar, so a flag added there fails this test.
+    for (const args of [...REFUSED_DESCRIPTIONS.map((d) => '5 ' + d), '--insert 5 --project-dir=/tmp x', '--insert --cwd=/tmp 5 x', '--raw 5 x', '15.2 --ws a --ws b Fix y']) {
       test('refuses the description of: ' + args, () => {
         const r = runFence(args);
-        assert.notEqual(r.status, 0);
+        assert.equal(r.status, 1, 'the refusal exits 1, not a bash syntax error');
         assert.equal(r.stdout, '', 'phase.insert never runs');
-        assert.match(r.stderr, /the CLI reads it as a flag/);
       });
     }
     test('a failed phase.insert fails the fence and its output reaches the agent', () => {
@@ -130,6 +140,8 @@ describe('#5583 insert-phase --sibling', () => {
       ['5 fix --raw mode', ['[5]', '[fix --raw mode]']],
       ['--insert 5 add -h flag "and" --cwd /tmp text', ['[5]', '[add -h flag and --cwd /tmp text]']],
       ['72 $(printf x) "q" GSD_ARGS_END', ['[72]', '[$(printf x) q GSD_ARGS_END]']],
+      ['5 déploiement 修正', ['[5]', '[déploiement 修正]']],
+      ['5 ' + 'w'.repeat(5000) + ' z', ['[5]', '[' + 'w'.repeat(5000) + ' z]']],
     ]) {
       test('split of "' + args.replace(/\n/g, '\\n') + '"', () => assert.deepEqual(split(args), want));
       test('zsh split of "' + args.replace(/\n/g, '\\n') + '"', { skip: !have('zsh') && 'zsh is not installed' }, () => assert.deepEqual(split(args, 'zsh'), want));
@@ -200,7 +212,7 @@ describe('#5583 insert-phase --sibling', () => {
       assert.ok(r.success, r.error);
       assert.equal(JSON.parse(r.output).name, '-5 degrees');
     });
-    for (const desc of ['-h', '--raw', '--cwd=/tmp x', '--project-dir=/tmp x', '--exit-contract=1 y', '--ws=feature x']) {
+    for (const desc of REFUSED_DESCRIPTIONS) {
       test('the CLI reads "' + desc + '" as a flag, not as a phase name', () => {
         const r = runGsdTools(['query', 'phase.insert', '1', desc], tmp);
         const name = r.success ? (() => { try { return JSON.parse(r.output).name; } catch { return undefined; } })() : undefined;

@@ -91,7 +91,7 @@ The CLI handles:
 - Creating the phase directory (`{planning_root}/phases/{N.M}-{slug}/`) (`{planning_root}`: the active scope's root, from `planning.inspect`)
 - Inserting the phase entry into ROADMAP.md after the target phase with (INSERTED) marker
 
-Extract from result: `phase_number`, `after_phase`, `name`, `slug`, `directory`.
+If the fence exits non-zero, print its error and stop; run no later step. Otherwise extract from result: `phase_number`, `after_phase`, `name`, `slug`, `directory`.
 </step>
 
 <step name="update_project_state">
