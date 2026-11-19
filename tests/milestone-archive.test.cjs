@@ -1809,7 +1809,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
       const expected = ids.map((id) => {
         const r = runGsdTools(['query', 'init.phase-op', id], tmpDir, env());
         assert.equal(r.success, true, r.error);
-        const init = JSON.parse(r.output);
+        const init = parseJson(r.output, r.output);
         assert.equal(init.phase_found, true, r.output);
         return init.phase_number;
       });
@@ -1826,7 +1826,7 @@ describe('milestone complete re-checks blocking ship:pre predicate gates per mil
     writeGateCap(home, { command: 'exit 3' });
     const r = runGsdTools(['query', 'init.phase-op', '01'], tmpDir, env());
     assert.equal(r.success, true, r.error);
-    assert.deepEqual(wouldRefuse().map((b) => b.phase), [JSON.parse(r.output).phase_number]);
+    assert.deepEqual(wouldRefuse().map((b) => b.phase), [parseJson(r.output, r.output).phase_number]);
   });
 
   // A copy of the fixture project under a root named `name` (a parent dir keeps the name verbatim).
