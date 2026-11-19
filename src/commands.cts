@@ -14,7 +14,7 @@ import { escapeRegex } from './pattern.cjs';
 import { stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { locateFrontmatterFence, type LocateFrontmatterFenceOptions } from './frontmatter-fence.cjs';
-import { requireSafePath, sanitizeForDisplay, sanitizeLabel,tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
+import { requireSafePath, sanitizeForDisplay, sanitizeLabel, tryWithinRoot, assertWithinRoot, isContainedIn, PathAcceptance } from './security.cjs';
 import type { ProjectContext } from './project-context.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
