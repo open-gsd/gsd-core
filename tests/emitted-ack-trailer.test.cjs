@@ -738,6 +738,27 @@ describe('real fixture reads via readAckTrailers', () => {
     assert.equal(r.growth.get('some-workflow.md')?.reason, ACK_REASON_5993, 'read once, by the whole-message pass');
   });
 
+  test('property: a body without the (#<pr>) subject or with one bullet chunk recovers nothing extra — #5993', () => {
+    fc.assert(fc.property(
+      fc.constantFrom('fix(#5993): an ordinary commit', 'fix: subject with (#12) in the middle of it'),
+      fc.integer({ min: 2, max: 4 }),
+      (title, count) => {
+        const chunks = Array.from({ length: count }, (_, i) => (
+          i === 0 ? `commit ${i}\n\nBody.\n\n${ackLine5993}` : `commit ${i}\n\nBody.`
+        ));
+        const dir = makeTempRepo('gsd-ack-trailer-5993-neg-');
+        try {
+          commitMessage(dir, 'base\n');
+          const baseSha = headSha(dir);
+          commitMessage(dir, noCoauthorSquash(title, chunks));
+          return readAckTrailers({ baseRef: baseSha, headRef: 'HEAD', cwd: dir }).growth.size === 0;
+        } finally {
+          cleanup(dir);
+        }
+      },
+    ), { numRuns: 6 });
+  });
+
   test('property: a no-co-author squash recovers an ack placed on any non-final chunk — #5993', () => {
     fc.assert(fc.property(
       fc.integer({ min: 2, max: 5 }),

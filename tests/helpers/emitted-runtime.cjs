@@ -1075,6 +1075,12 @@ const SQUASH_BULLET_SPLIT_RE = /\n\n(?=\* )/;
 // cannot produce that whole shape: the subject ends in an exact ` (#<digits>)` AND at least two
 // bullet chunks follow it (preamble + two or more chunks), so a commit whose body merely uses
 // markdown bullets does not match.
+// Accepted trade-off: a human-written commit whose subject ends ` (#<digits>)` and whose body is
+// two or more blank-separated `* ` paragraphs has exactly this shape, so a trailer-shaped terminal
+// paragraph in one of them is read as a declaration. That is no new capability (a PR author can
+// already write the trailer as the commit's final paragraph) and the shape cannot be told apart
+// from a real no-co-author squash. Chunk count is bounded by GitHub's 250-commit PR limit for a
+// real squash; one `interpret-trailers` spawn per chunk is the same cost the suffix path pays.
 const NO_COAUTHOR_SQUASH_HEAD_RE = /^[^\n]+ \(#\d+\)\n\n\* /;
 
 /** Index of the START of the LAST GitHub-squash-suffix occurrence in `text`, or -1. */
