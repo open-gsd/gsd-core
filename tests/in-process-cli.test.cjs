@@ -698,6 +698,55 @@ test('module-level caches are reset around every in-process call (#6332)', async
   });
 });
 
+// Two commands start asynchronous work in their router (they read session
+// files as streams). The binary waits for it because the event loop is not
+// empty; an in-process call has to wait for it too, or it returns before the
+// command has written anything and the output lands on the real stdout later.
+test('runCli waits for a command whose router finishes asynchronously (#6332)', async (t) => {
+  function sessions(t2) {
+    const dir = tempDir(t2);
+    fs.mkdirSync(path.join(dir, 'proj'));
+    fs.writeFileSync(path.join(dir, 'proj', 's1.jsonl'), `${JSON.stringify({
+      type: 'user',
+      userType: 'external',
+      message: { role: 'user', content: 'hello there friend' },
+      timestamp: '2026-01-01T00:00:00Z',
+    })}\n`);
+    return dir;
+  }
+  const env = (dir) => ({ ...process.env, GSD_TEMP_DIR: path.join(dir, 'tmp') });
+
+  await t.test('extract-messages returns its result', async (t2) => {
+    const dir = sessions(t2);
+
+    const result = await runCli({ argv: ['extract-messages', 'proj', '--path', dir], env: env(dir) });
+
+    assert.equal(result.exitCode, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.messages_extracted, 1);
+    assert.equal(JSON.parse(fs.readFileSync(report.output_file, 'utf8')).content, 'hello there friend');
+  });
+
+  await t.test('profile-sample returns its result', async (t2) => {
+    const dir = sessions(t2);
+
+    const result = await runCli({ argv: ['profile-sample', '--path', dir], env: env(dir) });
+
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).messages_sampled, 1);
+  });
+
+  await t.test('a failure inside the asynchronous work is the call\'s exit code and stderr', async (t2) => {
+    const dir = sessions(t2);
+
+    const result = await runCli({ argv: ['extract-messages', 'no-such-project', '--path', dir], env: env(dir) });
+
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /No project matching "no-such-project"/);
+  });
+});
+
 // The invariant (CONTEXT.md, RULESET.TESTS.property-based-testing): whatever
 // main does to process state, and however it ends, the state after the call
 // equals the state before it, and the call reports exactly what main wrote

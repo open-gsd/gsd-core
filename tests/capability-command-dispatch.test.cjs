@@ -632,6 +632,51 @@ describe('dispatchCapabilityCommand — non-ExitError from router → structured
 
 // ─── 10. Async router (thenable) → structured error ─────────────────────────
 
+describe('dispatchCapabilityCommand — a router its module declares asynchronous is waited for (#6332)', () => {
+  const call = (requireModule, errorCalls = []) => dispatchCapabilityCommand({
+    command: 'foo',
+    args: ['foo'],
+    cwd: '/p',
+    raw: false,
+    error: (msg, reason) => { errorCalls.push({ msg, reason }); },
+    registry: makeRegistry({ foo: { capId: 'x', module: 'fake.cjs', router: 'routeFoo' } }),
+    requireModule,
+  });
+
+  test('the dispatch returns a promise of true that settles when the router has', async () => {
+    const errorCalls = [];
+    let finished = false;
+    let finish;
+    const work = new Promise((resolve) => { finish = resolve; }).then(() => { finished = true; });
+
+    const dispatched = call(() => ({ routeFoo: () => work, asyncRouters: ['routeFoo'] }), errorCalls);
+
+    assert.equal(typeof dispatched.then, 'function');
+    assert.equal(finished, false);
+    finish();
+    assert.equal(await dispatched, true);
+    assert.equal(finished, true);
+    assert.deepEqual(errorCalls, []);
+  });
+
+  test('a declared router that returns a plain value is dispatched synchronously', () => {
+    assert.equal(call(() => ({ routeFoo: () => undefined, asyncRouters: ['routeFoo'] })), true);
+  });
+
+  test('a declaration for another router, or one that is inherited, does not cover this one', () => {
+    for (const mod of [
+      { routeFoo: () => Promise.resolve(), asyncRouters: ['routeOther'] },
+      Object.assign(Object.create({ asyncRouters: ['routeFoo'] }), { routeFoo: () => Promise.resolve() }),
+      { routeFoo: () => Promise.resolve(), asyncRouters: 'routeFoo' },
+    ]) {
+      const errorCalls = [];
+      assert.equal(call(() => mod, errorCalls), true);
+      assert.equal(errorCalls.length, 1);
+      assert.match(errorCalls[0].msg, /must be synchronous/);
+    }
+  });
+});
+
 describe('dispatchCapabilityCommand — async router returns a Promise → structured error', () => {
   const { ERROR_REASON } = require('../gsd-core/bin/lib/io.cjs');
 
