@@ -1543,6 +1543,15 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   blocks(['ionice /bin/dd if=.env'], { path: 'if=.env' });
   allows(["ionice ./env GIT_EDITOR='cat .env' git commit"]);
 
+  // A `cat` whose options name no file, then `--`, still passes its stdin on.
+  blocks([
+    "printf 'cat .env' | cat -u | bash",
+    "printf 'cat .env' | cat -- | bash",
+    "printf 'cat .env' | cat -uv - | bash",
+    "printf 'cat .env' | cat -n -- - | bash",
+  ]);
+  allows(["printf 'echo .env' | cat -u | bash", "printf 'cat .env' | cat -u notes.txt | bash"]);
+
   // Documented gaps, pinned as allowed (each really reads .env when run): a command inside a quoted argument of a
   // program or on the stdin of one that is not a shell (D1); a producer that computes what it writes, and printf
   // conversions other than %s, %b, %c and %% (D2); an alias defined on the line and used later on it (D3); and a key,
