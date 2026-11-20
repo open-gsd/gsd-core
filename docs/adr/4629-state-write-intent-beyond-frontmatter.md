@@ -178,6 +178,7 @@ inflates the "N found by the guard" census, so it is **excluded**.
 | Concern | Owner | Guard | Scan surface | Status |
 |---|---|---|---|---|
 | No raw STATE.md write outside the seam | `writeStateMd` requires `StateTransaction` (type) | `findRawStateWrites` (Axis 2, terminal), `targetsStatePath`, `RAW_WRITE_CALL_START_RE` in `scripts/lint-state-write-path-drift.cjs` | authored (above) | Enforced (extended here) |
+| No raw or unlocked STATE.md write (values, at run time; pairs with the row above, Amendment 2) | the write seam (`platformWriteSync`, `platformRestoreFileSync`) under the STATE.md lock | `classifyStateWrite` in `scripts/raw-state-write-guard.cjs`, loaded into every `npm test` chunk by `scripts/run-tests.cjs` (#5120) | code paths the suite executes | Enforced |
 | Composition not re-assembled | `syncAndPreserveStateMd` | `findCompositionBypasses` (terminal, #3871) | `src/**` | Enforced |
 | Completion-ratio re-derivation | ADR-3180 §7.6 kernel/discriminator | `lint-completion-ratio-drift.cjs` (**inherited**; §7.6 rules 1–2) | `src/**` | Enforced |
 | Bounded mutation (declared scope) | verifying executor | positive-control test (drives it red) | n/a (test) | Required — Phase 2 |
@@ -260,6 +261,15 @@ the caller's snapshot is the expected prior within the declared scope. No new fi
 because every `StateWriteIntent` already carries the caller's `snapshot` and `bodyDeltas`, which the executor
 previously ignored by re-snapshotting under the lock. Phase 2b lands between C2 (the verifying executor) and
 C3+ (caller migration), so no residual caller migrates twice.
+
+**Amendment 2 (2026-11-20): a run-time guard pairs with the Axis-2 lint (#5120).** The roster row "No raw
+STATE.md write outside the seam" was guarded only by `findRawStateWrites`, which reads authored source and
+matches names: a destination held in a `Map` key filled in another function is invisible to it (#5104 miss 3).
+The roster row added beside it (maintainer ruling on #6111, 2026-11-14) checks values instead: during
+`npm test`, a write from product code whose destination basename is `STATE.md` fails the run unless the write
+seam makes it or it is a rename or copy from a file named STATE.md, and unless the process holds the STATE.md lock (on both
+ends, for a relocation). The lint sees names in the authored source it scans (the scan surface above), whether
+or not that code runs; the run-time check sees values on the paths the suite executes. Neither replaces the other, and neither keeps an allowlist (Decision 5).
 
 ## Citation notes (symbol anchors, for the child issues)
 

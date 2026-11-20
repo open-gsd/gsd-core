@@ -30,9 +30,9 @@
  * path ending in a separator with EISDIR, before any lock is attempted
  * (refuseUnwritableStateMdPath).
  * It is an exact-content write under the lock: it runs no sync or
- * preservation pipeline, so it sits outside ADR-3408 section 8.3's closed
- * exception list (the maintainer's call, recorded in the #5120 PR). The
- * first such write also loads state.cjs, which registers its process exit
+ * preservation pipeline, and ADR-3408 section 8.3's closed list of
+ * exact-content writes names it ("MCP `gsd_write_state` onto a `STATE.md`
+ * path", added by that ADR's Amendment 4). The first such write also loads state.cjs, which registers its process exit
  * handler for held locks. Every other destination is still written exactly
  * as given. `configHome` write-confinement (ADR-1239 Phase B / #1679)
  * applies to the filesystem path.
@@ -67,8 +67,8 @@ export interface CreateStateIOOptions {
  * #5120: a STATE.md destination is written under the STATE.md lock, through the
  * write seam, the lock-then-platformWriteSync shape of cmdStateMilestoneSwitch
  * (src/state.cts) without its transition: the host's content is written as
- * given, so no sync or preservation pipeline runs (outside ADR-3408 section
- * 8.3's closed exception list; see the module header). Loaded lazily: the
+ * given, so no sync or preservation pipeline runs (ADR-3408 section 8.3's
+ * exact-content writes, Amendment 4; see the module header). Loaded lazily: the
  * lock lives in state.cts, which pulls in most of the engine, and this module
  * is also the SDK's `createStateIO` surface (host-integration-sdk.cts), whose
  * other callers never write STATE.md. The lock wait is acquireStateLock's: a

@@ -189,6 +189,19 @@ Both are **permanent entries in the ratchet with `owner: sanctioned-permanent`**
 
 *This paragraph is Amendment 2. The rule previously read "Every STATE.md write applies the pipeline", which is false by design for both rows and would have had Phase 2 route `cmdStateSync` through preservation — inverting a shipped feature with every gate green.*
 
+**Seam writes that run no pipeline: a second closed list; adding to it is an amendment (Amendment 4).** These writes are a second exception to the rule above. Each writes STATE.md under the STATE.md lock through `platformWriteSync` or `platformRestoreFileSync` (the functions #5120's run-time guard counts as the seam), never through `writeStateMd` and without the pipeline, so none is a `rebuild()` transaction or a ratchet entry, and the sanctioned-command table above is unchanged. The list was derived from the distinct callers of those two functions onto STATE.md in one full `npm test` run's guard ledger (2026-11-20), cross-checked by a grep of `src/` for their calls; the method is recorded in Amendment 4.
+
+| Write | Why the pipeline must NOT apply |
+|---|---|
+| MCP `gsd_write_state` onto a `STATE.md` path (the `filesystem` stateIO adapter, `src/state-io.cts`) | The host supplies the whole document and the tool's contract is to write it as given. Preservation would put curated frontmatter back over the document the host chose to write. |
+| the `gsd-tools roadmap upgrade --apply` rollback restore of STATE.md (`applyMigration`, `src/roadmap-upgrade.cts`) | It puts back the bytes STATE.md had before the failed migration. A pipeline pass would make the restored document differ from the one the user had. |
+| `state prune`'s write-failure restore (`publishPrunedToArchive`, `src/state.cts`, #5831) | It puts back STATE.md's bytes after a failed prune publish, for the same reason. |
+| `workstream create`'s initial STATE.md (`cmdWorkstreamCreate`, `src/workstream.cts`) | It writes the new workstream's template only when no STATE.md exists, so there is no document to merge into. |
+| `from-gsd2`'s STATE.md (`writePlanningDir`, `src/gsd2-import.cts`) | The import builds the document from the GSD-2 project; with `--force` it overwrites the imported files in an existing `.planning/`, which is the command's contract. |
+| `state milestone-switch` (`cmdStateMilestoneSwitch`, `src/state.cts`; ADR-1769 Phase 4) | Its transition core rebuilds the frontmatter itself for the new milestone; the steady-state sync would undo that rebuild. |
+
+`cmdPhaseComplete`'s write-failure restore of the files it wrote (`writePlanningFileSet`) is part of the I/O envelope the rule above already names, not a row here.
+
 **Rule.** `current_phase` and `current_phase_name` are written as a **pair**. A transaction that computes one from a phase number writes both from that same number, so the two cannot describe different phases (#3350).
 
 **Consumers that must route through the owner.** `readModifyWriteStateMd`'s 16 callers, `cmdPhaseComplete` (`src/phase.cts`), `patchCore` and `updateCore` (`src/state-transition.cts`), plus the three direct `writeStateMd` callers a whole-repo scan finds: `cmdStateSync` (`src/state.cts:3682`), `cmdMilestoneComplete` (`src/milestone.cts:865`), and the `REGENERATE_STATE` remedy (`src/health-diagnostic.cts:337`). Each is a **named ratchet entry** carrying the issue that owns its removal, never an unrecorded pass.
@@ -360,3 +373,11 @@ That is the **fourth consecutive time** a copy count in this epic proved a lower
 **A parity assertion, because the fix needed one.** `FRONTMATTER_KEY_TO_BODY_LABEL` is a second table beside `FIELD_CLASSIFICATION`, and a missing entry originally fell back silently to the raw key. That is this epic's shape in miniature. A missing `preserve-when-unchanged` label now throws with a structured error mirroring §8.2's `throwUnwiredRow`, and a test asserts every such row has an entry — the parity assertion `CLAUDE.md`'s *Generative Fix Divergence* entry requires whenever two surfaces share a constant. The throw is deliberately scoped to that policy: `divergedFields` legitimately carries `progress`, `milestone` and `milestone_name`, which have no body-line label, and an unconditional throw would have broken a live case.
 
 *(Phase 3's §8.4 bucket decision was folded here; `fix(#3351)` (#3487) subsumed most of Phase 3, which closed as subsumed.)*
+
+### Amendment 4 (2026-11-20): §8.3 gains a closed list of seam writes that run no pipeline (#5120)
+
+#5120 put every STATE.md writer its run-time guard found under the STATE.md lock. The maintainer ruled on #6111 (2026-11-14) that `gsd_write_state` and the roadmap-upgrade rollback restore be placed explicitly in §8.3 in that PR. Placing them needed the rest of their kind placed too: STATE.md writes that go through the write primitives under the lock and run no sync or preservation pipeline. They are not added to the sanctioned-command table: those two commands go through `writeStateMd` as `rebuild()` transactions ([ADR-3473](3473-enforcement-by-construction.md) §8.6), and these writes do not. They form §8.3's second closed list.
+
+**How the list was derived.** One full `npm test` run on 2026-11-20 recorded every STATE.md write's caller in the guard's ledger; its distinct callers of `platformWriteSync` and `platformRestoreFileSync` onto STATE.md were `readModifyWriteStateMd`, `writeStateMd`, `applyStateWriteIntent` (each runs the pipeline or is a sanctioned `rebuild()`), `writePlanningFileSet` (`cmdPhaseComplete`'s envelope), `cmdMilestoneComplete` (pipeline through `syncAndPreserveStateMd`), and the six writes listed. A grep of `src/` for calls to the two functions found no other call whose target is STATE.md. The list is closed: a new seam write that runs no pipeline is an amendment here, and a write that bypasses the seam or the lock fails `npm test` (the [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) guard roster row its Amendment 2 adds).
+
+This list names writes; it does not redefine §8.3's owner, which stays the pipeline and `readModifyWriteStateMd`.
