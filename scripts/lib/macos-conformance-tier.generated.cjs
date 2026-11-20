@@ -222,6 +222,7 @@ module.exports = {
   "tests/quick-commit-boundary.test.cjs",
   "tests/quick-research.test.cjs",
   "tests/quick-review-scope-tip-bound.test.cjs",
+  "tests/raw-state-write-guard.test.cjs",
   "tests/reapply-verify-hunks.test.cjs",
   "tests/refactor-1390-t3-characterization.test.cjs",
   "tests/release-notes-real-os-5922.test.cjs",

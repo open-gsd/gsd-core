@@ -2273,6 +2273,9 @@ async function main() {
   // check's install sentinels after the loop (every spawned chunk is a node process
   // that loads the shim; a chunk skipped after a timeout abort is not counted).
   let chunksRun = 0;
+  // #5120 review Minor 6: the test files of those chunks, each compared with the test files the
+  // preload sentinels name (a test-file child that did not load the shim leaves none).
+  const stateWriteTestFilesRun = [];
   for (let i = 0; i < chunks.length; i++) {
     if (chunks.length > 1) {
       console.error(`run-tests: chunk ${i + 1}/${chunks.length} — ${chunks[i].length} files`);
@@ -2385,6 +2388,7 @@ async function main() {
     );
     const elapsedMs = Number(process.hrtime.bigint() - chunkStartedAt) / 1e6;
     chunksRun++;
+    stateWriteTestFilesRun.push(...chunks[i]);
     // #5071: on every outcome — a failed or killed chunk's COMPLETED files
     // are still genuine measurements — and before the success path below
     // deletes the events file.
@@ -2507,11 +2511,13 @@ async function main() {
   // real chunk-loop exit code.
   // #5120: read before eventsDir is removed. The count is printed on every run,
   // beside the seam-write counts (ADR-3408 Decision 5: never the zero alone).
-  // Fewer install sentinels than spawned chunks means a chunk whose preload never loaded,
-  // so its empty ledger is not evidence; the report fails it and names the shim and the
-  // NODE_OPTIONS the chunks received, because eventsDir (shim and ledger) is removed below.
+  // Fewer preload sentinels than spawned chunks, or a test file no preload sentinel names, means
+  // a process whose preload never loaded, so its empty ledger is not evidence; the report fails it
+  // and names the shim and the NODE_OPTIONS the chunks received, because eventsDir (shim and
+  // ledger) is removed below.
   const stateWriteReport = formatStateWriteReport(readStateWriteLedger(stateWriteLedgerPath), {
     chunksRun,
+    testFilesRun: stateWriteTestFilesRun,
     shimPath: stateWritePreloadPath,
     nodeOptions: stateWriteNodeOptions,
   });

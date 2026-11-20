@@ -10,22 +10,26 @@
 // bypass, it is a lock bypass", the #500/#905/#1230 lost-update family. This module checks the
 // VALUE at run time instead: the destination's basename, whatever the variable is called.
 //
-// What it enforces. A write whose destination basename is exactly `STATE.md` is a violation when
-// the nearest caller frame outside node internals and this file is product code (a `.cjs` file in
-// a `gsd-core/bin/` directory: the compiled `gsd-core/bin/lib/*.cjs`, `gsd-tools.cjs`, or an
-// installed copy of either; the repo-root `bin/*.js` launchers are not payload) and the write is
-// not made by the write seam in `shell-command-projection.cjs`: `platformWriteSync` (it writes a
-// tmp file and renames it, and falls back to a direct write) or `platformRestoreFileSync` (#5831,
-// the byte-exact restore of a file's prior bytes, publishing through the same tmp-and-rename path;
-// the engine's own write-failure rollback inside readModifyWriteStateMd uses it). The seam is
-// identified by one of those two functions being on the stack, not by the module alone: the
-// module's other exports, such as `retryRenameSync`, can land raw bytes on STATE.md too. Whether
-// the restore primitive belongs to the seam under #5120's approved rule (which names
-// platformWriteSync) is recorded in the PR for the maintainer. A rename or copy whose source is itself a
-// file named `STATE.md` relocates an existing STATE.md (a workstream migration, an archive) and
-// authors no bytes, so it is not recorded; one from any other file (`STATE.md.tmp`, a backup) is.
-// Test code writing STATE.md fixtures is not product code and is never recorded. There is no
-// allowlist (ADR-4629 Decision 5).
+// What it enforces. A write whose destination basename is exactly `STATE.md` is recorded when the
+// caller is product code (a `.cjs` file in a `gsd-core/bin/` directory: the compiled
+// `gsd-core/bin/lib/*.cjs`, `gsd-tools.cjs`, or an installed copy of either; the repo-root `bin/*.js`
+// launchers are not payload). The caller is the nearest frame outside node internals, this file and
+// the seam module `shell-command-projection.cjs`, so a seam write is attributed to the code that
+// called the seam. A recorded write is one of three kinds:
+// - a seam write: `platformWriteSync` (it writes a tmp file and renames it, and falls back to a
+//   direct write) or `platformRestoreFileSync` (#5831, the byte-exact restore of a file's prior
+//   bytes, through the same tmp-and-rename path) is on the stack. The seam is the function on the
+//   stack, not the module: its other exports, such as `retryRenameSync`, can land raw bytes on
+//   STATE.md too. Both functions are the seam (maintainer ruling on #6111, 2026-11-14), and ADR-3408
+//   section 8.3's exact-content list (Amendment 4) names the two writes this PR put on them.
+// - a relocation: a rename or copy whose source is itself a file named `STATE.md` (a workstream
+//   migration, an archive). It authors no bytes.
+// - a raw write: anything else. It is a violation.
+// A seam write or a relocation is a violation unless this process holds the STATE.md lock on the
+// destination and, for a relocation, on the source too (#5120 review Major 1 and Major 3): it is the
+// same lost update as a raw write. The lock counts as held when `<path>.lock` names this process's
+// pid, which is what withStateLock writes. Test code writing STATE.md fixtures, or calling the seam
+// on one, is not product code and is never recorded. There is no allowlist (ADR-4629 Decision 5).
 //
 // How it is installed. run-tests.cjs writes a one-line preload shim into its run directory that
 // sets GSD_STATE_WRITE_LEDGER to the run's ledger file and requires this file, and puts
@@ -44,36 +48,53 @@
 // directly (the guard's own tests) installs too, on the ledger the runner also passes in the
 // env, but its sentinel is not a preload and cannot vouch for its chunk.
 //
-// Limits, stated plainly. It sees only code paths the suite executes. It wraps the fs entry points
-// listed in WRAPPED and WRAPPED_PROMISES (fs.promises.cp is seen through the fs.promises.copyFile
-// it calls, except in the ES module case below). The promise functions are wrapped on first reach:
-// through fs.promises, a CommonJS require of `fs/promises` or `node:fs/promises`, or
-// process.getBuiltinModule of either, so loading the check does not load node:os (whose tmpdir
-// branch is fixed at load). An ES module import of `fs/promises` is not such a reach. A write
-// through that import is not seen until one of those routes has run in the process; a named binding
-// taken from it before then stays unwrapped after; and if a cp runs through it before then, node's
-// cp module keeps the unwrapped copyFile it took when it loaded, so a later fs.promises.cp in that
-// process is not seen (fs.cp, wrapped itself, still is). These hold when the runner's shim is the
-// first preload, which run-tests.cjs arranges by prepending it to NODE_OPTIONS
-// (nodeOptionsWithRequire, called at scripts/run-tests.cjs:2126): a preload ordered before the shim
-// that keeps the fs.promises object or a promise function holds an unwrapped reference, and a write
-// through it is not seen. A write
-// through fs.openSync + fs.writeSync, a FileHandle,
-// a write stream, or a native addon is not seen (the seam's own direct fallback writes through a
-// descriptor, so a fallback write is not counted among the seam writes). A test that replaces
-// NODE_OPTIONS, or spawns node with an env that drops it, runs its child unguarded. A child built
-// with isolated-env.cjs keeps the guard but loses the test-file attribution (GSD_STATE_WRITE_TEST_FILE
-// is stripped), so its violation reads `test: unknown`. The caller is the nearest JS
-// frame, so a write is attributed to whatever function is closest to the fs call: product code
-// that hands a STATE.md path to a helper outside `gsd-core/bin/` is attributed to that helper, and
-// a test that mocks an fs function with a JS wrapper (mock.method) puts its own frame nearest, so a
-// product write made under that mock is not recorded. The basename match is case-sensitive. Without
-// a ledger path the module installs nothing. A ledger line a killed process left torn is counted
-// and printed beside the zero, never silently dropped. The install sentinels prove the preload
-// loaded in at least as many processes as chunks were spawned, not in every child a test spawns:
-// a test-file child or a gsd-tools subprocess whose env replaced NODE_OPTIONS leaves no sentinel
-// and no records, and its absence is not told apart from one more chunk-level sentinel, so such
-// a child stays unguarded and unseen.
+// Limits, stated plainly.
+// - It sees only code paths the suite executes.
+// - It records exactly: a call to one of the fs functions in WRAPPED or WRAPPED_PROMISES, made in
+//   a process where this file installed, at the outermost wrapped call, whose destination argument
+//   is a string, Buffer or file URL whose basename is exactly STATE.md. Anything else is not seen.
+//   (fs.promises.cp is seen through the fs.promises.copyFile it calls, except in the ES module
+//   case below.)
+// - Examples of what is therefore not seen: a write through a descriptor (fs.openSync +
+//   fs.writeSync, writeFileSync(fd)), a FileHandle, a write stream, a native addon, truncation
+//   (fs.truncateSync, fs.ftruncateSync, fs.truncate), a rename or copy of a DIRECTORY that holds a
+//   STATE.md (its destination's basename is the directory's), a rename of STATE.md onto another
+//   name, fs.linkSync or fs.symlinkSync onto STATE.md, a write made inside a cp/cpSync filter
+//   callback (only the outermost wrapped call is observed), a write through another name for the
+//   same file (a hard link or a case-insensitive alias), and a write by a non-node subprocess such
+//   as git. The seam's own direct fallback writes through a descriptor, so a fallback write is not
+//   counted among the seam writes.
+// - The promise functions are wrapped on first reach: through fs.promises, a CommonJS require of
+//   `fs/promises` or `node:fs/promises`, or process.getBuiltinModule of either, so loading the check
+//   does not load node:os (whose tmpdir branch is fixed at load).
+// - An ES module import of `fs/promises` is not such a reach. A write through that import is not
+//   seen until one of those routes has run in the process; a named binding taken from it before
+//   then stays unwrapped after; and if a cp runs through it before then, node's cp module keeps the
+//   unwrapped copyFile it took when it loaded, so a later fs.promises.cp in that process is not seen
+//   (fs.cp, wrapped itself, still is).
+// - Those hold when the runner's shim is the first preload, which run-tests.cjs arranges by
+//   prepending it to NODE_OPTIONS (nodeOptionsWithRequire). A preload ordered before the shim that
+//   keeps the fs.promises object or a promise function holds an unwrapped reference, and a write
+//   through it is not seen.
+// - A test that replaces NODE_OPTIONS, or spawns node with an env that drops it, runs its child
+//   unguarded; that child leaves no sentinel and no record. The runner compares preload sentinels
+//   with the chunks it spawned and with the test files it passed them, so a chunk or a test-file
+//   child that lost the shim fails the run; a subprocess a test-file child spawns is not compared.
+// - A child built with isolated-env.cjs keeps the guard but loses the test-file attribution
+//   (GSD_STATE_WRITE_TEST_FILE is stripped), so its violation reads `test: unknown`.
+// - The caller is the nearest JS frame outside the seam module, so product code that hands a
+//   STATE.md path to a helper outside `gsd-core/bin/` is attributed to that helper, and a test that
+//   mocks an fs function with a JS wrapper (mock.method) puts its own frame nearest, so a product
+//   write made under that mock is not recorded.
+// - The basename match is case-sensitive.
+// - The lock is checked when a callback or promise rename, copy or write is CALLED, not when it
+//   lands: one called under the lock that lands after the lock is released reads as locked.
+// - A write the seam module makes on its own behalf from a frame of its own (a deferred callback
+//   with no caller outside the module on its stack) has no caller to attribute and is not recorded.
+// - Without a ledger path the module installs nothing.
+// - A ledger line that does not parse, or parses to anything but one of the two exact record
+//   shapes (a process killed while appending), fails the run, as an unreadable ledger does: it
+//   can be a violation record cut off.
 
 const fs = require('fs');
 const path = require('path');
@@ -114,18 +135,27 @@ function isProductFile(file) {
 
 /**
  * The rule, as a pure function. `recorded` is false for anything the check does not look at:
- * a basename other than exactly `STATE.md`, or a caller that is not product code. `viaSeam` is
- * true when one of the seam module's write functions (SEAM_FUNCTIONS) is on the stack of this write. Whether the
- * STATE.md lock was held is recorded beside the verdict and never part of it: the approved rule
- * (#5120) is the seam, and the report prints the unlocked seam writes next to the zero.
+ * a basename other than exactly `STATE.md`, or a caller that is not product code (`callerFile`
+ * is the frame that called into the seam module, never a frame inside it). `viaSeam` is true
+ * when one of the seam module's write functions (SEAM_FUNCTIONS) is on the stack of this write.
+ * A rename or copy whose source is itself a file named `STATE.md` is a `relocation`: it moves
+ * or copies an existing STATE.md and authors no bytes, so it is not a raw write, but it is held
+ * to the lock rule like a seam write (#5120 review Major 3). A recorded write is a violation:
+ * - `reason: 'raw'` when it is neither a seam write nor a relocation;
+ * - `reason: 'unlocked'` when it is a seam write or a relocation and this process did not hold
+ *   the STATE.md lock on the destination (`lockHeld`) and, for a relocation, on the source too
+ *   (`sourceLockHeld`): a write that skips the lock is the lost update the check exists to
+ *   prevent (#5120 review Major 1).
  */
-function classifyStateWrite({ destination, source, callerFile, viaSeam }) {
-  const notRecorded = { recorded: false, violation: false, seam: false };
+function classifyStateWrite({ destination, source, callerFile, viaSeam, lockHeld, sourceLockHeld }) {
+  const notRecorded = { recorded: false, violation: false, seam: false, relocation: false, reason: null };
   if (path.posix.basename(toPosix(destination)) !== 'STATE.md') return notRecorded;
-  if (source !== undefined && source !== null && path.posix.basename(toPosix(source)) === 'STATE.md') return notRecorded;
   if (!callerFile || !isProductFile(callerFile)) return notRecorded;
   const seam = viaSeam === true;
-  return { recorded: true, violation: !seam, seam };
+  const relocation = !seam && source !== undefined && source !== null && path.posix.basename(toPosix(source)) === 'STATE.md';
+  if (!seam && !relocation) return { recorded: true, violation: true, seam, relocation, reason: 'raw' };
+  const locked = lockHeld === true && (!relocation || sourceLockHeld === true);
+  return { recorded: true, violation: !locked, seam, relocation, reason: locked ? null : 'unlocked' };
 }
 
 // Set by the runner's shim before it requires this file; the install sentinel records it.
@@ -160,23 +190,50 @@ function nodeOptionsWithRequire(existing, file) {
   return base ? `--require ${quoted} ${base}` : `--require ${quoted}`;
 }
 
+const hasExactKeys = (o, keys) => {
+  const own = Object.keys(o);
+  return own.length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(o, k));
+};
+const isPlainObject = (o) => o !== null && typeof o === 'object' && !Array.isArray(o);
+const isStringOrNull = (v) => v === null || typeof v === 'string';
+
+/** The install sentinel as `install` appends it: exactly installed, preload, pid, testFile. */
+function isInstallSentinel(o) {
+  return isPlainObject(o) && hasExactKeys(o, ['installed', 'preload', 'pid', 'testFile'])
+    && o.installed === true && typeof o.preload === 'boolean' && Number.isInteger(o.pid) && isStringOrNull(o.testFile);
+}
+
+/** The write entry as `observe` appends it: exactly its thirteen keys, with their types. */
+function isWriteEntry(o) {
+  return isPlainObject(o)
+    && hasExactKeys(o, ['fn', 'destination', 'source', 'callerFile', 'callerLine', 'lockHeld', 'sourceLockHeld', 'violation', 'reason', 'seam', 'relocation', 'testFile', 'pid'])
+    && typeof o.fn === 'string' && typeof o.destination === 'string' && isStringOrNull(o.source) && typeof o.callerFile === 'string'
+    && (o.callerLine === null || Number.isInteger(o.callerLine))
+    && typeof o.lockHeld === 'boolean' && (o.sourceLockHeld === null || typeof o.sourceLockHeld === 'boolean')
+    && typeof o.violation === 'boolean' && (o.reason === null || o.reason === 'raw' || o.reason === 'unlocked')
+    && typeof o.seam === 'boolean' && typeof o.relocation === 'boolean' && isStringOrNull(o.testFile) && Number.isInteger(o.pid);
+}
+
 /**
- * `{ entries, installs, preloadInstalls, tornLines }`: the ledger's write entries, the count of
- * install sentinel lines (one per process that installed the wrappers), how many of those came
- * through the runner's preload shim, and the count of lines that did not parse to an object (a
- * line a killed process left torn), or `{ entries: null, installs: 0, preloadInstalls: 0,
- * tornLines: 0 }` when the ledger cannot be read (unreadable evidence, #5170).
+ * `{ entries, installs, preloadInstalls, preloadTestFiles, tornLines }`: the ledger's write
+ * entries, the count of install sentinel lines (one per process that installed the wrappers), how
+ * many of those came through the runner's preload shim, the distinct test files those preload
+ * sentinels name (a test-file child and every subprocess that inherited its attribution), and the
+ * count of lines that did not parse, or parsed to anything but one of the two exact record shapes (a line a killed process left torn), or
+ * `{ entries: null, installs: 0, preloadInstalls: 0, preloadTestFiles: [], tornLines: 0 }` when
+ * the ledger cannot be read (unreadable evidence, #5170).
  */
 function readStateWriteLedger(file) {
   let text;
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch {
-    return { entries: null, installs: 0, preloadInstalls: 0, tornLines: 0 };
+    return { entries: null, installs: 0, preloadInstalls: 0, preloadTestFiles: [], tornLines: 0 };
   }
   const entries = [];
   let installs = 0;
   let preloadInstalls = 0;
+  const preloadTestFiles = new Set();
   let tornLines = 0;
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
@@ -187,66 +244,134 @@ function readStateWriteLedger(file) {
       tornLines++;
       continue;
     }
-    if (!parsed || typeof parsed !== 'object') {
+    // A line is a record only in one of the two exact shapes this file appends (isInstallSentinel,
+    // isWriteEntry): the same keys with the same value types, no more and no fewer. Any other
+    // parsed line (an array, a scalar, a partial or extended object) is unreadable evidence, like
+    // a torn line.
+    const sentinel = isInstallSentinel(parsed);
+    if (!sentinel && !isWriteEntry(parsed)) {
       tornLines++;
       continue;
     }
-    if (parsed.installed === true) {
+    if (sentinel) {
       installs++;
-      if (parsed.preload === true) preloadInstalls++;
+      if (parsed.preload === true) {
+        preloadInstalls++;
+        if (typeof parsed.testFile === 'string' && parsed.testFile) preloadTestFiles.add(parsed.testFile);
+      }
     } else {
       entries.push(parsed);
     }
   }
-  return { entries, installs, preloadInstalls, tornLines };
+  return { entries, installs, preloadInstalls, preloadTestFiles: [...preloadTestFiles].sort(), tornLines };
 }
 
 /**
- * `{ failed, lines }` for the runner to print, from readStateWriteLedger's result.
- * `chunksRun` is how many test chunks the runner spawned; each is a node process that loads the
- * shim, so fewer PRELOAD sentinels than chunks means a chunk whose preload never loaded, whose
- * empty ledger is not evidence of zero violations: the run fails, and the line names the shim
- * (`shimPath`) and the NODE_OPTIONS the chunks received (`nodeOptions`, bounded), because the
- * runner deletes its events directory, shim and ledger included, right after printing. A
- * sentinel from a direct require of this file is counted and shown, never compared: it cannot
- * vouch for a chunk (#5120 re-review NEW-1).
+ * One spelling per test file, for comparing the runner's list with the files the preload sentinels
+ * name: resolved, then its real path when it exists (a symlinked temp root, such as macOS's /var to
+ * /private/var, is followed on both sides), then case-folded on win32, whose file names are
+ * case-insensitive (a drive letter can reach the two sides in different cases).
  */
-function formatStateWriteReport({ entries, installs = 0, preloadInstalls = 0, tornLines }, { chunksRun, shimPath, nodeOptions } = {}) {
+function sameFileKey(file, platform = process.platform) {
+  let key = path.resolve(String(file));
+  try { key = fs.realpathSync.native(key); } catch { /* a file that is gone keeps its resolved path */ }
+  return platform === 'win32' ? key.toLowerCase() : key;
+}
+
+/** At most 120 characters of `value`, then its full length, for a line that names a long value. */
+function bounded(value) {
+  const text = String(value == null ? '' : value);
+  return text.length > 120 ? `${text.slice(0, 120)}... (${text.length} chars)` : text;
+}
+
+/**
+ * `{ failed, lines }` for the runner to print, from readStateWriteLedger's result. The run fails on:
+ * - a violation: a raw write, or a seam write or relocation without the STATE.md lock (each is
+ *   printed with its caller file and line);
+ * - a torn ledger line, which can be a violation record a killed process cut off, so it is
+ *   unreadable evidence like an unreadable ledger (#5170, #5120 review Minor 5);
+ * - fewer preload sentinels than chunks spawned (`chunksRun`): a chunk whose preload never loaded;
+ * - a test file the runner passed to a chunk (`testFilesRun`, compared by sameFileKey) that no
+ *   preload sentinel names: its test-file child did not load the shim, so it ran unguarded, or it
+ *   never started (a chunk that timed out first) (#5120 review Minor 6).
+ * The not-loaded lines name the shim (`shimPath`) and the NODE_OPTIONS the chunks received
+ * (`nodeOptions`, bounded), because the runner deletes its events directory, shim and ledger
+ * included, right after printing. A sentinel from a direct require of this file is counted and
+ * shown, never compared: it cannot vouch for a chunk or a test file (#5120 re-review NEW-1).
+ */
+function formatStateWriteReport(
+  { entries, installs = 0, preloadInstalls = 0, preloadTestFiles = [], tornLines = 0 },
+  { chunksRun, testFilesRun, shimPath, nodeOptions } = {},
+) {
   if (entries === null) {
     return { failed: true, lines: ['run-tests: raw STATE.md write check: ledger unreadable, so the check did not run'] };
   }
   const violations = entries.filter((e) => e.violation);
-  const seamWrites = entries.filter((e) => e.seam);
-  const unlocked = seamWrites.filter((e) => !e.lockHeld).length;
-  const torn = tornLines > 0 ? `, unreadable ledger lines: ${tornLines}` : '';
+  const raw = violations.filter((e) => e.reason !== 'unlocked').length;
+  const seamWrites = entries.filter((e) => e.seam).length;
+  const relocations = entries.filter((e) => e.relocation).length;
+  const unlocked = violations.length - raw;
   const lines = [
-    `run-tests: raw STATE.md writes in product code: ${violations.length} ` +
-      `(seam writes onto STATE.md: ${seamWrites.length}, of which without the STATE.md lock: ${unlocked}${torn}); ` +
+    `run-tests: raw STATE.md writes in product code: ${raw}; ` +
+      `seam writes and relocations onto STATE.md: ${seamWrites + relocations} (${relocations} relocation${relocations === 1 ? '' : 's'}), ` +
+      `of which without the STATE.md lock: ${unlocked}; unreadable ledger lines: ${tornLines}; ` +
       `the check loaded in ${preloadInstalls} process${preloadInstalls === 1 ? '' : 'es'}` +
       (installs > preloadInstalls ? ` (and in ${installs - preloadInstalls} more by a direct require)` : ''),
   ];
+  const where = `the shim was ${shimPath == null ? 'unknown' : shimPath} and each chunk received NODE_OPTIONS ${bounded(nodeOptions)}`;
+  const direct = installs > preloadInstalls
+    ? ` (${installs - preloadInstalls} more installed it by a direct require, which does not vouch for a chunk)`
+    : '';
   const neverLoaded = Number.isInteger(chunksRun) && preloadInstalls < chunksRun;
   if (neverLoaded) {
-    const options = String(nodeOptions == null ? '' : nodeOptions);
-    const shown = options.length > 120 ? `${options.slice(0, 120)}... (${options.length} chars)` : options;
-    const direct = installs > preloadInstalls
-      ? ` (${installs - preloadInstalls} more installed it by a direct require, which does not vouch for a chunk)`
-      : '';
     lines.push(
       `run-tests: raw STATE.md write check: ${chunksRun} chunk${chunksRun === 1 ? ' was' : 's were'} spawned but only ` +
-        `${preloadInstalls} process${preloadInstalls === 1 ? '' : 'es'} recorded the preload${direct}, so the zero above is not evidence; ` +
-        `the shim was ${shimPath == null ? 'unknown' : shimPath} and each chunk received NODE_OPTIONS ${shown}`,
+        `${preloadInstalls} process${preloadInstalls === 1 ? '' : 'es'} recorded the preload${direct}, so the counts above are not evidence; ${where}`,
+    );
+  }
+  const seen = new Set(preloadTestFiles.map((f) => sameFileKey(f)));
+  const unguarded = [];
+  const listed = new Set();
+  for (const f of Array.isArray(testFilesRun) ? testFilesRun : []) {
+    const key = sameFileKey(f);
+    if (listed.has(key)) continue;
+    listed.add(key);
+    if (!seen.has(key)) unguarded.push(path.resolve(String(f)));
+  }
+  if (unguarded.length > 0) {
+    const shown = unguarded.slice(0, 10).join(', ') + (unguarded.length > 10 ? `, and ${unguarded.length - 10} more` : '');
+    lines.push(
+      `run-tests: raw STATE.md write check: ${unguarded.length} test file${unguarded.length === 1 ? '' : 's'} left no preload ` +
+        `sentinel (unguarded, or never started), so the counts above do not cover ${unguarded.length === 1 ? 'it' : 'them'}: ${shown}; ${where}`,
+    );
+  }
+  if (tornLines > 0) {
+    lines.push(
+      `run-tests: raw STATE.md write check: ${tornLines} ledger line${tornLines === 1 ? '' : 's'} did not parse ` +
+        `(a process killed mid-record can cut off a violation), so the counts above are not evidence`,
     );
   }
   for (const v of violations) {
-    lines.push(`  ${v.fn} ${v.destination} from ${v.callerFile}:${v.callerLine} (test: ${v.testFile || 'unknown'})`);
+    let what = 'raw write';
+    let target = v.destination;
+    if (v.reason === 'unlocked' && v.relocation) {
+      const ends = [v.sourceLockHeld === true ? null : 'the source', v.lockHeld === true ? null : 'the destination'].filter(Boolean);
+      what = `relocation without the STATE.md lock on ${ends.join(' and ')}`;
+      target = `${v.source} -> ${v.destination}`;
+    } else if (v.reason === 'unlocked') {
+      what = 'seam write without the STATE.md lock';
+    }
+    lines.push(`  ${what}: ${v.fn} ${target} from ${v.callerFile}:${v.callerLine} (test: ${v.testFile || 'unknown'})`);
   }
-  return { failed: violations.length > 0 || neverLoaded, lines };
+  return { failed: violations.length > 0 || neverLoaded || unguarded.length > 0 || tornLines > 0, lines };
 }
 
 /**
- * The nearest caller frame outside node internals and this file, from V8's structured callsites,
- * and whether one of the seam's write functions is on the stack.
+ * The nearest caller frame outside node internals, this file and the seam module, from V8's
+ * structured callsites, and whether one of the seam's write functions sits between that frame and
+ * the fs call. Frames inside the seam module are passed over so the caller named is the code that
+ * called the seam (the site to fix), and so a test that calls the seam directly on a STATE.md
+ * fixture is attributed to the test, which is not product code.
  */
 function callerFrame() {
   const savedPrepare = Error.prepareStackTrace;
@@ -273,11 +398,12 @@ function callerFrame() {
       try { file = require('url').fileURLToPath(file); } catch { continue; }
     }
     if (file === __filename) continue;
-    if (!caller) caller = { file, line: site.getLineNumber() };
-    if (path.basename(file) === SEAM_MODULE && SEAM_FUNCTIONS.has(site.getFunctionName())) {
-      viaSeam = true;
-      break;
+    if (path.basename(file) === SEAM_MODULE) {
+      if (SEAM_FUNCTIONS.has(site.getFunctionName())) viaSeam = true;
+      continue;
     }
+    caller = { file, line: site.getLineNumber() };
+    break;
   }
   return { file: caller ? caller.file : null, line: caller ? caller.line : null, viaSeam };
 }
@@ -289,6 +415,9 @@ function index0IsSource(fn) {
 
 function lockHeldByThisProcess(destination) {
   try {
+    // A lock path that is not a regular file (a FIFO would block the read) is not a lock this
+    // process holds; withStateLock writes a regular file.
+    if (!fs.lstatSync(`${destination}.lock`).isFile()) return false;
     const body = fs.readFileSync(`${destination}.lock`, 'utf8');
     return Number.parseInt(body, 10) === process.pid;
   } catch {
@@ -297,7 +426,9 @@ function lockHeldByThisProcess(destination) {
 }
 
 function install(ledger) {
-  const testFile = process.env[TEST_FILE_ENV] || (process.env.NODE_TEST_CONTEXT ? process.argv[1] : undefined);
+  // Resolved once, here, so the runner can compare it with the test files it passed to its chunks.
+  const testFile = process.env[TEST_FILE_ENV]
+    || (process.env.NODE_TEST_CONTEXT && process.argv[1] ? path.resolve(process.argv[1]) : undefined);
   if (testFile && !process.env[TEST_FILE_ENV]) process.env[TEST_FILE_ENV] = testFile;
   const originalAppend = fs.appendFileSync;
   let ledgerWarned = false;
@@ -312,9 +443,14 @@ function install(ledger) {
       const caller = callerFrame();
       const lockHeld = lockHeldByThisProcess(destination);
       const source = index0IsSource(fn) && rawSource !== undefined && rawSource !== null ? asPath(rawSource) : undefined;
-      const verdict = classifyStateWrite({ destination, source, callerFile: caller.file, viaSeam: caller.viaSeam });
+      const sourceLockHeld = source !== undefined && path.basename(source) === 'STATE.md' ? lockHeldByThisProcess(source) : null;
+      const verdict = classifyStateWrite({ destination, source, callerFile: caller.file, viaSeam: caller.viaSeam, lockHeld, sourceLockHeld });
       if (!verdict.recorded) return;
-      const entry = { fn, destination, callerFile: caller.file, callerLine: caller.line, lockHeld, violation: verdict.violation, seam: verdict.seam, testFile: testFile || null, pid: process.pid };
+      const entry = {
+        fn, destination, source: source === undefined ? null : source, callerFile: caller.file, callerLine: caller.line,
+        lockHeld, sourceLockHeld, violation: verdict.violation, reason: verdict.reason, seam: verdict.seam,
+        relocation: verdict.relocation, testFile: testFile || null, pid: process.pid,
+      };
       originalAppend.call(fs, ledger, `${JSON.stringify(entry)}\n`);
     } catch (err) {
       // Never throw into the code under observation; say once that the check lost a record.
@@ -426,5 +562,6 @@ module.exports = {
   preloadShimSource,
   nodeOptionsWithRequire,
   readStateWriteLedger,
+  sameFileKey,
   formatStateWriteReport,
 };

@@ -4,7 +4,7 @@
  * Property-based tests for the raw STATE.md write check's rule (#5120).
  *
  * Module: scripts/raw-state-write-guard.cjs
- * Rule:   classifyStateWrite({ destination, source, callerFile, viaSeam })
+ * Rule:   classifyStateWrite({ destination, source, callerFile, viaSeam, lockHeld, sourceLockHeld })
  *
  * The rule is a classification surface (TESTING-STANDARDS "Property-based
  * testing tier"): three predicates over paths decide whether a write is
@@ -20,10 +20,13 @@
  *       (no `gsd-core` segment directly followed by `bin`, or a file that does
  *       not end in `.cjs`, or no caller at all) is never recorded
  *   (c) verdict: for a product caller and a STATE.md destination whose source
- *       is absent or is not itself a STATE.md, the write is recorded and
- *       `violation === !viaSeam`, `seam === viaSeam`
+ *       is absent or is not itself a STATE.md, the write is recorded, and it
+ *       passes only when it is a seam write AND the destination lock is held
+ *       (`lockHeld === true`); otherwise it is `raw` (no seam) or `unlocked`
  *   (d) relocation: the same product write whose source basename is
- *       `STATE.md` is never recorded (a rename or copy of an existing STATE.md)
+ *       `STATE.md` and that no seam function made is recorded as a
+ *       relocation, and passes only when both `lockHeld` and `sourceLockHeld`
+ *       are exactly `true` (#5120 review Major 3)
  */
 
 const { describe, test } = require('node:test');
@@ -32,7 +35,11 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const { classifyStateWrite } = require('../scripts/raw-state-write-guard.cjs');
 
-const NOT_RECORDED = Object.freeze({ recorded: false, violation: false, seam: false });
+const NOT_RECORDED = Object.freeze({ recorded: false, violation: false, seam: false, relocation: false, reason: null });
+
+// The lock bits as a caller may pass them: the guard passes booleans (and null for a source that
+// is not a STATE.md), but only exactly `true` may count as held.
+const lockBit = fc.constantFrom(true, false, null, undefined, 1, 'true');
 
 // One path segment: non-empty, no separator of either family. Random strings almost never
 // land on the rule's own tokens, so the near misses the rule must tell apart (case, a
@@ -122,8 +129,10 @@ describe('classifyStateWrite properties (#5120)', () => {
         fc.oneof(productCaller, nonProductCaller),
         fc.oneof(fc.constant(undefined), anyPath),
         fc.boolean(),
-        (destination, callerFile, source, viaSeam) => {
-          assert.deepEqual(classifyStateWrite({ destination, source, callerFile, viaSeam }), NOT_RECORDED);
+        lockBit,
+        lockBit,
+        (destination, callerFile, source, viaSeam, lockHeld, sourceLockHeld) => {
+          assert.deepEqual(classifyStateWrite({ destination, source, callerFile, viaSeam, lockHeld, sourceLockHeld }), NOT_RECORDED);
         },
       ),
     );
@@ -131,27 +140,32 @@ describe('classifyStateWrite properties (#5120)', () => {
 
   test('(b) a STATE.md destination from a caller that is not product code is never recorded', () => {
     fc.assert(
-      fc.property(stateDestination, nonProductCaller, nonStateSource, fc.boolean(), (destination, callerFile, source, viaSeam) => {
-        assert.deepEqual(classifyStateWrite({ destination, source, callerFile, viaSeam }), NOT_RECORDED);
+      fc.property(stateDestination, nonProductCaller, fc.oneof(nonStateSource, stateDestination), fc.boolean(), lockBit, (destination, callerFile, source, viaSeam, lockHeld) => {
+        assert.deepEqual(classifyStateWrite({ destination, source, callerFile, viaSeam, lockHeld }), NOT_RECORDED);
       }),
     );
   });
 
-  test('(c) a product write onto STATE.md is recorded and its verdict is exactly the seam bit', () => {
+  test('(c) a product write onto STATE.md is recorded and passes only as a seam write under the destination lock', () => {
     fc.assert(
-      fc.property(stateDestination, productCaller, nonStateSource, fc.boolean(), (destination, callerFile, source, viaSeam) => {
+      fc.property(stateDestination, productCaller, nonStateSource, fc.boolean(), lockBit, lockBit, (destination, callerFile, source, viaSeam, lockHeld, sourceLockHeld) => {
+        const passes = viaSeam && lockHeld === true;
         assert.deepEqual(
-          classifyStateWrite({ destination, source, callerFile, viaSeam }),
-          { recorded: true, violation: !viaSeam, seam: viaSeam },
+          classifyStateWrite({ destination, source, callerFile, viaSeam, lockHeld, sourceLockHeld }),
+          { recorded: true, violation: !passes, seam: viaSeam, relocation: false, reason: passes ? null : (viaSeam ? 'unlocked' : 'raw') },
         );
       }),
     );
   });
 
-  test('(d) a product rename or copy whose source is itself a STATE.md relocates a file and is never recorded', () => {
+  test('(d) a product rename or copy whose source is itself a STATE.md is a relocation that passes only with both locks held', () => {
     fc.assert(
-      fc.property(stateDestination, productCaller, stateDestination, fc.boolean(), (destination, callerFile, source, viaSeam) => {
-        assert.deepEqual(classifyStateWrite({ destination, source, callerFile, viaSeam }), NOT_RECORDED);
+      fc.property(stateDestination, productCaller, stateDestination, lockBit, lockBit, (destination, callerFile, source, lockHeld, sourceLockHeld) => {
+        const passes = lockHeld === true && sourceLockHeld === true;
+        assert.deepEqual(
+          classifyStateWrite({ destination, source, callerFile, viaSeam: false, lockHeld, sourceLockHeld }),
+          { recorded: true, violation: !passes, seam: false, relocation: true, reason: passes ? null : 'unlocked' },
+        );
       }),
     );
   });
