@@ -1583,6 +1583,17 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     "read GIT_CONFIG_VALUE_0 <<< 'cat .env'; export GIT_CONFIG_VALUE_0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor; git status",
     "printf -v GIT_CONFIG_VALUE_0 'cat %s' .env; export GIT_CONFIG_VALUE_0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor; git status",
     `O=--upload-pack; git ls-remote "$O=cat .env" .`,
+    // Stdin gaps: a `-c` script that itself reads stdin, a process substitution as an input redirect, an fd name
+    // relative to a `cd`, an fd path given through BASH_ENV or `--rcfile`, and a doubled `builtin`.
+    "bash -c '. /dev/stdin' <<< 'cat .env'",
+    "bash -c bash <<< 'cat .env'",
+    'bash < <(echo cat .env)',
+    'source /dev/stdin < <(echo cat .env)',
+    'bash /dev/fd/3 3< <(echo cat .env)',
+    "cd /dev && source stdin <<< 'cat .env'",
+    "BASH_ENV=/dev/stdin bash -c : <<< 'cat .env'",
+    "bash --rcfile /dev/stdin -ic : <<< 'cat .env'",
+    "builtin builtin source /dev/stdin <<< 'cat .env'",
   ]);
 
   // The allow rows of the 'Bash allows', #4639, #4856 and #5884 describes behind `caffeinate `, each with its own
