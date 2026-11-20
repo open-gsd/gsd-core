@@ -14,7 +14,11 @@
  *   (b) any BLANKET `eslint-disable*` comment (no rule list), which suppresses
  *       every rule including the protected ones;
  *   (c) a file that holds a disable keyword and does not parse (fail CLOSED: a
- *       file that cannot be read as JavaScript could hide a real directive).
+ *       file that cannot be read as JavaScript could hide a real directive). A
+ *       file that does not spell the keyword cannot hold a directive, so it is
+ *       not parsed and its parse errors are ESLint's to report, not this check's;
+ *   (d) fewer than MIN_FILES files to scan, so an empty or broken file set
+ *       cannot pass as clean.
  *
  * PROTECTED_RULES grows as later phases add rules; each new portability rule in
  * the `local/` namespace is appended to the list.
@@ -49,6 +53,9 @@ const PROTECTED_RULES = Object.freeze([
   // #4590 (epic #4589 Phase 1)
   'no-rendered-text-length-assert',
 ]);
+
+/** The scan must find at least this many files, or it proved nothing. */
+const MIN_FILES = 10;
 
 // The three directive forms ESLint recognises (built as concatenated strings so
 // this source file contains NO real disable directive of its own).
@@ -145,9 +152,13 @@ function scanFile(absPath) {
  * @param {{root: string}} ctx
  * @returns {{file: string, line: number|string, message: string}[]}
  */
-function run({ root }) {
+function run({ root, minFiles = MIN_FILES }) {
   const findings = [];
-  for (const absPath of collectFiles(root)) {
+  const files = collectFiles(root);
+  if (files.length < minFiles) {
+    findings.push({ file: '(scan)', line: 0, message: `expected at least ${minFiles} files to scan, found ${files.length}: the file set is empty or the globs broke` });
+  }
+  for (const absPath of files) {
     const rel = path.relative(root, absPath).split(path.sep).join('/');
     let scanned;
     try {
@@ -181,4 +192,5 @@ module.exports = {
   classifyComment,
   collectFiles,
   PROTECTED_RULES,
+  MIN_FILES,
 };

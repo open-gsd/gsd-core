@@ -76,7 +76,7 @@ describe('run: seeded violations in a temporary tree', () => {
     const root = makeRoot(t, {
       'tests/a.test.cjs': `'use strict';\n// ${KW_NEXT} local/no-hardcoded-tmp\nconst x = 1;\n`,
     });
-    const findings = ban.run({ root });
+    const findings = ban.run({ root, minFiles: 0 });
     assert.equal(findings.length, 1);
     assert.equal(findings[0].file, 'tests/a.test.cjs');
     assert.equal(findings[0].line, 2);
@@ -85,7 +85,7 @@ describe('run: seeded violations in a temporary tree', () => {
 
   test('a blanket disable in a test file is reported', (t) => {
     const root = makeRoot(t, { 'tests/b.test.cjs': `/* ${KW} */\nconst x = 1;\n` });
-    const findings = ban.run({ root });
+    const findings = ban.run({ root, minFiles: 0 });
     assert.equal(findings.length, 1);
     assert.match(findings[0].message, /blanket disable/);
   });
@@ -94,16 +94,18 @@ describe('run: seeded violations in a temporary tree', () => {
     const root = makeRoot(t, {
       'src/a.cts': `// ${KW_NEXT} local/normalize-path-in-content\nexport const x: number = 1;\n`,
     });
-    const findings = ban.run({ root });
+    const findings = ban.run({ root, minFiles: 0 });
     assert.equal(findings.length, 1);
     assert.equal(findings[0].file, 'src/a.cts');
+    assert.equal(findings[0].line, 1);
+    assert.match(findings[0].message, /protected portability rule/);
   });
 
   test('a disable in bin/install.js with a shebang is reported at its own line', (t) => {
     const root = makeRoot(t, {
       'bin/install.js': `#!/usr/bin/env node\n// ${KW_NEXT} local/require-fs-op-fallback\nconst x = 1;\n`,
     });
-    const findings = ban.run({ root });
+    const findings = ban.run({ root, minFiles: 0 });
     assert.equal(findings.length, 1);
     assert.equal(findings[0].line, 2);
   });
@@ -113,7 +115,7 @@ describe('run: seeded violations in a temporary tree', () => {
       'tests/c.test.cjs': `// ${KW_NEXT} no-console\nconsole.log(1);\n`,
       'tests/d.test.cjs': 'const y = 2;\n',
     });
-    assert.deepEqual(ban.run({ root }), []);
+    assert.deepEqual(ban.run({ root, minFiles: 0 }), []);
   });
 
   test('every violation in every file is reported, not only the first', (t) => {
@@ -121,21 +123,21 @@ describe('run: seeded violations in a temporary tree', () => {
       'tests/e.test.cjs': `/* ${KW} */\n// ${KW_NEXT} local/no-hardcoded-tmp\n`,
       'tests/f.test.cjs': `/* ${KW} */\n`,
     });
-    assert.equal(ban.run({ root }).length, 3);
+    assert.equal(ban.run({ root, minFiles: 0 }).length, 3);
   });
 });
 
 describe('scanFile fails closed', () => {
   test('a file that holds the keyword and does not parse is a finding, not a skip', (t) => {
     const root = makeRoot(t, { 'tests/broken.test.cjs': `const = ;\n// ${KW}\n` });
-    const findings = ban.run({ root });
+    const findings = ban.run({ root, minFiles: 0 });
     assert.equal(findings.length, 1);
     assert.match(findings[0].message, /Parse error/);
   });
 
   test('a .cts file that holds the keyword and does not parse is a finding', (t) => {
     const root = makeRoot(t, { 'src/broken.cts': `export const : = ;\n// ${KW}\n` });
-    const findings = ban.run({ root });
+    const findings = ban.run({ root, minFiles: 0 });
     assert.equal(findings.length, 1);
     assert.match(findings[0].message, /Parse error/);
   });
@@ -147,6 +149,25 @@ describe('scanFile fails closed', () => {
   test('a file without the keyword is not parsed, so cannot hold a directive', (t) => {
     const root = makeRoot(t, { 'tests/plain.test.cjs': 'const = ;\n' });
     assert.deepEqual(ban.scanFile(path.join(root, 'tests', 'plain.test.cjs')), { blanket: [], named: [] });
+  });
+});
+
+describe('run: the scan is not vacuous', () => {
+  test('a tree with fewer files than the minimum is a finding', (t) => {
+    const root = makeRoot(t, { 'tests/a.test.cjs': 'const x = 1;\n' });
+    const findings = ban.run({ root, minFiles: 2 });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /expected at least 2 files to scan, found 1/);
+  });
+
+  test('a tree with exactly the minimum is clean (limit, not limit-1)', (t) => {
+    const root = makeRoot(t, { 'tests/a.test.cjs': 'const x = 1;\n', 'tests/b.test.cjs': 'const y = 2;\n' });
+    assert.deepEqual(ban.run({ root, minFiles: 2 }), []);
+    assert.equal(ban.run({ root, minFiles: 3 }).length, 1);
+  });
+
+  test('the default minimum is 10 files', () => {
+    assert.equal(ban.MIN_FILES, 10);
   });
 });
 

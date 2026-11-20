@@ -20,13 +20,25 @@ const path = require('node:path');
 const DEFAULT_DIR = path.join(__dirname, 'static-checks');
 const DEFAULT_ROOT = path.join(__dirname, '..');
 
-/** @returns {{name: string, run: Function}[]} the checks in `dir`, sorted by file name */
+/**
+ * The checks in `dir`, sorted by file name. A module that cannot be loaded
+ * (a syntax error, a missing dependency) becomes a check whose run reports
+ * that, so one broken module never hides the findings of the others. A module
+ * that loads but lacks `name` and `run` is a programming error and throws.
+ * @returns {{name: string, run: Function}[]}
+ */
 function loadChecks(dir = DEFAULT_DIR) {
   return fs.readdirSync(dir)
     .filter((entry) => entry.endsWith('.cjs'))
     .sort()
     .map((entry) => {
-      const check = require(path.join(dir, entry));
+      let check;
+      try {
+        check = require(path.join(dir, entry));
+      } catch (err) {
+        const message = `could not load: ${err && err.message ? err.message : String(err)}`;
+        return { name: entry, run: () => [{ file: entry, line: 0, message }] };
+      }
       if (typeof check.name !== 'string' || typeof check.run !== 'function') {
         throw new TypeError(`static check ${entry} must export { name: string, run: function }`);
       }
@@ -45,6 +57,7 @@ function runChecks(checks, { root = DEFAULT_ROOT } = {}) {
     let findings;
     try {
       findings = check.run({ root });
+      if (!Array.isArray(findings)) throw new TypeError('run() must return an array of findings');
     } catch (err) {
       findings = [{ file: '(check)', line: 0, message: `the check threw: ${err && err.message ? err.message : String(err)}` }];
     }
@@ -69,24 +82,37 @@ function formatReport(results) {
   return lines.join('\n');
 }
 
-function main(argv = process.argv.slice(2)) {
+/**
+ * @param {string[]} argv
+ * @param {{dir?: string, root?: string, stdout?: {write: Function}, stderr?: {write: Function}}} [io]
+ * @returns {number} the exit code: 0 clean, 1 findings, 2 bad usage
+ */
+function main(argv = process.argv.slice(2), { dir = DEFAULT_DIR, root = DEFAULT_ROOT, stdout = process.stdout, stderr = process.stderr } = {}) {
   const only = [];
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--only' && argv[i + 1]) only.push(argv[++i]);
+    if (argv[i] !== '--only') {
+      stderr.write(`static checks: unknown argument: ${argv[i]}\n`);
+      return 2;
+    }
+    if (!argv[i + 1]) {
+      stderr.write('static checks: --only needs a check name\n');
+      return 2;
+    }
+    only.push(argv[++i]);
   }
-  let checks = loadChecks();
+  let checks = loadChecks(dir);
   if (only.length > 0) {
     const unknown = only.filter((name) => !checks.some((c) => c.name === name));
     if (unknown.length > 0) {
-      process.stderr.write(`static checks: unknown check(s): ${unknown.join(', ')}\n`);
+      stderr.write(`static checks: unknown check(s): ${unknown.join(', ')}\n`);
       return 2;
     }
     checks = checks.filter((c) => only.includes(c.name));
   }
-  const results = runChecks(checks);
+  const results = runChecks(checks, { root });
   const report = formatReport(results);
   const failed = results.some((r) => r.findings.length > 0);
-  (failed ? process.stderr : process.stdout).write(`${report}\n`);
+  (failed ? stderr : stdout).write(`${report}\n`);
   return failed ? 1 : 0;
 }
 

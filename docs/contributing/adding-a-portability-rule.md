@@ -74,7 +74,7 @@ trees and no longer scan the repository.
 
 ### 5. CI test selection — `scripts/ci-test-scope.cjs`
 
-The `portability lint rules (ADR-1703)` rule selects the rule suites + disable-ban when
+The `portability lint rules (ADR-1703)` rule selects the rule suites + the disable-ban's detection cases when
 `eslint-rules/`, `eslint.config.mjs`, or a covered production surface changes. Add new test files
 to its `tests:` list.
 
