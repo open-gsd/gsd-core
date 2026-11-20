@@ -1479,6 +1479,28 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     'caffeinate git status',
   ]);
 
+  // Documented gaps, pinned as allowed (each really reads .env when run): a command inside a quoted argument of a
+  // program or on the stdin of one that is not a shell (D1); a producer that computes what it writes, and printf
+  // conversions other than %s, %b, %c and %% (D2); an alias defined on the line and used later on it (D3); and a key,
+  // value or option that reaches the command through a shell variable, `read` or `printf -v` included (D4).
+  allows([
+    `tmux new -d "${G}"`,
+    `script -c "${G}" /dev/null`,
+    `echo "${G}" | at now`,
+    `echo "${G}" | batch`,
+    "printf 'all:\\n\\tcat .env\\n' | make -f -",
+    'echo Y2F0IC5lbnY= | base64 -d | sh',
+    "echo 'vne. tac' | rev | sh",
+    "echo 'sutats vne. tac=rotinomsf.eroc c-' | rev | xargs git",
+    "printf '%s%.2s' 'cat .e' 'nvx' | sh",
+    "printf 'cat %.4s' .envx | sh",
+    `alias g='git -c core.fsmonitor="cat .env"'\nshopt -s expand_aliases\ng status`,
+    "K=core.fsmonitor; GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=$K GIT_CONFIG_VALUE_0='cat .env' git status",
+    "read GIT_CONFIG_VALUE_0 <<< 'cat .env'; export GIT_CONFIG_VALUE_0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor; git status",
+    "printf -v GIT_CONFIG_VALUE_0 'cat %s' .env; export GIT_CONFIG_VALUE_0 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor; git status",
+    `O=--upload-pack; git ls-remote "$O=cat .env" .`,
+  ]);
+
   // The allow rows of the 'Bash allows', #4639, #4856 and #5884 describes behind `caffeinate `, each with its own
   // verdict at 25f10d345: the rule may not loosen one of them, nor block one it allowed.
   describe('behind caffeinate, each verdict as at 25f10d345', () => {
