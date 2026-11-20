@@ -1379,6 +1379,11 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
   // nests as nesting-too-deep before the grammar scan runs, so each row reads the
   // grammar scan's own verdict as well (grammarScan).
   const nestedCase = (n) => `echo "$(${'$('.repeat(n - 1)}case x in y) :;; esac${')'.repeat(n - 1)}; cat .env)"`;
+  test('the readers stop at 1,000 nested spans, the limit the changeset and the user guide state', () => {
+    // The rows below take their depths from the hook, so they move with the constant;
+    // this one holds its value.
+    assert.equal(MAX_READER_DEPTH, 1000);
+  });
   for (const n of [MAX_READER_DEPTH - 1, MAX_READER_DEPTH]) {
     test(`a case ${n} spans deep is read by the grammar: blocks the read after it`, () => {
       assertBlocked(runHook(bash(nestedCase(n))), `${n} deep`, { code: 'nesting-too-deep', tool: 'Bash' });
