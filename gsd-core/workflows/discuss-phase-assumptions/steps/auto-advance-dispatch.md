@@ -9,5 +9,5 @@ Context captured (assumptions mode). Launching plan-phase...
 
 Launch: `Skill(skill="gsd-plan-phase", args="${PHASE} --auto")`
 
-Handle return: PHASE COMPLETE / PLANNING COMPLETE / INCONCLUSIVE / GAPS FOUND
+Handle return: PHASE COMPLETE / PLANNING COMPLETE / PLANNING STOPPED / INCONCLUSIVE / GAPS FOUND
 (identical handling to discuss-phase.md auto_advance step)
