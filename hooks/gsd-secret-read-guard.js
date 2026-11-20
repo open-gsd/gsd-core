@@ -2240,8 +2240,20 @@ function copyDestinationIndices(operands) {
 function catPrintedText(cmd, feeds) {
   const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
   if (named.length > 0 && !named.some((w) => w.text === '-')) return null;
+  return fedText(feeds);
+}
+
+function fedText(feeds) {
   const parts = [...feeds.heredocs, ...feeds.hereStrings];
   return parts.length > 0 ? parts.join('\n') : null;
+}
+
+// A command that passes its stdin through unchanged when nothing is fed to it directly (`… | tee out | bash`,
+// `… | cat | bash`): the text a shell reads is then that of the segment upstream of it.
+function passesStdinThrough(cmd, feeds) {
+  if (fedText(feeds) !== null) return false;
+  if (cmd.base === 'tee') return true;
+  return cmd.base === 'cat' && cmd.operands.every((w) => w.text.startsWith('-'));
 }
 
 // The command words of one segment's tokens: the redirect targets (`<<<` text, `> file`) are not operands of the command.
@@ -2282,6 +2294,7 @@ function reconstructedScript(words, feeds = { heredocs: [], hereStrings: [] }) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
   if (cmd.base === 'cat') return catPrintedText(cmd, feeds);
+  if (cmd.base === 'tee') return fedText(feeds); // tee prints its stdin (the files it writes are outputs)
   if (cmd.base === 'echo') {
     let start = 0;
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
@@ -2969,11 +2982,14 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     return null;
   }
   let fileTok;
+  let stdinScript = false;
   for (let m = 0; m < operands.length; m++) {
     if (SHELL_VALUE_FLAGS.has(operands[m].text)) { m++; continue; }
+    // `-s` keeps stdin as the script: the operands that follow (`sh -s -- a`) are its positional parameters (#6182).
+    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(operands[m].text)) { stdinScript = true; break; }
     if (!operands[m].text.startsWith('-')) { fileTok = operands[m]; break; }
   }
-  if (fileTok) {
+  if (fileTok && !stdinScript) {
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (fileTok.procsub !== undefined) {
       const src = reconstructedProcsub(fileTok.procsub, reading);
@@ -2990,17 +3006,30 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     const hit = findSecretRead(hs, depth + 1);
     if (hit) return hit;
   }
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if ((op === '|' || op === '|&') && prevSeg >= 0) {
-    const upstream = bySeg.get(prevSeg) || [];
-    const heredocBodies = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(prevSeg) || []).map((h) => h.text);
-    const src = reconstructedScript(commandWords(upstream), {
-      heredocs: heredocBodies,
-      hereStrings: hereStringTargets(upstream),
-    });
-    if (src !== null) return findSecretRead(src, depth + 1);
-  }
+  const src = pipeSourceText(s, bySeg, sepAfter);
+  if (src !== null) return findSecretRead(src, depth + 1);
   return null;
+}
+
+// The statically-knowable text piped into segment `s`: the nearest upstream segment's, looking through `tee` and a bare
+// `cat` that only pass their own stdin along (#6182). Each hop moves to an earlier segment, so the walk ends.
+function pipeSourceText(s, bySeg, sepAfter) {
+  let seg = s;
+  for (;;) {
+    const { op, prevSeg } = precedingOp(seg, bySeg, sepAfter);
+    if (!((op === '|' || op === '|&') && prevSeg >= 0)) return null;
+    const upstream = bySeg.get(prevSeg) || [];
+    const feeds = {
+      heredocs: ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(prevSeg) || []).map((h) => h.text),
+      hereStrings: hereStringTargets(upstream),
+    };
+    const words = commandWords(upstream);
+    const own = reconstructedScript(words, feeds);
+    if (own !== null) return own;
+    const cmd = resolveCommand(words);
+    if (!cmd || !passesStdinThrough(cmd, feeds)) return null;
+    seg = prevSeg;
+  }
 }
 
 // `find … | xargs cat`: the upstream segment's operands become file names the

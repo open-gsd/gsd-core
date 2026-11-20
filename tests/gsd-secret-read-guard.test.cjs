@@ -3740,6 +3740,18 @@ describe('gsd-secret-read-guard: a heredoc or here-string that cat prints into a
     "cat <<EOF | sudo bash\ncat .env\nEOF",
     "cat <<EOF | bash -o pipefail\ncat .env\nEOF",
     "cat <<'EOF' 2>/dev/null | bash\ncat .env\nEOF",
+    "cat -A <<EOF | bash\ncat .env\nEOF",
+    "cat -- - <<EOF | bash\ncat .env\nEOF",
+    "cat <<-EOF | bash\n\tcat .env\n\tEOF",
+    "cat <<EOF | env bash\ncat .env\nEOF",
+    // A pass-through between the source and the shell (`tee`, a bare `cat`) still delivers the source's text.
+    "cat <<EOF | tee x | bash\ncat .env\nEOF",
+    "cat <<EOF | cat | bash\ncat .env\nEOF",
+    "tee <<EOF | bash\ncat .env\nEOF",
+    "echo cat .env | tee x | bash",
+    // `-s` keeps stdin as the script; the operands after it are positional parameters, not a script file.
+    "cat <<EOF | sh -s -- a\ncat .env\nEOF",
+    "echo cat .env | bash -s",
   ];
   const ALLOWS = [
     'cat <<EOF | wc -l\ncat .env\nEOF',
@@ -3752,6 +3764,10 @@ describe('gsd-secret-read-guard: a heredoc or here-string that cat prints into a
     "bash <(cat <<EOF\necho hello\nEOF\n)",
     "cat <<'EOF' | bash\necho hello\nEOF",
     "cat <<< 'echo hello' | bash",
+    "cat <<EOF | tee x | bash\necho hello\nEOF",
+    'echo hello | tee x | bash',
+    'cat script.sh | tee x | bash', // a file operand: the text is not knowable
+    "cat <<EOF | bash script.sh\ncat .env\nEOF", // a script file operand: stdin is data
   ];
 
   for (const cmd of BLOCKS) {
