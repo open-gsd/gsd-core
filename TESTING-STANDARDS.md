@@ -446,6 +446,34 @@ the merge queue ejected a docs-only PR for it (#6375).
 
 Raising the spawn limit is not the fix (ADR-6315 invariant I4).
 
+### A git fixture is a copy of a template
+
+`createFixture({ git: true })`, and so `createTempGitProject`, no longer runs git. Each of the four
+shapes a caller can ask for (with or without `.planning/phases`, with or without `PROJECT.md`) is
+built once, by the six git commands the fixture always used, and a fixture is a copy of that
+template (#6336). Inside a test run the templates are shared by every test file, in the same store
+as the installed trees above.
+
+What a test may rely on is unchanged: a repository on `master` with one commit, `initial commit`,
+by `Test <test@test.com>`, with signing off. `tests/git-fixture-template.process.test.cjs` holds a
+copy against a repository built by hand for every shape.
+
+Three things are different, and a test must not depend on the old behavior:
+
+- **Every fixture of a shape in one run has the same commit hash and commit time.** A test that
+  needs two repositories with different histories makes a commit in one.
+- **The repository's config has `core.trustctime = false` and `core.checkStat = minimal`.** A copy
+  has new inode numbers and change times, and without these git's plumbing (`diff-files`,
+  `diff-index`) reports a clean copy as modified until something refreshes the index.
+- **The template is built with no inherited `GIT_*` variable, no system config, an empty global
+  config and an empty init template**, so it does not depend on the machine or on which test file
+  built it. `.git/hooks` and `.git/info` exist and are empty: there are no sample hooks and no
+  `info/exclude`, whatever the machine's git ships (a developer's git can carry `.planning` in
+  that exclude file, #5470). A test that needs a repository shaped by a particular git setup
+  builds that repository itself.
+
+Do not write into a template (`gitTemplateRoot`). A test process that changes one fails at exit.
+
 ---
 
 ## ESLint rule reference

@@ -1325,7 +1325,10 @@ function _restoreEnvPairs(saved) {
  * git ignores. The config loader runs `git check-ignore` to decide
  * `commit_docs`, so a developer whose git setup ignores `.planning` would
  * otherwise see every fixture's `.planning/` as gitignored (#5470). Call it
- * BEFORE creating the fixture repo, so templates cannot seed its exclude file.
+ * before running git in the fixture. A fixture from `createFixture` is itself
+ * built with an empty init template and config (#6336), so its exclude file is
+ * never seeded; a repository a test builds with its own `git init` after this
+ * call gets the same.
  *
  * - Every GIT_* variable is cleared: GIT_CONFIG_PARAMETERS and
  *   GIT_CONFIG_COUNT/KEY_n/VALUE_n inject config, and GIT_DIR and GIT_WORK_TREE
