@@ -3894,17 +3894,20 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
 
   // The added readings run after the plain one, so a command that overflows the stack in an
   // added reading keeps the plain reading's denial; with no read found it is denied as
-  // `command-too-complex` (#5255), before the debugger-spawn check. A backtick body of 6,000
-  // nested `"\$(` reads harmlessly as written; the body the shell parses, `"$(` nested 6,000
-  // deep, overflows the span finder.
-  const deepEscapedBacktick = 'echo `' + '"\\$('.repeat(6000) + ')"'.repeat(6000) + '`';
-  test('a read after a deep escaped backtick body stays denied', () => {
-    const cmd = `${deepEscapedBacktick}; cat .env`;
-    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then cat .env', { tool: 'Bash', path: '.env' });
+  // `command-too-complex` (#5255), before the debugger-spawn check. After a CR, `#` starts no
+  // comment in the shell, so the CR reading parses 12,000 nested `"$(` that the plain reading
+  // skips as a comment, and overflows the span finder.
+  const crHiddenDeep = 'echo x\r#' + '"$('.repeat(12000) + ')"'.repeat(12000);
+  test('a deep body only the CR reading parses is denied as too complex', () => {
+    assertBlocked(runHook(bash(crHiddenDeep)), 'a deep body after a CR and `#`', { code: 'command-too-complex', tool: 'Bash' });
   });
-  test('a debugger spawn after a deep escaped backtick body stays denied', () => {
-    const cmd = `${deepEscapedBacktick}; claude --agent gsd-debugger -p hi`;
-    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then a debugger spawn', { code: 'command-too-complex', tool: 'Bash' });
+  test('a read before a deep body only the CR reading parses stays denied', () => {
+    const cmd = `cat .env\n${crHiddenDeep}`;
+    assertBlocked(runHook(bash(cmd)), 'cat .env, then a deep body after a CR and `#`', { tool: 'Bash', path: '.env' });
+  });
+  test('a debugger spawn before a deep body only the CR reading parses is denied as too complex', () => {
+    const cmd = `claude --agent gsd-debugger -p hi\n${crHiddenDeep}`;
+    assertBlocked(runHook(bash(cmd)), 'a debugger spawn, then a deep body after a CR and `#`', { code: 'command-too-complex', tool: 'Bash' });
   });
 
   // A heredoc body of 64,000 lines of three backslashes is one joined line under the join
@@ -3967,27 +3970,31 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
       assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
     });
 
-    // The fixture makes the spans reading throw on a backtick body holding FAULT.
+    // The fixture makes the zsh grouping reading throw on a command holding FAULT.
     const faulty = (command) => {
       const r = runHookSeam(HOOK_PATH, [], {
         input: JSON.stringify(bash(command)),
-        env: { ...process.env, NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-span-reading.cjs')}` },
+        env: { ...process.env, NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-zsh-reading.cjs')}` },
         timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
       });
       return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
     };
 
     test('a bug in a reading is reported on stderr, and the command is allowed as before', () => {
-      const r = faulty('echo `\\$FAULT`; ls');
+      const r = faulty('echo {FAULT}; ls');
       assertAllowed(r, 'a faulty reading, no read');
       const { DIAGNOSTIC } = require(HOOK_PATH);
-      assert.deepEqual(JSON.parse(r.stderr), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'span reading bug' });
+      assert.deepEqual(JSON.parse(r.stderr), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'zsh reading bug' });
     });
 
     test('a bug in a reading costs no denial', () => {
-      assertBlocked(faulty('echo `\\$FAULT`; cat .env'), 'a faulty reading, then a read', { tool: 'Bash', path: '.env' });
-      assertBlocked(faulty('{cat .env}; echo `\\$FAULT`'), 'a read only the zsh reading finds', { tool: 'Bash', path: '.env' });
-      assertBlocked(faulty('echo `\\$FAULT`; claude --agent gsd-debugger -p hi'), 'a faulty reading, then a debugger spawn', { code: 'debugger-cli-spawn', tool: 'Bash' });
+      assertBlocked(faulty('echo {FAULT}; cat .env'), 'a faulty reading, then a read', { tool: 'Bash', path: '.env' });
+      assertBlocked(faulty('echo {FAULT}; claude --agent gsd-debugger -p hi'), 'a faulty reading, then a debugger spawn', { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+
+    // The zsh reading runs before the spans reading, so the spans reading still runs after it throws.
+    test('a reading after one that throws still finds its read', () => {
+      assertBlocked(faulty('echo {FAULT}; echo $((#`cat .env`))'),'a faulty zsh reading, then a read only the spans reading finds', { tool: 'Bash', path: '.env' });
     });
   });
 

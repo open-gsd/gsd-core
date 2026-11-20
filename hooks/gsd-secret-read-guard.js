@@ -1176,8 +1176,8 @@ let inHeredocPass = false;
 //    of a brace group: at command position (zshAtCommandPosition) `{` opens one with no
 //    blank after it (`{cat x}`), and a `}` ending a word closes it.
 //  - shellSpans (with dollarDollarIsAWord): true scans the spans bash and dash run that the
-//    plain reading misses — a backtick body as the shell parses it, backslashes removed; the
-//    `$( )` and backtick spans inside `$((…))`, where `#` starts no comment; the spans of an
+//    plain reading misses — the `$( )` and backtick spans inside `$((…))`, where `#` starts
+//    no comment; the spans of an
 //    unquoted heredoc body found with `\`` read as a literal backtick — and reads `$$` (the
 //    shell's PID) as one unit, so a `{` after it opens no `${` (`$${x; cat y` runs `cat y`).
 const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', 'time', 'coproc', 'always']);
@@ -1589,17 +1589,6 @@ function trailingBackslashes(s) {
   return n;
 }
 
-// #5523 H (shellSpans only): before it parses a backtick body the shell removes a backslash
-// that comes before `$`, a backtick or a backslash, so `\$${x; cat y` is parsed as
-// `$${x; cat y`. The body as written is always scanned; under shellSpans the body the shell
-// parses is scanned as well, when the two differ.
-function pushBacktickBody(nested, raw) {
-  nested.push(raw);
-  if (!shellSpans) return;
-  const parsed = raw.replace(/\\([$`\\])/g, '$1');
-  if (parsed !== raw) nested.push(parsed);
-}
-
 // #5523 I (shellSpans only): the inner text of `$((…))` is arithmetic, where `#` starts no
 // comment. It is always scanned as a command; under shellSpans its own `$( )` and backtick
 // spans are also scanned directly, as the shell runs them before it evaluates the arithmetic.
@@ -1678,9 +1667,9 @@ function collectSubstitutionSpans(body, nested, skipEscapes, collectArithmetic) 
       continue;
     }
     if (body[i] === '`') {
-      const j = body.indexOf('`', i + 1);
+      const j = backtickEnd(body, i + 1);
       const e = j === -1 ? body.length : j;
-      pushBacktickBody(nested, body.slice(i + 1, e));
+      nested.push(backtickBody(body.slice(i + 1, e)));
       i = e + 1;
       continue;
     }
