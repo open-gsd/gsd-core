@@ -2169,13 +2169,15 @@ function resolveCommand(words, timeAssigns = true) {
 
 // The commands a segment's words may run: resolveCommand's, and where it read assignments after `time` (#5492), the
 // reading from before, first, which took the first of them for the command (`time X=1 ls .env` ran `X=1` with the
-// operands `ls .env`), so a command blocked before is still blocked, for the same reason.
-function commandReadings(words) {
-  const cmd = resolveCommand(words);
-  if (!words.some((w) => lastSegment(w.text).toLowerCase() === 'time')) return cmd === null ? [] : [cmd];
-  const before = resolveCommand(words, false);
-  if (before === null || (cmd !== null && before.operands.length === cmd.operands.length)) return cmd === null ? [] : [cmd];
-  return cmd === null ? [before] : [before, cmd];
+// operands `ls .env`), so a command blocked before is still blocked, for the same reason. `keepNull` keeps a null
+// reading (nothing but prefixes) in the list.
+function commandReadings(words, keepNull = false) {
+  const cmds = [resolveCommand(words)];
+  if (words.some((w) => lastSegment(w.text).toLowerCase() === 'time')) {
+    const before = resolveCommand(words, false);
+    if (before !== null && (cmds[0] === null || before.operands.length !== cmds[0].operands.length)) cmds.unshift(before);
+  }
+  return keepNull ? cmds : cmds.filter((cmd) => cmd !== null);
 }
 
 // A lowercased git key reduced to its section and name. The subsection is
@@ -3337,8 +3339,15 @@ function copyDestinationIndices(operands) {
 // other source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → [].
 const PRINTF_LINE_FORMATS = new Set(['%s\\n', '%s\\\\n']);
 function reconstructedScripts(words, ctx) {
-  const cmd = resolveCommand(words);
-  if (!cmd) return [];
+  // Each reading of the command (commandReadings), the earlier first.
+  const cmds = commandReadings(words);
+  if (cmds.length < 2) return cmds.length ? scriptsWritten(cmds[0], ctx) : [];
+  const scripts = [];
+  for (const cmd of cmds) for (const script of scriptsWritten(cmd, ctx)) if (!scripts.includes(script)) scripts.push(script);
+  return scripts;
+}
+
+function scriptsWritten(cmd, ctx) {
   if (cmd.base === 'echo') {
     let start = 0;
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
@@ -4254,34 +4263,35 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
     }
     if (!words.length) continue;
 
-    const cmd = resolveCommand(words);
-    if (!cmd) continue;
-    const { base, operands } = cmd;
+    // Each reading of the command (commandReadings), the earlier first.
+    for (const cmd of commandReadings(words)) {
+      const { base, operands } = cmd;
 
-    if (base === 'eval') {
-      if (depth < MAX_NESTING_DEPTH) {
-        const hit = findDebuggerCliSpawn(operands.map((w) => w.text).join(' '), depth + 1);
-        if (hit) return hit;
+      if (base === 'eval') {
+        if (depth < MAX_NESTING_DEPTH) {
+          const hit = findDebuggerCliSpawn(operands.map((w) => w.text).join(' '), depth + 1);
+          if (hit) return hit;
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (SHELL_INTERPRETERS.has(base)) {
-      for (const script of depth < MAX_NESTING_DEPTH ? shellScriptOperands(operands).scripts : []) {
-        const hit = findDebuggerCliSpawn(script.text, depth + 1);
-        if (hit) return hit;
+      if (SHELL_INTERPRETERS.has(base)) {
+        for (const script of depth < MAX_NESTING_DEPTH ? shellScriptOperands(operands).scripts : []) {
+          const hit = findDebuggerCliSpawn(script.text, depth + 1);
+          if (hit) return hit;
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (!CLAUDE_BINARY_RE.test(base)) continue;
-    for (let k = 0; k < operands.length; k++) {
-      const text = operands[k].text;
-      if (text === '--agent') {
-        const value = operands[k + 1];
-        if (value && isDebuggerAgent(value.text)) return value.text;
-      } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
-        return text.slice('--agent='.length);
+      if (!CLAUDE_BINARY_RE.test(base)) continue;
+      for (let k = 0; k < operands.length; k++) {
+        const text = operands[k].text;
+        if (text === '--agent') {
+          const value = operands[k + 1];
+          if (value && isDebuggerAgent(value.text)) return value.text;
+        } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
+          return text.slice('--agent='.length);
+        }
       }
     }
   }
@@ -4431,7 +4441,16 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
 
   // The sub-command is resolved through the same wrappers a top-level command is (`xargs sudo sh -c '…'`,
   // `xargs timeout 5 sh -c '…'`, `xargs env sh -c '…'`, #6114); nothing but wrappers left reads as the bare word.
-  const resolvedSub = resolveCommand(operands.slice(subIdx));
+  // Each reading of it is read (commandReadings), the earlier first.
+  for (const resolvedSub of commandReadings(operands.slice(subIdx), true)) {
+    const hit = scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// scanXargsPipe for one reading of the sub-command, `resolvedSub` (null when only wrappers are left).
+function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx) {
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, resolvedSub ? resolvedSub.assigns : []);
   try {
@@ -4495,20 +4514,20 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
   // Every upstream operand is a candidate file name — the NON_READING
   // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
   // isSecretBasename still holds.
-  const prevCmd = resolveCommand(upstreamWords);
-  if (!prevCmd) return null;
-  if (subIsShell) {
-    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
-    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = scanXargsShellScripts(subOperands, replaceStr, prevCmd.operands, depth, ctx);
-    if (hit) return hit;
-  }
-  for (const w of prevCmd.operands) {
-    if (operandNamesSecret(w.text)) return secretRead(w.text);
-    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
-    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
-    const received = xargsUnquoted(w.text);
-    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+  for (const prevCmd of commandReadings(upstreamWords)) {
+    if (subIsShell) {
+      // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+      // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+      const hit = scanXargsShellScripts(subOperands, replaceStr, prevCmd.operands, depth, ctx);
+      if (hit) return hit;
+    }
+    for (const w of prevCmd.operands) {
+      if (operandNamesSecret(w.text)) return secretRead(w.text);
+      // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+      // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+      const received = xargsUnquoted(w.text);
+      if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+    }
   }
   return null;
 }
@@ -4531,9 +4550,12 @@ function mentionInSource(upstreamWords, ctx) {
 // backslash (printf's `\0` and `\n` separate words on their way to xargs -0 / -d) and the characters that end a
 // word or an option name in a shell, an ssh option or a git config value. `/` stays inside a piece, so a piece is
 // judged by its basename, and `.` does too, so `.env.example` keeps its exemption.
-const MENTION_SPLIT_RE = /[\s"'=:;,|&<>()`$!{}@\\\0]+/;
+// A NUL (a decoded `\0`) splits too, read beside the split that keeps it inside a piece (`.env.example<NUL>x`).
+const MENTION_SPLIT_RE = /[\s"'=:;,|&<>()`$!{}@\\]+/;
+const MENTION_SPLIT_NUL_RE = /[\s"'=:;,|&<>()`$!{}@\\\0]+/;
 function mentionedSecret(text) {
-  return text.split(MENTION_SPLIT_RE).find((piece) => piece !== '' && namesSecretOperand(piece)) || null;
+  const named = (piece) => piece !== '' && namesSecretOperand(piece);
+  return text.split(MENTION_SPLIT_RE).find(named) || (text.includes('\0') && text.split(MENTION_SPLIT_NUL_RE).find(named)) || null;
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -4587,8 +4609,15 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
 // also the launcher's, which the ordinary check reads. That rescan is at the launcher's depth: the launched words are
 // the launcher's own, not a new script body, and each rescan holds fewer of them, so it ends.
 function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx, heredocs = [], hereStrings = []) {
-  const cmd = resolveCommand(words);
-  if (!cmd) return null;
+  // Each reading of the command (commandReadings), the earlier first.
+  for (const cmd of commandReadings(words)) {
+    const hit = scanLaunched(cmd, words, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function scanLaunched(cmd, words, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings) {
   for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, cmd.assigns);
