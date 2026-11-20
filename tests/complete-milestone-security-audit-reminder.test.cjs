@@ -137,6 +137,29 @@ describe('security_audit_phase: complete-milestone.md reminder step', () => {
     );
   });
 
+  test('the gate polarity is pinned: skip when the key is not "true"', () => {
+    assert.match(
+      step,
+      /is not `"true"`:\s*skip this step silently/i,
+      'the gate must skip when SECURITY_AUDIT_PHASE is not "true"'
+    );
+    assert.ok(
+      !/is\s+`"true"`:\s*skip/i.test(step),
+      'the gate must not be inverted into skip-when-true'
+    );
+  });
+
+  test('the reminder is conditional on missing evidence', () => {
+    const evidenceAt = step.indexOf('If no evidence exists');
+    assert.ok(evidenceAt !== -1, 'the step must gate the reminder on missing evidence');
+    const reminderAt = step.indexOf('print this reminder');
+    assert.ok(reminderAt !== -1, 'the reminder block must exist');
+    assert.ok(
+      evidenceAt < reminderAt,
+      'the "If no evidence exists" condition must precede the reminder'
+    );
+  });
+
   test('the reminder is tool-agnostic and never fabricates audit results', () => {
     assert.ok(
       step.includes('no audit tooling available'),
