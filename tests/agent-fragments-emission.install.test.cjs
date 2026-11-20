@@ -226,7 +226,7 @@ test('rows 21/22 — an identity composer makes agent markers leak', (t) => {
   assert.deepStrictEqual(
     failures,
     [],
-    `identity-stub installs must still succeed:\n${failures.join('\n')}`,
+    `identity-stub installs up to the first leak must succeed (row 5 sweeps every runtime):\n${failures.join('\n')}`,
   );
   assert.ok(
     leaks.length > 0,
