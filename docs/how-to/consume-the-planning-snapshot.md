@@ -126,6 +126,10 @@ The loop skips superseded rows because `halted` is set on them too, while
 `halted_count` and `progress.halted_plans` leave them out; without the skip, a
 retired plan would be listed as halted beside a count that does not include it.
 
+The new fields also add to `diagnostics[]`: under a scope that is not
+`complete` it carries a `percent_withheld` entry for `progress.halted_plans`,
+so a consumer that counts or matches `percent_withheld` entries sees one more.
+
 `halted: false` is a real answer only when no `summary_unreadable` diagnostic
 names that plan's SUMMARY, and some SUMMARY shapes read as not halted even
 then. See

@@ -1301,6 +1301,11 @@ older filename pairing (below). Four additive fields report the halt:
 | `halted_count` | each phase row, beside `summary_count` | Live (non-superseded) plans whose `halted` is `true` |
 | `progress.halted_plans` | beside `progress.completed_plans` | `{completed, total, percent, scope}`: Σ `halted_count` over Σ `plan_count`, under the same percent rule as the other fractions (a withheld percentage gets its own `percent_withheld` diagnostic) |
 
+The existing `diagnostics[]` can also gain two entries from these fields: a
+`percent_withheld` entry for `progress.halted_plans` whenever its scope is not
+`complete`, and a `summary_unreadable` entry for a SUMMARY the halt read
+cannot read that no plan row's own SUMMARY read had already reported (below).
+
 `halted` and `blocked_by` are computed the way `phase-plan-index` computes its
 fields of the same name: the same SUMMARY pairing and lookup, the same halt
 predicate (`isSummaryFileHalted`), the same `depends_on` resolution over the
