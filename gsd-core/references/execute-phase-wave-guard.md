@@ -36,8 +36,8 @@
    orchestrator HEAD (GSD's own `git worktree add` by construction; the Claude Code harness as
    measured from all three settings layers, #4588; Cursor unmeasured), so outside the two
    exceptions below this guard only fires when the setting
-   is absent and HEAD has diverged from `origin/HEAD`. Parallel worktrees then return once HEAD
-   is merged/pushed so `origin/HEAD` matches it, or once the setting is applied. The exceptions
+   is absent and HEAD has diverged from `origin/HEAD`. Parallel worktrees can then return in a
+   later run once HEAD is merged/pushed so `origin/HEAD` matches it, or once the setting is applied. The exceptions
    (#4588): a supplied `--observed-fork-base` is compared against HEAD instead of trusted, in
    both modes; and on a harness-created run with no observation, a Claude Code `WorktreeCreate`
    hook in any of those settings files — or one of them that does not parse, so a hook cannot be
