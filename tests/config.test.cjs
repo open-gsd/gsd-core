@@ -4956,6 +4956,95 @@ describe('#5681: config-save-defaults reports lock failures through error()', ()
   });
 });
 
+describe('#5681: new-project creation migrates a stored depth the way a save writes the store', () => {
+  // The plan reads defaults.json and migrates `depth` to `granularity` in memory;
+  // the rewrite that persists it ran later, unlocked, from that snapshot, so a
+  // config-save-defaults landing in between was overwritten. It now takes the
+  // installer lock, re-reads the store and migrates what it holds then.
+  const installerMigrations = require('../gsd-core/bin/lib/installer-migrations.cjs');
+  function project(t, store) {
+    const gsdHome = createTempDir('gsd-5681-depth-');
+    const projectDir = createTempDir('gsd-5681-depth-proj-');
+    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    const saved = process.env.GSD_HOME;
+    process.env.GSD_HOME = gsdHome;
+    t.after(() => {
+      if (saved === undefined) delete process.env.GSD_HOME;
+      else process.env.GSD_HOME = saved;
+    });
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, JSON.stringify(store));
+    const lockPath = path.join(gsdHome, '.gsd', installerMigrations.INSTALL_MIGRATION_LOCK_NAME);
+    const create = () => runQuietlyJson(() => configLib.cmdConfigNewProject(projectDir, '{}', true));
+    const read = () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
+    return { defaultsPath, lockPath, projectDir, create, read };
+  }
+
+  test('a save that lands between the plan and the rewrite is kept', async (t) => {
+    const { defaultsPath, create, read } = project(t, { depth: 'quick', mode: 'yolo' });
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => {
+      // The interleaved save: it lands after the plan read the store.
+      fs.writeFileSync(defaultsPath, JSON.stringify({ depth: 'quick', mode: 'yolo', model_overrides: { 'gsd-planner': 'opus' } }));
+      return realAcquire(dir);
+    });
+    const result = await create();
+    assert.strictEqual(result.ok, true, result.err);
+    assert.deepStrictEqual(read(), { mode: 'yolo', model_overrides: { 'gsd-planner': 'opus' }, granularity: 'coarse' });
+  });
+
+  test('a save that sets granularity first leaves nothing to migrate', async (t) => {
+    const { defaultsPath, create, read } = project(t, { depth: 'quick' });
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => {
+      fs.writeFileSync(defaultsPath, JSON.stringify({ granularity: 'fine' }));
+      return realAcquire(dir);
+    });
+    assert.strictEqual((await create()).ok, true);
+    assert.deepStrictEqual(read(), { granularity: 'fine' });
+  });
+
+  test('the rewrite is written while the lock is held, through a temp file renamed over the store, and the lock is released', async (t) => {
+    const { lockPath, create, read } = project(t, { depth: 'comprehensive' });
+    const renames = [];
+    const realRename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', function (from, to) {
+      if (path.basename(String(to)) === 'defaults.json') renames.push({ from: path.basename(String(from)), locked: fs.existsSync(lockPath) });
+      return realRename.apply(this, arguments);
+    });
+    assert.strictEqual((await create()).ok, true);
+    assert.strictEqual(renames.length, 1, 'one rename over the store');
+    assert.notStrictEqual(renames[0].from, 'defaults.json', 'renamed from a temp file');
+    assert.strictEqual(renames[0].locked, true, 'written under the lock');
+    assert.ok(!fs.existsSync(lockPath), 'the lock is released');
+    assert.deepStrictEqual(read(), { granularity: 'fine' });
+  });
+
+  test('a lock that cannot be taken skips the rewrite; the project is still created', async (t) => {
+    const before = JSON.stringify({ depth: 'quick' });
+    const { defaultsPath, projectDir, create } = project(t, JSON.parse(before));
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', () => {
+      throw new Error('installer migration lock is held (injected)');
+    });
+    const result = await create();
+    assert.strictEqual(result.ok, true, result.err);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8')).granularity, 'coarse');
+  });
+
+  test('a store removed before the rewrite is not recreated', async (t) => {
+    const { defaultsPath, create } = project(t, { depth: 'quick' });
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => {
+      fs.unlinkSync(defaultsPath);
+      return realAcquire(dir);
+    });
+    assert.strictEqual((await create()).ok, true);
+    assert.ok(!fs.existsSync(defaultsPath));
+  });
+});
+
 describe('#5681: mergeIntoGlobalDefaults properties', () => {
   const { mergeIntoGlobalDefaults } = configLib;
   // Few key names, so base and patch collide often and sections nest.

@@ -386,7 +386,8 @@ function validateShipPrBodySections(value: unknown): void {
  */
 interface NewProjectConfigPlan {
   config: Record<string, unknown>;
-  defaultsRewrite: { path: string; contents: string } | null;
+  /** The store to migrate `depth` in, when the plan migrated it in memory. */
+  defaultsRewrite: { path: string } | null;
 }
 
 /**
@@ -404,6 +405,25 @@ const DETECTED_SEARCH_INTEGRATIONS: readonly { key: string; envVar: string; keyF
   { key: 'perplexity', envVar: 'PERPLEXITY_API_KEY', keyFile: 'perplexity_api_key' },
   { key: 'jina', envVar: 'JINA_API_KEY', keyFile: 'jina_api_key' },
 ];
+
+/** Legacy `depth` values and the `granularity` each one became. */
+const DEPTH_TO_GRANULARITY: Readonly<Record<string, string>> = Object.freeze({ quick: 'coarse', standard: 'standard', comprehensive: 'fine' });
+
+/**
+ * `store` with a legacy `depth` migrated to `granularity`, or null when there is
+ * nothing to migrate (no `depth`, or a `granularity` beside it). An unknown depth,
+ * one named like an Object.prototype member included, is kept as given.
+ */
+function migrateDepthToGranularity(store: Record<string, unknown>): Record<string, unknown> | null {
+  if (!Object.prototype.hasOwnProperty.call(store, 'depth') || Object.prototype.hasOwnProperty.call(store, 'granularity')) return null;
+  const depth = store['depth'] as string;
+  const migrated: Record<string, unknown> = {
+    ...store,
+    granularity: (Object.prototype.hasOwnProperty.call(DEPTH_TO_GRANULARITY, depth) && DEPTH_TO_GRANULARITY[depth]) || depth,
+  };
+  delete migrated['depth'];
+  return migrated;
+}
 
 /**
  * The flat top-level settings a new project's template starts from. Two of
@@ -460,15 +480,12 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   try {
     if (fs.existsSync(globalDefaultsPath)) {
       userDefaults = JSON.parse(fs.readFileSync(globalDefaultsPath, 'utf-8')) as Record<string, unknown>;
-      // Migrate deprecated "depth" key to "granularity"
-      if ('depth' in userDefaults && !('granularity' in userDefaults)) {
-        const depthToGranularity: Record<string, string> = { quick: 'coarse', standard: 'standard', comprehensive: 'fine' };
-        const depth = userDefaults['depth'] as string;
-        userDefaults['granularity'] = (Object.prototype.hasOwnProperty.call(depthToGranularity, depth) && depthToGranularity[depth]) || depth;
-        delete userDefaults['depth'];
-        // The migrated value is used for this build whether or not the
-        // rewrite is ever persisted.
-        defaultsRewrite = { path: globalDefaultsPath, contents: JSON.stringify(userDefaults, null, 2) };
+      // Migrate deprecated "depth" key to "granularity". The migrated value is
+      // used for this build whether or not the rewrite is ever persisted.
+      const migrated = migrateDepthToGranularity(userDefaults);
+      if (migrated !== null) {
+        userDefaults = migrated;
+        defaultsRewrite = { path: globalDefaultsPath };
       }
     }
   } catch {
@@ -627,11 +644,31 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
 }
 
 /** Persist a plan's user defaults rewrite, best-effort as it always was. */
+/**
+ * Persist the `depth` -> `granularity` migration the plan applied in memory.
+ * The store is the one config-save-defaults writes, so this is written the same
+ * way: under the installer's lock on `.gsd/`, re-read and migrated as it is now
+ * (a save that landed after the plan read the store is kept, #5681), through an
+ * exclusive temp file renamed over it. Best effort, as before: the migration is
+ * redone on every read, so a lock that cannot be taken or a store that is refused
+ * leaves the store as it is.
+ */
 function persistDefaultsRewrite(plan: NewProjectConfigPlan): void {
   if (plan.defaultsRewrite === null) return;
+  const defaultsPath = plan.defaultsRewrite.path;
+  let release: () => void;
   try {
-    platformWriteSync(plan.defaultsRewrite.path, plan.defaultsRewrite.contents);
-  } catch { /* intentionally empty */ }
+    release = installerMigrations.acquireInstallMigrationLock(path.dirname(defaultsPath));
+  } catch {
+    return;
+  }
+  try {
+    updateDefaultsStore(defaultsPath, migrateDepthToGranularity, { createMissing: false });
+  } catch {
+    // best effort: the store is left as it was
+  } finally {
+    try { release(); } catch { /* best effort */ }
+  }
 }
 
 /**
@@ -1014,7 +1051,7 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   // own result: it is added to that result's one error line.
   let outcome: { created: boolean } | { message: string; reason: ErrorReasonValue };
   try {
-    outcome = saveDefaultsStore(defaultsPath, patch);
+    outcome = updateDefaultsStore(defaultsPath, (existing) => mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch));
   } catch (err) {
     try {
       release();
@@ -1039,10 +1076,18 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   output(result, raw, 'saved');
 }
 
-/** The read-modify-write of cmdConfigSaveDefaults, run while it holds the lock. */
-function saveDefaultsStore(
+/**
+ * The read-modify-write of the global defaults store, run while the caller holds
+ * the installer's lock on `.gsd/`: read and check the store, pass it to `update`,
+ * and write what it returns. A null from `update` writes nothing. A missing store
+ * is read as `{}` and created, unless `createMissing` is false, when nothing is
+ * written. Used by config-save-defaults and by new-project creation's `depth`
+ * migration, the two writers of the store outside the installer.
+ */
+function updateDefaultsStore(
   defaultsPath: string,
-  patch: Record<string, unknown>,
+  update: (existing: Record<string, unknown>) => Record<string, unknown> | null,
+  { createMissing = true }: { createMissing?: boolean } = {},
 ): { created: boolean } | { message: string; reason: ErrorReasonValue } {
   // A dangling link is not a missing store: writing would replace the link.
   let isLink = false;
@@ -1052,6 +1097,7 @@ function saveDefaultsStore(
     // absent
   }
   const created = !isLink && !fs.existsSync(defaultsPath);
+  if (created && !createMissing) return { created: false };
   let existing: Record<string, unknown> = {};
   // A store kept as a symlink (into a dotfiles repo) is read and written at its
   // target: the atomic write renames over its path, which would replace the link.
@@ -1102,7 +1148,9 @@ function saveDefaultsStore(
   // its own reason rather than letting the stack overflow reach the command.
   let data: string;
   try {
-    data = JSON.stringify(mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch), null, 2) + '\n';
+    const updated = update(existing);
+    if (updated === null) return { created: false };
+    data = JSON.stringify(updated, null, 2) + '\n';
   } catch (err) {
     if (!(err instanceof RangeError)) throw err;
     return { message: `Refusing to overwrite ${defaultsPath}: it is nested too deeply to merge into (${err.message}). Flatten it, then save again.`, reason: ERROR_REASON.CONFIG_DEFAULTS_INVALID };
