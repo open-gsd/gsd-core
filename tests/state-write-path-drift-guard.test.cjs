@@ -758,6 +758,8 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(['function f(p, statePath, c) {', '  if (a) { p = statePath; } fs.writeFileSync(p, c);', '}'].join('\n')), [2]);
   });
 
+  // The hop-bound row the script header names. REASSIGNMENT_GAPS records the
+  // reassignment form of the same limit as a known gap.
   test('bound: chains of MAX_TARGET_RESOLUTION_HOPS - 1 and exactly MAX lookups are reported, one more is not', () => {
     assert.ok(Number.isInteger(MAX_TARGET_RESOLUTION_HOPS) && MAX_TARGET_RESOLUTION_HOPS > 1);
     assert.strictEqual(findRawStateWrites(OTHER_FILE, chainFixture(MAX_TARGET_RESOLUTION_HOPS - 1)).length, 1);
@@ -1183,7 +1185,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W(...sibling, '  const { filePath, body } = entry;', '  fs.writeFileSync(filePath, body);')), []);
   });
 
-  test('scope: resolution stops at the enclosing named function, and skips strings and property names', () => {
+  test('scope: an earlier function\'s variable, a word in a quoted string and a property after `opts.` are not resolved here', () => {
     const otherFn = ['function other(dir) {', "  const p = path.join(dir, 'STATE.md');", '  return p;', '}'];
     assert.deepStrictEqual(lines([...otherFn, 'function writer(p, c) {', '  fs.writeFileSync(p, c);', '}'].join('\n')), []);
     assert.deepStrictEqual(
@@ -1192,11 +1194,8 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     );
   });
 
-  // Boundary rule: an assignment in a closed
-  // sibling block or arrow body is not in scope at the write. The nearest
-  // assignment ends the search only when no `{`, `}` or `=>` lies between it
-  // and the write; otherwise the search goes on to the next earlier one.
-  test('boundary: an outer STATE.md binding shadowed only inside a closed block or arrow body is still reported', () => {
+  // Boundary rule: see `resolvesToStatePath`'s header.
+  test('boundary: an outer STATE.md binding shadowed by a const in an if block, a one-line if block or an arrow body is still reported', () => {
     const outer = "  const p = path.join(dir, 'STATE.md');";
     const inner = "    const p = path.join(dir, 'ROADMAP.md');";
     assert.deepStrictEqual(lines(W(outer, '  if (x) {', inner, '    use(p);', '  }', '  fs.writeFileSync(p, c);')), [7]);
@@ -1362,7 +1361,8 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [],
     },
     {
-      // Missed: the named-function header ends the scan before its default is read.
+      // Missed: the header line matches FUNCTION_DECL_LINE_RE, which ends the
+      // scan before its default is read.
       shape: 'default parameter holding a STATE.md path',
       text: ["function w(p = path.join(dir, 'STATE.md')) {", '  fs.writeFileSync(p, c);', '}'].join('\n'),
       expected: [2],
@@ -1397,9 +1397,9 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [3],
     },
     {
-      // False positive: a named-function header on the write's line is dropped,
-      // so a top-level one-line function's parameter resolves to an earlier
-      // function's variable.
+      // False positive: the write's line matches FUNCTION_DECL_LINE_RE, so it
+      // is dropped, and a top-level one-line function's parameter resolves to
+      // an earlier function's variable.
       shape: "one-line top-level function's parameter resolved into an earlier function",
       text: ['function other(dir) {', "  const p = path.join(dir, 'STATE.md');", '  return p;', '}', 'function w(p, c) { fs.writeFileSync(p, c); }'].join('\n'),
       expected: [],
@@ -1718,7 +1718,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
   ];
   gapLoop(REASSIGNMENT_GAPS, 'reassignment');
 
-  test('reassignment shapes that are reported: these right-hand sides naming p, and a run of MAX_TARGET_RESOLUTION_HOPS - 1 of them', () => {
+  test("reassignment shapes that are reported: these right-hand sides naming p, and a run of MAX_TARGET_RESOLUTION_HOPS - 1 `p = p + '<k>'` lines", () => {
     const namesP = [
       "p + '.tmp'", "path.join(p, 'a')", 'p', 'String(p)', '`${p}.bak`', 'p || c', 'c ? p : c', '[p][0]',
       "path.dirname(p) + '/s'", 'p.trim()', '(p)', 'p + c',
