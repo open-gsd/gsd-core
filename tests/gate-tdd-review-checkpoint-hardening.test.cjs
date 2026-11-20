@@ -208,48 +208,140 @@ describe('#5354 tdd review checkpoint seal', () => {
   const sha = (c) => c.repeat(40);
   const SEAL_CAP = REPO_TEXT_MAX_BYTES;
   const sealOf = (red, green) => JSON.stringify({ plans: { '01-01': { red, green } } });
-
-  test('a record written before the squash keeps the plan passing after git merge --squash', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const before = run(dir, '--record');
-    assert.equal(before.payload.violations, 0);
-    const seal = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8'));
-    assert.match(seal.plans['01-01'].red, /^[0-9a-f]{40}$/);
-    assert.match(seal.plans['01-01'].green, /^[0-9a-f]{40}$/);
-    sealCommit(dir);
+  const padTo = (text, size) => text + ' '.repeat(size - Buffer.byteLength(text));
+  const RG = ['test(01-01): red', 'feat(01-01): green'];
+  const PLAN_02 = '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n';
+  const REFS_CAP = SUMMARY_REFS_MAX;
+  const summaryFile = (dir) => path.join(dir, PHASE, '01-01-SUMMARY.md');
+  // The SUMMARY names `hashes`, then the branch is squashed: no listed commit is reachable.
+  const squashWithSummary = (hashes) => (dir, base) => {
+    w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(hashes));
+    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
     squash(dir, base);
-    const after = run(dir);
-    assert.equal(after.payload.violations, 0);
-    assert.equal(after.block, false);
-    assert.equal(after.payload.rows[0].status, 'Pass');
-  });
+  };
 
-  test('a sealed plan squashed under a plan-scoped title passes (#5354)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    sealThenSquash(dir, base, 'feat(01-01): phase one');
-    const after = run(dir);
-    assert.equal(after.payload.rows[0].status, 'Pass');
-    assert.equal(after.payload.violations, 0);
-    assert.equal(after.block, false);
-  });
-
-  test('a sealed scoped squash followed by fix(01-01): typo still passes (#5354)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    sealThenSquash(dir, base, 'feat(01-01): phase one');
-    commit(dir, 'typo.txt', 'fix(01-01): typo');
-    assert.equal(run(dir).payload.rows[0].status, 'Pass');
-  });
-
-  test('no record and no reachable commits but a SUMMARY is not evaluable, not a failure', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base);
-    const r = run(dir);
-    assert.equal(r.payload.violations, 0);
-    assert.equal(r.block, false);
-    assert.equal(r.payload.rows[0].status, 'NotEvaluable');
-    assert.equal(r.payload.rows[0].reason, 'unsealed_summary_unreachable');
-    assert.equal(r.outcome, 'advisory');
-  });
+  // One table, one runner: each case builds a history, `setup` may return another directory to review (a clone, a copy
+  // that is no repo), and `expect` names the row the gate must report. Every limit is pinned at limit-1, limit and limit+1.
+  const PASS = { status: 'Pass', violations: 0, block: false };
+  const SQUASHED = { status: 'NotEvaluable', reason: TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE, violations: 0, block: false };
+  const SCENARIOS = [
+    // A record written before a squash survives it, whatever the squash is titled or followed by (#5354).
+    { name: 'a sealed plan squashed under a plan-scoped title passes', setup: (d, b) => sealThenSquash(d, b, 'feat(01-01): phase one'), expect: PASS },
+    { name: 'a sealed scoped squash followed by fix(01-01): typo still passes', setup: (d, b) => { sealThenSquash(d, b, 'feat(01-01): phase one'); commit(d, 'typo.txt', 'fix(01-01): typo'); }, expect: PASS },
+    { name: 'a sealed plan squashed with a test(01-01): squash title still passes', setup: (d, b) => sealThenSquash(d, b, 'test(01-01): phase one'), expect: PASS },
+    { name: 'a sealed plan squashed with a later test(01-01): commit still passes', setup: (d, b) => { sealThenSquash(d, b, 'feat(01-01): phase one'); commit(d, 'after.txt', 'test(01-01): add case'); }, expect: PASS },
+    // The squash is told by the seal's RED no longer being reachable: a reachable one, or none sealed, credits nothing.
+    { name: 'a seal whose RED is still reachable credits nothing: live commits that lack GREEN fail', subjects: ['test(01-01): red'], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(git(d, 'rev-parse', 'HEAD'), sha('b'))), expect: { status: 'FAIL', missing: ['GREEN'] } },
+    { name: 'a plan without a live RED whose seal names reachable commits credits nothing', subjects: ['docs(01-01): notes'], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(git(d, 'rev-parse', 'HEAD'), git(d, 'rev-parse', 'HEAD~1'))), expect: { status: 'FAIL', missing: ['RED', 'GREEN'] } },
+    { name: 'a scoped squash title without a seal fails (live plan commit, nothing sealed)', opts: { refs: true }, setup: (d, b) => squash(d, b, 'feat(01-01): squashed'), expect: { status: 'FAIL', missing: ['RED'] } },
+    // No seal, task commits gone: not evaluable, never a failure.
+    { name: 'no record and no reachable commits but a SUMMARY is not evaluable, not a failure', opts: { refs: true }, setup: (d, b) => squash(d, b), expect: { ...SQUASHED, outcome: 'advisory' } },
+    { name: 'fabricated SUMMARY ids (no such object) are not evaluable, like a squashed-and-collected commit', subjects: ['chore: x'], setup: (d) => ghostSummary(d), expect: { status: 'NotEvaluable' } },
+    { name: 'a squash whose title repeats one task subject is still not evaluable', subjects: ['chore: red', 'chore: green'], opts: { refs: true }, setup: (d, b) => squash(d, b, 'chore: green'), expect: { status: 'NotEvaluable', violations: 0 } },
+    {
+      name: 'a plan with one task rewritten and one gone is not evaluable, not a rewrite',
+      subjects: ['chore: red', 'chore: green'], opts: { refs: true },
+      setup: (d, b) => {
+        git(d, 'checkout', '-b', 'partial', b);
+        w(d, 'f0.txt', 'different content'); // same content and parent would reproduce the original sha
+        git(d, 'add', '-A'); git(d, 'commit', '-m', 'chore: red');
+        git(d, 'checkout', 'feature', '--', `${PHASE}/01-01-SUMMARY.md`);
+        git(d, 'commit', '-m', 'docs: summary');
+      },
+      expect: { status: 'NotEvaluable', violations: 0 },
+    },
+    { name: 'an absent primary SUMMARY falls through to a later candidate name that holds the task commits', opts: { refs: true }, setup: (d, b) => { squash(d, b); fs.renameSync(summaryFile(d), path.join(d, PHASE, '01-01-PLAN-SUMMARY.md')); }, expect: { status: 'NotEvaluable' } },
+    { name: 'a seal holding only a sibling plan entry does not rule out not evaluable', opts: { refs: true }, setup: (d, b) => { squash(d, b); w(d, SEAL, JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } })); }, expect: { status: 'NotEvaluable' } },
+    // A seal entry that credits nothing, or a live commit, makes the plan an ordinary failure.
+    { name: 'a seal entry that credits nothing (red equal to green) still rules out not evaluable', opts: { refs: true }, setup: (d, b) => { squash(d, b); w(d, SEAL, sealOf(sha('a'), sha('a'))); }, expect: { status: 'FAIL' } },
+    { name: 'a seal with two distinct non-hex values credits nothing, and its entry rules out not evaluable', opts: { refs: true }, setup: (d, b) => { squash(d, b); w(d, SEAL, sealOf('zz', 'yy')); }, expect: { status: 'FAIL', missing: ['RED', 'GREEN'], violations: 1 } },
+    { name: 'a seal with only red does not make the plan not evaluable', opts: { refs: true }, setup: (d, b) => { w(d, SEAL, JSON.stringify({ plans: { '01-01': { red: sha('a') } } })); git(d, 'add', '-A'); git(d, 'commit', '-m', 'seal'); squash(d, b); }, expect: { status: 'FAIL' } },
+    { name: 'a plan with reachable commits lacking test()/feat() still fails', subjects: ['docs(01-01): notes'], opts: { summary: false }, expect: { status: 'FAIL', missing: ['RED', 'GREEN'], violations: 1, block: true } },
+    { name: 'no commits, no SUMMARY, no seal still fails', subjects: [], opts: { summary: false }, expect: { status: 'FAIL', violations: 1 } },
+    { name: 'a plan with only a docs commit and a SUMMARY naming a nonexistent id fails (live plan commit)', subjects: ['docs(01-01): notes'], setup: (d) => ghostSummary(d), expect: { status: 'FAIL', missing: ['RED', 'GREEN'] } },
+    { name: 'a live RED and a SUMMARY naming a nonexistent id fails missing GREEN (live evidence is never overridden)', subjects: ['test(01-01): red'], setup: (d) => ghostSummary(d), expect: { status: 'FAIL', missing: ['GREEN'] } },
+    { name: 'an un-squashed plan whose SUMMARY hashes are reachable and has no test() fails', subjects: ['docs(01-01): notes'], opts: { refs: true }, expect: { status: 'FAIL', block: true } },
+    {
+      name: 'unscoped commits cherry-picked onto a moved base are a rewrite, not a squash: FAIL',
+      subjects: ['chore: a', 'chore: b'], opts: { refs: true },
+      setup: (d, b) => { git(d, 'checkout', '-b', 'rebased', b); commit(d, 'moved.txt', 'chore: moved base'); git(d, 'cherry-pick', `${b}..feature`); },
+      expect: { status: 'FAIL', missing: ['RED', 'GREEN'] },
+    },
+    {
+      name: 'a rebased plan whose SUMMARY hashes are unreachable but whose commits are still reachable fails, not evaluable',
+      subjects: ['docs(01-01): notes'], opts: { refs: true },
+      setup: (d, b) => {
+        git(d, 'checkout', '-b', 'rebased', b);
+        commit(d, 'f0.txt', 'docs(01-01): notes');
+        w(d, 'f0.txt', 'different content');
+        git(d, 'add', '-A'); git(d, 'commit', '--amend', '-m', 'docs(01-01): notes');
+        git(d, 'checkout', 'feature', '--', `${PHASE}/01-01-SUMMARY.md`);
+        git(d, 'commit', '-m', 'docs: summary');
+      },
+      expect: { status: 'FAIL', violations: 1 },
+    },
+    { name: 'a dependent plan feat() does not mask a missing RED', subjects: ['feat(01-02): green'], opts: { summary: false }, setup: (d) => w(d, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: execute\ndepends_on: [01-01]\n---\n'), expect: { status: 'FAIL', missing: ['RED'] } },
+    // The primary SUMMARY is unreadable, so a later candidate name must not turn the plan into NotEvaluable (execute-mvp-tdd.md: ordinary failure).
+    ...[
+      ['symlinked', true, (d) => { const real = path.join(d, 'real-summary.md'); fs.renameSync(summaryFile(d), real); fs.symlinkSync(real, summaryFile(d)); }],
+      ['oversized', false, (d) => fs.writeFileSync(summaryFile(d), padTo(fs.readFileSync(summaryFile(d), 'utf8'), REPO_TEXT_MAX_BYTES + 1))],
+    ].map(([label, posix, damage]) => ({
+      name: `a ${label} primary SUMMARY fails even when a later candidate name holds task commits`, posix, opts: { refs: true },
+      setup: (d, b) => { squash(d, b); fs.copyFileSync(summaryFile(d), path.join(d, PHASE, '01-01-PLAN-SUMMARY.md')); damage(d); },
+      expect: { status: 'FAIL' },
+    })),
+    { name: 'a seal entry with red equal to green and no commits or SUMMARY is ignored', subjects: [], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(sha('a'), sha('a'))), expect: { status: 'FAIL' } },
+    // A shallow clone cannot tell a squash from an un-squashed skipper; outside a repository nothing can be told.
+    {
+      name: 'a sealed pair with red equal to green in a shallow clone is a failure, not "sealed_shallow_history"',
+      setup: (d, b) => { squash(d, b); w(d, SEAL, sealOf(sha('a'), sha('a'))); git(d, 'add', '-A'); git(d, 'commit', '-m', 'docs: seal'); return shallowClone(d, '-equal', 'merged'); },
+      expect: { status: 'FAIL', missing: ['RED', 'GREEN'] },
+    },
+    { name: 'a shallow clone does not read an absent seal RED as squashed: a live RED without GREEN still fails', subjects: ['test(01-01): red'], setup: (d) => { const clone = shallowClone(d); w(clone, SEAL, sealOf(sha('a'), sha('b'))); return clone; }, expect: { status: 'FAIL', missing: ['GREEN'] } },
+    { name: 'a sealed squashed plan in a shallow clone is not evaluable, not a failure', setup: (d, b) => { sealThenSquash(d, b); return shallowClone(d, '-sealed', 'merged'); }, expect: { status: 'NotEvaluable', reason: TDD_ROW_REASON.SEALED_SHALLOW_HISTORY, block: false } },
+    { name: 'a shallow clone cannot tell squashed from un-squashed: an un-squashed skipper still FAILs', subjects: ['docs(01-01): notes'], opts: { refs: true }, setup: (d) => shallowClone(d), expect: { status: 'FAIL', block: true } },
+    {
+      name: 'outside a git repository an un-squashed skipper still FAILs',
+      subjects: ['docs(01-01): notes'], opts: { refs: true },
+      setup: (d) => { const bare = path.join(path.dirname(d), `${path.basename(d)}-nogit`); fs.cpSync(path.join(d, '.planning'), path.join(bare, '.planning'), { recursive: true }); dirs.push(bare); return bare; },
+      expect: { status: 'FAIL' },
+    },
+    // Limits: the SUMMARY text, the seal text, the SUMMARY hash count (each distinct hash costs git spawns) and the sealed hash shape.
+    ...[['limit-1', SEAL_CAP - 1, 'NotEvaluable'], ['limit', SEAL_CAP, 'NotEvaluable'], ['limit+1', SEAL_CAP + 1, 'FAIL']].map(([label, size, status]) => ({
+      // The Task Commits section comes first so an unread SUMMARY (FAIL) is told from a read one (NotEvaluable).
+      name: `a SUMMARY at ${label} bytes is ${status === 'FAIL' ? 'not read (no task commits)' : 'still read'}`,
+      opts: { refs: true },
+      setup: (d, b) => { squash(d, b); fs.writeFileSync(summaryFile(d), padTo(fs.readFileSync(summaryFile(d), 'utf8'), size)); },
+      expect: { status },
+    })),
+    ...[['limit-1', SEAL_CAP - 1, 'Pass'], ['limit', SEAL_CAP, 'Pass'], ['limit+1', SEAL_CAP + 1, undefined]].map(([label, size, status]) => ({
+      name: `seal size ${label} (${size} bytes) -> ${status ?? 'unreadable'}`,
+      subjects: [], opts: { summary: false },
+      setup: (d) => w(d, SEAL, padTo(sealOf(sha('a'), sha('b')), size)),
+      expect: status ? { status } : { outcome: 'unreadable' },
+    })),
+    ...[['limit-1', REFS_CAP - 1, 'NotEvaluable'], ['limit', REFS_CAP, 'NotEvaluable'], ['limit+1', REFS_CAP + 1, 'FAIL']].map(([label, count, status]) => ({
+      name: `SUMMARY with ${label} (${count}) distinct unreachable task commits -> ${status}`,
+      setup: squashWithSummary(Array.from({ length: count }, (_, i) => (i + 1).toString(16).padStart(40, 'f'))),
+      expect: { status },
+    })),
+    // The cap alone bounds the id lists of the three `git log` calls of the subject check, so the limit must pass through them with ids git knows.
+    { name: `SUMMARY with ${REFS_CAP} real task commits that a squash dropped -> NotEvaluable`, subjects: Array.from({ length: REFS_CAP }, (_, i) => `chore: task ${i + 1}`), opts: { refs: true }, setup: (d, b) => squash(d, b), expect: { status: 'NotEvaluable' } },
+    { name: 'a duplicated SUMMARY hash counts once against the cap', setup: squashWithSummary(Array.from({ length: REFS_CAP + 1 }, () => 'e'.repeat(40))), expect: { status: 'NotEvaluable' } },
+    ...[['39 hex', 'a'.repeat(39), 'FAIL'], ['40 hex', 'a'.repeat(40), 'Pass'], ['41 hex', 'a'.repeat(41), 'FAIL'], ['uppercase', 'A'.repeat(40), 'FAIL']].map(([label, hash, status]) => ({
+      name: `sealed red hash: ${label} -> ${status}`, subjects: [], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(hash, sha('b'))), expect: { status },
+    })),
+  ];
+  for (const { name, posix, subjects = RG, opts, setup, expect } of SCENARIOS) {
+    test(name, posix ? posixOnly : {}, () => {
+      const made = fixture(subjects, opts);
+      const r = run(setup?.(made.dir, made.base) ?? made.dir);
+      assert.equal(r.payload.rows[0]?.status, expect.status);
+      for (const key of ['missing', 'reason']) if (key in expect) assert.deepEqual(r.payload.rows[0][key], expect[key]);
+      for (const key of ['violations']) if (key in expect) assert.equal(r.payload[key], expect[key]);
+      for (const key of ['block', 'outcome']) if (key in expect) assert.equal(r[key], expect[key]);
+    });
+  }
 
   // A git call that gives no answer is not "squashed": the plan stays an ordinary failure.
   const GIT_NO_ANSWER = { exitCode: 128, stdout: '', stderr: 'fatal', signal: null, error: null, timedOut: false };
@@ -276,18 +368,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(r.payload.violations, 1);
   });
 
-  test('a sealed pair with red equal to green in a shallow clone is a failure, not "sealed_shallow_history" (#5354)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    squash(dir, base);
-    w(dir, SEAL, sealOf(sha('a'), sha('a')));
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-m', 'docs: seal');
-    const clone = shallowClone(dir, '-equal', 'merged');
-    const row = run(clone).payload.rows[0];
-    assert.equal(row.status, 'FAIL');
-    assert.deepEqual(row.missing, ['RED', 'GREEN']);
-  });
-
   test('two plans in one run probe the shallow-clone state once', (t) => {
     const { dir } = fixture([], { summary: false });
     const fake = (c) => summaryOf([c.repeat(40)]);
@@ -305,11 +385,43 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(probes, 1);
   });
 
-  test('the row reasons are a locked set', () => {
-    assert.deepEqual(Object.keys(TDD_ROW_REASON).sort(), ['GREEN_BEFORE_RED', 'SEALED_SHALLOW_HISTORY', 'UNSEALED_SUMMARY_UNREACHABLE']);
+  test('a record written before the squash keeps the plan passing after git merge --squash', () => {
+    const { dir, base } = fixture(RG);
+    const before = run(dir, '--record');
+    assert.equal(before.payload.violations, 0);
+    const seal = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8'));
+    assert.match(seal.plans['01-01'].red, /^[0-9a-f]{40}$/);
+    assert.match(seal.plans['01-01'].green, /^[0-9a-f]{40}$/);
+    sealCommit(dir);
+    squash(dir, base);
+    const after = run(dir);
+    assert.equal(after.payload.violations, 0);
+    assert.equal(after.block, false);
+    assert.equal(after.payload.rows[0].status, 'Pass');
   });
 
-  test('every NotEvaluable reason has report text', () => {
+  test('--record after a test(01-01): squash writes the sealed RED back, so the next run still passes (#5354)', () => {
+    const { dir, base } = fixture(RG);
+    run(dir, '--record');
+    const sealed = fs.readFileSync(path.join(dir, SEAL), 'utf8');
+    sealCommit(dir);
+    squash(dir, base, 'test(01-01): phase one');
+    commit(dir, 'later.txt', 'test(01-01): add case');
+    assert.equal(run(dir, '--record').payload.rows[0].status, 'Pass');
+    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), sealed);
+    assert.equal(run(dir).payload.rows[0].status, 'Pass');
+  });
+
+  test('a shallow marker over a warm object store does not make an existing seal commit gone (#5354)', () => {
+    const { dir, base } = fixture(RG);
+    sealThenSquash(dir, base);
+    assert.equal(run(dir).payload.rows[0].status, 'Pass');
+    w(dir, '.git/shallow', `${git(dir, 'rev-parse', 'HEAD')}\n`);
+    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
+  });
+
+  test('the row reasons are a locked set, and every NotEvaluable reason has report text', () => {
+    assert.deepEqual(Object.keys(TDD_ROW_REASON).sort(), ['GREEN_BEFORE_RED', 'SEALED_SHALLOW_HISTORY', 'UNSEALED_SUMMARY_UNREACHABLE']);
     const notEvaluable = Object.values(TDD_ROW_REASON).filter((r) => r !== TDD_ROW_REASON.GREEN_BEFORE_RED).sort();
     assert.deepEqual(Object.keys(TDD_NOT_EVALUABLE_WHY).sort(), notEvaluable);
     // One literal per reason, so a swapped or emptied text fails (the export is the typed surface, not the rendered report).
@@ -317,21 +429,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.match(TDD_NOT_EVALUABLE_WHY[TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE], /SUMMARY task commits are unreachable/);
   });
 
-  test('a plan with reachable commits lacking test()/feat() still fails', () => {
-    const { dir } = fixture(['docs(01-01): notes']);
-    const r = run(dir);
-    assert.equal(r.payload.violations, 1);
-    assert.equal(r.block, true);
-    assert.deepEqual(r.payload.rows[0].missing, ['RED', 'GREEN']);
-  });
-
-  test('no commits, no SUMMARY, no seal still fails', () => {
-    const { dir } = fixture([], { summary: false });
-    const r = run(dir);
-    assert.equal(r.payload.violations, 1);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-  });
-
+  // --record: what it writes and what it keeps.
   test('--record writes nothing when no plan passes', () => {
     const { dir } = fixture(['test(01-01): red']);
     const r = run(dir, '--record');
@@ -339,15 +437,164 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
   });
 
-  test('a malformed seal is unreadable, never an advisory "no entry (squashed?)"', () => {
-    const { dir } = fixture([], { summary: false });
-    w(dir, SEAL, '{not json');
-    const r = run(dir);
-    assert.equal(r.outcome, 'unreadable');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-    assert.deepEqual(r.payload.rows, []);
+  test('--record seals the passing plans even when a sibling plan fails', () => {
+    const { dir } = fixture(RG);
+    w(dir, `${PHASE}/01-02-PLAN.md`, PLAN_02);
+    const r = run(dir, '--record');
+    assert.equal(r.payload.violations, 1);
+    const { plans } = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8'));
+    assert.ok(plans['01-01']);
+    assert.equal(plans['01-02'], undefined);
   });
+
+  test('--record keeps seal entries of other plans', () => {
+    const { dir } = fixture(RG);
+    w(dir, SEAL, JSON.stringify({ plans: { '01-99': { red: sha('b'), green: sha('c') } } }));
+    run(dir, '--record');
+    const plans = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans;
+    assert.deepEqual(Object.keys(plans).sort(), ['01-01', '01-99']);
+  });
+
+  test('--record seals a plan in a phase directory whose name has a space and a non-ASCII letter', () => {
+    const { dir } = fixture(RG);
+    const odd = '.planning/phases/01-ünï phase';
+    fs.renameSync(path.join(dir, PHASE), path.join(dir, odd));
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'docs: rename phase dir');
+    assert.equal(run(dir, '--record').payload.violations, 0);
+    const seal = JSON.parse(fs.readFileSync(path.join(dir, odd, SEAL_FILE), 'utf8'));
+    assert.match(seal.plans['01-01'].red, /^[0-9a-f]{40}$/);
+  });
+
+  // A seal refused on read or at --record: the gate reports one typed `unreadable` entry and touches nothing it refused.
+  const outsideOf = (dir, content) => { const outside = path.join(dir, 'outside.json'); fs.writeFileSync(outside, content); return outside; };
+  const REFUSED = [
+    { name: 'a symlinked seal is refused and its target is never written', posix: true, args: ['--record'], make: (t, dir) => fs.symlinkSync(outsideOf(dir, 'untouched'), path.join(dir, SEAL)), after: (dir) => assert.equal(fs.readFileSync(path.join(dir, 'outside.json'), 'utf8'), 'untouched') },
+    { name: 'a symlinked seal credits nothing on read', posix: true, make: (t, dir) => fs.symlinkSync(outsideOf(dir, sealOf(sha('a'), sha('b'))), path.join(dir, SEAL)) },
+    {
+      name: 'a symlinked seal is refused at open even if lstat is made to lie (no check-to-read window)', posix: true,
+      make: (t, dir) => { const outside = outsideOf(dir, sealOf(sha('a'), sha('b'))); fs.symlinkSync(outside, path.join(dir, SEAL)); t.mock.method(fs, 'lstatSync', () => fs.statSync(outside)); },
+    },
+    { name: 'a FIFO seal never hangs the open (O_NONBLOCK) and fstat rejects it as not a regular file', posix: true, make: (t, dir) => mkfifo(t, path.join(dir, SEAL)) },
+    { name: 'a dangling symlink at the seal path is refused and its target is never created', posix: true, args: ['--record'], make: (t, dir) => fs.symlinkSync(path.join(dir, 'not-there.json'), path.join(dir, SEAL)), after: (dir) => assert.equal(fs.existsSync(path.join(dir, 'not-there.json')), false) },
+    { name: '--record over a seal that is a directory reports unreadable instead of throwing', args: ['--record'], make: (t, dir) => fs.mkdirSync(path.join(dir, SEAL)) },
+    { name: '--record refuses to overwrite a malformed seal and leaves it untouched', args: ['--record'], make: (t, dir) => w(dir, SEAL, '{not json'), after: (dir) => assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), '{not json') },
+    { name: 'a malformed seal is unreadable, never an advisory "no entry (squashed?)"', make: (t, dir) => w(dir, SEAL, '{not json'), after: (dir, r) => assert.deepEqual(r.payload.rows, []) },
+  ];
+  for (const { name, posix, args = [], make, after } of REFUSED) {
+    test(name, posix ? posixOnly : {}, (t) => {
+      const { dir } = fixture(RG);
+      if (make(t, dir) === false) return;
+      const r = run(dir, ...args);
+      assert.equal(r.outcome, 'unreadable');
+      assert.equal(r.payload.passed, false);
+      assert.equal(r.payload.unreadable.length, 1);
+      after?.(dir, r);
+    });
+  }
+
+  // A fault injected while the seal is read or written: one typed `unreadable` entry, the prior seal byte for byte, no temp file.
+  const PRIOR = JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } });
+  function failFs(t, method, when, code, message) {
+    const real = fs[method];
+    let calls = 0;
+    t.mock.method(fs, method, (f, ...rest) => {
+      if (when(String(f), ++calls)) throw Object.assign(new Error(message), { code });
+      return real(f, ...rest);
+    });
+  }
+  const isSeal = (f) => f.endsWith(SEAL_FILE);
+  const FAULTS = [
+    { name: 'a collision on the temp file leaves the prior seal and no temp file', prior: PRIOR, fault: (t) => failFs(t, 'openSync', (f) => f.includes('.tmp.'), 'EEXIST', 'temp file exists') },
+    {
+      name: '--record into an unwritable phase directory reports unreadable and keeps the review rows',
+      // A second TDD plan with no commits fails: the review result must survive the write fault (a read failure returns no rows).
+      setup: (dir) => w(dir, `${PHASE}/01-02-PLAN.md`, PLAN_02),
+      fault: (t) => failFs(t, 'openSync', (f) => f.includes(SEAL_FILE), 'EACCES', 'denied'),
+      unreadable: [{ source: SEAL_FILE, reason: 'EACCES' }], rows: ['Pass', 'FAIL'], violations: 1,
+    },
+    { name: '--record names the error text when the write fails with a code that means "absent" (ENOENT)', fault: (t) => failFs(t, 'openSync', (f) => f.includes(SEAL_FILE), 'ENOENT', 'phase dir vanished'), unreadable: [{ source: SEAL_FILE, reason: 'Error: phase dir vanished' }] },
+    {
+      name: 'a failed --record leaves no temp file behind',
+      fault: (t) => { failFs(t, 'renameSync', () => true, 'EPERM', 'rename failed'); },
+      opened: true,
+    },
+    {
+      name: 'a partial write of the temp file leaves the prior seal byte for byte and no temp file', prior: PRIOR,
+      fault: (t) => {
+        const real = fs.writeFileSync;
+        t.mock.method(fs, 'writeFileSync', (f, data, ...rest) => {
+          if (typeof f !== 'number' || !String(data).includes('"01-01"')) return real(f, data, ...rest);
+          real(f, String(data).slice(0, 10), ...rest);
+          throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+        });
+      },
+    },
+    { name: '--record reports unreadable when the seal cannot be examined (lstat fails, not ENOENT)', fault: (t) => failFs(t, 'lstatSync', isSeal, 'EACCES', 'denied'), source: (dir) => path.join(dir, SEAL) },
+    { name: '--record refuses a seal path that became a directory between the read and the write', fault: (t, dir) => { const real = fs.lstatSync; let seen = 0; t.mock.method(fs, 'lstatSync', (f, ...rest) => (isSeal(String(f)) && ++seen === 2 ? real(dir) : real(f, ...rest))); } },
+    { name: '--record refuses a seal path that cannot be examined at write time', fault: (t) => failFs(t, 'lstatSync', (f, n) => isSeal(f) && n === 2, 'EACCES', 'denied') },
+    { name: 'a close() failure on the seal is reported unreadable, not thrown', args: [], prior: sealOf(sha('a'), sha('b')), fault: (t) => failFs(t, 'closeSync', () => true, 'EIO', 'close failed'), source: (dir) => path.join(dir, SEAL) },
+  ];
+  for (const { name, args = ['--record'], prior, setup, fault, unreadable, rows, violations, opened, source = () => SEAL_FILE } of FAULTS) {
+    test(name, (t) => {
+      const { dir } = fixture(RG);
+      if (prior !== undefined) w(dir, SEAL, prior);
+      setup?.(dir);
+      const realOpen = fs.openSync;
+      let tempOpened = false;
+      t.mock.method(fs, 'openSync', (f, ...rest) => { if (String(f).includes('.tmp.')) tempOpened = true; return realOpen(f, ...rest); });
+      fault(t, dir);
+      const r = run(dir, ...args);
+      assert.equal(r.outcome, 'unreadable');
+      assert.equal(r.payload.passed, false);
+      assert.equal(r.payload.unreadable.length, 1);
+      assert.equal(r.payload.unreadable[0].source, source(dir));
+      if (unreadable) assert.deepEqual(r.payload.unreadable, unreadable);
+      if (rows) assert.deepEqual(r.payload.rows.map((row) => row.status), rows);
+      if (violations !== undefined) assert.equal(r.payload.violations, violations);
+      if (opened) assert.ok(tempOpened, 'the temp file was created before the failure');
+      assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
+      if (prior === undefined) assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
+      else assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), prior);
+    });
+  }
+
+  // Each Object.prototype member named as a plan: the seal is looked up by own key only.
+  for (const planId of ['constructor', 'toString', '__proto__']) {
+    test(`a plan named ${planId} does not inherit a seal entry from Object.prototype`, () => {
+      const { dir } = fixture([], { summary: false, plan: false });
+      w(dir, `${PHASE}/${planId}-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
+      w(dir, `${PHASE}/${planId}-SUMMARY.md`, summaryOf(['d'.repeat(40)]));
+      w(dir, SEAL, '{"plans":{}}');
+      assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
+    });
+  }
+
+  test('a seal entry keyed __proto__ is its own entry for a plan named __proto__ and is credited', () => {
+    const { dir } = fixture([], { summary: false, plan: false });
+    w(dir, `${PHASE}/__proto__-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
+    w(dir, SEAL, `{"plans":{"__proto__":{"red":"${sha('a')}","green":"${sha('b')}"}}}`);
+    assert.equal(run(dir).payload.rows[0].status, 'Pass');
+  });
+
+  test('--record seals a passing plan named __proto__ as its own entry', () => {
+    const { dir } = fixture(['test(__proto__): red', 'feat(__proto__): green'], { summary: false, plan: false });
+    w(dir, `${PHASE}/__proto__-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
+    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: plan');
+    assert.equal(run(dir, '--record').payload.violations, 0);
+    const sealed = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans;
+    assert.deepEqual(Object.keys(sealed), ['__proto__']);
+    assert.match(sealed.__proto__.red, /^[0-9a-f]{40}$/);
+    assert.match(sealed.__proto__.green, /^[0-9a-f]{40}$/);
+  });
+
+  // True when the FIFO exists; otherwise skips the test. Runs through the seam's bash interpreter.
+  function mkfifo(t, fifo) {
+    const r = runHook('-c', ['mkfifo "$1"', '_', fifo], { interpreter: 'bash', timeoutMs: GIT_TIMEOUT_MS });
+    if (r.exitCode === 0) return true;
+    t.skip('mkfifo unavailable');
+    return false;
+  }
 
   // Hostile seals (CONTRIBUTING.md "Parser and project-file inputs"): none is written by hand. A valid seal is built from git's own
   // answer in the documented shape (never from the gate's --record output), every key path of it is walked, and the checklist is applied to each path: a scalar where an object is
@@ -464,474 +711,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual([...seen].sort(), ['crlf', 'degenerate', 'duplicate-first-loses', 'duplicate-last-wins', 'key-char', 'missing', 'truncated', 'value-char', 'wrong-type']);
   });
 
-  const padTo = (text, size) => text + ' '.repeat(size - Buffer.byteLength(text));
-
-  test('fabricated SUMMARY ids (no such object) are NotEvaluable, indistinguishable from a squashed-and-collected commit', () => {
-    const none = fixture(['chore: x']);
-    ghostSummary(none.dir);
-    assert.equal(run(none.dir).payload.rows[0].status, 'NotEvaluable');
-  });
-
-  test('a seal whose RED is still reachable credits nothing: live commits that lack GREEN fail (#5354)', () => {
-    const { dir } = fixture(['test(01-01): red']);
-    w(dir, SEAL, sealOf(git(dir, 'rev-parse', 'HEAD'), sha('b')));
-    const row = run(dir).payload.rows[0];
-    assert.equal(row.status, 'FAIL');
-    assert.deepEqual(row.missing, ['GREEN']);
-  });
-
-  // A squash may itself be titled test(<plan>): or be followed by such a commit: the squash is told by the seal's RED no longer being reachable.
-  for (const [label, squashTitle, after] of [
-    ['a test(01-01): squash title', 'test(01-01): phase one', []],
-    ['a later test(01-01): commit', 'feat(01-01): phase one', ['test(01-01): add case']],
-  ]) {
-    test(`a sealed plan squashed with ${label} still passes (#5354)`, () => {
-      const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-      sealThenSquash(dir, base, squashTitle);
-      after.forEach((s, i) => commit(dir, `after${i}.txt`, s));
-      const r = run(dir);
-      assert.equal(r.payload.rows[0].status, 'Pass');
-      assert.equal(r.block, false);
-    });
-  }
-
-  test('--record after a test(01-01): squash writes the sealed RED back, so the next run still passes (#5354)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    run(dir, '--record');
-    const sealed = fs.readFileSync(path.join(dir, SEAL), 'utf8');
-    sealCommit(dir);
-    squash(dir, base, 'test(01-01): phase one');
-    commit(dir, 'later.txt', 'test(01-01): add case');
-    assert.equal(run(dir, '--record').payload.rows[0].status, 'Pass');
-    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), sealed);
-    assert.equal(run(dir).payload.rows[0].status, 'Pass');
-  });
-
-  test('a shallow clone does not read an absent seal RED as squashed: a live RED without GREEN still fails (#5354)', () => {
-    const { dir } = fixture(['test(01-01): red']);
-    const clone = shallowClone(dir);
-    w(clone, SEAL, sealOf(sha('a'), sha('b')));
-    const row = run(clone).payload.rows[0];
-    assert.equal(row.status, 'FAIL');
-    assert.deepEqual(row.missing, ['GREEN']);
-  });
-
-  test('a plan without a live RED whose seal names reachable commits credits nothing (#5354)', () => {
-    const { dir } = fixture(['docs(01-01): notes']);
-    w(dir, SEAL, sealOf(git(dir, 'rev-parse', 'HEAD'), git(dir, 'rev-parse', 'HEAD~1')));
-    const row = run(dir).payload.rows[0];
-    assert.equal(row.status, 'FAIL');
-    assert.deepEqual(row.missing, ['RED', 'GREEN']);
-  });
-
-  test('a collision on the temp file leaves the prior seal and no temp file', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const prior = JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } });
-    w(dir, SEAL, prior);
-    const real = fs.openSync;
-    t.mock.method(fs, 'openSync', (f, ...rest) => {
-      if (String(f).includes('.tmp.')) throw Object.assign(new Error('temp file exists'), { code: 'EEXIST' });
-      return real(f, ...rest);
-    });
-    assert.equal(run(dir, '--record').outcome, 'unreadable');
-    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), prior);
-    assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
-  });
-
-  test('a sealed squashed plan in a shallow clone is not evaluable, not a failure (#5354)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    sealThenSquash(dir, base);
-    const clone = shallowClone(dir, '-sealed', 'merged');
-    const r = run(clone);
-    assert.equal(r.payload.rows[0].status, 'NotEvaluable');
-    assert.equal(r.payload.rows[0].reason, 'sealed_shallow_history');
-    assert.equal(r.block, false);
-  });
-
-  test('a shallow marker over a warm object store does not make an existing seal commit gone (#5354)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    sealThenSquash(dir, base);
-    assert.equal(run(dir).payload.rows[0].status, 'Pass');
-    w(dir, '.git/shallow', `${git(dir, 'rev-parse', 'HEAD')}\n`);
-    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
-  });
-
-  test('a seal holding only a sibling plan entry does not rule out NotEvaluable (#5354)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base);
-    w(dir, SEAL, JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } }));
-    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
-  });
-
-  // The Task Commits section comes first so an unread SUMMARY (FAIL) is told from a read one (NotEvaluable).
-  for (const [label, size, status] of [['limit-1', SEAL_CAP - 1, 'NotEvaluable'], ['limit', SEAL_CAP, 'NotEvaluable'], ['limit+1', SEAL_CAP + 1, 'FAIL']]) {
-    test(`a SUMMARY at ${label} bytes is ${status === 'FAIL' ? 'not read (no task commits)' : 'still read'}`, () => {
-      const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-      squash(dir, base);
-      const summary = path.join(dir, PHASE, '01-01-SUMMARY.md');
-      fs.writeFileSync(summary, padTo(fs.readFileSync(summary, 'utf8'), size));
-      assert.equal(run(dir).payload.rows[0].status, status);
-    });
-  }
-
-  test('a scoped squash title without a seal fails (live plan commit, nothing sealed)', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base, 'feat(01-01): squashed');
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-    assert.deepEqual(r.payload.rows[0].missing, ['RED']);
-  });
-
-  test('a squash whose title repeats one task subject is still not evaluable (a rewrite keeps every task subject)', () => {
-    const { dir, base } = fixture(['chore: red', 'chore: green'], { refs: true });
-    squash(dir, base, 'chore: green');
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].status, 'NotEvaluable');
-    assert.equal(r.payload.violations, 0);
-  });
-
-  test('a plan with only a docs commit and a SUMMARY naming a nonexistent id fails (live plan commit)', () => {
-    const { dir } = fixture(['docs(01-01): notes']);
-    ghostSummary(dir);
-    const row = run(dir).payload.rows[0];
-    assert.equal(row.status, 'FAIL');
-    assert.deepEqual(row.missing, ['RED', 'GREEN']);
-  });
-
-  test('a live RED and a SUMMARY naming a nonexistent id fails missing GREEN (live evidence is never overridden)', () => {
-    const { dir } = fixture(['test(01-01): red']);
-    ghostSummary(dir);
-    const row = run(dir).payload.rows[0];
-    assert.equal(row.status, 'FAIL');
-    assert.deepEqual(row.missing, ['GREEN']);
-  });
-
-  test('unscoped commits cherry-picked onto a moved base are a rewrite, not a squash: FAIL', () => {
-    const { dir, base } = fixture(['chore: a', 'chore: b'], { refs: true });
-    git(dir, 'checkout', '-b', 'rebased', base);
-    commit(dir, 'moved.txt', 'chore: moved base');
-    git(dir, 'cherry-pick', `${base}..feature`);
-    const row = run(dir).payload.rows[0];
-    assert.equal(row.status, 'FAIL');
-    assert.deepEqual(row.missing, ['RED', 'GREEN']);
-  });
-
-  test('a seal entry that credits nothing still rules out NotEvaluable', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base);
-    fs.writeFileSync(path.join(dir, SEAL), sealOf(sha('a'), sha('a')));
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-    assert.equal(r.payload.rows.filter((row) => row.status === 'NotEvaluable').length, 0);
-  });
-
-  test('a rebased plan whose SUMMARY hashes are unreachable but whose commits are still reachable fails, not evaluable', () => {
-    const { dir, base } = fixture(['docs(01-01): notes'], { refs: true });
-    git(dir, 'checkout', '-b', 'rebased', base);
-    commit(dir, 'f0.txt', 'docs(01-01): notes');
-    w(dir, 'f0.txt', 'different content');
-    git(dir, 'add', '-A'); git(dir, 'commit', '--amend', '-m', 'docs(01-01): notes');
-    git(dir, 'checkout', 'feature', '--', `${PHASE}/01-01-SUMMARY.md`);
-    git(dir, 'commit', '-m', 'docs: summary');
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-    assert.equal(r.payload.violations, 1);
-  });
-
-  test('an un-squashed plan whose SUMMARY hashes are reachable and has no test() fails', () => {
-    const { dir } = fixture(['docs(01-01): notes'], { refs: true });
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-    assert.equal(r.block, true);
-  });
-
-  test('a dependent plan feat() does not mask a missing RED', () => {
-    const { dir } = fixture(['feat(01-02): green'], { summary: false });
-    w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: execute\ndepends_on: [01-01]\n---\n');
-    const r = run(dir);
-    assert.deepEqual(r.payload.rows[0].missing, ['RED']);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-  });
-
-  test('a seal with only red does not make the plan not evaluable', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    w(dir, SEAL, JSON.stringify({ plans: { '01-01': { red: sha('a') } } }));
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'seal');
-    squash(dir, base);
-    assert.equal(run(dir).payload.rows[0].status, 'FAIL');
-  });
-
-  test('a seal entry with red equal to green is ignored', () => {
-    const { dir } = fixture([], { summary: false });
-    w(dir, SEAL, JSON.stringify({ plans: { '01-01': { red: sha('a'), green: sha('a') } } }));
-    assert.equal(run(dir).payload.rows[0].status, 'FAIL');
-  });
-
-  test('--record keeps seal entries of other plans', () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    w(dir, SEAL, JSON.stringify({ plans: { '01-99': { red: sha('b'), green: sha('c') } } }));
-    run(dir, '--record');
-    const plans = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans;
-    assert.deepEqual(Object.keys(plans).sort(), ['01-01', '01-99']);
-  });
-
-  test('--record over a seal that is a directory reports unreadable instead of throwing', () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    fs.mkdirSync(path.join(dir, SEAL));
-    const r = run(dir, '--record');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-  });
-
-  test('--record refuses to overwrite a malformed seal and leaves it untouched', () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    w(dir, SEAL, '{not json');
-    const r = run(dir, '--record');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), '{not json');
-  });
-
-  test('--record reports unreadable when the seal cannot be examined (lstat fails, not ENOENT)', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const real = fs.lstatSync;
-    t.mock.method(fs, 'lstatSync', (f, ...rest) => {
-      if (String(f).endsWith(SEAL_FILE)) throw Object.assign(new Error('denied'), { code: 'EACCES' });
-      return real(f, ...rest);
-    });
-    const r = run(dir, '--record');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-    assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
-  });
-
-  test('--record seals the passing plans even when a sibling plan fails', () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
-    const r = run(dir, '--record');
-    assert.equal(r.payload.violations, 1);
-    const { plans } = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8'));
-    assert.ok(plans['01-01']);
-    assert.equal(plans['01-02'], undefined);
-  });
-
-  test('a symlinked seal is refused and its target is never written', posixOnly, () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const outside = path.join(dir, 'outside.txt');
-    fs.writeFileSync(outside, 'untouched');
-    fs.symlinkSync(outside, path.join(dir, SEAL));
-    const r = run(dir, '--record');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-    assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
-  });
-
-  test('a symlinked seal credits nothing on read', posixOnly, () => {
-    const { dir } = fixture([], { summary: false });
-    const outside = path.join(dir, 'outside.json');
-    fs.writeFileSync(outside, sealOf(sha('a'), sha('b')));
-    fs.symlinkSync(outside, path.join(dir, SEAL));
-    assert.equal(run(dir).outcome, 'unreadable');
-  });
-
-  test('a symlinked seal is refused at open even if lstat is made to lie (no check-to-read window)', posixOnly, (t) => {
-    const { dir } = fixture([], { summary: false });
-    const outside = path.join(dir, 'outside.json');
-    fs.writeFileSync(outside, sealOf(sha('a'), sha('b')));
-    fs.symlinkSync(outside, path.join(dir, SEAL));
-    t.mock.method(fs, 'lstatSync', () => fs.statSync(outside));
-    assert.equal(run(dir).outcome, 'unreadable');
-  });
-
-  // True when the FIFO exists; otherwise skips the test. Runs through the seam's bash interpreter.
-  function mkfifo(t, fifo) {
-    const r = runHook('-c', ['mkfifo "$1"', '_', fifo], { interpreter: 'bash', timeoutMs: GIT_TIMEOUT_MS });
-    if (r.exitCode === 0) return true;
-    t.skip('mkfifo unavailable');
-    return false;
-  }
-
-  test('a FIFO seal never hangs the open (O_NONBLOCK) and fstat rejects it as not a regular file', posixOnly, (t) => {
-    const { dir } = fixture([], { summary: false });
-    const fifo = path.join(dir, SEAL);
-    if (!mkfifo(t, fifo)) return;
-    assert.equal(run(dir).outcome, 'unreadable');
-  });
-
-  // The primary SUMMARY is unreadable, so a later candidate name must not turn the plan into NotEvaluable (execute-mvp-tdd.md: ordinary failure).
-  for (const [label, opts, damage] of [
-    ['symlinked', posixOnly, (dir, summary) => { const real = path.join(dir, 'real-summary.md'); fs.renameSync(summary, real); fs.symlinkSync(real, summary); }],
-    ['oversized', {}, (dir, summary) => fs.writeFileSync(summary, padTo(fs.readFileSync(summary, 'utf8'), REPO_TEXT_MAX_BYTES + 1))],
-  ]) {
-    test(`a ${label} primary SUMMARY fails even when a later candidate name holds task commits`, opts, () => {
-      const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-      squash(dir, base);
-      const summary = path.join(dir, PHASE, '01-01-SUMMARY.md');
-      fs.copyFileSync(summary, path.join(dir, PHASE, '01-01-PLAN-SUMMARY.md'));
-      damage(dir, summary);
-      assert.equal(run(dir).payload.rows[0].status, 'FAIL');
-    });
-  }
-
-  test('an absent primary SUMMARY falls through to a later candidate name that holds the task commits', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base);
-    fs.renameSync(path.join(dir, PHASE, '01-01-SUMMARY.md'), path.join(dir, PHASE, '01-01-PLAN-SUMMARY.md'));
-    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
-  });
-
-  test('a plan with one task rewritten and one gone is NotEvaluable, not a rewrite', () => {
-    const { dir, base } = fixture(['chore: red', 'chore: green'], { refs: true });
-    git(dir, 'checkout', '-b', 'partial', base);
-    w(dir, 'f0.txt', 'different content'); // same content and parent would reproduce the original sha
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'chore: red');
-    git(dir, 'checkout', 'feature', '--', `${PHASE}/01-01-SUMMARY.md`);
-    git(dir, 'commit', '-m', 'docs: summary');
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].status, 'NotEvaluable');
-    assert.equal(r.payload.violations, 0);
-  });
-
-  test('a close() failure on the seal is reported unreadable, not thrown', (t) => {
-    const { dir } = fixture([], { summary: false });
-    w(dir, SEAL, sealOf(sha('a'), sha('b')));
-    t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
-    assert.equal(run(dir).outcome, 'unreadable');
-  });
-
-  // Each distinct SUMMARY hash costs a `git merge-base` spawn and, when git does not know it, a `git rev-parse --verify`: the count is capped (`SUMMARY_REFS_MAX`).
-  const REFS_CAP = SUMMARY_REFS_MAX;
-  for (const [label, count, status] of [['limit-1', REFS_CAP - 1, 'NotEvaluable'], ['limit', REFS_CAP, 'NotEvaluable'], ['limit+1', REFS_CAP + 1, 'FAIL']]) {
-    test(`SUMMARY with ${label} (${count}) distinct unreachable task commits -> ${status}`, () => {
-      const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-      const hashes = Array.from({ length: count }, (_, i) => (i + 1).toString(16).padStart(40, 'f'));
-      w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(hashes));
-      git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
-      squash(dir, base);
-      assert.equal(run(dir).payload.rows[0].status, status);
-    });
-  }
-
-  // The cap alone bounds the id lists of the three `git log` calls of the subject check, so the limit must pass through them with ids git knows.
-  test(`SUMMARY with ${REFS_CAP} real task commits that a squash dropped -> NotEvaluable`, () => {
-    const { dir, base } = fixture(Array.from({ length: REFS_CAP }, (_, i) => `chore: task ${i + 1}`), { refs: true });
-    squash(dir, base);
-    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
-  });
-
-  test('a duplicated SUMMARY hash counts once against the cap', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(Array.from({ length: REFS_CAP + 1 }, () => 'e'.repeat(40))));
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
-    squash(dir, base);
-    assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
-  });
-
-  test('a seal with two distinct non-hex values credits nothing, and its entry rules out NotEvaluable', () => {
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base);
-    fs.writeFileSync(path.join(dir, SEAL), sealOf('zz', 'yy'));
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-    assert.deepEqual(r.payload.rows[0].missing, ['RED', 'GREEN']);
-    assert.equal(r.payload.violations, 1);
-  });
-
-  test('--record into an unwritable phase directory reports unreadable', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    // A second TDD plan with no commits fails: the review result must survive the write fault.
-    w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
-    const real = fs.openSync;
-    t.mock.method(fs, 'openSync', (f, ...rest) => {
-      if (String(f).includes(SEAL_FILE)) throw Object.assign(new Error('denied'), { code: 'EACCES' });
-      return real(f, ...rest);
-    });
-    const r = run(dir, '--record');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-    assert.deepEqual(r.payload.unreadable, [{ source: SEAL_FILE, reason: 'EACCES' }]);
-    // A write failure keeps the review rows; a read failure returns none ("was not reviewed").
-    assert.deepEqual(r.payload.rows.map((row) => row.status), ['Pass', 'FAIL']);
-    assert.equal(r.payload.violations, 1);
-  });
-
-  test('--record names the error text when the write fails with a code that means "absent" (ENOENT)', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const real = fs.openSync;
-    t.mock.method(fs, 'openSync', (f, ...rest) => {
-      if (String(f).includes(SEAL_FILE)) throw Object.assign(new Error('phase dir vanished'), { code: 'ENOENT' });
-      return real(f, ...rest);
-    });
-    const r = run(dir, '--record');
-    assert.equal(r.outcome, 'unreadable');
-    assert.deepEqual(r.payload.unreadable, [{ source: SEAL_FILE, reason: 'Error: phase dir vanished' }]);
-  });
-
-  test('a failed --record leaves no temp file behind', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const real = fs.openSync;
-    let opened = false;
-    t.mock.method(fs, 'openSync', (f, ...rest) => { if (String(f).includes('.tmp.')) opened = true; return real(f, ...rest); });
-    t.mock.method(fs, 'renameSync', () => { throw Object.assign(new Error('rename failed'), { code: 'EPERM' }); });
-    assert.equal(run(dir, '--record').outcome, 'unreadable');
-    assert.ok(opened, 'the temp file was created before the rename failed');
-    assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
-  });
-
-  test('a partial write of the temp file leaves the prior seal byte for byte and no temp file', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const prior = JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } });
-    w(dir, SEAL, prior);
-    const real = fs.writeFileSync;
-    t.mock.method(fs, 'writeFileSync', (f, data, ...rest) => {
-      if (typeof f !== 'number' || !String(data).includes('"01-01"')) return real(f, data, ...rest);
-      real(f, String(data).slice(0, 10), ...rest);
-      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
-    });
-    assert.equal(run(dir, '--record').outcome, 'unreadable');
-    assert.equal(fs.readFileSync(path.join(dir, SEAL), 'utf8'), prior);
-    assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
-  });
-
-  test('a dangling symlink at the seal path is refused and its target is never created', posixOnly, () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const target = path.join(dir, 'not-there.json');
-    fs.symlinkSync(target, path.join(dir, SEAL));
-    const r = run(dir, '--record');
-    assert.equal(r.outcome, 'unreadable');
-    assert.equal(fs.existsSync(target), false);
-  });
-
-  test('--record seals a plan in a phase directory whose name has a space and a non-ASCII letter', () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const odd = '.planning/phases/01-ünï phase';
-    fs.renameSync(path.join(dir, PHASE), path.join(dir, odd));
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-m', 'docs: rename phase dir');
-    assert.equal(run(dir, '--record').payload.violations, 0);
-    const seal = JSON.parse(fs.readFileSync(path.join(dir, odd, SEAL_FILE), 'utf8'));
-    assert.match(seal.plans['01-01'].red, /^[0-9a-f]{40}$/);
-  });
-
-  for (const [label, size, status] of [['limit-1', SEAL_CAP - 1, 'Pass'], ['limit', SEAL_CAP, 'Pass'], ['limit+1', SEAL_CAP + 1, 'unreadable']]) {
-    test(`seal size ${label} (${size} bytes) -> ${status}`, () => {
-      const { dir } = fixture([], { summary: false });
-      w(dir, SEAL, padTo(sealOf(sha('a'), sha('b')), size));
-      const r = run(dir);
-      assert.equal(status === 'unreadable' ? r.outcome : r.payload.rows[0].status, status);
-    });
-  }
-
-  for (const [label, hash, status] of [
-    ['39 hex', 'a'.repeat(39), 'FAIL'], ['40 hex', 'a'.repeat(40), 'Pass'], ['41 hex', 'a'.repeat(41), 'FAIL'], ['uppercase', 'A'.repeat(40), 'FAIL'],
-  ]) {
-    test(`sealed red hash: ${label} -> ${status}`, () => {
-      const { dir } = fixture([], { summary: false });
-      w(dir, SEAL, sealOf(hash, sha('b')));
-      assert.equal(run(dir).payload.rows[0].status, status);
-    });
-  }
-
   test('property: a sealed red hash is credited iff it is 40 lowercase hex and differs from green', () => {
     const { dir } = fixture([], { summary: false });
     const hex = fc.array(fc.constantFrom(...'0123456789abcdefABCDEFg'), { minLength: 38, maxLength: 42 }).map((a) => a.join(''));
@@ -953,40 +732,53 @@ describe('#5354 tdd review checkpoint seal', () => {
     }), { numRuns: 50 });
   });
 
-  // The seal is looked up by own key only: a plan named like an Object.prototype member has no inherited entry, so it stays NotEvaluable.
-  for (const planId of ['constructor', 'toString', '__proto__']) {
-    test(`a plan named ${planId} does not inherit a seal entry from Object.prototype`, () => {
-      const { dir } = fixture([], { summary: false, plan: false });
-      w(dir, `${PHASE}/${planId}-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
-      w(dir, `${PHASE}/${planId}-SUMMARY.md`, summaryOf(['d'.repeat(40)]));
-      w(dir, SEAL, '{"plans":{}}');
-      assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
+  const GREEN_SHA = sha('b');
+  const sealRedArb = fc.oneof(
+    fc.stringMatching(/^[0-9a-f]{40}$/),
+    fc.stringMatching(/^[0-9a-f]{39}$/),
+    fc.stringMatching(/^[0-9a-f]{41}$/),
+    fc.stringMatching(/^[0-9A-F]{40}$/),
+    fc.constant(GREEN_SHA),
+  );
+  // The seal is consulted when its RED (else its GREEN) is gone (#5354): these sealed hashes name no object, so it always is. It credits each kind the live commits lack.
+  for (const [name, subjects, liveRed, liveGreen] of [
+    ['none', [], false, false],
+    ['test only', ['test(01-01): red'], true, false],
+    ['feat only', ['feat(01-01): green'], false, true],
+    ['test then feat', ['test(01-01): red', 'feat(01-01): green'], true, true],
+  ]) {
+    test(`property: seal credit follows the squashed-seal rule (${name})`, () => {
+      const { dir } = fixture(subjects, { summary: false });
+      fc.assert(fc.property(sealRedArb, (red) => {
+        fs.writeFileSync(path.join(dir, SEAL), sealOf(red, GREEN_SHA));
+        const status = run(dir).payload.rows[0].status;
+        const applies = red !== GREEN_SHA;
+        const sealRed = /^[0-9a-f]{40}$/.test(red) && applies;
+        return status === ((liveRed || sealRed) && (liveGreen || applies) ? 'Pass' : 'FAIL');
+      }), { numRuns: 25 });
     });
   }
-
-  test('a seal entry keyed __proto__ is its own entry for a plan named __proto__ and is credited', () => {
-    const { dir } = fixture([], { summary: false, plan: false });
-    w(dir, `${PHASE}/__proto__-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
-    w(dir, SEAL, `{"plans":{"__proto__":{"red":"${sha('a')}","green":"${sha('b')}"}}}`);
-    assert.equal(run(dir).payload.rows[0].status, 'Pass');
-  });
-
-  test('--record seals a passing plan named __proto__ as its own entry', () => {
-    const { dir } = fixture(['test(__proto__): red', 'feat(__proto__): green'], { summary: false, plan: false });
-    w(dir, `${PHASE}/__proto__-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: plan');
-    assert.equal(run(dir, '--record').payload.violations, 0);
-    const sealed = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans;
-    assert.deepEqual(Object.keys(sealed), ['__proto__']);
-    assert.match(sealed.__proto__.red, /^[0-9a-f]{40}$/);
-    assert.match(sealed.__proto__.green, /^[0-9a-f]{40}$/);
-  });
 
   test('the no-TDD skip is keyed on the picked tddPlans field', () => {
     const skip = fixture([], { summary: false, plan: false });
     const out = runGsdTools(['check', 'tdd-review-checkpoint', '1', '--pick', 'tddPlans'], skip.dir);
     assert.ok(out.success, out.error || out.output);
     assert.equal(out.output.trim(), '0');
+  });
+
+  test('the CLI router passes --record through and writes the seal', () => {
+    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    const r = runGsdTools(['check', 'tdd-review-checkpoint', '1', '--record'], dir);
+    assert.ok(r.success, r.error || r.output);
+    assert.ok(JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans['01-01']);
+  });
+
+  test('the real ship.md invocation (--record --pick tddPlans) seals and prints the picked count', () => {
+    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
+    const r = runGsdTools(['check', 'tdd.review-checkpoint', '1', '--record', '--pick', 'tddPlans'], dir);
+    assert.ok(r.success, r.error || r.output);
+    assert.equal(r.output.trim(), '1');
+    assert.ok(JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans['01-01']);
   });
 
   // Execute ship.md's seal step against a stubbed `gsd_run`, so the branches (not their text) are what is tested.
@@ -1038,55 +830,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(subject, before);
   }
 
-  test('ship.md seal step commits a dirty seal after a successful record', posixOnly, () => {
-    const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
-    assert.equal(r.exitCode, 0, r.stderr);
-    assert.equal(subject, 'docs(01): seal TDD review evidence');
-  });
-
-  // User git config must not hide a new seal from the dirty check: with `status.showUntrackedFiles=no` a plain `git status` omits it.
-  test('ship.md seal step commits a new seal when git is configured to hide untracked files', posixOnly, () => {
-    const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')), prepare: (dir) => git(dir, 'config', 'status.showUntrackedFiles', 'no') });
-    assert.equal(r.exitCode, 0, r.stderr);
-    assert.equal(subject, 'docs(01): seal TDD review evidence');
-  });
-
-  test('ship.md seal step warns and commits nothing when a bounded git call times out', posixOnly, () => {
-    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitExit: 124 }), 'gitTimedOut');
-  });
-
-  for (const code of [2, 127, 128]) {
-    test(`ship.md seal step warns and commits nothing when a bounded git call exits ${code}`, posixOnly, () => {
-      expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitExit: code }), 'gitFailed');
-    });
-  }
-
-  // `git status` alone fails (the ignore check is clean): each bounded call carries its own branch.
-  test('ship.md seal step warns and commits nothing when only the bounded git status times out', posixOnly, () => {
-    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), statusExit: 124 }), 'gitTimedOut');
-  });
-
-  test('ship.md seal step warns and commits nothing when only the bounded git status fails', posixOnly, () => {
-    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), statusExit: 128 }), 'gitFailed');
-  });
-
-  test('ship.md seal step never commits the on-disk seal when --record failed', posixOnly, () => {
-    expectBranchWarning(runSealStep({ recordRc: 3, seal: '<<<<<<< conflict' }), 'recordFailed');
-  });
-
-  test('ship.md seal step leaves the seal uncommitted and warns when the commit owner skips it (commit_docs resolves false)', posixOnly, () => {
-    const result = runSealStep({ seal: sealOf(sha('a'), sha('b')), commitOut: 'skipped' });
-    expectBranchWarning(result, 'commitSkipped');
-    assert.equal(fs.existsSync(path.join(result.dir, SEAL)), true);
-    assert.notEqual(git(result.dir, 'status', '--porcelain', '--', SEAL), '');
-  });
-
-  test('ship.md seal step commits through the commit owner, not raw git', posixOnly, () => {
-    const { calls } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
-    const commit = calls.find((argv) => argv[0] === 'query' && argv[1] === 'commit');
-    assert.deepEqual(commit?.slice(0, 5), ['query', 'commit', 'docs(01): seal TDD review evidence', '--files', SEAL], JSON.stringify(calls));
-  });
-
   // The real commit owner: phase_commit_docs.<phase> beats the project-level commit_docs (#3587).
   function realSeal(config) {
     return runSealStep({
@@ -1096,6 +839,64 @@ describe('#5354 tdd review checkpoint seal', () => {
     });
   }
 
+  // The seal step takes exactly one branch: each row names it, the options that reach it and what else must hold afterwards.
+  const SEAL_AB = sealOf(sha('a'), sha('b'));
+  const WARNINGS = [
+    { name: 'a bounded git call times out', opts: { gitExit: 124 }, branch: 'gitTimedOut' },
+    ...[2, 127, 128].map((code) => ({ name: `a bounded git call exits ${code}`, opts: { gitExit: code }, branch: 'gitFailed' })),
+    // `git status` alone fails (the ignore check is clean): each bounded call carries its own branch.
+    { name: 'only the bounded git status times out', opts: { statusExit: 124 }, branch: 'gitTimedOut' },
+    { name: 'only the bounded git status fails', opts: { statusExit: 128 }, branch: 'gitFailed' },
+    { name: '--record failed (the on-disk seal is never committed)', opts: { recordRc: 3, seal: '<<<<<<< conflict' }, branch: 'recordFailed' },
+    { name: 'the commit owner skips (commit_docs resolves false)', opts: { commitOut: 'skipped' }, branch: 'commitSkipped' },
+    { name: 'the commit owner exits non-zero', opts: { commitOut: '', commitRc: 3 }, branch: 'commitFailed' },
+    { name: 'the commit owner reports failed', opts: { commitOut: 'failed' }, branch: 'commitFailed' },
+    { name: 'the seal commit fails', opts: { prepare: (dir) => w(dir, '.git/index.lock', '') }, branch: 'commitFailed' },
+    {
+      name: 'the seal is gitignored',
+      opts: { prepare: (dir) => { w(dir, '.gitignore', `${SEAL}\n`); git(dir, 'add', '.gitignore'); git(dir, 'commit', '--amend', '--no-edit'); } },
+      branch: 'gitignored',
+      after: (dir) => { assert.equal(fs.existsSync(path.join(dir, SEAL)), true); assert.equal(git(dir, 'status', '--porcelain', '--', SEAL), ''); },
+    },
+    { name: 'no seal file exists and the phase has tdd plans', opts: { seal: undefined, picked: '1' }, branch: 'noSeal', after: (dir) => assert.equal(fs.existsSync(path.join(dir, SEAL)), false) },
+  ];
+  for (const { name, opts, branch, after } of WARNINGS) {
+    test(`ship.md seal step takes the ${branch} branch and commits nothing when ${name}`, posixOnly, () => {
+      const result = runSealStep({ seal: SEAL_AB, ...opts });
+      expectBranchWarning(result, branch);
+      after?.(result.dir);
+    });
+  }
+
+  test('ship.md seal step stays quiet for a phase without tdd plans', posixOnly, () => {
+    expectQuiet(runSealStep({ picked: '0' }));
+  });
+
+  test('ship.md seal step commits a dirty seal after a successful record, through the commit owner', posixOnly, () => {
+    const { r, subject, calls } = runSealStep({ seal: SEAL_AB });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(subject, 'docs(01): seal TDD review evidence');
+    const commitCall = calls.find((argv) => argv[0] === 'query' && argv[1] === 'commit');
+    assert.deepEqual(commitCall?.slice(0, 5), ['query', 'commit', 'docs(01): seal TDD review evidence', '--files', SEAL], JSON.stringify(calls));
+  });
+
+  // User git config must not hide a new seal from the dirty check: with `status.showUntrackedFiles=no` a plain `git status` omits it.
+  test('ship.md seal step commits a new seal when git is configured to hide untracked files', posixOnly, () => {
+    const { r, subject } = runSealStep({ seal: SEAL_AB, prepare: (dir) => git(dir, 'config', 'status.showUntrackedFiles', 'no') });
+    assert.equal(r.exitCode, 0, r.stderr);
+    assert.equal(subject, 'docs(01): seal TDD review evidence');
+  });
+
+  test('ship.md seal step resolves the phase in the workstream ship resolved it in (#5354)', posixOnly, () => {
+    const { calls } = runSealStep({ ws: '--ws ws1', seal: SEAL_AB });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0][0], 'check');
+    assert.ok(calls[0].includes('--record'), JSON.stringify(calls[0]));
+    assert.deepEqual(calls[1].slice(0, 2), ['query', 'commit']);
+    for (const argv of calls) assert.equal(argv.filter((a) => a === '--ws=ws1').length, 1, JSON.stringify(argv));
+  });
+
+  // The real commit owner: phase_commit_docs.<phase> beats the project-level commit_docs (#3587).
   test('ship.md seal step commits the seal when the phase override is true and the project value false', posixOnly, () => {
     const { r, dir, subject } = realSeal({ commit_docs: false, phase_commit_docs: { '01': true } });
     assert.equal(r.exitCode, 0, r.stderr);
@@ -1108,132 +909,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     expectBranchWarning(result, 'commitSkipped');
     assert.equal(fs.existsSync(path.join(result.dir, SEAL)), true);
     assert.notEqual(git(result.dir, 'status', '--porcelain', '--', SEAL), '');
-  });
-
-  test('ship.md seal step resolves the phase in the workstream ship resolved it in (#5354)', posixOnly, () => {
-    const { calls } = runSealStep({ ws: '--ws ws1', seal: sealOf(sha('a'), sha('b')) });
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0][0], 'check');
-    assert.ok(calls[0].includes('--record'), JSON.stringify(calls[0]));
-    assert.deepEqual(calls[1].slice(0, 2), ['query', 'commit']);
-    for (const argv of calls) assert.equal(argv.filter((a) => a === '--ws=ws1').length, 1, JSON.stringify(argv));
-  });
-
-  test('ship.md seal step warns when no seal file exists, and only for a phase with tdd plans', posixOnly, () => {
-    const warned = runSealStep({ picked: '1' });
-    expectBranchWarning(warned, 'noSeal');
-    assert.equal(fs.existsSync(path.join(warned.dir, SEAL)), false);
-    expectQuiet(runSealStep({ picked: '0' }));
-  });
-
-  test('ship.md seal step warns about a gitignored seal and commits nothing', posixOnly, () => {
-    const result = runSealStep({
-      seal: sealOf(sha('a'), sha('b')),
-      prepare: (dir) => { w(dir, '.gitignore', `${SEAL}\n`); git(dir, 'add', '.gitignore'); git(dir, 'commit', '--amend', '--no-edit'); },
-    });
-    expectBranchWarning(result, 'gitignored');
-    const { dir } = result;
-    assert.equal(fs.existsSync(path.join(dir, SEAL)), true);
-    assert.equal(git(dir, 'status', '--porcelain', '--', SEAL), '');
-  });
-
-  test('ship.md seal step stops with exit 1 when the commit owner exits non-zero', posixOnly, () => {
-    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), commitOut: '', commitRc: 3 }), 'commitFailed');
-  });
-
-  test('ship.md seal step stops with exit 1 when the commit owner reports failed', posixOnly, () => {
-    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), commitOut: 'failed' }), 'commitFailed');
-  });
-
-  test('ship.md seal step stops with exit 1 when the seal commit fails', posixOnly, () => {
-    expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), prepare: (dir) => w(dir, '.git/index.lock', '') }), 'commitFailed');
-  });
-
-  test('--record refuses a seal path that became a directory between the read and the write', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const real = fs.lstatSync;
-    let seen = 0;
-    t.mock.method(fs, 'lstatSync', (f, ...rest) => (String(f).endsWith(SEAL_FILE) && ++seen === 2 ? real(dir) : real(f, ...rest)));
-    const r = run(dir, '--record');
-    assert.equal(r.outcome, 'unreadable');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-    assert.equal(r.payload.unreadable[0].source, SEAL_FILE);
-    assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
-  });
-
-  test('--record refuses a seal path that cannot be examined at write time', (t) => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const real = fs.lstatSync;
-    let seen = 0;
-    t.mock.method(fs, 'lstatSync', (f, ...rest) => {
-      if (String(f).endsWith(SEAL_FILE) && ++seen === 2) throw Object.assign(new Error('denied'), { code: 'EACCES' });
-      return real(f, ...rest);
-    });
-    const r = run(dir, '--record');
-    assert.equal(r.outcome, 'unreadable');
-    assert.equal(r.payload.passed, false);
-    assert.equal(r.payload.unreadable.length, 1);
-    assert.equal(r.payload.unreadable[0].source, SEAL_FILE);
-    assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
-  });
-
-  const GREEN_SHA = sha('b');
-  const sealRedArb = fc.oneof(
-    fc.stringMatching(/^[0-9a-f]{40}$/),
-    fc.stringMatching(/^[0-9a-f]{39}$/),
-    fc.stringMatching(/^[0-9a-f]{41}$/),
-    fc.stringMatching(/^[0-9A-F]{40}$/),
-    fc.constant(GREEN_SHA),
-  );
-  // The seal is consulted when its RED (else its GREEN) is gone (#5354): these sealed hashes name no object, so it always is. It credits each kind the live commits lack.
-  for (const [name, subjects, liveRed, liveGreen] of [
-    ['none', [], false, false],
-    ['test only', ['test(01-01): red'], true, false],
-    ['feat only', ['feat(01-01): green'], false, true],
-    ['test then feat', ['test(01-01): red', 'feat(01-01): green'], true, true],
-  ]) {
-    test(`property: seal credit follows the squashed-seal rule (${name})`, () => {
-      const { dir } = fixture(subjects, { summary: false });
-      fc.assert(fc.property(sealRedArb, (red) => {
-        fs.writeFileSync(path.join(dir, SEAL), sealOf(red, GREEN_SHA));
-        const status = run(dir).payload.rows[0].status;
-        const applies = red !== GREEN_SHA;
-        const sealRed = /^[0-9a-f]{40}$/.test(red) && applies;
-        return status === ((liveRed || sealRed) && (liveGreen || applies) ? 'Pass' : 'FAIL');
-      }), { numRuns: 25 });
-    });
-  }
-
-  test('the CLI router passes --record through and writes the seal', () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const r = runGsdTools(['check', 'tdd-review-checkpoint', '1', '--record'], dir);
-    assert.ok(r.success, r.error || r.output);
-    assert.ok(JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans['01-01']);
-  });
-
-  test('the real ship.md invocation (--record --pick tddPlans) seals and prints the picked count', () => {
-    const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const r = runGsdTools(['check', 'tdd.review-checkpoint', '1', '--record', '--pick', 'tddPlans'], dir);
-    assert.ok(r.success, r.error || r.output);
-    assert.equal(r.output.trim(), '1');
-    assert.ok(JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans['01-01']);
-  });
-
-  test('a shallow clone cannot tell squashed from un-squashed: an un-squashed skipper still FAILs', () => {
-    const { dir } = fixture(['docs(01-01): notes'], { refs: true });
-    const clone = shallowClone(dir);
-    const r = run(clone);
-    assert.equal(r.payload.rows[0].status, 'FAIL');
-    assert.equal(r.block, true);
-  });
-
-  test('outside a git repository an un-squashed skipper still FAILs', () => {
-    const { dir } = fixture(['docs(01-01): notes'], { refs: true });
-    const bare = path.join(path.dirname(dir), `${path.basename(dir)}-nogit`);
-    fs.cpSync(path.join(dir, '.planning'), path.join(bare, '.planning'), { recursive: true });
-    dirs.push(bare);
-    assert.equal(run(bare).payload.rows[0].status, 'FAIL');
   });
 });
 
