@@ -93,13 +93,9 @@ describe('execute-phase step 5.5: cross-wave-deviation cleanup documentation (#3
     );
   });
 
-  test('cleanup-tail snippet contains git worktree remove --force', () => {
-    const content = readWorkflow();
-    const block = extractStep55Block(content);
-    assert.ok(
-      block.includes('git worktree remove') && block.includes('--force'),
-      'step 5.5 cleanup-tail snippet must include git worktree remove --force',
-    );
+  test('cleanup-tail snippet invokes non-forced worktree removal', () => {
+    const block = extractStep55Block(readWorkflow());
+    assert.match(block, /^\s*if ! git worktree remove "\$WT"; then$/m); // allow-test-rule: source-text-is-the-product the shipped deviation step must leave the Git dirty-worktree guard enabled, see #3264
   });
 
   test('cleanup-tail snippet contains git worktree unlock', () => {
