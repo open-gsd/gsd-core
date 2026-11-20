@@ -14,7 +14,7 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, ERROR_REASON } = io;
+const { output, ERROR_REASON, errorReasonOf } = io;
 // Explicitly annotated so TypeScript applies never-return control-flow narrowing.
 // A destructured `const { error } = io` is a const WITHOUT a type annotation, and TS
 // only narrows after a never-returning call when the callee is a function declaration
@@ -48,7 +48,7 @@ type ErrorReason = (typeof ERROR_REASON)[keyof typeof ERROR_REASON];
 
 /** A gate's usage failure as `error()`: the gate's own message, and its code when it is a known reason. */
 function failGate(failed: GateUsageFailure): never {
-  const reason: ErrorReason | undefined = Object.values(ERROR_REASON).find((value) => value === failed.failure.code);
+  const reason: ErrorReason | undefined = errorReasonOf(failed.failure.code);
   return error(failed.failure.message, reason);
 }
 
