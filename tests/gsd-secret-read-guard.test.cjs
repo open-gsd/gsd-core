@@ -3723,3 +3723,65 @@ describe('gsd-secret-read-guard: strings re-interpreted by find, xargs and watch
     );
   });
 });
+
+// ─── #6282: xargs's options and its launcher sub-commands, parsed the way GNU and BSD xargs do ──────────────────
+//
+// A misread xargs option hides the sub-command: `-i` and `-l` take only an attached value, a long option may be
+// abbreviated, and BSD's `-J`, `-R` and `-S` take one, so reading them otherwise took the shell for a value and let
+// its plain `cat .env` through. The replace string is found in a cluster (`-tI{}`), an abbreviation (`--rep`) and
+// BSD `-J` too, and the last one given wins. A sub-command that is itself a launcher (`watch`, `find`, `git -c`, a
+// nested xargs) is read as it is at the top level. Every block row exits 0 on `next` except `-I {}` and the
+// rows with no value after `-I`/`-J`, which pin the walk against a regression.
+describe('gsd-secret-read-guard: xargs options and launcher sub-commands (#6282)', () => {
+  const OPTIONS = [
+    "echo x | xargs -i sh -c 'cat .env'",
+    "echo x | xargs -l sh -c 'cat .env'",
+    "echo x | xargs -I {} sh -c 'cat .env'",
+    "echo x | xargs --max-args 1 sh -c 'cat .env'",
+    "echo x | xargs --delimiter x sh -c 'cat .env'",
+    "echo x | xargs -J % sh -c 'cat .env'",
+    "echo x | xargs -R 1 sh -c 'cat .env'",
+    "echo x | xargs -S 9 sh -c 'cat .env'",
+  ];
+  // The piped word is the script, through a replace string found in each form xargs accepts.
+  const REPLACE_SCRIPT = [
+    "echo 'cat .env' | xargs -tI{} sh -c {}",
+    "echo 'cat .env' | xargs --rep sh -c {}",
+    "echo 'cat .env' | xargs -J % sh -c %",
+    "echo 'cat .env' | xargs -I{} -I@@ sh -c @@",
+  ];
+  // `-I` or `-J` with no word after it must not crash the scan (a crash allows): the read after it is still found.
+  const VALUE_MISSING = [
+    'echo x | xargs -I; cat .env',
+    'echo x | xargs -tI; cat .env',
+    'echo x | xargs -J; cat .env',
+  ];
+  const LAUNCHERS = [
+    "echo x | xargs watch 'cat .env'",
+    "echo x | xargs sudo watch 'cat .env'",
+    "echo x | xargs find . -exec sh -c 'cat .env' \\;",
+    "echo x | xargs xargs sh -c 'cat .env'",
+    "echo x | xargs git -c alias.x='!cat .env' x",
+    // Rescanned at xargs's own depth, so a launcher two shells deep is still read.
+    'sh -c "sh -c \\"echo x | xargs watch \'cat .env\'\\""',
+  ];
+  const ALLOWED = [
+    "echo x | xargs -i sh -c 'cat notes.txt'",
+    "echo x | xargs -J % sh -c 'cat notes.txt'",
+    "echo 'cat notes.txt' | xargs -tI{} sh -c {}",
+    "echo x | xargs watch 'cat notes.txt'",
+    "echo x | xargs find . -exec sh -c 'cat notes.txt' \\;",
+    'echo x | xargs -I',
+  ];
+
+  for (const cmd of [...OPTIONS, ...REPLACE_SCRIPT, ...VALUE_MISSING, ...LAUNCHERS]) {
+    test(`blocks: ${cmd}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const cmd of ALLOWED) {
+    test(`allows: ${cmd}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
