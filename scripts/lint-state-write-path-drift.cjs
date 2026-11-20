@@ -1062,11 +1062,11 @@ const BODY_BOUNDARY_RE = /[{}]|=>/;
  * header or a destructuring declaration, or a chain longer than the bound.
  *
  * Boundary rule: past a `{`, `}` or `=>` (`BODY_BOUNDARY_RE`) the nearest
- * assignment of a name may be a closed sibling block's. So an assignment
- * that does not reach the state path ends the search only when its
- * right-hand side holds no boundary and, if it sits on a line above the
- * write, `boundaryAfterLine` finds none after it; otherwise the walk looks
- * further back for an earlier assignment of that name. This can only add
+ * assignment of a name may be a closed sibling block's. So when an
+ * assignment that does not reach the state path has a boundary in its
+ * right-hand side, or sits on a line above the write and
+ * `boundaryAfterLine` finds one after it, the walk looks further back for
+ * an earlier assignment of that name. This can only add
  * reports: an assignment that reaches the state path reports at once.
  */
 function resolvesToStatePath(write, index, expr, hopsLeft) {
