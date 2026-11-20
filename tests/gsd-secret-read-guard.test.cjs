@@ -1368,6 +1368,14 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     "bash /proc/self/fd/0 <<< 'cat .env'",
     "source -- /dev/stdin <<< 'cat .env'",
   ]);
+  // An fd path is matched loosely and fails closed: any `fd/<N>` tail, any `..` near `fd` or `dev`, and whatever N
+  // is, the pipe as well as every heredoc and here-string (`3<&0` duplicates the pipe onto fd 3).
+  blocks([
+    "echo 'cat .env' | bash /dev/fd/3 3<&0",
+    "echo 'cat .env' | source /dev/fd/3 3<&0",
+    "source /proc/../proc/self/fd/0 <<< 'cat .env'",
+    "source /x/fd/7 7<<< 'cat .env'",
+  ]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
