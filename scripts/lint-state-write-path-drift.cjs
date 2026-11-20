@@ -942,9 +942,10 @@ const MAX_RAW_WRITE_RESOLVER_WORK = 250000000;
 const RAW_WRITE_ASSIGNMENT_OPTIONS = Object.freeze({ typed: true, stopAtPatternBinding: true, withLine: true });
 
 /**
- * The identifiers an expression reads. Quoted `'…'` / `"…"` string contents
- * are dropped, and a name directly after a single `.` is a property, not a
- * variable (a spread, `...parts`, is still a variable). A template literal is kept
+ * The identifiers an expression reads. Text between paired `'` or `"`
+ * quotes is dropped (a quote inside a regex literal can shift the pairing),
+ * and a name directly after a single `.` is a property, not a variable (a
+ * spread, `...parts`, is still a variable). A template literal is kept
  * whole, so the names in its `${…}` interpolations are read, and so is any
  * word in its text: that can only add a lookup, never drop one.
  */
