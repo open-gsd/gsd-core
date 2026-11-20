@@ -260,9 +260,11 @@ const declarationReason = (portion) => {
 // where mirroring the tokenizer perfectly is fiddly and a miss is silent.
 // The marker's reason, but only when the marker is in COMMENT position and
 // survives neither as an argv token. Returns null when there is no attempt.
-const declaredReasonFor = (line) => {
-  if (tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value))) return null;
-  return declarationReason(commentPortion(line));
+// `quote` is the quote an earlier line of the same text left open: it prefixes the line, so a closing quote is not read as an opening one.
+const declaredReasonFor = (line, quote = null) => {
+  if (tokenize(`${quote ?? ''}${line}`).some((t) => /gsd-scan-ignore:/.test(t.value))) return null;
+  const { cut } = scanLine(line, quote);
+  return declarationReason(cut === -1 ? '' : line.slice(cut));
 };
 const isDeclared = (line) => {
   const reason = declaredReasonFor(line);
@@ -350,12 +352,8 @@ const declaredLines = (raw) => {
   const set = new Set();
   let q = null;
   raw.split('\n').forEach((line, n) => {
-    const open = q ?? '';
-    const r = scanLine(line, q);
-    q = r.quote;
-    // The open quote of earlier lines prefixes the line, so a closing quote is not read as an opening one.
-    if (r.cut === -1 || tokenize(`${open}${line}`).some((t) => /gsd-scan-ignore:/.test(t.value))) return;
-    const reason = declarationReason(line.slice(r.cut));
+    const reason = declaredReasonFor(line, q);
+    q = scanLine(line, q).quote;
     if (reason !== null && ISSUE_REF_RE.test(reason)) set.add(n);
   });
   return set;
@@ -374,7 +372,8 @@ const gitSubcommandIdx = (toks, gi) => {
   return -1;
 };
 const isWholeTree = (a) => /^(?::\((?:top|literal|glob|icase)[^)]*\)|:\/)?(?:\.\.?(?:\/+\.\.?)*\/*|\/?)(?:\*+(?:\/+\*+)*)?$/.test(a);
-const isExcludeMagic = (a) => a.startsWith(':!') || a.startsWith(':^') || a.startsWith(':(exclude)');
+// Exclude magic in either spelling: the short run `:!`, `:^`, `:/!` and the long list `:(top,exclude)`, `:(exclude,glob)`.
+const isExcludeMagic = (a) => /^:(?:\([^)]*\bexclude\b[^)]*\)|\/*[!^])/.test(a);
 // `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
 // An `echo`/`printf` word that holds `git ... commit` (recovery advice), or an `eval` word, is scanned as a script; other quoted prose is not.
 const unscopedGitCommits = (raw, inline = false) => {
@@ -394,7 +393,7 @@ const unscopedGitCommits = (raw, inline = false) => {
       while (k >= 0 && !toks[k].op && !text.slice(toks[k].end, toks[k + 1].start).includes('\n')) k -= 1;
       let w = k + 1;
       while (toks[w] && (skippable(toks[w]) || toks[w].value === '{')) w += 1;
-      if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value) && !isDeclaredSpan(toks[i].start, toks[i].end)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]{0,200}\bcommit\b/.test(toks[i].value) && !isDeclaredSpan(toks[i].start, toks[i].end)) out.push(...unscopedGitCommits(toks[i].value, inline));
       continue;
     }
     const c = gitSubcommandIdx(toks, i);

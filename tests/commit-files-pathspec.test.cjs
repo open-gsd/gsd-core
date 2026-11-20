@@ -3344,7 +3344,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
   });
 
   test('scanner flags whole-tree pathspecs and echo after a redirection; accepts --pathspec-from-file', () => {
-    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- *', 'git commit -m x -- **', 'git commit -m x -- /', 'git commit -m x -- ./*', "git commit -m x -- '**/*'", "git commit -m x -- ':(glob)**/*'", 'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
+    for (const c of ['git commit -m x -- .', 'git commit -m x -- ./', 'git commit -m x -- :/', 'git commit -m x -- ":(top)"', 'git commit -m x -- *', 'git commit -m x -- **', 'git commit -m x -- /', 'git commit -m x -- ./*', "git commit -m x -- '**/*'", "git commit -m x -- ':(glob)**/*'", 'git commit -m x -- ":(literal)."', "git commit -m x -- . ':!.planning'", "git commit -m x -- ':!.planning'", "git commit -m x -- ':(top,exclude).planning'", "git commit -m x -- ':(exclude,glob)a'", "git commit -m x -- ':/!.planning'", "git commit -m x -- ':^a'", 'git commit -m x -- a .']) assert.equal(unscopedGitCommits(c).length, 1, c);
     assert.equal(unscopedGitCommits('>&2 echo "git commit -m x"').length, 1);
     assert.equal(unscopedGitCommits('git commit -m x --pathspec-from-file=list.txt').length, 0);
   });
@@ -3669,12 +3669,13 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     for (const f of ['gsd-core/workflows/add-tests.md', 'gsd-core/workflows/validate-phase.md']) {
       const lines = splitLines(fs.readFileSync(path.join(root, f), 'utf8'));
       const add = lines.findIndex((l) => /^git add \{test[ _]files\}/.test(l));
+      const blk = scanFencedBlocks(lines).find((b) => b.openLineIdx === add - 1);
+      const fence = blk ? lines.slice(add, blk.closeLineIdx) : [];
       // With no test files the pathspec is empty and the commit would take the whole index.
       // allow-test-rule: docs-parity (#5211)
-      assert.ok(add > 2 && lines[add - 1].startsWith('```bash') && /^If .*test.*commit/.test(lines[add - 3]), `${f}: a condition line precedes the test-file commit`);
+      assert.ok(add > 2 && blk?.infoString === 'bash' && /^If .*test.*commit/.test(lines[add - 3]), `${f}: a condition line precedes the test-file commit`);
       // The condition covers its own fence only: no other commit may share it.
       // allow-test-rule: docs-parity (#5211)
-      const fence = lines.slice(add, lines.indexOf('```', add));
       assert.ok(!fence.some((l) => l.includes('gsd_run query commit')), `${f}: the test-file fence holds no other commit`);
     }
   });
