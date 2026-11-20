@@ -633,8 +633,10 @@ const COPY_NAME_ONLY_FLAGS = new Set(['-f', '--force', '-i', '--interactive', '-
 // (heredoc / here-string / piped `echo`|`printf`). `su` is here for its `-c`
 // form (`su [user] -c 'cmd'`); a bare `su user` resolves to file mode, which
 // only runs the ordinary operand check. `eval`, `source`/`.` and `xargs` are
-// their own cases below; they are not in this set.
-const SHELL_INTERPRETERS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'su', 'ash', 'fish', 'csh', 'tcsh']);
+// their own cases below; they are not in this set. Each has its `.exe` name too (#5492).
+const SHELL_NAMES = ['bash', 'sh', 'zsh', 'dash', 'ksh', 'su', 'ash', 'fish', 'csh', 'tcsh',
+  'mksh', 'lksh', 'oksh', 'loksh', 'pdksh', 'ksh93', 'posh', 'yash', 'rbash'];
+const SHELL_INTERPRETERS = new Set([...SHELL_NAMES, ...SHELL_NAMES.map((name) => `${name}.exe`)]);
 
 // Shell flags whose VALUE is the next operand (`bash -o pipefail`,
 // `bash --rcfile x <<EOF`): skipped when locating a script-file operand, so a
@@ -4030,9 +4032,8 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
     }
 
     if (SHELL_INTERPRETERS.has(base)) {
-      const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
-      if (cIdx !== -1 && operands[cIdx + 1] && depth < MAX_NESTING_DEPTH) {
-        const hit = findDebuggerCliSpawn(operands[cIdx + 1].text, depth + 1);
+      for (const script of depth < MAX_NESTING_DEPTH ? shellScriptOperands(operands).scripts : []) {
+        const hit = findDebuggerCliSpawn(script.text, depth + 1);
         if (hit) return hit;
       }
       continue;
@@ -4052,30 +4053,75 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
   return null;
 }
 
-// A shell interpreter's script comes from `-c`, a file operand, or stdin.
-function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+// bash's reading of a shell's leading options (#5492): `c` anywhere in a `-` or `+` cluster is mode c (`-xc`, `+c`),
+// each `o` / `O` in one takes the next word as its value (`-coo a b`), so do `--rcfile` / `--init-file`, any other
+// long option takes none (`--norc`), and `--` or `-` ends them. `operand` is the index of the first word after
+// them, or -1.
+function shellOptions(operands) {
+  let modeC = false;
+  for (let k = 0; k < operands.length; k++) {
+    const t = operands[k].text;
+    if (t === '--' || t === '-') return { modeC, operand: k + 1 < operands.length ? k + 1 : -1 };
+    if (t.startsWith('--')) {
+      if (SHELL_VALUE_FLAGS.has(t)) k++;
+    } else if (t.length > 1 && (t[0] === '-' || t[0] === '+')) {
+      for (let i = 1; i < t.length; i++) {
+        if (t[i] === 'c') modeC = true;
+        else if (t[i] === 'o' || t[i] === 'O') k++;
+      }
+    } else {
+      return { modeC, operand: k };
+    }
+  }
+  return { modeC, operand: -1 };
+}
+
+// The words a shell may run as its `-c` script, each scanned on its own: the word after the first DASH_C_RE word,
+// as before (`su -c cmd user`, `su - root -c cmd`), and in mode c under shellOptions, the first word after the
+// options (`bash -c -- cmd`), when that is another word. `scriptless` is set when either reading is in mode c with
+// no script word, and `dashC` when the first one is in mode c at all.
+function shellScriptOperands(operands) {
+  const scripts = [];
+  let scriptless = false;
   const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
   if (cIdx !== -1) {
-    // Mode c: the next operand is the script; stdin is DATA (not scanned).
-    const script = operands[cIdx + 1];
-    if (script) return findSecretRead(script.text, depth + 1, ctx);
-    return null;
+    if (cIdx + 1 < operands.length) scripts.push(operands[cIdx + 1]);
+    else scriptless = true;
   }
+  const { modeC, operand } = shellOptions(operands);
+  if (modeC && operand === -1) scriptless = true;
+  else if (modeC && (cIdx === -1 || operand !== cIdx + 1)) scripts.push(operands[operand]);
+  return { scripts, scriptless, dashC: cIdx !== -1 };
+}
+
+// A shell interpreter's script comes from `-c`, a file operand, or stdin.
+function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  const { scripts, dashC } = shellScriptOperands(operands);
+  for (const script of scripts) {
+    const hit = findSecretRead(script.text, depth + 1, ctx);
+    if (hit) return hit;
+  }
+  // Mode c: stdin is DATA (not scanned). Only the first reading of mode c stops here, as before: bash's own reading
+  // adds scripts but never drops stdin mode (`bash -cx <<< '…'` has no script, and its stdin is still read).
+  if (dashC) return null;
+  // Mode file, read as before (the first word that does not start with `-`, past SHELL_VALUE_FLAGS values) and
+  // under shellOptions, which reads `+x` and a cluster's `o` value as options; stdin mode when either finds no file.
   let fileTok;
   for (let m = 0; m < operands.length; m++) {
     if (SHELL_VALUE_FLAGS.has(operands[m].text)) { m++; continue; }
     if (!operands[m].text.startsWith('-')) { fileTok = operands[m]; break; }
   }
-  if (fileTok) {
+  const options = shellOptions(operands);
+  const optionTok = options.modeC || options.operand === -1 ? undefined : operands[options.operand];
+  for (const tok of optionTok === fileTok ? [fileTok] : [fileTok, optionTok]) {
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
-    if (fileTok.procsub !== undefined) {
-      for (const src of reconstructedProcsubs(fileTok.procsub, reading)) {
-        const hit = findSecretRead(src, depth + 1, ctx);
-        if (hit) return hit;
-      }
+    if (tok === undefined || tok.procsub === undefined) continue;
+    for (const src of reconstructedProcsubs(tok.procsub, reading)) {
+      const hit = findSecretRead(src, depth + 1, ctx);
+      if (hit) return hit;
     }
-    return null;
   }
+  if (fileTok && (optionTok || options.modeC)) return null;
   // Mode stdin: heredoc bodies, here-strings, and a piped echo/printf source.
   for (const h of heredocs) {
     const hit = findSecretRead(h.text, depth + 1, ctx);
@@ -4193,15 +4239,17 @@ function xargsUnquoted(text) {
 // operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
 // (quotes and backslashes removed), is read as the script, or substituted into it.
 function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth, ctx) {
-  const cIdx = shellOperands.findIndex((w) => DASH_C_RE.test(w.text));
-  if (cIdx === -1) return null;
-  const script = shellOperands[cIdx + 1];
+  // Every script word shellScriptOperands finds, and the piped word itself when either of its readings has none.
+  const { scripts, scriptless } = shellScriptOperands(shellOperands);
+  if (!scripts.length && !scriptless) return null;
   for (const w of upstream) {
     const word = xargsUnquoted(w.text);
-    let text = null;
-    if (!script || (replaceStr !== null && script.text === replaceStr)) text = word;
-    else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) text = script.text.split(replaceStr).join(word);
-    if (text !== null) {
+    const texts = new Set(scriptless ? [word] : []);
+    for (const script of scripts) {
+      if (replaceStr !== null && script.text === replaceStr) texts.add(word);
+      else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) texts.add(script.text.split(replaceStr).join(word));
+    }
+    for (const text of texts) {
       const hit = findSecretRead(text, depth + 1, ctx);
       if (hit) return hit;
     }
