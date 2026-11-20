@@ -1001,7 +1001,7 @@ If `section_manifest` is `null` or `"chunked-planning-mode"` is in its `included
 DISK_PLANS=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r '.plan_count_all // 0')
 ```
 
-If `DISK_PLANS` is greater than 0, offer (receipt case: Retry first): 1) Accept plans (treat as `## PLANNING COMPLETE`), 2) Retry planner (return to step 8), 3) Stop. If it is 0: `## PLANNING INCONCLUSIVE`; with a receipt, Retry/Stop. Full banner text: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 9a.
+If `DISK_PLANS` is greater than 0, offer (receipt case: Retry first): 1) Accept plans (treat as `## PLANNING COMPLETE`), 2) Retry planner (return to step 8), 3) Stop. If it is 0: `## PLANNING INCONCLUSIVE`; receipt case: Retry / Stop. Full banner text: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 9a.
 
 ## 9b. Handle Phase Split Recommendation
 

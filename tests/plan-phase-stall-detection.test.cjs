@@ -1731,7 +1731,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     inOrder(blockAt(readStallHelpersDoc(), 'fails closed:'), ['`## CHECKPOINT REACHED`', 'use 9a', 'Retry planner before Accept'], 'control: the helpers send a body-less planner marker to 9a');
     const spine9a = sectionOf(readPlanPhase(), ['## 9a. Filesystem Fallback (Planner)', '## 9b.']);
     inOrder(lineWith(spine9a, '**Triggered when:**'), ['no recognized marker', 'receipt-only non-COMPLETE marker'], 'the spine 9a trigger names the receipt case, PLANNING COMPLETE excluded');
-    inOrder(lineWith(spine9a, 'If `DISK_PLANS` is greater than 0'), ['(receipt case: Retry first)', 'Accept plans', 'If it is 0', 'with a receipt, Retry/Stop'], 'the spine 9a menu orders the receipt case and routes 0 plans');
+    inOrder(lineWith(spine9a, 'If `DISK_PLANS` is greater than 0'), ['(receipt case: Retry first)', 'Accept plans', 'If it is 0', 'receipt case: Retry / Stop'], 'the spine 9a menu orders the receipt case and routes 0 plans');
     const detail = readFileNormalized(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'detail', 'elaboration.md'));
     const s9a = sectionOf(detail, ['## § 9a', '## § 9b']);
     inOrder(lineAfter(s9a, 'Fires when'), ['return receipt', 'has not arrived by', 'next cycle'], '9a\'s trigger covers a receipt-routed marker with no body');
@@ -1975,12 +1975,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(above.status, 0, above.stderr);
     // NI-1: lnk//ph is the same path as lnk/ph, and lnk is a link.
     if (symlinkOrSkip(t, path.join(proj, 'real'), path.join(proj, 'lnk'), 'dir')) {
-      for (const d of ['lnk/ph', 'lnk//ph']) {
+      // lnk//ph is refused for its empty component before anything is created (r2 NI-D).
+      for (const [d, why] of [['lnk/ph', 'a symlink on the path'], ['lnk//ph', 'empty component'], ['real/x//ph', 'empty component']]) {
         const r = receiptPathFrom(f, proj, d, proj);
         assert.notEqual(r.status, 0, `${d}: refused`);
         assertRefusalReason(r, d);
-        assert.ok(r.stderr.includes('a symlink on the path'), `${d}: names the link`);
+        assert.ok(r.stderr.includes(why), `${d}: names ${why}`);
       }
+      assert.ok(!fs.existsSync(path.join(proj, 'real', 'x')), 'nothing is created before an empty-component refusal');
       assert.ok(!fs.existsSync(path.join(proj, 'real', 'ph')), 'nothing is created through the link');
     }
     // NI-4: a relative dir under a cwd that holds a quote is refused like the absolute form.
@@ -1991,8 +1993,22 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.notEqual(r.status, 0, `${d}: refused`);
       assertRefusalReason(r, d);
     }
+    // r2 MI-A: if the .git test's tr or sed fails, the dir is refused, not let through.
+    const sedFails = runBashScript(`${extractStallFunctionsBash()}\nsed() { return 1; }\ngsd_receipt_path ${q(`${fwd(proj)}/ph2`)} x ${q(fwd(proj))}\n`, []);
+    assert.notEqual(sedFails.status, 0, 'a failed sed refuses');
+    assertRefusalReason(sedFails, 'failed sed');
     // Q-3: a FIFO named .gitignore would block the write; it is refused, not opened.
     if (process.platform !== 'win32') {
+      // r2 NI-C: a cwd ending in a newline keeps it ($PWD) and is refused as a control character.
+      const nl = path.join(f.dir, 'nl\n');
+      fs.mkdirSync(path.join(nl, 'ph'), { recursive: true });
+      const cwdFile = path.join(f.dir, 'nl-cwd.bin');
+      fs.writeFileSync(cwdFile, nl);
+      const rn = runBashScript(`${extractStallFunctionsBash()}\nIFS= read -r -d '' c < ${q(fwd(cwdFile))} || true\ncd "$c" || exit 9\ngsd_receipt_path ph x "$c"\n`, []);
+      assert.notEqual(rn.status, 0, 'a relative dir under a newline-ending cwd is refused');
+      assertRefusalReason(rn, 'newline cwd');
+      assert.ok(rn.stderr.includes('control character'), 'refused for the newline the cwd holds');
+      assert.ok(!fs.existsSync(path.join(f.dir, 'nl', 'ph')), 'no sibling dir without the newline is created');
       const fifoPhase = path.join(proj, 'fifo-ph');
       fs.mkdirSync(path.join(fifoPhase, '.gsd-returns'), { recursive: true });
       const made = runBashScript(`mkfifo ${q(path.join(fifoPhase, '.gsd-returns', '.gitignore'))}\n`, []);

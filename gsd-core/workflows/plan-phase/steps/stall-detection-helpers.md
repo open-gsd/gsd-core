@@ -206,7 +206,7 @@ gsd_stall_should_recover() {
 # phase dir outside a subdirectory cwd is still accepted when ROOT is passed): a checkout can commit the phase dir, `.planning` or `.gsd-returns` as
 # a symlink, and mkdir -p and the .gitignore write would follow it out of the
 # project. So a symlinked or dangling phase dir (or a missing component on the way
-# to it), a phase dir that is the project root or holds a `.git` component (in any letter case), a phase dir with a `..` component (after a missing component it would
+# to it), a phase dir that is the project root or holds a `.git` component below it (in any letter case, and the names Windows reads as `.git`), a phase dir with an empty `//` component, a phase dir with a `..` component (after a missing component it would
 # pass the ancestor check, and mkdir -p would then resolve it outside the project)
 # or a `.` component (init's phase_dir never has one),
 # a phase dir that resolves outside the root, and a symlinked .gsd-returns
@@ -223,9 +223,11 @@ gsd_receipt_path() {
   local root rp a up phys rest got
   [ -n "$dir" ] || { _gsd_no_receipt 'phase dir is empty or holds a quote, $, backtick, <, > or a control character'; return 1; }
   case "/$dir/" in *[/\\]..[/\\]*|*[/\\].[/\\]*) _gsd_no_receipt 'phase dir has a . or .. component'; return 1 ;; esac
+  # An empty component (a//b; a leading // is a UNC prefix) would be refused only after mkdir.
+  case "${dir#//}" in *//*) _gsd_no_receipt 'phase dir has an empty component'; return 1 ;; esac
   case "$dir" in
     /*|[A-Za-z]:[/\\]*) ;;
-    *) dir="$(pwd)/$dir" ;;
+    *) dir="$PWD/$dir" ;;
   esac
   # Checked after a relative dir is made absolute, so the working directory is checked too.
   case "$dir" in
@@ -259,7 +261,8 @@ gsd_receipt_path() {
   # Only the part under the root is compared, lowercased (on APFS and NTFS .GIT is .git),
   # with each segment's trailing dots and spaces dropped and the 8.3 name git~1 matched
   # (Windows reads .git with a trailing dot or space, and GIT~1, as .git).
-  case "$(printf '%s' "${phys#"$rp"}$rest/" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed 's/[. ]*\//\//g')" in */.git/*|*/git~1/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
+  # An empty result (a failed tr or sed) is refused too.
+  case "$(printf '%s' "${phys#"$rp"}$rest/" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed 's/[. ]*\//\//g')" in ''|*/.git/*|*/git~1/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
   [ -L "$dir/.gsd-returns" ] && { _gsd_no_receipt '.gsd-returns is a symlink'; return 1; }
   mkdir -p "$dir/.gsd-returns" 2>/dev/null || { _gsd_no_receipt 'cannot create .gsd-returns'; return 1; }
   got=$(CDPATH='' cd -P -- "$dir/.gsd-returns" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt '.gsd-returns does not resolve'; return 1; }
