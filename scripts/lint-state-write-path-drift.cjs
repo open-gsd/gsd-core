@@ -1219,7 +1219,7 @@ function boundaryAfterLine(write, index) {
  *     `p = 'x';` on the line below a `case` or `default` label, with the
  *     write under a later clause), and an assignment inside an expression
  *     (`c && (p = 'x');`, `c ? (p = 'x') : null;`). The known-gap rows pin
- *     representative forms, not every form. These reassignment shapes are
+ *     representative forms. These reassignment shapes are
  *     reported, as pinned by tests: `if (c) { p = 'x'; }` and the other
  *     braced forms the controls list, `if (c) p = 'x'; else { q(); }`,
  *     `if (c) p = p + '.tmp';` and the other right-hand sides naming `p`
