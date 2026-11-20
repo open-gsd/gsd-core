@@ -1398,8 +1398,10 @@ shapes as not halted, in both commands and with no entry in `diagnostics[]`:
 - the nested layout: `plans/PLAN-01.md` with `plans/SUMMARY-01.md`, which the
   halt lookup never pairs;
 - a SUMMARY with lone-CR (`\r`) line endings;
-- a SUMMARY whose frontmatter does not open on its first line (a blank line
-  before the opening `---`);
+- a SUMMARY whose frontmatter does not open with exactly `---` at byte 0,
+  after an optional BOM: a blank line before the opening `---`, or an opening
+  `--- ` with a trailing space (a CRLF line ending after the opening `---`
+  still opens it);
 - frontmatter that the first 64 KiB, the most the predicate reads, do not
   close with a `---` line (trailing spaces or tabs allowed), wherever `status`
   sits in it. Within those 64 KiB, a line of four or more dashes, or a line
