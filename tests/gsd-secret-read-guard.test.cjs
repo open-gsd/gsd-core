@@ -1218,6 +1218,9 @@ describe('gsd-secret-read-guard: shapes the round-13 adversarial pass found (#54
     "f() { GIT_EDITOR+=en; }; GIT_EDITOR='cat .'; f; GIT_EDITOR+=v; export GIT_EDITOR; git commit",
     "printf 'cat\\40.env' | xargs -0 sh -c",
     "printf '%s' 'cat .en' 'v' | xargs -0 sh -c",
+    // A subcommand's `-c` option (clone's) is applied after the alias is
+    // resolved, so it does not shadow the alias an outer git command defined.
+    "git -c alias.clone='!sh -c' -c alias.x='!git Clone \"cat .env\" -c alias.clone=y' x",
   ];
   for (const cmd of shapes) {
     test(`blocks ${JSON.stringify(cmd)}`, () => {
