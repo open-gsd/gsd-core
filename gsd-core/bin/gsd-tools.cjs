@@ -5930,6 +5930,19 @@ function captureTranslatingVerificationStatus(run) {
   return isThenable(captured) ? captured.then((text) => text, translate) : captured;
 }
 
+// #5933: the one refusal rule for the value-taking global options (`--cwd`,
+// `--project-dir`, `--pick`, `--default`). A missing value, or a `--`-led token
+// (another flag), is never taken as the value: the caller refuses it with a
+// usage error before removing anything from argv, so the flag still reaches the
+// command's own guard. `--default` alone accepts an explicit empty string. This
+// covers the space-separated form; the `--cwd=` / `--project-dir=` forms carry
+// their value in the same token and only need the empty check.
+function isRefusedGlobalFlagValue(value, { allowEmpty = false } = {}) {
+  if (value === undefined) return true;
+  if (value === '') return !allowEmpty;
+  return value.startsWith('--');
+}
+
 // Not an `async function` (#6333): it returns a promise only when the command
 // it dispatched did, so a synchronous command finishes before it returns.
 function main() {
@@ -6018,7 +6031,7 @@ function main() {
     cwd = path.resolve(value);
   } else if (cwdIdx !== -1) {
     const value = args[cwdIdx + 1];
-    if (!value || value.startsWith('--')) error('Missing value for --cwd', ERROR_REASON.USAGE);
+    if (isRefusedGlobalFlagValue(value)) error('Missing value for --cwd', ERROR_REASON.USAGE);
     args.splice(cwdIdx, 2);
     cwd = path.resolve(value);
   }
@@ -6046,7 +6059,7 @@ function main() {
     args.splice(args.indexOf(projectDirEqArg), 1);
   } else if (projectDirIdx !== -1) {
     projectDirValue = args[projectDirIdx + 1];
-    if (!projectDirValue || projectDirValue.startsWith('--')) error('Missing value for --project-dir', ERROR_REASON.USAGE);
+    if (isRefusedGlobalFlagValue(projectDirValue)) error('Missing value for --project-dir', ERROR_REASON.USAGE);
     args.splice(projectDirIdx, 2);
   }
   if (projectDirValue !== undefined) {
@@ -6136,7 +6149,7 @@ function main() {
   let pickField = null;
   if (pickIdx !== -1) {
     pickField = args[pickIdx + 1];
-    if (!pickField || pickField.startsWith('--')) error('Missing value for --pick', ERROR_REASON.USAGE);
+    if (isRefusedGlobalFlagValue(pickField)) error('Missing value for --pick', ERROR_REASON.USAGE);
     args.splice(pickIdx, 2);
   }
 
@@ -6148,7 +6161,9 @@ function main() {
   let defaultValue = undefined;
   if (defaultIdx !== -1) {
     defaultValue = args[defaultIdx + 1];
-    if (defaultValue === undefined) defaultValue = '';
+    if (isRefusedGlobalFlagValue(defaultValue, { allowEmpty: true })) {
+      error('Missing value for --default', ERROR_REASON.USAGE);
+    }
     args.splice(defaultIdx, 2);
   }
 
