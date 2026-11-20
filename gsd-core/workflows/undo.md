@@ -566,17 +566,17 @@ After all reverts are staged successfully, create a single commit:
 
 For MODE=phase:
 ```bash
-git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"
+git commit -m "revert(${TARGET_PHASE}): undo phase ${TARGET_PHASE} — ${REVERT_REASON}"  # gsd-scan-ignore: #5211 commits the staged git revert --no-commit result
 ```
 
 For MODE=plan:
 ```bash
-git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"
+git commit -m "revert(${TARGET_PLAN}): undo plan ${TARGET_PLAN} — ${REVERT_REASON}"  # gsd-scan-ignore: #5211 commits the staged git revert --no-commit result
 ```
 
 For MODE=last:
 ```bash
-git commit -m "revert: undo ${N} selected commits — ${REVERT_REASON}"
+git commit -m "revert: undo ${N} selected commits — ${REVERT_REASON}"  # gsd-scan-ignore: #5211 commits the staged git revert --no-commit result
 ```
 </step>
 

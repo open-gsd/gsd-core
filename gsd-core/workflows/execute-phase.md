@@ -462,12 +462,9 @@ ORCHESTRATOR_WT=$(git rev-parse --show-toplevel 2>/dev/null) || {
 ORCH_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if printf '%s' "$ORCH_BRANCH" | grep -Eq '^((worktree-)?agent-|worktree-wf_)'; then
   echo "FATAL: orchestrator cwd is inside an agent worktree (branch '$ORCH_BRANCH', root '$ORCHESTRATOR_WT') — refusing to execute waves (#48). A prior isolation=\"worktree\" dispatch drifted the cwd; re-run from the orchestrator's own worktree." >&2
-  # #1856 handoff: the refusal above is correct, but on its own it is a dead end —
-  # this worktree may hold committed fixes AND uncommitted work, and "re-run from
-  # the orchestrator's worktree" silently means abandoning them. Report exactly
-  # what is stranded and how to integrate it. Every command here is DIAGNOSTIC:
-  # each is `|| true`-guarded so a failure degrades to the plain refusal above
-  # rather than crashing before the message prints.
+  # #1856 handoff: the refusal alone strands this worktree's commits and uncommitted
+  # work. Report what is stranded and how to integrate it. Every command is DIAGNOSTIC
+  # and `|| true`-guarded: a failure degrades to the plain refusal above.
   _WT_BASE=""
   for _ref in "$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)" \
               origin/next origin/main next main; do
@@ -500,7 +497,7 @@ if printf '%s' "$ORCH_BRANCH" | grep -Eq '^((worktree-)?agent-|worktree-wf_)'; t
   if [ "$_WT_HAS_COMMITS" -eq 1 ] || [ -n "$_WT_DIRTY_ALL" ]; then
     echo "" >&2
     echo "  To integrate before continuing:" >&2
-    [ -n "$_WT_DIRTY_ALL" ] && echo "    1. git add -A && git commit -m 'chore(recover): recover worktree state'   # from THIS worktree" >&2
+    [ -n "$_WT_DIRTY_ALL" ] && echo "    1. git add -A -- . && git commit -m 'chore(recover): recover worktree state' -- .   # from THIS worktree's root" >&2  # gsd-scan-ignore: #5211 whole worktree
     echo "    2. cd <orchestrator worktree>   # a checkout whose branch is NOT agent-*/worktree-agent-*" >&2
     echo "    3. git merge --no-ff $ORCH_BRANCH        # or: git cherry-pick <sha>...  for selected commits" >&2
     echo "    4. re-run the phase from there" >&2

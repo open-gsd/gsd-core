@@ -60,7 +60,7 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  tokenize, bareCommandName, shellDashCPayloads, isDeclared, isUntrackedDeclaration,
+  tokenize, shellDashCPayloads, isDeclared, isUntrackedDeclaration, isGit, gitSubcommandIdx,
 } = require('./shipped-command-scan.cjs');
 
 // A fenced code block opens/closes on a line whose TRIMMED form starts with
@@ -180,27 +180,10 @@ const classifySegment = ({ tokens, src }) => {
     break;
   }
   if (ci === -1) return null;
-  const bare = bareCommandName(tokens[ci]);
-  if (bare !== 'git' && !/\/git$/.test(bare)) return null;
+  if (!isGit(tokens[ci])) return null;
 
-  // A flag's VALUE is not itself a flag. `git -C <dir> add -A` must still
-  // reach `add` — `-C`, `--git-dir`, `--work-tree`, `--namespace`, and `-c`
-  // (in their SEPARATE-value spellings) all consume the next token as their
-  // argument. The glued forms (`--git-dir=<p>`, `-C<dir>`) already carry
-  // their value in the same token and need no extra consumption; an explicit
-  // set (rather than "consume the token after every flag") is what keeps
-  // `git --no-pager add -A` from swallowing `add` as `--no-pager`'s value.
-  const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
-  let addIdx = -1;
-  for (let i = ci + 1; i < tokens.length; i += 1) {
-    if (tokens[i].redir) continue;
-    if (tokens[i].value.startsWith('-')) {
-      if (GIT_VALUE_FLAGS.has(tokens[i].value)) i += 1; // consume the flag's separate value
-      continue; // a flag on git itself; keep looking
-    }
-    addIdx = i;
-    break;
-  }
+  // A global flag's separate value is not the subcommand; the walk lives in shipped-command-scan.cjs.
+  const addIdx = gitSubcommandIdx(tokens, ci);
   if (addIdx === -1) return null;
   const subcommand = tokens[addIdx].value;
   if (subcommand !== 'add' && subcommand !== 'commit') return null;
@@ -368,21 +351,20 @@ const SCAN_ROOTS = [
   'skills',
 ];
 
+const listScanFiles = (repoRoot, roots = SCAN_ROOTS) => roots.flatMap((root) => {
+  const rootDir = path.join(repoRoot, root);
+  if (!fs.existsSync(rootDir)) return [];
+  return fs.readdirSync(rootDir, { recursive: true }).map(String).filter((f) => f.endsWith('.md')).map((f) => `${root}/${f.split(path.sep).join('/')}`);
+});
+
 const scanRepo = (repoRoot, roots = SCAN_ROOTS) => {
   const offenders = [];
   const untracked = [];
-  for (const root of roots) {
-    const rootDir = path.join(repoRoot, root);
-    if (!fs.existsSync(rootDir)) continue;
-    const mdFiles = fs.readdirSync(rootDir, { recursive: true }).filter((f) => String(f).endsWith('.md'));
-    for (const file of mdFiles) {
-      const normalized = String(file).split(path.sep).join('/');
-      const label = `${root}/${normalized}`;
-      const text = fs.readFileSync(path.join(rootDir, String(file)), 'utf-8');
-      const result = scanText(label, text);
-      offenders.push(...result.offenders);
-      untracked.push(...result.untracked);
-    }
+  for (const label of listScanFiles(repoRoot, roots)) {
+    const text = fs.readFileSync(path.join(repoRoot, label), 'utf-8');
+    const result = scanText(label, text);
+    offenders.push(...result.offenders);
+    untracked.push(...result.untracked);
   }
   return { offenders, untracked };
 };
@@ -391,5 +373,6 @@ module.exports = {
   hasReachingGitAdd,
   scanText,
   scanRepo,
+  listScanFiles,
   SCAN_ROOTS,
 };

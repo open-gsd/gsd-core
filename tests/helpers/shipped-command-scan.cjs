@@ -185,9 +185,10 @@ const tokenize = (str) => {
 // backslash escapes the space, so the shell keeps `docs: #` as ONE word and
 // `#` is literal — while a preceded-by-whitespace test reads it as a comment.
 // The scan would then exempt a line the runtime still executes unscoped.
-const commentPortion = (line) => {
-  let quote = null;
-  let started = false;
+// One pass over a line: { cut: index of the comment `#` or -1, quote: the quote still open at the end }. `quote0` is a quote opened on an earlier line.
+const scanLine = (line, quote0 = null) => {
+  let quote = quote0;
+  let started = quote0 !== null;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
     if (quote) {
@@ -198,12 +199,13 @@ const commentPortion = (line) => {
     if (ch === '\\' && i + 1 < line.length) { started = true; i += 1; continue; }
     if (ch === '"' || ch === "'") { started = true; quote = ch; continue; }
     if (/\s/.test(ch)) { started = false; continue; }
-    if (ch === '#' && !started) return line.slice(i);
+    if (ch === '#' && !started) return { cut: i, quote: null };
     if (ch === '>' || ch === '<' || ch === ';' || ch === '|' || ch === '&') { started = false; continue; }
     started = true;
   }
-  return '';
+  return { cut: -1, quote };
 };
+const commentPortion = (line, quote = null) => { const { cut } = scanLine(line, quote); return cut === -1 ? '' : line.slice(cut); };
 
 // The explicit opt-out for content that shows the defect ON PURPOSE. A
 // wrong-example is otherwise indistinguishable from a regression — which is
@@ -258,12 +260,13 @@ const declarationReason = (portion) => {
 // where mirroring the tokenizer perfectly is fiddly and a miss is silent.
 // The marker's reason, but only when the marker is in COMMENT position and
 // survives neither as an argv token. Returns null when there is no attempt.
-const declaredReasonFor = (line) => {
-  if (tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value))) return null;
-  return declarationReason(commentPortion(line));
+// `quote` is the quote an earlier line of the same text left open: it prefixes the line, so a closing quote is not read as an opening one.
+const declaredReasonFor = (line, quote = null) => {
+  if (tokenize(`${quote ?? ''}${line}`).some((t) => /gsd-scan-ignore:/.test(t.value))) return null;
+  return declarationReason(commentPortion(line, quote));
 };
-const isDeclared = (line) => {
-  const reason = declaredReasonFor(line);
+const isDeclared = (line, quote = null) => {
+  const reason = declaredReasonFor(line, quote);
   return reason !== null && ISSUE_REF_RE.test(reason);
 };
 // An ATTEMPTED declaration that carries no tracking reference — including one
@@ -273,6 +276,8 @@ const isUntrackedDeclaration = (line) => {
   const reason = declaredReasonFor(line);
   return reason !== null && !ISSUE_REF_RE.test(reason);
 };
+// True when the gap `text[a, b)` between two tokens holds a command-ending newline.
+const newlineBetween = (text, a, b) => /(?<!\\)\n/.test(text.slice(a, b));
 
 // A shell invoked with -c runs its next argument AS A COMMAND, so the
 // invocation lives inside a quoted token and no amount of markup-stripping
@@ -287,6 +292,30 @@ const isUntrackedDeclaration = (line) => {
 // follows; leaving them out is a silent false negative in a function whose
 // entire job is reaching a command the tokenizer cannot see.
 const SHELL_INVOKER_RE = /^(?:.*\/)?(?:ba|da|k|z|a|c|tc|fi|ya)?sh$/;
+// Shell keywords, prompt/list markers, and the command MODIFIERS that
+// pass straight through to the command after them. The modifiers are the
+// mirror of the invoker-set gap: omitting them is a false negative in the
+// same direction, since `time bash -c "…"` really does run the payload.
+//
+// RESIDUAL, named rather than half-solved: a modifier that takes its OWN
+// flags (`sudo -u alice bash -c …`) still stops the search, because
+// skipping arbitrary flag/value pairs here would mean modelling each
+// modifier's option grammar. No live instance exists in the six roots;
+// the failure is a missed candidate, and the declaration marker is not
+// involved either way.
+const NON_COMMAND_PREFIX = new Set([
+  'then', 'else', 'do', '$', '-', '*', '&&', '||',
+  'time', 'exec', 'nohup', 'env', 'command',
+]);
+// AN ASSIGNMENT IS A SKIPPABLE PREFIX ONLY WHEN IT IS NOT A SUBSTITUTION.
+// `FOO=1 bash -c "…"` prefixes the command; `V=$(bash -c "…")` IS the
+// command, and skipping it walks the search past the invoker onto `-c`,
+// which is not one — so the payload is never reached. Found by sweeping
+// the substitution-glues-to-the-binary class across every command-name
+// test rather than only the one the finding named.
+const skippable = (t) => t.redir
+  || (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?=/.test(t.value) && !t.value.includes('$('))
+  || NON_COMMAND_PREFIX.has(t.value);
 const shellDashCPayloads = (str) => {
   const payloads = [];
   let group = [];
@@ -299,33 +328,9 @@ const shellDashCPayloads = (str) => {
     // env assignment, a shell keyword, or a list/prompt marker may precede the
     // command name. Those are not commands; `echo` is, which is exactly the
     // line the search-anywhere version got wrong.
-    // Shell keywords, prompt/list markers, and the command MODIFIERS that
-    // pass straight through to the command after them. The modifiers are the
-    // mirror of the invoker-set gap: omitting them is a false negative in the
-    // same direction, since `time bash -c "…"` really does run the payload.
-    //
-    // RESIDUAL, named rather than half-solved: a modifier that takes its OWN
-    // flags (`sudo -u alice bash -c …`) still stops the search, because
-    // skipping arbitrary flag/value pairs here would mean modelling each
-    // modifier's option grammar. No live instance exists in the six roots;
-    // the failure is a missed candidate, and the declaration marker is not
-    // involved either way.
-    const NON_COMMAND_PREFIX = new Set([
-      'then', 'else', 'do', '$', '-', '*', '&&', '||',
-      'time', 'exec', 'nohup', 'env', 'command',
-    ]);
-    // AN ASSIGNMENT IS A SKIPPABLE PREFIX ONLY WHEN IT IS NOT A SUBSTITUTION.
-    // `FOO=1 bash -c "…"` prefixes the command; `V=$(bash -c "…")` IS the
-    // command, and skipping it walks the search past the invoker onto `-c`,
-    // which is not one — so the payload is never reached. Found by sweeping
-    // the substitution-glues-to-the-binary class across every command-name
-    // test rather than only the one the finding named.
-    const skippable = (t) => t.redir
-      || (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?=/.test(t.value) && !t.value.includes('$('))
-      || NON_COMMAND_PREFIX.has(t.value);
     const gi = group.findIndex((t) => !skippable(t));
     if (gi !== -1 && SHELL_INVOKER_RE.test(bareCommandName(group[gi]))) {
-      const ci = group.findIndex((t, k) => k > gi && !t.redir && t.value === '-c');
+      const ci = group.findIndex((t, k) => k > gi && !t.redir && /^-[A-Za-z]*c$/.test(t.value));
       const payload = ci !== -1 ? group.slice(ci + 1).find((t) => !t.redir) : undefined;
       if (payload) payloads.push(payload.value);
     }
@@ -338,15 +343,108 @@ const shellDashCPayloads = (str) => {
   return payloads;
 };
 
+// One quote-aware walk over the lines of `raw`: the text with every comment cut off, and the set of lines that carry a genuine declaration (isDeclared, with the quote an earlier line left open).
+const commentWalk = (raw) => {
+  const declared = new Set();
+  let q = null;
+  const text = raw.split('\n').map((line, n) => {
+    if (isDeclared(line, q)) declared.add(n);
+    const r = scanLine(line, q);
+    q = r.quote;
+    return r.cut === -1 ? line : line.slice(0, r.cut);
+  }).join('\n');
+  return { text, declared };
+};
+
+const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
+const GIT_VALUE_FLAGS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--attr-source', '--shallow-file']);
+// Index of the git subcommand after the git word at `gi`: redirections are skipped, a value option skips its separate value, every other `-option` is skipped (a safety guard fails closed: an option it does not know must not hide the subcommand); -1 when there is none.
+const gitSubcommandIdx = (toks, gi) => {
+  let c = gi + 1;
+  while (c < toks.length && !toks[c].op) {
+    if (toks[c].redir) { c += 1; continue; }
+    if (!toks[c].value.startsWith('-')) return c;
+    c += GIT_VALUE_FLAGS.has(toks[c].value) ? 2 : 1;
+  }
+  return -1;
+};
+const isWholeTree = (a) => /^(?::\((?:top|literal|glob|icase)[^)]*\)|:\/)?(?:\.\.?(?:\/+\.\.?)*\/*|\/?)(?:\*+(?:\/+\*+)*)?$/.test(a);
+// Exclude magic in either spelling: the short run `:!`, `:^`, `:/!` and the long list `:(top,exclude)`, `:(exclude,glob)`.
+const isExcludeMagic = (a) => /^:(?:\([^)]*\bexclude\b[^)]*\)|\/*[!^])/.test(a);
+// `inline`: a bare `git commit` in a prose code span names the command, it is not an invocation.
+// An `echo`/`printf` word that holds `git ... commit` (recovery advice), or an `eval` word, is scanned as a script; other quoted prose is not.
+const unscopedGitCommits = (raw, inline = false) => {
+  const out = [];
+  // A commit whose source lines carry a declaration is a deliberate unscoped commit.
+  const { text, declared } = commentWalk(raw);
+  const toks = tokenize(text);
+  const lineOf = (pos) => text.slice(0, pos).split('\n').length - 1;
+  const isDeclaredSpan = (a, b) => { for (let n = lineOf(a); n <= lineOf(b); n += 1) if (declared.has(n)) return true; return false; };
+  let skipTo = -1;
+  for (let i = 0; i < toks.length; i += 1) {
+    if (i <= skipTo || toks[i].op || toks[i].redir) continue;
+    if (!isGit(toks[i])) {
+      // The command word: after the last operator or newline before token i, past the prefixes `shellDashCPayloads` skips (`then`, `do`, `FOO=1`, redirections) and `{`.
+      let k = i - 1;
+      while (k >= 0 && !toks[k].op && !newlineBetween(text, toks[k].end, toks[k + 1].start)) k -= 1;
+      let w = k + 1;
+      while (toks[w] && (skippable(toks[w]) || toks[w].value === '{')) w += 1;
+      if (i > w && ['echo', 'printf', 'eval'].includes(toks[w].value) && !isDeclaredSpan(toks[i].start, toks[i].end)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      continue;
+    }
+    const c = gitSubcommandIdx(toks, i);
+    if (c === -1 || toks[c].value !== 'commit') continue;
+    const argv = [];
+    const argvTok = [];
+    let prev = toks[c];
+    for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
+      if (newlineBetween(text, prev.end, toks[j].start)) break;
+      if (!toks[j].redir) { argv.push(toks[j].value); argvTok.push(toks[j]); }
+      prev = toks[j];
+      skipTo = j;
+    }
+    const dd = argv.indexOf('--');
+    const spec = dd === -1 ? [] : argv.slice(dd + 1).filter((a) => !isExcludeMagic(a));
+    // An unquoted `$`-word may split to nothing, so a pathspec made only of those can commit the whole index.
+    const unquotedVar = (t) => t.value[0] === '$' && t.qmask[0] === '0';
+    const onlyUnquotedVars = dd !== -1 && dd < argv.length - 1 && argvTok.slice(dd + 1).every(unquotedVar);
+    const wholeTree = dd !== -1 && dd < argv.length - 1 && (spec.length === 0 || spec.some(isWholeTree) || onlyUnquotedVars);
+    // -i/--include, also bundled as in -qi, commits the whole index plus the named paths.
+    // A word after -m, -F, -C, -c or -t is that option's value (a message may start with `- `), not an option.
+    const include = argv.slice(0, dd === -1 ? argv.length : dd).some((a, n, all) => !/^-[mFCct]$/.test(all[n - 1] ?? '') && ((a.length > 4 && '--include'.startsWith(a)) || /^-[^-mFcCtuS]*i/.test(a)));
+    const fromFile = argv.some((a) => a === '--pathspec-from-file' || a.startsWith('--pathspec-from-file='));
+    if (((dd === -1 && !fromFile && (argv.length > 0 || !inline)) || (dd !== -1 && dd === argv.length - 1) || wholeTree || include) && !isDeclaredSpan(toks[i].start, prev.end)) out.push(text.slice(toks[i].start, prev.end));
+  }
+  // bash -c payloads per command line: an unquoted newline ends a command, a newline inside quotes does not.
+  let from = 0;
+  for (let k = 0; k < toks.length; k += 1) {
+    if (k + 1 < toks.length && !newlineBetween(text, toks[k].end, toks[k + 1].start)) continue;
+    if (!isDeclaredSpan(toks[from].start, toks[k].end)) for (const p of shellDashCPayloads(text.slice(toks[from].start, toks[k].end))) out.push(...unscopedGitCommits(p, inline));
+    from = k + 1;
+  }
+  return out;
+};
+
+// Git prefix spellings the add guard and the commit scanner must both see through to the subcommand.
+const GIT_PREFIX_SPELLINGS = ['git', 'git -C d', 'git -c k=v', 'git --no-pager', '/usr/bin/git', 'git 2>/dev/null', 'git --super-prefix p', 'git --no-advice', 'git --config-env=k=V', 'git --attr-source=HEAD', 'git --attr-source HEAD', 'git --config-env k=V', 'git --shallow-file f'];
+// Hand-written from git(1) global-option syntax, not from the list above, so a spelling the scanner omits still reaches the prefix tests (#2371).
+const GIT_PREFIX_ORACLE = ['git --git-dir=g', 'git --work-tree w', 'git --namespace=n', 'git -p', 'git --bare', 'git --exec-path=e', 'git --literal-pathspecs', 'git -C a -C b'];
+
 module.exports = {
   bareCommandName,
   tokenize,
   shellDashCPayloads,
   SHELL_INVOKER_RE,
+  GIT_VALUE_FLAGS,
   commentPortion,
   ISSUE_REF_RE,
   declarationReason,
   declaredReasonFor,
   isDeclared,
   isUntrackedDeclaration,
+  isGit,
+  gitSubcommandIdx,
+  unscopedGitCommits,
+  GIT_PREFIX_SPELLINGS,
+  GIT_PREFIX_ORACLE,
 };

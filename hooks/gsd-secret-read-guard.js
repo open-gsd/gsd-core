@@ -3409,7 +3409,7 @@ function main() {
 
 module.exports = {
   DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
-  MAX_SCAN_CHARACTERS,
+  MAX_SCAN_CHARACTERS, GIT_GLOBAL_VALUE_OPTIONS,
 };
 
 if (require.main === module) main();

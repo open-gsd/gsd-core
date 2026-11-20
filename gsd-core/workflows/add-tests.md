@@ -310,8 +310,9 @@ If there are passing tests to commit:
 
 ```bash
 git add {test files}
-git commit -m "test(phase-${phase_number}): add unit and E2E tests from add-tests command" -- {test files}
+git commit -m "test(phase-${phase_number}): add unit and E2E tests from add-tests command" -- ':(literal){test_file}' ...
 ```
+A `'` in a path becomes `'\''`.
 
 Present next steps:
 

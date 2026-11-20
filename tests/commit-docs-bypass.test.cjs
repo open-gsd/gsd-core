@@ -24,11 +24,13 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const fc = require('fast-check');
 const {
   hasReachingGitAdd, scanText, scanRepo, SCAN_ROOTS,
 } = require('./helpers/planning-add-guard.cjs');
+const { unscopedGitCommits, GIT_PREFIX_SPELLINGS, GIT_PREFIX_ORACLE } = require('./helpers/shipped-command-scan.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -143,6 +145,31 @@ describe('commit_docs bypass guard (#1783, repo-wide per #3585)', () => {
 
     test('B8: # git add -A (a shell comment) is NOT an invocation', () => {
       assert.strictEqual(hasReachingGitAdd('# git add -A'), false);
+    });
+
+    test('B10: git prefixes: add guard and commit scanner agree', () => {
+      for (const pre of [...GIT_PREFIX_SPELLINGS, ...GIT_PREFIX_ORACLE]) {
+        assert.equal(hasReachingGitAdd(`${pre} add -A`), true);
+        assert.equal(unscopedGitCommits(`${pre} commit -m x`).length, 1);
+      }
+      assert.equal(unscopedGitCommits('V=$(git commit -m x)').length, 1);
+      assert.equal(unscopedGitCommits('cd x\nbash -c "git commit -m x"').length, 1);
+      assert.equal(unscopedGitCommits("bash -c 'git commit -m x'").length, 1);
+    });
+
+    test('B11: shipped prompts commit only their named paths with a literal pathspec (#5211)', () => {
+      for (const rel of [
+        'agents/gsd-executor.md',
+        'agents/gsd-debug-session-manager.md',
+        'gsd-core/workflows/add-tests.md',
+      ]) {
+        // allow-test-rule: source-text-is-the-product (see #5211)
+        const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+        // each commit runs up to the next backtick (code fence or inline span end)
+        const commits = text.match(/git commit -m [^`]{0,600}/g) ?? [];
+        assert.ok(commits.length > 0, `${rel} has no commit`);
+        for (const c of commits) assert.match(c, /-- (':\(literal\)|\.(\s|$))/, `${rel}: ${c.slice(0, 60)}`);
+      }
     });
   });
 

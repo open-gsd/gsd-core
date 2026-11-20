@@ -199,6 +199,19 @@ AskUserQuestion with options: Squash merge (Recommended), Merge with history, De
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
+# The squash commits record the whole index, so a foreign staged file would ride along (the milestone's own REQUIREMENTS.md deletion is staged by design).
+REPO_TOP=$(git rev-parse --show-toplevel) || exit 1
+STAGED_LIST=$(mktemp) || exit 1
+trap 'rm -f "$STAGED_LIST"' EXIT
+# -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone. --ignore-submodules=none: a user or .gitmodules setting of `all` would hide a staged submodule bump.
+git -C "$REPO_TOP" diff --cached --ignore-submodules=none --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
+# Allowed: nothing staged, or exactly one staged .planning REQUIREMENTS.md deletion.
+STAGED=0; OWN=0
+while IFS= read -r -d '' st && IFS= read -r -d '' p; do
+  STAGED=$((STAGED + 1))
+  [ "$st" = D ] && [[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]] && OWN=$((OWN + 1))
+done < "$STAGED_LIST"
+[ "$STAGED" -eq "$OWN" ] && [ "$STAGED" -le 1 ] || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
 if [ "$BRANCHING_STRATEGY" = "phase" ]; then
@@ -211,7 +224,7 @@ if [ "$BRANCHING_STRATEGY" = "phase" ]; then
     if [ "$COMMIT_DOCS" = "false" ]; then
       git reset HEAD .planning/ 2>/dev/null || true
     fi
-    git commit -m "feat: $branch for v[X.Y]"
+    git commit -m "feat: $branch for v[X.Y]"  # gsd-scan-ignore: #5211 squash merge: a clean-index guard precedes it
   done
 fi
 
@@ -221,7 +234,7 @@ if [ "$BRANCHING_STRATEGY" = "milestone" ]; then
   if [ "$COMMIT_DOCS" = "false" ]; then
     git reset HEAD .planning/ 2>/dev/null || true
   fi
-  git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"
+  git commit -m "feat: $MILESTONE_BRANCH for v[X.Y]"  # gsd-scan-ignore: #5211 squash merge: a clean-index guard precedes it
 fi
 
 git checkout "$CURRENT_BRANCH"
@@ -231,6 +244,19 @@ git checkout "$CURRENT_BRANCH"
 
 ```bash
 CURRENT_BRANCH=$(git branch --show-current)
+# The merge commits record the whole index, so a foreign staged file would ride along (the milestone's own REQUIREMENTS.md deletion is staged by design).
+REPO_TOP=$(git rev-parse --show-toplevel) || exit 1
+STAGED_LIST=$(mktemp) || exit 1
+trap 'rm -f "$STAGED_LIST"' EXIT
+# -z prints raw paths (git quotes a backslash, quote or tab otherwise); each NUL-delimited status/path pair is matched whole by bash, as in git_commit_milestone. --ignore-submodules=none: a user or .gitmodules setting of `all` would hide a staged submodule bump.
+git -C "$REPO_TOP" diff --cached --ignore-submodules=none --name-status -z --no-renames > "$STAGED_LIST" || { echo "git diff failed: cannot list the staged paths" >&2; exit 1; }
+# Allowed: nothing staged, or exactly one staged .planning REQUIREMENTS.md deletion.
+STAGED=0; OWN=0
+while IFS= read -r -d '' st && IFS= read -r -d '' p; do
+  STAGED=$((STAGED + 1))
+  [ "$st" = D ] && [[ $p =~ ^(.*/)?\.planning/(.*/)?REQUIREMENTS\.md$ ]] && OWN=$((OWN + 1))
+done < "$STAGED_LIST"
+[ "$STAGED" -eq "$OWN" ] && [ "$STAGED" -le 1 ] || { echo "unrelated staged paths; unstage them first" >&2; exit 1; }
 git checkout ${BASE_BRANCH}
 
 if [ "$BRANCHING_STRATEGY" = "phase" ]; then
@@ -243,7 +269,7 @@ if [ "$BRANCHING_STRATEGY" = "phase" ]; then
     if [ "$COMMIT_DOCS" = "false" ]; then
       git reset HEAD .planning/ 2>/dev/null || true
     fi
-    git commit -m "Merge branch '$branch' for v[X.Y]"
+    git commit -m "Merge branch '$branch' for v[X.Y]"  # gsd-scan-ignore: #5211 merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it
   done
 fi
 
@@ -253,7 +279,7 @@ if [ "$BRANCHING_STRATEGY" = "milestone" ]; then
   if [ "$COMMIT_DOCS" = "false" ]; then
     git reset HEAD .planning/ 2>/dev/null || true
   fi
-  git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"
+  git commit -m "Merge branch '$MILESTONE_BRANCH' for v[X.Y]"  # gsd-scan-ignore: #5211 merge commit: git refuses a partial commit mid-merge; a clean-index guard precedes it
 fi
 
 git checkout "$CURRENT_BRANCH"

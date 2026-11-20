@@ -1326,6 +1326,27 @@ commit, so you are told which of the two problems you actually have. A marker th
 survives shell tokenization as an *argument* declares nothing: it reached argv, which
 means the runtime executed the line.
 
+### Every raw `git commit` in shipped content must carry a `-- <paths>` pathspec
+
+A bare `git commit -m "…"` records the whole index, so a file another session staged rides
+along in a commit whose message names one task (#5211). `tests/commit-files-pathspec.test.cjs`
+therefore scans the fenced blocks and inline code spans of every shipped prompt (the roots of
+`tests/helpers/planning-add-guard.cjs` plus `pi/package-skills` and `pi/package-agents`) with
+`unscopedGitCommits` (`tests/helpers/shipped-command-scan.cjs`), and fails on a `git commit`
+with no `-- <paths>` after it. A whole-tree pathspec (`.`, `:/`, `*`), `-i`/`--include` and a
+pathspec that is only unquoted `$`-words (`-- $FILES`) count as unscoped too. Quote each pasted
+path as `':(literal)<path>'`.
+
+A deliberate whole-index commit uses the same declaration as the `--files` guard, on the
+commit's own line:
+
+```
+git commit -m "chore: record the removal" # gsd-scan-ignore: #5211 commits the index removals
+```
+
+The scanner shares its tokenizer and marker rule with the two guards around it, so the
+declaration grammar above applies unchanged.
+
 ### Every `git add` in shipped content that can reach `.planning/` must sit inside an *executable* `commit_docs` check
 
 `tests/commit-docs-bypass.test.cjs` scans every `.md` under `gsd-core/workflows/`,
