@@ -73,15 +73,26 @@ Study B, tables, scored on the same 21 runs:
 
 ## Findings
 
-1. **The proposed pricing makes the shards less even.** With a current table, charging an isolated file twice its weight widens the gap in every run (26 of 26 and 29 of 29 in study A, and again in study B). Packed chunks reach only 1.45 to 1.9 times parallelism: a chunk cannot finish before its longest file, and its tail runs on one lane. The measured per-file durations already price that closely, so the current packer with good weights is the best of the variants tried. A multiplier helps only on the stale table (× 1.4 there), by compensating for wrong weights.
+1. **The proposed pricing widens the gap once the table is current.** Charging an isolated file twice its weight gives a wider per-run gap than the current packer in 26 of 26 runs with the table from the three previous runs, 25 of 26 with the table from the previous run, and 29 of 29 with the runs' own times (study A), and in 21 of 21 and 20 of 21 runs with the two regenerated tables of study B. On the stale committed tables it is wider in 17 of 29 runs (study A) and 8 of 21 (study B). Packed chunks reach only 1.45 to 1.9 times parallelism: a chunk cannot finish before its longest file, and its tail runs on one lane. The measured per-file durations already price that closely. Smaller multipliers do not settle on one value:
+   - On the stale committed table, × 1.4 narrows the per-run gap in 22 of 29 runs and brings the daily-check gap from 292 s to 171 s.
+   - On the table from the three previous runs, × 1.2 gives a daily-check gap of 43 s against 51 s for the current packer.
+   - On the table from the previous run and on the runs' own times, every multiplier tried gives a wider daily-check gap than none (× 1.2: 137 s against 30 s, and 55 s against 32 s).
 2. **The gap comes from the stale win32 table.** The table committed before #6374 was added on 2026-09-28 by #5097, from three shards; its only later change was #6361 renaming one entry. It had 280 entries, of which only 219 were files in the 344-file tier at `8a2b9be6f`, so 125 tier files were weighed by their Linux time. Regenerating it brings the daily-check gap from about 300 s to 30-120 s and takes 1 to 1.5 minutes off the median long pole.
 3. **One run is the right source, as `docs/how-to/regenerate-the-win32-timing-table.md` says.** The generator keeps each file's maximum across the streams it is given, which biases a multi-run table towards slow runs. A table from the single previous run scored a 30 s daily-check gap against 51 s for a table from the three previous runs.
-4. **A one-run table carries that run's noise.** In each of the two source runs, 15 to 18 of the roughly 130 files over 10 s differ from their median over the other study B runs by more than × 1.5, while the summed time stays within 4 to 6% of the medians. The two regenerated tables in study B differ by about as much as that noise. The files flagged in the #6374 review are real Windows behaviour: their values in run 44559069895 lie within × 0.6 to 1.2 of their 22-run medians. The four near-zero files (`opencode-install-notices`, `undo-commit-selection-4465`, `hook-activation-probe`, `gsd-validate-commit-sigpipe`) skip their tests on win32.
+4. **A one-run table carries that run's noise.** Each source run is compared with every file's median over the other 22 study B runs, counting the files that took at least 10 s in the source run:
+   - run 44652354632 (the table #6374 ships): 118 such files, 12 of them more than × 1.5 off their median, summed time 4.5% above the medians;
+   - run 44559069895 (#6374's first commit): 131 files, 18 off, summed 6.3% above.
+
+   The two regenerated tables in study B differ by about as much as that noise. In run 44652354632, the 12 files off their median are `installer-migrations` (46.3 s against 13.6 s, × 3.40), `defaults-json-fallback` (× 2.36), `kimi-config-toml-symlink` (× 2.24), `gate-tdd-review-checkpoint.unit` (× 2.23), `agent-install-validation` (× 1.88), `review-lane-availability` (× 1.75), `hermes-skills-migration` (× 1.67), `packaging-shipped-scripts-require-only-shipped` (× 1.54), `verify` (× 0.66), `commands.platform` (× 0.61), `verification-status` (× 0.55) and `context-drift` (× 0.52).
+
+   For the files the #6374 review flagged, the same run gives:
+   - `install-write-confinement` × 1.00, `capability-source` × 0.82, `windsurf-hooks-bridge` × 0.74 and `emitted-attribution` × 0.84;
+   - the four near-zero files take under 50 ms on every study B run, so a ratio means little at that size (`undo-commit-selection-4465` 32 ms, × 1.40; `gsd-validate-commit-sigpipe` 11 ms, × 1.44). `opencode-install-notices`, `undo-commit-selection-4465` and `gsd-validate-commit-sigpipe` skip on win32 at file or suite level, and `hook-activation-probe` skips its individual tests on win32.
 
 ## Limits
 
 - These are simulations from measured per-file times, validated against the real test step. The regenerated table's first real run is the merge queue's, after which the daily shard-balance check measures it.
-- The tier changes with almost every merge. A file added after a regeneration is weighed by its Linux time until the next one (ADR-6315 item 6, #6322, schedules that).
+- The tier changed several times a day while these runs were collected (344 files at `8a2b9be6f`, 352 at `263c6c45f`). A file added after a regeneration is weighed by its Linux time until the next one (ADR-6315 item 6, #6322, schedules that).
 - Per-file times move with the tests themselves (#6361 and the other in-process items of ADR-6315).
 
 ## Reproducing
