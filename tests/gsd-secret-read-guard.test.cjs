@@ -1454,6 +1454,9 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     "caffeinate eval 'cat .env'",
     `caffeinate xargs ${G}`,
     "caffeinate find . -exec git rebase -x 'cat .env' \\;",
+    // Behind wrappers that resolve to another unknown command, a shell or xargs still reads the segment's pipe.
+    "printf 'cat .env' | caffeinate env strace bash",
+    "printf 'cat .env' | caffeinate env strace xargs git",
     `caffeinate watch ${G}`,
     "builtin source /dev/stdin <<< 'cat .env'",
     "builtin source <(echo 'cat .env')",
