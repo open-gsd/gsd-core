@@ -1611,7 +1611,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: 1_699_999_990 });
     const b = commitDated(repo, 'b.txt', 'test(03-01): b', { author: 1_699_999_991 });
     repo.git('reset', '--hard', base);
-    // 12 commits with a 100000-byte subject make a listing of about 1.2 MB, over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
+    // 11 commits with a 100000-byte subject make a listing of about 1.1 MB, over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
     commit(repo, 'a.txt', 'feat(03-01): a', 'twin\n');
     const filler = 'x'.repeat(100_000);
     // The subject goes in through a file: one 100 KB argv entry exceeds the Windows command-line limit.

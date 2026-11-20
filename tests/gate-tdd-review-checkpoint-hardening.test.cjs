@@ -29,7 +29,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
-const { SUMMARY_REFS_MAX, REPO_TEXT_MAX_BYTES } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
+const { SUMMARY_REFS_MAX, REPO_TEXT_MAX_BYTES, SEAL_FILE } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
 const { evaluateTddReviewCheckpoint, TDD_ROW_REASON, TDD_NOT_EVALUABLE_WHY } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
 
 function git(dir, ...args) {
@@ -67,6 +67,18 @@ function review(dir) {
   assert.equal(result.failure, undefined, 'not a usage failure');
   return result.payload;
 }
+
+const PHASE = '.planning/phases/01-x';
+const dirs = [];
+afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
+
+function w(dir, rel, content) {
+  fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+  fs.writeFileSync(path.join(dir, rel), content);
+}
+
+/** A SUMMARY whose `## Task Commits` lists one row per hash. */
+const summaryOf = (hashes) => `# done\n\n## Task Commits\n\n${hashes.map((h, i) => `${i + 1}. **Task ${i + 1}: x** - \`${h}\``).join('\n')}\n`;
 
 describe('H1 type: tdd detection equals the old regex in its pathological forms', () => {
   const CASES = [
@@ -156,14 +168,6 @@ describe('H2 the plan id is matched literally in the git --grep pattern', () => 
 });
 
 describe('#5354 tdd review checkpoint seal', () => {
-  const PHASE = '.planning/phases/01-x';
-  const dirs = [];
-  afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
-
-  function w(dir, rel, content) {
-    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
-    fs.writeFileSync(path.join(dir, rel), content);
-  }
   function commit(dir, file, msg) { w(dir, file, msg); git(dir, 'add', '-A'); git(dir, 'commit', '-m', msg); }
   function fixture(subjects, { summary = true, refs = false, plan = true } = {}) {
     const dir = createTempGitProject('gate-5354-');
@@ -177,7 +181,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     subjects.forEach((s, i) => commit(dir, `f${i}.txt`, s));
     if (refs) {
       const shas = git(dir, 'rev-list', '--reverse', `${base}..HEAD`).split('\n');
-      w(dir, `${PHASE}/01-01-SUMMARY.md`, `# done\n\n## Task Commits\n\n${shas.map((h, i) => `${i + 1}. **Task ${i + 1}: x** - \`${h}\``).join('\n')}\n`);
+      w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(shas));
       git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
     }
     return { dir, base };
@@ -188,7 +192,16 @@ describe('#5354 tdd review checkpoint seal', () => {
     git(dir, 'commit', '-m', subject);
   }
   const run = (dir, ...args) => evaluateTddReviewCheckpoint({ projectDir: dir, args: ['1', ...args] });
-  const SEAL = path.join(PHASE, 'TDD-REVIEW-SEAL.json');
+  function sealCommit(dir) { git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs(01-01): seal'); }
+  function sealThenSquash(dir, base, subject) { run(dir, '--record'); sealCommit(dir); squash(dir, base, subject); }
+  function shallowClone(dir, suffix = '', branch) {
+    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow${suffix}`);
+    dirs.push(clone);
+    gitOrThrow(['clone', '-q', '--depth', '1', ...(branch ? ['--branch', branch] : []), pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    return clone;
+  }
+  const ghostSummary = (dir) => w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['d'.repeat(40)]));
+  const SEAL = path.join(PHASE, SEAL_FILE);
   const sha = (c) => c.repeat(40);
   const SEAL_CAP = REPO_TEXT_MAX_BYTES;
   const sealOf = (red, green) => JSON.stringify({ plans: { '01-01': { red, green } } });
@@ -197,10 +210,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const before = run(dir, '--record');
     assert.equal(before.payload.violations, 0);
-    const seal = JSON.parse(fs.readFileSync(path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json'), 'utf8'));
+    const seal = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8'));
     assert.match(seal.plans['01-01'].red, /^[0-9a-f]{40}$/);
     assert.match(seal.plans['01-01'].green, /^[0-9a-f]{40}$/);
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs(01-01): seal');
+    sealCommit(dir);
     squash(dir, base);
     const after = run(dir);
     assert.equal(after.payload.violations, 0);
@@ -210,9 +223,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a sealed plan squashed under a plan-scoped title passes (#5354)', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    run(dir, '--record');
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs(01-01): seal');
-    squash(dir, base, 'feat(01-01): phase one');
+    sealThenSquash(dir, base, 'feat(01-01): phase one');
     const after = run(dir);
     assert.equal(after.payload.rows[0].status, 'Pass');
     assert.equal(after.payload.violations, 0);
@@ -221,9 +232,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a sealed scoped squash followed by fix(01-01): typo still passes (#5354)', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    run(dir, '--record');
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs(01-01): seal');
-    squash(dir, base, 'feat(01-01): phase one');
+    sealThenSquash(dir, base, 'feat(01-01): phase one');
     commit(dir, 'typo.txt', 'fix(01-01): typo');
     assert.equal(run(dir).payload.rows[0].status, 'Pass');
   });
@@ -248,7 +257,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a timed-out object lookup for a SUMMARY commit is a failure, not "squashed" (#5354)', (t) => {
     const { dir } = fixture([], { summary: false });
-    w(dir, `${PHASE}/01-01-SUMMARY.md`, `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${'a'.repeat(40)}\`\n`);
+    w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['a'.repeat(40)]));
     failGit(t, (args) => args.includes('--verify'), { ...GIT_NO_ANSWER, exitCode: 1, signal: 'SIGTERM', timedOut: true });
     const r = run(dir);
     assert.equal(r.payload.rows[0].status, 'FAIL');
@@ -270,9 +279,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     w(dir, SEAL, sealOf(sha('a'), sha('a')));
     git(dir, 'add', '-A');
     git(dir, 'commit', '-m', 'docs: seal');
-    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow-equal`);
-    dirs.push(clone);
-    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    const clone = shallowClone(dir, '-equal', 'merged');
     const row = run(clone).payload.rows[0];
     assert.equal(row.status, 'FAIL');
     assert.deepEqual(row.missing, ['RED', 'GREEN']);
@@ -280,7 +287,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('two plans in one run probe the shallow-clone state once', (t) => {
     const { dir } = fixture([], { summary: false });
-    const fake = (c) => `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${c.repeat(40)}\`\n`;
+    const fake = (c) => summaryOf([c.repeat(40)]);
     w(dir, `${PHASE}/01-01-SUMMARY.md`, fake('a'));
     w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
     w(dir, `${PHASE}/01-02-SUMMARY.md`, fake('b'));
@@ -326,12 +333,12 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { dir } = fixture(['test(01-01): red']);
     const r = run(dir, '--record');
     assert.equal(r.payload.violations, 1);
-    assert.equal(fs.existsSync(path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json')), false);
+    assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
   });
 
   test('a malformed seal is unreadable, never an advisory "no entry (squashed?)"', () => {
     const { dir } = fixture([], { summary: false });
-    w(dir, `${PHASE}/TDD-REVIEW-SEAL.json`, '{not json');
+    w(dir, SEAL, '{not json');
     const r = run(dir);
     assert.equal(r.outcome, 'unreadable');
     assert.equal(r.payload.passed, false);
@@ -422,11 +429,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     const valid = { plans: { '01-01': { red: redSha, green: greenSha } } };
     const validText = `${JSON.stringify(valid, null, 2)}\n`;
     fs.mkdirSync(path.join(dir, PHASE), { recursive: true });
-    fs.writeFileSync(path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json'), validText);
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-m', 'docs(01-01): seal');
+    fs.writeFileSync(path.join(dir, SEAL), validText);
+    sealCommit(dir);
     squash(dir, base);
-    const seal = path.join(dir, PHASE, 'TDD-REVIEW-SEAL.json');
+    const seal = path.join(dir, SEAL);
     fs.writeFileSync(seal, validText);
     assert.equal(run(dir).payload.rows[0].status, 'Pass', 'the unmutated seal is credited');
     const seen = new Set();
@@ -453,7 +459,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('fabricated SUMMARY ids (no such object) are NotEvaluable, indistinguishable from a squashed-and-collected commit', () => {
     const none = fixture(['chore: x']);
-    w(none.dir, `${PHASE}/01-01-SUMMARY.md`, `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${'d'.repeat(40)}\`\n`);
+    ghostSummary(none.dir);
     assert.equal(run(none.dir).payload.rows[0].status, 'NotEvaluable');
   });
 
@@ -472,10 +478,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   ]) {
     test(`a sealed plan squashed with ${label} still passes (#5354)`, () => {
       const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-      run(dir, '--record');
-      git(dir, 'add', '-A');
-      git(dir, 'commit', '-m', 'docs(01-01): seal');
-      squash(dir, base, squashTitle);
+      sealThenSquash(dir, base, squashTitle);
       after.forEach((s, i) => commit(dir, `after${i}.txt`, s));
       const r = run(dir);
       assert.equal(r.payload.rows[0].status, 'Pass');
@@ -487,8 +490,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
     run(dir, '--record');
     const sealed = fs.readFileSync(path.join(dir, SEAL), 'utf8');
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-m', 'docs(01-01): seal');
+    sealCommit(dir);
     squash(dir, base, 'test(01-01): phase one');
     commit(dir, 'later.txt', 'test(01-01): add case');
     assert.equal(run(dir, '--record').payload.rows[0].status, 'Pass');
@@ -498,9 +500,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a shallow clone does not read an absent seal RED as squashed: a live RED without GREEN still fails (#5354)', () => {
     const { dir } = fixture(['test(01-01): red']);
-    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow`);
-    dirs.push(clone);
-    gitOrThrow(['clone', '-q', '--depth', '1', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    const clone = shallowClone(dir);
     w(clone, SEAL, sealOf(sha('a'), sha('b')));
     const row = run(clone).payload.rows[0];
     assert.equal(row.status, 'FAIL');
@@ -531,13 +531,8 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a sealed squashed plan in a shallow clone is not evaluable, not a failure (#5354)', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    run(dir, '--record');
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-m', 'docs(01-01): seal');
-    squash(dir, base);
-    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow-sealed`);
-    dirs.push(clone);
-    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    sealThenSquash(dir, base);
+    const clone = shallowClone(dir, '-sealed', 'merged');
     const r = run(clone);
     assert.equal(r.payload.rows[0].status, 'NotEvaluable');
     assert.equal(r.payload.rows[0].reason, 'sealed_shallow_history');
@@ -546,10 +541,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a shallow marker over a warm object store does not make an existing seal commit gone (#5354)', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    run(dir, '--record');
-    git(dir, 'add', '-A');
-    git(dir, 'commit', '-m', 'docs(01-01): seal');
-    squash(dir, base);
+    sealThenSquash(dir, base);
     assert.equal(run(dir).payload.rows[0].status, 'Pass');
     w(dir, '.git/shallow', `${git(dir, 'rev-parse', 'HEAD')}\n`);
     assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
@@ -588,8 +580,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(r.payload.rows[0].status, 'NotEvaluable');
     assert.equal(r.payload.violations, 0);
   });
-
-  const ghostSummary = (dir) => w(dir, `${PHASE}/01-01-SUMMARY.md`, `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${'d'.repeat(40)}\`\n`);
 
   test('a plan with only a docs commit and a SUMMARY naming a nonexistent id fails (live plan commit)', () => {
     const { dir } = fixture(['docs(01-01): notes']);
@@ -697,7 +687,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const real = fs.lstatSync;
     t.mock.method(fs, 'lstatSync', (f, ...rest) => {
-      if (String(f).endsWith('TDD-REVIEW-SEAL.json')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (String(f).endsWith(SEAL_FILE)) throw Object.assign(new Error('denied'), { code: 'EACCES' });
       return real(f, ...rest);
     });
     const r = run(dir, '--record');
@@ -715,7 +705,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.ok(plans['01-01']);
     assert.equal(plans['01-02'], undefined);
   });
-
 
   test('a symlinked seal is refused and its target is never written', posixOnly, () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
@@ -807,7 +796,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     test(`SUMMARY with ${label} (${count}) distinct unreachable task commits -> ${status}`, () => {
       const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
       const hashes = Array.from({ length: count }, (_, i) => (i + 1).toString(16).padStart(40, 'f'));
-      w(dir, `${PHASE}/01-01-SUMMARY.md`, `# done\n\n## Task Commits\n\n${hashes.map((h, i) => `${i + 1}. **Task ${i + 1}: x** - \`${h}\``).join('\n')}\n`);
+      w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(hashes));
       git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
       squash(dir, base);
       assert.equal(run(dir).payload.rows[0].status, status);
@@ -823,8 +812,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a duplicated SUMMARY hash counts once against the cap', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
-    const rows = Array.from({ length: REFS_CAP + 1 }, (_, i) => `${i + 1}. **Task ${i + 1}: x** - \`${'e'.repeat(40)}\``);
-    w(dir, `${PHASE}/01-01-SUMMARY.md`, `# done\n\n## Task Commits\n\n${rows.join('\n')}\n`);
+    w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(Array.from({ length: REFS_CAP + 1 }, () => 'e'.repeat(40))));
     git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
     squash(dir, base);
     assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
@@ -846,13 +834,13 @@ describe('#5354 tdd review checkpoint seal', () => {
     w(dir, `${PHASE}/01-02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
     const real = fs.openSync;
     t.mock.method(fs, 'openSync', (f, ...rest) => {
-      if (String(f).includes('TDD-REVIEW-SEAL.json')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (String(f).includes(SEAL_FILE)) throw Object.assign(new Error('denied'), { code: 'EACCES' });
       return real(f, ...rest);
     });
     const r = run(dir, '--record');
     assert.equal(r.payload.passed, false);
     assert.equal(r.payload.unreadable.length, 1);
-    assert.deepEqual(r.payload.unreadable, [{ source: 'TDD-REVIEW-SEAL.json', reason: 'EACCES' }]);
+    assert.deepEqual(r.payload.unreadable, [{ source: SEAL_FILE, reason: 'EACCES' }]);
     // A write failure keeps the review rows; a read failure returns none ("was not reviewed").
     assert.deepEqual(r.payload.rows.map((row) => row.status), ['Pass', 'FAIL']);
     assert.equal(r.payload.violations, 1);
@@ -862,12 +850,12 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const real = fs.openSync;
     t.mock.method(fs, 'openSync', (f, ...rest) => {
-      if (String(f).includes('TDD-REVIEW-SEAL.json')) throw Object.assign(new Error('phase dir vanished'), { code: 'ENOENT' });
+      if (String(f).includes(SEAL_FILE)) throw Object.assign(new Error('phase dir vanished'), { code: 'ENOENT' });
       return real(f, ...rest);
     });
     const r = run(dir, '--record');
     assert.equal(r.outcome, 'unreadable');
-    assert.deepEqual(r.payload.unreadable, [{ source: 'TDD-REVIEW-SEAL.json', reason: 'Error: phase dir vanished' }]);
+    assert.deepEqual(r.payload.unreadable, [{ source: SEAL_FILE, reason: 'Error: phase dir vanished' }]);
   });
 
   test('a failed --record leaves no temp file behind', (t) => {
@@ -912,7 +900,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     git(dir, 'add', '-A');
     git(dir, 'commit', '-m', 'docs: rename phase dir');
     assert.equal(run(dir, '--record').payload.violations, 0);
-    const seal = JSON.parse(fs.readFileSync(path.join(dir, odd, 'TDD-REVIEW-SEAL.json'), 'utf8'));
+    const seal = JSON.parse(fs.readFileSync(path.join(dir, odd, SEAL_FILE), 'utf8'));
     assert.match(seal.plans['01-01'].red, /^[0-9a-f]{40}$/);
   });
 
@@ -961,7 +949,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     test(`a plan named ${planId} does not inherit a seal entry from Object.prototype`, () => {
       const { dir } = fixture([], { summary: false, plan: false });
       w(dir, `${PHASE}/${planId}-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
-      w(dir, `${PHASE}/${planId}-SUMMARY.md`, `# done\n\n## Task Commits\n\n1. **Task 1: x** - \`${'d'.repeat(40)}\`\n`);
+      w(dir, `${PHASE}/${planId}-SUMMARY.md`, summaryOf(['d'.repeat(40)]));
       w(dir, SEAL, '{"plans":{}}');
       assert.equal(run(dir).payload.rows[0].status, 'NotEvaluable');
     });
@@ -1083,7 +1071,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('ship.md seal step commits through the commit owner, not raw git', posixOnly, () => {
     const { calls } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
-    assert.ok(calls.some((c) => c.startsWith('query commit docs(01): seal TDD review evidence --files ') && c.includes('TDD-REVIEW-SEAL.json')), calls.join('\n'));
+    assert.ok(calls.some((c) => c.startsWith('query commit docs(01): seal TDD review evidence --files ') && c.includes(SEAL_FILE)), calls.join('\n'));
   });
 
   // The real commit owner: phase_commit_docs.<phase> beats the project-level commit_docs (#3587).
@@ -1151,12 +1139,12 @@ describe('#5354 tdd review checkpoint seal', () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const real = fs.lstatSync;
     let seen = 0;
-    t.mock.method(fs, 'lstatSync', (f, ...rest) => (String(f).endsWith('TDD-REVIEW-SEAL.json') && ++seen === 2 ? real(dir) : real(f, ...rest)));
+    t.mock.method(fs, 'lstatSync', (f, ...rest) => (String(f).endsWith(SEAL_FILE) && ++seen === 2 ? real(dir) : real(f, ...rest)));
     const r = run(dir, '--record');
     assert.equal(r.outcome, 'unreadable');
     assert.equal(r.payload.passed, false);
     assert.equal(r.payload.unreadable.length, 1);
-    assert.equal(r.payload.unreadable[0].source, 'TDD-REVIEW-SEAL.json');
+    assert.equal(r.payload.unreadable[0].source, SEAL_FILE);
     assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
   });
 
@@ -1165,14 +1153,14 @@ describe('#5354 tdd review checkpoint seal', () => {
     const real = fs.lstatSync;
     let seen = 0;
     t.mock.method(fs, 'lstatSync', (f, ...rest) => {
-      if (String(f).endsWith('TDD-REVIEW-SEAL.json') && ++seen === 2) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (String(f).endsWith(SEAL_FILE) && ++seen === 2) throw Object.assign(new Error('denied'), { code: 'EACCES' });
       return real(f, ...rest);
     });
     const r = run(dir, '--record');
     assert.equal(r.outcome, 'unreadable');
     assert.equal(r.payload.passed, false);
     assert.equal(r.payload.unreadable.length, 1);
-    assert.equal(r.payload.unreadable[0].source, 'TDD-REVIEW-SEAL.json');
+    assert.equal(r.payload.unreadable[0].source, SEAL_FILE);
     assert.equal(fs.existsSync(path.join(dir, SEAL)), false);
   });
 
@@ -1184,7 +1172,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     fc.stringMatching(/^[0-9A-F]{40}$/),
     fc.constant(GREEN_SHA),
   );
-  // The seal is consulted when the plan has no live RED or when its RED is no longer reachable (#5354): these sealed hashes name no object, so it always is. It credits each kind the live commits lack.
+  // The seal is consulted when its RED (else its GREEN) is gone (#5354): these sealed hashes name no object, so it always is. It credits each kind the live commits lack.
   for (const [name, subjects, liveRed, liveGreen] of [
     ['none', [], false, false],
     ['test only', ['test(01-01): red'], true, false],
@@ -1220,9 +1208,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('a shallow clone cannot tell squashed from un-squashed: an un-squashed skipper still FAILs', () => {
     const { dir } = fixture(['docs(01-01): notes'], { refs: true });
-    const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow`);
-    gitOrThrow(['clone', '-q', '--depth', '1', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
-    dirs.push(clone);
+    const clone = shallowClone(dir);
     const r = run(clone);
     assert.equal(r.payload.rows[0].status, 'FAIL');
     assert.equal(r.block, true);
@@ -1239,22 +1225,14 @@ describe('#5354 tdd review checkpoint seal', () => {
 
 /** The gate asks the sub-repos, not the workspace root, whether the sealed commits are gone and whether history is complete (#5354, #5867). */
 describe('#5354 tdd review checkpoint in a planning.sub_repos workspace', () => {
-  const PHASE = '.planning/phases/01-x';
-  const dirs = [];
-  afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
-
-  const write = (dir, rel, content) => {
-    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
-    fs.writeFileSync(path.join(dir, rel), content);
-  };
   const run = (root, ...args) => evaluateTddReviewCheckpoint({ projectDir: root, args: ['1', ...args] });
 
   /** A workspace whose `app` sub-repo holds a RED and a GREEN on `feature`; the plan, the SUMMARY and (later) the seal live in the workspace root. */
   function workspace(root) {
     dirs.push(root);
-    write(root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: ['app'] } }));
-    write(root, `${PHASE}/01-01-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
-    write(root, `${PHASE}/01-01-SUMMARY.md`, '# done\n');
+    w(root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: ['app'] } }));
+    w(root, `${PHASE}/01-01-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
+    w(root, `${PHASE}/01-01-SUMMARY.md`, '# done\n');
     const app = path.join(root, 'app');
     fs.mkdirSync(app);
     git(app, 'init', '-q');
@@ -1262,17 +1240,17 @@ describe('#5354 tdd review checkpoint in a planning.sub_repos workspace', () => 
     const base = git(app, 'rev-parse', 'HEAD');
     git(app, 'checkout', '-q', '-b', 'feature');
     for (const subject of ['test(01-01): red', 'feat(01-01): green']) {
-      write(app, `${subject.slice(0, 4)}.txt`, subject);
+      w(app, `${subject.slice(0, 4)}.txt`, subject);
       git(app, 'add', '-A');
       git(app, 'commit', '-q', '-m', subject);
     }
     return { app, base };
   }
-  const squash = (app, base) => {
+  function squash(app, base) {
     git(app, 'checkout', '-q', '-b', 'merged', base);
     git(app, 'merge', '--squash', 'feature');
     git(app, 'commit', '-q', '-m', 'feat: squashed');
-  };
+  }
 
   test('a plan sealed and squashed away in the sub-repo passes under a workspace root that is no repo', () => {
     const root = createTempDir('gate-5354-ws-');
