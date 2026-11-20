@@ -1416,6 +1416,207 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     "printf 'echo .e%s\\n' nv | sh",
     "printf '%b' 'echo .\\x65nv' | sh",
   ]);
+
+  // A command the hook does not know that names git, a shell, an ssh client, eval, xargs, find, watch, dd or a
+  // wrapper among its operands is read as launching it from there, every occurrence, with the segment's stdin.
+  // `builtin` runs `source`, `.` and `eval` as they are run unprefixed.
+  const G = "git -c core.fsmonitor='cat .env' status";
+  blocks([
+    `caffeinate ${G}`,
+    `arch -arm64 ${G}`,
+    `strace -f ${G}`,
+    `builtin command ${G}`,
+    `npm exec -- ${G}`,
+    `screen -dm ${G}`,
+    `taskset 1 ${G}`,
+    `unshare -r ${G}`,
+    `perf stat ${G}`,
+    `script -q /dev/null ${G}`,
+    `strace -o git ${G}`,
+    "caffeinate bash -c 'cat .env'",
+    "caffeinate env GIT_EDITOR='cat .env' git commit",
+    "GIT_EDITOR='cat .env' caffeinate git commit --amend",
+    "export GIT_EDITOR='cat .env'; caffeinate git commit",
+    "caffeinate bash <<< 'cat .env'",
+    "caffeinate env GIT_EDITOR='cat .env' taskset 1 bash <<< 'git commit'",
+    "caffeinate ssh -o ProxyCommand='cat .env' h",
+    "caffeinate eval 'cat .env'",
+    `caffeinate xargs ${G}`,
+    "caffeinate find . -exec git rebase -x 'cat .env' \\;",
+    `caffeinate watch ${G}`,
+    "builtin source /dev/stdin <<< 'cat .env'",
+    "builtin source <(echo 'cat .env')",
+    "builtin -- source <(echo 'cat .env')",
+    // The container's command runs on the container's files, so this blocks rather than allows (fail closed).
+    "docker exec c sh -c 'cat .env'",
+    "kubectl exec p -- sh -c 'cat .env'",
+    // An accepted over-block: `cat` reads a file named git, but the rule reads it as launching git.
+    `cat ${G}`,
+    // Controls.
+    'builtin echo .env',
+    "builtin printf '%s' .env",
+    'builtin [ -f .env ]',
+    'builtin ls .env',
+    'builtin eval cat .env',
+    'caffeinate ls .env',
+    'caffeinate git check-ignore .env',
+  ]);
+  for (const cmd of ['caffeinate dd if=.env', 'caffeinate dd.exe if=.env']) blocks([cmd], { path: 'if=.env' });
+  allows([
+    // A launcher word that is a name-only operand (#4639, #4856, #5884) launches nothing.
+    'grep -r env . --exclude=.env',
+    'grep -rn git --exclude=.env .',
+    "rg sudo -g '!.env'",
+    'docker compose -p git --env-file .env up -d',
+    'cp scripts/git .env',
+    // A path or URL ending in eval, watch, env, dd or a wrapper's name is not that command.
+    'npm --prefix packages/watch test -- -t "handles .env"',
+    "curl https://example.com/eval -d 'cat .env'",
+    "echo git -c core.fsmonitor='cat .env' status",
+    "docker run --env-file .env img sh -c 'echo hi'",
+    'man git',
+    'strace -f git status',
+    'caffeinate git status',
+  ]);
+
+  // The allow rows of the 'Bash allows', #4639, #4856 and #5884 describes behind `caffeinate `, each with its own
+  // verdict at 25f10d345: the rule may not loosen one of them, nor block one it allowed.
+  describe('behind caffeinate, each verdict as at 25f10d345', () => {
+    const allowedBefore = [
+      "cat .envrc",
+      "cat env",
+      "ls",
+      "printenv",
+      "cat foo.env",
+      "git status",
+      "ls .env* 2>/dev/null",
+      "cat foo > .env",
+      "echo x >> .env.local",
+      "cmd 2>&1",
+      "cmd > .env 2>&1",
+      "cmd &> .env",
+      "cat \"my .env\"",
+      "git commit -m \"handle .env loading\"",
+      "git commit -m \"fix: .env parsing\"",
+      "cmd <<< \".env\"",
+      "git commit -m \"$(cat <<'EOF'\nfeat: add .env parsing\n\ncat .env is now supported\nEOF\n)\"",
+      "git commit -m \"$(cat <<'EOF'\nfix(#123): closes #1)\n\ncat .env is now supported\nEOF\n)\"",
+      "cat <<-EOF > out.md\n\tsee .env for values\n\tcat .env\n\tEOF",
+      "cat <<EOF\ncat .env\nnever terminated",
+      "cat <<'EOF'\n$(cat .env)\nEOF",
+      "cat <<A <<B\ncat .env\nA\ngrep K .env\nB\necho done",
+      "bash -c \"$TEST_CMD\"",
+      "grep -if.env.example pat f",
+      "grep -n.envrc pat f",
+      "grep -2if.env.example pat f",
+      "grep -1f.env.sample pat f",
+      "grep -2n.envrc pat f",
+      "cat .env.example",
+      "cat .env.sample",
+      "cat config/.env.template",
+      "cd /x && grep -n foo src/a.js",
+      "cd /x && cat README.md",
+      "grep -rn \"process.env\" src/",
+      "node -e \"console.log(process.env.HOME)\"",
+      "git add .env.example",
+      "echo \"cat .env\" # only prose",
+      "cat # .env",
+      "cat <<EOF\ncat .env\nEOF",
+      "bash <<EOF\necho .env\nEOF",
+      "echo \"cat .env\" | bash -c \"cat >/dev/null\"",
+      "echo \"cat .env\" | grep cat",
+      "bash script.sh",
+      "cat script.sh | bash",
+      "bash <(cat gen.sh)",
+      "cat <<EOF\n.env\nEOF",
+      "ls | xargs cat",
+      "su - user",
+      "su root",
+      "find . -name '*.ts' | xargs cat",
+      "echo .env.example | xargs cat",
+      "git ls-files | xargs grep -l KEY",
+      "printf '%s\\n' a b | xargs -n1 echo",
+      "cd /p && git check-ignore -q .env || echo tracked",
+      "bash -c 'git rm --cached .env'",
+      "egrep -n 'a|.env.local' src/setup.ts",
+      "grep -n \"packages/db/config.local\" src/setup.ts",
+      "rg -g '!.env' token .",
+      "rg --glob='!.env' token .",
+      "rg --iglob '!.env.local' token .",
+      "ls | xargs grep -n token --exclude=.env",
+      "cd /dir && docker compose --env-file .env.foundation build app",
+    ];
+    const blockedBefore = [
+      "[ -f \".env\" ] || [ -f \".env.local\" ]",
+      "[ -f .env ] && echo yes",
+      "test -f .env",
+      "[[ -f .env ]]",
+      "ls -la .secrets/",
+      "stat .env",
+      "echo .env",
+      "printf \"%s\" .env",
+      "touch .env",
+      "rm .env",
+      "rm -f .env.local",
+      "chmod 600 .env",
+      "basename /p/.env",
+      "dirname /p/.env",
+      "realpath .env",
+      "file .env",
+      "mkdir .secrets",
+      "echo .env | xargs rm",
+      "echo .env | xargs",
+      "echo .env | xargs -a names cat",
+      "git check-ignore -v .env",
+      "git ls-files --error-unmatch .env",
+      "git rm --cached .env",
+      "cp .env.example .env",
+      "git check-ignore -v .env.production",
+      "mv .env.example .env",
+      "git check-ignore -q .env .secrets",
+      "git ls-files -- .env",
+      "git ls-files -co --exclude-standard .env.local",
+      "git rm -r --cached -- .secrets",
+      "git rm .env --cached",
+      "git -C /p check-ignore -v .env",
+      "git --no-pager -c core.quotepath=off ls-files .env",
+      "git --git-dir=/p/.git rm --cached .env",
+      "sudo git rm --cached .env",
+      "cp -n .env.example .env",
+      "cp -fv .env.example .env",
+      "mv -i -- .env.example config/.env.local",
+      "grep -n 'packages/db/.env.local' src/setup.ts",
+      "fgrep -n '.env.local' src/setup.ts",
+      "grep -m 1 '.env.local' f",
+      "grep -A 2 -n '.env.local' f",
+      "grep -rn -i token . --exclude=.env",
+      "grep -rn -i token . --exclude .env",
+      "grep -rn token . --exclude-dir=.env --exclude=.env.local",
+      "jq '.env.DISABLE_AUTOUPDATER' settings.json",
+      "jq '.env' file.json",
+      "jq -r '.env' file.json",
+      "jq -n '.env.X'",
+      "jq -rc '.env' file.json",
+      "rg '.env.local' src",
+      "docker compose --env-file .env.foundation up -d --build app",
+      "docker run --env-file .env.foundation --rm img",
+      "docker compose --env-file=.env.foundation up -d",
+      "podman run --env-file .env.foundation --rm img",
+      "docker run --env-file .env --rm img",
+      "docker run --env-file .env alpine printenv",
+      "docker compose --env-file=.env config",
+      "nerdctl run --env-file .env.foundation --rm img",
+      "docker-compose --env-file .env.foundation up -d",
+    ];
+    for (const row of allowedBefore) {
+      const cmd = `caffeinate ${row}`;
+      test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(runHook(bash(cmd)), cmd));
+    }
+    for (const row of blockedBefore) {
+      const cmd = `caffeinate ${row}`;
+      test(`blocks ${JSON.stringify(cmd)}`, () => assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash' }));
+    }
+  });
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
@@ -1463,6 +1664,10 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
     // printf runs its format once per argument it consumes, so what it writes is far longer than the command.
     ['a long printf format run over many arguments, piped to a shell',
       `printf '${'x'.repeat(500000)}%s' ${'a '.repeat(1000)}| sh; cat .env`, 'command-too-complex', ''],
+    // An unknown command is read as launching each launcher word among its operands, each charged its length.
+    ['1 MiB of shell names after an unknown command', `caffeinate ${'sh '.repeat(349000)}; cat .env`, 'command-too-complex', ''],
+    ['1 MiB of env after an unknown command', `caffeinate ${'env '.repeat(262000)}; cat .env`, 'command-too-complex', ''],
+    ['1 MiB of env between unknown commands', `${'x env y env '.repeat(87000)}; cat .env`, 'command-too-complex', ''],
   ];
   for (const [shape, cmd, code, expectedPath] of blocks) {
     test(`decides ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
