@@ -436,18 +436,48 @@ function toRel(file) {
  * reports every site rather than counting listed files silently, and with
  * inline config off, so an `eslint-disable` comment cannot hide a site from
  * the count. The exempt helper stays out, as it does in eslint.config.mjs.
+ * `extraConfig` adds config objects after the repository's (a row's synthetic
+ * global ignore); such a row also turns off the unmatched-pattern error.
  */
-function siteCountEslint() {
+function siteCountEslint(extraConfig = []) {
   return new ESLint({
     cwd: REPO_ROOT,
     allowInlineConfig: false,
-    overrideConfig: {
-      files: ['tests/**/*.cjs'],
-      ignores: [EXEMPT_FILE],
-      rules: { [RULE_ID]: ['error', { allowlist: [] }] },
-    },
+    errorOnUnmatchedPattern: extraConfig.length === 0,
+    overrideConfig: [
+      {
+        files: ['tests/**/*.cjs'],
+        ignores: [EXEMPT_FILE],
+        rules: { [RULE_ID]: ['error', { allowlist: [] }] },
+      },
+      ...extraConfig,
+    ],
     ruleFilter: ({ ruleId }) => ruleId === RULE_ID,
   });
+}
+
+/** Every `.cjs` file on disk under `root` (repository-relative), sorted. */
+function cjsFilesOnDisk(root) {
+  const files = [];
+  (function walk(rel) {
+    for (const entry of fs.readdirSync(path.join(REPO_ROOT, rel), { withFileTypes: true })) {
+      const child = `${rel}/${entry.name}`;
+      if (entry.isDirectory()) walk(child);
+      else if (entry.isFile() && entry.name.endsWith('.cjs')) files.push(child);
+    }
+  })(root);
+  return files.sort();
+}
+
+/**
+ * The files on disk that the lint run did not visit. ESLint lints only what no
+ * ignore covers, so a global `ignores` entry over a tests/ subtree drops its
+ * copies from the rule and from the count together; this is how the count
+ * sees that. A file deleted between the walk and the lint is not reported.
+ */
+function findUnvisited(onDisk, results) {
+  const visited = new Set(results.map((r) => toRel(r.filePath)));
+  return onDisk.filter((f) => !visited.has(f) && fs.existsSync(path.join(REPO_ROOT, f)));
 }
 
 /** Per-file site counts from lint results, plus the files ESLint could not parse. */
@@ -463,7 +493,9 @@ function countSites(results) {
 
 /** The site count of every file under tests/. */
 async function measureSiteCounts() {
-  return countSites(await siteCountEslint().lintFiles(['tests/**/*.cjs']));
+  const onDisk = cjsFilesOnDisk('tests');
+  const results = await siteCountEslint().lintFiles(['tests/**/*.cjs']);
+  return { ...countSites(results), unvisited: findUnvisited(onDisk, results) };
 }
 
 /** The four ways measured counts can differ from the recorded ones (#597's per-file form). */
@@ -553,9 +585,26 @@ describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
     assert.deepStrictEqual(ratchetDiff({ ...recorded, ...counts }, recorded), { ...CLEAN_DIFF, added: [rel] });
   });
 
+  test('a global ignore over a tests/ subtree shows its files as unvisited', async () => {
+    const onDisk = cjsFilesOnDisk('tests/helpers');
+    assert.ok(onDisk.length > 0, 'the row needs .cjs files under tests/helpers');
+    const pattern = ['tests/helpers/**/*.cjs'];
+    // Control: with no extra ignore, every file under the subtree is visited.
+    assert.deepStrictEqual(findUnvisited(onDisk, await siteCountEslint().lintFiles(pattern)), []);
+    const ignored = await siteCountEslint([{ ignores: ['tests/helpers/**'] }]).lintFiles(pattern);
+    assert.deepStrictEqual(findUnvisited(onDisk, ignored), onDisk);
+  });
+
   test('every file under tests/ carries exactly the sites the allowlist records', async () => {
-    const { counts, unparsed } = await measureSiteCounts();
+    const { counts, unparsed, unvisited } = await measureSiteCounts();
     assert.deepStrictEqual(unparsed, [], 'a file ESLint cannot parse has no measured count');
+    assert.deepStrictEqual(
+      unvisited,
+      [],
+      'The count reads the files ESLint lints, and these .cjs files under tests/ were not linted, so their copies ' +
+        'would go uncounted. Find the ignore that covers them (an ignores entry in eslint.config.mjs, or an ESLint ' +
+        'default such as **/node_modules/) and lift it for these files.',
+    );
     const diff = ratchetDiff(counts, readAllowlist());
     assert.deepStrictEqual(
       diff,

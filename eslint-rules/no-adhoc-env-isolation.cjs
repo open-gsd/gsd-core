@@ -54,7 +54,10 @@ const path = require('path');
  * to its site count. `tests/no-adhoc-env-isolation.rule.test.cjs` lints every
  * `.cjs` file under `tests/` with the allowlist emptied and inline config off,
  * and fails when a listed file's count rises or falls, or an unlisted file has a
- * site, so the counts only fall. The rule has no marker comment of its own. An
+ * site, so the counts only fall. It also fails when ESLint lints fewer `.cjs`
+ * files under `tests/` than are on disk: an ESLint ignore over a `tests/`
+ * subtree would hide that subtree's copies from the rule and the count alike.
+ * The rule has no marker comment of its own. An
  * `eslint-disable` comment naming it hides a copy from lint output, but not
  * from that count, so it exempts nothing.
  *

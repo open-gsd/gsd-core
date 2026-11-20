@@ -749,7 +749,9 @@ as a `HOME=` inside a shell script string.
 and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
 A count may only fall. A new copy in a file the list does not name fails lint, and
 `tests/no-adhoc-env-isolation.rule.test.cjs` counts every `tests/**/*.cjs` file: it fails when a
-listed file holds more copies than its count, or fewer. When you migrate copies, lower the count,
+listed file holds more copies than its count, or fewer. The count reads the files ESLint lints, and
+it also fails when ESLint skips a `.cjs` file under `tests/`, so an ESLint ignore over a `tests/`
+subtree cannot hide that subtree's copies. When you migrate copies, lower the count,
 and delete the entry when it reaches zero (until you do, lint reports the entry as stale). Never add a file
 to the list or raise a count. Build the env with the helper instead. An `eslint-disable` comment
 for this rule does not exempt a copy: the count runs with inline config off and still sees it.
