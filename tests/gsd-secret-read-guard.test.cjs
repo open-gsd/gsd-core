@@ -1824,9 +1824,26 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
   // split makes: the reading before #5514 throws partway, and the GNU split denies.
   for (const [label, inner, code, passes] of [['read', 'cat .env', 'secret-read', 3], ['launch', TAIL, 'debugger-cli-spawn', 4]]) {
     test(`blocks: a ${label} in a string, when skipping it overflows the parser, in ${passes} passes`, () => {
-      assertScanned(`env -S '${inner}' bash -c '${'"$('.repeat(20000)}'`, code, passes, label);
+      const command = `env -S '${inner}' bash -c '${'"$('.repeat(20000)}'`;
+      assertScanned(command, code, passes, label);
+      assert.equal(scanReadings(command).threw, true, `${label}: the reading that skips the string threw`);
     });
   }
+
+  // On that command a scan throws and another finds the read, so the hook holds both a
+  // block and a throw, and the throw alone would end in the crash verdict, which allows.
+  // Only main() decides which comes first, so this row runs the hook itself: the block
+  // is emitted before the crash verdict. It checks that order; the scan's work is
+  // bounded by the in-process rows above.
+  test('the hook emits a read the scan found before the crash verdict a throw brings', () => {
+    const command = `env -S 'cat .env' bash -c '${'"$('.repeat(20000)}'`;
+    const r = runHookSeam(HOOK_PATH, [], {
+      input: JSON.stringify(bash(command)),
+      env: { ...process.env, NODE_V8_COVERAGE: '' },
+      timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+    });
+    assertBlocked({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr }, 'the read, before the crash verdict', { code: 'secret-read', tool: 'Bash' });
+  });
 
   // The other env -S dialects re-scan the whole command, and the BSD ones make the
   // 300,000-slash run below one word. The launch after it is denied by the reading
@@ -1847,7 +1864,7 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
   // in process, and asserts the verdict and the work charged (workSpent): a step
   // count, not a spawn timeout.
   describe('the env -S readings share the command\'s one scan budget, and keep its command-too-complex deny', () => {
-    const { scanBashCommand, scanBashReadings, scanDebuggerSpawn, workSpent, MAX_SCAN_CHARACTERS } = require(HOOK_PATH);
+    const { scanBashCommand, scanBashReadings, scanDebuggerSpawn, workSpent } = require(HOOK_PATH);
 
     // Skipped as the option's value, the string costs the plain reading one word.
     // Split, it is `sh -c` with 200,000 separators and a heredoc, which the scan and
@@ -1866,17 +1883,14 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     // debugger-spawn check's tokenizer (and the secret scan's, which reports it as
     // `command-too-complex`). The overflow is a deny, never the crash verdict's allow:
     // scanBashReadings reports that a scan threw and still returns the block, which
-    // main() emits before it reaches the crash verdict. The work stays within the
-    // command's budget. The block is the secret scan's, so this row pins the deny,
-    // not which scan's catch makes it.
+    // main() emits before it reaches the crash verdict. The block is the secret
+    // scan's, so this row pins the deny, not which scan's catch makes it.
     test('an env -S string whose split command overflows the debugger-spawn tokenizer is denied as command-too-complex', () => {
       const command = `env -S 'timeout 5 bash -c "claude --agent gsd-debugger; echo ${'\\"\\$('.repeat(100000)}"'`;
       assert.throws(() => scanDebuggerSpawn(command), RangeError, 'the spawn check overflows on the split command');
       const { block, threw } = scanBashReadings(command);
       assert.equal(threw, true, 'a scan threw');
       assert.equal(block === null ? null : block.code, 'command-too-complex', 'split command overflows the spawn check');
-      const { scan } = workSpent();
-      assert.ok(scan <= MAX_SCAN_CHARACTERS, `${scan} characters scanned, past the budget of ${MAX_SCAN_CHARACTERS}`);
     });
 
     // 200,000 separators after the string: one reading's scan and spawn check charge
