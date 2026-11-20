@@ -72,12 +72,18 @@
 //   fail closed: an option they do not list withdraws them from the segment.
 //   A git global option the walker does not know also keeps the #5045 `-c`
 //   scan running over every later word (see walkGitGlobals).
-//   A shell interpreter (bash/sh/zsh/dash/ksh/su) has its script scanned
-//   whether it arrives via `-c '…'`, a `<( )` file operand, a heredoc /
-//   here-string, or a pipe from a knowable `echo`/`printf` source
-//   (`echo cat .env | bash`); `eval` scans its joined operands; `source`/`.`
-//   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
-//   segment's names as the sub-command's read operands.
+//   A shell interpreter (bash/sh/zsh/dash/ksh/su, mksh, yash, …) has its script
+//   scanned whether it arrives via `-c '…'` (found past `--`, `-x` and other
+//   options too), a `<( )` file operand, a heredoc / here-string, or a pipe
+//   from a knowable `echo`/`printf` source (`echo cat .env | bash`; printf's
+//   format run over its `%s`/`%b`/`%c` arguments, escapes read, and a `cat`
+//   or `tee` stage passed through); `eval` scans its joined operands;
+//   `source`/`.` scans a `<( )` operand, and like a shell given `/dev/stdin`,
+//   `/dev/fd/N` or `-s`, its heredocs, here-strings and pipe; `dd` reads its
+//   `if=` file; and `find … | xargs cat` infers the upstream segment's names as
+//   the sub-command's read operands. A command with no rule of its own whose
+//   operands name git, a shell, an ssh client, eval, xargs, find, watch, dd or
+//   a wrapper is read as launching it from there (`caffeinate git …`, #5492).
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
 // before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
@@ -114,11 +120,15 @@
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
 //   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`), shell globs
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
-//   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
-//   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
-//   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
-//   the option's value). Reached through the same gaps and allowed under
+//   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), or
+//   from a producer that computes what it writes (`base64 -d`, `tr`, `rev`,
+//   `sed`, `awk`, `perl`, a printf conversion other than `%s`, `%b`, `%c` and
+//   `%%`, with or without a width or precision), into a shell or `xargs`
+//   (#5492), reads inside scripts the agent executes, and `glob: '*'` reaching
+//   a NON-gitignored `.env`, and a command another program takes as one
+//   string or on stdin rather than as its operands (`tmux new '…'`, `script -c
+//   '…'`, `at`, `batch`, `make -f -`), or `env -S 'script'` (the split string is
+//   skipped as the option's value). Reached through the same gaps and allowed under
 //   every reading, so the decoded-value check (#5255) does not cover them:
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
 //   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
@@ -179,14 +189,18 @@
 //   bare assignment anywhere in the script (inside `eval` or a `source <(…)`
 //   script too), with `VAR+=…` appends built on, and inherited by what it runs.
 //   A find action or `watch` running git or ssh is scanned too; words piped
-//   into `xargs git|ssh|<shell>` that mention a secret name block outright,
+//   into `xargs git|ssh|<shell>`, or into xargs running wrappers alone
+//   (`xargs -0 env`, `xargs sudo`), that mention a secret name block outright,
 //   since xargs re-splits them (-I, -0, -d, -n) in ways not modelled here.
 //   Values the command line does not set (the inherited environment) and
 //   config files (and commands that write one) are not scanned, nor are
 //   program-path keys and options
 //   (`difftool.<tool>.path`, `core.hooksPath`, `--exec-path`, a merge
 //   strategy) whose program the hook cannot see, or a command inside the
-//   quoted argument of a program other than ssh's `-o` (`vim -c`), the program
+//   quoted argument of a program other than ssh's `-o` (`vim -c`, `tmux new
+//   "…"`, `script -c`) or on the stdin of one that is not a shell (`at`,
+//   `batch`, `make -f -`), an alias the line defines and a later line uses
+//   (`alias g=…`, `shopt -s expand_aliases`, `g status`), the program
 //   `scp -S` / `sftp -S` / `sftp -D` runs, GNU `parallel`, and words xargs reads
 //   from `-a <file>` or a redirected stdin. Two more come from the scan
 //   underneath: a command directly behind `if`, `then`, `else`, `elif`,
@@ -195,9 +209,10 @@
 //   find, watch, a `VAR=…` prefix, the debugger check) never run on it
 //   (`if true; then git -c core.editor='cat .env #' log; fi`), while operands,
 //   `<ref>:<path>`, `source <file>`, redirects and substitutions are still
-//   read; and a value that arrives through a shell variable or a `$( )`
-//   output is not expanded (`E='cat .env #'; git -c core.editor="$E" log`),
-//   the `$VAR` gap above.
+//   read; and a key, value or option that arrives through a shell variable
+//   (one `read` or `printf -v` sets included) or a `$( )` output is not
+//   expanded (`E='cat .env #'; git -c core.editor="$E" log`), the `$VAR` gap
+//   above.
 //   The tests pin both as allowed. `core.pager`
 //   / `pager.*` / `GIT_PAGER` / `PAGER` are allowed on purpose (no TTY,
 //   nothing printed), a value naming a secret file included, except for a
