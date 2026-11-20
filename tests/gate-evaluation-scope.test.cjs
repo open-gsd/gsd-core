@@ -738,7 +738,8 @@ describe('resolveEvaluationScope — phase-side merges and per-merge failure iso
     assert.ok(!scope.outsideUnion.includes('src/base.js'));
   });
 
-  const isRevListNeg = (args) => args[0] === 'rev-list' && args.length === 3 && args[2].startsWith('^');
+  // `rev-list <p2> ^<base> --`: the revision list ends with the `--` terminator (#6179).
+  const isRevListNeg = (args) => args[0] === 'rev-list' && args.length === 4 && args[2].startsWith('^') && args[3] === '--';
   const failing = [
     ['the second-side rev-list', () => { let n = 0; return (args) => isRevListNeg(args) && (n += 1) === 1; }],
     ['the second-parent ancestry rev-list', () => { let n = 0; return (args) => isRevListNeg(args) && (n += 1) === 2; }],
