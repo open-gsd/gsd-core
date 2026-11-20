@@ -1777,9 +1777,8 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
   // tokenizes the command more often, spends past it. The count sees only charged
   // work. Splitting an `env -S` string is not charged, so these rows do not pin how
   // the split words reach the stack (a copy of it per string would pass them), and
-  // neither did the spawn rows they replace. lastSegment's own per-character bound,
-  // which this count does not see either, is pinned in
-  // tests/filename-classification.test.cjs.
+  // neither did the spawn rows they replace. Nor does it see lastSegment's own
+  // work, a loop on `next` since #5285.
   const { scanBashReadings: scanReadings, workSpent: spentWork } = require(HOOK_PATH);
   const assertScanned = (command, code, passes, label) => {
     const { block } = scanReadings(command);
