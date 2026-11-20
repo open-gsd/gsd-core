@@ -1376,6 +1376,44 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     "source /proc/../proc/self/fd/0 <<< 'cat .env'",
     "source /x/fd/7 7<<< 'cat .env'",
   ]);
+
+  // What printf writes, its format run over its arguments (`%s`, `%b`, `%c`, `%%`, escapes in the format and in `%b`
+  // read printf's way), and what echo writes with its escapes read; a `cat` reading stdin, or a `tee`, between the
+  // producer and the shell or xargs passes it on. Each is read beside what was read before.
+  blocks([
+    "printf '%s%s' 'cat .e' 'nv' | bash",
+    "printf '%b' 'cat .\\x65nv' | sh",
+    "echo -e 'cat .\\x65nv' | sh",
+    "echo 'cat .env' | cat | sh",
+    "echo 'cat .env' | tee x | sh",
+    "echo 'cat .env' | cat - | tee x | sh",
+    "printf -- '-c\\0core.fsmonitor=cat .e\\x6ev\\0status\\0' | xargs -0 git",
+    "printf '%s\\0' -c 'core.fsmonitor=cat .e''nv' status | cat | xargs -0 git",
+    "printf 'echo %s\\c;cat .e\\x6ev' hi | bash",
+    "printf '%b' 'cat .\\0145nv' | sh",
+    "printf 'cat .\\145nv' | sh",
+    "printf '%b' 'cat .\\x65nv\\c; echo' | sh",
+    "printf 'cat .e%cv' n | sh",
+    "printf '%%s; cat .e%s' nv | sh",
+    "printf 'cat .e%s\\n' x nv | sh",
+    "printf '%b\\0' -c 'core.fsmonitor=cat .\\x65nv' status | xargs -0 git",
+    "echo -e '-o\\nProxyCommand=cat .\\x65nv' | xargs -d '\\n' ssh host",
+    // Words piped into xargs running nothing but wrappers become the command and its assignments.
+    "printf 'GIT_EDITOR=cat .env\\0git\\0commit\\0' | xargs -0 env",
+    "printf 'git\\0commit\\0' | xargs -0 env 'GIT_EDITOR=cat .env #'",
+    `echo "git -c core.fsmonitor='cat .env' status" | xargs sudo`,
+    // Controls: the stage right before the shell or xargs is still read as before.
+    "echo hi | tee 'cat .env' | xargs git",
+    "echo safe | tee 'x=.env' | xargs git",
+    "printf 'cat %s' .env | sh",
+  ]);
+  allows([
+    // `;` is not a pipe, so the shell's stdin is not the echo.
+    "echo 'cat .env'; cat | sh",
+    "echo 'echo .env' | cat | sh",
+    "printf '%s %s\\n' echo .env | sh",
+    "printf '%b' 'echo .\\x65nv' | sh",
+  ]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
@@ -1420,6 +1458,9 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
       'command-too-complex', ''],
     ['an editor script of short segments, rescanned by its git commands',
       `export GIT_EDITOR='${'git log; '.repeat(30)}${'x;'.repeat(20000)}'; git log; cat .env`, 'secret-read', '.env'],
+    // printf runs its format once per argument it consumes, so what it writes is far longer than the command.
+    ['a long printf format run over many arguments, piped to a shell',
+      `printf '${'x'.repeat(500000)}%s' ${'a '.repeat(1000)}| sh; cat .env`, 'command-too-complex', ''],
   ];
   for (const [shape, cmd, code, expectedPath] of blocks) {
     test(`decides ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
