@@ -6,7 +6,7 @@
  * The advisor section of gsd-core/references/model-profiles.md said per-agent advisor control "is tracked upstream at
  * anthropics/claude-code#73072" after that issue had been closed as not planned, so readers waited for a switch that is
  * not coming. The ledger below names each upstream tracker the shipped docs link that is known to be closed without a
- * fix; a doc line that links one must say it is closed.
+ * fix; a doc line that links one must say it was closed as not planned.
  */
 
 const { describe, test } = require('node:test');
@@ -47,7 +47,7 @@ function pendingClaims(text, ledger = CLOSED_NOT_PLANNED) {
         const at = line.indexOf(ref);
         return at !== -1 && !/\d/.test(line[at + ref.length] ?? '');
       });
-      if (linksIt && !/\bclosed\b/i.test(line)) found.push({ line: index + 1, key });
+      if (linksIt && !/\bclosed as not planned\b/i.test(line)) found.push({ line: index + 1, key });
     }
   });
   return found;
@@ -66,11 +66,13 @@ describe('shipped docs do not present a closed-not-planned upstream tracker as p
     assert.deepEqual(offenders, []);
   });
 
-  test('the detector flags a pending claim and accepts a closed one', () => {
+  test('the detector flags a pending claim and accepts a closed one, and not a bare `closed` or `not closed`', () => {
     const url = 'https://github.com/anthropics/claude-code/issues/73072';
     assert.equal(pendingClaims(`Per-agent control is tracked upstream at [x](${url}); until it lands, pick one.`).length, 1);
     assert.equal(pendingClaims('tracked upstream at anthropics/claude-code#73072').length, 1);
     assert.equal(pendingClaims(`Requested upstream ([x](${url})), but closed as not planned, so none is coming.`).length, 0);
+    assert.equal(pendingClaims(`Still tracked upstream, not closed: ${url}`).length, 1);
+    assert.equal(pendingClaims(`Requested upstream, now closed: ${url}`).length, 1, 'closed alone does not say the request was declined');
     assert.equal(pendingClaims('A line that links no tracker.').length, 0);
     assert.equal(pendingClaims(`${url}1`).length, 0, 'a longer issue number is a different issue');
     assert.equal(pendingClaims(`${url}.`).length, 1, 'a trailing period still names the tracker');
