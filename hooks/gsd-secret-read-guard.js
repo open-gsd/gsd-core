@@ -349,9 +349,13 @@ function lineIsReadOnlyUnder(command, reading) {
       words.push(t);
     }
     if (words.length === 0) return false;
-    const cmd = resolveCommand(words);
-    if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
-    if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    // Every reading of the segment must be read-only (`time X=1 cat` is the unknown command `X=1` too).
+    const cmds = commandReadings(words);
+    if (cmds.length === 0) return false;
+    for (const cmd of cmds) {
+      if (!READ_ONLY_COMMANDS.has(cmd.base)) return false;
+      if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    }
   }
   return true;
 }
@@ -405,7 +409,8 @@ const WRAPPERS = new Map([
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
   ['command', {}],
-  ['time', { short: 'fo', long: ['--format', '--output'] }],
+  // bash's `time` keyword times a pipeline, which may start with assignments (#5492); see commandReadings.
+  ['time', { short: 'fo', long: ['--format', '--output'], assigns: true }],
   ['timeout', { short: 'sk', long: ['--signal', '--kill-after'], operands: 1 }],
   ['stdbuf', { short: 'ioe', long: ['--input', '--output', '--error'] }],
   ['setsid', {}],
@@ -416,6 +421,7 @@ const WRAPPERS = new Map([
   ['exec', { short: 'a' }],
   ['sshpass', { short: 'fdpP', reads: 'f' }],
 ]);
+const TIME_WITHOUT_ASSIGNS = { ...WRAPPERS.get('time'), assigns: false };
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
@@ -2124,13 +2130,15 @@ function wrapperReadValues(words, start, end, spec) {
 // remain. `assigns` are the prefix's `VAR=val` words, which the command and
 // everything it runs inherit; `reads` are files a wrapper reads itself. A
 // wrapper reads them whatever it runs (`sshpass -f .env`, `sshpass -f .env
-// env`), so prefixes with reads and no command give an empty `base`.
-function resolveCommand(words) {
+// env`), so prefixes with reads and no command give an empty `base`. `timeAssigns` false reads `time` as it was
+// read before #5492, taking no assignments (commandReadings).
+function resolveCommand(words, timeAssigns = true) {
   let idx = 0;
   const reads = [];
   while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
   while (idx < words.length) {
-    const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
+    const name = lastSegment(words[idx].text).toLowerCase();
+    const spec = name === 'time' && !timeAssigns ? TIME_WITHOUT_ASSIGNS : WRAPPERS.get(name);
     if (!spec) break;
     const next = skipWrapperArgs(words, idx + 1, spec);
     // A loop, not push(...): a spread of a command-sized array overflows the stack.
@@ -2142,6 +2150,17 @@ function resolveCommand(words) {
     base: idx < words.length ? lastSegment(words[idx].text).toLowerCase() : '', operands: words.slice(idx + 1), reads,
     assigns: words.slice(0, idx).map((w) => w.text).filter((t) => ASSIGNMENT_RE.test(t)),
   };
+}
+
+// The commands a segment's words may run: resolveCommand's, and where it read assignments after `time` (#5492), the
+// reading from before, first, which took the first of them for the command (`time X=1 ls .env` ran `X=1` with the
+// operands `ls .env`), so a command blocked before is still blocked, for the same reason.
+function commandReadings(words) {
+  const cmd = resolveCommand(words);
+  if (!words.some((w) => lastSegment(w.text).toLowerCase() === 'time')) return cmd === null ? [] : [cmd];
+  const before = resolveCommand(words, false);
+  if (before === null || (cmd !== null && before.operands.length === cmd.operands.length)) return cmd === null ? [] : [cmd];
+  return cmd === null ? [before] : [before, cmd];
 }
 
 // A lowercased git key reduced to its section and name. The subsection is
@@ -3853,82 +3872,83 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
     }
     if (!words.length) continue;
 
-    const cmd = resolveCommand(words);
-    if (!cmd) continue;
-    const { base, operands } = cmd;
     const heredocs = heredocsBySeg.get(s) || [];
-    for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
-    // A prefix's variables reach this command and everything it runs.
-    ctx.shellVars = shellVarFrame(scriptScope, cmd.assigns);
+    // Usually one reading; two where `time` took assignments, the earlier one first (commandReadings).
+    for (const cmd of commandReadings(words)) {
+      const { base, operands } = cmd;
+      for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
+      // A prefix's variables reach this command and everything it runs.
+      ctx.shellVars = shellVarFrame(scriptScope, cmd.assigns);
 
-    // eval concatenates ALL its operands and runs the result.
-    if (base === 'eval') {
-      // bash's eval takes an optional `--` before the words it joins (#5492).
-      const joined = operands.slice(operands.length && operands[0].text === '--' ? 1 : 0);
-      const hit = findSecretRead(joined.map((w) => w.text).join(' '), depth + 1, ctx);
-      if (hit) return hit;
-      continue;
-    }
-
-    // `source` / `.` reads a file (or a process-substitution script).
-    if (base === 'source' || base === '.') {
-      for (const w of operands) {
-        if (w.procsub !== undefined) {
-          for (const src of reconstructedProcsubs(w.procsub, reading)) {
-            const hit = findSecretRead(src, depth + 1, ctx);
-            if (hit) return hit;
-          }
-        } else if (operandNamesSecret(w.text)) return secretRead(w.text);
+      // eval concatenates ALL its operands and runs the result.
+      if (base === 'eval') {
+        // bash's eval takes an optional `--` before the words it joins (#5492).
+        const joined = operands.slice(operands.length && operands[0].text === '--' ? 1 : 0);
+        const hit = findSecretRead(joined.map((w) => w.text).join(' '), depth + 1, ctx);
+        if (hit) return hit;
+        continue;
       }
-      continue;
-    }
 
-    // xargs turns stdin file names into a sub-command's operands.
-    if (base === 'xargs') {
-      const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx);
-      if (hit) return hit;
-      // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
-      // operand — fall through to the operand check below.
-    }
+      // `source` / `.` reads a file (or a process-substitution script).
+      if (base === 'source' || base === '.') {
+        for (const w of operands) {
+          if (w.procsub !== undefined) {
+            for (const src of reconstructedProcsubs(w.procsub, reading)) {
+              const hit = findSecretRead(src, depth + 1, ctx);
+              if (hit) return hit;
+            }
+          } else if (operandNamesSecret(w.text)) return secretRead(w.text);
+        }
+        continue;
+      }
 
-    // find's -exec/-execdir/-ok/-okdir actions run a command; a shell given a script is read like any other (#6114).
-    if (base === 'find' || base === 'find.exe') {
-      const hit = scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
-      if (hit) return hit;
-    }
+      // xargs turns stdin file names into a sub-command's operands.
+      if (base === 'xargs') {
+        const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+        // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
+        // operand — fall through to the operand check below.
+      }
 
-    // procps watch joins its operands with spaces and runs the result through `sh -c` (#6114).
-    if (base === 'watch') {
-      const hit = scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
-      if (hit) return hit;
-    }
-
-    if (SHELL_INTERPRETERS.has(base)) {
-      const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
-      if (hit) return hit;
-      // `bash .env` (file mode) is caught by the operand check below.
-    }
-
-    // Git runs commands from -c values, aliases, options and URLs (#5045, #5492).
-    if (base === 'git' || base === 'git.exe') {
-      const hit = scanGitInvocation(operands, depth, ctx);
-      if (hit) return hit;
-    }
-
-    // ssh runs ProxyCommand-style -o values locally (#5492).
-    if (SSH_CLIENTS.has(base)) {
-      for (const [label, script] of sshOptionScripts(base, operands)) {
-        const hit = via(`${base} ${label}`, findSecretRead(script, depth + 1, ctx));
+      // find's -exec/-execdir/-ok/-okdir actions run a command; a shell given a script is read like any other (#6114).
+      if (base === 'find' || base === 'find.exe') {
+        const hit = scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
         if (hit) return hit;
       }
-    }
 
-    if (NON_READING_COMMANDS.has(base)) continue;
+      // procps watch joins its operands with spaces and runs the result through `sh -c` (#6114).
+      if (base === 'watch') {
+        const hit = scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+      }
 
-    const nameOnly = nameOnlyOperandIndices(base, operands);
-    for (let k = 0; k < operands.length; k++) {
-      if (nameOnly.has(k)) continue;
-      if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
+      if (SHELL_INTERPRETERS.has(base)) {
+        const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+        // `bash .env` (file mode) is caught by the operand check below.
+      }
+
+      // Git runs commands from -c values, aliases, options and URLs (#5045, #5492).
+      if (base === 'git' || base === 'git.exe') {
+        const hit = scanGitInvocation(operands, depth, ctx);
+        if (hit) return hit;
+      }
+
+      // ssh runs ProxyCommand-style -o values locally (#5492).
+      if (SSH_CLIENTS.has(base)) {
+        for (const [label, script] of sshOptionScripts(base, operands)) {
+          const hit = via(`${base} ${label}`, findSecretRead(script, depth + 1, ctx));
+          if (hit) return hit;
+        }
+      }
+
+      if (NON_READING_COMMANDS.has(base)) continue;
+
+      const nameOnly = nameOnlyOperandIndices(base, operands);
+      for (let k = 0; k < operands.length; k++) {
+        if (nameOnly.has(k)) continue;
+        if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
+      }
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
