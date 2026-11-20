@@ -4055,7 +4055,7 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
 
       // xargs turns stdin file names into a sub-command's operands.
       if (base === 'xargs') {
-        const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx);
+        const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
         if (hit) return hit;
         // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
         // operand — fall through to the operand check below.
@@ -4447,7 +4447,7 @@ function pipeSources(s, bySeg, sepAfter, ctx) {
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
 // mode c whether or not a pipe feeds it. The sub-command's prefix variables
 // (`xargs env GIT_CONFIG_…=… sh -c …`) are in scope for all of it (#5492).
-function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
+function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx, heredocs = [], hereStrings = []) {
   const { subIdx, argFile, replaceStr } = xargsSubCommand(operands);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
 
@@ -4455,14 +4455,14 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
   // `xargs timeout 5 sh -c '…'`, `xargs env sh -c '…'`, #6114); nothing but wrappers left reads as the bare word.
   // Each reading of it is read (commandReadings), the earlier first.
   for (const resolvedSub of commandReadings(operands.slice(subIdx), true)) {
-    const hit = scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx);
+    const hit = scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
     if (hit) return hit;
   }
   return null;
 }
 
 // scanXargsPipe for one reading of the sub-command, `resolvedSub` (null when only wrappers are left).
-function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx) {
+function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings) {
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, resolvedSub ? resolvedSub.assigns : []);
   try {
@@ -4471,8 +4471,8 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
     const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
     const subIsShell = SHELL_INTERPRETERS.has(subBase);
     if (subIsShell) {
-      // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
-      const hit = scanShellInterpreter(subOperands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
+      // Heredocs/here-strings belong to xargs, not the sub-shell, unless `-a` leaves xargs's stdin to it (#5492).
+      const hit = scanShellInterpreter(subOperands, argFile ? heredocs : [], argFile ? hereStrings : [], s, bySeg, sepAfter, depth, reading, ctx);
       if (hit) return hit;
     } else {
       // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
@@ -4637,7 +4637,7 @@ function scanLaunched(cmd, words, s, bySeg, sepAfter, depth, reading, ctx, hered
     if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
     if (cmd.base === 'eval') return scanEval(cmd.operands, depth, ctx);
     if (cmd.base === 'watch') return scanWatch(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
-    if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading, ctx);
+    if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
     // The launcher's stdin goes with the words it launches (#5492): a heredoc body as a here-string.
     const stdin = [...heredocs.map((h) => h.text), ...hereStrings].map((text) => `<<< ${shellQuote(text)}`);
     return rescanCommand([...words.map((w) => shellQuote(w.text)), ...stdin].join(' '), depth, ctx);
