@@ -1525,7 +1525,10 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     ['two nests of 1,100 heredoc tags around a long delimiter', `echo $(${'cat <<E$('.repeat(1100)}cat <<${'a'.repeat(100000)}$(${'cat <<E$('.repeat(1100)}`, ['nesting-too-deep', 'command-too-complex'], true],
     ['10,000 levels, each after a `)` in a comment', `echo "$(${'# c )\n$( '.repeat(10000)}`, ['command-too-complex'], false],
   ]) {
-    test(`${shape}: the hook denies it; the grammar scan ends as command-too-complex${stackBound ? ' where the stack runs out' : ''}, in steps linear in the command`, () => {
+    const grammarEnds = stackBound
+      ? 'the grammar scan ends as command-too-complex where the stack runs out, and allows the read-free nest where it does not'
+      : 'the grammar scan ends as command-too-complex';
+    test(`${shape}: the hook denies it; ${grammarEnds}, in steps linear in the command`, () => {
       const hook = scanOrOverflow(cmd).verdict;
       assert.ok(hook !== null && hookCodes.includes(hook.code), `hook verdict ${JSON.stringify(hook)}`);
       const { verdict, steps } = grammarScan(cmd);
