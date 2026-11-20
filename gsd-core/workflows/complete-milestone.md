@@ -72,6 +72,36 @@ SECURITY: Audit JSON output is structured data from the `audit-open` query handl
 Exact per-category bash (including the `@file:` large-payload handling, the `todos` 5-per-scan cap, and the phase-scoped `--archived-milestone` handling) and the exact STATE.md table shape: `gsd-core/workflows/complete-milestone/detail/elaboration.md` § 1.
 </step>
 
+<step name="security_audit_reminder">
+
+**Security-audit reminder (opt-in — `workflow.security_audit_phase`, default `false`).** When the key is `false` this step prints nothing and changes nothing.
+
+```bash
+SECURITY_AUDIT_PHASE=$(gsd_run query config-get workflow.security_audit_phase --raw 2>/dev/null || echo "false")
+```
+
+If `SECURITY_AUDIT_PHASE` is not `"true"`: skip this step silently — zero output.
+
+If `"true"`: look for evidence that a security audit of the code this milestone ships was performed during the milestone (e.g. a security-audit report or record in the milestone's phase artifacts, verification summaries, or `.planning/` notes). Per-phase `secure-phase` verification and code review are NOT a whole-codebase security audit and do not count as evidence.
+
+**If evidence exists:** note it in one line and continue.
+
+**If no evidence exists:** print this reminder — it is advisory only and NEVER blocks, gates, or delays the close:
+
+```
+⚠ SECURITY AUDIT REMINDER (workflow.security_audit_phase: true)
+
+No security-audit evidence was found for this milestone. Before closing, consider
+running a security audit of the code this milestone ships — using whatever audit
+skill or tooling is installed (e.g. a security-audit skill). If no audit tooling
+is available, report "no audit tooling available" — NEVER fabricate audit results
+or findings. This is a reminder only; the close proceeds either way.
+```
+
+Then continue with the close regardless.
+
+</step>
+
 <step name="verify_readiness">
 
 **Use `init.manager` for canonical readiness check:**
@@ -621,6 +651,7 @@ Milestone completion is successful when:
 - [ ] Pre-close artifact audit run and output shown to user
 - [ ] Deferred items recorded in STATE.md if user acknowledged
 - [ ] Known deferred items count noted in MILESTONES.md entry
+- [ ] Security-audit reminder surfaced when `workflow.security_audit_phase` is true and no audit evidence was found (non-blocking; silent when the key is false)
 
 - [ ] MILESTONES.md entry created with stats and accomplishments
 - [ ] PROJECT.md full evolution review completed (flat mode only; skipped under `--ws`)
