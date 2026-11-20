@@ -45,6 +45,8 @@ import noVerificationStatusLiteral from './eslint-rules/no-verification-status-l
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
 import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
 import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-registry.cjs';
+import directiveNamesIssue from './eslint-rules/directive-names-issue.cjs';
+import maxCommentBlockLines from './eslint-rules/max-comment-block-lines.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
 
@@ -98,6 +100,8 @@ const localPlugin = {
     'no-runtime-name-literal': noRuntimeNameLiteral,
     'require-read-only-git-env': requireReadOnlyGitEnv,
     'named-args-spec-from-registry': namedArgsSpecFromRegistry,
+    'directive-names-issue': directiveNamesIssue,
+    'max-comment-block-lines': maxCommentBlockLines,
   },
 };
 
@@ -1103,6 +1107,18 @@ export default tseslint.config(
           message: 'The command router dispatches to gate modules (src/gate-*.cts) only; implement the verb as a gate module that returns a GateResult (ADR-5057 §4, #5219).',
         }],
       }],
+    },
+  },
+
+  // ADR-6315 item 24 (#6342): an exemption directive names its issue, and a comment block is at
+  // most 15 lines. Each file may carry up to its baseline in eslint-rules/comment-ratchet.baseline.json,
+  // which can only shrink (a file under its baseline fails until the entry is lowered).
+  {
+    files: ['**/*.{cjs,js,mjs}', 'src/**/*.cts'],
+    plugins: { local: localPlugin },
+    rules: {
+      'local/directive-names-issue': 'error',
+      'local/max-comment-block-lines': 'error',
     },
   },
 );

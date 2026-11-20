@@ -1,0 +1,52 @@
+'use strict';
+
+/**
+ * max-comment-block-lines (ADR-6315 item 24, #6342)
+ *
+ * A comment block (a block comment, or consecutive `//` lines) may not exceed
+ * 15 lines. A longer one is a measurement log or an essay: move it to
+ * `docs/research/data/` and link it. Each file may carry up to its baseline of
+ * over-long blocks (`comment-ratchet.baseline.json`); a file with fewer than
+ * its baseline must lower it. See `lib/comment-ratchet.cjs`.
+ */
+
+const path = require('node:path');
+const { MAX_COMMENT_BLOCK_LINES, longBlocks, judge } = require('./lib/comment-ratchet.cjs');
+const defaultBaseline = require('./comment-ratchet.baseline.json');
+
+/** @type {import('eslint').Rule.RuleModule} */
+module.exports = {
+  meta: {
+    type: 'suggestion',
+    docs: { description: `A comment block is at most ${MAX_COMMENT_BLOCK_LINES} lines` },
+    schema: [{ type: 'object', properties: { baseline: { type: 'object' } }, additionalProperties: false }],
+    messages: {
+      long: `This comment block is {{lines}} lines; the ceiling is ${MAX_COMMENT_BLOCK_LINES}. Move it to docs/research/data/ and link it.`,
+      excess: `This comment block is {{lines}} lines; the ceiling is ${MAX_COMMENT_BLOCK_LINES}. The file has {{count}} over-long blocks and its baseline allows {{allowed}}.`,
+      stale: 'This file has {{count}} over-long comment blocks but a baseline of {{allowed}}. Lower its entry in eslint-rules/comment-ratchet.baseline.json to {{count}} (remove the entry at 0).',
+    },
+  },
+  create(context) {
+    const options = context.options[0] || {};
+    const baseline = options.baseline || defaultBaseline;
+    const rel = path.relative(context.cwd, context.filename).split(path.sep).join('/');
+    const allowed = (baseline[rel] && baseline[rel].block) || 0;
+    return {
+      Program() {
+        const blocks = longBlocks(context.sourceCode.getAllComments());
+        const { excess, stale } = judge(blocks.length, allowed);
+        if (excess > 0) {
+          for (const block of blocks.slice(allowed)) {
+            context.report({
+              loc: block.loc,
+              messageId: allowed === 0 ? 'long' : 'excess',
+              data: { lines: block.lines, count: blocks.length, allowed },
+            });
+          }
+        } else if (stale > 0) {
+          context.report({ loc: { line: 1, column: 0 }, messageId: 'stale', data: { count: blocks.length, allowed } });
+        }
+      },
+    };
+  },
+};
