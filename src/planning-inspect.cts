@@ -667,8 +667,9 @@ interface PlanRow {
    * `status` is read is looked up by plan id, then by canonical id, the last
    * match in listing order winning, and blocked SUMMARYs are not skipped, so
    * it can differ from the file that gave the completion record (and can be a
-   * bare-id SUMMARY written for another plan). False too when that file is
-   * unreadable (a `summary_unreadable` diagnostic then names it). The rules
+   * bare-id SUMMARY written for another plan). False too when `readDocument`
+   * refuses that file (a `summary_unreadable` diagnostic then names it), and
+   * when the predicate's own second read of it fails (no diagnostic). The rules
    * and their limits: docs/CLI-TOOLS.md, "Which SUMMARY `halted` reads".
    * `hasSummary` is untouched and keeps its own, older pairing rule.
    */
@@ -827,11 +828,14 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
   const summaryReadable = new Map<string, boolean>();
 
   /**
-   * #5823: `isSummaryFileHalted` on the plan's halt-paired SUMMARY, called
-   * only once `readDocument` has accepted that file. A halt-paired SUMMARY no
-   * row read has seen yet is read here, and if it cannot be read it gets ONE
-   * `summary_unreadable` however many plans pair with it, so `halted: false`
-   * is never silently a non-answer for an unreadable file.
+   * #5823: `isSummaryFileHalted` on the SUMMARY the halt lookup finds for the
+   * plan, called only once `readDocument` has accepted that file. A looked-up
+   * SUMMARY no row read has seen yet is read here, and if `readDocument`
+   * refuses it it gets ONE `summary_unreadable` however many plans look it up,
+   * so `halted: false` is never silently a non-answer for a file
+   * `readDocument` refuses. `isSummaryFileHalted` then opens the file again
+   * by path, as `phase-plan-index` does, and a failure of that read is false
+   * with no diagnostic.
    */
   function readHalted(planFile: string): boolean {
     if (unsummarizedPlanFiles.has(planFile)) return false;
