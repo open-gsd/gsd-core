@@ -194,11 +194,6 @@ function unreadableReview(
   });
 }
 
-/** A plan's id is its file name minus `-PLAN.md`; a control byte (a hand-made name) reads as `?`, so no report line can be split by an id. */
-function planIdOf(planPath: string): string {
-  return path.basename(planPath, '-PLAN.md').replace(/\p{Cc}/gu, '?');
-}
-
 /** One TDD plan's row, plus the evidence `--record` seals when it passes (the GREEN prefers live hashes over the seal's, the RED is the seal's when the seal supplied it). */
 function planRow(
   projectDir: string,
@@ -208,7 +203,7 @@ function planRow(
   dependents: ReadonlyMap<string, string[]>,
   historyComplete: () => boolean,
 ): { row: TddPlanRow; evidence?: SealEntry } {
-  const planId = planIdOf(planPath);
+  const planId = path.basename(planPath, '-PLAN.md');
   const commits = planCommits(projectDir, planId);
   const reds = shasOfKind(commits, 'test');
   // #5354: the seal stands in once the plan was squashed away. The test: its RED (else its GREEN) is no longer
@@ -317,7 +312,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
           if (plan.kind === 'unreadable') unreadable.push({ source: planPath, reason: plan.reason });
           else if (plan.kind === 'found') {
             if (isTddPlan(plan.value)) tddPlanFiles.push(planPath);
-            const planId = planIdOf(planPath);
+            const planId = path.basename(planPath, '-PLAN.md');
             for (const dep of dependsOnOf(plan.value)) dependents.set(dep, [...(dependents.get(dep) ?? []), planId]);
           }
         }

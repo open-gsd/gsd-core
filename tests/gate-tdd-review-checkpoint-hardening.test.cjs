@@ -86,10 +86,10 @@ describe('H1 type: tdd detection equals the old regex in its pathological forms'
   }
 });
 
-describe('H2 the plan id is matched literally in the git --grep pattern', () => {
-  // `*` and `?` are not valid in a Windows file name, so the POSIX-only ids are skipped there.
-  const posixOnly = { skip: process.platform === 'win32' };
+// `*` and `?` are not valid in a Windows file name, and a symlink or FIFO needs POSIX: those tests are skipped there.
+const posixOnly = { skip: process.platform === 'win32' };
 
+describe('H2 the plan id is matched literally in the git --grep pattern', () => {
   test('an ordinary id with a dot (`03.1-02`) still matches its own RED and GREEN commits', () => {
     withProject({ '03.1-02-PLAN.md': plan('type: tdd') }, ['test(03.1-02): red', 'feat(03.1-02): green'], (dir) => {
       const out = review(dir);
@@ -160,7 +160,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   const dirs = [];
   afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
 
-  const sealGit = (dir, ...a) => gitOrThrow(['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...a], { cwd: dir }).trim();
+  const sealGit = (dir, ...a) => git(dir, ...a).trim();
   function w(dir, rel, content) {
     fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
     fs.writeFileSync(path.join(dir, rel), content);
@@ -306,13 +306,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     // One literal per reason, so a swapped or emptied text fails (the export is the typed surface, not the rendered report).
     assert.match(TDD_NOT_EVALUABLE_WHY[TDD_ROW_REASON.SEALED_SHALLOW_HISTORY], /history is incomplete/);
     assert.match(TDD_NOT_EVALUABLE_WHY[TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE], /SUMMARY task commits are unreachable/);
-  });
-
-  test('a plan file name with control bytes reaches the rows as printable text', () => {
-    const { dir } = fixture([]);
-    w(dir, `${PHASE}/01-\n02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
-    const ids = run(dir).payload.rows.map((row) => row.planId).sort();
-    assert.deepEqual(ids, ['01-01', '01-?02']);
   });
 
   test('a plan with reachable commits lacking test()/feat() still fails', () => {
@@ -724,9 +717,8 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(plans['01-02'], undefined);
   });
 
-  const posix = { skip: process.platform === 'win32' };
 
-  test('a symlinked seal is refused and its target is never written', posix, () => {
+  test('a symlinked seal is refused and its target is never written', posixOnly, () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const outside = path.join(dir, 'outside.txt');
     fs.writeFileSync(outside, 'untouched');
@@ -737,7 +729,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(fs.readFileSync(outside, 'utf8'), 'untouched');
   });
 
-  test('a symlinked seal credits nothing on read', posix, () => {
+  test('a symlinked seal credits nothing on read', posixOnly, () => {
     const { dir } = fixture([], { summary: false });
     const outside = path.join(dir, 'outside.json');
     fs.writeFileSync(outside, sealOf(sha('a'), sha('b')));
@@ -745,7 +737,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(run(dir).outcome, 'unreadable');
   });
 
-  test('a symlinked seal is refused at open even if lstat is made to lie (no check-to-read window)', posix, (t) => {
+  test('a symlinked seal is refused at open even if lstat is made to lie (no check-to-read window)', posixOnly, (t) => {
     const { dir } = fixture([], { summary: false });
     const outside = path.join(dir, 'outside.json');
     fs.writeFileSync(outside, sealOf(sha('a'), sha('b')));
@@ -762,7 +754,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     return false;
   }
 
-  test('a FIFO seal never hangs the open (O_NONBLOCK) and fstat rejects it as not a regular file', posix, (t) => {
+  test('a FIFO seal never hangs the open (O_NONBLOCK) and fstat rejects it as not a regular file', posixOnly, (t) => {
     const { dir } = fixture([], { summary: false });
     const fifo = path.join(dir, SEAL);
     if (!mkfifo(t, fifo)) return;
@@ -771,7 +763,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   // The primary SUMMARY is unreadable, so a later candidate name must not turn the plan into NotEvaluable (execute-mvp-tdd.md: ordinary failure).
   for (const [label, opts, damage] of [
-    ['symlinked', posix, (dir, summary) => { const real = path.join(dir, 'real-summary.md'); fs.renameSync(summary, real); fs.symlinkSync(real, summary); }],
+    ['symlinked', posixOnly, (dir, summary) => { const real = path.join(dir, 'real-summary.md'); fs.renameSync(summary, real); fs.symlinkSync(real, summary); }],
     ['oversized', {}, (dir, summary) => fs.writeFileSync(summary, padTo(fs.readFileSync(summary, 'utf8'), REPO_TEXT_MAX_BYTES + 1))],
   ]) {
     test(`a ${label} primary SUMMARY fails even when a later candidate name holds task commits`, opts, () => {
@@ -905,7 +897,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(fs.readdirSync(path.join(dir, PHASE)).filter((n) => n.includes('.tmp')), []);
   });
 
-  test('a dangling symlink at the seal path is refused and its target is never created', posix, () => {
+  test('a dangling symlink at the seal path is refused and its target is never created', posixOnly, () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const target = path.join(dir, 'not-there.json');
     fs.symlinkSync(target, path.join(dir, SEAL));
@@ -1047,50 +1039,50 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(subject, before);
   }
 
-  test('ship.md seal step commits a dirty seal after a successful record', posix, () => {
+  test('ship.md seal step commits a dirty seal after a successful record', posixOnly, () => {
     const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(subject, /^docs\(01\): seal TDD review evidence$/);
   });
 
   // User git config must not hide a new seal from the dirty check: with `status.showUntrackedFiles=no` a plain `git status` omits it.
-  test('ship.md seal step commits a new seal when git is configured to hide untracked files', posix, () => {
+  test('ship.md seal step commits a new seal when git is configured to hide untracked files', posixOnly, () => {
     const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')), prepare: (dir) => sealGit(dir, 'config', 'status.showUntrackedFiles', 'no') });
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(subject, /^docs\(01\): seal TDD review evidence$/);
   });
 
-  test('ship.md seal step warns and commits nothing when a bounded git call times out', posix, () => {
+  test('ship.md seal step warns and commits nothing when a bounded git call times out', posixOnly, () => {
     expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitExit: 124 }), 'gitTimedOut');
   });
 
   for (const code of [2, 127, 128]) {
-    test(`ship.md seal step warns and commits nothing when a bounded git call exits ${code}`, posix, () => {
+    test(`ship.md seal step warns and commits nothing when a bounded git call exits ${code}`, posixOnly, () => {
       expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), gitExit: code }), 'gitFailed');
     });
   }
 
   // `git status` alone fails (the ignore check is clean): each bounded call carries its own branch.
-  test('ship.md seal step warns and commits nothing when only the bounded git status times out', posix, () => {
+  test('ship.md seal step warns and commits nothing when only the bounded git status times out', posixOnly, () => {
     expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), statusExit: 124 }), 'gitTimedOut');
   });
 
-  test('ship.md seal step warns and commits nothing when only the bounded git status fails', posix, () => {
+  test('ship.md seal step warns and commits nothing when only the bounded git status fails', posixOnly, () => {
     expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), statusExit: 128 }), 'gitFailed');
   });
 
-  test('ship.md seal step never commits the on-disk seal when --record failed', posix, () => {
+  test('ship.md seal step never commits the on-disk seal when --record failed', posixOnly, () => {
     expectBranchWarning(runSealStep({ recordRc: 3, seal: '<<<<<<< conflict' }), 'recordFailed');
   });
 
-  test('ship.md seal step leaves the seal uncommitted and warns when the commit owner skips it (commit_docs resolves false)', posix, () => {
+  test('ship.md seal step leaves the seal uncommitted and warns when the commit owner skips it (commit_docs resolves false)', posixOnly, () => {
     const result = runSealStep({ seal: sealOf(sha('a'), sha('b')), commitOut: 'skipped' });
     expectBranchWarning(result, 'commitSkipped');
     assert.equal(fs.existsSync(path.join(result.dir, SEAL)), true);
     assert.notEqual(sealGit(result.dir, 'status', '--porcelain', '--', SEAL), '');
   });
 
-  test('ship.md seal step commits through the commit owner, not raw git', posix, () => {
+  test('ship.md seal step commits through the commit owner, not raw git', posixOnly, () => {
     const { calls } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
     assert.ok(calls.some((c) => c.startsWith('query commit docs(01): seal TDD review evidence --files ') && c.includes('TDD-REVIEW-SEAL.json')), calls.join('\n'));
   });
@@ -1104,21 +1096,21 @@ describe('#5354 tdd review checkpoint seal', () => {
     });
   }
 
-  test('ship.md seal step commits the seal when the phase override is true and the project value false', posix, () => {
+  test('ship.md seal step commits the seal when the phase override is true and the project value false', posixOnly, () => {
     const { r, dir, subject } = realSeal({ commit_docs: false, phase_commit_docs: { '01': true } });
     assert.equal(r.exitCode, 0, r.stderr);
     assert.equal(subject, 'docs(01): seal TDD review evidence');
     assert.equal(sealGit(dir, 'status', '--porcelain', '--', SEAL), '');
   });
 
-  test('ship.md seal step leaves the seal uncommitted when the phase override is false and the project value true', posix, () => {
+  test('ship.md seal step leaves the seal uncommitted when the phase override is false and the project value true', posixOnly, () => {
     const result = realSeal({ commit_docs: true, phase_commit_docs: { '01': false } });
     expectBranchWarning(result, 'commitSkipped');
     assert.equal(fs.existsSync(path.join(result.dir, SEAL)), true);
     assert.notEqual(sealGit(result.dir, 'status', '--porcelain', '--', SEAL), '');
   });
 
-  test('ship.md seal step resolves the phase in the workstream ship resolved it in (#5354)', posix, () => {
+  test('ship.md seal step resolves the phase in the workstream ship resolved it in (#5354)', posixOnly, () => {
     const { calls } = runSealStep({ ws: '--ws ws1', seal: sealOf(sha('a'), sha('b')) });
     assert.equal(calls.length, 2);
     assert.match(calls[0], /^check .* --record /);
@@ -1126,14 +1118,14 @@ describe('#5354 tdd review checkpoint seal', () => {
     for (const call of calls) assert.match(call, / --ws=ws1(?: |$)/, call);
   });
 
-  test('ship.md seal step warns when no seal file exists, and only for a phase with tdd plans', posix, () => {
+  test('ship.md seal step warns when no seal file exists, and only for a phase with tdd plans', posixOnly, () => {
     const warned = runSealStep({ picked: '1' });
     expectBranchWarning(warned, 'noSeal');
     assert.equal(fs.existsSync(path.join(warned.dir, SEAL)), false);
     expectQuiet(runSealStep({ picked: '0' }));
   });
 
-  test('ship.md seal step warns about a gitignored seal and commits nothing', posix, () => {
+  test('ship.md seal step warns about a gitignored seal and commits nothing', posixOnly, () => {
     const result = runSealStep({
       seal: sealOf(sha('a'), sha('b')),
       prepare: (dir) => { w(dir, '.gitignore', `${SEAL}\n`); sealGit(dir, 'add', '.gitignore'); sealGit(dir, 'commit', '--amend', '--no-edit'); },
@@ -1144,15 +1136,15 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(sealGit(dir, 'status', '--porcelain', '--', SEAL), '');
   });
 
-  test('ship.md seal step stops with exit 1 when the commit owner exits non-zero', posix, () => {
+  test('ship.md seal step stops with exit 1 when the commit owner exits non-zero', posixOnly, () => {
     expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), commitOut: '', commitRc: 3 }), 'commitFailed');
   });
 
-  test('ship.md seal step stops with exit 1 when the commit owner reports failed', posix, () => {
+  test('ship.md seal step stops with exit 1 when the commit owner reports failed', posixOnly, () => {
     expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), commitOut: 'failed' }), 'commitFailed');
   });
 
-  test('ship.md seal step stops with exit 1 when the seal commit fails', posix, () => {
+  test('ship.md seal step stops with exit 1 when the seal commit fails', posixOnly, () => {
     expectBranchWarning(runSealStep({ seal: sealOf(sha('a'), sha('b')), prepare: (dir) => w(dir, '.git/index.lock', '') }), 'commitFailed');
   });
 
