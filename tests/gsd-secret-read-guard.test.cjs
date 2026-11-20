@@ -1249,6 +1249,58 @@ describe('gsd-secret-read-guard: shapes the round-13 adversarial pass found (#54
   }
 });
 
+describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', () => {
+  // Each `blocks` row runs a command that reads .env and was allowed at 25f10d345, except the controls, which were
+  // blocked there and stay blocked. Each `allows` row names a secret too, so a hook that over-reads would fail it.
+  const blocks = (cmds, expected = {}) => {
+    for (const cmd of cmds) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env', ...expected }));
+    }
+  };
+  const allows = (cmds) => {
+    for (const cmd of cmds) test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(runHook(bash(cmd)), cmd));
+  };
+
+  // A shell's `-c` script is found by bash's option walk too: `--`, `-` and long options before it, `c` anywhere in
+  // a `-` or `+` cluster, and an `o` / `O` in one taking the next word.
+  blocks([
+    "bash -c -- 'cat .env'",
+    `bash -c -- "git -c core.fsmonitor='cat .env' status"`,
+    "bash -cx 'cat .env'",
+    "bash -c -x 'cat .env'",
+    "bash -c --norc 'cat .env'",
+    "bash -co pipefail 'cat .env'",
+    "bash -coo pipefail allexport 'cat .env'",
+    "bash -c +x 'cat .env'",
+    "bash +c 'cat .env'",
+    "bash +x <<< 'cat .env'",
+    "bash -xo pipefail <<< 'cat .env'",
+    "mksh -c 'cat .env'",
+    "/bin/yash -c 'cat .env'",
+    "posh -c 'cat .env'",
+    "bash.exe -c -- 'cat .env'",
+    "sh.exe -c 'cat .env'",
+    "zsh.exe -c 'cat .env'",
+    "echo x | xargs bash -c -- 'cat .env'",
+    "find . -exec bash -c -- 'cat .env' \\;",
+    // Controls: the word after `-c` is still read (`su`), and stdin is still read where no script follows.
+    "su - root -c 'cat .env'",
+    "su -c 'cat .env' root",
+    "bash -xc 'cat .env'",
+    "bash -cx <<< 'cat .env'",
+    "bash - <<< 'cat .env'",
+    "echo 'cat .env' | xargs sh -cx",
+  ]);
+  blocks(["bash -c -- 'claude --agent gsd-debugger'"], { code: 'debugger-cli-spawn', path: undefined });
+  allows([
+    "bash -c -- 'echo .env'",
+    // Mode c: stdin is data.
+    "bash -co pipefail 'echo hi' <<< 'cat .env'",
+    // dash and bash take the word after a cluster's `o` as its value, so nothing runs here.
+    "dash -coerrexit 'cat .env'",
+  ]);
+});
+
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
   // A hook that crashes or outlives its timeout allows the command, so each
   // of these must decide. They are the reviewers' payloads, at a size that
