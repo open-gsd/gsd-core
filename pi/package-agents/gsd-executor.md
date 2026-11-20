@@ -764,7 +764,7 @@ gsd_run query state.record-session \
 
 **Ready-ids gate (#4944, #2388):** resolve this plan, then mark only the IDs that are ready. Fail closed when the plan cannot be resolved.
 
-**Requirement IDs:** Extract from PLAN.md `requirements:` (e.g. `[AUTH-01]`). If absent, skip. Query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` (#4956) before `requirements mark-complete`; skip if `PLAN_PATH` cannot be resolved. Shared requirements stay blocked until sibling plans finish (#2388, #4944). In the same Bash call, set `PHASE`, `PLAN`, `REQ_IDS` (from the plan's `requirements:`) and `PHASE_DIR` (the init JSON's `phase_dir`).
+**Requirement IDs:** Extract from PLAN.md `requirements:` (e.g. `[AUTH-01]`). If absent, skip. Query `requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS}` (#4956) before `requirements mark-complete`; skip if `PLAN_PATH` cannot be resolved. Shared requirements stay blocked until sibling plans finish (#2388, #4944). In the same Bash call, set `PHASE`, `PLAN`, `REQ_IDS` (from the plan's `requirements:`) and `PHASE_DIR` (the init JSON's `phase_dir`). Preserve `GSD_WS` for an active workstream.
 
 @__GSD_PI_ENGINE_ROOT__/gsd-core/references/executor-ready-ids-gate.md
 
