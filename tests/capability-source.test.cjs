@@ -434,11 +434,47 @@ describe('#5297 git adapter — exact pinned target', {
     assertScratchClonesRemoved('checkout failure');
   });
 
-  // #6441: the scratch clone is removed once, in a `finally`, and a failure of that removal is
-  // swallowed. A removal that fails because a git process is still writing under the directory
-  // (ENOTEMPTY, EBUSY) then left the clone behind with nothing reported, and the test above went
-  // red on `next` at the same commit that passed elsewhere. The filesystem retries those errors
-  // when told to; the `.git` removal in the same function already tells it to.
+  // #6441: the scratch clone was removed once, in a `finally`, and a failure of that removal was
+  // swallowed. The test above went red on `next` at a commit that passed elsewhere. The likely cause
+  // is a detached `git gc --auto` or an external scanner still writing under the directory when the
+  // single attempt ran (ENOTEMPTY, EBUSY); that is a hypothesis, not a captured error. Three pins
+  // follow: git is told not to detach maintenance, the removal asks the filesystem to retry (the
+  // retry happens inside the real rmSync, so this pins the options and cannot inject the race), and a
+  // removal that still fails is reported instead of swallowed.
+  test('#6441: git is told not to start automatic maintenance in the throwaway clone', async () => {
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#v0.3.0`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: (args, opts) => (args.includes('checkout')
+        ? { exitCode: 1, stdout: '', stderr: 'checkout refused', signal: null, error: null }
+        : localGit(args, opts)) },
+    }), /git checkout .* failed/);
+    const clone = calls.find(({ args }) => args.includes('clone'));
+    assert.ok(clone.args.includes('gc.auto=0'), 'gc --auto would detach a writer into the scratch directory');
+    assert.ok(clone.args.includes('maintenance.auto=false'), 'maintenance run --auto would too');
+  });
+
+  test('#6441: a scratch clone that still cannot be removed is reported, not swallowed', async (t) => {
+    const warnings = [];
+    t.mock.method(process, 'emitWarning', (_message, options) => warnings.push(options && options.code));
+    const realRmSync = fs.rmSync;
+    let leftBehind = null;
+    t.mock.method(fs, 'rmSync', (target, options) => {
+      if (leftBehind === null && cloneDirs.length > 0 && target === path.dirname(cloneDirs[0])) {
+        leftBehind = target;
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      }
+      // eslint-disable-next-line local/no-raw-rmsync-in-tests -- #6441 forwards every other removal (the afterEach cleanup) to the real one
+      return realRmSync(target, options);
+    });
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#v0.3.0`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: (args, opts) => (args.includes('checkout')
+        ? { exitCode: 1, stdout: '', stderr: 'checkout refused', signal: null, error: null }
+        : localGit(args, opts)) },
+    }), /git checkout .* failed/);
+    assert.deepEqual(warnings, ['GSD_SCRATCH_CLONE_LEFT']);
+    assert.ok(leftBehind !== null && fs.existsSync(leftBehind), 'the fixture really left the directory behind');
+    t.after(() => cleanup(leftBehind));
+  });
+
   test('#6441: the scratch clone removal is retried by the filesystem, not attempted once and dropped', async (t) => {
     const realRmSync = fs.rmSync;
     const scratchRemovals = [];
