@@ -1431,6 +1431,16 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     // Control: a pipe into it was read before.
     "echo 'cat .env' | xargs -a list bash",
   ]);
+  // Without `-a`, a here-string or heredoc is the stdin xargs reads its words from, the same as a pipe.
+  blocks([
+    'xargs cat <<< .env',
+    "xargs -0 sh -c <<< 'cat .env'",
+    `xargs git <<< "-c core.fsmonitor='cat .env' status"`,
+    "xargs -0 env <<< 'GIT_EDITOR=cat .env'",
+    "xargs cat <<'EOF'\nREADME.md .env\nEOF",
+    // Control: a pipe into it was read before.
+    "echo 'cat .env' | xargs -0 sh -c",
+  ]);
   allows([
     // Mode c: the shell's stdin is data.
     "xargs -a list bash -c 'echo hi' <<< 'cat .env'",
