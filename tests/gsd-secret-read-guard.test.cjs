@@ -2469,6 +2469,9 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       const mixed = (k) => `Keep {a} and \`b\` with \\n ${k}.\n`;
       assertBudgetEdge(message('Subject: cat <<EOF\r', mixed), 800000, 880000, 'mixed');
       assertBudgetEdge(message('Subject: cat <<EOF ((y))\r', mixed), 255000, 285000, 'mixed with ((');
+      // An arithmetic `$((…))` calls for the spans readings as well: about 762,600 with
+      // `{a, b}` lines, where `next` scans the message to the length limit.
+      assertBudgetEdge(message('Subject $((1+2))', (k) => `Keep {a, b} in step ${k}.\n`), 740000, 790000, '$((1+2)) with {a, b} lines');
     });
 
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
