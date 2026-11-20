@@ -47,7 +47,7 @@ const { PROBE_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const fc = require('fast-check');
+const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup, readFileNormalized, readWorkflowCombined, runGsdTools } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
@@ -1730,7 +1730,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('9a covers a receipt-routed planner marker whose body never arrived: names the marker, Retry first, fails closed at 0 plans', () => {
     inOrder(blockAt(readStallHelpersDoc(), 'fails closed:'), ['`## CHECKPOINT REACHED`', 'use 9a', 'Retry planner before Accept'], 'control: the helpers send a body-less planner marker to 9a');
     const spine9a = sectionOf(readPlanPhase(), ['## 9a. Filesystem Fallback (Planner)', '## 9b.']);
-    inOrder(lineWith(spine9a, '**Triggered when:**'), ['no recognized marker', 'receipt', 'Retry first'], 'the spine 9a trigger names the receipt case and its order');
+    inOrder(lineWith(spine9a, '**Triggered when:**'), ['no recognized marker', 'receipt-only non-COMPLETE marker'], 'the spine 9a trigger names the receipt case, PLANNING COMPLETE excluded');
+    inOrder(lineWith(spine9a, 'If `DISK_PLANS` is greater than 0'), ['(receipt case: Retry first)', 'Accept plans', 'If it is 0', 'with a receipt, Retry/Stop'], 'the spine 9a menu orders the receipt case and routes 0 plans');
     const detail = readFileNormalized(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'detail', 'elaboration.md'));
     const s9a = sectionOf(detail, ['## § 9a', '## § 9b']);
     inOrder(lineAfter(s9a, 'Fires when'), ['return receipt', 'has not arrived by', 'next cycle'], '9a\'s trigger covers a receipt-routed marker with no body');
@@ -1909,11 +1910,12 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       // Review 5904580537 Nit 1: mkdir's own error must not add a second stderr line, and
       // a .gitignore that cannot be written refuses instead of printing a path.
       ['ph-file', '.gsd-returns is a regular file'],
-      ['ph-gi', '.gsd-returns/.gitignore cannot be written'],
+      ['ph-gi', '.gsd-returns/.gitignore is a directory'],
     ];
+    const reasonOf = { 'ph-file': 'cannot create .gsd-returns', 'ph-gi': '.gsd-returns/.gitignore is not a regular file' };
     fs.mkdirSync(path.join(proj, 'ph-file'));
     fs.writeFileSync(path.join(proj, 'ph-file', '.gsd-returns'), 'not a directory\n');
-    // A directory named .gitignore makes the write fail with EISDIR; a chmod would let root write anyway.
+    // A directory named .gitignore is refused before any write is tried.
     fs.mkdirSync(path.join(proj, 'ph-gi', '.gsd-returns', '.gitignore'), { recursive: true });
     if (symlinkOrSkip(t, outside, path.join(proj, 'ph', '.gsd-returns'), 'dir')) cases.push(['ph', 'symlinked .gsd-returns']);
     let ran = 0;
@@ -1922,6 +1924,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.notEqual(r.status, 0, `${label}: refused`);
       assert.equal(r.stdout, '', `${label}: no path printed`);
       assertRefusalReason(r, label);
+      if (reasonOf[phaseDir]) assert.ok(r.stderr.includes(reasonOf[phaseDir]), `${label}: names ${reasonOf[phaseDir]}`);
       assert.ok(!r.stderr.includes(phaseDir) || phaseDir === '' || phaseDir === 'ph', `${label}: the phase dir itself is never echoed`);
       ran += 1;
     }
@@ -1962,6 +1965,59 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(ok.status, 0, ok.stderr);
   });
 
+  // Pre-push review r1 NI-1, NI-2, NI-4 and Q-3.
+  test('gsd_receipt_path: a doubled slash still meets the link check; .git above the root is not the phase dir; a relative dir is checked with its cwd; a FIFO .gitignore is refused', (t) => {
+    const f = fixture(t);
+    const proj = path.join(f.dir, '.GIT', 'proj');
+    fs.mkdirSync(path.join(proj, 'real'), { recursive: true });
+    // NI-2: an ancestor of the project root named .GIT does not refuse every phase.
+    const above = receiptPathFrom(f, proj, `${fwd(proj)}/ph`, proj);
+    assert.equal(above.status, 0, above.stderr);
+    // NI-1: lnk//ph is the same path as lnk/ph, and lnk is a link.
+    if (symlinkOrSkip(t, path.join(proj, 'real'), path.join(proj, 'lnk'), 'dir')) {
+      for (const d of ['lnk/ph', 'lnk//ph']) {
+        const r = receiptPathFrom(f, proj, d, proj);
+        assert.notEqual(r.status, 0, `${d}: refused`);
+        assertRefusalReason(r, d);
+        assert.ok(r.stderr.includes('a symlink on the path'), `${d}: names the link`);
+      }
+      assert.ok(!fs.existsSync(path.join(proj, 'real', 'ph')), 'nothing is created through the link');
+    }
+    // NI-4: a relative dir under a cwd that holds a quote is refused like the absolute form.
+    const odd = path.join(f.dir, "o'b");
+    fs.mkdirSync(path.join(odd, 'ph'), { recursive: true });
+    for (const d of ['ph', `${fwd(odd)}/ph`]) {
+      const r = receiptPathFrom(f, odd, d, odd);
+      assert.notEqual(r.status, 0, `${d}: refused`);
+      assertRefusalReason(r, d);
+    }
+    // Q-3: a FIFO named .gitignore would block the write; it is refused, not opened.
+    if (process.platform !== 'win32') {
+      const fifoPhase = path.join(proj, 'fifo-ph');
+      fs.mkdirSync(path.join(fifoPhase, '.gsd-returns'), { recursive: true });
+      const made = runBashScript(`mkfifo ${q(path.join(fifoPhase, '.gsd-returns', '.gitignore'))}\n`, []);
+      assert.equal(made.status, 0, made.stderr);
+      const r = receiptPathFrom(f, proj, `${fwd(proj)}/fifo-ph`, proj);
+      assert.notEqual(r.status, 0, 'a FIFO .gitignore is refused');
+      assertRefusalReason(r, 'FIFO .gitignore');
+      assert.ok(r.stderr.includes('not a regular file'));
+      // A project root of `/`: containment is `/*`, not `//*`, so a phase under it is accepted.
+      const top = receiptPathFrom(f, proj, `${f.fwd}/top-ph`, '/');
+      assert.equal(top.status, 0, top.stderr);
+      // A .gitignore that cannot be written (read-only .gsd-returns; root ignores mode bits).
+      if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+        const ro = path.join(proj, 'ro-ph', '.gsd-returns');
+        fs.mkdirSync(ro, { recursive: true });
+        fs.chmodSync(ro, 0o555);
+        const w = receiptPathFrom(f, proj, `${fwd(proj)}/ro-ph`, proj);
+        fs.chmodSync(ro, 0o755);
+        assert.notEqual(w.status, 0, 'an unwritable .gitignore is refused');
+        assertRefusalReason(w, 'unwritable .gitignore');
+        assert.ok(w.stderr.includes('cannot write .gsd-returns/.gitignore'));
+      }
+    }
+  });
+
   // Minor 3 and Nit 1, generated: a phase dir built from segments that are plain names,
   // `.git` in several letter cases, names that merely contain `git`, `.` and `..`, and names
   // holding a refused character, relative to the project or absolute under it. The oracle
@@ -1971,10 +2027,10 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   // path under its own .gsd-returns/ and nothing on stderr.
   test('property: gsd_receipt_path refuses a phase dir iff it is empty or the root, or a segment is unsafe, . or .., or .git in any case; one stderr line per refusal', (t) => {
     const f = fixture(t);
-    const segArb = fc.constantFrom('a', 'b c', '.git', '.GIT', '.gIt', '.gitx', 'x.git', 'git', '.', '..', 'q"', 'd$', 'e`', 'f<', 'g>', 'h\tt');
+    const segArb = fc.constantFrom('a', 'b c', '.git', '.GIT', '.gIt', '.git.', '.GIT ', 'GIT~1', '.gitx', 'x.git', 'git', '.', '..', 'q"', 'd$', 'e`', 'f<', 'g>', 'h\tt');
     const caseArb = fc.record({ abs: fc.boolean(), segs: fc.array(segArb, { maxLength: 4 }) });
     const refusedBy = ({ segs }) => (segs.length === 0) ||
-      segs.some((s) => /['"$`<>]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 0x20) || s === '.' || s === '..' || s.toLowerCase() === '.git');
+      segs.some((s) => /['"$`<>]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 0x20) || s === '.' || s === '..' || ['.git', 'git~1'].includes(s.toLowerCase().replace(/[. ]+$/, '')));
     const seen = { accepted: 0, refused: 0 };
     fc.assert(fc.property(fc.array(caseArb, { minLength: 1, maxLength: 12 }), (cases) => {
       const proj = fs.mkdtempSync(path.join(f.dir, 'rg-'));
@@ -1986,7 +2042,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       const rows = new Map(r.stdout.split('\n').filter(Boolean).map((l) => { const [i, rc, out] = l.split('\t'); return [Number(i), { rc, out }]; }));
       const ok = r.status === 0 && cases.every((c, i) => {
         const row = rows.get(i);
-        const err = fs.readFileSync(path.join(caseDir, `${i}.err`), 'utf8').split('\n').filter(Boolean);
+        const err = splitLines(fs.readFileSync(path.join(caseDir, `${i}.err`), 'utf8')).filter(Boolean);
         if (refusedBy(c)) {
           seen.refused += 1;
           return row.rc !== '0' && row.out === '' && err.length === 1 && /^gsd_receipt_path: no receipt: \S/.test(err[0]);
@@ -2356,7 +2412,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       // file, or each regular file in DIR whose name matches PATTERN, when AGE is
       // inside the window.
       '  local mins="" name="" a e; local -a paths=()',
-      '  while [ $# -gt 0 ]; do case "$1" in -mmin) mins="${2#-}"; shift 2 ;; -name) name="$2"; shift 2 ;; -maxdepth|-type) shift 2 ;; *) paths+=("$1"); shift ;; esac; done',
+      '  while [ $# -gt 0 ]; do case "$1" in -mmin) mins="${2#-}"; shift 2 ;; -name) name="$2"; shift 2 ;; -maxdepth|-type) shift 2 ;; -H) shift ;; *) paths+=("$1"); shift ;; esac; done',
       '  [ "$AGE" -lt $(( mins * 60 )) ] || return 0',
       '  for a in "${paths[@]}"; do',
       '    if [ -n "$name" ]; then for e in "$a"/*; do [ -f "$e" ] || continue; case "${e##*/}" in $name) printf \'%s\\n\' "$e" ;; esac; done',
@@ -2372,14 +2428,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     };
     assert.equal(aged(299, 5), 'active', '4m59s old: inside a 5-minute interval');
     assert.deepEqual(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean),
-      [f.fwd, '-maxdepth', '1', '-type', 'f', '-name', '*-PLAN.md', '-mmin', '-5'],
-      'find is handed the quoted phase dir, the basename pattern and the interval as -mmin -N');
+      ['-H', f.fwd, '-maxdepth', '1', '-type', 'f', '-name', '*-PLAN.md', '-mmin', '-5'],
+      'find is handed -H, the quoted phase dir, the basename pattern and the interval as -mmin -N');
     assert.equal(aged(300, 5), 'waiting', '5m00s old: outside a 5-minute interval');
     assert.equal(aged(301, 5), 'waiting', '5m01s old: outside a 5-minute interval');
     assert.equal(aged(300, 7), 'active', 'the window follows the interval: 5m00s is inside 7 minutes');
     assert.equal(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean).pop(), '-7');
     assert.equal(aged(0, 5, `${f.fwd}/none-*-PLAN.md`), 'waiting', 'a pattern no file matches gives no activity');
-    assert.ok(fs.existsSync(plan), 'control: 01-PLAN.md was present when the non-matching pattern ran');
+    assert.deepEqual(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean).slice(0, 7),
+      ['-H', f.fwd, '-maxdepth', '1', '-type', 'f', '-name'], 'the pattern goes to find unexpanded, beside 01-PLAN.md');
+    assert.equal(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean)[7], 'none-*-PLAN.md');
+    aged(0, 5, '/none-*-PLAN.md');
+    assert.equal(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean)[1], '/', 'a root-level pattern searches /, not an empty dir');
   });
 
   // Review 5904580537 Major 1: the review traced the orchestrator's Bash calls on macOS Claude
@@ -2421,6 +2481,24 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(run(`${fwdPhase}/none-*-PLAN.md`).stdout.trim(), 'stalled', 'control: no matching plan at 660 s is stalled');
   });
 
+  // Pre-push review r1 MI-1: find does not descend a start path that is a symlink unless
+  // given -H, so a phase dir committed as a link to a real dir lost its activity signal.
+  // A plan file that is itself a link is not a regular file, so it is not activity (-type f).
+  test('a fresh *-PLAN.md behind a symlinked phase dir is active; a symlinked plan file is not (-H, -type f)', (t) => {
+    const f = fixture(t);
+    const real = path.join(f.dir, 'real-phase');
+    fs.mkdirSync(real);
+    fs.writeFileSync(path.join(real, '01-PLAN.md'), '# plan\n');
+    if (!symlinkOrSkip(t, real, path.join(f.dir, 'linked-phase'), 'dir')) return;
+    const markers = watchCallOf(sectionOf(readPlanPhase(), PLANNER_SECTION)).markers;
+    assert.equal(watch(NOW - 660, f.receipt, `${f.fwd}/linked-phase/*-PLAN.md`, markers), 'active', 'the link is followed to the fresh plan');
+    const other = path.join(f.dir, 'file-link-phase');
+    fs.mkdirSync(other);
+    fs.writeFileSync(path.join(f.dir, 'target.md'), '# plan\n');
+    if (!symlinkOrSkip(t, path.join(f.dir, 'target.md'), path.join(other, '01-PLAN.md'), 'file')) return;
+    assert.equal(watch(NOW - 660, f.receipt, `${f.fwd}/file-link-phase/*-PLAN.md`, markers), 'stalled', 'a linked plan file is not activity');
+  });
+
   // Major 1, generated: phase dir names with spaces, glob characters, a leading `-` (relative
   // only) and a non-ASCII letter, each holding a drawn set of entries (regular files or
   // directories, fresh or an hour old). The oracle: the signal is active iff some entry is a
@@ -2431,12 +2509,15 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const f = fixture(t);
     const shells = [['bash', undefined]];
     const zsh = zshOnPath();
-    if (zsh) shells.push(['zsh', zsh]);
+    if (zsh) shells.push(['zsh', zsh]); else t.diagnostic('no zsh on PATH: this property ran under bash only');
     // `*` and `?` are left out on Windows, where a file name cannot hold them. A literal
     // entry named `*-PLAN.md` is the literal-path branch, covered by its own row.
-    const segChars = process.platform === 'win32' ? 'ab -[]é\'' : 'ab -[]*?é\'';
-    const segArb = fc.string({ unit: fc.constantFrom(...segChars.split('')), minLength: 1, maxLength: 6 });
-    const nameArb = fc.constantFrom('01-PLAN.md', 'x-PLAN.md', '-PLAN.md', '.h-PLAN.md', '01-plan.md', 'PLAN.md', '01-PLAN.md.bak', '[1]-PLAN.md', 'a b-PLAN.md');
+    // `!` and `(` lead a relative path that find would otherwise read as an operator.
+    // On Windows a name cannot end in a space (Win32 drops it, Git Bash keeps it).
+    const segChars = process.platform === 'win32' ? 'ab -[]é\'!(' : 'ab -[]*?é\'!(';
+    const segArb = fc.string({ unit: fc.constantFrom(...segChars.split('')), minLength: 1, maxLength: 6 })
+      .filter((x) => process.platform !== 'win32' || !x.endsWith(' '));
+    const nameArb = fc.constantFrom('01-PLAN.md', 'x-PLAN.md', '-PLAN.md', '.h-PLAN.md', '02-plan.md', 'PLAN.md', '01-PLAN.md.bak', '[1]-PLAN.md', 'a b-PLAN.md');
     const entryArb = fc.record({ name: nameArb, dir: fc.boolean(), fresh: fc.boolean() });
     const caseArb = fc.record({ seg: segArb, rel: fc.boolean(), entries: fc.uniqueArray(entryArb, { selector: (e) => e.name, maxLength: 4 }) });
     const old = new Date(Date.now() - 3600 * 1000);

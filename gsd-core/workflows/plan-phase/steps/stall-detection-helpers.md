@@ -220,14 +220,16 @@ gsd_stall_should_recover() {
 _gsd_no_receipt() { printf 'gsd_receipt_path: no receipt: %s\n' "$1" >&2; return 1; }
 gsd_receipt_path() {
   local dir="$1" spawn="${2//[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]/_}"
-  local root a up phys rest got
-  case "$dir" in
-    ''|*[[:cntrl:]]*|*[\'\"\$\`\<\>]*) _gsd_no_receipt 'phase dir is empty or holds a quote, $, backtick, <, > or a control character'; return 1 ;;
-  esac
+  local root rp a up phys rest got
+  [ -n "$dir" ] || { _gsd_no_receipt 'phase dir is empty or holds a quote, $, backtick, <, > or a control character'; return 1; }
   case "/$dir/" in *[/\\]..[/\\]*|*[/\\].[/\\]*) _gsd_no_receipt 'phase dir has a . or .. component'; return 1 ;; esac
   case "$dir" in
     /*|[A-Za-z]:[/\\]*) ;;
     *) dir="$(pwd)/$dir" ;;
+  esac
+  # Checked after a relative dir is made absolute, so the working directory is checked too.
+  case "$dir" in
+    *[[:cntrl:]]*|*[\'\"\$\`\<\>]*) _gsd_no_receipt 'phase dir is empty or holds a quote, $, backtick, <, > or a control character'; return 1 ;;
   esac
   while [ "${#dir}" -gt 1 ] && [ "${dir%/}" != "$dir" ]; do dir="${dir%/}"; done
   if [ -n "${3:-}" ]; then
@@ -235,23 +237,29 @@ gsd_receipt_path() {
   else
     root=$(pwd -P) || { _gsd_no_receipt 'working directory does not resolve'; return 1; }
   fi
+  # The root without a trailing slash ("" for /), held in a variable: bash does not
+  # match "${root%/}" written inside a case pattern.
+  rp="${root%/}"
   # Walk up to the nearest existing ancestor; any walked component that is a link
-  # (tested before -e, so a dangling one counts) is refused.
+  # (tested before -e, so a dangling one counts) is refused. Trailing slashes are
+  # stripped before the test, or a doubled slash (lnk//ph) would test lnk/, which follows the link.
   a="$dir"
   while :; do
-    [ -L "$a" ] && { _gsd_no_receipt 'a symlink on the path to the phase dir'; return 1; }
+    [ -L "${a%"${a##*[!/]}"}" ] && { _gsd_no_receipt 'a symlink on the path to the phase dir'; return 1; }
     [ -e "$a" ] && break
     up="${a%/*}"; [ -n "$up" ] || up=/
     [ "$up" = "$a" ] && { _gsd_no_receipt 'no existing ancestor of the phase dir'; return 1; }
     a="$up"
   done
   phys=$(CDPATH='' cd -P -- "$a" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt 'the phase dir ancestor does not resolve'; return 1; }
-  case "$phys/" in "$root"/*) ;; *) _gsd_no_receipt 'the phase dir resolves outside the project root'; return 1 ;; esac
+  case "$phys/" in "$rp"/*) ;; *) _gsd_no_receipt 'the phase dir resolves outside the project root'; return 1 ;; esac
   rest="${dir#"$a"}"
   # The project root itself and anything under a .git component are never a phase dir.
-  [ "${phys%/}$rest" = "$root" ] && { _gsd_no_receipt 'the phase dir is the project root'; return 1; }
-  # Compared lowercased: on a case-insensitive filesystem (APFS, Windows) .GIT is .git.
-  case "$(printf '%s' "${phys%/}$rest/" | LC_ALL=C tr 'A-Z' 'a-z')" in */.git/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
+  [ "${phys%/}$rest" = "$rp" ] && { _gsd_no_receipt 'the phase dir is the project root'; return 1; }
+  # Only the part under the root is compared, lowercased (on APFS and NTFS .GIT is .git),
+  # with each segment's trailing dots and spaces dropped and the 8.3 name git~1 matched
+  # (Windows reads .git with a trailing dot or space, and GIT~1, as .git).
+  case "$(printf '%s' "${phys#"$rp"}$rest/" | LC_ALL=C tr '[:upper:]' '[:lower:]' | sed 's/[. ]*\//\//g')" in */.git/*|*/git~1/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
   [ -L "$dir/.gsd-returns" ] && { _gsd_no_receipt '.gsd-returns is a symlink'; return 1; }
   mkdir -p "$dir/.gsd-returns" 2>/dev/null || { _gsd_no_receipt 'cannot create .gsd-returns'; return 1; }
   got=$(CDPATH='' cd -P -- "$dir/.gsd-returns" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt '.gsd-returns does not resolve'; return 1; }
@@ -259,7 +267,10 @@ gsd_receipt_path() {
   [ -L "$dir/.gsd-returns/.gitignore" ] && { _gsd_no_receipt '.gsd-returns/.gitignore is a symlink'; return 1; }
   # The redirection's own error is silenced by the outer 2>/dev/null (an inner one would
   # apply after the failed open), so a refusal stays one stderr line.
-  if [ ! -f "$dir/.gsd-returns/.gitignore" ]; then
+  if [ -e "$dir/.gsd-returns/.gitignore" ]; then
+    # A directory or FIFO there would fail or block the write.
+    [ -f "$dir/.gsd-returns/.gitignore" ] || { _gsd_no_receipt '.gsd-returns/.gitignore is not a regular file'; return 1; }
+  else
     { printf '*\n' > "$dir/.gsd-returns/.gitignore"; } 2>/dev/null || { _gsd_no_receipt 'cannot write .gsd-returns/.gitignore'; return 1; }
   fi
   if command -v cygpath >/dev/null 2>&1; then dir=$(cygpath -m "$dir"); fi
@@ -341,15 +352,18 @@ gsd_stall_watch() {
   # space in PHASE_DIR must not split it), so the shell never globs: this reads the
   # same under bash and under zsh, which has no shopt and does not glob a variable's
   # value. No match prints nothing, and artifact_fresh stays false. A relative path
-  # that starts with `-` gets a `./` prefix, so find reads it as a path, not an option.
+  # gets a `./` prefix, so find reads a leading `-`, `!` or `(` as a path, not an
+  # option or operator. -H follows a phase dir that is itself a symlink; -type f counts
+  # regular files only (a directory or symlink named like a plan is not activity), and
+  # -name matches a leading dot (`.x-PLAN.md` counts).
   artifact_fresh="false"
-  case "$artifact_glob" in -*) artifact_glob="./$artifact_glob" ;; esac
+  case "$artifact_glob" in ''|/*|[A-Za-z]:[/\\]*) ;; *) artifact_glob="./$artifact_glob" ;; esac
   local _d="${artifact_glob%/*}" _p="${artifact_glob##*/}"
-  [ "$_d" = "$artifact_glob" ] && _d=.
+  [ -n "$_d" ] || _d=/
   if [ -n "$artifact_glob" ] && [ -e "$artifact_glob" ]; then
     [ -n "$(find "$artifact_glob" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
   elif [ -n "$artifact_glob" ] && [ -d "$_d" ]; then
-    [ -n "$(find "$_d" -maxdepth 1 -type f -name "$_p" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
+    [ -n "$(find -H "$_d" -maxdepth 1 -type f -name "$_p" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
   fi
   gsd_stall_should_recover "$elapsed" "$PLANNER_STALL_THRESHOLD_MINUTES" "$marker_found" "$artifact_fresh"
 }
