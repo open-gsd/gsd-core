@@ -231,6 +231,7 @@ module.exports = {
   "tests/review-lane-windows-spawn-resolution.test.cjs",
   "tests/review-parallel-lanes.test.cjs",
   "tests/review-plan-coverage-manifest.test.cjs",
+  "tests/review-read-check.test.cjs",
   "tests/review-reviewer-selection.test.cjs",
   "tests/reviewed-or-maintainer-policy.test.cjs",
   "tests/reviewer-manifest-body.test.cjs",

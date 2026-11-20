@@ -275,6 +275,7 @@ module.exports = {
   "tests/review-model-config.test.cjs",
   "tests/review-parallel-lanes.test.cjs",
   "tests/review-plan-coverage-manifest.test.cjs",
+  "tests/review-read-check.test.cjs",
   "tests/reviewer-step-dispatch.test.cjs",
   "tests/revision-remediation-binding.test.cjs",
   "tests/roadmap-upgrade-bracket.test.cjs",
