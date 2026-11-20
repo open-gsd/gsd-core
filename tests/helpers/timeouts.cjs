@@ -307,7 +307,7 @@ const MALFORMED_INPUT_HOOK_TIMEOUT_MS = 5000;
  * Evidence (TIMEOUT_EVIDENCE.GENERATOR_SCRIPT_TIMEOUT_MS): no seam spawn of this class reached 2000ms across 359 lanes (darwin 188,
  * linux 171); margin at least 15x. CI seam spawn-stall records, 188 runs since 2026-10-25.
  * win32 not measured: no win32 lane ran these sites in the window.
- * 8 call sites spawn outside the seam and are not covered; tracked in #6063.
+ * 7 call sites spawn outside the seam and are not covered; tracked in #6063.
  */
 const GENERATOR_SCRIPT_TIMEOUT_MS = 30000;
 
@@ -435,7 +435,7 @@ const TIMEOUT_EVIDENCE = Object.freeze({
   LOOP_HOOK_POINT_CLI_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 39655, worstPlatform: 'win32', p50Ms: 2555, p99Ms: 20684, samples: { win32: 2176, darwin: 1117, linux: 714 }, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 14, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
   BUILD_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 564, darwin: 188, linux: 429 }, unmeasuredPlatforms: [], unseenSites: 0, source: CI_SOURCE, window: CI_WINDOW },
   QUICK_SPAWN_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { win32: 389, darwin: 188, linux: 286 }, unmeasuredPlatforms: [], unseenSites: 26, unseenSitesTrackedBy: '#6061', source: CI_SOURCE, window: CI_WINDOW },
-  GENERATOR_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { darwin: 188, linux: 171 }, unmeasuredPlatforms: ['win32'], unseenSites: 8, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
+  GENERATOR_SCRIPT_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 2000, censoredBelowMs: 2000, worstPlatform: null, lanes: { darwin: 188, linux: 171 }, unmeasuredPlatforms: ['win32'], unseenSites: 7, unseenSitesTrackedBy: '#6063', source: CI_SOURCE, window: CI_WINDOW },
   GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 15020, worstPlatform: 'win32', p50Ms: 2270, p99Ms: 15020, samples: { win32: 4 }, lanes: { win32: 188, darwin: 8, linux: 221 }, unmeasuredPlatforms: [], unseenSites: 4, unseenSitesTrackedBy: '#6063', source: MODERATE_SOURCE, window: MODERATE_WINDOW },
   SCAN_USAGE_ERROR_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 108, worstPlatform: 'darwin', p50Ms: 7, p99Ms: 46, samples: { darwin: 400, linux: 400 }, unmeasuredPlatforms: ['win32'], unseenSites: 0, source: HARNESS_SOURCE, window: HARNESS_WINDOW },
   MALFORMED_INPUT_HOOK_TIMEOUT_MS: { kind: 'measured', observedMaxMs: 170, worstPlatform: 'darwin', p50Ms: 78, p99Ms: 163, samples: { darwin: 150, linux: 150 }, unmeasuredPlatforms: ['win32'], unseenSites: 0, source: HARNESS_SOURCE, window: HARNESS_WINDOW },

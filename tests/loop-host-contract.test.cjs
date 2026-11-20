@@ -111,6 +111,8 @@ function makeValidWorkflowFiles() {
       'EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)',
       'For each active entry where `kind == "step"`: dispatch.',
       'For each active entry where `kind == "gate"`: evaluate.',
+      // #5984: the verifier's landing site, asserted by the generator's contribution/verifier auxiliary entry.
+      'For each active entry where `kind == "contribution"` and `into == "verifier"`: inject.',
       '',
     ].join('\n'),
     'verify-work.md': makeWorkflow('verify', ['verify:pre', 'verify:post'], ['orchestrator'], ['UAT.md'], ['SUMMARY.md']),
