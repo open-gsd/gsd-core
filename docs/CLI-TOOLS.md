@@ -1304,7 +1304,8 @@ older filename pairing (below). Four additive fields report the halt:
 The existing `diagnostics[]` can also gain two entries from these fields: a
 `percent_withheld` entry for `progress.halted_plans` whenever its scope is not
 `complete`, and a `summary_unreadable` entry for a SUMMARY the halt read
-cannot read that no plan row's own SUMMARY read had already reported (below).
+finds and `readDocument` refuses, when no plan row's own SUMMARY read had
+already reported it (below).
 
 `halted` and `blocked_by` are computed the way `phase-plan-index` computes its
 fields of the same name: the same SUMMARY pairing and lookup, the same halt
@@ -1392,7 +1393,8 @@ plans not reported as halted.
 **`halted: false` is meaningful only when no `summary_unreadable` diagnostic
 names the same SUMMARY file.** `isSummaryFileHalted` runs only on a SUMMARY
 `readDocument` has accepted (a regular file contained in the planning root);
-it then opens that file again by path, as `phase-plan-index` does. An unread
+it then opens that file again by path, as `phase-plan-index` does, and a
+failure of that second read also reads as not halted, with no diagnostic. An unread
 halt can also be missing from the `blocked_by` of the plans downstream of it.
 
 That condition is necessary, not sufficient. Beyond the lookup above, the halt
@@ -1400,7 +1402,7 @@ reader `planning inspect` shares with `phase-plan-index` reads these SUMMARY
 shapes as not halted, in both commands and with no entry in `diagnostics[]`:
 
 - the nested layout: `plans/PLAN-01.md` with `plans/SUMMARY-01.md`, which the
-  halt lookup never pairs;
+  halt lookup never finds for that plan;
 - a SUMMARY with lone-CR (`\r`) line endings;
 - a SUMMARY whose frontmatter does not open with exactly `---` at byte 0,
   after an optional BOM: a blank line before the opening `---`, or an opening
