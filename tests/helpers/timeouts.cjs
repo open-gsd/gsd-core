@@ -424,11 +424,12 @@ const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.
  * One `scripts/run-tests.cjs` invocation over a one-file GSD_TEST_DIR fixture, spawned
  * through the process seam: the runner's incremental tsc build, one node --test chunk
  * and the post-run reports. A heavier class than `PROBE_TIMEOUT_MS` (the build alone is
- * seconds) and a different operation from `INSTALL_TIMEOUT_MS`. Not a mirror of
- * tests/run-tests-harness.test.cjs's own `HARNESS_TIMEOUT_MS`, which that file keeps
- * (#5120 adds the shared constant; folding the harness test onto it is its own change).
+ * seconds) and a different operation from `INSTALL_TIMEOUT_MS`. tests/run-tests-harness.test.cjs
+ * and tests/raw-state-write-guard.process.test.cjs both time their runner spawns with it.
  *
- * The value is the one the harness test already uses for the same spawn, kept wide
+ * The value is the one the harness test used for the same spawn before it moved onto this
+ * constant (#5120 review Minor 3); it must stay above that file's longest chunk-timeout
+ * override (30000ms) so the runner's own timeout diagnostic fires first. It is kept wide
  * because CI's win32 lane runs the runner's build and chunk several times slower than
  * the linux harness that measured it; the margin is stated, not hidden.
  *
@@ -437,7 +438,7 @@ const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.
  */
 const RUN_TESTS_HARNESS_TIMEOUT_MS = 120000;
 
-const RUN_TESTS_HARNESS_SOURCE = 'local harness through the process seam: tests/raw-state-write-guard.test.cjs, the three runner rows (a one-file GSD_TEST_DIR fixture each), node --test durations';
+const RUN_TESTS_HARNESS_SOURCE = 'local harness through the process seam: tests/raw-state-write-guard.process.test.cjs, the three runner rows (a one-file GSD_TEST_DIR fixture each), node --test durations; tests/run-tests-harness.test.cjs times the same runner spawn with this constant and is not in these samples';
 const RUN_TESTS_HARNESS_WINDOW = 'run 2026-11-09: linux (WSL2) node v24; win32 and darwin not measured';
 
 /**
