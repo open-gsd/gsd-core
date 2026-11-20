@@ -4029,7 +4029,9 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
     if (!words.length) continue;
 
     const heredocs = heredocsBySeg.get(s) || [];
-    // Usually one reading; two where `time` took assignments, the earlier one first (commandReadings).
+    // Usually one reading; two where `time` took assignments, the earlier one first (commandReadings). The words a
+    // reading started a launched command from are not started again by the other (scanLauncherOperands).
+    const launchedHere = new Set();
     for (const cmd of commandReadings(words)) {
       const { base, operands } = cmd;
       for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
@@ -4115,7 +4117,7 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
       }
 
       if (readsLauncherOperands(base)) {
-        const hit = scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        const hit = scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx, launchedHere);
         if (hit) return hit;
       }
     }
@@ -4177,8 +4179,8 @@ function bareLauncherName(text) {
 // is started here, with the segment's pipe, which a rescan does not have.
 const REENTERING_WORDS = new Set(['dd', 'dd.exe', ...WRAPPERS.keys()]);
 const XARGS_REENTERING_WORDS = new Set([...REENTERING_WORDS, 'xargs', 'find', 'find.exe', 'watch']);
-function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
-  const covered = new Set();
+// `covered` holds the words started or left to a rescan so far, shared by a segment's readings.
+function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx, covered = new Set()) {
   const cover = (cmd, words) => {
     if (cmd === null || !readsLauncherOperands(cmd.base)) return;
     for (const w of cmd.operands) if (words.has(bareLauncherName(w.text))) covered.add(w);
@@ -4186,6 +4188,7 @@ function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySe
   for (let j = 0; j < operands.length; j++) {
     if (nameOnly.has(j) || covered.has(operands[j]) || !isLauncherWord(operands[j].text)) continue;
     charge(ctx, TOKEN_WORK * (operands.length - j));
+    covered.add(operands[j]);
     const tail = [];
     for (let k = j; k < operands.length; k++) if (!nameOnly.has(k)) tail.push(operands[k]);
     const launched = resolveCommand(tail);
@@ -4682,16 +4685,23 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
 // as the command it is, so the git and ssh scans see it (`find . -exec git rebase -x …`, #5492); its operands are
 // also the launcher's, which the ordinary check reads. That rescan is at the launcher's depth: the launched words are
 // the launcher's own, not a new script body, and each rescan holds fewer of them, so it ends.
+// Each reading of the command (commandReadings), the earlier first. The rescan of anything else reads the words
+// themselves, whatever the reading, so it runs once (#5492): once per reading would double at each `time` stage.
+const RESCAN_WORDS = Symbol('rescan the launched words');
 function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx, heredocs = [], hereStrings = []) {
-  // Each reading of the command (commandReadings), the earlier first.
+  let rescan = false;
   for (const cmd of commandReadings(words)) {
-    const hit = scanLaunched(cmd, words, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
-    if (hit) return hit;
+    const hit = scanLaunched(cmd, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+    if (hit === RESCAN_WORDS) rescan = true;
+    else if (hit) return hit;
   }
-  return null;
+  if (!rescan) return null;
+  // The launcher's stdin goes with the words it launches (#5492): a heredoc body as a here-string.
+  const stdin = [...heredocs.map((h) => h.text), ...hereStrings].map((text) => `<<< ${shellQuote(text)}`);
+  return rescanCommand([...words.map((w) => shellQuote(w.text)), ...stdin].join(' '), depth, ctx);
 }
 
-function scanLaunched(cmd, words, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings) {
+function scanLaunched(cmd, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings) {
   for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, cmd.assigns);
@@ -4700,9 +4710,7 @@ function scanLaunched(cmd, words, s, bySeg, sepAfter, depth, reading, ctx, hered
     if (cmd.base === 'eval') return scanEval(cmd.operands, depth, ctx);
     if (cmd.base === 'watch') return scanWatch(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
     if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
-    // The launcher's stdin goes with the words it launches (#5492): a heredoc body as a here-string.
-    const stdin = [...heredocs.map((h) => h.text), ...hereStrings].map((text) => `<<< ${shellQuote(text)}`);
-    return rescanCommand([...words.map((w) => shellQuote(w.text)), ...stdin].join(' '), depth, ctx);
+    return RESCAN_WORDS;
   } finally {
     ctx.shellVars = saved;
   }
