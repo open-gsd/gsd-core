@@ -229,6 +229,7 @@ import {
   stateCurrentPositionSlice,
   isSessionHeading,
   isSessionContinuityHeading,
+  recordedPhaseField,
 } from './state-document.cjs';
 import { tokenizeHeadings, collectSection, collectSections, replaceSection, stripFencedCode } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
@@ -2794,10 +2795,8 @@ function resolveStatePhase(fm: Record<string, unknown>, body: string, convention
  * parameter — never by pointing this at it and dropping the difference.
  */
 function resolveCurrentPhaseId(fm: Record<string, unknown>, body: string, convention?: string | null, directoryContext?: PhaseDirectoryContext): string | null {
-  const positionSection = sliceCurrentPositionSection(body);
-  const prosePhase =
-    positionSection !== null ? parseProsePhaseField(stateFieldValue(fm, positionSection, null, 'Phase').value, convention, directoryContext).phase : null;
-  return stateFieldValue(fm, body, 'current_phase', 'Current Phase').value ?? prosePhase;
+  const { value, prose } = recordedPhaseField(fm, body, sliceCurrentPositionSection(body));
+  return prose && value !== null ? parseProsePhaseField(value, convention, directoryContext).phase : value;
 }
 
 function parseProseLastActivityField(value: string | null): { date: string | null; description: string | null } {

@@ -17,7 +17,7 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
-import { stateFieldValue, KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
+import { recordedPhaseField, KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
 import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
@@ -2808,8 +2808,8 @@ function plannedPhaseCore(
   // `N of M` from either spelling (#3784 hybrid for `Current Plan:`). A replan
   // keeps the recorded leading N and moves only M; anything else starts at 0.
   // The recorded N carries over only for the SAME phase (`Phase:` or `Current Phase:` leading token).
-  // The recorded phase is read in the order of `resolveCurrentPhaseId`: frontmatter current_phase first.
-  const recordedPhase = stateFieldValue(existingFm, posBefore, 'current_phase', 'Current Phase').value ?? stateExtractField(posBefore, 'Phase');
+  // The recorded phase comes from `recordedPhaseField`, the owner `resolveCurrentPhaseId` also calls.
+  const recordedPhase = recordedPhaseField(existingFm, beforePos, sliceCurrentPositionSection(beforePos)).value;
   const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase, intent.directoryContext, intent.phaseIdConvention) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber, intent.directoryContext);
   // #5320: the plan lines advance-plan reads, from the same scope; a refusal writes nothing.
   const planned: ReturnType<typeof planLinesForPlanned> = intent.planCount == null ? {} : planLinesForPlanned(content, intent.planCount, samePhase, totalRecorded);

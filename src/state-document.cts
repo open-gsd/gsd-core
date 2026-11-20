@@ -834,6 +834,22 @@ export function stateFieldValue(
 }
 
 /**
+ * The phase a STATE.md records, in the one order every reader and writer uses
+ * (ADR-3180 §7.7): frontmatter or body `Current Phase` over the whole body, then
+ * the `Phase:` line of the `## Current Position` section (`prose: true`; the
+ * caller parses that value, which is prose such as `19 (Name) — EXECUTING`).
+ */
+export function recordedPhaseField(
+  fm: Record<string, unknown>,
+  body: string,
+  positionSection: string | null,
+): { value: string | null; prose: boolean } {
+  const current = stateFieldValue(fm, body, 'current_phase', 'Current Phase').value;
+  if (current !== null) return { value: current, prose: false };
+  return { value: positionSection === null ? null : stateFieldValue(fm, positionSection, null, 'Phase').value, prose: true };
+}
+
+/**
  * Match the "Current Position" section body from a STATE.md body. #2956: this
  * is the Phase analogue of state.cts's matchSessionSection. `Phase` canonically
  * lives under `## Current Position` (gsd-core/templates/state.md), so — like

@@ -5612,6 +5612,12 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(lineOf(runBody(body(['Current Phase: 19', 'Phase: 18'])).content), 'Plan: 2 of 6', 'body Current Phase 19 wins over Phase 18');
     const emptyFm = ['---', "current_phase: ''", '---', body(['Phase: 19'])].join('\n');
     assert.strictEqual(lineOf(runBody(emptyFm).content), 'Plan: 2 of 6', 'an empty frontmatter phase falls through to the body');
+    // `Current Phase` is read from the whole body, so a line above `## Current Position` counts too
+    const above = ['# Project State', '', '**Current Phase:** 19', '', '## Current Position', '', 'Phase: 18', 'Plan: 2 of 5', 'Status: Ready', ''].join('\n');
+    assert.strictEqual(lineOf(runBody(above).content), 'Plan: 2 of 6', 'a Current Phase line outside the position section is the recorded phase');
+    // and with no position section at all
+    const noSection = ['# Project State', '', '**Current Phase:** 19', 'Plan: 2 of 5', 'Status: Ready', ''].join('\n');
+    assert.strictEqual(lineOf(runBody(noSection).content), 'Plan: 2 of 6', 'no position section: the body Current Phase is still read');
   });
 
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
