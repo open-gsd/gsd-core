@@ -52,9 +52,11 @@ function bareDirectives(comments) {
  * block; a `/* *\/` comment is its own block. A shebang is not a comment here.
  * @param {{type: string, value: string, loc: {start: {line: number}, end: {line: number}}}[]} comments
  * @param {number} [max]
+ * @param {(comment: object) => boolean} [startsLine] whether nothing but whitespace precedes the
+ *   comment on its line; a trailing `code(); // note` is not part of a block
  * @returns {{loc: object, lines: number}[]} one entry per over-long block, at its first line
  */
-function longBlocks(comments, max = MAX_COMMENT_BLOCK_LINES) {
+function longBlocks(comments, max = MAX_COMMENT_BLOCK_LINES, startsLine = () => true) {
   const found = [];
   let run = null;
   const flush = () => {
@@ -62,7 +64,9 @@ function longBlocks(comments, max = MAX_COMMENT_BLOCK_LINES) {
     run = null;
   };
   for (const c of comments) {
-    if (c.type === 'Line') {
+    if (c.type === 'Line' && !startsLine(c)) {
+      flush();
+    } else if (c.type === 'Line') {
       if (run && c.loc.start.line === run.endLine + 1) {
         run.lines += 1;
         run.endLine = c.loc.end.line;

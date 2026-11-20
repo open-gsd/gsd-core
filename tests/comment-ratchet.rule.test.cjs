@@ -79,6 +79,93 @@ describe('lib: longBlocks', () => {
   });
 });
 
+describe('lib: longBlocks properties and trailing comments', () => {
+  const fc = require('fast-check');
+  const at = (line) => ({ type: 'Line', value: 'x', loc: { start: { line }, end: { line } } });
+
+  test('property: n consecutive own-line comments are one block exactly when n exceeds the ceiling', () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 60 }), fc.integer({ min: 1, max: 30 }), (n, max) => {
+      const found = lib.longBlocks(Array.from({ length: n }, (_, i) => at(i + 1)), max);
+      return n > max ? found.length === 1 && found[0].lines === n : found.length === 0;
+    }));
+  });
+
+  test('property: a gap of any width splits a run into two blocks that are each judged alone', () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 40 }), fc.integer({ min: 1, max: 40 }), fc.integer({ min: 2, max: 5 }), (a, b, gap) => {
+      const comments = [
+        ...Array.from({ length: a }, (_, i) => at(i + 1)),
+        ...Array.from({ length: b }, (_, i) => at(a + gap + i)),
+      ];
+      return lib.longBlocks(comments, 15).length === (a > 15 ? 1 : 0) + (b > 15 ? 1 : 0);
+    }));
+  });
+
+  test('a trailing comment after code does not merge into a block', () => {
+    const trailing = (line) => ({ type: 'Line', value: 'x', loc: { start: { line }, end: { line } } });
+    const comments = Array.from({ length: 20 }, (_, i) => trailing(i + 1));
+    assert.equal(lib.longBlocks(comments, 15, () => false).length, 0);
+    assert.equal(lib.longBlocks(comments, 15, () => true).length, 1);
+  });
+});
+
+describe('local/max-comment-block-lines: trailing comments', () => {
+  test('sixteen lines of code with a trailing comment each are not a block', () => {
+    tester.run('max-comment-block-lines', blockRule, {
+      valid: [{
+        code: Array.from({ length: 16 }, (_, i) => `f(${i}); // note ${i}`).join('\n'),
+        filename: 'tests/a.cjs',
+        options: [{ baseline: {} }],
+      }],
+      invalid: [],
+    });
+  });
+});
+
+describe('the committed baseline', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const baseline = require('../eslint-rules/comment-ratchet.baseline.json');
+  const root = path.join(__dirname, '..');
+
+  test('every entry names a file that exists, with a positive count of a known kind', () => {
+    for (const [file, entry] of Object.entries(baseline)) {
+      assert.ok(fs.existsSync(path.join(root, ...file.split('/'))), `${file}: baselined but absent (renamed or deleted: drop the entry)`);
+      const kinds = Object.keys(entry);
+      assert.ok(kinds.length > 0 && kinds.every((k) => k === 'directive' || k === 'block'), `${file}: unknown kind in ${JSON.stringify(entry)}`);
+      for (const kind of kinds) assert.ok(Number.isInteger(entry[kind]) && entry[kind] > 0, `${file}: ${kind} must be a positive integer`);
+    }
+  });
+
+  test('both rules report through a Linter configured the way eslint.config.mjs configures them', () => {
+    const { Linter } = require('eslint');
+    const linter = new Linter({ cwd: root });
+    const plugin = { rules: { d: directiveRule, m: blockRule } };
+    const config = [{
+      files: ['**/*.cjs'],
+      plugins: { local: plugin },
+      languageOptions: { sourceType: 'commonjs' },
+      rules: { 'local/d': ['error', { baseline: {} }], 'local/m': ['error', { baseline: {} }] },
+    }];
+    const messages = linter.verify(`// ${KW_NEXT} no-console\nf();\n${lines(16)}\ng();`, config, 'tests/x.cjs');
+    assert.deepEqual(messages.filter((m) => m.ruleId).map((m) => m.ruleId).sort(), ['local/d', 'local/m']);
+  });
+});
+
+describe('known limit: a directive that disables all rules hides its own report', () => {
+  test('a bare disable-line is not reported by the rule (the portability static check bans it in tests and src)', () => {
+    const { Linter } = require('eslint');
+    const linter = new Linter({ cwd: process.cwd() });
+    const config = [{
+      files: ['**/*.cjs'],
+      plugins: { local: { rules: { d: directiveRule } } },
+      languageOptions: { sourceType: 'commonjs' },
+      rules: { 'local/d': ['error', { baseline: {} }] },
+    }];
+    const hidden = linter.verify(`f(); // ${KW}-line`, config, 'tests/x.cjs');
+    assert.deepEqual(hidden, []);
+  });
+});
+
 describe('lib: judge', () => {
   test('excess is sites beyond the baseline and stale is baseline beyond the sites', () => {
     assert.deepEqual(lib.judge(3, 3), { excess: 0, stale: 0 });

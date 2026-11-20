@@ -145,15 +145,6 @@
     "block": 13,
     "directive": 1
   },
-  "gsd-core/bin/lib/host-integration-adapters/cline-sdk-binding.cjs": {
-    "block": 2
-  },
-  "gsd-core/bin/lib/host-integration-adapters/imperative-hook-bus.cjs": {
-    "block": 1
-  },
-  "gsd-core/bin/lib/installer-migrations/006-pi-extension-cjs-to-js.cjs": {
-    "block": 1
-  },
   "gsd-core/bin/lib/legacy-cleanup.cjs": {
     "block": 2
   },
@@ -176,7 +167,7 @@
     "block": 1
   },
   "hooks/gsd-context-monitor.js": {
-    "block": 6
+    "block": 5
   },
   "hooks/gsd-cursor-post-tool.js": {
     "block": 1
@@ -369,7 +360,7 @@
     "block": 1
   },
   "scripts/gen-platform-conformance-tier.cjs": {
-    "block": 7
+    "block": 6
   },
   "scripts/gen-plugin-skills.cjs": {
     "block": 2
@@ -1058,7 +1049,7 @@
   },
   "src/install-engine.cts": {
     "directive": 1,
-    "block": 21
+    "block": 20
   },
   "src/install-fs-adapter.cts": {
     "block": 2
@@ -1325,7 +1316,7 @@
     "directive": 3
   },
   "src/review-lane-descriptor.cts": {
-    "block": 9
+    "block": 8
   },
   "src/review-lane-invocation.cts": {
     "block": 5
@@ -1633,15 +1624,12 @@
     "directive": 3
   },
   "tests/agent-size-budget.test.cjs": {
-    "block": 3
+    "block": 2
   },
   "tests/agent-skills-awareness.test.cjs": {
     "directive": 1
   },
   "tests/agent-skills-compact-variant.test.cjs": {
-    "block": 1
-  },
-  "tests/agent-tools.install.test.cjs": {
     "block": 1
   },
   "tests/agent-tracked-source-rule.test.cjs": {
@@ -2367,7 +2355,7 @@
     "directive": 1
   },
   "tests/gsd-secret-read-guard.test.cjs": {
-    "block": 3
+    "block": 1
   },
   "tests/gsd-settings-advanced.test.cjs": {
     "directive": 2,
@@ -2861,7 +2849,7 @@
     "directive": 1
   },
   "tests/mutation-matrix-ratchet.test.cjs": {
-    "block": 2
+    "block": 1
   },
   "tests/mutation-tap-runner-wiring.test.cjs": {
     "block": 1

@@ -49,6 +49,7 @@ import directiveNamesIssue from './eslint-rules/directive-names-issue.cjs';
 import maxCommentBlockLines from './eslint-rules/max-comment-block-lines.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
+const commentRatchetBaseline = require('./eslint-rules/comment-ratchet.baseline.json');
 
 // The `no-restricted-syntax` selectors every file under tests/ is held to. The block for the six
 // in-process command suites (#6334) extends this list; a later flat-config block replaces a rule's
@@ -150,6 +151,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-ledger.cjs',
       // #5759: tsc-generated runtime artifact — lint src/config-file-read.cts, not this.
       'gsd-core/bin/lib/config-file-read.cjs',
+      // #6425: tsc-emitted, gitignored; the comment-ratchet baseline must not depend on whether the build ran.
+      'gsd-core/bin/lib/host-integration-adapters/cline-sdk-binding.cjs',
+      'gsd-core/bin/lib/host-integration-adapters/imperative-hook-bus.cjs',
+      'gsd-core/bin/lib/installer-migrations/006-pi-extension-cjs-to-js.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
       'gsd-core/bin/lib/capability-consent.cjs',
@@ -1117,8 +1122,8 @@ export default tseslint.config(
     files: ['**/*.{cjs,js,mjs}', 'src/**/*.cts'],
     plugins: { local: localPlugin },
     rules: {
-      'local/directive-names-issue': 'error',
-      'local/max-comment-block-lines': 'error',
+      'local/directive-names-issue': ['error', { baseline: commentRatchetBaseline }],
+      'local/max-comment-block-lines': ['error', { baseline: commentRatchetBaseline }],
     },
   },
 );

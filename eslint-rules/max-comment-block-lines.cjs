@@ -12,7 +12,6 @@
 
 const path = require('node:path');
 const { MAX_COMMENT_BLOCK_LINES, longBlocks, judge } = require('./lib/comment-ratchet.cjs');
-const defaultBaseline = require('./comment-ratchet.baseline.json');
 
 /** @type {import('eslint').Rule.RuleModule} */
 module.exports = {
@@ -28,12 +27,19 @@ module.exports = {
   },
   create(context) {
     const options = context.options[0] || {};
-    const baseline = options.baseline || defaultBaseline;
+    // The baseline arrives as a rule option (eslint.config.mjs loads the JSON), so a change to it
+    // changes the resolved config and invalidates ESLint's result cache.
+    const baseline = options.baseline || {};
     const rel = path.relative(context.cwd, context.filename).split(path.sep).join('/');
     const allowed = (baseline[rel] && baseline[rel].block) || 0;
     return {
       Program() {
-        const blocks = longBlocks(context.sourceCode.getAllComments());
+        const sourceCode = context.sourceCode;
+        const startsLine = (comment) => {
+          const before = sourceCode.getTokenBefore(comment, { includeComments: true });
+          return !before || before.loc.end.line < comment.loc.start.line;
+        };
+        const blocks = longBlocks(sourceCode.getAllComments(), MAX_COMMENT_BLOCK_LINES, startsLine);
         const { excess, stale } = judge(blocks.length, allowed);
         if (excess > 0) {
           for (const block of blocks.slice(allowed)) {
