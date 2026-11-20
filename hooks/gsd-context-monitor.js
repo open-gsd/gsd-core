@@ -249,16 +249,10 @@ const handleStdinEnd = () => {
       allow(undefined);
     }
 
-    // #6360: inside a subagent or in-process teammate, Claude Code sends the
-    // PARENT's session_id and adds agent_id (a top-level session has none, and
-    // a top-level `claude --agent` session sets only agent_type). Every path
-    // below is built from session_id alone, so such an input would read the
-    // parent's bridge and report the parent's usage as the subagent's own,
-    // spend the parent's debounce and WARNING->CRITICAL escalation, start the
-    // parent's CRITICAL record-session write, and on PreCompact clear the
-    // parent's bridge and sentinel. Nothing the hook can read describes the
-    // subagent's own context, so it exits before touching any of those files,
-    // on every event.
+    // #6360: a subagent's input carries the PARENT's session_id plus agent_id,
+    // and every path below is keyed on session_id alone, so exit before any of
+    // them is read or written, on every event. Only a non-empty string counts;
+    // the why and the agent_type-only case: docs/context-monitor.md, "Safety".
     if (typeof data.agent_id === 'string' && data.agent_id !== '') {
       allow(undefined);
     }
@@ -363,7 +357,7 @@ const handleStdinEnd = () => {
       // enabled, thresholds at the constants above, which `thresholds` already holds)
     }
 
-    // If no metrics file, this is a subagent or fresh session -- exit silently.
+    // If no metrics file, this is a fresh session -- exit silently.
     // Collapsed existsSync+readFileSync: ENOENT → exit 0 (identical to old !existsSync branch),
     // other errors rethrow to the outer catch (swallowed → exit 0, as before).
     //

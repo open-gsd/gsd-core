@@ -206,7 +206,7 @@ As a brief reference: the statusline hook registers as `statusLine` in `settings
 - It never blocks tool execution — a broken monitor should not break the agent's workflow
 - Stale metrics (older than 60s) are ignored
 - Missing bridge files are handled gracefully (fresh sessions)
-- Subagents get no advisory (#6360): their hook input carries the parent's `session_id`, so the only reading the hook could find is the parent's. An input with a non-empty `agent_id` exits before any bridge or sentinel read or write, on every event; a top-level `--agent` session (`agent_type` only) is monitored as before
+- Subagents get no advisory (#6360): their hook input carries the parent's `session_id`, so the only reading the hook could find is the parent's. An input whose `agent_id` is a non-empty string exits before any bridge or sentinel read or write, on every event; a top-level `--agent` session (`agent_type` only) is monitored as before
 
 ### Supported hosts (#4840)
 

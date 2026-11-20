@@ -1330,115 +1330,6 @@ describe('#2289 context-monitor: side effects still fire on silent events (no ou
  * about state carried ACROSS calls. The helpers above deliberately delete the
  * sentinel after every invocation, so this block needs its own driver.
  */
-/**
- * #6360 — a subagent's hook input is silent and leaves the parent's files alone.
- *
- * Inside a subagent (or in-process teammate) Claude Code sends the PARENT's
- * session_id plus agent_id / agent_type. The hook built every path from
- * session_id alone, so it read the parent's bridge and reported the parent's
- * usage as the subagent's own, advanced the parent's debounce sentinel, and at
- * CRITICAL in a GSD project started the parent's record-session write. A
- * top-level `claude --agent` session sets agent_type WITHOUT agent_id, so
- * agent_type alone must still be monitored.
- */
-describe('#6360 context-monitor: subagent inputs (agent_id) are silent and touch no session file', () => {
-  const SUBAGENT = { agent_id: 'a4653ce68d3a4418c', agent_type: 'general-purpose' };
-
-  function makeParentSession(t, { remaining, gsdActive = false } = {}) {
-    const dir = os.tmpdir();
-    const id = `fix-6360-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const metricsPath = path.join(dir, `claude-ctx-${id}.json`);
-    const warnPath = path.join(dir, `claude-ctx-${id}-warned.json`);
-    const watermarkPath = path.join(dir, `claude-ctx-${id}-compacted.json`);
-    const projDir = fs.mkdtempSync(path.join(dir, 'fix-6360-proj-'));
-    const statePath = path.join(projDir, '.planning', 'STATE.md');
-    if (gsdActive) {
-      fs.mkdirSync(path.join(projDir, '.planning'), { recursive: true });
-      fs.writeFileSync(statePath, '# State\n');
-    }
-    // The parent's statusline bridge, fresh, past the given threshold.
-    fs.writeFileSync(metricsPath, JSON.stringify({
-      session_id: id,
-      remaining_percentage: remaining,
-      used_pct: 100 - remaining,
-      timestamp: Math.floor(Date.now() / 1000),
-    }));
-    t.after(() => {
-      for (const p of [metricsPath, warnPath, watermarkPath]) { try { fs.unlinkSync(p); } catch { /* absent */ } }
-      try { cleanup(projDir); } catch { /* best effort */ }
-    });
-    return {
-      metricsPath,
-      warnPath,
-      watermarkPath,
-      statePath,
-      call(extra = {}, event = 'PostToolUse') {
-        const input = JSON.stringify({ session_id: id, cwd: projDir, tool_name: 'Bash', hook_event_name: event, ...extra });
-        try {
-          const stdout = execFileSync(process.execPath, [MONITOR_PATH], {
-            input,
-            encoding: 'utf-8',
-            timeout: CONTEXT_MONITOR_QUERY_TIMEOUT_MS,
-          });
-          return { exitCode: 0, stdout };
-        } catch (e) {
-          return { exitCode: e.status ?? 1, stdout: e.stdout || '' };
-        }
-      },
-    };
-  }
-
-  test('a subagent input at CRITICAL in a GSD project emits nothing, writes no sentinel and records no session', (t) => {
-    const s = makeParentSession(t, { remaining: 20, gsdActive: true });
-    const { exitCode, stdout } = s.call(SUBAGENT);
-    assert.strictEqual(exitCode, 0);
-    assert.strictEqual(stdout, '', 'the parent\'s usage must not be reported to a subagent');
-    // criticalRecorded is written to the sentinel in the same step that spawns
-    // record-session, so no sentinel means the spawn branch was not reached.
-    assert.ok(!fs.existsSync(s.warnPath), 'a subagent must not create the parent\'s debounce sentinel');
-    assert.strictEqual(fs.readFileSync(s.statePath, 'utf-8'), '# State\n', 'STATE.md untouched');
-  });
-
-  test('a subagent input leaves the parent\'s debounce sentinel byte-identical (no escalation spent)', (t) => {
-    const s = makeParentSession(t, { remaining: 20 });
-    const before = JSON.stringify({ callsSinceWarn: 2, lastLevel: 'warning' });
-    fs.writeFileSync(s.warnPath, before);
-    const { exitCode, stdout } = s.call(SUBAGENT);
-    assert.strictEqual(exitCode, 0);
-    assert.strictEqual(stdout, '');
-    assert.strictEqual(fs.readFileSync(s.warnPath, 'utf-8'), before,
-      'the WARNING->CRITICAL escalation must stay for the parent\'s own next tool call');
-  });
-
-  test('a subagent PreCompact leaves the parent\'s bridge and sentinel in place and writes no watermark', (t) => {
-    const s = makeParentSession(t, { remaining: 30 });
-    const sentinel = JSON.stringify({ callsSinceWarn: 1, lastLevel: 'warning' });
-    fs.writeFileSync(s.warnPath, sentinel);
-    const bridge = fs.readFileSync(s.metricsPath, 'utf-8');
-    const { exitCode, stdout } = s.call(SUBAGENT, 'PreCompact');
-    assert.strictEqual(exitCode, 0);
-    assert.strictEqual(stdout, '');
-    assert.strictEqual(fs.readFileSync(s.metricsPath, 'utf-8'), bridge, 'parent bridge kept');
-    assert.strictEqual(fs.readFileSync(s.warnPath, 'utf-8'), sentinel, 'parent sentinel kept');
-    assert.ok(!fs.existsSync(s.watermarkPath), 'no compaction watermark for the parent');
-  });
-
-  test('the same input without agent_id still warns and writes the sentinel (top level unchanged)', (t) => {
-    const s = makeParentSession(t, { remaining: 30 });
-    const { exitCode, stdout } = s.call();
-    assert.strictEqual(exitCode, 0);
-    assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, /^CONTEXT WARNING: Usage at 70%/);
-    assert.ok(fs.existsSync(s.warnPath), 'top-level debounce bookkeeping still runs');
-  });
-
-  test('a top-level --agent session (agent_type without agent_id) still warns', (t) => {
-    const s = makeParentSession(t, { remaining: 30 });
-    const { exitCode, stdout } = s.call({ agent_type: 'general-purpose' });
-    assert.strictEqual(exitCode, 0);
-    assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, /^CONTEXT WARNING: Usage at 70%/);
-  });
-});
-
 describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
   const HOOK = path.join(__dirname, '..', 'hooks', 'gsd-context-monitor.js');
   const UNLINK_EPERM_PRELOAD = path.join(__dirname, 'helpers', 'context-monitor-unlink-eperm-preload.cjs');
@@ -1516,6 +1407,10 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
       // `runMonitor` helper in this file has taken an explicit env for exactly
       // this reason all along. A key set to `undefined` is UNSET in the child,
       // which is what pinning an ambient variable requires.
+      //
+      // `fields` adds keys to the hook input (the #6360 rows send `agent_id`).
+      // `timeoutMs` is for a call that reaches the detached record-session
+      // writer: those take CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS.
       call(event, remaining, {
         metrics = true,
         failUnlinkMatching = null,
@@ -1525,6 +1420,8 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
         nowMs = null,
         bridgeTimestamp = null,
         env: envOverrides = null,
+        fields = null,
+        timeoutMs = CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS,
       } = {}) {
         if (metrics === 'keep') {
           // leave the bridge exactly as the previous call left it
@@ -1574,9 +1471,9 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
         for (const k of Object.keys(env)) { if (env[k] === undefined) delete env[k]; }
         try {
           stdout = execFileSync(process.execPath, argv, {
-            input: JSON.stringify({ session_id: id, cwd, hook_event_name: event }),
+            input: JSON.stringify({ session_id: id, cwd, hook_event_name: event, ...(fields || {}) }),
             encoding: 'utf8',
-            timeout: CONTEXT_MONITOR_PRELOAD_HOOK_TIMEOUT_MS,
+            timeout: timeoutMs,
             env,
           });
         } catch (e) { stdout = e.stdout || ''; exitCode = e.status ?? 1; }
@@ -2481,6 +2378,115 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
     }
   });
 
+
+  /**
+   * #6360 — a subagent's hook input is silent and leaves the parent's files alone.
+   *
+   * Inside a subagent (or in-process teammate) Claude Code sends the PARENT's
+   * session_id plus agent_id / agent_type. The hook built every path from
+   * session_id alone, so it read the parent's bridge and reported the parent's
+   * usage as the subagent's own, advanced the parent's debounce sentinel, at
+   * CRITICAL in a GSD project started the parent's record-session write, and
+   * on PreCompact cleared the parent's bridge. A top-level `claude --agent`
+   * session sets agent_type WITHOUT agent_id, so agent_type alone is still
+   * monitored. These rows reuse this block's driver because they too assert on
+   * the files one session id carries across calls.
+   */
+  describe('#6360 context-monitor: subagent inputs (agent_id) are silent and touch no session file', () => {
+    const SUBAGENT = { agent_id: 'a4653ce68d3a4418c', agent_type: 'general-purpose' };
+    const WARNING_70 = /^CONTEXT WARNING: Usage at 70%/;
+
+    test('a subagent input at CRITICAL in a GSD project emits nothing and never reaches the record-session spawn', (t) => {
+      const s = makeSession(t, { gsdActive: true });
+      const sub = s.call('PostToolUse', 20, { fields: SUBAGENT, timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS });
+      assert.strictEqual(sub.exitCode, 0);
+      assert.strictEqual(sub.stdout, '', 'the parent\'s usage must not be reported to a subagent');
+      assert.strictEqual(s.warnRaw(), null, 'a subagent must not create the parent\'s debounce sentinel');
+      // Control on the same fixture: the top-level call reaches the spawn
+      // branch, which stamps criticalRecorded in the step that spawns the
+      // detached writer. So the fixture is live and the subagent's silence
+      // above is the guard, not a missing precondition.
+      const top = s.call('PostToolUse', 20, { timeoutMs: CONTEXT_MONITOR_CRITICAL_RECORD_TIMEOUT_MS });
+      assert.strictEqual(top.exitCode, 0);
+      assert.strictEqual(s.warn() && s.warn().criticalRecorded, true,
+        'the top-level control must reach the record-session spawn on this fixture');
+    });
+
+    test('a subagent input leaves the parent\'s debounce sentinel byte-identical (no escalation spent)', (t) => {
+      const s = makeSession(t);
+      s.seed({ callsSinceWarn: 2, lastLevel: 'warning' });
+      const before = s.warnRaw();
+      const { exitCode, stdout } = s.call('PostToolUse', 20, { fields: SUBAGENT });
+      assert.strictEqual(exitCode, 0);
+      assert.strictEqual(stdout, '');
+      assert.strictEqual(s.warnRaw(), before,
+        'the WARNING->CRITICAL escalation must stay for the parent\'s own next tool call');
+    });
+
+    test('a subagent PreCompact leaves the parent\'s bridge and sentinel in place and writes no watermark', (t) => {
+      const s = makeSession(t);
+      s.writeBridge({ remaining_percentage: 30, used_pct: 70, timestamp: Math.floor(Date.now() / 1000) });
+      s.seed({ callsSinceWarn: 1, lastLevel: 'warning' });
+      const bridge = s.metricsRaw();
+      const sentinel = s.warnRaw();
+      const { exitCode, stdout } = s.call('PreCompact', 30, { metrics: 'keep', fields: SUBAGENT });
+      assert.strictEqual(exitCode, 0);
+      assert.strictEqual(stdout, '');
+      assert.strictEqual(s.metricsRaw(), bridge, 'parent bridge kept');
+      assert.strictEqual(s.warnRaw(), sentinel, 'parent sentinel kept');
+      assert.strictEqual(s.watermark(), null, 'no compaction watermark for the parent');
+    });
+
+    // On every event: before #6360 the silent events still wrote the sentinel
+    // for a subagent input (the #2289 bookkeeping); now they touch nothing.
+    for (const event of ['Stop', 'SubagentStop', undefined]) {
+      test(`a subagent input on ${event ?? 'an event-less input'} writes no sentinel`, (t) => {
+        const s = makeSession(t);
+        const { exitCode, stdout } = s.call(event, 30, { fields: SUBAGENT });
+        assert.strictEqual(exitCode, 0);
+        assert.strictEqual(stdout, '');
+        assert.strictEqual(s.warnRaw(), null);
+      });
+    }
+
+    // The rule is "agent_id is a non-empty string", taken as the host sends
+    // it: Claude Code's ids are opaque strings, so "0" and whitespace are not
+    // parsed or trimmed into "no subagent" -- any non-empty string is one.
+    for (const agentId of ['a4653ce68d3a4418c', '0', ' ']) {
+      test(`agent_id ${JSON.stringify(agentId)} (a non-empty string) is a subagent: silent, no sentinel`, (t) => {
+        const s = makeSession(t);
+        const { exitCode, stdout } = s.call('PostToolUse', 30, { fields: { agent_id: agentId, agent_type: 'general-purpose' } });
+        assert.strictEqual(exitCode, 0);
+        assert.strictEqual(stdout, '');
+        assert.strictEqual(s.warnRaw(), null);
+      });
+    }
+
+    // Anything else is not the host's subagent marker and is monitored as a
+    // top-level session. Pins both halves of the guard: a truthiness test
+    // fails the truthy non-strings, a bare typeof-string test fails ''.
+    const NOT_A_SUBAGENT = [
+      ['absent', {}],
+      ['absent, agent_type only (top-level --agent)', { agent_type: 'general-purpose' }],
+      ['""', { agent_id: '', agent_type: 'general-purpose' }],
+      ['null', { agent_id: null }],
+      ['0', { agent_id: 0 }],
+      ['123', { agent_id: 123 }],
+      ['true', { agent_id: true }],
+      ['[]', { agent_id: [] }],
+      ['["x"]', { agent_id: ['x'] }],
+      ['{}', { agent_id: {} }],
+    ];
+    for (const [label, fields] of NOT_A_SUBAGENT) {
+      test(`agent_id ${label} is not a subagent: still warns and writes the sentinel`, (t) => {
+        const s = makeSession(t);
+        const { exitCode, stdout } = s.call('PostToolUse', 30, { fields });
+        assert.strictEqual(exitCode, 0);
+        assert.match(JSON.parse(stdout).hookSpecificOutput.additionalContext, WARNING_70);
+        assert.ok(s.warnRaw() !== null, 'top-level debounce bookkeeping still runs');
+      });
+    }
+  });
 });
 
 // ─── #3709 round 3 (Major 2): the thresholds this fix turns on, at their limits ───
