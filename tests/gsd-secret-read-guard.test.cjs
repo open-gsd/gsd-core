@@ -1093,7 +1093,6 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['a backtick in an env -S string', "env -S 'claude -p `hi --agent gsd-debugger'"],
     ['a << in an env -S string', "env -S 'claude -p << --agent gsd-debugger'"],
     ['vertical tabs between the words of an env -S string', "env -S 'claude\v--agent\vgsd-debugger\v-p\vhi'"],
-    ['a launch after a deeply nested env -S chain', `env ${'-S'.repeat(20000)}x; claude --agent gsd-debugger -p hi`],
     ['behind sudo --host', 'sudo --host myhost claude --agent gsd-debugger -p hi'],
     ['behind a chain of wrappers with options', 'timeout -k 5 10 nice -n 5 env -i PATH="$PATH" claude --agent gsd-debugger -p hi'],
     // The wrapper options #5627 reads, pinned for the launch too.
@@ -1836,39 +1835,48 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     assertScanned(`env -S '\${Z}\\ A=1 ls ${'/'.repeat(300000)}x'; ${TAIL}`, 'debugger-cli-spawn', 1, 'launch');
   });
 
+  // 20,000 `-S` in one word nest the strings far past MAX_NESTING_DEPTH; the launch
+  // after them is denied by the reading before #5514, so no splitting reading runs.
+  test('blocks: a launch after a deeply nested env -S chain, in one pass', () => {
+    assertScanned(`env ${'-S'.repeat(20000)}x; ${TAIL} -p hi`, 'debugger-cli-spawn', 1, 'launch');
+  });
+
   // The env -S readings run on the scan budget #5255 sets for the whole command
   // (scanBashCommand), set once, and a block they find is #5255's `{ code, text }`.
-  // Each row goes through the hook entry.
+  // Each row runs scanBashReadings, the scan main() calls and whose block it emits,
+  // in process, and asserts the verdict and the work charged (workSpent): a step
+  // count, not a spawn timeout.
   describe('the env -S readings share the command\'s one scan budget, and keep its command-too-complex deny', () => {
-    const { scanBashCommand, scanDebuggerSpawn, workSpent } = require(HOOK_PATH);
-    const runEntry = (command) => {
-      const r = runHookSeam(HOOK_PATH, [], {
-        input: JSON.stringify(bash(command)),
-        env: { ...process.env, NODE_V8_COVERAGE: '' },
-        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
-      });
-      return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
-    };
-    const TOO_COMPLEX = { code: 'command-too-complex' };
+    const { scanBashCommand, scanBashReadings, scanDebuggerSpawn, workSpent, MAX_SCAN_CHARACTERS } = require(HOOK_PATH);
 
     // Skipped as the option's value, the string costs the plain reading one word.
     // Split, it is `sh -c` with 200,000 separators and a heredoc, which the scan and
     // #5513's two heredoc passes each charge: 600,000, past the 524,288 the command
-    // may spend. The deny is `command-too-complex`, never a read.
+    // may spend. The deny is `command-too-complex`, never a read, within nine passes
+    // over the command's text.
     test('a command that spends the budget only under a splitting reading is denied as command-too-complex', () => {
       const inner = `sh -c "${'x;'.repeat(200000)}: <<E\\nE"`;
-      assertBlocked(runEntry(`env -S '${inner}'`), 'split reading spends the budget', TOO_COMPLEX);
+      assertScanned(`env -S '${inner}'`, 'command-too-complex', 9, 'split reading spends the budget');
+      assert.equal(workSpent().exhausted, true, 'the budget ran out');
       // The same string as the value of an option that does not split is allowed.
-      assertAllowed(runEntry(`env -u '${inner}' ls`), 'the string skipped as -u\'s value');
+      assertScanned(`env -u '${inner}' ls`, null, 3, 'the string skipped as -u\'s value');
     });
 
     // Split, the `bash -c` body nests `"$(` 100,000 deep, which overflows the
     // debugger-spawn check's tokenizer (and the secret scan's, which reports it as
-    // `command-too-complex`). The overflow is a deny, never the crash verdict's allow.
+    // `command-too-complex`). The overflow is a deny, never the crash verdict's allow:
+    // scanBashReadings reports that a scan threw and still returns the block, which
+    // main() emits before it reaches the crash verdict. The work stays within the
+    // command's budget. The block is the secret scan's, so this row pins the deny,
+    // not which scan's catch makes it.
     test('an env -S string whose split command overflows the debugger-spawn tokenizer is denied as command-too-complex', () => {
       const command = `env -S 'timeout 5 bash -c "claude --agent gsd-debugger; echo ${'\\"\\$('.repeat(100000)}"'`;
       assert.throws(() => scanDebuggerSpawn(command), RangeError, 'the spawn check overflows on the split command');
-      assertBlocked(runEntry(command), 'split command overflows the spawn check', TOO_COMPLEX);
+      const { block, threw } = scanBashReadings(command);
+      assert.equal(threw, true, 'a scan threw');
+      assert.equal(block === null ? null : block.code, 'command-too-complex', 'split command overflows the spawn check');
+      const { scan } = workSpent();
+      assert.ok(scan <= MAX_SCAN_CHARACTERS, `${scan} characters scanned, past the budget of ${MAX_SCAN_CHARACTERS}`);
     });
 
     // 200,000 separators after the string: one reading's scan and spawn check charge
@@ -1880,7 +1888,8 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
       assert.equal(scanBashCommand(command), null);
       assert.equal(scanDebuggerSpawn(command), null);
       assert.deepEqual(workSpent(), { scan: 2 * command.length, reader: 0, separators: 400002, exhausted: false }, 'one reading fits');
-      assertBlocked(runEntry(command), 'two readings on one budget', TOO_COMPLEX);
+      assertScanned(command, 'command-too-complex', 2, 'two readings on one budget');
+      assert.equal(workSpent().exhausted, true, 'the budget ran out');
     });
 
     // The budget's edge, in process with the budgets set small (RULESET.TESTS
@@ -1892,7 +1901,6 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     // times the separators. One reading's share is far below that, so these rows
     // sit on the budget the readings share. At the total the command is allowed;
     // one less and it is denied as command-too-complex.
-    const { scanBashReadings } = require(HOOK_PATH);
     const SHARED = `env -S true; ${'x;'.repeat(1000)}`;
     const SHARED_SEPARATORS = 1001;
     const codeOf = ({ block }) => (block === null ? null : block.code);
@@ -1930,7 +1938,7 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
     // With no env -S option no later reading can name a read, so a block that is not a
     // read or a launch is emitted at once, as `next` emits it, before the spawn check runs.
     test('with no env -S option, a block that is not a read or a launch is emitted as next emits it', () => {
-      assertBlocked(runEntry("claude --agent gsd-debugger -p x; echo $'abc"), 'launch, then an unterminated $\'…\'', { code: 'ansi-c-unterminated' });
+      assertScanned("claude --agent gsd-debugger -p x; echo $'abc", 'ansi-c-unterminated', 4, 'launch, then an unterminated $\'…\'');
     });
   });
 
