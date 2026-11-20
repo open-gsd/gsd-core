@@ -418,6 +418,14 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(conv, /- \[ \] A plan-phase run that prints `PLANNING STOPPED` \(step 4 or 5d\) ends the workflow; it never converges/);
   });
 
+  // discuss-phase's chain runs plan-phase with --auto, so a research question stops it at once; its return table
+  // must name that return, or the user gets no defined next step (nothing executes: the stop precedes step 15).
+  test('both discuss chains name the stop among plan-phase\'s returns', () => {
+    const chain = read('gsd-core/workflows/discuss-phase/modes/chain.md').replace(/\s+/g, ' ');
+    assert.match(chain, /- \*\*PLANNING STOPPED\*\* → Stop chain\. A research question needs a user ruling; the plans stay on disk and are not executed: ``` Auto-advance stopped: research questions need a user ruling\. Continue: \/gsd:discuss-phase \$\{PHASE\} \$\{GSD_WS\} ```/);
+    assert.match(read('gsd-core/workflows/discuss-phase-assumptions/steps/auto-advance-dispatch.md'), /Handle return: PHASE COMPLETE \/ PLANNING COMPLETE \/ PLANNING STOPPED \/ INCONCLUSIVE \/ GAPS FOUND/);
+  });
+
   test('both stops end plan-phase with a marker line, and autonomous never executes plans whose run carries it', () => {
     assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous` reads so that it does not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
     assert.doesNotMatch(resolve(), /a caller never executes/, 'only autonomous reads the marker');
