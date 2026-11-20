@@ -255,7 +255,11 @@ it derives, and nothing else, to an executor-identity record:
   `.gitignore`; the writer refuses a linked record directory.
 - **Key and merge rule.** One file per query scope: `plan+<phase>+<plan>.json`,
   `phase+<phase>.json`, or `all.json` for a query naming neither (`+` is outside the safe-key alphabet,
-  so no two scopes share a name). Each write is a full snapshot of that scope's derivation, through an
+  so no two scopes share a name). On a case-insensitive volume two scopes whose keys differ only in case
+  (`phase+A.json`, `phase+a.json`) are one file, as their keyed records are: the snapshot renamed last
+  replaces the other, and a decision write for either spelling removes it. The replaced or removed
+  snapshot's names leave the union until that scope's next held query, unless another recent record
+  carries them. Phase and plan keys that differ only in case are not expected. Each write is a full snapshot of that scope's derivation, through an
   exclusive temp file and a rename, so a reader sees one whole snapshot. Two queries at the same scope
   race on the rename and the file holds the snapshot renamed last: a derivation that read the plans
   before an edit can replace one that read them after, until the next held query at that scope. The
@@ -282,8 +286,7 @@ it derives, and nothing else, to an executor-identity record:
   clock-skew allowance in the future sets `scanOverflow`: classification fails closed, it does not
   ignore the record. A directory named `*.json` is skipped, as in the keyed scan; one at a scope's own
   name stops that scope's held query from holding (above). The scan has the keyed scan's bounds (1024
-  entries, newest mtime first). Two phases that differ only in case share one file on a
-  case-insensitive volume, as their keyed records do.
+  entries, newest mtime first).
 - **Reader.** `readSentinelAt` reads the records on its classify path only, in the shape
   `isExecutorDispatch` already consumes, so the two guard hooks are unchanged. Enforcement, the
   resolver's own-scope hold read and a `gsd-executor` dispatch never read them. The directory name,
