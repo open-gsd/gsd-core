@@ -440,12 +440,64 @@ describe('the gate is described as failing the written plans, never as blocking 
       assert.match(read(doc), /\*\*Purpose:\*\* Fail plan verification while RESEARCH\.md has unresolved open questions, so plans built on incomplete information are not accepted\. The check runs after the planner has written the plans\./, doc);
       assert.doesNotMatch(read(doc), /Block planning when RESEARCH\.md/, doc);
     }
+    // Exact lines, not patterns: a pattern with a wildcard in the middle let a reverted clause pass.
     const translated = {
-      'docs/ja-JP/FEATURES.md': /\*\*目的:\*\* RESEARCH\.md に未解決のオープンクエスチョンが残っている間はプランの検証を不合格にし、.*このチェックはプランナーがプランを書いた後に実行されます。/,
-      'docs/zh-CN/FEATURES.md': /\*\*目的：\*\* 当 RESEARCH\.md 仍有未解决的开放问题时，计划验证不通过，.*该检查在规划器写出计划之后运行。/,
-      'docs/ko-KR/FEATURES.md': /\*\*목적:\*\* RESEARCH\.md에 미해결 오픈 질문이 남아 있으면 계획 검증을 통과시키지 않아, .*이 검사는 플래너가 계획을 작성한 뒤에 실행됩니다\./,
+      'docs/ja-JP/FEATURES.md': {
+        now: [
+          '**目的:** RESEARCH.md に未解決のオープンクエスチョンが残っている間はプランの検証を不合格にし、不完全な情報に基づく計画が受け入れられないようにします。このチェックはプランナーがプランを書いた後に実行されます。',
+          '- REQ-RESGATE-01: プランを検証する際に、RESEARCH.md の未解決オープンクエスチョンをチェックしなければならない',
+          '- REQ-RESGATE-02: 未解決のオープンクエスチョンごとにブロッカーを出し、プランが受け入れられないようにしなければならない',
+          '2. **ゲート** — 該当する `D-NN` のない質問はそれぞれブロッカーになる。プランナーは記録済みの決定を引用できるが、決定を追加することはできない',
+        ],
+        gone: ['プランニングをブロック', 'プランニング開始前に', 'プランフェーズのエントリをブロック', '不完全な情報に基づく計画を防止'],
+      },
+      'docs/zh-CN/FEATURES.md': {
+        now: [
+          '**目的：** 当 RESEARCH.md 仍有未解决的开放问题时，计划验证不通过，防止基于不完整信息的计划被接受。该检查在规划器写出计划之后运行。',
+          '- REQ-RESGATE-01：系统在验证计划时，必须检查 RESEARCH.md 中未解决的开放问题',
+          '- REQ-RESGATE-02：系统必须为每个未解决的开放问题提出阻断项，使计划不被接受',
+          '2. **门控** — 每个没有符合条件的 `D-NN` 的问题都是阻断项；规划器可以引用已记录的决定，但不能新增决定',
+        ],
+        gone: ['阻止规划', '规划开始前', '阻止进入 plan-phase', '在不完整信息基础上制定计划'],
+      },
+      'docs/ko-KR/FEATURES.md': {
+        now: [
+          '**목적:** RESEARCH.md에 미해결 오픈 질문이 남아 있으면 계획 검증을 통과시키지 않아, 불완전한 정보에 기반한 계획이 승인되지 않도록 합니다. 이 검사는 플래너가 계획을 작성한 뒤에 실행됩니다.',
+          '- REQ-RESGATE-01: 계획을 검증할 때 RESEARCH.md에서 미해결 오픈 질문을 확인해야 합니다.',
+          '- REQ-RESGATE-02: 미해결 오픈 질문마다 블로커를 제기하여 계획이 승인되지 않도록 해야 합니다.',
+          '2. **게이트** — 해당하는 `D-NN`이 없는 질문은 각각 블로커가 됨. 플래너는 이미 기록된 결정을 인용할 수 있지만 새 결정을 추가할 수는 없음',
+        ],
+        gone: ['계획 차단', '계획 시작 전', '플랜 페이즈 진입을 차단', '계획을 차단하여'],
+      },
+      'docs/pt-BR/FEATURES.md': {
+        now: ['- **Research gate** — reprova a verificação dos planos quando RESEARCH.md tem questões abertas sem decisão registrada do usuário (v1.32)'],
+        gone: ['bloqueia planejamento'],
+      },
     };
-    for (const [doc, purpose] of Object.entries(translated)) assert.match(read(doc), purpose, doc);
+    for (const [doc, { now, gone }] of Object.entries(translated)) {
+      const text = read(doc);
+      for (const line of now) assert.ok(text.includes(line), `${doc} is missing: ${line}`);
+      // The old wording is checked inside the gate's own section (feature 71); other features legitimately
+      // talk about planning starting. pt-BR carries only a one-line summary, so its whole file is the scope.
+      const at = text.indexOf('### 71.');
+      const section = at === -1 ? text : text.slice(at, text.indexOf('\n---', at));
+      for (const old of gone) assert.ok(!section.includes(old), `${doc} still says: ${old}`);
+    }
+  });
+
+  // The architecture diagrams list the gate inside the plan checker's verify loop, after the planner, never as a
+  // plan-phase step ahead of the researcher.
+  test('every architecture diagram puts the gate inside the verify loop', () => {
+    for (const doc of ['docs/ARCHITECTURE.md', 'docs/ja-JP/ARCHITECTURE.md', 'docs/zh-CN/ARCHITECTURE.md', 'docs/ko-KR/ARCHITECTURE.md']) {
+      const lines = splitLines(read(doc));
+      const gate = lines.findIndex((l) => /Research gate \(Dimension 11\)|리서치 게이트 \(Dimension 11\)/.test(l));
+      const checker = lines.findIndex((l) => /├── (Plan Checker → Verify loop|계획 검사기 → 검증 루프)/.test(l));
+      const planner = lines.findIndex((l) => /├── (Planner \(with reachability check\)|플래너 \(도달 가능성 검사 포함\))/.test(l));
+      assert.ok(gate !== -1 && checker !== -1 && planner !== -1, `${doc}: gate, planner and checker rows`);
+      assert.equal(gate, checker + 1, `${doc}: the gate row sits under the verify loop`);
+      assert.ok(planner < checker, `${doc}: the planner runs before the checker`);
+      assert.ok(!lines.some((l) => /├── (Research gate \(blocks if|리서치 게이트 \(RESEARCH\.md에 미해결)/.test(l)), `${doc}: no pre-research gate step`);
+    }
   });
 
   test('plan-md row 11, and the researcher and template rules, say the checker fails the plans', () => {
