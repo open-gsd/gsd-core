@@ -4421,9 +4421,12 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.strictEqual(loaded.research, false);
   });
 
+  // The global-defaults branch reads every twin it projects through the one
+  // list, NESTED_TWINS, so the rows come from that list, not a hand-typed one.
   test('outside a project, each twin key the loader reads is honored under its nested spelling', (t) => {
-    const { CONFIG_KEY_ALIASES, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
-    const keys = ['commit_docs', 'research', 'plan_checker', 'verifier', 'nyquist_validation', 'text_mode', 'subagent_timeout'];
+    const { NESTED_TWINS, GLOBAL_DEFAULTS_RESOLUTION_KEYS, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const keys = NESTED_TWINS.map((twin) => twin.key).filter((key) => GLOBAL_DEFAULTS_RESOLUTION_KEYS.includes(key));
+    assert.ok(keys.includes('post_planning_gaps') && keys.includes('research_before_questions'), `precondition: the hand-read keys are in the list (${keys.join(', ')})`);
     const gsdHome = createTempDir('gsd-5681-home-');
     const outside = createTempDir('gsd-5681-outside-');
     t.after(() => { cleanup(gsdHome); cleanup(outside); });
@@ -4431,7 +4434,7 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     const store = {};
     const want = {};
     for (const key of keys) {
-      const { section, field } = CONFIG_KEY_ALIASES.find((alias) => alias.key === key);
+      const { section, field } = NESTED_TWINS.find((twin) => twin.key === key);
       const fallback = CONFIG_DEFAULTS[key];
       want[key] = typeof fallback === 'number' ? fallback + 1 : !fallback;
       store[section] = { ...store[section], [field]: want[key] };
@@ -4558,6 +4561,12 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     const save = (settings) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
     return { defaultsPath, save, read: () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')) };
   }
+
+  test('the twin pairs are the loader\'s NESTED_TWINS plus depth/granularity', () => {
+    const { NESTED_TWINS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    assert.deepStrictEqual(SPELLING_TWINS.map(([legacy, canonical]) => `${legacy}=${canonical}`),
+      [...NESTED_TWINS.map(({ key, section, field }) => `${key}=${section}.${field}`), 'depth=granularity']);
+  });
 
   test('saving each canonical spelling drops its stale legacy spelling', (t) => {
     assert.ok(SPELLING_TWINS.length > 0, 'precondition: the twin table is not empty');

@@ -18,7 +18,7 @@ import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, resolvePlannerStallDetectionEnabled } = configLoader;
+const { CONFIG_DEFAULTS, NESTED_TWINS, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -406,6 +406,25 @@ const DETECTED_SEARCH_INTEGRATIONS: readonly { key: string; envVar: string; keyF
 ];
 
 /**
+ * The flat top-level settings a new project's template starts from. Two of
+ * them have a nested twin (TEMPLATE_FLAT_TWINS).
+ */
+const TEMPLATE_FLAT_SETTINGS: Readonly<Record<string, unknown>> = Object.freeze({
+  model_profile: CONFIG_DEFAULTS.model_profile,
+  commit_docs: CONFIG_DEFAULTS.commit_docs,
+  parallelization: CONFIG_DEFAULTS.parallelization,
+  search_gitignored: CONFIG_DEFAULTS.search_gitignored,
+});
+
+/**
+ * The twins whose flat key the template writes (`commit_docs`,
+ * `search_gitignored`). The loader reads a flat key before its nested twin, so
+ * new-project creation reads each layer's nested spelling into the flat key
+ * itself (#5681).
+ */
+const TEMPLATE_FLAT_TWINS = NESTED_TWINS.filter(({ key }) => Object.prototype.hasOwnProperty.call(TEMPLATE_FLAT_SETTINGS, key));
+
+/**
  * Plan a fully-materialized config object for a new project. Writes nothing:
  * the user defaults rewrite comes back as data, for the caller to persist once
  * it has decided to write at all (#5268: a `--dry-run` never does, and a
@@ -457,10 +476,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   }
 
   const hardcoded: Record<string, unknown> = {
-    model_profile: CONFIG_DEFAULTS.model_profile,
-    commit_docs: CONFIG_DEFAULTS.commit_docs,
-    parallelization: CONFIG_DEFAULTS.parallelization,
-    search_gitignored: CONFIG_DEFAULTS.search_gitignored,
+    ...TEMPLATE_FLAT_SETTINGS,
     ...detectedSearch,
     git: {
       branching_strategy: CONFIG_DEFAULTS.branching_strategy,
@@ -583,8 +599,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   // to override the root's. A nested twin in the new project is given the same
   // value, so the two spellings agree (#5681).
   const isSet = (value: unknown): boolean => value !== undefined && value !== null;
-  for (const { key, section, field } of CONFIG_KEY_ALIASES) {
-    if (section === key || !Object.prototype.hasOwnProperty.call(hardcoded, key)) continue;
+  for (const { key, section, field } of TEMPLATE_FLAT_TWINS) {
     let resolved: unknown = hardcoded[key];
     for (const layer of [choices, safeDefaults] as Record<string, unknown>[]) {
       const layerSection = layer[section];
@@ -838,17 +853,12 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
 
 /**
  * Settings with a legacy spelling, as [legacy, canonical]: each flat key the
- * loader reads ahead of its nested key (config-loader's CONFIG_KEY_ALIASES;
- * not `parallelization`, whose nested field sits under the flat key itself),
- * `research_before_questions`, which the loader's global-defaults branch reads
- * flat first (#3894), and `depth`, which the loader and new-project creation
- * read only when `granularity` is absent.
+ * loader reads ahead of its nested twin (config-loader's NESTED_TWINS), and
+ * `depth`, which the loader and new-project creation read only when
+ * `granularity` is absent.
  */
 const SPELLING_TWINS: readonly (readonly [string, string])[] = [
-  ...CONFIG_KEY_ALIASES
-    .filter(({ key, section }) => section !== key)
-    .map(({ key, section, field }) => [key, `${section}.${field}`] as const),
-  ['research_before_questions', 'workflow.research_before_questions'],
+  ...NESTED_TWINS.map(({ key, section, field }) => [key, `${section}.${field}`] as const),
   ['depth', 'granularity'],
 ];
 
