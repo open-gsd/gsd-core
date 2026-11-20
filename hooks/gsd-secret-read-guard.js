@@ -1485,6 +1485,11 @@ function tokenize(str, reading) {
   let buf = '';
   let quoted = 'none';
   let hasWord = false;
+  // #6282: whether the word's first character, and any glob or brace character in it, is outside quotes, so the
+  // shell may expand the word into other words (nameOnlyOperandIndices).
+  let leadUnquoted = false;
+  let globUnquoted = false;
+  let braceUnquoted = false;
   let seg = 0;
   let heredocs = [];
   let expectTag = null;
@@ -1501,11 +1506,16 @@ function tokenize(str, reading) {
       // zsh keeps a `\0` escape's NUL in the word and hands a command the
       // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
       const nul = reading === 'zsh' ? buf.indexOf('\0') : -1;
-      tokens.push({ kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg });
+      const brace = braceUnquoted && (buf.includes(',') || buf.includes('..'));
+      tokens.push({
+        kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg, leadUnquoted,
+        globUnquoted: globUnquoted || brace,
+      });
     }
     buf = '';
     quoted = 'none';
     hasWord = false;
+    leadUnquoted = globUnquoted = braceUnquoted = false;
   };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
@@ -1718,6 +1728,7 @@ function tokenize(str, reading) {
         fd = buf;
         buf = '';
         hasWord = false;
+        leadUnquoted = globUnquoted = braceUnquoted = false;
       } else {
         flush();
       }
@@ -1800,6 +1811,10 @@ function tokenize(str, reading) {
     }
 
     hasWord = true;
+    // `buf`, not `hasWord`: an empty quote before it (`''*`) leaves the glob leading.
+    if (buf.length === 0) leadUnquoted = true;
+    if (ch === '*' || ch === '?' || ch === '[') globUnquoted = true;
+    else if (ch === '{') braceUnquoted = true;
     buf += ch;
     i++;
   }
@@ -1934,11 +1949,28 @@ function nameOnlyOperandIndices(base, operands) {
   if (CONTAINER_RUNTIMES.has(base)) return envFileValueIndices(operands);
   if (base === 'git') return gitPathspecIndices(operands);
   if (base === 'cp' || base === 'mv') return copyDestinationIndices(operands);
-  if (SEARCH_TOOLS.has(base)) return searchOperandIndices(SEARCH_TOOLS.get(base), operands);
+  if (SEARCH_TOOLS.has(base)) {
+    if (noSearchCarveOut) return new Set();
+    const exempt = searchOperandIndices(SEARCH_TOOLS.get(base), operands);
+    return expansionMayShift(operands, exempt) ? new Set() : exempt;
+  }
   // No `xargs` entry (#6282): the words xargs adds from stdin or an arg file can be
   // options (`-e KEY`, or `-f` through a replace string), which change what every
   // other word of a search tool is, so nothing a search tool run by xargs takes is exempt.
   return new Set();
+}
+
+// #6282: a word the shell expands into other words withdraws the search carve-out. An unquoted glob, brace or
+// tilde that leads a word can become an option (`grep .env *` with a file named `-eKEY`, `{-e,KEY}`, `~` with
+// HOME=-eKEY), and one at or before an exempt word can add or remove words ahead of it, so the exempt index is no
+// longer the pattern or exclusion value the tool reads (`grep --label .* .env`). A glob after every exempt word
+// (`grep .env docs/*.md`) only adds files.
+const LEAD_EXPANSION_RE = /^[*?[~]/;
+function expansionMayShift(operands, exempt) {
+  let last = -1;
+  for (const k of exempt) if (k > last) last = k;
+  return operands.some((w, k) => (w.leadUnquoted && (LEAD_EXPANSION_RE.test(w.text) || (w.text.startsWith('{') && w.globUnquoted)))
+    || (k <= last && w.globUnquoted));
 }
 
 // #5884: grep-family, ripgrep and jq command lines. Their pattern or program
@@ -2036,7 +2068,10 @@ const SEARCH_TOOLS = new Map([
 ]);
 
 // The operand indices that are a pattern, program or exclusion value; the empty
-// set when any option is outside the spec (see above).
+// set when any option is outside the spec (see above). A separate exclusion value
+// after the first positional is not exempt (#6282): under POSIXLY_CORRECT, which
+// the agent's environment may export, parsing stops at that positional, so
+// `grep -n KEY . --exclude .env` reads `.env`; `--exclude=.env` is a file named so.
 function searchOperandIndices(spec, operands) {
   const exempt = new Set();
   let patternSupplied = false;
@@ -2055,7 +2090,8 @@ function searchOperandIndices(spec, operands) {
         exempt.add(k);
         if (eq === -1) {
           if (k + 1 >= operands.length) return new Set();
-          exempt.add(++k);
+          k++;
+          if (firstPositional === -1) exempt.add(k);
         }
       } else if (spec.negatedLong.has(name)) {
         // Exempt only a negated glob; a selecting glob is read like a file operand.
@@ -2063,7 +2099,7 @@ function searchOperandIndices(spec, operands) {
           if (t.startsWith('!', eq + 1)) exempt.add(k);
         } else {
           if (k + 1 >= operands.length) return new Set();
-          if (operands[k + 1].text.startsWith('!')) exempt.add(k + 1);
+          if (operands[k + 1].text.startsWith('!') && firstPositional === -1) exempt.add(k + 1);
           k++;
         }
       } else if (spec.patternLong.has(name)) {
@@ -2088,7 +2124,7 @@ function searchOperandIndices(spec, operands) {
           if (attached) {
             if (t.startsWith('!', i + 1)) exempt.add(k);
           } else if (k + 1 < operands.length) {
-            if (operands[k + 1].text.startsWith('!')) exempt.add(k + 1);
+            if (operands[k + 1].text.startsWith('!') && firstPositional === -1) exempt.add(k + 1);
             k++;
           } else {
             return new Set();
@@ -2622,11 +2658,52 @@ function secretRead(text) {
   return { code: 'secret-read', text };
 }
 
+// #6282: set while a scan runs whose text, or any text it was reached from, may hand a search tool words the guard
+// does not see: an expansion it does not perform (`$@`, `$1`, `$X`, `${…}`, `$( )`, backticks, zsh's `$=X`), or a
+// variable that changes how the tool parses its words (GREP_OPTIONS, RIPGREP_CONFIG_PATH, POSIXLY_CORRECT), set
+// anywhere in it. Such a word can be `-e KEY`, which turns the pattern into a file. A search tool then keeps no
+// pattern or exclusion carve-out (nameOnlyOperandIndices). Each scan inherits it, so no rescan of a body wins the
+// carve-out back, and each tests its own text too, so a body decoded or rebuilt on the way in is tested as run.
+let noSearchCarveOut = false;
+const UNSEEN_WORDS_RE = /`|\$[@*#?!$0-9A-Za-z_{([=~^+-]/;
+const PARSING_VARS_RE = /GREP_OPTIONS|RIPGREP_CONFIG_PATH|POSIXLY_CORRECT/;
+
+// Whether `text` names one of those variables, also when quotes or backslashes split the name (`GREP_OPT''IONS`,
+// through any number of eval layers) or a brace group may build it (`GREP_OPT{X,I}ONS`). Every word a list group
+// expands to keeps its piece's characters in order, so a piece holding a brace and the name as a subsequence counts;
+// a `..` range makes characters of its own (`{Z..a}` holds `_`), so a piece holding one counts whatever it spells.
+const PARSING_VAR_NAMES = ['GREP_OPTIONS', 'RIPGREP_CONFIG_PATH', 'POSIXLY_CORRECT'];
+function namesParsingVar(text) {
+  const plain = text.replace(/["'\\]/g, '');
+  if (PARSING_VARS_RE.test(plain)) return true;
+  if (!plain.includes('{')) return false;
+  return plain.split(/\s+/).some((piece) => piece.includes('{') && (piece.includes('..') || PARSING_VAR_NAMES.some((name) => {
+    let at = 0;
+    for (let i = 0; i < piece.length && at < name.length; i++) if (piece[i] === name[at]) at++;
+    return at === name.length;
+  })));
+}
+
 // One reading of `command`: `reading` is false for the plain reading, or the
 // shell ('bash' | 'zsh' | 'dash') whose reading it is; an ANSI-C reading
 // (bash's, zsh's) uses that shell's `$'…'` values.
 function scanCommand(command, depth, reading) {
+  const inherited = noSearchCarveOut;
+  // Tested with `\<newline>` removed, as the shell reads a body: `"$\<newline>@"` is `"$@"`.
+  const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
+  noSearchCarveOut = inherited || UNSEEN_WORDS_RE.test(joined) || namesParsingVar(joined);
+  try {
+    return scanSegments(command, depth, reading);
+  } finally {
+    noSearchCarveOut = inherited;
+  }
+}
+
+// The scan of `command` itself (scanCommand).
+function scanSegments(command, depth, reading) {
   const { tokens, nested, unreadable } = tokenizeCharged(command, reading, true);
+  // A word as the reading decodes it can name one too (`export $'\x47REP_OPTIONS=-eK'`).
+  if (!noSearchCarveOut && tokens.some((t) => t.kind === 'word' && namesParsingVar(t.text))) noSearchCarveOut = true;
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
@@ -2925,10 +3002,17 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   const subBase = resolvedSub ? resolvedSub.base : writtenBase;
   const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
   const subIsShell = SHELL_INTERPRETERS.has(subBase);
+  const replaceStr = xargsReplaceStr(operands, subIdx);
   if (subIsShell) {
     // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
     const hit = scanShellInterpreter(subOperands, [], [], s, bySeg, sepAfter, depth, reading);
     if (hit) return hit;
+    // Before the arg-file and pipe returns below: a replace string is filled from `-a list` or `< list` too.
+    const unseen = withUnseenWords(subOperands, replaceStr);
+    if (unseen !== subOperands) {
+      const unseenHit = scanShellInterpreter(unseen, [], [], s, bySeg, sepAfter, depth, reading);
+      if (unseenHit) return unseenHit;
+    }
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
   // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
@@ -2947,7 +3031,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   if (subIsShell) {
     // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
     // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
+    const hit = scanXargsShellScripts(subOperands, replaceStr, prevCmd.operands, depth);
     if (hit) return hit;
   }
   for (const w of prevCmd.operands) {
@@ -2958,6 +3042,14 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
   }
   return null;
+}
+
+// #6282: the words with each `replaceStr` (an xargs replace string, find's `{}`) replaced by `"$@"`, which stands
+// for the words the guard does not see, so a script that holds one is scanned with no search carve-out: `-I{} sh -c
+// 'grep .env {}'` given `-eKEY` makes `.env` a file. The same array when nothing is replaced.
+function withUnseenWords(words, replaceStr) {
+  if (!replaceStr || !words.some((w) => w.text.includes(replaceStr))) return words;
+  return words.map((w) => ({ ...w, text: w.text.split(replaceStr).join('"$@"') }));
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -3011,6 +3103,11 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
     i = j;
     const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading);
     if (hit) return hit;
+    const unseen = withUnseenWords(action, '{}');
+    if (unseen !== action) {
+      const unseenHit = scanLaunchedCommand(unseen, s, bySeg, sepAfter, depth, reading);
+      if (unseenHit) return unseenHit;
+    }
   }
   return null;
 }
