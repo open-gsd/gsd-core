@@ -1669,7 +1669,7 @@ describe('#3829 review round — frontmatter scoping, section anchoring, ledger 
   test('docs-parity: section headings are anchored whole and the prior source cell is captured', () => {
     const src = fs.readFileSync(DISPOSITION_STEP_PATH, 'utf8');
     assert.ok(
-      src.includes('/^##\\s+Fixed Issues\\s*\\$/') && src.includes('/^##\\s+Skipped Issues\\s*\\$/'),
+      src.includes('/^##\\s+Fixed(\\s+Issues)?\\s*\\$/') && src.includes('/^##\\s+Skipped(\\s+Issues)?\\s*\\$/'),
       'fix-report section headings must be matched whole, never by prefix'
     );
     // Eighth src.includes() converted -- it pinned the exact source-cell CAPTURE, and that
