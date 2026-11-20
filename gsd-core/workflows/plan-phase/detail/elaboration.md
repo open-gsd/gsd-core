@@ -18,7 +18,7 @@ Without this guard, an LLM following the workflow could fall through into "use e
 
 ## § 9a — Filesystem Fallback (Planner)
 
-Fires when the planner's Agent() call comes back with no recognized marker, or when a planner marker (`## CHECKPOINT REACHED`, `## PHASE SPLIT RECOMMENDED`, `## ⚠ Source Audit`, `## PLANNING INCONCLUSIVE`) arrived on the return receipt but the body step 9 reads (the question, the proposed split, the gap list, the attempts) has not arrived by the next cycle (`steps/stall-detection-helpers.md`). This elaborates the spine's §9a — the recovery banners and their options.
+Fires when the planner's Agent() call comes back with no recognized marker, or when a planner marker (`## CHECKPOINT REACHED`, `## PHASE SPLIT RECOMMENDED`, `## ⚠ Source Audit`, `## PLANNING INCONCLUSIVE`) arrived on the return receipt but the body step 9 reads (the question, the proposed split, the gap list, the attempts) has not arrived when the watch ends (`steps/stall-detection-helpers.md`). This elaborates the spine's §9a — the recovery banners and their options.
 
 ```bash
 # #3218: this asks "did the planner write files to disk at all" — a
@@ -136,7 +136,7 @@ Use AskUserQuestion for each gap (or batch if multiple gaps).
 
 ## § 11a — Filesystem Fallback (Checker)
 
-Fires when the checker's Agent() call comes back without either completion marker (`## VERIFICATION PASSED` / `## ISSUES FOUND`), or when one of those markers arrived on the return receipt but the body step 11 reads (the issue list, or the findings a PASSED return lists) has not arrived by the next cycle (`steps/stall-detection-helpers.md`). The spine already computed `DISK_PLANS` before reaching this elaboration.
+Fires when the checker's Agent() call comes back without either completion marker (`## VERIFICATION PASSED` / `## ISSUES FOUND`), or when one of those markers arrived on the return receipt but the body step 11 reads (the issue list, or the findings a PASSED return lists) has not arrived when the watch ends (`steps/stall-detection-helpers.md`). The spine already computed `DISK_PLANS` before reaching this elaboration.
 
 **If `DISK_PLANS` > 0 and a marker arrived on the receipt without its body:** the checker's
 findings cannot be read, so the receipt alone never counts as a pass or as 0 issues. Display:

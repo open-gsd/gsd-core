@@ -60,16 +60,16 @@ comes from the completion result. If both are present and name different markers
 treat the return as unrecognized (9a/11a). A route that needs the body when it never
 arrives fails closed: a receipt-routed `## ISSUES FOUND` with no issue list is
 never counted as 0 issues; use 11a and offer Retry checker before Accept. A
-receipt-routed `## VERIFICATION PASSED` whose body has not arrived by the next cycle
+receipt-routed `## VERIFICATION PASSED` whose body has not arrived when the watch ends
 never proceeds to step 13 on the receipt alone, since step 11 reads that body for
 listed findings (#5578): use 11a and offer Retry checker before Accept. A planner
 `## CHECKPOINT REACHED`, `## PHASE SPLIT RECOMMENDED`, `## ⚠ Source Audit` or
 `## PLANNING INCONCLUSIVE` whose body (the question, the proposed split, the gap list,
-the attempts step 9 shows) has not arrived by the next cycle never routes to an empty
+the attempts step 9 shows) has not arrived when the watch ends never routes to an empty
 checkpoint, 9b, 9c or an empty attempts list: use 9a's receipt case, name the marker
 received, and offer Retry planner before Accept; with no plans on disk there is
 nothing to accept, so 9a offers Retry planner or Stop. A revision `## REVISION_CONFLICT` whose body (the
-`CONFLICT_*` fields step 12 records) has not arrived by the next cycle never writes an
+`CONFLICT_*` fields step 12 records) has not arrived when the watch ends never writes an
 empty conflict record: use that watch's `stalled` menu, name the marker received, and
 offer Retry before Accept.
 
@@ -195,31 +195,35 @@ gsd_stall_should_recover() {
 # overwrite a file the agent never read). Absolute because a subagent's cwd may
 # differ from the orchestrator's; `mktemp -u` keeps back-to-back dispatches in one
 # second distinct and EPOCH makes a leftover receipt's dispatch time readable.
-# SPAWN is reduced to [A-Za-z0-9_-], so a plan ID can
-# never leave the directory (the character lists are spelled out, not ranges, so
-# no locale can widen them).
+# SPAWN is reduced to [A-Za-z0-9_-] and cut to 64 characters, so a plan ID can
+# never leave the directory or overflow a file name (the character lists are spelled
+# out, not ranges, so no locale can widen them).
 # Input contract: PHASE_DIR (init's phase_dir) and ROOT (init's project_root) are
 # absolute paths (a drive letter counts only where cygpath exists) with no empty,
-# `.` or `..` component, no trailing separator (except a ROOT that is a filesystem
-# root), no quote, `$`, backtick, `<`, `>` or control character, and in PHASE_DIR
-# no backslash; anything else is refused before the filesystem is touched.
+# `.` or `..` component (so a UNC path, which starts with `//`, is refused), no
+# trailing separator (except a ROOT that is a filesystem root), no quote, `$`,
+# backtick, `<`, `>` or ASCII control character (matched in the C locale, so the
+# caller's locale cannot change the set), and in PHASE_DIR no backslash; anything
+# else is refused before the filesystem is touched.
 # The receipt directory must also sit physically under ROOT: a checkout can commit
 # the phase dir, `.planning` or `.gsd-returns` as a symlink, and mkdir -p and the
 # .gitignore write would follow it out of the project. So a link on the walk from
 # the phase dir up to its nearest existing ancestor (a dangling one too), a phase
 # dir that resolves outside ROOT, is ROOT, or holds a `.git` component below it (in
 # any letter case, and the names Windows reads as `.git`), and a symlinked
-# .gsd-returns or .gitignore all disable the receipt; the watch then ends on the
+# .gsd-returns or .gitignore (or a .gitignore other than the catch-all `*`) all disable the receipt; the watch then ends on the
 # runtime's completion result or as `stalled`. Both sides are compared after
 # `cd -P`/`pwd -P` (macOS temp dirs live under the /var -> /private/var link; Git
 # Bash maps C:/ to /c/ on both sides). Only static, checked-in links are in scope: a
 # link swapped in between these checks and the mkdir/printf (check-then-act) is not.
-# Every refusal prints one `gsd_receipt_path: no receipt: <reason>` line on stderr
-# (the reason only, never the path, which may hold control characters).
+# Every refusal, including a failed cygpath or mktemp, prints one
+# `gsd_receipt_path: no receipt: <reason>` line on stderr (the reason only, never the
+# path, which may hold control characters).
 _gsd_no_receipt() { printf 'gsd_receipt_path: no receipt: %s\n' "$1" >&2; return 1; }
 # _gsd_receipt_arg LABEL VALUE — refuse VALUE unless it meets the input contract above
 # (the backslash rule for PHASE_DIR is applied by the caller).
 _gsd_receipt_arg() {
+  local LC_ALL=C
   [ -n "$2" ] || { _gsd_no_receipt "$1 is empty"; return 1; }
   case "$2" in
     *[[:cntrl:]]*|*[\'\"\$\`\<\>]*) _gsd_no_receipt "$1 holds a quote, \$, backtick, <, > or a control character"; return 1 ;;
@@ -238,6 +242,7 @@ _gsd_receipt_arg() {
 gsd_receipt_path() {
   local dir="$1" spawn="${2//[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]/_}"
   local root rp a up phys rest got low
+  spawn="${spawn:0:64}"
   _gsd_receipt_arg 'phase dir' "$dir" || return 1
   case "$dir" in *\\*) _gsd_no_receipt 'phase dir holds a backslash'; return 1 ;; esac
   _gsd_receipt_arg 'project root' "${3:-}" || return 1
@@ -280,11 +285,16 @@ gsd_receipt_path() {
   if [ -e "$dir/.gsd-returns/.gitignore" ]; then
     # A directory or FIFO there would fail or block the write.
     [ -f "$dir/.gsd-returns/.gitignore" ] || { _gsd_no_receipt '.gsd-returns/.gitignore is not a regular file'; return 1; }
+    # One written by hand that does not hold exactly `*` might let receipts be committed.
+    [ "$(head -c 3 -- "$dir/.gsd-returns/.gitignore" 2>/dev/null)" = '*' ] || { _gsd_no_receipt '.gsd-returns/.gitignore is not the catch-all *'; return 1; }
   else
     { printf '*\n' > "$dir/.gsd-returns/.gitignore"; } 2>/dev/null || { _gsd_no_receipt 'cannot write .gsd-returns/.gitignore'; return 1; }
   fi
-  if command -v cygpath >/dev/null 2>&1; then dir=$(cygpath -m "$dir"); fi
-  mktemp -u "$dir/.gsd-returns/${spawn:-spawn}.$(date +%s).XXXXXXXX"
+  if command -v cygpath >/dev/null 2>&1; then
+    { dir=$(cygpath -m "$dir" 2>/dev/null) && [ -n "$dir" ]; } || { _gsd_no_receipt 'cygpath failed'; return 1; }
+  fi
+  { got=$(mktemp -u "$dir/.gsd-returns/${spawn:-spawn}.$(date +%s).XXXXXXXX" 2>/dev/null) && [ -n "$got" ]; } || { _gsd_no_receipt 'mktemp failed'; return 1; }
+  printf '%s\n' "$got"
 }
 
 # gsd_return_marker FILE MARKER... — print the first MARKER that STARTS a line of
@@ -298,7 +308,7 @@ gsd_receipt_path() {
 # so `## PLAN COMPLETE-x` or a
 # longer word that merely starts with a marker is not that marker. A BOM at the
 # start of the file (line 1 only) and a missing final newline are tolerated. A receipt that is a symlink is never
-# read. The one owner of "which marker did the agent return": gsd_stall_watch and
+# read, nor one with a NUL byte in its first 4097 bytes (bash and zsh read a NUL differently). The one owner of "which marker did the agent return": gsd_stall_watch and
 # step 11's routing both use it. Indented, mid-line, or JSON-encoded marker text
 # (prompts, agent definitions, transcripts) never matches.
 gsd_return_marker() {
@@ -306,6 +316,7 @@ gsd_return_marker() {
   [ -L "$file" ] && return 0
   [ -f "$file" ] && [ -r "$file" ] || return 0
   size=$(( $(head -c 4097 -- "$file" 2>/dev/null | wc -c) ))
+  [ "$(( $(head -c 4097 -- "$file" 2>/dev/null | LC_ALL=C tr -d '\000' | wc -c) ))" -eq "$size" ] || return 0
   while [ "$n" -lt 64 ]; do
     cut=0
     if IFS= read -r line; then :
@@ -364,14 +375,15 @@ gsd_stall_watch() {
   # value. No match prints nothing, and artifact_fresh stays false. A relative path
   # gets a `./` prefix, so find reads a leading `-`, `!` or `(` as a path, not an
   # option or operator. -H follows a phase dir that is itself a symlink; -type f counts
-  # regular files only (a directory or symlink named like a plan is not activity), and
+  # regular files only in both branches (a directory or symlink, named like a plan or
+  # passed as the literal file, is not activity), and
   # -name matches a leading dot (`.x-PLAN.md` counts).
   artifact_fresh="false"
   case "$artifact_glob" in ''|/*|[A-Za-z]:[/\\]*) ;; *) artifact_glob="./$artifact_glob" ;; esac
   local _d="${artifact_glob%/*}" _p="${artifact_glob##*/}"
   [ -n "$_d" ] || _d=/
   if [ -n "$artifact_glob" ] && [ -e "$artifact_glob" ]; then
-    [ -n "$(find "$artifact_glob" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
+    [ -n "$(find "$artifact_glob" -maxdepth 0 -type f -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
   elif [ -n "$artifact_glob" ] && [ -d "$_d" ]; then
     [ -n "$(find -H "$_d" -maxdepth 1 -type f -name "$_p" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
   fi

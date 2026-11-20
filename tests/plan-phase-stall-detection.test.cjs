@@ -48,7 +48,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { cleanup, readFileNormalized, readWorkflowCombined, runGsdTools } = require('./helpers.cjs');
+const { cleanup, createTempProject, readFileNormalized, readWorkflowCombined, runGsdTools } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
@@ -927,12 +927,13 @@ describe('bug #2650 plan-phase — all five planner/plan-checker spawns dispatch
   });
 
   test('step 7.99 documents that {receipt} must be bound from gsd_receipt_path before dispatch (not passed literally) (#5182)', () => {
+    const workflow = readPlanPhase();
     const idx = workflow.indexOf('## 7.99. Bounded Stall-Detection Helpers');
     assert.notEqual(idx, -1);
     const nextSectionIdx = workflow.indexOf('## 8. Spawn gsd-planner Agent', idx);
     const section = workflow.slice(idx, nextSectionIdx === -1 ? undefined : nextSectionIdx);
     assert.match(section, /`\{receipt\}` = `gsd_receipt_path "\$\{PHASE_DIR\}" <spawn> "\$\{PROJECT_ROOT\}"`/, 'step 7.99 must bind {receipt} from gsd_receipt_path, anchored on the project root (review 5563209291 Minor 1)');
-    // Every bind site passes the project root init resolved, never the cwd default.
+    // Every bind site passes the project root init resolved (ROOT is required).
     const binds = [...`${workflow}\n${readChunkedPlanningMode()}\n${readStallHelpersDoc()}`.matchAll(/`gsd_receipt_path "\$\{PHASE_DIR\}" [^`]*`/g)].map((m) => m[0]);
     assert.ok(binds.length >= 4, `the bind sites are found (${binds.length})`);
     for (const bind of binds) assert.match(bind, /"\$\{PROJECT_ROOT\}"`$/, `${bind}: passes the project root`);
@@ -1736,7 +1737,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     inOrder(lineWith(spine9a, 'If `DISK_PLANS` is greater than 0'), ['(receipt case: Retry first)', 'Accept plans', 'If it is 0', 'receipt case: Retry / Stop'], 'the spine 9a menu orders the receipt case and routes 0 plans');
     const detail = readFileNormalized(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'detail', 'elaboration.md'));
     const s9a = sectionOf(detail, ['## § 9a', '## § 9b']);
-    inOrder(lineAfter(s9a, 'Fires when'), ['return receipt', 'has not arrived by', 'next cycle'], '9a\'s trigger covers a receipt-routed marker with no body');
+    inOrder(lineAfter(s9a, 'Fires when'), ['return receipt', 'has not arrived when', 'the watch ends'], '9a\'s trigger covers a receipt-routed marker with no body');
     const at = s9a.indexOf('**If `DISK_PLANS` > 0 and a marker arrived on the receipt without its body:**');
     assert.notEqual(at, -1, '9a has a case for plans on disk and a marker that arrived without its body');
     const receiptCase = s9a.slice(at, s9a.indexOf('**If `DISK_PLANS`', at + 1));
@@ -1766,7 +1767,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const failClosed = blockAt(readStallHelpersDoc(), 'fails closed:');
     assert.ok(failClosed.includes('`## VERIFICATION PASSED`'), '## VERIFICATION PASSED is in the fail-closed list');
     inOrder(failClosed, ['`## VERIFICATION PASSED`', 'never proceeds to', 'step 13', '11a', 'Retry checker before Accept'], 'a body-less PASSED never proceeds to step 13 on the receipt alone');
-    inOrder(passedLine, ['proceed to step 13', '(receipt only, no body by the next cycle: 11a)'], 'step 11 itself points a body-less PASSED at 11a');
+    inOrder(passedLine, ['proceed to step 13', '(receipt only, no body as the watch ends: 11a)'], 'step 11 itself points a body-less PASSED at 11a');
   });
 
   // The helpers send a body-less receipt-routed PASSED or ISSUES FOUND to 11a "and offer Retry
@@ -1775,7 +1776,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('11a covers a receipt-routed checker marker whose body never arrived: names the marker, Retry before Accept', () => {
     const detail = readFileNormalized(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'detail', 'elaboration.md'));
     const s11a = sectionOf(detail, ['## § 11a', '## § 11 thinking-partner']);
-    inOrder(lineAfter(s11a, 'Fires when'), ['return receipt', 'has not arrived by', 'next cycle'], '11a\'s trigger covers a receipt-routed marker with no body');
+    inOrder(lineAfter(s11a, 'Fires when'), ['return receipt', 'has not arrived when', 'the watch ends'], '11a\'s trigger covers a receipt-routed marker with no body');
     const at = s11a.indexOf('a marker arrived on the receipt without its body');
     assert.notEqual(at, -1, '11a has a case for a marker that arrived on the receipt without its body');
     const receiptCase = s11a.slice(at, s11a.indexOf('**If `DISK_PLANS`', at));
@@ -1922,8 +1923,12 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       // a .gitignore that cannot be written refuses instead of printing a path.
       [`${P}/ph-file`, '.gsd-returns is a regular file'],
       [`${P}/ph-gi`, '.gsd-returns/.gitignore is a directory'],
+      // Q-4: a hand-written .gitignore that is not the catch-all `*` could let receipts be committed.
+      [`${P}/ph-star`, '.gsd-returns/.gitignore is not *'],
     ];
-    const reasonOf = { [`${P}/ph-file`]: 'cannot create .gsd-returns', [`${P}/ph-gi`]: '.gsd-returns/.gitignore is not a regular file' };
+    const reasonOf = { [`${P}/ph-file`]: 'cannot create .gsd-returns', [`${P}/ph-gi`]: '.gsd-returns/.gitignore is not a regular file', [`${P}/ph-star`]: 'not the catch-all *' };
+    fs.mkdirSync(path.join(proj, 'ph-star', '.gsd-returns'), { recursive: true });
+    fs.writeFileSync(path.join(proj, 'ph-star', '.gsd-returns', '.gitignore'), '!keep\n');
     fs.mkdirSync(path.join(proj, 'ph-file'));
     fs.writeFileSync(path.join(proj, 'ph-file', '.gsd-returns'), 'not a directory\n');
     // A directory named .gitignore is refused before any write is tried.
@@ -1939,7 +1944,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.ok(phaseDir === '' || !r.stderr.includes(phaseDir), `${label}: the phase dir itself is never echoed`);
       ran += 1;
     }
-    assert.ok(ran >= 8);
+    assert.ok(ran >= 9);
   });
 
   // Option B (#5192): the input contract. PHASE_DIR and ROOT are canonical absolute paths
@@ -1971,7 +1976,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       [ok, `${fwd(f.dir)}//proj`, 'project root has an empty component'],
       [ok, `${P}\n`, 'project root holds a quote'],
       [ok, `${P}'`, 'project root holds a quote'],
+      // A UNC path starts with an empty component, so it is refused (stated in the contract).
+      ['//host/share/proj/ph', P, 'phase dir has an empty component'],
     ];
+    // Windows-only ROOT shapes: init's project_root there is the native path with backslashes.
+    if (process.platform === 'win32') {
+      cases.push([ok, `${proj}\\`, 'project root ends in a separator']);
+      cases.push([ok, proj.replace(/\\([^\\]*)$/, '\\\\$1'), 'project root has an empty component']);
+    }
     // A drive letter is absolute only where cygpath exists (Git Bash); elsewhere C:/x is a relative name.
     if (process.platform !== 'win32') cases.push(['C:/x', P, 'phase dir is not absolute']);
     for (const [phaseDir, root, why] of cases) {
@@ -1987,7 +1999,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // init's canonical form is accepted, from a cwd outside the project.
     const good = receiptPathFrom(f, f.dir, ok, proj);
     assert.equal(good.status, 0, good.stderr);
-    assert.ok(good.stdout.trim().startsWith(`${ok}/.gsd-returns/checker.`) || process.platform === 'win32', good.stdout);
+    assert.match(good.stdout.trim(), /\/proj\/\.planning\/phases\/01-x\/\.gsd-returns\/checker\.\d+\.[A-Za-z0-9]+$/i);
     // On Windows init's project_root is the native path (backslashes, no toPosixPath);
     // it is accepted as given.
     if (process.platform === 'win32') {
@@ -2031,6 +2043,53 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       return ok;
     }), { numRuns: 10, examples: [[[{ abs: true, segs: ['a', 'b c'], trail: false }, { abs: false, segs: ['a'], trail: false }, { abs: true, segs: ['a', ''], trail: false }, { abs: true, segs: ['a'], trail: true }]]] });
     assert.ok(seen.accepted > 0 && seen.refused > 0, `both verdicts must occur (accepted ${seen.accepted}, refused ${seen.refused})`);
+  });
+
+  // Pre-push r4 NI-9: the contract is checked against what init actually emits, so a change
+  // to init's path form that the helper would refuse fails here, not silently in the field.
+  test('gsd_receipt_path accepts the phase_dir and project_root that init plan-phase emits', (t) => {
+    const proj = createTempProject('gsd-5182-init-');
+    t.after(() => cleanup(proj));
+    fs.mkdirSync(path.join(proj, '.planning', 'phases', '01-setup'), { recursive: true });
+    const result = runGsdTools('init plan-phase 1 --raw', proj);
+    assert.ok(result.success, `init plan-phase failed: ${result.error}`);
+    const init = JSON.parse(result.output);
+    assert.ok(init.phase_dir && init.project_root, `init emits both paths: ${result.output.slice(0, 200)}`);
+    const f = fixture(t);
+    const r = receiptPathFrom(f, f.dir, init.phase_dir, init.project_root, { raw: true });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout.trim(), /\/\.planning\/phases\/01-setup\/\.gsd-returns\/checker\.\d+\.[A-Za-z0-9]+$/);
+  });
+
+  // Pre-push r4 MI-1, NI-1, NI-2: a failed cygpath or mktemp refuses with the one stderr line
+  // (never a path built from an empty dir), a long label is cut to 64 characters, and the
+  // control-character test is the ASCII set whatever the caller's locale.
+  test('gsd_receipt_path refuses a failed cygpath or mktemp, cuts a long label, and tests ASCII controls in any locale', (t) => {
+    const f = fixture(t);
+    const P = f.fwd;
+    fs.mkdirSync(path.join(f.dir, 'ph'));
+    const helpers = extractStallFunctionsBash();
+    for (const [stub, why] of [['cygpath() { return 1; }', 'cygpath failed'], ['cygpath() { :; }', 'cygpath failed'], ['mktemp() { return 1; }', 'mktemp failed']]) {
+      const r = runBashScript(`${helpers}\n${stub}\ngsd_receipt_path ${q(`${P}/ph`)} x ${q(P)}\n`, []);
+      assert.notEqual(r.status, 0, `${stub}: refused`);
+      assert.equal(r.stdout, '', `${stub}: no path printed`);
+      assertRefusalReason(r, stub);
+      assert.ok(r.stderr.includes(why), `${stub}: names ${why}`);
+    }
+    const long = runBashScript(`${helpers}\ngsd_receipt_path ${q(`${P}/ph`)} ${q('p'.repeat(300))} ${q(P)}\n`, []);
+    assert.equal(long.status, 0, long.stderr);
+    const stem = path.posix.basename(long.stdout.trim()).split('.')[0];
+    assert.equal(stem, 'p'.repeat(64), 'a long label is cut to 64 characters');
+    // Under a UTF-8 locale a C1 control or U+2028 would match [[:cntrl:]]; the contract
+    // tests ASCII controls only, so the verdict is the same in every locale.
+    const valueFile = path.join(f.dir, 'locale-dir-value.bin');
+    for (const [name, refused] of [['u\u0085x', false], ['u x', false], ['u\x01x', true], ['u\x7fx', true]]) {
+      fs.writeFileSync(valueFile, `${P}/${name}`);
+      for (const lc of ['C', 'C.UTF-8']) {
+        const r = runBashScript(`export LC_ALL=${lc}\n${helpers}\nIFS= read -r -d '' d < ${q(fwd(valueFile))} || true\ngsd_receipt_path "$d" x ${q(P)}\n`, []);
+        assert.equal(r.status !== 0, refused, `${JSON.stringify(name)} under LC_ALL=${lc}: ${refused ? 'refused' : 'accepted'}`);
+      }
+    }
   });
 
   // Review 5692447413 Minor 2: a phase dir that IS the project root, or sits inside
@@ -2441,6 +2500,36 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(watch(NOW - 11 * 60, f.receipt, `${f.fwd}/*-PLAN.md`, ['## PLAN COMPLETE'], { interval: 5 }), 'active', 'control: a basename pattern still globs');
   });
 
+  // Pre-push r4 NI-4: the literal branch counts regular files only, like the glob branch, so
+  // a fresh symlink to an old file is not activity on either path.
+  test('a fresh symlink passed as the literal artifact is not activity, like a symlink the glob matches (r4 NI-4)', (t) => {
+    const f = fixture(t);
+    const old = path.join(f.dir, 'old-outline.md');
+    fs.writeFileSync(old, '# outline\n');
+    const past = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(old, past, past);
+    const link = path.join(f.dir, 'outline.md');
+    if (!symlinkOrSkip(t, old, link, 'file')) return;
+    assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(link), ['## OUTLINE COMPLETE'], { interval: 5 }), 'stalled', 'a fresh link to an old file is not activity');
+    fs.utimesSync(old, new Date(), new Date());
+    assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(old), ['## OUTLINE COMPLETE'], { interval: 5 }), 'active', 'control: the fresh regular file itself is activity');
+  });
+
+  // Pre-push r4 NI-3: bash drops a NUL byte on read and zsh keeps it, so a receipt holding
+  // one is never read; both shells agree on "no marker".
+  test('gsd_return_marker never reads a receipt with a NUL byte (bash and zsh would disagree)', (t) => {
+    const f = fixture(t);
+    let ran = 0;
+    for (const body of ['## ISSUES\0 FOUND\n', '## ISSUES FOUND\n\0\n', Buffer.from('## ISSUES FOUND\n', 'utf16le')]) {
+      fs.writeFileSync(f.receipt, body);
+      assert.equal(runHelpers(`gsd_return_marker ${q(fwd(f.receipt))} '## ISSUES FOUND'`), '', `${JSON.stringify(String(body))}: no marker`);
+      ran += 1;
+    }
+    assert.equal(ran, 3);
+    fs.writeFileSync(f.receipt, '## ISSUES FOUND\n');
+    assert.equal(runHelpers(`gsd_return_marker ${q(fwd(f.receipt))} '## ISSUES FOUND'`), '## ISSUES FOUND', 'control: a clean receipt is read');
+  });
+
   // -- Review 5477738387 Minor 3: the cleanup is a command at each watch site, not
   // helper prose only. The clause lives in the site's ORCHESTRATOR RULE paragraph,
   // after its gsd_stall_watch call, and names stalled and Retry, so every route of
@@ -2512,7 +2601,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       'find() {',
       `  printf '%s\\n' "$@" > ${q(fwd(argvLog))}`,
       // The shim models the two argv shapes the watch hands find: a literal file
-      // (`find FILE -mmin -N`), or a directory with a basename pattern
+      // (`find FILE -maxdepth 0 -type f -mmin -N`), or a directory with a basename pattern
       // (`find DIR -maxdepth 1 -type f -name PATTERN -mmin -N`). It prints each listed
       // file, or each regular file in DIR whose name matches PATTERN, when AGE is
       // inside the window.
