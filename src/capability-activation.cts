@@ -38,6 +38,11 @@ function _getNestedConfigValue(
 
 const _warnedRawConfigPaths = new Set<string>();
 
+// #6332: per invocation, like the config-loader warning sets.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('capability-activation.warnedRawConfigPaths', () => { _warnedRawConfigPaths.clear(); });
+
 function _readRawConfigKey(
   filePath: string,
   dotKey: string,

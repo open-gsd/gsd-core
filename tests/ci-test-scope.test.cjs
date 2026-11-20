@@ -467,6 +467,9 @@ describe('#6075 CI YAML runs only the targeted workflow lints, never the matrix'
       'tests/release-tarball-smoke-workflow.test.cjs',
       'tests/ci-conformance-pr-gating.test.cjs',
       'tests/workflow-token-permissions.test.cjs',
+      // #5029: holds the SHARD_BALANCE <-> test.yml layout-parity test, which
+      // must fail in the re-shard PR (a test.yml-only diff), not on `next`.
+      'tests/ci-timeout-report.test.cjs',
       // #5299: reads APPROVAL_LABELS from auto-close-unsolicited-prs.yml
       'tests/registry-docs-approved-issue-parity.test.cjs',
     ];

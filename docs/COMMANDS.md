@@ -1767,9 +1767,11 @@ gsd-tools query project-context --project-dir <dir>   # Resolve as if started fr
 | `repoRoot` | Top level of the main checkout (first non-bare `git worktree list` entry) |
 | `gitCommonDir` | Absolute `git rev-parse --git-common-dir`; `null` outside a git repository |
 | `isLinkedWorktree` | `true` when `worktreeRoot` differs from `repoRoot` |
-| `provenance` | `{ source, reason, degraded, warnings }` — how the answer was reached |
+| `provenance` | `{ source, layout, reason, degraded, warnings }` — how the answer was reached |
 
 `provenance.source` names the rule that found `projectRoot`: `explicit` (`--project-dir`), `ancestor` (a `.planning` in the start directory or one of its parents), `workspace` (the enclosing `planning.sub_repos` workspace), `main-checkout` (a linked worktree with no `.planning` of its own falls back to the main checkout's), or `none` (no `.planning` found; `projectRoot` is the start directory).
+
+`provenance.layout` says how the git facts were obtained: `filesystem` when they were read from `.git`, `gitdir` and `commondir` without starting a process, `git` when `git rev-parse` was asked. A plain checkout, a linked worktree of a non-bare repository and a directory outside any repository are read from the filesystem. Git is asked for anything the reader does not answer for: a start inside a git dir or a bare repository, a worktree of a bare repository, a submodule, a repository with `core.worktree` or `core.bare` set, a config include, an unknown repository format or extension, a config or `HEAD` git would reject, a repository another user owns (on Windows, any repository outside your home directory), and any call with `GIT_CEILING_DIRECTORIES`, `GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_CONFIG_COUNT` or `GIT_CONFIG_PARAMETERS` set. The two paths give the same roots.
 
 `provenance.reason` names the git facts behind the context: `ok`, `bare_main_worktree` (the main repository is bare, so the checkout is its own repo root), `not_git_repo` (not inside a git repository), or one of the degraded reasons `git_timed_out`, `git_unavailable`, `git_error`, `worktree_list_failed`. A degraded context sets `degraded: true` and adds a message to `warnings`; roots fall back to what git had answered or the start directory, and a degraded context never refuses a commit.
 
@@ -1781,7 +1783,7 @@ gsd-tools query project-context --project-dir <dir>   # Resolve as if started fr
   "repoRoot": "/work/app",
   "gitCommonDir": "/work/app/.git",
   "isLinkedWorktree": true,
-  "provenance": { "source": "ancestor", "reason": "ok", "degraded": false, "warnings": [] }
+  "provenance": { "source": "ancestor", "layout": "filesystem", "reason": "ok", "degraded": false, "warnings": [] }
 }
 ```
 
@@ -1976,7 +1978,7 @@ Reviewers are prompted to verify the plan's claims against the actual repository
 
 **No `jq`, `curl`, or `timeout` prerequisite.** Reviewer lanes used to shell out to these for JSON parsing, HTTP calls, and wall-clock bounding, which made five lanes unavailable on a stock Windows/Git-Bash host (no `jq`) and left one lane unbounded on stock macOS (no `timeout` or `gtimeout`). GSD now does all three itself, so every lane runs with nothing on your `PATH` but the reviewer's own CLI. A lane that declares an external tool it genuinely needs still reports itself unavailable with an install hint rather than running into an empty review.
 
-**Local-lane availability:** `gsd_run review-lane availability [--selected a,b]` prints one `<slug>:available|missing` line per first-party local OpenAI-compatible lane (`ollama`, `lm_studio`, `llama_cpp`) in roster order. Each lane's host is `review.<lane>_host` if set, else its descriptor default. The probe is a bounded 2s GET `/v1/models`; any HTTP response (including 401, 404, 5xx) counts as `available`, while connection failure or timeout counts as `missing`. The same rule applies when you name a local reviewer explicitly: a server that answers 404 or 5xx is treated as reachable and the run proceeds. Redirects are not followed, and installed third-party lanes are never probed. The `jq` prerequisite is reported separately by the review workflow.
+**Local-lane availability:** `gsd_run review-lane availability [--selected a,b]` prints one `<slug>:available|missing` line per first-party local OpenAI-compatible lane (`ollama`, `lm_studio`, `llama_cpp`) in roster order. Each lane's host is `review.<lane>_host` if set, else its descriptor default. The probe is a bounded 2s GET `/v1/models`. When `review.<lane>_host` is set, any HTTP response (including 401, 404, 5xx) counts as `available`, while connection failure or timeout counts as `missing`. When it is unset, the built-in default host (`localhost:11434`, `:1234`, `:8080`) counts as `available` only if it answers 2xx with an OpenAI-style models listing (a JSON object with `object: "list"` and a `data` array of entries carrying a string `id`); an unrelated local service answering 401, 404, a redirect or a non-listing 200 there is `missing`; a default-port server that requires an API key (and so answers 401) must be named through `review.<lane>_host` to count. The same rules apply when you name a local reviewer explicitly: an unavailable default host never receives the review prompt, and a configured host that answers 404 or 5xx is treated as reachable and the run proceeds. Redirects are not followed, and installed third-party lanes are never probed. The `jq` prerequisite is reported separately by the review workflow.
 
 **Unavailable reviewers:** an explicit reviewer flag is an assertion. If you name a reviewer that cannot run on this host — its CLI is not installed, a required external tool is missing, its local server is unreachable, or its egress destination changed (see below) — `/gsd-review` reports an **error** for that reviewer and does not proceed with a reduced set. This holds even when other named reviewers are available: `--codex --qwen` on a host without `qwen` fails rather than silently becoming a Codex-only review.
 

@@ -965,7 +965,7 @@ describe('mergeReviewerLanes (#2927)', () => {
 const fs = require('node:fs');
 const os = require('node:os');
 const nodePath = require('node:path');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, cleanup } = require('./helpers.cjs');
 
 const cliTmps = [];
 function cliTmpDir(prefix) {
@@ -1037,7 +1037,7 @@ function writeReviewerCapSource(id, bodyOverrides = {}) {
 }
 
 describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
-  test('cliSectionsAndPlanSeeOverlayLane', () => {
+  test('cliSectionsAndPlanSeeOverlayLane', async () => {
     // Acceptance #1 + #3: an installed overlay lane appears in `sections` and
     // `plan --selected <slug>` returns ok:true with a usable plan.
     const home = cliTmpDir('rev2927-home-');
@@ -1045,7 +1045,7 @@ describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
     const src = writeReviewerCapSource('rev2927lane');
     // Global scope is trusted without a consent record; --yes acknowledges the
     // executable reviewer surface; --raw emits JSON.
-    const install = runGsdTools(
+    const install = await runGsdToolsAsync(
       ['capability', 'install', src, '--scope', 'global', '--yes', '--raw'],
       cwd,
       scopeEnv(home),
@@ -1055,7 +1055,7 @@ describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
     assert.equal(installOut.status, 'installed', `install did not report installed: ${install.output}`);
 
     // Row 9 / acceptance #1: sections includes the overlay slug + reviewsSection.
-    const sections = runGsdTools(['review-lane', 'sections'], cwd, scopeEnv(home));
+    const sections = await runGsdToolsAsync(['review-lane', 'sections'], cwd, scopeEnv(home));
     assert.equal(sections.success, true, `sections failed: ${sections.error || sections.output}`);
     const sectionRows = sections.output.split('\n').filter(Boolean);
     const overlayRow = sectionRows.find((r) => r.startsWith('rev2927lane\t'));
@@ -1066,7 +1066,7 @@ describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
     // malformed_lane / no such declared lane — the pre-fix failure). The `plan`
     // subcommand renders an ARRAY of {slug, ok, section, transport, ...} (it strips
     // the nested invocation `plan` object before output), so find the overlay entry.
-    const plan = runGsdTools(
+    const plan = await runGsdToolsAsync(
       ['review-lane', 'plan', '--selected', 'rev2927lane', '--run-dir', cwd, '--repo-root', cwd],
       cwd,
       scopeEnv(home),
@@ -1081,7 +1081,7 @@ describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
     assert.equal(overlayPlan.transport, 'spawn');
   });
 
-  test('cliFlagsIncludeOverlayFlag', () => {
+  test('cliFlagsIncludeOverlayFlag', async () => {
     // Acceptance #2: the overlay's declared --flag appears in `flags` output.
     //
     // NOTE on the negative-space "malformed flag filtered" case: the capability
@@ -1098,7 +1098,7 @@ describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
     const src = writeReviewerCapSource('rev2927flag', {
       flags: ['--rev2927flag', '--rev2927alt'],
     });
-    const install = runGsdTools(
+    const install = await runGsdToolsAsync(
       ['capability', 'install', src, '--scope', 'global', '--yes', '--raw'],
       cwd,
       scopeEnv(home),
@@ -1106,23 +1106,23 @@ describe('review-lane CLI overlay invocation (#2927, rows 9–10)', () => {
     assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
     assert.equal(JSON.parse(install.output).status, 'installed', `install did not report installed: ${install.output}`);
 
-    const flags = runGsdTools(['review-lane', 'flags'], cwd, scopeEnv(home));
+    const flags = await runGsdToolsAsync(['review-lane', 'flags'], cwd, scopeEnv(home));
     assert.equal(flags.success, true, `flags failed: ${flags.error || flags.output}`);
     const flagLines = flags.output.split('\n').filter(Boolean);
     assert.ok(flagLines.includes('--rev2927flag'), `overlay flag missing from flags output:\n${flags.output}`);
     assert.ok(flagLines.includes('--rev2927alt'), 'second well-formed overlay flag missing (flag array flattened?)');
   });
 
-  test('dispatchStepNamesCanonicalSlugForOverlayAlias (#5359)', () => {
+  test('dispatchStepNamesCanonicalSlugForOverlayAlias (#5359)', async () => {
     // End-to-end pin for the `lanes: mergedLanes` hand-off in gsd-tools: without it the
     // alias error falls back to "not available on this host" for installed overlay lanes.
     const home = cliTmpDir('rev5359-home-');
     const cwd = makeCwd();
     const src = writeReviewerCapSource('rev5359lane', { flags: ['--rev5359lane', '--rev5359alt'] });
-    const install = runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], cwd, scopeEnv(home));
+    const install = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], cwd, scopeEnv(home));
     assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
 
-    const r = runGsdTools(
+    const r = await runGsdToolsAsync(
       ['review-lane', 'dispatch-step', '--repo-root', cwd, '--depth', 'quick', '--base-sha', 'abc',
         '--run-dir', cwd, '--cap-id', 'code-review', '--point', 'execute:post',
         '--explicit', 'rev5359alt', '--raw'],

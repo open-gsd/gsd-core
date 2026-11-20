@@ -44,6 +44,12 @@ DOMAIN_MODEL=$(gsd_run query resolve-model gsd-domain-researcher --pick model 2>
 PLANNER_MODEL=$(gsd_run query resolve-model gsd-eval-planner --pick model 2>/dev/null || true)
 ```
 
+<!-- #2517 model-omit-on-inherit -->
+
+**Omit `model=` entirely when the value a spawn would carry (`SELECTOR_MODEL`, `RESEARCHER_MODEL`, `DOMAIN_MODEL`, `PLANNER_MODEL`) is `inherit` or empty** (#2517) — passing either
+value through as an argument fails the spawn on runtimes without native tier aliases. See
+@gsd-core/references/model-profile-resolution.md.
+
 Check config:
 ```bash
 AI_PHASE_ENABLED=$(gsd_run query config-get workflow.ai_integration_phase --raw 2>/dev/null || echo "true")
@@ -113,7 +119,7 @@ Display:
 ◆ Step 1/4 — Framework Selection...
 ```
 
-Spawn `gsd-framework-selector` with:
+Spawn `gsd-framework-selector` with `model="{SELECTOR_MODEL}"` and:
 ```markdown
 Read ~/.claude/agents/gsd-framework-selector.md for instructions.
 
@@ -159,7 +165,7 @@ Display:
 ◆ Step 2/4 — Researching {primary_framework} docs + AI systems best practices...
 ```
 
-Spawn `gsd-ai-researcher` with:
+Spawn `gsd-ai-researcher` with `model="{RESEARCHER_MODEL}"` and:
 ```markdown
 Read ~/.claude/agents/gsd-ai-researcher.md for instructions.
 
@@ -194,7 +200,7 @@ Display:
 ◆ Step 3/4 — Researching domain context and expert evaluation criteria...
 ```
 
-Spawn `gsd-domain-researcher` with:
+Spawn `gsd-domain-researcher` with `model="{DOMAIN_MODEL}"` and:
 ```markdown
 Read ~/.claude/agents/gsd-domain-researcher.md for instructions.
 
@@ -227,7 +233,7 @@ Display:
 ◆ Step 4/4 — Designing evaluation strategy from domain + technical context...
 ```
 
-Spawn `gsd-eval-planner` with:
+Spawn `gsd-eval-planner` with `model="{PLANNER_MODEL}"` and:
 ```markdown
 Read ~/.claude/agents/gsd-eval-planner.md for instructions.
 

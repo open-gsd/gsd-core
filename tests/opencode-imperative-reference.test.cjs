@@ -146,9 +146,9 @@ test('no `runtime === "opencode"` string-equality branch remains in the install 
 
 // ─── #4738: the opencode manifest must record the skills it stages ───────────
 
-const { cleanup, runGsdTools, createTempDir } = require('./helpers.cjs');
+const { cleanup, runGsdToolsAsync, createTempDir } = require('./helpers.cjs');
 const { writeManifest } = require(path.join(__dirname, '..', 'bin', 'install.js'));
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 
 describe('#4738: writeManifest records staged skills for opencode', () => {
   let tmpDir;
@@ -187,8 +187,8 @@ describe('#4738: writeManifest records staged skills for opencode', () => {
 });
 
 describe('#4738: a clean opencode install is invisible to detect-custom-files', () => {
-  test('real --opencode --global install: manifest records staged skills and the detector reports zero custom files', (t) => {
-    const { manifest, configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+  test('real --opencode --global install: manifest records staged skills and the detector reports zero custom files', async (t) => {
+    const { manifest, configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     const skillEntries = Object.keys(manifest.files).filter((k) => k.startsWith('skills/'));
@@ -201,7 +201,7 @@ describe('#4738: a clean opencode install is invisible to detect-custom-files', 
       assert.ok(fs.existsSync(path.join(configDir, rel)), `staged file exists: ${rel}`);
     }
 
-    const result = runGsdTools(['detect-custom-files', '--config-dir', configDir], root);
+    const result = await runGsdToolsAsync(['detect-custom-files', '--config-dir', configDir], root);
     assert.ok(result.success, `detector failed: ${result.error}`);
     const json = JSON.parse(result.output);
     assert.ok(Array.isArray(json.custom_files), 'the detector must emit a custom_files array');

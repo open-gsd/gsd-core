@@ -46,7 +46,7 @@ const { readConfigFileBounded } = configFileReadMod;
 // #4257: `resolveEnvWorkstream` is that same module's ONE owner of the env
 // workstream discriminator `planningDir` applies — the name W002's scope
 // clause prints comes from the same resolution point that scoped the reads.
-const { planningPaths, planningRoot, resolvePhaseIdConvention, resolveEnvWorkstream } = planningWorkspace;
+const { planningPaths, planningRoot, planningDir, resolvePhaseIdConvention, resolveEnvWorkstream } = planningWorkspace;
 // #4257: canonical CommonMark code strippers (markdown-sectionizer is the
 // repo's T0 structural seam, adopted per the #2365 composition order — fenced
 // blocks first, then inline spans) so the `statePhaseTokens` harvest sees
@@ -994,15 +994,16 @@ function buildResearchValidationStatusField(
  * DIRECTORIES, a different target than this field's `milestones/*-ROADMAP.md`
  * FILES — reusing it here would silently answer the wrong question.
  *
- * Root-scoped (`planningRoot(cwd)`), matching `verify.cts`'s own
- * `rootBase`-based `milestonesPath`/`milestonesArchiveDir`.
+ * Scoped by `planningDir(cwd)` (#5881): the project base under GSD_PROJECT and the workstream
+ * directory under a workstream, the same pair `milestone complete` writes and `init.complete-milestone`
+ * reports (`milestones_path`, `archive_dir`), and the pair `repairPaths` (health-diagnostic.cts) backfills.
  */
 function buildMilestoneArchiveStatusField(
   cwd: string,
 ): { value: { archivedVersions: string[]; documentedVersions: string[] }; scope: Scope } {
-  const rootBase = planningRoot(cwd);
-  const milestonesArchiveDir = path.join(rootBase, 'milestones');
-  const milestonesPath = path.join(rootBase, 'MILESTONES.md');
+  const scopeBase = planningDir(cwd);
+  const milestonesArchiveDir = path.join(scopeBase, 'milestones');
+  const milestonesPath = path.join(scopeBase, 'MILESTONES.md');
 
   let archivedVersions: string[] = [];
   let scope: Scope = SCOPE.COMPLETE;

@@ -29,6 +29,7 @@ const fs = require('fs');
 const {
   convertClaudeCommandToClaudeSkill,
   convertClaudeToHermesMarkdown,
+  convertClaudeToPiMarkdown,
   projectNamedDispatchToStructuralDelegate,
   _hostIntegrationDispatch,
   _resolveAvailableGsdRoles,
@@ -512,8 +513,9 @@ describe('#2284 convertClaudeToHermesMarkdown / projectNamedDispatchToStructural
   test('emits a delegate_task-shaped dispatch call with the resolved role reference', () => {
     const out = convertClaudeToHermesMarkdown(FIXTURE_ASSERTION_AND_CALL, { runtime: 'hermes' });
     assert.ok(/delegate_task\(/.test(out), 'delegate_task( call syntax present');
-    assert.ok(/gsd_role="gsd-planner"/.test(out), 'gsd_role carries the resolved role identifier');
-    assert.ok(/gsd_role_prompt=/.test(out), 'gsd_role_prompt carries the loaded-content instruction');
+    assert.ok(/context=<resolve "gsd-planner"/.test(out), 'context carries the resolved role prompt (the role id is inside the resolve instruction)');
+    assert.ok(!/\bgsd_role(_prompt)?=/.test(out), 'no gsd_role / gsd_role_prompt parameter: delegate_task does not accept them (#6066)');
+    assert.ok(/goal=filled_research_hook_fragment/.test(out), 'the Agent prompt becomes goal');
     assert.ok(/role="leaf"/.test(out), 'structural role pinned to Hermes\'s non-orchestrating leaf value');
   });
 
@@ -527,7 +529,7 @@ describe('#2284 convertClaudeToHermesMarkdown / projectNamedDispatchToStructural
     const out = convertClaudeToHermesMarkdown(FIXTURE_ASSERTION_AND_CALL, { runtime: 'hermes' });
     assert.ok(!/Agent tool IS available/.test(out), 'false Claude-shaped assertion removed');
     assert.ok(/delegate_task/.test(out), 'assertion references the real Hermes dispatch primitive');
-    assert.ok(/no concept of a named subagent identity/i.test(out), 'assertion states the roleless-lookup contract (namedDispatch: false)');
+    assert.ok(/has no named-role parameter/i.test(out), 'assertion states the roleless-lookup contract (namedDispatch: false)');
   });
 
   test('async halt/resume wording is preserved (no busy-poll)', () => {
@@ -569,7 +571,7 @@ describe('#2284 convertClaudeToHermesMarkdown / projectNamedDispatchToStructural
     );
     // No role-prompt-embedding machinery should be injected when the target
     // primitive can resolve named agents itself.
-    assert.ok(!/gsd_role_prompt=/.test(out), 'no prompt-content-embedding injected when namedDispatch is true');
+    assert.ok(!/context=<resolve/.test(out), 'no prompt-content-embedding injected when namedDispatch is true');
     assert.ok(!/FAIL CLOSED/.test(out), 'no fail-closed role-resolution injected when namedDispatch is true');
     assert.ok(/delegate_task\(/.test(out), 'call syntax still renamed to the target tool name');
   });
@@ -614,11 +616,11 @@ describe('#2284 all three real corpus Agent(...) call-argument shapes', () => {
   ];
 
   for (const [label, fixture, role] of forms) {
-    test(`${label}: projects to delegate_task with gsd_role_prompt + role="leaf"`, () => {
+    test(`${label}: projects to delegate_task with the role prompt in context + role="leaf"`, () => {
       const out = convertClaudeToHermesMarkdown(fixture, { runtime: 'hermes' });
       assert.ok(/delegate_task\(/.test(out), `${label}: delegate_task( present`);
-      assert.ok(out.includes(`gsd_role="${role}"`), `${label}: gsd_role carries "${role}"`);
-      assert.ok(/gsd_role_prompt=/.test(out), `${label}: gsd_role_prompt injected`);
+      assert.ok(out.includes(`context=<resolve "${role}"`), `${label}: context resolves "${role}"`);
+      assert.ok(!/\bgsd_role(_prompt)?=/.test(out), `${label}: no parameter outside delegate_task's documented set`);
       assert.ok(/role="leaf"/.test(out), `${label}: structural role="leaf" injected`);
       assert.ok(/FAIL CLOSED/.test(out), `${label}: fail-closed wording present`);
     });
@@ -652,7 +654,7 @@ describe('#2284 all three real corpus Agent(...) call-argument shapes', () => {
 
   test('object-literal form: non-role/model keys (e.g. prompt:) are left in their original colon style', () => {
     const out = convertClaudeToHermesMarkdown(OBJECT_LITERAL, { runtime: 'hermes' });
-    assert.ok(out.includes('prompt: "Validate the plan."'), 'untouched arg keys keep their original syntax');
+    assert.ok(out.includes('goal: "Validate the plan."'), 'the prompt key becomes goal and keeps its original colon syntax (#6066)');
   });
 
   test('single-line-compact: a real corpus fixture identical to code-review-fix.md:201 shape (multi-line prompt body opened on the compact head)', () => {
@@ -670,7 +672,7 @@ describe('#2284 all three real corpus Agent(...) call-argument shapes', () => {
     const out = convertClaudeToHermesMarkdown(fixture, { runtime: 'hermes' });
     assert.ok(!/\bAgent\(/.test(out), 'no literal Agent( survives a multi-line-body compact-head call');
     assert.ok(/delegate_task\(/.test(out));
-    assert.ok(out.includes('gsd_role="gsd-code-fixer"'));
+    assert.ok(out.includes('context=<resolve "gsd-code-fixer"'));
     assert.ok(!/\bmodel\s*[=:]/.test(maskStringLiterals(out)), 'model stripped even though the prompt body spans many lines');
     assert.ok(out.includes('<files_to_read>'), 'multi-line prompt BODY content is preserved verbatim');
     assert.ok(out.includes('${REVIEW_PATH}'), 'interpolation placeholders inside the prompt body are untouched');
@@ -715,7 +717,8 @@ describe('#2284 all three real corpus Agent(...) call-argument shapes', () => {
     assert.ok(!/Only include model=/.test(out), 'dead explanatory comment (line 1) removed');
     assert.ok(!/omit this parameter entirely/.test(out), 'dead explanatory comment (line 2) removed');
     assert.ok(!/inherits the orchestrator model/.test(out), 'dead explanatory comment (line 3) removed');
-    assert.ok(out.includes('isolation="worktree"'), 'unrelated surrounding arguments preserved');
+    assert.ok(out.includes('goal="Execute the plan."'), 'unrelated surrounding arguments preserved (prompt becomes goal)');
+    assert.ok(!/\bisolation\s*[=:]/.test(out), 'isolation= is dropped: delegate_task has no isolation parameter (#6066)');
   });
 });
 
@@ -753,7 +756,7 @@ describe('#2284 post-projection guard — fails loud on any unanticipated residu
   });
 
   test('does NOT throw on a clean, fully-projected document', () => {
-    const clean = 'delegate_task(gsd_role="gsd-planner", gsd_role_prompt=<resolve...>, role="leaf", prompt="x")';
+    const clean = 'delegate_task(context=<resolve...>, role="leaf", goal="x")';
     assert.doesNotThrow(() => _assertProjectionComplete(clean, toolConfig));
   });
 
@@ -834,8 +837,8 @@ describe('#2284 real disposable-HOME --hermes --global install', () => {
     const content = fs.readFileSync(importPath, 'utf8');
     assert.ok(!/\bAgent\(/.test(content), 'no literal Agent( in installed import.md');
     assert.ok(!/\bsubagent_type\s*[=:]/.test(content), 'no residual subagent_type in installed import.md');
-    assert.ok(content.includes('gsd_role="gsd-plan-checker"'), 'gsd_role carries the resolved role');
-    assert.ok(/gsd_role_prompt=/.test(content), 'role-prompt-resolution injected');
+    assert.ok(content.includes('context=<resolve "gsd-plan-checker"'), 'context resolves the role prompt');
+    assert.ok(!/\bgsd_role(_prompt)?=/.test(content), 'no parameter outside delegate_task\'s documented set');
   });
 
   test('spot-check ingest-docs.md (object-literal Agent({...}) form, two call sites) in the installed tree', () => {
@@ -845,8 +848,8 @@ describe('#2284 real disposable-HOME --hermes --global install', () => {
     const content = fs.readFileSync(ingestPath, 'utf8');
     assert.ok(!/\bAgent\(/.test(content), 'no literal Agent( in installed ingest-docs.md');
     assert.ok(!/\bsubagent_type\s*[=:]/.test(content), 'no residual subagent_type in installed ingest-docs.md');
-    assert.ok(content.includes('gsd_role="gsd-doc-synthesizer"'), 'first call site role resolved');
-    assert.ok(content.includes('gsd_role="gsd-roadmapper"'), 'second call site role resolved');
+    assert.ok(content.includes('context=<resolve "gsd-doc-synthesizer"'), 'first call site role resolved');
+    assert.ok(content.includes('context=<resolve "gsd-roadmapper"'), 'second call site role resolved');
   });
 
   test('spot-check code-review-fix.md (single-line-compact Agent(subagent_type=..., model=..., prompt="multi-line body) form) in the installed tree', () => {
@@ -858,8 +861,8 @@ describe('#2284 real disposable-HOME --hermes --global install', () => {
     assert.ok(!/\bsubagent_type\s*[=:]/.test(content), 'no residual subagent_type in installed code-review-fix.md');
     const mask = maskStringLiterals(content);
     assert.ok(!/\bmodel\s*[=:]/.test(mask), 'no leaked model= inside any real call in installed code-review-fix.md');
-    assert.ok(content.includes('gsd_role="gsd-code-fixer"'), 'gsd-code-fixer role resolved');
-    assert.ok(content.includes('gsd_role="gsd-code-reviewer"'), 'gsd-code-reviewer role resolved (2nd/3rd call sites)');
+    assert.ok(content.includes('context=<resolve "gsd-code-fixer"'), 'gsd-code-fixer role resolved');
+    assert.ok(content.includes('context=<resolve "gsd-code-reviewer"'), 'gsd-code-reviewer role resolved (2nd/3rd call sites)');
   });
 
   test('EVERY installed workflow file is free of literal Agent( call syntax', () => {
@@ -1039,15 +1042,15 @@ describe('#2284 corpus-wide invariant — every shipped workflow/reference/templ
 
     assert.ok(!/\bAgent\(/.test(out), 'no literal Agent( survives in code-review.md');
     assert.ok(!/\bsubagent_type\s*[=:]/.test(out), 'no residual subagent_type in code-review.md');
-    assert.ok(out.includes('gsd_role="gsd-code-reviewer"'), 'the real call\'s role is resolved, not just the catch-all rename');
+    assert.ok(out.includes('context=<resolve "gsd-code-reviewer"'), 'the real call\'s role is resolved, not just the catch-all rename');
 
-    const callStart = out.indexOf('delegate_task(gsd_role="gsd-code-reviewer"');
+    const callStart = out.indexOf('delegate_task(context=<resolve "gsd-code-reviewer"');
     assert.ok(callStart !== -1, 'the real call head IS delegate_task( — not a bare catch-all-renamed Agent( survivor');
     const callSpans = findDispatchCallSpans(out, 'delegate_task');
     const realCallSpan = callSpans.find((s) => s.start === callStart);
     assert.ok(realCallSpan, 'the real call is detected as a complete, well-formed delegate_task(...) span');
     const rawCall = out.slice(realCallSpan.start, realCallSpan.end);
-    assert.ok(/gsd_role_prompt=/.test(rawCall), 'gsd_role_prompt injected into the real call');
+    assert.ok(/context=<resolve/.test(rawCall), 'the role prompt is delivered through context in the real call');
     assert.ok(/role="leaf"/.test(rawCall), 'role="leaf" injected into the real call');
     assert.ok(!/\bmodel\s*[=:]/.test(rawCall), 'no model= leaked inside the real call');
   });
@@ -1092,8 +1095,8 @@ describe('#2284 bash-fence quote-imbalance before a real call (round-2 root caus
     const out = convertClaudeToHermesMarkdown(FIXTURE, { runtime: 'hermes' });
     assert.ok(!/\bAgent\(/.test(out), 'no literal Agent( survives');
     assert.ok(!/\bsubagent_type\s*[=:]/.test(out), 'no residual subagent_type');
-    assert.ok(out.includes('delegate_task(gsd_role="gsd-code-reviewer"'), 'real call head IS delegate_task(, role resolved inline at the head — not a bare catch-all rename');
-    assert.ok(/gsd_role_prompt=/.test(out), 'role-prompt-resolution injected');
+    assert.ok(out.includes('delegate_task(context=<resolve "gsd-code-reviewer"'), 'real call head IS delegate_task(, role resolved inline at the head — not a bare catch-all rename');
+    assert.ok(/context=<resolve/.test(out), 'role-prompt-resolution injected');
     assert.ok(/role="leaf"/.test(out), 'structural role injected');
     const mask = maskStringLiterals(out);
     assert.ok(!/\bmodel\s*[=:]/.test(mask), 'no model= leaked');
@@ -1291,5 +1294,114 @@ describe('#2284(b) branding protected-region — <runtime_compatibility> compari
       const outsideBlock = out.replace(/<runtime_compatibility>[\s\S]*?<\/runtime_compatibility>/g, '');
       assert.ok(/\bHermes Agent\b/.test(outsideBlock), 'genuine self-references outside the block ARE branded to Hermes Agent');
     });
+  });
+});
+
+
+// ─── #6066: the role prompt rides `context`; no parameter outside delegate_task's set ──────
+//
+// Hermes `delegate_task` takes goal / context / role (and a few more) and has no `gsd_role` or `gsd_role_prompt`.
+// The projection used to name both, never saying where the role prompt goes, so orchestrators told the child to
+// read the 48 KB role file as tool output (windowed, truncated, compacted) and the plan was lost.
+
+describe('#6066: Hermes dispatch delivers the role prompt as context and the plan as the first read', () => {
+  // Exactly what the projection may emit onto delegate_task: the task text, the role prompt, the leaf role, and the
+  // background flag (the host-integration capability matrix documents `background` for Hermes).
+  const DOCUMENTED_PARAMS = new Set(['goal', 'context', 'role', 'background']);
+  const CORPUS = path.join(__dirname, '..', 'gsd-core');
+
+  /** Top-level `key=` / `key:` argument names of a call span (string literals and nested brackets blanked). */
+  function topLevelParamNames(rawSpan) {
+    const masked = maskStringLiterals(rawSpan);
+    const inner = masked.slice(masked.indexOf('(') + 1, masked.lastIndexOf(')'));
+    const names = [];
+    let depth = 0;
+    let token = '';
+    for (const ch of `${inner},`) {
+      if ('([{<'.includes(ch)) depth += 1;
+      else if (')]}>'.includes(ch)) depth -= 1;
+      if (ch === ',' && depth === 0) {
+        const m = /^\s*(?:#[^\n]*\n\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*[=:]/.exec(token);
+        if (m) names.push(m[1]);
+        token = '';
+      } else token += ch;
+    }
+    return names;
+  }
+
+  test('every projected call in every shipped workflow uses only documented delegate_task parameters', () => {
+    const files = [];
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name.endsWith('.md')) files.push(full);
+      }
+    };
+    walk(path.join(CORPUS, 'workflows'));
+    const offenders = [];
+    let calls = 0;
+    for (const file of files) {
+      const out = convertClaudeToHermesMarkdown(fs.readFileSync(file, 'utf8'), { runtime: 'hermes' });
+      for (const span of findDispatchCallSpans(out, 'delegate_task')) {
+        calls += 1;
+        for (const name of topLevelParamNames(out.slice(span.start, span.end))) {
+          if (!DOCUMENTED_PARAMS.has(name)) offenders.push(`${path.relative(CORPUS, file)}: ${name}`);
+        }
+      }
+    }
+    assert.ok(calls > 50, `sanity: expected many projected calls, got ${calls}`);
+    assert.deepEqual(offenders, []);
+  });
+
+  test('the parameter-name extractor sees both a named and a quoted-prose argument (non-vacuity)', () => {
+    assert.deepEqual(topLevelParamNames('delegate_task(gsd_role="x", goal="a, b=c", context=<f(1, 2)>, role="leaf")'), ['gsd_role', 'goal', 'context', 'role']);
+  });
+
+  test('the installed text puts the role prompt contents in context and the plan as the child\'s own first read', () => {
+    const out = convertClaudeToHermesMarkdown(FIXTURE_ASSERTION_AND_CALL, { runtime: 'hermes' });
+    assert.ok(/put them in the task's `context`/.test(out), 'the contract paragraph says the contents go in context');
+    assert.ok(/not enough: file reads can be windowed, truncated and compacted/.test(out), 'it says why a file pointer fails');
+    assert.ok(/read it with `read_file` as a call of its own, as its first read/.test(out), 'the plan is the child\'s first read');
+    assert.ok(/its full contents here as the task's instructions \(never a pointer to the file\)/.test(out), 'each call repeats it');
+  });
+
+  test('exact projected shape for each call form, with the role first, last and alone (no stray or doubled comma)', () => {
+    const ctx = (role) => `context=<resolve "${role}" against the active install's gsd-* role prompts and put its full contents here as the task's instructions (never a pointer to the file); the \`goal\` names the plan and tells the child to read it with read_file as a call of its own, first; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>`;
+    const project = (src) => convertClaudeToHermesMarkdown(src, { runtime: 'hermes' });
+    assert.equal(project('Agent(subagent_type="gsd-planner")'), `delegate_task(${ctx('gsd-planner')}, role="leaf")`, 'role alone');
+    assert.equal(project('Agent(prompt="p", subagent_type="gsd-planner")'), `delegate_task(goal="p", ${ctx('gsd-planner')}, role="leaf")`, 'role last');
+    assert.equal(project('Agent(subagent_type="gsd-planner", prompt="p")'), `delegate_task(${ctx('gsd-planner')}, role="leaf", goal="p")`, 'role first');
+    assert.equal(project('Agent({ subagent_type: "gsd-plan-checker", prompt: "p" })'), `delegate_task( ${ctx('gsd-plan-checker')}, role="leaf", goal: "p" )`, 'object literal');
+    assert.equal(
+      project('Agent(\n  prompt=x,\n  subagent_type="gsd-planner"\n)'),
+      `delegate_task(\n  goal=x,\n  ${ctx('gsd-planner')}, role="leaf"\n)`,
+      'multi-line, role last',
+    );
+    assert.equal(
+      project('Agent(\n  subagent_type="gsd-planner",\n  prompt=x,\n  description="d"\n)'),
+      `delegate_task(\n  ${ctx('gsd-planner')},\n  role="leaf",  # nested delegation is unavailable at this dispatch depth/toolkit\n  goal=x,\n)`,
+      'multi-line, role first, description dropped',
+    );
+  });
+
+  test('Claude-only isolation= and mode= arguments are dropped, since delegate_task has neither', () => {
+    const project = (src) => convertClaudeToHermesMarkdown(src, { runtime: 'hermes' });
+    const withMode = project('Agent(\n  subagent_type="gsd-planner",\n  prompt=x,\n  mode="auto"\n)');
+    assert.equal(/\bmode\s*[=:]/.test(maskStringLiterals(withMode)), false, withMode);
+    assert.equal(project('A prior `Agent(isolation="worktree")` dispatch drifted.'), 'A prior `delegate_task()` dispatch drifted.');
+    assert.equal(project('Agent(subagent_type="gsd-planner", isolation="worktree", prompt="p")').includes('isolation'), false);
+  });
+
+  test('an unknown gsd-* role still fails the install', () => {
+    assert.throws(
+      () => convertClaudeToHermesMarkdown('Agent(subagent_type="gsd-no-such-role", prompt="x")', { runtime: 'hermes' }),
+      /gsd-no-such-role/,
+    );
+  });
+
+  test('the Pi projection is unchanged: role + task only, no context, no goal', () => {
+    const out = convertClaudeToPiMarkdown('Agent(prompt="x", subagent_type="gsd-executor", description="d")', { runtime: 'pi' });
+    assert.equal(out, 'gsd_dispatch(task="x", role="gsd-executor")');
   });
 });
