@@ -14,9 +14,7 @@ require('node:test').afterEach(() => {
 });
 
 const helpers = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
-const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { FAKE_WSL_HOST_PREAMBLE, runWin32InstallerChild, readProbeJson } = require('./helpers/win32-install-probe.cjs');
 
 const hooksSurface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const { install, installAllRuntimes, finishInstall, selectConfiguredEntrypointsForValidation } = require('../bin/install.js');
@@ -857,13 +855,10 @@ Object.defineProperty(process, 'platform', { value: 'win32' });
 // Host-independent: a real Windows host carries a real Git Bash, and blanking the discovery
 // env vars is spelling-sensitive there (ProgramFiles / PROGRAMFILES). Make no bash.exe exist
 // for this probe, whatever the host has, so the 'no Git Bash found' host is the one under test.
+// (#5888: the host's WSL signals are hidden by runWin32InstallerChild, not here.)
 const nodeFs = require('node:fs');
 const realExistsSync = nodeFs.existsSync;
-// #5888: on a WSL host the installer's load-time WSL check reads /proc/version and exits 1
-// before install() runs. Hide /proc/version from it too (WSL_DISTRO_NAME is blanked in the env).
-nodeFs.existsSync = (p) => (
-  /[\\\\/]bash\\.exe$/i.test(String(p)) || String(p) === '/proc/version' ? false : realExistsSync(p)
-);
+nodeFs.existsSync = (p) => (/[\\\\/]bash\\.exe$/i.test(String(p)) ? false : realExistsSync(p));
 const path = require('node:path');
 const { install } = require(path.join(process.env.PROBE_REPO, 'bin', 'install.js'));
 const result = install(true, process.env.PROBE_RUNTIME);
@@ -879,18 +874,15 @@ process.stdout.write('PROBE_JSON ' + JSON.stringify({
 }) + '\\n');
 `;
 
-function gsd5100RunWin32InstallProbe(t, runtime, { preamble = '' } = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5100-win32-'));
-  t.after(() => helpers.cleanup(home));
-  // The preamble must come first so the probe's existsSync stub wraps the preamble's.
-  const result = runNode(['-e', preamble + GSD_5100_WIN32_INSTALL_PROBE], {
-    cwd: path.join(__dirname, '..'),
-    env: helpers.installSpawnEnv(isolatedEnv({
-      home,
-      override: {
-      PROBE_REPO: path.join(__dirname, '..'),
+// `env` stands in for host variables (the #5888 case passes a WSL host's WSL_DISTRO_NAME);
+// the probe's own blanks below, and runWin32InstallerChild's WSL isolation, win over it.
+function gsd5100RunWin32InstallProbe(t, runtime, { preamble = '', env = {} } = {}) {
+  const result = runWin32InstallerChild(t, GSD_5100_WIN32_INSTALL_PROBE, {
+    preamble,
+    tmpPrefix: 'gsd-5100-win32-',
+    env: (home) => ({
+      ...env,
       PROBE_RUNTIME: runtime,
-      GSD_TEST_MODE: '1',
       // #5848: under a spoofed win32 os.tmpdir() reads TEMP/TMP, else the unset
       // SystemRoot and yields the RELATIVE 'undefined\\temp' (a dir inside the repo
       // root, the probe's cwd). Point both at an os.tmpdir()-based directory.
@@ -904,24 +896,18 @@ function gsd5100RunWin32InstallProbe(t, runtime, { preamble = '' } = {}) {
       // resolveBashExecutable reads truthiness, so either works, and an
       // explicit blank survives an env-inheriting host that exports one.
       GSD_BASH_PATH: '',
-      // #5888: installSpawnEnv spreads the host env, so a WSL host's
-      // WSL_DISTRO_NAME would trip the installer's load-time WSL exit.
-      WSL_DISTRO_NAME: '',
       ProgramFiles: '',
       'ProgramFiles(x86)': '',
       SystemDrive: '',
-      },
-    })),
-    timeoutMs: INSTALL_TIMEOUT_MS,
+    }),
   });
-  const marker = 'PROBE_JSON ';
-  const line = result.stdout.split('\n').find(entry => entry.startsWith(marker));
+  const probe = readProbeJson(result);
   assert.ok(
-    line,
+    probe,
     `the win32 install probe must report its summary on stdout; got outcome=${result.outcome} `
       + `exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`,
   );
-  return { ...JSON.parse(line.slice(marker.length)), expectedTmpdir: home };
+  return { ...probe, expectedTmpdir: result.home };
 }
 
 test('#5850 claude portable install on a win32 host with no Git Bash registers PowerShell hooks and needs no bash', (t) => {
@@ -959,65 +945,37 @@ test('#5100 the installer CALL SITE surfaces command-less unresolved-bash entrie
 // #5888: the probe above fakes win32 in a child that inherits the host. On a WSL
 // host that child saw WSL_DISTRO_NAME and a /proc/version naming "microsoft", so
 // the installer's load-time WSL check exited 1 before install() ran. Present both
-// signals here and require the probe to still reach install().
-const GSD_5888_FAKE_WSL_HOST = `
-{
-  const hostFs = require('node:fs');
-  const hostExistsSync = hostFs.existsSync;
-  const hostReadFileSync = hostFs.readFileSync;
-  hostFs.existsSync = (p) => (String(p) === '/proc/version' ? true : hostExistsSync(p));
-  hostFs.readFileSync = (p, ...rest) => (
-    String(p) === '/proc/version'
-      ? 'Linux version 5.15.167.4-microsoft-standard-WSL2 (gcc) #1 SMP'
-      : hostReadFileSync(p, ...rest)
-  );
-}
-`;
-
+// signals here (the env override stands in for the host's variable, the preamble
+// for its /proc/version) and require the probe to still reach install().
 test('#5888 the #5100 win32 install probe is independent of a WSL host', (t) => {
-  const saved = process.env.WSL_DISTRO_NAME;
-  process.env.WSL_DISTRO_NAME = 'Ubuntu';
-  t.after(() => {
-    if (saved === undefined) delete process.env.WSL_DISTRO_NAME;
-    else process.env.WSL_DISTRO_NAME = saved;
+  const probe = gsd5100RunWin32InstallProbe(t, 'claude', {
+    preamble: FAKE_WSL_HOST_PREAMBLE,
+    env: { WSL_DISTRO_NAME: 'Ubuntu' },
   });
-  const probe = gsd5100RunWin32InstallProbe(t, 'claude', { preamble: GSD_5888_FAKE_WSL_HOST });
   // Reaching install() at all is the point; since #5850 claude registers PowerShell hooks there.
   assert.ok(probe.total > 0, `the win32 install probe must reach install() on a WSL host; got ${JSON.stringify(probe)}`);
   assert.equal(probe.unresolvedBash, 0, `claude portable hooks must not require bash; got ${JSON.stringify(probe)}`);
 });
 
-// #5888 positive control: without the probe's isolation stubs, the faked-win32
-// installer must still take its WSL exit, both from WSL_DISTRO_NAME and from the
-// GSD_5888_FAKE_WSL_HOST preamble. Keeps the WSL warning covered and proves the
-// preamble actually presents WSL, so the #5888 case above can't pass vacuously.
+// #5888 positive control: without the isolation, the faked-win32 installer must
+// still take its WSL exit, both from WSL_DISTRO_NAME and from the
+// FAKE_WSL_HOST_PREAMBLE /proc/version. Keeps the WSL warning covered and proves
+// the preamble actually presents WSL, so the #5888 case above can't pass vacuously.
 const GSD_5888_BARE_WIN32_REQUIRE = `
 Object.defineProperty(process, 'platform', { value: 'win32' });
 require(require('node:path').join(process.env.PROBE_REPO, 'bin', 'install.js'));
 `;
 
-function gsd5888RunBareWin32Require(t, { preamble = '', wslDistroName }) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5888-wsl-'));
-  t.after(() => helpers.cleanup(home));
-  return runNode(['-e', preamble + GSD_5888_BARE_WIN32_REQUIRE], {
-    cwd: path.join(__dirname, '..'),
-    env: helpers.installSpawnEnv({
-      HOME: home,
-      USERPROFILE: home,
-      PROBE_REPO: path.join(__dirname, '..'),
-      GSD_TEST_MODE: '1',
-      WSL_DISTRO_NAME: wslDistroName,
-    }),
-    timeoutMs: INSTALL_TIMEOUT_MS,
-  });
-}
-
 for (const [label, opts] of [
-  ['WSL_DISTRO_NAME', { wslDistroName: 'Ubuntu' }],
-  ['/proc/version via GSD_5888_FAKE_WSL_HOST', { wslDistroName: '', preamble: GSD_5888_FAKE_WSL_HOST }],
+  // Row 1 stays even though it needs no fake-host preamble and adds nothing on a
+  // real WSL host: the installer checks WSL_DISTRO_NAME first and returns before
+  // reading /proc/version, so on any other host (CI included) this is the only row
+  // that reaches the env-var branch. Row 2 blanks the variable to reach the file branch.
+  ['WSL_DISTRO_NAME', { env: { WSL_DISTRO_NAME: 'Ubuntu' } }],
+  ['/proc/version via FAKE_WSL_HOST_PREAMBLE', { env: { WSL_DISTRO_NAME: '' }, preamble: FAKE_WSL_HOST_PREAMBLE }],
 ]) {
   test(`#5888 a faked-win32 installer on a WSL host still exits with the WSL warning (${label})`, (t) => {
-    const result = gsd5888RunBareWin32Require(t, opts);
+    const result = runWin32InstallerChild(t, GSD_5888_BARE_WIN32_REQUIRE, { ...opts, isolateWsl: false, tmpPrefix: 'gsd-5888-wsl-' });
     assert.equal(result.exitCode, 1, `expected exit 1; got outcome=${result.outcome} exitCode=${result.exitCode} stderr=${result.stderr.slice(-800)}`);
     assert.match(result.stderr, /Detected WSL with Windows-native Node\.js/);
   });
