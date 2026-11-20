@@ -525,6 +525,12 @@ test('near-cap check CI_JOB_TIMEOUT_MINUTES literals match each job\'s own timeo
       'test.yml jobs.test-inert.name changed — update JOB_RULES to match');
     assert.equal(testInertRule.test('test (inert CI)'), true);
 
+    const insertShellRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'test-insert-shell');
+    assert.equal(testWorkflow.jobs['test-insert-shell'].name, 'insert-phase shell test',
+      'test.yml jobs.test-insert-shell.name changed — update JOB_RULES to match');
+    assert.equal(insertShellRule.test('insert-phase shell test'), true);
+    assert.equal(testRule.test('insert-phase shell test'), false);
+
     const coverageGateRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'coverage-gate');
     assert.equal(testWorkflow.jobs['coverage-gate'].name, 'Coverage gate (merged shards)',
       'test.yml jobs.coverage-gate.name changed — update JOB_RULES to match');

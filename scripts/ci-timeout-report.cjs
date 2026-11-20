@@ -48,6 +48,7 @@ const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 const JOB_RULES = [
   { workflowFile: 'test.yml', jobKey: 'test-inert', test: (name) => name === 'test (inert CI)' },
   { workflowFile: 'test.yml', jobKey: 'test', test: (name) => name.startsWith('test (') && name !== 'test (inert CI)' },
+  { workflowFile: 'test.yml', jobKey: 'test-insert-shell', test: (name) => name === 'insert-phase shell test' },
   { workflowFile: 'test.yml', jobKey: 'coverage-gate', test: (name) => name === 'Coverage gate (merged shards)' },
   { workflowFile: 'test.yml', jobKey: 'test-conformance', test: (name) => name.startsWith('conformance test (') },
   { workflowFile: 'install-smoke.yml', jobKey: 'smoke', test: (name) => name.startsWith('smoke (') },

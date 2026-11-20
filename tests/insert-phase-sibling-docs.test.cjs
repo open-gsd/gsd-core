@@ -1,0 +1,350 @@
+/**
+ * #5583 — `/gsd-phase --insert` must document and forward `--sibling`
+ * (#4569), accept a decimal <after> phase, and say that inserting after a
+ * decimal phase nests by default, except under bracket phase ids, which
+ * refuse the nested insert and need `--sibling`. Text pins on the shipped
+ * prompt files and the four docs pages the docs-guard registry maps to this test.
+ */
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const { have, skipUnless } = require('./helpers/bash-probe.cjs');
+const { runBash } = require('./helpers/doc-bash-span.cjs');
+const path = require('node:path');
+const fc = require('./helpers/fast-check-setup.cjs');
+
+const ROOT = path.join(__dirname, '..');
+// allow-test-rule: source-text-is-the-product (#5583) — the workflow, routers and help modes are the prompt text the
+// runtime loads; the four docs pages are pinned as docs-parity with the same flag
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+
+const { GLOBAL_FLAGS } = require('../gsd-core/bin/lib/cli-surface.cjs');
+
+const SKIP = skipUnless('bash');
+// Descriptions the CLI reads as a flag: an `=`-form flag with a value, `--ws=`, and every one-word help or rejected token.
+const REFUSED_DESCRIPTIONS = [
+  ...[...GLOBAL_FLAGS.eqFlags, 'ws'].map((f) => '--' + f + '=1 y'),
+  ...GLOBAL_FLAGS.helpTokens,
+  ...GLOBAL_FLAGS.rejectedTokens,
+  '--raw',
+];
+const WF = 'gsd-core/workflows/insert-phase.md';
+const ROUTERS = [
+  'commands/gsd/phase.md',
+  'skills/gsd-phase/SKILL.md',
+  'pi/package-skills/gsd-phase/SKILL.md',
+];
+
+const DOCS = {
+  'docs/COMMANDS.md': '--insert 15.2 --sibling',
+  'docs/USER-GUIDE.md': '--insert 15.2 --sibling',
+  'docs/FEATURES.md': '--insert [N] [--sibling]',
+  'docs/features/phase-management.md': '--insert [N] [--sibling]',
+};
+const NEST_SITES = [
+  WF,
+  ...ROUTERS,
+  'gsd-core/workflows/help/modes/full.md',
+  'gsd-core/workflows/help/modes/full.compact.md',
+  'docs/COMMANDS.md',
+];
+
+describe('#5583 insert-phase --sibling', () => {
+  test('workflow accepts a decimal <after> phase', () => {
+    const WORKFLOW = read(WF);
+    assert.doesNotMatch(WORKFLOW, /integer phase number to insert after/);
+    assert.doesNotMatch(WORKFLOW, /Validate first argument is an integer/);
+    assert.doesNotMatch(WORKFLOW, /between existing integer phases/);
+    assert.doesNotMatch(WORKFLOW, /\{next_integer\}/);
+    assert.match(WORKFLOW, /Validate first argument is a phase number \(integer or dotted decimal\)/);
+  });
+
+  test('workflow splits GSD_ARGS in the insert fence and forwards --sibling', () => {
+    const WORKFLOW = read(WF);
+    assert.match(WORKFLOW, /Usage: \/gsd:phase --insert <after> \[--sibling\] <description>/);
+    assert.match(WORKFLOW, /\(optional, any position, like the CLI router\)/);
+    const cmds = WORKFLOW.match(/^gsd_run query phase\.insert .*$/gm) || [];
+    assert.equal(cmds.length, 1, 'one phase.insert call per run');
+    assert.ok(WORKFLOW.split('```').every((f) => (f.match(/phase\.insert/g) || []).length < 2), 'no fence holds two phase.insert calls');
+    const fence = WORKFLOW.split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
+    assert.match(fence, /<<'GSD_ARGS_END'/, 'the capture delimiter is quoted: typed text is never expanded');
+    assert.doesNotMatch(WORKFLOW, /GSD_DESC_END/, 'GSD_ARGS_END stays the only capture terminator');
+    assert.match(WORKFLOW, /If the fence exits non-zero, print its error and stop; run no later step\./, 'a refused or failed insert stops the workflow');
+  });
+
+  // Run the shipped insert fence, capture included, over the typed arguments.
+  describe('insert fence argument split', { skip: SKIP }, () => {
+    const runFence = (args, shell = 'bash', stub = "gsd_run() { printf '[%s]\\n' \"$@\"; }") => {
+      const fence = read(WF).split('```').find((f, i) => i % 2 && /phase\.insert/.test(f));
+      const lines = fence.split('\n').slice(1).join('\n').replace('$ARGUMENTS', () => args).split('\n');
+      return runBash(
+        lines,
+        { stdout: '', rc: 0 },
+        { shell, setE: false, preamble: [stub] },
+      );
+    };
+    const split = (args, shell = 'bash') => {
+      const r = runFence(args, shell);
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.split('\n').slice(2, -1);
+    };
+    // The CLI reads a one-word description such as -h or --raw, and any argument starting with
+    // --cwd=, --project-dir=, --exit-contract= or --ws=, as a flag; so does an after-phase starting with `-`.
+    // The refused words come from GLOBAL_FLAGS, the CLI's one owner of that grammar, so a flag added there fails this test.
+    for (const args of [...REFUSED_DESCRIPTIONS.map((d) => '5 ' + d), '--insert 5 --project-dir=/tmp x', '--insert --cwd=/tmp 5 x', '--raw 5 x', '15.2 --ws a --ws b Fix y']) {
+      test('refuses the description of: ' + args, () => {
+        const r = runFence(args);
+        assert.equal(r.status, 1, 'the refusal exits 1, not a bash syntax error');
+        assert.equal(r.stdout, '', 'phase.insert never runs');
+      });
+    }
+    test('a failed phase.insert fails the fence and its output reaches the agent', () => {
+      const r = runFence('15.2 x', 'bash', "gsd_run() { printf 'boom\\n'; return 3; }");
+      assert.equal(r.status, 3);
+      assert.equal(r.stdout, 'boom\n');
+    });
+    // [typed text, the arguments phase.insert receives after `query phase.insert`]
+    for (const [args, want] of [
+      ['15.2 --sibling x', ['[15.2]', '[--sibling]', '[x]']],
+      ['15.2 x --sibling', ['[15.2]', '[--sibling]', '[x]']],
+      ['--sibling 15.2 x', ['[15.2]', '[--sibling]', '[x]']],
+      ['15.2\t--sibling x', ['[15.2]', '[--sibling]', '[x]']],
+      ['15.2 --ws feature --sibling x', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
+      ['--ws feature 15.2 x --sibling', ['[--ws=feature]', '[15.2]', '[--sibling]', '[x]']],
+      ['15.2 x --ws', ['[15.2]', '[x]']],
+      ['15.2 --ws --sibling x', ['[15.2]', '[--sibling]', '[x]']],
+      ['15.2 --ws "feature" x', ['[--ws=feature]', '[15.2]', '[x]']],
+      ["15.2 --ws 'feature' x", ['[--ws=feature]', '[15.2]', '[x]']],
+      ['06 --ws "foo" Fix y', ['[--ws=foo]', '[06]', '[Fix y]']],
+      ['15.2 --ws\tfeature x', ['[15.2]', '[feature x]']],
+      ['15.2 x\n--ws feature', ['[15.2]', '[x feature]']],
+      ['5 -5 degrees', ['[5]', '[-5 degrees]']],
+      ['5 -h flag', ['[5]', '[-h flag]']],
+      ['  --insert 15.2 x', ['[15.2]', '[x]']],
+      ['15.2 x\ny', ['[15.2]', '[x y]']],
+      ['5 fix "" x', ['[5]', '[fix x]']],
+      ['15.2 x', ['[15.2]', '[x]']],
+      ['--insert 15.2 --sibling x', ['[15.2]', '[--sibling]', '[x]']],
+      ['--insert 5 fix --insert flag', ['[5]', '[fix --insert flag]']],
+      ['5 fix 1--insert', ['[5]', '[fix 1--insert]']],
+      ['15.2 --sibling "x"', ['[15.2]', '[--sibling]', '[x]']],
+      ['5 "Critical security fix"', ['[5]', '[Critical security fix]']],
+      ["5 don't 'stop'", ['[5]', "[don't 'stop']"]],
+      ['72 fix the --siblings flag', ['[72]', '[fix the --siblings flag]']],
+      ['72 x--sibling y', ['[72]', '[x--sibling y]']],
+      ['72 *', ['[72]', '[*]']],
+      ['5 add -h flag', ['[5]', '[add -h flag]']],
+      ['5 drop -v output', ['[5]', '[drop -v output]']],
+      ['5 fix --raw mode', ['[5]', '[fix --raw mode]']],
+      ['--insert 5 add -h flag "and" --cwd /tmp text', ['[5]', '[add -h flag and --cwd /tmp text]']],
+      ['72 $(printf x) "q" GSD_ARGS_END', ['[72]', '[$(printf x) q GSD_ARGS_END]']],
+      ['5 déploiement 修正', ['[5]', '[déploiement 修正]']],
+      ['5 ' + 'w'.repeat(5000) + ' z', ['[5]', '[' + 'w'.repeat(5000) + ' z]']],
+    ]) {
+      test('split of "' + args.replace(/\n/g, '\\n') + '"', () => assert.deepEqual(split(args), want));
+      test('zsh split of "' + args.replace(/\n/g, '\\n') + '"', { skip: !have('zsh') && 'zsh is not installed' }, () => assert.deepEqual(split(args, 'zsh'), want));
+    }
+
+    // Whatever the description words are, they reach the CLI as ONE argument, in order.
+    test('property: description words, CLI flag words included, stay one argument', () => {
+      const word = fc.constantFrom('x', '"q"', 'a-b', '*', '--siblings', '-h', '--help', '-v', '--raw', '--cwd', '/tmp', '--pick', '--json-errors', '--dry-run');
+      fc.assert(fc.property(fc.array(word, { minLength: 1, maxLength: 6 }), (words) => {
+        assert.deepEqual(split('15.2 x ' + words.join(' ')), ['[15.2]', '[x ' + words.map((w) => w.replace(/^"|"$/g, '')).join(' ') + ']']);
+      }), { numRuns: 25 });
+    });
+
+    // Reference tokenizer: the shape space of the fence (separators space/tab/newline, double quotes,
+    // --ws/--sibling/--insert first, middle, last, repeated, attached, value-less, a value starting with
+    // `-`, empty argument) checked against a plain re-statement of the contract.
+    const reference = (args) => {
+      const ws = (' ' + args.replace(/["']/g, '')).split('\n').map((l) => /.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(l)).find(Boolean);
+      const name = ws ? ws[1] : '';
+      const toks = args.split(/\s+/).map((t) => t.replace(/^"/, '').replace(/"$/, '')).filter(Boolean);
+      if (toks[0] === '--insert') toks.shift();
+      let sibling = false, afterWs = false, after = '', wsCount = 0;
+      const desc = [];
+      for (const t of toks) {
+        if (afterWs) { afterWs = false; if (name && t.replace(/["']/g, '') === name) continue; }
+        if (t === '--sibling') sibling = true;
+        else if (t === '--ws') { afterWs = true; wsCount++; }
+        else if (!after) after = t;
+        else desc.push(t);
+      }
+      const d = desc.join(' ');
+      if (/^(--cwd=|--project-dir=|--exit-contract=|--ws=)/.test(d) || (/^-/.test(d) && !d.includes(' ')) || /^-/.test(after) || wsCount > 1) return null;
+      return [...(name ? ['[--ws=' + name + ']'] : []), '[' + after + ']', ...(sibling ? ['[--sibling]'] : []), '[' + d + ']'];
+    };
+    test('property: the fence matches the reference tokenizer over every token shape', () => {
+      const tok = fc.constantFrom('15.2', '7', 'x', 'fix', '-h', '-5', '--raw', '--cwd=/t', '--ws=feature', '--ws', '--ws', '--ws', '--sibling', '--insert', '1--insert', 'x--sibling', 'feature', 'feature', 'x', 'ws2', '"feature"', '"q"', '"', '""', "don't", '*');
+      const sep = fc.constantFrom(' ', '  ', '\t', '\n', ' \n ');
+      fc.assert(fc.property(fc.array(tok, { maxLength: 8 }), fc.array(sep, { minLength: 8, maxLength: 8 }), fc.constantFrom('', ' ', '\n'), (toks, seps, lead) => {
+        const args = lead + toks.map((t, i) => (i ? seps[i] : '') + t).join('');
+        const want = reference(args);
+        if (want === null) return assert.notEqual(runFence(args).status, 0, 'refuses: ' + JSON.stringify(args));
+        assert.deepEqual(split(args), want, JSON.stringify(args));
+      }), { numRuns: 250 });
+    });
+  });
+
+  // The real CLI, not a stub: flag words inside the description reach the phase name intact.
+  describe('phase.insert with flag words inside the description', () => {
+    let tmp;
+    beforeEach(() => {
+      tmp = createTempProject();
+      fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n### Phase 2: API\n**Goal:** Build API\n');
+      fs.mkdirSync(path.join(tmp, '.planning', 'phases', '01-foundation'), { recursive: true });
+    });
+    afterEach(() => cleanup(tmp));
+    for (const desc of ['add -h flag', 'drop -v output', 'fix --raw mode', 'x --cwd /tmp text', 'x --project-dir=/tmp y']) {
+      test('keeps "' + desc + '" as the phase name', () => {
+        const r = runGsdTools(['query', 'phase.insert', '1', desc], tmp);
+        assert.ok(r.success, r.error);
+        assert.equal(JSON.parse(r.output).name, desc);
+      });
+    }
+    // The fence mirrors the CLI's own flag grammar (gsd-tools.cjs reads `-h`, `--raw` and the `--cwd=`, `--project-dir=`,
+    // `--exit-contract=`, `--ws=` prefixes as flags). Each form the fence refuses must really not reach phase.insert as a name,
+    // and a multi-word description that starts with `-` must.
+    test('keeps "-5 degrees" as the phase name', () => {
+      const r = runGsdTools(['query', 'phase.insert', '1', '-5 degrees'], tmp);
+      assert.ok(r.success, r.error);
+      assert.equal(JSON.parse(r.output).name, '-5 degrees');
+    });
+    for (const desc of REFUSED_DESCRIPTIONS) {
+      test('the CLI reads "' + desc + '" as a flag, not as a phase name', () => {
+        const r = runGsdTools(['query', 'phase.insert', '1', desc], tmp);
+        const name = r.success ? (() => { try { return JSON.parse(r.output).name; } catch { return undefined; } })() : undefined;
+        assert.notEqual(name, desc);
+      });
+    }
+    test('--sibling after a decimal phase creates the peer, nested is the default', () => {
+      fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n### Phase 1.1: Hotfix (INSERTED)\n**Goal:** Fix\n\n### Phase 2: API\n**Goal:** Build API\n');
+      fs.mkdirSync(path.join(tmp, '.planning', 'phases', '01.1-hotfix'), { recursive: true });
+      const sib = runGsdTools(['query', 'phase.insert', '1.1', '--sibling', 'x'], tmp);
+      assert.ok(sib.success, sib.error);
+      assert.equal(JSON.parse(sib.output).phase_number, '01.2');
+      const nested = runGsdTools(['query', 'phase.insert', '1.1', 'y'], tmp);
+      assert.ok(nested.success, nested.error);
+      assert.equal(JSON.parse(nested.output).phase_number, '01.1.1');
+    });
+  });
+
+  // The init step, the insert fence and the state block each read --ws from the typed text: all must pick the same workstream.
+  describe('init step, insert fence and state block read the same --ws', { skip: SKIP }, () => {
+    const WS_ROWS = [
+      '15.2 --ws feature x',
+      '--ws feature 15.2 x --sibling',
+      '15.2 x --ws',
+      '15.2 y --ws=x',
+      '15.2 --ws a.b-c_1 x',
+      '15.2 --ws -bad x',
+      '06 --ws "foo" Fix y',
+      "06 --ws 'foo' Fix y",
+    ];
+    const blocks = (text) => text.split('```').filter((f, i) => i % 2 && f.includes('GSD_WS=$('));
+    const STATE_CALLS = 2; // state.patch and state.add-roadmap-evolution
+    // the workstream argument the block hands to gsd_run, or '' when it hands none
+    const wsOf = (block, args, probe) => {
+      const lines = block.split('\n').slice(1).filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n')
+        .replace('$ARGUMENTS', () => args).split('\n');
+      const r = runBash(lines, { stdout: '', rc: 0 }, {
+        setE: false,
+        preamble: ["after_phase=15.2; gsd_run() { printf '[%s]\\n' \"$@\"; }"],
+        probe,
+      });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout.split('\n').filter((l) => l.startsWith('[--ws=')).join('');
+    };
+    const wsPair = (text, args) => {
+      const [init, fence, state] = blocks(text);
+      return [wsOf(init, args, 'printf "%s\\n" "$INIT"'), wsOf(fence, args, 'true'), wsOf(state, args, 'true')];
+    };
+
+    test('the workflow has exactly the init block, the insert fence and the state block', () => assert.equal(blocks(read(WF)).length, 3));
+    for (const args of WS_ROWS) {
+      test('same workstream for "' + args + '"', () => {
+        const [a, b, c] = wsPair(read(WF), args);
+        assert.equal(a, b);
+        assert.equal(c, b.repeat(STATE_CALLS), 'both state queries get the same --ws');
+      });
+    }
+    // The state block takes the description from a quoted heredoc: no text of it is ever expanded.
+    for (const d of ['use `id` and $(printf x)', 'say "hi" \\', 'a $HOME b']) {
+      test('the state block passes the description literally: ' + d, () => {
+        const lines = blocks(read(WF))[2].split('\n').slice(1).join('\n')
+          .replace('$ARGUMENTS', () => '15.2 x').replace('{description}', () => d).split('\n');
+        const r = runBash(lines, { stdout: '', rc: 0 }, {
+          setE: false,
+          preamble: ["gsd_run() { printf '[%s]\\n' \"$@\"; }"],
+          probe: 'true',
+        });
+        assert.equal(r.status, 0, r.stderr);
+        const argv = r.stdout.split(/\r?\n/);
+        const at = argv.indexOf('[--note]');
+        assert.deepEqual(argv.slice(at, at + 2), ['[--note]', '[' + d + ']'], r.stdout);
+      });
+    }
+    test('a table row reads a workstream in all three blocks', () => {
+      assert.deepEqual(wsPair(read(WF), '15.2 --ws feature x'), ['[--ws=feature]', '[--ws=feature]', '[--ws=feature][--ws=feature]']);
+    });
+    // the three sed lines are identical: mutate the nth one (init block, insert fence, state block)
+    for (const [n, name] of [[0, 'init block'], [1, 'insert fence'], [2, 'state block']]) {
+      test('a mutated sed in the ' + name + ' makes the blocks disagree', () => {
+        const text = read(WF);
+        const sed = blocks(text)[n].split('\n').find((l) => l.startsWith('GSD_WS=$('));
+        let at = -1;
+        for (let i = 0; i <= n; i++) at = text.indexOf(sed, at + 1);
+        const mutated = text.slice(0, at) + sed.replace('[A-Za-z0-9._-]*', '[A-Za-z0-9]*') + text.slice(at + sed.length);
+        const [a, b, c] = wsPair(mutated, '15.2 --ws a.b-c_1 x');
+        assert.ok(!(a === b && c === b.repeat(STATE_CALLS)), 'the parity table must catch it');
+      });
+    }
+  });
+
+  test('workflow documents nest-by-default and the top-level fallback', () => {
+    const WORKFLOW = read(WF);
+    assert.match(WORKFLOW, /inserting after a decimal phase nests by default/i);
+    assert.match(WORKFLOW, /15\.2 --sibling[\s\S]*15\.3/);
+    assert.match(WORKFLOW, /top-level[^\n]*falls back to nested/i);
+  });
+
+  for (const file of ['commands/gsd/phase.md', 'skills/gsd-phase/SKILL.md']) {
+    test(`${file} argument-hint carries --insert [--sibling]`, () => {
+      assert.match(read(file), /argument-hint: "\[--insert \[--sibling\] \|/);
+    });
+  }
+
+  for (const f of ROUTERS) {
+    test(`${f} objective bullet mentions --sibling`, () => {
+      assert.match(read(f), /- \*\*--insert\*\*:[^\n]*--sibling/);
+    });
+  }
+
+  for (const f of ['gsd-core/workflows/help/modes/full.md', 'gsd-core/workflows/help/modes/full.compact.md']) {
+    test(`${f} pins --sibling`, () => {
+      assert.match(read(f), /--insert <after> \[--sibling\] <description>/);
+    });
+  }
+
+  for (const [f, text] of Object.entries(DOCS)) {
+    test(`${f} pins ${text}`, () => {
+      assert.ok(read(f).includes(text));
+    });
+  }
+
+  for (const f of NEST_SITES) {
+    test(`${f} says bracket ids refuse a nested insert after a decimal phase`, () => {
+      assert.match(read(f), /bracket[^\n]*decimal phase[^\n]*--sibling/i);
+    });
+  }
+
+  for (const file of ROUTERS) {
+    test(`${file} lists --sibling in the insert routing`, () => {
+      const text = read(file);
+      assert.match(text, /\[--sibling\]/);
+      assert.match(text, /nests? by default/i);
+    });
+  }
+});

@@ -234,6 +234,7 @@ describe('#5604: the required gate tolerates a skipped lane', () => {
     TEST_RESULT: 'success',
     TEST_CONFORMANCE_RESULT: 'success',
     INERT_RESULT: 'skipped',
+    TEST_INSERT_SHELL_RESULT: 'skipped',
     COVERAGE_GATE_RESULT: 'success',
     QA_LOOP_WALK_RESULT: 'success',
   };
@@ -259,6 +260,14 @@ describe('#5604: the required gate tolerates a skipped lane', () => {
   test('a skipped conformance lane passes the real aggregation script', (t) => {
     const result = runGate(t, { TEST_CONFORMANCE_RESULT: 'skipped' });
     assert.equal(result.exitCode, 0, result.stderr);
+  });
+
+  test('a failed or cancelled test-insert-shell fails it, a skipped one does not', (t) => {
+    for (const bad of ['failure', 'cancelled']) {
+      assert.equal(runGate(t, { TEST_INSERT_SHELL_RESULT: bad }).exitCode, 1, `TEST_INSERT_SHELL_RESULT=${bad}`);
+    }
+    assert.equal(runGate(t, { TEST_INSERT_SHELL_RESULT: 'success' }).exitCode, 0);
+    assert.equal(runGate(t, { TEST_INSERT_SHELL_RESULT: 'skipped' }).exitCode, 0);
   });
 
   test('a failed conformance lane still fails it', (t) => {

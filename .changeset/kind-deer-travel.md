@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 5620
+---
+**`/gsd-phase --insert` now documents and forwards `--sibling`, and accepts a decimal after-phase** — inserting after a decimal phase nests by default (`15.2` -> `15.2.1`); `--insert 15.2 --sibling "x"` creates the peer `15.3`. Bracket phase ids refuse a nested insert after a decimal phase; use `--sibling`. The insert workflow previously rejected a decimal `<after>` and had no slot to pass the flag. The insert step now refuses an after-phase starting with `-`, and a description that is one word starting with `-`, or that starts with `--cwd=`, `--project-dir=`, `--exit-contract=` or `--ws=`, because the CLI reads it as a flag. A `--ws <name>` (quoted or not) typed with `--insert` now reaches the insert and both STATE.md updates, so they no longer run in the active workstream; a repeated `--ws` is refused. The insert step now prints the `phase.insert` JSON, and exits with its status when it fails; a refused or failed insert now stops the workflow, so the STATE.md and completion steps no longer run after it. The STATE.md step passes the description through a quoted heredoc, so a backtick or `$(...)` in it is never expanded. (#5583)

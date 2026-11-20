@@ -6,14 +6,23 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs');
 const os = require('node:os');
-const { cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const yaml = require('js-yaml');
+const { cleanup, createTempDir } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
+const { runNode, runHook } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { parseArgs, selectExplicitFiles, walkTestFiles } = require('../scripts/run-tests.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'ci-test-scope.cjs');
 const WORKFLOWS_DIR = path.join(ROOT, '.github', 'workflows');
+
+// The GITHUB_OUTPUT file as key/value pairs.
+function readOutputs(file) {
+  return Object.fromEntries(fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map(l => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]));
+}
 
 function scopeForAt(files, cwd) {
   const r = runNode([SCRIPT, '--files', files.join(' ')], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
@@ -52,6 +61,113 @@ describe('ci-test-scope.cjs', () => {
     const result = scopeFor(['tests/ci-timeout-budget-history.jsonl', 'src/init.cts']);
     assert.strictEqual(result.product_changed, true, JSON.stringify(result));
     assert.strictEqual(result.code_changed, true, JSON.stringify(result));
+  });
+
+  // The test-insert-shell job (test.yml) runs only when zsh_changed is true: the insert-phase
+  // test, the workflow it pins or a helper its rows run through, so a change elsewhere never starts the zsh install.
+  for (const file of ['tests/insert-phase-sibling-docs.test.cjs', 'gsd-core/workflows/insert-phase.md',
+    'tests/helpers/doc-bash-span.cjs', 'tests/helpers/bash-probe.cjs']) {
+    test(`zsh_changed is true for ${file}`, () => {
+      // A renamed or deleted entry would leave the trigger naming a dead path.
+      assert.ok(fs.existsSync(path.join(ROOT, file)), `${file} exists`);
+      assert.strictEqual(scopeFor([file]).zsh_changed, true);
+    });
+  }
+  // A PR lists many files: one trigger file anywhere in the list starts the job, whatever its position.
+  for (const files of [['gsd-core/workflows/insert-phase.md', 'docs/usage.md'], ['docs/usage.md', 'gsd-core/workflows/insert-phase.md'],
+    ['docs/usage.md', 'gsd-core/workflows/insert-phase.md', 'tests/commands.test.cjs']]) {
+    test(`zsh_changed is true for the mixed list ${files.join(' ')}`, () => {
+      assert.strictEqual(scopeFor(files).zsh_changed, true);
+    });
+  }
+  // Near misses: same basename elsewhere, a sibling, a nested path, a similar test name, a neighbour helper.
+  for (const file of ['gsd-core/workflows/new-project.md', 'tests/commands.test.cjs', 'docs/usage.md',
+    'gsd-core/insert-phase.md', 'gsd-core/workflows/add-phase.md', 'gsd-core/workflows/insert-phase/x.md',
+    'tests/insert-phase.test.cjs', 'tests/helpers/timeouts.cjs', 'gsd-core/workflows/insert-phase.md.bak',
+    'tests/insert-phase-sibling-docs.test.cjs.bak', 'tests/helpers/doc-bash-span.cjs.bak']) {
+    test(`zsh_changed is false for ${file}`, () => {
+      assert.strictEqual(scopeFor([file]).zsh_changed, false);
+    });
+  }
+
+  // writeOutputs puts zsh_changed on $GITHUB_OUTPUT, the channel test.yml reads; the JSON rows above never run it.
+  for (const [file, expected] of [['gsd-core/workflows/insert-phase.md', 'true'], ['docs/usage.md', 'false']]) {
+    test(`GITHUB_OUTPUT holds zsh_changed=${expected} for ${file}`, (t) => {
+      const dir = createTempDir('ci-scope-out-');
+      t.after(() => cleanup(dir));
+      const out = path.join(dir, 'github-output');
+      const r = runNode([SCRIPT, '--files', file], {
+        cwd: ROOT, timeoutMs: PROBE_TIMEOUT_MS, env: isolatedEnv({ home: dir, override: { GITHUB_OUTPUT: out } }),
+      });
+      assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
+      const result = JSON.parse(r.stdout);
+      assert.deepStrictEqual(readOutputs(out), {
+        code_changed: String(result.code_changed),
+        product_changed: String(result.product_changed),
+        full_matrix: String(result.full_matrix),
+        zsh_changed: expected,
+        targeted_tests: result.targeted_tests.join(' '),
+      });
+    });
+  }
+
+  // Push, merge-group and dispatch runs have no changed-file list: the real `scope` step of test.yml, run under
+  // bash for each of those events, must leave the zsh job skipped.
+  for (const event of ['push', 'merge_group', 'workflow_dispatch']) {
+    test(`the scope step writes zsh_changed=false for a ${event} event`, (t) => {
+      const dir = createTempDir('ci-scope-step-');
+      t.after(() => cleanup(dir));
+      const out = path.join(dir, 'github-output');
+      const step = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8')).jobs.changes.steps.find(s => s.id === 'scope');
+      const file = path.join(dir, 'scope.sh');
+      fs.writeFileSync(file, `#!/usr/bin/env bash\n${step.run}\n`, { mode: 0o755 });
+      const r = runHook(file, [], {
+        interpreter: 'bash',
+        cwd: ROOT,
+        timeoutMs: PROBE_TIMEOUT_MS,
+        env: isolatedEnv({ home: dir, override: { EVENT_NAME: event, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: path.join(dir, 'summary') } }),
+      });
+      assert.strictEqual(r.exitCode, 0, `stderr: ${r.stderr}`);
+      assert.strictEqual(readOutputs(out).zsh_changed, 'false');
+    });
+  }
+
+  // One parse of test.yml, one table: every guard property of the test-insert-shell job. A fail-open
+  // install or run (`|| true`, `continue-on-error`, a step `if`), a dropped `needs`, or a dropped
+  // result mapping in required-tests lets the job pass with the insert-phase rows never run. The refusal
+  // itself is run, not text-pinned, by ci-conformance-pr-gating.test.cjs.
+  test('test.yml: every guard property of the test-insert-shell job holds', () => {
+    const doc = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8'));
+    const job = doc.jobs['test-insert-shell'];
+    const steps = job.steps;
+    const install = steps.findIndex(s => /apt-get install .*\bzsh\b/.test(s.run || ''));
+    const runStep = steps.findIndex(s => /scripts\/run-tests\.cjs/.test(s.run || ''));
+    const gate = doc.jobs['required-tests'];
+    const table = [
+      ['job if', job.if, "needs.changes.outputs.zsh_changed == 'true'"],
+      // The `if` reads needs.changes.outputs; the preflight need is pinned by ci-pr-mergeability.test.cjs (GATED).
+      ['job needs changes', job.needs.includes('changes'), true],
+      ['job continue-on-error', job['continue-on-error'], undefined],
+      ['job runs-on', job['runs-on'], 'ubuntu-latest'],
+      ['job timeout-minutes', job['timeout-minutes'], 10],
+      ['install step precedes run step', install >= 0 && runStep > install, true],
+      ['run step command', steps[runStep]?.run, 'node scripts/run-tests.cjs --files tests/insert-phase-sibling-docs.test.cjs'],
+      ['install step command', steps[install]?.run, 'sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh'],
+      ['steps with continue-on-error', steps.filter(s => 'continue-on-error' in s).length, 0],
+      ['steps with if', steps.filter(s => 'if' in s).length, 0],
+      ['changes job exports zsh_changed', doc.jobs.changes.outputs.zsh_changed, '${{ steps.scope.outputs.zsh_changed }}'],
+      ['required-tests needs the job', gate.needs.includes('test-insert-shell'), true],
+      ['required-tests result env', gate.steps[0].env.TEST_INSERT_SHELL_RESULT, '${{ needs.test-insert-shell.result }}'],
+    ];
+    for (const [label, actual, expected] of table) assert.deepStrictEqual(actual, expected, label);
+    // The run goes through run-tests.cjs, which accepts the arguments and selects exactly the insert-phase test
+    // from the files on disk: a renamed or deleted test file fails here, not in CI.
+    const parsed = parseArgs(steps[runStep].run.trim().split(/\s+/).slice(2));
+    assert.strictEqual(parsed.error, undefined, 'run-tests.cjs accepts the job arguments');
+    assert.deepStrictEqual(
+      selectExplicitFiles(walkTestFiles(path.join(ROOT, 'tests'), '').sort(), parsed.files, parsed.filesFrom),
+      { files: ['insert-phase-sibling-docs.test.cjs'] },
+    );
   });
 
   test('a different tests/ .jsonl is not exempt', () => {
@@ -592,7 +708,6 @@ describe('test.yml changes job contract (#837)', () => {
 });
 
 describe('test.yml gating internals (#2472 / #4241)', () => {
-  const yaml = require('js-yaml');
 
   // #2472: every job of a run must merge ONE base commit. Each job runs the
   // rebase-check step independently, minutes apart across the matrix, so

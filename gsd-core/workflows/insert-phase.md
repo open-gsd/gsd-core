@@ -1,7 +1,7 @@
 @~/.claude/gsd-core/references/response-language-directive.md
 
 <purpose>
-Insert a decimal phase for urgent work discovered mid-milestone between existing integer phases. Uses decimal numbering (72.1, 72.2, etc.) to preserve the logical sequence of planned phases while accommodating urgent insertions without renumbering the entire roadmap.
+Insert a decimal phase for urgent work discovered mid-milestone between existing phases (after an integer or a decimal phase). Uses decimal numbering (72.1, 72.2, etc.) to preserve the logical sequence of planned phases while accommodating urgent insertions without renumbering the entire roadmap.
 </purpose>
 
 <required_reading>
@@ -12,24 +12,27 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 <step name="parse_arguments">
 Parse the command arguments:
-- First argument: integer phase number to insert after
+- First argument: phase number to insert after (integer or dotted decimal, e.g. `72`, `15.2`, `15.2.1`)
+- `--sibling` (optional, any position, like the CLI router): a flag, never part of the description, like `--ws <name>`. The insert_phase step drops a leading `--insert`, splits `GSD_ARGS` one word per line (no arrays, so it runs under bash and zsh) and drops double quotes around each word (single quotes stay). It passes the after-phase, `--sibling` and `--ws=<name>` (read with the same `sed` as the init_context step) as their own arguments and the other words, in order and joined by single spaces, as ONE description argument, so a description word such as `-h`, `--raw` or `--cwd` inside the description is never read as a CLI flag. The step refuses an after-phase starting with `-`, and a description that is a single word starting with `-`, or starts with `--cwd=`, `--project-dir=`, `--exit-contract=` or `--ws=`, because the CLI reads those as flags. It also refuses a repeated `--ws`, and it reads a quoted `--ws "name"` like an unquoted one
 - Remaining arguments: phase description
 
 Example: `/gsd:phase --insert 72 Fix critical auth bug`
 -> after = 72
 -> description = "Fix critical auth bug"
 
+Allocation: inserting after an integer phase creates the next decimal (72.1). Inserting after a decimal phase nests by default (`--insert 15.2 "x"` -> 15.2.1); add `--sibling` to join the parent level instead (`--insert 15.2 --sibling "x"` -> 15.3). A top-level after-phase with `--sibling` falls back to nested. Under bracket phase ids a nested insert after a decimal phase is refused; use `--sibling` to insert at the parent level.
+
 If arguments missing:
 
 ```
 ERROR: Both phase number and description required
-Usage: /gsd:phase --insert <after> <description>
+Usage: /gsd:phase --insert <after> [--sibling] <description>
 Example: /gsd:phase --insert 72 Fix critical auth bug
 ```
 
 Exit.
 
-Validate first argument is an integer.
+Validate first argument is a phase number (integer or dotted decimal).
 </step>
 
 <step name="init_context">
@@ -41,6 +44,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
+GSD_ARGS=${GSD_ARGS//[\"\']/}
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
 INIT=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${after_phase}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
@@ -57,49 +61,70 @@ Exit.
 **Delegate the phase insertion to `gsd_run query phase.insert`:**
 
 ```bash
-RESULT=$(gsd_run query phase.insert "${after_phase}" "${description}")
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_L=$(printf '%s\n' "$GSD_ARGS" | tr -s '[:space:]' '\n')
+GSD_ARGS=${GSD_ARGS//[\"\']/}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_F=1; GSD_A=; GSD_S=; GSD_P=; GSD_D=; GSD_N=0
+while IFS= read -r GSD_T; do
+  GSD_T=${GSD_T#\"}; GSD_T=${GSD_T%\"}; [ -n "$GSD_T" ] || continue
+  if [ -n "$GSD_F" ] && [ "$GSD_T" = --insert ]; then GSD_F=; continue; fi; GSD_F=
+  GSD_U=${GSD_T//[\"\']/}
+  if [ -n "$GSD_P" ]; then GSD_P=; [ -n "$GSD_WS" ] && [ "$GSD_U" = "${GSD_WS##* }" ] && continue; fi
+  if [ "$GSD_T" = --sibling ]; then GSD_S=1
+  elif [ "$GSD_T" = --ws ]; then GSD_P=1; GSD_N=$((GSD_N+1))
+  elif [ -z "$GSD_A" ]; then GSD_A=$GSD_T
+  else GSD_D="${GSD_D:+$GSD_D }$GSD_T"; fi
+done <<<"$GSD_L"
+GSD_B=; case "$GSD_D" in --cwd=*|--project-dir=*|--exit-contract=*|--ws=*) GSD_B=1;; -*" "*) ;; -*) GSD_B=1;; esac; case "$GSD_A" in -*) GSD_B=1;; esac; [ "$GSD_N" -le 1 ] || GSD_B=1
+[ -z "$GSD_B" ] || { echo "ERROR: the after-phase must not start with '-', the description must not be a single word starting with '-', nor start with --cwd=, --project-dir=, --exit-contract= or --ws= (the CLI reads it as a flag), and --ws may appear only once" >&2; exit 1; }
+gsd_run query phase.insert ${GSD_WS:+--ws=${GSD_WS##* }} "$GSD_A" ${GSD_S:+--sibling} "$GSD_D"
 ```
 
 The CLI handles:
 - Verifying target phase exists in ROADMAP.md
-- Calculating next decimal phase number (checking existing decimals on disk)
+- Calculating next decimal phase number (checking existing decimals on disk; nested by default, parent level with `--sibling`; bracket phase ids refuse the nested form after a decimal phase)
 - Generating slug from description
 - Creating the phase directory (`{planning_root}/phases/{N.M}-{slug}/`) (`{planning_root}`: the active scope's root, from `planning.inspect`)
 - Inserting the phase entry into ROADMAP.md after the target phase with (INSERTED) marker
 
-Extract from result: `phase_number`, `after_phase`, `name`, `slug`, `directory`.
+If the fence exits non-zero, print its error and stop; run no later step. Otherwise extract from result: `phase_number`, `after_phase`, `name`, `slug`, `directory`.
 </step>
 
 <step name="update_project_state">
 Update STATE.md to reflect the inserted phase via SDK handlers (never raw
 `Edit`/`Write` — projects may ship a `protect-files.sh` PreToolUse hook that
-blocks direct STATE.md writes):
+blocks direct STATE.md writes). Run both commands in one block, so `--ws <name>` from the typed arguments reaches both. The quoted heredoc passes the description as text, never as part of a shell string:
 
-1. Update STATE.md's next-phase pointer(s) to the newly inserted phase
-   `{decimal_phase}`:
+```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+IFS= read -rd '' GSD_D <<'GSD_ARGS_END' || true
+{description}
+GSD_ARGS_END
+GSD_D=${GSD_D%$'\n'}
+GSD_ARGS=${GSD_ARGS//[\"\']/}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+# 1. Update STATE.md's next-phase pointer(s) to the newly inserted phase `{decimal_phase}`.
+#    Adjust field names to whatever pointers STATE.md exposes; the handler reports which fields it matched.
+gsd_run query state.patch ${GSD_WS:+--ws=${GSD_WS##* }} '{"Current Phase":"{decimal_phase}","Next recommended run":"/gsd:plan-phase {decimal_phase}"}'
+# 2. Append a Roadmap Evolution entry. The handler creates the `### Roadmap Evolution` subsection
+#    under `## Accumulated Context` if missing and dedupes identical entries.
+gsd_run query state.add-roadmap-evolution ${GSD_WS:+--ws=${GSD_WS##* }} \
+  --phase {decimal_phase} \
+  --action inserted \
+  --after {after_phase} \
+  --note "$GSD_D" \
+  --urgent
+```
 
-   ```bash
-   gsd_run query state.patch ${GSD_WS:+--ws=${GSD_WS##* }} '{"Current Phase":"{decimal_phase}","Next recommended run":"/gsd:plan-phase {decimal_phase}"}'
-   ```
-
-   (Adjust field names to whatever pointers STATE.md exposes — the handler
-   reports which fields it matched.)
-
-2. Append a Roadmap Evolution entry via the dedicated handler. It creates the
-   `### Roadmap Evolution` subsection under `## Accumulated Context` if missing
-   and dedupes identical entries:
-
-   ```bash
-   gsd_run query state.add-roadmap-evolution ${GSD_WS:+--ws=${GSD_WS##* }} \
-     --phase {decimal_phase} \
-     --action inserted \
-     --after {after_phase} \
-     --note "{description}" \
-     --urgent
-   ```
-
-   Expected response shape: `{ added: true, entry: "- Phase ... (URGENT)" }`
-   (or `{ added: false, reason: "duplicate", entry: ... }` on replay).
+`state.add-roadmap-evolution` responds `{ added: true, entry: "- Phase ... (URGENT)" }`
+(or `{ added: false, reason: "duplicate", entry: ... }` on replay).
 </step>
 
 <step name="completion">
@@ -128,7 +153,7 @@ Project state updated: .planning/STATE.md
 ---
 
 **Also available:**
-- Review insertion impact: Check if Phase {next_integer} dependencies still make sense
+- Review insertion impact: Check if the dependencies of the phase that follows {after_phase} still make sense
 - Review roadmap
 
 ---
