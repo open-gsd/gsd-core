@@ -2038,8 +2038,10 @@ describe('regressions: workflows forward the started workstream to agent-skills 
   // one checkout cannot cross-read each other's workstream. (new-milestone.md
   // predates this and keeps its own persisted GSD_WS_ARG file; its calls are
   // held to the same forwarding rule through the `viaFile` branch below.)
-  const CANONICAL_PARSE =
-    'GSD_WS=$(echo " $GSD_ARGS" | sed -nE \'s/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \\1/p\' | head -n 1)';
+  // #6218: the value may be wrapped in one pair of double or single quotes. No backreference: the macOS sed
+  // mishandles one against an optional empty group, so the three spellings are separate alternatives.
+  const WS_NAME = '[A-Za-z0-9][A-Za-z0-9._-]*';
+  const CANONICAL_PARSE = String.raw`GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +("(${WS_NAME})"|'\''(${WS_NAME})'\''|(${WS_NAME})).*/--ws \2\3\4/p' | head -n 1)`;
   // The single-token call-site expansion: `--ws=<name>` or nothing. One token
   // is what makes it safe under zsh, which does not word-split `$GSD_WS`.
   const FLAG_EXPANSION = '${GSD_WS:+--ws=${GSD_WS##* }}';
@@ -2201,6 +2203,40 @@ describe('regressions: workflows forward the started workstream to agent-skills 
         assert.strictEqual(expand('2 --ws backend-api'), '1|--ws=backend-api');
         assert.strictEqual(expand('--ws  ws_a.1   --auto 3'), '1|--ws=ws_a.1');
         assert.strictEqual(expand('2 --skip-research --ws ws-a'), '1|--ws=ws-a');
+      });
+
+      test('[regression #6218] a quoted --ws value selects the same workstream as the unquoted one', () => {
+        for (const value of ['feature', 'ws_a.1', 'none']) {
+          const bare = expand(`15.2 --ws ${value} x`);
+          assert.strictEqual(bare, `1|--ws=${value}`);
+          assert.strictEqual(expand(`15.2 --ws "${value}" x`), bare);
+          assert.strictEqual(expand(`15.2 --ws '${value}' x`), bare);
+          assert.strictEqual(expand(`--ws "${value}"`), bare);
+        }
+      });
+
+      test('[boundary #6218] a quote that is unterminated, mismatched, empty or holds a space selects nothing', () => {
+        for (const args of ['--ws "feature', '--ws \'feature"', '--ws "feature x"', '--ws ""', '--ws "-x"', '--ws "']) {
+          assert.strictEqual(expand(args), '0|', args);
+        }
+      });
+
+      test('[regression #6218] every arg-stripping line in the workflows removes a quoted --ws value too', () => {
+        const stripLines = [];
+        for (const file of corpus) {
+          for (const line of splitLines(fs.readFileSync(file, 'utf-8'))) {
+            if (/^[A-Z_]+=\$\(echo "\$GSD_ARGS" \| sed -E 's\/--ws\[\[:space:\]\]/.test(line)) stripLines.push(line);
+          }
+        }
+        assert.ok(stripLines.length > 0, 'the corpus has arg-stripping lines');
+        for (const line of stripLines) {
+          const name = line.slice(0, line.indexOf('='));
+          for (const [input, expected] of [['12 --ws feature --auto', '12 --auto'], ['12 --ws "feature" --auto', '12 --auto'], ['12 --ws \'feature\' --auto', '12 --auto']]) {
+            const r = runShellScript(sh, `${line}\nprintf '%s' "$${name}"`, { env: { ...process.env, GSD_ARGS: input } });
+            assertSeamExit(assert, r, 0, r.stderr);
+            assert.strictEqual(r.stdout, expected, `${line} on ${input}`);
+          }
+        }
       });
 
       test('no --ws (or a malformed one) expands to zero tokens, never a stray empty argument', () => {
