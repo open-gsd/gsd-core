@@ -36,12 +36,15 @@ describe('commitReachability', () => {
 
 /** A `planning.sub_repos` workspace keeps its history in the sub-repos, so completeness and existence are asked of the repos `commitIsAncestor` walks. */
 describe('planning.sub_repos workspaces', () => {
-  const configure = (root, subRepos) => {
+  function configure(root, subRepos) {
     fs.mkdirSync(path.join(root, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ planning: { sub_repos: subRepos } }));
-  };
+  }
   const sha = (dir, ref = 'HEAD') => git(dir, 'rev-parse', ref).trim();
-  const track = (t, dir) => { t.after(() => cleanup(dir)); return dir; };
+  function track(t, dir) {
+    t.after(() => cleanup(dir));
+    return dir;
+  }
 
   /** `app`: a shallow clone (depth 1, file:// so git honours it) of a two-commit origin; `old` is the commit it cut off. */
   function shallowApp(t, root) {
