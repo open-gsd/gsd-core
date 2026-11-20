@@ -16,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { cleanup, createTempDir } = require('./helpers.cjs');
+const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const {
   resolveEvaluationScope,
@@ -1726,7 +1726,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
 
   test('[hostile] log.showSignature never puts gpg lines into the records of a signed commit', (t) => {
     if (process.platform === 'win32') { t.skip('POSIX shell script fixture'); return; }
-    const scratch = createTempDir('gsd-scope-gpg-');
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-gpg-'));
     dirs.push(scratch);
     const program = path.join(scratch, 'fake-gpg.sh');
     fs.writeFileSync(program, '#!/bin/sh\necho "gpg: fake verdict" >&2\nexit 1\n', { mode: 0o755 });
