@@ -80,6 +80,13 @@ function w(dir, rel, content) {
 /** A SUMMARY whose `## Task Commits` lists one row per hash. */
 const summaryOf = (hashes) => `# done\n\n## Task Commits\n\n${hashes.map((h, i) => `${i + 1}. **Task ${i + 1}: x** - \`${h}\``).join('\n')}\n`;
 
+/** Squash `feature` onto `base` as one commit on a new `merged` branch. */
+function squash(dir, base, subject = 'feat: squashed') {
+  git(dir, 'checkout', '-q', '-b', 'merged', base);
+  git(dir, 'merge', '--squash', 'feature');
+  git(dir, 'commit', '-q', '-m', subject);
+}
+
 describe('H1 type: tdd detection equals the old regex in its pathological forms', () => {
   const CASES = [
     ['a duplicate type key with tdd second', 'type: execute\ntype: tdd', 1],
@@ -185,11 +192,6 @@ describe('#5354 tdd review checkpoint seal', () => {
       git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
     }
     return { dir, base };
-  }
-  function squash(dir, base, subject = 'feat: squashed') {
-    git(dir, 'checkout', '-b', 'merged', base);
-    git(dir, 'merge', '--squash', 'feature');
-    git(dir, 'commit', '-m', subject);
   }
   const run = (dir, ...args) => evaluateTddReviewCheckpoint({ projectDir: dir, args: ['1', ...args] });
   function sealCommit(dir) { git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs(01-01): seal'); }
@@ -1245,11 +1247,6 @@ describe('#5354 tdd review checkpoint in a planning.sub_repos workspace', () => 
       git(app, 'commit', '-q', '-m', subject);
     }
     return { app, base };
-  }
-  function squash(app, base) {
-    git(app, 'checkout', '-q', '-b', 'merged', base);
-    git(app, 'merge', '--squash', 'feature');
-    git(app, 'commit', '-q', '-m', 'feat: squashed');
   }
 
   test('a plan sealed and squashed away in the sub-repo passes under a workspace root that is no repo', () => {
