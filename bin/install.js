@@ -1009,6 +1009,20 @@ function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
   return runtimeArtifactConversion._shieldEmittedPrefix(content, codexGsdPath, convertClaudeToCodexMarkdown);
 }
 
+/**
+ * #6158 — the Codex role sources in `agentsSrc`: every `gsd-*.md` EXCEPT the
+ * `*.compact.md` alternate renderings, sorted so the emit order never depends on
+ * the filesystem's directory order. A compact file is not a role: it shares its
+ * canonical sibling's frontmatter `name:`, so emitting it writes the same `.toml`
+ * twice. A compact file with no canonical sibling is therefore not emitted either
+ * (the same rule as tests/helpers/agent-roster.cjs).
+ */
+function codexAgentSourceFiles(agentsSrc) {
+  return fs.readdirSync(agentsSrc)
+    .filter(f => f.startsWith('gsd-') && f.endsWith('.md') && !f.endsWith('.compact.md'))
+    .sort();
+}
+
 function codexAgentTomlName(file, source) {
   const { frontmatter } = extractFrontmatterAndBody(source);
   // Resolve identity from converted frontmatter, matching the header
@@ -7482,12 +7496,29 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
   // rename / F1(b) sibling-clobber rows), asserted on the emitted `.toml`'s
   // `sandbox_mode`, not on the derivation's return value.
 
-  const agentEntries = fs.readdirSync(agentsSrc).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+  // #6158: one `.toml` per role, from the canonical source, in a fixed order. The
+  // roster is enumerated by `codexAgentSourceFiles` (no `*.compact.md` alternates,
+  // sorted), and every destination is resolved BEFORE any write so two sources that
+  // name the same role fail the install loudly instead of one silently overwriting
+  // the other.
+  const agentEntries = codexAgentSourceFiles(agentsSrc).map(file => {
+    const source = fs.readFileSync(path.join(agentsSrc, file), 'utf8');
+    return { file, source, name: codexAgentTomlName(file, source) };
+  });
+  const sourceByRole = new Map();
+  for (const { file, name } of agentEntries) {
+    if (sourceByRole.has(name)) {
+      throw new Error(
+        `Codex agent role "${name}" is declared by both ${sourceByRole.get(name)} and ${file}; ` +
+        'each role needs exactly one source file, so one would overwrite the other. Rename or remove one.',
+      );
+    }
+    sourceByRole.set(name, file);
+  }
   const agents = [];
 
-  for (const file of agentEntries) {
+  for (const { file, source, name } of agentEntries) {
     const agentTomlSourcePath = path.join(agentsSrc, file);
-    const source = fs.readFileSync(agentTomlSourcePath, 'utf8');
     // #2995 (epic #1671 Phase 6.4): Codex embeds each agent's prompt into a
     // per-agent `.toml`, reading the source .md independently of the inline
     // agent loop — a separate emission path that must strip gsd:section
@@ -7510,7 +7541,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // for that call; see `deriveCodexSandboxMode`'s doc in
     // `codex-agent-toml.cts` for the resolution.
     const fileStem = file.replace(/\.md$/, '');
-    const name = codexAgentTomlName(file, source);
     const description = extractFrontmatterField(frontmatter, 'description') || '';
 
     agents.push({ name, description: toSingleLine(description) });
@@ -15545,6 +15575,7 @@ module.exports = {
     validateCodexConfigSchema,
     mergeCodexConfig,
     installCodexConfig,
+    codexAgentSourceFiles,
     install,
     installAllRuntimes,
     uninstall,
