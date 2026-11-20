@@ -4006,29 +4006,27 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
 
       // eval concatenates ALL its operands and runs the result.
       if (base === 'eval') {
-        // bash's eval takes an optional `--` before the words it joins (#5492).
-        const joined = operands.slice(operands.length && operands[0].text === '--' ? 1 : 0);
-        const hit = findSecretRead(joined.map((w) => w.text).join(' '), depth + 1, ctx);
+        const hit = scanEval(operands, depth, ctx);
         if (hit) return hit;
         continue;
       }
 
       // `source` / `.` reads a file (or a process-substitution script).
       if (base === 'source' || base === '.') {
-        for (const w of operands) {
-          if (w.procsub !== undefined) {
-            for (const src of reconstructedProcsubs(w.procsub, reading, ctx)) {
-              const hit = findSecretRead(src, depth + 1, ctx);
-              if (hit) return hit;
-            }
-          } else if (operandNamesSecret(w.text)) return secretRead(w.text);
-        }
-        // `source /dev/stdin` runs its stdin, as a shell in stdin mode does (#5492), and `source /dev/fd/3` fd 3.
-        if (isFdPath(sourcedFile(operands.map((w) => w.text)))) {
-          const hit = scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
-          if (hit) return hit;
-        }
+        const hit = scanSource(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
         continue;
+      }
+
+      // `builtin` runs `source`, `.` and `eval` as they run unprefixed (#5492). It is not a wrapper: `builtin echo
+      // .env` is still the unknown command `builtin`, whose operands are checked below.
+      if (base === 'builtin') {
+        const rest = operands.length && operands[0].text === '--' ? operands.slice(1) : operands;
+        const name = rest.length ? rest[0].text : '';
+        const hit = name === 'eval' ? scanEval(rest.slice(1), depth, ctx)
+          : name === 'source' || name === '.' ? scanSource(rest.slice(1), heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx)
+            : null;
+        if (hit) return hit;
       }
 
       // xargs turns stdin file names into a sub-command's operands.
@@ -4083,10 +4081,78 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
         if (nameOnly.has(k)) continue;
         if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
       }
+
+      if (readsLauncherOperands(base)) {
+        const hit = scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+      }
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
   return unreadable;
+}
+
+// eval's operands, past bash's optional `--` (#5492), joined and read as a script.
+function scanEval(operands, depth, ctx) {
+  const joined = operands.slice(operands.length && operands[0].text === '--' ? 1 : 0);
+  return findSecretRead(joined.map((w) => w.text).join(' '), depth + 1, ctx);
+}
+
+// `source` / `.`: a `<( )` operand's script, every other operand as a file it reads, and for an fd path its stdin.
+function scanSource(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  for (const w of operands) {
+    if (w.procsub !== undefined) {
+      for (const src of reconstructedProcsubs(w.procsub, reading, ctx)) {
+        const hit = findSecretRead(src, depth + 1, ctx);
+        if (hit) return hit;
+      }
+    } else if (operandNamesSecret(w.text)) return secretRead(w.text);
+  }
+  // `source /dev/stdin` runs its stdin, as a shell in stdin mode does (#5492), and `source /dev/fd/3` fd 3.
+  if (isFdPath(sourcedFile(operands.map((w) => w.text)))) return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+  return null;
+}
+
+// Commands with a rule of their own for what they launch, which scanLauncherOperands leaves to that rule; and the
+// reserved words and `coproc` of #6138 and GNU `parallel` (#6419), documented gaps of their own that it leaves as
+// they were.
+const LAUNCHING_BASES = new Set(['git', 'git.exe', ...SSH_CLIENTS, ...SHELL_INTERPRETERS, 'eval', 'source', '.', 'xargs',
+  'find', 'find.exe', 'watch', 'if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', 'coproc', 'parallel']);
+// Operand words that start a command when another command runs them (#5492): git, a shell and an ssh client by
+// their last path segment, and eval, xargs, find, watch, dd and the wrappers only as the bare word, so a path or URL
+// ending in one (`packages/watch`, `https://x/eval`) starts nothing.
+const LAUNCHER_WORDS = new Set(['eval', 'xargs', 'find', 'find.exe', 'watch', 'dd', 'dd.exe', ...WRAPPERS.keys()]);
+function isLauncherWord(text) {
+  const name = lastSegment(text).toLowerCase();
+  return name === 'git' || name === 'git.exe' || SSH_CLIENTS.has(name) || SHELL_INTERPRETERS.has(name)
+    || LAUNCHER_WORDS.has(text.toLowerCase());
+}
+
+// A command the scan has no rule for may run the command its operands name (#5492): `caffeinate git …`, `strace -f
+// bash -c …`, `docker exec c sh -c …`. From each operand that is a launcher word, every occurrence, the operands from
+// there on are read as the command it starts (scanLaunchedCommand), with the segment's heredocs and here-strings as
+// its stdin; each is charged its length first. A name-only operand (nameOnlyOperandIndices) starts nothing and is
+// left out of what is read, so its exemption holds there too (`grep -r env . --exclude=.env`). When the launched
+// command is one this rule reads again (`x env y env …` launches `y`), its rescan reads the operands after it, so
+// they are not started here as well: starting each of them here too would cost exponentially many rescans.
+function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  const covered = new Set();
+  for (let j = 0; j < operands.length; j++) {
+    if (nameOnly.has(j) || covered.has(operands[j]) || !isLauncherWord(operands[j].text)) continue;
+    charge(ctx, TOKEN_WORK * (operands.length - j));
+    const tail = [];
+    for (let k = j; k < operands.length; k++) if (!nameOnly.has(k)) tail.push(operands[k]);
+    const launched = resolveCommand(tail);
+    if (launched !== null && readsLauncherOperands(launched.base)) for (const w of launched.operands) covered.add(w);
+    const hit = scanLaunchedCommand(tail, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// Whether scanScript runs scanLauncherOperands on a command with this base.
+function readsLauncherOperands(base) {
+  return base !== '' && !LAUNCHING_BASES.has(base) && !SEARCH_TOOLS.has(base) && !NON_READING_COMMANDS.has(base);
 }
 
 // ---------------------------------------------------------------------------
@@ -4493,7 +4559,7 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
     let j = i + 1;
     while (j < operands.length && operands[j].text !== ';' && operands[j].text !== '+') action.push(operands[j++]);
     i = j;
-    const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading, ctx);
+    const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
     if (hit) return hit;
   }
   return null;
@@ -4505,18 +4571,20 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
 // as the command it is, so the git and ssh scans see it (`find . -exec git rebase -x …`, #5492); its operands are
 // also the launcher's, which the ordinary check reads. That rescan is at the launcher's depth: the launched words are
 // the launcher's own, not a new script body, and each rescan holds fewer of them, so it ends.
-function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx) {
+function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx, heredocs = [], hereStrings = []) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
   for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, cmd.assigns);
   try {
-    if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
-    if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1, ctx);
-    if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
+    if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+    if (cmd.base === 'eval') return scanEval(cmd.operands, depth, ctx);
+    if (cmd.base === 'watch') return scanWatch(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
     if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading, ctx);
-    return rescanCommand(words.map((w) => shellQuote(w.text)).join(' '), depth, ctx);
+    // The launcher's stdin goes with the words it launches (#5492): a heredoc body as a here-string.
+    const stdin = [...heredocs.map((h) => h.text), ...hereStrings].map((text) => `<<< ${shellQuote(text)}`);
+    return rescanCommand([...words.map((w) => shellQuote(w.text)), ...stdin].join(' '), depth, ctx);
   } finally {
     ctx.shellVars = saved;
   }
@@ -4548,7 +4616,7 @@ function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, r
   if (k >= operands.length) return null;
   // -x/--exec: no shell re-reads the operands (`watch -x cat '".env"'` reads a file named `".env"`), but the command
   // itself may be a shell or a launcher that does (`watch -x sh -c 'cat .env'`).
-  if (exec) return scanLaunchedCommand(operands.slice(k), s, bySeg, sepAfter, depth, reading, ctx);
+  if (exec) return scanLaunchedCommand(operands.slice(k), s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
   return findSecretRead(operands.slice(k).map((w) => w.text).join(' '), depth + 1, ctx);
 }
 
