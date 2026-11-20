@@ -43,9 +43,9 @@ const fc = require('fast-check');
 // coincidentally-matching value: that constant's own doc comment (see
 // tests/helpers/timeouts.cjs) scopes it to "a single scripts/*.cjs generator
 // or lint script, spawned directly ... no fan-out" — and its cited precedent
-// sites (tests/adr-index-gate.test.cjs, tests/check-env.test.cjs) confirm
-// that shape in practice: both spawn `process.execPath` against a single
-// script file directly via spawnSync, with no intermediate shell. This
+// site (tests/adr-index-gate.test.cjs) confirms that shape in practice: it
+// spawns `process.execPath` against a single script file directly via
+// spawnSync, with no intermediate shell. This
 // file's sites are a heavier, different shape (bash wrapping a further node
 // spawn), so they get their own file-local constant instead of borrowing one
 // whose doc comment describes something else.
@@ -2555,3 +2555,83 @@ describe('#3899 REVIEWS.md path resolution is path-safe and fails closed', () =>
     );
   });
 });
+
+// ─── #6122 — the converged branch records the LIVE plan count ────────────────
+describe('plan-review-convergence workflow: converged planned-phase records the live plan count (#6122)', () => {
+  const { splitLines: splitWorkflowLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+  const JQ_SHIM = 'jq() { node -e "let s=\'\';process.stdin.on(\'data\',d=>s+=d).on(\'end\',()=>{const k=process.argv[1].replace(/^\\./,\'\').replace(/ \\/\\/ 0$/,\'\');const v=JSON.parse(s)[k];process.stdout.write(String(v??0))})" "$2"; }';
+
+  function convergedFence() {
+    const lines = splitWorkflowLines(fs.readFileSync(WORKFLOW_PATH, 'utf8'));
+    const head = lines.findIndex((line) => line.startsWith('**If HIGH_COUNT == 0 and ACTIONABLE_COUNT == 0 and OPEN_CONFLICTS == 0 (converged):**'));
+    assert.ok(head >= 0, 'the converged branch must exist');
+    const open = lines.findIndex((line, i) => i > head && line === '```bash');
+    const close = lines.findIndex((line, i) => i > open && line === '```');
+    assert.ok(open > head && close > open, 'the converged branch must carry its bash fence');
+    return lines.slice(open + 1, close).join('\n');
+  }
+
+  // the run as the orchestrator has it: the stale pre-loop physical count, the phase, the real find-phase, and a
+  // recording stand-in for the state writer (the state writer itself is out of scope). `jq` is a test-local reader
+  // of the one `.field // 0` expression the fence uses, because the bench image carries no jq.
+  function runConverged(project, staleCount) {
+    const script = [
+      'gsd_run() { if [ "$1" = state ]; then printf "STATE:%s\\n" "$*"; else node "$GSD_TOOLS_PATH" "$@"; fi; }',
+      JQ_SHIM,
+      `PHASE='08'; phase_name='demo'; PLAN_COUNT='${staleCount}'`,
+      convergedFence(),
+    ].join('\n');
+    return execFileSync('bash', ['-c', script], { cwd: project, encoding: 'utf8', env: { ...process.env, GSD_TOOLS_PATH }, timeout: NESTED_BASH_GSD_TOOLS_TIMEOUT_MS }).trim();
+  }
+
+  function phaseProject(t, planSpecs) {
+    const project = createTempDir('gsd-6122-');
+    t.after(() => cleanup(project));
+    const dir = path.join(project, '.planning', 'phases', '08-demo');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [name, status] of planSpecs) {
+      fs.writeFileSync(path.join(dir, name), `---\nphase: 08-demo\nplan: ${name.slice(3, 5)}\n${status ? `status: ${status}\n` : ''}---\n# plan\n`);
+    }
+    return project;
+  }
+
+  test('a superseded plan and a plan added during convergence are reflected, not the stale pre-loop count', (t) => {
+    // pre-loop: 08-01 and 08-02 on disk (physical 2). Convergence superseded 08-02 and added 08-03 and 08-04: live = 3.
+    const project = phaseProject(t, [['08-01-PLAN.md', null], ['08-02-PLAN.md', 'superseded'], ['08-03-PLAN.md', null], ['08-04-PLAN.md', null]]);
+    assert.equal(runConverged(project, 2), 'STATE:state planned-phase --phase 08 --name demo --plans 3', 'a plan added during convergence is counted');
+    const added = phaseProject(t, [['08-01-PLAN.md', null], ['08-02-PLAN.md', null], ['08-03-PLAN.md', null]]);
+    assert.equal(runConverged(added, 2), 'STATE:state planned-phase --phase 08 --name demo --plans 3', 'an added plan with nothing superseded');
+    const physicalOnly = phaseProject(t, [['08-01-PLAN.md', null], ['08-02-PLAN.md', 'superseded']]);
+    assert.equal(runConverged(physicalOnly, 2), 'STATE:state planned-phase --phase 08 --name demo --plans 1', 'the stale value 2 counted the superseded plan');
+  });
+
+  test('a run that changed no plan records the same count as before', (t) => {
+    const project = phaseProject(t, [['08-01-PLAN.md', null], ['08-02-PLAN.md', null]]);
+    assert.equal(runConverged(project, 2), 'STATE:state planned-phase --phase 08 --name demo --plans 2');
+  });
+
+  test('plan-phase step 13b records the live count it reads, not an unassigned or pre-planning variable', (t) => {
+    const lines = splitWorkflowLines(fs.readFileSync(PLAN_PHASE_PATH, 'utf8'));
+    const head = lines.findIndex((line) => line.startsWith('## 13b. Record Planning Completion in STATE.md'));
+    assert.ok(head >= 0, 'step 13b exists');
+    const open = lines.findIndex((line, i) => i > head && line === '```bash');
+    const close = lines.findIndex((line, i) => i > open && line === '```');
+    const fence = lines.slice(open + 1, close).join('\n');
+    const project = phaseProject(t, [['08-01-PLAN.md', null], ['08-02-PLAN.md', 'superseded'], ['08-03-PLAN.md', null]]);
+    const script = [
+      'gsd_run() { if [ "$1" = query ] && [ "$2" = state.planned-phase ]; then shift; printf "STATE:%s\\n" "$*"; else node "$GSD_TOOLS_PATH" "$@"; fi; }',
+      JQ_SHIM,
+      "PHASE_NUMBER='08'; PHASE_NAME='demo'; unset PLAN_COUNT",
+      fence,
+    ].join('\n');
+    const out = execFileSync('bash', ['-c', script], { cwd: project, encoding: 'utf8', env: { ...process.env, GSD_TOOLS_PATH }, timeout: NESTED_BASH_GSD_TOOLS_TIMEOUT_MS }).trim();
+    assert.equal(out, 'STATE:state.planned-phase --phase 08 --name demo --plans 2');
+  });
+
+  test('the initial planning check keeps the physical count', () => {
+    const text = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    assert.ok(text.includes("PLAN_COUNT=$(gsd_run query find-phase \"${PHASE}\" | jq -r '.plan_count_all // 0')"), 'the planner-produced-nothing check stays physical (#3218)');
+  });
+});
+

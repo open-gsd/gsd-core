@@ -146,8 +146,8 @@ describe('milestone-summary workflow', () => {
   test('workflow checks both audit file locations for archived milestones', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     assert.ok(
-      content.includes('.planning/milestones/v${VERSION}-MILESTONE-AUDIT.md'),
-      'should check milestones/ directory for archived audit file'
+      content.includes('${PLANNING_ROOT}/milestones/v${VERSION}-MILESTONE-AUDIT.md'),
+      'should check milestones/ directory (under the resolved planning root) for archived audit file'
     );
   });
 });
@@ -174,17 +174,18 @@ describe('milestone-summary artifact path resolution', () => {
   test('archived milestone paths point to milestones/ directory', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     // Archived roadmap path should be under milestones/
+    // #5861: paths are scoped through the resolved ${PLANNING_ROOT} (flat: .planning).
     assert.ok(
-      content.includes('.planning/milestones/v${VERSION}-ROADMAP.md'),
-      'archived ROADMAP path should be under .planning/milestones/'
+      content.includes('${PLANNING_ROOT}/milestones/v${VERSION}-ROADMAP.md'),
+      'archived ROADMAP path should be under ${PLANNING_ROOT}/milestones/'
     );
     assert.ok(
-      content.includes('.planning/milestones/v${VERSION}-REQUIREMENTS.md'),
-      'archived REQUIREMENTS path should be under .planning/milestones/'
+      content.includes('${PLANNING_ROOT}/milestones/v${VERSION}-REQUIREMENTS.md'),
+      'archived REQUIREMENTS path should be under ${PLANNING_ROOT}/milestones/'
     );
     assert.ok(
-      content.includes('.planning/milestones/v${VERSION}-MILESTONE-AUDIT.md'),
-      'archived AUDIT path should be under .planning/milestones/'
+      content.includes('${PLANNING_ROOT}/milestones/v${VERSION}-MILESTONE-AUDIT.md'),
+      'archived AUDIT path should be under ${PLANNING_ROOT}/milestones/'
     );
   });
 
@@ -197,8 +198,8 @@ describe('milestone-summary artifact path resolution', () => {
       lines.findIndex(l => l.includes('Current/in-progress')) + 10
     ).join('\n');
     assert.ok(
-      currentSection.includes('ROADMAP_PATH=".planning/ROADMAP.md"'),
-      'current ROADMAP path should be at .planning/ root'
+      currentSection.includes('ROADMAP_PATH="${PLANNING_ROOT}/ROADMAP.md"'),
+      'current ROADMAP path should be at the resolved ${PLANNING_ROOT} root'
     );
   });
 });

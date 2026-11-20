@@ -43,7 +43,9 @@ GRADUATION_THRESHOLD=$(gsd_run query config-get features.graduation_threshold --
 Find LEARNINGS.md files from the last N completed phases (excluding the phase currently completing):
 
 ```bash
-find .planning/phases -name "*-LEARNINGS.md" | sort | tail -n "$GRADUATION_WINDOW"
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+find "${PLANNING_ROOT}/phases" -name "*-LEARNINGS.md" | sort | tail -n "$GRADUATION_WINDOW"
 ```
 
 For each file found:
@@ -69,7 +71,7 @@ For each category independently, cluster items using Jaccard similarity on token
 
 ## Step 4: Check graduation_backlog in STATE.md
 
-Read `.planning/STATE.md` `graduation_backlog` section (if present). Format:
+Read `{planning_root}/STATE.md` `graduation_backlog` section (`{planning_root}`: the active scope's root, from `planning.inspect`) (if present). Format:
 
 ```yaml
 graduation_backlog:
@@ -143,7 +145,7 @@ Use `AskUserQuestion` (or equivalent HITL primitive for the current runtime). If
 
 **On `D` (Defer):**
 
-Write to `.planning/STATE.md` under `graduation_backlog`:
+Write to `{planning_root}/STATE.md` under `graduation_backlog`:
 ```yaml
 - cluster_id: "{sha256}"
   status: "deferred"
@@ -153,7 +155,7 @@ Write to `.planning/STATE.md` under `graduation_backlog`:
 
 **On `X` (Dismiss):**
 
-Write to `.planning/STATE.md` under `graduation_backlog`:
+Write to `{planning_root}/STATE.md` under `graduation_backlog`:
 ```yaml
 - cluster_id: "{sha256}"
   status: "dismissed"

@@ -612,6 +612,7 @@
       "aliases": [],
       "positionals": 1,
       "flags": {
+        "executor-type": "value",
         "harness-flag": "value",
         "isolation": "value",
         "json": "boolean",
@@ -673,7 +674,9 @@
       "positionals": 1,
       "flags": {
         "json": "boolean",
-        "name": "value"
+        "name": "value",
+        "phase": "value",
+        "plan": "value"
       },
       "required": [],
       "workstreamScoped": false
@@ -745,10 +748,16 @@
     {
       "verb": "resolve-model",
       "aliases": [],
-      "positionals": 2,
-      "flags": {},
+      "positionals": 1,
+      "flags": {
+        "fallback-agent": "value"
+      },
       "required": [],
-      "workstreamScoped": false
+      "workstreamScoped": false,
+      "freePositionals": true,
+      "nonEmpty": [
+        "fallback-agent"
+      ]
     },
     {
       "verb": "resolve-package-manager",

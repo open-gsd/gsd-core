@@ -24,7 +24,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { runNode } = require('./helpers/process-seam.cjs');
 
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -38,7 +38,7 @@ describe('#2071: effort sync runs in an installed runtime (no package-root bin/i
   test('effort sync does not crash reaching for the un-shipped bin/install.js', () => {
     if (process.platform === 'win32') return; // install layout is POSIX-path-shaped
 
-    const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     try {
       // Installed layout invariant: the package-root installer is never copied in.
       assert.ok(!fs.existsSync(path.join(root, 'bin', 'install.js')), 'installed home must not contain bin/install.js');
