@@ -152,6 +152,7 @@ For onboarding an existing codebase before starting a new milestone, run `/gsd-o
 | `--chain` | `/gsd-discuss-phase` | Auto-chain discuss → plan → execute without stopping |
 | `--skip-research` | `/gsd-plan-phase` | Skip research agents when the domain is already familiar |
 | `--draft` | `/gsd-ship` | Create a draft PR instead of a ready-for-review one |
+| `--efficiency` | `/gsd-ship` | Audit CI timing, local `act` coverage, and release controls without shipping |
 
 For the full command reference with all flags, see [`docs/COMMANDS.md`](COMMANDS.md). For configuration options (model profiles, workflow agents, git branching), see [`docs/CONFIGURATION.md`](CONFIGURATION.md).
 

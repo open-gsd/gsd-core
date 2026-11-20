@@ -196,9 +196,9 @@ Usage: `/gsd:verify-work 3`
 
 ### Ship Work
 
-**`/gsd:ship [phase]`** — Pushes branch, opens a PR with a body from SUMMARY/VERIFICATION/REQUIREMENTS, optionally requests review, updates STATE.md. Requires a verified phase and authenticated `gh`.
+**`/gsd:ship [phase] [--efficiency]`** — With a phase, pushes the branch and opens a PR from verified work. `--efficiency` audits an exact CI run, cheap preflights, local `act` coverage, and release controls without pushing or publishing.
 
-Usage: `/gsd:ship 4` or `/gsd:ship 4 --draft`
+Usage: `/gsd:ship 4`, `/gsd:ship 4 --draft`, or `/gsd:ship --efficiency`
 
 ---
 

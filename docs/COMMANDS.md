@@ -389,19 +389,21 @@ node gsd-tools.cjs uat classify-coverage --summary .planning/phases/01-foundatio
 
 ### `/gsd-ship`
 
-Create PR from completed phase work with auto-generated body.
+Create PR from completed phase work with auto-generated body, or audit CI/CD timing and local reproduction with `--efficiency`.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `N` | No | Phase number or milestone version (e.g., `4` or `v1.0`) |
 | `--draft` | No | Create as draft PR |
+| `--efficiency` | No | Audit one exact CI run, critical-path and runner time, preflights, `act` suitability, and release controls; audit-only mode makes no remote changes |
 
-**Prerequisites:** Phase verified (`/gsd-verify-work` passed), `gh` CLI installed and authenticated, `jq` installed, phase recorded complete in ROADMAP.md
-**Produces:** GitHub PR with rich body from planning artifacts, STATE.md updated
+**Prerequisites (normal shipping mode):** Phase verified (`/gsd-verify-work` passed), `gh` CLI installed and authenticated, `jq` installed, and the phase recorded complete in ROADMAP.md.
+**Produces:** Normal mode creates a GitHub PR and updates STATE.md; `--efficiency` returns a read-only evidence-backed audit.
 
 ```bash
 /gsd-ship 4                         # Ship phase 4
 /gsd-ship 4 --draft                 # Ship as draft PR
+/gsd-ship --efficiency              # Audit CI/CD efficiency without shipping
 ```
 
 **PR body includes:**

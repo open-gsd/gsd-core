@@ -28,6 +28,7 @@ Route to the appropriate quality / review skill based on the user's intent.
 | Forensic investigation of a broken system | gsd-forensics |
 | Autonomous audit-to-fix pipeline | gsd-audit-fix |
 | Cross-AI peer review of plans | gsd-review |
+| Audit CI/CD timing, runner cost, or local `act` coverage | gsd-ship --efficiency |
 | Generate a UI design contract | gsd-ui-phase |
 
 Invoke the matched skill directly using the Skill tool.

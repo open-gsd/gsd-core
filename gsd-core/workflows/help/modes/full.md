@@ -463,17 +463,21 @@ Usage: `/gsd:verify-work 3`
 
 ### Ship Work
 
-**`/gsd:ship [phase]`**
-Create a PR from completed phase work with an auto-generated body.
+**`/gsd:ship [phase] [--efficiency]`**
+Create a PR from completed phase work with an auto-generated body, or run a read-only CI/CD timing and local-reproduction audit.
+
+**Normal shipping mode:**
 
 - Pushes branch to remote
 - Creates PR with summary from SUMMARY.md, VERIFICATION.md, REQUIREMENTS.md
 - Optionally requests code review
 - Updates STATE.md with shipping status
 
-Prerequisites: Phase verified, `gh` CLI installed and authenticated.
+Prerequisites for normal shipping: phase verified, `gh` CLI installed and authenticated. Audit-only mode needs no verified phase or `gh` authentication.
 
-Usage: `/gsd:ship 4` or `/gsd:ship 4 --draft`
+Usage: `/gsd:ship 4`, `/gsd:ship 4 --draft`, or `/gsd:ship --efficiency`
+
+`--efficiency` inspects one exact workflow run, separates critical-path time from runner-minutes, checks cheap preflights and faithful `act` coverage, and reviews release controls. Audit-only mode does not push, merge, publish, or change files.
 
 ---
 

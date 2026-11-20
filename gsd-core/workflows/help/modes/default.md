@@ -31,7 +31,7 @@ Existing codebase? Run `/gsd:onboard` to map the repo, ingest existing docs, and
 | `/gsd:debug "<symptom>"` | Persistent debug session, survives `/clear` |
 | `/gsd:capture` | Save an idea, todo, note, seed, or backlog item |
 | `/gsd:verify-work <N>` | Conversational UAT for a completed phase |
-| `/gsd:ship <N>` | Open a PR from a completed phase |
+| `/gsd:ship <N>` | Open a PR from a completed phase; `--efficiency` audits CI/CD |
 | `/gsd:help --full` | Complete reference (every command, every flag) |
 
 ## Want more?
