@@ -135,9 +135,7 @@
 //   `echo $[ \] ' $(cat .env >&2) ' ]` (bash, zsh),
 //   `(( \( ' $(cat .env >&2) ' ))` (bash) and
 //   `(( \) ' $(cat .env >&2) ' ))` (bash, zsh);
-//   a `#` comment in a
-//   `$( )`, whose `(` or `)` the scan counts
-//   (`echo $(#)'<newline>); cat $'.env' #'`); and a `$` before a line
+//   and a `$` before a line
 //   continuation that opens a `$(` inside "…" or a heredoc body
 //   (`echo "$\<newline>(cat .env)"`). The tests
 //   pin each as allowed, and #5945 and #6132 track them with the further
@@ -271,7 +269,13 @@ function readOnlyOptionsOnly(base, operands) {
 // READINGS, since a `$'…'` span the plain reading takes as an open quote can
 // hide a command bash runs (`cat <exempt> $'\''; mv a b`), and a word with no
 // value to check is not read-only.
+// False while scanByGrammar reads by grammar (closeByCount off): the answer is
+// kept for the whole command (exemption.bashReadOnly), and that reading takes a
+// heredoc tag as one word, so it would pass
+// `cat <<$(case x in x) ;; esac) <listed>`, a line the counting scans refuse
+// for its `$(`.
 function lineIsReadOnly(command) {
+  if (!closeByCount) return false;
   try {
     const readings = readsEachWay(command) ? [false, ...READINGS] : [false];
     return readings.every((reading) => lineIsReadOnlyUnder(command, reading));
@@ -1160,10 +1164,237 @@ let heredocBraceTags = true;
 let braceTagRead = false;
 let inHeredocPass = false;
 
+// Index just past the newline at `i`. A heredoc opened inside a nested `$( )`
+// that closed before its body began is an orphan: bash reads its body from
+// the lines after the next newline, wherever that newline falls — in the span
+// around it, a sibling span or a quoted string. Every reader below steps over
+// a newline through here, so those lines are passed over by whichever one
+// reaches them. `ctx.orphans` is that list, shared by the nested readers of
+// one findParenClose call. It is only ever appended to, or replaced here by a
+// new empty one, which is what lets a read-ahead be undone by truncating.
+function afterNewline(str, i, ctx) {
+  if (ctx.orphans.length === 0) return i + 1;
+  const end = consumeHeredocBodies(str, i + 1, ctx.orphans).end;
+  ctx.orphans = [];
+  return end;
+}
+
+// Index just past the quoted span that starts at `i` — a backslash pair, a
+// '…' or "…" string (the `$( )` and backtick bodies inside "…" skipped whole)
+// or a backtick span — or -1 when `str[i]` starts none.
+function skipQuoted(str, i, ctx) {
+  const ch = str[i];
+  if (ch === '\\') return i + 2;
+  // Under the bash and zsh readings a `$'…'` span is one quoted part, ended where
+  // tokenize ends it (ansiCQuoteEnd), so its `\'` and a `)` in it close nothing. A run
+  // of `$` is read once, from wherever it is first met: its first `$`, or the one after
+  // an escaped `\$`, which starts a run of its own (`\$$'x'` is `$` and `$'x'`). A `$`
+  // inside a run already read is not read again (ctx.runFrom, ctx.runEnd), so a run
+  // broken by line continuations costs its length, not its square.
+  if (ch === '$' && ctx.reading && !(i > ctx.runFrom && i < ctx.runEnd)) {
+    const run = dollarRun(str, i);
+    spanStep(run.end - i);
+    ctx.runFrom = i;
+    ctx.runEnd = run.end;
+    if (opensAnsiC(run, str, ctx.reading)) {
+      const end = ansiCQuoteEnd(str, run.end);
+      const to = end === -1 ? str.length : end + 1;
+      spanStep(to - run.end);
+      return to;
+    }
+  }
+  if (ch === "'" || ch === '`') {
+    i++;
+    while (i < str.length && str[i] !== ch) {
+      spanStep(1);
+      i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
+    }
+    return i + 1;
+  }
+  if (ch === '"') {
+    i++;
+    while (i < str.length && str[i] !== '"') {
+      spanStep(1);
+      if (str[i] === '\\') { i += 2; continue; }
+      if (str[i] === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; continue; }
+      if (str[i] === '`') { i = skipQuoted(str, i, ctx); continue; }
+      i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
+    }
+    return i + 1;
+  }
+  return -1;
+}
+
+// Index of the `}` closing a `${` opened just before `i`, or str.length when
+// unterminated. The first unquoted `}` closes it; a nested `${` or `$(` is
+// skipped whole.
+function findBraceClose(str, i, ctx) {
+  descend(ctx);
+  while (i < str.length) {
+    spanStep(1);
+    const q = skipQuoted(str, i, ctx);
+    if (q !== -1) { i = q; continue; }
+    if (str[i] === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; continue; }
+    if (str[i] === '$' && str[i + 1] === '{') { i = findBraceClose(str, i + 2, ctx) + 1; continue; }
+    if (str[i] === '}') break;
+    i = str[i] === '\n' ? afterNewline(str, i, ctx) : i + 1;
+  }
+  ctx.depth--;
+  return Math.min(i, str.length);
+}
+
+// Index of the `)` matching a `(` opened just before `i` by counting parens
+// alone, or str.length when unterminated: the reading bash gives text that is
+// not a command list — an arithmetic expression, an extended-glob group, or
+// an array literal (`words` set: its elements are shell words, so a `#`
+// starts a comment, `<( )` is a span of its own, and a newline starts the body
+// of a heredoc the span around it has waiting, `pending`). Quoted spans,
+// `${ }` and `$( )` are skipped whole.
+function findPlainParenClose(str, i, words, ctx, pending) {
+  let depth = 1;
+  let wordStart = true;
+  while (i < str.length) {
+    spanStep(1);
+    // bash deletes a backslash-newline here too, so a `#` after one starts a word.
+    if (words && str[i] === '\\' && str[i + 1] === '\n') { i += 2; continue; }
+    const q = skipQuoted(str, i, ctx);
+    if (q !== -1) { i = q; wordStart = false; continue; }
+    const ch = str[i];
+    if (ch === '$' && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; wordStart = false; continue; }
+    if (ch === '$' && str[i + 1] === '{') { i = findBraceClose(str, i + 2, ctx) + 1; wordStart = false; continue; }
+    if (words && (ch === '<' || ch === '>') && str[i + 1] === '(') { i = readParenClose(str, i + 2, ctx) + 1; wordStart = false; continue; }
+    if (words && ch === '#' && wordStart) {
+      const j = str.indexOf('\n', i);
+      i = j === -1 ? str.length : j;
+      continue;
+    }
+    if (ch === '\n') {
+      i = afterNewline(str, i, ctx);
+      if (pending && pending.length) {
+        i = consumeHeredocBodies(str, i, pending).end;
+        pending.length = 0;
+      }
+      wordStart = true;
+      continue;
+    }
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+    wordStart = ch === ' ' || ch === '\t' || ch === '(';
+    i++;
+  }
+  return str.length;
+}
+
+// Tokens after which a command can start, so a `case` read there is the
+// keyword; anywhere else it is an ordinary word. This is bash's rule for where
+// a word is reserved, less the places its grammar then rejects a new command.
+// Reserved words are named by their own text. `word` is any other word,
+// `redir` a redirection operator, `arith` a `(( ))` command, `pat)` the paren
+// that ends a case pattern, `fn()` the parens of a function definition, and
+// `sub)` the paren that closes a subshell.
+const RESERVED_WORD_FOLLOWS = new Set([
+  'start', '\n', ';', '&', '&&', '|', '|&', '||', '(', 'pat)', 'fn()', '{', '}', '!', ']]', 'arith',
+  'if', 'then', 'else', 'elif', 'fi', 'while', 'until', 'do', 'done', 'esac',
+  'time', 'time -p', 'time --', 'coproc',
+]);
+// After a subshell closes, only a word that continues the construct around it
+// is reserved: `if (a) then`, `while (a) do`, `{ (a) }`. A command cannot start
+// there, so `(a) case x in y` holds no `case` command.
+const SUBSHELL_FOLLOWS = new Set(['then', 'do', 'done', 'fi', 'esac', 'elif', 'else', '}']);
+// `time` is reserved only where a pipeline can start, so not after `|`.
+const TIME_FOLLOWS = new Set([
+  '&', '&&', '||', '(', 'pat)', '{', '!', 'if', 'then', 'else', 'elif', 'while', 'until', 'do',
+  'time', 'time -p', 'time --',
+]);
+// Reserved words that need no handling beyond being recorded as the last token.
+const PLAIN_RESERVED = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'while', 'until', 'do', 'done', 'for', 'select', 'function', 'coproc']);
+
+// Deciding whether `((` opens an arithmetic command reads ahead over text the
+// scan then reads again. This caps the total, and no read-ahead starts inside
+// another, so neither a run of `((` nor a nest of them can make one command
+// quadratic; where it does not read ahead, `((` is read as two subshells.
+// scanByGrammar refills it before each scan, so no scan reads `((` with
+// what an earlier one left: one hook run makes several.
+let probeBudget = MAX_COMMAND_LENGTH;
+
+// Iterations of the span readers' loops, summed over the process: the work
+// the tests hold linear in the length of a command (module.exports).
+let spanReaderSteps = 0;
+
+// One step of the span readers: counted for the tests (spanReaderSteps), and charged to
+// the command's readerSteps like the readings' own readers, so the one budget
+// scanBashCommand sets bounds this work too (#5285).
+function spanStep(n) {
+  spanReaderSteps += n;
+  chargeReader(n);
+}
+
+// The readers recurse once per nested `$( )`, `<( )` or `${ }`. Past this many
+// levels of one context they stop, and the grammar scan, which cannot finish, ends as
+// `command-too-complex`. A heredoc tag starts a new context, so the limit does not run
+// across tags, and a run of tags is stopped by the stack. On a nest of spans the limit
+// sits well below where Node's stack runs out (about 1,600 levels on the costliest
+// shape), so there the verdict does not depend on the runtime's stack size.
+const MAX_READER_DEPTH = 1000;
+
+// One level deeper into the readers' recursion; past MAX_READER_DEPTH, the
+// same RangeError a stack overflow throws. The caller steps back up with
+// `ctx.depth--` when it returns.
+function descend(ctx) {
+  if (++ctx.depth > MAX_READER_DEPTH) throw new RangeError(`spans nested over ${MAX_READER_DEPTH} deep`);
+}
+
+// Which bash runs the command decides where a span closes, and the hook
+// cannot know which one will. bash 3.2, still the /bin/bash macOS ships, counts
+// parens: it ends `"$(case x in y)"; cat .env` at the pattern and runs the `cat`,
+// a line bash 5 rejects whole. bash 5 closes a span where its grammar does, so a
+// `case` pattern's `)` closes nothing, and `$(case x in x) cat .env;; esac)` runs
+// to its last `)` (#5267).
+// The Bash leg makes the scans it always made, by paren counting, with
+// `closeByCount` true. Only then, and only if one of them met a span (`spanSeen`),
+// does scanByGrammar scan again with it false. A hit there is a deny. Nothing that
+// goes wrong there can touch a verdict the counting scans reached.
+let closeByCount = true;
+let spanSeen = false;
+
+// Closes a span by bash 5's grammar, for scanByGrammar: to it a `)` is not the
+// close when it sits in a quoted string, a heredoc body, a comment, a `${ }`, or
+// ends a `case` pattern. Past MAX_READER_DEPTH levels of one context, or on a stack
+// overflow, the readers stop and the scan cannot finish, which the readings take as
+// `command-too-complex` (unfinishedBy), as scanBashByGrammar does. V8 reports some
+// overflows as a SyntaxError from a regular expression; that one is rethrown as the
+// RangeError the readings know, so it is never filed as a reading's bug.
+function readSpanClose(str, i, reading) {
+  try {
+    return readParenClose(str, i, { orphans: [], depth: 0, reading });
+  } catch (err) {
+    if (stackRanOut(err) && !(err instanceof RangeError)) throw new RangeError(err.message);
+    throw err;
+  }
+}
+
+function readParenClose(str, i, ctx) {
+  descend(ctx);
+  // `$((` / `<((`: bash finds this close by counting parens alone, whether the
+  // text turns out to be arithmetic or a subshell.
+  const at = str[i] === '(' ? findPlainParenClose(str, i, false, ctx) : scanCommandParenClose(str, i, ctx);
+  ctx.depth--;
+  return at;
+}
+
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
-// quoted string or a heredoc body never closes the span early.
+// quoted string or a heredoc body never closes the span early. Under
+// scanByGrammar the readers above close it instead.
+// The two lines above `next`'s body add no local, so the function keeps `next`'s
+// frame: the counting scans recurse through it once per nested `"$(`, and what they
+// deny depends on where the stack runs out. Check it with --print-bytecode.
 function findParenClose(str, i, reading) {
+  if (!closeByCount) return readSpanClose(str, i, reading);
+  spanSeen = true;
   if (str[i] === '(' && str[i - 2] === '$') {
     const math = zshMathEnd(str, i, reading);
     if (math !== -1) return math;
@@ -1384,10 +1615,301 @@ function ansiCTagWord(str, i, shell) {
   return sawSpan ? { tag, end: Math.min(i, str.length) } : null;
 }
 
+// findParenClose over a command list. It follows bash's rule for where a word
+// is reserved far enough to know when a `case` is open, because only there is
+// a `)` not a closing paren. One frame per open `case`: st 'subj' (its word is
+// next), 'in' (`in` is next), 'pat' (a pattern list; pd = depth of
+// extended-glob parens, start = nothing read yet) or 'body'. Only the top
+// frame acts, and only at its own paren depth. Text that is not a command
+// list (a comment, an array literal, arithmetic, an extended-glob group,
+// `[[ ]]`) is passed over without reading keywords in it: a phantom `case`
+// there would swallow the real `)` and hide what follows.
+function scanCommandParenClose(str, i, ctx) {
+  let depth = 1;
+  // Heredocs this span's own commands opened. Their bodies start at this
+  // span's next newline; a span nested here never reads them, and any still
+  // waiting when the span closes become orphans (see afterNewline).
+  const heredocTags = [];
+  const frames = [];
+  const close = (at) => {
+    for (const tag of heredocTags) ctx.orphans.push(tag);
+    return at;
+  };
+  // Past a newline bash reads as a token, in whatever state the reader is in:
+  // orphan bodies come first in the input, then the ones this span opened.
+  const pastNewline = (at) => {
+    let to = afterNewline(str, at, ctx);
+    if (heredocTags.length) {
+      to = consumeHeredocBodies(str, to, heredocTags).end;
+      heredocTags.length = 0;
+    }
+    return to;
+  };
+  let last = 'start';  // the last token read, and the one before it
+  let prev = 'start';
+  let braces = 0;      // open `{` groups: `}` is reserved only inside one
+  let cond = 0;        // paren depth of an open `[[`, else 0
+  let word = null;     // the word being read: { raw, quoted, lit, first }
+
+  const token = (t) => { prev = last; last = t; };
+  const reservedOk = (kw) => RESERVED_WORD_FOLLOWS.has(last) ||
+    (last === 'sub)' && SUBSHELL_FOLLOWS.has(kw)) ||
+    (last === 'word' && (prev === 'coproc' || prev === 'function'));
+  const active = () => {
+    const f = frames[frames.length - 1];
+    return f && f.depth === depth ? f : null;
+  };
+  // A word part. `quoted`: a quoted, escaped or expanded part, which keeps the
+  // word from being a keyword.
+  const wordPart = (quoted) => {
+    if (word === null) {
+      const f = active();
+      word = { raw: '', tail: '', quoted: false, lit: false, first: !!(f && f.st === 'pat' && f.start) };
+      if (f && f.st === 'pat') f.start = false;
+    }
+    if (quoted) word.quoted = true;
+    word.lit = !quoted;
+  };
+  const endWord = () => {
+    if (word === null) return;
+    const kw = word.quoted ? '' : word.raw;
+    const first = word.first;
+    word = null;
+    if (cond) {
+      if (kw === ']]' && depth === cond) { cond = 0; token(']]'); }
+      return;
+    }
+    let f = active();
+    if (f && f.st === 'subj') { f.st = 'in'; token('word'); return; }
+    if (f && f.st === 'in') {
+      if (kw === 'in') { f.st = 'pat'; f.start = true; f.pd = 0; token('in'); return; }
+      frames.pop(); // bash rejects this; read on by paren counting
+      f = active();
+    }
+    if (f && f.st === 'pat') {
+      if (first && kw === 'esac') { frames.pop(); token('esac'); }
+      return;
+    }
+    if (kw === '-p' && last === 'time') { token('time -p'); return; }
+    if (kw === '--' && (last === 'time' || last === 'time -p')) { token('time --'); return; }
+    if (last === 'word' && (prev === 'for' || prev === 'select') && (kw === 'in' || kw === 'do')) { token(kw); return; }
+    if (!reservedOk(kw)) { token('word'); return; }
+    if (kw === 'case') { frames.push({ depth, st: 'subj', pd: 0, start: false }); token('case'); return; }
+    if (kw === 'esac') {
+      if (f && f.st === 'body') frames.pop();
+      token('esac');
+      return;
+    }
+    if (kw === '[[') { cond = depth; token('[['); return; }
+    if (kw === 'time') {
+      const pipelineStart = last === 'start' || last === ';' || last === '\n' ? prev !== '|' : TIME_FOLLOWS.has(last);
+      token(pipelineStart ? 'time' : 'word');
+      return;
+    }
+    if (kw === '{') { braces++; token('{'); return; }
+    if (kw === '}' && braces > 0) { braces--; token('}'); return; }
+    token(PLAIN_RESERVED.has(kw) ? kw : 'word');
+  };
+
+  while (i < str.length) {
+    spanStep(1);
+    const ch = str[i];
+    // bash deletes a backslash-newline before it reads a token, so it is no
+    // word and leaves the word around it whole.
+    if (ch === '\\' && str[i + 1] === '\n') { i += 2; continue; }
+    const q = skipQuoted(str, i, ctx);
+    if (q !== -1) { wordPart(true); i = q; continue; }
+    const next = i + 1;
+    if (ch === '$' && str[next] === '(') { wordPart(true); i = readParenClose(str, next + 1, ctx) + 1; continue; }
+    if (ch === '$' && str[next] === '{') { wordPart(true); i = findBraceClose(str, next + 1, ctx) + 1; continue; }
+    // A process substitution is a part of the word it touches (`x<(a)` is one
+    // word), in a command, a case subject, a pattern or `[[ ]]`, where a `<`
+    // compares only when no `(` touches it.
+    if ((ch === '<' || ch === '>') && str[next] === '(') {
+      wordPart(true);
+      i = readParenClose(str, next + 1, ctx) + 1;
+      continue;
+    }
+    const top = active();
+    const inGlobPattern = !!(top && top.st === 'pat' && top.pd > 0);
+    if (ch === '#' && word === null && !inGlobPattern) {
+      const j = str.indexOf('\n', i);
+      i = j === -1 ? str.length : j;
+      continue;
+    }
+    // Space and tab only. A carriage return is a word character to bash, so
+    // `\rcase` is an ordinary word and must not open a pattern list.
+    const blank = ch === ' ' || ch === '\t';
+    if (!blank && ch !== '\n' && !';&|()<>'.includes(ch)) {
+      wordPart(false);
+      word.raw += ch;
+      word.tail = ch; // read in place of word.raw's last character, which would flatten it
+      i++;
+      continue;
+    }
+
+    // A delimiter. Two `(` belong to the word before them and do not end it.
+    if (ch === '(' && word !== null && !(top && top.st === 'pat')) {
+      // `!(` where a command can start is `!` and a subshell with extglob
+      // off, bash's default outside an interactive shell, and an
+      // extended-glob word with it on. This reading takes the first: `!` is
+      // the pipeline's negation and the `(` is read again as a subshell. The
+      // second reading, a glob group closed by paren counting, is the one the
+      // counting scans make, and every span is scanned both ways.
+      if (word.raw === '!' && !word.quoted && !cond && reservedOk('!')) {
+        endWord();
+        continue;
+      }
+      // An extended-glob group: `?(` `*(` `+(` `@(` `!(` inside a word.
+      if (word.lit && '?*+@!'.includes(word.tail)) {
+        word.quoted = true;
+        i = findPlainParenClose(str, i + 1, false, ctx) + 1;
+        continue;
+      }
+      // An array literal: `NAME=(` / `NAME+=(`.
+      if (!cond && !word.quoted && /^[A-Za-z_][A-Za-z0-9_]*\+?=$/.test(word.raw)) {
+        endWord();
+        i = findPlainParenClose(str, i + 1, true, ctx, heredocTags) + 1;
+        continue;
+      }
+    }
+    endWord();
+    if (blank) { i++; continue; }
+
+    if (cond) {
+      // Inside `[[ ]]` a paren groups, `<` / `>` compare, and no word is reserved.
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0) return close(i);
+        if (depth < cond) cond = 0;
+      }
+      i = ch === '\n' ? pastNewline(i) : i + 1;
+      continue;
+    }
+
+    let f = active();
+    if (f && (f.st === 'subj' || f.st === 'in')) {
+      if (ch === '\n' && f.st === 'in') { i = pastNewline(i); continue; }
+      frames.pop(); // bash rejects this; read on by paren counting
+      f = active();
+    }
+    if (f && f.st === 'pat') {
+      if (f.pd > 0) {
+        if (ch === '(') f.pd++;
+        else if (ch === ')') f.pd--;
+        i = ch === '\n' ? afterNewline(str, i, ctx) : i + 1;
+        continue;
+      }
+      if (ch === '\n') { i = pastNewline(i); continue; }
+      if (ch === '|') { i++; continue; }
+      if (ch === '(') {
+        if (f.start) f.start = false; // the optional paren before a pattern list
+        else f.pd++;
+        i++;
+        continue;
+      }
+      if (ch === ')') { f.st = 'body'; token('pat)'); i++; continue; } // ends the pattern, not the span
+      frames.pop(); // bash rejects this; read on by paren counting
+      f = active();
+    }
+    if (f && f.st === 'body' && ch === ';' && (str[next] === ';' || str[next] === '&')) {
+      f.st = 'pat';
+      f.start = true;
+      f.pd = 0;
+      token(';;');
+      i = str[next] === ';' && str[next + 1] === '&' ? next + 2 : next + 1;
+      continue;
+    }
+
+    if (ch === '\n') {
+      token('\n');
+      i = pastNewline(i);
+      continue;
+    }
+    if (ch === '<' || ch === '>') {
+      token('redir');
+      if (ch === '<' && str[next] === '<' && str[next + 1] === '<') {
+        i = next + 2; // a here-string, whose word is an ordinary word
+        continue;
+      }
+      if (ch === '<' && str[next] === '<' && str[next + 1] !== '<') {
+        const tag = readHeredocTag(str, next + 1, ctx.reading);
+        heredocTags.push(tag);
+        token('word');
+        i = tag.end;
+        continue;
+      }
+      i = str[next] === '&' || str[next] === '>' || (ch === '>' && str[next] === '|') ? next + 1 : i + 1;
+      continue;
+    }
+    if (ch === '&' && str[next] === '>') {
+      token('redir');
+      i = str[next + 1] === '>' ? next + 2 : next + 1;
+      continue;
+    }
+    if (ch === ';') { token(';'); i++; continue; }
+    if (ch === '&') {
+      const two = str[next] === '&';
+      token(two ? '&&' : '&');
+      i = two ? next + 1 : i + 1;
+      continue;
+    }
+    if (ch === '|') {
+      const op = str[next] === '|' ? '||' : str[next] === '&' ? '|&' : '|';
+      token(op);
+      i = op === '|' ? i + 1 : next + 1;
+      continue;
+    }
+    if (ch === '(') {
+      if (last === 'word') {
+        // `name()` / `name ( )`: the parens of a function definition.
+        let j = i + 1;
+        while (str[j] === ' ' || str[j] === '\t') j++;
+        if (str[j] === ')') { token('fn()'); i = j + 1; continue; }
+      }
+      if (str[next] === '(' && (last === 'for' || reservedOk('((')) && probeBudget > 0) {
+        // `((`: arithmetic when the inner paren's match is followed by `)`,
+        // otherwise two subshells — bash decides it the same way.
+        // The read-ahead shares the orphan list, and what it did to the list
+        // is kept only if the text is arithmetic and the scan resumes past
+        // it; otherwise its appends are dropped and the text is read again.
+        const orphans = ctx.orphans;
+        const waiting = orphans.length;
+        const probe = { orphans, depth: ctx.depth, reading: ctx.reading };
+        const budget = probeBudget;
+        probeBudget = 0; // none inside this one: each would re-read its text
+        const e = findPlainParenClose(str, next + 1, false, probe);
+        probeBudget = budget - (e - i);
+        if (e >= str.length) return close(str.length);
+        if (str[e + 1] === ')') {
+          ctx.orphans = probe.orphans;
+          token('arith');
+          i = e + 2;
+          continue;
+        }
+        orphans.length = waiting;
+      }
+      depth++;
+      token('(');
+      i++;
+      continue;
+    }
+    // ch === ')'
+    depth--;
+    if (depth === 0) return close(i);
+    while (frames.length && frames[frames.length - 1].depth > depth) frames.pop();
+    token('sub)');
+    i++;
+  }
+  return close(str.length);
+}
+
 // Reads the tag word after `<<` / `<<-` starting at `i`. Under an ANSI-C
 // reading a word that holds a `$'…'` span is read whole (ansiCTagWord), and
 // bash's `<<$"EOF"` is `<<"EOF"`.
 function readHeredocTag(str, i, reading) {
+  if (!closeByCount) return readDelimiterWord(str, i, reading);
   let stripTabs = false;
   if (str[i] === '-') { stripTabs = true; i++; }
   while (str[i] === ' ' || str[i] === '\t') i++;
@@ -1436,6 +1958,149 @@ function readHeredocTag(str, i, reading) {
     }
   }
   return { tag, quoted, stripTabs, end: i };
+}
+
+// The heredoc at `i` (just past `<<`), read in bash's two steps, so that where a span
+// ends and what is scanned inside it cannot disagree. Step one finds the word: it ends
+// at a metacharacter outside any quote or nested construct. Step two runs only if the
+// word held a quote of its own, and removes quotes across all of its text, nested
+// constructs included. So `$(echo "x")` waits for itself and `'E'$(echo "x")` waits for
+// `E$(echo x)`. The word and any `$( )` or `${ }` in it are read under the scan's shell
+// reading, as the scans that count parens read them, so a `$'…'` opens where that
+// shell opens one: read plainly, the `\'` in `<<E$(echo $'\'')` opens a quote that
+// takes the body with it. One place still differs, as on `next`: zsh 5.9 reads the
+// `$'` of a `${ }` inside "…" as text, where this reads `$'…'`, so `<<E"${x:-$'"'}"`
+// is read to end before zsh ends it. Escapes in `$'…'` other than `\'` and `\\` are not
+// decoded: that reading belongs to the ANSI-C work (#5255). bash 5.2 also rewrites a
+// `$'…'` inside a nested `$( )` or `${ }` as '…' before it compares lines, which this
+// does not, so `<<E$(echo $'a)')F` ends at the line spelled like it, where bash reads
+// on to the end, and a read later in the body is missed, as it is on `next`. A quoted
+// tag is unquoted flat (withoutQuotes), so one whose nested `$( )` or `${ }` holds a
+// `$'…'` (`<<'E'$(echo $'\'')`, `<<'E'"${x:-$'x'}"`) waits for a line bash does not,
+// its body runs past the line bash ends it at, and a read after it is missed, as it is
+// on `next`.
+// tokenize's heredoc under scanByGrammar: the tag word at `i` (just past `<<`), read
+// whole and queued on `heredocs` for segment `seg`; returns where reading resumes. A
+// helper, so that tokenize's own frame, which the counting scans recurse through,
+// stays the size it is on `next`.
+function readGrammarHeredoc(str, i, heredocs, seg, reading) {
+  const heredoc = readHeredocTag(str, i, reading);
+  heredocs.push({ tag: heredoc.tag, quoted: heredoc.quoted, stripTabs: heredoc.stripTabs, seg });
+  return heredoc.end;
+}
+
+function readDelimiterWord(str, i, reading) {
+  const start = i;
+  const pastContinuations = () => { while (str[i] === '\\' && str[i + 1] === '\n') i += 2; };
+  pastContinuations();
+  const stripTabs = str[i] === '-';
+  if (stripTabs) i++;
+  pastContinuations();
+  while (str[i] === ' ' || str[i] === '\t') { i++; pastContinuations(); }
+  spanStep(i - start);
+  const ctx = { orphans: [], depth: 0, reading };
+  let word = '';
+  let quoted = false;
+  // Each loop below charges the characters it walks itself; a nested span, `${ }` or
+  // quoted part it steps over charges its own, so a nest of delimiters is charged
+  // once per character it reads, not once per level.
+  while (i < str.length) {
+    spanStep(1);
+    const ch = str[i];
+    if (ch === '\\' && str[i + 1] === '\n') { i += 2; continue; }
+    if (ch === '$') {
+      // A run of `$` is read once, and charged once, so a long one costs its length.
+      // Whether the `'` after it opens a `$'…'` part is opensAnsiC's answer, as in the
+      // scans that count parens: bash pairs the run, so `<<E$$'\''` is the PID and a
+      // plain quote, which runs on to the next `'`; zsh opens one after any run; dash,
+      // which has no `$'…'`, never does. The `$`s before the run's last are plain text.
+      // Before a `'` the run does not open, the last is text too. Otherwise it is read
+      // below: as the `$` of a `$(` or `${`, as text, or before `"` as a `$"` whose `$`
+      // is dropped. That is bash's reading after an odd run; dash and zsh never drop
+      // it, bash keeps it after an even run, and bash drops it across a continuation,
+      // where this keeps it. So `<<E$$"x"` waits for `E$x` where all three wait for
+      // `E$$x`, and `<<E$"x"` for `Ex` where dash and zsh wait for `E$x`: misses `next`
+      // makes too.
+      const run = dollarRun(str, i);
+      spanStep(run.end - i);
+      word += '$'.repeat(run.dollars - 1);
+      if (opensAnsiC(run, str, reading)) {
+        let text = '';
+        for (i = run.end + 1; i < str.length && str[i] !== "'"; i++) {
+          spanStep(1);
+          if (str[i] === '\\' && (str[i + 1] === "'" || str[i + 1] === '\\')) i++;
+          text += str[i];
+        }
+        i++;
+        word += `'${text.replaceAll("'", "'\\''")}'`;
+        quoted = true;
+        continue;
+      }
+      if (str[run.end] === "'") { word += '$'; i = run.end; continue; }
+      i = run.last;
+    }
+    if (ch === '$' && str[i + 1] === '"') { i++; continue; }
+    if (ch === '\\' || ch === "'" || ch === '"') {
+      let end = ch === '"' ? i + 1 : skipQuoted(str, i, ctx);
+      // Bash reads a `${ }` inside "…" with quotes of its own, which skipQuoted does not.
+      while (ch === '"' && end < str.length) {
+        spanStep(1);
+        if (str[end] === '"') { end++; break; }
+        if (str[end] === '$' && str[end + 1] === '{') end = findBraceClose(str, end + 2, ctx) + 1;
+        else if (str[end] === '$' && str[end + 1] === '(') end = readSpanClose(str, end + 2, reading) + 1;
+        else if (str[end] === '`') end = skipQuoted(str, end, ctx);
+        else end += str[end] === '\\' ? 2 : 1;
+      }
+      word += str.slice(i, end);
+      quoted = true;
+      i = end;
+      continue;
+    }
+    let close = -1;
+    if (ch === '`') close = skipQuoted(str, i, ctx) - 1;
+    else if ((ch === '$' || ch === '<' || ch === '>') && str[i + 1] === '(') close = readSpanClose(str, i + 2, reading);
+    else if (ch === '$' && str[i + 1] === '{') close = findBraceClose(str, i + 2, ctx);
+    if (close !== -1) {
+      word += str.slice(i, close + 1);
+      i = close + 1;
+      continue;
+    }
+    if (/[ \t\n;&|<>()]/.test(ch)) break;
+    word += ch;
+    i++;
+  }
+  // Quote removal reads the whole word, nested text included, and is charged for it:
+  // the command's budget is what bounds a nest of quoted delimiters that each hold the
+  // rest of the nest.
+  if (!quoted) return { tag: word, quoted, stripTabs, end: i };
+  spanStep(word.length);
+  return { tag: withoutQuotes(word), quoted, stripTabs, end: i };
+}
+
+// `word` with one level of shell quoting removed, reading it flat: a quote inside a
+// nested construct counts like any other.
+function withoutQuotes(word) {
+  let out = '';
+  let inDouble = false;
+  for (let i = 0; i < word.length; i++) {
+    const ch = word[i];
+    if (ch === '\\' && i + 1 < word.length) {
+      const next = word[++i];
+      if (next === '\n') continue;
+      if (inDouble && !'"\\$`'.includes(next)) out += ch;
+      out += next;
+    } else if (ch === "'" && !inDouble) {
+      const j = word.indexOf("'", i + 1);
+      const end = j === -1 ? word.length : j;
+      out += word.slice(i + 1, end);
+      i = end;
+    } else if (ch === '"') {
+      inDouble = !inDouble;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 // From `i` (start of the line after the heredoc-opening line), consume one
@@ -1752,6 +2417,10 @@ function tokenize(str, reading) {
       else if (str.startsWith('>>', j)) { text = '>>'; j += 2; }
       else if (str.startsWith('>|', j)) { text = '>|'; j += 2; }
       else { text = ch; j += 1; }
+      if ((text === '<<' || text === '<<-') && !closeByCount) {
+        i = readGrammarHeredoc(str, i + 2, heredocs, seg, reading);
+        continue;
+      }
       if (text === '<<' || text === '<<-') {
         expectTag = { stripTabs: text === '<<-' };
         i = j;
@@ -2361,6 +3030,24 @@ function findSecretRead(command, depth) {
   return null;
 }
 
+// `scan` over `command` with spans closed by bash 5's grammar (#5267), or null.
+// scanBashByGrammar runs it, on what the scans before it left of the command's
+// budgets: it sets none of them, and all of the readers' work is charged to them. A hit
+// there is a deny. A command it cannot finish, by a spent budget, the readers' depth
+// limit or a stack overflow, ends as `command-too-complex`, as in any other pass, never
+// as an allow. The one bound refilled here, per scan, is probeBudget, which decides only
+// how far a `((` reads ahead.
+function scanByGrammar(scan, command) {
+  closeByCount = false;
+  probeBudget = MAX_COMMAND_LENGTH;
+  try {
+    return scan(command);
+  } finally {
+    closeByCount = true;
+  }
+}
+
+
 // Set when readEachWay ran the readings on `command` or a body it rescans.
 let readingsRan = false;
 
@@ -2388,6 +3075,7 @@ function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget 
   readerSpent = false;
   scanSpent = false;
   budgetHeld = true;
+  spanSeen = false;
   try {
     const first = findSecretRead(command, 0);
     if (first !== null && first.code !== 'nesting-too-deep') return first;
@@ -2410,6 +3098,27 @@ function scanDebuggerSpawn(command) {
     return spawn === null ? null : { code: 'debugger-cli-spawn', text: spawn };
   } catch (e) {
     if (e === SCAN_BUDGET_SPENT) return { code: 'command-too-complex', text: '' };
+    throw e;
+  } finally {
+    budgetHeld = false;
+  }
+}
+
+// The Bash scan with spans closed by bash 5's grammar (#5267): main() runs it after
+// scanBashCommand and scanDebuggerSpawn, on what they left of the command's budgets,
+// and only when one of them met a span (spanSeen). The secret-read scan, then the
+// debugger-spawn check, each through scanByGrammar. A hit is a deny, and a command it
+// cannot finish is `command-too-complex`, as in the scans before it.
+function scanBashByGrammar(command) {
+  if (!spanSeen) return null;
+  budgetHeld = true;
+  try {
+    const hit = scanByGrammar((c) => findSecretRead(c, 0), command);
+    if (hit !== null) return hit;
+    const spawn = scanByGrammar(findDebuggerCliSpawnEitherWay, command);
+    return spawn === null ? null : { code: 'debugger-cli-spawn', text: spawn };
+  } catch (e) {
+    if (e === SCAN_BUDGET_SPENT || stackRanOut(e)) return { code: 'command-too-complex', text: '' };
     throw e;
   } finally {
     budgetHeld = false;
@@ -2519,10 +3228,19 @@ let scanSpent = false;
 // nested body is read again at each outer pass, so the charge on a script a
 // shell reads from a heredoc is a fixed multiple of its length, set by its
 // nesting. With a reading trigger in it, each character of a `bash <<'EOF'`
-// script is scanned about 120 times and charged up to about 33 separators,
-// and such scripts are denied from about 16,000-70,000 characters by shape;
-// inside `$( )` or a second heredoc each is scanned about 500 times and
-// charged up to about 130, and they are denied from about 4,000-17,000. The
+// script is scanned about 120 times and charged tens of separators (about 48
+// for a script of `:;` lines), and such scripts were denied from about
+// 11,000-70,000 characters in the shapes measured; inside `$( )` or a second
+// heredoc each is scanned about 500 times and charged a few hundred, and they
+// were denied from about 2,800-17,000. A command holding a `$( )`, `$(( ))`,
+// `<( )` or `>( )` the shell expands is scanned once more (scanBashByGrammar),
+// on what those scans leave, so it is denied sooner: at about three quarters
+// of the size in the heredoc scripts measured, about half in a long command of
+// separators, nearly the whole size in a script of short `$( )` lines with no
+// reading trigger, and far sooner when it holds a long `case` arm inside
+// `$( )`, which the counting scans close at the pattern and the grammar scan
+// reads whole. All of these are measured shapes, not bounds: a denser script
+// is denied sooner. The
 // most any of the 1,384,856 real agent commands above needs is 20,043 (a
 // 4,543-character heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;
@@ -2592,6 +3310,15 @@ const SCAN_BUDGET_SPENT = new Error('secret read guard: scan budget spent');
 // Whether `e` means a reading could not finish, rather than a parser bug.
 function unfinishedBy(e) {
   return e instanceof RangeError || e === SCAN_BUDGET_SPENT;
+}
+
+// Whether `e` is the stack running out: a RangeError, or the SyntaxError V8 throws
+// when it compiles a regular expression for the first time with no stack left
+// (`Invalid regular expression: …: Stack overflow`, or, nearest the edge,
+// `…: Maximum call stack size exceeded`). The scan by grammar (#5267)
+// reads deeper than the counting scans, so it can be the first to compile one there.
+function stackRanOut(e) {
+  return e instanceof RangeError || (e instanceof SyntaxError && /Stack overflow|Maximum call stack size exceeded/.test(e.message));
 }
 
 // The first error in a reading that was not a limit: a bug. The hook reports it
@@ -3307,6 +4034,8 @@ function main() {
       if (hit !== null) emitBlock(hit.code, tool, hit.text);
       const spawn = scanDebuggerSpawn(command);
       if (spawn !== null) emitBlock(spawn.code, tool, spawn.text);
+      const grammar = scanBashByGrammar(command);
+      if (grammar !== null) emitBlock(grammar.code, tool, grammar.text);
       if (readingBug !== null) {
         process.stderr.write(`${JSON.stringify({ hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: String(readingBug.message) })}\n`);
       }
@@ -3326,8 +4055,8 @@ function main() {
 }
 
 module.exports = {
-  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
-  MAX_SCAN_CHARACTERS,
+  DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashByGrammar, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent,
+  MAX_SCAN_SEPARATORS, MAX_SCAN_CHARACTERS, MAX_COMMAND_LENGTH, MAX_READER_DEPTH, spanReaderSteps: () => spanReaderSteps, stackRanOut,
 };
 
 if (require.main === module) main();
