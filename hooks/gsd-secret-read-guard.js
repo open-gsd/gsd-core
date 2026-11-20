@@ -464,10 +464,22 @@ const SHELL_INTERPRETERS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'su', 'a
 // flag value is not mistaken for the script and stdin mode still applies.
 const SHELL_VALUE_FLAGS = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-file']);
 
-// Value-taking `xargs` flags (long `--flag=value` forms are single words).
-// `-a`/`--arg-file` additionally replaces stdin, so it suppresses the pipeline
-// inference below.
-const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-i', '-L', '-l', '-P', '-s', '-d', '-E', '-a']);
+// GNU xargs(1) options: short letters whose value is attached or the next
+// word, short letters whose optional value must be attached, and long
+// options (any unambiguous prefix) whose value is the next word unless
+// attached with `=`; the optional ones take only `=`. `-a`/`--arg-file`
+// also replaces stdin, so it suppresses the pipeline inference below.
+// BSD xargs's `-J`, `-R` and `-S` take a value as well; GNU xargs rejects
+// them and runs nothing, so reading them as value-taking is safe there.
+const XARGS_SHORT_VALUE = 'adEIJLnPRSs';
+const XARGS_SHORT_OPTIONAL = 'eil';
+const XARGS_LONG_OPTIONS = new Map([
+  ['arg-file', 'value'], ['delimiter', 'value'], ['max-args', 'value'], ['max-procs', 'value'],
+  ['max-chars', 'value'], ['process-slot-var', 'value'], ['eof', 'optional'], ['replace', 'optional'],
+  ['max-lines', 'optional'], ['null', 'flag'], ['no-run-if-empty', 'flag'], ['verbose', 'flag'],
+  ['interactive', 'flag'], ['exit', 'flag'], ['open-tty', 'flag'], ['show-limits', 'flag'],
+  ['version', 'flag'], ['help', 'flag'],
+]);
 
 // Probe names a Grep glob alternative is matched against. `.env` and
 // `.secrets` are the exact names; the rest stand in for the open-ended
@@ -2142,19 +2154,45 @@ function searchOperandIndices(spec, operands) {
 }
 
 // `xargs <sub-command words>`: the word index of the sub-command, or -1.
-// `argFile` is true when `-a`/`--arg-file` replaces stdin.
+// `argFile` is true when `-a`/`--arg-file` replaces stdin. `replaceStr` is
+// xargs's replace string, or null without one: `-I STR`, `-i[STR]`,
+// `--replace[=STR]` (`{}` without a value) and BSD `-J STR`, in a cluster
+// (`-tI{}`) or under any prefix of `--replace` too; the last one given wins.
 function xargsSubCommand(operands) {
   let argFile = false;
+  let replaceStr = null;
   for (let m = 0; m < operands.length; m++) {
     const t = operands[m].text;
-    if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
-    if (t.startsWith('--arg-file=')) { argFile = true; continue; }
-    if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
-    if (t.startsWith('--') && t.includes('=')) continue;
-    if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
-    return { subIdx: m, argFile };
+    if (t === '--') return { subIdx: m + 1 < operands.length ? m + 1 : -1, argFile, replaceStr };
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = t.slice(2, eq === -1 ? undefined : eq);
+      const matches = [...XARGS_LONG_OPTIONS.keys()].filter((long) => long.startsWith(name));
+      const long = XARGS_LONG_OPTIONS.has(name) ? name : matches.length === 1 ? matches[0] : null;
+      if (long === 'arg-file') argFile = true;
+      if (long === 'replace') replaceStr = (eq === -1 ? '' : t.slice(eq + 1)) || '{}';
+      if (eq === -1 && XARGS_LONG_OPTIONS.get(long) === 'value') m++;
+      continue;
+    }
+    if (t.length > 1 && t.startsWith('-')) {
+      for (let i = 1; i < t.length; i++) {
+        if (t[i] === 'a') argFile = true;
+        if (t[i] === 'i') replaceStr = t.slice(i + 1) || '{}';
+        if (XARGS_SHORT_OPTIONAL.includes(t[i])) break;
+        if (!XARGS_SHORT_VALUE.includes(t[i])) continue;
+        if (t[i] === 'I' || t[i] === 'J') {
+          // The value is the rest of the word, else the next word, which a trailing `-I` lacks.
+          if (i < t.length - 1) replaceStr = t.slice(i + 1);
+          else replaceStr = m + 1 < operands.length ? operands[m + 1].text : null;
+        }
+        if (i === t.length - 1) m++;
+        break;
+      }
+      continue;
+    }
+    return { subIdx: m, argFile, replaceStr };
   }
-  return { subIdx: -1, argFile };
+  return { subIdx: -1, argFile, replaceStr };
 }
 
 // #4639: the `--env-file` word, plus the next operand for the bare flag
@@ -2992,7 +3030,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
 // mode c whether or not a pipe feeds it.
 function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
-  const { subIdx, argFile } = xargsSubCommand(operands);
+  const { subIdx, argFile, replaceStr } = xargsSubCommand(operands);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
 
   // The sub-command is resolved through the same wrappers a top-level command is (`xargs sudo sh -c '…'`,
@@ -3002,7 +3040,6 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   const subBase = resolvedSub ? resolvedSub.base : writtenBase;
   const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
   const subIsShell = SHELL_INTERPRETERS.has(subBase);
-  const replaceStr = xargsReplaceStr(operands, subIdx);
   if (subIsShell) {
     // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
     const hit = scanShellInterpreter(subOperands, [], [], s, bySeg, sepAfter, depth, reading);
@@ -3013,6 +3050,14 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
       const unseenHit = scanShellInterpreter(unseen, [], [], s, bySeg, sepAfter, depth, reading);
       if (unseenHit) return unseenHit;
     }
+  } else {
+    // Any other sub-command is scanned as the command xargs runs (#6282), so a launcher there reads its script as
+    // it does at the top level (`xargs watch 'cat .env'`, `xargs find . -exec sh -c …`). Its words end in the
+    // words xargs adds, which the guard does not see (`"$@"`), so a search tool in it keeps no carve-out.
+    // At xargs's own depth, as #5492's branch does: the words are xargs's, not a new script body, and each rescan
+    // holds one xargs fewer, so it ends.
+    const hit = readEachWay(`${operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' ')} "$@"`, depth);
+    if (hit) return hit;
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
   // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
@@ -3052,22 +3097,12 @@ function withUnseenWords(words, replaceStr) {
   return words.map((w) => ({ ...w, text: w.text.split(replaceStr).join('"$@"') }));
 }
 
+// `word` as one single-quoted shell word.
+const shellQuote = (word) => `'${word.replaceAll("'", "'\\''")}'`;
+
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
 function xargsUnquoted(text) {
   return text.replace(/["'\\]/g, '');
-}
-
-// xargs's replace string: `-I STR`, `-ISTR`, `-i[STR]`, `--replace[=STR]` (default `{}`), or null without one.
-function xargsReplaceStr(operands, subIdx) {
-  for (let i = 0; i < subIdx; i++) {
-    const t = operands[i].text;
-    if (t === '-I') return operands[i + 1] ? operands[i + 1].text : null;
-    if (t.startsWith('-I') && t.length > 2) return t.slice(2);
-    if (t === '-i' || t === '--replace') return '{}';
-    if (t.startsWith('-i') && t.length > 2 && !t.startsWith('--')) return t.slice(2);
-    if (t.startsWith('--replace=')) return t.slice('--replace='.length) || '{}';
-  }
-  return null;
 }
 
 // `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
