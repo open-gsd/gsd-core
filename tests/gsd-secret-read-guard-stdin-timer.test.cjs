@@ -15,8 +15,9 @@
  * STDIN_TIMEOUT_MS, and asserts whether the timer fired, so no cell reads
  * elapsed time. Two cells let the timer run at the hook's own 3 s. The rest set
  * GSD_TEST_STALL_TIMER, which the preload alone reads: the held-open cells
- * schedule the timer at 100 ms, and the early-close cell parks it (armed, never
- * due), so its verdict cannot depend on how fast the host runs.
+ * schedule the timer at 100 ms, counted from the payload's arrival in the
+ * cells that write one, and the early-close cell parks it (armed, never due),
+ * so no verdict depends on how fast the host runs.
  *
  * The process seam cannot stand in for these: spawnSync with no `input` closes
  * the child's stdin at once, so the hook sees EOF and takes its outer catch,
@@ -56,7 +57,9 @@ const TIMER_PRELOAD = path.join(__dirname, 'helpers', 'stdin-timer-preload.cjs')
 const { STDIN_TIMEOUT_MS } = require(HOOK_PATH);
 
 // What the held-open cells schedule the timer at: only the timer can end those
-// runs, so a short delay changes nothing but the wall time.
+// runs, so a short delay changes nothing but the wall time. A cell that writes a
+// payload counts it from the hook's first `data` (fromData), so the payload is
+// in before the timer can fire however slow the host is.
 const SHORT_STALL_MS = 100;
 // When the early-close cell closes stdin: after the payload has arrived and the
 // timer is armed. Its timer is parked, so this delay orders nothing.
@@ -88,14 +91,16 @@ function runHook(payload, extraEnv) {
 // pipe then closes after that delay; without it the pipe stays open, so only
 // the stall timer can end the run. With `stallTimer` the preload schedules the
 // timer at that many ms, or parks it for 'park'; without it the timer runs at
-// the hook's own delay. fd 3 carries the preload's report. The kill is a hang
-// backstop (the timer's scheduled delay, or the close for a parked timer, plus
-// the quick-spawn bound), never an elapsed-time assertion. NODE_V8_COVERAGE is blanked rather than deleted: a child under c8
+// the hook's own delay. With `fromData` those ms count from the hook's first
+// `data` rather than from when it armed the timer. fd 3 carries the preload's
+// report. The kill is a hang backstop (the timer's scheduled delay, or the
+// close for a parked timer, plus the quick-spawn bound), never an elapsed-time
+// assertion. NODE_V8_COVERAGE is blanked rather than deleted: a child under c8
 // inherits it and runs several times slower, and Node restores an inherited key
 // that the child env lacks but leaves an own key alone.
-function runPiped({ env: extraEnv, written, closeAfterMs, stallTimer } = {}) {
+function runPiped({ env: extraEnv, written, closeAfterMs, stallTimer, fromData = false } = {}) {
   const extra = { NODE_V8_COVERAGE: '', ...extraEnv };
-  if (stallTimer !== undefined) extra[STALL_TIMER_ENV] = String(stallTimer);
+  if (stallTimer !== undefined) extra[STALL_TIMER_ENV] = fromData ? `after-data:${stallTimer}` : String(stallTimer);
   const endsByMs = stallTimer === 'park' ? (closeAfterMs ?? 0) : (stallTimer ?? STDIN_TIMEOUT_MS);
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--require', TIMER_PRELOAD, HOOK_PATH], {
@@ -192,7 +197,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   const FULL_PAYLOAD = JSON.stringify({ tool_name: 'Bash', tool_input: { command: 'ls -la' } });
 
   test('opted in: a full payload whose stdin stays open blocks as guard-error', async () => {
-    const w = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS });
+    const w = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: true });
     const written = assertGuardError(w, 'written stall');
     assertTimer(w, 'written stall', { fired: true });
     assertReceivedBeforeStall(w, FULL_PAYLOAD, 'written stall');
@@ -203,7 +208,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   });
 
   test('unset: a full payload whose stdin stays open still allows, silently', async () => {
-    const r = await runPiped({ written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS });
+    const r = await runPiped({ written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: true });
     assertAllowed(r, 'written stall');
     assertTimer(r, 'written stall', { fired: true });
     assertReceivedBeforeStall(r, FULL_PAYLOAD, 'written stall');

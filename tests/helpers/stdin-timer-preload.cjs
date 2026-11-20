@@ -17,6 +17,11 @@
  * (which is still what `armed` and `fired` report):
  * - `<ms>` schedules the callback at that delay instead, so a held-open stall
  *   cell ends in milliseconds;
+ * - `after-data:<ms>` schedules it that many ms after the hook's own `data`
+ *   listener receives its first chunk, so a cell that writes a payload into a
+ *   held-open pipe has it delivered before the timer can fire, on any host.
+ *   Until then the timer is parked, and clearTimeout on the hook's handle
+ *   cancels both;
  * - `park` arms a real, clearable timer that is never due (2^31-1 ms), so the
  *   hook's callback can never run, and a cell whose stdin closes is decided by
  *   the hook's verdict on any host, however slow.
@@ -29,9 +34,15 @@
 const fs = require('node:fs');
 
 const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
 const mode = process.env.GSD_TEST_STALL_TIMER || '';
 const park = mode === 'park';
+const afterData = /^after-data:([1-9][0-9]*)$/.exec(mode);
 const override = Number(mode);
+
+// after-data: each parked handle the hook holds, mapped to its callback and,
+// once the first chunk has arrived, the real timer that will run it.
+const pending = new Map();
 
 function report(line) {
   try {
@@ -46,12 +57,35 @@ globalThis.setTimeout = function stallTimerSeam(fn, ms, ...args) {
   report(`armed ${asked}`);
   // A parked timer is still a real, clearable handle; it is just never due.
   if (park) return realSetTimeout(() => {}, 2 ** 31 - 1);
-  const delay = Number.isFinite(override) && override > 0 ? override : asked;
-  return realSetTimeout(() => {
+  const fire = () => {
     report(`fired ${asked}`);
     fn(...args);
-  }, delay);
+  };
+  if (afterData) {
+    const handle = realSetTimeout(() => {}, 2 ** 31 - 1);
+    pending.set(handle, { fire, timer: null });
+    return handle;
+  }
+  const delay = Number.isFinite(override) && override > 0 ? override : asked;
+  return realSetTimeout(fire, delay);
 };
+
+globalThis.clearTimeout = function stallClearSeam(handle) {
+  const entry = pending.get(handle);
+  if (entry) {
+    if (entry.timer !== null) realClearTimeout(entry.timer);
+    pending.delete(handle);
+  }
+  return realClearTimeout(handle);
+};
+
+// The first chunk starts every after-data timer still waiting; later chunks
+// start nothing.
+function startAfterData() {
+  for (const entry of pending.values()) {
+    if (entry.timer === null) entry.timer = realSetTimeout(entry.fire, Number(afterData[1]));
+  }
+}
 
 const stdin = process.stdin;
 const realOn = stdin.on;
@@ -59,6 +93,7 @@ stdin.on = function stdinDataSeam(event, listener) {
   if (event !== 'data') return realOn.call(this, event, listener);
   return realOn.call(this, event, (chunk) => {
     report(`data ${Buffer.byteLength(chunk)}`);
+    if (afterData) startAfterData();
     listener(chunk);
   });
 };
