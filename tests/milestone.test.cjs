@@ -2434,9 +2434,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   test('behavioral: parity between executor ready-ids gate and orchestrator requirements step (#4944)', () => {
     const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md');
-    // The orchestrator can forward an active workstream before the positional arguments.
-    const workflowContent = fs.readFileSync(workflowPath, 'utf-8')
-      .replaceAll(' ${GSD_WS:+--ws=${GSD_WS##* }}', '');
+    const workflowContent = fs.readFileSync(workflowPath, 'utf-8');
     const refPath = path.join(__dirname, '..', 'gsd-core', 'references', 'executor-ready-ids-gate.md');
     const refContent = fs.readFileSync(refPath, 'utf-8');
 
@@ -2445,10 +2443,9 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     assert.ok(!workflowContent.includes('requirements.ready-ids --raw'), 'execute-plan.md must not mention ready-ids --raw');
     assert.ok(!refContent.includes('--raw'), 'executor-ready-ids-gate.md must not pass --raw');
 
-    // Both surfaces must query ready-ids with the same argument pattern
-    const readyIdsPattern = /requirements\.ready-ids\s+"?\$\{PLAN_PATH\}"?\s+\$\{REQ_IDS\}/;
-    assert.match(workflowContent, readyIdsPattern, 'execute-plan.md must invoke ready-ids with "${PLAN_PATH}" ${REQ_IDS}');
-    assert.match(refContent, readyIdsPattern, 'executor-ready-ids-gate.md must invoke ready-ids with "${PLAN_PATH}" ${REQ_IDS}');
+    const workstreamArg = `\${GSD_WS:+--ws=\${GSD_WS##* }}`;
+    assert.ok(workflowContent.includes('requirements.ready-ids ' + workstreamArg + ' "${PLAN_PATH}" ${REQ_IDS}'));
+    assert.ok(refContent.includes('requirements.ready-ids ' + workstreamArg + ' "${PLAN_PATH}" "$@"'));
 
     // Both surfaces must extract ready IDs using jq -r '.ready[]'
     const jqExtractionPattern = /jq\s+-r\s+['"]\.ready\[\]['"]/;
@@ -2460,10 +2457,40 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     assert.match(workflowContent, guardPattern, 'execute-plan.md must check READY_IDS is non-empty before mark-complete');
     assert.match(refContent, guardPattern, 'executor-ready-ids-gate.md must check READY_IDS is non-empty before mark-complete');
 
-    // Both surfaces must invoke requirements.mark-complete ${READY_IDS}
-    const markCompletePattern = /requirements\.mark-complete\s+\$\{READY_IDS\}/;
-    assert.match(workflowContent, markCompletePattern, 'execute-plan.md must mark complete only ${READY_IDS}');
-    assert.match(refContent, markCompletePattern, 'executor-ready-ids-gate.md must mark complete only ${READY_IDS}');
+    const markComplete = 'requirements.mark-complete ' + workstreamArg + ' ${READY_IDS}';
+    assert.ok(workflowContent.includes(markComplete));
+    assert.ok(refContent.includes(markComplete));
+  });
+
+  test('executor ready-ids forwards the active workstream to both calls', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    const dir = makePhaseDir(tmpDir);
+    const planPath = path.join(dir, '05-01-PLAN.md');
+    fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
+    const result = runExtractedExecutorBash(tmpDir, {
+      PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
+      REQ_IDS: 'ONLY1-01', GSD_WS: 'workspace stream-a',
+    }, `gsd_run() {
+      case "$2:$3" in
+        requirements.ready-ids:--ws=stream-a) printf '%s' '{"ready":["ONLY1-01"]}' ;;
+        requirements.mark-complete:--ws=stream-a) printf '%s\\n' "$4" ;;
+        *) return 1 ;;
+      esac
+    }`);
+    assertShellExit(result, result.stderr);
+    assert.match(result.stdout, /^ONLY1-01$/m);
+  });
+
+  test('executor ready-ids rejects IDs that resemble global flags', (t) => {
+    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+    const dir = makePhaseDir(tmpDir);
+    const planPath = path.join(dir, '05-01-PLAN.md');
+    fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
+    const result = runExtractedExecutorBash(tmpDir, {
+      PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
+      REQ_IDS: 'ONLY1-01 --raw',
+    });
+    assert.match(result.stderr, /Invalid requirement ID: --raw/);
   });
 
   test('negative control: preset PLAN_PATH with missing or empty plan frontmatter fails closed (#4944)', (t) => {
@@ -2477,6 +2504,7 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     const planPath = path.join(phaseDir, '05-01-PLAN.md');
     const bodies = [
       '---\nrequirements: [ONLY1-01]\n---\nNotes without plan key\n',
+      '---\nplan: 01\nrequirements: [ONLY1-01]\n',
       '---\nplan:\nrequirements: [ONLY1-01]\n---\nEmpty plan key\n',
       '---\nplan: ""\nrequirements: [ONLY1-01]\n---\nQuoted empty plan\n',
     ];
