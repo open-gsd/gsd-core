@@ -20,6 +20,7 @@ const {
   buildPlanningArtifacts,
   buildRoadmapMd,
   buildStateMd,
+  writePlanningDir,
   slugify,
   zeroPad,
 } = require('../gsd-core/bin/lib/gsd2-import.cjs');
@@ -493,6 +494,35 @@ describe('buildStateMd', () => {
 });
 
 // ─── CLI Integration Tests ──────────────────────────────────────────────────
+
+describe('writePlanningDir STATE.md lock (#5120)', () => {
+  test('writes STATE.md with the STATE.md lock held, creating the directory first (#5120 pre-push review Mi6)', (t) => {
+    const tmpDir = createTempDir('gsd2-write-lock-');
+    try {
+      const planningRoot = path.join(tmpDir, 'not-yet-created', '.planning');
+      assert.equal(fs.existsSync(planningRoot), false);
+      const realRename = fs.renameSync;
+      const stateRenames = [];
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        if (path.basename(String(to)) === 'STATE.md') {
+          stateRenames.push({ to: String(to), locked: fs.existsSync(`${to}.lock`) });
+        }
+        return realRename.call(fs, from, to, ...rest);
+      });
+      const artifacts = new Map([
+        ['STATE.md', '# State\n'],
+        ['ROADMAP.md', '# Roadmap\n'],
+      ]);
+      writePlanningDir(artifacts, planningRoot);
+      assert.deepEqual(stateRenames, [{ to: path.join(planningRoot, 'STATE.md'), locked: true }]);
+      assert.equal(fs.readFileSync(path.join(planningRoot, 'STATE.md'), 'utf-8'), '# State\n');
+      assert.equal(fs.readFileSync(path.join(planningRoot, 'ROADMAP.md'), 'utf-8'), '# Roadmap\n');
+      assert.deepEqual(fs.readdirSync(planningRoot).filter(n => n.includes('.lock')), []);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
 
 describe('gsd-tools from-gsd2 CLI', () => {
   let tmpDir;

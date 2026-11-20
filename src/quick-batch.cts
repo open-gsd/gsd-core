@@ -8,7 +8,7 @@
  * dependency-DAG + file-overlap wave construction, and exactly-once STATE.md
  * completion. NO agent dispatch, NO worktree creation, NO user-facing command —
  * those are Phase 4 (#3676)'s job. This module only ADDS new call sites onto
- * four existing, unmodified primitives:
+ * existing, unmodified primitives:
  *
  *   - `cmdInitQuick`'s quick-ID grammar (src/init.cts) — replicated here (NOT
  *     delegated to per-item, since that function's own 2-second granularity is
@@ -20,6 +20,8 @@
  *     durable, cross-call collision-sensitive operation here
  *     (`createBatch`/`completeQuickItem`/`resumeBatch`) runs inside exactly
  *     ONE (never nested) `withPlanningLock` transaction.
+ *   - `readModifyWriteStateMd` (src/state.cts) — reused as-is; `completeQuickItem`
+ *     appends its STATE.md row through it, under the STATE.md lock (#5120).
  *   - `partitionByFileOverlap` (src/file-overlap-partitioner.cts, #3674) —
  *     reused as-is, called per dependency-DAG layer in `computeWaves`, over
  *     PRE-NORMALIZED `planned_files` (normalization happens at THIS module's
@@ -49,6 +51,9 @@ import type { Clock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { withPlanningLock, planningDir, planningRoot, planningPaths, quickDirFrom } = planningWorkspace;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import stateMod = require('./state.cjs');
+const { readModifyWriteStateMd } = stateMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import fileOverlapPartitioner = require('./file-overlap-partitioner.cjs');
 const { partitionByFileOverlap } = fileOverlapPartitioner;
@@ -770,6 +775,15 @@ interface CompleteQuickItemFields {
  * Both steps run inside ONE `withPlanningLock` transaction. A repeat call for
  * an already-complete item is a no-op (no re-append, no re-write).
  *
+ * The STATE.md row is read, checked and appended inside `readModifyWriteStateMd`, under the
+ * STATE.md lock (#5120 review Major 1: ADR-4629 guard roster, no raw or unlocked STATE.md write),
+ * the same route and `{ resync: false }` as `gsd-tools.cjs`'s `quick-tasks-append`: the planning
+ * lock alone does not keep out a STATE.md writer that holds only the STATE.md lock. The planning
+ * lock is taken first and the STATE.md lock inside it, the order `cmdPhaseComplete` uses. While
+ * this waits for a STATE.md lock another writer holds (up to acquireStateLock's 30 s), it keeps
+ * the planning lock, so another planning-lock waiter can reach its own shorter wait budget and
+ * fail first; `cmdPhaseComplete` has the same shape.
+ *
  * `warnings` passes through `appendQuickTaskRow`'s advisory warnings (#5830:
  * a description over `QUICK_TASK_DESCRIPTION_MAX_CHARS` is written in full
  * but reported), so the `quick-batch complete` JSON carries them the same way
@@ -792,11 +806,13 @@ function completeQuickItem(
       if (!item) return { ok: false, reason: `batch ${batchId} has no item ${quickId}` };
 
       const statePath = planningPaths(cwd).state;
-      const stateContent = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : '';
-
       let appended = false;
       let warnings: string[] = [];
-      if (!hasQuickTaskRow(stateContent, quickId)) {
+      let refused: { ok: false; reason: string } | null = null;
+      // A refusal is returned from the transform as the unchanged content (no write) and carried
+      // out beside it; the result's own reason is passed through as it is.
+      readModifyWriteStateMd(statePath, (stateContent: string): string => {
+        if (hasQuickTaskRow(stateContent, quickId)) return stateContent;
         const appendResult = appendQuickTaskRow(stateContent, {
           description: fields.description,
           date: fields.date,
@@ -804,11 +820,17 @@ function completeQuickItem(
           directory: fields.directory,
           quickId,
         });
-        if (!appendResult.ok) return appendResult;
-        platformWriteSync(statePath, appendResult.value.content);
+        if (!appendResult.ok) {
+          refused = appendResult;
+          return stateContent;
+        }
         appended = true;
         warnings = appendResult.value.warnings;
-      }
+        return appendResult.value.content;
+      }, cwd, { resync: false });
+      // Assigned inside the transform, which TypeScript's narrowing does not follow.
+      const refusal = refused as { ok: false; reason: string } | null;
+      if (refusal) return refusal;
 
       if (item.status !== 'complete') {
         item.status = 'complete';

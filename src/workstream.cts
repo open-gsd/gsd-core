@@ -26,6 +26,8 @@ import roadmapParser = require('./roadmap-parser.cjs');
 const { getMilestoneInfo } = roadmapParser;
 import { platformWriteSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import stateMod = require('./state.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningRoot, setActiveWorkstream, getActiveWorkstream } = planningWorkspace;
 import {
@@ -56,6 +58,31 @@ interface MigrateResult {
   migrated: boolean;
   workstream: string;
   files_moved: string[];
+}
+
+const { withStateLock } = stateMod;
+
+/**
+ * #5120 (ADR-4629 guard roster: no raw or unlocked STATE.md write; review Major 3): a move of a
+ * workstream's files runs inside ONE scope that holds the STATE.md lock on both the source and the
+ * destination directory's STATE.md, taken before the first rename and released after the last
+ * (rollback renames included). A STATE.md rename inside it cannot land between a locked writer's
+ * read and its publish (readModifyWriteStateMd), a lock that cannot be taken fails the operation
+ * before anything has moved, and the rollback never needs a lock of its own. Both locks are taken
+ * whether or not a STATE.md exists, so a dead holder's lock is always stolen and removed here. They
+ * are taken in one fixed order (by path), so two moves between the same pair of directories cannot
+ * each hold the lock the other waits for. withStateLock is not re-entrant: fn must not take either.
+ */
+function withBothStateLocks<T>(dirA: string, dirB: string, fn: () => T): T {
+  const [first, second] = [path.join(dirA, 'STATE.md'), path.join(dirB, 'STATE.md')].sort();
+  return withStateLock(first, () => withStateLock(second, fn));
+}
+
+/** The error a failed move reports: the cause, and any entry the rollback could not return. */
+function moveFailure(cause: unknown, notReturned: string[], leftIn: string): Error {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (notReturned.length === 0) return cause instanceof Error ? cause : new Error(message);
+  return new Error(`${message}; NOT rolled back: ${notReturned.join(', ')} left in ${leftIn}`, { cause });
 }
 
 // ─── Migration ───────────────────────────────────────────────────────────────
@@ -93,22 +120,35 @@ function migrateToWorkstreams(cwd: string, workstreamName: string): MigrateResul
   platformEnsureDir(wsDir);
 
   const filesMoved: string[] = [];
+  const notReturned: string[] = [];
+  let failure: unknown = null;
   try {
-    for (const item of toMove) {
-      const src = path.join(baseDir, item.name);
-      if (fs.existsSync(src)) {
-        const dest = path.join(wsDir, item.name);
-        retryRenameSync(src, dest);
-        filesMoved.push(item.name);
+    withBothStateLocks(baseDir, wsDir, () => {
+      try {
+        for (const item of toMove) {
+          const src = path.join(baseDir, item.name);
+          if (fs.existsSync(src)) {
+            retryRenameSync(src, path.join(wsDir, item.name));
+            filesMoved.push(item.name);
+          }
+        }
+      } catch (err) {
+        failure = err;
+        for (const name of [...filesMoved].reverse()) {
+          try { retryRenameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch { notReturned.push(name); }
+        }
       }
-    }
-  } catch (err) {
-    for (const name of filesMoved) {
-      try { retryRenameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch { /* ignore */ }
-    }
-    try { fs.rmSync(wsDir, { recursive: true }); } catch { /* ignore */ }
-    try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch { /* ignore */ }
-    throw err;
+    });
+  } catch (lockErr) {
+    // A lock that could not be taken: nothing has moved.
+    failure = failure ?? lockErr;
+  }
+  if (failure !== null) {
+    // After the locks are released, so the directories hold no lock file. rmdir removes only an
+    // empty directory: one that still holds an entry the rollback could not return is kept.
+    try { fs.rmdirSync(wsDir); } catch { /* not empty, or already gone */ }
+    try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch { /* not empty, or already gone */ }
+    throw moveFailure(failure, notReturned, toPosixPath(path.relative(cwd, wsDir)));
   }
 
   return { migrated: true, workstream: workstreamName, files_moved: filesMoved };
@@ -211,10 +251,12 @@ function cmdWorkstreamCreate(cwd: string, name: string | null | undefined, optio
     '',
   ].join('\n');
 
+  // #5120 review Major 1: written under the STATE.md lock, and the existence check is made under
+  // it too, so a STATE.md another writer creates meanwhile is never overwritten.
   const statePath = path.join(wsDir, 'STATE.md');
-  if (!fs.existsSync(statePath)) {
-    platformWriteSync(statePath, stateContent);
-  }
+  withStateLock(statePath, () => {
+    if (!fs.existsSync(statePath)) platformWriteSync(statePath, stateContent);
+  });
 
   setActiveWorkstream(cwd, slug);
 
@@ -321,19 +363,42 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
   platformEnsureDir(archivePath);
 
   const filesMoved: string[] = [];
+  const notReturned: string[] = [];
+  let failure: unknown = null;
   try {
-    const entries = fs.readdirSync(wsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      retryRenameSync(path.join(wsDir, entry.name), path.join(archivePath, entry.name));
-      filesMoved.push(entry.name);
-    }
-  } catch (err) {
-    for (const fname of filesMoved) {
-      try { retryRenameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch { /* ignore */ }
-    }
-    try { fs.rmSync(archivePath, { recursive: true }); } catch { /* ignore */ }
+    withBothStateLocks(wsDir, archivePath, () => {
+      try {
+        // Listed after the locks are taken: the one lock file in wsDir is this process's own
+        // (#5120 pre-push review M1), and it is removed when the locks are released.
+        for (const entry of fs.readdirSync(wsDir, { withFileTypes: true })) {
+          if (entry.name === 'STATE.md.lock') continue;
+          try {
+            retryRenameSync(path.join(wsDir, entry.name), path.join(archivePath, entry.name));
+          } catch (err) {
+            // A lock another process's steal renamed aside can be removed by that process first.
+            if (entry.name.startsWith('STATE.md.lock.') && (err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+            throw err;
+          }
+          filesMoved.push(entry.name);
+        }
+      } catch (err) {
+        failure = err;
+        for (const fname of [...filesMoved].reverse()) {
+          try { retryRenameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch { notReturned.push(fname); }
+        }
+      }
+    });
+  } catch (lockErr) {
+    // A lock that could not be taken: nothing has moved.
+    failure = failure ?? lockErr;
+  }
+  if (failure !== null) {
+    // After the locks are released; rmdir keeps an archive that still holds an entry the
+    // rollback could not return.
+    try { fs.rmdirSync(archivePath); } catch { /* not empty, or already gone */ }
     if (active === name) setActiveWorkstream(cwd, name!);
-    output({ completed: false, error: 'archive_failed', message: (err as Error).message, workstream: name }, raw, undefined);
+    const err = moveFailure(failure, notReturned, toPosixPath(path.relative(cwd, archivePath)));
+    output({ completed: false, error: 'archive_failed', message: err.message, workstream: name }, raw, undefined);
     return;
   }
 

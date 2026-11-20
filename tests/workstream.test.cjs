@@ -8,9 +8,14 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdTools, cleanup, captureFdSync } = require('./helpers.cjs');
 const { createFixture, seedWorkstream } = require('./fixtures/index.cjs');
-const { migrateToWorkstreams, getOtherActiveWorkstreams } = require('../gsd-core/bin/lib/workstream.cjs');
+const {
+  migrateToWorkstreams,
+  getOtherActiveWorkstreams,
+  cmdWorkstreamCreate,
+  cmdWorkstreamComplete,
+} = require('../gsd-core/bin/lib/workstream.cjs');
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
@@ -654,6 +659,342 @@ describe('migrateToWorkstreams', () => {
     } finally {
       cleanup(tmpDir);
     }
+  });
+});
+
+// #5120 pre-push review: STATE.md relocations and writes in workstream.cts run under the STATE.md lock.
+describe('workstream STATE.md moves and writes hold the STATE.md lock (#5120)', () => {
+  const STATE_LOCK_SUFFIX = 'STATE.md.lock';
+
+  function eio(message) {
+    return Object.assign(new Error(message), { code: 'EIO' });
+  }
+
+  // Mocks fs.renameSync and fs.openSync. Every rename whose source or destination basename is
+  // STATE.md is logged with whether `${from}.lock` and `${to}.lock` both existed at that moment,
+  // and every open of a STATE.md lock path is logged in order. `failWhen(from, to)` makes a rename
+  // throw EIO instead of running. All calls otherwise go to the real functions.
+  function instrument(t, { failWhen } = {}) {
+    const realRename = fs.renameSync;
+    const realOpen = fs.openSync;
+    const events = [];
+    t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+      if (failWhen && failWhen(String(from), String(to))) throw eio('injected EIO');
+      if (path.basename(String(from)) !== 'STATE.md' && path.basename(String(to)) !== 'STATE.md') {
+        events.push({ type: 'any-rename', from: String(from), to: String(to) });
+      } else {
+        events.push({
+          type: 'rename',
+          from: String(from),
+          to: String(to),
+          bothLocked: fs.existsSync(`${from}.lock`) && fs.existsSync(`${to}.lock`),
+        });
+      }
+      return realRename.call(fs, from, to, ...rest);
+    });
+    t.mock.method(fs, 'openSync', (p, ...rest) => {
+      if (String(p).endsWith(STATE_LOCK_SUFFIX)) events.push({ type: 'open', path: String(p) });
+      return realOpen.call(fs, p, ...rest);
+    });
+    return events;
+  }
+
+  function seedFlat(tmpDir) {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '# State\noriginal\n');
+    fs.writeFileSync(path.join(planning, 'REQUIREMENTS.md'), '# Requirements\n');
+    fs.mkdirSync(path.join(planning, 'phases', '01-a'), { recursive: true });
+    return planning;
+  }
+
+  function seedLockedWorkstream(tmpDir, name, extraDir) {
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', name);
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'STATE.md'), '# State\nworkstream\n');
+    if (extraDir) {
+      fs.mkdirSync(path.join(wsDir, extraDir), { recursive: true });
+      fs.writeFileSync(path.join(wsDir, extraDir, 'x.md'), 'x\n');
+    }
+    return wsDir;
+  }
+
+  function lockFilesIn(dir) {
+    return fs.readdirSync(dir).filter(n => n.startsWith(STATE_LOCK_SUFFIX));
+  }
+
+  test('migrateToWorkstreams moves STATE.md with the STATE.md lock held on both ends (#5120 pre-push review Mi4)', (t) => {
+    const tmpDir = createFixture();
+    try {
+      const planning = seedFlat(tmpDir);
+      const events = instrument(t);
+      migrateToWorkstreams(tmpDir, 'main');
+      const renames = events.filter(e => e.type === 'rename');
+      assert.equal(renames.length, 1);
+      assert.equal(renames[0].from, path.join(planning, 'STATE.md'));
+      assert.equal(renames[0].to, path.join(planning, 'workstreams', 'main', 'STATE.md'));
+      assert.ok(renames.every(e => e.bothLocked), JSON.stringify(renames));
+      assert.deepEqual(lockFilesIn(planning), []);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('migrateToWorkstreams takes both STATE.md locks once, in sorted path order, before its first move, and rolls back inside them (#5120 pre-push review Mi4)', (t) => {
+    const tmpDir = createFixture();
+    try {
+      const planning = seedFlat(tmpDir);
+      const phasesDir = path.join(planning, 'phases');
+      const events = instrument(t, { failWhen: (from) => from === phasesDir });
+      assert.throws(() => migrateToWorkstreams(tmpDir, 'main'), (err) => err.code === 'EIO');
+
+      assert.equal(fs.readFileSync(path.join(planning, 'STATE.md'), 'utf-8'), '# State\noriginal\n');
+      const forwardFrom = path.join(planning, 'STATE.md');
+      const wsState = path.join(planning, 'workstreams', 'main', 'STATE.md');
+      const stateMoves = events.map((e, i) => ({ e, i })).filter(x => x.e.type === 'rename');
+      assert.equal(stateMoves.length, 2);
+      const [forward, rollback] = stateMoves;
+      assert.equal(forward.e.from, forwardFrom);
+      assert.equal(forward.e.to, wsState);
+      assert.equal(rollback.e.from, wsState);
+      assert.equal(rollback.e.to, forwardFrom);
+      assert.equal(forward.e.bothLocked, true);
+      assert.equal(rollback.e.bothLocked, true);
+
+      // One lock scope for the whole move, rollback included: the two locks are opened once, in
+      // ascending path order (a fixed order, so two moves between the same directories cannot
+      // each hold the lock the other waits for), before the first rename of any entry.
+      const opens = events.filter(e => e.type === 'open').map(e => e.path);
+      assert.deepEqual(opens, [forwardFrom + '.lock', wsState + '.lock']);
+      assert.deepEqual(opens, [...opens].sort());
+      const firstRename = events.findIndex(e => e.type === 'rename' || e.type === 'any-rename');
+      const lastOpen = events.map(e => e.type).lastIndexOf('open');
+      assert.ok(firstRename === -1 || lastOpen < firstRename, JSON.stringify(events));
+      assert.deepEqual(lockFilesIn(planning), []);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('cmdWorkstreamCreate keeps a STATE.md another writer created while it waited for the lock (#5120 pre-push review Mi4)', (t) => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const statePath = path.join(tmpDir, '.planning', 'workstreams', 'alpha', 'STATE.md');
+      const realOpen = fs.openSync;
+      const realWrite = fs.writeFileSync;
+      let injected = false;
+      t.mock.method(fs, 'openSync', (p, ...rest) => {
+        if (String(p) === `${statePath}.lock` && !injected) {
+          injected = true;
+          // The other writer lands after create's first existence check and before it holds the lock.
+          realWrite.call(fs, statePath, '# Other writer\n');
+        }
+        return realOpen.call(fs, p, ...rest);
+      });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamCreate(tmpDir, 'alpha', {}, false)));
+      assert.equal(injected, true);
+      assert.equal(out.created, true);
+      assert.equal(fs.readFileSync(statePath, 'utf-8'), '# Other writer\n');
+      assert.deepEqual(lockFilesIn(path.dirname(statePath)), []);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('cmdWorkstreamComplete archives a workstream whose STATE.md lock is stale, leaving no lock behind (#5120 pre-push review M1)', () => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedLockedWorkstream(tmpDir, 'alpha');
+      // A pid far above any real pid limit: not running, so the lock is stolen, not waited for.
+      fs.writeFileSync(path.join(wsDir, 'STATE.md.lock'), '2147483646');
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      assert.equal(out.completed, true);
+      const archive = path.join(tmpDir, out.archived_to);
+      assert.equal(fs.readFileSync(path.join(archive, 'STATE.md'), 'utf-8'), '# State\nworkstream\n');
+      assert.deepEqual(lockFilesIn(archive), []);
+      assert.equal(fs.existsSync(wsDir), false);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('cmdWorkstreamComplete archives a leftover STATE.md.lock.stale-* file like any other file and removes the workstream directory (#5120 pre-push review M1)', () => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedLockedWorkstream(tmpDir, 'alpha');
+      const leftover = path.join(wsDir, 'STATE.md.lock.stale-1-2-3');
+      fs.writeFileSync(leftover, '2147483646');
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      assert.equal(out.completed, true);
+      const archive = path.join(tmpDir, out.archived_to);
+      assert.equal(fs.existsSync(path.join(archive, 'STATE.md')), true);
+      // A lock a steal renamed aside is a leftover, not the live lock: it is archived as before,
+      // so the workstream directory empties and is removed.
+      assert.deepEqual(lockFilesIn(archive), ['STATE.md.lock.stale-1-2-3']);
+      assert.equal(fs.existsSync(wsDir), false);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('cmdWorkstreamComplete rolls STATE.md back under both locks when a later move fails (#5120 pre-push review Mi4)', (t) => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedLockedWorkstream(tmpDir, 'alpha', 'phases');
+      const realReaddir = fs.readdirSync;
+      t.mock.method(fs, 'readdirSync', (p, ...rest) => {
+        const result = realReaddir.call(fs, p, ...rest);
+        if (String(p) !== wsDir || !rest[0] || !rest[0].withFileTypes) return result;
+        // STATE.md is moved first and the phases directory last, whatever the filesystem lists.
+        return [...result].sort((a, b) => Number(b.name === 'STATE.md') - Number(a.name === 'STATE.md') || a.name.localeCompare(b.name));
+      });
+      const failFrom = path.join(wsDir, 'phases');
+      const events = instrument(t, { failWhen: (from) => from === failFrom });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      assert.equal(out.completed, false);
+      assert.equal(out.error, 'archive_failed');
+      assert.equal(fs.readFileSync(path.join(wsDir, 'STATE.md'), 'utf-8'), '# State\nworkstream\n');
+      const renames = events.filter(e => e.type === 'rename');
+      assert.equal(renames.length, 2);
+      assert.equal(renames[0].from, path.join(wsDir, 'STATE.md'));
+      assert.equal(renames[1].to, path.join(wsDir, 'STATE.md'));
+      assert.ok(renames.every(e => e.bothLocked), JSON.stringify(renames));
+      assert.deepEqual(lockFilesIn(wsDir), []);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+});
+
+describe('workstream migrate and complete fault sweep (#5120)', () => {
+  const FILES = {
+    'ROADMAP.md': '# Roadmap\nroadmap-bytes\n',
+    'STATE.md': '# State\nstate-bytes\n',
+    'REQUIREMENTS.md': '# Requirements\nrequirements-bytes\n',
+    'phases/01-a/PLAN.md': '# Plan\nplan-bytes\n',
+  };
+
+  function seedFiles(dir) {
+    for (const [rel, content] of Object.entries(FILES)) {
+      const p = path.join(dir, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, content);
+    }
+  }
+
+  function walk(dir, out = []) {
+    if (!fs.existsSync(dir)) return out;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p, out); else out.push(p);
+    }
+    return out;
+  }
+
+  // Runs one fresh fixture with the call numbers in `faults` (index into the ordered list of
+  // matching fs calls) throwing. Returns the recorded call labels and the violations found.
+  function runOnce(t, kind, faults) {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    const planning = path.join(tmpDir, '.planning');
+    const calls = [];
+    const violations = [];
+    try {
+      let srcDir; let newDirs;
+      if (kind === 'migrate') {
+        seedFiles(planning);
+        srcDir = planning;
+        newDirs = () => [path.join(planning, 'workstreams', 'main')];
+      } else {
+        srcDir = path.join(planning, 'workstreams', 'alpha');
+        seedFiles(srcDir);
+        newDirs = () => (fs.existsSync(path.join(planning, 'milestones'))
+          ? fs.readdirSync(path.join(planning, 'milestones'))
+            .filter(n => n.startsWith('ws-alpha-')).map(n => path.join(planning, 'milestones', n))
+          : []);
+      }
+      const rel = (p) => path.relative(planning, p).split(path.sep).join('/');
+      const realRename = fs.renameSync;
+      const realOpen = fs.openSync;
+      const hit = (label, err) => {
+        const n = calls.length;
+        calls.push(label);
+        if (faults.has(n)) throw Object.assign(new Error('injected ' + err), { code: err });
+      };
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        if (String(from).startsWith(planning) || String(to).startsWith(planning)) {
+          hit('rename ' + rel(String(from)) + ' -> ' + rel(String(to)), 'EIO');
+        }
+        return realRename.call(fs, from, to, ...rest);
+      });
+      t.mock.method(fs, 'openSync', (p, ...args) => {
+        if (String(p).endsWith('STATE.md.lock')) hit('lock ' + rel(String(p)), 'ENOSPC');
+        return realOpen.call(fs, p, ...args);
+      });
+
+      let outcome;
+      try {
+        if (kind === 'migrate') {
+          migrateToWorkstreams(tmpDir, 'main');
+          outcome = 'returned';
+        } else {
+          outcome = captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)).replace(/\s+/g, ' ').trim().slice(0, 90);
+        }
+      } catch (err) {
+        outcome = 'threw ' + (err && err.code ? err.code : String(err && err.message).slice(0, 60));
+      }
+      t.mock.restoreAll();
+
+      const label = kind + ' faults=[' + [...faults].map(n => n + ':' + calls[n]).join(' ; ') + '] (' + outcome + ')';
+      for (const [relFile, content] of Object.entries(FILES)) {
+        const parts = relFile.split('/');
+        const found = [path.join(srcDir, ...parts), ...newDirs().map(d => path.join(d, ...parts))]
+          .filter(p => fs.existsSync(p));
+        if (found.length !== 1) {
+          violations.push(label + ': ' + relFile + ' present in ' + found.length + ' places [' + found.map(rel).join(', ') + ']');
+        } else if (fs.readFileSync(found[0], 'utf-8') !== content) {
+          violations.push(label + ': ' + relFile + ' changed bytes at ' + rel(found[0]));
+        }
+      }
+      for (const p of walk(planning)) {
+        if (path.basename(p).startsWith('STATE.md.lock')) violations.push(label + ': lock left behind ' + rel(p));
+      }
+    } finally {
+      t.mock.restoreAll();
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+    return { calls, violations };
+  }
+
+  const sweepCalls = {};
+
+  test('workstream migrate and complete conserve every file under any single injected failure (#5120 pre-push review R2-B1)', (t) => {
+    const violations = [];
+    for (const kind of ['migrate', 'complete']) {
+      const dry = runOnce(t, kind, new Set());
+      violations.push(...dry.violations);
+      sweepCalls[kind] = dry.calls;
+      for (let k = 0; k < dry.calls.length; k++) {
+        const first = runOnce(t, kind, new Set([k]));
+        violations.push(...first.violations);
+        // Second level: a forward rename fails, then each later call (the rollback) fails too.
+        if (dry.calls[k].startsWith('rename')) {
+          for (let j = k + 1; j < first.calls.length; j++) {
+            violations.push(...runOnce(t, kind, new Set([k, j])).violations);
+          }
+        }
+      }
+    }
+    assert.deepEqual(violations, [], 'recorded calls: ' + JSON.stringify(sweepCalls, null, 1) + '\nviolations (' + violations.length + '):\n' + violations.join('\n'));
   });
 });
 

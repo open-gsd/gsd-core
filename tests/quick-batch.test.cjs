@@ -983,6 +983,79 @@ describe('quick-batch: manifest tracks identity, options, base revision, stage s
     }
   });
 
+  test('completeQuickItem appends the Quick Tasks row under the STATE.md lock (#5120 pre-push review Mi6)', (t) => {
+    const dir = mkTmpProject();
+    writeState(dir, stateWithQuickTasksSection());
+    try {
+      const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+      assert.equal(created.ok, true);
+      const item = created.value.manifest.items[0];
+      const statePath = path.join(dir, '.planning', 'STATE.md');
+      const realRename = fs.renameSync;
+      const stateRenames = [];
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        if (path.basename(String(to)) === 'STATE.md') {
+          stateRenames.push({ to: String(to), locked: fs.existsSync(`${to}.lock`) });
+        }
+        return realRename.call(fs, from, to, ...rest);
+      });
+      const result = completeQuickItem(dir, created.value.batchId, item.quick_id, {
+        description: item.description, date: '2026-01-01', commit: 'abc',
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.value.appended, true);
+      assert.deepEqual(stateRenames, [{ to: statePath, locked: true }]);
+      assert.equal(fs.existsSync(`${statePath}.lock`), false);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test('completeQuickItem on a STATE.md with no frontmatter leaves it starting with a frontmatter block and the appended row (#5120 pre-push review Mi6)', () => {
+    const dir = mkTmpProject();
+    writeState(dir, stateWithQuickTasksSection());
+    try {
+      assert.equal(readState(dir).startsWith('---\n'), false, 'fixture has no frontmatter');
+      const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+      assert.equal(created.ok, true);
+      const item = created.value.manifest.items[0];
+      const result = completeQuickItem(dir, created.value.batchId, item.quick_id, {
+        description: item.description, date: '2026-01-01', commit: 'abc',
+      });
+      assert.equal(result.ok, true);
+      const after = readState(dir);
+      // The locked read-modify-write route also syncs the frontmatter, so a STATE.md that had
+      // none now starts with one. The disclosed behaviour change of moving this write under the lock.
+      assert.equal(after.startsWith('---\n'), true);
+      assert.ok(after.indexOf('\n---\n', 3) > 0, 'the frontmatter block is closed by a second fence');
+      assert.equal(hasQuickTaskRow(after, item.quick_id), true);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  test('completeQuickItem keeps curated progress counters through the frontmatter sync and appends its row once (#5120 pre-push review m6)', () => {
+    const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+    const dir = mkTmpProject();
+    // Curated frontmatter as a user leaves it; { resync: false } keeps every progress.* key.
+    writeState(dir, ['---', 'status: paused', 'progress:', '  total_phases: 42', '  percent: 77', '---', '', stateWithQuickTasksSection()].join('\n'));
+    try {
+      const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+      assert.equal(created.ok, true);
+      const item = created.value.manifest.items[0];
+      const fields = { description: item.description, date: '2026-01-01', commit: 'abc' };
+      assert.equal(completeQuickItem(dir, created.value.batchId, item.quick_id, fields).ok, true);
+      assert.equal(completeQuickItem(dir, created.value.batchId, item.quick_id, fields).ok, true);
+      const after = readState(dir);
+      const fm = extractFrontmatter(after);
+      assert.equal(String(fm.progress.total_phases), '42');
+      assert.equal(String(fm.progress.percent), '77');
+      assert.equal(after.split(`| ${item.quick_id} |`).length - 1, 1, 'the row is appended once');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   // #5830: the batch path writes the same Quick Tasks row as
   // quick-tasks-append, so it must surface the same length warning.
   for (const [len, warns] of [[239, false], [240, false], [241, true]]) {
