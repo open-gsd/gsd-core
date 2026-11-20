@@ -136,7 +136,9 @@ SUMMARY: .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md
 What to commit:
 
 ```bash
-gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files .planning/phases/XX-name/{phase}-{plan}-PLAN.md .planning/phases/XX-name/{phase}-{plan}-SUMMARY.md .planning/STATE.md .planning/ROADMAP.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs({phase}-{plan}): complete [plan-name] plan" --files "${PLANNING_ROOT}/phases/XX-name/{phase}-{plan}-PLAN.md" "${PLANNING_ROOT}/phases/XX-name/{phase}-{plan}-SUMMARY.md" "${PLANNING_ROOT}/STATE.md" "${PLANNING_ROOT}/ROADMAP.md"
 ```
 
 **Note:** Code files NOT included - already committed per-task.
@@ -240,7 +242,7 @@ Each plan produces 2-4 commits (tasks + metadata). Clear, granular, bisectable.
 **Failure recovery:**
 - Task 1 committed ✅, Task 2 failed ❌
 - Claude in next session: sees task 1 complete, can retry task 2
-- Can `git reset --hard` to last successful task
+- Task 1's commit is the known-good point to resume from
 
 **Debugging:**
 - `git bisect` finds exact failing task, not just failing plan

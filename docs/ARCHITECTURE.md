@@ -372,9 +372,12 @@ Workflows reach it as `gsd_run check evaluation-scope`:
 gsd_run check evaluation-scope --phase <phase> [--since <sha>] --raw      # a phase (or --phase-dir <dir>; --ref <ref>)
 gsd_run check evaluation-scope --plan <phase>-<plan> --raw                # a plan: --commits-only, --max-commits N,
                                                                           #   --milestone-bound, --committed-since <date>,
-                                                                          #   --pathspec <glob> (repeatable)
+                                                                          #   --pathspec <glob> (repeatable),
+                                                                          #   --all-branches (plan/quick only; see below)
 gsd_run check evaluation-scope --quick <quick-id> --include-files --raw   # a quick task
 ```
+
+`--all-branches` (plan and quick units only; a usage failure on a phase) looks the unit's commits up across every local branch instead of the commits reachable from `--ref`, and adds `latestCommitTime` (unix seconds of the newest match, or `null`) to the payload. It exists for the executor stall probe ([#6117](https://github.com/open-gsd/gsd-core/issues/6117)): a worktree executor's commits sit on its own unmerged agent branch until the wave merges. It is an explicit opt-in; the gates keep the reachable-from-ref contract above, and without the flag the payload is unchanged.
 
 The verb is a resolver, not a policy: it always reports `block: false`, and the caller decides what a `degraded` or `unresolvable` scope means. `scripts/lint-evaluation-scope-drift.cjs` fails CI when a gate module, `verify`, a workflow or an agent derives its own range again (`git log … --all`, `git diff … ..HEAD`, a `HEAD~N` anchor, a hand-rolled phase-start anchor, a commit-message lookup); its allowlist pins exact non-scope sites and is drained, never renewed.
 
@@ -537,6 +540,8 @@ Node.js CLI utility (`gsd-tools.cjs`) with domain modules split across `gsd-core
 | `audit-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-3); extracted from the `case 'audit-uat':` and `case 'audit-open':` arms in `gsd-tools.cjs`; `routeAuditUat` → `uat.cjs:cmdAuditUat`, `routeAuditOpen` → `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; discovered via `commandFamilies` in the capability registry |
 | `intel-command-router.cjs` | ADR-959 capability command router (phase 4d-impl-4, last first-party cutover); extracted from the `case 'intel':` arm in `gsd-tools.cjs`; `routeIntelCommand` → all 9 intel subcommands via lazy `require('./intel.cjs')`; preserves non-raw `timeAgo` transform on `status.files[*].updated_at`; discovered via `commandFamilies` in the capability registry |
 | `runtime-hooks-surface.cjs` | Hook-surface writer and configured-entrypoint validation module (ADR-857 phase 5f-1); owns Cline rules/agents-md/pre-tool-use hook generation, Cursor/Windsurf `hooks.json`, Kimi hook TOML, Copilot session-hook config, Codex hook-block management, and construction-time records for paths emitted into runtime configuration. Installer success requires those records to pass non-executing file-type and interpreter-resolution checks. |
+
+`gsd-tools.cjs` requires each of these modules on first use (#5865). A command loads the modules it runs, plus the ones every command goes through before dispatch: those `main()` uses first (`cli-exit`, `io`, `project-root`, `project-context`, `cli-skew-check`, `active-workstream-store`, `cli-surface`, and what they require) and the capability-dispatch stack (`capability-registry`, `capability-loader` and theirs). `runtime-identity` loads 32 `lib/` modules, where every command used to load about 220.
 
 
 ---

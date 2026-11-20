@@ -77,6 +77,9 @@ describe('#5758 readSentinel: regular-file bounds', () => {
       phase: h.PHASE,
       plan: h.PLAN,
       writtenAt: now,
+      executorType: null,
+      executorTypes: [],
+      executorTypesTruncated: false,
     });
   });
 
@@ -138,8 +141,12 @@ describe('#5758 readSentinel: object-identity re-checks after the open', () => {
     return Object.assign(Object.create(Object.getPrototypeOf(st)), st, patch);
   }
 
-  /** `ino` one higher, in the same numeric type the caller asked for ({ bigint: true } gives bigint). */
-  const nextIno = (st) => ({ ino: typeof st.ino === 'bigint' ? st.ino + 1n : st.ino + 1 });
+  /**
+   * `ino` higher by the number of swapped calls so far, in the same numeric type the caller asked for
+   * ({ bigint: true } gives bigint). The identity keeps moving on every call, so the bounded retry of a refused
+   * read (#6213) cannot see two consistent stats of a swapped object and accept it.
+   */
+  const nextIno = (st, n = 1) => ({ ino: typeof st.ino === 'bigint' ? st.ino + BigInt(n) : st.ino + n });
 
   /** Make the Nth and later lstat calls for `target` answer `patchFor(target)`. */
   function swapAfter(target, calls, patch) {
@@ -147,7 +154,7 @@ describe('#5758 readSentinel: object-identity re-checks after the open', () => {
     mock.method(fs, 'lstatSync', (p, ...rest) => {
       if (path.resolve(String(p)) !== target) return realLstat.call(fs, p, ...rest);
       seen += 1;
-      return seen > calls ? patched(p, patch(realLstat.call(fs, p, ...rest)), rest) : realLstat.call(fs, p, ...rest);
+      return seen > calls ? patched(p, patch(realLstat.call(fs, p, ...rest), seen), rest) : realLstat.call(fs, p, ...rest);
     });
   }
 

@@ -14,14 +14,18 @@
  *   - staging atomicity: validation failure leaves no dir under capabilities/
  */
 
-const { describe, test, beforeEach, afterEach } = require('node:test');
+const { describe, test, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { pathToFileURL } = require('node:url');
 
 const { cleanup, createTempDir } = require('./helpers.cjs');
+const { runGit, OUTCOME } = require('./helpers/process-seam.cjs');
+const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 // The module under test — loaded from the built .cjs artifact.
 const capSource = require('../gsd-core/bin/lib/capability-source.cjs');
@@ -41,6 +45,11 @@ const {
 } = capSource;
 const { EventEmitter } = require('node:events');
 const fc = require('fast-check');
+const { execGit: realExecGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const consent = require('../gsd-core/bin/lib/capability-consent.cjs');
+const { git, put } = require('./helpers/gate-positive-control.cjs');
+const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /** Build a `git ls-remote --tags` style stdout line for a tag. */
 function lsRemoteLine(tag) {
@@ -185,6 +194,389 @@ describe('parseSpec — kind detection', () => {
 
   test('npm: with empty package spec → throws', () => {
     assert.throws(() => parseSpec('npm:'), /empty after "npm:"/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #5297 — real shallow Git retrieval at the requested ref, through the exec seam.
+// ---------------------------------------------------------------------------
+
+const gitProbe = runGit(['--version'], { timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+describe('#5297 git adapter — exact pinned target', {
+  skip: gitProbe.outcome !== OUTCOME.EXITED || gitProbe.exitCode !== 0 ? 'git is unavailable' : false,
+}, () => {
+  let root;
+  let repo;
+  let gsdHome;
+  let env;
+  let commits;
+  let calls;
+  let cloneDirs;
+  let retrieved;
+  const sourceUrl = 'https://example.com/pinned-cap.git';
+
+  function fixtureGit(args) {
+    return gitOrThrow(args, { cwd: repo, env, timeoutMs: GIT_FIXTURE_TIMEOUT_MS }).trim();
+  }
+
+  function commitCapability(version, payload) {
+    fs.writeFileSync(path.join(repo, 'capability.json'), JSON.stringify(featureCap('pinned-cap', { version })));
+    fs.writeFileSync(path.join(repo, 'payload.json'), JSON.stringify({ payload }));
+    // Copy-only: an npm lifecycle script in a Git bundle must remain inert.
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({
+      scripts: { postinstall: 'node lifecycle.cjs' },
+    }));
+    fs.writeFileSync(path.join(repo, 'lifecycle.cjs'), "require('node:fs').writeFileSync('lifecycle-ran', 'unexpected');\n");
+    fs.mkdirSync(path.join(repo, '.githooks'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.githooks', 'post-checkout'), "#!/bin/sh\nprintf 'ran' > hook-ran\n");
+    fixtureGit(['add', '--all']);
+    fixtureGit(['update-index', '--chmod=+x', '.githooks/post-checkout']);
+    fixtureGit(['commit', '-m', `version ${version}`]);
+    return fixtureGit(['rev-parse', 'HEAD']);
+  }
+
+  // Only transport is substituted: real Git sees file:// so --depth is honored,
+  // while the production parser still receives an allowed HTTPS source spec.
+  function localGit(args, opts) {
+    calls.push({ args: [...args], timeout: opts?.timeout });
+    if (args.includes('clone')) cloneDirs.push(args.at(-1));
+    const localArgs = args.map((arg) => arg === sourceUrl ? pathToFileURL(repo).href : arg);
+    const result = execGit(localArgs, { ...opts, env: {
+      ...env, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '.githooks',
+      GIT_CONFIG_KEY_1: 'clone.defaultRemoteName', GIT_CONFIG_VALUE_1: 'custom-upstream',
+    } });
+    if (result.exitCode === 0 && (args.includes('clone') || args.includes('checkout'))) {
+      const cloneDir = args.includes('clone') ? args.at(-1) : args[args.indexOf('-C') + 1];
+      // Inspect the retrieved repository before staging. Staging may strip Git
+      // metadata independently (#5298); the requested worktree is the contract.
+      retrieved = {
+        commit: gitOrThrow(['rev-parse', 'HEAD'], { cwd: cloneDir, env }).trim(),
+        shallow: gitOrThrow(['rev-parse', '--is-shallow-repository'], { cwd: cloneDir, env }).trim(),
+      };
+    }
+    return result;
+  }
+
+  beforeEach(() => {
+    root = createTempDir('gsd-pinned-git-');
+    repo = path.join(root, 'remote');
+    gsdHome = path.join(root, 'home');
+    const template = path.join(root, 'empty-template');
+    const config = path.join(root, 'empty-gitconfig');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(template);
+    fs.writeFileSync(config, '');
+    env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: config, GIT_TEMPLATE_DIR: template };
+    calls = [];
+    cloneDirs = [];
+    retrieved = null;
+    fixtureGit(['init', '-b', 'main']);
+    fixtureGit(['config', 'user.name', 'Capability fixture']);
+    fixtureGit(['config', 'user.email', 'fixture@example.com']);
+    fixtureGit(['config', 'commit.gpgsign', 'false']);
+    fixtureGit(['config', 'core.autocrlf', 'false']);
+    const old = commitCapability('0.1.0', 'old unadvertised commit');
+    const tag = commitCapability('0.3.0', 'annotated tag behind default tip');
+    fixtureGit(['tag', '-a', 'v0.3.0', '-m', 'pinned release']);
+    const tip = commitCapability('0.4.0', 'default branch tip');
+    fixtureGit(['tag', 'v0.4.0']);
+    fixtureGit(['checkout', '-b', 'preview', tag]);
+    const branch = commitCapability('2.0.0', 'non-default branch');
+    fixtureGit(['checkout', 'main']);
+    commits = { old, tag, tip, branch };
+    assert.notStrictEqual(old, tag, 'the SHA target is not the tag or any branch tip');
+    assert.notStrictEqual(tag, tip, 'the pinned tag must be behind the default tip');
+  });
+
+  afterEach(() => { cleanup(root); });
+
+  async function assertTarget(fragment, version, payload, commit) {
+    const spec = sourceUrl + fragment;
+    const result = await resolveCapabilitySource(spec, {
+      gsdHome, hostVersion: '1.5.0', promote: false, execOverrides: { git: localGit },
+    });
+    try {
+      assert.strictEqual(result.version, version);
+      assert.strictEqual(result.source, spec, 'retain the original fragment for the ledger and re-resolution');
+      assert.strictEqual(result.integrity, null);
+      assert.strictEqual(JSON.parse(fs.readFileSync(path.join(result.stagedDir, 'capability.json'), 'utf8')).version, version);
+      assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(result.stagedDir, 'payload.json'), 'utf8')), { payload });
+      assert.deepStrictEqual(retrieved, { commit, shallow: 'true' });
+      assert.strictEqual(fs.existsSync(path.join(result.stagedDir, 'lifecycle-ran')), false);
+      assert.strictEqual(fs.existsSync(path.join(result.stagedDir, 'hook-ran')), false, 'inherited relative Git hooks must not execute capability code');
+      assert.ok(calls.every(({ timeout }) => timeout > 0 && timeout <= 60_000), 'every retrieval subprocess is bounded');
+      const clone = calls.find(({ args }) => args.includes('clone'));
+      const checkout = calls.find(({ args }) => args.includes('checkout'));
+      assert.equal(clone.args[clone.args.indexOf('--origin') + 1], 'origin');
+      if (checkout) assert.equal(checkout.timeout, clone.timeout, 'checkout writes the tree with the clone budget');
+    } finally {
+      cleanup(result.stagedDir);
+    }
+  }
+
+  function assertScratchClonesRemoved(context) {
+    assert.ok(cloneDirs.length > 0, `${context}: fixture must observe at least one scratch clone`);
+    assert.ok(
+      cloneDirs.every((dir) => !fs.existsSync(path.dirname(dir))),
+      `${context}: every scratch clone must be removed`,
+    );
+  }
+
+  for (const fragment of ['#v0.3.0', '#tag:v0.3.0', '#TAG:v0.3.0']) {
+    test(`${fragment} installs the annotated tag behind the default tip`, async () => {
+      await assertTarget(fragment, '0.3.0', 'annotated tag behind default tip', commits.tag);
+    });
+  }
+
+  test('#tag: selects the tag when a same-named branch has different content', async () => {
+    fixtureGit(['branch', 'v0.3.0', commits.branch]);
+    await assertTarget('#tag:v0.3.0', '0.3.0', 'annotated tag behind default tip', commits.tag);
+  });
+
+  test('#sha:<commit> installs an old commit that is not a remote ref tip', async () => {
+    await assertTarget(`#sha:${commits.old}`, '0.1.0', 'old unadvertised commit', commits.old);
+  });
+
+  test('#preview installs a non-default branch', async () => {
+    await assertTarget('#preview', '2.0.0', 'non-default branch', commits.branch);
+  });
+
+  test('no ref continues to install the default tip', async () => {
+    await assertTarget('', '0.4.0', 'default branch tip', commits.tip);
+  });
+
+  test('a bare tag at the default tip continues to install', async () => {
+    await assertTarget('#v0.4.0', '0.4.0', 'default branch tip', commits.tip);
+  });
+
+  test('CONTROL: the tracked hook executes when Git is allowed to use the inherited hook path', () => {
+    const controlDir = path.join(root, 'control');
+    const result = execGit(['clone', '--depth', '1', '--', pathToFileURL(repo).href, controlDir], {
+      timeout: GIT_FIXTURE_TIMEOUT_MS,
+      env: { ...env, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '.githooks' },
+    });
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.strictEqual(fs.existsSync(path.join(controlDir, 'hook-ran')), true, 'the hook suppression fixture must be live');
+  });
+
+  test('an unavailable ref rejects without staging the default tip', async () => {
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#missing-release`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: localGit },
+    }), /git fetch "missing-release" failed/);
+    assert.strictEqual(fs.existsSync(path.join(gsdHome, '.gsd', 'capabilities', 'pinned-cap')), false);
+    assertScratchClonesRemoved('fetch failure');
+  });
+
+  for (const fragment of ['#tag:main', '#tag:HEAD', '#tag:origin/main']) {
+    test(`${fragment} cannot fall back from a missing typed tag to a local commit-ish`, async () => {
+      await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}${fragment}`, {
+        gsdHome, hostVersion: '1.5.0', execOverrides: { git: localGit },
+      }), /git fetch .* failed/);
+      assert.strictEqual(fs.existsSync(path.join(gsdHome, '.gsd', 'capabilities', 'pinned-cap')), false);
+      assertScratchClonesRemoved(`${fragment} fetch failure`);
+    });
+  }
+
+  test('#sha:<commit> cannot fall back from a failed fetch to the cloned tip', async () => {
+    const fetchFailGit = (args, opts) => {
+      if (args.includes('fetch')) {
+        return { exitCode: 1, stdout: '', stderr: 'fetch unavailable', signal: null, error: null };
+      }
+      return localGit(args, opts);
+    };
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#sha:${commits.tip}`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: fetchFailGit },
+    }), /git fetch .* failed/);
+    assert.strictEqual(fs.existsSync(path.join(gsdHome, '.gsd', 'capabilities', 'pinned-cap')), false);
+    assertScratchClonesRemoved('sha pin fetch failure');
+  });
+
+  test('a server refusal of an unadvertised SHA reports the fetch failure', async () => {
+    const refused = (args, opts) => args.includes('fetch')
+      ? { exitCode: 128, stdout: '', stderr: 'server refuses unadvertised object', signal: null, error: null }
+      : localGit(args, opts);
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#sha:${commits.tip}`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: refused },
+    }), { message: `git fetch "sha:${commits.tip}" failed (exit 128): server refuses unadvertised object` });
+    assertScratchClonesRemoved('server SHA refusal');
+  });
+
+  test('a bare-ref fallback after a transport failure emits a typed warning', async (t) => {
+    const warnings = [];
+    t.mock.method(process, 'emitWarning', (_message, options) => warnings.push(options.code));
+    const refused = (args, opts) => args.includes('fetch')
+      ? { exitCode: 1, stdout: '', stderr: 'network unavailable', signal: null, error: null }
+      : localGit(args, opts);
+    const result = await resolveCapabilitySource(`${sourceUrl}#main`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: refused },
+    });
+    t.after(() => cleanup(result.stagedDir));
+    assert.equal(result.id, 'pinned-cap');
+    assert.equal(retrieved.commit, commits.tip);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(result.stagedDir, 'payload.json'), 'utf8')), { payload: 'default branch tip' });
+    assert.deepEqual(warnings, ['GSD_GIT_REF_LOCAL_FALLBACK']);
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#not-in-shallow-clone`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: refused },
+    }), { message: 'git fetch "not-in-shallow-clone" failed (exit 1): network unavailable' });
+    assert.deepEqual(warnings, ['GSD_GIT_REF_LOCAL_FALLBACK']);
+  });
+
+  test('checkout failure cleans the scratch clone', async () => {
+    const checkoutFailGit = (args, opts) => {
+      if (args.includes('checkout')) {
+        return { exitCode: 1, stdout: '', stderr: 'checkout refused', signal: null, error: null };
+      }
+      return localGit(args, opts);
+    };
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#v0.3.0`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: checkoutFailGit },
+    }), /git checkout .* failed/);
+    assertScratchClonesRemoved('checkout failure');
+  });
+
+  test('missing cloned manifest cleans the scratch clone', async () => {
+    const missingManifestGit = (args, opts) => {
+      const result = localGit(args, opts);
+      if (result.exitCode === 0 && args.includes('clone')) {
+        cleanup(path.join(args.at(-1), 'capability.json'));
+      }
+      return result;
+    };
+    await assert.rejects(() => resolveCapabilitySource(sourceUrl, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: missingManifestGit },
+    }), /capability\.json not found/);
+    assertScratchClonesRemoved('missing manifest');
+  });
+
+  test('tip-local commit-ish spellings retain shallow-checkout compatibility', async () => {
+    const branch = fixtureGit(['branch', '--show-current']);
+    for (const fragment of [
+      `#${commits.tip.slice(0, 8)}`,
+      `#origin/${branch}`,
+      '#origin/HEAD',
+      `#${branch}~0`,
+      '#v0.4.0^{}',
+    ]) {
+      await assertTarget(fragment, '0.4.0', 'default branch tip', commits.tip);
+    }
+  });
+
+  test('PROPERTY (fc): bare and typed tag spellings stage the same exact tagged tree', async () => {
+    fixtureGit(['tag', '--force', 'v1.0.0+build', commits.tag]);
+    await assertTarget('#tag:v1.0.0+build', '0.3.0', 'annotated tag behind default tip', commits.tag);
+    const tagName = fc.array(fc.constantFrom('a', 'b', 'c', '0', '1', '-'), { minLength: 1, maxLength: 12 })
+      .map((suffix) => `release-${suffix.join('')}`);
+    await fc.assert(fc.asyncProperty(tagName, async (tag) => {
+      fixtureGit(['tag', '--force', tag, commits.tag]);
+      for (const fragment of [`#${tag}`, `#tag:${tag}`]) {
+        await assertTarget(fragment, '0.3.0', 'annotated tag behind default tip', commits.tag);
+      }
+    }), { seed: 5297, numRuns: 8 });
+  });
+});
+
+const GIT_REF_SAFETY_CASES = [
+  ...['v*', 'v?', 'v[', 'tag:v*', 'tag:v?', 'tag:v[', 'tag:v^', 'tag:v~'].map((fragment) => [fragment, /invalid ref-name character/]),
+  ['tag:--foo', /leading dash not allowed/],
+  ['sha:--foo', /leading dash not allowed/],
+  ['TAG:-foo', /leading dash not allowed/],
+  ['tag:', /typed ref must not be empty/],
+  ['sha:', /typed ref must not be empty/],
+  ['SHA:', /typed ref must not be empty/],
+  ['a:refs/tags/x', /fetch refspec not allowed/],
+  ['+a:b', /fetch refspec not allowed/],
+  ['tag:+release', /fetch refspec not allowed/],
+  ['Tag:+x', /fetch refspec not allowed/],
+  ['sha:a:b', /fetch refspec not allowed/],
+  ['tag:tag:', /fetch refspec not allowed/],
+  ['sha:sha:', /fetch refspec not allowed/],
+  ['sha:main', /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(39)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(41)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(63)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'a'.repeat(65)}`, /sha: pin must be a full 40- or 64-hex object name/],
+  [`sha:${'g'.repeat(40)}`, /sha: pin must be a full 40- or 64-hex object name/],
+];
+
+describe('#5297 git adapter — normalized ref safety', () => {
+  test('PROPERTY (fc): unsafe typed refs reject before any Git operation', async (t) => {
+    const gsdHome = createTempDir('gsd-unsafe-typed-');
+    t.after(() => cleanup(gsdHome));
+    const body = fc.array(fc.constantFrom('a', 'b', 'Z', '0', '1', '/', '.', '_'), { minLength: 1, maxLength: 30 }).map((chars) => chars.join(''));
+    await fc.assert(fc.asyncProperty(
+      fc.constantFrom('tag:', 'TAG:', 'Tag:', 'sha:', 'SHA:', 'Sha:'),
+      body, fc.constantFrom('+', '-', ':'), body,
+      async (prefix, left, operator, right) => {
+        const value = operator === ':' ? `${left}:${right}` : `${operator}${left}${right}`;
+        const reason = operator === '-' ? 'leading dash not allowed' : 'fetch refspec not allowed';
+        let calls = 0;
+        await assert.rejects(() => resolveCapabilitySource(`https://example.com/repo.git#${prefix}${value}`, {
+          gsdHome, hostVersion: '1.5.0', execOverrides: { git: () => { calls += 1; return spawnOk(''); } },
+        }), { message: `Unsafe git ref (${reason}): "${prefix}${value}"` });
+        assert.equal(calls, 0);
+      },
+    ));
+  });
+  test('rejected normalized refs are never reported as safe pins by update status', async (t) => {
+    const gsdHome = createTempDir('gsd-ref-status-parity-');
+    t.after(() => cleanup(gsdHome));
+    for (const [fragment] of GIT_REF_SAFETY_CASES) {
+      const spec = `https://example.com/repo.git#${fragment}`;
+      let rejection;
+      const git = () => { assert.fail('invalid refs must reject before Git'); };
+      await assert.rejects(() => resolveCapabilitySource(spec, {
+        gsdHome, hostVersion: '1.5.0', execOverrides: { git },
+      }), (err) => { rejection = err.message; return true; });
+      assert.deepEqual(peekLatestVersion(spec, { execOverrides: { git } }), {
+        status: 'unknown', version: null, reason: rejection,
+      }, fragment);
+    }
+    assert.equal(peekLatestVersion('https://example.com/r.git#sha:abc1234').status, 'unknown');
+  });
+
+  test('normalized unsafe refs and empty typed refs reject before Git runs', async () => {
+    const gsdHome = createTempDir('gsd-ref-safety-');
+    const calls = [];
+    const fakeGit = (args) => {
+      calls.push([...args]);
+      if (args.includes('clone')) {
+        fs.mkdirSync(args.at(-1), { recursive: true });
+        fs.writeFileSync(path.join(args.at(-1), 'capability.json'), JSON.stringify(featureCap('default-cap')));
+      }
+      return spawnOk('');
+    };
+    try {
+      for (const [fragment, expected] of GIT_REF_SAFETY_CASES) {
+        await assert.rejects(() => resolveCapabilitySource(`https://example.com/repo.git#${fragment}`, {
+          gsdHome, hostVersion: '1.5.0', execOverrides: { git: fakeGit },
+        }), expected, fragment);
+      }
+      assert.deepStrictEqual(calls, [], 'normalization must not bypass the unsafe-ref guard or install HEAD');
+      assert.strictEqual(fs.existsSync(path.join(gsdHome, '.gsd', 'capabilities')), false);
+    } finally {
+      cleanup(gsdHome);
+    }
+  });
+
+  test('full 40- and 64-hex sha pins pass validation and reach Git', async (t) => {
+    const gsdHome = createTempDir('gsd-ref-full-sha-');
+    t.after(() => cleanup(gsdHome));
+    for (const value of ['a'.repeat(40), 'b'.repeat(64), 'A'.repeat(40), 'B'.repeat(64)]) {
+      const calls = [];
+      const fakeGit = (args) => {
+        calls.push([...args]);
+        if (args.includes('clone')) {
+          fs.mkdirSync(args.at(-1), { recursive: true });
+          fs.writeFileSync(path.join(args.at(-1), 'capability.json'), JSON.stringify(featureCap(`sha-${value.length}`)));
+        }
+        return spawnOk('');
+      };
+      const result = await resolveCapabilitySource(`https://example.com/repo.git#sha:${value}`, {
+        gsdHome, hostVersion: '1.5.0', promote: false, execOverrides: { git: fakeGit },
+      });
+      assert.ok(calls.some((args) => args.includes('fetch')), `${value.length}-hex pin must reach fetch`);
+      cleanup(result.stagedDir);
+    }
   });
 });
 
@@ -867,6 +1259,237 @@ function _fakeTarball(cap) {
   // We just need a buffer; the injected tar override does the actual "extraction".
   return Buffer.from(JSON.stringify({ _fakeTarball: true, id: cap.id }), 'utf8');
 }
+
+// #5298: exercise real clones through the existing exec override, mapping only
+// the fixture URL to a local repository so the test needs no network/server.
+describe('#5298 — Git source excludes only cloned .git metadata', () => {
+  const isolatedGitConfig = process.platform === 'win32' ? 'NUL' : '/dev/null';
+  let savedGitConfigGlobal;
+  let savedGitConfigNoSystem;
+
+  beforeEach(() => {
+    savedGitConfigGlobal = process.env.GIT_CONFIG_GLOBAL;
+    savedGitConfigNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+    process.env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+  });
+
+  afterEach(() => {
+    if (savedGitConfigGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = savedGitConfigGlobal;
+    if (savedGitConfigNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = savedGitConfigNoSystem;
+  });
+
+  function fixture(t) {
+    const root = createTempDir('gsd-git-metadata-');
+    t.after(() => cleanup(root));
+    const repo = path.join(root, 'repo');
+    fs.mkdirSync(repo);
+    git(repo, 'init', '-q');
+    const cap = featureCap('git-metadata-cap', { skills: ['git-metadata-skill'] });
+    const files = {
+      'capability.json': JSON.stringify(cap),
+      'skills/git-metadata-skill/SKILL.md': '# Fixture skill\n',
+      'README.md': 'Development documentation\n',
+      'tests/dev.cjs': 'throw new Error("install must not execute this file");\n',
+      'hooks/dev.cjs': 'throw new Error("install must not execute this file");\n',
+      '.github/workflows/dev.yml': 'name: development\n',
+      '.gitattributes': '* -text\n',
+      '.gitignore': '*.tmp\n',
+    };
+    for (const [rel, bytes] of Object.entries(files)) put(repo, rel, bytes);
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-qm', 'fixture capability');
+    const spec = 'git+https://example.invalid/git-metadata-cap.git';
+    const clones = [];
+    const execGit = (args, opts) => {
+      const actual = [...args];
+      if (args.includes('clone')) {
+        assert.equal(actual[actual.indexOf('--') + 1], parseSpec(spec).target);
+        actual[actual.indexOf('--') + 1] = repo;
+        clones.push(actual.at(-1));
+      }
+      return realExecGit(actual, opts);
+    };
+    return { root, repo, cap, files, spec, clones, execGit };
+  }
+
+  async function stagedFixture(t) {
+    const f = fixture(t);
+    const project = path.join(f.root, 'project');
+    fs.mkdirSync(project);
+    git(project, 'init', '-q');
+    const opts = { gsdHome: project, hostVersion: '1.16.0', execOverrides: { git: f.execGit } };
+    const staged = await resolveCapabilitySource(f.spec, { ...opts, promote: false });
+    const stagedHash = consent.bundleContentHash(staged.stagedDir);
+    const stagedState = {
+      hasGit: fs.existsSync(path.join(staged.stagedDir, '.git')),
+      files: Object.fromEntries(Object.keys(f.files).map((rel) => [
+        rel, fs.readFileSync(path.join(staged.stagedDir, rel), 'utf8'),
+      ])),
+    };
+    cleanup(staged.stagedDir);
+    const promoted = await resolveCapabilitySource(f.spec, opts);
+    return { f, project, opts, stagedState, stagedHash, promoted };
+  }
+
+  test('staged and promoted clones preserve checkout bytes and metadata exclusion', async (t) => {
+    const { f, stagedState, stagedHash, promoted } = await stagedFixture(t);
+    assert.equal(stagedState.hasGit, false, 'staged Git bundle must exclude clone metadata');
+    assert.ok(!fs.existsSync(path.join(promoted.stagedDir, '.git')), 'promoted Git bundle must exclude clone metadata');
+    for (const [rel, bytes] of Object.entries(f.files)) {
+      assert.equal(stagedState.files[rel], bytes);
+      assert.equal(fs.readFileSync(path.join(promoted.stagedDir, rel), 'utf8'), bytes);
+    }
+    assert.equal(consent.bundleContentHash(promoted.stagedDir), stagedHash, 'same checkout content has a stable hash across real clones');
+    assert.equal(promoted.source, f.spec);
+    assert.equal(promoted.integrity, null, 'Git sources keep their existing null byte-SRI result');
+  });
+
+  test('real clone with a pinned ref checks out before metadata removal', async (t) => {
+    const f = fixture(t);
+    git(f.repo, 'tag', 'metadata-fixture-ref');
+    put(f.repo, 'README.md', 'Default branch content after the pinned ref\n');
+    git(f.repo, 'add', '-A');
+    git(f.repo, 'commit', '-qm', 'advance default branch past pinned ref');
+    const project = path.join(f.root, 'ref-project');
+    fs.mkdirSync(project);
+    const result = await resolveCapabilitySource(`${f.spec}#metadata-fixture-ref`, {
+      gsdHome: project,
+      hostVersion: '1.16.0',
+      promote: false,
+      execOverrides: { git: f.execGit },
+    });
+    t.after(() => cleanup(result.stagedDir));
+    assert.equal(result.id, f.cap.id);
+    assert.equal(fs.readFileSync(path.join(result.stagedDir, 'README.md'), 'utf8'), f.files['README.md']);
+    assert.equal(fs.existsSync(path.join(result.stagedDir, '.git')), false);
+    assert.ok(f.clones.length > 0, 'fixture must observe the real scratch clone');
+  });
+
+  test('metadata removal failure rejects before staging and cleans the scratch clone', async (t) => {
+    const f = fixture(t);
+    const project = path.join(f.root, 'remove-failure-project');
+    fs.mkdirSync(project);
+    const originalRmSync = fs.rmSync;
+    mock.method(fs, 'rmSync', (target, options) => {
+      if (path.basename(target) === '.git' && f.clones.includes(path.dirname(target))) {
+        throw new Error('metadata removal refused by fixture');
+      }
+      // eslint-disable-next-line local/no-raw-rmsync-in-tests -- delegate non-target cleanup through the saved implementation while rmSync is mocked
+      return originalRmSync(target, options);
+    });
+    t.after(() => mock.restoreAll());
+
+    await assert.rejects(() => resolveCapabilitySource(f.spec, {
+      gsdHome: project,
+      hostVersion: '1.16.0',
+      execOverrides: { git: f.execGit },
+    }), /metadata removal refused by fixture/);
+    const stagingRoot = path.join(project, '.gsd', 'capabilities', '.staging');
+    assert.equal(fs.existsSync(stagingRoot), false, 'shared staging must not start after metadata removal fails');
+    assert.ok(f.clones.length > 0, 'fixture must observe the scratch clone');
+    assert.ok(f.clones.every((dir) => !fs.existsSync(dir)), 'failure must clean every scratch clone');
+  });
+
+  test('consent stays bound to checkout content', async (t) => {
+    const { f, project, stagedHash, promoted } = await stagedFixture(t);
+    const consentHome = path.join(f.root, 'consent-home');
+    consent.recordProjectConsent({ gsdHome: consentHome, projectRoot: project, id: f.cap.id,
+      integrity: promoted.integrity ?? '', disclosureSignature: 'fixture-disclosure', contentHash: stagedHash });
+    assert.ok(consent.hasProjectConsent({ gsdHome: consentHome, projectRoot: project, id: f.cap.id,
+      contentHash: consent.bundleContentHash(promoted.stagedDir) }));
+    put(promoted.stagedDir, 'skills/git-metadata-skill/SKILL.md', 'Changed instructions\n');
+    assert.equal(consent.hasProjectConsent({ gsdHome: consentHome, projectRoot: project, id: f.cap.id,
+      contentHash: consent.bundleContentHash(promoted.stagedDir) }), false, 'checkout content remains consent-bound');
+  });
+
+  test('git add stages regular files rather than an embedded repository', async (t) => {
+    const { f, project } = await stagedFixture(t);
+    const add = realExecGit(['-C', project, 'add', '-A'], { timeout: GIT_TIMEOUT_MS });
+    assert.equal(add.exitCode, 0, add.stderr);
+    const entries = splitLines(git(project, 'ls-files', '--stage')).filter(Boolean);
+    assert.equal(entries.length, Object.keys(f.files).length);
+    assert.ok(entries.every((entry) => entry.startsWith('100644 ')), 'capability files must be regular index entries, never a 160000 gitlink');
+    for (const rel of Object.keys(f.files)) {
+      assert.ok(entries.some((entry) => entry.endsWith(`\t.gsd/capabilities/${f.cap.id}/${rel}`)), rel);
+    }
+  });
+
+  test('validation failure cleans scratch and preserves the existing bundle', async (t) => {
+    const { f, project, opts, stagedHash, promoted } = await stagedFixture(t);
+    // Validation still rejects a bad replacement, cleans scratch/staging, and preserves the old bundle.
+    put(f.repo, 'capability.json', JSON.stringify({ ...f.cap, role: 'invalid-role' }));
+    git(f.repo, 'add', '-A');
+    git(f.repo, 'commit', '-qm', 'invalid replacement');
+    await assert.rejects(() => resolveCapabilitySource(f.spec, opts), /validation failed/i);
+    assert.equal(consent.bundleContentHash(promoted.stagedDir), stagedHash);
+    assert.deepEqual(fs.readdirSync(path.join(project, '.gsd', 'capabilities', '.staging')), []);
+    assert.ok(f.clones.every((dir) => !fs.existsSync(dir)), 'temporary clones are cleaned on failure');
+    assert.ok(fs.existsSync(path.join(f.repo, '.git')), 'the original source repository is untouched');
+  });
+
+  test('property: clone metadata bytes do not affect the staged checkout hash', async (t) => {
+    const root = createTempDir('gsd-git-metadata-property-');
+    t.after(() => cleanup(root));
+    const resolveWithMetadata = (metadata) => resolveCapabilitySource('git+https://example.invalid/property.git', {
+      gsdHome: root, hostVersion: '1.16.0', promote: false,
+      execOverrides: { git: (args) => {
+        const clone = args.at(-1);
+        put(clone, 'capability.json', JSON.stringify(featureCap('git-metadata-property')));
+        put(clone, 'README.md', 'Fixed checkout content');
+        fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+        if (metadata) put(clone, '.git/objects/metadata', Buffer.from(metadata));
+        return spawnOk('');
+      } },
+    });
+    const baseline = await resolveWithMetadata(null);
+    const expectedHash = consent.bundleContentHash(baseline.stagedDir);
+    cleanup(baseline.stagedDir);
+    await fc.assert(fc.asyncProperty(fc.uint8Array({ minLength: 1, maxLength: 256 }), async (bytes) => {
+      const result = await resolveWithMetadata(bytes);
+      assert.ok(!fs.existsSync(path.join(result.stagedDir, '.git')));
+      const hash = consent.bundleContentHash(result.stagedDir);
+      assert.equal(hash, expectedHash);
+      cleanup(result.stagedDir);
+    }), { numRuns: 30 });
+  });
+
+  for (const kind of ['local', 'npm', 'tarball']) {
+    test(`CONTROL: ${kind} source retains its existing .git staging behavior`, async (t) => {
+      const root = createTempDir('gsd-non-git-metadata-');
+      t.after(() => cleanup(root));
+      t.after(() => _setCapabilitySourceHttpGet(null));
+      const cap = featureCap(`metadata-${kind}-control`);
+      const writeBundle = (dir) => {
+        put(dir, 'capability.json', JSON.stringify(cap));
+        put(dir, '.git/config', 'metadata from non-Git source');
+      };
+      const local = path.join(root, 'local');
+      writeBundle(local);
+      const tgz = _fakeTarball(cap);
+      _setCapabilitySourceHttpGet(() => Promise.resolve({ statusCode: 200, body: tgz }));
+      const result = await resolveCapabilitySource(kind === 'local' ? local : kind === 'npm'
+        ? 'npm:metadata-control@1.0.0' : 'https://example.invalid/metadata-control.tgz', {
+        gsdHome: path.join(root, 'home'), hostVersion: '1.16.0',
+        execOverrides: {
+          npm: (args) => {
+            put(args[args.indexOf('--pack-destination') + 1], 'cap.tgz', tgz);
+            return spawnOk('cap.tgz\n');
+          },
+          tar: (_prog, args) => {
+            if (args[0] === '-tzf') return spawnOk('capability.json\n.git/config\n');
+            if (args[0] === '-tvzf') return spawnOk('-rw-r--r-- 0 u g 10 Jan 1 2020 capability.json\n-rw-r--r-- 0 u g 10 Jan 1 2020 .git/config\n');
+            writeBundle(args[args.indexOf('-C') + 1]);
+            return spawnOk('');
+          },
+        },
+      });
+      assert.equal(fs.readFileSync(path.join(result.stagedDir, '.git/config'), 'utf8'), 'metadata from non-Git source');
+    });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // #1461 DOS-1 — realHttpsGet must BOUND the fetched response size. Without a cap,

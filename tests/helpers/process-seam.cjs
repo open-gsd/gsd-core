@@ -39,7 +39,7 @@
  *     the exact timeout boundary, spawnSync can report `error.code ===
  *     'ETIMEDOUT'` (the timer fired) on a result that ALSO carries
  *     `status: 0` (the child finished on its own first) — verified
- *     empirically via `tests/process-seam.test.cjs`'s at-the-bound case.
+ *     empirically via `tests/process-seam.process.test.cjs`'s at-the-bound case.
  *     `status` is only ever populated by a real exit, so it outranks an
  *     attached error: a process that returned a real exit code did not time
  *     out in any sense the caller cares about, and reporting TIMED_OUT while
