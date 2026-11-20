@@ -75,8 +75,6 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     "rg --glob='!.env' token .",
     "rg --iglob '!.env.local' token .",
     "rg '.env.local' src",
-    // xargs hands the same sub-command words to the same carve-out.
-    'ls | xargs grep -n token --exclude=.env',
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));
@@ -133,7 +131,8 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     "jq --rawfile v .env '.'",
     "jq -n --arg x .env '.'",
     "jq '.env' .env",
-    // xargs does not widen the carve-out to other commands.
+    // xargs keeps no carve-out (#6282): stdin words can change what a word is.
+    'ls | xargs grep -n token --exclude=.env',
     'xargs grep token --exclude=.env .env.local',
     'xargs cp src .env',
   ];
