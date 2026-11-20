@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-11-13
 - **Issue:** [#6178](https://github.com/open-gsd/gsd-core/issues/6178) (`approved-feature`, go-with-conditions: this ADR before code, three increments, compatibility test first)
-- **Amends:** [ADR-857](857-capability-system.md) (the hook model gains an execution-context dimension next to point and kind) · [ADR-894](894-capability-declaration-format.md): the hook entry schema gains `executionContexts`, the Loop Host Contract gains logical quick hosts, and the hook-activation paragraph with its #1022 clarification ("Runtime/mode context … is likewise **not** a hook-activation concern … It **self-gates inside the skill**") gains an exception: the execution context is applied by the host before dispatch, for annotated hooks only (D1)
+- **Amends:** [ADR-857](857-capability-system.md) (the hook model gains an execution-context dimension next to point and kind) · [ADR-894](894-capability-declaration-format.md): the hook entry schema gains `executionContexts`, the Loop Host Contract gains logical quick hosts, and the hook-activation paragraph and its own #1022 clarification section ("Runtime/mode context … is likewise **not** a hook-activation concern … It **self-gates inside the skill**") gains an exception: the execution context is applied by the host before dispatch, for annotated hooks only (D1)
 - **Builds on:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (quick-batch binding: single-writer coordinator, `BATCH.json` as the source of truth for completion) · [ADR-1244](1244-capability-ecosystem.md) (`engines.gsd` as the compatibility gate for manifests that use the field)
 
 ## Context
@@ -25,16 +25,20 @@ Three consequences:
 
 1. **A capability cannot finish work it started in a quick task.** Its planner contribution reaches
    the quick planner, but its `execute:post` step runs only when the user also asked for full mode.
-   The motivating case is the community capability gsd-musk-simplification: its contribution records
-   entries under `.planning/musk/`, and its `execute:post` step `musk commit` commits them. In a plain
-   `/gsd-quick` the entries stay uncommitted.
+   The motivating case is the community capability gsd-musk-simplification (maintained outside this
+   repository): its contribution has the planner record entries under `.planning/musk/`, and its
+   `execute:post` step `musk commit` is the step that commits them. In a plain `/gsd-quick` that step
+   is never dispatched, so nothing commits the entries.
 2. **Hooks have no quick invocation contract.** Command steps run as
    `gsd_run <command> --phase "${PHASE_NUMBER}" --raw` (`references/loop-hook-dispatch.md`), and
    `quick.md` never sets `PHASE_NUMBER`. A step gets an empty or an inherited phase, and nothing
    tells it which quick task it runs for.
-3. **The generator cannot see it.** `validateHooksWired` checks that *some* file in `HOST_LOOP_FILES`
-   covers each point and kind, as a union across hosts. Quick's narrowed `execute:post` passes because
-   `verify-phase-goal.md` covers the kinds, and `quick-batch/**` is not scanned at all.
+3. **The generator sees one quick seam only.** `validateHooksWired` checks that *some* file in
+   `HOST_LOOP_FILES` covers each point and kind, as a union across hosts. The one per-file check for
+   quick is the `plan:pre` contribution into `planner`: `scripts/gen-loop-host-contract.cjs` registers
+   `quick.md` as an `auxiliaryHosts` entry of `plan-phase.md` for it. Nothing checks quick's other
+   points. Its narrowed `execute:post` passes because `verify-phase-goal.md` covers the kinds, and
+   `quick-batch/**` is not scanned at all.
 
 **Dispatching every active hook in quick is not the fix.** Moving the `execute:post` dispatch out of
 the code-review step would run the bundled refactor-trigger step (`refactor evaluate --phase N`, which
@@ -118,11 +122,15 @@ Two mechanisms close the gap:
   asked for. The `engines.gsd` floor is what turns that into an install-time error under
   [ADR-1244](1244-capability-ecosystem.md) instead of a silent difference; the ignored key alone
   guarantees nothing.
-- **Hosts that know the field** validate annotations by point and check the floor against a
-  machine-readable cell table (D2):
-  - An annotation for a point no quick host supports in the running version is a validation error,
-    never a silent no-op.
-  - A floor below the first version in which *any* quick host supports an annotated point is a
+- **Hosts that know the field** validate each annotated hook by its **shape**: its point, its kind
+  and, for a contribution, its `into` target. They check the floor against the machine-readable cell
+  table (D2), which is keyed by host and shape:
+  - An annotated hook whose shape no quick host supports in the running version is a validation
+    error, never a silent no-op. That covers an unsupported point (`plan:post`), an unsupported kind
+    at a supported point (a contribution at `execute:post`) and an unsupported target (`into:
+    verifier` or `into: code-reviewer`, which the phase loop delivers but no quick cell does). Such a
+    hook stays valid for the phase loop once `"quick"` is removed from its field.
+  - A floor below the first version in which *any* quick host supports an annotated shape is a
     validation error.
   - A floor below a cell on one particular host (quick-batch `execute:post` before increment 3, say)
     is a validation warning. An older host skips that cell by design (D2).
@@ -157,17 +165,24 @@ executor or accept on `gaps_found`, and continuing on `human_needed`
 (`quick/steps/quick-verification.md`). In quick-batch it is the item's `fail` or `human_needed`
 route (`quick-batch-dispatch.cts`). Accepting a result as-is never counts as `passed`.
 
-**The cell table is data, not prose.** Each cell's first supported version lives in one
-machine-readable table in core that the validator reads (D1). The matrix in
-`references/loop-hook-dispatch.md` is generated from it and checked by `lint:generated-sync`, so the
-documented and the enforced matrix cannot drift.
+**The cell table is data, not prose.** A cell is a host and a shape (point, kind and, for a
+contribution, target), the unit D1 validates. Which cells exist is not hand-authored: it is the
+generated Loop Host Contract's entry for each quick host (D5), read from that host's workflow markers
+as [ADR-894](894-capability-declaration-format.md) §3 requires. The only hand-authored data is each
+cell's first supported version, in one machine-readable table in core that the validator reads (D1).
+A parity test fails when the version table names a cell the generated contract lacks, or the
+contract has a quick cell with no version. The matrix in `references/loop-hook-dispatch.md` is
+generated from both and checked by `lint:generated-sync`, so the documented and the enforced matrix
+cannot drift.
 
 The `"quick"` context covers both hosts; a manifest does not pick one. Validation and dispatch
 therefore work at different granularities:
 
-- **Validation is per point.** Annotating a hook for `"quick"` at a point that *no* quick host
-  supports in the running version (`plan:post`, `execute:pre`, …, or `verify:*` before increment 2)
-  is a manifest validation error.
+- **Validation is per shape.** Annotating a hook for `"quick"` with a shape that *no* quick host
+  supports in the running version is a manifest validation error: a point such as `plan:post` or
+  `execute:pre`, `verify:*` before increment 2, a contribution at `execute:post`, or a contribution
+  into any target other than `planner` at `plan:pre` and `orchestrator` at `verify:pre` and
+  `discuss:pre`.
 - **Dispatch is per cell.** Each host dispatches an annotated hook only at the cells it supports. A
   cell that does not apply to a host (`discuss:*` in quick-batch) is permanently skipped there. A cell
   not yet delivered (quick-batch `execute:post` before increment 3) is skipped too, exactly as v1.21.0
@@ -237,7 +252,8 @@ Annotated hooks dispatched on a quick path receive quick context instead of phas
 - **Command steps and query gates** run with `--quick "<quick_id>" --quick-modes "<set>"` instead of
   `--phase`. A quick id is never passed as a phase number.
 - **Skill steps, agent steps, gates and contributions** receive the quick id, the task directory
-  (`.planning/quick/<id>-<slug>/`), the working directory, the resolved modes, and the batch id when
+  (`<planning_root>/quick/<id>-<slug>/`, the workstream-aware planning directory that `init quick`
+  resolves), the working directory, the resolved modes, and the batch id when
   there is one, as one **quick context** object:
   `{ "quick_id", "task_dir", "cwd", "modes": [...], "batch_id", "planning", "items" }`. For a
   `/gsd-quick` task or a batch item, `quick_id` and `task_dir` name the task, `planning` and `items`
@@ -327,8 +343,10 @@ Annotated hooks dispatched on a quick path receive quick context instead of phas
   `check evaluation-scope --quick "<quick_id>"`, [ADR-5057](5057-one-owner-per-workflow-verdict.md) §4,
   the one `/gsd-quick` Step 6.25 already uses. It returns the commits on the current branch whose
   message contains the quick id (a fixed-string `git log --grep`, `src/gate-evaluation-scope.cts`). A
-  hook never derives a commit range, a `BATCH.json` commit or the working-tree diff on its own;
-  `lint-evaluation-scope-drift` already rejects such derivations in core.
+  hook never derives a commit range, a `BATCH.json` commit or the working-tree diff on its own. In
+  core, `scripts/lint-evaluation-scope-drift.cjs` already fails CI on such derivations in the gate
+  modules, workflows and agents it scans (its shapes S1 to S5, including a shell `git log --grep`).
+  A third-party hook is outside that scan, so for it this is the contract, not a check.
   - **What makes the id appear.** Today only `/gsd-quick`'s own commits are sure to name it: the
     pre-dispatch artifact commit of an isolated run (`docs(<quick_id>): …`) and the final commit
     (`docs(quick-<quick_id>): …`). The executor prompts say only "commit each task atomically"
@@ -411,18 +429,25 @@ below). Those windows are not tied to annotated hooks, so their fix is not eithe
   (`src/quick-batch.cts`) and fails closed above it. The cap counts the JavaScript string length of
   the file's text (UTF-16 code units, `src/security.cts`), not bytes. That cap stays, and the schema
   is bounded so a batch never outgrows it through its own writes. Every limit below except the
-  fragment cap is measured the same way, as the length of the serialized JSON string, so the
-  boundary tests count what the loader counts:
+  fragment cap is measured the same way, on the text the writers write: the length of
+  `JSON.stringify(manifest, null, 2) + '\n'` (`src/quick-batch.cts`), indented, not compact JSON.
+  The boundary tests count what the loader counts:
   - **Stored once.** Each snapshot is stored once in the schedule, keyed by its SHA-256. Planning
     invocations and ledger rows refer to entries by identity, never by copy, so a fragment's size
     counts once per batch, not once per item or invocation.
-  - **Caps at freeze.** A contribution fragment holds at most 16 KiB of UTF-8, and the serialized
-    frozen schedule is at most 262,144 code units long. Over either cap, `quick-batch create` refuses the batch with a
+  - **Caps at freeze.** A contribution fragment holds at most 16 KiB of UTF-8, and the frozen
+    schedule, as it appears in that indented text, is at most 262,144 code units long. Over either cap, `quick-batch create` refuses the batch with a
     validation error that names the capability and the hook. It never truncates a fragment.
   - **Budget at freeze.** `create` also refuses a batch whose worst case exceeds the cap: the v1
     fields, plus the schedule, plus items × the per-item entries scheduled for each × the largest
-    ledger row (its identity, outcome and `head_revision`), plus the merge and verifier records.
-    About 3,000 ledger rows fit next to a full schedule, 100 items with 30 hooks each, say.
+    ledger row, plus the merge and verifier records. A ledger row is its key (`quick_id` or
+    `planning`), the hook identity (capability id, point, kind, index, SHA-256) and the outcome. It
+    holds no HEAD: `head_revision` is one manifest-level field, set in the same write (below). As
+    an example, a row with an 18-character capability id, a two-digit index and the longest
+    checkpointed point, kind and outcome names (`execute:post`, `gate`, `error-skipped`) is 276 code
+    units in the indented text (210 compact). With a full schedule and 100,000 code units for the v1
+    fields and the merge and verifier records, about 2,480 rows fit: 100 items with 24 hooks each,
+    say.
   - **Guard at write.** Planning invocations are not bounded at freeze, because a crash during
     planning adds one. So every writer serializes the new manifest first and refuses a write that
     would exceed the cap. The previous file stays intact and the verb returns a diagnostic, so the
@@ -644,6 +669,14 @@ workflow together with its step files. `quick` (`quick.md`, `quick/steps/**`) an
 contribution target that D2 claims, per host and not as a union, including whether the gating flag can
 reach the call site.
 
+**One owner.** The logical hosts are part of the generated Loop Host Contract, not a structure beside
+it. Each quick call site carries the same `<!-- gsd:loop-host ... -->` marker the phase hosts use,
+and `scripts/gen-loop-host-contract.cjs` gains a list of logical hosts, each a name and its files,
+from which it emits one contract entry per host with its cells. Today's `auxiliaryHosts` entry that
+registers `quick.md` for the `plan:pre` contribution into `planner` moves into the `quick` host and
+is removed from `plan-phase.md`'s list, so no cell is declared twice. The version table (D2) holds
+only first supported versions, and the parity test (D2) keeps the two in step.
+
 `produces`/`consumes` is checked per logical host, against the points that host actually schedules
 and the modes that gate them, not per context. Both hosts share the `"quick"` context but schedule
 different points: a `discuss:post` producer can satisfy a consumer in `quick`, never in `quick-batch`.
@@ -664,8 +697,9 @@ dispatches exactly as v1.21.0 on every quick and quick-batch path and flag set. 
 merge only with it green on their own head, and it stays in the suite afterwards.
 
 1. **The field and `/gsd-quick` `execute:post`.**
-   - Schema and validation: the D1 shapes, the unsupported-point error, the floor check and the
-     machine-readable cell table.
+   - Schema and validation: the D1 field shapes, the unsupported-shape error (point, kind and
+     contribution target), the floor check, the version table and its parity test against the
+     generated contract.
    - Context filtering in `loop render-hooks`: `--context quick` and `--context quick-legacy`. Every
      legacy quick call site moves to `--context quick-legacy`.
    - A new `/gsd-quick` `plan:pre` dispatch for annotated hooks: steps and gates before the planner
@@ -674,7 +708,11 @@ merge only with it green on their own head, and it stays in the suite afterwards
    - The D3 contract, including `<quick_id>-TASK.json`, the quick context object, the
      `--quick-modes` grammar and the commit-subject rule in the `quick.md` executor prompt.
    - An `execute:post` dispatch for annotated hooks that runs whatever the flags.
-   - The logical `quick` host and its coverage check for `plan:pre` and `execute:post`.
+   - The `gaps_found` re-run in `quick/steps/quick-verification.md`: the `executed_head` reset before
+     it and the annotated `execute:post` dispatch after it (D2, D3). These ship with `executed_head`
+     itself, so no release writes `executed_head` without resetting it before a re-run.
+   - The logical `quick` host and its coverage check for `plan:pre` and `execute:post`, with the
+     `quick.md` `auxiliaryHosts` entry moved into it (D5).
    - The resume contract and the `resume <slug>` re-entry (D2, D3): `init quick --resume` in
      `src/init.cts`, the RESUME subcommand in `commands/gsd/quick.md`, the `resume-entry` section in
      `quick.md`, and the CLI surface manifest.
@@ -686,7 +724,10 @@ merge only with it green on their own head, and it stays in the suite afterwards
        one;
      - `resume <slug>` after an `execute:post` gate stop re-evaluates the gate without re-spawning the
        executor;
-     - a hook given a `no-matching-commits` scope treats it as nothing to evaluate.
+     - a hook given a `no-matching-commits` scope treats it as nothing to evaluate;
+     - an annotated contribution at `execute:post`, or one `into: verifier`, is a validation error;
+     - an interrupted `gaps_found` re-run leaves `executed_head` `null`, so the resume re-spawns the
+       executor.
 2. **`verify:*` and `discuss:*` in `/gsd-quick`.** Dispatch in `quick/steps/quick-verification.md`
    and `quick/steps/discussion-phase.md`, contribution target `orchestrator` only, coverage extended
    to them.
@@ -717,7 +758,13 @@ Each increment adds its D2 cells, with their first supported version, to the cel
 manifest's `engines.gsd` floor can name the version that supports everything it annotates.
 
 Each increment updates `references/loop-hook-dispatch.md`, the capability how-to and tutorial, the
-quick-task how-to, the CLI surface manifest where the CLI changes, and carries an `Added` changeset.
+quick-task how-to, the CLI surface manifest where the CLI changes, and `CONTEXT.md`, and carries an
+`Added` changeset. In `CONTEXT.md`, increment 1 amends `RULESET.CAPABILITY.cutover-self-gating` and
+`RULESET.CAPABILITY.step-additive-gate-blocks` with D1's exception (for an annotated hook the host
+applies the execution context before dispatch; self-gating stays the rule for unannotated hooks) and
+adds the terms it introduces: `executionContexts`, annotated hook, the quick context object and
+logical host. Increment 3 adds the frozen schedule and the outcome ledger. `CONTEXT.md` changes
+with the code that makes it true, not in this ADR's PR.
 
 ## Consequences
 
