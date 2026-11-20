@@ -943,14 +943,18 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
  * (`resolveDependencyId`) and the same `computeHaltPropagation` pass. A token
  * that resolves to no plan in the set is dropped, as there. docs/CLI-TOOLS.md
  * ("Halted plans") lists every case where the two commands answer
- * differently; two of them arise here, because this read never fails where
- * `phase-plan-index` refuses the phase. On a depends_on cycle the shared
+ * differently; three of them arise here. Two because this read never fails
+ * where `phase-plan-index` refuses the phase. On a depends_on cycle the shared
  * propagation's fail-closed answer stands: every non-halted plan it cannot
  * order carries a non-empty `blocked_by`. On two plan ids that differ only in
  * case, an exact or canonical token naming either resolves to the one that
  * sorts last (`planMap` and `canonicalToId` keep the last write), and a
  * short-form token to the one that sorts first (`buildShortFormToId` keeps
- * the first).
+ * the first). The third because the shared propagation orders this graph
+ * itself, where `phase-plan-index` hands it a wave order that leaves out an
+ * edge to a plan whose id is empty (a bare `PLAN.md`), so a halt upstream of
+ * that plan reaches the plans whose token resolves to it here, and can miss
+ * them there.
  */
 function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }>): void {
   // `cmdPhasePlanIndex` builds its id maps from `planFiles.sort()`, and both

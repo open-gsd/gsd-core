@@ -1341,6 +1341,13 @@ cases:
   canonical id they share, resolves to the plan that sorts last, and a
   short-form token (the plan number alone, such as `01`) to the plan that
   sorts first.
+- **A `depends_on` token that resolves to a plan whose id is empty** (a bare
+  `PLAN.md`, named by `depends_on: [""]`). `phase-plan-index` leaves that edge
+  out of its wave order but keeps it in the halt propagation it runs in that
+  order, so a plan behind it can read `blocked_by: []` there. `planning
+  inspect` orders and propagates over the same edges: with a halted `01-01`,
+  a bare `PLAN.md` depending on it, and `01-02` with `depends_on: [""]`, it
+  gives `01-02` `blocked_by: ["01-01"]` where `phase-plan-index` gives `[]`.
 - **A plan `phase-plan-index` does not list** (superseded, or not canonically
   named). It still gets its own `halted`, but its `blocked_by` is always `[]`,
   and, as in `phase-plan-index`, a `depends_on` token never resolves to it. (A
