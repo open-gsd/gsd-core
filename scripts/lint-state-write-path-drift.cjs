@@ -943,8 +943,8 @@ const RAW_WRITE_ASSIGNMENT_OPTIONS = Object.freeze({ typed: true, stopAtPatternB
 
 /**
  * The identifiers an expression reads. Quoted `'…'` / `"…"` string contents
- * are dropped, and a name after a single `.` is a property, not a variable
- * (a spread, `...parts`, is still a variable). A template literal is kept
+ * are dropped, and a name directly after a single `.` is a property, not a
+ * variable (a spread, `...parts`, is still a variable). A template literal is kept
  * whole, so the names in its `${…}` interpolations are read, and so is any
  * word in its text: that can only add a lookup, never drop one.
  */
@@ -1247,10 +1247,9 @@ function boundaryAfterLine(write, index) {
  * of a class method (`save(p, c) {`, `async save(p, c) {`) resolved to a
  * sibling method's STATE.md variable, a parameter of an unnamed
  * `function (p)` expression resolved to a sibling function expression's
- * STATE.md variable or to an outer one it shadows (only a line matching
- * `FUNCTION_DECL_LINE_RE` ends the scan), an arrow's parameter resolved to
- * a sibling arrow body's variable of the same name, a block-scoped binding or `for`
- * header's `let` earlier on the write's line
+ * STATE.md variable or to an outer one it shadows, an arrow's parameter
+ * resolved to a sibling arrow body's variable of the same name, a
+ * block-scoped binding or `for` header's `let` earlier on the write's line
  * (`if (a) { const p = statePath; } else { fs.writeFileSync(p, c); }`), a
  * target computed from the state file, a longer name such as `STATE.md.bak`,
  * a word in a template literal's text that names a statePath variable (the
@@ -1293,9 +1292,8 @@ function boundaryAfterLine(write, index) {
  * whose argument names `statePath` itself, since once the budget is spent no
  * argument is read. At most one unresolved report per line, so the budget
  * too can add reports but never drop one. Without it, many writes that
- * each name a different variable read back to the enclosing named function
- * once per name (distinct names x lines), a line that repeats a declaration
- * scanned to its end once per repeat (quadratic in the line), each write
+ * each name a different variable read back once per name (distinct
+ * names x lines), a line that repeats a declaration scanned to its end once per repeat (quadratic in the line), each write
  * re-read a shared right-hand side, and each write walked every earlier
  * assignment of its name past a body boundary.
  * With both caps, a file costs time linear in its length (finding the calls,
