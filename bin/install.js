@@ -1759,8 +1759,9 @@ function resolveSettingsWritePath(settingsPath) {
  * anything. The #338 migration writes settings.local.json before it rewrites
  * the shared settings.json, so it checks the shared file first: a refusal
  * then leaves both files as they were instead of half-migrated. Uninstall
- * checks settings.json before its first removal, when step 6 would rewrite
- * it, for the same reason.
+ * checks each settings file step 6 would rewrite (settings.json, and a local
+ * install's settings.local.json) before its first removal, for the same
+ * reason.
  *
  * With the opt-in, the write puts a temp file beside the link's target and
  * renames it into place, so it needs that directory writable, not the file
@@ -8941,14 +8942,15 @@ function reclaimKimiHooksRoot(kimiHooksRoot) {
 }
 
 /**
- * Uninstall step 6's settings.json cleanup, applied in memory to `settings`
+ * Uninstall step 6's settings file cleanup, applied in memory to `settings`
  * for `runtime` installed at `targetDir`. Returns whether anything changed,
  * which is exactly when step 6 writes the file. Each removal is reported
  * through `log`, and a message that names the file names `settingsFileName`,
  * the file step 6 is cleaning. uninstall() also runs it on a throwaway copy
- * with a silent `log` before its first removal, to check a symlinked
- * settings.json only when step 6 would write it (#5037). Sharing one function
- * keeps that check and step 6 from disagreeing about whether a write happens.
+ * of each settings file with a silent `log` before its first removal, to
+ * check a symlinked one only when step 6 would write it (#5037). Sharing one
+ * function keeps that check and step 6 from disagreeing about whether a write
+ * happens.
  */
 function stripGsdFromSettings(settings, runtime, targetDir, log, settingsFileName) {
   let settingsModified = false;
@@ -9137,19 +9139,45 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
-  // Step 6 rewrites settings.json only after GSD's files are gone, so a
-  // symlinked settings.json that writeSettings would refuse (#5037) is
-  // refused here, before anything is removed. Refusing at step 6 would leave
-  // the link target's GSD hooks and statusline pointing at deleted files.
-  // Step 6's own cleanup runs here on a throwaway copy, and only a
-  // settings.json it would write is checked: one with no GSD entries, an
-  // unparseable file or a dangling link (existsSync reports it missing) is
-  // never written, so it must not block the uninstall.
-  const settingsPath = path.join(targetDir, 'settings.json');
-  if (fs.existsSync(settingsPath)) {
-    const settingsPreview = readSettings(settingsPath, { quiet: true });
-    if (settingsPreview !== null && stripGsdFromSettings(settingsPreview, runtime, targetDir, () => {}, 'settings.json')) {
-      assertSettingsWriteAllowed(settingsPath);
+  // #2870: scope id resolved ONCE here and reused below (was two independent
+  // isGlobal-derived re-derivations). Routed through the Install Scope
+  // Module (src/install-scope.cts) when the capability registry is
+  // available; degrades to the plain id on failure (unknown/non-installable
+  // runtime, broken bundle) so this function's scope-id uses — which never
+  // depended on registry availability before this migration — keep working
+  // exactly as they did pre-migration.
+  const _uninstallScopeId = isGlobal ? 'global' : 'local';
+  const _resolvedUninstallScope = _resolveScopeSafe(_uninstallScopeId, runtime);
+  const scope = _resolvedUninstallScope ? _resolvedUninstallScope.id : _uninstallScopeId;
+
+  // #5952: a local install of a runtime with a per-scope settings file (local Claude, #338)
+  // registered its hooks in that file (settings.local.json), not settings.json, so step 6
+  // cleans both: settings.json still holds the entries of an install that predates the routing.
+  // The check below runs over this same list, so it covers every file step 6 can write.
+  const _localSettingsFile = !isGlobal
+    ? ((_resolvedUninstallScope && _resolvedUninstallScope.settingsFile)
+      || (hostBehaviorsFor(runtime).settingsFileByScope || {}).local
+      || null)
+    : null;
+  const _uninstallSettingsFiles = _localSettingsFile && _localSettingsFile !== 'settings.json'
+    ? ['settings.json', _localSettingsFile]
+    : ['settings.json'];
+
+  // Step 6 rewrites these settings files only after GSD's files are gone, so
+  // a symlinked one that writeSettings would refuse (#5037) is refused here,
+  // before anything is removed. Refusing at step 6 would leave the link
+  // target's GSD hooks and statusline pointing at deleted files. Step 6's own
+  // cleanup runs here on a throwaway copy of each file, and only a file it
+  // would write is checked: one with no GSD entries, an unparseable file or a
+  // dangling link (existsSync reports it missing) is never written, so it
+  // must not block the uninstall.
+  for (const _settingsFileName of _uninstallSettingsFiles) {
+    const settingsPath = path.join(targetDir, _settingsFileName);
+    if (fs.existsSync(settingsPath)) {
+      const settingsPreview = readSettings(settingsPath, { quiet: true });
+      if (settingsPreview !== null && stripGsdFromSettings(settingsPreview, runtime, targetDir, () => {}, _settingsFileName)) {
+        assertSettingsWriteAllowed(settingsPath);
+      }
     }
   }
 
@@ -9265,17 +9293,8 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     removedCount++;
   } catch {}
 
-  // 1. Remove GSD commands/skills (layout-driven)
-  // #2870: scope id resolved ONCE here and reused below (was two independent
-  // isGlobal-derived re-derivations). Routed through the Install Scope
-  // Module (src/install-scope.cts) when the capability registry is
-  // available; degrades to the plain id on failure (unknown/non-installable
-  // runtime, broken bundle) so this function's scope-id uses — which never
-  // depended on registry availability before this migration — keep working
-  // exactly as they did pre-migration.
-  const _uninstallScopeId = isGlobal ? 'global' : 'local';
-  const _resolvedUninstallScope = _resolveScopeSafe(_uninstallScopeId, runtime);
-  const scope = _resolvedUninstallScope ? _resolvedUninstallScope.id : _uninstallScopeId;
+  // 1. Remove GSD commands/skills (layout-driven). `scope` is resolved at the
+  // top of uninstall(), where the settings pre-check needs it too.
   // ADR-1239 / #2086: drive uninstall through the public Host-Integration Interface.
   // Fail-open to the engine directly if the composed-registry adapter can't load.
   const _uninstallAdapter = _runtimeAdapter(runtime);
@@ -9940,18 +9959,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     console.log(`  ${green}✓${reset} Removed GSD package.json (pre-#2544 config-root marker)`);
   }
 
-  // 6. Clean up settings.json (remove GSD hooks and statusline)
-  // #5952: a local install of a runtime with a per-scope settings file (local Claude, #338)
-  // registered its hooks in that file (settings.local.json), not settings.json, so both are
-  // cleaned: settings.json still holds the entries of an install that predates the routing.
-  const _localSettingsFile = !isGlobal
-    ? ((_resolvedUninstallScope && _resolvedUninstallScope.settingsFile)
-      || (hostBehaviorsFor(runtime).settingsFileByScope || {}).local
-      || null)
-    : null;
-  const _uninstallSettingsFiles = _localSettingsFile && _localSettingsFile !== 'settings.json'
-    ? ['settings.json', _localSettingsFile]
-    : ['settings.json'];
+  // 6. Clean up settings.json (remove GSD hooks and statusline), and the
+  // per-scope settings file of a local install (#5952). The list was computed
+  // at the top of uninstall(), where the pre-check ran over it.
   for (const _settingsFileName of _uninstallSettingsFiles) {
   const settingsPath = path.join(targetDir, _settingsFileName);
   if (fs.existsSync(settingsPath)) {
