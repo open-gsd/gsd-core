@@ -1304,10 +1304,14 @@ fields of the same name: the same SUMMARY pairing, the same halt predicate
 (the live, canonically named ones, in the same sorted order), and the same
 propagation. The two commands give the same answers except in these cases:
 
-- **A SUMMARY that cannot be read, or that resolves outside the planning
-  root.** `planning inspect` does not read it for its halt and names it in a
-  `summary_unreadable` diagnostic, so the plan reads `halted: false` and blocks
-  nothing. `phase-plan-index` reads the file either way.
+- **A SUMMARY that resolves outside the planning root** (a symlink out of
+  it). `phase-plan-index` reads it for its halt. `planning inspect` does not:
+  it names the file in a `summary_unreadable` diagnostic, and the plan reads
+  `halted: false` and blocks nothing. A SUMMARY that cannot be read at all (a
+  directory with a SUMMARY's name, or a file without read permission) is not a
+  difference: both commands read it as not halted, and `planning inspect` also
+  names it in a `summary_unreadable` diagnostic. A SUMMARY too large for
+  `planning inspect` to read whole differs the way an outside-root one does.
 - **A PLAN that cannot be read, or that resolves outside the planning root.**
   `planning inspect` reports `plan_unreadable` and still reads the plan's own
   SUMMARY for its halt, but the plan's `depends_on` is unknown: its own
