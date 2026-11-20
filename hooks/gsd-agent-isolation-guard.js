@@ -75,7 +75,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { readSentinel, isGsdRoleName, displayAgentName, isExecutorDispatch, EXECUTOR_SUBAGENT_TYPES, VALID_ISOLATION, extractDispatchIdentifiers, sentinelAppliesToDispatch, agedNoneGovernsDispatch, buildSentinelDiscard } = require('./lib/isolation-sentinel.js');
-const { REASON_CODE, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
+const { REASON_CODE, remedyFor, composeRemedyText, describeSentinelDiscard } = require('./lib/isolation-deny-reason.js');
 const { HOOK_ON_CRASH, allow, deny, crash } = require('./lib/hook-exit.js');
 const { readConfigFileBounded } = require('./lib/config-read.js');
 
@@ -587,14 +587,19 @@ function evaluateDispatch(data, { clock = Date } = {}) {
 
   if (toolInput[parsed.param] === parsed.value) return { action: 'allow' };
 
-  let reason =
+  // #6028: a fresh recorded `none` that did not apply to this dispatch means the flag was deliberately absent
+  // (a base-check degrade); advising "add the flag" there is the action the degrade refused as unsafe.
+  const remedy = remedyFor(state.sentinelDiscarded);
+  const reason =
     `Agent isolation guard: this project's dispatch isolation resolves to "harness-worktree", ` +
     `but the Agent() dispatch for subagent_type="${displayAgentName(subagentType)}" is missing ` +
-    `${parsed.param}="${parsed.value}". Add ${parsed.param}="${parsed.value}" to the Agent() ` +
-    `call so the executor runs in an isolated worktree instead of the primary checkout ` +
-    `(gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md).`;
-  if (state.sentinelDiscarded) reason += describeSentinelDiscard(state.sentinelDiscarded);
-  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, sentinelDiscarded: state.sentinelDiscarded, agentName: displayAgentName(subagentType) };
+    `${parsed.param}="${parsed.value}".` +
+    composeRemedyText(
+      state.sentinelDiscarded,
+      ` Add ${parsed.param}="${parsed.value}" to the Agent() call so the executor runs in an isolated worktree ` +
+        `instead of the primary checkout (gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md).`,
+    );
+  return { action: 'block', reason, reasonCode: REASON_CODE.HARNESS_FLAG_MISSING, remedy, sentinelDiscarded: state.sentinelDiscarded, agentName: displayAgentName(subagentType) };
 }
 
 /* istanbul ignore next -- stdin adapter, exercised via spawnSync in tests */
@@ -613,6 +618,7 @@ function main() {
           decision: 'block',
           reason: decision.reason,
           reason_code: decision.reasonCode,
+          remedy: decision.remedy ?? null,
           sentinel_discarded: decision.sentinelDiscarded ?? null,
         };
         // Kimi feeds stderr (not stdout) back to the model on exit 2.

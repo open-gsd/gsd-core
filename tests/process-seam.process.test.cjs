@@ -21,8 +21,14 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createTempDir, cleanup, runGsdTools, TOOLS_PATH } = require('./helpers.cjs');
+// #6333: runGsdTools runs commands in-process now. The adapter over this seam,
+// with its retry and legacy-shape rules, is runGsdToolsProcess.
+const { createTempDir, cleanup, runGsdToolsProcess, TOOLS_PATH } = require('./helpers.cjs');
 const processSeam = require('./helpers/process-seam.cjs');
+const { assertNoLeftoverStall } = require('./helpers/stall-leftovers.cjs');
+
+/** The stall the bash-timeout test plants; a duration no other fixture uses, so a leftover is attributable (#6086). */
+const SEAM_STALL_COMMAND = 'sleep 5.0862';
 const { runNode, runGit, runHook, OUTCOME, toSeamResult } = processSeam;
 const {
   SEAM_DEFAULT_TIMEOUT_MS,
@@ -538,13 +544,15 @@ describe('runHook interpreter option', () => {
       scriptPath,
       [
         '#!/usr/bin/env bash',
-        'sleep 5',
+        // `exec` so the timeout kills the stall itself, not the bash above it (#6086).
+        `exec ${SEAM_STALL_COMMAND}`,
       ].join('\n')
     );
     const result = runHook(scriptPath, [], { interpreter: 'bash', timeoutMs: SEAM_SHORT_TIMEOUT_MS });
     assert.equal(result.outcome, OUTCOME.TIMED_OUT);
     assert.equal(result.timedOut, true);
     assert.equal(result.exitCode, null);
+    assertNoLeftoverStall(assert, SEAM_STALL_COMMAND, 'runHook bash stall');
   });
 });
 
@@ -675,14 +683,14 @@ describe('runGsdTools adapter (process-seam parity)', () => {
   });
 
   test('adapter returns the legacy success shape', () => {
-    const result = runGsdTools(['--help'], tmpDir);
+    const result = runGsdToolsProcess(['--help'], tmpDir);
     assert.equal(result.success, true);
     assert.equal(result.exitCode, 0);
     assert.equal(typeof result.output, 'string');
   });
 
   test('adapter returns the legacy failure shape', () => {
-    const result = runGsdTools(['this-is-not-a-real-command'], tmpDir);
+    const result = runGsdToolsProcess(['this-is-not-a-real-command'], tmpDir);
     assert.equal(result.success, false);
     assert.equal(typeof result.error, 'string');
     assert.ok(result.error.length > 0);
@@ -703,7 +711,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
         code: null,
       }),
       () => {
-        const result = runGsdTools(['a', 'b'], tmpDir);
+        const result = runGsdToolsProcess(['a', 'b'], tmpDir);
         const expected = `Command failed: ${process.execPath} ${TOOLS_PATH} a b [stderr: (empty) exit:9]`;
         assert.equal(result.success, false);
         assert.equal(result.error, expected);
@@ -736,7 +744,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
           code: null,
         }),
       (getCallCount) => {
-        const result = runGsdTools(['x'], tmpDir);
+        const result = runGsdToolsProcess(['x'], tmpDir);
         assert.equal(result.success, true);
         assert.equal(result.output, 'ok');
         assert.equal(getCallCount(), 2);
@@ -768,7 +776,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
           code: null,
         }),
       (getCallCount) => {
-        const result = runGsdTools(['x'], tmpDir);
+        const result = runGsdToolsProcess(['x'], tmpDir);
         assert.equal(result.success, true);
         assert.equal(result.output, 'ok');
         assert.equal(getCallCount(), 2);
@@ -796,7 +804,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
           `This indicates host OOM or scheduler contention, not a product bug. ` +
           `stdout=partial-out stderr=partial-err`;
         assert.throws(
-          () => runGsdTools(['x'], tmpDir),
+          () => runGsdToolsProcess(['x'], tmpDir),
           (err) => err instanceof Error && err.message === expected
         );
         assert.equal(getCallCount(), 2);
@@ -824,7 +832,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
           `This indicates host OOM or scheduler contention, not a product bug. ` +
           `stdout=partial-out stderr=partial-err`;
         assert.throws(
-          () => runGsdTools(['x'], tmpDir),
+          () => runGsdToolsProcess(['x'], tmpDir),
           (err) => err instanceof Error && err.message === expected
         );
       }
@@ -844,20 +852,20 @@ describe('runGsdTools adapter (process-seam parity)', () => {
         code: 'ETIMEDOUT',
       }),
       (getCallCount) => {
-        assert.throws(() => runGsdTools(['x'], tmpDir));
+        assert.throws(() => runGsdToolsProcess(['x'], tmpDir));
         assert.equal(getCallCount(), 2);
       }
     );
   });
 
   test('adapter still accepts a shell-style string', () => {
-    const result = runGsdTools('--help', tmpDir);
+    const result = runGsdToolsProcess('--help', tmpDir);
     assert.equal(result.success, true);
     assert.equal(result.exitCode, 0);
   });
 
   test('adapter still accepts an argv array', () => {
-    const result = runGsdTools(['--help'], tmpDir);
+    const result = runGsdToolsProcess(['--help'], tmpDir);
     assert.equal(result.success, true);
     assert.equal(result.exitCode, 0);
   });
@@ -880,7 +888,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
         };
       },
       () => {
-        runGsdTools(['x'], tmpDir, { GSD_SESSION_KEY: 'override-value' });
+        runGsdToolsProcess(['x'], tmpDir, { GSD_SESSION_KEY: 'override-value' });
         // TEST_ENV_BASE defaults GSD_SESSION_KEY to '' — the caller's env
         // argument must win over it.
         assert.equal(withMockedRunNode.capturedEnv.GSD_SESSION_KEY, 'override-value');
@@ -907,7 +915,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
         code: 'ENOBUFS',
       }),
       (getCallCount) => {
-        const result = runGsdTools(['x'], tmpDir);
+        const result = runGsdToolsProcess(['x'], tmpDir);
         assert.equal(getCallCount(), 1);
         assert.equal(result.success, false);
         assert.equal(typeof result.exitCode, 'number');
@@ -931,7 +939,7 @@ describe('runGsdTools adapter (process-seam parity)', () => {
         code: 'ENOENT',
       }),
       (getCallCount) => {
-        const result = runGsdTools(['x'], tmpDir);
+        const result = runGsdToolsProcess(['x'], tmpDir);
         assert.equal(getCallCount(), 1);
         assert.equal(result.success, false);
         assert.equal(typeof result.exitCode, 'number');

@@ -133,7 +133,7 @@ const { applySurface } = require('../gsd-core/bin/lib/surface.cjs');
 const { loadSkillsManifest, resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
 const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const { cleanup, sandboxHome } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 
 const COMMANDS_GSD = path.join(ROOT, 'commands', 'gsd');
 
@@ -170,7 +170,7 @@ describe('#1575 — golden-parity: surface path matches install path for descrip
 
   for (const runtime of DESCRIPTOR_RUNTIMES) {
     test(`${runtime}: surface agents byte-identical to install agents`, (t) => {
-      const installed = runMinimalInstall({ runtime, scope: 'global' });
+      const installed = copyRuntimeFixture({ runtime, scope: 'global' });
       const { configDir, root } = installed;
       t.after(() => { try { cleanup(root); } catch { /* best-effort */ } });
       // #3738: antigravity's skills/agents kinds declare a global `home`
@@ -226,7 +226,7 @@ describe('#1575 — golden-parity: surface path matches install path for descrip
     // is a no-op (it replaces existing lines, doesn't add new ones). But this test
     // proves the agentCtx threading is correct for both paths regardless.
     const attrResolver = () => 'Test Bot <test@example.com>';
-    const installed = runMinimalInstall({ runtime: 'cursor', scope: 'global' });
+    const installed = copyRuntimeFixture({ runtime: 'cursor', scope: 'global' });
     const { configDir, root } = installed;
     t.after(() => { try { cleanup(root); } catch { /* best-effort */ } });
     sandboxHome(t, root);
@@ -266,7 +266,7 @@ describe('#1575 — golden-parity: surface path matches install path for descrip
 
 describe('#1575 — surface path: no prune data-loss over pre-existing legacy agents', () => {
   test('pre-existing gsd-* agents not in staged set are pruned; user agents preserved', (t) => {
-    const installed = runMinimalInstall({ runtime: 'copilot', scope: 'global' });
+    const installed = copyRuntimeFixture({ runtime: 'copilot', scope: 'global' });
     const { configDir, root } = installed;
     t.after(() => { try { cleanup(root); } catch { /* best-effort */ } });
 

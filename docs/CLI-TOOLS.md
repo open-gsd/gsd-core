@@ -1145,6 +1145,28 @@ The JSON result carries `status`, `next_action`, `next_command` (the route proje
 - **`missing` on `verify-work`.** `/gsd-verify-work` runs the regeneration step for a `stale` report, and for a `missing` one only when every plan has a `SUMMARY.md` (the verify step never ran on an executed phase). A `missing` report on a phase that is not fully executed does not dispatch it: the command blocks with `next_command` (`execute-phase`) instead.
 - **Containment.** Two checks, both before any read. The phase directory must resolve under its phases root, and the report (and each `*-UAT.md` and `*-HUMAN-UAT.md`) must resolve inside its phase directory. Anything that escapes (a symlink out of the project) is never read and none of its content reaches any output: an escaped report reads `missing` from `verification status`, an escaped UAT file is treated as absent, and an escaped phase directory reads `missing` from `verification status` but `phase_dir_not_found` from `init verify-work`.
 
+### `verification all-summarized` (execute-phase's all-plans-summarized decision, #6096)
+
+```bash
+node gsd-tools.cjs verification all-summarized <phase-dir> [--filter-active] [--plan-index <json|@file:path>] [--phase-marked <true|false>] [--pick <field>]
+```
+
+When every plan in a phase has a `SUMMARY.md`, `execute-phase` has no plan work left to dispatch. Whether it then exits, presents a route, or resumes at the verification gates is decided here, by code, so a judgment such as "this change is test-only" cannot override the owner's staleness verdict. The result is `{ "decision": <one of the values below> }`, plus the full `verification status` result (`status`, `next_action`, `next_command`, `route`, ...) whenever the decision needed the report, so a caller can `--pick decision` and, for `present-route`, read `next_action` and `next_command` from the same call.
+
+`--filter-active` says a `--gaps-only` or wave filter is set. `--plan-index` is `phase-plan-index`'s own output (inline JSON, or the `@file:` form it prints for a large one); the blocked and not-ready skips are derived from it by the command, never asserted by the caller: an incomplete plan (no `has_summary`) with a non-empty `blocked_by` is a blocked skip, one with `ready: false` is a not-ready skip. It is required unless `--filter-active` already decides. `--phase-marked` is the roadmap checkbox from `roadmap.analyze` (`roadmap_complete`); any value other than `true`, including an empty one, reads as not marked. An unknown option, a missing or unparseable plan index, and a valueless option are errors.
+
+| `decision` | When (first match wins, in this order) |
+|------------|-----------------------------------------|
+| `exit-filtered` | `--filter-active` |
+| `exit-blocked` | the plan index holds a blocked skip |
+| `exit-not-ready` | the plan index holds a not-ready skip |
+| `resume-at-gates` | the owner's `route` is `execute-phase`: a `stale` or `missing` report, on both sides of `--phase-marked`, whatever the report's own `status` field says |
+| `update-roadmap` | a fresh `passed` report and the phase is not marked complete |
+| `exit-unchanged` | a fresh `passed` report and the phase is marked complete |
+| `present-route` | any other route (`gaps_found`, `human_needed`, `unparseable`, `phase_dir_not_found`) |
+
+The three plan-index exits never read the report, so they answer even when the report's `status` is outside the closed set; every other decision reads it and fails with `verification_status_invalid` like `verification status`. The branch is derived from the same `VERIFICATION_ROUTES` table as `verification status`, not a second one.
+
 ---
 
 ## Validation Commands

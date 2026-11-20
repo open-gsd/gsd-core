@@ -150,6 +150,7 @@ const GSD_ROLE_NAMES = Object.freeze(new Set([
   'gsd-doc-writer',
   'gsd-doc-verifier',
   'gsd-dom-verifier',
+  'gsd-behavior-verifier',
   'gsd-advisor-researcher',
   'gsd-ai-researcher',
   'gsd-assumptions-analyzer',
@@ -1057,7 +1058,9 @@ function buildSentinelDiscard(sentinel, dispatchIds) {
   if (!sentinel || !sentinel.present || sentinel.stale) return null;
   if (sentinelAppliesToDispatch(sentinel, dispatchIds)) return null;
   return {
-    sentinel: { phase: sentinel.phase ?? null, plan: sentinel.plan ?? null },
+    // #6028: the recorded decision rides along so the deny remedy can tell a recorded sequential degrade
+    // (`none`) from a recorded `harness-worktree` that merely named another phase or plan.
+    sentinel: { phase: sentinel.phase ?? null, plan: sentinel.plan ?? null, isolation: sentinel.isolation ?? null },
     dispatch: {
       phase: dispatchIds ? (dispatchIds.phase ?? null) : null,
       plan: dispatchIds ? (dispatchIds.plan ?? null) : null,

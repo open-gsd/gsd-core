@@ -5823,7 +5823,8 @@ describe('#5118 G: workflows surface verification-status errors instead of readi
     return out;
   }
 
-  const STATUS_READ_RE = /gsd_run\s+(?:query\s+)?(?:verification[. ]status|phase\s+uat-passed)\b/;
+  // #6096: execute-phase's all-plans-summarized read is `verification all-summarized` (the owner's status plus the decision).
+  const STATUS_READ_RE = /gsd_run\s+(?:query\s+)?(?:verification[. ](?:status|all-summarized)|phase\s+uat-passed)\b/;
 
   test('V48: every verification.status / uat-passed read keeps stderr and never coerces a failure to "no result" (§R3)', () => {
     for (const rel of [
@@ -5884,8 +5885,8 @@ describe('#5118 G: workflows surface verification-status errors instead of readi
   // echo must not re-print the raw, unsanitized phase path.
   test('V48c: execute-phase status-read failure echoes do not interpolate PHASE_DIR (review H)', () => {
     const lines = bashFenceLines(fs.readFileSync(path.join(WORKFLOWS, 'execute-phase.md'), 'utf-8'))
-      .filter((line) => /gsd_run\s+query\s+verification[. ]status\b/.test(line) && /\|\|\s*\{\s*echo\b/.test(line));
-    assert.ok(lines.length >= 2, 'non-vacuous: the resume ladder reads status and route');
+      .filter((line) => /gsd_run\s+query\s+verification[. ](?:status|all-summarized)\b/.test(line) && /\|\|\s*\{\s*echo\b/.test(line));
+    assert.ok(lines.length >= 1, 'non-vacuous: the resume ladder reads the all-summarized decision (#6096: one call, no separate status and route reads)');
     for (const line of lines) {
       const echoPart = line.slice(line.indexOf('|| {'));
       assert.doesNotMatch(echoPart, /\$\{?PHASE_DIR\}?/, `echo re-prints the raw path: ${line.trim()}`);
@@ -6042,3 +6043,391 @@ describe('#5931: a project-coded or unpadded phase dir resolves the scaffolder-w
     });
   }
 });
+
+// ─── #6078: a gaps_found report is checked against its covered-input fingerprint ──
+//
+// `readVerificationStatus` used to return `gaps_found` before the covered-digest check, so a gap closed
+// outside a gap-closure plan (a fix touching the report's covered files) never read stale and no route
+// re-ran the verifier. A `passed` report in the same situation reads `stale` and routes to execute-phase.
+
+describe('#6078: gaps_found with a covered-input fingerprint', () => {
+  /** A git project with one covered file and a report of `status` carrying its v4 fingerprint. */
+  function project(t, status, extraFrontmatter = null) {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    const covered = path.join(projectDir, 'src', 'a.ts');
+    fs.writeFileSync(covered, 'export const a = 1;\n');
+    const past = new Date(Date.now() - 120000);
+    fs.utimesSync(covered, past, past);
+    const digest = computeCoveredDigest(projectDir, ['src/a.ts'], undefined, { phaseDir });
+    const report = path.join(phaseDir, '01-VERIFICATION.md');
+    const fingerprint = extraFrontmatter ?? `covered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n`;
+    fs.writeFileSync(report, `---\nstatus: ${status}\n${fingerprint}---\n`);
+    const reportTime = new Date(Date.now() - 60000);
+    fs.utimesSync(report, reportTime, reportTime);
+    return { projectDir, phaseDir, covered };
+  }
+  const read = (phaseDir) => readVerificationStatus(phaseDir, { phaseCleanCommitTimesMs: () => new Map() });
+
+  test('a matching fingerprint keeps gaps_found and its gap-planning route', (t) => {
+    const { phaseDir } = project(t, 'gaps_found');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'gaps_found');
+    assert.equal(r.route, 'plan-phase');
+    assert.match(r.next_command, /plan-phase 01 --gaps/);
+    assert.equal(r.moved_files, undefined);
+  });
+
+  test('a moved fingerprint reads stale, names the moved file, and routes to the verifier re-run', (t) => {
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+    assert.match(r.next_command, /execute-phase 01/);
+    assert.deepEqual(r.moved_files, ['src/a.ts']);
+    assert.match(r.next_action, /re-runs the verifier/);
+  });
+
+  test('control: a passed report with the same moved file still reads stale and routes to execute-phase', (t) => {
+    const { phaseDir, covered } = project(t, 'passed');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+  });
+
+  test('a gaps_found report with no fingerprint and a newer SUMMARY still reads gaps_found', (t) => {
+    const { phaseDir } = project(t, 'gaps_found', '');
+    const summary = path.join(phaseDir, '01-01-SUMMARY.md');
+    fs.writeFileSync(summary, '# Summary\n');
+    const newer = new Date(Date.now() + 60000);
+    fs.utimesSync(summary, newer, newer);
+    const r = read(phaseDir);
+    assert.equal(r.status, 'gaps_found');
+    assert.equal(r.route, 'plan-phase');
+  });
+
+  test('a malformed or unknown-version fingerprint does not fail a gaps_found report closed to stale', (t) => {
+    const cases = {
+      'covered_files without a digest': 'covered_files:\n  - src/a.ts\n',
+      'a digest without covered_files': 'covered_digest: "v4:sha256:abc"\n',
+      'an empty covered_files array': 'covered_files: []\ncovered_digest: "v4:sha256:abc"\n',
+      'an unknown digest version': 'covered_files:\n  - src/a.ts\ncovered_digest: "v99:sha256:abc"\n',
+    };
+    for (const [label, fingerprint] of Object.entries(cases)) {
+      const { phaseDir } = project(t, 'gaps_found', fingerprint);
+      assert.equal(read(phaseDir).status, 'gaps_found', label);
+    }
+  });
+
+  test('a gap-closure plan and summary added after verification (no covered file edited) read stale with no moved files', (t) => {
+    const { phaseDir } = project(t, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Gap closure plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-SUMMARY.md'), '# Gap closure summary\n');
+    const r = read(phaseDir);
+    assert.equal(r.status, 'stale');
+    assert.equal(r.route, 'execute-phase');
+    assert.equal(r.moved_files, undefined);
+  });
+
+  test('a v2 digest on a gaps_found report: an undeclared plan added after verification reads stale; unchanged reads gaps_found', (t) => {
+    const projectDir = createTempGitProject();
+    t.after(() => cleanup(projectDir));
+    const phaseDir = path.join(projectDir, '.planning', 'phases', '01-foo');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.mkdirSync(path.join(projectDir, 'src'));
+    fs.writeFileSync(path.join(projectDir, 'src', 'a.ts'), 'export const a = 1;\n');
+    const digest = computeCoveredDigest(projectDir, ['src/a.ts'], 2, { phaseDir });
+    assert.match(digest, /^v2:/);
+    fs.writeFileSync(
+      path.join(phaseDir, '01-VERIFICATION.md'),
+      `---\nstatus: gaps_found\ncovered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n---\n`,
+    );
+    assert.equal(read(phaseDir).status, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan added after verification\n');
+    assert.equal(read(phaseDir).status, 'stale');
+  });
+
+  test('table: {known version, unknown version, malformed} x {unchanged, moved} for gaps_found vs passed', (t) => {
+    const rows = [
+      // [label, fingerprint builder key, unchangedStatus(gaps_found), movedStatus(gaps_found), unchangedStatus(passed), movedStatus(passed)]
+      ['known version', 'known', 'gaps_found', 'stale', 'passed', 'stale'],
+      ['unknown version', 'unknown', 'gaps_found', 'gaps_found', 'stale', 'stale'],
+      ['malformed pair', 'malformed', 'gaps_found', 'gaps_found', 'stale', 'stale'],
+    ];
+    const fingerprints = (digest) => ({
+      known: `covered_files:\n  - src/a.ts\ncovered_digest: "${digest}"\n`,
+      unknown: 'covered_files:\n  - src/a.ts\ncovered_digest: "v99:sha256:abc"\n',
+      malformed: 'covered_files:\n  - src/a.ts\n',
+    });
+    for (const [label, key, gUnchanged, gMoved, pUnchanged, pMoved] of rows) {
+      for (const [status, unchanged, moved] of [['gaps_found', gUnchanged, gMoved], ['passed', pUnchanged, pMoved]]) {
+        const base = project(t, status);
+        const digest = computeCoveredDigest(base.projectDir, ['src/a.ts'], undefined, { phaseDir: base.phaseDir });
+        const report = path.join(base.phaseDir, '01-VERIFICATION.md');
+        fs.writeFileSync(report, `---\nstatus: ${status}\n${fingerprints(digest)[key]}---\n`);
+        const reportTime = new Date(Date.now() - 60000);
+        fs.utimesSync(report, reportTime, reportTime);
+        assert.equal(read(base.phaseDir).status, unchanged, `${label} / ${status} / unchanged`);
+        fs.writeFileSync(base.covered, 'export const a = 2;\n');
+        assert.equal(read(base.phaseDir).status, moved, `${label} / ${status} / moved`);
+      }
+    }
+  });
+
+  test('a stale gaps_found phase keeps the phase status a gaps_found phase has today (EXECUTED)', (t) => {
+    const { phaseStatusFromFacts, PHASE_STATUS } = require('../gsd-core/bin/lib/phase-status.cjs');
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const statusOf = () => {
+      const v = isPhaseComplete(phaseDir, { phaseCleanCommitTimesMs: () => new Map() }).value;
+      return phaseStatusFromFacts({ planCount: 1, summaryCount: 1, complete: v.complete, verificationStatus: v.verification.status });
+    };
+    // a v4 digest unions the live plan/summary, so the report written above (before them) already reads stale
+    const staleStatus = statusOf();
+    fs.writeFileSync(covered, 'export const a = 3;\n');
+    assert.equal(statusOf(), PHASE_STATUS.EXECUTED);
+    assert.equal(staleStatus, PHASE_STATUS.EXECUTED);
+  });
+
+  test('a stale gaps_found phase is not complete', (t) => {
+    const { phaseDir, covered } = project(t, 'gaps_found');
+    fs.writeFileSync(covered, 'export const a = 2;\n');
+    const r = isPhaseComplete(phaseDir, { phaseCleanCommitTimesMs: () => new Map() });
+    assert.equal(r.value.complete, false);
+    assert.equal(r.value.verification.status, 'stale');
+  });
+});
+
+/**
+ * #6096 — execute-phase's all-plans-summarized decision is computed by code.
+ *
+ * When every plan has a SUMMARY, whether execute-phase resumes at the verification gates used to be left to the
+ * orchestrating model's reading of prose, so a stale report could be skipped on a judgment such as "this change
+ * is test-only". `verification all-summarized` owns the branch: filter / blocked / not-ready exits first (the
+ * blocked and not-ready skips are derived from `phase-plan-index`'s own JSON, not asserted by the caller), then
+ * the owner's own route (`stale` and `missing` route to execute-phase whatever the report's `status` says).
+ */
+{
+const fc = require('./helpers/fast-check-setup.cjs');
+const { runGsdTools } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const {
+  ALL_SUMMARIZED_DECISION,
+  VERIFICATION_ROUTES: ALL_SUMMARIZED_ROUTES,
+  decideAllSummarized,
+  parseAllSummarizedFacts,
+  VERIFICATION_STATUS,
+} = require('../gsd-core/bin/lib/verification.cjs');
+
+const D = ALL_SUMMARIZED_DECISION;
+const NO_FACTS = { filterActive: false, blockedSkip: false, notReadySkip: false, phaseMarked: false };
+const PLAN_INDEX = (plans) => JSON.stringify({ phase: '01', plans });
+const DONE = { id: '01-01', has_summary: true };
+
+describe('#6096: decideAllSummarized', () => {
+  const answer = (status) => ({ status, route: ALL_SUMMARIZED_ROUTES[status].command });
+
+  test('parity with the routing table: resume-at-gates holds for exactly the statuses VERIFICATION_ROUTES routes to execute-phase', () => {
+    const routed = Object.values(VERIFICATION_STATUS).filter((s) => ALL_SUMMARIZED_ROUTES[s].command === 'execute-phase').sort();
+    assert.deepEqual(routed, ['missing', 'stale'], 'the table routes exactly these to execute-phase');
+    for (const status of Object.values(VERIFICATION_STATUS)) {
+      for (const phaseMarked of [true, false]) {
+        const got = decideAllSummarized({ ...NO_FACTS, phaseMarked }, answer(status));
+        assert.equal(got === D.RESUME_AT_GATES, routed.includes(status), `${status} marked=${phaseMarked} -> ${got}`);
+      }
+    }
+  });
+
+  test('a fresh passed report: exit unchanged when marked, update the roadmap when not', () => {
+    assert.equal(decideAllSummarized({ ...NO_FACTS, phaseMarked: true }, answer(VERIFICATION_STATUS.PASSED)), D.EXIT_UNCHANGED);
+    assert.equal(decideAllSummarized({ ...NO_FACTS, phaseMarked: false }, answer(VERIFICATION_STATUS.PASSED)), D.UPDATE_ROADMAP);
+  });
+
+  test('every other status presents the owner\'s route, marked or not', () => {
+    for (const status of [VERIFICATION_STATUS.GAPS_FOUND, VERIFICATION_STATUS.HUMAN_NEEDED, VERIFICATION_STATUS.UNPARSEABLE, VERIFICATION_STATUS.PHASE_DIR_NOT_FOUND]) {
+      for (const phaseMarked of [true, false]) {
+        assert.equal(decideAllSummarized({ ...NO_FACTS, phaseMarked }, answer(status)), D.PRESENT_ROUTE, `${status} marked=${phaseMarked}`);
+      }
+    }
+  });
+
+  test('the plan-index exits come first and in the workflow\'s order, and never need the owner\'s answer', () => {
+    assert.equal(decideAllSummarized({ ...NO_FACTS, filterActive: true, blockedSkip: true, notReadySkip: true }, null), D.EXIT_FILTERED);
+    assert.equal(decideAllSummarized({ ...NO_FACTS, blockedSkip: true, notReadySkip: true }, null), D.EXIT_BLOCKED);
+    assert.equal(decideAllSummarized({ ...NO_FACTS, notReadySkip: true }, null), D.EXIT_NOT_READY);
+    assert.throws(() => decideAllSummarized(NO_FACTS, null), TypeError);
+  });
+
+  test('property: over every combination of facts and statuses the decision is total, ordered, and a stale route can only be overridden by a plan-index exit', () => {
+    const statuses = fc.constantFrom(...Object.values(VERIFICATION_STATUS));
+    fc.assert(
+      fc.property(fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), statuses, (filterActive, blockedSkip, notReadySkip, phaseMarked, status) => {
+        const facts = { filterActive, blockedSkip, notReadySkip, phaseMarked };
+        const got = decideAllSummarized(facts, answer(status));
+        assert.ok(Object.values(D).includes(got), 'total');
+        if (filterActive) assert.equal(got, D.EXIT_FILTERED);
+        else if (blockedSkip) assert.equal(got, D.EXIT_BLOCKED);
+        else if (notReadySkip) assert.equal(got, D.EXIT_NOT_READY);
+        else if (status === VERIFICATION_STATUS.STALE || status === VERIFICATION_STATUS.MISSING) assert.equal(got, D.RESUME_AT_GATES);
+      }),
+      { numRuns: 100 },
+    );
+  });
+});
+
+describe('#6096: parseAllSummarizedFacts', () => {
+  test('the plan index decides the blocked and not-ready skips; summarized plans are never skips', () => {
+    const parse = (plans, ...rest) => parseAllSummarizedFacts(['--plan-index', PLAN_INDEX(plans), ...rest]);
+    assert.deepEqual(parse([DONE]), NO_FACTS);
+    assert.equal(parse([DONE, { id: '01-02', has_summary: false, blocked_by: ['01-01'] }]).blockedSkip, true);
+    assert.equal(parse([DONE, { id: '01-02', has_summary: false, ready: false }]).notReadySkip, true);
+    // a SUMMARY'd plan carrying either field is not a skip; an empty blocked_by is not blocked; ready:true is ready
+    assert.deepEqual(parse([{ id: 'a', has_summary: true, blocked_by: ['x'], ready: false }, { id: 'b', has_summary: false, blocked_by: [], ready: true }]), NO_FACTS);
+    assert.deepEqual(parse([DONE], '--phase-marked', 'true'), { ...NO_FACTS, phaseMarked: true });
+  });
+
+  test('--phase-marked other than true (empty, null, false) is not marked; --filter-active needs no plan index', () => {
+    for (const value of ['false', '', 'null', 'TRUE']) {
+      assert.equal(parseAllSummarizedFacts(['--filter-active', '--phase-marked', value]).phaseMarked, false, JSON.stringify(value));
+    }
+    assert.deepEqual(parseAllSummarizedFacts(['--filter-active']), { ...NO_FACTS, filterActive: true });
+  });
+
+  test('anything malformed is an error, never ignored', () => {
+    assert.match(parseAllSummarizedFacts(['--bogus']).error, /unknown option/);
+    assert.match(parseAllSummarizedFacts(['--phase-marked']).error, /needs a value/);
+    assert.match(parseAllSummarizedFacts(['--phase-marked', '--filter-active']).error, /needs a value/);
+    assert.match(parseAllSummarizedFacts(['--plan-index']).error, /needs a value/);
+    assert.match(parseAllSummarizedFacts([]).error, /--plan-index is required/);
+    assert.match(parseAllSummarizedFacts(['--plan-index', 'not json']).error, /not valid phase-plan-index JSON/);
+    assert.match(parseAllSummarizedFacts(['--plan-index', '@file:/no/such/plan-index.json']).error, /not valid phase-plan-index JSON/);
+  });
+});
+
+describe('#6096: verification all-summarized through the CLI', () => {
+  function project(t) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6096-'));
+    t.after(() => cleanup(root));
+    const phaseDir = path.join(root, '.planning', 'phases', '01-alpha');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    const past = new Date(Date.now() - 120000);
+    fs.utimesSync(path.join(phaseDir, '01-01-SUMMARY.md'), past, past);
+    return { root, phaseDir };
+  }
+  const report = (phaseDir, frontmatter) => {
+    const file = path.join(phaseDir, '01-alpha-VERIFICATION.md');
+    fs.writeFileSync(file, `---\n${frontmatter}\n---\n\n# Verification\n`);
+    const now = new Date(Date.now() - 60000);
+    fs.utimesSync(file, now, now);
+  };
+  const run = (root, phaseDir, ...args) => runGsdTools(['verification', 'all-summarized', phaseDir, ...args], root);
+  const decision = (root, phaseDir, ...args) => {
+    const r = run(root, phaseDir, ...args);
+    assert.ok(r.success, `all-summarized should run: ${r.error}`);
+    return JSON.parse(r.output);
+  };
+  const CLEAN = ['--plan-index', PLAN_INDEX([DONE])];
+
+  test('the issue: a passed report whose covered digest no longer matches resumes at the gates, marked or not', (t) => {
+    const { root, phaseDir } = project(t);
+    report(phaseDir, 'status: passed\ncovered_files:\n  - src/a.ts\ncovered_digest: "v4:sha256:0000000000000000000000000000000000000000000000000000000000000000"');
+    for (const marked of ['true', 'false']) {
+      const r = decision(root, phaseDir, ...CLEAN, '--phase-marked', marked);
+      assert.equal(r.decision, D.RESUME_AT_GATES, `marked=${marked}`);
+      assert.equal(r.status, 'stale');
+      assert.equal(r.route, 'execute-phase');
+    }
+  });
+
+  test('a missing report resumes at the gates', (t) => {
+    const { root, phaseDir } = project(t);
+    assert.equal(decision(root, phaseDir, ...CLEAN, '--phase-marked', 'true').decision, D.RESUME_AT_GATES);
+  });
+
+  test('a fresh passed report: exit unchanged when marked, update-roadmap when not (including a value jq printed empty)', (t) => {
+    const { root, phaseDir } = project(t);
+    report(phaseDir, 'status: passed');
+    assert.equal(decision(root, phaseDir, ...CLEAN, '--phase-marked', 'true').decision, D.EXIT_UNCHANGED);
+    assert.equal(decision(root, phaseDir, ...CLEAN, '--phase-marked', 'false').decision, D.UPDATE_ROADMAP);
+    assert.equal(decision(root, phaseDir, ...CLEAN, '--phase-marked', '').decision, D.UPDATE_ROADMAP);
+  });
+
+  test('gaps_found presents the owner\'s route with its next_action and next_command', (t) => {
+    const { root, phaseDir } = project(t);
+    report(phaseDir, 'status: gaps_found');
+    const r = decision(root, phaseDir, ...CLEAN, '--phase-marked', 'true');
+    assert.equal(r.decision, D.PRESENT_ROUTE);
+    assert.equal(r.route, 'plan-phase');
+    assert.match(r.next_command, /plan-phase/);
+    assert.ok(r.next_action.length > 0);
+  });
+
+  test('--pick decision prints just the decision', (t) => {
+    const { root, phaseDir } = project(t);
+    report(phaseDir, 'status: passed');
+    const r = runGsdTools(['verification', 'all-summarized', phaseDir, ...CLEAN, '--phase-marked', 'true', '--pick', 'decision'], root);
+    assert.ok(r.success, r.error);
+    assert.equal(r.output.trim(), D.EXIT_UNCHANGED);
+  });
+
+  test('the plan-index exits answer from the plan index without reading the report: an out-of-set status does not error there, and does without them', (t) => {
+    const { root, phaseDir } = project(t);
+    report(phaseDir, 'status: verified');
+    const blocked = ['--plan-index', PLAN_INDEX([{ id: '01-02', has_summary: false, blocked_by: ['01-01'] }])];
+    const notReady = ['--plan-index', PLAN_INDEX([{ id: '01-02', has_summary: false, ready: false }])];
+    assert.equal(decision(root, phaseDir, '--filter-active').decision, D.EXIT_FILTERED);
+    assert.equal(decision(root, phaseDir, ...blocked).decision, D.EXIT_BLOCKED);
+    assert.equal(decision(root, phaseDir, ...notReady).decision, D.EXIT_NOT_READY);
+    assert.equal(decision(root, phaseDir, '--filter-active', ...blocked).decision, D.EXIT_FILTERED);
+    assert.equal(run(root, phaseDir, ...CLEAN, '--phase-marked', 'true').success, false, 'an out-of-set status is a hard error when the report must be read');
+  });
+
+  test('the plan index may arrive as the @file: form phase-plan-index prints for a large one', (t) => {
+    const { root, phaseDir } = project(t);
+    report(phaseDir, 'status: passed');
+    const file = path.join(root, 'plan-index.json');
+    fs.writeFileSync(file, PLAN_INDEX([{ id: '01-02', has_summary: false, blocked_by: ['01-01'] }]));
+    assert.equal(decision(root, phaseDir, '--plan-index', `@file:${file}`).decision, D.EXIT_BLOCKED);
+  });
+
+  test('a missing phase directory argument, a missing plan index and an unknown option are errors', (t) => {
+    const { root, phaseDir } = project(t);
+    assert.equal(runGsdTools(['verification', 'all-summarized'], root).success, false);
+    assert.equal(run(root, phaseDir, '--phase-marked', 'true').success, false);
+    assert.equal(run(root, phaseDir, ...CLEAN, '--no-such-flag').success, false);
+  });
+});
+
+describe('#6096: the workflow branches on the decision command and on every decision it can print', () => {
+  const WORKFLOW = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+  const step = () => {
+    const content = fs.readFileSync(WORKFLOW, 'utf8');
+    const start = content.indexOf('<step name="discover_and_group_plans">');
+    return content.slice(start, content.indexOf('</step>', start));
+  };
+
+  test('parity: the decision bullets are exactly the values the command can print', () => {
+    const bullets = splitLines(step())
+      .map((line) => /^- \*\*`([a-z-]+)`\*\*/.exec(line))
+      .filter(Boolean)
+      .map((m) => m[1]);
+    assert.deepEqual([...bullets].sort(), Object.values(D).sort());
+  });
+
+  test('the call hands the command the plan index and the filters, not model-asserted skip flags', () => {
+    const call = splitLines(step()).find((line) => line.startsWith('ALL_SUMMARIZED=$(gsd_run query verification all-summarized'));
+    assert.ok(call, 'the block must make the all-summarized call');
+    assert.ok(call.includes('--plan-index "$PLAN_INDEX"'), 'the plan index is the input');
+    assert.ok(call.includes(':+--filter-active}'), 'the filter flag comes from the --gaps-only / WAVE_FILTER variables');
+    for (const flag of ['--blocked-skip', '--not-ready-skip']) assert.equal(call.includes(flag), false, `${flag} no longer exists`);
+  });
+});
+}

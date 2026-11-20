@@ -52,7 +52,7 @@ This step is `onError: skip` at `discuss:post` / `plan:post` / `verify:post` -- 
    - `CONTEXT.md` → `decisions`
    - `PLAN.md` → `planning`
    - `SUMMARY.md` → `milestones`
-   (Confirmed problem→fix pairs go to `problems` — see the `capture-problems` fragment used at `execute:wave:post`.)
+   (Confirmed problem→fix pairs go to `problems` — see the `capture-problems` fragment used at `execute:post`.)
 3. **Wing.** `config.mempalace.wing` if non-empty, else `config.project_code`, else the repo directory name.
 4. **Mode / transport.** Read `config.mempalace.memory_mode`. Prefer MCP (`mempalace_*`) when your MemPalace MCP server is registered and your runtime permits those tools; otherwise use the `mempalace` CLI (covered by this skill's `Bash` allow-tool), as in `mempalace-recall`.
 
