@@ -1388,8 +1388,10 @@ shapes as not halted, in both commands and with no entry in `diagnostics[]`:
 - the nested layout: `plans/PLAN-01.md` with `plans/SUMMARY-01.md`, which the
   halt lookup never pairs;
 - a SUMMARY with lone-CR (`\r`) line endings;
-- frontmatter longer than 64 KiB, of which the predicate reads only the first
-  64 KiB.
+- a SUMMARY whose frontmatter does not open on its first line (a blank line
+  before the opening `---`);
+- frontmatter whose closing `---` lies past the first 64 KiB, the most the
+  predicate reads, wherever `status` sits in it.
 
 #### Large payloads
 
