@@ -753,3 +753,84 @@ describe('#5681: the defaults store is read bounded and replaced through an excl
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { runtime: 'codex', model_profile: 'balanced' });
   });
 });
+
+describe('#5681: config-save-defaults names the live process that holds the lock', () => {
+  // The holder is a process this test spawns and keeps alive until the test ends,
+  // so the lock names a live pid other than the saver's on any host. The save runs
+  // in a child that takes the lock with no wait, so a held lock is refused on the
+  // first look instead of after the 30 s default.
+  const CONFIG_LIB_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config.cjs');
+  const INSTALLER_MIGRATIONS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'installer-migrations.cjs');
+  const CLI_EXIT_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'cli-exit.cjs');
+  const HELD_LOCK_SCRIPT = [
+    'const [configPath, migrationsPath, cliExitPath, gsdHome, settings] = process.argv.slice(1);',
+    'const installerMigrations = require(migrationsPath);',
+    'const realAcquire = installerMigrations.acquireInstallMigrationLock;',
+    'installerMigrations.acquireInstallMigrationLock = (dir) => realAcquire(dir, { timeoutMs: 0 });',
+    'const cliExit = require(cliExitPath);',
+    'cliExit.setJsonErrorMode(true);',
+    'try {',
+    '  require(configPath).cmdConfigSaveDefaults(gsdHome, settings, false);',
+    '} catch (err) {',
+    '  if (!(err instanceof cliExit.ExitError)) throw err;',
+    '  process.exitCode = 1;',
+    '}',
+  ].join('\n');
+
+  function liveHolderPid(t) {
+    const { spawn } = require('node:child_process');
+    const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });
+    t.after(() => holder.kill('SIGKILL'));
+    return holder.pid;
+  }
+
+  function heldStore(t, lockPayload) {
+    const gsdHome = createTempDir('gsd-5681-held-');
+    t.after(() => cleanup(gsdHome));
+    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+    const lockPath = path.join(gsdHome, '.gsd', require(INSTALLER_MIGRATIONS_PATH).INSTALL_MIGRATION_LOCK_NAME);
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, '{"mode":"interactive"}');
+    fs.writeFileSync(lockPath, JSON.stringify(lockPayload) + '\n');
+    const save = () => runNode(['-e', HELD_LOCK_SCRIPT, CONFIG_LIB_PATH, INSTALLER_MIGRATIONS_PATH, CLI_EXIT_PATH, gsdHome, '{"mode":"yolo"}'], {
+      cwd: gsdHome,
+      env: installSpawnEnv({ GSD_HOME: gsdHome }),
+      timeoutMs: PROBE_TIMEOUT_MS,
+    });
+    return { defaultsPath, lockPath, save };
+  }
+
+  test('a lock held by another live process is a typed refusal that names the holder, and nothing is written', (t) => {
+    const pid = liveHolderPid(t);
+    const { defaultsPath, lockPath, save } = heldStore(t, { pid, acquiredAt: '2026-11-07T00:00:00.000Z' });
+
+    const r = save();
+
+    assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
+    assert.strictEqual(r.exitCode, 1, r.summary);
+    const error = JSON.parse(r.stderr.trim());
+    assert.strictEqual(error.reason, 'config_defaults_lock_unavailable');
+    assert.deepStrictEqual({ pid: error.holder_pid, since: error.holder_since }, { pid, since: '2026-11-07T00:00:00.000Z' });
+    assert.strictEqual(error.lock_path, lockPath);
+    // The same refusal reaches a lock whose owner has exited but could not be
+    // reclaimed (a read-only .gsd/), so it also says when to remove it.
+    assert.ok(error.message.includes('Save again when that GSD install or settings save has finished'), error.message);
+    assert.ok(error.message.includes(`if pid ${pid} is not running, remove ${lockPath} and save again`), error.message);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), '{"mode":"interactive"}');
+    assert.ok(fs.existsSync(lockPath), "another process's lock is left in place");
+  });
+
+  test('a lock that names a pid but no start time is refused without an undefined field or text', (t) => {
+    const pid = liveHolderPid(t);
+    const { save } = heldStore(t, { pid });
+
+    const r = save();
+
+    assert.strictEqual(r.exitCode, 1, r.summary);
+    const error = JSON.parse(r.stderr.trim());
+    assert.strictEqual(error.reason, 'config_defaults_lock_unavailable');
+    assert.strictEqual(error.holder_pid, pid);
+    assert.strictEqual(Object.hasOwn(error, 'holder_since'), false);
+    assert.doesNotMatch(error.message, /undefined/);
+  });
+});

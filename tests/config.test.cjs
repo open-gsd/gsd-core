@@ -4082,22 +4082,79 @@ describe('config-new-project: choices are held to config-set leaf by leaf (#5268
   });
 });
 
+// ─── #5681 fixtures ─────────────────────────────────────────────────────────
+
+/**
+ * Point process.env.GSD_HOME at `gsdHome` for the rest of the test, for rows that
+ * call config.cjs in-process. Restored in t.after rather than through
+ * withIsolatedProcessState, which restores when its callback returns, before an
+ * awaited in-process save has finished.
+ */
+function useGsdHome(t, gsdHome) {
+  const saved = process.env.GSD_HOME;
+  process.env.GSD_HOME = gsdHome;
+  t.after(() => {
+    if (saved === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = saved;
+  });
+}
+
+/**
+ * A temp GSD_HOME holding the global defaults store, removed after the test.
+ * `defaults` seeds `.gsd/defaults.json`: an object is written as JSON, a string as
+ * given, and undefined writes nothing, not even `.gsd/`. `inProcess` points
+ * process.env.GSD_HOME at it.
+ */
+function defaultsHome(t, defaults, { inProcess = false } = {}) {
+  const gsdHome = createTempDir('gsd-5681-home-');
+  t.after(() => cleanup(gsdHome));
+  const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
+  if (defaults !== undefined) {
+    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
+    fs.writeFileSync(defaultsPath, typeof defaults === 'string' ? defaults : JSON.stringify(defaults));
+  }
+  if (inProcess) useGsdHome(t, gsdHome);
+  const env = { GSD_HOME: gsdHome };
+  const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+  return {
+    gsdHome,
+    env,
+    defaultsPath,
+    lockPath: path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME),
+    readText: () => fs.readFileSync(defaultsPath, 'utf-8'),
+    read: () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')),
+    /** config-save-defaults through the CLI with --json-errors; `args` are its positionals. */
+    run: (args, cwd = gsdHome) => runGsdTools(['--json-errors', 'config-save-defaults', ...args], cwd, env),
+    save: (settings, cwd = gsdHome) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], cwd, env),
+    /** config-save-defaults in-process, through runQuietlyJson (needs `inProcess`). */
+    saveInProcess: (settings) => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify(settings), false)),
+  };
+}
+
+/** A temp project directory, removed after the test. */
+function tempProject(t) {
+  const dir = createTempDir('gsd-5681-proj-');
+  t.after(() => cleanup(dir));
+  return dir;
+}
+
+/**
+ * Make the installer lock give up at once instead of after its 30 s default, so a
+ * held lock is refused on the first look. Not a subprocess timeout: the lock's own
+ * wait budget, zero.
+ */
+function lockWaitNone(t) {
+  const installerMigrations = require('../gsd-core/bin/lib/installer-migrations.cjs');
+  const realAcquire = installerMigrations.acquireInstallMigrationLock;
+  const LOCK_WAIT_NONE_MS = 0;
+  t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
+}
+
 describe('#5681 regression: config-save-defaults merges into the global defaults store', () => {
   // The settings workflow's "save as global defaults" step wrote a fixed object,
   // so every key only the defaults file carried was deleted, and the next install
   // re-baked the agents without those overrides.
-  function store(t, contents) {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    t.after(() => cleanup(gsdHome));
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    if (contents !== undefined) {
-      fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-      fs.writeFileSync(defaultsPath, contents);
-    }
-    const save = (settings) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
-    const read = () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
-    return { defaultsPath, save, read };
-  }
+  const store = defaultsHome;
 
   test('keys the settings flow does not manage survive a save; the chosen settings are updated', (t) => {
     const { save, read } = store(t, JSON.stringify({
@@ -4175,11 +4232,9 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
 
   test('a saved {} leaves a stored parallelization: false resolving to false', (t) => {
     const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
-    const { defaultsPath, save } = store(t, JSON.stringify({ parallelization: false }));
-    const gsdHome = path.dirname(path.dirname(defaultsPath));
+    const { gsdHome, save } = store(t, { parallelization: false });
     assert.ok(save({ parallelization: {} }).success);
-    const outside = createTempDir('gsd-5681-outside-');
-    t.after(() => cleanup(outside));
+    const outside = tempProject(t);
     const loaded = withIsolatedProcessState(() => {
       process.env.GSD_HOME = gsdHome;
       return loadConfig(outside);
@@ -4215,18 +4270,13 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   // flat one. Each row follows the save through config-new-project and loadConfig.
   const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
   function newProjectAfterSave(t, defaults, settings) {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(defaults));
-    const env = { GSD_HOME: gsdHome };
-    const saved = runGsdTools(['config-save-defaults', JSON.stringify(settings)], projectDir, env);
+    const home = defaultsHome(t, defaults);
+    const projectDir = tempProject(t);
+    const saved = home.save(settings, projectDir);
     assert.ok(saved.success, saved.error);
-    const created = runGsdTools(['config-new-project', '{}'], projectDir, env);
+    const created = runGsdTools(['config-new-project', '{}'], projectDir, home.env);
     assert.ok(created.success, created.error);
-    const store = JSON.parse(fs.readFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), 'utf-8'));
-    return { config: loadConfig(projectDir), store };
+    return { config: loadConfig(projectDir), store: home.read() };
   }
 
   test('turning research off wins over a stale flat research: true', (t) => {
@@ -4263,11 +4313,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   // key with the chosen value. A nested-only workstream config lost to the
   // root's flat `commit_docs: true`, and planning files were committed.
   test('a nested choice in a workstream overrides the flat value in the root config', (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: true, search_gitignored: false }));
+    const { gsdHome } = defaultsHome(t, JSON.stringify({ commit_docs: true, search_gitignored: false }));
+    const projectDir = tempProject(t);
     const env = { GSD_HOME: gsdHome };
     fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), JSON.stringify({ commit_docs: true, search_gitignored: false }));
@@ -4291,11 +4338,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
         ['as a choice', '{}', `{"planning":{"commit_docs":${bad}}}`, true],
         ['as a choice over a flat store value', '{"commit_docs":false}', `{"planning":{"commit_docs":${bad}}}`, false],
       ]) {
-        const gsdHome = createTempDir('gsd-5681-home-');
-        const projectDir = createTempDir('gsd-5681-proj-');
-        t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-        fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-        fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), store);
+        const { gsdHome } = defaultsHome(t, store);
+        const projectDir = tempProject(t);
         const created = runGsdTools(['config-new-project', choices], projectDir, { GSD_HOME: gsdHome });
         assert.ok(created.success, created.error);
         const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
@@ -4309,11 +4353,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
 
   test('check-commit refuses planning files when a string "false" was chosen over a stored false', (t) => {
     const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: false }));
+    const { gsdHome } = defaultsHome(t, JSON.stringify({ commit_docs: false }));
+    const projectDir = tempProject(t);
     const env = { GSD_HOME: gsdHome };
     gitOrThrow(['init', '-q'], { cwd: projectDir });
     const created = runGsdTools(['config-new-project', JSON.stringify({ planning: { commit_docs: 'false' } })], projectDir, env);
@@ -4331,11 +4372,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
       ['a flat choice over a saved nested default', { planning: { commit_docs: false } }, { commit_docs: true }, true],
       ['a nested choice over a flat store value', { commit_docs: false }, { planning: { commit_docs: true } }, true],
     ]) {
-      const gsdHome = createTempDir('gsd-5681-home-');
-      const projectDir = createTempDir('gsd-5681-proj-');
-      t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify(store));
+      const { gsdHome } = defaultsHome(t, JSON.stringify(store));
+      const projectDir = tempProject(t);
       const created = runGsdTools(['config-new-project', JSON.stringify(choices)], projectDir, { GSD_HOME: gsdHome });
       assert.ok(created.success, created.error);
       const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
@@ -4346,11 +4384,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   });
 
   test('a null nested commit_docs in the store is no setting, so the template default stands', (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ planning: { commit_docs: null, search_gitignored: null } }));
+    const { gsdHome } = defaultsHome(t, JSON.stringify({ planning: { commit_docs: null, search_gitignored: null } }));
+    const projectDir = tempProject(t);
     const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
     assert.ok(created.success, created.error);
     const config = loadConfig(projectDir);
@@ -4359,11 +4394,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   });
 
   test('a null flat commit_docs in the store is no setting, so the template default stands', (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: null }));
+    const { gsdHome } = defaultsHome(t, JSON.stringify({ commit_docs: null }));
+    const projectDir = tempProject(t);
     const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
     assert.ok(created.success, created.error);
     assert.strictEqual(loadConfig(projectDir).commit_docs, true);
@@ -4374,12 +4406,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   // resolve the default too, not the nested value behind the null.
   for (const [key, nestedValue, fallback] of [['commit_docs', false, true], ['search_gitignored', true, false]]) {
     test(`a null flat ${key} beside a nested value resolves the default in the loader and in a new project alike`, (t) => {
-      const gsdHome = createTempDir('gsd-5681-home-');
-      const projectDir = createTempDir('gsd-5681-proj-');
-      const outside = createTempDir('gsd-5681-outside-');
-      t.after(() => { cleanup(gsdHome); cleanup(projectDir); cleanup(outside); });
-      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ [key]: null, planning: { [key]: nestedValue } }));
+      const { gsdHome } = defaultsHome(t, JSON.stringify({ [key]: null, planning: { [key]: nestedValue } }));
+      const projectDir = tempProject(t);
+      const outside = tempProject(t);
       const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
       assert.ok(created.success, created.error);
       const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
@@ -4420,11 +4449,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   // choice is not shadowed by the template's flat default, and it outranks a
   // saved default under either spelling.
   test('a nested planning choice reaches the new project over the template and the store', (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ commit_docs: true }));
+    const { gsdHome } = defaultsHome(t, JSON.stringify({ commit_docs: true }));
+    const projectDir = tempProject(t);
     const created = runGsdTools(['config-new-project', JSON.stringify({ planning: { commit_docs: false } })], projectDir, { GSD_HOME: gsdHome });
     assert.ok(created.success, created.error);
     assert.strictEqual(loadConfig(projectDir).commit_docs, false);
@@ -4447,11 +4473,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   // save that stored the nested spelling and dropped the flat one turned a
   // saved `workflow.research: false` back into the default.
   test('turning research off outside a project survives the save that drops the flat spelling', (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const outside = createTempDir('gsd-5681-outside-');
-    t.after(() => { cleanup(gsdHome); cleanup(outside); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ research: false }));
+    const { gsdHome } = defaultsHome(t, JSON.stringify({ research: false }));
+    const outside = tempProject(t);
     assert.ok(runGsdTools(['config-save-defaults', JSON.stringify({ workflow: { research: false } })], outside, { GSD_HOME: gsdHome }).success);
     const loaded = withIsolatedProcessState(() => {
       process.env.GSD_HOME = gsdHome;
@@ -4466,10 +4489,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     const { NESTED_TWINS, GLOBAL_DEFAULTS_RESOLUTION_KEYS, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
     const keys = NESTED_TWINS.map((twin) => twin.key).filter((key) => GLOBAL_DEFAULTS_RESOLUTION_KEYS.includes(key));
     assert.ok(keys.includes('post_planning_gaps') && keys.includes('research_before_questions'), `precondition: the hand-read keys are in the list (${keys.join(', ')})`);
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const outside = createTempDir('gsd-5681-outside-');
-    t.after(() => { cleanup(gsdHome); cleanup(outside); });
+    const { gsdHome } = defaultsHome(t);
     fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    const outside = tempProject(t);
     const store = {};
     const want = {};
     for (const key of keys) {
@@ -4490,12 +4512,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   // ahead of workflow.research_before_questions, so a stale flat value kept
   // winning over a saved nested one.
   test('a saved workflow.research_before_questions replaces a stale flat value', (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const outside = createTempDir('gsd-5681-outside-');
-    t.after(() => { cleanup(gsdHome); cleanup(outside); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.writeFileSync(defaultsPath, JSON.stringify({ research_before_questions: true }));
+    const { gsdHome, defaultsPath } = defaultsHome(t, JSON.stringify({ research_before_questions: true }));
+    const outside = tempProject(t);
     const saved = runGsdTools(['config-save-defaults', JSON.stringify({ workflow: { research_before_questions: false } })], outside, { GSD_HOME: gsdHome });
     assert.ok(saved.success, saved.error);
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')), { workflow: { research_before_questions: false } });
@@ -4510,11 +4528,8 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
   // member read that member from the depth-to-granularity table, and the new
   // project got no granularity. It is now an unknown depth, kept as given.
   test('a stored depth named like an Object.prototype member is kept as the granularity', (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
-    fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ depth: 'constructor' }));
+    const { gsdHome } = defaultsHome(t, JSON.stringify({ depth: 'constructor' }));
+    const projectDir = tempProject(t);
     const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
     assert.ok(created.success, created.error);
     const config = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
@@ -4559,10 +4574,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     const workflowTemplate = JSON.parse(body.replaceAll('<current>', 'null'));
     assert.deepStrictEqual(dotted(template), dotted(workflowTemplate));
 
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const projectDir = createTempDir('gsd-5681-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
+    const { gsdHome } = defaultsHome(t);
     fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+    const projectDir = tempProject(t);
     fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({
       research: true, plan_checker: true, branching_strategy: 'none', quick_branch_template: 'old/{slug}', depth: 'quick',
     }));
@@ -4591,15 +4605,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     const [head, field] = dotted.split('.');
     return field === undefined ? { [head]: value } : { [head]: { [field]: value } };
   };
-  function store(t, contents) {
-    const gsdHome = createTempDir('gsd-5681-twins-');
-    t.after(() => cleanup(gsdHome));
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, JSON.stringify(contents));
-    const save = (settings) => runGsdTools(['--json-errors', 'config-save-defaults', JSON.stringify(settings)], gsdHome, { GSD_HOME: gsdHome });
-    return { defaultsPath, save, read: () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')) };
-  }
+  const store = defaultsHome;
 
   test('the twin pairs are the loader\'s NESTED_TWINS plus depth/granularity', () => {
     const { NESTED_TWINS } = require('../gsd-core/bin/lib/config-loader.cjs');
@@ -4652,16 +4658,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
   // The installer's defaults writers hold this lock for their read-modify-write
   // (bin/install.js), so a save that holds it cannot interleave with them.
   test('a save holds the installer lock on .gsd/ while it writes, and releases it on every path', async (t) => {
-    const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
-    const gsdHome = createTempDir('gsd-5681-lock-');
-    const lockPath = path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME);
-    const savedHome = process.env.GSD_HOME;
-    t.after(() => {
-      if (savedHome === undefined) delete process.env.GSD_HOME;
-      else process.env.GSD_HOME = savedHome;
-      cleanup(gsdHome);
-    });
-    process.env.GSD_HOME = gsdHome;
+    const { gsdHome, lockPath } = defaultsHome(t, undefined, { inProcess: true });
     const heldAtWrite = [];
     const realRename = fs.renameSync;
     t.mock.method(fs, 'renameSync', function (from, to) {
@@ -4684,15 +4681,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
 describe('#5681: config-save-defaults holds the settings to the config-set rules', () => {
   // The store seeds every new project, so it takes only what config-set would
   // store, as config-new-project's choices do (#5268).
-  function storeWith(t, contents) {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    t.after(() => cleanup(gsdHome));
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, contents);
-    const run = (args) => runGsdTools(['--json-errors', 'config-save-defaults', ...args], gsdHome, { GSD_HOME: gsdHome });
-    return { defaultsPath, run };
-  }
+  const storeWith = defaultsHome;
   const BEFORE = JSON.stringify({ model_profile: 'quality' });
 
   // config-set's value rules (validateConfigValue) raise no typed reason, in
@@ -4797,25 +4786,15 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
   // A partial write that fails (ENOSPC) must not reach the store: the old seam
   // fell back to writing the store in place and truncated it.
   test('a failed write is reported and leaves the existing store and no temp file', async (t) => {
-    const gsdHome = createTempDir('gsd-5681-home-');
-    t.after(() => cleanup(gsdHome));
-    const savedGsdHome = process.env.GSD_HOME;
-    process.env.GSD_HOME = gsdHome;
-    t.after(() => {
-      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
-      else process.env.GSD_HOME = savedGsdHome;
-    });
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
     const before = JSON.stringify({ mode: 'interactive', runtime: 'codex' });
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, before);
+    const { defaultsPath, saveInProcess } = defaultsHome(t, before, { inProcess: true });
     // Matched by name: the store is written at its resolved path, which spells a
     // temp dir differently when it sits behind a link (/var is /private/var on macOS).
     // The temp file is written through an exclusively-created descriptor (#5759),
     // so the write is matched by the path that descriptor was opened under.
     t.after(mockPartialWriteThenThrow(fs, (target) => path.basename(String(target)).startsWith('defaults.json'), 5, { resolveDescriptors: true }));
 
-    const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+    const result = await saveInProcess({ mode: 'yolo' });
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
@@ -4827,19 +4806,8 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
   // attempt, including the rename's retries): the store keeps its bytes, the
   // temp file is removed, and the lock is released.
   test('a rename that fails is reported and leaves the existing store, no temp file and no lock', async (t) => {
-    const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
-    const gsdHome = createTempDir('gsd-5681-home-');
-    const savedGsdHome = process.env.GSD_HOME;
-    process.env.GSD_HOME = gsdHome;
-    t.after(() => {
-      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
-      else process.env.GSD_HOME = savedGsdHome;
-      cleanup(gsdHome);
-    });
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
     const before = JSON.stringify({ mode: 'interactive', runtime: 'codex' });
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, before);
+    const { defaultsPath, lockPath, saveInProcess } = defaultsHome(t, before, { inProcess: true });
     const realRename = fs.renameSync;
     t.mock.method(fs, 'renameSync', function (from, to) {
       if (path.basename(String(to)) === 'defaults.json') {
@@ -4848,13 +4816,13 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
       return realRename.apply(this, arguments);
     });
 
-    const result = await runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), false));
+    const result = await saveInProcess({ mode: 'yolo' });
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
     assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
-    assert.ok(!fs.existsSync(path.join(gsdHome, '.gsd', INSTALL_MIGRATION_LOCK_NAME)), 'the lock must be released');
+    assert.ok(!fs.existsSync(lockPath), 'the lock must be released');
   });
 });
 
@@ -4862,22 +4830,10 @@ describe('#5681: config-save-defaults reports lock failures through error()', ()
   // trek-e review 5814890657 (Minors 1 and 2): a lock that cannot be taken threw
   // a plain Error (a stack trace from runMain), and a release that threw from
   // `finally` replaced the save's own result.
-  const installerMigrations = require('../gsd-core/bin/lib/installer-migrations.cjs');
   function inProcessHome(t, contents) {
-    const gsdHome = createTempDir('gsd-5681-lockfail-');
-    const savedHome = process.env.GSD_HOME;
-    t.after(() => {
-      if (savedHome === undefined) delete process.env.GSD_HOME;
-      else process.env.GSD_HOME = savedHome;
-      cleanup(gsdHome);
-    });
-    process.env.GSD_HOME = gsdHome;
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    if (contents !== undefined) fs.writeFileSync(defaultsPath, contents);
-    const lockPath = path.join(gsdHome, '.gsd', installerMigrations.INSTALL_MIGRATION_LOCK_NAME);
-    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify({ mode: 'yolo' }), true));
-    return { gsdHome, defaultsPath, lockPath, save };
+    const home = defaultsHome(t, contents, { inProcess: true });
+    fs.mkdirSync(path.dirname(home.defaultsPath), { recursive: true });
+    return { ...home, save: () => home.saveInProcess({ mode: 'yolo' }) };
   }
   function failLockUnlink(t, lockPath) {
     const realUnlink = fs.unlinkSync;
@@ -4910,43 +4866,9 @@ describe('#5681: config-save-defaults reports lock failures through error()', ()
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), '{"mode":');
   });
 
-  test('a lock held by another live process is a typed refusal that names the holder, and nothing is written', async (t) => {
-    const before = '{"mode":"interactive"}';
-    const { defaultsPath, lockPath, save } = inProcessHome(t, before);
-    // The parent (the test runner) is alive and is not this process, so the
-    // lock is not reclaimed; a zero timeout gives up at once.
-    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.ppid, acquiredAt: '2026-11-07T00:00:00.000Z' }) + '\n');
-    // Not a subprocess timeout: the lock's own wait budget, zero so a held lock
-    // is refused on the first look instead of after the 30 s default.
-    const LOCK_WAIT_NONE_MS = 0;
-    const realAcquire = installerMigrations.acquireInstallMigrationLock;
-    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
-    const result = await save();
-    assert.strictEqual(result.ok, false);
-    assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
-    assert.deepStrictEqual({ pid: result.error.holder_pid, since: result.error.holder_since },
-      { pid: process.ppid, since: '2026-11-07T00:00:00.000Z' }, 'the refusal names the lock holder');
-    assert.strictEqual(result.error.lock_path, lockPath);
-    // RV6.5 review: the same refusal reaches a lock whose owner has exited but
-    // could not be reclaimed (a read-only .gsd/), so it also says when to remove it.
-    assert.ok(result.error.message.includes('Save again when that GSD install or settings save has finished'), result.error.message);
-    assert.ok(result.error.message.includes(`if pid ${process.ppid} is not running, remove ${lockPath} and save again`), result.error.message);
-    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
-    assert.ok(fs.existsSync(lockPath), "another process's lock is left in place");
-  });
-
-  test('a lock that names a pid but no start time is refused without an undefined field or text', async (t) => {
-    const { lockPath, save } = inProcessHome(t, '{"mode":"interactive"}');
-    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.ppid }) + '\n');
-    const LOCK_WAIT_NONE_MS = 0;
-    const realAcquire = installerMigrations.acquireInstallMigrationLock;
-    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
-    const result = await save();
-    assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
-    assert.strictEqual(result.error.holder_pid, process.ppid);
-    assert.strictEqual(Object.hasOwn(result.error, 'holder_since'), false);
-    assert.doesNotMatch(result.error.message, /undefined/);
-  });
+  // A lock held by another live process is refused with its holder's pid: those
+  // rows hold the lock with a process they spawn, so they live in
+  // config.platform.test.cjs.
 
   // Review 2026-11-18, Minor 5: a lock file whose contents name no owner (a
   // crash between creating it and writing its payload) is never reclaimed, so
@@ -4955,9 +4877,7 @@ describe('#5681: config-save-defaults reports lock failures through error()', ()
     const before = '{"mode":"interactive"}';
     const { defaultsPath, lockPath, save } = inProcessHome(t, before);
     fs.writeFileSync(lockPath, '');
-    const LOCK_WAIT_NONE_MS = 0;
-    const realAcquire = installerMigrations.acquireInstallMigrationLock;
-    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir) => realAcquire(dir, { timeoutMs: LOCK_WAIT_NONE_MS }));
+    lockWaitNone(t);
     const result = await save();
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.error.reason, 'config_defaults_lock_unavailable');
@@ -4976,22 +4896,10 @@ describe('#5681: new-project creation migrates a stored depth the way a save wri
   // installer lock, re-reads the store and migrates what it holds then.
   const installerMigrations = require('../gsd-core/bin/lib/installer-migrations.cjs');
   function project(t, store) {
-    const gsdHome = createTempDir('gsd-5681-depth-');
-    const projectDir = createTempDir('gsd-5681-depth-proj-');
-    t.after(() => { cleanup(gsdHome); cleanup(projectDir); });
-    const saved = process.env.GSD_HOME;
-    process.env.GSD_HOME = gsdHome;
-    t.after(() => {
-      if (saved === undefined) delete process.env.GSD_HOME;
-      else process.env.GSD_HOME = saved;
-    });
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, JSON.stringify(store));
-    const lockPath = path.join(gsdHome, '.gsd', installerMigrations.INSTALL_MIGRATION_LOCK_NAME);
+    const home = defaultsHome(t, store, { inProcess: true });
+    const projectDir = tempProject(t);
     const create = () => runQuietlyJson(() => configLib.cmdConfigNewProject(projectDir, '{}', true));
-    const read = () => JSON.parse(fs.readFileSync(defaultsPath, 'utf-8'));
-    return { defaultsPath, lockPath, projectDir, create, read };
+    return { ...home, projectDir, create };
   }
 
   test('a save that lands between the plan and the rewrite is kept', async (t) => {
@@ -5116,19 +5024,8 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
   }
 
   function seed(t, text, patch = { mode: 'yolo' }) {
-    const gsdHome = createTempDir('gsd-5681-cap-');
-    const savedGsdHome = process.env.GSD_HOME;
-    process.env.GSD_HOME = gsdHome;
-    t.after(() => {
-      if (savedGsdHome === undefined) delete process.env.GSD_HOME;
-      else process.env.GSD_HOME = savedGsdHome;
-      cleanup(gsdHome);
-    });
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, text);
-    const save = () => runQuietlyJson(() => configLib.cmdConfigSaveDefaults(gsdHome, JSON.stringify(patch), false));
-    return { defaultsPath, save };
+    const home = defaultsHome(t, text, { inProcess: true });
+    return { defaultsPath: home.defaultsPath, save: () => home.saveInProcess(patch) };
   }
 
   for (const [label, bytes] of [['one byte under the cap', CONFIG_MAX_BYTES - 1], ['exactly the cap', CONFIG_MAX_BYTES]]) {
