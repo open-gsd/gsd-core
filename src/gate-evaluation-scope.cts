@@ -564,7 +564,7 @@ const withPrefix = (prefix: string, file: string): string => (prefix === '' ? fi
 function commitTimes(git: Git, shas: readonly string[]): Map<string, number> {
   const times = new Map<string, number>();
   for (const group of chunk(shas, SHA_CHUNK)) {
-    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct', ...group]).split('\n')) {
+    for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct', ...group, '--']).split('\n')) {
       const [sha, time] = line.split('\x1f');
       if (sha && time !== undefined && /^[0-9]+$/.test(time)) times.set(sha, Number(time));
     }
@@ -891,7 +891,7 @@ function parseLog(out: string, withBody: boolean, parentsOut?: ParentMap): Scope
 function subjectsFor(git: Git, shas: readonly string[], withBody: boolean, chunkSize: number, parentsOut: ParentMap): ScopeCommit[] {
   const out: ScopeCommit[] = [];
   for (const group of chunk(shas, chunkSize)) {
-    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group]), withBody, parentsOut));
+    out.push(...parseLog(git(['log', '--no-walk=unsorted', logFormat(withBody), ...group, '--']), withBody, parentsOut));
   }
   return out;
 }
@@ -954,12 +954,12 @@ function baseSideMergeFiles(
     if (parents.length !== 2) continue;
     const [p1 = '', p2 = ''] = parents;
     try {
-      const secondSide = git(['rev-list', p2, `^${p1}`]).split('\n').filter(Boolean);
+      const secondSide = git(['rev-list', p2, `^${p1}`, '--']).split('\n').filter(Boolean);
       if (secondSide.some((entry) => listed.has(entry))) continue;
       // One walk of the second parent's history after the phase start, intersected with the listed
       // non-merge commits (never one ancestry spawn per listed commit).
       const reachable = new Set(git([
-        'rev-list', p2, ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]),
+        'rev-list', p2, ...(rangeBase === EMPTY_TREE ? [] : [`^${rangeBase}`]), '--',
       ]).split('\n').filter(Boolean));
       if (listedNonMerge.some((entry) => reachable.has(entry))) continue;
       if (!forkedAtOrBeforePhaseStart(git, p1, p2, rangeBase)) continue;
@@ -990,7 +990,7 @@ function newestOf(git: Git, shas: readonly string[], chunkSize: number): string 
     const tips = chunk(shas, chunkSize).map((group) => newestOf(git, group, chunkSize));
     return newestOf(git, tips, chunkSize);
   }
-  const tip = git(['rev-list', '--topo-order', '-n', '1', ...shas]).split('\n').filter(Boolean)[0];
+  const tip = git(['rev-list', '--topo-order', '-n', '1', ...shas, '--']).split('\n').filter(Boolean)[0];
   return tip ?? shas[0] ?? 'HEAD';
 }
 
@@ -1137,7 +1137,7 @@ function resolvePhase(
   scope.source = 'phase-range';
   const max = clampMaxCommits(options.maxCommits);
   scope.commits = parseLog(
-    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max)]),
+    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max), '--']),
     options.includeBody === true,
   );
   finalizeFiles(scope, repoRoot, rangeFiles(git, scope.rangeBase, ref));
@@ -1190,7 +1190,7 @@ function lookupSubjectCommits(
   }
   const rangeArgs = options.allBranches === true ? ['--branches'] : [range];
   const out = git(
-    ['log', ...rangeArgs, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
+    ['log', ...rangeArgs, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, '--', ...pathspecs],
   );
   // `--grep` matches ANY message line; a plan lookup is subject-anchored, so filter on the subject.
   const parentsOf: ParentMap = new Map();
