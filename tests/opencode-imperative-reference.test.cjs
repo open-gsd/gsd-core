@@ -148,7 +148,7 @@ test('no `runtime === "opencode"` string-equality branch remains in the install 
 
 const { cleanup, runGsdToolsAsync, createTempDir } = require('./helpers.cjs');
 const { writeManifest } = require(path.join(__dirname, '..', 'bin', 'install.js'));
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 
 describe('#4738: writeManifest records staged skills for opencode', () => {
   let tmpDir;
@@ -188,7 +188,7 @@ describe('#4738: writeManifest records staged skills for opencode', () => {
 
 describe('#4738: a clean opencode install is invisible to detect-custom-files', () => {
   test('real --opencode --global install: manifest records staged skills and the detector reports zero custom files', async (t) => {
-    const { manifest, configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { manifest, configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     const skillEntries = Object.keys(manifest.files).filter((k) => k.startsWith('skills/'));

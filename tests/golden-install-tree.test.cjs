@@ -26,8 +26,8 @@ const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 
-const { cleanup } = require('./helpers.cjs');
-const { RUNTIME_META, runMinimalInstall, BUILD_SCRIPT, buildInstallTree, extraEmitRootsFor } = require('./helpers/install-shared.cjs');
+// Every install here is only read, so each is the run's shared tree (#6335).
+const { RUNTIME_META, runMinimalInstall, installRuntimeFixture, BUILD_SCRIPT, buildInstallTree, extraEmitRootsFor } = require('./helpers/install-shared.cjs');
 
 // #3145: class-norm timeout, not a per-suite value — see helpers/timeouts.cjs.
 const { BUILD_TIMEOUT_MS: BUILD_HOOKS_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -71,13 +71,8 @@ for (const runtime of runtimes) {
       t.skip('install output is platform-specific on Windows (backslash paths); parity is asserted on macOS + Linux');
       return;
     }
-    const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
-    let actual;
-    try {
-      actual = buildInstallTree(configDir, root, extraEmitRootsFor(runtime, 'global', root));
-    } finally {
-      cleanup(root);
-    }
+    const { configDir, root } = installRuntimeFixture({ runtime, scope: 'global' });
+    const actual = buildInstallTree(configDir, root, extraEmitRootsFor(runtime, 'global', root));
 
     const fixturePath = path.join(FIXTURE_DIR, `${runtime}.json`);
 
@@ -118,13 +113,8 @@ test('install tree — claude (local legacy layout)', async (t) => {
     t.skip('install output is platform-specific on Windows (backslash paths); parity is asserted on macOS + Linux');
     return;
   }
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
-  let actual;
-  try {
-    actual = buildInstallTree(configDir, root);
-  } finally {
-    cleanup(root);
-  }
+  const { configDir, root } = installRuntimeFixture({ runtime: 'claude', scope: 'local' });
+  const actual = buildInstallTree(configDir, root);
 
   const fixturePath = path.join(FIXTURE_DIR, 'claude-local.json');
 
@@ -167,9 +157,8 @@ test('install tree — claude (local legacy layout)', async (t) => {
 // global shape (#3544's fix rewrote 54 includes on live installs with ZERO
 // manifest/fixture diffs).
 
-test('#3547 global harness install uses the real config-home shape (claude)', async (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
-  t.after(() => cleanup(root));
+test('#3547 global harness install uses the real config-home shape (claude)', async () => {
+  const { configDir, root } = installRuntimeFixture({ runtime: 'claude', scope: 'global' });
 
   // Strict-subdirectory shape: <root>/.claude, never the collapsed <root>.
   assert.equal(configDir, path.join(root, RUNTIME_META.claude.globalSuffix),
@@ -185,21 +174,18 @@ test('#3547 global harness install uses the real config-home shape (claude)', as
     'the collapsed bare-$HOME prefix must not appear in real-shape installs');
 });
 
-test('#3547 codex global harness install resolves the .codex subdirectory', async (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'codex', scope: 'global' });
-  t.after(() => cleanup(root));
+test('#3547 codex global harness install resolves the .codex subdirectory', async () => {
+  const { configDir, root } = installRuntimeFixture({ runtime: 'codex', scope: 'global' });
   assert.equal(configDir, path.join(root, RUNTIME_META.codex.globalSuffix));
 });
 
-test('#3547 opencode global harness install resolves the XDG subdirectory', async (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
-  t.after(() => cleanup(root));
+test('#3547 opencode global harness install resolves the XDG subdirectory', async () => {
+  const { configDir, root } = installRuntimeFixture({ runtime: 'opencode', scope: 'global' });
   assert.equal(configDir, path.join(root, '.config', 'opencode'));
 });
 
-test('#3547 local scope configDir unchanged', async (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
-  t.after(() => cleanup(root));
+test('#3547 local scope configDir unchanged', async () => {
+  const { configDir, root } = installRuntimeFixture({ runtime: 'claude', scope: 'local' });
   assert.equal(configDir, path.join(root, '.claude'),
     'local installs keep the root/<localDir> shape — untouched by #3547');
 });

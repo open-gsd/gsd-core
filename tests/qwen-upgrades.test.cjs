@@ -4,7 +4,7 @@
  * qwen capability UPGRADES — ADR-1239 Phase D / #2092 (EoS/qwen).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) to prove the two real upgrades qwen contributes beyond
+ * `copyRuntimeFixture`, a copy of a real install) to prove the two real upgrades qwen contributes beyond
  * the hermes migration (#2091):
  *
  *   UPGRADE 1 — native `agents` artifact-layout kind: GSD specialist agents
@@ -24,7 +24,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 
@@ -42,15 +42,15 @@ function parseFrontmatter(content) {
 
 for (const scope of ['global', 'local']) {
   test(`qwen --${scope}: native .qwen/agents/*.md subagent projection (UPGRADE 1)`, (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'qwen', scope });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'qwen', scope });
     t.after(() => cleanup(root));
 
     const agentsDir = path.join(configDir, 'agents');
     assert.ok(fs.existsSync(agentsDir), `${agentsDir} must exist`);
 
     const expectedNames = listAgentFiles(); // dynamically derived source roster
-    assert.equal(expectedNames.length, 35,
-      'sanity: shipped GSD agent roster is 35 files — update this boundary if the roster changes');
+    assert.equal(expectedNames.length, 36,
+      'sanity: shipped GSD agent roster is 36 files — update this boundary if the roster changes');
 
     const installedFiles = fs.readdirSync(agentsDir)
       .filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
@@ -100,7 +100,7 @@ for (const scope of ['global', 'local']) {
 // -- UPGRADE 2: SubagentStart hook fires symmetrically with SubagentStop ----
 
 test('qwen --global: settings.json SubagentStart mirrors SubagentStop (UPGRADE 2)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'qwen', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'qwen', scope: 'global' });
   t.after(() => cleanup(root));
 
   const settingsPath = path.join(configDir, 'settings.json');
@@ -122,7 +122,7 @@ test('qwen --global: settings.json SubagentStart mirrors SubagentStop (UPGRADE 2
 });
 
 test('a non-qwen runtime that does not declare SubagentStart does NOT get a SubagentStart hook (descriptor-gated, not global)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
   t.after(() => cleanup(root));
 
   const settingsPath = path.join(configDir, 'settings.json');
