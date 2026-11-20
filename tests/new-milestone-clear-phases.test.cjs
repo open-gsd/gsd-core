@@ -784,10 +784,10 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
 
       test('ws mode: forwards --ws to both state.get and state.milestone-switch', () => {
         const out = runStep5('--ws search');
-        assert.match(out, /gsd_run_call:query state\.get milestone --raw --ws search/,
-          `expected state.get to forward --ws search, got: ${out}`);
-        assert.match(out, /gsd_run_call:query state\.milestone-switch --milestone v\[X\.Y\] --name \[Name\] --ws search/,
-          `expected state.milestone-switch to forward --ws search, got: ${out}`);
+        assert.match(out, /gsd_run_call:query state\.get milestone --raw --ws=search/,
+          `expected state.get to forward --ws=search, got: ${out}`);
+        assert.match(out, /gsd_run_call:query state\.milestone-switch --milestone v\[X\.Y\] --name \[Name\] --ws=search/,
+          `expected state.milestone-switch to forward --ws=search, got: ${out}`);
       });
 
       test('flat mode: no stray --ws tokens on either call', () => {
@@ -814,14 +814,14 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
 
       test('ws mode, no outgoing milestone: forwards --ws to the plain phases.clear branch', () => {
         const out = runPhasesClearFence('--ws search');
-        assert.match(out, /gsd_run_call:query phases\.clear --confirm --ws search\s*$/m,
-          `expected phases.clear to forward --ws search, got: ${out}`);
+        assert.match(out, /gsd_run_call:query phases\.clear --confirm --ws=search\s*$/m,
+          `expected phases.clear to forward --ws=search, got: ${out}`);
       });
 
       test('ws mode, with outgoing milestone: forwards --ws alongside --archive-version', () => {
         fs.writeFileSync(path.join(tmpDir, '.planning', '.gsd-outgoing-milestone'), 'v1.0');
         const out = runPhasesClearFence('--ws search');
-        assert.match(out, /gsd_run_call:query phases\.clear --confirm --archive-version v1\.0 --ws search\s*$/m,
+        assert.match(out, /gsd_run_call:query phases\.clear --confirm --archive-version v1\.0 --ws=search\s*$/m,
           `expected phases.clear to forward both --archive-version and --ws, got: ${out}`);
       });
 
