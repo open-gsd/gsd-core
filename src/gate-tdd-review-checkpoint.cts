@@ -65,9 +65,6 @@ export const TDD_ROW_REASON = {
 } as const;
 type NotEvaluableReason = typeof TDD_ROW_REASON.SEALED_SHALLOW_HISTORY | typeof TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE;
 
-/** One `NotEvaluable` plan of the payload: the row reason plus its report text. */
-type NotEvaluableEntry = { planId: string; reason: NotEvaluableReason; why: string };
-
 /** The `Plan {id} not evaluable: {why}` text of each `NotEvaluable` reason; one entry per reason keeps the report and its test on one typed surface. */
 export const TDD_NOT_EVALUABLE_WHY: Record<NotEvaluableReason, string> = {
   [TDD_ROW_REASON.SEALED_SHALLOW_HISTORY]: 'its sealed commits cannot be verified because the history is incomplete (shallow clone or git unavailable); fetch full history. Not counted as a violation.',
@@ -177,7 +174,7 @@ function unreadableReview(
   phase: string,
   tddPlans: number,
   unreadable: UnreadableSource[],
-  reviewed?: { rows: TddPlanRow[]; violations: number; table: string; notEvaluable: NotEvaluableEntry[] },
+  reviewed?: { rows: TddPlanRow[]; violations: number; table: string },
 ): GateResult {
   const names = unreadable.map((u) => `${u.source} (${u.reason})`).join(', ');
   // A failed `--record` write comes after the review ran: it keeps the review result and says nothing was sealed.
@@ -192,7 +189,6 @@ function unreadableReview(
     violations,
     table,
     rows,
-    ...(reviewed && { notEvaluable: reviewed.notEvaluable }),
     unreadable,
     message,
   });
@@ -379,11 +375,9 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     table += `\n\nPlan ${r.planId} GREEN is supplied by dependent plan ${(r.greenFrom ?? []).join(', ')}.`;
   }
 
-  const notEvaluable: NotEvaluableEntry[] = rows
-    .filter((r): r is Extract<TddPlanRow, { status: 'NotEvaluable' }> => r.status === 'NotEvaluable')
-    .map(r => ({ planId: r.planId, reason: r.reason, why: TDD_NOT_EVALUABLE_WHY[r.reason] }));
+  const notEvaluable = rows.filter((r): r is Extract<TddPlanRow, { status: 'NotEvaluable' }> => r.status === 'NotEvaluable');
   for (const n of notEvaluable) {
-    table += `\n\nPlan ${n.planId} not evaluable: ${n.why}`;
+    table += `\n\nPlan ${n.planId} not evaluable: ${TDD_NOT_EVALUABLE_WHY[n.reason]}`;
   }
 
   if (violations > 0) {
@@ -402,7 +396,7 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
       writeSeal(phaseDir, evidence, sealRead);
     } catch (err) {
       const e = evidenceFromError(err, SEAL_FILE);
-      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }], { rows, violations, table, notEvaluable });
+      return unreadableReview(phase, tddPlanFiles.length, [{ source: SEAL_FILE, reason: e.kind === 'unreadable' ? e.reason : String(err) }], { rows, violations, table });
     }
   }
 
@@ -416,7 +410,6 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     violations,
     table,
     rows,
-    notEvaluable,
     message: table,
   });
 }
