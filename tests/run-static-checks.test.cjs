@@ -145,6 +145,22 @@ describe('main', () => {
     assert.match(out.stderr, /--only needs a check name/);
   });
 
+  test('a directory with no checks exits 1 instead of passing everything', (t) => {
+    const out = run(t, { 'notes.md': 'no checks here' }, []);
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /no checks found/);
+    assert.equal(out.stdout, '');
+  });
+
+  test('a malformed finding is one finding of the check, not a crash in the report', () => {
+    for (const bad of [[null], [{}], [{ message: 5 }], ['text']]) {
+      const results = runChecks([{ name: 'bad', run: () => bad }], { root: os.tmpdir() });
+      assert.equal(results[0].findings.length, 1, JSON.stringify(bad));
+      assert.match(results[0].findings[0].message, /must be an object with a string message/);
+      assert.doesNotThrow(() => formatReport(results));
+    }
+  });
+
   test('an unknown argument exits 2', (t) => {
     const out = run(t, { 'green.cjs': green }, ['--bogus']);
     assert.equal(out.code, 2);

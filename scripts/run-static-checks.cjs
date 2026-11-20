@@ -58,6 +58,8 @@ function runChecks(checks, { root = DEFAULT_ROOT } = {}) {
     try {
       findings = check.run({ root });
       if (!Array.isArray(findings)) throw new TypeError('run() must return an array of findings');
+      const malformed = findings.findIndex((f) => f === null || typeof f !== 'object' || typeof f.message !== 'string');
+      if (malformed !== -1) throw new TypeError(`finding ${malformed} must be an object with a string message`);
     } catch (err) {
       findings = [{ file: '(check)', line: 0, message: `the check threw: ${err && err.message ? err.message : String(err)}` }];
     }
@@ -101,6 +103,10 @@ function main(argv = process.argv.slice(2), { dir = DEFAULT_DIR, root = DEFAULT_
     only.push(argv[++i]);
   }
   let checks = loadChecks(dir);
+  if (checks.length === 0) {
+    stderr.write(`static checks: no checks found in ${dir}; an empty runner would pass everything\n`);
+    return 1;
+  }
   if (only.length > 0) {
     const unknown = only.filter((name) => !checks.some((c) => c.name === name));
     if (unknown.length > 0) {
