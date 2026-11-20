@@ -285,7 +285,7 @@ If "Continue without context": Proceed to step 5.
 If "Run discuss-phase first":
   **IMPORTANT:** Do NOT invoke discuss-phase as a nested Skill/Task call — AskUserQuestion
   fails in nested subcontexts (#1009). Display the command and exit so the user runs
-  it at top level:
+  it top-level:
   ```
   Run this command first, then re-run /gsd:plan-phase {X} ${GSD_WS}:
 
