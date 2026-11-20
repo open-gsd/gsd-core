@@ -491,8 +491,18 @@ describe('verify-work\'s gap-closure checker skips Dimension 11, and import\'s d
   test('import --from\'s checker prompt does not skip it', () => {
     const step = span(read('gsd-core/workflows/import.md'), '<step name="plan_validate">', /<\/step>/);
     assert.match(step, /subagent_type: "gsd-plan-checker"/);
-    assert.doesNotMatch(step, /Dimension 11|research.resolution|research question/i,
-      'no wording of a research-resolution skip, not only the dimension number');
+    const prompt = step.split('\n').find((l) => l.includes('prompt: "Validate:'));
+    assert.ok(prompt, 'import hands the checker a prompt');
+    assert.doesNotMatch(prompt, /Dimension 11|research.resolution|research question/i,
+      'no wording of a research-resolution skip in the checker prompt, not only the dimension number');
+    assert.doesNotMatch(step, /skip\w*[^.\n]{0,40}(Dimension 11|research.resolution)/i, 'nor anywhere else in the step');
+  });
+
+  // Not skipped, so import needs its own way to clear the blocker: "Ask the user to resolve issues" names no step
+  // that records a D-NN, and no edit the user can make to the plan file satisfies Dimension 11.
+  test('import names the route that clears a research_resolution blocker', () => {
+    const step = span(read('gsd-core/workflows/import.md'), '<step name="plan_validate">', /<\/step>/).replace(/\s+/g, ' ');
+    assert.match(step, /A `research_resolution` \(Dimension 11\) blocker clears only on a user ruling the checker can read: ask each question it names and record each answer as the next `- \*\*D-NN:\*\* <ruling>` under `\$\{phase_dir\}`'s CONTEXT\.md `<decisions>`, outside Claude's Discretion, as `gsd-core\/references\/revision-loop\.md`'s Resolve step does; with no CONTEXT\.md, the user runs `\/gsd:discuss-phase \{phase\}` first\. Then re-run this step/);
   });
 
   test('the checker prompt carries the same scope line', () => {
