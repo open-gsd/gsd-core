@@ -1935,7 +1935,9 @@ function nameOnlyOperandIndices(base, operands) {
   if (base === 'git') return gitPathspecIndices(operands);
   if (base === 'cp' || base === 'mv') return copyDestinationIndices(operands);
   if (SEARCH_TOOLS.has(base)) return searchOperandIndices(SEARCH_TOOLS.get(base), operands);
-  if (base === 'xargs') return xargsSearchIndices(operands);
+  // No `xargs` entry (#6282): the words xargs adds from stdin or an arg file can be
+  // options (`-e KEY`, or `-f` through a replace string), which change what every
+  // other word of a search tool is, so nothing a search tool run by xargs takes is exempt.
   return new Set();
 }
 
@@ -2117,19 +2119,6 @@ function xargsSubCommand(operands) {
     return { subIdx: m, argFile };
   }
   return { subIdx: -1, argFile };
-}
-
-// The carve-out for a search sub-command run by xargs, shifted to xargs's own
-// operand indices. Only the search tools: the words xargs appends from stdin
-// follow the sub-command's own, so they never turn the pattern into a file,
-// whereas `xargs cp src .env` would make `.env` a source.
-function xargsSearchIndices(operands) {
-  const { subIdx } = xargsSubCommand(operands);
-  if (subIdx === -1) return new Set();
-  const sub = lastSegment(operands[subIdx].text).toLowerCase();
-  if (!SEARCH_TOOLS.has(sub)) return new Set();
-  const inner = searchOperandIndices(SEARCH_TOOLS.get(sub), operands.slice(subIdx + 1));
-  return new Set([...inner].map((i) => i + subIdx + 1));
 }
 
 // #4639: the `--env-file` word, plus the next operand for the bare flag
