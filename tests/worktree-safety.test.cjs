@@ -25,7 +25,6 @@ const { createTempDir, cleanup, readFileNormalized } = require('./helpers.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
-const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // 30000ms: this file's single named bound for every migrated subprocess call
