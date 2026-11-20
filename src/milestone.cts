@@ -1118,6 +1118,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // (existsSync also returns false there) reached via a real content
   // comparison instead.
   let stateUpdated = false;
+  // #6174: operator lines moved out of ## Current Position by the closure reset.
+  let movedPositionLines: string[] = [];
   if (fs.existsSync(statePath)) {
     withStateLock(statePath, () => {
       const originalStateContent = platformReadSync(statePath) || '';
@@ -1130,6 +1132,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         },
         { clock: realClock, sourcePath: statePath },
       );
+      const movedFromTransition = result.data?.['moved_current_position_lines'];
+      if (Array.isArray(movedFromTransition)) movedPositionLines = movedFromTransition as string[];
       const divergedFields: string[] = [];
       // #2111 (found by #3471 review): `milestoneCompleteCore` never declares
       // `current_phase`/`current_phase_name` among the fields it touches — but
@@ -1301,6 +1305,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     milestones_updated: milestonesUpdated,
     state_updated: stateUpdated,
     preservation_warnings: preservationWarnings,
+    ...(movedPositionLines.length > 0 ? { moved_current_position_lines: movedPositionLines } : {}),
     ...(releaseMapReport ? { release_map: releaseMapReport } : {}),
   };
 
