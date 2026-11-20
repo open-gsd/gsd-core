@@ -1369,8 +1369,12 @@ file read need not be the one that gave the plan its completion record:
   command sorts the listing: it holds the phase directory's SUMMARY files and
   then those under `plans/`, each directory in the order Node lists it. On
   Unix that is filename byte order (libuv sorts it; measured on Linux), so
-  among the phase directory's files the one whose name sorts last is read, and
-  a matching SUMMARY under `plans/` is read after all of them.
+  among the phase directory's files the one whose name sorts last is read. A
+  SUMMARY under `plans/` takes part only when the canonical id of its path is
+  the id being looked up (`plans/01-06-01-SUMMARY-01.md` for
+  `06-01-PLAN.md`), and is then read after all of them; an ordinary nested
+  SUMMARY such as `plans/SUMMARY-01.md` or `plans/01-06-SUMMARY-01.md` never
+  takes part.
 
 `hasSummary` keeps its older filename pairing, so a plan in the second case
 can read `hasSummary: false` with `halted: true`. Every plan counted in
