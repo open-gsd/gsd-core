@@ -410,6 +410,7 @@ describe('#5491 runReadCheck', () => {
   };
   const deps = (f) => ({
     exists: (p) => p in f,
+    fileSize: (p) => (p in f ? f[p].length : null),
     readFile: (p) => { if (!(p in f)) throw new Error(`ENOENT ${p}`); return f[p]; },
   });
 

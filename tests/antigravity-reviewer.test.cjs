@@ -57,6 +57,7 @@ function deps(overrides = {}) {
       readFile: (p) => { if (!(p in files)) throw new Error(`ENOENT ${p}`); return files[p]; },
       writeFile: (p, c) => { files[p] = c; },
       exists: (p) => p in files,
+      fileSize: (p) => (p in files ? files[p].length : null),
       hasBinary: () => true,
       configGet: () => undefined,
       homeDir: HOME,

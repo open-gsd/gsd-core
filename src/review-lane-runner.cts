@@ -61,6 +61,8 @@ export interface RunnerDeps {
   readFile: (p: string) => string;
   writeFile: (p: string, content: string) => void;
   exists: (p: string) => boolean;
+  /** Size in bytes of a regular file; null for anything else (#5491: a plan the read check may read). */
+  fileSize: (p: string) => number | null;
   /** `command -v` equivalent. */
   hasBinary: (name: string) => boolean;
   /** Resolved config lookup, for the egress-host re-verification. */
