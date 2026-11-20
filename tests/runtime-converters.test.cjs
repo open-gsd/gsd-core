@@ -135,9 +135,9 @@ describe('#4482: OpenCode conversion strips Copilot-only runtime notes', () => {
   });
 
   test('a real OpenCode install filters mvp-phase workflow assets too', (t) => {
-    const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+    const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
     const { cleanup } = require('./helpers.cjs');
-    const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
     const installed = fs.readFileSync(path.join(configDir, 'gsd-core', 'workflows', 'mvp-phase.md'), 'utf8');
     assert.ok(!installed.includes('vscode_askquestions'));

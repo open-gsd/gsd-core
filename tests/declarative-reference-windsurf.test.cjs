@@ -56,7 +56,7 @@ const {
   resolveInstallPlan,
 } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { walk, runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { walk, copyRuntimeFixture, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 
 const DESC = path.join(__dirname, '..', 'capabilities', 'windsurf', 'capability.json');
 const WINDSURF_CAP = JSON.parse(fs.readFileSync(DESC, 'utf8'));
@@ -87,7 +87,7 @@ test('the public declarative adapter classifies Windsurf as a declarative host',
 });
 
 test('a real Windsurf install emits a gsd agent surface (invocable)', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'windsurf', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'windsurf', scope: 'global' });
   try {
     const files = walk(configDir);
     assert.ok(files.length > 0, 'install must emit artifacts');
