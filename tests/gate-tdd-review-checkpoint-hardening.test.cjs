@@ -303,10 +303,17 @@ describe('#5354 tdd review checkpoint seal', () => {
   test('every NotEvaluable reason has report text, and the payload carries it per plan', () => {
     const notEvaluable = Object.values(TDD_ROW_REASON).filter((r) => r !== TDD_ROW_REASON.GREEN_BEFORE_RED).sort();
     assert.deepEqual(Object.keys(TDD_NOT_EVALUABLE_WHY).sort(), notEvaluable);
-    const entry = (reason) => ({ planId: '01-01', reason, why: TDD_NOT_EVALUABLE_WHY[reason] });
+    // The text is pinned per reason as a literal, not read back from TDD_NOT_EVALUABLE_WHY, so a swapped or edited text fails.
+    const expectOne = ({ notEvaluable: entries, table, message }, reason, text) => {
+      assert.deepEqual(entries.map((e) => ({ planId: e.planId, reason: e.reason })), [{ planId: '01-01', reason }]);
+      assert.match(entries[0].why, text);
+      const line = `Plan 01-01 not evaluable: ${entries[0].why}`;
+      assert.ok(table.includes(line));
+      assert.ok(message.includes(line));
+    };
     const unsealed = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
     squash(unsealed.dir, unsealed.base);
-    assert.deepEqual(run(unsealed.dir).payload.notEvaluable, [entry(TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE)]);
+    expectOne(run(unsealed.dir).payload, TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE, /SUMMARY task commits are unreachable/);
     const sealed = fixture(['test(01-01): red', 'feat(01-01): green']);
     run(sealed.dir, '--record');
     sealGit(sealed.dir, 'add', '-A');
@@ -315,7 +322,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     const clone = path.join(path.dirname(sealed.dir), `${path.basename(sealed.dir)}-shallow-why`);
     dirs.push(clone);
     gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(sealed.dir).href, clone], { cwd: path.dirname(sealed.dir) });
-    assert.deepEqual(run(clone).payload.notEvaluable, [entry(TDD_ROW_REASON.SEALED_SHALLOW_HISTORY)]);
+    expectOne(run(clone).payload, TDD_ROW_REASON.SEALED_SHALLOW_HISTORY, /history is incomplete/);
     assert.deepEqual(run(fixture(['test(01-01): red', 'feat(01-01): green']).dir).payload.notEvaluable, []);
   });
 
@@ -869,6 +876,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     // A write failure keeps the review rows; a read failure returns none ("was not reviewed").
     assert.deepEqual(r.payload.rows.map((row) => row.status), ['Pass', 'FAIL']);
     assert.equal(r.payload.violations, 1);
+    assert.deepEqual(r.payload.notEvaluable, []);
   });
 
   test('--record names the error text when the write fails with a code that means "absent" (ENOENT)', (t) => {
