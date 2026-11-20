@@ -30,6 +30,10 @@ default `gsd-executor`. `plan_id` (the current plan's id, same scope step 2.5 us
 - A hint naming a GSD non-executor role (for example `gsd-verifier`) is refused:
   `resolve-agent` prints a warning and `EXECUTOR_TYPE` stays `gsd-executor`.
 - Effort comes from the hinted agent's own frontmatter; no `effort=` is passed.
+- A plan may instead declare `executor_runtime: <id>` (never together with `agent_hint`; refused at
+  validation). With `workflow.cross_runtime_execution` on, the `dispatch-isolation` route resolves it
+  to that runtime's own process-spawn exec; `execute-phase/steps/cross-runtime-executor-dispatch.md`
+  runs the launch. Every unhappy case falls back to this block's host dispatch (#6303).
 
 ## Resolution
 

@@ -224,10 +224,16 @@ function extractCheckBlock() {
   assert.fail('check_incomplete_work step must embed a ```bash code block');
 }
 
+// The shipped step resolves the scoped planning root with `gsd_run query planning.inspect --pick
+// generated_from.planning_root` (#5861); `gsd_run` itself is defined by an earlier launcher step. These fixtures
+// have no installed shim, so the verb is stubbed to return what the real one returns for a flat fixture: the
+// absolute `.planning` directory under the cwd. A shell function, so it also runs under an empty PATH.
+const GSD_RUN_STUB = 'gsd_run() { printf %s "$PWD/.planning"; }\n';
+
 function runSnippet(cwd, snippet) {
   // has_interrupted_agent is a downstream-orchestrator variable; default it
   // to "false" so the embedded `if` branch is a no-op during this test.
-  return toLegacyResult(runHookSeam('-c', [snippet], {
+  return toLegacyResult(runHookSeam('-c', [`${GSD_RUN_STUB}${snippet}`], {
     interpreter: 'bash',
     cwd,
     env: { ...process.env, has_interrupted_agent: 'false', interrupted_agent_id: '' },
@@ -359,14 +365,20 @@ const { span } = require('./helpers/doc-bash-span.cjs');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'resume-project.md');
 
+// The shipped step resolves the scoped planning root with `gsd_run query planning.inspect --pick
+// generated_from.planning_root` (#5861); `gsd_run` itself is defined by an earlier launcher step. These fixtures
+// have no installed shim, so the verb is stubbed to return what the real one returns for a flat fixture: the
+// absolute `.planning` directory under the cwd. A shell function, so it also runs under an empty PATH.
+const GSD_RUN_STUB = 'gsd_run() { printf %s "$PWD/.planning"; }\n';
+
 // The discovery lines the workflow ships, read from resume-project.md itself (#4805) rather than a
 // copy that could drift: from the #2962 nullglob prelude (which keeps zsh NOMATCH from aborting a glob
 // loop) through the line before the next check. Shell builtins only, so it runs as is under bash and zsh.
-const DISCOVERY_SNIPPET = span(
+const DISCOVERY_SNIPPET = `${GSD_RUN_STUB}${span(
   'gsd-core/workflows/resume-project.md',
   '# #2962: zsh aborts the block',
   '# Check for plans without summaries',
-).join('\n');
+).join('\n')}`;
 
 // What the workflow shipped before #4805, kept only as a control: with `find` unavailable it prints nothing.
 const LEGACY_FIND_SNIPPET = [

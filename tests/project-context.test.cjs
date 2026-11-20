@@ -24,6 +24,8 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const {
   resolveProjectContext,
   legacyDispatchCwd,
+  readGitLayout,
+  parseGitConfig,
 } = require('../gsd-core/bin/lib/project-context.cjs');
 const shellProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
@@ -254,7 +256,7 @@ describe('project-context: git degradation', () => {
     const start = mkTmp(t);
     const calls = [];
     const ctx = resolveProjectContext(start, {
-      deps: { execGit: (args, opts) => { calls.push({ args, opts }); return TIMED_OUT; } },
+      deps: { readGitLayout: () => null, execGit: (args, opts) => { calls.push({ args, opts }); return TIMED_OUT; } },
     });
     assert.equal(ctx.provenance.degraded, true);
     assert.equal(ctx.provenance.reason, 'git_timed_out');
@@ -268,6 +270,7 @@ describe('project-context: git degradation', () => {
     const start = mkTmp(t);
     const ctx = resolveProjectContext(start, {
       deps: {
+        readGitLayout: () => null,
         execGit: () => ({
           exitCode: null, stdout: '', stderr: '', signal: null, error: new Error('spawn git ENOENT'), timedOut: false,
         }),
@@ -284,6 +287,7 @@ describe('project-context: git degradation', () => {
     const calls = [];
     const ctx = resolveProjectContext(start, {
       deps: {
+        readGitLayout: () => null,
         execGit: (args, opts) => {
           calls.push({ args, opts });
           return shellProjection.execGit(args, { ...opts, env: { ...GIT_ENV, ...(opts && opts.env) } });
@@ -303,6 +307,7 @@ describe('project-context: git degradation', () => {
     const calls = [];
     const ctx = resolveProjectContext(subdir(root, 1), {
       deps: {
+        readGitLayout: () => null,
         execGit: (args, opts) => {
           calls.push(args);
           return shellProjection.execGit(args, { ...opts, env: { ...GIT_ENV, ...(opts && opts.env) } });
@@ -321,6 +326,7 @@ describe('project-context: git degradation', () => {
     const calls = [];
     resolveProjectContext(wt, {
       deps: {
+        readGitLayout: () => null,
         execGit: (args, opts) => {
           calls.push(args);
           return shellProjection.execGit(args, { ...opts, env: { ...GIT_ENV, ...(opts && opts.env) } });
@@ -334,6 +340,7 @@ describe('project-context: git degradation', () => {
     const start = mkTmp(t);
     const ctx = resolveProjectContext(start, {
       deps: {
+        readGitLayout: () => null,
         execGit: (args) => {
           const out = (exitCode, stdout, stderr = '') => ({ exitCode, stdout, stderr, signal: null, error: null, timedOut: false });
           if (args[0] === 'rev-parse') return out(0, `${start}\n${start}/.git/worktrees/w\n${start}/.git\n`);
@@ -352,6 +359,7 @@ describe('project-context: git degradation', () => {
     const start = mkTmp(t);
     const ctx = resolveProjectContext(start, {
       deps: {
+        readGitLayout: () => null,
         execGit: () => ({ exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', signal: null, error: null, timedOut: false }),
       },
     });
@@ -363,6 +371,7 @@ describe('project-context: git degradation', () => {
     const start = mkTmp(t);
     const ctx = resolveProjectContext(start, {
       deps: {
+        readGitLayout: () => null,
         execGit: () => ({ exitCode: 128, stdout: '', stderr: 'fatal: detected dubious ownership in repository at /x\n', signal: null, error: null, timedOut: false }),
       },
     });
@@ -401,6 +410,7 @@ describe('project-context: repository shapes', () => {
     const bareOnly = `worktree ${start}\nbare\n\n`;
     const ctx = resolveProjectContext(start, {
       deps: {
+        readGitLayout: () => null,
         execGit: (args) => {
           const out = (stdout) => ({ exitCode: 0, stdout, stderr: '', signal: null, error: null, timedOut: false });
           if (args[0] === 'rev-parse') return out(`${start}\n${start}/.git/worktrees/w\n${start}/.git\n`);
@@ -433,7 +443,7 @@ describe('project-context: legacyDispatchCwd parity', () => {
   // as expected outputs of legacyDispatchCwd, plus the real-layout analogues.
   test('project-context: legacyDispatchCwd parity', (t) => {
     // (1) git_timed_out: fallback root is the start itself.
-    const timedOut = resolveProjectContext('/repo/wt', { deps: { execGit: () => TIMED_OUT } });
+    const timedOut = resolveProjectContext('/repo/wt', { deps: { readGitLayout: () => null, execGit: () => TIMED_OUT } });
     assert.equal(legacyDispatchCwd(timedOut, '/repo/wt'), '/repo/wt');
 
     // (2) benign linked_worktree: no .planning in the worktree -> main checkout.
@@ -517,5 +527,350 @@ describe('project-context: invariants property', () => {
       }),
       { seed: 6043, numRuns: 25 },
     );
+  });
+});
+
+// ─── #6355: the git layout read from the filesystem ─────────────────────────
+//
+// That the reader agrees with real git is proved over git-built fixtures in
+// git-layout-parity.process.test.cjs. These cases build the on-disk shapes by
+// hand, which is what lets them cover the shapes git itself will not create,
+// and pin the reader's other half: what it declines to answer.
+describe('#6355: readGitLayout', () => {
+  /** The files git needs to see before it calls a directory a git dir. */
+  function gitDir(dir, { config = '[core]\n\tbare = false\n' } = {}) {
+    fs.mkdirSync(path.join(dir, 'objects'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'refs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'HEAD'), 'ref: refs/heads/main\n');
+    if (config !== null) fs.writeFileSync(path.join(dir, 'config'), config);
+    return dir;
+  }
+
+  /** A main checkout and one linked worktree of it, as `git worktree add` lays them out. */
+  function mainAndLinked(root) {
+    const main = path.join(root, 'main');
+    const common = gitDir(path.join(main, '.git'));
+    const linked = path.join(root, 'linked');
+    const linkedGitDir = path.join(common, 'worktrees', 'linked');
+    fs.mkdirSync(linked);
+    fs.mkdirSync(linkedGitDir, { recursive: true });
+    fs.writeFileSync(path.join(linkedGitDir, 'HEAD'), 'ref: refs/heads/linked\n');
+    fs.writeFileSync(path.join(linkedGitDir, 'commondir'), '../..\n');
+    fs.writeFileSync(path.join(linkedGitDir, 'gitdir'), `${path.join(linked, '.git')}\n`);
+    fs.writeFileSync(path.join(linked, '.git'), `gitdir: ${linkedGitDir}\n`);
+    return { main, common, linked, linkedGitDir };
+  }
+
+  test('a main checkout: the checkout is both roots, from its top and from below', (t) => {
+    const root = mkTmp(t);
+    const { main, common } = mainAndLinked(root);
+    fs.mkdirSync(path.join(main, 'a', 'b'), { recursive: true });
+
+    for (const start of [main, path.join(main, 'a', 'b')]) {
+      assert.deepEqual(readGitLayout(start), {
+        worktreeRoot: main, repoRoot: main, gitCommonDir: common, reason: 'ok', degraded: false, warnings: [],
+      });
+    }
+  });
+
+  test('a linked worktree: its own top, the main checkout as the repo root, the shared git dir', (t) => {
+    const root = mkTmp(t);
+    const { main, common, linked } = mainAndLinked(root);
+    fs.mkdirSync(path.join(linked, 'a'));
+
+    for (const start of [linked, path.join(linked, 'a')]) {
+      assert.deepEqual(readGitLayout(start), {
+        worktreeRoot: linked, repoRoot: main, gitCommonDir: common, reason: 'ok', degraded: false, warnings: [],
+      });
+    }
+  });
+
+  test('no repository above the start: the start itself, and that is not a degradation', (t) => {
+    const start = path.join(mkTmp(t), 'a', 'b');
+    fs.mkdirSync(start, { recursive: true });
+
+    assert.deepEqual(readGitLayout(start), {
+      worktreeRoot: start, repoRoot: start, gitCommonDir: null, reason: 'not_git_repo', degraded: false, warnings: [],
+    });
+  });
+
+  test('the nearest repository wins: a repository nested in another answers for what is inside it', (t) => {
+    const root = mkTmp(t);
+    const outer = path.join(root, 'outer');
+    const inner = path.join(outer, 'vendor', 'inner');
+    gitDir(path.join(outer, '.git'));
+    gitDir(path.join(inner, '.git'));
+    fs.mkdirSync(path.join(inner, 'src'));
+
+    assert.equal(readGitLayout(path.join(inner, 'src')).worktreeRoot, inner);
+    assert.equal(readGitLayout(path.join(outer, 'vendor')).worktreeRoot, outer);
+  });
+
+  test('property: from any depth, the answer is the nearest ancestor that holds a repository', (t) => {
+    const root = mkTmp(t);
+    let n = 0;
+    fc.assert(fc.property(
+      fc.integer({ min: 0, max: 6 }),
+      fc.array(fc.integer({ min: 0, max: 6 }), { maxLength: 3 }),
+      (depth, repoLevels) => {
+        n += 1;
+        const dirs = [path.join(root, `case-${n}`)];
+        for (let level = 1; level <= depth; level += 1) dirs.push(path.join(dirs[level - 1], `d${level}`));
+        fs.mkdirSync(dirs[depth], { recursive: true });
+        const repos = [...new Set(repoLevels.filter((level) => level <= depth))];
+        for (const level of repos) gitDir(path.join(dirs[level], '.git'));
+
+        const layout = readGitLayout(dirs[depth]);
+        if (repos.length === 0) return layout.reason === 'not_git_repo' && layout.worktreeRoot === dirs[depth];
+        const nearest = dirs[Math.max(...repos)];
+        return layout.reason === 'ok' && layout.worktreeRoot === nearest && layout.repoRoot === nearest
+          && layout.gitCommonDir === path.join(nearest, '.git');
+      },
+    ), { numRuns: 60 });
+  });
+
+  describe('declines, so that git decides', () => {
+    const cases = {
+      'a start that does not exist': (root) => path.join(root, 'not-there'),
+      'a start inside the git dir': (root) => path.join(mainAndLinked(root).common, 'objects'),
+      'a bare repository': (root) => gitDir(path.join(root, 'bare.git'), { config: '[core]\n\tbare = true\n' }),
+      'a `.git` whose HEAD git cannot parse': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'HEAD'), 'garbage\n');
+        return main;
+      },
+      'a `.git` with an empty HEAD': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'HEAD'), '');
+        return main;
+      },
+      'a `.git` with no objects directory': (root) => {
+        const { main, common } = mainAndLinked(root);
+        cleanup(path.join(common, 'objects'));
+        return main;
+      },
+      'a config git would reject': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core\njunk\n');
+        return main;
+      },
+      'a repository format this reader does not know': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core]\n\trepositoryformatversion = 2\n');
+        return main;
+      },
+      'an extension this reader does not know': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core]\n\trepositoryformatversion = 1\n[extensions]\n\tfooBar = true\n');
+        return main;
+      },
+      'core.bare spelled in a way a pattern would miss': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core]\n\tbare = "true"\n');
+        return main;
+      },
+      'core.bare = true hidden behind a later subsection of core': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core]\n\tbare = true\n[core "x"]\n\tbare = false\n');
+        return main;
+      },
+      'core.worktree on the section header line': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core] worktree = ../elsewhere\n');
+        return main;
+      },
+      'a `.git` that is not a git dir': (root) => {
+        fs.mkdirSync(path.join(root, 'work', '.git'), { recursive: true });
+        return path.join(root, 'work');
+      },
+      'a `.git` file that names no git dir': (root) => {
+        fs.mkdirSync(path.join(root, 'work'));
+        fs.writeFileSync(path.join(root, 'work', '.git'), 'not a pointer\n');
+        return path.join(root, 'work');
+      },
+      'a `.git` file larger than a pointer': (root) => {
+        fs.mkdirSync(path.join(root, 'work'));
+        fs.writeFileSync(path.join(root, 'work', '.git'), `gitdir: ${'x'.repeat(5000)}\n`);
+        return path.join(root, 'work');
+      },
+      'core.worktree in the config': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core]\n\tworktree = ../elsewhere\n');
+        return main;
+      },
+      'core.bare = true in the config': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core]\n\tbare = true\n');
+        return main;
+      },
+      'an include in the config': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[include]\n\tpath = ../other.config\n');
+        return main;
+      },
+      'core.worktree in the per-worktree config': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config.worktree'), '[core]\n\tworktree = ../elsewhere\n');
+        return main;
+      },
+      'a linked worktree whose main repository is bare': (root) => {
+        const { linked, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'config'), '[core]\n\tbare = true\n');
+        return linked;
+      },
+      'a linked worktree whose git dir points back somewhere else': (root) => {
+        const { linked, linkedGitDir } = mainAndLinked(root);
+        fs.writeFileSync(path.join(linkedGitDir, 'gitdir'), `${path.join(root, 'main', '.git')}\n`);
+        return linked;
+      },
+      'a linked worktree whose git dir is not under <common>/worktrees': (root) => {
+        const { linked, linkedGitDir } = mainAndLinked(root);
+        fs.writeFileSync(path.join(linkedGitDir, 'commondir'), '..\n');
+        return linked;
+      },
+      'a git dir with a commondir where a main checkout has none': (root) => {
+        const { main, common } = mainAndLinked(root);
+        fs.writeFileSync(path.join(common, 'commondir'), '.\n');
+        return main;
+      },
+    };
+    for (const [name, build] of Object.entries(cases)) {
+      test(name, (t) => {
+        assert.equal(readGitLayout(build(mkTmp(t))), null);
+      });
+    }
+
+    test('a `.git` that is a symbolic link', { skip: process.platform === 'win32' && 'needs symlink privilege' }, (t) => {
+      const root = mkTmp(t);
+      const { common } = mainAndLinked(root);
+      fs.mkdirSync(path.join(root, 'work'));
+      fs.symlinkSync(common, path.join(root, 'work', '.git'), 'dir');
+      assert.equal(readGitLayout(path.join(root, 'work')), null);
+    });
+
+    // A FIFO blocks whoever opens it for reading until a writer appears. One
+    // planted as `config` or `commondir` must never be opened: the open would
+    // hang every CLI call. The stand-in turns "opened it" into a failure
+    // instead of a hang.
+    test('a FIFO where a file is expected is never opened', { skip: process.platform === 'win32' && 'no FIFOs' }, (t) => {
+      const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
+      const root = mkTmp(t);
+      const { main, common, linked, linkedGitDir } = mainAndLinked(root);
+      for (const file of [path.join(common, 'config'), path.join(linkedGitDir, 'commondir')]) {
+        fs.unlinkSync(file);
+        const made = runHook(file, [], { interpreter: 'mkfifo' });
+        assert.equal(made.outcome, OUTCOME.EXITED, `mkfifo did not run: ${made.outcome}`);
+        assert.equal(made.exitCode, 0, made.stderr);
+      }
+      const realOpen = fs.openSync;
+      const opened = [];
+      t.mock.method(fs, 'openSync', (file, ...rest) => {
+        if (fs.lstatSync(file).isFIFO()) {
+          opened.push(file);
+          throw new Error(`opened a FIFO: ${file}`);
+        }
+        return realOpen.call(fs, file, ...rest);
+      });
+
+      assert.equal(readGitLayout(main), null);
+      assert.equal(readGitLayout(linked), null);
+      assert.deepEqual(opened, []);
+    });
+
+    // Windows has no uid. There the reader answers only when everything the
+    // answer rests on is inside the user's home directory, and leaves any
+    // other repository to git and git's own ownership check.
+    test('where there is no uid: a repository outside the home directory', (t) => {
+      const root = mkTmp(t);
+      const { main, linked } = mainAndLinked(root);
+      const home = path.join(root, 'home');
+      fs.mkdirSync(home);
+      const uid = Object.getOwnPropertyDescriptor(process, 'getuid');
+      Object.defineProperty(process, 'getuid', { value: undefined, configurable: true, writable: true });
+      t.after(() => {
+        if (uid) Object.defineProperty(process, 'getuid', uid);
+        else delete process.getuid;
+      });
+
+      // One mock, re-pointed. Mocking the same method again would leave the
+      // earlier mock installed when the test ends, for every test after it.
+      const homedir = t.mock.method(os, 'homedir', () => home);
+      assert.equal(readGitLayout(main), null);
+      assert.equal(readGitLayout(linked), null);
+
+      // The same repositories, with the home directory above them, are answered.
+      homedir.mock.mockImplementation(() => root);
+      assert.equal(readGitLayout(main).worktreeRoot, main);
+      assert.equal(readGitLayout(linked).repoRoot, main);
+
+      // A home that is a filesystem root vouches for nothing.
+      homedir.mock.mockImplementation(() => path.parse(root).root);
+      assert.equal(readGitLayout(main), null);
+    });
+
+    test('a repository another user owns', { skip: typeof process.getuid !== 'function' && 'no uid on this platform' }, (t) => {
+      const { main } = mainAndLinked(mkTmp(t));
+      const mine = process.getuid();
+      t.mock.method(process, 'getuid', () => mine + 1);
+      assert.equal(readGitLayout(main), null);
+    });
+  });
+
+  describe('parseGitConfig', () => {
+    const values = (text) => Object.fromEntries(parseGitConfig(text).values);
+
+    test('sections, subsections, case and the last value of a key', () => {
+      assert.deepEqual(values('[Core]\n\tBare = false\n[branch "A b"]\n\tmerge = x\n[core]\n\tbare = true\n'), {
+        'core.bare': 'true', 'branch.A b.merge': 'x',
+      });
+      assert.deepEqual([...parseGitConfig('[core]\n[branch "a"]\n[include]\n').sections].sort(), ['branch', 'core', 'include']);
+    });
+
+    test('values: quotes, escapes, comments, continuations, and a key with no value', () => {
+      assert.deepEqual(values('[s]\n k = "a;b" ; c\n q = a"b"c\n e = a\\tb\n c = tr\\\nue\n t =  x  \n bare\n'), {
+        's.k': 'a;b', 's.q': 'abc', 's.e': 'a\tb', 's.c': 'true', 's.t': 'x', 's.bare': true,
+      });
+    });
+
+    test('a key on the header line, and a key before any section', () => {
+      assert.deepEqual(values('top = 1\n[core] worktree = /tmp\n'), { '.top': '1', 'core.worktree': '/tmp' });
+    });
+
+    // `[core "x"]` is its own namespace to git. Read as plain `core`, a later
+    // `[core "x"] bare = false` would hide a real `core.bare = true`.
+    test('a subsection of core does not override core', () => {
+      assert.deepEqual(values('[core]\n\tbare = true\n[core "x"]\n\tbare = false\n'), {
+        'core.bare': 'true', 'core.x.bare': 'false',
+      });
+    });
+
+    test('a form feed or a vertical tab is not whitespace', () => {
+      assert.equal(parseGitConfig('[core]\f\n\tfoo = 1\n'), null);
+      assert.equal(parseGitConfig('[core]\v\n\tfoo = 1\n'), null);
+      assert.deepEqual(values('[s]\n\tk = a\fb\n'), { 's.k': 'a\fb' });
+    });
+
+    test('what git rejects is rejected', () => {
+      for (const text of ['[core\n', '[ core]\n', '[]\n', '!!!\n', '[s]\n1k = v\n', '[s]\nk_1 = v\n',
+        '[s]\nk = "open\n', '[s]\nk = a\\qb\n', '[s]\nk v\n']) {
+        assert.equal(parseGitConfig(text), null, JSON.stringify(text));
+      }
+    });
+  });
+
+  test('resolveProjectContext says which path answered, and uses git only when the reader declines', (t) => {
+    const { main } = mainAndLinked(mkTmp(t));
+    const calls = [];
+    const execGit = (args, opts) => {
+      calls.push(args.join(' '));
+      return shellProjection.execGit(args, opts);
+    };
+
+    assert.equal(resolveProjectContext(main, { deps: { execGit } }).provenance.layout, 'filesystem');
+    assert.deepEqual(calls, []);
+
+    const declined = resolveProjectContext(main, { deps: { execGit, readGitLayout: () => null } });
+    assert.equal(declined.provenance.layout, 'git');
+    assert.equal(calls.length, 1);
   });
 });

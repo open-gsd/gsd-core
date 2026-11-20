@@ -71,7 +71,8 @@ function resolveBundledTree(pluginRoot) {
   }
   let root;
   try {
-    root = fs.realpathSync(pluginRoot);
+    // #6107: `.native` everywhere below, so two letter-case spellings of one folder compare equal on a case-insensitive volume
+    root = fs.realpathSync.native(pluginRoot);
   } catch (_) {
     return null; // plugin root does not exist
   }
@@ -82,7 +83,7 @@ function resolveBundledTree(pluginRoot) {
     // resolves to a path inside the plugin root. realpathSync throws ENOENT/
     // ENOTDIR if <pluginRoot>/gsd-core is absent, so no separate existence
     // check is needed. Reject anything that does not resolve to a directory.
-    bundledReal = fs.realpathSync(bundled);
+    bundledReal = fs.realpathSync.native(bundled);
     if (!fs.statSync(bundledReal).isDirectory()) return null;
   } catch (_) {
     return null;
@@ -124,8 +125,8 @@ function createDirLink(target, linkPath, platform) {
 function linkPointsAt(linkPath, expectedTarget) {
   try {
     if (!fs.lstatSync(linkPath).isSymbolicLink()) return false;
-    const resolved = fs.realpathSync(linkPath);
-    return resolved === fs.realpathSync(expectedTarget);
+    const resolved = fs.realpathSync.native(linkPath);
+    return resolved === fs.realpathSync.native(expectedTarget);
   } catch (_) {
     return false;
   }
@@ -219,7 +220,7 @@ function ensureCanonicalPath(opts = {}) {
     // validated plugin bundle.
     let targetIsDir = false;
     try {
-      const targetReal = fs.realpathSync(target);
+      const targetReal = fs.realpathSync.native(target);
       // A NAMED subdir must resolve strictly BELOW the bundled tree root. We do
       // NOT accept targetReal === bundledTree here: a subdir that self-links to
       // the tree root would otherwise be exposed at the wrong level (e.g.
@@ -288,6 +289,7 @@ function ensureCanonicalPath(opts = {}) {
 module.exports = {
   ensureCanonicalPath,
   resolveBundledTree,
+  linkPointsAt,
   resolveConfigDir,
   dirLinkType,
   MANAGED_SUBDIRS,

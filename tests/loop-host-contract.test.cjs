@@ -111,6 +111,8 @@ function makeValidWorkflowFiles() {
       'EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)',
       'For each active entry where `kind == "step"`: dispatch.',
       'For each active entry where `kind == "gate"`: evaluate.',
+      // #5984: the verifier's landing site, asserted by the generator's contribution/verifier auxiliary entry.
+      'For each active entry where `kind == "contribution"` and `into == "verifier"`: inject.',
       '',
     ].join('\n'),
     'verify-work.md': makeWorkflow('verify', ['verify:pre', 'verify:post'], ['orchestrator'], ['UAT.md'], ['SUMMARY.md']),
@@ -988,7 +990,7 @@ describe('declared loop points are dispatched (#5848)', () => {
     assert.ok(handoffIdx !== -1, 'execute:pre hand-off to its step file must exist');
     assert.equal(text.split('execute-phase/steps/pre-execute-gate-hooks.md').length, 2, 'the hand-off is the only mention');
     assert.ok(handoffIdx < wavePreIdx, 'execute:pre must be handed off before the first wave dispatch site');
-    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name');
+    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name');
     assert.ok(handoffIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
   });
 

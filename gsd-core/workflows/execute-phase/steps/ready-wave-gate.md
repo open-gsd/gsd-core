@@ -18,11 +18,11 @@ missing predecessors: "Skipping {plan.id}: incomplete predecessor
 plan's own dependencies are already complete, so **a not-ready plan must
 never be dispatched in this run, even when a later wave's plans are ready**.
 
-**Waiting is not done (#4628).** In step 1's filtered-out evaluation order,
-after the #2830 blocked condition and before the all-summarized condition,
-insert:
+**Waiting is not done (#4628).** In step 1's all-filtered decision (the
+`exit-not-ready` outcome of `verification all-summarized`, #6096), after the
+#2830 blocked exit and before the all-summarized routing:
 
-> 2b. **No filter is active, no blocked-plan skip occurred, and at least one
+> **No filter is active, no blocked-plan skip occurred, and at least one
 > filtered plan was skipped because `ready: false` (#4624 cross-reference; #4628 scope)** — the wave
 > is WAITING on incomplete predecessors, not finished: report "Phase waiting:
 > {plan ids} await incomplete predecessors {unresolved_dependencies} —

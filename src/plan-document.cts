@@ -110,6 +110,8 @@ interface PlanDocument {
   dependsOn: string[];
   autonomous: boolean;
   agentHint: string | null;
+  /** #6302 (ADR-3711 D1): frontmatter `executor_runtime`, a registry runtime id naming a foreign executor; null when unset or blank. */
+  executorRuntime: string | null;
   /** Frontmatter `files_modified` / `files-modified`, normalised to an array. */
   filesModified: string[];
   /**
@@ -319,6 +321,7 @@ function planIdFromFile(planFile: string): string {
  * migration below naturally covers it. `gap_closure` (#4924) is a 9th field,
  * absorbed onto this same bulk-read seam by this fix rather than left on the
  * removed `fm[key]` object-property read it was rebased in against.
+ * `executor_runtime` (#6302) is a 10th field, read through the same seam.
  */
 const FRONTMATTER_READ_KEYS = [
   'wave',
@@ -329,6 +332,7 @@ const FRONTMATTER_READ_KEYS = [
   'files_deleted',
   'files-deleted',
   'agent_hint',
+  'executor_runtime',
   'type',
   'objective',
   'gap_closure',
@@ -366,8 +370,8 @@ type FrontmatterValueLike = string | string[] | Record<string, unknown>;
  * @param planPath Historically the path passed to `extractFrontmatter`'s
  *                 truncated-frontmatter diagnostic (#1882) — a stderr-only
  *                 side channel, never part of this function's return value.
- *                 #5026: the 9 frontmatter fields below (7 scheduling fields,
- *                 plus `objective` and `gap_closure`) now read through
+ *                 #5026: the 10 frontmatter fields below (7 scheduling fields,
+ *                 plus `objective`, `gap_closure` and `executor_runtime`) now read through
  *                 `readFrontmatterFieldFromSource`, which has no path
  *                 parameter, so this diagnostic's file-naming/dedup key is a
  *                 documented, accepted side-effect-only regression (falls
@@ -427,6 +431,14 @@ function parsePlanDocument(content: string, _planPath = ''): PlanDocument {
     agentHint = hintStr !== '' ? hintStr : null;
   }
 
+  let executorRuntime: string | null = null;
+  const fmExecutorRuntime = frontmatterField(fields, 'executor_runtime');
+  // A bare `executor_runtime:` opens a nested map in the frontmatter reader, so only a scalar string counts.
+  if (typeof fmExecutorRuntime === 'string') {
+    const runtimeStr = fmExecutorRuntime.trim();
+    executorRuntime = runtimeStr !== '' ? runtimeStr : null;
+  }
+
   let planType: string | null = null;
   const fmType = frontmatterField(fields, 'type');
   if (fmType !== undefined) {
@@ -441,6 +453,7 @@ function parsePlanDocument(content: string, _planPath = ''): PlanDocument {
     dependsOn,
     autonomous,
     agentHint,
+    executorRuntime,
     filesModified,
     filesDeleted,
     // extractFrontmatter yields every scalar as a string, so YAML `true` is 'true'.

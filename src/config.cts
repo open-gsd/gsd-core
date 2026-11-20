@@ -120,6 +120,8 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
   // without an agent_hint field, so existing dispatch is byte-identical.
   'workflow.agent_hint_routing': true,
+  // #6302 (ADR-3711 D1): the opt-in gate for dispatching a plan to a foreign executor; off unless set.
+  'workflow.cross_runtime_execution': false,
   // #4401: Compact Content mode gate — derived from the defaults manifest via
   // CONFIG_DEFAULTS (added in config-loader.cts) so the manifest stays the
   // single source of truth, matching workflow.smart_zone_tokens /
@@ -977,6 +979,25 @@ function unsetConfigValue(cwd: string, keyPath: string): UnsetConfigValueResult 
 }
 
 /**
+ * Runtime-state flags whose absence already reads as `false` (config-loader.cts, init.cts). Clearing one of them
+ * when the key is absent changes nothing a reader can see, so it must not touch the committed config (#6124):
+ * the workflows clear `workflow._auto_chain_active` on every plan-phase, execute-phase and transition run, and the
+ * write left `.planning/config.json` modified in every project created without `--auto`.
+ */
+const ABSENT_MEANS_FALSE_FLAGS: ReadonlySet<string> = new Set(['workflow._auto_chain_active']);
+
+function isNoopFlagClear(config: Record<string, unknown>, keyPath: string, parsedValue: unknown): boolean {
+  if (parsedValue !== false || !ABSENT_MEANS_FALSE_FLAGS.has(keyPath)) return false;
+  let current: unknown = config;
+  for (const key of keyPath.split('.')) {
+    if (current === null || typeof current !== 'object' || Array.isArray(current)) return false;
+    if (!Object.prototype.hasOwnProperty.call(current, key)) return true;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current === undefined;
+}
+
+/**
  * Sets a value in the config file, allowing nested values via dot notation (e.g.,
  * "workflow.research").
  *
@@ -988,6 +1009,10 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
+
+    if (isNoopFlagClear(config, keyPath, parsedValue)) {
+      return { updated: false, key: keyPath, value: parsedValue, previousValue: undefined };
+    }
 
     const previousValue = _setNestedValue(config, keyPath, parsedValue);
 
@@ -1010,10 +1035,14 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
  * compute, rather than a second, hand-maintained traversal that could drift
  * from the real one.
  */
-function previewConfigValue(cwd: string, keyPath: string, parsedValue: unknown): { key: string; value: unknown; previousValue: unknown } {
+function previewConfigValue(cwd: string, keyPath: string, parsedValue: unknown): { key: string; value: unknown; previousValue: unknown; wouldWrite: boolean } {
   const config = loadConfigJson(cwd);
+  // The preview states exactly what the write would do (#4444), so it asks the write's own predicate.
+  if (isNoopFlagClear(config, keyPath, parsedValue)) {
+    return { key: keyPath, value: parsedValue, previousValue: undefined, wouldWrite: false };
+  }
   const previousValue = _setNestedValue(config, keyPath, parsedValue);
-  return { key: keyPath, value: parsedValue, previousValue };
+  return { key: keyPath, value: parsedValue, previousValue, wouldWrite: true };
 }
 
 /**
@@ -1168,7 +1197,7 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
       output({ dry_run: true, would_update: true, key: kp, value: masked, previousValue: maskedPrev, masked: true }, raw, `${kp}=${masked} (dry run)`);
       return;
     }
-    output({ dry_run: true, would_update: true, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
+    output({ dry_run: true, would_update: preview.wouldWrite, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
     return;
   }
 
@@ -1545,6 +1574,45 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
     if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
     error(message, reason);
   };
+
+  // #5470: `commit_docs` and `search_gitignored` answer, under either
+  // spelling, with the value the runtime resolves, not a literal path walk
+  // (their CONFIG_KEY_ALIASES entries say `configGet: 'loader'`). Shipped
+  // workflows read both through the flat key while the docs write the nested
+  // one, so after `config-set planning.commit_docs false` (the
+  // keep-planning-docs-private how-to) a `config-get commit_docs` read was
+  // "Key not found", and every workflow gate's `|| echo "true"` fallback
+  // committed `.planning/`. The loader also derives values the walk cannot
+  // (a gitignored `.planning/` resolves `commit_docs` to false). Same
+  // invariant as #2256: config-get must not disagree with the runtime. A value
+  // the loader resolves, null included, is printed and `--default` does not
+  // apply. The other loader aliases stay on the walk below, which ADR-5057
+  // makes the authority for gate config. `persist: false` because a read must
+  // not rewrite config.json (#3648).
+  // A config file the loader reports unusable (CONFIG_UNPARSEABLE /
+  // CONFIG_UNREADABLE) is not reported as a value: the loader discards it and
+  // resolves defaults, so `true` would read as the user's setting. config-get
+  // fails with CONFIG_PARSE_FAILED instead (ADR-1411: corrupt is not absent).
+  // The file can be, for example, the scoped config.json, the root config.json
+  // a workstream inherits from, or ~/.gsd/defaults.json when there is no
+  // .planning/; the loader has already named it on stderr. The loader's
+  // workstream fallback (GSD_PROJECT and GSD_WORKSTREAM both set, a usable
+  // root) reports no fault in what it falls back to (the GSD_PROJECT
+  // config.json, or ~/.gsd/defaults.json when that project has no directory),
+  // so there config-get prints the defaults the runtime resolves.
+  const loaderAlias = configLoader.configKeyAliasFor(kp);
+  if (loaderAlias?.configGet === 'loader') {
+    const resolution = configLoader.loadConfigResolved(cwd, { persist: false });
+    if (resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNPARSEABLE
+      || resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNREADABLE) {
+      error(`Failed to read config: ${resolution.reason} (the file named in the warning above)`, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const resolved = configLoader.readResolvedAlias(resolution.config, loaderAlias);
+    if (resolved !== undefined) {
+      emitConfigValue(kp, resolved, raw);
+      return;
+    }
+  }
 
   let config: Record<string, unknown> = {};
   try {
