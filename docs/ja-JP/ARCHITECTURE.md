@@ -373,7 +373,6 @@ ui-phase → UI-SPEC.md (design contract, optional)
     │
     ▼
 plan-phase
-    ├── Research gate (blocks if RESEARCH.md has unresolved open questions)
     ├── Phase Researcher → RESEARCH.md
     │       └── Package Legitimacy Gate: registry-API verdict on every package; [SLOP] removed,
     │           [SUS]/[ASSUMED] flagged; Audit table written to RESEARCH.md
@@ -381,6 +380,8 @@ plan-phase
     │       └── checkpoint:human-verify injected before [ASSUMED]/[SUS] installs;
     │           T-{phase}-SC STRIDE row added for install-bearing plans
     ├── Plan Checker → Verify loop (max 3x)
+    │       └── Research gate (Dimension 11): blocks the plans until each open RESEARCH.md
+    │           question cites a recorded user decision (D-NN in CONTEXT.md <decisions>)
     ├── Requirements coverage gate (REQ-IDs → plans)
     └── Decision coverage gate (CONTEXT.md `<decisions>` → plans, BLOCKING — #2492)
     │
