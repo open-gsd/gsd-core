@@ -25,6 +25,7 @@ const { execFileSync } = require('node:child_process');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -419,7 +420,13 @@ describe('#5354 tdd review checkpoint seal', () => {
       out.push({ cls: 'duplicate-last-wins', label: p.join('/'), text: stringifyDuplicated(valid, p, 'x', true) });
       out.push({ cls: 'duplicate-first-loses', label: p.join('/'), text: stringifyDuplicated(valid, p, 'x', false) });
     }
-    for (let cut = 1; cut < text.length; cut += 7) out.push({ cls: 'truncated', label: `at ${cut}`, text: text.slice(0, cut), unreadable: true });
+    // every 7th cut, plus the cut one byte short of the whole text
+    const cuts = new Set([text.length - 1]);
+    for (let cut = 1; cut < text.length; cut += 7) cuts.add(cut);
+    for (const cut of cuts) out.push({ cls: 'truncated', label: `at ${cut}`, text: text.slice(0, cut), unreadable: true });
+    // a project file edited on Windows: no text, only blanks, a byte-order mark; and a valid seal with CRLF line endings
+    for (const [label, bad] of [['empty', ''], ['whitespace', ' \r\n\t\n'], ['BOM', `\uFEFF${text}`]]) out.push({ cls: 'degenerate', label, text: bad, unreadable: true });
+    out.push({ cls: 'crlf', label: 'valid seal, CRLF', text: `${JSON.stringify(valid, null, 2)}\n`.replace(/\n/g, '\r\n'), credited: true });
     return out;
   }
 
@@ -438,13 +445,13 @@ describe('#5354 tdd review checkpoint seal', () => {
     fs.writeFileSync(seal, validText);
     assert.equal(run(dir).payload.rows[0].status, 'Pass', 'the unmutated seal is credited');
     const seen = new Set();
-    for (const { cls, label, text, unreadable } of hostileSeals(valid)) {
+    for (const { cls, label, text, unreadable, credited } of hostileSeals(valid)) {
       seen.add(cls);
       fs.writeFileSync(seal, text);
       const r = run(dir);
       const why = `${cls}: ${label}`;
-      if (cls === 'duplicate-first-loses') {
-        // the real member comes last and wins, so the credit is the valid one
+      if (cls === 'duplicate-first-loses' || credited) {
+        // the real member comes last and wins (or only the line endings differ), so the credit is the valid one
         assert.equal(r.payload.rows[0].status, 'Pass', why);
       } else if (r.outcome === 'unreadable') {
         assert.equal(run(dir, '--record').outcome, 'unreadable', why);
@@ -454,7 +461,7 @@ describe('#5354 tdd review checkpoint seal', () => {
       }
       if (unreadable !== undefined) assert.equal(r.outcome === 'unreadable', unreadable, `${why}: unreadable verdict`);
     }
-    assert.deepEqual([...seen].sort(), ['duplicate-first-loses', 'duplicate-last-wins', 'key-char', 'missing', 'truncated', 'value-char', 'wrong-type']);
+    assert.deepEqual([...seen].sort(), ['crlf', 'degenerate', 'duplicate-first-loses', 'duplicate-last-wins', 'key-char', 'missing', 'truncated', 'value-char', 'wrong-type']);
   });
 
   const padTo = (text, size) => text + ' '.repeat(size - Buffer.byteLength(text));
@@ -993,15 +1000,18 @@ describe('#5354 tdd review checkpoint seal', () => {
     if (prepare) prepare(dir);
     const calls = path.join(path.dirname(dir), `${path.basename(dir)}-calls`);
     dirs.push(calls);
+    const home = `${dir}-home`;
+    fs.mkdirSync(home);
+    dirs.push(home);
     // `query commit` stands in for cmdCommit: it commits the seal itself unless COMMIT_OUT is set (then it prints that and commits nothing).
     const stub = real
-      ? 'gsd_run() { echo "$*" >> "$CALLS"; node "$GSD_TOOLS_BIN" "$@"; }\n'
-      : 'gsd_run() { echo "$*" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_EXIT+x}" ]; then return "$GIT_EXIT"; fi; case "$*" in "git status"*) if [ -n "${STATUS_EXIT+x}" ]; then return "$STATUS_EXIT"; fi;; esac; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
+      ? 'gsd_run() { node -e "console.log(JSON.stringify(process.argv.slice(1)))" -- "$@" >> "$CALLS"; node "$GSD_TOOLS_BIN" "$@"; }\n'
+      : 'gsd_run() { node -e "console.log(JSON.stringify(process.argv.slice(1)))" -- "$@" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_EXIT+x}" ]; then return "$GIT_EXIT"; fi; case "$*" in "git status"*) if [ -n "${STATUS_EXIT+x}" ]; then return "$STATUS_EXIT"; fi;; esac; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
     const r = runHook('-c', [stub + script], {
       interpreter: 'bash', cwd: dir, timeoutMs: GIT_TIMEOUT_MS,
-      env: { ...process.env, ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitExit === undefined ? {} : { GIT_EXIT: String(gitExit) }), ...(statusExit === undefined ? {} : { STATUS_EXIT: String(statusExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
+      env: isolatedEnv({ home, override: { ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitExit === undefined ? {} : { GIT_EXIT: String(gitExit) }), ...(statusExit === undefined ? {} : { STATUS_EXIT: String(statusExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' } }),
     });
-    return { r, dir, before, subject: git(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter((c) => c && !c.startsWith('run-with-timeout ')) };
+    return { r, dir, before, subject: git(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter(Boolean).map((c) => JSON.parse(c)).filter((argv) => argv[0] !== 'run-with-timeout') };
   }
 
   // Each seal-step branch, with the text of ship.md's own message for it (defined once, taken from the step).
@@ -1031,14 +1041,14 @@ describe('#5354 tdd review checkpoint seal', () => {
   test('ship.md seal step commits a dirty seal after a successful record', posixOnly, () => {
     const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.match(subject, /^docs\(01\): seal TDD review evidence$/);
+    assert.equal(subject, 'docs(01): seal TDD review evidence');
   });
 
   // User git config must not hide a new seal from the dirty check: with `status.showUntrackedFiles=no` a plain `git status` omits it.
   test('ship.md seal step commits a new seal when git is configured to hide untracked files', posixOnly, () => {
     const { r, subject } = runSealStep({ seal: sealOf(sha('a'), sha('b')), prepare: (dir) => git(dir, 'config', 'status.showUntrackedFiles', 'no') });
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.match(subject, /^docs\(01\): seal TDD review evidence$/);
+    assert.equal(subject, 'docs(01): seal TDD review evidence');
   });
 
   test('ship.md seal step warns and commits nothing when a bounded git call times out', posixOnly, () => {
@@ -1073,7 +1083,8 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   test('ship.md seal step commits through the commit owner, not raw git', posixOnly, () => {
     const { calls } = runSealStep({ seal: sealOf(sha('a'), sha('b')) });
-    assert.ok(calls.some((c) => c.startsWith('query commit docs(01): seal TDD review evidence --files ') && c.includes(SEAL_FILE)), calls.join('\n'));
+    const commit = calls.find((argv) => argv[0] === 'query' && argv[1] === 'commit');
+    assert.deepEqual(commit?.slice(0, 5), ['query', 'commit', 'docs(01): seal TDD review evidence', '--files', SEAL], JSON.stringify(calls));
   });
 
   // The real commit owner: phase_commit_docs.<phase> beats the project-level commit_docs (#3587).
@@ -1102,9 +1113,10 @@ describe('#5354 tdd review checkpoint seal', () => {
   test('ship.md seal step resolves the phase in the workstream ship resolved it in (#5354)', posixOnly, () => {
     const { calls } = runSealStep({ ws: '--ws ws1', seal: sealOf(sha('a'), sha('b')) });
     assert.equal(calls.length, 2);
-    assert.match(calls[0], /^check .* --record /);
-    assert.match(calls[1], /^query commit /);
-    for (const call of calls) assert.match(call, / --ws=ws1(?: |$)/, call);
+    assert.equal(calls[0][0], 'check');
+    assert.ok(calls[0].includes('--record'), JSON.stringify(calls[0]));
+    assert.deepEqual(calls[1].slice(0, 2), ['query', 'commit']);
+    for (const argv of calls) assert.equal(argv.filter((a) => a === '--ws=ws1').length, 1, JSON.stringify(argv));
   });
 
   test('ship.md seal step warns when no seal file exists, and only for a phase with tdd plans', posixOnly, () => {

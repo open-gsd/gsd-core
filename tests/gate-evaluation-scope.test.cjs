@@ -16,8 +16,9 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
@@ -50,7 +51,7 @@ function write(dir, rel, content) {
 function makeRepo({ deferScaffold = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-'));
   dirs.push(dir);
-  const gitWith = (env, ...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY, ...env } }).trim();
+  const gitWith = (env, ...args) => gitOrThrow(args, { cwd: dir, env: isolatedEnv({ home: dir, override: { ...IDENTITY, ...env } }) }).trim();
   const git = (...args) => gitWith({}, ...args);
   git('init', '--initial-branch=main');
   git('config', 'user.email', 'test@test.io');
@@ -1259,6 +1260,9 @@ describe('evaluateEvaluationScope — the check verb', () => {
 // ─── Seams driven through an injected git runner ──────────────────────────────
 
 const { execGit: realExecGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+// A test that stubs `git --version` at 2.37 still sends `--since-as-filter` to the real git, which must accept it.
+const hostGit = parseGitVersion(realExecGit(['--version'], { cwd: __dirname }).stdout);
+const SKIP_HOST_GIT_BEFORE_2_37 = hostGit !== null && (hostGit.major > 2 || (hostGit.major === 2 && hostGit.minor >= 37)) ? false : 'the host git before 2.37 rejects --since-as-filter';
 const TIMED_OUT = { exitCode: 1, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true };
 
 /** A git runner that records every argv and delegates to the real git unless `force` answers. */
@@ -1639,7 +1643,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(listing.opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
   });
 
-  test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are (git 2.37 and git 2.36 alike)', () => {
+  test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are (git 2.37 and git 2.36 alike)', { skip: SKIP_HOST_GIT_BEFORE_2_37 }, () => {
     for (const version of ['2.37.0', '2.36.9']) {
       for (const [offset, expected] of [[-1, false], [0, true], [1, true]]) {
         const repo = makeRepo();
@@ -1669,7 +1673,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     }
   });
 
-  test('[negative] a listing record whose first field is not a full sha is skipped, never read as a commit', () => {
+  test('[negative] a listing record whose first field is not a full sha is skipped, never read as a commit', { skip: SKIP_HOST_GIT_BEFORE_2_37 }, () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
@@ -1732,7 +1736,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
 
   test('[hostile] log.showSignature never puts gpg lines into the records of a signed commit', (t) => {
     if (process.platform === 'win32') { t.skip('POSIX shell script fixture'); return; }
-    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-gpg-'));
+    const scratch = createTempDir('gsd-scope-gpg-');
     dirs.push(scratch);
     const program = path.join(scratch, 'fake-gpg.sh');
     fs.writeFileSync(program, '#!/bin/sh\necho "gpg: fake verdict" >&2\nexit 1\n', { mode: 0o755 });
@@ -1759,7 +1763,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
     assert.equal(subjectsOccurOnHead(repo.dir, [original]), true, 'a signed twin is read, so the rewrite is found');
   });
 
-  test('[boundary] one date window on git 2.36 (no flag, filtered in code) and git 2.37 (`--since-as-filter`); the probe reads `git --version`', () => {
+  test('[boundary] one date window on git 2.36 (no flag, filtered in code) and git 2.37 (`--since-as-filter`); the probe reads `git --version`', { skip: SKIP_HOST_GIT_BEFORE_2_37 }, () => {
     const repo = makeRepo();
     const base = repo.git('rev-parse', 'HEAD');
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
