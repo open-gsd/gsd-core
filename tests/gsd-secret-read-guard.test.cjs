@@ -1420,6 +1420,23 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   ]);
   // Control: a NUL splits a mention only beside the reading that keeps it whole (`.env.example<NUL>x` is a secret name).
   blocks(["echo 'a=.env.example\u0000x' | xargs git"], { path: '.env.example\u0000x' });
+
+  // With `-a` / `--arg-file` xargs leaves its stdin alone, so a shell it runs reads that stdin: the segment's
+  // here-string or heredoc is the shell's script, as it is for a shell run directly.
+  blocks([
+    "xargs -a /dev/null bash <<< 'cat .env'",
+    "xargs --arg-file=list sh -s <<< 'cat .env'",
+    "xargs -a list env bash <<< 'cat .env'",
+    "xargs -a list sh <<'EOF'\ncat .env\nEOF",
+    // Control: a pipe into it was read before.
+    "echo 'cat .env' | xargs -a list bash",
+  ]);
+  allows([
+    // Mode c: the shell's stdin is data.
+    "xargs -a list bash -c 'echo hi' <<< 'cat .env'",
+    // Without `-a` xargs reads the here-string itself, as words.
+    "xargs echo <<< 'cat .env'",
+  ]);
   allows([
     // `;` is not a pipe, so the shell's stdin is not the echo.
     "echo 'cat .env'; cat | sh",
