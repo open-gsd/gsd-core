@@ -10,6 +10,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { refOf } = require('./helpers/isolated-env.cjs');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { git, commitAll, write, commitRound, publish, runSh, mergePr, probePrMerged, markerOf, pendingOf, builtOf, refsOf, changed, buildRepo, squashMerge, ghPrelude, publishedWhileMainMoves, WARNED, noRefs, useRepos } = require('./helpers/pr-branch-published-fixture.cjs');
@@ -97,6 +98,29 @@ describe('#5469 pr-branch published marker (real git): failures', () => {
     assert.match(r.stderr, /starts with -/);
     assert.doesNotMatch(r.stderr, /Unknown target/, 'the run stopped at the refusal, not at the later lookup');
     assert.ok(!fs.existsSync(pwned), 'git wrote no file');
+  });
+
+  // The refusal and unknown-target texts print a name from repo config: control bytes must not reach the terminal raw.
+  for (const [what, target, text] of [['refused', "$'-\\033[2J\\rx'", 'Refusing target'], ['unknown', "$'x\\033]0;t\\rx'", 'Unknown target']]) {
+    test(`a ${what} target prints no raw control byte`, () => {
+      const dir = repo();
+      commitRound(dir, 1);
+      const r = publish(dir, target);
+      assert.equal(r.status, 1);
+      assert.ok(r.stderr.includes(text), r.stderr);
+      assert.ok([...r.stderr].every((ch) => ch === '\n' || (ch.charCodeAt(0) > 31 && ch.charCodeAt(0) !== 127)), 'no control byte but the newline');
+    });
+  }
+
+  // `_to` takes its bound from the call site, never from a TO the user exported.
+  test('an exported TO neither breaks nor removes the bound of a git call', () => {
+    const dir = repo();
+    commitRound(dir, 1);
+    const r = publish(dir, 'main', { prelude: 'export TO=abc; gh() { return 1; }' });
+    assert.equal(r.status, 0, r.stderr);
+    const calls = splitLines(fs.readFileSync(path.join(dir, '.git', 'rwt.log'), 'utf8')).filter(Boolean);
+    assert.ok(calls.length > 0);
+    for (const c of calls) assert.match(c, /^run-with-timeout (10|60) --/, c);
   });
 
   // The guard refuses a leading dash only: a dash inside the name is a normal target.
