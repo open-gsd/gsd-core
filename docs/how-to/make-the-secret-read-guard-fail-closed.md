@@ -2,11 +2,11 @@
 
 `gsd-secret-read-guard.js` fails open on its own failure: if the hook throws, one
 of its shell readings fails on a command no scan blocked, or its stdin does not
-close within 3 s, it allows the tool call. This page makes those failures block instead, for
-a guard registered in Claude Code's
-`settings.json`. A Bash command nested too deep for the guard's parser is not
-such a failure: it is denied as `command-too-complex` with or without this
-page's setting.
+close within 3 s, it allows the tool call. This page makes those failures block
+instead, for a guard registered in Claude Code's `settings.json`. Two limits are
+not such failures, and are denied with or without this page's setting: a Bash
+command nested too deep for the guard's parser (`command-too-complex`), and one
+that nests shells or substitutions more than 3 levels deep (`nesting-too-deep`).
 
 ## Before you start
 

@@ -25,7 +25,8 @@
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
  *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
  *      or a failed reading blocks as guard-error, while an overflow stays
- *      command-too-complex; any other value allows. The stdin-not-closing
+ *      command-too-complex and a body nested past MAX_NESTING_DEPTH stays
+ *      nesting-too-deep; any other value allows. The stdin-not-closing
  *      cells hold the hook's stdin pipe open and live in
  *      tests/gsd-secret-read-guard-stdin-timer.test.cjs.
  *
@@ -807,6 +808,20 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
       ['a debugger spawn, then 100,000 levels', `timeout 5 bash -c 'claude --agent gsd-debugger; echo ${deep(100000)}'`],
     ]) {
       assertBlocked(runHook(bash(cmd), { env: DENY_ENV }), label, { code: 'command-too-complex', tool: 'Bash', path: '' });
+    }
+  });
+
+  test('opted in: a body nested past MAX_NESTING_DEPTH is still nesting-too-deep', () => {
+    // nesting-too-deep (#6136) is a limit the scan reports, as an overflow is,
+    // not a hook error, so the opt-in leaves it as it is, read or not; at the
+    // limit the body is scanned as without the opt-in.
+    const layers = (inner, n) => (n === 0 ? inner : layers(`bash -c ${JSON.stringify(inner)}`, n - 1));
+    const secret = '.e' + 'nv';
+    assertBlocked(runHook(bash(layers(`cat ${secret}`, 3)), { env: DENY_ENV }), 'a read, 3 layers', { tool: 'Bash', path: secret });
+    assertAllowed(runHook(bash(layers('echo ok', 3)), { env: DENY_ENV }), 'a benign body, 3 layers');
+    for (const n of [4, 10]) {
+      assertBlocked(runHook(bash(layers(`cat ${secret}`, n)), { env: DENY_ENV }), `a read, ${n} layers`, { code: 'nesting-too-deep', tool: 'Bash' });
+      assertBlocked(runHook(bash(layers('echo ok', n)), { env: DENY_ENV }), `a benign body, ${n} layers`, { code: 'nesting-too-deep', tool: 'Bash' });
     }
   });
 
