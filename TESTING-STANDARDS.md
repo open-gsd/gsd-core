@@ -353,9 +353,19 @@ hide. Each rule below names what enforces it. Where nothing does yet, the rule s
    `await runGsdToolsAsync` for an asynchronous one, `runGsdToolsProcess` only when the subject is the process
    itself (exit of a real process, signals, real stdin, what a missing working directory does). The in-process
    helpers never spawn as a fallback; each throws and names the helper to use. *Enforced by the helpers.*
+   A test that asserts on what a successful command wrote to stderr, or on stdout's exact bytes, calls
+   `runGsdToolsCaptured`, which returns `{ exitCode, stdout, stderr }` in-process. `runGsdTools` keeps stderr
+   only for a failed command and trims stdout, so it is not the helper for those. *The choice between the two
+   is not enforced; found in review.*
 2. **A test that needs a real process lives in a `*.process.test.cjs` file and says why in its title.**
    `tests/cli-parity.process.test.cjs` is the model: it starts the real binary on purpose, once per row, so
-   that other tests do not have to. *Enforced by review today;
+   that other tests do not have to. The six command suites (`state`, `phase`, `roadmap`, `config`, `init`,
+   `custom-phase-readers`) are held to this by ESLint: their `*.test.cjs` files cannot import
+   `tests/helpers/process-seam.cjs` or call `runGsdToolsProcess`, so a case whose subject is a process
+   (an `ExitError` becoming an exit code, a reader meeting a named pipe) or git itself (the commit a STATE.md
+   was written against, allocation across linked worktrees) goes in the suite's `.process.test.cjs` sibling.
+   Git used only to build a repository the case needs (`createTempGitProject`, a `gitOrThrow` commit) may stay
+   in the unit file: ESLint does not ban `tests/helpers/git-fixture.cjs`. *Enforced by ESLint for those six files; for every other file by review today, and
    ADR-6315 item 20 adds the lint.*
 3. **Inject a failure by mocking, not by preloading.** The command runs in your process, so
    `t.mock.method(module, 'fn', …)` on the module the command uses is what the command calls. A per-call
