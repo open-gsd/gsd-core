@@ -3391,7 +3391,9 @@ function _stripCallArgument(spanText, matchStart, matchEnd, { consumeLeadingComm
 /**
  * Replace a named-role argument token's `[matchStart, matchEnd)` span
  * (`subagent_type=`/`subagent_type:` + its value) with the projected
- * `gsd_role=` / role-prompt-resolution / structural-role argument group.
+ * `gsd_role=` / role-prompt-resolution / structural-role argument group (the
+ * `context=<role prompt>` / structural-role group for a `rolePromptResolution: 'context'`
+ * primitive such as Hermes's `delegate_task`, #6066).
  * Preserves the pretty multi-line one-arg-per-line style when the original
  * token owned its own line; falls back to an inline, comma-joined group for
  * the single-line-compact and object-literal forms.
@@ -3406,6 +3408,10 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
   }
   const lineStart = spanText.lastIndexOf('\n', matchStart - 1) + 1;
   const startsOwnLine = /^[ \t]*$/.test(spanText.slice(lineStart, matchStart));
+  // #6066: a primitive with no role parameters at all (Hermes `delegate_task`: goal / context / role ...) takes the
+  // resolved role prompt as the task's `context` (instructions, not a tool result the child could window or
+  // compact) and the plan as the first thing the child reads from `goal`. No `gsd_role` / `gsd_role_prompt`.
+  const contextMode = toolConfig.rolePromptResolution === 'context';
 
   // Consume an immediately-following separator comma (+ same-line whitespace/
   // newline) into `end` — never leave it dangling AFTER an injected trailing
@@ -3418,17 +3424,22 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
   if (afterMatch) end += afterMatch[0].length;
   const ownLine = startsOwnLine && hadTrailingComma && /\n$/.test(afterMatch[0]);
 
-  const promptContentPhrase =
-    `${promptContentParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and load ` +
-    'its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
+  const promptContentPhrase = contextMode
+    ? `${toolConfig.contextParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and put ` +
+      `its full contents here as the task's instructions (never a pointer to the file); the \`${toolConfig.taskParam}\` ` +
+      'names the plan and tells the child to read it with read_file as a call of its own, first; FAIL CLOSED with an ' +
+      'explicit error if unresolved — never execute the role inline>'
+    : `${promptContentParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and load ` +
+      'its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
+  const namedRolePart = contextMode ? '' : `${namedRoleParam}=${roleValueExpr},`;
 
   let replacement;
   if (ownLine) {
     const indent = spanText.slice(lineStart, matchStart);
     const depthNote = canOrchestrate ? '' : '  # nested delegation is unavailable at this dispatch depth/toolkit';
     replacement =
-      `${namedRoleParam}=${roleValueExpr},\n` +
-      `${indent}${promptContentPhrase},\n` +
+      (contextMode ? '' : `${namedRoleParam}=${roleValueExpr},\n${indent}`) +
+      `${promptContentPhrase},\n` +
       `${indent}${structuralRoleParam}="${leafRoleValue}",${depthNote}\n`;
   } else {
     // Inline forms never carry a trailing `#` comment mid-argument-list (it
@@ -3437,7 +3448,7 @@ function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, too
     // Re-emit exactly the separator that originally followed this argument
     // (a comma if more args follow; nothing if it was the last one).
     replacement =
-      `${namedRoleParam}=${roleValueExpr}, ${promptContentPhrase}, ${structuralRoleParam}="${leafRoleValue}"` +
+      `${contextMode ? '' : namedRolePart + ' '}${promptContentPhrase}, ${structuralRoleParam}="${leafRoleValue}"` +
       (hadTrailingComma ? ', ' : '');
   }
   return spanText.slice(0, matchStart) + replacement + spanText.slice(end);
@@ -3537,8 +3548,9 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
 
   // 1b. #5569: a tool-resolved primitive (`rolePromptResolution: 'tool'`) takes
   //     `role` + `task` only. The task text arrives as `prompt`, so the key is
-  //     renamed; `description` has no counterpart and is dropped.
-  if (toolConfig.rolePromptResolution === 'tool') {
+  //     renamed; `description` has no counterpart and is dropped. #6066: Hermes's `delegate_task`
+  //     (`rolePromptResolution: 'context'`) takes `goal` for the task text and has no `description` either.
+  if (toolConfig.rolePromptResolution === 'tool' || toolConfig.rolePromptResolution === 'context') {
     const pm = /\bprompt(\s*[=:])/.exec(_maskStringsAndComments(text));
     if (pm) {
       text = text.slice(0, pm.index) + toolConfig.taskParam + text.slice(pm.index + 'prompt'.length);
@@ -3546,6 +3558,16 @@ function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolCon
     const dm = _callArgValueRe('description').exec(_maskStringsAndComments(text));
     if (dm) {
       text = _stripCallArgument(text, dm.index, dm.index + dm[0].length);
+    }
+  }
+
+  // 1c. #6066: Hermes's `delegate_task` (goal / context / role / background) has no `isolation` or `mode`
+  //     parameter, so a Claude-shaped `isolation="worktree"` / `mode="auto"` argument is dropped rather than
+  //     forwarded to a primitive that does not accept it.
+  if (toolConfig.rolePromptResolution === 'context') {
+    for (const key of ['isolation', 'mode']) {
+      const am = _callArgValueRe(key).exec(_maskStringsAndComments(text));
+      if (am) text = _stripCallArgument(text, am.index, am.index + am[0].length);
     }
   }
 
@@ -3762,7 +3784,7 @@ function _assertProjectionComplete(content, toolConfig, namedDispatch = false) {
  *
  * @param {string} content
  * @param {{namedDispatch?: boolean, nested?: boolean, maxDepth?: number, background?: boolean, backgroundDispatch?: boolean, subagentToolkit?: string}} dispatch
- * @param {{toolName: string, namedRoleParam: string, promptContentParam: string, structuralRoleParam: string, leafRoleValue: string, backgroundParam: string, supportsPerCallModel: boolean, availableRoles: Set<string>|null, runtime: string}} toolConfig
+ * @param {{toolName: string, namedRoleParam: string, promptContentParam: string, structuralRoleParam: string, leafRoleValue: string, backgroundParam: string, supportsPerCallModel: boolean, availableRoles: Set<string>|null, runtime: string, rolePromptResolution?: string, contextParam?: string, taskParam?: string}} toolConfig
  */
 function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig) {
   const d = dispatch || {};
@@ -3787,6 +3809,18 @@ function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig)
         'runs the role in an isolated child session; the child cannot dispatch further. FAIL CLOSED — surface the ' +
         `tool's error and stop — if it reports the role unresolved; never execute the role inline as a substitute. ` +
         `Always dispatch ${rosterFlat} as separate \`${toolName}\` calls.`
+      );
+    }
+    if (toolConfig.rolePromptResolution === 'context') {
+      return (
+        `${sessionName} has no \`Agent\` tool. It exposes \`${toolName}\`, which takes a \`${toolConfig.taskParam}\` and a ` +
+        `\`${toolConfig.contextParam}\` and has no named-role parameter. GSD projects each named gsd-* role onto it itself: ` +
+        `resolve the role's prompt file from the active install, load its contents, and put them in the task's ` +
+        `\`${toolConfig.contextParam}\` as the child's operating instructions (a pointer to the file is not enough: file reads ` +
+        `can be windowed, truncated and compacted). The \`${toolConfig.taskParam}\` names the plan and tells the child to read ` +
+        'it with `read_file` as a call of its own, as its first read. FAIL CLOSED — surface an explicit error and stop — ' +
+        'if a referenced role prompt cannot be resolved; never execute the role inline as a substitute. In a top-level ' +
+        `${sessionName} session, always dispatch ${rosterFlat} as separate \`${toolName}\` calls.`
       );
     }
     return (
@@ -3916,6 +3950,10 @@ const HERMES_DISPATCH_TOOL_CONFIG = Object.freeze({
   leafRoleValue: 'leaf',
   backgroundParam: 'background',
   supportsPerCallModel: false,
+  // #6066: `delegate_task` takes goal / context / role; the role prompt rides `context`.
+  rolePromptResolution: 'context',
+  contextParam: 'context',
+  taskParam: 'goal',
 });
 
 /**

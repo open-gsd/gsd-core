@@ -487,60 +487,10 @@ proves command by command that both give the same exit code, stdout and stderr. 
 
 ### In-process CLI tests: the rules
 
-Since ADR-6315 items 14 and 15, a CLI test runs the command inside the test's own process. That is what made
-the suite's CLI tests cheap, and it puts rules on tests and on product code that a process per call used to
-hide. Each rule below names what enforces it. Where nothing does yet, the rule says so.
-
-**For tests**
-
-1. **Pick the helper by what the test is about.** `runGsdTools` for a synchronous command,
-   `await runGsdToolsAsync` for an asynchronous one, `runGsdToolsProcess` only when the subject is the process
-   itself (exit of a real process, signals, real stdin, what a missing working directory does). The in-process
-   helpers never spawn as a fallback; each throws and names the helper to use. *Enforced by the helpers.*
-2. **A test that needs a real process lives in a `*.process.test.cjs` file and says why in its title.**
-   `tests/cli-parity.process.test.cjs` is the model: it starts the real binary on purpose, once per row, so
-   that other tests do not have to. *Enforced by review today;
-   ADR-6315 item 20 adds the lint.*
-3. **Inject a failure by mocking, not by preloading.** The command runs in your process, so
-   `t.mock.method(module, 'fn', …)` on the module the command uses is what the command calls. A per-call
-   `NODE_OPTIONS=--require …` does nothing in-process and is refused. *Enforced by the helpers.*
-4. **Mock a method once per test.** `node:test` restores mocks in creation order, so mocking the same method
-   a second time leaves the first mock installed when the test ends, for every test after it. Re-point the one
-   mock with `mock.mockImplementation(…)`. *Not enforced; found in review.*
-5. **Do not rely on the command's process ending.** State the command leaves in memory is still there for the
-   next call unless a reset is registered for it (rule 8). If a second call in the same file sees the first
-   call's state, that is a product defect: fix the product, do not move the test to a spawned call.
-6. **When you compare output across two runs, mask what differs by name, not by path.** Two runs get two temp
-   directories. The CLI prints a directory in several spellings (backslashes, JSON-escaped backslashes, and
-   forward slashes from the commands that emit POSIX paths), and on Windows `fs.realpathSync` keeps an 8.3
-   short name that `fs.realpathSync.native` expands. Mask the directory's own name, and build fixture paths
-   with `fs.realpathSync.native`. *Covered by a test of the mask in `tests/cli-parity.process.test.cjs`; the
-   Windows lanes run only in the merge queue, so a Windows-only mistake here costs a queue ejection.*
-7. **A new synchronous call to an asynchronous command fails loudly.** The commands are
-   `asyncHostCommandNames()` in `gsd-tools.cjs`, the capability routers named in a module's `asyncRouters`,
-   and `run-with-timeout`. *Enforced by `runGsdTools`.*
-
-**For product code, so that it stays testable in-process**
-
-8. **No state computed from the environment when a module loads.** `os.homedir()`, `os.tmpdir()`,
-   `process.cwd()` and `process.env` are read when they are used, never into a module-level constant: the
-   second command in a process has a different home, temp root or working directory than the first. A
-   module-level cache or warned-once set registers a reset with `registerInvocationReset`
-   (`src/invocation-scope.cts`). *Covered for the known cases by tests in `tests/in-process-cli.test.cjs`;
-   ADR-6315 item 14b (#6354) adds the lint.*
-9. **A command router returns the promise of its asynchronous work and is declared asynchronous.** Make it an
-   `async function`, or name it in its module's `asyncRouters` (capability routers) or in
-   `MAYBE_ASYNC_HOST_COMMANDS`. A router that drops its promise finishes after `main` has returned: the binary
-   only works because the event loop is not empty, and an in-process call returns before the output exists.
-   *Enforced: an undeclared promise is `in_process_async_started` in a synchronous call, and
-   `tests/cli-parity.process.test.cjs` compares every top-level command in-process against the spawned binary.*
-10. **A command reads stdin only with `fs.readFileSync(0)` or `fs.readSync(0, …)`.** Those are served from
-    `options.stdin` in-process. `process.stdin` as a stream and `/dev/stdin` reach the host's real stdin.
-    *Not enforced; no command does otherwise today.*
-11. **A new top-level command needs no parity row.** The rows are generated from the dispatch tables, and a
-    test requires those tables to match the declared CLI surface. If your command's output holds something
-    that differs between two runs other than a temp directory name or a timestamp, extend the mask and the
-    mask's own test.
+The rules that in-process CLI tests put on tests and on product code are in
+[`TESTING-STANDARDS.md` — "In-process CLI tests: the rules"](TESTING-STANDARDS.md#in-process-cli-tests-the-rules).
+The helper table above says which helper to call; that section says what a test and the code under
+test must and must not do, and what enforces each rule.
 
 ### Spawning a subprocess: use the process seam
 
@@ -966,6 +916,12 @@ Required cases where relevant:
 - Runtime `.cjs` and SDK `.ts` generated surfaces disagree
 
 Generator tests should run in temp fixtures and assert atomic output behavior. Do not mutate production generated files except in explicit freshness checks.
+
+### A parser or reader that must agree with an external tool
+
+Code that gives the answer another program gives, without running it, is tested against that
+program. The rules are in
+[`TESTING-STANDARDS.md` — "A parser or reader that must agree with an external tool"](TESTING-STANDARDS.md#a-parser-or-reader-that-must-agree-with-an-external-tool).
 
 ### Prohibited: Source-Grep Tests
 

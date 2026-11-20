@@ -18,7 +18,7 @@
  * (tests/fixtures/install-tree/windsurf.json) holds 344 paths and has ZERO
  * `workflows/` entries — a global install cannot exercise the windsurf cap
  * rule at all. This file therefore builds a LOCAL windsurf install
- * (`runMinimalInstall({ runtime: 'windsurf', scope: 'local' })`), the only
+ * (`copyRuntimeFixture({ runtime: 'windsurf', scope: 'local' })`, a copy of a real install), the only
  * scope where the capped artifact family exists.
  */
 
@@ -30,7 +30,7 @@ const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { cleanup } = require('./helpers.cjs');
 const {
   BUILD_SCRIPT,
-  runMinimalInstall,
+  copyRuntimeFixture,
   buildEmittedSizes,
 } = require('./helpers/install-shared.cjs');
 const { evaluateEmittedCaps, formatCapReport } = require('./helpers/emitted-caps.cjs');
@@ -51,7 +51,7 @@ let fixture = null;
 let sizes = null;
 
 before(() => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'windsurf', scope: 'local' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'windsurf', scope: 'local' });
   fixture = { configDir, root };
   sizes = buildEmittedSizes(fixture.configDir, fixture.root);
 });
