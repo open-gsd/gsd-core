@@ -1713,7 +1713,7 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
     ].join('\n');
     const body = [];
     for (let n = 1; n <= waves; n++) {
-      body.push(`N=${n}`, script, 'printf "%s %s %s\\n" "$N" "$ISOLATION" "$USE_WORKTREES" >> "$STATE_DIR/state"');
+      body.push(`N=${n}`, script, 'printf "%s %s %s %s\\n" "$N" "$ISOLATION" "$USE_WORKTREES" "${_DEGRADE_SCOPE:--}" >> "$STATE_DIR/state"');
     }
     const r = runHook('-c', [`${prelude}\n${body.join('\n')}`], {
       interpreter: 'bash',
@@ -1723,7 +1723,8 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
     const calls = splitLines(fs.readFileSync(path.join(dir, 'calls'), { encoding: 'utf-8', flag: 'a+' })).filter(Boolean);
     const state = splitLines(fs.readFileSync(path.join(dir, 'state'), 'utf-8')).filter(Boolean).map(l => l.split(' '));
     return {
-      stderr: r.stderr,
+      // The scope the step declared for its degrade ('-' while it has not degraded).
+      scopes: state.map(([, , , ...scope]) => scope.join(' ')),
       waves: state.map(([n, iso, wt]) => ({ isolation: iso, worktrees: wt, calls: calls.filter(c => c === n).length })),
     };
   }
@@ -1731,13 +1732,6 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
   const SEQUENTIAL = { isolation: 'none', worktrees: 'false' };
   const ISOLATED = { isolation: 'harness-worktree', worktrees: 'true' };
   const wave = (state, calls) => ({ ...state, calls });
-
-  // The one degrade line either step prints: the message names its scope, and that scope is the rest of the run.
-  function degradeLine(stderr) {
-    const lines = stderr.split('\n').filter(l => l.includes('#1369'));
-    assert.equal(lines.length, 1, `expected one #1369 degrade line, got: ${stderr}`);
-    return lines[0];
-  }
 
   for (const { name, script } of STEPS) {
     describe(name, () => {
@@ -1774,11 +1768,14 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
         ]);
       });
 
-      test('the degrade message names the remaining waves and promises no return within the run', (t) => {
-        const line = degradeLine(runWaves(t, script, 1).stderr);
-        assert.deepEqual(line.match(/\b(?:this wave|remaining waves)\b/g), ['remaining waves']);
-        assert.doesNotMatch(line, /\b(?:later|re-?enable|return|restor)/i);
+      test('the degrade declares the remaining waves as its scope, and only once it degrades', (t) => {
+        assert.deepEqual(runWaves(t, script, 3, { degradeFrom: 2 }).scopes, ['-', 'remaining waves', 'remaining waves']);
       });
     });
   }
+
+  test('both steps declare the same degrade scope', (t) => {
+    const [guard, reset] = STEPS.map(({ script }) => runWaves(t, script, 1).scopes[0]);
+    assert.equal(guard, reset);
+  });
 });

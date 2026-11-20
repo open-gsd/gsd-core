@@ -17,7 +17,8 @@
      if [ "$_WAVE_DEGRADE" = "true" ]; then
        _WAVE_DEGRADE_MSG=$(gsd_run query worktree.base-check --mode "$ISOLATION" --pick message 2>/dev/null || true)
        [ -n "$_WAVE_DEGRADE_MSG" ] && printf '%s\n' "$_WAVE_DEGRADE_MSG" >&2
-       echo "⚠ [#1369] Worktree fork base diverged from orchestrator HEAD (wave merges advanced HEAD past origin/HEAD). Auto-degrading to sequential mode for remaining waves to avoid base-mismatch halts." >&2
+       _DEGRADE_SCOPE="remaining waves"
+       echo "⚠ [#1369] Worktree fork base diverged from orchestrator HEAD (wave merges advanced HEAD past origin/HEAD). Auto-degrading to sequential mode for ${_DEGRADE_SCOPE} to avoid base-mismatch halts." >&2
        # Both must move together (#2652): dispatch keys on ISOLATION.
        USE_WORKTREES=false
        ISOLATION=none
@@ -27,9 +28,10 @@
 
    If `shouldDegrade` is `true`, override `USE_WORKTREES=false` and `ISOLATION=none` for the
    **remaining waves** — all plans in this wave and every later wave execute sequentially on the
-   main working tree. Nothing restores either variable, and this check and step 7c's re-check only
-   run while both still allow worktrees, so later waves skip the check and isolation does not come
-   back during the run, even if `origin/HEAD` matches HEAD again.
+   main working tree. `USE_WORKTREES=false` keeps `ISOLATION=none` (the isolation-dispatch step
+   re-forces it), and this check and step 7c's re-check only run while both still allow
+   worktrees, so later waves skip the check and isolation does not come back during the run,
+   even if `origin/HEAD` matches HEAD again.
 
    **How `worktree.baseRef:"head"` interacts with this degrade (#3659, #4588):** with the
    setting in place the check trusts it and does not compare — the worktree creator forks from the
