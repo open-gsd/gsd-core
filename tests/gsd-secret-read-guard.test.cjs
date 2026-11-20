@@ -1552,6 +1552,17 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   ]);
   allows(["printf 'echo .env' | cat -u | bash", "printf 'cat .env' | cat -u notes.txt | bash"]);
 
+  // bash takes its long options with one dash too (`-rcfile FILE`, `-norc`), beside the reading as a cluster.
+  blocks([
+    "bash -rcfile /dev/null <<< 'cat .env'",
+    'echo cat .env | bash -init-file /dev/null',
+    "bash -rcfile /dev/null -i <<< 'cat .env'",
+    "bash -norc <<< 'cat .env'",
+    // Control.
+    "bash -init-file x -c 'cat .env'",
+  ]);
+  allows(["bash -rcfile /dev/null -c 'echo hi' <<< 'cat .env'"]);
+
   // Documented gaps, pinned as allowed (each really reads .env when run): a command inside a quoted argument of a
   // program or on the stdin of one that is not a shell (D1); a producer that computes what it writes, and printf
   // conversions other than %s, %b, %c and %% (D2); an alias defined on the line and used later on it (D3); and a key,
