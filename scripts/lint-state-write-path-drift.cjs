@@ -1040,9 +1040,9 @@ const BODY_BOUNDARY_RE = /[{}]|=>/;
  *     hold a body boundary (`BODY_BOUNDARY_RE`), so the boundary rule below
  *     reads no line range per write.
  *   - A name's verdict is memoized on `name`, `index` and `hopsLeft`.
- *     Below the write's line it depends on the write only through whether a
- *     body boundary lies after `index`, up to the call
- *     (`boundaryAfterLine`): the lines it reads are the same for every write,
+ *     Below the write's line it depends on the write only through
+ *     `boundaryAfterLine(write, index)`: the lines it reads are the same
+ *     for every write,
  *     and each hop's boundary flag follows from that one and the lines
  *     between. So those verdicts are kept in `verdicts`, shared by every
  *     write in the file and keyed on that flag too. A verdict from the
@@ -1061,13 +1061,13 @@ const BODY_BOUNDARY_RE = /[{}]|=>/;
  * Unresolved is not flagged: a parameter, a name bound by a `for...of`
  * header or a destructuring declaration, or a chain longer than the bound.
  *
- * Boundary rule: the nearest assignment of a name ends its search only when
- * no `{`, `}` or `=>` (`BODY_BOUNDARY_RE`) lies between that assignment's
- * right-hand side and the write. Past such a boundary the nearest assignment
- * may be a closed sibling block's, so when it does not reach the state path
- * the search goes on to the next earlier assignment of that name. This can
- * only add reports: an assignment that reaches the state path reports at
- * once.
+ * Boundary rule: past a `{`, `}` or `=>` (`BODY_BOUNDARY_RE`) the nearest
+ * assignment of a name may be a closed sibling block's. So an assignment
+ * that does not reach the state path ends the search only when its
+ * right-hand side holds no boundary and, if it sits on a line above the
+ * write, `boundaryAfterLine` finds none after it; otherwise the walk looks
+ * further back for an earlier assignment of that name. This can only add
+ * reports: an assignment that reaches the state path reports at once.
  */
 function resolvesToStatePath(write, index, expr, hopsLeft) {
   if (targetsStatePath(expr)) return true;
@@ -1147,8 +1147,9 @@ function chargeWork(budget, amount) {
   return true;
 }
 
-// True when a body boundary lies on a line after `index` (below the write's
-// line), up to the write's call.
+// True when a body boundary is in `write.ownLine` (the write's line up to
+// the call, empty when that text holds a named-function header) or on a line
+// after `index` and before the write's line.
 function boundaryAfterLine(write, index) {
   return write.ownLineHasBoundary || write.boundaryLinesBefore[write.line] > write.boundaryLinesBefore[index + 1];
 }
