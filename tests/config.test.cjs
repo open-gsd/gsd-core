@@ -4128,15 +4128,28 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     assert.deepStrictEqual(read(), { mode: 'yolo', workflow: { verifier: true } });
   });
 
-  test('machine-detected search flags are not copied to the global store', (t) => {
+  // The keys come from the one list new-project detection reads, so an eighth
+  // integration is covered here without a new row.
+  const DETECTED_KEYS = configLib.DETECTED_SEARCH_INTEGRATIONS.map(({ key }) => key);
+
+  test('machine-detected search flags are not copied to the global store, and are reported as skipped', (t) => {
+    assert.ok(DETECTED_KEYS.includes('brave_search'), 'precondition: the list is the search integrations');
     const { save, read } = store(t, JSON.stringify({ mode: 'yolo' }));
-    const result = save({ model_profile: 'quality', brave_search: true, firecrawl: true, exa_search: true, tavily_search: true, ref_search: true, perplexity: true, jina: true });
+    const result = save({ model_profile: 'quality', ...Object.fromEntries(DETECTED_KEYS.map((key) => [key, true])) });
     assert.ok(result.success, result.error);
     assert.deepStrictEqual(read(), { mode: 'yolo', model_profile: 'quality' });
-    // Review 2026-11-18, Minor 6: the dropped flags are reported, so a caller
-    // can tell they were not saved.
-    assert.deepStrictEqual(JSON.parse(result.output).skipped,
-      ['brave_search', 'firecrawl', 'exa_search', 'tavily_search', 'ref_search', 'perplexity', 'jina']);
+    assert.deepStrictEqual(JSON.parse(result.output).skipped, DETECTED_KEYS);
+  });
+
+  // docs/CLI-TOOLS.md lists the keys a save never stores; it must name exactly
+  // the keys the verb skips, in the same order.
+  test('the CLI-TOOLS.md list of never-saved keys is the list the verb skips', () => {
+    const doc = fs.readFileSync(path.join(__dirname, '..', 'docs', 'CLI-TOOLS.md'), 'utf-8').split(/\s+/).join(' ');
+    const lead = 'These keys are never saved: the search flags that new projects detect from this machine (';
+    const start = doc.indexOf(lead);
+    assert.ok(start !== -1, 'CLI-TOOLS.md must keep the never-saved sentence');
+    const listed = doc.slice(start + lead.length, doc.indexOf(')', start + lead.length));
+    assert.deepStrictEqual([...listed.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]), DETECTED_KEYS);
   });
 
   test('a save that gives only search flags writes an empty store and lists every flag as skipped', (t) => {

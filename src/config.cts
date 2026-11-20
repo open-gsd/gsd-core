@@ -2235,6 +2235,7 @@ export = {
   cmdConfigSetModelProfile,
   cmdConfigNewProject,
   cmdConfigSaveDefaults,
+  DETECTED_SEARCH_INTEGRATIONS,
   mergeIntoGlobalDefaults,
   SPELLING_TWINS,
   cmdConfigPath,
