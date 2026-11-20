@@ -1794,6 +1794,45 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.deepEqual(ordinaryDup.evidence.report_errors, []);
   });
 
+  for (const { signal, error, code } of [
+    { signal: 'error', error: 'test failed', code: 'ERR_ASSERTION' },
+    { signal: 'code', error: 'expected a malformed token to be rejected', code: 'ERR_TEST_FAILURE' },
+  ]) {
+    test(`a repeated-key block with only the load-failure ${signal} still recovers`, () => {
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP([
+          "  failureType: 'testCodeFailure'",
+          `  error: '${error}'`,
+          `  code: '${code}'`,
+          "  stack: 'frame one'",
+          "  stack: 'frame two'",
+        ]),
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+      assert.equal(result.reason, 'target_test_failed');
+      assert.deepEqual(result.evidence.report_errors, []);
+    });
+  }
+
+  test('a repeated-key block with a comment at the key indentation still recovers', () => {
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP([
+        "  failureType: 'testCodeFailure'",
+        "  error: 'expected a malformed token to be rejected'",
+        "  stack: 'frame one'",
+        '  # additional stack context',
+        "  stack: 'frame two'",
+      ]),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.deepEqual(result.evidence.report_errors, []);
+  });
+
   // The lone-CR refusal (re-review Minor 1) is removed with its guard: tap-parser's
   // line splitter (`/^.*\r?\n/`) stops `.*` before a mid-line \r, so the line never
   // matches and stays buffered — the block cannot reach recoverDuplicateKeyDiagnostic
