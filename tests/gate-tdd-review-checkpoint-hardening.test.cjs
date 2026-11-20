@@ -24,7 +24,7 @@ const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
 const { runHook } = require('./helpers/process-seam.cjs');
 const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { createTempGitProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
@@ -1233,5 +1233,70 @@ describe('#5354 tdd review checkpoint seal', () => {
     fs.cpSync(path.join(dir, '.planning'), path.join(bare, '.planning'), { recursive: true });
     dirs.push(bare);
     assert.equal(run(bare).payload.rows[0].status, 'FAIL');
+  });
+});
+
+/** The gate asks the sub-repos, not the workspace root, whether the sealed commits are gone and whether history is complete (#5354, #5867). */
+describe('#5354 tdd review checkpoint in a planning.sub_repos workspace', () => {
+  const PHASE = '.planning/phases/01-x';
+  const dirs = [];
+  afterEach(() => { while (dirs.length) cleanup(dirs.pop()); });
+
+  const write = (dir, rel, content) => {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), content);
+  };
+  const run = (root, ...args) => evaluateTddReviewCheckpoint({ projectDir: root, args: ['1', ...args] });
+
+  /** A workspace whose `app` sub-repo holds a RED and a GREEN on `feature`; the plan, the SUMMARY and (later) the seal live in the workspace root. */
+  function workspace(root) {
+    dirs.push(root);
+    write(root, '.planning/config.json', JSON.stringify({ planning: { sub_repos: ['app'] } }));
+    write(root, `${PHASE}/01-01-PLAN.md`, '---\nphase: 1\nplan: 1\ntype: tdd\n---\n# Plan\n');
+    write(root, `${PHASE}/01-01-SUMMARY.md`, '# done\n');
+    const app = path.join(root, 'app');
+    fs.mkdirSync(app);
+    git(app, 'init', '-q');
+    git(app, 'commit', '-q', '--allow-empty', '-m', 'docs: base');
+    const base = git(app, 'rev-parse', 'HEAD').trim();
+    git(app, 'checkout', '-q', '-b', 'feature');
+    for (const subject of ['test(01-01): red', 'feat(01-01): green']) {
+      write(app, `${subject.slice(0, 4)}.txt`, subject);
+      git(app, 'add', '-A');
+      git(app, 'commit', '-q', '-m', subject);
+    }
+    return { app, base };
+  }
+  const squash = (app, base) => {
+    git(app, 'checkout', '-q', '-b', 'merged', base);
+    git(app, 'merge', '--squash', 'feature');
+    git(app, 'commit', '-q', '-m', 'feat: squashed');
+  };
+
+  test('a plan sealed and squashed away in the sub-repo passes under a workspace root that is no repo', () => {
+    const root = createTempDir('gate-5354-ws-');
+    const { app, base } = workspace(root);
+    assert.equal(run(root, '--record').payload.rows[0].status, 'Pass', 'positive control: the live commits pass before the squash');
+    squash(app, base);
+    const after = run(root);
+    assert.equal(after.payload.rows[0].status, 'Pass');
+    assert.equal(after.payload.violations, 0);
+    assert.equal(after.block, false);
+  });
+
+  test('a sealed plan squashed away in a shallow sub-repo under a complete root is not evaluable, not a pass', () => {
+    const root = createTempGitProject('gate-5354-ws-');
+    const { app, base } = workspace(root);
+    run(root, '--record');
+    squash(app, base);
+    const origin = `${root}-origin`;
+    dirs.push(origin);
+    fs.renameSync(app, origin);
+    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(origin).href, 'app'], { cwd: root });
+    assert.equal(git(root, 'rev-parse', '--is-shallow-repository').trim(), 'false', 'positive control: the root is complete');
+    assert.equal(git(app, 'rev-parse', '--is-shallow-repository').trim(), 'true', 'positive control: the sub-repo is shallow');
+    const row = run(root).payload.rows[0];
+    assert.equal(row.status, 'NotEvaluable');
+    assert.equal(row.reason, TDD_ROW_REASON.SEALED_SHALLOW_HISTORY);
   });
 });

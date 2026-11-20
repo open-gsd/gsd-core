@@ -12,11 +12,12 @@
 const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
 const { cleanup, createTempDir } = require('./helpers.cjs');
-const { gitOrThrow, growHistoryFastImport } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
@@ -47,7 +48,7 @@ function write(dir, rel, content) {
 }
 
 function makeRepo({ deferScaffold = false } = {}) {
-  const dir = createTempDir('gsd-scope-');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-'));
   dirs.push(dir);
   const gitWith = (env, ...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY, ...env } }).trim();
   const git = (...args) => gitWith({}, ...args);
@@ -1195,7 +1196,7 @@ describe('resolveEvaluationScope — failure is never an empty scope', () => {
   });
 
   test('[negative] a directory that is not a repository is unresolvable', () => {
-    const dir = createTempDir('gsd-scope-nogit-');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-nogit-'));
     dirs.push(dir);
     const scope = resolveEvaluationScope(dir, { kind: 'plan', planId: '03-01' });
     assert.equal(scope.status, 'unresolvable');
@@ -1417,7 +1418,7 @@ describe('resolveEvaluationScope — what a scope says when it finds little', ()
   });
 
   test('[boundary] a phase directory that arrived with the root commit still includes the root commit\'s files', () => {
-    const dir = createTempDir('gsd-scope-root-');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-root-'));
     dirs.push(dir);
     const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
     git('init', '--initial-branch=main');
@@ -1440,7 +1441,7 @@ describe('check evaluation-scope — the CLI surface for a coded plan id (#5271)
   const { runTools } = require('./helpers/gsd-tools-cli.cjs');
 
   function codedRepo() {
-    const dir = createTempDir('gsd-scope-cli-');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-cli-'));
     dirs.push(dir);
     const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
     git('init', '--initial-branch=main');
@@ -1610,11 +1611,11 @@ describe('subjectsOccurOnHead (#5354)', () => {
     const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: 1_699_999_990 });
     const b = commitDated(repo, 'b.txt', 'test(03-01): b', { author: 1_699_999_991 });
     repo.git('reset', '--hard', base);
-    // 9000 commits of about 180 bytes of log record each are over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
-    const filler = 'x'.repeat(100);
-    growHistoryFastImport(repo.dir, 9000, { from: base, message: (i) => (i === 1 ? 'feat(03-01): a\n' : `chore: ${filler} ${i}\n`) });
-    repo.git('reset', '--hard', 'main');
-    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'a subject 9000 commits deep is found');
+    // 12 commits with a 100000-byte subject make a listing of about 1.2 MB, over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
+    commit(repo, 'a.txt', 'feat(03-01): a', 'twin\n');
+    const filler = 'x'.repeat(100_000);
+    for (let i = 1; i <= 11; i++) commit(repo, `f${i}.txt`, `chore: ${filler} ${i}`);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'a subject under 1.2 MB of listing is found');
     assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from the whole history is no');
   });
 
