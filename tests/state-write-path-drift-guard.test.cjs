@@ -1709,6 +1709,10 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     ];
     for (const rhs of namesNone) assert.deepStrictEqual(viaRhs(rhs), [], `missed: ${rhs}`);
     for (const rhs of namesP) assert.deepStrictEqual(viaRhs(rhs), [4], `reported: ${rhs}`);
+    // Hop bound, as pinned by two chains: three reassignments naming p report, four miss.
+    const chain = (n) => W(ASSIGN, ...['a', 'b', 'c', 'd'].slice(0, n).map((k) => `  if (c) p = p + '${k}';`), WRITE_P);
+    assert.deepStrictEqual(lines(chain(3)), [6], 'three reassignments naming p are followed');
+    assert.deepStrictEqual(lines(chain(4)), [], 'four reassignments naming p exceed the hop bound');
   });
 
   // Names a generated identifier must not take: JS/TS reserved and keyword-like
