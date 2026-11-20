@@ -1406,12 +1406,14 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     "echo hi | tee 'cat .env' | xargs git",
     "echo safe | tee 'x=.env' | xargs git",
     "printf 'cat %s' .env | sh",
+    // The space-joined reading runs `%s` with `.env` as an operand here, as before.
+    "printf '%s %s\\n' echo .env | sh",
   ]);
   allows([
     // `;` is not a pipe, so the shell's stdin is not the echo.
     "echo 'cat .env'; cat | sh",
     "echo 'echo .env' | cat | sh",
-    "printf '%s %s\\n' echo .env | sh",
+    "printf 'echo .e%s\\n' nv | sh",
     "printf '%b' 'echo .\\x65nv' | sh",
   ]);
 });
