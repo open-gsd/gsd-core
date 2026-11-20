@@ -357,7 +357,7 @@ If `section_manifest` is `null` or `"research-only-modifiers"` is in its `includ
 
 ### 5.1. Standard Research Decision
 
-**Skip if** `RESEARCH_ONLY=true` (the research-only mode in 5.0 already determined the path: spawn or exit). Without this guard, an LLM following the workflow could fall through into "use existing, continue to step 5.5" → planner spawn, violating the research-only contract. **CR #3045 finding: this gate makes the early-exit unreachable from any non-research-only branch.**
+**Skip if** `RESEARCH_ONLY=true` (the research-only mode in 5.0 already determined the path: spawn or exit). Rationale: `gsd-core/workflows/plan-phase/detail/elaboration.md` § research-only.
 
 **If `has_research` is true (from init) AND no `--research` flag:** Use existing, continue to step 5.5.
 
@@ -1001,7 +1001,7 @@ If `section_manifest` is `null` or `"chunked-planning-mode"` is in its `included
 DISK_PLANS=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r '.plan_count_all // 0')
 ```
 
-If `DISK_PLANS` is greater than 0 (a known Windows stdio hang pattern — the planner wrote plans to disk but the return never arrived), offer: 1) Accept plans (treat as `## PLANNING COMPLETE`), 2) Retry planner (return to step 8), 3) Stop. If it is 0 and no marker, treat as `## PLANNING INCONCLUSIVE`. Full banner text: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 9a.
+If `DISK_PLANS` is greater than 0, offer: 1) Accept plans (treat as `## PLANNING COMPLETE`), 2) Retry planner (return to step 8), 3) Stop. If it is 0 and no marker, treat as `## PLANNING INCONCLUSIVE`. Full banner text: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 9a.
 
 ## 9b. Handle Phase Split Recommendation
 

@@ -12,6 +12,10 @@ Elaboration deferred from the `plan-phase.md` spine under ADR-4139 (Compact Cont
 
 **#2401 — `prior_verify_commands` is NOT part of the `CONTEXT_WINDOW >= 500000` prior-phase enrichment and is never gated on `CONTEXT_WINDOW`.** It is a handful of one-line `<automated>` commands harvested from the nearest prior phase that had any; the payload is tiny and its absence at 200k is exactly what made the planner re-invent a verify command and author an unrunnable path. Surface it at every context window.
 
+## § research-only — Why Step 5 Skips When RESEARCH_ONLY Is Set
+
+Without this guard, an LLM following the workflow could fall through into "use existing, continue to step 5.5" → planner spawn, violating the research-only contract. **CR #3045 finding: this gate makes the early-exit unreachable from any non-research-only branch.**
+
 ## § 9a — Filesystem Fallback (Planner)
 
 Fires when the planner's Agent() call comes back with no recognized marker, or when a planner marker (`## CHECKPOINT REACHED`, `## PHASE SPLIT RECOMMENDED`, `## ⚠ Source Audit`, `## PLANNING INCONCLUSIVE`) arrived on the return receipt but the body step 9 reads (the question, the proposed split, the gap list, the attempts) has not arrived by the next cycle (`steps/stall-detection-helpers.md`). This elaborates the spine's §9a — the recovery banners and their options.
