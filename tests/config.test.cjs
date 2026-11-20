@@ -4999,6 +4999,49 @@ describe('#5681: new-project creation migrates a stored depth the way a save wri
     assert.strictEqual(JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8')).granularity, 'coarse');
   });
 
+  // Best effort, so it never waits: a held lock, or an ownerless one a crash left
+  // (never reclaimed), would otherwise hold up every project creation for the
+  // lock's 30 s default.
+  test('the rewrite takes the lock without waiting', async (t) => {
+    const { create } = project(t, { depth: 'quick' });
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    const waits = [];
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir, options) => {
+      waits.push(options && options.timeoutMs);
+      return realAcquire(dir, options);
+    });
+    assert.strictEqual((await create()).ok, true);
+    assert.deepStrictEqual(waits, [0]);
+  });
+
+  test('a lock file that names no owner skips the rewrite; the project is still created', async (t) => {
+    const before = JSON.stringify({ depth: 'quick' });
+    const { defaultsPath, lockPath, projectDir, create } = project(t, JSON.parse(before));
+    fs.writeFileSync(lockPath, '');
+    const result = await create();
+    assert.strictEqual(result.ok, true, result.err);
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+    assert.ok(fs.existsSync(lockPath), 'the lock file is left as it was');
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8')).granularity, 'coarse');
+  });
+
+  test('a .gsd directory removed before the rewrite is not recreated', async (t) => {
+    const { defaultsPath, create } = project(t, { depth: 'quick' });
+    const realAcquire = installerMigrations.acquireInstallMigrationLock;
+    const gsdDir = path.dirname(defaultsPath);
+    let removed = false;
+    const realExists = fs.existsSync;
+    t.mock.method(fs, 'existsSync', function (target) {
+      // Remove .gsd/ once the plan has read the store, as a concurrent cleanup would.
+      if (!removed && String(target) === gsdDir) { cleanup(gsdDir); removed = true; }
+      return realExists.apply(this, arguments);
+    });
+    t.mock.method(installerMigrations, 'acquireInstallMigrationLock', (dir, options) => realAcquire(dir, options));
+    assert.strictEqual((await create()).ok, true);
+    assert.ok(removed, 'precondition: the directory was removed before the rewrite');
+    assert.ok(!fs.existsSync(gsdDir));
+  });
+
   test('a store removed before the rewrite is not recreated', async (t) => {
     const { defaultsPath, create } = project(t, { depth: 'quick' });
     const realAcquire = installerMigrations.acquireInstallMigrationLock;

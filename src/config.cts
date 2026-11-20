@@ -644,21 +644,29 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
 }
 
 /** Persist a plan's user defaults rewrite, best-effort as it always was. */
+/** How long the best-effort depth rewrite waits for the installer lock: not at all. */
+const DEPTH_REWRITE_LOCK_WAIT_MS = 0;
+
 /**
  * Persist the `depth` -> `granularity` migration the plan applied in memory.
  * The store is the one config-save-defaults writes, so this is written the same
  * way: under the installer's lock on `.gsd/`, re-read and migrated as it is now
  * (a save that landed after the plan read the store is kept, #5681), through an
  * exclusive temp file renamed over it. Best effort, as before: the migration is
- * redone on every read, so a lock that cannot be taken or a store that is refused
- * leaves the store as it is.
+ * redone on every read, so a lock that is not free at once or a store that is
+ * refused leaves the store as it is.
  */
 function persistDefaultsRewrite(plan: NewProjectConfigPlan): void {
   if (plan.defaultsRewrite === null) return;
   const defaultsPath = plan.defaultsRewrite.path;
+  // Taking the lock creates `.gsd/`; a store whose directory is gone has
+  // nothing to migrate.
+  if (!fs.existsSync(path.dirname(defaultsPath))) return;
   let release: () => void;
   try {
-    release = installerMigrations.acquireInstallMigrationLock(path.dirname(defaultsPath));
+    // No wait: a held lock, or one a crash left naming no owner (never
+    // reclaimed), skips the rewrite instead of holding up project creation.
+    release = installerMigrations.acquireInstallMigrationLock(path.dirname(defaultsPath), { timeoutMs: DEPTH_REWRITE_LOCK_WAIT_MS });
   } catch {
     return;
   }
