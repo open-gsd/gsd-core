@@ -554,7 +554,15 @@ describe('verify-work\'s gap-closure checker skips Dimension 11, and import\'s d
   // that records a D-NN, and no edit the user can make to the plan file satisfies Dimension 11.
   test('import names the route that clears a research_resolution blocker', () => {
     const step = span(read('gsd-core/workflows/import.md'), '<step name="plan_validate">', /<\/step>/).replace(/\s+/g, ' ');
-    assert.match(step, /A `research_resolution` \(Dimension 11\) blocker clears only on a user ruling the checker can read: ask each question it names and record each answer as the next `- \*\*D-NN:\*\* <ruling>` under `\$\{phase_dir\}`'s CONTEXT\.md `<decisions>`, outside Claude's Discretion, as `gsd-core\/references\/revision-loop\.md`'s Resolve step does; with no CONTEXT\.md, the user runs `\/gsd:discuss-phase \{phase\}` first\. Then re-run this step/);
+    assert.match(step, /A `research_resolution` \(Dimension 11\) blocker clears only on a user ruling the checker can read: ask each question it names, record each answer as the next `- \*\*D-NN:\*\* <ruling>` under `\$\{phase_dir\}`'s CONTEXT\.md `<decisions>`, outside Claude's Discretion, as `gsd-core\/references\/revision-loop\.md`'s Resolve step does,/);
+    // Dimension 11 passes a question only when RESEARCH.md cites the D-NN on it; import has no planner to write
+    // the citation, so the route writes it, and commits both files before re-validating.
+    assert.match(step, /cite it on that question in the phase's RESEARCH\.md as `RESOLVED \(D-NN\): <ruling>` \(Dimension 11 reads the citation there\), and commit both files at once/);
+    // The commit names the files init.phase-op resolved: a path built as {NN}-RESEARCH.md skips an unnumbered
+    // RESEARCH.md, and query commit still reports committed: true, leaving the citation out of the commit.
+    assert.match(step, /at the `context_path` and `research_path` a fresh `gsd_run query init\.phase-op [^`]*"\{NN\}"` returns \(either file may be unnumbered\): `gsd_run query commit "docs\(\{NN\}\): record research rulings" --files "\$context_path" "\$research_path"`/);
+    assert.doesNotMatch(step, /\{NN\}-(CONTEXT|RESEARCH)\.md/);
+    assert.match(step, /With no CONTEXT\.md, the user runs `\/gsd:discuss-phase \{NN\} \$\{GSD_WS\}` first\. Then re-run this step/);
   });
 
   test('the checker prompt carries the same scope line', () => {
