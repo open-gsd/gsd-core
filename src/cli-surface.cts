@@ -55,7 +55,7 @@ function deepFreeze<T>(value: T): T {
 export const GLOBAL_FLAGS: GlobalFlags = deepFreeze({
   valueFlags: ['cwd', 'default', 'pick', 'project-dir', 'ws'],
   booleanFlags: ['json-errors', 'raw'],
-  eqFlags: ['cwd', 'exit-contract', 'project-dir'],
+  eqFlags: ['cwd', 'exit-contract', 'project-dir', 'ws'],
   helpTokens: ['-h', '--help', '-?', '--h', '--usage'],
   rejectedTokens: ['--version', '-v'],
 });

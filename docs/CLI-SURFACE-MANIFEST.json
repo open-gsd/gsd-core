@@ -13,7 +13,8 @@
     "eq": [
       "cwd",
       "exit-contract",
-      "project-dir"
+      "project-dir",
+      "ws"
     ],
     "help": [
       "-h",
