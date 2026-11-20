@@ -1,5 +1,9 @@
 // Properties of the #5427 PR-template link guard (tests/helpers/pr-template-links.cjs).
 // Expected values come from the class tables below, never from the guard's own predicates.
+// Sources of the refused forms: CommonMark 0.31.2 (spec.commonmark.org) for link reference
+// definitions (4.7), inline links and nesting (6.3), raw HTML (6.6) and the entity and escape
+// decoding of a destination (2.4, 2.5); GitHub's render of a PR body for the base-URL rule.
+// The two fixtures below are text of the templates at origin/next before this fix (#5427).
 const { describe, test } = require('node:test');
 const fc = require('./helpers/fast-check-setup.cjs');
 const assert = require('node:assert/strict');
@@ -47,6 +51,17 @@ describe('repo link grammar (#5427)', () => {
     bad(fc.tuple(fc.constantFrom(...checked), fc.constantFrom('next', 'main'), rel)
       .map(([v, r, p]) => `${REPO}/${v}/${r}/${p}`)),
   );
+  // Lines of .github/pull_request_template.md and PULL_REQUEST_TEMPLATE/feature.md at origin/next.
+  const before = [
+    'See [CONTRIBUTING.md](../CONTRIBUTING.md) for the full process.',
+    '> [CONTRIBUTING.md → Documentation Updates](../../CONTRIBUTING.md#documentation-updates'
+      + '-update-the-relevant-docs).',
+  ];
+  test('the template links that #5427 reported are refused', () => {
+    for (const line of before) {
+      assert.deepEqual(hrefsIn(line).map(isBadLink), [true], line);
+    }
+  });
   test('property: each link class is decided by construction', () => {
     fc.assert(fc.property(classes,
       ([h, isBad]) => assert.equal(isBadLink(h), isBad, JSON.stringify(h))));
@@ -122,7 +137,9 @@ describe('link extractor properties (#5427)', () => {
   });
   test('property: the gate and the sectionizer agree on which spans hide a link', () => {
     const piece = fc.constantFrom('`', '``', '[a]', '(x.md)', ' ', '\\', '~', '[a](x.md)');
-    fc.assert(fc.property(fc.array(piece, { maxLength: 8 }).map((p) => p.join('')), (line) => {
+    // `x` first: three leading backticks open a fence in the gate's maskCode, not a code span
+    const lines = fc.array(piece, { maxLength: 8 }).map((p) => `x${p.join('')}`);
+    fc.assert(fc.property(lines, (line) => {
       assert.deepEqual(extractLinks(stripInlineCode(line)), extractLinks(line),
         JSON.stringify(line));
     }));

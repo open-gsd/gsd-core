@@ -182,6 +182,8 @@ describe('refused forms (#5427)', () => {
       '[a](https://x/?src=1&href=2)', '[a](../x.md) and [b](y)', '`[c](../z.md)`']) {
       assert.deepEqual(refused(text), [], JSON.stringify(text));
     }
+    // `src` is a path segment here, after a tag has opened
+    assert.deepEqual(refused(`<kbd>x</kbd>\n[a](${NEXT}src/x.md)\n[b](${NEXT}x/src)`), []);
   });
   test('a definition is refused at any indent and in any container', () => {
     for (const text of ['   > [a]: x', '    > [a]: x', '  > [a]: x', '- [a]: x', '    [a]: x',
@@ -346,7 +348,7 @@ describe('readRepoFile (#5427)', () => {
   test('reads a repo file; a missing name, a wrong case or a path outside is refused', () => {
     assert.match(readRepoFile('CONTRIBUTING.md'), /^# /m);
     for (const rel of ['no-such-file.md', 'contributing.md', '../outside.md']) {
-      assert.throws(() => readRepoFile(rel), /no such file inside the repo/, JSON.stringify(rel));
+      assert.throws(() => readRepoFile(rel), { rel }, JSON.stringify(rel));
     }
   });
   test('an existing file outside the repo is refused although fs.existsSync finds it', (t) => {
@@ -356,7 +358,7 @@ describe('readRepoFile (#5427)', () => {
     const rel = path.relative(ROOT, path.join(dir, 'secret.md'));
     if (path.isAbsolute(rel)) return t.skip('the temp dir is on another drive than the repo');
     assert.ok(fs.existsSync(path.join(ROOT, rel)), rel);
-    assert.throws(() => readRepoFile(rel), /no such file inside the repo/);
+    assert.throws(() => readRepoFile(rel), { rel });
   });
   test('a symlink in the repo that leads out of it is refused', (t) => {
     const dir = createTempDir();
@@ -375,8 +377,7 @@ describe('readRepoFile (#5427)', () => {
     }
     assert.ok(fs.existsSync(path.join(ROOT, name, 'secret.md')));
     // a fresh cache: the module cache lists the repo root before this link exists
-    assert.throws(() => readRepoFile(`${name}/secret.md`, new Map()),
-      /no such file inside the repo/);
+    assert.throws(() => readRepoFile(`${name}/secret.md`, new Map()), { rel: `${name}/secret.md` });
   });
 });
 

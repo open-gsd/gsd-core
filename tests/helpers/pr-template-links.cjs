@@ -35,15 +35,16 @@ const NEXT = `${REPO}blob/next/`;
 // stays in it). 999 is this guard's own scan bound for the angle form.
 const destOf = (raw) => {
   const rest = raw.slice(raw.search(/[^ \t]|$/));
-  return /^<([^<>]{0,999})>/.exec(rest)?.[1] ?? rest.split(/[^!-~\u0080-￿]/)[0];
+  return /^<([^<>]{0,999})>/.exec(rest)?.[1] ?? rest.split(/[^!-~\u0080-\u{10FFFF}]/u)[0];
 };
 // Code spans are the sectionizer's: it blanks them before the gate's extractLinks reads a line.
 const linksOf = (line) => extractLinks(stripInlineCode(line));
 // Line by line: the gate's fence mask spans lines, and this guard checks code blocks too.
 const hrefsIn = (text) => splitLines(text)
   .flatMap((line) => linksOf(line).map(({ target }) => destOf(target)));
-// A name WHATWG reads as an href, src or srcset attribute (any case).
-const URL_ATTR = /(?:^|[\s"'/])(?:href|src|srcset)(?=[\s/>=]|$)/i;
+// A name WHATWG reads as an href, src or srcset attribute (any case). A `/` after the name ends
+// a path segment (`/src/x.md`), so it never closes the name here.
+const URL_ATTR = /(?:^|[\s"'/])(?:href|src|srcset)(?=[\s>=]|$)/i;
 // The lines this guard refuses instead of reading, as `N: "line"`: see the header.
 const unreadForms = (text) => {
   let tagged = false;
@@ -165,7 +166,7 @@ const headingSet = (source) => {
 // A repo file read through the gate's case-exact walk, which refuses a symlink out of the repo.
 const readRepoFile = (rel, cache) => {
   if (!existsExact(rel, cache)) {
-    throw new Error(`${JSON.stringify(rel)}: no such file inside the repo`);
+    throw Object.assign(new Error(`${JSON.stringify(rel)}: no such file inside the repo`), { rel });
   }
   return fs.readFileSync(path.join(ROOT, rel), 'utf8');
 };
