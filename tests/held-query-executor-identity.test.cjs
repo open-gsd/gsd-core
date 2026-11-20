@@ -35,7 +35,7 @@ const { skipUnless } = require('./helpers/bash-probe.cjs');
 
 const {
   SENTINEL_RELATIVE_PATH, KEYED_SENTINEL_DIR, IDENTITY_RECORD_DIR, IDENTITY_MAX_EXECUTOR_TYPES,
-  IDENTITY_RECORD_MAX_BYTES, IDENTITY_RECORD_SCHEMA, SENTINEL_MAX_BYTES, MAX_EXECUTOR_TYPES, CLOCK_SKEW_MS,
+  IDENTITY_RECORD_MAX_BYTES, IDENTITY_RECORD_SCHEMA, SENTINEL_MAX_BYTES, MAX_EXECUTOR_TYPES, CLOCK_SKEW_MS, AGED_NONE_MAX_MS,
   identityRecordName, readSentinel, isExecutorDispatch,
 } = sentinel;
 
@@ -141,6 +141,17 @@ describe('#4904 a held query keeps the guards\' executor classification current'
     const r = runGit(['check-ignore', '-q', rel], { cwd: root, timeoutMs: PROBE_TIMEOUT_MS });
     assert.ok(r.exitCode === 0 || r.exitCode === 1, `git check-ignore ${rel}: exit ${r.exitCode} ${r.stderr}`);
     return r.exitCode === 0;
+  }
+  // Every file under `.gsd` gets the mtime `ms`, so the recency reads judge it against a GSD_NOW_MS clock.
+  function setGsdMtimes(ms) {
+    const walk = (d) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, e.name);
+        if (e.isDirectory()) walk(full);
+        else fs.utimesSync(full, ms / 1000, ms / 1000);
+      }
+    };
+    walk(path.join(root, '.gsd'));
   }
 
   test('case 1: the routed executor changes within the hold (routing switched on)', () => {
@@ -301,6 +312,32 @@ describe('#4904 a held query keeps the guards\' executor classification current'
     assert.ok(readFileNormalized(path.join(root, '.gsd', '.gitignore')).includes('\n/dispatch-isolation-identity/\n'),
       'the identity directory\'s rule was appended');
     assert.equal(ignoredByGit('.gsd/dispatch-isolation-identity/plan+02+02-01.json'), true);
+  });
+
+  test('a held query prunes other scopes\' identity records past the 24-hour window and keeps the rest', () => {
+    // A GSD_NOW_MS clock whose window holds the planted mtimes; fs.utimesSync cannot set a time before 1970.
+    const NOW = 2_000_000_000_000;
+    writePlan('02-api', '02', '01', HINTED);
+    gsd(['dispatch-isolation', '--raw', '--phase', '02', '--force-isolation', 'none'], NOW - 60_000);
+    setGsdMtimes(NOW - 60_000);
+    const dir = path.join(root, IDENTITY_RECORD_DIR);
+    fs.mkdirSync(dir, { recursive: true });
+    const plantAt = (name, phase, mtimeMs) => {
+      const { record } = executorType.buildExecutorIdentityRecord({ phase, plan: null }, null, [OTHER], NOW - 60_000);
+      fs.writeFileSync(path.join(dir, name), JSON.stringify(record));
+      fs.utimesSync(path.join(dir, name), mtimeMs / 1000, mtimeMs / 1000);
+    };
+    plantAt('phase+05.json', '05', NOW - AGED_NONE_MAX_MS - 60_000);
+    plantAt('phase+06.json', '06', NOW - 1000);
+    plantAt('phase+07.json.tmp-1-abcdef', '07', NOW - AGED_NONE_MAX_MS - 60_000);
+    const answer = JSON.parse(gsd(['dispatch-isolation', '--json', '--phase', '02'], NOW));
+    assert.equal(answer.held, true, 'precondition: the query holds');
+    const left = fs.readdirSync(dir).sort();
+    assert.ok(!left.includes('phase+05.json'), 'an aged record of another scope is pruned');
+    assert.ok(!left.includes('phase+07.json.tmp-1-abcdef'), 'an aged leftover temp file is pruned');
+    assert.ok(left.includes('phase+06.json'), 'a fresh record of another scope stays');
+    // The own scope's file has the real write time, older than this clock's window, so only the own-scope skip keeps it.
+    assert.ok(left.includes('phase+02.json'), 'the query\'s own record stays');
   });
 
   test('an empty derivation replaces the scope\'s record; the decision record still names what it named', () => {
@@ -472,6 +509,56 @@ describe('#4904 identity record reader: boundaries and hostile files fail closed
     const hold = sentinel.readSentinelAt(root, { clock, dispatchIds: { phase: '03', plan: null }, ownScope: true });
     assert.equal(hold.scanOverflow, undefined);
     assert.equal(readSentinel(root, { clock, subagentType: 'gsd-executor', dispatchIds: { phase: '03', plan: null } }).scanOverflow, undefined);
+  });
+});
+
+describe('#4904 identity records outside the recency window are not read', () => {
+  // A clock whose window holds the planted mtimes; fs.utimesSync cannot set a time before 1970. Every record's
+  // written_at is fresh, so only the mtime can put a file outside the window.
+  const NOW = 2_000_000_000_000;
+  const at = { now: () => NOW };
+  const WINDOW = AGED_NONE_MAX_MS + CLOCK_SKEW_MS;
+  let root;
+  const dir = () => path.join(root, IDENTITY_RECORD_DIR);
+  const plantAged = (name, text, ageMs) => {
+    fs.mkdirSync(dir(), { recursive: true });
+    const file = path.join(dir(), name);
+    fs.writeFileSync(file, text);
+    fs.utimesSync(file, (NOW - ageMs) / 1000, (NOW - ageMs) / 1000);
+  };
+  const record = JSON.stringify({
+    schema: 1, phase: '02', plan: null, executor_type: null, executor_types: [OTHER],
+    executor_types_truncated: false, written_at: NOW - 1000,
+  });
+  const read = () => readSentinel(root, { clock: at, subagentType: 'some-agent', dispatchIds: { phase: '03', plan: null } });
+  const classifies = (type) => isExecutorDispatch(type, read(), { phase: '03', plan: null }, { clock: at });
+
+  before(() => {
+    root = createTempDir('gsd-4904-identity-aged-');
+    fs.mkdirSync(path.join(root, '.planning'));
+  });
+  beforeEach(() => cleanup(path.join(root, '.gsd')));
+  after(() => cleanup(root));
+
+  test('a record whose mtime is at the window\'s edge is read', () => {
+    plantAged('phase+02.json', record, WINDOW);
+    assert.equal(read().scanOverflow, undefined);
+    assert.equal(classifies(OTHER), true);
+  });
+
+  test('a record one second past the window takes no slot: its names are not read', () => {
+    plantAged('phase+02.json', record, WINDOW + 1000);
+    assert.equal((read().candidates || []).filter((c) => c.identity).length, 0);
+    assert.equal(read().scanOverflow, undefined);
+    assert.equal(classifies(OTHER), false);
+  });
+
+  test('a hostile file at the window\'s edge fails closed; one second past it, it sets no scanOverflow', () => {
+    plantAged('phase+02.json', '{not json', WINDOW);
+    assert.equal(read().scanOverflow, true, 'control: the file fails closed while it is inside the window');
+    plantAged('phase+02.json', '{not json', WINDOW + 1000);
+    assert.equal(read().scanOverflow, undefined);
+    assert.equal(classifies(OTHER), false);
   });
 });
 
