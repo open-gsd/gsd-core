@@ -1313,6 +1313,15 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   ]);
   blocks(["time A=1 BASH_ENV=./.env bash -c ':'"], { path: 'BASH_ENV=./.env' });
   allows(['time GIT_EDITOR=vim git commit', "time GIT_EDITOR='echo .env' git commit"]);
+  // Controls: the reading from before took an assignment's last path segment for the command (`X=/bin/echo` ran
+  // `echo`), and every check that resolves a command still reads it so: a producer, a piped stage, the command xargs
+  // runs and the debugger check.
+  blocks([
+    "time X=/bin/echo 'cat .env' | bash",
+    'time X=/bin/ls .env | xargs cat',
+    `echo "-c core.fsmonitor='cat .env' status" | xargs time X=/usr/bin/git foo`,
+  ]);
+  blocks(['time X=/usr/bin/claude --agent gsd-debugger'], { code: 'debugger-cli-spawn', path: undefined });
 
   // `source` / `.` and a shell given `/dev/stdin` (or `/dev/fd/0`, `/proc/self/fd/0`) run their stdin, as a shell
   // with no file operand does, and so does one given `-s`. A `<( )` operand is still read as the script.
@@ -1409,6 +1418,8 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     // The space-joined reading runs `%s` with `.env` as an operand here, as before.
     "printf '%s %s\\n' echo .env | sh",
   ]);
+  // Control: a NUL splits a mention only beside the reading that keeps it whole (`.env.example<NUL>x` is a secret name).
+  blocks(["echo 'a=.env.example\u0000x' | xargs git"], { path: '.env.example\u0000x' });
   allows([
     // `;` is not a pipe, so the shell's stdin is not the echo.
     "echo 'cat .env'; cat | sh",
@@ -4919,14 +4930,16 @@ describe('nothing the hook denied at 25f10d345 is allowed (#5492)', () => {
   // denies too, with no exceptions. A seeded soup of the shapes those fixes touch, in process; a throw in either is
   // that hook's crash policy, an allow.
   const before = require('./fixtures/secret-read-guard-r13-scanner.cjs');
-  const { scanBashCommand } = require(HOOK_PATH);
-  const denies = (scan, cmd) => {
+  const { scanBashCommand, scanDebuggerSpawn } = require(HOOK_PATH);
+  // A Bash command is denied by the secret scan or by the debugger-spawn check (main runs both).
+  const denies = (hook, cmd) => [hook.scanBashCommand, hook.scanDebuggerSpawn].some((scan) => {
     try {
       return scan(cmd) !== null;
     } catch {
       return false;
     }
-  };
+  });
+  const live = { scanBashCommand, scanDebuggerSpawn };
   const token = fc.constantFrom(
     'cat ', 'cat .env', '.env', './.env', 'echo ', 'ls ', ' ', ' ', '; ', '\n', ' | ', ' && ', "'", '"', '\\', '$', '(', ')',
     'time ', 'time -p ', 'X=1 ', 'A=.env ', 'GIT_EDITOR=', "'cat .env #' ", 'builtin ', 'builtin -- ', 'command ', 'caffeinate ',
@@ -4935,16 +4948,17 @@ describe('nothing the hook denied at 25f10d345 is allowed (#5492)', () => {
     "'%b' ", "'%s%s' ", "'\\x65' ", "'\\0' ", "'\\c' ", ' | cat | ', ' | tee x | ', ' | cat - | ', 'xargs ', 'xargs -0 ',
     'xargs -0 sh -c ', 'git ', 'git -c core.fsmonitor=', 'status ', '--env-file ', 'docker run ', 'eval ', 'watch ',
     'find . -exec ', ' \\;', '<<< ', '<<E\n', 'E\n', '<(', 'strace ', 'x ', 'grep ', '--exclude=', 'rg ', '-g ', "'!", 'cp ',
-    'scripts/git ', 'if true; then ', '; fi',
+    'scripts/git ', 'if true; then ', '; fi', 'X=/bin/echo ', 'X=/usr/bin/git ', 'X=/bin/sh ', 'X=/usr/bin/claude ',
+    'claude ', '--agent gsd-debugger ', 'a=.env.example\u0000x ',
   );
   const command = fc.array(token, { minLength: 1, maxLength: 14 }).map((parts) => parts.join(''));
 
   test('property: every command the 25f10d345 hook denies, the hook denies', () => {
     let denied = 0;
     fc.assert(fc.property(command, (cmd) => {
-      if (!denies(before.scanBashCommand, cmd)) return true;
+      if (!denies(before, cmd)) return true;
       denied++;
-      return denies(scanBashCommand, cmd);
+      return denies(live, cmd);
     }), { seed: 5492, numRuns: 30000 });
     // A soup the frozen hook never denied would pass this vacuously.
     assert.ok(denied >= 1000, `the 25f10d345 hook denied ${denied} of 30,000`);
