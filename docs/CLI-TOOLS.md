@@ -1414,10 +1414,11 @@ shapes as not halted, in both commands and with no entry in `diagnostics[]`:
   `--- ` with a trailing space (a CRLF line ending after the opening `---`
   still opens it);
 - frontmatter that the first 64 KiB, the most the predicate reads, do not
-  close with a `---` line (trailing spaces or tabs allowed), wherever `status`
-  sits in it. Within those 64 KiB, a line of four or more dashes, or a line
-  that the limit cuts to `---`, closes the frontmatter instead, and the
-  SUMMARY can then read as halted.
+  close with a complete `---` line (trailing spaces or tabs allowed; a CRLF
+  `---` whose CR is the last byte read is not one), wherever `status` sits in
+  it. Within those 64 KiB, a line of four or more dashes, or a last line that
+  the limit cuts to `---` followed only by spaces or tabs, closes the
+  frontmatter instead, and the SUMMARY can then read as halted.
 
 #### Large payloads
 
