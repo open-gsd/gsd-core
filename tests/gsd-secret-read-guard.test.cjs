@@ -3723,3 +3723,66 @@ describe('gsd-secret-read-guard: strings re-interpreted by find, xargs and watch
     );
   });
 });
+
+describe('gsd-secret-read-guard: a heredoc or here-string that cat prints into a shell (#6182)', () => {
+  // Oracle: #6182 requires the text `cat` prints from a heredoc or here-string to get the verdict a heredoc given to the
+  // shell directly gets (`bash <<'EOF'`). The bodies a command that does not run them receives (`wc -l`, bare `cat`) stay data.
+  const BLOCKS = [
+    "cat <<'EOF' | bash\ncat .env\nEOF",
+    'cat <<EOF | bash\ncat .env\nEOF',
+    "cat <<< 'cat .env' | bash",
+    "cat <<<'cat .env' | sh",
+    "bash <(cat <<EOF\ncat .env\nEOF\n)",
+    "source <(cat <<< 'cat .env')",
+    ". <(cat <<'EOF'\ncat .env\nEOF\n)",
+    "cat - <<EOF | sh\ncat .env\nEOF", // `-` is stdin
+    "cat -n <<EOF | bash\ncat .env\nEOF", // an option does not change the stdin
+    "cat <<EOF | sudo bash\ncat .env\nEOF",
+    "cat <<EOF | bash -o pipefail\ncat .env\nEOF",
+    "cat <<'EOF' 2>/dev/null | bash\ncat .env\nEOF",
+  ];
+  const ALLOWS = [
+    'cat <<EOF | wc -l\ncat .env\nEOF',
+    "cat <<'EOF' | grep cat\ncat .env\nEOF",
+    "cat <<'EOF'\ncat .env\nEOF",
+    "cat <<< 'cat .env' | wc -l",
+    "cat <<< 'cat .env'",
+    "cat file.sh <<EOF | bash\ncat .env\nEOF", // a file operand: stdin is never read
+    'cat script.sh | bash',
+    "bash <(cat <<EOF\necho hello\nEOF\n)",
+    "cat <<'EOF' | bash\necho hello\nEOF",
+    "cat <<< 'echo hello' | bash",
+  ];
+
+  for (const cmd of BLOCKS) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const cmd of ALLOWS) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  test('a heredoc to cat is judged like the same heredoc to the shell: the verdicts agree', () => {
+    for (const body of ['cat .env', 'echo hello', 'ls -a']) {
+      const direct = runHook(bash(`bash <<'EOF'\n${body}\nEOF`)).status;
+      const viaCat = runHook(bash(`cat <<'EOF' | bash\n${body}\nEOF`)).status;
+      assert.equal(viaCat, direct, `body ${JSON.stringify(body)}`);
+    }
+  });
+
+  test('property: any secret name read through a cat-fed shell is blocked, in all four forms', () => {
+    fc.assert(
+      fc.property(SECRET, (name) => {
+        assertBlocked(runHook(bash(`cat <<'EOF' | bash\ncat ${name}\nEOF`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`cat <<< 'cat ${name}' | bash`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`bash <(cat <<EOF\ncat ${name}\nEOF\n)`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`source <(cat <<< 'cat ${name}')`)), name, { tool: 'Bash' });
+        return true;
+      }),
+      PROPERTY_RUNS,
+    );
+  });
+});

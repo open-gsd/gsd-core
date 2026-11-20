@@ -75,8 +75,9 @@
 //   A shell interpreter (bash/sh/zsh/dash/ksh/su) has its script scanned
 //   whether it arrives via `-c '…'`, a `<( )` file operand, a heredoc /
 //   here-string, or a pipe from a knowable `echo`/`printf` source
-//   (`echo cat .env | bash`); `eval` scans its joined operands; `source`/`.`
-//   scans a `<( )` operand; and `find … | xargs cat` infers the upstream
+//   (`echo cat .env | bash`) or a bare `cat` printing a heredoc / here-string
+//   (`cat <<'EOF' | bash`, `bash <(cat <<< 'cat .env')`, #6182); `eval` scans
+//   its joined operands; `source`/`.` scans a `<( )` operand; and `find … | xargs cat` infers the upstream
 //   segment's names as the sub-command's read operands.
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
@@ -2234,12 +2235,53 @@ function copyDestinationIndices(operands) {
   return positional.length === 2 ? new Set([positional[1]]) : new Set();
 }
 
+// What a bare `cat` prints when its stdin is a heredoc or here-string in the command text (#6182): the bodies and
+// strings joined by a newline. `cat file` (an operand that is not `-`) reads no stdin, so its output is not knowable here.
+function catPrintedText(cmd, feeds) {
+  const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
+  if (named.length > 0 && !named.some((w) => w.text === '-')) return null;
+  const parts = [...feeds.heredocs, ...feeds.hereStrings];
+  return parts.length > 0 ? parts.join('\n') : null;
+}
+
+// The command words of one segment's tokens: the redirect targets (`<<<` text, `> file`) are not operands of the command.
+function commandWords(segTokens) {
+  const words = [];
+  for (let k = 0; k < segTokens.length; k++) {
+    const t = segTokens[k];
+    if (t.kind === 'op') {
+      if (!t.dup && segTokens[k + 1] && segTokens[k + 1].kind === 'word') k++;
+      continue;
+    }
+    if (t.kind === 'word') words.push(t);
+  }
+  return words;
+}
+
+// The here-string targets of one segment's tokens (`cat <<< 'text'`): the word after each `<<<` operator.
+function hereStringTargets(segTokens) {
+  const out = [];
+  for (let k = 0; k < segTokens.length; k++) {
+    const t = segTokens[k];
+    if (t.kind !== 'op' || t.dup || !t.text.endsWith('<<<')) continue;
+    const target = segTokens[k + 1];
+    if (target && target.kind === 'word') out.push(target.text);
+  }
+  return out;
+}
+
+// The heredoc bodies of each segment, keyed by the `bySeg` map the scan builds, so a shell reading a pipe can reach
+// the bodies of the segment upstream of it without every scanner taking another parameter.
+const heredocBodiesBySegMap = new WeakMap();
+
 // The statically-knowable stdin a segment writes: `echo`/`printf` operands
-// joined by a space (for `echo`, leading `-neE` flags dropped). Any other
+// joined by a space (for `echo`, leading `-neE` flags dropped), or the text a
+// bare `cat` prints from a heredoc or here-string given to it (#6182). Any other
 // source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → null.
-function reconstructedScript(words) {
+function reconstructedScript(words, feeds = { heredocs: [], hereStrings: [] }) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
+  if (cmd.base === 'cat') return catPrintedText(cmd, feeds);
   if (cmd.base === 'echo') {
     let start = 0;
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
@@ -2252,12 +2294,17 @@ function reconstructedScript(words) {
 // Same rule applied to a `<( … )` / `>( … )` inner script's first segment.
 function reconstructedProcsub(inner, reading) {
   const { tokens } = tokenizeCharged(inner, reading);
-  const words = [];
+  const first = [];
+  const heredocs = [];
+  let sawSeparator = false;
   for (const t of tokens) {
-    if (t.kind === 'sep') break;
-    if (t.kind === 'word') words.push(t);
+    // The body of a heredoc opened on the first line is emitted after that line's newline separator.
+    if (t.kind === 'heredoc' && first.length > 0 && t.seg === first[0].seg) heredocs.push(t.text);
+    else if (sawSeparator) continue;
+    else if (t.kind === 'sep') sawSeparator = true;
+    else first.push(t);
   }
-  return reconstructedScript(words);
+  return reconstructedScript(commandWords(first), { heredocs, hereStrings: hereStringTargets(first) });
 }
 
 // The operator connecting segment `s` to the nearest PRECEDING segment that has
@@ -2699,6 +2746,7 @@ function scanCommand(command, depth, reading) {
     }
   }
 
+  heredocBodiesBySegMap.set(bySeg, heredocsBySeg);
   for (let s = 0; s <= maxSeg; s++) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
@@ -2944,7 +2992,12 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   }
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if ((op === '|' || op === '|&') && prevSeg >= 0) {
-    const src = reconstructedScript((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
+    const upstream = bySeg.get(prevSeg) || [];
+    const heredocBodies = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(prevSeg) || []).map((h) => h.text);
+    const src = reconstructedScript(commandWords(upstream), {
+      heredocs: heredocBodies,
+      hereStrings: hereStringTargets(upstream),
+    });
     if (src !== null) return findSecretRead(src, depth + 1);
   }
   return null;
