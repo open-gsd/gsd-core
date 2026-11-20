@@ -134,12 +134,21 @@ G = gate.
 
 | Point | `/gsd-quick` | `/gsd-quick-batch` |
 |---|---|---|
-| `plan:pre` | Always. S and G before the planner spawns; C into `planner`. | Per planning invocation (D3, D4). |
-| `execute:post` | After every successful executor run, **whatever the flags**: for an isolated run after the Step 6 merge-back succeeded, otherwise right after the executor returns. Always before Step 6.25. No dispatch when the merge-back fails. S and G. | Per item, serially in manifest order, once the item is recorded as merged (D4), before verification and `quick-batch complete`. |
-| `verify:pre` | With `--validate`, before the verifier. S and G; C into `verifier`. | Per item, with `--validate`. |
-| `verify:post` | With `--validate`, after the verifier, **only when its status is `passed`**. S and G. | Same condition, per item. |
-| `discuss:pre` / `discuss:post` | With `--discuss`. S and G; C into `orchestrator` at `discuss:pre`. | Not applicable (`--discuss` is rejected). |
+| `plan:pre` | Always. S and G before the planner spawns; C into `planner`. | Per planning invocation (D3, D4), in `planner-wave.md` step 3 next to the legacy dispatch. |
+| `execute:post` | After every successful executor run, **whatever the flags**: for an isolated run after the Step 6 merge-back succeeded, otherwise right after the executor returns. Always before Step 6.25. No dispatch when the merge-back fails. S and G. | Per item, serially in manifest order, once the item is recorded as merged (D4), before verification and `quick-batch complete`: in `merge-wave.md` after step 5 routes the `worktree.cleanup-wave` result, and with `ISOLATION=none` in `worktree-dispatch.md` after the inline executor returns. |
+| `verify:pre` | With `--validate`, before the verifier, in `quick/steps/quick-verification.md`. S and G; C into `orchestrator`. | Per item, with `--validate`, in `verification-wave.md`. |
+| `verify:post` | With `--validate`, after the verifier, **only when its status is `passed`**. S and G. | Same condition, per item, in `verification-wave.md`. |
+| `discuss:pre` / `discuss:post` | With `--discuss`, in `quick/steps/discussion-phase.md`. S and G; C into `orchestrator` at `discuss:pre`. | Not applicable (`--discuss` is rejected). |
 | `plan:post`, `execute:pre`, `execute:wave:*`, `ship:*` | Not supported. | Not supported. |
+
+**Contributions at `verify:*` go to the orchestrator only.** `workflows/verify-work.md` publishes
+`verify:pre` and `verify:post` with `agent-roles: orchestrator`, and
+[ADR-894](894-capability-declaration-format.md) keeps the `verify` step orchestrator-only. The quick
+hosts follow that rule and amend nothing. A `verify:pre` contribution is injected into the quick
+orchestrator's own context where its step file starts (`quick/steps/quick-verification.md`,
+`quick-batch/steps/verification-wave.md`), before the verifier spawns. It never reaches the
+`gsd-verifier` prompt. The `discuss:pre` contribution follows the same rule in
+`quick/steps/discussion-phase.md`.
 
 **One `verify:post` condition for both hosts.** `verify:post` runs only after a `passed` verdict.
 After `gaps_found`, `human_needed` or a status the query could not resolve, each host keeps its
@@ -184,22 +193,27 @@ already produced left in place.
 that point's annotated hooks again, which the idempotency rule (D4) makes safe. This ADR changes
 where a run re-enters in one case only:
 
-- **`resume <slug>`** (`commands/gsd/quick.md`):
-  - **`<quick_id>-TASK.json`** keeps its original description, modes and ids when present and valid.
-    Only core's `executed_head` write changes it (D3). It is written as at a first run when it is
-    absent and an annotated hook is now scheduled. An invalid file stops the resume with a diagnostic,
-    and core never rewrites it.
-  - **Planning.** When the task has no `PLAN.md`, the planner spawns again, and the annotated
-    `plan:pre` steps, gates and contributions run before it as at a first run. When a `PLAN.md`
-    exists, no planner spawns and no `plan:pre` hook runs.
+- **`resume <slug>`** (`commands/gsd/quick.md`), through the resume contract (D3):
+  - **The same task.** The resume keeps the task's quick id, task directory and slug; it never
+    allocates new ones. `<quick_id>-TASK.json` keeps its original description, modes and ids when
+    present and valid. Only core's `executed_head` writes change it (D3). It is written as at a first
+    run when it is absent and an annotated hook is now scheduled. An invalid file stops the resume
+    with a diagnostic, and core never rewrites it.
+  - **Planning.** When the task has no `PLAN.md`, the run re-enters before its first enabled
+    pre-planning stage (discussion with `--discuss`, then research, then the planner) with the full
+    description (D3), and the annotated `discuss:*` and `plan:pre` steps, gates and contributions run
+    as at a first run. A gate that stopped the task there is re-evaluated. A task with neither
+    `TASK.json` nor `PLAN.md` has nothing to resume from: the resume stops with a diagnostic, as v1.21.0 needs a `PLAN.md`.
+    When a `PLAN.md` exists, no planner spawns and no `discuss:*` or `plan:pre` hook runs.
   - **The new re-entry.** It applies to a task with no STATE.md row whose `<quick_id>-TASK.json`
     records an `executed_head` (D3) that is reachable from HEAD. Core writes `executed_head` only once
     the executor succeeded and, when isolated, its merge-back succeeded, and before the first annotated
     `execute:post` hook. Its reachability is the same ancestry evidence quick-batch uses (D4). Such a
-    task does not re-spawn the executor. That is the state an `execute:post` gate stop leaves, and also
-    a crash during the `execute:post` dispatch. The resume continues at the annotated `execute:post`
-    dispatch, so every annotated `execute:post` step runs again and a gate that stopped the task is
-    re-evaluated. The rest of the run follows as usual.
+    task does not re-spawn the executor. That is the state an `execute:post` gate stop leaves, a crash
+    during the `execute:post` dispatch, and a stop or crash at a later point. The resume continues at
+    the annotated `execute:post` dispatch, so every annotated `execute:post` step runs again and a gate
+    that stopped the task is re-evaluated. When no `execute:post` hook is annotated, that dispatch is
+    empty and the run continues at Step 6.25. The rest of the run follows as usual.
   - **What the artifacts alone do not prove.** None of these is enough without `executed_head`: a
     complete `SUMMARY.md` (an isolated merge-back rescues it into the checkout before it merges), the
     task's commits as the evaluation-scope resolver lists them (they include the pre-dispatch artifact
@@ -220,14 +234,28 @@ runs once, and quick-batch gains none.
 
 Annotated hooks dispatched on a quick path receive quick context instead of phase context:
 
-- **Command steps and query gates** run with `--quick "<quick_id>" --quick-modes <set>` instead of
+- **Command steps and query gates** run with `--quick "<quick_id>" --quick-modes "<set>"` instead of
   `--phase`. A quick id is never passed as a phase number.
 - **Skill steps, agent steps, gates and contributions** receive the quick id, the task directory
   (`.planning/quick/<id>-<slug>/`), the working directory, the resolved modes, and the batch id when
-  there is one.
+  there is one, as one **quick context** object:
+  `{ "quick_id", "task_dir", "cwd", "modes": [...], "batch_id", "planning", "items" }`. For a
+  `/gsd-quick` task or a batch item, `quick_id` and `task_dir` name the task, `planning` and `items`
+  are `null`, and `batch_id` is `null` outside a batch. For a batch planning invocation (below),
+  `quick_id` and `task_dir` are `null`, `planning` is the invocation id, and `items` lists its
+  members as `[{ "quick_id", "task_dir" }]`. Query gates take the command-step argv in both cases.
+  `loop render-hooks --context quick` builds it and returns it in its envelope; no workflow assembles
+  it by hand. A skill step gets the object's JSON as the `args` string of its `Skill(...)` call. An
+  agent step gets it as a `<quick_context>` block at the start of its prompt. Contributions get one
+  `<quick_context>` block per target prompt, in front of the injected fragments. The values come from
+  core, never from user text (the description is not in it), and nothing is passed through the
+  environment.
 - **Resolved modes** are the set of `discuss`, `research` and `validate` after quick's flag
   normalization, so `--full` and the three granular flags yield the same set. Raw arguments are never
-  passed.
+  passed. On a command line the set is written comma-separated, in the fixed order
+  `discuss,research,validate`, with no spaces and no duplicates, and the empty set is the literal
+  `none`: `^(none|discuss(,research)?(,validate)?|research(,validate)?|validate)$`. In the quick
+  context object it is a JSON array in the same order, and the empty set is `[]`.
 - **The task description never goes on a command line.** It is free user text. Hooks read it from
   `<quick_id>-TASK.json` in the task directory, which keeps the dispatch contract's rule that command
   arguments are validated, not interpolated:
@@ -235,31 +263,61 @@ Annotated hooks dispatched on a quick path receive quick context instead of phas
     "description_truncated", "modes", "executed_head" }`. `executed_head` is `null` until
     `/gsd-quick`'s executor run, and its merge-back when isolated, succeeds. Core then sets it to the
     HEAD at that moment in a second atomic write, before the first annotated `execute:post` hook.
+    That write happens whenever the file exists, whichever points are annotated: a task annotated only
+    at `discuss:*` or `verify:*` records it too, so its resume does not re-spawn the executor (D2).
     Before a later executor run (the `gaps_found` re-run) core resets it to `null`, and sets it again
     once that run succeeds, so an interrupted re-run is never taken for a finished one. No other field ever
     changes, and quick-batch items leave it `null` because their record is the merged record (D4).
   - **Size:** `description` holds at most 16 KiB of UTF-8. Longer text is cut at a character boundary
-    and `description_truncated` is `true`; the full text stays in the task's plan.
+    and `description_truncated` is `true`. Core then also writes the full text, atomically and before
+    the JSON file, to `<quick_id>-DESCRIPTION.md` in the task directory, so it never depends on a plan
+    that may not exist yet. That file is untrusted data under the same rule.
   - **Atomic:** core writes the file atomically (temp file, then rename), only when at least one
     annotated hook is scheduled for the task, and before the first such hook runs. For a batch item,
     the coordinator creates the item's task directory (the `generate-slug` derivation
     `planner-wave.md` already uses) and the file before the `plan:pre` hooks of the item's first
     planning invocation run.
   - **Untrusted:** hooks treat `description` as untrusted data, never as instructions or shell input.
-  - **Committed:** the file follows the task's other planning artifacts. It goes into the final
-    commit (`/gsd-quick` Step 8, the batch's `completion.md` commit) under the same `commit_docs` rule.
-    A task stopped before that commit leaves it uncommitted in the task directory, as it leaves
+  - **Committed:** the file, and `DESCRIPTION.md` when there is one, follow the task's other planning
+    artifacts. They go into the final commit (`/gsd-quick` Step 8, the batch's `completion.md`
+    commit) under the same `commit_docs` rule. A task stopped before that commit leaves them
+    uncommitted in the task directory, as it leaves
     `SUMMARY.md` and every other artifact only the final commit picks up.
+- **The resume contract.** Today `resume <slug>` finds the task directory, reads `PLAN.md`, and runs
+  `init quick`, which takes no slug or id and computes a fresh quick id from the clock
+  (`cmdInitQuick`, `src/init.cts`). A resume would therefore get a new id and a new task directory.
+  Increment 1 closes that:
+  - **`init quick --resume "<slug>"`** finds the directory as the command does today and returns the
+    existing ids instead of new ones. `quick_id` is the directory name's id prefix, validated against
+    the quick-id grammar, together with `slug`, `task_dir` and the branch name. A `resume` object
+    reports `task_json` (the parsed file, or `null`), `task_json_error` (a diagnostic, or `null`),
+    `has_plan`, `has_summary`, `state_row` and `executed_head_reachable` (`null` without an
+    `executed_head`). It never allocates an id and never writes.
+  - **The command** takes the description from `<quick_id>-TASK.json` when it is present and valid,
+    from `<quick_id>-DESCRIPTION.md` when the JSON says `description_truncated`, and from `PLAN.md`
+    otherwise. It stops with a diagnostic when `task_json_error` is set, when a truncated description
+    has no `DESCRIPTION.md`, or when neither `TASK.json` nor `PLAN.md` exists.
+  - **The workflow** gains a named re-entry, a `resume-entry` section in `quick.md`, which routes by
+    the `resume` object. When `has_plan` is false it re-enters before the first pre-planning stage
+    the recorded modes enable, as at a first run: discussion, then research, then the planner. A gate
+    that stopped the task at `discuss:*` or `plan:pre` is therefore re-evaluated, never skipped. It
+    goes to the annotated
+    `execute:post` dispatch when `state_row` is false and `executed_head_reachable` is true. In every
+    other case it resumes as in v1.21.0.
 - **Batch `plan:pre` is per planning invocation.** Planning recomputes waves and only plans pending
   items, so a layer number does not identify a stable item set across resumes. Each planning dispatch
   gets a planning-invocation id, persisted with its item membership before any hook runs (D4). The id
   is a per-batch sequence number matching `^[1-9][0-9]{0,5}$`, validated before it is passed. The
-  quick id is validated the same way (`^\d{6}-[0-9a-z]{3}$`) and the batch id against
-  `SAFE_BATCH_ID_RE`. Hooks receive the batch id, the invocation id and the items (quick ids and task
+  quick id is validated the same way (`^\d{6}-[0-9a-z]{3}$`), and so is the batch id. The loader's
+  `SAFE_BATCH_ID_RE` (`^[0-9a-zA-Z-]+$`, `src/quick-batch.cts`) is not enough on a command line,
+  because it accepts a leading `-` that a third-party command could read as an option. `createBatch`
+  allocates the batch id from the quick-id grammar, so the check never fails for a batch core
+  created. A hand-made id that fails it is refused before dispatch, like an invalid quick id. Hooks
+  receive the batch id, the invocation id and the items (quick ids and task
   directories). Command steps get `--quick-batch "<batch_id>" --planning "<invocation_id>"` and the
   batch's resolved modes, with no per-item flag and no single `--quick`. A command step reads the
-  invocation's item membership from `BATCH.json` through a read-only `quick-batch` verb keyed by those
-  two ids, never from a list of items on its command line.
+  invocation's item membership from `BATCH.json` through the read-only `quick-batch planning-members`
+  verb keyed by those two ids (D4), never from a list of items on its command line.
 - **Per-item batch hooks run after their own item's merge.** The merge step merges the mergeable
   prefix of a wave in one `worktree.cleanup-wave` call, and an entry can fail on its own
   (`quick-batch/steps/merge-wave.md`). A per-item `execute:post` runs only for an item recorded as
@@ -267,10 +325,24 @@ Annotated hooks dispatched on a quick path receive quick context instead of phas
   merged in the same call are, later or failed ones are not. A hook must assume neither.
 - **A hook finds its task's work through the evaluation-scope resolver.** That resolver is
   `check evaluation-scope --quick "<quick_id>"`, [ADR-5057](5057-one-owner-per-workflow-verdict.md) §4,
-  the one `/gsd-quick` Step 6.25 already uses. It returns the commits that name the quick id on the
-  current branch. This holds on both hosts, isolated or not. A hook never derives a commit range, a
-  `BATCH.json` commit or the working-tree diff on its own; `lint-evaluation-scope-drift` already
-  rejects such derivations in core.
+  the one `/gsd-quick` Step 6.25 already uses. It returns the commits on the current branch whose
+  message contains the quick id (a fixed-string `git log --grep`, `src/gate-evaluation-scope.cts`). A
+  hook never derives a commit range, a `BATCH.json` commit or the working-tree diff on its own;
+  `lint-evaluation-scope-drift` already rejects such derivations in core.
+  - **What makes the id appear.** Today only `/gsd-quick`'s own commits are sure to name it: the
+    pre-dispatch artifact commit of an isolated run (`docs(<quick_id>): …`) and the final commit
+    (`docs(quick-<quick_id>): …`). The executor prompts say only "commit each task atomically"
+    (`quick.md` Step 6, `quick-batch/steps/worktree-dispatch.md`), and the isolated merge commit is
+    `chore: merge executor worktree (<branch>)` (`src/worktree-safety.cts`). Increment 1 (for
+    `/gsd-quick`) and increment 3 (for quick-batch) add one rule to each executor prompt: every commit
+    subject names the task as `<type>(quick-<quick_id>): …`, the form Step 8 already uses. A workflow
+    test checks both prompts for it.
+  - **When the resolver finds nothing.** An executor is an agent and can miss the rule, so the
+    contract does not rest on it. A `resolved` result with reason `no-matching-commits` means that no
+    commit names the task: a hook treats it as nothing to evaluate, never as a failure. An
+    `unresolvable` result (exit 69) is an error of that hook: a step gets `error` and the host
+    continues, and a gate follows its `onError`. Core's own records never depend on the resolver: the
+    `ISOLATION=none` merged record stores the HEAD after the executor (D4).
 
 An annotated hook accepts this contract. That is the meaning of listing `"quick"`.
 
@@ -284,8 +356,8 @@ ownership of `BATCH.json`, STATE.md and worktree merges is unchanged.
 fields of `BATCH.json` itself, never a second file, so `BATCH.json` stays the sole source of truth for
 completion ([ADR-1239](1239-gsd-embeddable-orchestration-engine.md)). So are the recovery records
 that close two crash windows v1.21.0 already has (below): the merge-in-flight record, the merged
-record, the verifier status and the recorded HEAD. Those windows are not tied to annotated hooks, so
-their fix is not either:
+record and the verifier status, each written together with `head_revision` (HEAD across resume,
+below). Those windows are not tied to annotated hooks, so their fix is not either:
 
 - **Loader:** it accepts `schema_version` 1 and 2. For 2 it validates and carries every v2 field
   through validation and through every rewrite (`completeQuickItem`, `updateBatchItems`,
@@ -298,8 +370,13 @@ their fix is not either:
   - **A v1 batch** is upgraded to 2 in place by the first write such a core makes to it. The write
     adds an empty frozen schedule, so no annotated hook ever runs for that batch, and from then on the
     recovery records apply to it.
-  - **v1 fields are never extended.** A v1.21.0 loader rebuilds from known fields, so recovery records
-    stored under `schema_version: 1` would vanish silently on the first rewrite by an older core.
+  - **No recovery record goes into a v1 batch.** A v1.21.0 loader rebuilds from known fields, so a
+    recovery record stored under `schema_version: 1` would vanish silently on the first rewrite by
+    such a core. `head_revision` (#6203) is an optional v1 field that core added after v1.21.0, and
+    the same loss applies to it. It can stay a v1 field because its loss fails closed: without it,
+    `resumeBatch` falls back to `base_revision` and refuses a moved HEAD with its recoverable
+    diagnostic. A lost merge-in-flight or merged record would not fail closed. The work would be
+    merged with no record of it. So those records exist only in schema 2.
 - **Rollback:** an older core refuses a v2 batch, as it refuses any unknown schema today. That
   includes a batch with no annotated hooks and an upgraded v1 batch. The refusal fails closed. It is
   the intended rollback behavior, and the changeset says that a batch in flight must be finished
@@ -310,7 +387,7 @@ their fix is not either:
 - **When it is frozen.** The schedule is resolved once, when the batch starts. It records every
   annotated hook at a cell quick-batch supports, active or not, so a capability enabled, disabled or
   upgraded mid-batch does not change a running batch. Each planning invocation is persisted (id, item
-  membership, a copy of the `plan:pre` part of the schedule) before its hooks run.
+  membership, the identities of the `plan:pre` entries it schedules) before its hooks run.
 - **What an entry stores.** Each entry is a snapshot: the full resolved manifest entry (`ref`,
   `onError`, `blocking`, `produces`/`consumes`, the field itself), the capability id and version, and
   the activation evaluated at freeze (enabled, `when`, `pointFrom`). Activation is evaluated at freeze,
@@ -330,6 +407,26 @@ their fix is not either:
 - **Contributions are snapshots, not checkpoints.** A contribution is prompt content, not a side
   effect. Its resolved fragment is stored with the frozen schedule and injected into every spawn of the
   target agent, including replacement and revision spawns after a resume. It is never marked done.
+- **Size.** `loadBatch` parses `BATCH.json` with `safeJsonParse(raw, { maxLength: 1048576 })`
+  (`src/quick-batch.cts`) and fails closed above it. The cap counts the JavaScript string length of
+  the file's text (UTF-16 code units, `src/security.cts`), not bytes. That cap stays, and the schema
+  is bounded so a batch never outgrows it through its own writes. Every limit below except the
+  fragment cap is measured the same way, as the length of the serialized JSON string, so the
+  boundary tests count what the loader counts:
+  - **Stored once.** Each snapshot is stored once in the schedule, keyed by its SHA-256. Planning
+    invocations and ledger rows refer to entries by identity, never by copy, so a fragment's size
+    counts once per batch, not once per item or invocation.
+  - **Caps at freeze.** A contribution fragment holds at most 16 KiB of UTF-8, and the serialized
+    frozen schedule is at most 262,144 code units long. Over either cap, `quick-batch create` refuses the batch with a
+    validation error that names the capability and the hook. It never truncates a fragment.
+  - **Budget at freeze.** `create` also refuses a batch whose worst case exceeds the cap: the v1
+    fields, plus the schedule, plus items × the per-item entries scheduled for each × the largest
+    ledger row (its identity, outcome and `head_revision`), plus the merge and verifier records.
+    About 3,000 ledger rows fit next to a full schedule, 100 items with 30 hooks each, say.
+  - **Guard at write.** Planning invocations are not bounded at freeze, because a crash during
+    planning adds one. So every writer serializes the new manifest first and refuses a write that
+    would exceed the cap. The previous file stays intact and the verb returns a diagnostic, so the
+    batch stops readable rather than unreadable.
 
 **Outcomes.** Steps and gates are checkpointed: per-item hooks by item, point and hook identity;
 `plan:pre` hooks by planning invocation, point and hook identity. Each outcome is written under
@@ -362,7 +459,10 @@ invocation and is never replayed.
   exists in which the fields are cleared but the item is not yet marked merged. `commit` holds one
   value:
   - **Isolated:** the `--no-ff` merge commit that brought the item's branch in.
-  - **`ISOLATION=none`:** the item's newest commit as the evaluation-scope resolver returns it (D3).
+  - **`ISOLATION=none`:** the HEAD after the executor returned, the value the same write records as
+    `head_revision`. It never comes from the evaluation-scope resolver, which can find no commit for
+    an item (D3). An executor that made no commit leaves HEAD where it was, and that HEAD is the
+    `commit`.
 
   `quick-batch complete` must later be called with that same commit. Hooks never use it to find the
   item's work (D3). A `pending` item with the merged mark is never re-dispatched or re-merged, and a
@@ -452,35 +552,37 @@ invocation and is never replayed.
   held item. Once the user fixes the cause, `--resume` re-evaluates the `blocked` gate and continues
   from there. Sticky outcomes are never replayed, and there is no retry policy beyond `onError`.
 
-**HEAD across resume.** `resumeBatch` refuses a HEAD other than the batch's `base_revision` when it
-is given `--current-base-revision` and `base_revision` is non-null (`src/quick-batch.cts`).
-`resume-mode.md` always passes the current HEAD. `base_revision` is HEAD at creation and is never
-advanced. The batch's own merges already move HEAD, so a resume after any merged wave is refused
-([#6203](https://github.com/open-gsd/gsd-core/issues/6203)). Hook commits,
-the final artifact commit (`quick-batch/steps/completion.md`), executor commits under
-`ISOLATION=none` and a user's commits that fix a held item's gate would all add to that. Requiring
-HEAD to equal a recorded value cannot work. For a v2 batch the rule is ancestry, not equality:
+**HEAD across resume.** Since #6203 (fixed in #6296) the manifest records `head_revision`, the HEAD
+the batch last recorded for itself, and `resumeBatch` refuses a HEAD other than
+`head_revision ?? base_revision` when it is given `--current-base-revision` and `base_revision` is
+non-null (`src/quick-batch.cts`). `resume-mode.md` always passes the current HEAD. The step files set
+`head_revision` with a separate `quick-batch update --head-revision` after an inline executor returns
+(`worktree-dispatch.md`), after each `worktree.cleanup-wave` call (`merge-wave.md`) and after the
+final commit (`completion.md`). Equality holds only while nothing moves HEAD between two of those
+writes. Annotated hooks break that: a hook's commit, or a user's commit that fixes a held item's gate,
+moves HEAD with no write, and so does a crash between a hook's side effect and its checkpoint.
+Increment 3 keeps `head_revision` as the one recorded HEAD, and for a v2 batch:
 
-- **Recorded HEAD.** Every ledger write (merge-in-flight and merged records, hook outcome, verifier
-  status) also records the HEAD
-  at that moment, in the same `withPlanningLock` write. Until the first such write, `base_revision`
-  is the last recorded HEAD.
-- **Accepted HEADs.** Resume accepts any HEAD that is the last recorded HEAD or descends from it. The
-  commits after it are not attributed to anyone. The batch reconciles from its ledger, never from
-  which commits exist. Merges keep their own per-entry `--expected-base` check.
-- **Refused HEADs.** A HEAD that does not descend from the last recorded HEAD (a reset, a rebase, or a
-  switch to another branch) is refused with the recoverable diagnostic
+- **Recorded in the ledger write.** Every ledger write (merge-in-flight and merged records, hook
+  outcome, verifier status) also sets `head_revision` to the HEAD at that moment, in the same
+  `withPlanningLock` write. The merged-record writes replace the separate `--head-revision` updates in
+  `worktree-dispatch.md` and `merge-wave.md`, so no state exists in which an item is merged but the
+  HEAD is not recorded. The update after the final commit in `completion.md` stays, because no
+  ledger write follows that commit.
+- **Ancestry, not equality.** Resume accepts any HEAD that is `head_revision ?? base_revision` or
+  descends from it. The commits after it are not attributed to anyone. The batch reconciles from its
+  ledger, never from which commits exist. Merges keep their own per-entry `--expected-base` check.
+- **Refused HEADs.** A HEAD that does not descend from it (a reset, a rebase, or a switch to another
+  branch) is refused with the recoverable diagnostic
   [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) requires. This is the "diverged in a way the
   coordinator cannot reconcile" case of ADR-1239, and the batch's merged base keeps moving forward as
   that ADR states.
 - **Crash window.** A crash between a hook's side effect (a commit, say) and its checkpoint leaves
-  HEAD ahead of the last recorded HEAD. That HEAD is accepted, and the hook re-runs because it has no
+  HEAD ahead of `head_revision`. That HEAD is accepted, and the hook re-runs because it has no
   outcome. This is why annotated hooks must be idempotent.
 
 Because every batch a core with increment 3 writes is schema 2, the rule covers every batch such a
-core resumes. A v1 batch is checked against its `base_revision` under the same ancestry rule before
-the first write upgrades it. Increment 3 therefore also fixes #6203. If #6203 lands earlier on its
-own, its fix adopts this ancestry rule, and increment 3 builds on it.
+core resumes. A v1 batch is checked under the same ancestry rule before the first write upgrades it.
 
 **Further rules.**
 
@@ -509,8 +611,30 @@ own, its fix adopts this ancestry rule, and increment 3 builds on it.
   first write upgrades them to 2 with an empty schedule, so their hooks keep v1.21.0 dispatch.
   Completed items stay complete as [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) requires,
   and no annotated hook runs retroactively for any of their items. They do gain the recovery records:
-  the merge-in-flight and merged records, the verifier status and the recorded HEAD. The hook contract
-  applies from the next batch.
+  the merge-in-flight and merged records and the verifier status, each written with `head_revision`.
+  The hook contract applies from the next batch.
+
+**The CLI verbs.** Today's `quick-batch` verbs are `create`, `update` (`--updates`,
+`--head-revision`), `resume`, `complete`, `effective-concurrency`, `merge-eligible`, `spawn-plan`,
+`filter-executed`, `verification-routing`, `merge-routing`, `cleanup-entry` and `parse-args`
+(`src/quick-batch-command-router.cts`). Increment 3 adds the verbs the step files and tests call.
+The names are working names (Open questions). Each new verb that writes does so under
+`withPlanningLock`, sets `head_revision` in the same write, and returns it in its result.
+
+| Verb | Writes | Arguments | Result |
+|---|---|---|---|
+| `create` (extended) | the frozen schedule and its `skipped` rows | as today | as today, plus `schedule: { entries, length }` |
+| `planning-start` | a planning invocation | `--batch <id> --items <json array of quick ids>` | `{ invocation_id, items: [{ quick_id, task_dir }], head_revision }` |
+| `planning-members` | nothing | `--batch <id> --planning <n>` | `{ batch_id, invocation_id, items: [{ quick_id, task_dir }] }` |
+| `due-hooks` | nothing | `--batch <id> (--quick-id <id> \| --planning <n>) --point <point>` | `{ entries: [{ key, kind, snapshot }] }`: the scheduled entries without a sticky outcome, in manifest order; `key` is the full identity |
+| `hook-outcome` | one ledger row | `--batch <id> (--quick-id <id> \| --planning <n>) --point <point> --hook <key> --outcome <outcome>` | `{ recorded, head_revision }` |
+| `merge-start` | the merge-in-flight records | `--batch <id> --entries <json array of { quick_id, tip }>` | `{ recorded, head_revision }` |
+| `merge-resolve` | merged records, cleared in-flight records | `--batch <id> [--results <worktree.cleanup-wave JSON>]` | `{ entries: [{ quick_id, resolution, commit, diagnostic }], head_revision }`, `resolution` one of `merged`, `pending`, `merge_failed`, `scope_violation`, `refused` |
+| `record-merged` | the merged record under `ISOLATION=none` | `--batch <id> --quick-id <id>` | `{ commit, head_revision }` |
+| `verifier-status` | the verifier status | `--batch <id> --quick-id <id> --status <passed\|gaps_found\|human_needed>` | `{ recorded, head_revision }` |
+
+`merge-resolve` applies the ancestry rule above, both right after the call and on resume. Without
+`--results` (the call never returned) every entry is routed as one with no reported status.
 
 ### D5 — Logical hosts and per-host coverage
 
@@ -547,32 +671,47 @@ merge only with it green on their own head, and it stays in the suite afterwards
    - A new `/gsd-quick` `plan:pre` dispatch for annotated hooks: steps and gates before the planner
      spawns, contributions into `planner`. It sits next to the legacy contribution injection, which
      keeps serving unannotated hooks.
-   - The D3 contract, including `<quick_id>-TASK.json`.
+   - The D3 contract, including `<quick_id>-TASK.json`, the quick context object, the
+     `--quick-modes` grammar and the commit-subject rule in the `quick.md` executor prompt.
    - An `execute:post` dispatch for annotated hooks that runs whatever the flags.
    - The logical `quick` host and its coverage check for `plan:pre` and `execute:post`.
-   - The `resume <slug>` re-entry at the annotated `execute:post` dispatch (D2).
+   - The resume contract and the `resume <slug>` re-entry (D2, D3): `init quick --resume` in
+     `src/init.cts`, the RESUME subcommand in `commands/gsd/quick.md`, the `resume-entry` section in
+     `quick.md`, and the CLI surface manifest.
    - Tests: besides the compatibility test,
      - an annotated `execute:post` step under `--full` runs exactly once and never with `--phase`;
      - a `["phase"]` hook never runs in quick;
      - an isolated run dispatches `execute:post` only after a successful merge-back;
+     - `init quick --resume` returns the task's existing quick id and task directory, and never a new
+       one;
      - `resume <slug>` after an `execute:post` gate stop re-evaluates the gate without re-spawning the
-       executor.
-2. **`verify:*` and `discuss:*` in `/gsd-quick`.** Dispatch in the two step files, contribution
-   targets `verifier` and `orchestrator`, coverage extended to them.
+       executor;
+     - a hook given a `no-matching-commits` scope treats it as nothing to evaluate.
+2. **`verify:*` and `discuss:*` in `/gsd-quick`.** Dispatch in `quick/steps/quick-verification.md`
+   and `quick/steps/discussion-phase.md`, contribution target `orchestrator` only, coverage extended
+   to them.
 3. **quick-batch.**
    - The logical `quick-batch` host.
-   - Per-invocation `plan:pre`, and per-item `execute:post` and `verify:*`.
-   - `BATCH.json` schema 2 for every batch, with the loader change, the frozen schedule, the ledger,
-     the merge-in-flight and merged records, the verifier status and the recorded-HEAD rule.
+   - Per-invocation `plan:pre` in `planner-wave.md` step 3. Per-item `execute:post` in `merge-wave.md`
+     after step 5, and with `ISOLATION=none` in `worktree-dispatch.md`. Per-item `verify:*` in
+     `verification-wave.md`. The completion check in `completion.md`. Resume in `resume-mode.md`.
+   - `BATCH.json` schema 2 for every batch, with the loader change, the frozen schedule and its size
+     rules, the ledger, the merge-in-flight and merged records, the verifier status, and
+     `head_revision` written with each ledger write and checked by ancestry.
+   - The new `quick-batch` verbs (D4), and the commit-subject rule in the `worktree-dispatch.md`
+     executor prompt.
    - The D4 lifecycle in `quick-batch complete`, merge routing and completion recovery.
    - Tests:
      - a v2 round trip through every writer that preserves all v2 fields;
-     - a v1 batch that is upgraded on resume, keeps v1.21.0 hook dispatch and resumes after a merged
-       wave (#6203);
+     - a v1 batch that is upgraded on resume and keeps v1.21.0 hook dispatch;
+     - a v2 batch whose annotated `execute:post` step commits resumes with that HEAD accepted, with
+       no `--head-revision` update in between; a HEAD reset below `head_revision` is refused;
      - a crash inside `worktree.cleanup-wave` resolved by ancestry, for each status in the D4 routing
        list;
      - a crash between the verifier's return and its routing;
-     - a recorded `human_needed` that passes once its report is resolved.
+     - a recorded `human_needed` that passes once its report is resolved;
+     - size limits at limit − 1, limit and limit + 1 for the fragment cap, the schedule cap and the
+       write guard, the last leaving the previous `BATCH.json` intact.
 
 Each increment adds its D2 cells, with their first supported version, to the cell table, so a
 manifest's `engines.gsd` floor can name the version that supports everything it annotates.
@@ -619,8 +758,9 @@ quick-task how-to, the CLI surface manifest where the CLI changes, and carries a
 ## Open questions
 
 - **Names.** `executionContexts` is the working name of the field. The CLI flags (`--quick`,
-  `--quick-modes`, `--quick-batch`, `--planning`) and the render contexts (`quick`, `quick-legacy`)
-  are contract surface too. All of them should be settled before increment 1 merges, since each one is
+  `--quick-modes`, `--quick-batch`, `--planning`, `init quick --resume`), the render contexts
+  (`quick`, `quick-legacy`), the quick context object's keys and the new `quick-batch` verbs (D4) are
+  contract surface too. Each should be settled before the increment that introduces it merges, since each one is
   a stability contract.
 - **`fast`.** `/gsd-fast` runs inline with no hooks at all. Whether it becomes a third context is left
   to a later issue.
