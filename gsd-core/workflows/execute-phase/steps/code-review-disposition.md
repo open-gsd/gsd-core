@@ -924,14 +924,16 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
                            === String(b === undefined ? '' : b).replace(/\s+/g, ' ').trim();
   // Section headings are matched WHOLE: a prefix match would let '## Fixed Issues Verification'
   // classify every finding under it as fixed.
-  const applied = new Map(), staleFix = [];
+  const applied = new Map(), staleFix = [], orphaned = [];
   for (const fixPath of fixReports) {
     let sect = null;
     for (const h of headings(fs.readFileSync(fixPath, 'utf-8'))) {
       if (h.fence || h.skip) continue;
-      if (/^##\s+Fixed Issues\s*\$/.test(h.line)) { sect = 'fixed'; continue; }
-      if (/^##\s+Skipped Issues\s*\$/.test(h.line)) { sect = 'skipped'; continue; }
+      if (/^##\s+Fixed(\s+Issues)?\s*\$/.test(h.line)) { sect = 'fixed'; continue; }
+      if (/^##\s+Skipped(\s+Issues)?\s*\$/.test(h.line)) { sect = 'skipped'; continue; }
       if (/^##\s+/.test(h.line)) { sect = null; continue; }
+      // A finding heading under no recognised section is never lost silently (#6126): it is named on the verdict line.
+      if (h.id && !sect) orphaned.push({ id: h.id, src: path.basename(fixPath) });
       if (h.id && sect && !applied.has(h.id)) {
         // THREE ARMS. An id the review does not report has no title to disagree with -- not the
         // stale-report case, but what a finding looks like once acted on; the old form dropped it
@@ -959,6 +961,8 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
     return { id, sev: sev(id), d: 'open', src: '-', t: title.get(id) };
   };
   const rows = order.map(row);
+  const orphanedLeft = orphaned.filter((o, i) => !applied.has(o.id) && orphaned.findIndex((q) => q.id === o.id && q.src === o.src) === i);
+  const orphanNote = orphanedLeft.length ? ' (' + orphanedLeft.length + ' fix-report finding heading(s) sit under no recognised section (## Fixed Issues, ## Skipped Issues, ## Fixed, ## Skipped), so they were not reconciled: ' + orphanedLeft.map((o) => o.id + ' in ' + o.src).join(', ') + ')' : '';
   const carriedIds = [];
   for (const id of prior.keys()) if (order.indexOf(id) === -1 && carriedIds.indexOf(id) === -1) carriedIds.push(id);
   for (const id of applied.keys()) if (order.indexOf(id) === -1 && carriedIds.indexOf(id) === -1) carriedIds.push(id);
@@ -976,7 +980,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const open = rows.filter((r) => r.d === 'open').length;
   const reusedNote = reused.length ? ' (' + reused.length + ' recorded decision(s) DROPPED -- the id now names a different finding, so the decision no longer has a row: ' + reused.join(', ') + ')' : '';
   const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';
-  if (rows.length === 0 && !unparsed && !fs.existsSync(process.env.DISPOSITION_FILE)) return;
+  if (rows.length === 0 && !unparsed && !orphanedLeft.length && !fs.existsSync(process.env.DISPOSITION_FILE)) return;
   const escapePipes = (t) => t.replace(/\\\\.|\|/g, (m) => (m === '|' ? '\\\\|' : m));
   const body = ['# Phase ' + process.env.PADDED + ': Code Review Disposition', '', '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|']
     .concat(rows.map((r) => { const src = escapePipes(r.src || '-'); const mark = r.carried && !/\(not in the current review\)\s*\$/.test(src) ? ' (not in the current review)' : ''; return '| ' + r.id + ' | ' + r.sev + ' | ' + r.d + ' | ' + src + mark + ' |'; }))
@@ -1002,11 +1006,11 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const stripTs = (t) => t.replace(/^recorded:.*\$/m, 'recorded:');
   const prev = fs.existsSync(process.env.DISPOSITION_FILE) ? norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')) : '';
   if (prev && stripTs(prev) === stripTs(render(''))) {
-    console.log('Code review disposition unchanged: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote);
+    console.log('Code review disposition unchanged: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote);
     return;
   }
   fs.writeFileSync(process.env.DISPOSITION_FILE, render(new Date().toISOString()));
-  console.log('Code review disposition recorded: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + ' — ' + process.env.DISPOSITION_FILE);
+  console.log('Code review disposition recorded: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + ' — ' + process.env.DISPOSITION_FILE);
   })();
 " || echo "Code review disposition record skipped (non-blocking)."
 

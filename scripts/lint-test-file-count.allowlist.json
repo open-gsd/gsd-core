@@ -91,9 +91,11 @@
         "phase-resolution-parity.test.cjs",
         "phase-structure.test.cjs",
         "phase-tdd-applicable.test.cjs",
+        "phase.process.test.cjs",
         "phase.test.cjs"
       ],
-      "issue": "3186"
+      "issue": "3186",
+      "justification": "ADR-6315 item 16 (#6334): the sibling-worktree allocation cases build real git repositories, so they are the process-contract part of the phase suite and must be a separate .process.test.cjs file (the tier is chosen by filename; phase.test.cjs is held in-process by ESLint)."
     },
     "roadmap": {
       "files": [
@@ -134,9 +136,11 @@
         "state-rebuild.test.cjs",
         "state-todos-render.test.cjs",
         "state-write-path-drift-guard.test.cjs",
+        "state.process.test.cjs",
         "state.test.cjs"
       ],
-      "issue": "180"
+      "issue": "180",
+      "justification": "ADR-6315 item 16 (#6334): the state_head cases read the commit a STATE.md was written against from a real git repository, so they are the process-contract part of the state suite and must be a separate .process.test.cjs file (the tier is chosen by filename; state.test.cjs is held in-process by ESLint)."
     },
     "verify": {
       "files": [
