@@ -842,6 +842,10 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     const { DIAGNOSTIC } = require(HOOK_PATH);
     assert.deepEqual(JSON.parse(r.stderr.slice(0, newline)), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
     assert.equal(r.stderr.slice(newline + 1), out.reason, 'the diagnostic line, then the plain reason');
+    // The failed reading names its own cause, so a host can tell it from a
+    // crash: its reason is not the outer catch's.
+    const crash = assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash');
+    assert.notEqual(out.reason, crash.reason, 'the failed reading must not reuse the outer catch reason');
   });
 
   test('unset: the same failed reading is allowed, and its diagnostic is still written', () => {

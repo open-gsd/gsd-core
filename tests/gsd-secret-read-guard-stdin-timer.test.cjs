@@ -13,8 +13,8 @@
  * (`fired <ms>`), each restart of it (`refreshed <ms>`), and each chunk the
  * hook's own `data` listener received (`data <bytes>`). Every cell asserts that
  * the hook armed exactly the exported STDIN_TIMEOUT_MS, once, and never
- * restarted it, and asserts whether the timer fired, so no cell reads elapsed
- * time. Two cells let the timer run at the hook's own 3 s. The rest set
+ * restarted it, and each cell that holds the pipe open asserts that the timer
+ * fired, so no cell reads elapsed time. Two cells let the timer run at the hook's own 3 s. The rest set
  * GSD_TEST_STALL_TIMER, which the preload alone reads: the held-open cells
  * schedule the timer at 100 ms, counted from the payload's arrival in the
  * cells that write one, and the early-close cell parks it (armed, never due),
@@ -45,8 +45,8 @@
  *     only after the second, so data is still arriving while it is pending.
  *   - "opted in: a payload whose stdin closes before the timer gets its
  *     ordinary verdict" — the other side of the bound: the timer is armed and
- *     still pending (parked) when the pipe closes, so the hook must reach its
- *     scan, and the timer must not fire.
+ *     still pending (parked) when the pipe closes, so the scan's verdict must
+ *     decide the run.
  */
 
 const { describe, test } = require('node:test');
@@ -145,12 +145,16 @@ function runPiped({ env: extraEnv, written, closeAfterMs, stallTimer, fromData =
 }
 
 // The hook must arm one timer, at exactly its exported bound, whatever delay
-// the preload then schedules it at, and never restart it; and the timer must,
-// or must not, be what ended the run.
-function assertTimer(r, label, { fired }) {
+// the preload then schedules it at, and never restart it.
+function assertArmed(r, label) {
   assert.deepEqual(r.armed, [STDIN_TIMEOUT_MS], `${label}: the hook must arm one stdin timer at STDIN_TIMEOUT_MS`);
   assert.deepEqual(r.refreshed, [], `${label}: the hook must never restart its stdin timer`);
-  assert.deepEqual(r.fired, fired ? [STDIN_TIMEOUT_MS] : [], `${label}: the stdin timer must ${fired ? '' : 'not '}fire`);
+}
+
+// ...and, on a held-open pipe, the timer must be what ended the run.
+function assertTimer(r, label) {
+  assertArmed(r, label);
+  assert.deepEqual(r.fired, [STDIN_TIMEOUT_MS], `${label}: the stdin timer must fire`);
 }
 
 // The hook's own `data` listener received the whole payload, and before its
@@ -193,7 +197,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assert.equal(STDIN_TIMEOUT_MS, 3000, 'the documented stall bound');
     const r = await runPiped({ env: DENY_ENV });
     const stall = assertGuardError(r, 'stall');
-    assertTimer(r, 'stall', { fired: true });
+    assertTimer(r, 'stall');
     assert.match(stall.reason, /stdin did not close within 3 s/, 'the reason names the bound');
     // The two failure paths name different causes, so a runner that closed
     // stdin (and so reached the outer catch) cannot pass as a stall.
@@ -204,7 +208,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   test('unset: a stalled stdin still allows, silently', async () => {
     const r = await runPiped();
     assertAllowed(r, 'stall');
-    assertTimer(r, 'stall', { fired: true });
+    assertTimer(r, 'stall');
   });
 
   // The timer runs from the hook's start and `data` does not touch it, so a
@@ -215,18 +219,18 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   test('opted in: a full payload whose stdin stays open blocks as guard-error', async () => {
     const w = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: true });
     const written = assertGuardError(w, 'written stall');
-    assertTimer(w, 'written stall', { fired: true });
+    assertTimer(w, 'written stall');
     assertReceivedBeforeStall(w, FULL_PAYLOAD, 'written stall');
     const s = await runPiped({ env: DENY_ENV, stallTimer: SHORT_STALL_MS });
     const stall = assertGuardError(s, 'stall');
-    assertTimer(s, 'stall', { fired: true });
+    assertTimer(s, 'stall');
     assert.equal(written.reason, stall.reason, 'the written stall must end on the stdin timer, like the empty one');
   });
 
   test('unset: a full payload whose stdin stays open still allows, silently', async () => {
     const r = await runPiped({ written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: true });
     assertAllowed(r, 'written stall');
-    assertTimer(r, 'written stall', { fired: true });
+    assertTimer(r, 'written stall');
     assertReceivedBeforeStall(r, FULL_PAYLOAD, 'written stall');
   });
 
@@ -236,13 +240,13 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // `data` handler has run twice before the timer can fire and goes on running
   // while it is pending. A hook that restarted its timer from
   // `data` shows it in the preload's report whatever the host's speed: a
-  // refresh() as `refreshed`, a new timer as a second `armed` (assertTimer);
+  // refresh() as `refreshed`, a new timer as a second `armed` (assertArmed);
   // and under the feed a restarted timer could not come due before the
   // backstop.
   test('opted in: data arriving while the timer is pending does not restart it', async () => {
     const r = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: 2, feed: ' ' });
     assertGuardError(r, 'fed stall');
-    assertTimer(r, 'fed stall', { fired: true });
+    assertTimer(r, 'fed stall');
     const fired = r.lines.findIndex((l) => l.startsWith('fired '));
     const before = r.lines.slice(0, fired).filter((l) => l.startsWith('data ')).length;
     assert.ok(before >= 2, `fed stall: the timer must fire after the chunk that started it (${before} chunk(s) before it)`);
@@ -251,12 +255,13 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // The other side of the bound. The timer is armed and parked, so it is still
   // pending when the pipe closes CLOSE_AFTER_MS in, and nothing about the host's
   // speed can let it fire first. Both payloads must reach the scan's own
-  // verdict, and in both the timer must not fire.
+  // verdict. A parked timer cannot fire, so the report shows only that the
+  // timer was armed; the verdicts show that the scan, not the timer, decided.
   test('opted in: a payload whose stdin closes before the timer gets its ordinary verdict', async () => {
     const early = { env: DENY_ENV, closeAfterMs: CLOSE_AFTER_MS, stallTimer: 'park' };
     const allowed = await runPiped({ ...early, written: FULL_PAYLOAD });
     assertAllowed(allowed, 'allow, closed early');
-    assertTimer(allowed, 'allow, closed early', { fired: false });
+    assertArmed(allowed, 'allow, closed early');
     const secret = '/p/' + '.e' + 'nv';
     const read = JSON.stringify({ tool_name: 'Read', tool_input: { file_path: secret } });
     const r = await runPiped({ ...early, written: read });
@@ -265,6 +270,6 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assert.equal(out.decision, 'block');
     assert.equal(out.code, 'secret-read', 'the scan must decide, not the stdin timer');
     assert.equal(out.path, secret);
-    assertTimer(r, 'secret read, closed early', { fired: false });
+    assertArmed(r, 'secret read, closed early');
   });
 });
