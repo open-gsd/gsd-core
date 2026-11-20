@@ -1336,8 +1336,10 @@ cases:
   itself names itself), so nothing the graph cannot order reads as runnable.
 - **Two plan ids that differ only in case** (`A-01-PLAN.md` and
   `a-01-PLAN.md`). `phase-plan-index` refuses the phase as ambiguous. `planning
-  inspect` answers, and a `depends_on` token naming either resolves to the one
-  that sorts last.
+  inspect` answers: a `depends_on` token naming either plan's id, or a
+  canonical id they share, resolves to the plan that sorts last, and a
+  short-form token (the plan number alone, such as `01`) to the plan that
+  sorts first.
 - **A plan `phase-plan-index` does not list** (superseded, or not canonically
   named). It still gets its own `halted`, but its `blocked_by` is always `[]`,
   and, as in `phase-plan-index`, a `depends_on` token never resolves to it. (A

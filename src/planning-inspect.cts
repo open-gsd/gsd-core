@@ -943,7 +943,10 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
  * `phase-plan-index` refuses the phase. On a depends_on cycle the shared
  * propagation's fail-closed answer stands: every non-halted plan it cannot
  * order carries a non-empty `blocked_by`. On two plan ids that differ only in
- * case, a token naming either resolves to the one that sorts last.
+ * case, an exact or canonical token naming either resolves to the one that
+ * sorts last (`planMap` and `canonicalToId` keep the last write), and a
+ * short-form token to the one that sorts first (`buildShortFormToId` keeps
+ * the first).
  */
 function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }>): void {
   // `cmdPhasePlanIndex` builds its id maps from `planFiles.sort()`, and both
