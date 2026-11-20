@@ -25,7 +25,8 @@ const path = require('node:path');
 const espree = require('espree');
 
 const SUBJECT = 'runtime-launcher-parity.test.cjs';
-const MIN_FILES = 900;
+// The old test required `scanned > 900`, so the corpus must hold at least 901 files.
+const MIN_FILES = 901;
 
 // The fold-shadowed helpers that remain elsewhere in tests/, measured with this
 // same walker, not guessed. They are leftovers of the #1969 fold consolidation:
@@ -233,7 +234,7 @@ function run({ root, subject = SUBJECT, known = KNOWN_FOLD_SHADOWS, minFiles = M
   for (const key of actual) {
     const at = remaining.indexOf(key);
     if (at === -1) {
-      findings.push({ file: key.split('::')[0] ? `tests/${key.split('::')[0]}` : 'tests', line: 0, message: `${key} is a new fold-shadowed helper. Do not add it to KNOWN_FOLD_SHADOWS: declare the helper once at module scope instead (#4409).` });
+      findings.push({ file: `tests/${key.split('::')[0]}`, line: 0, message: `${key} is a new fold-shadowed helper. Do not add it to KNOWN_FOLD_SHADOWS: declare the helper once at module scope instead (#4409).` });
     } else {
       remaining.splice(at, 1);
     }

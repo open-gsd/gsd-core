@@ -53,6 +53,15 @@ describe('foldShadowedIn', () => {
     assert.equal(check.foldShadowedIn(path.join(root, 'tests'), 'a.test.cjs').length, 1);
   });
 
+  test('a helper re-declared deep inside the fold (in the callback of a describe) is a shadow', (t) => {
+    const root = makeRoot(t, {
+      'a.test.cjs': "function helper() {}\n{\n  describe('x', () => {\n    function helper() {}\n  });\n}\n",
+    });
+    const shadows = check.foldShadowedIn(path.join(root, 'tests'), 'a.test.cjs');
+    assert.equal(shadows.length, 1);
+    assert.equal(shadows[0].foldLine, 4);
+  });
+
   test('a helper declared once, a different name inside the fold, and a nested non-fold function are not shadows', (t) => {
     const root = makeRoot(t, {
       'a.test.cjs': 'function helper() {}\n{\n  function other() {}\n}\n',
@@ -69,7 +78,12 @@ describe('run: the three findings', () => {
     assert.deepEqual(run(makeRoot(t, { [SUBJECT]: CLEAN_SUBJECT })), []);
   });
 
+  test('the default minimum is 901 files (the old test required more than 900)', () => {
+    assert.equal(check.MIN_FILES, 901);
+  });
+
   test('a shadow in the subject is reported at its fold line', (t) => {
+    // The fixture's own extractShellBlocks is renamed so only the shadow finding is under test.
     const findings = run(makeRoot(t, { [SUBJECT]: shadowed('extractShellBlocks') + CLEAN_SUBJECT.replace('function extractShellBlocks', 'function unused') }));
     const subjectFindings = findings.filter((f) => f.file === `tests/${SUBJECT}` && /re-declared inside a fold/.test(f.message));
     assert.equal(subjectFindings.length, 1);
@@ -100,7 +114,7 @@ describe('run: the three findings', () => {
     assert.deepEqual(run(twice, { known: ['other.test.cjs::helper', 'other.test.cjs::helper'] }), []);
   });
 
-  test('a corpus smaller than the minimum is a finding, at limit and limit-1', (t) => {
+  test('a corpus smaller than the minimum is a finding: exactly the minimum passes, one more required fails', (t) => {
     const root = makeRoot(t, { [SUBJECT]: CLEAN_SUBJECT, 'a.test.cjs': 'const x = 1;\n' });
     assert.deepEqual(run(root, { minFiles: 2 }), []);
     const findings = run(root, { minFiles: 3 });
