@@ -1288,8 +1288,9 @@ and progress surfaces follow, for the same reason. See
 
 A plan that stops at a designed halt still writes a SUMMARY, with
 `status: halted` in its frontmatter (#2830). That SUMMARY is a completion
-record, so `hasSummary`, `summary_count` and `progress.completed_plans` keep
-counting the plan, exactly as before. Four additive fields report the halt:
+record, so `summary_count` and `progress.completed_plans` keep counting the
+plan, exactly as before. `hasSummary` is unchanged too: it keeps its own,
+older filename pairing (below). Four additive fields report the halt:
 
 | Field | Where | Meaning |
 |---|---|---|
