@@ -3045,6 +3045,28 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     });
   });
 
+  describe('pinned: the env -S shapes the header lists under "Documented gaps" stay allowed (#5514)', () => {
+    // A shell reserved word before the command, a `${VAR}` that is set, and a
+    // plain command in an `env -S` string behind `xargs` or `find -exec`. Each is
+    // allowed on `next` too, where no `env -S` string is read. A change that
+    // closes one updates the header's list with it. Plain strings: `${` would
+    // interpolate.
+    const shapes = [
+      "if true; then env -S 'cat .env'; fi",
+      "for i in 1; do env -S 'cat .env'; done",
+      "! env -S 'cat .env'",
+      "P=.env env -S 'cat ${P}'",
+      "Z=claude env -S '${Z} --agent gsd-debugger -p x'",
+      "xargs env -S 'cat .env'",
+      "find . -exec env -S 'cat .env' \\;",
+    ];
+    for (const cmd of shapes) {
+      test(`allowed: ${JSON.stringify(cmd)}`, () => {
+        assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+  });
+
   describe('a heredoc tag that is a brace, or holds a `${` that never closes', () => {
     // Each read the file in a real shell (2026-11-05): `}` in bash 5.2 and dash
     // 0.5.12, `{` in those and zsh 5.9, `${` in dash only. No trigger for the

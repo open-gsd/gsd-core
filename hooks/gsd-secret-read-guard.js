@@ -114,21 +114,19 @@
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
 //   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`, and a `${VAR}`
-//   inside an `env -S` string that is set, `Z=claude env -S '${Z} …'`: the
-//   string is read with each `${VAR}` kept as written and with it empty, as
-//   env expands an unset name), shell globs
+//   inside an `env -S` string that is set, `Z=claude env -S '${Z} …'`,
+//   `P=.env env -S 'cat ${P}'`: the string is read with each `${VAR}` kept as
+//   written and with it empty, as env expands an unset name), shell globs
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
 //   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
 //   inside scripts the agent executes, and `glob: '*'` reaching a
 //   NON-gitignored `.env`, a wrapper (or wrapper option taking a
-//   separate value) the WRAPPERS table does not list, and a wrapper in the
-//   sub-command of `xargs`, which is not walked through that table, so an
-//   `env -S` string or a shell script behind it is not read (`xargs env -S
-//   'cat .env'`, `xargs sudo sh -c 'cat .env'`; the sub-command's own operands
-//   are still checked). A `find -exec` sub-command is not resolved as a command
-//   either, so its shell script or `env -S` string is not read (`find . -exec
-//   sh -c 'cat .env' \;`); its words are still checked as operands. A
-//   shell reserved word before a command (`if`, `then`, `elif`, `else`,
+//   separate value) the WRAPPERS table does not list, and a plain command in
+//   an `env -S` string in the sub-command of `xargs` or a `find -exec` action
+//   (`xargs env -S 'cat .env'`, `find . -exec env -S 'cat .env' \;`), though a
+//   shell script there is read (#6114); the sub-command's own words are still
+//   checked as operands. A shell reserved word before a command (`if`,
+//   `then`, `elif`, `else`,
 //   `while`, `until`, `do`, `!`, bash's `coproc`, zsh's `repeat N`,
 //   `nocorrect`, `noglob` and `-`) is taken as the command word, so the
 //   wrapper walk, a shell script, an `env -S` string and the debugger-spawn
@@ -215,7 +213,8 @@
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
 //         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
-//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
+//         split-string-too-deep | ansi-c-unterminated | ansi-c-undecodable |
+//         debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
