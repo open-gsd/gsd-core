@@ -736,8 +736,8 @@ becomes a number, text starting with `[` or `{` is parsed as JSON (and stays a s
 not valid JSON), and anything else is a string, including ` 5`, `0x10` and a number too large to
 represent (`1e400`). So `--default '[]'` prints `[]`,
 the same as a key set to an empty array. `--default` needs a value: a missing value, or one that
-starts with `--` (another flag), is a usage error, as it is for `--cwd`, `--project-dir` and
-`--pick`. Pass `--default ""` for an empty default.
+starts with `--` (another flag), is a usage error, as it is for `--cwd`, `--project-dir`, `--ws`
+and `--pick`. Pass `--default ""` for an empty default.
 
 `--raw` prints the value as plain text for shell use. It is a display format, not JSON: an array
 prints its items joined by commas and an object prints `[object Object]`, so read structured

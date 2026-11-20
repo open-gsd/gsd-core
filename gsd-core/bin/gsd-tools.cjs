@@ -6096,6 +6096,16 @@ function main() {
 
   // Optional workstream override for parallel milestone work.
   // Priority: --ws flag > GSD_WORKSTREAM env var > session/shared pointer > null.
+  // --ws is refused like the other value-taking global options (#5933), before
+  // resolution; `--ws=<name>` takes precedence over `--ws <name>`, as in parseCliWorkstream.
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
+  const wsEqArg = args.find((arg) => arg.startsWith('--ws='));
+  // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
+  const wsIdx = args.indexOf('--ws');
+  const wsRefused = wsEqArg !== undefined
+    ? isRefusedGlobalFlagValue(wsEqArg.slice('--ws='.length).trim())
+    : wsIdx !== -1 && isRefusedGlobalFlagValue(args[wsIdx + 1]);
+  if (wsRefused) error('Missing value for --ws', ERROR_REASON.USAGE);
   let workstreamContext = null;
   try {
     // #3579 root-cause fix: this bootstrap resolution only decides whether to
