@@ -2580,6 +2580,19 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(link), ['## OUTLINE COMPLETE'], { interval: 5 }), 'stalled', 'a fresh link to an old file is not activity');
     fs.utimesSync(old, new Date(), new Date());
     assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(old), ['## OUTLINE COMPLETE'], { interval: 5 }), 'active', 'control: the fresh regular file itself is activity');
+    // Ten literal names (glob characters, spaces, a leading dash or dot): each fresh regular
+    // file is activity, and the same name as a fresh link to the old file is not.
+    const names = ['01-PLAN-OUTLINE.md', '02-PLAN.md', 'a b-PLAN.md', '-x-PLAN.md', '.h-PLAN.md', 'q[1]-PLAN.md', 's*t-PLAN.md', 'u?-PLAN.md', 'w{x}-PLAN.md', 'z~-PLAN.md'];
+    fs.utimesSync(old, past, past);
+    for (const name of names) {
+      const file = path.join(f.dir, name);
+      fs.writeFileSync(file, '# plan\n');
+      assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(file), ['## PLAN COMPLETE'], { interval: 5 }), 'active', `${name}: a fresh regular file is activity`);
+      fs.unlinkSync(file);
+      if (!symlinkOrSkip(t, old, file, 'file')) return;
+      assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(file), ['## PLAN COMPLETE'], { interval: 5 }), 'stalled', `${name}: a fresh link to an old file is not`);
+      fs.unlinkSync(file);
+    }
   });
 
   // Pre-push r4 NI-3: bash drops a NUL byte on read and zsh keeps it, so a receipt holding
