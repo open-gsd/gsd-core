@@ -119,6 +119,7 @@ module.exports = {
   "tests/graphify-visualization.test.cjs",
   "tests/gsd-agent-isolation-guard.test.cjs",
   "tests/gsd-path-export-hook.test.cjs",
+  "tests/gsd-secret-read-guard-brace-expansion.test.cjs",
   "tests/gsd-secret-read-guard.test.cjs",
   "tests/gsd-statusline.test.cjs",
   "tests/gsd-tool-dir.platform.test.cjs",
