@@ -1085,7 +1085,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
         [
           '# Roadmap',
           '',
-          '## Goals for v2.0',
+          '## v2.0 Goals',
           '',
           'Ship the thing.',
           '',

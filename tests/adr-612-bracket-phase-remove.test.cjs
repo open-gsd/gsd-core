@@ -3216,7 +3216,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
 
   // #4304: a non-closed heading
   // carrying the ACTIVE version token sits BEFORE the real milestone
-  // heading ("## Goals for v2.0"). The read side selects THAT heading as
+  // heading ("## v2.0 Goals"). The read side selects THAT heading as
   // the active one (`selectMilestoneHeading` picks the first non-closed
   // match for the version), so the located window is just the Goals
   // paragraph — ending exactly where the real milestone heading begins —
@@ -3228,7 +3228,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       [
         '# Roadmap',
         '',
-        '## Goals for v2.0',
+        '## v2.0 Goals',
         '',
         'Ship the thing.',
         '',
@@ -3870,7 +3870,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       [
         '# Roadmap',
         '',
-        '## Goals for v2.0',
+        '## v2.0 Goals',
         '',
         'Ship.',
         '',
