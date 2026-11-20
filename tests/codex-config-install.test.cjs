@@ -2876,6 +2876,7 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
     describe('stripping GSD content from a symlinked config.toml (#5716)', () => {
       const { loadSkillsManifest, writeActiveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
       const { writeSurface } = require('../gsd-core/bin/lib/surface.cjs');
+      const { stageUserArtifacts } = require('../gsd-core/bin/lib/user-artifact-staging.cjs');
       const crypto = require('node:crypto');
       const USER_KEYS = 'model = "gpt-5"\n';
       const withUserKeys = (gsdOnly) => `${USER_KEYS}\n${gsdOnly}`;
@@ -3330,6 +3331,33 @@ describe('#2586 Codex context-monitor: stop installing, clean up on reinstall', 
         assertLinkedTo(realConfig);
         assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
         assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused install must leave the install as it was');
+      });
+
+      // An earlier run that crashed between staging a user artifact and restoring it leaves
+      // an orphan, which the install puts back in its first write. The refusal must come
+      // before that write too, so a refused run leaves the orphan for a later run.
+      test('a core install with no agent roles and without the opt-in refuses a link before it recovers an orphaned user artifact', () => {
+        const { content } = prepareAgentlessCoreInstall((gsdOnly) => gsdOnly);
+        const realConfig = linkConfigToml(content);
+        const gsdDir = path.join(codexHome, 'gsd-core');
+        const profile = path.join(gsdDir, 'USER-PROFILE.md');
+        const profileContent = '# My Profile\n';
+        fs.writeFileSync(profile, profileContent);
+        // A dead owner pid marks the staging entry as a crashed run's, not a live one's.
+        stageUserArtifacts(gsdDir, ['USER-PROFILE.md'], path.join(codexHome, '.gsd-staging', 'user-artifacts'), { runId: '999999' });
+        fs.unlinkSync(profile);
+        const tree = snapshotCodexHome();
+
+        assert.throws(() => runCodexInstall(codexHome), LINK_REFUSAL);
+
+        assertLinkedTo(realConfig);
+        assert.strictEqual(fs.readFileSync(realConfig, 'utf8'), content);
+        assert.deepStrictEqual(snapshotCodexHome(), tree, 'a refused install must leave the orphan as it was');
+
+        // The orphan is real: an install that is allowed to proceed puts the file back.
+        process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+        runCodexInstall(codexHome);
+        assert.strictEqual(fs.readFileSync(profile, 'utf8'), profileContent);
       });
     });
   });
