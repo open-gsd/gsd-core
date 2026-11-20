@@ -1027,9 +1027,10 @@ const BODY_BOUNDARY_RE = /[{}]|=>/;
  *   - `lines` is the comment-stripped file and `line` the write's line.
  *     `ownLine` is that line cut at the `fs.writeFileSync(` call, so an
  *     assignment earlier on the write's line is read and one after the call
- *     is not (it is empty when the cut holds a named-function header, which
- *     then does not end the scan). `index` is the last line an assignment may
- *     sit on; each hop resumes on the line above the assignment it followed,
+ *     is not (it is empty when the cut matches `FUNCTION_DECL_LINE_RE`,
+ *     which then does not end the scan). `index` is the last line an
+ *     assignment may sit on; each hop resumes on the line above the
+ *     assignment it followed,
  *     so `p = p + '.tmp'` reaches the earlier assignment of `p`.
  *   - `bindings` is the file's assignment cache, one object shared by every
  *     write in the file (`nearestPrecedingAssignment`'s `cache`). A line
@@ -1148,7 +1149,7 @@ function chargeWork(budget, amount) {
 }
 
 // True when a body boundary is in `write.ownLine` (the write's line up to
-// the call, empty when that text holds a named-function header) or on a line
+// the call, empty when that text matches `FUNCTION_DECL_LINE_RE`) or on a line
 // after `index` and before the write's line.
 function boundaryAfterLine(write, index) {
   return write.ownLineHasBoundary || write.boundaryLinesBefore[write.line] > write.boundaryLinesBefore[index + 1];
@@ -1175,10 +1176,10 @@ function boundaryAfterLine(write, index) {
  * Decision 5). Verified misses, each with a test row (a known gap beside its
  * correct verdict, or the hop-bound row); the syntax-tree follow-up is #5279:
  *   - A file name built in another function (a `Map` value, a return value)
- *     or held in a module-level constant: resolution stops at the
- *     named-function boundary.
- *   - A one-line function that assigns and writes: a named-function header
- *     on the write's line drops that line from the scan.
+ *     or held in a module-level constant: resolution stops at a line
+ *     matching `FUNCTION_DECL_LINE_RE`.
+ *   - A one-line function that assigns and writes, its line matching
+ *     `FUNCTION_DECL_LINE_RE`: that line is dropped from the scan.
  *   - Two assignments of a chain on one line (`const d = …; const p = d;`):
  *     each hop resumes on the line above.
  *   - A `+=` that adds the STATE.md segment, a value that starts on the line
@@ -1189,7 +1190,8 @@ function boundaryAfterLine(write, index) {
  *     (`const p = path.join(` with `dir,` and `'STATE.md',` below it, or a
  *     name holding `'STATE.md'` there): only the `=` line is read.
  *   - A default parameter (`function w(p = path.join(dir, 'STATE.md'))`):
- *     the named-function header ends the scan before its line is read.
+ *     the header line matches `FUNCTION_DECL_LINE_RE`, which ends the scan
+ *     before that line is read.
  *   - A name only read in a later destructuring pattern, as a default or a
  *     computed key (`const { d = p } = o`, `const [a = p] = o`,
  *     `const { [p]: v } = o`): any mention there reads as a rebinding.
@@ -1245,9 +1247,9 @@ function boundaryAfterLine(write, index) {
  * of a class method (`save(p, c) {`, `async save(p, c) {`) resolved to a
  * sibling method's STATE.md variable, a parameter of an unnamed
  * `function (p)` expression resolved to a sibling function expression's
- * STATE.md variable or to an outer one it shadows (only a named `function`
- * header ends the scan), an arrow's parameter resolved to a sibling arrow
- * body's variable of the same name, a block-scoped binding or `for`
+ * STATE.md variable or to an outer one it shadows (only a line matching
+ * `FUNCTION_DECL_LINE_RE` ends the scan), an arrow's parameter resolved to
+ * a sibling arrow body's variable of the same name, a block-scoped binding or `for`
  * header's `let` earlier on the write's line
  * (`if (a) { const p = statePath; } else { fs.writeFileSync(p, c); }`), a
  * target computed from the state file, a longer name such as `STATE.md.bak`,
@@ -1371,8 +1373,8 @@ function findRawStateWrites(rel, text, stats) {
       continue;
     }
     const targetArg = rawArg.trim();
-    // The write's own line is read up to the call. When that text holds a
-    // named-function header (a one-line nested function), it is dropped
+    // The write's own line is read up to the call. When that text matches
+    // `FUNCTION_DECL_LINE_RE` (a one-line nested function), it is dropped
     // instead, so the header does not end the scan: the write may read its
     // enclosing function's variable.
     const cut = joined.slice(lineStart, m.index);
