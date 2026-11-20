@@ -48,7 +48,9 @@ function parseSeal(text: string): Evidence<SealPlans> {
   }
 }
 
-const readBoundedText = (file: string): Evidence<string> => readBoundedTextEvidence(file, REPO_TEXT_MAX_BYTES);
+function readBoundedText(file: string): Evidence<string> {
+  return readBoundedTextEvidence(file, REPO_TEXT_MAX_BYTES);
+}
 
 /** #5354: per-plan RED/GREEN hashes recorded pre-squash. Absent is `none`; a malformed, oversize, non-regular or unreadable seal is `unreadable`. */
 export function readSeal(phaseDir: string): Evidence<SealPlans> {

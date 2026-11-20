@@ -17,10 +17,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { createTempProject, cleanup } = require('./helpers.cjs');
+const { createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 const {
   readTextEvidence,
   readDirEvidence,
+  isPlainObject,
+  lstatEvidence,
+  readBoundedTextEvidence,
   verdictFromEvidence,
   evidenceFound,
   evidenceNone,
@@ -257,17 +260,15 @@ describe('gate-evidence › unreadable arm cannot return pass', () => {
 
 describe('isPlainObject (#5354)', () => {
   test('is an object that is neither null nor an array', () => {
-    const { isPlainObject } = require('../gsd-core/bin/lib/gate-evidence.cjs');
     assert.equal(isPlainObject({}), true);
     for (const bad of [null, [], 'x', 1, undefined]) assert.equal(isPlainObject(bad), false, String(bad));
   });
 });
 
 describe('gate-evidence — lstatEvidence and readBoundedTextEvidence (#5354)', () => {
-  const { lstatEvidence, readBoundedTextEvidence } = require('../gsd-core/bin/lib/gate-evidence.cjs');
   const CAP = 16;
   let dir;
-  beforeEach(() => { dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'gate-evidence-bounded-')); });
+  beforeEach(() => { dir = createTempDir('gate-evidence-bounded-'); });
   afterEach(() => cleanup(dir));
 
   test('lstatEvidence: a file is found, an absent path and a path below a file are none', () => {

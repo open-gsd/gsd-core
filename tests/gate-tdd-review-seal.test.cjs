@@ -9,9 +9,8 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-const { createTempGitProject, cleanup } = require('./helpers.cjs');
+const { createTempGitProject, createTempDir, cleanup } =require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
 const { commitReachability, commitIsGone } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
@@ -66,7 +65,7 @@ describe('planning.sub_repos workspaces', () => {
   });
 
   test('the seal case: a root that is no repo, with complete sub-repos, reads a vanished commit as gone', (t) => {
-    const root = track(t, fs.mkdtempSync(path.join(os.tmpdir(), 'gate-5354-norepo-')));
+    const root = track(t, createTempDir('gate-5354-norepo-'));
     configure(root, ['app']);
     fs.mkdirSync(path.join(root, 'app'));
     git(path.join(root, 'app'), 'init', '-q');

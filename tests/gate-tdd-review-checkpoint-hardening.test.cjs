@@ -292,6 +292,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.equal(probes, 1);
   });
 
+  test('the row reasons are a locked set', () => {
+    assert.deepEqual(Object.keys(TDD_ROW_REASON).sort(), ['GREEN_BEFORE_RED', 'SEALED_SHALLOW_HISTORY', 'UNSEALED_SUMMARY_UNREACHABLE']);
+  });
+
   test('tdd.md names every row reason the gate can emit', () => {
     const tdd = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
     const owner = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'execute-mvp-tdd.md'), 'utf8');

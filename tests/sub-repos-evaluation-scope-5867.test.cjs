@@ -16,6 +16,7 @@ const path = require('node:path');
 
 const { cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
@@ -633,7 +634,6 @@ describe('#5867 the check evaluation-scope verb and commitIsAncestor', () => {
       repo.git('checkout', '-q', 'main');
       return side;
     });
-    const { execGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
     // Repo `name` reports no commit times (the call that asks for `%ct` and `%at`): that repo's answer is null.
     const unansweredIn = (name) => (args, opts) => {
       const result = execGit(args, opts);
