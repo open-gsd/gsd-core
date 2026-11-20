@@ -2289,6 +2289,16 @@ function gitConfigsNamed(ctx, key) {
   return found;
 }
 
+// The definitions of the alias a git command invokes: every one in force, except that one the command sets itself
+// (`-c`, `--config-env`) shadows those an outer git command's own did. Git reads a command's own config after the
+// GIT_CONFIG_PARAMETERS it inherits and the last value wins, so the inherited one never runs there; the command that
+// set it scanned it. Within one command every definition still runs, as do those the environment sets.
+function invokedAliasConfigs(ctx, invoked, own) {
+  const all = gitConfigsNamed(ctx, invoked);
+  if (!own.some((config) => config.key === invoked)) return all;
+  return all.filter((config) => own.includes(config) || config.source.startsWith('$'));
+}
+
 // Every url.<base>.insteadOf rewrite in force, and whether vcs=ext is.
 function gitRewritesInForce(ctx) {
   const rewrites = [];
@@ -2384,7 +2394,7 @@ function assignmentSegmentStart(words) {
 // The `NAME=value` words of a script's declaration builtins and bare
 // assignment segments, and of the scripts its `eval` and `source <(…)` /
 // `. <(…)` segments run in the same shell (#5492): eval's joined operands, and
-// what the process substitution's echo / printf write (reconstructedProcsub),
+// what the process substitution's echo / printf write (reconstructedProcsubs),
 // read under `reading`, and under every shell reading as well when the plain
 // one meets a form they are for (readsEachWay), at most MAX_NESTING_DEPTH deep.
 function scriptAssignments(tokens, reading, ctx, depth) {
@@ -2870,7 +2880,7 @@ function scanGitInvocation(operands, depth, ctx) {
     if (hit !== null) return hit;
     // Every definition of the invoked alias in force runs with the words
     // after it: a variable may hold several values, and only one of them wins.
-    for (const alias of invoked === null ? [] : gitConfigsNamed(ctx, invoked)) {
+    for (const alias of invoked === null ? [] : invokedAliasConfigs(ctx, invoked, own)) {
       hit = scanGitAlias(alias, rest, depth, ctx, true);
       if (hit !== null) return hit;
     }
@@ -4096,8 +4106,9 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
       if (hit) return hit;
     } else {
       // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
-      // command xargs runs; stdin words only add operands after it.
-      const hit = findSecretRead(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth + 1, ctx);
+      // command xargs runs, at xargs's depth (scanLaunchedCommand); stdin
+      // words only add operands after it.
+      const hit = rescanCommand(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth, ctx);
       if (hit) return hit;
     }
     if (argFile) return null; // stdin replaced by a file — no pipeline inference
@@ -4217,7 +4228,8 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
 // scanShellInterpreter, and the launchers that re-interpret a string (eval, watch, xargs) are read as they are at the
 // top level. Its prefix's files and variables count as a top-level command's do (#5492). Anything else is rescanned
 // as the command it is, so the git and ssh scans see it (`find . -exec git rebase -x …`, #5492); its operands are
-// also the launcher's, which the ordinary check reads.
+// also the launcher's, which the ordinary check reads. That rescan is at the launcher's depth: the launched words are
+// the launcher's own, not a new script body, and each rescan holds fewer of them, so it ends.
 function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
@@ -4229,7 +4241,7 @@ function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx) {
     if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1, ctx);
     if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
     if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading, ctx);
-    return findSecretRead(words.map((w) => shellQuote(w.text)).join(' '), depth + 1, ctx);
+    return rescanCommand(words.map((w) => shellQuote(w.text)).join(' '), depth, ctx);
   } finally {
     ctx.shellVars = saved;
   }
