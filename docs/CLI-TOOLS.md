@@ -1356,6 +1356,20 @@ file read need not be the one that gave the plan its completion record:
   canonical id: `01-06-scaffolding-PLAN.md` with only `01-06-SUMMARY.md` reads
   that bare-id SUMMARY, even when it was written for a superseded
   `01-06-PLAN.md`.
+- When several SUMMARY files carry the id being looked up, as their own id or
+  as their canonical id, the last one in directory listing order decides,
+  whichever way it reads. For `01-06-PLAN.md`, a complete `01-06-SUMMARY.md`
+  beside a halted `01-06-review-SUMMARY.md` reads `halted: true` (and blocks
+  the plans that depend on `01-06`), and a halted `01-06-SUMMARY.md` beside a
+  complete `01-06-review-SUMMARY.md` reads `halted: false`. The other file can
+  be another plan's own: a halted `01-06-scaffolding-SUMMARY.md` beside a
+  complete `01-06-SUMMARY.md` makes both `01-06` and `01-06-scaffolding` read
+  `halted: true`, and `halted_count`, which counts plans, counts both. Neither
+  command sorts the listing: it holds the phase directory's SUMMARY files and
+  then those under `plans/`, each directory in the order Node lists it. On
+  Unix that is filename byte order (libuv sorts it; measured on Linux), so
+  among the phase directory's files the one whose name sorts last is read, and
+  a matching SUMMARY under `plans/` is read after all of them.
 
 `hasSummary` keeps its older filename pairing, so a plan in the second case
 can read `hasSummary: false` with `halted: true`. Every plan counted in
@@ -1369,15 +1383,12 @@ names the same SUMMARY file.** `isSummaryFileHalted` runs only on a SUMMARY
 it then opens that file again by path, as `phase-plan-index` does. An unread
 halt can also be missing from the `blocked_by` of the plans downstream of it.
 
-That condition is necessary, not sufficient. The halt reader `planning inspect`
-shares with `phase-plan-index` reads four SUMMARY shapes as not halted, in both
-commands and with no entry in `diagnostics[]`:
+That condition is necessary, not sufficient. Beyond the lookup above, the halt
+reader `planning inspect` shares with `phase-plan-index` reads these SUMMARY
+shapes as not halted, in both commands and with no entry in `diagnostics[]`:
 
 - the nested layout: `plans/PLAN-01.md` with `plans/SUMMARY-01.md`, which the
   halt lookup never pairs;
-- a second SUMMARY with the same canonical id beside the plan's own, such as
-  `01-06-review-SUMMARY.md` beside `01-06-SUMMARY.md`, which can take the
-  lookup's place;
 - a SUMMARY with lone-CR (`\r`) line endings;
 - frontmatter longer than 64 KiB, of which the predicate reads only the first
   64 KiB.
