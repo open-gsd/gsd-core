@@ -2401,8 +2401,9 @@ describe('#3709 context-monitor: PreCompact resets the warn sentinel', () => {
 
     test('a subagent input at CRITICAL in a GSD project emits nothing and never reaches the record-session spawn', (t) => {
       const s = makeSession(t, { gsdActive: true });
-      const spawnLog = path.join(os.tmpdir(), `fix-6360-spawns-${Date.now()}-${Math.random().toString(36).slice(2)}.log`);
-      t.after(() => { try { fs.unlinkSync(spawnLog); } catch { /* absent */ } });
+      const spawnDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fix-6360-spawns-'));
+      const spawnLog = path.join(spawnDir, 'spawns.log');
+      t.after(() => cleanup(spawnDir));
       const recordSessionSpawns = () => {
         let raw = '';
         try { raw = fs.readFileSync(spawnLog, 'utf8'); } catch { /* no spawn recorded */ }
