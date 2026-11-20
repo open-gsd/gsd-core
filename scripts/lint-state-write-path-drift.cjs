@@ -1210,29 +1210,21 @@ function boundaryAfterLine(write, index) {
  *     closer's own line (code after it on that line is scanned); the rest of
  *     the file goes unscanned only when no closer follows. Real instance
  *     with no raw write in its span: `src/git-base-branch.cts:479-511`.
- *   - A reassignment the resolver does not see as a statement boundary hides
- *     the earlier STATE.md assignment (`p = path.join(dir, 'STATE.md')`):
- *     the walk back from the write stops at the reassignment, whose
- *     right-hand side (the rest of its line) has no boundary. When that
- *     right-hand side names no variable that resolves to the state path
- *     (`p = 'x'`), the earlier assignment is not read and the write is
- *     missed; when it names one (`if (c) p = p + '.tmp';`), the resolver
- *     follows it back to the earlier assignment and the write is reported,
- *     within the hop bound above (each reassignment spends one hop). The
- *     class: a braceless body, on the same line or on the next line, after
+ *   - A reassignment the resolver does not see as a statement boundary can
+ *     hide the earlier STATE.md assignment (`p = path.join(dir, 'STATE.md')`).
+ *     The class: a braceless body, on the same line or on the next line, after
  *     `if`, `else`, `else if`, `for`, `for...in`, `for...of` or `while`
  *     (`if (c) p = 'x';`, `} else p = 'y';`, `while (c)` with `p = x;`
  *     below it), a `switch` clause body (`case 1: p = 'x'; break;`, or
  *     `p = 'x';` on the line below a `case` or `default` label, with the
  *     write under a later clause), and an assignment inside an expression
- *     (`c && (p = 'x');`, `c ? (p = 'x') : null;`). A `{`, `}` or `=>` in
- *     the reassignment's right-hand side, on a line between it and the
- *     write, or on the write's own line before the call, sends the search
- *     on to the earlier assignment (the boundary rule,
- *     `resolvesToStatePath`), so `if (c) p = 'x'; else { q(); }` and the
- *     braced forms (`if (c) { p = 'x'; }`) are reported. The
- *     KNOWN_RESOLUTION_GAPS rows pin representative forms, not every form,
- *     and each braced form they pin has a control.
+ *     (`c && (p = 'x');`, `c ? (p = 'x') : null;`). The known-gap rows pin
+ *     representative forms, not every form. These reassignment shapes are
+ *     reported, as pinned by tests: `if (c) { p = 'x'; }` and the other
+ *     braced forms the controls list, `if (c) p = 'x'; else { q(); }`,
+ *     `if (c) p = p + '.tmp';` and the other right-hand sides naming `p`
+ *     that the reassignment test lists, and a run of
+ *     `MAX_TARGET_RESOLUTION_HOPS - 1` lines `if (c) p = p + '<k>';`.
  *   - A regex literal in the first argument holding a `)`
  *     (`x.replace(/\)/g, '') + statePath`): `captureFirstArg` tracks quotes
  *     and brackets, not regex literals. The `)` in the literal pops the depth
