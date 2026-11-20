@@ -2479,11 +2479,11 @@ function scriptAssignments(tokens, reading, ctx, depth) {
       runInShell(words.slice(words[i + 1] === '--' ? i + 2 : i + 1).join(' ')); // bash's eval takes `--`
     } else if (depth < MAX_NESTING_DEPTH && (words[i] === 'source' || words[i] === '.')) {
       for (const t of segTokens.slice(i + 1)) {
-        if (t.procsub !== undefined) for (const src of reconstructedProcsubs(t.procsub, reading)) runInShell(src);
+        if (t.procsub !== undefined) for (const src of reconstructedProcsubs(t.procsub, reading, ctx)) runInShell(src);
       }
       if (isFdPath(sourcedFile(words.slice(i + 1)))) {
         for (const text of stdinBySeg.get(seg) || []) runInShell(text);
-        for (const src of pipedScripts(seg, bySeg, sepAfter)) runInShell(src);
+        for (const src of pipedScripts(seg, bySeg, sepAfter, ctx)) runInShell(src);
       }
     }
   }
@@ -3315,16 +3315,23 @@ function copyDestinationIndices(operands) {
 // blocked: for a `%s\n` or `%s\\n` format, its arguments a line each; for a
 // `%s`, `%s\n` or `%s\\n` format, its arguments run together (`%s` prints
 // them so); and for a format with no `%`, the format with its escapes read
-// (`printf 'cat\40.env'`), a NUL as a space since xargs -0 splits on it. Any
+// (`printf 'cat\40.env'`), a NUL as a space since xargs -0 splits on it.
+// Beside those (#5492): what printf writes, as printfOutput reads it, and for
+// an echo holding a backslash, what it writes with its escapes read (`echo -e`,
+// and dash's and zsh's echo, which read them unasked), each NUL as a space. Any
 // other source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → [].
 const PRINTF_LINE_FORMATS = new Set(['%s\\n', '%s\\\\n']);
-function reconstructedScripts(words) {
+function reconstructedScripts(words, ctx) {
   const cmd = resolveCommand(words);
   if (!cmd) return [];
   if (cmd.base === 'echo') {
     let start = 0;
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
-    return [cmd.operands.slice(start).map((w) => w.text).join(' ')];
+    const joined = cmd.operands.slice(start).map((w) => w.text).join(' ');
+    if (!joined.includes('\\')) return [joined];
+    charge(ctx, joined.length);
+    const decoded = decodePrintfArgument(joined).text.replaceAll('\0', ' ');
+    return decoded === joined ? [joined] : [joined, decoded];
   }
   if (cmd.base !== 'printf') return [];
   const texts = cmd.operands.map((w) => w.text);
@@ -3337,14 +3344,105 @@ function reconstructedScripts(words) {
     const decoded = decodeAnsiCBash(format.replace(/\\0(?![0-7])/g, ' '));
     if (decoded !== format) scripts.push(decoded);
   }
+  const written = printfOutput(texts[0] === '--' ? texts.slice(1) : texts, ctx);
+  if (written !== null && !scripts.includes(written.replaceAll('\0', ' '))) scripts.push(written.replaceAll('\0', ' '));
   return scripts;
+}
+
+// What printf writes for its format and arguments (#5492): the format run over the arguments as many times as it
+// takes to consume them, ending after a pass that consumes none. `%s`, `%b`, `%c` and `%%` are read; any other
+// conversion (`%d`, `%q`, a flag, width or precision) gives null, which adds no reading. Each pass, and each
+// argument it writes, is charged before it is built.
+function printfOutput(texts, ctx) {
+  if (!texts.length) return null;
+  const [format, ...args] = texts;
+  let out = '';
+  let next = 0;
+  for (;;) {
+    const before = next;
+    charge(ctx, format.length + 1);
+    for (let i = 0; i < format.length; i++) {
+      if (format[i] === '\\') {
+        const escape = printfEscape(format, i, false);
+        out += escape.text;
+        i = escape.end - 1;
+        continue;
+      }
+      if (format[i] !== '%') {
+        out += format[i];
+        continue;
+      }
+      const conversion = format[++i];
+      if (conversion === '%') {
+        out += '%';
+        continue;
+      }
+      if (conversion !== 's' && conversion !== 'b' && conversion !== 'c') return null;
+      const arg = next < args.length ? args[next++] : '';
+      charge(ctx, arg.length);
+      if (conversion === 's') out += arg;
+      else if (conversion === 'c') out += arg.slice(0, 1);
+      else {
+        const decoded = decodePrintfArgument(arg);
+        out += decoded.text;
+        if (decoded.stop) return out;
+      }
+    }
+    if (next === before || next >= args.length) return out;
+  }
+}
+
+// One printf escape, at `str[i]` === '\\', as bash's printf reads it (#5492): in the format (`inArgument` false),
+// `\NNN` is octal and `\c` is written as it stands; in a `%b` argument and echo's operands, `\0NNN` and `\NNN` are
+// octal and `\c` ends the output (`stop`). Both read `\xHH`, `\uHHHH`, `\UHHHHHHHH` and the C escapes, and leave
+// any other backslash as it stands. `end` is the index after the escape.
+const PRINTF_ESCAPES = new Map([
+  ['a', '\x07'], ['b', '\b'], ['e', '\x1b'], ['E', '\x1b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'], ['v', '\v'],
+  ['\\', '\\'],
+]);
+const PRINTF_HEX_DIGITS = new Map([['x', 2], ['u', 4], ['U', 8]]);
+function printfEscape(str, i, inArgument) {
+  const c = str[i + 1];
+  if (c === undefined) return { text: '\\', end: i + 1, stop: false };
+  if (PRINTF_ESCAPES.has(c)) return { text: PRINTF_ESCAPES.get(c), end: i + 2, stop: false };
+  if (!inArgument && (c === '"' || c === "'" || c === '?')) return { text: c, end: i + 2, stop: false };
+  if (c === 'c') return inArgument ? { text: '', end: i + 2, stop: true } : { text: '\\c', end: i + 2, stop: false };
+  const from = inArgument && c === '0' ? i + 2 : i + 1;
+  const octal = /^[0-7]{1,3}/.exec(str.slice(from, from + 3));
+  if (octal || from === i + 2) {
+    const digits = octal ? octal[0] : '';
+    return { text: String.fromCharCode(parseInt(digits || '0', 8) & 0xff), end: from + digits.length, stop: false };
+  }
+  const width = PRINTF_HEX_DIGITS.get(c);
+  const hex = width && /^[0-9A-Fa-f]+/.exec(str.slice(i + 2, i + 2 + width));
+  if (hex) {
+    const v = parseInt(hex[0], 16);
+    if (c === 'x' || v <= 0x10ffff) return { text: c === 'x' ? String.fromCharCode(v) : String.fromCodePoint(v), end: i + 2 + hex[0].length, stop: false };
+  }
+  return { text: `\\${c}`, end: i + 2, stop: false };
+}
+
+// A `%b` argument, or echo's operands, with printfEscape's escapes read; `stop` when a `\c` ended it.
+function decodePrintfArgument(text) {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '\\') {
+      out += text[i];
+      continue;
+    }
+    const escape = printfEscape(text, i, true);
+    if (escape.stop) return { text: out, stop: true };
+    out += escape.text;
+    i = escape.end - 1;
+  }
+  return { text: out, stop: false };
 }
 
 // Same rule applied to a `<( … )` / `>( … )` inner script: the scripts its
 // first segment may amount to, as before, and (#5492: `<(echo a; echo "…")`)
 // what each echo / printf segment writes, a line each. The alternatives are
 // scanned apart, since joining them could let a quote in one swallow another.
-function reconstructedProcsubs(inner, reading) {
+function reconstructedProcsubs(inner, reading, ctx) {
   const { tokens } = tokenizeCharged(inner, reading);
   const bySeg = new Map();
   for (const t of tokens) {
@@ -3352,7 +3450,7 @@ function reconstructedProcsubs(inner, reading) {
     if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
     bySeg.get(t.seg).push(t);
   }
-  const perSeg = [...bySeg.values()].map((words) => reconstructedScripts(words));
+  const perSeg = [...bySeg.values()].map((words) => reconstructedScripts(words, ctx));
   const scripts = [];
   for (const alts of perSeg) for (const a of alts) scripts.push(a);
   const lines = perSeg.filter((alts) => alts.length).map((alts) => alts[0]);
@@ -3919,7 +4017,7 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
       if (base === 'source' || base === '.') {
         for (const w of operands) {
           if (w.procsub !== undefined) {
-            for (const src of reconstructedProcsubs(w.procsub, reading)) {
+            for (const src of reconstructedProcsubs(w.procsub, reading, ctx)) {
               const hit = findSecretRead(src, depth + 1, ctx);
               if (hit) return hit;
             }
@@ -4187,7 +4285,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   for (const tok of optionTok === fileTok ? [fileTok] : [fileTok, optionTok]) {
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (tok === undefined || tok.procsub === undefined) continue;
-    for (const src of reconstructedProcsubs(tok.procsub, reading)) {
+    for (const src of reconstructedProcsubs(tok.procsub, reading, ctx)) {
       const hit = findSecretRead(src, depth + 1, ctx);
       if (hit) return hit;
     }
@@ -4209,18 +4307,35 @@ function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
     const hit = findSecretRead(hs, depth + 1, ctx);
     if (hit) return hit;
   }
-  for (const src of pipedScripts(s, bySeg, sepAfter)) {
+  for (const src of pipedScripts(s, bySeg, sepAfter, ctx)) {
     const hit = findSecretRead(src, depth + 1, ctx);
     if (hit) return hit;
   }
   return null;
 }
 
-// What the segment piped into segment `s` writes, as reconstructedScripts reads it; [] without a pipe.
-function pipedScripts(s, bySeg, sepAfter) {
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if ((op !== '|' && op !== '|&') || prevSeg < 0) return [];
-  return reconstructedScripts((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
+// What the stages piped into segment `s` write (pipeSources), as reconstructedScripts reads it; [] without a pipe.
+function pipedScripts(s, bySeg, sepAfter, ctx) {
+  const scripts = [];
+  for (const words of pipeSources(s, bySeg, sepAfter, ctx)) for (const script of reconstructedScripts(words, ctx)) scripts.push(script);
+  return scripts;
+}
+
+// The word tokens of the stages piped into segment `s`, nearest first: the one right before it, as before, and past
+// each stage that passes its stdin on (`cat` reading only stdin, `tee`), the one before that (#5492), every hop a
+// pipe. [] without a pipe.
+function pipeSources(s, bySeg, sepAfter, ctx) {
+  const sources = [];
+  for (let at = s; ;) {
+    const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
+    if ((op !== '|' && op !== '|&') || prevSeg < 0) return sources;
+    const words = (bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word');
+    sources.push(words);
+    const cmd = resolveCommand(words);
+    if (!cmd || !(cmd.base === 'tee' || (cmd.base === 'cat' && cmd.operands.every((w) => w.text === '-')))) return sources;
+    charge(ctx, TOKEN_WORK * words.length + 1);
+    at = prevSeg;
+  }
 }
 
 // `find … | xargs cat`: the upstream segment's operands become file names the
@@ -4259,43 +4374,29 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
     // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
     if (NON_READING_COMMANDS.has(writtenBase)) return null;
 
-    const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-    if (op !== '|' && op !== '|&') return null;
-    if (prevSeg < 0) return null;
-
-    const upstreamWords = (bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word');
+    // The stage piped in, as before, and past a `cat` reading only stdin or a `tee`, the stage before it (#5492).
+    const sources = pipeSources(s, bySeg, sepAfter, ctx);
+    if (!sources.length) return null;
     // #5492: piped words become options and scripts of git, an ssh client or a shell (`-c 'core.fsmonitor=…'`,
     // `-o ProxyCommand=…`, `-c '…'`), split by whichever of -I, -0, -d or -n xargs was given. Rather than model
-    // that, fail closed: a pipe into one of them whose words mention a secret name anywhere is a read.
-    if (subBase === 'git' || subBase === 'git.exe' || SSH_CLIENTS.has(subBase) || subIsShell) {
-      for (const w of upstreamWords) {
-        const named = mentionedSecret(w.text) || mentionedSecret(xargsUnquoted(w.text));
-        if (named) return secretRead(named);
-      }
-      // What an echo / printf upstream writes, which printf may run together (`%s`) or spell with escapes.
-      for (const written of reconstructedScripts(upstreamWords)) {
-        const named = mentionedSecret(written);
-        if (named) return secretRead(named);
-      }
-    }
-
-    // Every upstream operand is a candidate file name — the NON_READING
-    // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
-    // isSecretBasename still holds.
-    const prevCmd = resolveCommand(upstreamWords);
-    if (!prevCmd) return null;
-    if (subIsShell) {
-      // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
-      // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-      const hit = scanXargsShellScripts(subOperands, replaceStr, prevCmd.operands, depth, ctx);
+    // that, fail closed: a pipe into one of them whose words mention a secret name anywhere is a read. So is one into
+    // wrappers alone (`xargs -0 env`, `xargs sudo`), whose piped words are the command and its assignments.
+    const failClosed = subBase === 'git' || subBase === 'git.exe' || SSH_CLIENTS.has(subBase) || subIsShell;
+    const wrappersOnly = !resolvedSub || subBase === '';
+    let hit = readXargsSource(sources[0], failClosed, subIsShell, subOperands, replaceStr, depth, ctx);
+    if (hit) return hit;
+    if (wrappersOnly) {
+      hit = mentionInSource(sources[0], ctx);
       if (hit) return hit;
     }
-    for (const w of prevCmd.operands) {
-      if (operandNamesSecret(w.text)) return secretRead(w.text);
-      // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
-      // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
-      const received = xargsUnquoted(w.text);
-      if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+    for (const upstreamWords of sources.slice(1)) {
+      hit = readXargsSource(upstreamWords, failClosed || wrappersOnly, subIsShell, subOperands, replaceStr, depth, ctx);
+      if (hit) return hit;
+    }
+    // A wrapper-only sub-command's own assignments may take the rest of their value from the piped words.
+    for (const w of wrappersOnly ? operands.slice(subIdx) : []) {
+      const named = ASSIGNMENT_RE.test(w.text) && mentionedSecret(w.text);
+      if (named) return secretRead(named);
     }
     return null;
   } finally {
@@ -4303,11 +4404,53 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
   }
 }
 
+// One stage piped into xargs (scanXargsPipe): with `mention`, its words and what it writes checked for any mention
+// of a secret name; then its operands as the file names the sub-command reads, and a shell sub-command's script.
+function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replaceStr, depth, ctx) {
+  if (mention) {
+    const hit = mentionInSource(upstreamWords, ctx);
+    if (hit) return hit;
+  }
+  // Every upstream operand is a candidate file name — the NON_READING
+  // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
+  // isSecretBasename still holds.
+  const prevCmd = resolveCommand(upstreamWords);
+  if (!prevCmd) return null;
+  if (subIsShell) {
+    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+    const hit = scanXargsShellScripts(subOperands, replaceStr, prevCmd.operands, depth, ctx);
+    if (hit) return hit;
+  }
+  for (const w of prevCmd.operands) {
+    if (operandNamesSecret(w.text)) return secretRead(w.text);
+    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+    const received = xargsUnquoted(w.text);
+    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+  }
+  return null;
+}
+
+// A secret name a piped stage's words mention, as they are or as xargs unquotes them, or what it writes does.
+function mentionInSource(upstreamWords, ctx) {
+  for (const w of upstreamWords) {
+    const named = mentionedSecret(w.text) || mentionedSecret(xargsUnquoted(w.text));
+    if (named) return secretRead(named);
+  }
+  // What an echo / printf upstream writes, which printf may run together (`%s`) or spell with escapes.
+  for (const written of reconstructedScripts(upstreamWords, ctx)) {
+    const named = mentionedSecret(written);
+    if (named) return secretRead(named);
+  }
+  return null;
+}
+
 // The first piece of `text` that names a secret, or null (#5492). Pieces are cut at whitespace, quotes, a
 // backslash (printf's `\0` and `\n` separate words on their way to xargs -0 / -d) and the characters that end a
 // word or an option name in a shell, an ssh option or a git config value. `/` stays inside a piece, so a piece is
 // judged by its basename, and `.` does too, so `.env.example` keeps its exemption.
-const MENTION_SPLIT_RE = /[\s"'=:;,|&<>()`$!{}@\\]+/;
+const MENTION_SPLIT_RE = /[\s"'=:;,|&<>()`$!{}@\\\0]+/;
 function mentionedSecret(text) {
   return text.split(MENTION_SPLIT_RE).find((piece) => piece !== '' && namesSecretOperand(piece)) || null;
 }
