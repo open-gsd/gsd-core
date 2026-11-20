@@ -1299,6 +1299,20 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     // dash and bash take the word after a cluster's `o` as its value, so nothing runs here.
     "dash -coerrexit 'cat .env'",
   ]);
+
+  // `time` times a pipeline, which may start with assignments. The words after it are still read as before, as an
+  // unknown command's operands, so the controls stay blocked.
+  blocks([
+    "time GIT_EDITOR='cat .env' git commit --amend",
+    "time -p GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env' git status",
+    "time GIT_SSH_COMMAND='cat .env' git fetch",
+    "/usr/bin/time GIT_EDITOR='cat .env' git commit",
+    'time X=1 ls .env',
+    'time X=1 stat .env',
+    'time X=1 eval echo .env',
+  ]);
+  blocks(["time A=1 BASH_ENV=./.env bash -c ':'"], { path: 'BASH_ENV=./.env' });
+  allows(['time GIT_EDITOR=vim git commit', "time GIT_EDITOR='echo .env' git commit"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
@@ -4771,6 +4785,14 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     // the plain reading takes `'; mv a b` as an open quote and sees only `cat`.
     assertBlocked(run(bash(`cat ${pq} $'\\''; mv a b`)), "a $'…' span hiding mv", { tool: 'Bash', path: p });
     assertAllowed(run(bash(`cat ${pq} $'x'`)), "a $'…' word on a read-only line");
+  });
+
+  // `time X=1 cat` was read as the unknown command `X=1`, which withdraws the exemption; reading `X=1` as the
+  // prefix `time` takes (#5492) must not bring it back.
+  test('a time prefix holding an assignment keeps the exemption withdrawn', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    assertBlocked(run(bash(`time X=1 cat ${absq('.env.production')}`)), 'time X=1 cat', { tool: 'Bash', path: p });
   });
 
   // Row 13.
