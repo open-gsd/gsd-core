@@ -4320,8 +4320,12 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
 // bash's reading of a shell's leading options (#5492): `c` anywhere in a `-` or `+` cluster is mode c (`-xc`, `+c`),
 // an `s` reads the script from stdin (`-s`, `-xs`), each `o` / `O` in one takes the next word as its value
 // (`-coo a b`), so do `--rcfile` / `--init-file`, any other long option takes none (`--norc`), and `--` or `-`
-// ends them. `operand` is the index of the first word after them, or -1.
-function shellOptions(operands) {
+// ends them. `operand` is the index of the first word after them, or -1. With `oneDashLong`, a bash long option
+// spelled with one dash (`-rcfile FILE`, `-norc`), which bash also takes, is read as that option, not as a cluster.
+const BASH_LONG_OPTIONS = new Set(['debug', 'debugger', 'dump-po-strings', 'dump-strings', 'help', 'init-file', 'login',
+  'noediting', 'noprofile', 'norc', 'posix', 'pretty-print', 'protected', 'rcfile', 'restricted', 'rpm-requires',
+  'verbose', 'version', 'wordexp']);
+function shellOptions(operands, oneDashLong = false) {
   let modeC = false;
   let stdin = false;
   for (let k = 0; k < operands.length; k++) {
@@ -4329,6 +4333,8 @@ function shellOptions(operands) {
     if (t === '--' || t === '-') return { modeC, stdin, operand: k + 1 < operands.length ? k + 1 : -1 };
     if (t.startsWith('--')) {
       if (SHELL_VALUE_FLAGS.has(t)) k++;
+    } else if (oneDashLong && t[0] === '-' && BASH_LONG_OPTIONS.has(t.slice(1))) {
+      if (SHELL_VALUE_FLAGS.has(`-${t}`)) k++;
     } else if (t.length > 1 && (t[0] === '-' || t[0] === '+')) {
       for (let i = 1; i < t.length; i++) {
         if (t[i] === 'c') modeC = true;
@@ -4340,6 +4346,11 @@ function shellOptions(operands) {
     }
   }
   return { modeC, stdin, operand: -1 };
+}
+
+// shellOptions's two readings of the options: as clusters, and with one-dash long options.
+function shellReadings(operands) {
+  return [shellOptions(operands), shellOptions(operands, true)];
 }
 
 // Whether a path may open a file descriptor (#5492), failing closed rather than following the kernel's links: past
@@ -4356,8 +4367,9 @@ function isFdPath(text) {
 
 // The words a shell may run as its `-c` script, each scanned on its own: the word after the first DASH_C_RE word,
 // as before (`su -c cmd user`, `su - root -c cmd`), and in mode c under shellOptions, the first word after the
-// options (`bash -c -- cmd`), when that is another word. `scriptless` is set when either reading is in mode c with
-// no script word, and `dashC` when the first one is in mode c at all.
+// options (`bash -c -- cmd`), under either of shellReadings, when that is another word. `scriptless` is set when
+// any reading is in mode c with no script word, and `dashC` when the first one is in mode c, from a word that is not
+// a one-dash long option (`-norc` matches DASH_C_RE, but bash reads it as `--norc`).
 function shellScriptOperands(operands) {
   const scripts = [];
   let scriptless = false;
@@ -4366,10 +4378,11 @@ function shellScriptOperands(operands) {
     if (cIdx + 1 < operands.length) scripts.push(operands[cIdx + 1]);
     else scriptless = true;
   }
-  const { modeC, operand } = shellOptions(operands);
-  if (modeC && operand === -1) scriptless = true;
-  else if (modeC && (cIdx === -1 || operand !== cIdx + 1)) scripts.push(operands[operand]);
-  return { scripts, scriptless, dashC: cIdx !== -1 };
+  for (const { modeC, operand } of shellReadings(operands)) {
+    if (modeC && operand === -1) scriptless = true;
+    else if (modeC && !scripts.includes(operands[operand])) scripts.push(operands[operand]);
+  }
+  return { scripts, scriptless, dashC: cIdx !== -1 && !BASH_LONG_OPTIONS.has(operands[cIdx].text.slice(1)) };
 }
 
 // A shell interpreter's script comes from `-c`, a file operand, or stdin.
@@ -4390,9 +4403,9 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     if (SHELL_VALUE_FLAGS.has(operands[m].text)) { m++; continue; }
     if (!operands[m].text.startsWith('-')) { fileTok = operands[m]; break; }
   }
-  const options = shellOptions(operands);
-  const optionTok = options.modeC || options.stdin || options.operand === -1 ? undefined : operands[options.operand];
-  for (const tok of optionTok === fileTok ? [fileTok] : [fileTok, optionTok]) {
+  const readings = shellReadings(operands);
+  const optionToks = readings.map((o) => (o.modeC || o.stdin || o.operand === -1 ? undefined : operands[o.operand]));
+  for (const tok of new Set([fileTok, ...optionToks])) {
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (tok === undefined || tok.procsub === undefined) continue;
     for (const src of reconstructedProcsubs(tok.procsub, reading, ctx)) {
@@ -4401,7 +4414,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     }
   }
   const fromStdin = !fileTok || isFdPath(fileTok.text)
-    || (!options.modeC && (!optionTok || isFdPath(optionTok.text)));
+    || readings.some((o, i) => !o.modeC && (!optionToks[i] || isFdPath(optionToks[i].text)));
   if (!fromStdin) return null;
   return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
 }
