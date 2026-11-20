@@ -541,7 +541,7 @@ function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): b
 const SINCE_AS_FILTER_MIN_GIT: readonly [number, number] = [2, 37];
 
 /** Whether `git --version` output names a git with `log --since-as-filter`; unparseable reads as no. */
-function sinceAsFilterSupported(output: string): boolean {
+export function sinceAsFilterSupported(output: string): boolean {
   const version = parseGitVersion(output);
   if (version === null) return false;
   return version.major > SINCE_AS_FILTER_MIN_GIT[0]

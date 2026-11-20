@@ -37,7 +37,7 @@ function git(dir, ...args) {
   return execFileSync(
     'git',
     ['-c', 'user.name=gate-test', '-c', 'user.email=gate-test@example.invalid', '-c', 'commit.gpgsign=false', ...args],
-    { cwd: dir, encoding: 'utf-8', stdio: 'pipe', timeout: GIT_TIMEOUT_MS, windowsHide: true },
+    { cwd: dir, env: isolatedEnv({ home: dir }), encoding: 'utf-8', stdio: 'pipe', timeout: GIT_TIMEOUT_MS, windowsHide: true },
   ).trim();
 }
 
@@ -200,7 +200,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   function shallowClone(dir, suffix = '', branch) {
     const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow${suffix}`);
     dirs.push(clone);
-    gitOrThrow(['clone', '-q', '--depth', '1', ...(branch ? ['--branch', branch] : []), pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
+    gitOrThrow(['clone', '-q', '--depth', '1', ...(branch ? ['--branch', branch] : []), pathToFileURL(dir).href, clone], { cwd: path.dirname(dir), env: isolatedEnv({ home: path.dirname(dir) }) });
     return clone;
   }
   const ghostSummary = (dir) => w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['d'.repeat(40)]));
@@ -1280,7 +1280,7 @@ describe('#5354 tdd review checkpoint in a planning.sub_repos workspace', () => 
     const origin = `${root}-origin`;
     dirs.push(origin);
     fs.renameSync(app, origin);
-    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(origin).href, 'app'], { cwd: root });
+    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(origin).href, 'app'], { cwd: root, env: isolatedEnv({ home: root }) });
     assert.equal(git(root, 'rev-parse', '--is-shallow-repository'), 'false', 'positive control: the root is complete');
     assert.equal(git(app, 'rev-parse', '--is-shallow-repository'), 'true', 'positive control: the sub-repo is shallow');
     const row = run(root).payload.rows[0];

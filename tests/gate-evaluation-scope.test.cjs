@@ -30,6 +30,7 @@ const {
   subjectsOccurOnHead,
   parseGitVersion,
   remergeDiffSupported,
+  sinceAsFilterSupported,
   SCOPE_EXCLUSION_PATHSPECS,
 } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
@@ -1261,8 +1262,8 @@ describe('evaluateEvaluationScope — the check verb', () => {
 
 const { execGit: realExecGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 // A test that stubs `git --version` at 2.37 still sends `--since-as-filter` to the real git, which must accept it.
-const hostGit = parseGitVersion(realExecGit(['--version'], { cwd: __dirname }).stdout);
-const SKIP_HOST_GIT_BEFORE_2_37 = hostGit !== null && (hostGit.major > 2 || (hostGit.major === 2 && hostGit.minor >= 37)) ? false : 'the host git before 2.37 rejects --since-as-filter';
+const hostGitVersion = realExecGit(['--version'], { cwd: __dirname }).stdout;
+const SKIP_HOST_GIT_BEFORE_2_37 = sinceAsFilterSupported(hostGitVersion) ? false : 'the host git before 2.37 rejects --since-as-filter';
 const TIMED_OUT = { exitCode: 1, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true };
 
 /** A git runner that records every argv and delegates to the real git unless `force` answers. */
@@ -1851,7 +1852,7 @@ describe('subjectsOccurOnHead (#5354)', () => {
       make('rewrite');
       const keptIds = rows.filter(([, kept]) => kept).map(([msg]) => make(msg));
       // The oracle reads the subjects as git reports them: git strips trailing whitespace and reads a blank message as empty.
-      const subjectOf = (sha) => gitOrThrow(['log', '-1', '--format=%s%x1e', sha], { cwd: repo.dir }).split('\x1e')[0];
+      const subjectOf = (sha) => gitOrThrow(['log', '-1', '--format=%s%x1e', sha], { cwd: repo.dir, env: isolatedEnv({ home: repo.dir }) }).split('\x1e')[0];
       const keptSubjects = new Set(keptIds.map(subjectOf));
       assert.equal(subjectsOccurOnHead(repo.dir, ids), ids.every((id) => keptSubjects.has(subjectOf(id))));
     }), { seed: 5354, numRuns: 12 });
