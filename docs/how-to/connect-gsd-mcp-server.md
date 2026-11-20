@@ -200,7 +200,11 @@ through it nor over it (the raw write followed a symlink, wrote into a hard
 link or a device, blocked on a FIFO, and failed on a directory or a socket). A
 `STATE.md` path whose directory is missing or is not a directory, or that
 ends in a path separator, returns a tool error at once, before any lock
-wait. Every other `path` is written exactly as given.
+wait. The name match is exact and case-sensitive: on a case-insensitive file
+system (the macOS and Windows defaults) a `path` ending in `state.md` or
+`State.md` names the same file but is written exactly as given, without the
+lock and the seam, so name it `STATE.md`. Every other `path` is written
+exactly as given.
 
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.

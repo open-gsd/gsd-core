@@ -435,75 +435,111 @@ into each chunk, and into every subprocess a test spawns that inherits
 `NODE_OPTIONS`, through a per-run preload shim in `NODE_OPTIONS --require`
 (the shim carries the ledger path, because `tests/helpers/isolated-env.cjs`
 strips every `GSD_*` variable). It records every write whose destination is a
-file named exactly `STATE.md` when the nearest caller frame is product code (a
-`.cjs` file under a `gsd-core/bin/` directory: the compiled `gsd-core/bin/lib`,
-`gsd-tools.cjs`, or an installed copy). A write the STATE.md write seam makes
-(`platformWriteSync`, or the byte-exact restore `platformRestoreFileSync`, in
-`shell-command-projection.cjs` on the stack) is recorded as a seam write; any
-other is a violation, and **one violation fails the run**. There is no allowlist (ADR-4629 Decision 5): a new raw STATE.md
-writer is migrated onto the seam, never listed. Test code writing a STATE.md
-fixture is never recorded, and a rename or copy whose source is itself a
-`STATE.md` (a workstream migration, an archive) relocates a file rather than
-authoring one, so it is not recorded either.
+file named exactly `STATE.md` when the caller is product code (a `.cjs` file
+under a `gsd-core/bin/` directory: the compiled `gsd-core/bin/lib`,
+`gsd-tools.cjs`, or an installed copy). The caller is the nearest frame outside
+the STATE.md write seam's module (`shell-command-projection.cjs`), so a seam
+write is attributed to the code that called the seam, and a test that calls the
+seam on a STATE.md fixture is test code. A recorded write is one of three kinds:
+
+- a **seam write**: `platformWriteSync`, or the byte-exact restore
+  `platformRestoreFileSync`, is on the stack;
+- a **relocation**: a rename or copy whose source is itself a file named
+  `STATE.md` (a workstream migration, an archive), which moves bytes rather
+  than authoring them;
+- a **raw write**: anything else.
+
+A raw write is a violation. A seam write or a relocation is a violation unless
+the process holds the STATE.md lock (`withStateLock`, or
+`readModifyWriteStateMd`) on the destination and, for a relocation, on the
+source too: a write that skips the lock is the same lost update as a raw write.
+**One violation fails the run.** There is no allowlist (ADR-4629 Decision 5): a
+new writer is moved onto the seam and under the lock, never listed.
 
 The check exists because the Axis-2 lint guard
 (`scripts/lint-state-write-path-drift.cjs`) matches variable names, not
 values: a path held in a `Map` key filled in another function is invisible to
 it (#5104 miss 3, #5120). A raw write skips the STATE.md lock, which is the
-#500/#905/#1230 lost-update family.
+#500/#905/#1230 lost-update family. ADR-4629's guard roster lists the two
+guards as a pair.
 
 After the last chunk the runner prints one line, on every run:
 
 ```text
-run-tests: raw STATE.md writes in product code: 0 (seam writes onto STATE.md: N, of which without the STATE.md lock: M); the check loaded in P processes
+run-tests: raw STATE.md writes in product code: 0; seam writes and relocations onto STATE.md: N (R relocations), of which without the STATE.md lock: 0; unreadable ledger lines: 0; the check loaded in P processes
 ```
 
-(`P process` when P is 1.)
+(`1 relocation` and `P process` when the count is 1.)
 
-The zero is never printed alone (ADR-3408 Decision 5): the seam-write count
-and the count of seam writes made without the STATE.md lock stand beside it,
-and so does the count of ledger lines a killed process left unreadable, when
-there are any. The unlocked count is reported, not enforced, by this check. A
-violation names the fs function, the destination, the product file and line,
-and the test file whose run produced it (`unknown` for a child built with
-`isolated-env.cjs`, which strips the attribution variable). A missing or
-unreadable ledger fails the run as unreadable evidence, never as a zero. Each process that
-installs the check appends one install sentinel to the ledger, and `P` counts
-them; every chunk the runner spawns is itself a node process that loads the
-shim, so a run with fewer sentinels than spawned chunks fails too, naming the
-shim path and the `NODE_OPTIONS` the chunks received: a chunk whose preload
-never loaded leaves no sentinel, and an empty ledger alone would otherwise
-read as zero violations. Only a sentinel written through the runner's shim
-counts (the shim sets a marker the sentinel records); a test file that
-requires the guard directly installs the check too, and its sentinel is
-shown beside `P` but never compared, so it cannot vouch for a chunk whose
-preload did not load.
+The zero is never printed alone (ADR-3408 Decision 5). A violation is printed
+under that line with its kind, the fs function, the destination, the product
+file and line, and the test file whose run produced it (`unknown` for a child
+built with `isolated-env.cjs`, which strips the attribution variable). These
+also fail the run, because each one means the counts are not evidence:
 
-Limits, stated plainly: it sees only code paths the suite executes; it wraps
-the `fs` write, append, rename, copy and cp entry points in their sync and
-callback forms and the promise forms of write, append, rename and copyFile
-(`fs.promises.cp` is seen through the `fs.promises.copyFile` it calls, except
-in the ES module case below), not
-`fs.openSync` + `fs.writeSync`, file handles, write streams or native addons (the seam's own direct fallback writes through a
-descriptor, so it is not counted among the seam writes); the promise forms are
-wrapped on first reach, through `fs.promises`, a CommonJS `require` of
-`fs/promises` or `node:fs/promises`, or `process.getBuiltinModule` of either,
-so loading the check does not load `node:os`, whose tmpdir branch is fixed when
-it loads; an ES module import of `fs/promises` is not such a reach: a write
-through that import is not seen until one of those routes has run in the
-process, a named binding taken from it before then stays unwrapped after, and
-if a cp runs through it before then, a later `fs.promises.cp` in that process
-is not seen (`fs.cp`, wrapped itself, still is); these hold when the runner's
-shim is the first preload, which the runner arranges by prepending it to
-`NODE_OPTIONS`, and a preload ordered before the shim that keeps the
-`fs.promises` object or a promise function holds an unwrapped reference whose
-writes are not seen; a test that replaces
-`NODE_OPTIONS` runs its child unguarded, and leaves no sentinel and no record,
-so it is unseen; a write made under a JS mock of an fs function is attributed
-to the mock's frame; and the install sentinels prove the check loaded in at
-least as many processes as chunks were spawned, not in every child a test
-spawns (a child that lost `NODE_OPTIONS` is not told apart from one more
-chunk-level sentinel).
+- a missing or unreadable ledger;
+- a ledger line that does not parse (a process killed while appending can cut
+  off a violation record);
+- fewer preload sentinels than chunks spawned: each process that installs the
+  check through the runner's shim appends one install sentinel, and every chunk
+  is a node process that loads the shim;
+- a test file the runner passed to a chunk that no preload sentinel names: the
+  test-file child did not load the shim, or never started (a chunk that timed
+  out first).
+
+The not-loaded lines name the shim path and the `NODE_OPTIONS` the chunks
+received. Only a sentinel written through the runner's shim counts (the shim
+sets a marker the sentinel records); a test file that requires the guard
+directly installs the check too, and its sentinel is shown beside `P` but never
+compared.
+
+Limits:
+
+- It sees only code paths the suite executes.
+- It records exactly: a call to one of the wrapped `fs` functions (write,
+  append, rename, copy and cp in their sync and callback forms, and the promise
+  forms of write, append, rename and copyFile), made in a process where the
+  check installed, at the outermost wrapped call, whose destination argument is
+  a string, Buffer or file URL whose basename is exactly `STATE.md`. Anything
+  else is not seen. (`fs.promises.cp` is seen through the `fs.promises.copyFile`
+  it calls, except in the ES module case below.)
+- Examples of what is therefore not seen: a write through a descriptor
+  (`fs.openSync` + `fs.writeSync`, `writeFileSync(fd)`), a file handle, a write
+  stream, a native addon, truncation (`fs.truncateSync`, `fs.ftruncateSync`,
+  `fs.truncate`), a rename or copy of a directory that holds a `STATE.md`
+  (including a directory `cpSync` over one; the destination's basename is the
+  directory's), a rename of `STATE.md` onto another name, a link onto
+  `STATE.md` (`fs.linkSync`, `fs.symlinkSync`), a write made inside a
+  `cp`/`cpSync` filter callback, a write through another name for the same file
+  (a hard link or a case-insensitive alias), and a write by a non-node
+  subprocess such as git. The seam's own direct fallback writes through a
+  descriptor, so it is not counted among the seam writes.
+- The promise forms are wrapped on first reach, through `fs.promises`, a
+  CommonJS `require` of `fs/promises` or `node:fs/promises`, or
+  `process.getBuiltinModule` of either, so loading the check does not load
+  `node:os`, whose tmpdir branch is fixed when it loads.
+- An ES module import of `fs/promises` is not such a reach. A write through
+  that import is not seen until one of those routes has run in the process; a
+  named binding taken from it before then stays unwrapped after; and if a cp
+  runs through it before then, a later `fs.promises.cp` in that process is not
+  seen (`fs.cp`, wrapped itself, still is).
+- Those hold when the runner's shim is the first preload, which the runner
+  arranges by prepending it to `NODE_OPTIONS`. A preload ordered before the
+  shim that keeps the `fs.promises` object or a promise function holds an
+  unwrapped reference whose writes are not seen.
+- A subprocess a test spawns with an env that replaces `NODE_OPTIONS` runs
+  unguarded and leaves no sentinel and no record. The test-file comparison
+  covers test-file children only, not the subprocesses they spawn.
+- A write made under a JS mock of an fs function is attributed to the mock's
+  frame.
+- The lock counts as held when the destination's `STATE.md.lock` file names
+  this process's pid, which is what `withStateLock` writes.
+- The basename match is case-sensitive.
+- The lock is checked when a callback or promise rename, copy or write is
+  called, not when it lands: one called under the lock that lands after the
+  lock is released reads as locked.
+- A write the seam module makes from a frame of its own, with no caller
+  outside the module on its stack, is not recorded.
 
 ## The mergeability preflight
 
