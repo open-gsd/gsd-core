@@ -1334,6 +1334,19 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     // After the file operand, `-s` is the script's `$1`, and stdin is the script's data.
     "bash file.sh -s <<< 'cat .env'",
   ]);
+
+  // `dd if=<file>` reads the file; the ordinary operand check still runs on every operand.
+  for (const [cmd, expectedPath] of [
+    ['dd if=.env', 'if=.env'],
+    ['dd if=.e""nv', 'if=.env'],
+    // Controls.
+    ['dd bs=1 if=./.env', 'if=./.env'],
+    ['dd of=./.env', 'of=./.env'],
+    ['dd .env', '.env'],
+    ['dd --foo=.env', '--foo=.env'],
+  ]) blocks([cmd], { path: expectedPath });
+  // Writing the file reads nothing.
+  allows(['dd if=/dev/zero of=.env count=1']);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
