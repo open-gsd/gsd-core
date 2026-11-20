@@ -1332,6 +1332,12 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     "time X=1 GIT_EDITOR='cat .env' caffeinate env git commit",
     "time X=1 GIT_EDITOR='cat .env' caffeinate bash -c 'git commit'",
   ]);
+  // The same launched by find, watch -x or another unknown command: its rescan reads both readings of the words.
+  blocks([
+    "find . -exec time GIT_EDITOR='cat .env' caffeinate git commit \\;",
+    "watch -x time GIT_EDITOR='cat .env' caffeinate git commit",
+    "caffeinate time GIT_EDITOR='cat .env' caffeinate git commit",
+  ]);
   // caffeinate, like nice or timeout, runs its first operand as the program, so `GIT_EDITOR=…` there runs nothing.
   allows(["time X=1 caffeinate GIT_EDITOR='cat .env' git commit"]);
 
