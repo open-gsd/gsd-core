@@ -24,9 +24,10 @@
  *   5. Kimi vocabulary (ReadFile / Grep / Shell, `path`) is normalized.
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
  *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
- *      or a failed reading blocks as guard-error, while an overflow stays
- *      command-too-complex and a body nested past MAX_NESTING_DEPTH stays
- *      nesting-too-deep; any other value allows. The stdin-not-closing
+ *      or a reading that fails on a command no scan blocked blocks as
+ *      guard-error, while an overflow stays command-too-complex and a body
+ *      nested past MAX_NESTING_DEPTH stays nesting-too-deep; any other value
+ *      allows. The stdin-not-closing
  *      cells hold the hook's stdin pipe open and live in
  *      tests/gsd-secret-read-guard-stdin-timer.test.cjs.
  *

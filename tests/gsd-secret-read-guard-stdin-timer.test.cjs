@@ -3,7 +3,7 @@
 /**
  * gsd-secret-read-guard.js — the stdin-timer cells of the host crash-policy
  * opt-in (#5784). Each runs the hook file itself and drives its stdin through
- * a raw pipe that this file controls: five hold it open, so the hook's own
+ * a raw pipe that this file controls: six hold it open, so the hook's own
  * stall timer (stdin not closed) is what ends them, and one closes it before
  * that timer, so the scan does.
  *
@@ -43,6 +43,9 @@
  *   - "opted in: data arriving while the timer is pending does not restart
  *     it" — feeds a chunk for every chunk the hook reports; the timer starts
  *     only after the second, so data is still arriving while it is pending.
+ *   - "opted in: data fed through the whole window does not hold off the
+ *     timer at its own 3 s" — the same check by behaviour alone: the timer
+ *     is not steered, and a chunk goes in every 100 ms until the run ends.
  *   - "opted in: a payload whose stdin closes before the timer gets its
  *     ordinary verdict" — the other side of the bound: the timer is armed and
  *     still pending (parked) when the pipe closes, so the scan's verdict must
@@ -68,6 +71,10 @@ const SHORT_STALL_MS = 100;
 // When the early-close cell closes stdin: after the payload has arrived and the
 // timer is armed. Its timer is parked, so this delay orders nothing.
 const CLOSE_AFTER_MS = 200;
+
+// How often the unsteered fed cell writes a chunk: well inside the hook's 3 s,
+// so a hook that restarted its timer on `data` would never come due.
+const FEED_EVERY_MS = 100;
 
 // The hook reads its crash policy from its environment, and the preload reads
 // its delay from its own; each spawn starts from process.env without either,
@@ -98,13 +105,14 @@ function runHook(payload, extraEnv) {
 // the hook's own delay. With `fromData` those ms count from the hook's first
 // `data` (or its n-th, for a number) rather than from when it armed the timer.
 // With `feed` that string is written again each time the hook reports a chunk,
-// so data keeps arriving until the run ends. fd 3 carries the preload's
+// so data keeps arriving until the run ends; with `feedEveryMs` it is written on
+// that interval instead, with no reference to what the hook received. fd 3 carries the preload's
 // report. The kill is a hang backstop (the timer's scheduled delay, or the
 // close for a parked timer, plus the quick-spawn bound), never an elapsed-time
 // assertion. NODE_V8_COVERAGE is blanked rather than deleted: a child under c8
 // inherits it and runs several times slower, and Node restores an inherited key
 // that the child env lacks but leaves an own key alone.
-function runPiped({ env: extraEnv, written, closeAfterMs, stallTimer, fromData = false, feed } = {}) {
+function runPiped({ env: extraEnv, written, closeAfterMs, stallTimer, fromData = false, feed, feedEveryMs } = {}) {
   const extra = { NODE_V8_COVERAGE: '', ...extraEnv };
   if (stallTimer !== undefined) {
     const chunk = typeof fromData === 'number' ? `:${fromData}` : '';
@@ -124,17 +132,19 @@ function runPiped({ env: extraEnv, written, closeAfterMs, stallTimer, fromData =
     let fed = 0;
     child.stdio[3].setEncoding('utf8').on('data', (chunk) => {
       timerReport += chunk;
-      if (feed === undefined) return;
+      if (feed === undefined || feedEveryMs !== undefined) return;
       const delivered = (timerReport.match(/^data /gm) || []).length;
       for (; fed < delivered; fed++) child.stdin.write(feed);
     });
     child.stdin.on('error', () => {});
     if (written !== undefined) child.stdin.write(written);
     const closer = closeAfterMs === undefined ? null : setTimeout(() => child.stdin.end(), closeAfterMs);
+    const feeder = feedEveryMs === undefined ? null : setInterval(() => child.stdin.write(feed ?? ' '), feedEveryMs);
     const backstop = setTimeout(() => child.kill('SIGKILL'), endsByMs + QUICK_SPAWN_TIMEOUT_MS);
-    child.on('error', (err) => { clearTimeout(closer); clearTimeout(backstop); reject(err); });
+    child.on('error', (err) => { clearTimeout(closer); clearInterval(feeder); clearTimeout(backstop); reject(err); });
     child.on('close', (status) => {
       clearTimeout(closer);
+      clearInterval(feeder);
       clearTimeout(backstop);
       child.stdin.destroy();
       const lines = timerReport.split('\n').filter(Boolean);
@@ -238,11 +248,11 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // payload, then one more chunk each time the hook reports one, and the
   // preload starts the timer only once the second chunk is in, so the hook's
   // `data` handler has run twice before the timer can fire and goes on running
-  // while it is pending. A hook that restarted its timer from
-  // `data` shows it in the preload's report whatever the host's speed: a
-  // refresh() as `refreshed`, a new timer as a second `armed` (assertArmed);
-  // and under the feed a restarted timer could not come due before the
-  // backstop.
+  // while it is pending. A restart the preload's seam sees shows in its report
+  // on any host: refresh() by any route as `refreshed`, a new timer through
+  // setTimeout (global or node:timers) as a second `armed` (assertArmed). The
+  // timer that fires here is the seam's, so a restart the seam does not see is
+  // the next cell's to catch.
   test('opted in: data arriving while the timer is pending does not restart it', async () => {
     const r = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: 2, feed: ' ' });
     assertGuardError(r, 'fed stall');
@@ -250,6 +260,18 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     const fired = r.lines.findIndex((l) => l.startsWith('fired '));
     const before = r.lines.slice(0, fired).filter((l) => l.startsWith('data ')).length;
     assert.ok(before >= 2, `fed stall: the timer must fire after the chunk that started it (${before} chunk(s) before it)`);
+  });
+
+  // The same check by behaviour alone, whatever API a restart goes through.
+  // Nothing steers the timer: the hook's own 3 s timer is the one that fires,
+  // and a chunk goes in every FEED_EVERY_MS until the run ends. A correct hook
+  // ends at its bound however the feed is timed, so this cannot fail one; a hook
+  // that restarted its timer on `data` never comes due while chunks keep
+  // arriving, and the run ends only at the backstop.
+  test('opted in: data fed through the whole window does not hold off the timer at its own 3 s', async () => {
+    const r = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, feedEveryMs: FEED_EVERY_MS });
+    assertGuardError(r, 'fed at 3 s');
+    assertTimer(r, 'fed at 3 s');
   });
 
   // The other side of the bound. The timer is armed and parked, so it is still
