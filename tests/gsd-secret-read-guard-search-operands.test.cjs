@@ -62,7 +62,6 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     "grep -A 2 -n '.env.local' f",
     // G5: the value of an exclusion option is a name to skip.
     'grep -rn -i token . --exclude=.env',
-    'grep -rn -i token . --exclude .env',
     'grep -rn token . --exclude-dir=.env --exclude=.env.local',
     // G6 (maintainer decision on #5884): the jq program is not a file.
     "jq '.env.DISABLE_AUTOUPDATER' settings.json",
@@ -83,6 +82,9 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
   const blocks = [
     // A real read remains in the segment.
     'grep -rn token . --exclude=.env .env.local',
+    // A separate exclusion value after the first positional is a file under
+    // POSIXLY_CORRECT, which the agent's environment may export (#6282).
+    'grep -rn -i token . --exclude .env',
     'grep pat .env',
     "grep '.env.local' .env",
     'grep KEY .env.local',
@@ -147,7 +149,9 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
 
   test('property: an exclusion value is a name; a real read after it is still blocked', () => {
     fc.assert(fc.property(EXCLUDE_OPT, FORM, NAME, SAFE_FLAGS, (opt, form, name, flags) => {
-      assertAllowed(`grep ${flags}token . ${opt}${form}${name}`);
+      // A separate value after the first positional is a file under POSIXLY_CORRECT (#6282).
+      if (form === '=') assertAllowed(`grep ${flags}token . ${opt}${form}${name}`);
+      else assertBlocked(`grep ${flags}token . ${opt}${form}${name}`);
       assertBlocked(`grep ${flags}token . ${opt}${form}${name} .env`);
       assertBlocked(`grep ${flags}token ${opt}${form}${name} ${name}`);
     }), PROPERTY_RUNS);
