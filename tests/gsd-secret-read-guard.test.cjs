@@ -1731,6 +1731,12 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
     ['1 MiB of shell names after an unknown command', `caffeinate ${'sh '.repeat(349000)}; cat .env`, 'command-too-complex', ''],
     ['1 MiB of env after an unknown command', `caffeinate ${'env '.repeat(262000)}; cat .env`, 'command-too-complex', ''],
     ['1 MiB of env between unknown commands', `${'x env y env '.repeat(87000)}; cat .env`, 'command-too-complex', ''],
+    // Each stage's xargs walks back through every tee to the producer, so a re-read is charged.
+    ...[[' | tee xargs env', 60], [' | tee xargs env', 1500], [' | tee xargs nice', 60], [' | tee xargs nice', 1500]].map(([stage, k]) => {
+      const tail = `${stage.repeat(k)}; cat .env`;
+      return [`a 1 MiB producer read through ${k} \`${stage.slice(3)}\` stages`,
+        `echo '${'a=a '.repeat(Math.floor((1024 * 1024 - tail.length - 20) / 4))}'${tail}`, 'command-too-complex', ''];
+    }),
   ];
   for (const [shape, cmd, code, expectedPath] of blocks) {
     test(`decides ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
