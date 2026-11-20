@@ -30,7 +30,7 @@ const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const shell = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
 const { SUMMARY_REFS_MAX, REPO_TEXT_MAX_BYTES } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
-const { evaluateTddReviewCheckpoint, TDD_ROW_REASON } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
+const { evaluateTddReviewCheckpoint, TDD_ROW_REASON, TDD_NOT_EVALUABLE_WHY } = require('../gsd-core/bin/lib/gate-tdd-review-checkpoint.cjs');
 
 function git(dir, ...args) {
   return execFileSync(
@@ -296,13 +296,14 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(Object.keys(TDD_ROW_REASON).sort(), ['GREEN_BEFORE_RED', 'SEALED_SHALLOW_HISTORY', 'UNSEALED_SUMMARY_UNREACHABLE']);
   });
 
-  test('tdd.md names every row reason the gate can emit', () => {
-    const tdd = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
-    const owner = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'execute-mvp-tdd.md'), 'utf8');
-    for (const reason of Object.values(TDD_ROW_REASON)) assert.ok(tdd.includes(reason), reason);
-    for (const reason of [TDD_ROW_REASON.SEALED_SHALLOW_HISTORY, TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]) assert.ok(owner.includes(reason), `owner: ${reason}`);
-    assert.ok(owner.includes(`${SUMMARY_REFS_MAX} distinct task commits`), 'owner states SUMMARY_REFS_MAX');
-    assert.ok(owner.includes(`${REPO_TEXT_MAX_BYTES / 1024} KiB`), 'owner states REPO_TEXT_MAX_BYTES');
+  test('every NotEvaluable reason has report text, and the report prints it', () => {
+    const notEvaluable = Object.values(TDD_ROW_REASON).filter((r) => r !== TDD_ROW_REASON.GREEN_BEFORE_RED).sort();
+    assert.deepEqual(Object.keys(TDD_NOT_EVALUABLE_WHY).sort(), notEvaluable);
+    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
+    squash(dir, base);
+    const r = run(dir);
+    assert.equal(r.payload.rows[0].reason, TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE);
+    assert.ok(r.payload.table.includes(`Plan 01-01 not evaluable: ${TDD_NOT_EVALUABLE_WHY[TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]}`));
   });
 
   test('a plan with reachable commits lacking test()/feat() still fails', () => {

@@ -65,6 +65,12 @@ export const TDD_ROW_REASON = {
 } as const;
 type NotEvaluableReason = typeof TDD_ROW_REASON.SEALED_SHALLOW_HISTORY | typeof TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE;
 
+/** The `Plan {id} not evaluable: {why}` text of each `NotEvaluable` reason; one entry per reason keeps the report and its test on one typed surface. */
+export const TDD_NOT_EVALUABLE_WHY: Record<NotEvaluableReason, string> = {
+  [TDD_ROW_REASON.SEALED_SHALLOW_HISTORY]: 'its sealed commits cannot be verified because the history is incomplete (shallow clone or git unavailable); fetch full history. Not counted as a violation.',
+  [TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]: `its SUMMARY task commits are unreachable and no ${SEAL_FILE} entry exists (squashed?); not counted as a violation.`,
+};
+
 /**
  * True when the plan's frontmatter declares `type: tdd` (CRLF included, #2449). The block is the
  * one fence owner's, read as RAW text — not through the YAML parser — so a block the parser refuses
@@ -370,12 +376,8 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   }
 
   const notEvaluableRows = rows.filter((r): r is Extract<TddPlanRow, { status: 'NotEvaluable' }> => r.status === 'NotEvaluable');
-  const notEvaluableWhy: Record<NotEvaluableReason, string> = {
-    [TDD_ROW_REASON.SEALED_SHALLOW_HISTORY]: 'its sealed commits cannot be verified because the history is incomplete (shallow clone or git unavailable); fetch full history. Not counted as a violation.',
-    [TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]: `its SUMMARY task commits are unreachable and no ${SEAL_FILE} entry exists (squashed?); not counted as a violation.`,
-  };
   for (const r of notEvaluableRows) {
-    table += `\n\nPlan ${r.planId} not evaluable: ${notEvaluableWhy[r.reason]}`;
+    table += `\n\nPlan ${r.planId} not evaluable: ${TDD_NOT_EVALUABLE_WHY[r.reason]}`;
   }
 
   if (violations > 0) {
