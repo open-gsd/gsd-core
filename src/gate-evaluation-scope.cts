@@ -70,6 +70,13 @@ export interface ScopeOptions {
   commitsOnly?: boolean;
   /** Plan/quick units only: only commits made since this git date ("1 hour ago", "2026-10-01"). */
   committedSince?: string;
+  /**
+   * Plan/quick units only: look the commits up across every local branch instead of the ones reachable from `ref`,
+   * and report the newest commit's time as `latestCommitTime` (#6117). For a progress probe: a worktree executor's
+   * commits sit on its own unmerged agent branch until the wave merges. The gates keep the reachable-from-ref
+   * contract (#5164); only this explicit opt-in widens the lookup.
+   */
+  allBranches?: boolean;
   /** Git runner. Default: `execGit` from shell-command-projection. */
   execGit?: GitRunner;
   /** Shas per git argv chunk (default 400, safely under the Windows 32,767-char limit). A test seam. */
@@ -108,6 +115,8 @@ export interface EvaluationScope {
    */
   reason: string | null;
   commits: ScopeCommit[];
+  /** Only with `allBranches`: the committer time (unix seconds) of the newest matching commit, or null when none matched. */
+  latestCommitTime?: number | null;
   /** Every path the scope touched, deleted ones included. */
   changedFiles: string[];
   /** `changedFiles` that exist on disk — the reviewable set. */
@@ -790,7 +799,9 @@ function resolveAcrossSources(projectDir: string, unit: ScopeUnit, options: Scop
 
   const finished = found.map((entry, index) => {
     const part = emptyScope(unit);
-    finishSubjectScope(part, entry.source.git, kept.filter((k) => k.index === index).map((k) => k.commit), entry.lookup.parentsOf, entry.opts, entry.source.repoRoot);
+    // The newest time is taken across the repos below; the per-repo part must not look the times up again.
+    const partOptions = entry.opts.allBranches === true ? { ...entry.opts, allBranches: false } : entry.opts;
+    finishSubjectScope(part, entry.source.git, kept.filter((k) => k.index === index).map((k) => k.commit), entry.lookup.parentsOf, partOptions, entry.source.repoRoot);
     return part;
   });
   const byRepo = new Map<string, ScopeCommit>();
@@ -799,6 +810,14 @@ function resolveAcrossSources(projectDir: string, unit: ScopeUnit, options: Scop
     for (const commit of part.commits) byRepo.set(commit.sha, withSourcePrefix(commit, prefix));
   });
   scope.commits = kept.map((k) => byRepo.get(k.commit.sha) ?? k.commit);
+  if (options.allBranches === true) {
+    const keptTimes = kept.flatMap((k) => {
+      const time = found[k.index]?.times.get(k.commit.sha);
+      return time === undefined ? [] : [time];
+    });
+    if (kept.length > 0 && keptTimes.length === 0) throw new ScopeUnreadable('commit-time-unreadable');
+    scope.latestCommitTime = kept.length === 0 ? null : Math.max(...keptTimes);
+  }
   const gather = (pick: (part: EvaluationScope) => string[]): string[] =>
     uniqueSorted(finished.flatMap((part, index) => pick(part).map((f) => withPrefix(found[index]?.source.prefix ?? '', f))));
   scope.changedFiles = gather((part) => part.changedFiles);
@@ -895,6 +914,8 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
   try {
     if (!isSafeRefArgument(ref)) throw new ScopeUnreadable('unsafe-ref');
     if (options.since !== undefined && !isSafeRefArgument(options.since)) throw new ScopeUnreadable('unsafe-since');
+    // #6117: the all-branches lookup is a plan/quick progress probe; a phase window is a range of one ref.
+    if (options.allBranches === true && unit.kind === 'phase') throw new ScopeUnreadable('all-branches-needs-plan-or-quick');
     // #5867: a `planning.sub_repos` workspace keeps its history in the sub-repos, not at the root.
     const subRepoNames = readSubRepoNames(projectDir);
     if (subRepoNames.length > 0) return resolveAcrossSources(projectDir, unit, options, openSources(projectDir, subRepoNames, runner, ref), ref);
@@ -1315,8 +1336,9 @@ function lookupSubjectCommits(
     if (!isSafeDateArgument(options.committedSince)) throw new ScopeUnreadable('unsafe-committed-since');
     sinceArgs.push(`--since=${options.committedSince}`);
   }
+  const rangeArgs = options.allBranches === true ? ['--branches'] : [range];
   const out = git(
-    ['log', range, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
+    ['log', ...rangeArgs, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
   );
   // `--grep` matches ANY message line; a plan lookup is subject-anchored, so filter on the subject.
   const parentsOf: ParentMap = new Map();
@@ -1330,6 +1352,13 @@ function lookupSubjectCommits(
 function finishSubjectScope(
   scope: EvaluationScope, git: Git, commits: readonly ScopeCommit[], parentsOf: ParentMap, options: ScopeOptions, repoRoot: string,
 ): void {
+  if (options.allBranches === true) {
+    const times = commitTimes(git, commits.map((c) => c.sha));
+    const known = commits.flatMap((c) => (times.has(c.sha) ? [times.get(c.sha) as number] : []));
+    // A commit whose time cannot be read is "could not look", never a time of 0 beside non-empty commits.
+    if (commits.length > 0 && known.length === 0) throw new ScopeUnreadable('commit-time-unreadable');
+    scope.latestCommitTime = commits.length === 0 ? null : Math.max(...known);
+  }
   if (options.commitsOnly === true) {
     scope.commits = [...commits];
     if (commits.length === 0) scope.reason = 'no-matching-commits';
@@ -1368,7 +1397,7 @@ function resolveBySubject(
 // ─── The `check evaluation-scope` verb ────────────────────────────────────────
 
 const VALUE_FLAGS = new Set(['--phase', '--phase-dir', '--plan', '--quick', '--since', '--ref', '--pathspec', '--committed-since', '--max-commits']);
-const BOOLEAN_FLAGS = new Set(['--milestone-bound', '--include-body', '--include-files', '--commits-only']);
+const BOOLEAN_FLAGS = new Set(['--milestone-bound', '--include-body', '--include-files', '--commits-only', '--all-branches']);
 
 function parseScopeArgs(args: readonly string[]): { unit: ScopeUnit; options: ScopeOptions } | string {
   const values = new Map<string, string[]>();
@@ -1414,6 +1443,11 @@ function parseScopeArgs(args: readonly string[]): { unit: ScopeUnit; options: Sc
   if (flags.has('--include-body')) options.includeBody = true;
   if (flags.has('--include-files')) options.includeFiles = true;
   if (flags.has('--commits-only')) options.commitsOnly = true;
+  if (flags.has('--all-branches')) {
+    if (unit.kind === 'phase') return '--all-branches applies to --plan and --quick units only';
+    if (flags.has('--milestone-bound')) return '--all-branches and --milestone-bound cannot be combined: the milestone range is a range of one ref';
+    options.allBranches = true;
+  }
   return { unit, options };
 }
 
