@@ -25,6 +25,7 @@ const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-ar
 const { CLUSTERS, allClusteredSkills } = require('../gsd-core/bin/lib/clusters.cjs');
 const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
 const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
+const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 
@@ -1990,12 +1991,12 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
       // 664 is the case the umask narrows on create, so only the chmod keeps it.
       // For 600 the chmod is stubbed out, so only the create mode keeps it.
       const savedUmask = process.umask(0o022);
-      const realChmod = fs.chmodSync;
-      if (mode === 0o600) fs.chmodSync = () => {};
+      const realChmod = fs.fchmodSync;
+      if (mode === 0o600) fs.fchmodSync = () => {};
       try {
         fx.apply();
       } finally {
-        fs.chmodSync = realChmod;
+        fs.fchmodSync = realChmod;
         process.umask(savedUmask);
       }
       assert.equal(JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files[fx.key], fx.rewritten(), 'sanity: rewritten');
@@ -2098,6 +2099,99 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     assert.deepEqual(saveLocalPatches(fx.configDir), [], 'the next install reports no local patches');
   });
 
+  test('a drive-relative key on another drive (X:foo) is refused on Windows by the containment check', { skip: process.platform !== 'win32' && 'win32 path semantics' }, (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-drive-'));
+    t.after(() => cleanup(root));
+    // normalizeInstallRelativePath lets X:foo through (not absolute, no bad
+    // segment). For another drive, path.resolve takes it to that drive's cwd,
+    // outside root; for root's own drive it stays under root.
+    const own = root[0].toUpperCase();
+    const other = own === 'Z' ? 'Y' : 'Z';
+    assert.equal(installEngine.normalizeInstallRelativePath(`${other}:foo`), `${other}:foo`, 'precondition: the segment check alone accepts it');
+    assert.equal(installEngine.resolveInstallRelativePath(root, `${other}:foo`), null, 'another drive escapes root');
+    assert.equal(installEngine.resolveInstallRelativePath(root, `${own}:foo`)?.fullPath, path.join(root, 'foo'), 'the same drive stays under root');
+  });
+
+  test('a manifest key that names a FIFO under a synced destination does not hang the apply', { skip: process.platform === 'win32' && 'no mkfifo on Windows' }, (t) => {
+    const fx = installedWithOlderSkill(t);
+    const fifoKey = `${path.posix.dirname(fx.key)}/notes.md`;
+    const fifoPath = path.join(fx.configDir, ...fifoKey.split('/'));
+    const { runHook } = require('./helpers/process-seam.cjs');
+    const { throwIfFailed } = require('./helpers/git-fixture.cjs');
+    throwIfFailed(runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), `mkfifo ${fifoPath}`);
+    const manifest = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8'));
+    manifest.files[fifoKey] = sha256('fifo\n');
+    fs.writeFileSync(fx.manifestPath, JSON.stringify(manifest, null, 2));
+    // In a child: a blocking read of the FIFO would never return, and the
+    // timeout turns that hang into a failure of this row.
+    const lib = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
+    const script = `
+      const path = require('path');
+      const lib = ${JSON.stringify(lib)};
+      const { applySurface } = require(path.join(lib, 'surface.cjs'));
+      const { loadSkillsManifest } = require(path.join(lib, 'install-profiles.cjs'));
+      const { resolveRuntimeArtifactLayout } = require(path.join(lib, 'runtime-artifact-layout.cjs'));
+      const { CLUSTERS } = require(path.join(lib, 'clusters.cjs'));
+      const configDir = ${JSON.stringify(fx.configDir)};
+      const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+      applySurface(configDir, layout, loadSkillsManifest(${JSON.stringify(REAL_COMMANDS_DIR)}), CLUSTERS, undefined,
+        { surfaceState: ${JSON.stringify(FULL)} });
+      process.stdout.write('applied');
+    `;
+    const { runNode } = require('./helpers/process-seam.cjs');
+    // SIGKILL: the child installs SIGTERM handlers it cannot run while blocked.
+    const r = runNode(['-e', script], { timeoutMs: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL', env: process.env });
+    assert.equal(r.timedOut, false, `the apply returned: ${r.summary}`);
+    assert.equal(r.exitCode, 0, r.summary);
+    assert.equal(r.stdout, 'applied');
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[fifoKey], sha256('fifo\n'), 'the FIFO entry is left as recorded');
+    assert.equal(files[fx.key], fx.rewritten(), 'the rewritten skill is still re-recorded');
+  });
+
+  test('a recorded file outside the synced destinations keeps its entry even if it changes during the apply', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const before = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    const outsideKey = Object.keys(before).find((k) => k.startsWith('gsd-core/') && k.endsWith('.md'));
+    assert.ok(outsideKey, 'precondition: a recorded file outside skills/ and agents/');
+    const outsidePath = path.join(fx.configDir, ...outsideKey.split('/'));
+    assert.equal(sha256(fs.readFileSync(outsidePath)), before[outsideKey], 'precondition: GSD-owned');
+    // The file changes after its pre-apply hash would be taken and before the
+    // recorder re-hashes: when the recorder reads the manifest.
+    const realRead = fs.readFileSync;
+    let changed = false;
+    fs.readFileSync = (p, ...rest) => {
+      if (!changed && p === fx.manifestPath && new Error().stack.includes('recordManifestFileHashesResult')) {
+        changed = true;
+        fs.writeFileSync(outsidePath, 'changed outside the sync\n');
+      }
+      return realRead(p, ...rest);
+    };
+    try {
+      fx.apply();
+    } finally {
+      fs.readFileSync = realRead;
+    }
+    assert.ok(changed, 'precondition: the recorder ran');
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[outsideKey], before[outsideKey], 'the outside entry is not re-recorded');
+    assert.equal(files[fx.key], fx.rewritten(), 'the rewritten skill is re-recorded');
+  });
+
+  test('a symlink planted at the manifest tmp path is replaced, never written or chmodded through', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, (t) => {
+    const fx = installedWithOlderSkill(t);
+    const victim = path.join(fx.root, 'victim.txt');
+    fs.writeFileSync(victim, 'victim\n', { mode: 0o600 });
+    fs.chmodSync(victim, 0o600);
+    fs.chmodSync(fx.manifestPath, 0o644);
+    fs.symlinkSync(victim, `${fx.manifestPath}.tmp.${process.pid}`);
+    fx.apply();
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'victim\n', 'the symlink target is not written');
+    if (process.platform !== 'win32') assert.equal(fs.statSync(victim).mode & 0o777, 0o600, 'the symlink target keeps its mode');
+    assert.equal(JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files[fx.key], fx.rewritten(), 'the record still lands');
+    assert.equal(fs.existsSync(`${fx.manifestPath}.tmp.${process.pid}`), false, 'no tmp file is left behind');
+  });
+
   test('manifestSkillsRedirect takes the first skills kind, as the installer does', (t) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-kinds-'));
     t.after(() => cleanup(root));
@@ -2127,7 +2221,10 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     assert.equal(r('skills/gsd-a/SKILL.md').fullPath, path.join(configDir, 'skills', 'gsd-a', 'SKILL.md'));
     assert.equal(r('skills/gsd-b/SKILL.md').fullPath, path.join(skillsRoot, 'gsd-b', 'SKILL.md'));
     assert.equal(r('skills/gsd-b/SKILL.md').relPath, 'skills/gsd-b/SKILL.md', 'the key stays the manifest key');
-    for (const bad of ['../x', path.join(root, 'x'), 'skills/..', 'skills/../../x', '', 'a\0b', 42]) {
+    for (const bad of [
+      '../x', path.join(root, 'x'), 'skills/..', 'skills/../../x', '', 'a\0b', 42,
+      'skills\\..\\..\\x', '..\\x', 'C:\\x', 'C:/x', '\\x', '\\\\server\\share\\x',
+    ]) {
       assert.equal(r(bad), null, `hostile key ${String(bad)} is refused`);
     }
     if (process.platform !== 'win32') {
@@ -2148,7 +2245,11 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     try {
       const byApply = resolvedBy(() => fx.apply());
       const byScan = resolvedBy(() => saveLocalPatches(fx.configDir));
-      assert.deepEqual(byApply, [...keys].sort(), 'surface apply resolves each manifest key through resolveManifestKeyPath');
+      // A claude global apply syncs skills/ and agents/. Keys outside them are
+      // dropped on their lexical path, before the resolver's lstat walk.
+      const synced = keys.filter((k) => /^(skills|agents)\//.test(k)).sort();
+      assert.ok(synced.length > 0 && synced.length < keys.length, 'precondition: keys inside and outside the synced destinations');
+      assert.deepEqual(byApply, synced, 'surface apply resolves exactly the keys under its synced destinations');
       assert.deepEqual(byScan, [...keys].sort(), 'the installer scan resolves each manifest key through resolveManifestKeyPath');
     } finally {
       installEngine.resolveManifestKeyPath = real;

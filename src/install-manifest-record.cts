@@ -7,10 +7,13 @@
  * `bin/install.js` fileHash delegates to this module: one hash function.
  */
 
-import { readFileSync, writeFileSync, unlinkSync, statSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, statSync, openSync, closeSync, fchmodSync } from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { retryRenameSync } from './shell-command-projection.cjs';
+// capability-ledger is `export =`, so it is imported this way (as in capability-state.cts).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ledgerMod = require('./capability-ledger.cjs');
 
 const MANIFEST_NAME = 'gsd-file-manifest.json';
 
@@ -31,9 +34,23 @@ export interface RewrittenFile {
   key?: string;
 }
 
-/** fileHash that returns null instead of throwing — for capturing a pre-rewrite hash. */
+/** The largest file tryFileHash reads; a recorded GSD file is far smaller. */
+export const MAX_HASHED_FILE_BYTES = 16 * 1024 * 1024;
+
+/**
+ * fileHash that returns null instead of throwing — for capturing a pre-rewrite
+ * hash. A manifest key can name a FIFO, and a blocking read of one never
+ * returns (#6331), so this reads through the shared bounded reader: open
+ * non-blocking, fstat the descriptor, then only a regular file of at most
+ * MAX_HASHED_FILE_BYTES is read.
+ */
 export function tryFileHash(filePath: string): string | null {
-  try { return fileHash(filePath); } catch { return null; }
+  try {
+    const bytes = ledgerMod.readSmallRegularFileBuffer(filePath, MAX_HASHED_FILE_BYTES);
+    return bytes === null ? null : createHash('sha256').update(bytes).digest('hex');
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -87,18 +104,26 @@ export function recordManifestFileHashesResult(configDir: string, rewritten: rea
     const rel = key ?? relative(configDir, absPath).replace(/\\/g, '/');
     if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
     if (preHash === null || entries[rel] !== preHash) continue;
-    try {
-      entries[rel] = fileHash(absPath);
-      changed = true;
-    } catch { /* unreadable file: leave its entry as recorded */ }
+    const hash = tryFileHash(absPath);
+    if (hash === null) continue; // unreadable or not a regular file: leave its entry as recorded
+    entries[rel] = hash;
+    changed = true;
   }
   if (!changed) return 'unchanged';
 
   const tmpPath = `${manifestPath}.tmp.${process.pid}`;
   try {
     const mode = statSync(manifestPath).mode & 0o7777;
-    writeFileSync(tmpPath, JSON.stringify(manifest, null, 2), { mode });
-    chmodSync(tmpPath, mode); // the umask may have narrowed the create mode
+    // Exclusive create: a planted symlink (or a stale file) at the tmp path is
+    // removed, never written or chmodded through.
+    try { unlinkSync(tmpPath); } catch { /* absent */ }
+    const fd = openSync(tmpPath, 'wx', mode);
+    try {
+      writeFileSync(fd, JSON.stringify(manifest, null, 2));
+      fchmodSync(fd, mode); // the umask may have narrowed the create mode
+    } finally {
+      closeSync(fd);
+    }
     // #6331: best effort; a concurrent install rewrote the manifest after it was read.
     if (readFileSync(manifestPath, 'utf8') !== raw) {
       try { unlinkSync(tmpPath); } catch { /* already gone */ }

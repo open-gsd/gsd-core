@@ -408,9 +408,23 @@ function manifestEntriesUnder(layout: Layout, kinds: readonly { dest: string }[]
   const dests = kinds.map((k) => path.resolve(k.dest));
   const entries: RewrittenFile[] = [];
   for (const key of Object.keys(files)) {
+    // The destination test runs on the lexical path the key names, before the
+    // resolver's per-component lstat walk, so a key outside every synced
+    // destination costs no lstat (#6331). The redirect is chosen as the
+    // resolver chooses it: the config-dir path is missing and the redirected
+    // one exists. The resolver can still refuse a redirect that crosses a
+    // symlink and fall back to the missing config-dir path; that path has no
+    // pre-apply hash, so the recorder never writes its entry.
+    const rel = installEngine.normalizeInstallRelativePath(key);
+    if (rel === null) continue;
+    let lexical = path.resolve(layout.configDir, rel);
+    if (redirect && rel.startsWith(redirect.prefix) && !fs.existsSync(lexical)) {
+      const redirected = path.resolve(redirect.root, rel.slice(redirect.prefix.length));
+      if (fs.existsSync(redirected)) lexical = redirected;
+    }
+    if (!dests.some((d) => tryWithinRootLexical(lexical, d) !== null)) continue;
     const ref = installEngine.resolveManifestKeyPath(layout.configDir, key, redirect);
     if (ref === null) continue;
-    if (!dests.some((d) => tryWithinRootLexical(ref.fullPath, d) !== null)) continue;
     entries.push({ path: ref.fullPath, preHash: tryFileHash(ref.fullPath), key });
   }
   return entries;
