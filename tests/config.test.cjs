@@ -4507,6 +4507,29 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.deepStrictEqual(Object.fromEntries(keys.map((key) => [key, loaded[key]])), want);
   });
 
+  // A null flat value is the flat key set to null: the read stops there and the
+  // default applies, for every twin outside a project as inside one, whatever
+  // the nested spelling holds.
+  test('outside a project, a null flat twin stops the nested read and resolves the default', (t) => {
+    const { NESTED_TWINS, GLOBAL_DEFAULTS_RESOLUTION_KEYS, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const keys = NESTED_TWINS.map((twin) => twin.key).filter((key) => GLOBAL_DEFAULTS_RESOLUTION_KEYS.includes(key));
+    const store = {};
+    for (const key of keys) {
+      const { section, field } = NESTED_TWINS.find((twin) => twin.key === key);
+      const fallback = CONFIG_DEFAULTS[key];
+      store[key] = null;
+      store[section] = { ...store[section], [field]: typeof fallback === 'number' ? fallback + 1 : !fallback };
+    }
+    const { gsdHome } = defaultsHome(t, store);
+    const outside = tempProject(t);
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.deepStrictEqual(Object.fromEntries(keys.map((key) => [key, loaded[key]])),
+      Object.fromEntries(keys.map((key) => [key, CONFIG_DEFAULTS[key]])));
+  });
+
   // The loader reads a flat research_before_questions ahead of
   // workflow.research_before_questions, so saving the nested one must drop a
   // stale flat value.
