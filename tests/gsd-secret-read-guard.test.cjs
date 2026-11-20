@@ -1808,6 +1808,8 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
       `export GIT_CONFIG_PARAMETERS="'alias.q=status'"; ${'git log; '.repeat(50000)}`],
     // Each `time X=1` has two readings (#5492); the words both launch are started once, not once per reading.
     ['an unknown command repeated behind time and an assignment', 'time X=1 y '.repeat(300)],
+    // A wrapper a launched command resolves through is not started again on its own.
+    ['an unknown command repeated behind a chain of wrappers', `x ${'env time X=1 y '.repeat(300)}`],
   ];
   for (const [shape, cmd] of allows) {
     test(`allows ${shape} (${(cmd.length / 1024).toFixed(0)} KB)`, () => {
