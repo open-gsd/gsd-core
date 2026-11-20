@@ -83,11 +83,11 @@ Study B, tables, scored on the same 21 runs:
    - run 44652354632 (the table #6374 ships): 118 such files, 12 of them more than × 1.5 off their median, summed time 4.5% above the medians;
    - run 44559069895 (#6374's first commit): 131 files, 18 off, summed 6.3% above.
 
-   The two regenerated tables in study B differ by about as much as that noise. In run 44652354632, the 12 files off their median are `installer-migrations` (46.3 s against 13.6 s, × 3.40), `defaults-json-fallback` (× 2.36), `kimi-config-toml-symlink` (× 2.24), `gate-tdd-review-checkpoint.unit` (× 2.23), `agent-install-validation` (× 1.88), `review-lane-availability` (× 1.75), `hermes-skills-migration` (× 1.67), `packaging-shipped-scripts-require-only-shipped` (× 1.54), `verify` (× 0.66), `commands.platform` (× 0.61), `verification-status` (× 0.55) and `context-drift` (× 0.52).
+   The two regenerated tables in study B differ by about as much as that noise. In run 44652354632, the 12 files off their median are `installer-migrations` (46.3 s against 13.6 s, × 3.40), `defaults-json-fallback` (× 2.36), `kimi-config-toml-symlink` (× 2.24), `gate-tdd-review-checkpoint.unit` (× 2.23), `agent-install-validation` (× 1.88), `review-lane-availability` (× 1.75), `hermes-skills-migration` (× 1.67), `packaging-shipped-scripts-require-only-shipped` (× 1.54), `verify` (× 0.67: 0.666, just past the × 1.5 line), `commands.platform` (× 0.61), `verification-status` (× 0.55) and `context-drift` (× 0.52).
 
    For the files the #6374 review flagged, the same run gives:
    - `install-write-confinement` × 1.00, `capability-source` × 0.82, `windsurf-hooks-bridge` × 0.74 and `emitted-attribution` × 0.84;
-   - the four near-zero files take under 50 ms on every study B run, so a ratio means little at that size (`undo-commit-selection-4465` 32 ms, × 1.40; `gsd-validate-commit-sigpipe` 11 ms, × 1.44). `opencode-install-notices`, `undo-commit-selection-4465` and `gsd-validate-commit-sigpipe` skip on win32 at file or suite level, and `hook-activation-probe` skips its individual tests on win32.
+   - the four near-zero files take under 50 ms on every study B run, so a ratio means little at that size. From the unrounded run values, `undo-commit-selection-4465` took 31.7 ms (× 1.40) and `gsd-validate-commit-sigpipe` 10.7 ms (× 1.44); the table rounds them to 32 ms and 11 ms, which give × 1.41 and × 1.49. `opencode-install-notices`, `undo-commit-selection-4465` and `gsd-validate-commit-sigpipe` skip on win32 at file or suite level, and `hook-activation-probe` skips its individual tests on win32.
 
 ## Limits
 
