@@ -2278,15 +2278,24 @@ function isCurlBlank(ch) {
 
 // namesSecret judges only a name's last path segment (and the part of it after
 // a `:`), so the segment is cut out here first: one pass, where lastSegment's
-// trailing-separator regex backtracks on a long run of separators.
+// trailing-separator regex backtracks on a long run of separators. A name it
+// judges secret is kept in curlOpened, so a block reports the file curl opens
+// rather than the option word that holds it (`.env`, not `-d@.env`).
 function curlNameIsSecret(name) {
   let end = name.length;
   while (end > 0 && (name[end - 1] === '/' || name[end - 1] === '\\')) end--;
   let seg = end;
   while (seg > 0 && name[seg - 1] !== '/' && name[seg - 1] !== '\\') seg--;
   const last = name.slice(seg, end);
-  return last.includes('.') && namesSecret(last);
+  if (!last.includes('.') || !namesSecret(last)) return false;
+  curlOpened = name;
+  return true;
 }
+
+// The secret name the curl reading last found (curlNameIsSecret). Every curl
+// reader returns as soon as curlNameIsSecret says yes, so right after a reader
+// returns true this is the name that decided it.
+let curlOpened = '';
 
 // The grammars curl's -F parser (src/tool_formparse.c) has shipped. They open
 // different files for some values, so a value is judged under each:
@@ -3907,8 +3916,8 @@ function scanCommand(command, depth, reading) {
     const nameOnly = nameOnlyOperandIndices(base, operands);
     for (let k = 0; k < operands.length; k++) {
       if (nameOnly.has(k)) continue;
-      if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
-      if (curlOperandOpensSecret(base, operands, k)) return secretRead(operands[k].text);
+      if (operandNamesSecret(operands[k].text)) return secretRead(curlOperandOpensSecret(base, operands, k) ? curlOpened : operands[k].text);
+      if (curlOperandOpensSecret(base, operands, k)) return secretRead(curlOpened);
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
@@ -4266,7 +4275,7 @@ function xargsPipedReadsSecret(operands, piped, curl) {
   // (`printf -E | xargs -I{} curl {} f:pw`).
   if (toCurl && rep !== null && piped.some((w) => curlTakesCertValue(w.text))) {
     for (let k = subCmd + 1; k + 1 < operands.length; k++) {
-      if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return secretRead(operands[k + 1].text);
+      if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return secretRead(curlOpened);
     }
   }
   for (let j = 0; j < piped.length; j++) {
@@ -4277,8 +4286,8 @@ function xargsPipedReadsSecret(operands, piped, curl) {
     const received = xargsUnquoted(w.text);
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
     if (!toCurl) continue;
-    if (curlValueNamesSecret(w.text) || curlCertOpensSecret(piped, j)) return secretRead(w.text);
-    if (certPiped && curlCertNamesSecret(w.text)) return secretRead(w.text);
+    if (curlValueNamesSecret(w.text) || curlCertOpensSecret(piped, j)) return secretRead(curlOpened);
+    if (certPiped && curlCertNamesSecret(w.text)) return secretRead(curlOpened);
   }
   return null;
 }
