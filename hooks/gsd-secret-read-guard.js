@@ -2420,15 +2420,28 @@ function assignmentSegmentStart(words) {
 // what the process substitution's echo / printf write (reconstructedProcsubs),
 // read under `reading`, and under every shell reading as well when the plain
 // one meets a form they are for (readsEachWay), at most MAX_NESTING_DEPTH deep.
+// `source /dev/stdin` runs its segment's heredocs, here-strings and piped
+// producer in the same shell too (#5492).
 function scriptAssignments(tokens, reading, ctx, depth) {
   const bySeg = new Map();
+  const stdinBySeg = new Map();
+  const sepAfter = new Map();
+  const addStdin = (seg, text) => {
+    if (!stdinBySeg.has(seg)) stdinBySeg.set(seg, []);
+    stdinBySeg.get(seg).push(text);
+  };
   for (let k = 0; k < tokens.length; k++) {
     const t = tokens[k];
     // A redirect's target is a file name, not a word of the command.
     if (t.kind === 'op') {
-      if (!t.dup && tokens[k + 1] && tokens[k + 1].kind === 'word' && tokens[k + 1].seg === t.seg) k++;
+      if (!t.dup && tokens[k + 1] && tokens[k + 1].kind === 'word' && tokens[k + 1].seg === t.seg) {
+        k++;
+        if (t.text.endsWith('<<<')) addStdin(t.seg, tokens[k].text);
+      }
       continue;
     }
+    if (t.kind === 'heredoc') addStdin(t.seg, t.text);
+    if (t.kind === 'sep') sepAfter.set(t.seg, t.text);
     if (t.kind !== 'word') continue;
     if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
     bySeg.get(t.seg).push(t);
@@ -2457,7 +2470,7 @@ function scriptAssignments(tokens, reading, ctx, depth) {
       for (const w of words) assignments.push(w);
     }
   };
-  for (const segTokens of bySeg.values()) {
+  for (const [seg, segTokens] of bySeg) {
     const words = segTokens.map((t) => t.text);
     const i = assignmentSegmentStart(words);
     if (i === words.length || DECLARATION_COMMANDS.has(words[i])) {
@@ -2468,9 +2481,19 @@ function scriptAssignments(tokens, reading, ctx, depth) {
       for (const t of segTokens.slice(i + 1)) {
         if (t.procsub !== undefined) for (const src of reconstructedProcsubs(t.procsub, reading)) runInShell(src);
       }
+      if (isStdinPath(sourcedFile(words.slice(i + 1, i + 3)))) {
+        for (const text of stdinBySeg.get(seg) || []) runInShell(text);
+        for (const src of pipedScripts(seg, bySeg, sepAfter)) runInShell(src);
+      }
     }
   }
   return assignments;
+}
+
+// The file `source` / `.` runs: its first operand, past bash's optional `--`; '' when there is none.
+function sourcedFile(texts) {
+  const at = texts[0] === '--' ? 1 : 0;
+  return at < texts.length ? texts[at] : '';
 }
 
 // Every value `name` is given in `frame` and the frames above it. A `+=`
@@ -3899,6 +3922,11 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
             }
           } else if (operandNamesSecret(w.text)) return secretRead(w.text);
         }
+        // `source /dev/stdin` runs its stdin, as a shell in stdin mode does (#5492).
+        if (isStdinPath(sourcedFile(operands.slice(0, 2).map((w) => w.text)))) {
+          const hit = scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+          if (hit) return hit;
+        }
         continue;
       }
 
@@ -4074,26 +4102,34 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
 }
 
 // bash's reading of a shell's leading options (#5492): `c` anywhere in a `-` or `+` cluster is mode c (`-xc`, `+c`),
-// each `o` / `O` in one takes the next word as its value (`-coo a b`), so do `--rcfile` / `--init-file`, any other
-// long option takes none (`--norc`), and `--` or `-` ends them. `operand` is the index of the first word after
-// them, or -1.
+// an `s` reads the script from stdin (`-s`, `-xs`), each `o` / `O` in one takes the next word as its value
+// (`-coo a b`), so do `--rcfile` / `--init-file`, any other long option takes none (`--norc`), and `--` or `-`
+// ends them. `operand` is the index of the first word after them, or -1.
 function shellOptions(operands) {
   let modeC = false;
+  let stdin = false;
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
-    if (t === '--' || t === '-') return { modeC, operand: k + 1 < operands.length ? k + 1 : -1 };
+    if (t === '--' || t === '-') return { modeC, stdin, operand: k + 1 < operands.length ? k + 1 : -1 };
     if (t.startsWith('--')) {
       if (SHELL_VALUE_FLAGS.has(t)) k++;
     } else if (t.length > 1 && (t[0] === '-' || t[0] === '+')) {
       for (let i = 1; i < t.length; i++) {
         if (t[i] === 'c') modeC = true;
+        else if (t[i] === 's') stdin = true;
         else if (t[i] === 'o' || t[i] === 'O') k++;
       }
     } else {
-      return { modeC, operand: k };
+      return { modeC, stdin, operand: k };
     }
   }
-  return { modeC, operand: -1 };
+  return { modeC, stdin, operand: -1 };
+}
+
+// The paths that open a process's own stdin (#5492), matched with `//` and `/./` collapsed.
+const STDIN_PATHS = new Set(['/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']);
+function isStdinPath(text) {
+  return STDIN_PATHS.has(text.replace(/\/(?:\.?\/)+/g, '/'));
 }
 
 // The words a shell may run as its `-c` script, each scanned on its own: the word after the first DASH_C_RE word,
@@ -4125,14 +4161,15 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   // adds scripts but never drops stdin mode (`bash -cx <<< '…'` has no script, and its stdin is still read).
   if (dashC) return null;
   // Mode file, read as before (the first word that does not start with `-`, past SHELL_VALUE_FLAGS values) and
-  // under shellOptions, which reads `+x` and a cluster's `o` value as options; stdin mode when either finds no file.
+  // under shellOptions, which reads `+x` and a cluster's `o` value as options and has no file under `-s`; stdin
+  // mode when either finds no file, or a file that is stdin (`bash /dev/stdin`).
   let fileTok;
   for (let m = 0; m < operands.length; m++) {
     if (SHELL_VALUE_FLAGS.has(operands[m].text)) { m++; continue; }
     if (!operands[m].text.startsWith('-')) { fileTok = operands[m]; break; }
   }
   const options = shellOptions(operands);
-  const optionTok = options.modeC || options.operand === -1 ? undefined : operands[options.operand];
+  const optionTok = options.modeC || options.stdin || options.operand === -1 ? undefined : operands[options.operand];
   for (const tok of optionTok === fileTok ? [fileTok] : [fileTok, optionTok]) {
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (tok === undefined || tok.procsub === undefined) continue;
@@ -4141,8 +4178,15 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
       if (hit) return hit;
     }
   }
-  if (fileTok && (optionTok || options.modeC)) return null;
-  // Mode stdin: heredoc bodies, here-strings, and a piped echo/printf source.
+  const fromStdin = !fileTok || isStdinPath(fileTok.text)
+    || (!options.modeC && (!optionTok || isStdinPath(optionTok.text)));
+  if (!fromStdin) return null;
+  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+}
+
+// The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and what a
+// piped echo/printf source writes.
+function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
   for (const h of heredocs) {
     const hit = findSecretRead(h.text, depth + 1, ctx);
     if (hit) return hit;
@@ -4151,14 +4195,18 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
     const hit = findSecretRead(hs, depth + 1, ctx);
     if (hit) return hit;
   }
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if ((op === '|' || op === '|&') && prevSeg >= 0) {
-    for (const src of reconstructedScripts((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'))) {
-      const hit = findSecretRead(src, depth + 1, ctx);
-      if (hit) return hit;
-    }
+  for (const src of pipedScripts(s, bySeg, sepAfter)) {
+    const hit = findSecretRead(src, depth + 1, ctx);
+    if (hit) return hit;
   }
   return null;
+}
+
+// What the segment piped into segment `s` writes, as reconstructedScripts reads it; [] without a pipe.
+function pipedScripts(s, bySeg, sepAfter) {
+  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
+  if ((op !== '|' && op !== '|&') || prevSeg < 0) return [];
+  return reconstructedScripts((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
 }
 
 // `find … | xargs cat`: the upstream segment's operands become file names the
