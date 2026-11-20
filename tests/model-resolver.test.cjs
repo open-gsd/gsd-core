@@ -3649,10 +3649,23 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
     writeConfig(projectDir, {
       runtime: 'claude',
       model_profile: 'balanced',
-      model_policy: { provider: 'anthropic-fable', budget: 'low' },
+      model_policy: {
+        provider: 'anthropic',
+        budget: 'high',
+        runtime_tiers: { claude: { opus: { model: 'claude-opus-4-5' } } },
+      },
     });
-    // gsd-planner -> opus tier; anthropic-fable opus/low = claude-opus-4-5 (no alias) -> fall back to "opus"
-    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-opus-4-5 (no alias) -> fall back to "opus" (#6125: no
+    // longer a shipped preset cell, so the unmappable id is supplied explicitly)
+    const writes = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+    try {
+      assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+    } finally {
+      process.stderr.write = original;
+    }
+    assert.ok(writes.some((w) => w.includes('claude-opus-4-5')), `the unmappable id is warned about: ${JSON.stringify(writes)}`);
   });
 
   test('model_policy.runtime_tiers applies on runtime:"claude", mapped to alias (#1133)', () => {
@@ -7035,3 +7048,59 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
     }
   });
 }
+
+// ─── #6125 — budget "low" is the cheapest model in every tier, as the settings table documents ─────────────────
+describe('#6125 model_policy budget "low" routes every tier to the cheapest model', () => {
+  const { createTempProject: makeTempProject6125, cleanup: cleanup6125, resetRuntimeWarningCaches } = require('./helpers.cjs');
+  const fs6125 = require('node:fs');
+  const path6125 = require('node:path');
+  const { splitLines: splitLines6125 } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const CATALOG = JSON.parse(fs6125.readFileSync(path6125.join(__dirname, '..', 'gsd-core', 'bin', 'shared', 'model-catalog.json'), 'utf8')).providerPresets;
+  const SETTINGS = path6125.join(__dirname, '..', 'gsd-core', 'workflows', 'settings-advanced.md');
+
+  // the `low` rows of the canonical tier table: | provider | low | high-col | medium-col | low-col |, columns = opus, sonnet, haiku
+  function documentedLowRows() {
+    const rows = {};
+    for (const line of splitLines6125(fs6125.readFileSync(SETTINGS, 'utf8'))) {
+      const cells = line.split('|').map((cell) => cell.trim()).filter((cell, i, all) => !(i === 0 && cell === '') && !(i === all.length - 1 && cell === ''));
+      if (cells.length === 5 && cells[1] === 'low' && CATALOG[cells[0]]) rows[cells[0]] = cells.slice(2);
+    }
+    return rows;
+  }
+
+  test('every provider preset low cell equals the documented low row (all three tiers)', () => {
+    const rows = documentedLowRows();
+    assert.deepEqual(Object.keys(rows).sort(), Object.keys(CATALOG).filter((name) => name !== 'generic').sort(), 'the table carries a low row per concrete preset');
+    for (const [provider, documented] of Object.entries(rows)) {
+      const shipped = ['opus', 'sonnet', 'haiku'].map((tier) => CATALOG[provider][tier].low.model);
+      assert.deepEqual(shipped, documented, `${provider} low: the catalog and the settings table agree`);
+    }
+  });
+
+  test('the openai opus low cell carries the same reasoning effort as the other low cells (#6125)', () => {
+    const { opus, sonnet, haiku } = CATALOG.openai;
+    assert.equal(opus.low.reasoning_effort, sonnet.low.reasoning_effort);
+    assert.equal(opus.low.reasoning_effort, haiku.low.reasoning_effort);
+    assert.equal(opus.low.reasoning_effort, 'low');
+  });
+
+  for (const provider of ['anthropic', 'anthropic-fable']) {
+    test(`${provider} low resolves the opus-tier planner to the cheapest model, with no unmappable-id warning`, () => {
+      const dir = makeTempProject6125();
+      try {
+        for (const [runtime, expected] of [['claude', 'haiku'], ['opencode', 'claude-haiku-4-5']]) {
+          resetRuntimeWarningCaches();
+          writeConfig(dir, { runtime, model_profile: 'quality', model_policy: { provider, budget: 'low' } });
+          const writes = [];
+          const original = process.stderr.write.bind(process.stderr);
+          process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+          let planner;
+          try { planner = resolveModelInternal(dir, 'gsd-planner'); } finally { process.stderr.write = original; }
+          assert.strictEqual(planner, expected, `${provider}/${runtime}`);
+          assert.deepEqual(writes.filter((w) => w.includes('alias')), [], `${provider}/${runtime}: no alias warning`);
+        }
+      } finally { cleanup6125(dir); }
+    });
+  }
+});
+

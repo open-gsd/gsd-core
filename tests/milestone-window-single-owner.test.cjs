@@ -2347,11 +2347,14 @@ test('listMilestoneHeadingsRefusesPunctuationOnlyNames', () => {
     '',
     '### Phase 1: Runtime Adapter Interface',
   ].join('\n');
+  // #6149: a heading is a milestone heading only when its version token LEADS it, so this name-then-version H1 is not
+  // enumerated at all; no punctuation-only name can arise from it, and the milestone identity stays the honest TRUNCATED one.
   const result = listMilestoneHeadings(content);
-  assert.strictEqual(result.length, 1);
-  assert.strictEqual(result[0].version, 'v1.13');
-  assert.strictEqual(result[0].closed, false);
-  assert.strictEqual(result[0].name, null, `name must be null, not ${JSON.stringify(result[0].name)}`);
+  assert.strictEqual(result.length, 0);
+  // The same refusal still holds for a LEADING version followed by punctuation only.
+  const leading = listMilestoneHeadings('## v1.13 —\n');
+  assert.strictEqual(leading.length, 1);
+  assert.strictEqual(leading[0].name, null, `name must be null, not ${JSON.stringify(leading[0].name)}`);
 });
 
 // (RED) #4134 negative space: a name that merely CONTAINS punctuation is a

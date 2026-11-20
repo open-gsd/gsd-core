@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { setImmediate: yieldToReporter } = require('node:timers/promises');
 const { cleanup, createTempDir, runGsdTools } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { classifyRedEvidence, buildRedEvidenceRecord } = require('../gsd-core/bin/lib/tdd-red-evidence.cjs');
@@ -229,7 +229,7 @@ test('#4692: the CLI accepts Vitest TAP and returns the same blocking verdict wi
 
 for (const runtime of ['claude', 'codex', 'antigravity']) {
   test(`#4692: ${runtime} installed runtime validates TAP and XML without node_modules`, (t) => {
-    const { root, configDir } = runMinimalInstall({ runtime, scope: 'global' });
+    const { root, configDir } = copyRuntimeFixture({ runtime, scope: 'global' });
     t.after(async () => {
       cleanup(root);
       // The test runner uses --test-force-exit. Let its reporter drain between

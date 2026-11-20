@@ -16,7 +16,7 @@ const path = require('node:path');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const {
   listWorkflows,
   WORKFLOW_DISPOSITIONS,
@@ -114,7 +114,7 @@ describe('#5561: Pi parity over the shipped surface', () => {
   let configDir;
 
   before(() => {
-    ({ root, configDir } = runMinimalInstall({ runtime: 'pi', scope: 'global' }));
+    ({ root, configDir } = copyRuntimeFixture({ runtime: 'pi', scope: 'global' }));
   });
   after(() => cleanup(root));
 

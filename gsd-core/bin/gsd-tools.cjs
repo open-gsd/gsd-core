@@ -2736,7 +2736,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // id — `-c`, `--config`, `-`, `--`, `-p` are unsafe to hand to
   // resolveOrchestratorExec, whose own `unsafe_leading_dash_model` guard
   // rejects them and fails the WHOLE resolution to `{ ok: false }` ->
-  // exec:null -> a FATAL wave abort (executor-isolation-dispatch.md:299-303),
+  // exec:null -> a FATAL wave abort (the EXEC_OK fail-closed halt of executor-isolation-dispatch.md),
   // even on hosts (e.g. kimi-code) that declare no modelFlag at all and
   // previously ignored the pin entirely. This check MUST run BEFORE
   // MODEL_ID_CHARSET_RE below: the charset is anchored to `[A-Za-z0-9]` at
@@ -2893,7 +2893,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           const resolution = resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model);
           // A host declaring orchestrator-worktree whose exec descriptor does not
           // resolve halts THIS wave's dispatch: isolation is forced to 'none' here,
-          // and executor-isolation-dispatch.md:299-303 treats a null exec as FATAL
+          // and the EXEC_OK fail-closed halt of executor-isolation-dispatch.md treats a null exec as FATAL
           // (exit 1) after the worktree has already been created — it does not
           // degrade to sequential execution. resolveDispatchModelPin rejects any
           // leading-dash value (flag/option shape) before it ever reaches this
