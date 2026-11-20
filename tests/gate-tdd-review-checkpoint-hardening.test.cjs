@@ -88,6 +88,8 @@ function squash(dir, base, subject = 'feat: squashed') {
   git(dir, 'commit', '-q', '-m', subject);
 }
 
+const run = (dir, ...args) => evaluateTddReviewCheckpoint({ projectDir: dir, args: ['1', ...args] });
+
 describe('H1 type: tdd detection equals the old regex in its pathological forms', () => {
   const CASES = [
     ['a duplicate type key with tdd second', 'type: execute\ntype: tdd', 1],
@@ -194,24 +196,21 @@ describe('#5354 tdd review checkpoint seal', () => {
     }
     return { dir, base };
   }
-  const run = (dir, ...args) => evaluateTddReviewCheckpoint({ projectDir: dir, args: ['1', ...args] });
   function sealCommit(dir) { git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs(01-01): seal'); }
   function sealThenSquash(dir, base, subject) { run(dir, '--record'); sealCommit(dir); squash(dir, base, subject); }
   function shallowClone(dir, suffix = '', branch) {
     const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow${suffix}`);
     dirs.push(clone);
-    gitOrThrow(['clone', '-q', '--depth', '1', ...(branch ? ['--branch', branch] : []), pathToFileURL(dir).href, clone], { cwd: path.dirname(dir), env: isolatedEnv({ home: path.dirname(dir) }) });
+    gitOrThrow(['clone', '-q', '--depth', '1', ...(branch ? ['--branch', branch] : []), pathToFileURL(dir).href, clone], { cwd: path.dirname(dir), env: isolatedEnv({ home: dir }) });
     return clone;
   }
   const ghostSummary = (dir) => w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['d'.repeat(40)]));
   const SEAL = path.join(PHASE, SEAL_FILE);
   const sha = (c) => c.repeat(40);
-  const SEAL_CAP = REPO_TEXT_MAX_BYTES;
   const sealOf = (red, green) => JSON.stringify({ plans: { '01-01': { red, green } } });
   const padTo = (text, size) => text + ' '.repeat(size - Buffer.byteLength(text));
   const RG = ['test(01-01): red', 'feat(01-01): green'];
   const PLAN_02 = '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n';
-  const REFS_CAP = SUMMARY_REFS_MAX;
   const summaryFile = (dir) => path.join(dir, PHASE, '01-01-SUMMARY.md');
   // The SUMMARY names `hashes`, then the branch is squashed: no listed commit is reachable.
   const squashWithSummary = (hashes) => (dir, base) => {
@@ -307,27 +306,27 @@ describe('#5354 tdd review checkpoint seal', () => {
       expect: { status: 'FAIL' },
     },
     // Limits: the SUMMARY text, the seal text, the SUMMARY hash count (each distinct hash costs git spawns) and the sealed hash shape.
-    ...[['limit-1', SEAL_CAP - 1, 'NotEvaluable'], ['limit', SEAL_CAP, 'NotEvaluable'], ['limit+1', SEAL_CAP + 1, 'FAIL']].map(([label, size, status]) => ({
+    ...[['limit-1', REPO_TEXT_MAX_BYTES - 1, 'NotEvaluable'], ['limit', REPO_TEXT_MAX_BYTES, 'NotEvaluable'], ['limit+1', REPO_TEXT_MAX_BYTES + 1, 'FAIL']].map(([label, size, status]) => ({
       // The Task Commits section comes first so an unread SUMMARY (FAIL) is told from a read one (NotEvaluable).
       name: `a SUMMARY at ${label} bytes is ${status === 'FAIL' ? 'not read (no task commits)' : 'still read'}`,
       opts: { refs: true },
       setup: (d, b) => { squash(d, b); fs.writeFileSync(summaryFile(d), padTo(fs.readFileSync(summaryFile(d), 'utf8'), size)); },
       expect: { status },
     })),
-    ...[['limit-1', SEAL_CAP - 1, 'Pass'], ['limit', SEAL_CAP, 'Pass'], ['limit+1', SEAL_CAP + 1, undefined]].map(([label, size, status]) => ({
+    ...[['limit-1', REPO_TEXT_MAX_BYTES - 1, 'Pass'], ['limit', REPO_TEXT_MAX_BYTES, 'Pass'], ['limit+1', REPO_TEXT_MAX_BYTES + 1, undefined]].map(([label, size, status]) => ({
       name: `seal size ${label} (${size} bytes) -> ${status ?? 'unreadable'}`,
       subjects: [], opts: { summary: false },
       setup: (d) => w(d, SEAL, padTo(sealOf(sha('a'), sha('b')), size)),
       expect: status ? { status } : { outcome: 'unreadable' },
     })),
-    ...[['limit-1', REFS_CAP - 1, 'NotEvaluable'], ['limit', REFS_CAP, 'NotEvaluable'], ['limit+1', REFS_CAP + 1, 'FAIL']].map(([label, count, status]) => ({
+    ...[['limit-1', SUMMARY_REFS_MAX - 1, 'NotEvaluable'], ['limit', SUMMARY_REFS_MAX, 'NotEvaluable'], ['limit+1', SUMMARY_REFS_MAX + 1, 'FAIL']].map(([label, count, status]) => ({
       name: `SUMMARY with ${label} (${count}) distinct unreachable task commits -> ${status}`,
       setup: squashWithSummary(Array.from({ length: count }, (_, i) => (i + 1).toString(16).padStart(40, 'f'))),
       expect: { status },
     })),
     // The cap alone bounds the id lists of the three `git log` calls of the subject check, so the limit must pass through them with ids git knows.
-    { name: `SUMMARY with ${REFS_CAP} real task commits that a squash dropped -> NotEvaluable`, subjects: Array.from({ length: REFS_CAP }, (_, i) => `chore: task ${i + 1}`), opts: { refs: true }, setup: (d, b) => squash(d, b), expect: { status: 'NotEvaluable' } },
-    { name: 'a duplicated SUMMARY hash counts once against the cap', setup: squashWithSummary(Array.from({ length: REFS_CAP + 1 }, () => 'e'.repeat(40))), expect: { status: 'NotEvaluable' } },
+    { name: `SUMMARY with ${SUMMARY_REFS_MAX} real task commits that a squash dropped -> NotEvaluable`, subjects: Array.from({ length: SUMMARY_REFS_MAX }, (_, i) => `chore: task ${i + 1}`), opts: { refs: true }, setup: (d, b) => squash(d, b), expect: { status: 'NotEvaluable' } },
+    { name: 'a duplicated SUMMARY hash counts once against the cap', setup: squashWithSummary(Array.from({ length: SUMMARY_REFS_MAX + 1 }, () => 'e'.repeat(40))), expect: { status: 'NotEvaluable' } },
     ...[['39 hex', 'a'.repeat(39), 'FAIL'], ['40 hex', 'a'.repeat(40), 'Pass'], ['41 hex', 'a'.repeat(41), 'FAIL'], ['uppercase', 'A'.repeat(40), 'FAIL']].map(([label, hash, status]) => ({
       name: `sealed red hash: ${label} -> ${status}`, subjects: [], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(hash, sha('b'))), expect: { status },
     })),
@@ -532,8 +531,8 @@ describe('#5354 tdd review checkpoint seal', () => {
     },
     { name: '--record reports unreadable when the seal cannot be examined (lstat fails, not ENOENT)', fault: (t) => failFs(t, 'lstatSync', isSeal, 'EACCES', 'denied'), source: (dir) => path.join(dir, SEAL) },
     { name: '--record refuses a seal path that became a directory between the read and the write', fault: (t, dir) => { const real = fs.lstatSync; let seen = 0; t.mock.method(fs, 'lstatSync', (f, ...rest) => (isSeal(String(f)) && ++seen === 2 ? real(dir) : real(f, ...rest))); } },
-    { name: '--record refuses a seal path that cannot be examined at write time', fault: (t) => failFs(t, 'lstatSync', (f, n) => isSeal(f) && n === 2, 'EACCES', 'denied') },
-    { name: 'a close() failure on the seal is reported unreadable, not thrown', args: [], prior: sealOf(sha('a'), sha('b')), fault: (t) => failFs(t, 'closeSync', () => true, 'EIO', 'close failed'), source: (dir) => path.join(dir, SEAL) },
+    { name: '--record refuses a seal path that cannot be examined at write time', fault: (t) => { let seen = 0; failFs(t, 'lstatSync', (f) => isSeal(f) && ++seen === 2, 'EACCES', 'denied'); } },
+    { name: 'a close() failure on the seal is reported unreadable, not thrown', args: [], prior: sealOf(sha('a'), sha('b')), fault: (t) => { const real = fs.closeSync; t.mock.method(fs, 'closeSync', (fd, ...rest) => { real(fd, ...rest); throw Object.assign(new Error('close failed'), { code: 'EIO' }); }); }, source: (dir) => path.join(dir, SEAL) },
   ];
   for (const { name, args = ['--record'], prior, setup, fault, unreadable, rows, violations, opened, source = () => SEAL_FILE } of FAULTS) {
     test(name, (t) => {
@@ -590,7 +589,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   // True when the FIFO exists; otherwise skips the test. Runs through the seam's bash interpreter.
   function mkfifo(t, fifo) {
-    const r = runHook('-c', ['mkfifo "$1"', '_', fifo], { interpreter: 'bash', timeoutMs: GIT_TIMEOUT_MS });
+    const r = runHook('-c', ['mkfifo "$1"', '_', fifo], { interpreter: 'bash', timeoutMs: GIT_TIMEOUT_MS, env: isolatedEnv({ home: path.dirname(fifo) }) });
     if (r.exitCode === 0) return true;
     t.skip('mkfifo unavailable');
     return false;
@@ -782,7 +781,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 
   // Execute ship.md's seal step against a stubbed `gsd_run`, so the branches (not their text) are what is tested.
-  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, gitExit, statusExit }) {
+  function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, checkIgnoreExit, statusExit }) {
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf8').replace(/\r\n/g, '\n');
     const from = ship.indexOf('```bash\n', ship.indexOf('<step name="seal_tdd_review">')) + 8;
     const script = ship.slice(from, ship.indexOf('\n```', from));
@@ -798,10 +797,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     // `query commit` stands in for cmdCommit: it commits the seal itself unless COMMIT_OUT is set (then it prints that and commits nothing).
     const stub = real
       ? 'gsd_run() { node -e "console.log(JSON.stringify(process.argv.slice(1)))" -- "$@" >> "$CALLS"; node "$GSD_TOOLS_BIN" "$@"; }\n'
-      : 'gsd_run() { node -e "console.log(JSON.stringify(process.argv.slice(1)))" -- "$@" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; if [ -n "${GIT_EXIT+x}" ]; then return "$GIT_EXIT"; fi; case "$*" in "git status"*) if [ -n "${STATUS_EXIT+x}" ]; then return "$STATUS_EXIT"; fi;; esac; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
+      : 'gsd_run() { node -e "console.log(JSON.stringify(process.argv.slice(1)))" -- "$@" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; case "$*" in "git check-ignore"*) if [ -n "${CHECK_IGNORE_EXIT+x}" ]; then return "$CHECK_IGNORE_EXIT"; fi;; "git status"*) if [ -n "${STATUS_EXIT+x}" ]; then return "$STATUS_EXIT"; fi;; esac; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
     const r = runHook('-c', [stub + script], {
       interpreter: 'bash', cwd: dir, timeoutMs: GIT_TIMEOUT_MS,
-      env: isolatedEnv({ home, override: { ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(gitExit === undefined ? {} : { GIT_EXIT: String(gitExit) }), ...(statusExit === undefined ? {} : { STATUS_EXIT: String(statusExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' } }),
+      env: isolatedEnv({ home, override: { ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(checkIgnoreExit === undefined ? {} : { CHECK_IGNORE_EXIT: String(checkIgnoreExit) }), ...(statusExit === undefined ? {} : { STATUS_EXIT: String(statusExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' } }),
     });
     return { r, dir, before, subject: git(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter(Boolean).map((c) => JSON.parse(c)).filter((argv) => argv[0] !== 'run-with-timeout') };
   }
@@ -842,9 +841,9 @@ describe('#5354 tdd review checkpoint seal', () => {
   // The seal step takes exactly one branch: each row names it, the options that reach it and what else must hold afterwards.
   const SEAL_AB = sealOf(sha('a'), sha('b'));
   const WARNINGS = [
-    { name: 'a bounded git call times out', opts: { gitExit: 124 }, branch: 'gitTimedOut' },
-    ...[2, 127, 128].map((code) => ({ name: `a bounded git call exits ${code}`, opts: { gitExit: code }, branch: 'gitFailed' })),
-    // `git status` alone fails (the ignore check is clean): each bounded call carries its own branch.
+    { name: 'the bounded git check-ignore times out', opts: { checkIgnoreExit: 124 }, branch: 'gitTimedOut' },
+    ...[2, 127, 128].map((code) => ({ name: `the bounded git check-ignore exits ${code}`, opts: { checkIgnoreExit: code }, branch: 'gitFailed' })),
+    // `git status` alone fails (the ignore check is clean); `git check-ignore` alone fails above: each bounded call carries its own branch.
     { name: 'only the bounded git status times out', opts: { statusExit: 124 }, branch: 'gitTimedOut' },
     { name: 'only the bounded git status fails', opts: { statusExit: 128 }, branch: 'gitFailed' },
     { name: '--record failed (the on-disk seal is never committed)', opts: { recordRc: 3, seal: '<<<<<<< conflict' }, branch: 'recordFailed' },
@@ -868,6 +867,13 @@ describe('#5354 tdd review checkpoint seal', () => {
     });
   }
 
+  test('ship.md seal step stays quiet and commits nothing for a seal that is already committed', posixOnly, () => {
+    const result = runSealStep({ seal: SEAL_AB, prepare: (dir) => { git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: seal'); } });
+    assert.equal(result.r.exitCode, 0, result.r.stderr);
+    assert.equal(result.r.stderr.trim(), '');
+    assert.equal(result.subject, 'docs: seal');
+    assert.equal(result.calls.some((argv) => argv[0] === 'query' && argv[1] === 'commit'), false, JSON.stringify(result.calls));
+  });
   test('ship.md seal step stays quiet for a phase without tdd plans', posixOnly, () => {
     expectQuiet(runSealStep({ picked: '0' }));
   });
@@ -914,8 +920,6 @@ describe('#5354 tdd review checkpoint seal', () => {
 
 /** The gate asks the sub-repos, not the workspace root, whether the sealed commits are gone and whether history is complete (#5354, #5867). */
 describe('#5354 tdd review checkpoint in a planning.sub_repos workspace', () => {
-  const run = (root, ...args) => evaluateTddReviewCheckpoint({ projectDir: root, args: ['1', ...args] });
-
   /** A workspace whose `app` sub-repo holds a RED and a GREEN on `feature`; the plan, the SUMMARY and (later) the seal live in the workspace root. */
   function workspace(root) {
     dirs.push(root);

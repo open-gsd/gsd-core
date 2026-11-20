@@ -1262,7 +1262,7 @@ describe('evaluateEvaluationScope — the check verb', () => {
 
 const { execGit: realExecGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 // A test that stubs `git --version` at 2.37 still sends `--since-as-filter` to the real git, which must accept it.
-const hostGitVersion = realExecGit(['--version'], { cwd: __dirname }).stdout;
+const hostGitVersion = realExecGit(['--version'], { cwd: __dirname, env: isolatedEnv({ home: __dirname }) }).stdout;
 const SKIP_HOST_GIT_BEFORE_2_37 = sinceAsFilterSupported(hostGitVersion) ? false : 'the host git before 2.37 rejects --since-as-filter';
 const TIMED_OUT = { exitCode: 1, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true };
 
