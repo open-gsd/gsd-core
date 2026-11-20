@@ -1206,6 +1206,35 @@ describe('gsd-secret-read-guard: shapes the 2026-11-19 review found still allowe
   });
 });
 
+describe('gsd-secret-read-guard: shapes the round-13 adversarial pass found (#5492)', () => {
+  // A source <( ) script whose quote spans two segments was blocked before the
+  // round-13 fix and allowed after it; the rest were allowed throughout.
+  const shapes = [
+    "source <(printf %s 'cat .env\"'; printf %s '\"')",
+    "source <(echo -n 'cat .env\"'; echo '\"')",
+    `source <(printf '%s' "export GIT_EDITOR='cat .env #'"); git commit`,
+    `eval -- "export GIT_EDITOR='cat .env #'"; git commit`,
+    `eval -- "git -c core.fsmonitor='cat .env' status"`,
+    "f() { GIT_EDITOR+=en; }; GIT_EDITOR='cat .'; f; GIT_EDITOR+=v; export GIT_EDITOR; git commit",
+    "printf 'cat\\40.env' | xargs -0 sh -c",
+    "printf '%s' 'cat .en' 'v' | xargs -0 sh -c",
+  ];
+  for (const cmd of shapes) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  const allowed = [
+    "printf 'hello\\n' | xargs -0 sh -c",
+    "printf '%s\\n' a b | bash",
+    "printf '%s\\n' x y | xargs git add",
+    `eval -- "export GIT_EDITOR=vim"; git commit`,
+  ];
+  for (const cmd of allowed) {
+    test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(runHook(bash(cmd)), cmd));
+  }
+});
+
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
   // A hook that crashes or outlives its timeout allows the command, so each
   // of these must decide. They are the reviewers' payloads, at a size that
