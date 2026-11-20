@@ -148,7 +148,9 @@ if [ -n "$FILES_OVERRIDE" ]; then
     # The path travels in the environment, never as an argument: node parses an argument that starts with `-` as one of
     # its own options (`--import=…`, `--require=…`), so a hostile list entry would run code.
     # `realpathSync.native` also expands Windows 8.3 short names (RUNNER~1), which git reports in long form.
-    GSD_RESOLVE_PATH="$1" node -e 'const p=require("path"),f=require("fs");let a=p.resolve(process.env.GSD_RESOLVE_PATH);try{a=f.realpathSync.native(a)}catch(e){}process.stdout.write(a)'
+    # A path that does not exist is resolved through its deepest existing ancestor, so a missing file under an 8.3
+    # short temp directory reports the same long form as the repository root.
+    GSD_RESOLVE_PATH="$1" node -e 'const p=require("path"),f=require("fs");let a=p.resolve(process.env.GSD_RESOLVE_PATH);const t=[];for(;;){try{a=f.realpathSync.native(a);break}catch(e){const d=p.dirname(a);if(d===a)break;t.unshift(p.basename(a));a=d}}process.stdout.write(p.join(a,...t))'
   }
   # An empty root (git failed) stays empty: the resolver would turn "" into the working directory, so it is only called
   # on a non-empty answer, and the `-z "$REPO_ROOT"` check below then rejects every entry.

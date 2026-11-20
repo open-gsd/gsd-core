@@ -287,6 +287,15 @@ describe('/gsd-code-review --files resolves the listed files under bash and zsh,
       assert.deepEqual(mixed.files, ['src/a.ts'], 'a valid entry beside a rejected one is still reviewed');
     });
 
+    test(`${shell}: a missing file under a symlinked directory that points outside is rejected, not reported as missing`, { skip: process.platform === 'win32' && 'symlinks need privilege on Windows' }, (t) => {
+      const fx = fixture(t);
+      fs.symlinkSync(path.join(fx.parent, 'outside'), path.join(fx.repo, 'link-dir'), 'dir');
+      const r = tier1(shell, fx, 'link-dir/missing.ts');
+      assert.match(r.stdout, /Error: File path outside repository, skipping: link-dir\/missing\.ts/);
+      assert.doesNotMatch(r.stdout, /Warning: File not found/);
+      assert.deepEqual(r.files, []);
+    });
+
     test(`${shell}: a list entry shaped like a node option is a path, never an option (it runs nothing)`, (t) => {
       const fx = fixture(t);
       const marker = path.join(fx.parent, 'pwned');
