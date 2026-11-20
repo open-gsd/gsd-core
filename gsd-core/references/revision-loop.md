@@ -165,19 +165,19 @@ so they restate the operative rules inline; this section is the authority they m
    runs as a background or nested agent, where AskUserQuestion cannot reach the user, as
    `/gsd:autonomous` dispatches it, or the convergence run around it, when it does not flatten.
    `--chain` and `workflow.auto_advance` are not keys of their own: discuss-phase's chain starts
-   plan-phase with `--auto` on either, and a plan-phase the user starts with `--chain`, or with
-   `auto_advance` on, runs where the user can answer. A run that calls plan-phase inline without
-   `--auto` asks, and waits for the answer, as `/gsd:autonomous` does at its own blockers. Where
-   no one can be asked, record no answer and do not re-spawn: the planner could only return the
-   same conflict. Escalate at once, and at that gate stop the workflow rather than proceed, which
-   would ship the plans with this blocker open. `AUTO_CHAIN` (`workflow._auto_chain_active`) is not
-   the key: a chained run passes `--auto` anyway, and a flag an interrupted chain left set, which a
-   manual plan-phase clears only at its step 15, after this loop, would refuse a user who is
-   present, and again on a `--research` re-run, which stops before step 15 too. This stop and
-   leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a
-   user ruling`, which `/gsd:autonomous` reads so that it does not execute the plans. The plans
-   stay on disk, as after the cap gate's Abandon, so `/gsd:progress --next` or `/gsd:execute-phase`
-   can still run them.
+   plan-phase with `--auto` on either, and every other run under them is keyed as above, so a
+   plan-phase the user starts with `--chain`, or with `auto_advance` on, asks. A run that calls
+   plan-phase inline without `--auto` asks, and waits for the answer, as `/gsd:autonomous` does at
+   its own blockers. Where no one can be asked, record no answer and do not re-spawn: the planner
+   could only return the same conflict. Escalate at once, and at that gate stop the workflow rather
+   than proceed, which would ship the plans with this blocker open. `AUTO_CHAIN`
+   (`workflow._auto_chain_active`) is not the key: a chained run passes `--auto` anyway, and a flag
+   an earlier chain left set (step 15 persists it on success too), which a manual plan-phase clears
+   only at its step 15, after this loop, would refuse a user who is present, and again on a
+   `--research` re-run, which stops before step 15 too. This stop and leaving the loop both end
+   plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which
+   `/gsd:autonomous` reads so that it does not execute the plans. The plans stay on disk, as after
+   the cap gate's Abandon, so `/gsd:progress --next` or `/gsd:execute-phase` can still run them.
 4. **Close** — the workflow that wrote the line owns flipping it to `- [x]` once the resolution
    has been applied, appending ` | resolved: {chosen resolution}`. Readers only read. A line left
    open is a live blocker, never a stale artifact.
