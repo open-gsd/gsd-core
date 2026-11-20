@@ -1347,6 +1347,25 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   ]) blocks([cmd], { path: expectedPath });
   // Writing the file reads nothing.
   allows(['dd if=/dev/zero of=.env count=1']);
+
+  // Any spelling of a path that opens a file descriptor (`..` resolved, relative, `/dev/fd/N`, `/proc/<pid>/fd/N`)
+  // runs the segment's heredocs and here-strings, whichever fd they are on; a pipe only feeds fd 0. `source`'s own
+  // options (bash 5.3's `-p PATH`) come before the file it runs.
+  blocks([
+    "source /dev/../dev/stdin <<< 'cat .env'",
+    "source ../../dev/stdin <<< 'cat .env'",
+    ". /dev/fd/3 3<<< 'cat .env'",
+    "bash /dev/fd/3 3<<< 'cat .env'",
+    "source /proc/thread-self/fd/0 <<< 'cat .env'",
+    "source /proc/123/fd/4 4<<'EOF'\ncat .env\nEOF",
+    "source -p . /dev/stdin <<< 'cat .env'",
+    "source -p. /dev/stdin <<< 'cat .env'",
+    `source /dev/fd/3 3<<< "export GIT_EDITOR='cat .env #'"; git commit`,
+    "echo 'cat .env' | source /dev/./fd/0",
+    // Controls.
+    "bash /proc/self/fd/0 <<< 'cat .env'",
+    "source -- /dev/stdin <<< 'cat .env'",
+  ]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
