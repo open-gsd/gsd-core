@@ -194,9 +194,10 @@
 //        work budget, is denied as `command-too-complex` (#5255), because
 //        failing open there allows a read the scan had not yet reached.
 //        A host may opt in to failing closed instead with
-//        GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): a hook error, or a
-//        stdin that does not close within 3 s, then blocks with code
-//        guard-error.
+//        GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): a hook error, a shell
+//        reading that fails on a command no scan blocked (its
+//        DIAGNOSTIC.READING_FAILED line is written in both modes), or a stdin
+//        that does not close within 3 s then blocks with code guard-error.
 
 'use strict';
 
@@ -207,9 +208,10 @@ const { finalExtension, normalizeWindowsBasename, lastSegment } = require('./lib
 // outer catch states its policy explicitly (#3911). A host that registers this
 // guard with Claude Code's `onFailure: "block"` can opt in to DENY with
 // GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): `onFailure` cannot see a failure
-// the hook catches itself and exits 0 on, so without this a crash or a stalled
-// stdin still allows. Any other value, or none, keeps ALLOW. Read once, before
-// stdin, so the policy is settled before any failure it governs.
+// the hook catches itself and exits 0 on, so without this a crash, a failed
+// shell reading or a stalled stdin still allows. Any other value, or none,
+// keeps ALLOW. Read once, before stdin, so the policy is settled before any
+// failure it governs.
 const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
   ? HOOK_ON_CRASH.DENY
   : HOOK_ON_CRASH.ALLOW;
