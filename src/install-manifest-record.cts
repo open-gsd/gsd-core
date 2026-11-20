@@ -7,7 +7,7 @@
  * `bin/install.js` fileHash delegates to this module: one hash function.
  */
 
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, statSync, chmodSync } from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { retryRenameSync } from './shell-command-projection.cjs';
@@ -42,14 +42,21 @@ export function tryFileHash(filePath: string): string | null {
  * recorded manifest entry. A file the user had already edited keeps its stale
  * entry so the next install still detects it and backs it up.
  * Skips silently (returns false) when the manifest is absent, unparseable or
- * not the documented shape; publishes via tmp + rename.
+ * not the documented shape; publishes via tmp + rename, keeping the manifest's
+ * file mode. The installer writes the manifest without a lock, so there is no
+ * lock to share. Conflict detection is best effort: when the manifest changed
+ * on disk since it was read (a concurrent install), nothing is written. An
+ * install that writes between that check and the rename can still be
+ * overwritten; only a lock both writers take would close that window.
  */
 export function recordManifestFileHashes(configDir: string, rewritten: readonly RewrittenFile[]): boolean {
   if (rewritten.length === 0) return false;
   const manifestPath = join(configDir, MANIFEST_NAME);
   let manifest: Record<string, unknown>;
+  let raw: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    raw = readFileSync(manifestPath, 'utf8');
+    const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
     manifest = parsed as Record<string, unknown>;
   } catch {
@@ -73,7 +80,11 @@ export function recordManifestFileHashes(configDir: string, rewritten: readonly 
 
   const tmpPath = `${manifestPath}.tmp.${process.pid}`;
   try {
-    writeFileSync(tmpPath, JSON.stringify(manifest, null, 2));
+    const mode = statSync(manifestPath).mode & 0o7777;
+    writeFileSync(tmpPath, JSON.stringify(manifest, null, 2), { mode });
+    chmodSync(tmpPath, mode); // the umask may have narrowed the create mode
+    // #6331: best effort; a concurrent install rewrote the manifest after it was read.
+    if (readFileSync(manifestPath, 'utf8') !== raw) throw new Error('manifest changed since read');
     retryRenameSync(tmpPath, manifestPath);
     return true;
   } catch {

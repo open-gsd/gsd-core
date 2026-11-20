@@ -1289,6 +1289,58 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'the skill is still re-staged');
     assert.equal(fs.existsSync(path.join(rcd, MANIFEST)), false, 'no manifest is invented');
   });
+
+  test('a skill new in the capability\'s new version gets no entry, and the next scan does not report it', () => {
+    const { rcd, home, set } = installedAtV1();
+    const NEW_STEM = `${STEM}-extra`;
+    const capJson = path.join(capDir(home, STEM), 'capability.json');
+    const cap = JSON.parse(fs.readFileSync(capJson, 'utf8'));
+    cap.skills = [STEM, NEW_STEM];
+    fs.writeFileSync(capJson, JSON.stringify(cap, null, 2));
+    fs.mkdirSync(path.join(capDir(home, STEM), 'skills', NEW_STEM), { recursive: true });
+    fs.writeFileSync(path.join(capDir(home, STEM), 'skills', NEW_STEM, 'SKILL.md'),
+      `---\nname: ${NEW_STEM}\ndescription: new in v2\n---\n\n# new\n`);
+    set();
+    assert.ok(fs.existsSync(path.join(rcd, 'skills', `gsd-${NEW_STEM}`, 'SKILL.md')), 'sanity: the new skill is materialized');
+    const files = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files;
+    assert.deepEqual(Object.keys(files), [SKILL_KEY], 'no entry is added outside the installer (the next install records it)');
+    assert.deepEqual(saveLocalPatches(rcd), [], 'an unrecorded skill is never reported as a local patch');
+  });
+
+  test('end to end through the real installer: install, capability update, install again backs nothing up', () => {
+    const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+    const root = tmpDir('cap-cli-6331-e2e-');
+    const env = { GSD_HOME: root, GSD_WORKSTREAM: '', GSD_PROJECT: '' };
+    const install = () => runMinimalInstall({ runtime: 'claude', scope: 'global', root, extraEnv: env });
+    const { configDir } = install();
+    const cwd = makeCwd();
+    const src = tmpDir('cap-cli-6331-e2e-src-');
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify({
+      id: STEM, role: 'feature', version: '1.0.0', title: STEM, description: 'x', tier: 'standard',
+      requires: [], runtimeCompat: { supported: ['*'], unsupported: [] }, skills: [STEM],
+      agents: [], hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    }, null, 2));
+    fs.mkdirSync(path.join(src, 'skills', STEM), { recursive: true });
+    fs.writeFileSync(path.join(src, 'skills', STEM, 'SKILL.md'), SKILL_V1);
+    const cli = (args) => {
+      const r = runGsdTools(args, cwd, { ...env, HOME: root, USERPROFILE: root });
+      assert.equal(r.success, true, `${args.join(' ')} failed: ${r.error || r.output}`);
+    };
+    const set = () => cli(['capability', 'set', STEM, '--runtime', 'claude', '--scope', 'global', '--config-dir', configDir, '--raw']);
+    cli(['capability', 'install', src, '--scope', 'global', '--raw']);
+    set();
+    install(); // records the v1 skill the way a real install does
+    const skillPath = path.join(configDir, 'skills', `gsd-${STEM}`, 'SKILL.md');
+    const files = JSON.parse(fs.readFileSync(path.join(configDir, MANIFEST), 'utf8')).files;
+    assert.equal(files[SKILL_KEY], sha256File(skillPath), 'sanity: the installer recorded the capability skill');
+
+    fs.writeFileSync(path.join(capDir(root, STEM), 'skills', STEM, 'SKILL.md'), SKILL_V2);
+    set();
+    assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'sanity: v2 skill text materialized');
+    const { stdout } = install();
+    assert.doesNotMatch(stdout, /locally modified GSD file/, 'the next real install reports no local patches (#6331)');
+    assert.equal(fs.existsSync(path.join(configDir, 'gsd-local-patches', SKILL_KEY)), false, 'and backs nothing up');
+  });
 });
 
 // ─── #3929 — install-time cross-capability validation sees the merged registry ──

@@ -240,6 +240,7 @@ module.exports = {
   "tests/run-tests-accounting.test.cjs",
   "tests/run-tests-harness.test.cjs",
   "tests/run-tests-temp-root.test.cjs",
+  "tests/runtime-artifact-layout-surface.test.cjs",
   "tests/runtime-artifact-layout.test.cjs",
   "tests/runtime-identity.test.cjs",
   "tests/runtime-launcher-parity.test.cjs",

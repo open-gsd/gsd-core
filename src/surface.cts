@@ -39,6 +39,8 @@ import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import installEngine = require('./install-engine.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import testHomeGuard = require('./real-home-guard.cjs');
 
 /**
@@ -388,36 +390,28 @@ function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]
 /**
  * #6331: the install manifest entries for files under the destinations a
  * surface apply is about to sync, each with its pre-sync hash, for
- * recordManifestFileHashes. A key resolves against the config dir first; a
- * `skills/` key whose file is not there resolves against a skills destination
- * outside the config dir (Codex `~/.agents/skills`), as saveLocalPatches does.
+ * recordManifestFileHashes. Keys resolve through resolveManifestKeyPath, the
+ * resolver the installer's local-patch scan uses, so a hostile key, a symlink
+ * and a Codex skills root outside the config dir are handled the same way.
  * Empty when the manifest is absent or not the documented shape.
  */
-function manifestEntriesUnder(configDir: string, runtime: string, kinds: readonly { kind: ArtifactKind; dest: string }[]): RewrittenFile[] {
+function manifestEntriesUnder(layout: Layout, kinds: readonly { dest: string }[]): RewrittenFile[] {
   let files: unknown;
   try {
-    files = (JSON.parse(fs.readFileSync(path.join(configDir, INSTALL_MANIFEST_FILE_NAME), 'utf8')) as Record<string, unknown>)?.['files'];
+    files = (JSON.parse(fs.readFileSync(path.join(layout.configDir, INSTALL_MANIFEST_FILE_NAME), 'utf8')) as Record<string, unknown>)?.['files'];
   } catch {
     return [];
   }
   if (!files || typeof files !== 'object' || Array.isArray(files)) return [];
+  const redirect = installEngine.manifestSkillsRedirect(layout.runtime, layout, layout.configDir);
   // Lexical containment: the dests are not realpath-resolved by the sync either.
-  const within = (root: string, candidate: string): string | null => tryWithinRootLexical(candidate, root);
   const dests = kinds.map((k) => path.resolve(k.dest));
-  const skillsPrefix: string = (hostBehaviorsFor(runtime).skillsManifestPrefix as string | undefined) || 'skills/';
-  const outsideSkillsDest = kinds
-    .filter((k) => k.kind.kind === 'skills' && within(configDir, path.resolve(k.dest)) === null)
-    .map((k) => path.resolve(k.dest))[0];
   const entries: RewrittenFile[] = [];
   for (const key of Object.keys(files)) {
-    let abs = within(configDir, path.resolve(configDir, key));
-    if (abs === null) continue;
-    if (!fs.existsSync(abs) && outsideSkillsDest !== undefined && key.startsWith(skillsPrefix)) {
-      abs = within(outsideSkillsDest, path.resolve(outsideSkillsDest, key.slice(skillsPrefix.length))) ?? abs;
-    }
-    const file = abs;
-    if (!dests.some((d) => within(d, file) !== null)) continue;
-    entries.push({ path: file, preHash: tryFileHash(file), key });
+    const ref = installEngine.resolveManifestKeyPath(layout.configDir, key, redirect);
+    if (ref === null) continue;
+    if (!dests.some((d) => tryWithinRootLexical(ref.fullPath, d) !== null)) continue;
+    entries.push({ path: ref.fullPath, preHash: tryFileHash(ref.fullPath), key });
   }
   return entries;
 }
@@ -547,11 +541,17 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
     // (a capability's new skill text after `capability set`). Re-record the
     // ones GSD still owned, as `effort sync --apply` does (#5683), or the next
     // install reports them as local patches.
-    const recordedBeforeSync = manifestEntriesUnder(layout.configDir, layout.runtime, stagedKinds);
-    for (const item of stagedKinds) {
-      _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
+    // Recorded in a finally: a sync that fails part-way has already rewritten
+    // files, and an entry whose file the sync did not reach re-records the
+    // hash it already has.
+    const recordedBeforeSync = manifestEntriesUnder(layout, stagedKinds);
+    try {
+      for (const item of stagedKinds) {
+        _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
+      }
+    } finally {
+      recordManifestFileHashes(layout.configDir, recordedBeforeSync);
     }
-    recordManifestFileHashes(layout.configDir, recordedBeforeSync);
 
     if (hasCandidateState) {
       if (candidateState === null) {
