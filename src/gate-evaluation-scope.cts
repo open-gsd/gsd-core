@@ -127,6 +127,11 @@ export interface EvaluationScope {
   outsideUnion: string[];
   /** Listed commit ids not reachable from the ref (other branch, dropped by a rebase), by name. */
   unreachable: string[];
+  /**
+   * Phase units: the live SUMMARY files that have a `## Task Commits` section from which no commit id could be read, by
+   * name. Their work is not in the scope, so a reviewer must be told rather than left to assume the scope is complete (#6215).
+   */
+  unparsedSummaries: string[];
   /** The phase-start anchor (parent of the commit that first added the phase dir); null if none. */
   rangeBase: string | null;
 }
@@ -151,8 +156,21 @@ const MAX_ID_LOOKUPS = 1024;
 
 const TASK_COMMITS_HEADING = /^## Task Commits[ \t\r]*$/;
 const NEXT_HEADING = /^## /;
-const TASK_ROW_PREFIX = /^[ \t]*(?:[0-9]+\.|[-*])?[ \t]*\*\*Task[ \t]+[0-9]+:/;
+// `**Task N:` with an optional qualifier between the number and the colon (`**Task 1 (tracer):**`, `**Task 1 RED:**`, #6215).
+const TASK_ROW_PREFIX = /^[ \t]*(?:(?:[0-9]+\.|[-*])[ \t]*)?\*\*Task[ \t]+[0-9]+(?:[^0-9:*\r\n][^:*\r\n]*)?:/;
+// A task row the strict label does not recognise (`**Task 1 - tracer**`, `**Task 1 (x)**:`): counted as an unread row.
+const TASK_ROW_LOOSE = /^[ \t]*(?:(?:[0-9]+\.|[-*])[ \t]*)?\*\*Task[ \t]+[0-9]+/;
+// A list item nested under a task row (`  - RED \`<sha>\``): the TDD commits gsd-executor writes under the task (#6215).
+const SUB_BULLET = /^([ \t]+)(?:[-*+]|[0-9]+\.)[ \t]/;
+const PLAN_METADATA_LINE = /\*\*Plan metadata:?\*\*/;
 const HEX_TOKEN = /`[0-9a-f]{7,40}`/g;
+
+/** Indentation width in columns, a tab advancing to the next multiple of 4. */
+function indentWidth(line: string): number {
+  let width = 0;
+  for (const ch of /^[ \t]*/.exec(line)?.[0] ?? '') width = ch === '\t' ? width + 4 - (width % 4) : width + 1;
+  return width;
+}
 
 /**
  * The commit ids a SUMMARY names, in document order, duplicates included. Section-scoped (every
@@ -161,20 +179,56 @@ const HEX_TOKEN = /`[0-9a-f]{7,40}`/g;
  * counts, so a sha quoted in prose or on the `**Plan metadata:**` line is not a task commit.
  */
 export function extractTaskCommitRefs(text: string): string[] {
+  return scanTaskCommits(text).refs;
+}
+
+/**
+ * `extractTaskCommitRefs` plus whether the text has a `## Task Commits` section and how many task rows yielded no id.
+ * A task row may carry a qualifier before its colon, and the backticked ids on the first list level nested under a task
+ * row (deeper than the row; wrapped continuation lines allowed, a blank line or an unindented line ends the row) belong
+ * to that row, so a TDD task's RED and GREEN sub-bullets are read (#6215).
+ */
+function scanTaskCommits(text: string): { refs: string[]; sectionFound: boolean; unreadRows: number } {
   const refs: string[] = [];
   let inside = false;
+  let sectionFound = false;
+  let unreadRows = 0;
+  let rowIndent = -1; // column of the task row whose sub-bullets are being read; -1 when none
+  let rowIds = 0;
+  let subIndent = -1; // column of the first nested list level under that row
+  const tokens = (from: string): void => {
+    const found = from.match(HEX_TOKEN) ?? [];
+    for (const token of found) refs.push(token.slice(1, -1));
+    rowIds += found.length;
+  };
+  const endRow = (): void => {
+    if (rowIndent !== -1 && rowIds === 0) unreadRows += 1;
+    rowIndent = -1; rowIds = 0; subIndent = -1;
+  };
   for (const line of text.split('\n')) {
-    if (TASK_COMMITS_HEADING.test(line)) { inside = true; continue; }
-    if (NEXT_HEADING.test(line)) { inside = false; continue; }
+    if (TASK_COMMITS_HEADING.test(line)) { endRow(); inside = true; sectionFound = true; continue; }
+    if (NEXT_HEADING.test(line)) { endRow(); inside = false; continue; }
     if (!inside) continue;
     const row = TASK_ROW_PREFIX.exec(line);
-    if (!row) continue;
-    const rest = line.slice(row[0].length);
-    const close = rest.indexOf('**');
-    if (close === -1) continue;
-    for (const token of rest.slice(close + 2).match(HEX_TOKEN) ?? []) refs.push(token.slice(1, -1));
+    if (row) {
+      endRow();
+      rowIndent = indentWidth(line);
+      const rest = line.slice(row[0].length);
+      const close = rest.indexOf('**');
+      if (close !== -1) tokens(rest.slice(close + 2));
+      continue;
+    }
+    if (TASK_ROW_LOOSE.test(line)) { endRow(); unreadRows += 1; continue; }
+    if (rowIndent === -1) continue;
+    if (line.trim() === '' || indentWidth(line) <= rowIndent) { endRow(); continue; }
+    const nested = SUB_BULLET.exec(line);
+    if (!nested) continue; // a wrapped continuation of the row's description
+    const width = indentWidth(line);
+    if (subIndent === -1 || width < subIndent) subIndent = width;
+    if (width === subIndent && !PLAN_METADATA_LINE.test(line)) tokens(line);
   }
-  return refs;
+  endRow();
+  return { refs, sectionFound, unreadRows };
 }
 
 // ─── Plan-id → anchored subject pattern ───────────────────────────────────────
@@ -444,7 +498,7 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
 function emptyScope(unit: ScopeUnit): EvaluationScope {
   return {
     unit, status: 'resolved', source: 'none', reason: null, commits: [],
-    changedFiles: [], files: [], missingOnDisk: [], outsideUnion: [], unreachable: [], rangeBase: null,
+    changedFiles: [], files: [], missingOnDisk: [], outsideUnion: [], unreachable: [], unparsedSummaries: [], rangeBase: null,
   };
 }
 
@@ -736,6 +790,7 @@ function resolvePhaseAcrossSources(
     merged.status = 'degraded';
     merged.source = 'phase-range';
     merged.reason = `${parts[0]?.part.reason ?? 'no-task-commits'}:no-phase-start-anchor`;
+    merged.unparsedSummaries = [...gathered.unparsed].sort();
     return merged;
   }
   merged.status = taken.length > 0 ? 'resolved' : 'degraded';
@@ -755,6 +810,8 @@ function resolvePhaseAcrossSources(
   merged.files = gather((part) => part.files);
   merged.missingOnDisk = gather((part) => part.missingOnDisk);
   merged.outsideUnion = gather((part) => part.outsideUnion);
+  // The unparsed SUMMARYs belong to the workspace's phase directory, not to a repo: no prefix.
+  merged.unparsedSummaries = uniqueSorted(pick.flatMap(({ part }) => part.unparsedSummaries));
   return merged;
 }
 
@@ -779,7 +836,7 @@ export function resolveEvaluationScope(projectDir: string, unit: ScopeUnit, opti
     return scope;
   } catch (error) {
     const reason = error instanceof ScopeUnreadable ? error.reason : 'resolver-error';
-    return { ...emptyScope(unit), status: 'unresolvable', reason };
+    return { ...emptyScope(unit), status: 'unresolvable', reason, unparsedSummaries: scope.unparsedSummaries };
   }
 }
 
@@ -1020,6 +1077,8 @@ interface PhaseGather {
   /** Every `## Task Commits` id of the live SUMMARY set, in document order, duplicates included. */
   refs: string[];
   summaryCount: number;
+  /** The live SUMMARYs whose `## Task Commits` section yielded no id (#6215). */
+  unparsed: string[];
 }
 
 function gatherPhase(projectDir: string, unit: { kind: 'phase'; phase: string; phaseDir?: string }): PhaseGather {
@@ -1032,6 +1091,7 @@ function gatherPhase(projectDir: string, unit: { kind: 'phase'; phase: string; p
   if (!phaseDir) throw new ScopeUnreadable('phase-dir-not-found');
 
   const refs: string[] = [];
+  const unparsed: string[] = [];
   let summaryCount = 0;
   // The canonical LIVE summary set (root + nested, superseded excluded) from its single owner. A scan
   // that did not see every summary (an existing nested plans/ that could not be read) is "could not
@@ -1041,13 +1101,15 @@ function gatherPhase(projectDir: string, unit: { kind: 'phase'; phase: string; p
   const entries = [...planScan.value.summaryFiles].sort();
   for (const name of entries) {
     try {
-      refs.push(...extractTaskCommitRefs(fs.readFileSync(path.join(phaseDir, name), 'utf-8')));
+      const scanned = scanTaskCommits(fs.readFileSync(path.join(phaseDir, name), 'utf-8'));
+      refs.push(...scanned.refs);
+      if (scanned.sectionFound && (scanned.refs.length === 0 || scanned.unreadRows > 0)) unparsed.push(name.replace(/\p{Cc}/gu, '?'));
       summaryCount += 1;
     } catch {
       throw new ScopeUnreadable(`summary-unreadable:${name}`);
     }
   }
-  return { phaseDir, refs, summaryCount };
+  return { phaseDir, refs, summaryCount, unparsed };
 }
 
 /**
@@ -1062,7 +1124,8 @@ function resolvePhase(
   git: Git, ref: string, options: ScopeOptions, repoRoot: string,
   gathered?: PhaseGather, anchored = true, partial = false, notAfter?: number,
 ): void {
-  const { phaseDir, refs, summaryCount } = gathered ?? gatherPhase(projectDir, unit);
+  const { phaseDir, refs, summaryCount, unparsed } = gathered ?? gatherPhase(projectDir, unit);
+  scope.unparsedSummaries = [...unparsed].sort();
 
   // Resolve each listed id to a full sha reachable from the ref (and, for wave scoping, newer than `since`).
   const shas: string[] = [];
