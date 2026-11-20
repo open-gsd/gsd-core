@@ -1391,7 +1391,8 @@ describe('roadmap-parser: #6149 — a mention heading is not the milestone headi
   test('selection and section detection agree on the same heading table', () => {
     const table = [
       ['## v0.5.0 Name', true], ['## ✅ v0.5.0 Name', true], ['### 🚧 v0.5.0 Name (In Progress)', true], ['## **v0.5.0** Name', true],
-      ['## Milestone v0.5.0: Name', true], ['## [GSD.02] v0.5.0: Name', true], ['## Carried forward to v0.5.0 (inputs, not phases)', false],
+      ['## Milestone v0.5.0: Name', true], ['## Current Milestone: v0.5.0', true], ['## Milestone 1: First Milestone v0.5.0', true], ['## Roadmap v0.5.0: Name', true],
+      ['## [GSD.02] v0.5.0: Name', true], ['## Carried forward to v0.5.0 (inputs, not phases)', false],
       ['## Deferred to v0.5.0 pending review', false], ['# Roadmap: Name (v0.5.0)', false],
       // a status marker or the word Milestone elsewhere in a mention heading signals a section but carries no version
       ['## Deferred to v0.5.0 🚧', false], ['## Carried forward to the next Milestone (v0.5.0)', false],

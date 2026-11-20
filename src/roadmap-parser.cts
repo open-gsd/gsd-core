@@ -664,13 +664,15 @@ function listMilestoneHeadings(content: string): Array<{ heading: string; versio
 const MILESTONE_HEADING_LINE_SOURCE = '^#{1,3}\\s+(?!Phase\\s+\\S)[^\\n]*';
 
 // #6149: the ONE rule for "this heading is a milestone's heading": its version token LEADS the heading text. Before the
-// token only a status emoji (✅ 📋 🚧), bold markers, the words `Milestone` and `Roadmap` (`## Roadmap v2.0: Name`) and an
-// ADR-612 bracket id (`[GSD.02] v2.0: …`)
+// token only a status emoji (✅ 📋 🚧), bold markers, the word `Roadmap` (`## Roadmap v2.0: Name`), a Milestone label (`Milestone
+// v1.0`, `Current Milestone: v3.0`, `Milestone 1: First Milestone v1.0`) and an ADR-612 bracket id (`[GSD.02] v2.0: …`)
 // may stand, so `## Carried forward to v0.5.0 (inputs, not phases)` mentions a version without being that milestone's
 // heading. Selection (`locateMilestoneHeadings`), enumeration (`listMilestoneHeadings`), section detection
 // (`MILESTONE_HEADING_SIGNAL_PATTERN`, `milestoneSections`), the section end (`computeMilestoneSectionEnd`) and the window
 // classifiers (`hasVersionedMilestones`, the preamble and earliest-milestone cutoffs) all read it, so they cannot disagree.
-const MILESTONE_LEADING_PREFIX = '(?:[\\s✅📋🚧*]|Milestone\\b|Roadmap\\b|\\[[^\\]\\n]{0,64}\\])*';
+const MILESTONE_LEADING_FILLER = '(?:[\\s✅📋🚧*]|Roadmap\\b|\\[[^\\]\\n]{0,64}\\])*';
+// At most ONE bounded Milestone label (never a repeated group: a repeated label would be ambiguous and backtrack badly).
+const MILESTONE_LEADING_PREFIX = `${MILESTONE_LEADING_FILLER}(?:[\\w :'-]{0,60}?Milestone\\b(?:\\s+\\d+)?:?${MILESTONE_LEADING_FILLER})?`;
 const MILESTONE_LEADING_VERSION_RE = new RegExp(`^${MILESTONE_LEADING_PREFIX}v\\d+\\.\\d+`, 'i');
 
 /**
