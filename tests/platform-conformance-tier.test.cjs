@@ -1347,3 +1347,53 @@ describe('#6002: detectors match platform behavior, not text', () => {
     );
   });
 });
+
+// ─── #6166: a test file that vanishes between the walk and the read ─────────
+
+describe('#6166 tree classifiers skip a test file deleted after enumeration', () => {
+  // Make reading `gone.test.cjs` throw `code`, as a file deleted between
+  // walkTestFiles and the read does; every other read goes through.
+  function withFailingRead(t, testsDir, code) {
+    const gone = path.join(testsDir, 'gone.test.cjs');
+    const readFileSync = fs.readFileSync;
+    t.mock.method(fs, 'readFileSync', (file, ...rest) => {
+      if (file === gone) throw Object.assign(new Error(`${code}: ${file}`), { code });
+      return readFileSync(file, ...rest);
+    });
+  }
+
+  for (const [name, classify] of [
+    ['classifyTree', classifyTree],
+    ['classifyMacosTree', classifyMacosTree],
+  ]) {
+    test(`${name}: an ENOENT file is left out of files and total`, (t) => {
+      const tmpDir = createTempDir('gen-platform-vanished-');
+      try {
+        const testsDir = path.join(tmpDir, 'tests');
+        fs.mkdirSync(testsDir, { recursive: true });
+        fs.writeFileSync(path.join(testsDir, 'gone.test.cjs'), "if (process.platform === 'darwin') {}\n");
+        fs.writeFileSync(path.join(testsDir, 'kept.test.cjs'), "if (process.platform === 'darwin') {}\n");
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/gone.test.cjs', 'tests/kept.test.cjs'] });
+
+        withFailingRead(t, testsDir, 'ENOENT');
+        assert.deepEqual(classify(testsDir), { total: 1, files: ['tests/kept.test.cjs'] });
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+
+    test(`${name}: any other read error still throws`, (t) => {
+      const tmpDir = createTempDir('gen-platform-unreadable-');
+      try {
+        const testsDir = path.join(tmpDir, 'tests');
+        fs.mkdirSync(testsDir, { recursive: true });
+        fs.writeFileSync(path.join(testsDir, 'gone.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+
+        withFailingRead(t, testsDir, 'EACCES');
+        assert.throws(() => classify(testsDir), { code: 'EACCES' });
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+  }
+});
