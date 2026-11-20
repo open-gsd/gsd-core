@@ -2551,6 +2551,9 @@ describe('#3197 — gsd-tools.cjs config-set workflow._auto_chain_active', () =>
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
+    // #6124: with the key present, a clear writes false (absent already reads false, so a clear of an absent key
+    // is a no-op, covered below).
+    runGsdTools(['config-set', 'workflow._auto_chain_active', 'true'], tmpDir);
     runGsdTools(['config-set', 'workflow._auto_chain_active', 'false'], tmpDir);
 
     const configPath = path.join(tmpDir, '.planning', 'config.json');
