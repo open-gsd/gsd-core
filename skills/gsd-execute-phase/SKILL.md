@@ -63,6 +63,10 @@ Phase: the `<arguments>` block
 Context files are resolved inside the workflow via `gsd-tools query init.execute-phase` and per-subagent `<required_reading>` blocks.
 </context>
 
+<efficiency_guidance>
+Before any long test suite or hosted CI run in phase execution, run the relevant cheap checks first: diff/format, script syntax, generated-copy parity, workflow selection, and focused contracts. Fix preflight failures before paying for the long suite. When CI finishes, inspect the measured critical path and runner-minutes for low-risk duplicate work; preserve all required checks and coverage. Use `act` only for locally representative jobs, and do not treat `act --dryrun` as execution evidence. Use `/gsd-ship --efficiency` for a focused CI/CD timing or release-path audit.
+</efficiency_guidance>
+
 <process>
 Execute end-to-end.
 Preserve all workflow gates (wave execution, checkpoint handling, verification, state updates, routing).

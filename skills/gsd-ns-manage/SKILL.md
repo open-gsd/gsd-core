@@ -25,6 +25,7 @@ Route to the appropriate management skill based on the user's intent.
 | Resume paused work | gsd-resume-work |
 | Update the GSD installation | gsd-update |
 | Ship completed work | gsd-ship |
+| Audit CI/CD timing, runner cost, or local `act` coverage | gsd-ship --efficiency |
 | Process inbox items | gsd-inbox |
 | Create a clean PR branch | gsd-pr-branch |
 | Undo the last GSD action | gsd-undo |

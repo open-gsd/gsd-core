@@ -208,6 +208,8 @@ Before a long suite or hosted matrix, run the cheapest relevant consistency chec
 
 Use `act` for locally reproducible workflow jobs, or `act --dryrun` for routing, when it adds coverage beyond the existing local suite. Record hosted-only limits and keep the corresponding hosted checks required. For releases, inspect the release workflow together with CI, including packaging, publication, and archive validation. Prefer measured reductions in duplicate work or critical-path time; add caches, dependencies, concurrency changes, or matrix reductions only when evidence shows full required coverage and release guarantees remain intact.
 
+OpenGSD applies this guidance during phase execution and shipping. Use [CI/CD efficiency mode](skills/gsd-ship/SKILL.md) for an explicit run-timing and local-reproduction audit.
+
 See [CI timeout signals](docs/how-to/read-ci-timeout-signals.md) for measured job budgets and [the branching and release guide](docs/branching.md) for the release path.
 
 ## CHANGELOG Entries — Drop a Fragment
