@@ -893,8 +893,8 @@ function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<str
 
 /**
  * Deep-merge `patch` into the global defaults `base`: objects merge key by key,
- * a null removes the key (as `config-set <key> null` clears one), and anything
- * else replaces. A section left empty is dropped.
+ * a null removes the key (as `config-set <key> null` clears one), an empty
+ * object sets nothing, and anything else replaces. A section left empty is dropped.
  */
 function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
@@ -902,11 +902,11 @@ function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<st
     if (value === null) {
       delete merged[key];
     } else if (isPlainObject(value) && Object.keys(value).length === 0) {
-      // An empty object reaches here only for a setting config-set accepts `{}`
-      // for (`parallelization`): it is that setting's value, so it replaces a
-      // stored non-object as config-set would, and changes nothing in a
-      // stored object (#5681).
-      if (!isPlainObject(merged[key])) merged[key] = {};
+      // An empty object sets nothing, whatever is stored under its key. It
+      // reaches here only for a setting config-set accepts `{}` for
+      // (`parallelization`, a boolean or an object whose `enabled` holds it),
+      // where `{}` read as the default would turn a stored `false` on (#5681).
+      continue;
     } else if (isPlainObject(value)) {
       const section = mergeIntoGlobalDefaults(isPlainObject(merged[key]) ? merged[key] : {}, value);
       if (Object.keys(section).length === 0) delete merged[key];

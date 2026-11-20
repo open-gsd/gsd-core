@@ -788,8 +788,8 @@ it is not reported when the config already exists.
 
 `config-save-defaults` is the write behind `/gsd-settings` "save as global defaults" (#5681).
 It merges one JSON object into `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.json` unless
-`GSD_HOME` is set): sections merge key by key, a `null` removes its key, and any other value
-replaces. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+`GSD_HOME` is set): sections merge key by key, a `null` removes its key, an empty object sets
+nothing (a stored `parallelization: false` stays `false`), and any other value replaces. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
 `resolve_model_ids`, unlisted `workflow` keys) survive a save. The object is held to the
 `config-set` key and value rules first, as `config-new-project` choices are, so a key must be
 spelled the way `config-set` accepts it: `git.branching_strategy`, not `branching_strategy`

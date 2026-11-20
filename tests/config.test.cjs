@@ -4147,13 +4147,31 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     assert.deepStrictEqual(read(), {});
   });
 
-  // RV6.5 review: config-set accepts `{}` as parallelization's value, and the
-  // merge took it for an empty section and deleted the stored `true`.
-  test('an empty object given as a setting value is saved, not taken for an empty section', (t) => {
-    const { save, read } = store(t, JSON.stringify({ parallelization: true, model_profile: 'quality' }));
-    const result = save({ parallelization: {} });
-    assert.ok(result.success, result.error);
-    assert.deepStrictEqual(read(), { parallelization: {}, model_profile: 'quality' });
+  // config-set accepts `{}` as parallelization's value, and the loader reads an
+  // object without `enabled` as the default, which is on. So `{}` sets nothing:
+  // a stored value of any shape stays, and none is created.
+  for (const [label, stored] of [['false', false], ['true', true], ['an object', { enabled: false }], ['absent', undefined]]) {
+    test(`an empty object given as a setting value leaves a stored ${label} as it was`, (t) => {
+      const before = stored === undefined ? { model_profile: 'quality' } : { parallelization: stored, model_profile: 'quality' };
+      const { save, read } = store(t, JSON.stringify(before));
+      const result = save({ parallelization: {} });
+      assert.ok(result.success, result.error);
+      assert.deepStrictEqual(read(), before);
+    });
+  }
+
+  test('a saved {} leaves a stored parallelization: false resolving to false', (t) => {
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const { defaultsPath, save } = store(t, JSON.stringify({ parallelization: false }));
+    const gsdHome = path.dirname(path.dirname(defaultsPath));
+    assert.ok(save({ parallelization: {} }).success);
+    const outside = createTempDir('gsd-5681-outside-');
+    t.after(() => cleanup(outside));
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.strictEqual(loaded.parallelization, false);
   });
 
   test('a save with no search flags reports an empty skipped list', (t) => {
