@@ -459,3 +459,47 @@ describe('plan-document: extractThreatRegisterIds (#4683)', () => {
     assert.deepEqual(extractThreatRegisterIds('# Plan\n\nDo things.\n'), []);
   });
 });
+
+describe('plan-document: executor_runtime (#6302, ADR-3711 D1)', () => {
+  const plan = (frontmatterLines, eol = '\n') => `---${eol}${['phase: 03-x', ...frontmatterLines].join(eol)}${eol}---${eol}<objective>x</objective>${eol}`;
+
+  test('a declared id is read verbatim', () => {
+    assert.equal(parsePlanDocument(plan(['executor_runtime: codex'])).executorRuntime, 'codex');
+    assert.equal(parsePlanDocument(plan(['executor_runtime: kimi-code'])).executorRuntime, 'kimi-code');
+  });
+
+  test('surrounding whitespace and quotes are not part of the value', () => {
+    assert.equal(parsePlanDocument(plan(['executor_runtime:   codex   '])).executorRuntime, 'codex');
+    assert.equal(parsePlanDocument(plan(['executor_runtime: "codex"'])).executorRuntime, 'codex');
+  });
+
+  test('an absent field is null', () => {
+    assert.equal(parsePlanDocument(plan(['agent_hint: some-specialist'])).executorRuntime, null);
+    assert.equal(parsePlanDocument('# no frontmatter\n').executorRuntime, null);
+  });
+
+  test('an empty, quoted-empty or blank value is null', () => {
+    for (const line of ['executor_runtime: ""', 'executor_runtime: "   "', 'executor_runtime: \'\'']) {
+      assert.equal(parsePlanDocument(plan([line])).executorRuntime, null, line);
+    }
+  });
+
+  test('a bare key (a nested map to the reader) and a list value are null', () => {
+    assert.equal(parsePlanDocument(plan(['executor_runtime:', 'wave: 1'])).executorRuntime, null);
+    assert.equal(parsePlanDocument(plan(['executor_runtime: [codex]'])).executorRuntime, null);
+  });
+
+  test('CRLF frontmatter yields the bare value', () => {
+    assert.equal(parsePlanDocument(plan(['executor_runtime: codex'], '\r\n')).executorRuntime, 'codex');
+  });
+
+  test('a mention in the body is not the field', () => {
+    assert.equal(parsePlanDocument(`${plan(['wave: 1'])}executor_runtime: codex\n`).executorRuntime, null);
+  });
+
+  test('the field is independent of agent_hint', () => {
+    const doc = parsePlanDocument(plan(['executor_runtime: codex', 'agent_hint: some-specialist']));
+    assert.equal(doc.executorRuntime, 'codex');
+    assert.equal(doc.agentHint, 'some-specialist');
+  });
+});

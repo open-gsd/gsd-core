@@ -389,6 +389,10 @@ const WRAPPERS = new Map([
   ['timeout', { short: 'sk', long: ['--signal', '--kill-after'], operands: 1 }],
   ['stdbuf', { short: 'ioe', long: ['--input', '--output', '--error'] }],
   ['setsid', {}],
+  // `busybox sh -c`, `chroot NEWROOT cmd`, `flock FILE cmd` run the command that follows (#6114).
+  ['busybox', {}],
+  ['chroot', { operands: 1 }],
+  ['flock', { short: 'wE', long: ['--timeout', '--wait', '--conflict-exit-code'], operands: 1 }],
   ['exec', { short: 'a' }],
 ]);
 
@@ -479,7 +483,7 @@ const COPY_NAME_ONLY_FLAGS = new Set(['-f', '--force', '-i', '--interactive', '-
 // form (`su [user] -c 'cmd'`); a bare `su user` resolves to file mode, which
 // only runs the ordinary operand check. `eval`, `source`/`.` and `xargs` are
 // their own cases below; they are not in this set.
-const SHELL_INTERPRETERS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'su']);
+const SHELL_INTERPRETERS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'su', 'ash', 'fish', 'csh', 'tcsh']);
 
 // Shell flags whose VALUE is the next operand (`bash -o pipefail`,
 // `bash --rcfile x <<EOF`): skipped when locating a script-file operand, so a
@@ -525,21 +529,52 @@ function isSecretBasename(name) {
 // lower case once at the top so `.ENV` / `.Secrets` match on the
 // case-insensitive filesystems (macOS, Windows) where they ARE the secret file
 // — the same stance as the write guard's `/i` patterns.
-function namesSecretByName(tok) {
+function namesSecretByName(tok, backslashSeparates = true) {
   if (typeof tok !== 'string' || tok === '') return false;
   const lower = tok.toLowerCase();
-  if (isSecretBasename(lastSegment(lower))) return true;
+  if (isSecretBasename(lastSegment(lower, backslashSeparates))) return true;
   const colon = lower.lastIndexOf(':');
-  return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1)));
+  return colon !== -1 && isSecretBasename(lastSegment(lower.slice(colon + 1), backslashSeparates));
 }
 
 // A secret-by-name token is still allowed when the project listed that exact
 // committed file under `hooks.secret_read_exempt` (#4432). The exemption is
 // consulted only on the secret-classified branch, so an ordinary token costs
 // no I/O.
-function namesSecret(tok) {
-  if (!namesSecretByName(tok)) return false;
+function namesSecret(tok, backslashSeparates = true) {
+  if (!namesSecretByName(tok, backslashSeparates)) return false;
   return !isExemptSecret(tok);
+}
+
+// A drive prefix (`C:\`) or a UNC prefix (`\\host`): a Windows path, whose `\`
+// is always a path separator.
+const WINDOWS_SHAPED_RE = /^(?:[A-Za-z]:\\|\\\\)/;
+
+// Characters that occur in a regular expression but cannot occur in a Windows
+// file name (`|`, `*`, `?`). A word carrying one is a pattern, so its `\` is a
+// regex escape (`process\.env` in `'a|process\.env'`) and not a path separator
+// (#5883). `( ) [ ] { } + ^ $` are legal in a Windows name, so they do not make
+// a word a pattern: `config(1)\.env` stays a path.
+const REGEX_ONLY_CHAR_RE = /[|*?]/;
+
+// Does a `\` in this whitespace-free word separate path segments? Yes for a
+// Windows path, and for any word that cannot be a regex. A bare `\.env` or
+// `.\.env` is fail-safe denied: it is a Windows relative path as readily as a
+// pattern.
+function wordBackslashIsSeparator(word) {
+  return WINDOWS_SHAPED_RE.test(word) || !REGEX_ONLY_CHAR_RE.test(word);
+}
+
+// namesSecret for a word of a Bash command. A word with whitespace can be a
+// whole command handed to another interpreter (`powershell -c "type .\.env"`),
+// so each whitespace-separated piece is classified on its own. The Read tool
+// and Grep glob arms call namesSecret directly and keep reading `\` as a
+// separator.
+function namesSecretOperand(tok) {
+  if (typeof tok !== 'string') return false;
+  const named = (w) => namesSecret(w, wordBackslashIsSeparator(w));
+  if (!/\s/.test(tok)) return named(tok);
+  return named(tok) || tok.split(/\s+/).some((w) => w.includes('\\') && named(w));
 }
 
 // ---------------------------------------------------------------------------
@@ -1821,14 +1856,14 @@ function operandNamesSecret(text) {
   if (v.startsWith('--')) {
     const eq = v.indexOf('=');
     if (eq !== -1) v = v.slice(eq + 1);
-    return namesSecret(v);
+    return namesSecretOperand(v);
   }
-  if (!/^-[^-]./.test(v)) return namesSecret(v);
-  if (namesSecret(v.slice(2))) return true;
+  if (!/^-[^-]./.test(v)) return namesSecretOperand(v);
+  if (namesSecretOperand(v.slice(2))) return true;
   let end = 1;
   while (end < v.length && CLUSTER_FLAG_CHAR_RE.test(v[end])) end++;
-  if (end > 2 && namesSecret(v.slice(end))) return true;
-  return v[end] === '=' && namesSecret(v.slice(end + 1));
+  if (end > 2 && namesSecretOperand(v.slice(end))) return true;
+  return v[end] === '=' && namesSecretOperand(v.slice(end + 1));
 }
 
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -1925,7 +1960,202 @@ function nameOnlyOperandIndices(base, operands) {
   if (CONTAINER_RUNTIMES.has(base)) return envFileValueIndices(operands);
   if (base === 'git') return gitPathspecIndices(operands);
   if (base === 'cp' || base === 'mv') return copyDestinationIndices(operands);
+  if (SEARCH_TOOLS.has(base)) return searchOperandIndices(SEARCH_TOOLS.get(base), operands);
+  if (base === 'xargs') return xargsSearchIndices(operands);
   return new Set();
+}
+
+// #5884: grep-family, ripgrep and jq command lines. Their pattern or program
+// (the first positional when no option supplied one), and the value of an
+// exclusion option, are a regular expression, code, or a name to skip, never a
+// file the command opens. Each spec is the command's own option vocabulary
+// (grep(1) GNU and BSD, rg(1), jq(1)): an option in none of its sets withdraws
+// the whole carve-out for the segment, because an unknown option may take a
+// value, and an option value mistaken for the pattern would turn the real
+// pattern, or a file, into the exempt operand.
+//   noShort / valueShort / patternShort: short option letters without a value,
+//     with a value, and with a value that IS the pattern or program (`-e`, `-f`).
+//   nameShort: short letters whose value is a name to skip (`rg -g`).
+//   noLong / valueLong (name -> operand count) / patternLong / nameLong: the
+//     same for long options; optionalLong may carry `=value` or none.
+//   digits: grep's `-NUM` context count may be bundled in a short cluster.
+// A pattern FILE (`-f`, `--file`, `--from-file`) is read by the command, so its
+// value is never exempt: it is classified as an ordinary operand.
+const GREP_SPEC = {
+  noShort: new Set('EFGPiyvwxcLloqsbHhnTZzaIrRUuVOpS'),
+  // `-C` / `--context` are not listed: BSD grep (macOS) takes an OPTIONAL
+  // number, so `grep -C 3 .env` there reads `.env` with pattern `3`, and a
+  // required-value reading would exempt `.env` as the pattern.
+  valueShort: new Set('mABdD'),
+  patternShort: new Set('ef'),
+  nameShort: new Set(),
+  noLong: new Set([
+    'extended-regexp', 'fixed-strings', 'basic-regexp', 'perl-regexp', 'ignore-case', 'no-ignore-case',
+    'invert-match', 'word-regexp', 'line-regexp', 'count', 'files-without-match', 'files-with-matches',
+    'only-matching', 'quiet', 'silent', 'no-messages', 'byte-offset', 'with-filename', 'no-filename',
+    'initial-tab', 'null', 'null-data', 'text', 'recursive', 'dereference-recursive', 'line-number',
+    'line-buffered', 'unix-byte-offsets', 'no-group-separator', 'help', 'version', 'binary', 'mmap',
+  ]),
+  valueLong: new Map([
+    ['max-count', 1], ['after-context', 1], ['before-context', 1], ['devices', 1],
+    ['directories', 1], ['binary-files', 1], ['label', 1], ['group-separator', 1],
+    // `--include` selects the files to search, so `--include=.env` READS `.env`:
+    // its value stays an ordinary operand, like `--exclude-from`.
+    ['exclude-from', 1], ['include-dir', 1], ['include', 1],
+  ]),
+  optionalLong: new Set(['color', 'colour']),
+  patternLong: new Set(['regexp', 'file']),
+  nameLong: new Set(['exclude', 'exclude-dir']),
+  negatedLong: new Set(),
+  digits: true,
+};
+const RG_SPEC = {
+  noShort: new Set('iSsnNlcowxvuUFHIPzabqp0.'),
+  valueShort: new Set('mABCjMrtTEd'),
+  patternShort: new Set('ef'),
+  // `-g` / `--glob` / `--iglob` take a glob that SELECTS files unless it starts
+  // with `!`, so only a negated value is a name to skip (`rg -g .env` reads it).
+  nameShort: new Set('g'),
+  noLong: new Set([
+    'ignore-case', 'case-sensitive', 'smart-case', 'line-number', 'no-line-number', 'files-with-matches',
+    'files-without-match', 'count', 'only-matching', 'word-regexp', 'line-regexp', 'invert-match',
+    'fixed-strings', 'hidden', 'no-ignore', 'unrestricted', 'text', 'binary', 'multiline', 'heading',
+    'no-heading', 'with-filename', 'no-filename', 'column', 'json', 'no-messages', 'quiet', 'stats',
+    'vimgrep', 'null', 'follow', 'pcre2', 'pretty', 'trim', 'help', 'version', 'no-config',
+  ]),
+  valueLong: new Map([
+    ['max-count', 1], ['after-context', 1], ['before-context', 1], ['context', 1], ['threads', 1],
+    ['max-columns', 1], ['replace', 1], ['type', 1], ['type-not', 1], ['encoding', 1], ['max-depth', 1],
+    ['sort', 1], ['sortr', 1], ['colors', 1], ['path-separator', 1], ['ignore-file', 1], ['pre', 1],
+  ]),
+  optionalLong: new Set(['color']),
+  patternLong: new Set(['regexp', 'file']),
+  nameLong: new Set(),
+  negatedLong: new Set(['glob', 'iglob']),
+  digits: false,
+};
+const JQ_SPEC = {
+  noShort: new Set('nrjascCMSeRhV'),
+  valueShort: new Set('L'),
+  patternShort: new Set('f'),
+  nameShort: new Set(),
+  noLong: new Set([
+    'null-input', 'raw-input', 'slurp', 'compact-output', 'raw-output', 'join-output', 'ascii-output',
+    'color-output', 'monochrome-output', 'sort-keys', 'tab', 'exit-status', 'seq', 'stream',
+    'stream-errors', 'unbuffered', 'binary', 'args', 'jsonargs', 'help', 'version', 'raw-output0',
+  ]),
+  // `--arg NAME VALUE` takes two operands; `--slurpfile` / `--rawfile` read the
+  // file named by the second, which stays an ordinary operand.
+  valueLong: new Map([
+    ['indent', 1], ['library-path', 1], ['arg', 2], ['argjson', 2], ['slurpfile', 2], ['rawfile', 2],
+  ]),
+  optionalLong: new Set(),
+  patternLong: new Set(['from-file']),
+  nameLong: new Set(),
+  negatedLong: new Set(),
+  digits: false,
+};
+const SEARCH_TOOLS = new Map([
+  ['grep', GREP_SPEC], ['egrep', GREP_SPEC], ['fgrep', GREP_SPEC], ['rg', RG_SPEC], ['jq', JQ_SPEC],
+]);
+
+// The operand indices that are a pattern, program or exclusion value; the empty
+// set when any option is outside the spec (see above).
+function searchOperandIndices(spec, operands) {
+  const exempt = new Set();
+  let patternSupplied = false;
+  let firstPositional = -1;
+  let endOfOptions = false;
+  for (let k = 0; k < operands.length; k++) {
+    const t = operands[k].text;
+    if (endOfOptions || !t.startsWith('-') || t === '-') {
+      if (firstPositional === -1) firstPositional = k;
+    } else if (t === '--') {
+      endOfOptions = true;
+    } else if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t.slice(2) : t.slice(2, eq);
+      if (spec.nameLong.has(name)) {
+        exempt.add(k);
+        if (eq === -1) {
+          if (k + 1 >= operands.length) return new Set();
+          exempt.add(++k);
+        }
+      } else if (spec.negatedLong.has(name)) {
+        // Exempt only a negated glob; a selecting glob is read like a file operand.
+        if (eq !== -1) {
+          if (t.startsWith('!', eq + 1)) exempt.add(k);
+        } else {
+          if (k + 1 >= operands.length) return new Set();
+          if (operands[k + 1].text.startsWith('!')) exempt.add(k + 1);
+          k++;
+        }
+      } else if (spec.patternLong.has(name)) {
+        patternSupplied = true;
+        if (eq === -1) k++;
+      } else if (spec.valueLong.has(name)) {
+        if (eq === -1) k += spec.valueLong.get(name);
+      } else if (spec.optionalLong.has(name) || (eq === -1 && spec.noLong.has(name))) {
+        // no operand of its own
+      } else {
+        return new Set();
+      }
+    } else {
+      for (let i = 1; i < t.length; i++) {
+        const ch = t[i];
+        if (spec.noShort.has(ch) || (spec.digits && /[0-9]/.test(ch))) continue;
+        const known = spec.valueShort.has(ch) || spec.patternShort.has(ch) || spec.nameShort.has(ch);
+        if (!known) return new Set();
+        if (spec.patternShort.has(ch)) patternSupplied = true;
+        const attached = i + 1 < t.length;
+        if (spec.nameShort.has(ch)) {
+          if (attached) {
+            if (t.startsWith('!', i + 1)) exempt.add(k);
+          } else if (k + 1 < operands.length) {
+            if (operands[k + 1].text.startsWith('!')) exempt.add(k + 1);
+            k++;
+          } else {
+            return new Set();
+          }
+        } else if (!attached) {
+          k++;
+        }
+        break;
+      }
+    }
+    if (k >= operands.length) return new Set(); // an option ran off the end of the words
+  }
+  if (!patternSupplied && firstPositional !== -1) exempt.add(firstPositional);
+  return exempt;
+}
+
+// `xargs <sub-command words>`: the word index of the sub-command, or -1.
+// `argFile` is true when `-a`/`--arg-file` replaces stdin.
+function xargsSubCommand(operands) {
+  let argFile = false;
+  for (let m = 0; m < operands.length; m++) {
+    const t = operands[m].text;
+    if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
+    if (t.startsWith('--arg-file=')) { argFile = true; continue; }
+    if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
+    if (t.startsWith('--') && t.includes('=')) continue;
+    if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
+    return { subIdx: m, argFile };
+  }
+  return { subIdx: -1, argFile };
+}
+
+// The carve-out for a search sub-command run by xargs, shifted to xargs's own
+// operand indices. Only the search tools: the words xargs appends from stdin
+// follow the sub-command's own, so they never turn the pattern into a file,
+// whereas `xargs cp src .env` would make `.env` a source.
+function xargsSearchIndices(operands) {
+  const { subIdx } = xargsSubCommand(operands);
+  if (subIdx === -1) return new Set();
+  const sub = lastSegment(operands[subIdx].text).toLowerCase();
+  if (!SEARCH_TOOLS.has(sub)) return new Set();
+  const inner = searchOperandIndices(SEARCH_TOOLS.get(sub), operands.slice(subIdx + 1));
+  return new Set([...inner].map((i) => i + subIdx + 1));
 }
 
 // #4639: the `--env-file` word, plus the next operand for the bare flag
@@ -2478,7 +2708,7 @@ function scanCommand(command, depth, reading) {
           k++;
           if (t.text.endsWith('<<<')) hereStrings.push(target.text); // stdin data for a shell
           // Input redirects are reads regardless of the command's exemption.
-          else if (t.read && namesSecret(target.text)) return secretRead(target.text);
+          else if (t.read && namesSecretOperand(target.text)) return secretRead(target.text);
         }
         continue;
       }
@@ -2522,6 +2752,18 @@ function scanCommand(command, depth, reading) {
       // operand — fall through to the operand check below.
     }
 
+    // find's -exec/-execdir/-ok/-okdir actions run a command; a shell given a script is read like any other (#6114).
+    if ((base === 'find' || base === 'find.exe') && depth < MAX_NESTING_DEPTH) {
+      const hit = scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
+      if (hit) return hit;
+    }
+
+    // procps watch joins its operands with spaces and runs the result through `sh -c` (#6114).
+    if (base === 'watch' && depth < MAX_NESTING_DEPTH) {
+      const hit = scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
+      if (hit) return hit;
+    }
+
     if (SHELL_INTERPRETERS.has(base) && depth < MAX_NESTING_DEPTH) {
       const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
       if (hit) return hit;
@@ -2558,9 +2800,50 @@ function isDebuggerAgent(value) {
   return value.slice(value.lastIndexOf(':') + 1) === DEBUGGER_AGENT_NAME;
 }
 
-// Returns the `--agent` value text of a debugger launch, or null.
+// Returns the `--agent` value text of a debugger launch, or null. A command
+// readsEachWay flags is read the way findSecretRead reads it (#5441): under
+// bash's, zsh's and dash's readings, then the plain one, and a launch any of
+// them finds is the answer, so `claude --agent $'gsd-debugger'` is a launch as
+// the unquoted spelling is. readsEachWay joins `\<newline>` continuations first
+// (bash joins them before it reads a quote), then flags dollar-quoting (`$'`,
+// `$"`), a `$${` or `$$(`, and a quote in a command that also holds `((` or
+// `$[`, so `(( n = 1 )); echo "x"` is read every way too. Each body the scan
+// rescans (a substitution, an `eval` operand, a `bash -c` body) comes back
+// through here and picks its own readings, so
+// `bash -c $'claude --agent gsd-debugger'` is decoded by the reading and then
+// read again. A command readsEachWay does not flag gets the plain scan alone,
+// which is the check as it was before #5441.
+//
+// A reading that could not finish (a stack overflow, a spent budget) does not
+// cost the other readings their say: when none of them finds a launch, its
+// error is thrown on, and the command is denied as `command-too-complex`
+// (scanDebuggerSpawn, main), as findSecretRead denies one. Any other error in
+// a reading is reported as readingBug and the scan goes on; an error in the
+// plain reading is thrown as before.
 function findDebuggerCliSpawn(command, depth) {
-  const { tokens, nested } = tokenizeCharged(command);
+  if (!readsEachWay(command)) return findDebuggerCliSpawnUnder(command, depth, false);
+  let unfinished = null;
+  for (const shell of READINGS) {
+    try {
+      const spawn = findDebuggerCliSpawnUnder(command, depth, shell);
+      if (spawn !== null) return spawn;
+    } catch (e) {
+      if (!unfinishedBy(e)) {
+        if (readingBug === null) readingBug = e;
+      } else if (unfinished === null) {
+        unfinished = e;
+      }
+    }
+  }
+  const spawn = findDebuggerCliSpawnUnder(command, depth, false);
+  if (spawn === null && unfinished !== null) throw unfinished;
+  return spawn;
+}
+
+// One reading of findDebuggerCliSpawn: `reading` is false for the plain
+// reading, or the shell whose reading it is (scanCommand).
+function findDebuggerCliSpawnUnder(command, depth, reading) {
+  const { tokens, nested } = tokenizeCharged(command, reading);
 
   for (const sub of nested) {
     if (depth < MAX_NESTING_DEPTH) {
@@ -2669,28 +2952,25 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
 // mode c whether or not a pipe feeds it.
 function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
-  let argFile = false;
-  let subIdx = -1;
-  for (let m = 0; m < operands.length; m++) {
-    const t = operands[m].text;
-    if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
-    if (t.startsWith('--arg-file=')) { argFile = true; continue; }
-    if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
-    if (t.startsWith('--') && t.includes('=')) continue;
-    if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
-    subIdx = m;
-    break;
-  }
+  const { subIdx, argFile } = xargsSubCommand(operands);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
 
-  const subBase = lastSegment(operands[subIdx].text).toLowerCase();
-  if (SHELL_INTERPRETERS.has(subBase)) {
+  // The sub-command is resolved through the same wrappers a top-level command is (`xargs sudo sh -c '…'`,
+  // `xargs timeout 5 sh -c '…'`, `xargs env sh -c '…'`, #6114); nothing but wrappers left reads as the bare word.
+  const resolvedSub = resolveCommand(operands.slice(subIdx));
+  const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
+  const subBase = resolvedSub ? resolvedSub.base : writtenBase;
+  const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
+  const subIsShell = SHELL_INTERPRETERS.has(subBase);
+  if (subIsShell) {
     // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
-    const hit = scanShellInterpreter(operands.slice(subIdx + 1), [], [], s, bySeg, sepAfter, depth, reading);
+    const hit = scanShellInterpreter(subOperands, [], [], s, bySeg, sepAfter, depth, reading);
     if (hit) return hit;
   }
   if (argFile) return null; // stdin replaced by a file — no pipeline inference
-  if (NON_READING_COMMANDS.has(subBase)) return null;
+  // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
+  // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
+  if (NON_READING_COMMANDS.has(writtenBase)) return null;
 
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
@@ -2701,10 +2981,118 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
+  if (subIsShell) {
+    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+    const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
+    if (hit) return hit;
+  }
   for (const w of prevCmd.operands) {
     if (operandNamesSecret(w.text)) return secretRead(w.text);
+    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+    const received = xargsUnquoted(w.text);
+    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
   }
   return null;
+}
+
+// A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
+function xargsUnquoted(text) {
+  return text.replace(/["'\\]/g, '');
+}
+
+// xargs's replace string: `-I STR`, `-ISTR`, `-i[STR]`, `--replace[=STR]` (default `{}`), or null without one.
+function xargsReplaceStr(operands, subIdx) {
+  for (let i = 0; i < subIdx; i++) {
+    const t = operands[i].text;
+    if (t === '-I') return operands[i + 1] ? operands[i + 1].text : null;
+    if (t.startsWith('-I') && t.length > 2) return t.slice(2);
+    if (t === '-i' || t === '--replace') return '{}';
+    if (t.startsWith('-i') && t.length > 2 && !t.startsWith('--')) return t.slice(2);
+    if (t.startsWith('--replace=')) return t.slice('--replace='.length) || '{}';
+  }
+  return null;
+}
+
+// `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
+// operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
+// (quotes and backslashes removed), is read as the script, or substituted into it.
+function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
+  const cIdx = shellOperands.findIndex((w) => DASH_C_RE.test(w.text));
+  if (cIdx === -1) return null;
+  const script = shellOperands[cIdx + 1];
+  for (const w of upstream) {
+    const word = xargsUnquoted(w.text);
+    let text = null;
+    if (!script || (replaceStr !== null && script.text === replaceStr)) text = word;
+    else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) text = script.text.split(replaceStr).join(word);
+    if (text !== null) {
+      const hit = findSecretRead(text, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+// `find … -exec CMD … ;` / `+` (also -execdir, -ok, -okdir): a shell among the action commands is read through
+// scanShellInterpreter, so `find . -exec sh -c 'cat .env' \;` reads its script. An action whose command is not a
+// shell needs nothing more: its operands are already find's operands, which the ordinary check reads.
+const FIND_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
+  for (let i = 0; i < operands.length; i++) {
+    if (!FIND_ACTIONS.has(operands[i].text)) continue;
+    const action = [];
+    let j = i + 1;
+    while (j < operands.length && operands[j].text !== ';' && operands[j].text !== '+') action.push(operands[j++]);
+    i = j;
+    const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// A command another program launches (a find action, a `watch -x` command): a shell is read through
+// scanShellInterpreter, and the launchers that re-interpret a string (eval, watch, xargs) are read as they are at the
+// top level. Anything else needs nothing more: its operands are the launcher's, which the ordinary check reads.
+function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
+  const cmd = resolveCommand(words);
+  if (!cmd) return null;
+  if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
+  if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1);
+  if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
+  if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading);
+  return null;
+}
+
+// procps `watch [options] command…`: without -x/--exec the operands are joined with spaces and handed to
+// `sh -c`, so the joined string is a shell script (quotes inside an operand are removed a second time:
+// `watch cat '".env"'` runs `cat .env`, and `watch 'cat .env'` is a whole script). With -x/--exec the command
+// runs without a shell and its operands are plain words, which the ordinary check judges as before.
+const WATCH_INTERVAL_SHORT = 'n';
+function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
+  let exec = false;
+  let k = 0;
+  for (; k < operands.length; k++) {
+    const text = operands[k].text;
+    if (text === '--') { k++; break; }
+    if (!text.startsWith('-') || text === '-') break;
+    if (text === '--exec') { exec = true; continue; }
+    if (text === '--interval') { k++; continue; }
+    if (text.startsWith('--')) continue;
+    for (let c = 1; c < text.length; c++) {
+      if (text[c] === 'x') exec = true;
+      if (text[c] === WATCH_INTERVAL_SHORT) {
+        if (c === text.length - 1) k++; // `-n 5`: the value is the next word; `-n5` carries it
+        break;
+      }
+    }
+  }
+  if (k >= operands.length) return null;
+  // -x/--exec: no shell re-reads the operands (`watch -x cat '".env"'` reads a file named `".env"`), but the command
+  // itself may be a shell or a launcher that does (`watch -x sh -c 'cat .env'`).
+  if (exec) return scanLaunchedCommand(operands.slice(k), s, bySeg, sepAfter, depth, reading);
+  return findSecretRead(operands.slice(k).map((w) => w.text).join(' '), depth + 1);
 }
 
 // ---------------------------------------------------------------------------

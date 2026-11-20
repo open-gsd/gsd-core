@@ -30,7 +30,7 @@ if [[ -z "${GSD_CONFIG_PATH:-}" ]]; then
     WS=$(tr -d '\n\r' < .planning/active-workstream)
     GSD_CONFIG_PATH=".planning/workstreams/${WS}/config.json"
   else
-    GSD_CONFIG_PATH=".planning/config.json"
+    GSD_CONFIG_PATH="$(gsd_run query config-path --raw ${GSD_WS:+--ws=${GSD_WS##* }})"
   fi
 fi
 ```
@@ -640,7 +640,7 @@ the central setter.
 
 ### Section 8 — Model Policy
 
-This section configures the `model_policy` key in `.planning/config.json`. Model policy
+This section configures the `model_policy` key in `$GSD_CONFIG_PATH`. Model policy
 defines which AI models GSD uses at each cost tier (low / medium / high), independently
 of the `runtime` and `model_profile` selections above. Two paths are offered:
 

@@ -125,6 +125,12 @@ ${AGENT_SKILLS_AUDITOR}
 
 Spawn as Task with model `AUDITOR_MODEL`.
 
+<!-- #2517 model-omit-on-inherit -->
+
+**Omit `model=` entirely when `AUDITOR_MODEL` is `inherit` or empty** (#2517) — passing either
+value through as an argument fails the spawn on runtimes without native tier aliases. See
+@gsd-core/references/model-profile-resolution.md.
+
 ## 4. Parse Auditor Result
 
 Read the written EVAL-REVIEW.md. Extract:

@@ -5689,6 +5689,93 @@ describe('init — GSD_PROJECT scoping (#3964)', () => {
   });
 });
 
+// ─── #5858: research_dir / latest milestone / phase archive follow the scoped base ───
+// `milestone complete` writes MILESTONES.md and milestones/<v>-phases under
+// planningPaths(cwd).planning (project- and workstream-scoped), and the same
+// init.new-milestone payload already names that base in milestones_path and
+// archive_dir. The latest-milestone read, phase_archive_path and research_dir
+// must agree with it instead of reading the root .planning/.
+describe('init.new-project / init.new-milestone — scoped research, milestones and archive (#5858)', () => {
+  function seed() {
+    const tmpDir = fs.realpathSync(createTempProject('gsd-init-scoped-ms-'));
+    const p = (...s) => path.join(tmpDir, '.planning', ...s);
+    fs.writeFileSync(p('MILESTONES.md'), '## v9.9 Root (Shipped: 2026-01-01)\n');
+    fs.mkdirSync(p('second-product', 'phases'), { recursive: true });
+    fs.writeFileSync(p('second-product', 'PROJECT.md'), '# Second Product\n');
+    fs.writeFileSync(p('second-product', 'MILESTONES.md'), '## v1.0 Second (Shipped: 2026-02-02)\n');
+    fs.mkdirSync(p('workstreams', 'ws1', 'phases'), { recursive: true });
+    fs.writeFileSync(p('workstreams', 'ws1', 'MILESTONES.md'), '## v2.3 Stream (Shipped: 2026-03-03)\n');
+    return tmpDir;
+  }
+  const env = (extra) => ({ GSD_WORKSTREAM: '', GSD_PROJECT: '', ...extra });
+
+  test('under GSD_PROJECT, new-project and new-milestone name the project\'s research dir', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    for (const verb of ['init.new-project', 'init.new-milestone']) {
+      const r = runGsdTools(['query', verb], tmpDir, env({ GSD_PROJECT: 'second-product' }));
+      assert.ok(r.success, r.error);
+      assert.equal(JSON.parse(r.output).research_dir, absPlanningPath(tmpDir, 'second-product', 'research'),
+        `${verb}: research_dir must sit beside project_path, not at the root .planning/research`);
+    }
+  });
+
+  test('under GSD_PROJECT, new-milestone reads the project\'s MILESTONES.md and archive', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    const r = runGsdTools(['query', 'init.new-milestone'], tmpDir, env({ GSD_PROJECT: 'second-product' }));
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.equal(out.milestones_path, absPlanningPath(tmpDir, 'second-product', 'MILESTONES.md'));
+    assert.equal(out.latest_completed_milestone, 'v1.0', 'must read the MILESTONES.md that milestones_path names');
+    assert.equal(out.phase_archive_path, absPlanningPath(tmpDir, 'second-product', 'milestones', 'v1.0-phases'));
+  });
+
+  test('under --ws, new-milestone reads the workstream\'s MILESTONES.md and archive', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    const r = runGsdTools(['query', 'init.new-milestone', '--ws', 'ws1'], tmpDir, env());
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.equal(out.archive_dir, absPlanningPath(tmpDir, 'workstreams', 'ws1', 'milestones'));
+    assert.equal(out.latest_completed_milestone, 'v2.3', 'must read the MILESTONES.md that milestones_path names');
+    assert.equal(out.phase_archive_path, absPlanningPath(tmpDir, 'workstreams', 'ws1', 'milestones', 'v2.3-phases'));
+    // research/ is shared by a project's workstreams, like PROJECT.md.
+    assert.equal(out.research_dir, absPlanningPath(tmpDir, 'research'));
+  });
+
+  test('under GSD_PROJECT with phases but no MILESTONES.md, no milestone or archive is inherited from the root', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'fresh', 'phases', '01-a'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'fresh', 'PROJECT.md'), '# Fresh\n');
+    const r = runGsdTools(['query', 'init.new-milestone'], tmpDir, env({ GSD_PROJECT: 'fresh' }));
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.equal(out.latest_completed_milestone, null, 'must not read the root v9.9');
+    assert.equal(out.phase_archive_path, null, 'reset-phase-safety must stop rather than archive into the root');
+  });
+
+  test('under --ws, new-project keeps the project-level research dir', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    const r = runGsdTools(['query', 'init.new-project', '--ws', 'ws1'], tmpDir, env());
+    assert.ok(r.success, r.error);
+    assert.equal(JSON.parse(r.output).research_dir, absPlanningPath(tmpDir, 'research'));
+  });
+
+  test('the root project is unchanged', (t) => {
+    const tmpDir = seed();
+    t.after(() => cleanup(tmpDir));
+    const r = runGsdTools(['query', 'init.new-milestone'], tmpDir, env());
+    assert.ok(r.success, r.error);
+    const out = JSON.parse(r.output);
+    assert.equal(out.latest_completed_milestone, 'v9.9');
+    assert.equal(out.phase_archive_path, absPlanningPath(tmpDir, 'milestones', 'v9.9-phases'));
+    assert.equal(out.research_dir, absPlanningPath(tmpDir, 'research'));
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // #4040: partial-init routing signal (interrupted bootstrap detection)
 // ─────────────────────────────────────────────────────────────────────────────

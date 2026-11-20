@@ -882,7 +882,7 @@
     "probe-core.property.test.cjs": 168,
     "probe-core.test.cjs": 121,
     "process-seam-spawn-metrics.test.cjs": 1201,
-    "process-seam.test.cjs": 8159,
+    "process-seam.process.test.cjs": 8159,
     "product-name-purity.test.cjs": 26,
     "profile-output.test.cjs": 4878,
     "profile-pipeline.test.cjs": 2285,

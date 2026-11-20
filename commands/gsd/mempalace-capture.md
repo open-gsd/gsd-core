@@ -27,9 +27,9 @@ Then proceed to Step 1.
 
 ## Step 1 -- Config Gate
 
-Check whether the MemPalace capability is enabled by reading `.planning/config.json` directly with the Read tool.
+Check whether the MemPalace capability is enabled by reading `{planning_root}/config.json` directly with the Read tool. (`{planning_root}`: the active scope's root, from `planning.inspect`)
 
-1. Read `.planning/config.json` with the Read tool.
+1. Read `{planning_root}/config.json` with the Read tool.
 2. If the file does not exist, or `config.mempalace` is absent, or `config.mempalace.enabled !== true`, or `config.mempalace.capture_artifacts === false`: display the disabled message and **STOP**.
 3. Otherwise proceed to Step 2.
 
@@ -51,7 +51,7 @@ This step is `onError: skip` at `discuss:post` / `plan:post` / `verify:post` -- 
    - `CONTEXT.md` → `decisions`
    - `PLAN.md` → `planning`
    - `SUMMARY.md` → `milestones`
-   (Confirmed problem→fix pairs go to `problems` — see the `capture-problems` fragment used at `execute:wave:post`.)
+   (Confirmed problem→fix pairs go to `problems` — see the `capture-problems` fragment used at `execute:post`.)
 3. **Wing.** `config.mempalace.wing` if non-empty, else `config.project_code`, else the repo directory name.
 4. **Mode / transport.** Read `config.mempalace.memory_mode`. Prefer MCP (`mempalace_*`) when your MemPalace MCP server is registered and your runtime permits those tools; otherwise use the `mempalace` CLI (covered by this skill's `Bash` allow-tool), as in `mempalace-recall`.
 

@@ -24,6 +24,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Install GSD as a Pi package](how-to/install-gsd-as-a-pi-package.md) — `pi install npm:@opengsd/gsd-core` instead of the gsd-core installer, with the same commands and extension
 - [Install a minimal GSD and add skills later](how-to/install-minimal-and-add-skills.md) — install only the core skills, then grow the surface with profiles and `/gsd-surface`
 - [Attach a plugin-provided skill to a GSD agent](how-to/attach-a-plugin-skill-to-a-gsd-agent.md) — use the `global:plugin:skill` entry form to load Claude Code plugin skills into agent prompts
+- [Run a plan on another runtime](how-to/run-a-plan-on-another-runtime.md) — declare `executor_runtime` on a plan so a different runtime's CLI executes it, with the gate, the model source and every fallback reason
 - [Enable the Claude orchestration Workflow backend (BETA)](how-to/enable-claude-orchestration-workflow-backend.md) — turn the capability on, check whether workflows are available in your Claude Code setup, and emit a Workflow script for a phase
 - [Review reapplied patches hunk by hunk](how-to/review-reapplied-patches.md) — after `/gsd-update`, keep, retire, or rewrite each of your edits that upstream adopted, reworded around, or orphaned
 - [Discuss a phase](how-to/discuss-a-phase.md) — capture implementation decisions before planning begins
@@ -87,6 +88,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
 - [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
 - [Enable live-DOM verification](how-to/enable-live-dom-verification.md) — opt a project into browser-backed UI acceptance checks during execution, handle the browser-profile lock, and tell "nothing to report" apart from "could not look"
+- [Enable deep verification](how-to/enable-deep-verification.md) — opt a project into agent-driven behavior enumeration and browser execution before UAT, widen it beyond UI phases, and read what is left for you to confirm
 - [Enable UI interaction capture](how-to/enable-ui-interaction-capture.md) — let `/gsd-ui-review`'s auditor capture hover, focus, open-menu and filled-form states through the `chrome-devtools` CLI from Bash, with no MCP server
 - [Develop a Capability for GSD 1.5+](how-to/develop-a-capability.md) — add feature Capabilities, hook fragments, and registry entries
 - [Develop a task-content resolver capability](how-to/develop-a-task-content-resolver-capability.md) — declare a `taskContentResolver` so `execute-plan.md` resolves per-task content from your external issue tracker instead of `PLAN.md`

@@ -21,7 +21,7 @@
  * stayed GREEN.
  *
  * This file instead drives a REAL spawned `bin/install.js` (via
- * `tests/helpers/install-shared.cjs`'s `runMinimalInstall` — the same driver
+ * `tests/helpers/install-shared.cjs`'s `runMinimalInstall` (through `copyRuntimeFixture`, which copies a tree it made) — the same driver
  * `tests/workflow-fragments-emission.install.test.cjs` and
  * `tests/agent-fragments-emission.install.test.cjs` use) and compares its
  * REAL emitted output against the catalog's served content, renamed to
@@ -63,7 +63,7 @@ const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const { cleanup } = require('./helpers.cjs');
-const { runMinimalInstall, installerEnv } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture, installerEnv } = require('./helpers/install-shared.cjs');
 const { buildOverlayRepo } = require('./helpers/overlay-repo.cjs');
 const { ensureHooksDist } = require('./helpers/hooks-dist.cjs');
 
@@ -76,7 +76,7 @@ const MARKER_TOKEN = 'gsd:section';
 const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // hooks/dist/ is gitignored and only produced by `npm run build:hooks`. This
-// suite's real spawned install (runMinimalInstall) and overlay builds
+// suite's real spawned install (the shared fixture a copy is made from) and overlay builds
 // (buildOverlayRepo, which hard-links every leaf under REPO_ROOT including
 // hooks/dist/) both need it populated. In CI the scoped/windows jobs do not
 // run build:hooks first, so — absent this guard — the suite only passes when
@@ -157,7 +157,7 @@ function installOverlay(overlayRoot, runtime, extraArgs = []) {
 describe('the parity gate — real installer vs real catalog', () => {
   test('installer composition decision matches the served catalog for every file in the real installed tree (row 48/52)', (t) => {
     const catalog = buildCatalog({ root: REPO_ROOT });
-    const install = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const install = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     t.after(() => cleanup(install.root));
 
     // Anti-vacuity guard: the installer must actually have emitted files —

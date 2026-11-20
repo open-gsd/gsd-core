@@ -4,13 +4,16 @@
  *
  * Establishes the exact contract every extracted rule builds onto: the
  * frozen `SEVERITY`/`REMEDY_ACTION`/`REMEDY_RISK` enums, the
- * `Diagnostic`/`Remedy`/`Rule` shapes, the `RULES` container (the 32 rules
- * extracted from `cmdValidateHealth`, `src/verify.cts:1616-2577`, are
- * concatenated in from each rule-group file under
- * `src/health-diagnostic-rules/`), the `evaluateRules` evaluator, and the
+ * `Diagnostic`/`Remedy`/`Rule` shapes, the `RULES` container (the 35 rules
+ * — 31 extracted from `cmdValidateHealth` in `src/verify.cts`, plus
+ * the new W028, W029, W030 and W031 — are concatenated in from the nine
+ * rule-group files under `src/health-diagnostic-rules/`), the
+ * `evaluateRules` evaluator, and the
  * `applyRepairs` `--repair`/`--backfill` dispatcher — whose per-action
  * handlers are REAL here (ported behavior-preserving from
- * `verify.cts:2405-2553`'s repair switch), not stubs.
+ * `cmdValidateHealth`'s repair switch in `verify.cts`), not stubs. Line
+ * citations of the form `verify.cts:NNNN` below are historical: they point
+ * at `verify.cts` as it stood at extraction time (#3309).
  *
  * `applyRepairs` does not receive a `PlanningSnapshot` (its call-site
  * signature, `(cwd, diagnostics, repair, backfill)`, is a locked contract —
@@ -62,8 +65,14 @@ type Rule = healthDiagnosticTypesMod.Rule;
 // ─── Rule table ─────────────────────────────────────────────────────────────
 
 // Populated by concatenating each rule group's exported `RULES` array (design
-// doc, "Rule table organization" section) — the 32 rule functions extracted
-// from `cmdValidateHealth`, `src/verify.cts:1616-2577`.
+// doc, "Rule table organization" section) — the rule functions extracted
+// from `cmdValidateHealth` in `src/verify.cts`, plus the rules added since
+// (W028, W029, W030, W031). The count is asserted only by
+// `tests/health-diagnostic.test.cjs`'s frozen RULES test;
+// `scripts/lint-health-diagnostic-rule-table.cjs` checks that every code is
+// unique, every severity is valid and every code has a fixture test (except
+// the codes it lists in `PERMANENTLY_INERT_CODES`, currently W024's inert
+// stub), but it does not check the count.
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import rootExistenceMod = require('./health-diagnostic-rules/root-existence.cjs');
@@ -216,27 +225,25 @@ interface RepairPaths {
 /**
  * Derive every filesystem path a repair handler needs, from `cwd` alone —
  * exactly how `cmdValidateHealth` derived them pre-migration
- * (`verify.cts:1644-1652`/`2301-2302`). `config.json`/`MILESTONES.md`/
- * `milestones/` are root-scoped (`planningRoot`); `STATE.md` is
- * workstream-scoped (`planningDir`) — the same root-vs-workstream split
- * `buildConfigField`/`buildStateFields` (`planning-snapshot.cts`) already
- * document for the read side.
+ * (`verify.cts:1644-1652`/`2301-2302`). `config.json` is project-scoped (the project base,
+ * never the workstream); `STATE.md`, `MILESTONES.md` and `milestones/` are scoped by
+ * `planningDir` (#5881): the workstream's own pair under a workstream, which is where
+ * `milestone complete` archives to and `init.complete-milestone` reports, and the same pair the
+ * W018 detection (`buildMilestoneArchiveStatusField`, `planning-snapshot.cts`) compares.
  */
 function repairPaths(cwd: string): RepairPaths {
-  // #3749: the project root is PROJECT-aware but deliberately NOT workstream-
-  // scoped — under GSD_PROJECT, config.json/MILESTONES.md/milestones belong to
-  // `.planning/<project>/` (the same base init.new-project's config_path
-  // names); under GSD_WORKSTREAM they stay at the workstream PARENT, keeping
-  // the documented root-vs-workstream split. planningDir(cwd, null) is exactly
-  // that base: project env honored, ws env suppressed.
+  // #3749: the config base is PROJECT-aware but deliberately NOT workstream-scoped — under
+  // GSD_PROJECT, config.json belongs to `.planning/<project>/` (the same base
+  // init.new-project's config_path names). planningDir(cwd, null) is exactly that base: project
+  // env honored, ws env suppressed. MILESTONES.md and milestones/ follow the workstream (#5881).
   const rootBase = planningDir(cwd, null);
   const wsBase = planningDir(cwd);
   return {
     rootBase,
     configPath: path.join(rootBase, 'config.json'),
     statePath: path.join(wsBase, 'STATE.md'),
-    milestonesPath: path.join(rootBase, 'MILESTONES.md'),
-    milestonesArchiveDir: path.join(rootBase, 'milestones'),
+    milestonesPath: path.join(wsBase, 'MILESTONES.md'),
+    milestonesArchiveDir: path.join(wsBase, 'milestones'),
   };
 }
 

@@ -120,13 +120,16 @@ After applying each fix:
 <step name="setup_worktree">
 **Isolation: create a dedicated git worktree BEFORE touching any files.** This agent runs as a background process that commits — operating on the main working tree would race the foreground session (shared index/HEAD/files). Every instance runs in its own isolated worktree.
 
-**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase` and `/gsd:quick`, plus the `execute-plan` and `diagnose-issues` workflows, all honor — this is the only writer that hand-rolls its own worktree).** Read it directly via `node` from `.planning/config.json` (NOT the gsd-tools CLI — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
+**Honor `workflow.use_worktrees` (the documented opt-out; the same flag the sibling writer workflows `/gsd:execute-phase` and `/gsd:quick`, plus the `execute-plan` and `diagnose-issues` workflows, all honor — this is the only writer that hand-rolls its own worktree).** Read it directly via `node` from the scoped config.json (path derived from `GSD_PROJECT`/`GSD_WS`, flat when unset; NOT the gsd-tools CLI — this step runs before the launcher preamble is sourced). When `false`: edit/commit in the main checkout directly — `wt="."`, `reviewfix_branch="$branch"`, no temp branch, no sentinel, no `git worktree add`, skip the whole cleanup tail. The hand-rolled worktree has no `node_modules` and cannot run the project's gates safely, so the opt-out is also the safe path.
 
 ```bash
-USE_WORKTREES=$(node -e '
+USE_WORKTREES=$(GSD_WS="${GSD_WS:-}" node -e '
   try {
     const fs = require("fs");
-    const p = (process.env.GSD_PROJECT_DIR || process.cwd()) + "/.planning/config.json";
+    const path = require("path");
+    const seg = (v) => (/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(v || "") ? [v] : []);
+    const ws = seg((process.env.GSD_WS || "").replace(/^--ws\s+/, ""));
+    const p = path.join(process.env.GSD_PROJECT_DIR || process.cwd(), ".planning", ...seg(process.env.GSD_PROJECT), ...(ws.length ? ["workstreams", ...ws] : []), "config.json");
     const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
     process.stdout.write(String((cfg.workflow && cfg.workflow.use_worktrees) ?? true));
   } catch { process.stdout.write("true"); }
@@ -183,8 +186,10 @@ else
   # the session's permission scope; an absolute /tmp path prompts on every
   # read and breaks short-path handling on Windows). $$-PID + epoch suffix
   # keeps concurrent runs for the same phase from colliding.
-  main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"
-  wt="$main_repo/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"
+  # $session_root: toplevel of this session's checkout (the worktree that has $branch
+  # checked out; the first `git worktree list` entry is the main checkout, #5876).
+  session_root="$(git rev-parse --show-toplevel)"
+  wt="$session_root/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"
   mkdir -p "$wt"
 
   # Attach to a NEW branch (git refuses to check out the same branch in two
@@ -220,16 +225,21 @@ if [ "$USE_WORKTREES" = "false" ]; then
 fi
 
 # Step 1: fast-forward $branch to capture commits made on $reviewfix_branch.
-# Run from main_repo (the user's checkout owns $branch). --ff-only means we
-# never silently drop/rewrite history on divergence — on failure this fails
-# loudly and leaves the temp branch for manual merge.
-main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"
+# Run it in the worktree that has $branch checked out (#5876), found by the
+# `branch refs/heads/$branch` porcelain line (substr($0, 10) skips "worktree " and
+# keeps spaces) — not the first entry (the main checkout); `branch --show-current`
+# re-confirms the path has $branch checked out. --ff-only means we never silently drop/rewrite history on
+# divergence — on failure this fails loudly and leaves the temp branch.
+owner_wt="$(git worktree list --porcelain | awk -v ref="refs/heads/$branch" '
+  /^worktree / { path = substr($0, 10) }
+  $0 == "branch " ref { print path; exit }')"
 ff_status=0
-if git -C "$main_repo" merge --ff-only "$reviewfix_branch" 2>&1; then
+if [ -n "$owner_wt" ] && [ "$(git -C "$owner_wt" branch --show-current 2>/dev/null)" = "$branch" ] \
+   && git -C "$owner_wt" merge --ff-only "$reviewfix_branch" 2>&1; then
   ff_status=0
 else
   ff_status=$?
-  echo "WARN: could not fast-forward $branch to $reviewfix_branch (exit $ff_status)."
+  echo "WARN: could not fast-forward $branch to $reviewfix_branch in ${owner_wt:-<no worktree has it checked out>} (exit $ff_status)."
   echo "      The temp branch $reviewfix_branch is preserved for manual merge."
 fi
 
@@ -238,7 +248,7 @@ git worktree remove "$wt" --force
 
 # Step 3: delete the temp branch ONLY if the fast-forward succeeded.
 if [ "$ff_status" -eq 0 ]; then
-  git -C "$main_repo" branch -D "$reviewfix_branch" || true
+  git -C "$owner_wt" branch -D "$reviewfix_branch" || true
 fi
 
 # Step 4: drop the recovery sentinel ONLY after worktree remove succeeds —
