@@ -270,7 +270,7 @@ Exit.
 If the milestone scope is unchanged, update STATE.md Roadmap Evolution:
 
 ```bash
-gsd_run query state.add-roadmap-evolution \
+gsd_run query state.add-roadmap-evolution ${GSD_WS:+--ws=${GSD_WS##* }} \
   --phase {target} \
   --action edited \
   --note "edited fields: {changed_field_list}"

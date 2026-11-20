@@ -38,9 +38,10 @@
  *   correct tree while a missed prose mention only loses one detection
  *   channel.
  *
- * `package-lock.json` deletions additionally fail if any workflow still
- * uses `npm ci` or `cache: 'npm'`/`cache: "npm"` — those depend on a
- * lockfile even though they never spell out its filename.
+ * Deleting the root `package-lock.json` additionally fails if any workflow
+ * still uses `npm ci` or `cache: 'npm'`/`cache: "npm"` — those depend on
+ * that lockfile even though they never spell out its filename. A lockfile
+ * elsewhere in the tree (a test fixture's) is not the one they read (#6375).
  *
  * ## False-positive risk (moderate, per audit)
  *
@@ -317,7 +318,9 @@ function findSurvivingReferences(deletedFiles, corpus, survivingBasenames = new 
         });
       }
     }
-    if (basename === 'package-lock.json') {
+    // Only the root lockfile: a workflow's `npm ci` and `cache: 'npm'` run at
+    // the repository root, so a fixture's own lockfile is not what they read (#6375).
+    if (deletedFile === 'package-lock.json') {
       for (const { file, content } of corpus) {
         if (file.startsWith('.github/workflows') && referencesNpmLockfileDependency(content)) {
           violations.push({

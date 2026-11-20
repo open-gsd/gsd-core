@@ -235,15 +235,20 @@ The cleanup tail (commit fixes -> remove worktree -> drop recovery sentinel) MUS
 # #2825: honor workflow.use_worktrees — the documented opt-out. When false,
 # edit/commit in the main checkout (wt=".", no temp branch, no sentinel, no
 # cleanup tail). Read the flag the same way the four sibling writer workflows
-# do. NOTE: this read parses .planning/config.json directly via `node` rather
+# do. NOTE: this read parses the config file directly via `node` rather
 # than the gsd-tools CLI, because setup_worktree runs BEFORE the canonical
 # launcher preamble is sourced — invoking the CLI here would be undefined at
 # runtime and violates the runtime-launcher-parity preamble-ordering rule.
 # Once the preamble is sourced (later steps), the CLI is available.
-USE_WORKTREES=$(node -e '
+# The scoped path is derived from GSD_PROJECT / GSD_WS (the planningDir layout, no CLI);
+# both unset is the flat project; a missing or unreadable config fails open.
+USE_WORKTREES=$(GSD_WS="${GSD_WS:-}" node -e '
   try {
     const fs = require("fs");
-    const p = (process.env.GSD_PROJECT_DIR || process.cwd()) + "/.planning/config.json";
+    const path = require("path");
+    const seg = (v) => (/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(v || "") ? [v] : []);
+    const ws = seg((process.env.GSD_WS || "").replace(/^--ws\s+/, ""));
+    const p = path.join(process.env.GSD_PROJECT_DIR || process.cwd(), ".planning", ...seg(process.env.GSD_PROJECT), ...(ws.length ? ["workstreams", ...ws] : []), "config.json");
     const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
     process.stdout.write(String((cfg.workflow && cfg.workflow.use_worktrees) ?? true));
   } catch { process.stdout.write("true"); }
@@ -327,10 +332,12 @@ else
   # valid and short on Windows as well as POSIX, and is covered by the single
   # `.gitignore` rule for `.claude/` (`.gitignore:12`). Uniqueness across
   # concurrent runs for the same phase comes from the PID (`$$`) + epoch suffix
-  # (replacing mktemp's XXXXXX). `$main_repo` is resolved the same way the
-  # cleanup tail below resolves it (`git worktree list --porcelain` first line).
-  main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"
-  wt="$main_repo/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"
+  # (replacing mktemp's XXXXXX). `$session_root` is the toplevel of the checkout this
+  # session runs in, i.e. the worktree that has `$branch` checked out. The first
+  # `git worktree list` entry is the MAIN checkout, which owns a different branch
+  # when the fixer starts in a linked worktree (#5876).
+  session_root="$(git rev-parse --show-toplevel)"
+  wt="$session_root/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"
   mkdir -p "$wt"
 
   # Create a temp branch from the current branch tip so the worktree
@@ -366,7 +373,7 @@ Concrete steps:
 1. Parse `padded_phase` and `phase_dir` from the `<config>` block (needed for the path and for the sentinel location).
 2. Resolve the current branch: `branch=$(git branch --show-current)`. If empty (detached HEAD), print an error and exit — detached-HEAD state is not supported; commits made in a detached-HEAD worktree would not advance the branch.
 3. **Recovery check (#2839, #2990):** If `${phase_dir}/.review-fix-recovery-pending.json` already exists, a prior run was interrupted. Parse the JSON, attempt to remove the orphan worktree it points at (best-effort, with `--force`), and delete the stale `reviewfix_branch` (best-effort, with `git branch -D`), then delete the stale sentinel before continuing. This makes a re-run of `/gsd:code-review --fix` self-healing.
-4. Create a unique worktree path **inside the repo**: `main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"` then `wt="$main_repo/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"` + `mkdir -p "$wt"`. The path lives under the same `.claude/worktrees/` dir the harness-managed executor worktrees use (already gitignored via `.claude/`, already in the session's permission scope), and the `$$`-PID + epoch suffix ensures concurrent runs for the same phase do not collide (#2647 — an absolute `/tmp` path landed outside the project tree and prompted on every read).
+4. Create a unique worktree path **inside the repo**: `session_root="$(git rev-parse --show-toplevel)"` (the checkout this session runs in, which has `$branch` checked out; not the first `git worktree list` entry, which is the main checkout, #5876) then `wt="$session_root/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"` + `mkdir -p "$wt"`. The path lives under the same `.claude/worktrees/` dir the harness-managed executor worktrees use (already gitignored via `.claude/`, already in the session's permission scope), and the `$$`-PID + epoch suffix ensures concurrent runs for the same phase do not collide (#2647 — an absolute `/tmp` path landed outside the project tree and prompted on every read).
 5. Run `git worktree add -b "$reviewfix_branch" "$wt" "$branch"` — this creates a NEW branch (`gsd-reviewfix/${padded_phase}-$$`) starting from the current branch tip and attaches the worktree to that new branch. Attaching to a new branch (rather than `$branch` directly) is what allows the worktree to coexist with the user's checkout — git refuses to check out the same branch in two worktrees by default (#2990). Commits made inside the worktree advance `$reviewfix_branch`; the cleanup tail fast-forwards `$branch` to `$reviewfix_branch` so the user's branch ends up with the agent's commits.
 6. **Write the recovery sentinel** at `${phase_dir}/.review-fix-recovery-pending.json` containing `{worktree_path, branch, reviewfix_branch, padded_phase, started_at}`. Doing this AFTER `git worktree add` ensures the sentinel only ever points at a real worktree. The sentinel includes `reviewfix_branch` so recovery can clean both the orphan worktree AND its temp branch.
 7. All subsequent file reads, edits, and commits happen inside `$wt` (which is on `$reviewfix_branch`, not `$branch`).
@@ -386,27 +393,32 @@ if [ "$USE_WORKTREES" = "false" ]; then
 fi
 
 # Step 1 (#2990): fast-forward $branch to capture the commits the agent
-# made on $reviewfix_branch. Run from the main repo (not $wt) — the user's
-# checkout owns $branch. --ff-only ensures we never silently drop or
-# rewrite history if the user committed to $branch concurrently; on
-# divergence, this fails loudly and the temp branch is left for the
-# user to inspect/merge manually. We deliberately resolve the main repo
-# path via `git worktree list --porcelain` rather than assuming $PWD,
-# because the agent ran inside $wt.
-# Strip the literal "worktree " prefix and print the rest of the line, then
-# exit on the first match. This preserves paths that contain spaces
-# (awk '$2' would truncate "/path/with spaces/repo" to "/path/with").
-main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"
+# made on $reviewfix_branch. Run it in the worktree that has $branch checked
+# out (#5876) — NOT the first `git worktree list` entry, which is the main
+# checkout and owns a different branch when the agent was started from a
+# linked worktree. --ff-only ensures we never silently drop or rewrite history
+# if the user committed to $branch concurrently; on divergence, this fails
+# loudly and the temp branch is left for the user to inspect/merge manually.
+# The owner is found by the `branch refs/heads/$branch` line of the porcelain
+# listing, because the agent ran inside $wt. substr($0, 10) keeps a path that
+# contains spaces intact (awk '$2' would truncate "/path/with spaces/repo").
+owner_wt="$(git worktree list --porcelain | awk -v ref="refs/heads/$branch" '
+  /^worktree / { path = substr($0, 10) }
+  $0 == "branch " ref { print path; exit }')"
 ff_status=0
 # Capture the exit code of `git merge` directly. `if ! cmd; then ff_status=$?`
 # captures the exit code of the `!` operator (always 1 when the inner cmd
 # failed) — masking the real merge exit code. Use the success/else split
-# instead so $? in the else-branch is the merge command's exit code.
-if git -C "$main_repo" merge --ff-only "$reviewfix_branch" 2>&1; then
+# instead so $? in the else-branch is the merge command's exit code (an empty
+# $owner_wt makes it the `[ -n ]` test's 1: no worktree owns $branch). The
+# `branch --show-current` check re-confirms the resolved path really has $branch
+# checked out, so a path truncated at a newline never receives the merge.
+if [ -n "$owner_wt" ] && [ "$(git -C "$owner_wt" branch --show-current 2>/dev/null)" = "$branch" ] \
+   && git -C "$owner_wt" merge --ff-only "$reviewfix_branch" 2>&1; then
   ff_status=0
 else
   ff_status=$?
-  echo "WARN: could not fast-forward $branch to $reviewfix_branch (exit $ff_status)."
+  echo "WARN: could not fast-forward $branch to $reviewfix_branch in ${owner_wt:-<no worktree has it checked out>} (exit $ff_status)."
   echo "      The temp branch $reviewfix_branch is preserved for manual merge."
 fi
 
@@ -422,7 +434,7 @@ git worktree remove "$wt" --force
 # Step 3: delete the temp branch ONLY if the fast-forward succeeded. If
 # it didn't, leaving the branch lets the user inspect/merge manually.
 if [ "$ff_status" -eq 0 ]; then
-  git -C "$main_repo" branch -D "$reviewfix_branch" || true
+  git -C "$owner_wt" branch -D "$reviewfix_branch" || true
 fi
 
 # Step 4: drop the recovery sentinel ONLY after `git worktree remove`
@@ -438,11 +450,11 @@ This cleanup is unconditional when a worktree was created — register it mental
 **1. Read mandatory files:** Load all files from `<required_reading>` block if present.
 
 **2. Parse config:** Extract from `<config>` block in prompt:
-- `phase_dir`: Path to phase directory (e.g., `.planning/phases/02-code-review-command`)
+- `phase_dir`: Path to phase directory (e.g., `{planning_root}/phases/02-code-review-command` (`{planning_root}`: the active scope's root, from `planning.inspect`))
 - `padded_phase`: Zero-padded phase number (e.g., "02")
-- `review_path`: Full path to REVIEW.md (e.g., `.planning/phases/02-code-review-command/02-REVIEW.md`)
+- `review_path`: Full path to REVIEW.md (e.g., `{planning_root}/phases/02-code-review-command/02-REVIEW.md`)
 - `fix_scope`: "critical_warning" (default) or "all" (includes Info and necessity findings)
-- `fix_report_path`: Full path for REVIEW-FIX.md output (e.g., `.planning/phases/02-code-review-command/02-REVIEW-FIX.md`)
+- `fix_report_path`: Full path for REVIEW-FIX.md output (e.g., `{planning_root}/phases/02-code-review-command/02-REVIEW-FIX.md`)
 
 **3. Read REVIEW.md:**
 ```bash
@@ -667,11 +679,11 @@ _Iteration: {N}_
 
 <critical_rules>
 
-**ALWAYS run inside the isolated worktree** — set up via `branch=$(git branch --show-current)` + `main_repo="$(git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print; exit }')"` + `wt="$main_repo/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"` + `mkdir -p "$wt"` + `git worktree add -b "$reviewfix_branch" "$wt" "$branch"` at the very start (see `setup_worktree` step). The worktree path is repo-relative under `.claude/worktrees/` (the same dir the harness-managed executor worktrees use — gitignored via `.claude/`, inside the session's permission scope); the `$$`-PID + epoch suffix ensures concurrent runs do not collide (#2647 — a hardcoded `/tmp` path landed outside the project tree and prompted on every read). Attaching to a NEW branch `$reviewfix_branch` (not `$branch` directly) is required because git refuses to check out the same branch in two worktrees by default — `$branch` is already checked out in the user's main repo (#2990). Commits advance `$reviewfix_branch`; the cleanup tail fast-forwards `$branch` to `$reviewfix_branch` so the user's branch ends up with the agent's commits. Every file read, edit, and commit must happen inside `$wt`. Run the four-step cleanup tail when done (treat it as a finally block) — but only when a worktree was actually created; when `workflow.use_worktrees` is `false` the cleanup early-exits (no worktree to remove). If `git worktree add` fails, exit with an error rather than force-removing a path another run may hold. This prevents racing the foreground session on the shared main working tree (#2686).
+**ALWAYS run inside the isolated worktree** — set up via `branch=$(git branch --show-current)` + `session_root="$(git rev-parse --show-toplevel)"` + `wt="$session_root/.claude/worktrees/rf-${padded_phase}-$$-$(date +%s)"` + `mkdir -p "$wt"` + `git worktree add -b "$reviewfix_branch" "$wt" "$branch"` at the very start (see `setup_worktree` step). The worktree path is repo-relative under `.claude/worktrees/` (the same dir the harness-managed executor worktrees use — gitignored via `.claude/`, inside the session's permission scope); the `$$`-PID + epoch suffix ensures concurrent runs do not collide (#2647 — a hardcoded `/tmp` path landed outside the project tree and prompted on every read). Attaching to a NEW branch `$reviewfix_branch` (not `$branch` directly) is required because git refuses to check out the same branch in two worktrees by default — `$branch` is already checked out in the session's own worktree (#2990). Commits advance `$reviewfix_branch`; the cleanup tail fast-forwards `$branch` to `$reviewfix_branch` so the user's branch ends up with the agent's commits. Every file read, edit, and commit must happen inside `$wt`. Run the four-step cleanup tail when done (treat it as a finally block) — but only when a worktree was actually created; when `workflow.use_worktrees` is `false` the cleanup early-exits (no worktree to remove). If `git worktree add` fails, exit with an error rather than force-removing a path another run may hold. This prevents racing the foreground session on the shared main working tree (#2686).
 
 **#2825 — honor `workflow.use_worktrees`.** Before creating a worktree, read the
 `workflow.use_worktrees` config flag (the documented opt-out — same key the four sibling writer
-workflows honor). `setup_worktree` reads it via `node` directly from `.planning/config.json`
+workflows honor). `setup_worktree` reads it via `node` directly from `{planning_root}/config.json`
 (because that step runs BEFORE the canonical gsd_run launcher preamble is sourced; later steps may
 use `gsd_run query config-get workflow.use_worktrees`). When it is `false`, do NOT create a worktree
 — edit and commit in the main checkout directly (`wt="."`, no temp branch, no sentinel, no cleanup
@@ -693,7 +705,7 @@ the gates ran in the main checkout or the isolated worktree, so a reader can tel
 are reproducible from the tree they are looking at (a worktree-env run is not reproducible from the
 main checkout after teardown).
 
-**ALWAYS run the transactional cleanup tail in order when a worktree was created** (#2839, #2990; skipped — bash early-exits — when `workflow.use_worktrees` is `false`): the cleanup is four steps with strict ordering. (1) `git -C "$main_repo" merge --ff-only "$reviewfix_branch"` — fast-forward the user's branch to capture the agent's commits; on divergence, fail loudly and preserve the temp branch. (2) `git worktree remove "$wt" --force`. (3) `git -C "$main_repo" branch -D "$reviewfix_branch"` ONLY if the fast-forward succeeded; otherwise leave the temp branch for manual merge. (4) `rm -f "$sentinel"` (the recovery sentinel at `${phase_dir}/.review-fix-recovery-pending.json`). The sentinel is written AFTER `git worktree add` succeeds and removed only AFTER `git worktree remove` returns successfully. The temp branch is deleted only when the fast-forward succeeded. This ordering is what makes the cleanup tail transactional — an interruption between commits and `git worktree remove` leaves the sentinel behind (with `reviewfix_branch` recorded) so a future run, `/gsd:resume-work`, or `/gsd:progress` can detect and complete the recovery. Reversing the order recreates the orphan-worktree bug.
+**ALWAYS run the transactional cleanup tail in order when a worktree was created** (#2839, #2990; skipped — bash early-exits — when `workflow.use_worktrees` is `false`): the cleanup is four steps with strict ordering. (1) `git -C "$owner_wt" merge --ff-only "$reviewfix_branch"` (`$owner_wt` = the worktree whose `branch refs/heads/$branch` line `git worktree list --porcelain` prints, #5876) — fast-forward the user's branch to capture the agent's commits; on divergence, fail loudly and preserve the temp branch. (2) `git worktree remove "$wt" --force`. (3) `git -C "$owner_wt" branch -D "$reviewfix_branch"` ONLY if the fast-forward succeeded; otherwise leave the temp branch for manual merge. (4) `rm -f "$sentinel"` (the recovery sentinel at `${phase_dir}/.review-fix-recovery-pending.json`). The sentinel is written AFTER `git worktree add` succeeds and removed only AFTER `git worktree remove` returns successfully. The temp branch is deleted only when the fast-forward succeeded. This ordering is what makes the cleanup tail transactional — an interruption between commits and `git worktree remove` leaves the sentinel behind (with `reviewfix_branch` recorded) so a future run, `/gsd:resume-work`, or `/gsd:progress` can detect and complete the recovery. Reversing the order recreates the orphan-worktree bug.
 
 **ALWAYS use the Write tool to create files** — never use `Bash(cat << 'EOF')` or heredoc commands for file creation.
 

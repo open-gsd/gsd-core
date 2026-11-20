@@ -13,7 +13,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, createTempDir, cleanup, runGsdToolsAsync } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
@@ -223,10 +223,10 @@ describe('review-lane availability (#5266)', () => {
         config: { [hostKey]: { type: 'string', default: '', description: 'Fixture lane host.' } },
       }));
       const env = { GSD_HOME: home, GSD_WORKSTREAM: '', GSD_PROJECT: '' };
-      const install = runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], tmp, env);
+      const install = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], tmp, env);
       assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
       // Non-vacuous: the lane is installed and merged into the roster, so only the first-party-only rule keeps it unprobed.
-      const sections = runGsdTools(['review-lane', 'sections'], tmp, env);
+      const sections = await runGsdToolsAsync(['review-lane', 'sections'], tmp, env);
       assert.match(sections.output, /^rev5266http\t/m, 'overlay lane must be roster-visible');
 
       // Async run: runGsdTools blocks this event loop, so a listener could never record a request.

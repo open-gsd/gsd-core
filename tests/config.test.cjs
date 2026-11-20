@@ -2551,6 +2551,9 @@ describe('#3197 — gsd-tools.cjs config-set workflow._auto_chain_active', () =>
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
+    // #6124: with the key present, a clear writes false (absent already reads false, so a clear of an absent key
+    // is a no-op, covered below).
+    runGsdTools(['config-set', 'workflow._auto_chain_active', 'true'], tmpDir);
     runGsdTools(['config-set', 'workflow._auto_chain_active', 'false'], tmpDir);
 
     const configPath = path.join(tmpDir, '.planning', 'config.json');
@@ -2561,6 +2564,85 @@ describe('#3197 — gsd-tools.cjs config-set workflow._auto_chain_active', () =>
       config.workflow !== undefined && config.workflow._auto_chain_active === false,
       `Expected workflow._auto_chain_active: false in config.json, got: ${JSON.stringify(config)}`
     );
+  });
+});
+
+// ─── #6124 — clearing the chaining flag when it is absent leaves the committed config untouched ──────────────────
+// "The tree stays clean" is "the config file is byte-identical to what was committed", so the committed state is a
+// snapshot of the file's bytes: no git process is needed.
+describe('#6124 — config-set workflow._auto_chain_active false does not dirty a committed config that lacks the key', () => {
+  const FLAG = 'workflow._auto_chain_active';
+  const configFile = (dir) => path.join(dir, '.planning', 'config.json');
+  const readConfig6124 = (dir) => fs.readFileSync(configFile(dir), 'utf8');
+
+  function newProject(t) {
+    const dir = createTempProject('gsd-6124-');
+    t.after(() => cleanup(dir));
+    const created = runGsdTools(['config-new-project', '{}'], dir);
+    assert.ok(created.success, created.error);
+    assert.equal('_auto_chain_active' in (JSON.parse(readConfig6124(dir)).workflow || {}), false, 'a new project config omits the flag');
+    return { dir, committed: readConfig6124(dir) };
+  }
+
+  test('the plan-phase clear on a committed config without the key leaves the file byte-identical', (t) => {
+    const { dir, committed } = newProject(t);
+    const result = runGsdTools(['config-set', FLAG, 'false'], dir);
+    assert.ok(result.success, result.error);
+    assert.equal(readConfig6124(dir), committed, 'the committed config is untouched');
+    assert.equal(JSON.parse(result.output).value, false, 'the command still reports the requested value');
+  });
+
+  test('a config with no workflow block at all is not given one by the clear', (t) => {
+    const dir = createTempProject('gsd-6124-');
+    t.after(() => cleanup(dir));
+    fs.writeFileSync(configFile(dir), '{}\n');
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    assert.equal(readConfig6124(dir), '{}\n');
+  });
+
+  test('no config file is created by the clear, and a non-object workflow value is still replaced', (t) => {
+    const missing = createTempDir('gsd-6124-');
+    t.after(() => cleanup(missing));
+    fs.mkdirSync(path.join(missing, '.planning'), { recursive: true });
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], missing).success);
+    assert.equal(fs.existsSync(configFile(missing)), false, 'reading an absent config already yields false, so nothing is written');
+
+    const odd = createTempProject('gsd-6124-');
+    t.after(() => cleanup(odd));
+    fs.writeFileSync(configFile(odd), JSON.stringify({ workflow: 'broken' }));
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], odd).success);
+    assert.deepEqual(JSON.parse(readConfig6124(odd)).workflow, { _auto_chain_active: false }, 'a malformed parent keeps the pre-#6124 replacement');
+  });
+
+  test('--dry-run states what the write does: no update for the absent-key clear, an update otherwise', (t) => {
+    const { dir, committed } = newProject(t);
+    const cleared = JSON.parse(runGsdTools(['config-set', FLAG, 'false', '--dry-run'], dir).output);
+    assert.equal(cleared.dry_run, true);
+    assert.equal(cleared.would_update, false, 'the real run writes nothing');
+    const set = JSON.parse(runGsdTools(['config-set', FLAG, 'true', '--dry-run'], dir).output);
+    assert.equal(set.would_update, true, 'setting true is a real change');
+    assert.equal(readConfig6124(dir), committed, 'a dry run never writes');
+  });
+
+  test('clearing a committed true writes false, and starting a chained run writes true', (t) => {
+    const { dir } = newProject(t);
+    assert.ok(runGsdTools(['config-set', FLAG, 'true'], dir).success);
+    assert.equal(JSON.parse(readConfig6124(dir)).workflow._auto_chain_active, true);
+    const committedTrue = readConfig6124(dir);
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    assert.equal(JSON.parse(readConfig6124(dir)).workflow._auto_chain_active, false, 'a stale true is cleared');
+    assert.notEqual(readConfig6124(dir), committedTrue, 'the clear of a present key is a real change');
+  });
+
+  test('a committed false cleared again leaves the file untouched, and any other explicit config-set still writes', (t) => {
+    const { dir } = newProject(t);
+    assert.ok(runGsdTools(['config-set', FLAG, 'true'], dir).success);
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    const committedFalse = readConfig6124(dir);
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    assert.equal(readConfig6124(dir), committedFalse, 'rewriting the same false changes nothing');
+    assert.ok(runGsdTools(['config-set', 'workflow.auto_advance', 'false'], dir).success);
+    assert.equal(JSON.parse(readConfig6124(dir)).workflow.auto_advance, false, 'an explicit set of another key still writes the file');
   });
 });
   });
@@ -3085,22 +3167,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
-const { toLegacyResult } = require('./helpers/git-fixture.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runGsdToolsCaptured } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
 function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
-}
-
-function runGsd(args, cwd) {
-  const result = runNode([path.join(ROOT, 'gsd-core/bin/gsd-tools.cjs'), ...args], {
-    cwd,
-    timeoutMs: PROBE_TIMEOUT_MS,
-  });
-  return toLegacyResult(result);
 }
 
 describe('bug #3212 execute-phase stall detection and safe resume', () => {
@@ -3131,12 +3203,12 @@ describe('bug #3212 execute-phase stall detection and safe resume', () => {
     fs.mkdirSync(path.join(tmp, '.planning'));
     fs.writeFileSync(path.join(tmp, '.planning/config.json'), '{}\n');
 
-    const interval = runGsd(['config-get', 'executor.stall_detect_interval_minutes', '--raw'], tmp);
-    const threshold = runGsd(['config-get', 'executor.stall_threshold_minutes', '--raw'], tmp);
+    const interval = runGsdToolsCaptured(['config-get', 'executor.stall_detect_interval_minutes', '--raw'], tmp);
+    const threshold = runGsdToolsCaptured(['config-get', 'executor.stall_threshold_minutes', '--raw'], tmp);
 
-    assert.equal(interval.status, 0, interval.stderr);
+    assert.equal(interval.exitCode, 0, interval.stderr);
     assert.equal(interval.stdout.trim(), '5');
-    assert.equal(threshold.status, 0, threshold.stderr);
+    assert.equal(threshold.exitCode, 0, threshold.stderr);
     assert.equal(threshold.stdout.trim(), '10');
   });
 

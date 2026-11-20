@@ -92,12 +92,9 @@ Error: Phase ${PHASE_ARG} not found. Run /gsd:progress to see available phases.
 
 This runs BEFORE config gate check so user errors are surfaced immediately regardless of config state.
 
-If FILES_OVERRIDE is set, split by comma into array:
-```bash
-if [ -n "$FILES_OVERRIDE" ]; then
-  IFS=',' read -ra FILES_ARRAY <<< "$FILES_OVERRIDE"
-fi
-```
+If FILES_OVERRIDE is set, Tier 1 below splits it by comma inside its own block (#6152): the split
+and its use must share one shell call, because an orchestrator that runs each fenced block as a
+separate shell call loses any array built here, and `read -a` is bash-only (zsh: `bad option: -a`).
 </step>
 
 <step name="check_config_gate">
@@ -145,21 +142,41 @@ if [ -n "$FILES_OVERRIDE" ]; then
   _gsd_norm_path() {
     if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
   }
-  REPO_ROOT=$(_gsd_norm_path "$(git rev-parse --show-toplevel 2>/dev/null)")
-  
-  for file_path in "${FILES_ARRAY[@]}"; do
+  # #6152: resolve a path (symlinks followed when it exists, `..` collapsed when it does not) with node, not GNU
+  # `realpath -m`, which macOS and other BSD userlands do not have.
+  _gsd_resolve_path() {
+    # The path travels in the environment, never as an argument: node parses an argument that starts with `-` as one of
+    # its own options (`--import=…`, `--require=…`), so a hostile list entry would run code.
+    # `realpathSync.native` also expands Windows 8.3 short names (RUNNER~1), which git reports in long form.
+    # A path that does not exist is resolved through its deepest existing ancestor, so a missing file under an 8.3
+    # short temp directory reports the same long form as the repository root.
+    GSD_RESOLVE_PATH="$1" node -e 'const p=require("path"),f=require("fs");let a=p.resolve(process.env.GSD_RESOLVE_PATH);const t=[];for(;;){try{a=f.realpathSync.native(a);break}catch(e){const d=p.dirname(a);if(d===a)break;t.unshift(p.basename(a));a=d}}process.stdout.write(p.join(a,...t))'
+  }
+  # An empty root (git failed) stays empty: the resolver would turn "" into the working directory, so it is only called
+  # on a non-empty answer, and the `-z "$REPO_ROOT"` check below then rejects every entry.
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  [ -n "$REPO_ROOT" ] && REPO_ROOT=$(_gsd_norm_path "$(_gsd_resolve_path "$(_gsd_norm_path "$REPO_ROOT")")")
+
+  # #6152: split on commas with parameter expansion alone (no `read -a`, no subshell, no here-string), so the loop runs
+  # in this shell and behaves the same in bash 3.2, zsh and Git Bash.
+  _gsd_rest="${FILES_OVERRIDE},"
+  while [ -n "$_gsd_rest" ]; do
+    file_path=${_gsd_rest%%,*}; _gsd_rest=${_gsd_rest#*,}
+    # Trim leading and trailing blanks so `a.ts, b.ts` lists the two files (no entry names a path with edge blanks).
+    file_path="${file_path#"${file_path%%[![:space:]]*}"}"
+    file_path="${file_path%"${file_path##*[![:space:]]}"}"
+    [ -n "$file_path" ] || continue
     # Security: validate path is within repository (prevent path traversal). Compare on a path
     # boundary: the root itself or anything under "<root>/" — a sibling such as "<root>-other"
     # shares the prefix but is not inside.
-    ABS_PATH=$(_gsd_norm_path "$(realpath -m "${file_path}" 2>/dev/null || echo "${file_path}")")
+    ABS_PATH=$(_gsd_norm_path "$(_gsd_resolve_path "$(_gsd_norm_path "${file_path}")")")
     # Fail closed on two shapes that cannot be trusted: an empty root (git failed, so nothing can be
-    # "inside" it) and a path that still holds ".." segments (a resolved path never does, so it was
-    # not resolved — no GNU realpath).
+    # "inside" it) and a path that still holds ".." segments (a resolved path never does).
     if [ -z "$REPO_ROOT" ] || [[ "$ABS_PATH" == */../* || "$ABS_PATH" == */.. ]] || [[ "$ABS_PATH" != "$REPO_ROOT" && "$ABS_PATH" != "$REPO_ROOT"/* ]]; then
       echo "Error: File path outside repository, skipping: ${file_path}"
       continue
     fi
-    
+
     # Validate path exists (relative to repo root)
     if [ -f "${REPO_ROOT}/${file_path}" ] || [ -f "${file_path}" ]; then
       REVIEW_FILES+=("$file_path")
@@ -167,7 +184,14 @@ if [ -n "$FILES_OVERRIDE" ]; then
       echo "Warning: File not found, skipping: ${file_path}"
     fi
   done
-  
+
+  # #6152: fail closed. An override that resolves to no reviewable file inside the repository is an error, never a
+  # widening to the phase evaluation scope under the `--files override` label.
+  if [ ${#REVIEW_FILES[@]} -eq 0 ]; then
+    echo "Error: --files override resolved to no reviewable file inside the repository; not falling back to phase scope."
+    exit 1
+  fi
+
   echo "File scope: ${#REVIEW_FILES[@]} files from --files override"
 fi
 ```
@@ -283,7 +307,7 @@ the reviewer lanes that need an anchor sha.
 # Exit 69 (UNAVAILABLE) is the resolver saying "could not look" (`status: unresolvable`): its JSON
 # carries the reason and is kept. Any other non-zero status means the command did not run: no JSON.
 SCOPE_RC=0
-SCOPE_JSON=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" ${LAST_REVIEW_COMMIT:+--since "$LAST_REVIEW_COMMIT"} --raw 2>/dev/null) || SCOPE_RC=$?
+SCOPE_JSON=$(gsd_run check evaluation-scope --phase "${PADDED_PHASE}" ${LAST_REVIEW_COMMIT:+--since} ${LAST_REVIEW_COMMIT:+"$LAST_REVIEW_COMMIT"} --raw 2>/dev/null) || SCOPE_RC=$?
 if [ "$SCOPE_RC" -ne 0 ] && [ "$SCOPE_RC" -ne 69 ]; then SCOPE_JSON=""; fi
 # One field of the resolver's JSON; arrays print one element per line, an absent field prints nothing.
 scope_field() {
@@ -315,7 +339,8 @@ if [ -n "$SCOPE_MISSING" ]; then
 fi
 
 if [ ${#REVIEW_FILES[@]} -eq 0 ]; then
-  # Full fallback (per D-02): SUMMARY scoping yielded nothing.
+  # Full fallback (per D-02): SUMMARY scoping yielded nothing. Never reached for a --files override: Tier 1 exits
+  # non-zero when the override resolves to nothing (#6152).
   if [ -n "$SCOPE_FILES" ]; then
     while IFS= read -r file; do
       [ -n "$file" ] && REVIEW_FILES+=("$file")
@@ -659,7 +684,9 @@ rm -f "$EXPLICIT_JOINED_STDERR"
 
 EXPLICIT_REVIEWER_SLUGS=()
 if [ -n "$EXPLICIT_JOINED" ]; then
-  IFS=',' read -ra EXPLICIT_REVIEWER_SLUGS <<< "$EXPLICIT_JOINED"
+  # #6152: split with parameter expansion; `read -a` is bash-only (zsh rejects it)
+  _gsd_rest="${EXPLICIT_JOINED},"
+  while [ -n "$_gsd_rest" ]; do _gsd_slug=${_gsd_rest%%,*}; _gsd_rest=${_gsd_rest#*,}; [ -n "$_gsd_slug" ] && EXPLICIT_REVIEWER_SLUGS+=("$_gsd_slug"); done
 fi
 
 EXTERNAL_EVIDENCE_BLOCK=""
@@ -670,16 +697,10 @@ if [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ] && [ -z "$DIFF_BASE" ]; then
   # generic rejection stand unexplained.
   echo "Warning: external reviewer lane(s) requested (${EXPLICIT_REVIEWER_SLUGS[*]}) but no diff base could be resolved (no prior review, no phase-start commit) — skipping external dispatch." >&2
 elif [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ]; then
-  # #4209 R5: a dedicated run-scoped temp dir (same `${TMPDIR:-/tmp}/gsd-review-*` convention
-  # review.md's gather_context step uses), not $PHASE_DIR directly — lane artifacts
-  # (gsd-review-prompt.md, gsd-review-<slug>.md/.err) are read-once evidence for THIS run, never
-  # meant to be committed, and a second dispatch on the same phase would otherwise silently
-  # overwrite the prior run's files in place. Removed by commit_review once the reviewer agent
-  # has read every cited evidence path. An early exit between here and commit_review (a
-  # checkpoint, a halt) leaves this directory on disk — the same trade-off review.md's own
-  # gather_context/cleanup pair already accepts for the identical resource class: a leftover
-  # $TMPDIR entry is cheaper than a cleanup mechanism (e.g. a trap) that could fire before a
-  # later step reads it. Not a regression to fix; matches established precedent.
+  # #4209 R5: a dedicated run-scoped temp dir (same `${TMPDIR:-/tmp}/gsd-review-*` convention as review.md's
+  # gather_context), not $PHASE_DIR: lane artifacts are read-once evidence for THIS run, never committed, and a
+  # second dispatch must not overwrite them. commit_review removes it once the reviewer has read the evidence; an
+  # early exit leaves it on disk, the same accepted trade-off as review.md's gather_context/cleanup pair.
   LANE_RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-review-lanes-XXXXXX")
   DISPATCH_JSON=$(printf '%s\n' "${REVIEW_FILES[@]}" | gsd_run review-lane dispatch-step \
     --repo-root "$REPO_ROOT" --depth "$REVIEW_DEPTH" --base-sha "$DIFF_BASE" \
@@ -813,7 +834,7 @@ case "$REVIEWER_POINT" in execute:post|execute:wave:post) ;; *) REVIEWER_POINT="
 REVIEWER_HOOKS_JSON=$(gsd_run loop render-hooks "${REVIEWER_POINT}" --raw 2>/dev/null) || REVIEWER_HOOKS_JSON=""
 if [[ "$REVIEWER_HOOKS_JSON" == @file:* ]]; then REVIEWER_HOOKS_JSON=$(cat "${REVIEWER_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
 # A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
-REVIEWER_CONTRIBUTIONS=$(printf '%s' "$REVIEWER_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="code-reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_review_rules>").join("<\\/capability_review_rules>"));if(h.length)process.stdout.write("<capability_review_rules>\n"+h.join("\n\n")+"\n</capability_review_rules>")}catch(e){}})' 2>/dev/null || true)
+REVIEWER_CONTRIBUTIONS=$(printf '%s' "$REVIEWER_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="code-reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_review_rules>").join("<"+String.fromCharCode(92)+"/capability_review_rules>"));if(h.length)process.stdout.write("<capability_review_rules>\n"+h.join("\n\n")+"\n</capability_review_rules>")}catch(e){}})' 2>/dev/null || true)
 ```
 
 Spawn the gsd-code-reviewer agent:
@@ -1003,10 +1024,10 @@ repository (#5519).
 
 **macOS:** macOS ships with bash 3.2 (GPL licensing). This workflow does NOT use `mapfile` (bash 4+
 only) — all array construction uses portable `while IFS= read -r` loops compatible with bash 3.2.
-The `--files` path validation uses `realpath -m` which requires GNU coreutils (install via
-`brew install coreutils`). Without coreutils, the path guard falls back to fail-closed behavior
-(rejects paths it cannot verify), so security is maintained but valid relative paths may be rejected.
-If `--files` validation fails unexpectedly on macOS, install coreutils or use absolute paths.
+The `--files` path validation resolves paths with `node`, so it needs no GNU `realpath -m` and no
+coreutils on macOS or any BSD userland, and it behaves the same under zsh and bash 3.2 (#6152). A
+`--files` list that resolves to no reviewable file inside the repository is an error (non-zero exit),
+never a fall back to phase scope.
 </platform_notes>
 
 <success_criteria>

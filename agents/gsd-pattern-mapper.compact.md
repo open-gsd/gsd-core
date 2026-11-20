@@ -133,7 +133,7 @@ Cross-cutting patterns applying to multiple new files: auth middleware/guards, e
 
 ## PATTERNS.md Structure
 
-**Location:** `.planning/phases/XX-name/{phase_num}-PATTERNS.md`
+**Location:** `{phase_dir}/{phase_num}-PATTERNS.md` (the scoped phase directory from init)
 
 ```markdown
 # Phase [X]: [Name] - Pattern Map

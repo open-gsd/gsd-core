@@ -12,7 +12,7 @@ allowed-tools:
 <objective>
 Archive phase directories from completed milestones into `.planning/milestones/v{X.Y}-phases/`.
 
-Use when `.planning/phases/` has accumulated directories from past milestones.
+Use when `{planning_root}/phases/` has accumulated directories from past milestones. (`{planning_root}`: the active scope's root, from `planning.inspect`)
 </objective>
 
 <execution_context>

@@ -57,7 +57,7 @@ function write(dir, rel, content) {
 }
 
 function buildRepo(branch = 'feature') {
-  const dir = createFixture({ prefix: 'gsd-prmarker-', git: true, planning: false, projectDoc: false, gitEnv: gitChildEnv });
+  const dir = createFixture({ prefix: 'gsd-prmarker-', git: true, planning: false, projectDoc: false });
   git(dir, 'branch', '-M', 'main');
   write(dir, 'code.txt', 'v0\n');
   write(dir, '.planning/STATE.md', 's0\n');
