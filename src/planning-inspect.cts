@@ -937,11 +937,13 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
  * (`phase-plan-index`'s node set) the way `cmdPhasePlanIndex`
  * (`src/phase.cts`) does: the same three-tier depends_on resolution
  * (`resolveDependencyId`) and the same `computeHaltPropagation` pass. A token
- * that resolves to no plan in the set is dropped, as there. One difference is
- * forced by this command's contract: where `phase-plan-index` refuses a
- * depends_on cycle outright, this read never fails, so the shared
- * propagation's fail-closed answer stands — every non-halted plan it cannot
- * order carries a non-empty `blocked_by`.
+ * that resolves to no plan in the set is dropped, as there. docs/CLI-TOOLS.md
+ * ("Halted plans") lists every case where the two commands answer
+ * differently; two of them arise here, because this read never fails where
+ * `phase-plan-index` refuses the phase. On a depends_on cycle the shared
+ * propagation's fail-closed answer stands: every non-halted plan it cannot
+ * order carries a non-empty `blocked_by`. On two plan ids that differ only in
+ * case, a token naming either resolves to the one that sorts last.
  */
 function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }>): void {
   // `cmdPhasePlanIndex` builds its id maps from `planFiles.sort()`, and both
