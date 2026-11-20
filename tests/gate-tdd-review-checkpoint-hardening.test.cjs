@@ -190,19 +190,28 @@ describe('#5354 tdd review checkpoint seal', () => {
     if (!hasPlan) w(dir, `${PHASE}/.keep`, '');
     if (hasPlan) w(dir, `${PHASE}/01-01-PLAN.md`, plan('type: tdd'));
     if (summary) w(dir, `${PHASE}/01-01-SUMMARY.md`, '# done\n');
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: plans');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'docs: plans');
     const base = git(dir, 'rev-parse', 'HEAD');
     git(dir, 'checkout', '-b', 'feature');
     subjects.forEach((s, i) => commit(dir, `f${i}.txt`, s));
     if (refs) {
       const shas = git(dir, 'rev-list', '--reverse', `${base}..HEAD`).split('\n');
       w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(shas));
-      git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: summary');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-m', 'docs: summary');
     }
     return { dir, base };
   }
-  function sealCommit(dir) { git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs(01-01): seal'); }
-  function sealThenSquash(dir, base, subject) { run(dir, '--record'); sealCommit(dir); squash(dir, base, subject); }
+  function sealCommit(dir) {
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'docs(01-01): seal');
+  }
+  function sealThenSquash(dir, base, subject) {
+    run(dir, '--record');
+    sealCommit(dir);
+    squash(dir, base, subject);
+  }
   function shallowClone(dir, suffix = '', branch) {
     const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow${suffix}`);
     dirs.push(clone);
@@ -218,9 +227,10 @@ describe('#5354 tdd review checkpoint seal', () => {
   const PLAN_02 = '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n';
   const summaryFile = (dir) => path.join(dir, PHASE, '01-01-SUMMARY.md');
   // The SUMMARY names `hashes`, then the branch is squashed: no listed commit is reachable.
-  function squashWithSummary(hashes) {
+  const abbreviated = (dir, base) => git(dir, 'rev-list', '--reverse', `${base}..HEAD`).split('\n').map((h) => h.slice(0, 7));
+  function squashWithSummary(hashes, transform = (text) => text) {
     return (dir, base) => {
-      w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(hashes));
+      w(dir, `${PHASE}/01-01-SUMMARY.md`, transform(summaryOf(hashes)));
       git(dir, 'add', '-A');
       git(dir, 'commit', '-m', 'docs: summary');
       squash(dir, base);
@@ -244,6 +254,11 @@ describe('#5354 tdd review checkpoint seal', () => {
     // No seal, task commits gone: not evaluable, never a failure.
     { name: 'no record and no reachable commits but a SUMMARY is not evaluable, not a failure', opts: { refs: true }, setup: (d, b) => squash(d, b), expect: { ...SQUASHED, outcome: 'advisory' } },
     { name: 'fabricated SUMMARY ids (no such object) are not evaluable, like a squashed-and-collected commit', subjects: ['chore: x'], setup: (d) => ghostSummary(d), expect: { status: 'NotEvaluable' } },
+    // The SUMMARY id grammar (extractTaskCommitRefs): 7 to 40 lowercase hex in backticks, CRLF lines allowed.
+    { name: 'a 7-char SUMMARY id of a squashed-away commit is not evaluable', opts: { refs: true }, setup: (d, b) => squashWithSummary(abbreviated(d, b))(d, b), expect: SQUASHED },
+    { name: 'a 7-char SUMMARY id git does not know is not evaluable', subjects: ['chore: x'], setup: (d) => w(d, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['abcdef0'])), expect: { status: 'NotEvaluable' } },
+    { name: 'an uppercase SUMMARY id lists no hash, so the plan fails', subjects: ['chore: x'], setup: (d) => w(d, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['D'.repeat(40)])), expect: { status: 'FAIL' } },
+    { name: 'a SUMMARY with CRLF line endings is read like one with LF', opts: { refs: true }, setup: (d, b) => { squashWithSummary(abbreviated(d, b), (t) => t.replace(/\n/g, '\r\n'))(d, b); }, expect: SQUASHED },
     { name: 'a squash whose title repeats one task subject is still not evaluable', subjects: ['chore: red', 'chore: green'], opts: { refs: true }, setup: (d, b) => squash(d, b, 'chore: green'), expect: { status: 'NotEvaluable', violations: 0 } },
     {
       name: 'a plan with one task rewritten and one gone is not evaluable, not a rewrite',
@@ -251,7 +266,8 @@ describe('#5354 tdd review checkpoint seal', () => {
       setup: (d, b) => {
         git(d, 'checkout', '-b', 'partial', b);
         w(d, 'f0.txt', 'different content'); // same content and parent would reproduce the original sha
-        git(d, 'add', '-A'); git(d, 'commit', '-m', 'chore: red');
+        git(d, 'add', '-A');
+        git(d, 'commit', '-m', 'chore: red');
         git(d, 'checkout', 'feature', '--', `${PHASE}/01-01-SUMMARY.md`);
         git(d, 'commit', '-m', 'docs: summary');
       },
@@ -281,7 +297,8 @@ describe('#5354 tdd review checkpoint seal', () => {
         git(d, 'checkout', '-b', 'rebased', b);
         commit(d, 'f0.txt', 'docs(01-01): notes');
         w(d, 'f0.txt', 'different content');
-        git(d, 'add', '-A'); git(d, 'commit', '--amend', '-m', 'docs(01-01): notes');
+        git(d, 'add', '-A');
+        git(d, 'commit', '--amend', '-m', 'docs(01-01): notes');
         git(d, 'checkout', 'feature', '--', `${PHASE}/01-01-SUMMARY.md`);
         git(d, 'commit', '-m', 'docs: summary');
       },
@@ -588,7 +605,8 @@ describe('#5354 tdd review checkpoint seal', () => {
   test('--record seals a passing plan named __proto__ as its own entry', () => {
     const { dir } = fixture(['test(__proto__): red', 'feat(__proto__): green'], { summary: false, plan: false });
     w(dir, `${PHASE}/__proto__-PLAN.md`, plan('type: tdd'));
-    git(dir, 'add', '-A'); git(dir, 'commit', '-m', 'docs: plan');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'docs: plan');
     assert.equal(run(dir, '--record').payload.violations, 0);
     const sealed = JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans;
     assert.deepEqual(Object.keys(sealed), ['__proto__']);
@@ -786,7 +804,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.ok(JSON.parse(fs.readFileSync(path.join(dir, SEAL), 'utf8')).plans['01-01']);
   });
 
-  test('the real ship.md invocation (--record --pick tddPlans) seals and prints the picked count', () => {
+  test('`check tdd.review-checkpoint 1 --record --pick tddPlans` seals and prints the picked count', () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     const r = runGsdTools(['check', 'tdd.review-checkpoint', '1', '--record', '--pick', 'tddPlans'], dir);
     assert.ok(r.success, r.error || r.output);
@@ -916,7 +934,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     for (const argv of calls) assert.equal(argv.filter((a) => a === '--ws=ws1').length, 1, JSON.stringify(argv));
   });
 
-  // The real commit owner: phase_commit_docs.<phase> beats the project-level commit_docs (#3587).
   test('ship.md seal step commits the seal when the phase override is true and the project value false', posixOnly, () => {
     const { r, dir, subject } = realSeal({ commit_docs: false, phase_commit_docs: { '01': true } });
     assert.equal(r.exitCode, 0, r.stderr);

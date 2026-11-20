@@ -10,6 +10,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
@@ -53,7 +54,7 @@ describe('planning.sub_repos workspaces', () => {
     git(origin, 'commit', '-q', '--allow-empty', '-m', 'old, unlike any commit of the root');
     const old = sha(origin);
     git(origin, 'commit', '-q', '--allow-empty', '-m', 'second');
-    git(root, 'clone', '-q', '--depth', '1', `file://${origin}`, 'app');
+    git(root, 'clone', '-q', '--depth', '1', pathToFileURL(origin).href, 'app');
     assert.equal(git(path.join(root, 'app'), 'rev-parse', '--is-shallow-repository').trim(), 'true', 'positive control: app is shallow');
     return old;
   }
