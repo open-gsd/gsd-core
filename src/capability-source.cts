@@ -1130,8 +1130,11 @@ function resolveGit(
         retryDelay: GIT_METADATA_RM_RETRY_DELAY_MS,
       });
     } catch (err) {
+      // The error code only, never its message: an fs error message names the entry that failed, and
+      // entry names inside the clone come from the untrusted repository.
+      const errorCode = typeof (err as NodeJS.ErrnoException)?.code === 'string' ? (err as NodeJS.ErrnoException).code : 'unknown';
       process.emitWarning(
-        `Could not remove the scratch clone ${scratchDir}: ${err instanceof Error ? err.message : String(err)}`,
+        `Could not remove the scratch clone ${scratchDir} (${errorCode}).`,
         { code: 'GSD_SCRATCH_CLONE_LEFT' },
       );
     }

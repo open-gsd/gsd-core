@@ -454,13 +454,15 @@ describe('#5297 git adapter — exact pinned target', {
 
   test('#6441: a scratch clone that still cannot be removed is reported, not swallowed', async (t) => {
     const warnings = [];
-    t.mock.method(process, 'emitWarning', (_message, options) => warnings.push(options && options.code));
+    const messages = [];
+    t.mock.method(process, 'emitWarning', (message, options) => { messages.push(message); warnings.push(options && options.code); });
     const realRmSync = fs.rmSync;
     let leftBehind = null;
     t.mock.method(fs, 'rmSync', (target, options) => {
       if (leftBehind === null && cloneDirs.length > 0 && target === path.dirname(cloneDirs[0])) {
         leftBehind = target;
-        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        // The message carries an entry name from the (untrusted) clone, as a real fs error does.
+        throw Object.assign(new Error(`EACCES: permission denied, rmdir '${target}/repo/evil\n\u001b[31mforged line'`), { code: 'EACCES' });
       }
       // eslint-disable-next-line local/no-raw-rmsync-in-tests -- #6441 forwards every other removal (the afterEach cleanup) to the real one
       return realRmSync(target, options);
@@ -471,6 +473,8 @@ describe('#5297 git adapter — exact pinned target', {
         : localGit(args, opts)) },
     }), /git checkout .* failed/);
     assert.deepEqual(warnings, ['GSD_SCRATCH_CLONE_LEFT']);
+    assert.equal(messages[0], `Could not remove the scratch clone ${leftBehind} (EACCES).`, 'the code and the scratch path, never the error message');
+    assert.ok(!messages[0].includes('forged line') && !messages[0].includes('\u001b'), 'an entry name from the clone never reaches the warning');
     assert.ok(leftBehind !== null && fs.existsSync(leftBehind), 'the fixture really left the directory behind');
     t.after(() => cleanup(leftBehind));
   });
