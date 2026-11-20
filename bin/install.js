@@ -139,12 +139,20 @@ const GSD_CODEX_HOOKS_OWNERSHIP_PREFIX = '# GSD codex_hooks ownership: ';
 // when every direct key is one of these (named agent roles live in the flattened
 // `[agents.<name>]` sub-tables, a separate `AgentRoleToml`). GSD writes only
 // `max_depth` (ADR-1239 upgrade 2 / #2088); the full set is enumerated so the
-// schema check accepts a user's other legitimate AgentsToml scalars too.
+// schema check accepts a user's other legitimate AgentsToml scalars too (#6165:
+// `enabled`, `max_concurrent_threads_per_session`, `default_subagent_model` and
+// `default_subagent_reasoning_effort` joined the struct). Values are integers,
+// booleans or single-line strings; a multiline-string value is never accepted.
+// The schema validator and the user-scalar extractor both read this one set.
 const CODEX_AGENTS_TOML_SCALAR_KEYS = new Set([
+  'enabled',
   'max_threads',
+  'max_concurrent_threads_per_session',
   'max_depth',
   'job_max_runtime_seconds',
   'interrupt_message',
+  'default_subagent_model',
+  'default_subagent_reasoning_effort',
 ]);
 // GSD's managed dispatch-depth value. Codex's implicit default is also 1 (root
 // sessions start at depth 0); writing it EXPLICITLY pins the negotiated
@@ -4775,6 +4783,7 @@ function extractCodexUserAgentsScalars(content) {
     const key = record.keySegments[0];
     if (key === 'max_depth') continue; // GSD-managed — GSD's value wins.
     if (!CODEX_AGENTS_TOML_SCALAR_KEYS.has(key)) continue;
+    if (tomlAssignmentStartsMultilineString(record.text)) continue; // only its first line would be kept
     preserved.push(trimmed);
   }
   return preserved;
@@ -6367,6 +6376,14 @@ function parseTomlToObject(content) {
  *   - `hooks.<Event>` MUST be an array of tables when present (Codex ≥0.124
  *     rejects bare `[hooks.<Event>]` single-bracket maps).
  */
+/** True when a TOML assignment line's value opens a multiline string (triple single or double quote). */
+function tomlAssignmentStartsMultilineString(recordText) {
+  const equalsIndex = findTomlAssignmentEquals(recordText);
+  if (equalsIndex === -1) return false;
+  const value = recordText.slice(equalsIndex + 1).trimStart();
+  return value.startsWith("'''") || value.startsWith('"""');
+}
+
 /**
  * True when a bare `[agents]` table body contains ONLY known AgentsToml scalar
  * keys (CODEX_AGENTS_TOML_SCALAR_KEYS) — i.e. it is a valid AgentsToml struct
@@ -6378,10 +6395,9 @@ function codexBareAgentsHasOnlyKnownScalars(body) {
   const lineRecords = getTomlLineRecords(body);
   for (const record of lineRecords) {
     // Conservative reject of anything not positively a single known-scalar
-    // assignment. A multiline-string value cannot be a valid AgentsToml scalar
-    // (max_threads/max_depth/job_max_runtime_seconds are integers,
-    // interrupt_message is a bool — none are strings), so codex would reject it
-    // too; rejecting here is correct, not a false negative.
+    // assignment. The scalars are integers, booleans or single-line strings
+    // (model, reasoning effort, interrupt message), never a multiline string,
+    // so a multiline-string value is rejected here as codex would reject it.
     if (record.startsInMultilineString) return false;
     if (record.tableHeader) return false;
     const trimmed = record.text.trim();
@@ -6390,6 +6406,7 @@ function codexBareAgentsHasOnlyKnownScalars(body) {
         !CODEX_AGENTS_TOML_SCALAR_KEYS.has(record.keySegments[0])) {
       return false;
     }
+    if (tomlAssignmentStartsMultilineString(record.text)) return false;
   }
   return true;
 }
@@ -6870,6 +6887,9 @@ function repairTrappedFeaturesKeys(content) {
     if (record.start < featuresSection.headerEnd) return false;
     if (record.end + record.eol.length > featuresSection.end) return false;
     if (!record.keySegments || record.keySegments.length === 0) return false;
+    // #6165: a dotted assignment (`multi_agent_v2.<key> = …`) is a nested feature setting that is legitimately a
+    // `[features]` entry whatever its value; only a plain single-segment key can be trapped there.
+    if (record.keySegments.length > 1) return false;
 
     // Check if the value is a boolean — if so, it belongs under [features]
     const equalsIndex = findTomlAssignmentEquals(record.text);
@@ -15578,6 +15598,8 @@ module.exports = {
     validateCodexConfigSchema,
     mergeCodexConfig,
     installCodexConfig,
+    ensureCodexHooksFeature,
+    repairTrappedFeaturesKeys,
     codexAgentSourceFiles,
     install,
     installAllRuntimes,
