@@ -176,19 +176,28 @@
 //   `GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`, `--config-env` and the
 //   GIT_ENV_CONFIG_KEYS twins (`GIT_EDITOR`, `GIT_SSH_COMMAND`, …), set as a
 //   `VAR=…` prefix, through `env` / `sudo`, or by `export` / `declare` / a
-//   bare assignment anywhere in the script, and inherited by what it runs.
+//   bare assignment anywhere in the script (inside `eval` or a `source <(…)`
+//   script too), with `VAR+=…` appends built on, and inherited by what it runs.
+//   A find action or `watch` running git or ssh is scanned too; words piped
+//   into `xargs git|ssh|<shell>` that mention a secret name block outright,
+//   since xargs re-splits them (-I, -0, -d, -n) in ways not modelled here.
 //   Values the command line does not set (the inherited environment) and
 //   config files (and commands that write one) are not scanned, nor are
 //   program-path keys and options
 //   (`difftool.<tool>.path`, `core.hooksPath`, `--exec-path`, a merge
 //   strategy) whose program the hook cannot see, or a command inside the
-//   quoted argument of a program other than ssh's `-o` (`vim -c`). Two more
-//   come from the scan underneath: a git or ssh directly behind `if`, `then`,
-//   `else`, `elif`, `while`, `until`, `do` or `!` is not resolved as the
-//   command, so scanGitInvocation never runs on it
-//   (`if true; then git -c core.editor='cat .env #' log; fi`, #6138), and a
-//   value that arrives through a shell variable is not expanded
-//   (`E='cat .env #'; git -c core.editor="$E" log`), the `$VAR` gap above.
+//   quoted argument of a program other than ssh's `-o` (`vim -c`), the program
+//   `scp -S` / `sftp -S` / `sftp -D` runs, GNU `parallel`, and words xargs reads
+//   from `-a <file>` or a redirected stdin. Two more come from the scan
+//   underneath: a command directly behind `if`, `then`, `else`, `elif`,
+//   `while`, `until`, `do`, `!` or `coproc` is not resolved as the command
+//   (#6138), so its command-specific checks (git, ssh, a shell's script, eval,
+//   find, watch, a `VAR=…` prefix, the debugger check) never run on it
+//   (`if true; then git -c core.editor='cat .env #' log; fi`), while operands,
+//   `<ref>:<path>`, `source <file>`, redirects and substitutions are still
+//   read; and a value that arrives through a shell variable or a `$( )`
+//   output is not expanded (`E='cat .env #'; git -c core.editor="$E" log`),
+//   the `$VAR` gap above.
 //   The tests pin both as allowed. `core.pager`
 //   / `pager.*` / `GIT_PAGER` / `PAGER` are allowed on purpose (no TTY,
 //   nothing printed), a value naming a secret file included, except for a
