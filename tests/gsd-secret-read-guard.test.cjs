@@ -3878,6 +3878,9 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
     ['`$$((` with no span in it', 'echo $$((1+2))'],
     ['an even run of backslashes, which joins nothing', 'cat <<E\nx\\\\\nE\ncat <<F\nE\ncat .env\nF'],
     ['a quoted tag, whose body joins nothing', "cat <<'E'\nx\\\nE\ncat <<F\nE\ncat .env\nF"],
+    // The joined line takes the first `E` into the body, so the second ends it and the `)` after
+    // it closes the `$( )`: `cat .env` is then text inside the double quotes.
+    ['a joined heredoc line inside `$( )`, its read left in the quoted text', 'echo "$(cat <<E\nx\\\nE\ncat <<F\nE\n)\ncat .env\nF\n)"'],
     ['arithmetic, a parameter expansion and the PID', 'echo $((1+2)) ${HOME} $$'],
   ]) {
     test(`still allows ${label}`, () => {
