@@ -434,8 +434,13 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
     { file: 'gsd-core/workflows/progress/steps/forensic-audit.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
     {
       file: 'gsd-core/workflows/pr-branch.md',
-      match: /^\s*#|STRUCTURAL_RE=|MILESTONE_PHASES_RE=|MILESTONE_PHASE_DIRS=|\[ -d \.planning\/milestones \]/,
+      match: /^\s*#|STRUCTURAL_RE=|MILESTONE_PHASES_RE=|MILESTONE_PHASE_DIRS=/,
       why: 'mirrors the drift-guarded root-layout patterns in src/pr-branch-patterns.cts, which classify repo paths rather than read an artifact',
+    },
+    {
+      file: 'gsd-core/workflows/pr-branch.md',
+      match: /\[ -d \.planning\/milestones \]/,
+      why: 'probes whether the repo-root milestones directory exists before the find that lists its phase directories for git rm, whose index paths are root-relative',
     },
   ];
 
