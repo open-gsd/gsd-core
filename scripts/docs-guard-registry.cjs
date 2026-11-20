@@ -407,7 +407,14 @@ const DOCS_GUARD_TESTS = {
   ],
   // #5438: pins the Research Gate's no-one-can-be-asked sentence and its command spellings in both the
   // feature page and the FEATURES.md projection.
-  'tests/research-resolution-provenance.test.cjs': ['docs/features/research-gate.md', 'docs/FEATURES.md'],
+  'tests/research-resolution-provenance.test.cjs': [
+    'docs/features/research-gate.md',
+    'docs/FEATURES.md',
+    'docs/reference/plan-md.md',
+    'docs/ja-JP/FEATURES.md',
+    'docs/zh-CN/FEATURES.md',
+    'docs/ko-KR/FEATURES.md',
+  ],
   'tests/reversibility-tagging.test.cjs': ['docs/reference/plan-md.md'],
   'tests/reviewer-docs-parity.test.cjs': [
     'docs/COMMANDS.md',
