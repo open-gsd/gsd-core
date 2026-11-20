@@ -157,9 +157,9 @@ const MAX_ID_LOOKUPS = 1024;
 const TASK_COMMITS_HEADING = /^## Task Commits[ \t\r]*$/;
 const NEXT_HEADING = /^## /;
 // `**Task N:` with an optional qualifier between the number and the colon (`**Task 1 (tracer):**`, `**Task 1 RED:**`, #6215).
-const TASK_ROW_PREFIX = /^[ \t]*(?:[0-9]+\.|[-*])?[ \t]*\*\*Task[ \t]+[0-9]+[^:*\r\n]*:/;
+const TASK_ROW_PREFIX = /^[ \t]*(?:(?:[0-9]+\.|[-*])[ \t]*)?\*\*Task[ \t]+[0-9]+(?:[^0-9:*\r\n][^:*\r\n]*)?:/;
 // A task row the strict label does not recognise (`**Task 1 - tracer**`, `**Task 1 (x)**:`): counted as an unread row.
-const TASK_ROW_LOOSE = /^[ \t]*(?:[0-9]+\.|[-*])?[ \t]*\*\*Task[ \t]+[0-9]+/;
+const TASK_ROW_LOOSE = /^[ \t]*(?:(?:[0-9]+\.|[-*])[ \t]*)?\*\*Task[ \t]+[0-9]+/;
 // A list item nested under a task row (`  - RED \`<sha>\``): the TDD commits gsd-executor writes under the task (#6215).
 const SUB_BULLET = /^([ \t]+)(?:[-*+]|[0-9]+\.)[ \t]/;
 const PLAN_METADATA_LINE = /\*\*Plan metadata:?\*\*/;
@@ -1103,7 +1103,7 @@ function gatherPhase(projectDir: string, unit: { kind: 'phase'; phase: string; p
     try {
       const scanned = scanTaskCommits(fs.readFileSync(path.join(phaseDir, name), 'utf-8'));
       refs.push(...scanned.refs);
-      if (scanned.sectionFound && (scanned.refs.length === 0 || scanned.unreadRows > 0)) unparsed.push(name);
+      if (scanned.sectionFound && (scanned.refs.length === 0 || scanned.unreadRows > 0)) unparsed.push(name.replace(/\p{Cc}/gu, '?'));
       summaryCount += 1;
     } catch {
       throw new ScopeUnreadable(`summary-unreadable:${name}`);

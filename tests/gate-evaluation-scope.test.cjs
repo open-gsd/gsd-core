@@ -1726,6 +1726,22 @@ describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
 });
 
 describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
+  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    summarize(repo, [a], '03-01-SUMMARY.md');
+    commit(repo, `${PHASE_DIR}/03-02\nforged line-SUMMARY.md`, 'docs(03-02): summary', '# Summary\n\n## Task Commits\n\n- **Task 1:** none\n');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.ok(scope.unparsedSummaries.length > 0);
+    for (const name of scope.unparsedSummaries) assert.doesNotMatch(name, /[\u0000-\u001f\u007f]/);
+  });
+
+  test('[boundary] long digit and whitespace runs in a Task Commits section are rows of no id, not a hang or a read', () => {
+    for (const noise of ['**Task 1' + '1'.repeat(50000), ' '.repeat(50000) + 'x']) {
+      assert.deepEqual(extractTaskCommitRefs(`## Task Commits\n\n${noise}\n`), []);
+    }
+  });
+
   test('[regression] a SUMMARY with one readable row and one unreadable row is named, not partly dropped', () => {
     const repo = makeRepo();
     const a = commit(repo, 'src/a.js', 'feat(03-01): a');
