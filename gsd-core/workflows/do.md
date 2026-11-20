@@ -32,7 +32,7 @@ Wait for response before continuing.
 **Check if project exists.**
 
 ```bash
-INIT=$(gsd_run query state.load 2>/dev/null)
+INIT=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }} 2>/dev/null)
 ```
 
 Track whether `.planning/` exists — some routes require it, others don't.

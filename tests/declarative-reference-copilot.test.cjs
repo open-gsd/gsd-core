@@ -55,7 +55,7 @@ const {
 const { validateCapability } = require('../gsd-core/bin/lib/capability-validator.cjs');
 const { createDeclarativeAdapter } = require('../gsd-core/bin/lib/adapter-declarative.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { walk, runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { walk, copyRuntimeFixture, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 
 const DESC = path.join(__dirname, '..', 'capabilities', 'copilot', 'capability.json');
 const COPILOT_CAP = JSON.parse(fs.readFileSync(DESC, 'utf8'));
@@ -86,7 +86,7 @@ test('the public declarative adapter classifies Copilot as a declarative host', 
 });
 
 test('a real Copilot install emits a gsd agent/skill surface (invocable)', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'copilot', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'copilot', scope: 'global' });
   try {
     const files = walk(configDir);
     assert.ok(files.length > 0, 'install must emit artifacts');

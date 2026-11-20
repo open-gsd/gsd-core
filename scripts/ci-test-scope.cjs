@@ -42,11 +42,15 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/ci-pr-mergeability.test.cjs',
   'tests/ci-test-job-timeout-budget.test.cjs',
   'tests/ci-test-scope.test.cjs',
+  // #5029: its SHARD_BALANCE <-> test.yml layout-parity test has to fail in the
+  // re-shard PR, which changes only test.yml.
+  'tests/ci-timeout-report.test.cjs',
   'tests/merge-commit-pr.test.cjs',
   'tests/mutation-tap-runner-wiring.test.cjs',
   'tests/mutation-workflow-base-ref.test.cjs',
   'tests/policy-release-no-npm-self-upgrade.test.cjs',
   'tests/policy-shell-pinning.test.cjs',
+  'tests/registry-docs-approved-issue-parity.test.cjs',
   'tests/release-backmerge-invariants.test.cjs',
   'tests/release-coverage-scope.test.cjs',
   'tests/release-finalize-notes-5922.test.cjs',
@@ -77,6 +81,12 @@ const PROTECTED_WORKFLOWS = new Set([
   // #3833: the reusable gate every `pull_request` compute lane depends on —
   // the gate it defines is exercised by tests/ci-pr-mergeability.test.cjs.
   'pr-mergeable-preflight.yml',
+]);
+
+// Data-only logs committed by automation (ci-timeout-report.yml rolling PR).
+// A PR touching only these runs no test matrix.
+const DATA_LOG_FILES = new Set([
+  'tests/ci-timeout-budget-history.jsonl',
 ]);
 
 const RULES = [
@@ -125,6 +135,7 @@ const RULES = [
     fullMatrix: true,
     tests: [
       'tests/check-env.test.cjs',
+      'tests/check-env.process.test.cjs',
       'tests/npm-integrity-gate.test.cjs', // #2758: absorbs the former tests/bug-3588-npm-audit-clean.test.cjs (folded into it by consolidation epic #1969 B6 #1975; the stale filename here was a silent coverage hole this rule never actually re-selected)
       'tests/package-manifest.test.cjs',
     ],
@@ -474,7 +485,11 @@ function changedFiles(args) {
   // branch's merge-base, mis-flagging product_changed/full_matrix on docs-only PRs cut
   // from a slightly stale base (#837). The `changes` job checks out with fetch-depth: 0,
   // so the merge-base is always available.
-  const stdout = execFileSync('git', ['diff', '--name-only', `${args.base}...${args.head}`], {
+  // --no-renames lists both the deleted source and the added destination of a
+  // rename, so renaming product code onto an exempt path cannot hide the deletion.
+  // Side effect: the deleted src/ path is unreadable, so reachesConformanceTierOrSeam
+  // fails safe to true and a src/ move escalates to full_matrix (more CI, never less).
+  const stdout = execFileSync('git', ['diff', '--name-only', '--no-renames', `${args.base}...${args.head}`], {
     encoding: 'utf8',
   });
   return splitFiles(stdout);
@@ -563,6 +578,10 @@ function classify(files, reachabilityDeps = {}) {
   let fullMatrix = false;
 
   for (const file of files) {
+    // DATA_LOG_FILES are append-only records written by automation; nothing
+    // executes them, so like docs they never count as product/pipeline code.
+    if (DATA_LOG_FILES.has(file)) continue;
+
     // Determine if this file is product/pipeline code.
     // docs/ and root-level .md files are intentionally excluded.
     // 'skills/' is shipped agent-skill content installed into every runtime by

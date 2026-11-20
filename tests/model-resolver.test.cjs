@@ -100,9 +100,9 @@ describe('resolveModelInternal', () => {
     assert.ok(typeof model === 'string' && model.length > 0);
   });
 
-  test('resolve_model_ids=omit -> returns empty string', () => {
+  test('resolve_model_ids=omit -> tier alias on the default claude runtime (#3703)', () => {
     writeConfig(tmpDir, { resolve_model_ids: 'omit' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), '');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
   });
 
   test('unknown agent type, no config -> returns a non-empty string (fallback)', () => {
@@ -3649,10 +3649,23 @@ describe('#49 resolveModelInternal: model_policy in the resolution chain', () =>
     writeConfig(projectDir, {
       runtime: 'claude',
       model_profile: 'balanced',
-      model_policy: { provider: 'anthropic-fable', budget: 'low' },
+      model_policy: {
+        provider: 'anthropic',
+        budget: 'high',
+        runtime_tiers: { claude: { opus: { model: 'claude-opus-4-5' } } },
+      },
     });
-    // gsd-planner -> opus tier; anthropic-fable opus/low = claude-opus-4-5 (no alias) -> fall back to "opus"
-    assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+    // gsd-planner -> opus tier; runtime_tiers.claude.opus = claude-opus-4-5 (no alias) -> fall back to "opus" (#6125: no
+    // longer a shipped preset cell, so the unmappable id is supplied explicitly)
+    const writes = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+    try {
+      assert.strictEqual(resolveModelInternal(projectDir, 'gsd-planner'), 'opus');
+    } finally {
+      process.stderr.write = original;
+    }
+    assert.ok(writes.some((w) => w.includes('claude-opus-4-5')), `the unmappable id is warned about: ${JSON.stringify(writes)}`);
   });
 
   test('model_policy.runtime_tiers applies on runtime:"claude", mapped to alias (#1133)', () => {
@@ -4267,7 +4280,7 @@ describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-planner', 0), 'custom-model-id');
   });
 
-  test('dynamic_routing.tier_models used normally when model_policy absent', () => {
+  test('without model_policy, codex attempt 0 is resolve-model and an escalation uses tier_models (#6214)', () => {
     writeConfig(tmpDir, {
       runtime: 'codex',
       dynamic_routing: {
@@ -4275,7 +4288,9 @@ describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {
         tier_models: { light: 'haiku', standard: 'my-custom-sonnet', heavy: 'opus' },
       },
     });
-    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-custom-sonnet');
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), resolveModelInternal(tmpDir, 'gsd-executor'));
+    assert.notStrictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'my-custom-sonnet');
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 1), 'opus');
   });
 
   test('model_policy with Claude runtime does not interrupt dynamic_routing', () => {
@@ -4491,23 +4506,23 @@ describe('#2229 cmdResolveModel CLI — tier key, additive-output guard, unknown
     assert.strictEqual(parsed.profile, 'balanced');
   });
 
-  test('resolve_model_ids=omit -> tier "sonnet" even though model is blank', () => {
+  test('resolve_model_ids=omit -> tier "sonnet", and model is the same alias on claude (#3703)', () => {
     writeConfig(tmpDir, { resolve_model_ids: 'omit' });
     const result = runGsdTools('resolve-model gsd-phase-researcher', tmpDir);
     assert.ok(result.success, `resolve-model failed: ${result.error}`);
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.tier, 'sonnet');
-    assert.strictEqual(parsed.model, '');
+    assert.strictEqual(parsed.model, 'sonnet');
   });
 
-  test('CORE CASE: resolve_model_ids=omit + models.research=haiku -> tier "haiku" though model is blank ' +
+  test('CORE CASE: resolve_model_ids=omit + models.research=haiku -> tier "haiku" and model is the same alias on claude (#3703) ' +
     'and profile alone would also miss it', () => {
     writeConfig(tmpDir, { resolve_model_ids: 'omit', models: { research: 'haiku' } });
     const result = runGsdTools('resolve-model gsd-phase-researcher', tmpDir);
     assert.ok(result.success, `resolve-model failed: ${result.error}`);
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.tier, 'haiku');
-    assert.strictEqual(parsed.model, '');
+    assert.strictEqual(parsed.model, 'haiku');
   });
 
   test('runtime=codex + model_profile=budget -> tier "haiku" even though the resolved model id ' +
@@ -4861,16 +4876,16 @@ describe('#2297: explicit project-level resolve_model_ids:"omit" is honored rega
   beforeEach(() => { isolateHome(); projDir = null; });
   afterEach(() => { rmDir(projDir); restoreHome(); });
 
-  test('no runtime set, explicit project omit -> "" even though the default runtime is claude', () => {
+  test('no runtime set, explicit project omit -> tier alias on the default claude runtime (#3703)', () => {
     projDir = mkProjWithConfig({ resolve_model_ids: 'omit' });
 
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), '');
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), 'opus');
   });
 
-  test('runtime:"claude" + explicit project omit -> "" (mirrors #2517 finding #4)', () => {
+  test('runtime:"claude" + explicit project omit -> tier alias, never a full id (#3703)', () => {
     projDir = mkProjWithConfig({ runtime: 'claude', resolve_model_ids: 'omit' });
 
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), '');
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), 'opus');
   });
 });
 
@@ -4896,14 +4911,14 @@ describe('#2297: explicit project-level "omit" is honored at the active-workstre
     restoreHome();
   });
 
-  test('root config has no resolve_model_ids, but the active workstream config sets "omit" -> "" despite default runtime claude', () => {
+  test('root config has no resolve_model_ids, but the active workstream config sets "omit" -> omit applies (the root claude pin is skipped)', () => {
     const ws = 'ws-alpha';
     projDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2297-proj-ws-'));
     fs.mkdirSync(path.join(projDir, '.planning'), { recursive: true });
     // Root config exists but does NOT set resolve_model_ids at all.
     fs.writeFileSync(
       path.join(projDir, '.planning', 'config.json'),
-      JSON.stringify({ model_profile: 'balanced' }, null, 2)
+      JSON.stringify({ model_profile: 'balanced', model_profile_overrides: { claude: { opus: 'claude-opus-4-7' } } }, null, 2)
     );
     // The active workstream's own config explicitly sets "omit".
     const wsConfigDir = path.join(projDir, '.planning', 'workstreams', ws);
@@ -4914,7 +4929,8 @@ describe('#2297: explicit project-level "omit" is honored at the active-workstre
     );
     process.env.GSD_WORKSTREAM = ws;
 
-    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), '');
+    // Without the workstream omit the root pin would resolve 'claude-opus-4-7'; omit yields the alias (#3703).
+    assert.strictEqual(resolveModelInternal(projDir, 'gsd-planner'), 'opus');
   });
 });
 
@@ -5151,9 +5167,9 @@ describe('issue #2517: backwards compat — no runtime key set', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-4-8');
   });
 
-  test('resolve_model_ids:"omit" still returns "" with no runtime', () => {
+  test('resolve_model_ids:"omit" with no runtime -> tier alias on the default claude runtime (#3703)', () => {
     writeConfig(tmpDir, { model_profile: 'balanced', resolve_model_ids: 'omit' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), '');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
   });
 
   test('effort resolves universally but render param is null when runtime absent', () => {
@@ -5184,7 +5200,7 @@ describe('issue #2517: runtime "claude" is a no-op for resolution (finding #4)',
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
   });
 
-  test('runtime:"claude" + resolve_model_ids:"omit" returns "" (finding #4 regression)', () => {
+  test('runtime:"claude" + resolve_model_ids:"omit" returns the tier alias, not a full id (finding #4, #3703)', () => {
     // The pre-fix bug: runtime:"claude" hijacked the resolution chain and
     // returned the resolved Claude ID even when the user explicitly asked for the
     // omit semantics.
@@ -5193,7 +5209,7 @@ describe('issue #2517: runtime "claude" is a no-op for resolution (finding #4)',
       model_profile: 'quality',
       resolve_model_ids: 'omit',
     });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), '');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
   });
 
   test('runtime:"claude" + resolve_model_ids:true maps alias -> full Claude ID', () => {
@@ -6486,14 +6502,14 @@ describe('#4192 model_profile_overrides.claude.*: tier overrides honor pins on t
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'inherit');
   });
 
-  // Row 12 — CONTROL: explicit project resolve_model_ids:"omit" beats the override (#2297).
-  test('project resolve_model_ids: "omit" + claude.opus pin → empty string', () => {
+  // Row 12 — CONTROL: explicit project resolve_model_ids:"omit" beats the override (#2297); on claude it yields the alias (#3703).
+  test('project resolve_model_ids: "omit" + claude.opus pin → tier alias (#3703)', () => {
     write({
       model_profile: 'balanced',
       resolve_model_ids: 'omit',
       model_profile_overrides: { claude: { opus: 'claude-opus-4-7' } },
     });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), '');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
   });
 
   // Row 13 — CONTROL: model_overrides still wins over the tier override.
@@ -7032,3 +7048,59 @@ describe('#4192 model_overrides: fully-qualified claude IDs resolve as configure
     }
   });
 }
+
+// ─── #6125 — budget "low" is the cheapest model in every tier, as the settings table documents ─────────────────
+describe('#6125 model_policy budget "low" routes every tier to the cheapest model', () => {
+  const { createTempProject: makeTempProject6125, cleanup: cleanup6125, resetRuntimeWarningCaches } = require('./helpers.cjs');
+  const fs6125 = require('node:fs');
+  const path6125 = require('node:path');
+  const { splitLines: splitLines6125 } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const CATALOG = JSON.parse(fs6125.readFileSync(path6125.join(__dirname, '..', 'gsd-core', 'bin', 'shared', 'model-catalog.json'), 'utf8')).providerPresets;
+  const SETTINGS = path6125.join(__dirname, '..', 'gsd-core', 'workflows', 'settings-advanced.md');
+
+  // the `low` rows of the canonical tier table: | provider | low | high-col | medium-col | low-col |, columns = opus, sonnet, haiku
+  function documentedLowRows() {
+    const rows = {};
+    for (const line of splitLines6125(fs6125.readFileSync(SETTINGS, 'utf8'))) {
+      const cells = line.split('|').map((cell) => cell.trim()).filter((cell, i, all) => !(i === 0 && cell === '') && !(i === all.length - 1 && cell === ''));
+      if (cells.length === 5 && cells[1] === 'low' && CATALOG[cells[0]]) rows[cells[0]] = cells.slice(2);
+    }
+    return rows;
+  }
+
+  test('every provider preset low cell equals the documented low row (all three tiers)', () => {
+    const rows = documentedLowRows();
+    assert.deepEqual(Object.keys(rows).sort(), Object.keys(CATALOG).filter((name) => name !== 'generic').sort(), 'the table carries a low row per concrete preset');
+    for (const [provider, documented] of Object.entries(rows)) {
+      const shipped = ['opus', 'sonnet', 'haiku'].map((tier) => CATALOG[provider][tier].low.model);
+      assert.deepEqual(shipped, documented, `${provider} low: the catalog and the settings table agree`);
+    }
+  });
+
+  test('the openai opus low cell carries the same reasoning effort as the other low cells (#6125)', () => {
+    const { opus, sonnet, haiku } = CATALOG.openai;
+    assert.equal(opus.low.reasoning_effort, sonnet.low.reasoning_effort);
+    assert.equal(opus.low.reasoning_effort, haiku.low.reasoning_effort);
+    assert.equal(opus.low.reasoning_effort, 'low');
+  });
+
+  for (const provider of ['anthropic', 'anthropic-fable']) {
+    test(`${provider} low resolves the opus-tier planner to the cheapest model, with no unmappable-id warning`, () => {
+      const dir = makeTempProject6125();
+      try {
+        for (const [runtime, expected] of [['claude', 'haiku'], ['opencode', 'claude-haiku-4-5']]) {
+          resetRuntimeWarningCaches();
+          writeConfig(dir, { runtime, model_profile: 'quality', model_policy: { provider, budget: 'low' } });
+          const writes = [];
+          const original = process.stderr.write.bind(process.stderr);
+          process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+          let planner;
+          try { planner = resolveModelInternal(dir, 'gsd-planner'); } finally { process.stderr.write = original; }
+          assert.strictEqual(planner, expected, `${provider}/${runtime}`);
+          assert.deepEqual(writes.filter((w) => w.includes('alias')), [], `${provider}/${runtime}: no alias warning`);
+        }
+      } finally { cleanup6125(dir); }
+    });
+  }
+});
+

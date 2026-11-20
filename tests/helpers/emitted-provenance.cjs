@@ -40,8 +40,7 @@
 
 const path = require('node:path');
 
-const { cleanup } = require('../helpers.cjs');
-const { MANIFEST_FAMILIES, runMinimalInstall, buildParityManifest } = require('./install-shared.cjs');
+const { MANIFEST_FAMILIES, installRuntimeFixture, buildParityManifest } = require('./install-shared.cjs');
 
 /**
  * Number of runtime manifests the guard expects to cover. Asserted, so a glob that
@@ -868,15 +867,18 @@ assertNoIdentityTransforms(PROVENANCE_RULES);
  * @param {object} [deps]  injected for testability (hostile-input coverage below) —
  *   production callers use the defaults.
  * @param {Array}    [deps.families]  MANIFEST_FAMILIES by default
- * @param {function} [deps.install]   runMinimalInstall by default
+ * @param {function} [deps.install]   installRuntimeFixture by default: the trees are
+ *   only read here, so each is the run's shared one (#6335)
  * @param {function} [deps.build]     buildParityManifest by default
- * @param {function} [deps.clean]     cleanup by default
+ * @param {function} [deps.clean]     called with each root after its build. Nothing by
+ *   default: a shared tree is not this caller's to remove. A caller that injects an
+ *   `install` making private trees injects the matching `clean`.
  */
 function loadManifests({
   families = MANIFEST_FAMILIES,
-  install = runMinimalInstall,
+  install = installRuntimeFixture,
   build = buildParityManifest,
-  clean = cleanup,
+  clean = () => {},
 } = {}) {
   return families.map(({ name, runtime, scope }) => {
     const { configDir, root } = install({ runtime, scope });

@@ -72,8 +72,9 @@ const HARNESS_ONLY = new Set(['SCAN_USAGE_ERROR_TIMEOUT_MS', 'MALFORMED_INPUT_HO
  * share the value by command and argv, exactly as when the values are equal).
  * LOOP_HOOK_POINT_CLI_TIMEOUT_MS was 60000 in the window; runGsdTools (tests/helpers.cjs) ran at
  * the process seam's 60000 fallback then and is bound to this constant (now 80000) at HEAD.
+ * GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS was 30000 in the window; #6143 raised it to 32000.
  */
-const HISTORICAL_VALUES = { LOOP_HOOK_POINT_CLI_TIMEOUT_MS: [60000] };
+const HISTORICAL_VALUES = { LOOP_HOOK_POINT_CLI_TIMEOUT_MS: [60000], GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS: [30000] };
 
 const EXCLUSION_KINDS = ['UNDER_TEST', 'EXEMPT'];
 const GIT_OR_THROW = 'tests/helpers/git-fixture.cjs gitOrThrow forwards options.timeoutMs to runGit (process seam)';
@@ -106,6 +107,7 @@ const MANUAL_RESOLUTIONS = [
   { file: 'tests/install-regressions.test.cjs', callee: '(not-direct-arg) var=runOpts', cls: 'SEAM', resolvedCallee: 'runNode', note: 'runOpts is passed to runNode' },
   { file: 'tests/install-regressions.test.cjs', callee: '(not-direct-arg)', cls: 'SEAM', resolvedCallee: 'runNode', note: 'nested options object is passed to runNode' },
   { file: 'tests/helpers/opencode-real.cjs', callee: '(not-direct-arg)', cls: 'DIRECT', resolvedCallee: 'spawn', note: 'realRun default timeoutMs is passed to child_process spawn as {timeout}' },
+  { file: 'tests/codex-config-install.test.cjs', callee: 'spawnNode', cls: 'SEAM', resolvedCallee: 'runNode', note: 'validateAgents spawnNode parameter defaults to the process seam runNode (injectable so the budget test reads the options without spawning)' },
   { file: 'tests/loop-walk.qa.test.cjs', callee: 'execFileAsync', cls: 'DIRECT', resolvedCallee: 'execFileAsync', note: 'execFileAsync = promisify(execFile) from child_process' },
   { file: 'tests/review-lane-availability.test.cjs', callee: 'run', cls: 'DIRECT', resolvedCallee: 'run', note: 'run = promisify(execFile) from child_process' },
   { file: 'tests/review-lane-no-redirect-5433.test.cjs', callee: 'run', cls: 'DIRECT', resolvedCallee: 'run', note: 'run = promisify(execFile) from child_process' },
