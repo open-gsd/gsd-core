@@ -2391,13 +2391,84 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
     });
 
-    test('in process: a commit message holding a reading trigger is scanned to about 70,000 characters', () => {
-      // The user guide's figure: two levels, eight scans each, and #5513's
-      // heredoc passes put the boundary near 69,900 characters. Pinned at
-      // 10% either side, so the guide's "about" stays true.
-      const message = (n) => `git commit -m "$(cat <<'EOF'\nsubject $'\\t'\n\n${'a'.repeat(n)}\nEOF\n)"`;
-      assert.equal(scanBashCommand(message(63000)), null);
-      assert.deepEqual(scanBashCommand(message(77000)), TOO_COMPLEX);
+    // The user guide's measured examples of where the scan budget stops a long
+    // command, each pinned about 2-10% either side of its edge on this hook.
+    // `verdict` is main()'s order: the secret scan, then the debugger-spawn
+    // check on what it left. Every deny pin asserts command-too-complex.
+    const budgetVerdict = (cmd) => scanBashCommand(cmd) || scanDebuggerSpawn(cmd);
+    const fillLines = (line, chars) => {
+      let body = '';
+      for (let i = 0; body.length < chars; i++) body += line(i);
+      return body;
+    };
+    const assertBudgetEdge = (cmd, below, above, label) => {
+      assert.equal(budgetVerdict(cmd(below)), null, `${label}: ${below} characters`);
+      assert.deepEqual(budgetVerdict(cmd(above)), TOO_COMPLEX, `${label}: ${above} characters`);
+    };
+
+    test('in process: a heredoc commit message holding a reading trigger is scanned to about 64,500 or 67,700 characters', () => {
+      // Two levels, eight scans each, #5513's heredoc passes and #5523's
+      // readings: about 64,500 with a `$'\t'` (its backslash also calls for
+      // the join readings), about 67,700 with a quote beside `((`. `next`
+      // denies both from about 69,900, so the `$'\t'` pin fails there.
+      const message = (subject) => (n) => `git commit -m "$(cat <<'EOF'\nsubject ${subject}\n\n${'a'.repeat(n)}\nEOF\n)"`;
+      assertBudgetEdge(message("$'\\t'"), 61000, 67000, "$'\\t'");
+      assertBudgetEdge(message("' (( '"), 64000, 71000, 'quote beside ((');
+    });
+
+    test('in process: scripts with a reading trigger a shell reads from a heredoc are denied at sizes set by their shape', () => {
+      // The guide's examples: strict-mode `(( n += k ))` lines about 15,700;
+      // `echo` lines after `IFS=$'\t'` about 67,700 (`next`: 69,900, so the
+      // 69,000 pin fails there); bare `:` lines about 10,700; `echo` lines
+      // after `echo ' (( '` about 69,900; and inside `$( )` about 16,200
+      // (`echo`) and 2,700 (`:`). The strict-mode script in `$( )` is the row above.
+      const script = (head, line, nested) => (chars) => {
+        const body = head + fillLines(line, chars);
+        return nested ? `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"` : `bash <<'EOF'\n${body}EOF\n`;
+      };
+      const tab = "IFS=$'\\t'\n";
+      assertBudgetEdge(script("set -euo pipefail\nIFS=$'\\n\\t'\n", (k) => `(( n += ${k} ))\n`, false), 15000, 17000, 'strict-mode lines');
+      assertBudgetEdge(script(tab, (k) => `echo line ${k}\n`, false), 64000, 69000, 'echo lines');
+      assertBudgetEdge(script(tab, () => ':\n', false), 10000, 11500, ': lines');
+      assertBudgetEdge(script("echo ' (( '\n", (k) => `echo line ${k}\n`, false), 66000, 73000, "echo lines after ' (( '");
+      assertBudgetEdge(script(tab, (k) => `echo line ${k}\n`, true), 15000, 17500, 'echo lines in $( )');
+      assertBudgetEdge(script(tab, () => ':\n', true), 2500, 3000, ': lines in $( )');
+    });
+
+    test('in process: a heredoc with none of the reading triggers is scanned once per #5523 reading it calls for', () => {
+      // The guide's examples. A commit-message heredoc's own `$(` calls for the
+      // spans readings, a brace for zsh's grouping, a backslash (with the `<<`
+      // and a newline) or a CR for the join and CR readings, and each composes.
+      // `next` scans every one of these to the length limit but the `$( )` script.
+      const message = (line) => (chars) => `git commit -m "$(cat <<'EOF'\nSubject\n\n${fillLines(line, chars)}EOF\n)"`;
+      assertBudgetEdge(message((k) => `Plain line ${k}.\n`), 800000, 880000, 'plain lines');
+      assertBudgetEdge(message((k) => `Keep {a, b} in step ${k}.\n`), 570000, 630000, '{a, b} lines');
+      assertBudgetEdge(message((k) => `Keep {a, b} in \\n step ${k}.\n`), 440000, 490000, '{a, b} lines with a backslash');
+      assertBudgetEdge(message((k) => `Keep {a, b} in step ${k}.\r\n`), 440000, 490000, '{a, b} lines ending in CRLF');
+      const home = (line, nested) => (chars) => {
+        const body = fillLines(line, chars);
+        return nested ? `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"` : `bash <<'EOF'\n${body}EOF\n`;
+      };
+      const plainHome = () => 'echo ${HOME}\n';
+      const slashHome = (k) => `echo \${HOME} 'a\\n' ${k}\n`;
+      assertBudgetEdge(home(plainHome, false), 570000, 630000, 'echo ${HOME} lines');
+      assertBudgetEdge(home(plainHome, true), 370000, 430000, 'echo ${HOME} lines in $( )');
+      assertBudgetEdge(home(slashHome, false), 440000, 490000, 'echo ${HOME} lines with a backslash');
+      assertBudgetEdge(home(slashHome, true), 290000, 330000, 'echo ${HOME} lines with a backslash in $( )');
+    });
+
+    test('in process: a single-quoted commit message is scanned once per reading its characters call for', () => {
+      // The guide's examples: `{a, b}` lines call for zsh's grouping only, so
+      // the message is scanned twice and stays within the budget to the length
+      // limit; a backtick, a backslash, `<<` and a CR as well call for ten
+      // scans, about 840,000; a `((` added is a #5255 form, about 270,000.
+      const message = (subject, line) => (chars) => `git commit -m '${subject}\n\n${fillLines(line, chars)}'`;
+      const braces = message('Subject', (k) => `Keep {a, b} in step ${k}.\n`)(1048000);
+      assert.ok(braces.length <= 1024 * 1024);
+      assert.equal(budgetVerdict(braces), null);
+      const mixed = (k) => `Keep {a} and \`b\` with \\n ${k}.\n`;
+      assertBudgetEdge(message('Subject: cat <<EOF\r', mixed), 800000, 880000, 'mixed');
+      assertBudgetEdge(message('Subject: cat <<EOF ((y))\r', mixed), 255000, 285000, 'mixed with ((');
     });
 
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
@@ -2414,19 +2485,27 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "cat ${x:-$'.env'}", "cat ${x-$'.e\\x6ev'}",
       "cat ${x:+a}$'.env'", 'cat .env${}',
       "echo $(#)'\n); cat $'.env' #'",
-      'echo "$\\\n(cat .env)"', 'cat <<E\n$\\\n(cat .env)\nE',
+      'echo "$\\\n(cat .env)"',
       ": <<${x#'}'}\n${x#'}'}\ncat .env\n",
-      "echo $(( ' $(cat .env >&2) ' ))",
       "if((' $(cat .env >&2) '));then :;fi",
       "{((' $(cat .env >&2) '));}",
       "echo $[ \\[ ' $(cat .env >&2) ' ]",
       "echo $[ \\] ' $(cat .env >&2) ' ]",
       "(( \\( ' $(cat .env >&2) ' ))",
       "(( \\) ' $(cat .env >&2) ' ))",
+      "zsh -c $'{cat .env}'",
+      "\r#;cat $'\\''; cat .env #'",
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {
         assertAllowed(runHook(bash(cmd)), cmd);
+      });
+    }
+    // Listed here until #5523's readings closed them: the join reading for the heredoc body,
+    // the arithmetic spans for `$((…))`.
+    for (const cmd of ['cat <<E\n$\\\n(cat .env)\nE', "echo $(( ' $(cat .env >&2) ' ))"]) {
+      test(`denied since #5523: ${JSON.stringify(cmd)}`, () => {
+        assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
       });
     }
     // Listed here until #5513 (bash 3.2's reading of a `$( )` span) closed it on `next`.
@@ -3685,5 +3764,242 @@ describe('gsd-secret-read-guard: strings re-interpreted by find, xargs and watch
       }),
       PROPERTY_RUNS,
     );
+  });
+});
+
+describe('gsd-secret-read-guard: constructs the tokenizer read differently from the shell (#5523)', () => {
+  // Each command below runs `cat .env` in the shells named (bash 3.2, 5.2 and 5.3, dash
+  // 0.5.12 and zsh 5.9 measured), and the guard allowed it: the tokenizer read one construct
+  // differently from the shell, and the read sat in text it did not scan. `\n` is a newline,
+  // `\r` a CR.
+  const DENIED = [
+    ['a CR before `#` (bash, dash, zsh)', '\r#;cat .env'],
+    ['a CR as a heredoc tag (bash, dash, zsh)', '<<\r cat .env'],
+    ['an escaped backtick in an unquoted heredoc body (bash, dash, zsh)', 'cat <<E\n\\``cat .env`\nE'],
+    ['`#` straight after `(` (zsh)', 'x (#;cat .env'],
+    ['`#` after a word and `(` (zsh)', 'E(#$(cat .env)'],
+    ['a brace group with no blank after `{` (zsh)', '{cat .env}'],
+    ['a brace group closed by the `}` ending a word (zsh)', '{ cat .env}'],
+    ['a brace group after `then` (zsh)', 'if true; then {cat .env}; fi'],
+    ['a brace group after `!` (zsh)', '! {cat .env}'],
+    ['a brace group after `then !` (zsh)', 'if true; then ! {cat .env}; fi'],
+    ['a brace group after `time` (zsh)', 'time {cat .env}'],
+    ['a brace group after `coproc` (zsh)', 'coproc {cat .env}; wait'],
+    ['a brace group after a group\'s `always` (zsh)', '{ true } always {cat .env}'],
+    ['a brace group on the line after a heredoc (zsh)', 'cat <<E\nx\nE\n{cat .env}'],
+    ['a brace group after an fd duplication (zsh)', '2>&1 {cat .env}'],
+    ['a brace group after a redirection and its target (zsh)', '</dev/null {cat .env}'],
+    ['a brace group after `then` and a redirection (zsh)', 'if true; then >&2 {cat .env}; fi'],
+    ['a brace group closed by a `}` before a redirection (zsh)', '{cat .env}<&-'],
+    ['the same before an output redirection (zsh)', '{cat .env}>&2'],
+    ['`$$((`, which zsh reads as `$` and an arithmetic span (zsh)', "echo $$((1+'`cat .env`'))"],
+    ['the same with the backtick first (zsh)', "echo $$(('`cat .env`'))"],
+    ['a CR before `#` and a `$$` before `{` in one command (bash, dash)', '\r#;echo $${x; cat .env'],
+    ['a CR before `#` and a brace group with no blank in one command (zsh)', '\r#;{cat .env}'],
+    ['a CR before `#` and a `)` in a heredoc body inside `$( )` (bash 3.2)', '\r#;echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"'],
+    ['a `$$` before `{` and a `)` in a heredoc body inside `$( )` (bash 3.2)', 'echo $${x; echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"'],
+    ['the CR row, its `<<` assembled by eval from `<\'\'<` (bash 3.2)', "\r#;eval 'echo \"$(cat <''<EOF\n)\"; cat .env; \"\nEOF\n)\"'"],
+    ['a backtick body parsed and a `)` in a heredoc body inside `$( )` (bash 3.2)', 'echo `\\$${x; echo "$(cat <<EOF\n)"; cat .env; "\nEOF\n)"`'],
+    ['a backtick body as the shell parses it, backslashes removed (bash, dash)', 'echo `\\$${x; cat .env`'],
+    ['the same inside double quotes (bash, dash)', 'echo "`\\$${x; cat .env`"'],
+    ['the same in an unquoted heredoc body (bash, dash)', 'cat <<E\n`\\$${x; cat .env`\nE'],
+    ['`$$` before `{`, which opens no `${` (bash, dash)', 'echo $${x; cat .env'],
+    ['the same in an assignment, a `}` after a `#` (bash, dash)', 'x=$${y; cat .env #}'],
+    ['`#` inside `$((…))` (bash, dash, zsh)', 'echo $((#`cat .env`))'],
+    ['the same inside double quotes (bash, dash, zsh)', 'echo "$((#`cat .env`))"'],
+    ['the same in an unquoted heredoc body (bash, dash, zsh)', 'cat <<E\n$((#`cat .env`))\nE'],
+    ['`#` after a blank inside `$((…))` (dash, zsh)', 'echo $((1 #`cat .env`))'],
+    ['the same inside double quotes (dash, zsh)', 'echo "$((1 #`cat .env`))"'],
+    ['the same in an unquoted heredoc body (dash, zsh)', 'cat <<E\n$((1 #`cat .env`))\nE'],
+    ['a body line joined to the tag line by a backslash-newline (bash, dash, zsh)', 'cat <<E\nx\\\nE\ncat <<F\nE\ncat .env\nF'],
+    ['the same, the read then hidden by a quote (bash, dash, zsh)', "cat <<E\nx\\\nE\n'\nE\ncat .env\n'"],
+    ['the same inside `$( )` (bash, dash, zsh)', 'echo $(cat <<E\nx\\\nE\ncat <<F\nE\ncat .env\nF\n)'],
+    ['the same, assembled by eval from `\\\'\'` and a newline (bash, dash, zsh)', "eval 'cat <<E\nx\\''\nE\ncat <<F\nE\ncat .env\nF'"],
+    ['`$$` assembled by eval from `$\'\'$` (bash, dash)', "eval '$''${x; cat .env'"],
+  ];
+  for (const [label, cmd] of DENIED) {
+    test(`denies the read in ${label}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+    // The same command reading a file that is not a secret stays allowed.
+    const twin = cmd.split('.env').join('README.md');
+    test(`allows the twin reading README.md in ${label}`, () => {
+      assertAllowed(runHook(bash(twin)), twin);
+    });
+  }
+
+  // Controls: no shell runs a read in any of these.
+  for (const [label, cmd] of [
+    ['a `{` in argument position (zsh opens no group there)', 'echo {cat .env}'],
+    ['a `{` in an assignment', 'x={cat .env}'],
+    ['a `}` that does not end a word', '{cat .env}x'],
+    ['a `{` after an argument-position `{`', 'echo { {cat .env} x'],
+    ['a `{` straight after a closed group (zsh rejects the line)', '{a} {cat .env} x'],
+    ['a reserved word in argument position', 'echo then {cat .env}'],
+    ['an argument-position `{` before a redirection', 'echo {cat .env}>x'],
+    ['a redirection after a command word', 'echo >&2 {cat .env}'],
+    ['a redirection after an assignment', 'x=1 >&2 {cat .env}'],
+    ['`$$((` with no span in it', 'echo $$((1+2))'],
+    ['an even run of backslashes, which joins nothing', 'cat <<E\nx\\\\\nE\ncat <<F\nE\ncat .env\nF'],
+    ['a quoted tag, whose body joins nothing', "cat <<'E'\nx\\\nE\ncat <<F\nE\ncat .env\nF"],
+    ['arithmetic, a parameter expansion and the PID', 'echo $((1+2)) ${HOME} $$'],
+  ]) {
+    test(`still allows ${label}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The earlier readings stay readings: the body below holds two escaped backticks, so no
+  // shell runs the read, but the span between them was denied before and stays denied.
+  test('a span between escaped backticks in a heredoc body stays denied', () => {
+    const cmd = 'cat <<E\n\\`cat .env\\`\nE';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // The added readings run after the plain one, so a command that overflows the stack in an
+  // added reading keeps the plain reading's denial; with no read found it is denied as
+  // `command-too-complex` (#5255), before the debugger-spawn check. A backtick body of 6,000
+  // nested `"\$(` reads harmlessly as written; the body the shell parses, `"$(` nested 6,000
+  // deep, overflows the span finder.
+  const deepEscapedBacktick = 'echo `' + '"\\$('.repeat(6000) + ')"'.repeat(6000) + '`';
+  test('a read after a deep escaped backtick body stays denied', () => {
+    const cmd = `${deepEscapedBacktick}; cat .env`;
+    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then cat .env', { tool: 'Bash', path: '.env' });
+  });
+  test('a debugger spawn after a deep escaped backtick body stays denied', () => {
+    const cmd = `${deepEscapedBacktick}; claude --agent gsd-debugger -p hi`;
+    assertBlocked(runHook(bash(cmd)), 'deep escaped backtick body, then a debugger spawn', { code: 'command-too-complex', tool: 'Bash' });
+  });
+
+  // A heredoc body of 64,000 lines of three backslashes is one joined line under the join
+  // reading. The run's length is counted once per line, so the hook answers within the file's
+  // spawn backstop (QUICK_SPAWN_TIMEOUT_MS) rather than re-walking the run at every join.
+  test('a long run of joined heredoc lines is allowed within the spawn backstop', () => {
+    const cmd = 'cat <<E\n' + '\\\\\\\n'.repeat(64000) + 'E';
+    assertAllowed(runHook(bash(cmd)), '64,000 joined backslash lines');
+  });
+
+  // Property: behind each construct, a read is denied exactly when it names a secret.
+  const HIDERS = [
+    (c) => `\r#;${c}`,
+    (c) => `cat <<E\n\\\`\`${c}\`\nE`,
+    (c) => `x (#;${c}`,
+    (c) => `{${c}}`,
+    (c) => `echo \`\\$\${x; ${c}\``,
+    (c) => `echo $((#\`${c}\`))`,
+    (c) => `echo $((1 #\`${c}\`))`,
+    (c) => `cat <<E\nx\\\nE\ncat <<F\nE\n${c}\nF`,
+  ];
+  const READER = fc.constantFrom('cat', 'grep KEY', 'head -1');
+  const BENIGN = fc.constantFrom('README.md', 'src/a.js', 'notes.txt', '.envrc');
+  test('a read behind each construct is denied when it names a secret, allowed when not', () => {
+    fc.assert(fc.property(
+      fc.nat(HIDERS.length - 1), READER, fc.oneof(
+        SECRET.map((name) => ({ name, secret: true })),
+        BENIGN.map((name) => ({ name, secret: false })),
+      ),
+      (h, reader, { name, secret }) => {
+        const cmd = HIDERS[h](`${reader} ${name}`);
+        const r = runHook(bash(cmd));
+        if (secret) assertBlocked(r, cmd, { tool: 'Bash' });
+        else assertAllowed(r, cmd);
+      },
+    ), PROPERTY_RUNS);
+  });
+
+  // #5255's three rules hold for these readings too: a block is `{ code, text }`, every
+  // reading draws on the command's one budget, and a bug in one never changes the verdict.
+  describe("on #5255's scan", () => {
+    const { scanBashCommand, workSpent } = require(HOOK_PATH);
+    const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
+    const need = (cmd) => {
+      scanBashCommand(cmd, 2 ** 40, 2 ** 40);
+      return workSpent().scan;
+    };
+
+    test('a read only a reading finds is a `{ code, text }` block', () => {
+      assert.deepEqual(scanBashCommand('{cat .env}'), { code: 'secret-read', text: '.env' });
+      assert.deepEqual(scanBashCommand('\r#;cat .env'), { code: 'secret-read', text: '.env' });
+    });
+
+    test('the readings draw on the command\'s one budget', () => {
+      // No read: the plain reading, then the zsh grouping reading, each scan the command once.
+      const cmd = `{echo ${'a'.repeat(1000)}}`;
+      const whole = need(cmd);
+      assert.equal(whole, 2 * cmd.length);
+      assert.equal(scanBashCommand(cmd, whole), null, 'on the whole need');
+      assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
+    });
+
+    // The fixture makes the spans reading throw on a backtick body holding FAULT.
+    const faulty = (command) => {
+      const r = runHookSeam(HOOK_PATH, [], {
+        input: JSON.stringify(bash(command)),
+        env: { ...process.env, NODE_OPTIONS: `--require ${path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-span-reading.cjs')}` },
+        timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
+      });
+      return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+    };
+
+    test('a bug in a reading is reported on stderr, and the command is allowed as before', () => {
+      const r = faulty('echo `\\$FAULT`; ls');
+      assertAllowed(r, 'a faulty reading, no read');
+      const { DIAGNOSTIC } = require(HOOK_PATH);
+      assert.deepEqual(JSON.parse(r.stderr), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'span reading bug' });
+    });
+
+    test('a bug in a reading costs no denial', () => {
+      assertBlocked(faulty('echo `\\$FAULT`; cat .env'), 'a faulty reading, then a read', { tool: 'Bash', path: '.env' });
+      assertBlocked(faulty('{cat .env}; echo `\\$FAULT`'), 'a read only the zsh reading finds', { tool: 'Bash', path: '.env' });
+      assertBlocked(faulty('echo `\\$FAULT`; claude --agent gsd-debugger -p hi'), 'a faulty reading, then a debugger spawn', { code: 'debugger-cli-spawn', tool: 'Bash' });
+    });
+  });
+
+  describe('with a project exemption (#4432)', () => {
+    const fs = require('node:fs');
+    const { gitOrThrow: fixtureGit } = require('./helpers/git-fixture.cjs');
+    const { createTempGitProject, cleanup } = require('./helpers.cjs');
+    const EXEMPT = '.env';
+    let repo;
+    const absq = () => `'${path.join(repo, EXEMPT)}'`;
+    const run = (command) => runHook({ ...bash(command), cwd: repo });
+
+    before(() => {
+      repo = fs.realpathSync(createTempGitProject('gsd-5523-exempt-'));
+      fs.writeFileSync(path.join(repo, EXEMPT), 'KEY=CHANGE_ME\n');
+      fixtureGit(['-c', 'commit.gpgsign=false', 'add', '-f', EXEMPT], { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+      fixtureGit(['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-m', 'fixture'],
+        { cwd: repo, timeoutMs: GIT_TIMEOUT_MS });
+      fs.mkdirSync(path.join(repo, '.planning'), { recursive: true });
+      fs.writeFileSync(path.join(repo, '.planning', 'config.json'), JSON.stringify({ hooks: { secret_read_exempt: [EXEMPT] } }));
+    });
+
+    after(() => {
+      cleanup(repo);
+    });
+
+    test('a plain read of the exempt file stays allowed', () => {
+      assertAllowed(run(`cat ${absq()}`), 'cat <exempt>');
+    });
+
+    // The `mv` that `$$` hides from the plain reading is seen by #5255's readings of `$${` too.
+    test('denies an exempt read when a later reading sees a command an earlier one hid (bash, dash)', () => {
+      const cmd = '{cat ' + absq() + '};cat $' + '${x; mv /tmp/a /tmp/b; cat ' + absq() + ' }';
+      assertBlocked(run(cmd), '{cat <exempt>};cat $${x; mv a b; cat <exempt> }', { tool: 'Bash' });
+    });
+
+    // The plain reading takes `\r#` as a comment and judges the line read-only; only the CR reading
+    // sees the `mv`. Each reading judges the line itself, so the read is denied.
+    test('denies an exempt read when only a #5523 reading sees the other command (bash, dash, zsh)', () => {
+      const cmd = 'cat ' + absq() + ' \r#;mv /tmp/a /tmp/b; cat ' + absq();
+      assertBlocked(run(cmd), 'cat <exempt> CR#;mv a b; cat <exempt>', { tool: 'Bash' });
+    });
+
+    // The CR reading scans with the plain reading alone, where `$'\''` opens a quote that hides the
+    // `mv`; its read-only check still reads the line under #5255's readings, which see it.
+    test('denies an exempt read when a $\'…\' span hides the other command from the scan (bash)', () => {
+      const cmd = "cat x\r#;cat $'\\''; mv /tmp/a " + absq() + " #'\ncat " + absq();
+      assertBlocked(run(cmd), "cat x CR#;cat $'\\''; mv a <exempt> #' <newline> cat <exempt>", { tool: 'Bash' });
+    });
   });
 });
