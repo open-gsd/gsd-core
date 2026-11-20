@@ -118,7 +118,7 @@ The preconditions below read the filter projections above, so they come first.
 ```bash
 # TARGET comes from config: refuse an option-like name; git gets only its sha.
 unset TO; _T=${TARGET//[[:cntrl:]]/?}
-case $TARGET in -*) echo "Refusing target $_T: it starts with -." >&2; exit 1 ;; esac
+case $TARGET in -*|*[[:cntrl:]]*) echo "Refusing target $_T: it starts with - or has a control byte." >&2; exit 1 ;; esac
 [ -n "$CURRENT_BRANCH" ] || { echo "Detached HEAD: check out a branch." >&2; exit 1; }
 TARGET_SHA=$(git rev-parse -q --verify "refs/heads/$TARGET^{commit}" || git rev-parse -q --verify "$TARGET^{commit}") || { echo "Unknown target: $_T" >&2; exit 1; }
 PR_BRANCH="${CURRENT_BRANCH}-pr"
@@ -258,8 +258,7 @@ if [ -n "$DIRTY" ]; then
   exit 1
 fi
 
-# A leftover -pr branch is reset only when already merged. Refuse here, before handle_sub_repos
-# pushes branches and opens PRs, so a refused run has no outward effects.
+# A leftover -pr branch is reset only when already merged. Refuse before handle_sub_repos pushes or opens PRs.
 if [ -n "$PR_BRANCH_TIP" ] && { [ -z "$PR_BRANCH_MERGED" ] || [ "$PENDING_VERDICT" = unproven ]; }; then
   if [ -z "$PR_BRANCH_MERGED" ]; then echo "$PR_BRANCH exists and is not merged into $TARGET (if it was merged on a remote $TARGET, update $TARGET and re-run). Else choose one, then re-run:" >&2
   else echo "$PR_BRANCH is merged into $TARGET but no longer holds the pending build $PENDING_TIP. Choose one, then re-run:" >&2; fi

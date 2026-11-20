@@ -100,8 +100,8 @@ describe('#5469 pr-branch published marker (real git): failures', () => {
     assert.ok(!fs.existsSync(pwned), 'git wrote no file');
   });
 
-  // The refusal and unknown-target texts print a name from repo config: control bytes must not reach the terminal raw.
-  for (const [what, target, text] of [['refused', "$'-\\033[2J\\rx'", 'Refusing target'], ['unknown', "$'x\\033]0;t\\rx'", 'Unknown target']]) {
+  // A target from repo config with a control byte is refused before any later message prints it raw.
+  for (const [what, target, text] of [['refused', "$'-\\033[2J\\rx'", 'Refusing target'], ['revision-expression', "$'HEAD^{/\\033c}'", 'Refusing target']]) {
     test(`a ${what} target prints no raw control byte`, () => {
       const dir = repo();
       commitRound(dir, 1);
