@@ -172,3 +172,68 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     }), PROPERTY_RUNS);
   });
 });
+
+// #6282: words xargs takes from stdin or an arg file can be options. `-e KEY` or
+// `-f pats` makes the first positional a file, and a replace string can turn an
+// exclusion value into an option's value (`-I--exclude=` gives `grep -f.env`).
+// The guard cannot see those words, so a search tool run by xargs keeps no
+// carve-out.
+describe('gsd-secret-read-guard: a search tool run by xargs keeps no carve-out (#6282)', () => {
+  function assertBlockedOn(command) {
+    const r = runHook(bash(command));
+    assert.equal(r.status, 2, `${command}: expected block (exit 2), got exit ${r.status}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block', command);
+    assert.equal(out.code, 'secret-read', `${command}: code`);
+    assert.equal(out.tool, 'Bash', `${command}: tool`);
+    return out;
+  }
+
+  const blocks = [
+    // The issue's rows: stdin or an arg file supplies the pattern.
+    ["echo '-e KEY' | xargs grep .env", '.env'],
+    ["echo '-f pats' | xargs grep .env", '.env'],
+    ["echo '-e KEY' | xargs rg .env", '.env'],
+    ['xargs -a list grep .env', '.env'],
+    // A replace string puts stdin words anywhere, `--` included.
+    ["echo '-eKEY' | xargs -I-- grep -- .env", '.env'],
+    ["echo '-eKEY' | xargs -rI-- grep -- .env", '.env'],
+    ["echo '-eKEY' | xargs --rep=-- grep -- .env", '.env'],
+    ["echo '-eKEY' | xargs -J-- grep -- .env", '.env'],
+    // ... and can turn an exclusion value into another option's value.
+    ["echo '-f' | xargs -I--exclude= grep --exclude=.env KEY", '--exclude=.env'],
+    ["echo '-f' | xargs -I--exclude grep --exclude .env KEY", '.env'],
+    // jq: stdin can supply `-f`, which makes the program word a file.
+    ["echo '-f' | xargs jq '.env'", '.env'],
+  ];
+  for (const [cmd, file] of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => assert.equal(assertBlockedOn(cmd).path, file, `${cmd}: path`));
+  }
+
+  test('allows a search tool run by xargs with no protected name in its words', () => {
+    assertAllowed('echo x | xargs grep KEY');
+    assertAllowed('git ls-files | xargs grep -l KEY');
+    assertAllowed("find . -name '*.ts' | xargs rg -n token");
+  });
+
+  test('the carve-out outside xargs is unchanged (#5884)', () => {
+    assertAllowed("grep -n '.env.local' src/setup.ts");
+    assertAllowed('grep -rn token . --exclude=.env');
+    assertAllowed("rg -g '!.env' token .");
+    assertBlockedOn('grep .env -e KEY');
+  });
+
+  test('property: a protected name among the words of a search tool run by xargs is blocked', () => {
+    const NAME = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production');
+    const SLOT = fc.constantFrom('pattern', 'exclusion', 'after --');
+    const XARGS_FLAGS = fc.constantFrom('', '-r ', '-0 ', '-n 1 ', '-I{} ');
+    const TOOL = fc.constantFrom('grep', 'egrep', 'fgrep', 'rg', 'jq');
+    fc.assert(fc.property(NAME, TOOL, XARGS_FLAGS, SLOT, (name, tool, xargsFlags, slot) => {
+      let words = `-- '${name}'`;
+      // rg's exclusion (`-g '!name'`) names `!name`, never the protected file, so rg and jq take the pattern slot.
+      if (slot === 'pattern' || tool === 'jq' || (slot === 'exclusion' && tool === 'rg')) words = `'${name}'`;
+      else if (slot === 'exclusion') words = `--exclude=${name} KEY`;
+      assertBlockedOn(`echo x | xargs ${xargsFlags}${tool} ${words}`);
+    }), PROPERTY_RUNS);
+  });
+});
