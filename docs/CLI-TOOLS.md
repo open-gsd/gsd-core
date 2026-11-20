@@ -791,12 +791,12 @@ It merges one JSON object into `$GSD_HOME/.gsd/defaults.json` (`~/.gsd/defaults.
 `GSD_HOME` is set): sections merge key by key, a `null` removes its key, and any other value
 replaces. A setting the save leaves unset keeps what is stored: an empty object, at any depth,
 sets nothing (`{"parallelization":{"enabled":{}}}` leaves a stored `parallelization: false` as it
-was), and a stored section is dropped only when the save's `null`s empty it. Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
+was), and a stored section is dropped only when the save empties it (its `null`s, or a spelling it replaces). Keys the settings flow does not manage (`model_overrides`, `effort`, `runtime`,
 `resolve_model_ids`, unlisted `workflow` keys) survive a save. The object is held to the
 `config-set` key and value rules first, as `config-new-project` choices are, so a key must be
 spelled the way `config-set` accepts it: `git.branching_strategy`, not `branching_strategy`
 (a few flat spellings, such as `commit_docs`, are accepted). Saving either spelling of a
-setting removes the other from the store (`research` for `workflow.research`,
+setting (a value or a `null`; an empty object is neither) removes the other from the store (`research` for `workflow.research`,
 `planning.commit_docs` for `commit_docs`, `depth` for `granularity`), so a stale value cannot
 keep winning or be copied into new projects. A missing file is created, and a store kept as a
 symlink is written through to its target, so the link survives; a link whose target is missing
@@ -829,7 +829,7 @@ With `--json-errors`, each refusal carries a typed reason
 ([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
 `usage` for settings that are not one JSON object (including an empty or blank argument),
 that give both spellings of one setting (`commit_docs` and `planning.commit_docs`), or that give
-`commit_docs` or `search_gitignored`, under either spelling, a value that is not a boolean (new
+`commit_docs` or `search_gitignored`, under either spelling, a value that is neither a boolean nor `null` (new
 projects would ignore it while the loader read it),
 `config_invalid_key` for a key that is not a known setting, is written dotted
 (`workflow.research` rather than nested) or gives a section a scalar, the reason `config-set` itself

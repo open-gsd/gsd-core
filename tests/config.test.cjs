@@ -4700,6 +4700,34 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
     assert.ok(accepted.includes('commit_docs'), `commit_docs must be an accepted legacy spelling (accepted: ${accepted.join(', ')})`);
   });
 
+  // An empty object sets nothing, so it must not count as saving its spelling
+  // either: a stored other spelling keeps its value and the loader its reading.
+  test('an empty object under either spelling leaves both spellings as stored', (t) => {
+    const accepted = [];
+    for (const [legacy, canonical] of SPELLING_TWINS) {
+      for (const [given, other] of [[canonical, legacy], [legacy, canonical]]) {
+        for (const hollow of [{}, { x: {} }]) {
+          const seeded = { mode: 'yolo', ...nested(other, 'stored') };
+          const { save, read } = store(t, seeded);
+          const result = save(nested(given, hollow));
+          if (!result.success) continue; // a refused save writes nothing (rows above)
+          accepted.push(given);
+          assert.deepStrictEqual(read(), seeded, `${JSON.stringify(nested(given, hollow))} must leave ${other} as stored`);
+        }
+      }
+    }
+    for (const spelling of ['workflow.verifier', 'workflow.text_mode', 'granularity']) {
+      assert.ok(accepted.includes(spelling), `precondition: an empty ${spelling} is accepted (accepted: ${accepted.join(', ')})`);
+    }
+  });
+
+  test('a null for either spelling clears the other spelling too', (t) => {
+    const { save, read } = store(t, { mode: 'yolo', verifier: false, depth: 'deep' });
+    const result = save({ workflow: { verifier: null }, granularity: null });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), { mode: 'yolo' });
+  });
+
   // The installer's defaults writers hold this lock for their read-modify-write
   // (bin/install.js), so a save that holds it cannot interleave with them.
   test('a save holds the installer lock on .gsd/ while it writes, and releases it on every path', async (t) => {
@@ -4788,6 +4816,18 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     const { defaultsPath, run } = storeWith(t, BEFORE);
     assertRefused(run([JSON.stringify({ commit_docs: false, planning: { commit_docs: true } })]), 'usage');
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+  });
+
+  // An empty object sets nothing, so it is neither a second spelling nor a
+  // value of the wrong type.
+  test('an empty object beside the other spelling, or alone, is not refused', (t) => {
+    const { save, read } = storeWith(t, BEFORE);
+    let result = save({ commit_docs: {}, planning: { commit_docs: true } });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), { model_profile: 'quality', planning: { commit_docs: true } });
+    result = save({ search_gitignored: {}, planning: { search_gitignored: { x: {} } } });
+    assert.ok(result.success, result.error);
+    assert.deepStrictEqual(read(), { model_profile: 'quality', planning: { commit_docs: true } });
   });
 
   // New-project creation ignores a commit_docs or search_gitignored of another

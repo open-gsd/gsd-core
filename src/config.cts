@@ -643,7 +643,6 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   return { config, defaultsRewrite };
 }
 
-/** Persist a plan's user defaults rewrite, best-effort as it always was. */
 /** How long the best-effort depth rewrite waits for the installer lock: not at all. */
 const DEPTH_REWRITE_LOCK_WAIT_MS = 0;
 
@@ -942,7 +941,8 @@ function withoutPath(obj: Record<string, unknown>, dotted: string): Record<strin
 }
 
 /**
- * Remove from `store` the other spelling of every setting `patch` sets. A stale
+ * Remove from `store` the other spelling of every setting `patch` sets or
+ * clears; one it gives only an empty object leaves both spellings as stored. A stale
  * legacy value keeps winning over a saved canonical one, and a stale canonical
  * value is copied into every new project beside a saved legacy one. `patch` has
  * passed the `config-set` key rules, which accept the canonical spellings and a
@@ -951,8 +951,8 @@ function withoutPath(obj: Record<string, unknown>, dotted: string): Record<strin
 function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   let result: Record<string, unknown> = { ...store };
   for (const [legacy, canonical] of SPELLING_TWINS) {
-    if (readPath(patch, canonical) !== undefined) result = withoutPath(result, legacy);
-    if (readPath(patch, legacy) !== undefined) result = withoutPath(result, canonical);
+    if (setsValue(readPath(patch, canonical))) result = withoutPath(result, legacy);
+    if (setsValue(readPath(patch, legacy))) result = withoutPath(result, canonical);
   }
   return result;
 }
@@ -960,6 +960,11 @@ function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<str
 /** An object whose leaves are all empty objects (`{}` included): a patch that sets nothing. */
 function isHollowPatch(value: unknown): boolean {
   return isPlainObject(value) && Object.values(value).every(isHollowPatch);
+}
+
+/** Whether a patch value sets or clears its key: present (a null clears) and not hollow. */
+function setsValue(value: unknown): boolean {
+  return value !== undefined && !isHollowPatch(value);
 }
 
 /**
@@ -1026,7 +1031,7 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   const patch = validateConfigChoices(cwd, unchecked, { verb: 'config-save-defaults', keepNull: true });
   // Both spellings of one setting would both be stored, and the loader and
   // new-project creation each read a different one first.
-  const twin = SPELLING_TWINS.find(([legacy, canonical]) => readPath(patch, legacy) !== undefined && readPath(patch, canonical) !== undefined);
+  const twin = SPELLING_TWINS.find(([legacy, canonical]) => setsValue(readPath(patch, legacy)) && setsValue(readPath(patch, canonical)));
   if (twin) {
     error(`Invalid settings for config-save-defaults: "${twin[0]}" and "${twin[1]}" are one setting; give only one of them.`, ERROR_REASON.USAGE);
   }
@@ -1037,7 +1042,7 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
     const want = typeof TEMPLATE_FLAT_SETTINGS[key];
     for (const spelling of [key, `${section}.${field}`]) {
       const value = readPath(patch, spelling);
-      if (value !== undefined && value !== null && typeof value !== want) {
+      if (setsValue(value) && value !== null && typeof value !== want) {
         const shown = typeof value === 'number' ? String(value) : JSON.stringify(value);
         error(`Invalid settings for config-save-defaults: "${spelling}" must be a ${want}, got ${shown}.`, ERROR_REASON.USAGE);
       }
