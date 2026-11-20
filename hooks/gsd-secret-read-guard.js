@@ -3970,6 +3970,11 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
         }
       }
 
+      // dd reads the file its `if=` operand names (#5492); every operand is still checked below.
+      if (base === 'dd') {
+        for (const w of operands) if (w.text.startsWith('if=') && operandNamesSecret(w.text.slice(3))) return secretRead(w.text);
+      }
+
       if (NON_READING_COMMANDS.has(base)) continue;
 
       const nameOnly = nameOnlyOperandIndices(base, operands);
