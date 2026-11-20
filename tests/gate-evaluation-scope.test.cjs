@@ -1698,9 +1698,43 @@ describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
       assert.deepEqual(extractTaskCommitRefs(section(...lines)), expected);
     }), { numRuns: 100 });
   });
+
+  test('[regression] a wrapped description line between a task row and its sub-bullets keeps the row open', () => {
+    const doc = section('1. **Task 1: b**', '   wrapped description line', '   - RED `1111111`', '   - GREEN `2222222`');
+    assert.deepEqual(extractTaskCommitRefs(doc), ['1111111', '2222222']);
+  });
+
+  test('[boundary] only the first nested level is read; metadata and deeper items are not task commits', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '   - RED `1111111`', '     - reverted by `deadbee`')), ['1111111']);
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '   - RED `1111111`', '   - **Plan metadata:** `8888888`')), ['1111111']);
+  });
+
+  test('[boundary] indentation compares in columns: a tab-indented sub-bullet under a 4-space row is nested', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('    - **Task 1: b**', '\t- RED `1111111`')), ['1111111']);
+    assert.deepEqual(extractTaskCommitRefs(section('\t- **Task 1: b**', '    - RED `1111111`')), []);
+  });
+
+  test('[property] noise between a row and its sub-bullets never adds an id and never hides one', () => {
+    const sha = fc.stringMatching(/^[0-9a-f]{7,12}$/);
+    const noise = fc.constantFrom('   wrapped prose', '   more prose with no id', '     deeper prose');
+    fc.assert(fc.property(fc.array(fc.record({ id: sha, before: fc.array(noise, { maxLength: 2 }) }), { minLength: 1, maxLength: 4 }), (items) => {
+      const lines = ['1. **Task 1: b**'];
+      for (const item of items) lines.push(...item.before, `   - RED \`${item.id}\``);
+      assert.deepEqual(extractTaskCommitRefs(section(...lines)), items.map((item) => item.id));
+    }), { numRuns: 100 });
+  });
 });
 
 describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
+  test('[regression] a SUMMARY with one readable row and one unreadable row is named, not partly dropped', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    const b = commit(repo, 'src/b.js', 'feat(03-01): b');
+    commit(repo, `${PHASE_DIR}/03-01-SUMMARY.md`, 'docs(03-01): summary', `# Summary\n\n## Task Commits\n\n1. **Task 1: a** - \`${a}\`\n2. **Task 2 - tracer**\n   - GREEN \`${b}\`\n\n## Next\n`);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.unparsedSummaries, ['03-01-SUMMARY.md']);
+  });
+
   /** A phase with plan 01 in the canonical shape and plan 02 written with `body` as its Task Commits section. */
   function twoPlanPhase(secondSection) {
     const repo = makeRepo();
