@@ -2566,6 +2566,96 @@ describe('#3197 — gsd-tools.cjs config-set workflow._auto_chain_active', () =>
     );
   });
 });
+
+// ─── #6124 — clearing the chaining flag when it is absent leaves the committed config untouched ──────────────────
+const { createTempGitProject: createGitProject6124 } = require('./helpers.cjs');
+const { runGit: runGit6124 } = require('./helpers/process-seam.cjs');
+
+describe('#6124 — config-set workflow._auto_chain_active false does not dirty a committed config that lacks the key', () => {
+  const FLAG = 'workflow._auto_chain_active';
+  const status = (dir) => runGit6124(['status', '--porcelain', '--untracked-files=all'], { cwd: dir }).stdout.trim();
+  const commitAll = (dir) => {
+    runGit6124(['add', '-A'], { cwd: dir });
+    const r = runGit6124(['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'init'], { cwd: dir });
+    assert.equal(r.exitCode, 0, r.stderr);
+  };
+  const configFile = (dir) => path.join(dir, '.planning', 'config.json');
+
+  function newProject(t) {
+    const dir = createGitProject6124();
+    t.after(() => cleanup(dir));
+    const created = runGsdTools(['config-new-project', '{}'], dir);
+    assert.ok(created.success, created.error);
+    assert.equal('_auto_chain_active' in (JSON.parse(fs.readFileSync(configFile(dir), 'utf8')).workflow || {}), false, 'a new project config omits the flag');
+    commitAll(dir);
+    return dir;
+  }
+
+  test('the plan-phase clear on a committed config without the key leaves the working tree clean', (t) => {
+    const dir = newProject(t);
+    assert.equal(runGit6124(['ls-files', '.planning/config.json'], { cwd: dir }).stdout.trim(), '.planning/config.json', 'the config is tracked, so a clean status is meaningful');
+    const result = runGsdTools(['config-set', FLAG, 'false'], dir);
+    assert.ok(result.success, result.error);
+    assert.equal(status(dir), '', 'the tree is clean');
+    assert.equal(JSON.parse(result.output).value, false, 'the command still reports the requested value');
+  });
+
+  test('a config with no workflow block at all is not given one by the clear', (t) => {
+    const dir = createGitProject6124();
+    t.after(() => cleanup(dir));
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(configFile(dir), '{}\n');
+    commitAll(dir);
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    assert.equal(fs.readFileSync(configFile(dir), 'utf8'), '{}\n');
+    assert.equal(status(dir), '');
+  });
+
+  test('no config file is created by the clear, and a non-object workflow value is still replaced', (t) => {
+    const missing = createGitProject6124();
+    t.after(() => cleanup(missing));
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], missing).success);
+    assert.equal(fs.existsSync(configFile(missing)), false, 'reading an absent config already yields false, so nothing is written');
+
+    const odd = createGitProject6124();
+    t.after(() => cleanup(odd));
+    fs.mkdirSync(path.join(odd, '.planning'), { recursive: true });
+    fs.writeFileSync(configFile(odd), JSON.stringify({ workflow: 'broken' }));
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], odd).success);
+    assert.deepEqual(JSON.parse(fs.readFileSync(configFile(odd), 'utf8')).workflow, { _auto_chain_active: false }, 'a malformed parent keeps the pre-#6124 replacement');
+  });
+
+  test('--dry-run states what the write does: no update for the absent-key clear, an update otherwise', (t) => {
+    const dir = newProject(t);
+    const cleared = JSON.parse(runGsdTools(['config-set', FLAG, 'false', '--dry-run'], dir).output);
+    assert.equal(cleared.dry_run, true);
+    assert.equal(cleared.would_update, false, 'the real run writes nothing');
+    const set = JSON.parse(runGsdTools(['config-set', FLAG, 'true', '--dry-run'], dir).output);
+    assert.equal(set.would_update, true, 'setting true is a real change');
+    assert.equal(status(dir), '', 'a dry run never writes');
+  });
+
+  test('clearing a committed true writes false, and starting a chained run writes true', (t) => {
+    const dir = newProject(t);
+    assert.ok(runGsdTools(['config-set', FLAG, 'true'], dir).success);
+    assert.equal(JSON.parse(fs.readFileSync(configFile(dir), 'utf8')).workflow._auto_chain_active, true);
+    commitAll(dir);
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    assert.equal(JSON.parse(fs.readFileSync(configFile(dir), 'utf8')).workflow._auto_chain_active, false, 'a stale true is cleared');
+    assert.notEqual(status(dir), '', 'the clear of a present key is a real change');
+  });
+
+  test('a committed false cleared again leaves the tree clean, and any other explicit config-set still writes', (t) => {
+    const dir = newProject(t);
+    assert.ok(runGsdTools(['config-set', FLAG, 'true'], dir).success);
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    commitAll(dir);
+    assert.ok(runGsdTools(['config-set', FLAG, 'false'], dir).success);
+    assert.equal(status(dir), '', 'rewriting the same false changes nothing');
+    assert.ok(runGsdTools(['config-set', 'workflow.auto_advance', 'false'], dir).success);
+    assert.equal(JSON.parse(fs.readFileSync(configFile(dir), 'utf8')).workflow.auto_advance, false, 'an explicit set of another key still writes the file');
+  });
+});
   });
 }
 
