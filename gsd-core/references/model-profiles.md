@@ -139,9 +139,18 @@ Without `inherit`, GSD's default `balanced` profile spawns specific Anthropic mo
 
 ## Advisor Tool (Claude Code)
 
-Claude Code (v2.1.98+) can pair the session's executor model with a stronger **advisor** model that it consults mid-generation for strategy and course-correction (Anthropic's [advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool)). This is a host-runtime feature, not a GSD setting — GSD selects each agent's *executor* model through the profile/tier system above; Claude Code supplies the advisor.
+Claude Code (v2.1.117+, the first release whose changelog mentions it, as "Advisor Tool (experimental)") can pair the session's executor model with a stronger **advisor** model that it consults mid-generation for strategy and course-correction (Anthropic's [advisor tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool)). This is a host-runtime feature, not a GSD setting — GSD selects each agent's *executor* model through the profile/tier system above; Claude Code supplies the advisor.
 
-Set it once at the session level with `/advisor <model>` (or the `advisorModel` setting / `--advisor` flag). **Subagents inherit the session advisor automatically**, so every GSD subagent an orchestrator spawns gets the same advisor with no per-agent configuration. It composes cleanly with GSD's tiering: the profile keeps executors cheap where the work is mechanical, and the advisor adds a stronger reviewer inline on the turns that benefit.
+Set it once at the session level with `/advisor <model>` (or the `advisorModel` setting / `--advisor` flag). **Subagents inherit the session advisor automatically**, so every GSD subagent an orchestrator spawns gets the same advisor with no per-agent configuration. It composes with GSD's tiering: the profile keeps executors cheap where the work is mechanical, and the advisor adds a stronger reviewer inline on the turns that benefit. That inheritance is also a cost you do not set per agent — see the caveats below before turning it on for a long run.
+
+### Cost, accounting and the off switch
+
+Per Anthropic's advisor-tool docs and the Claude Code changelog:
+
+- **Every advisor call sends the calling agent's full transcript** (system prompt, tool definitions, prior turns, tool results) to the advisor model as context, so a call costs more the longer the agent has been running. Every subagent that inherits the advisor pays this on each call it makes.
+- **The advisor's own read is uncached by default.** The tool's `caching` parameter defaults to off; enabling it (`ephemeral`, 5 minute or 1 hour) pays off at roughly three or more advisor calls per conversation and loses money at fewer.
+- **Advisor tokens are billed at the advisor model's rates and reported separately.** They appear as `usage.iterations[]` entries of `type: "advisor_message"`; the top-level `usage` covers the executor's tokens only, so a cost figure read from it alone under-counts a run that used an advisor.
+- **Turning it off:** nothing runs until an advisor is chosen, so leave `/advisor`, `advisorModel` and `--advisor` unset, or run `/advisor off`. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` removes the tool for the whole session. These are session switches, not per-agent ones.
 
 ### Candidate pairings
 
@@ -162,7 +171,7 @@ Fable 5 is a valid advisor for Haiku 4.5, Sonnet 4.6/5, and Opus 4.8 executors, 
 
 ### Constraint: session-level only (today)
 
-The advisor is a single session-wide setting inherited by all subagents; there is **no per-agent advisor selection**, so GSD cannot vary the advisor by role the way it varies the executor model (e.g. "no advisor on the Haiku mapper, a Fable 5 advisor on the Sonnet executor"). Per-agent advisor control is tracked upstream at [anthropics/claude-code#73072](https://github.com/anthropics/claude-code/issues/73072); until it lands, pick one session advisor that fits the most valuable agents in your run.
+The advisor is a single session-wide setting inherited by all subagents; there is **no per-agent advisor selection**, so GSD cannot vary the advisor by role the way it varies the executor model (e.g. "no advisor on the Haiku mapper, a Fable 5 advisor on the Sonnet executor"). A per-subagent advisor field was requested upstream ([anthropics/claude-code#73072](https://github.com/anthropics/claude-code/issues/73072)), but that issue was closed as not planned on 2026-09-15, so no per-agent switch is coming; pick one session advisor that fits the most valuable agents in your run, or leave the advisor off for runs dominated by short agents.
 
 ## Dynamic Routing with Failure-Tier Escalation (#3024)
 
