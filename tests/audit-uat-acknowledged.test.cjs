@@ -139,3 +139,46 @@ describe('#3805: audit-uat honours audit_acknowledged', () => {
     assert.ok(out.summary.total_items > 0, 'no marker → item surfaces (pre-existing behavior)');
   });
 });
+
+// ─── #6232: the documented audit-uat scope names every layout the scan walks ────────────────────────────────────
+
+describe('#6232: the audit-uat scope text names the archives the scan walks', () => {
+  const REPO_ROOT = path.join(__dirname, '..');
+  const DOCS = ['skills/gsd-audit-uat/SKILL.md', 'commands/gsd/audit-uat.md'];
+  // [phase directory seeded, the layout it sits in, the fragment the scope text must carry for that layout]
+  const LAYOUTS = [
+    ['01-live', ['.planning', 'phases'], 'phases/*/*-UAT.md'],
+    ['01-flat', ['.planning', 'milestones', 'v1.0-phases'], 'milestones/v*-phases'],
+    ['01-wsarch', ['.planning', 'milestones', 'ws-alpha-2026-01-01', 'phases'], 'milestones/ws-*/phases'],
+    ['01-wsflat', ['.planning', 'workstreams', 'beta', 'milestones', 'v2.0-phases'], 'workstreams/<name>'],
+    ['01-wsws', ['.planning', 'workstreams', 'beta', 'milestones', 'ws-gamma-2026-02-01', 'phases'], 'workstreams/<name>'],
+  ];
+
+  test('every seeded layout is scanned, and every scope text names it', (t) => {
+    const tmpDir = createTempProject('gsd-6232-');
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmapWith(['01']));
+    for (const [dirName, segments] of LAYOUTS) {
+      const dir = path.join(tmpDir, ...segments, dirName);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${dirName}-UAT.md`), ['---', 'status: human_needed', '---', '', UAT_BODY].join('\n'));
+    }
+    const reported = JSON.stringify(runAudit(tmpDir).results);
+    for (const [dirName] of LAYOUTS) assert.ok(reported.includes(dirName), `the scan must reach ${dirName}: ${reported}`);
+    for (const rel of DOCS) {
+      const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+      for (const [dirName, , fragment] of LAYOUTS) assert.ok(text.includes(fragment), `${rel} must name the layout of ${dirName} (${fragment})`);
+    }
+  });
+
+  test('the two scope blocks stay identical', () => {
+    const block = (rel) => {
+      const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+      const start = text.indexOf('**Scope:**');
+      const end = text.indexOf('</context>', start);
+      return start === -1 || end === -1 ? undefined : text.slice(start, end);
+    };
+    assert.ok(block(DOCS[0]), 'skill scope block found');
+    assert.equal(block(DOCS[0]), block(DOCS[1]));
+  });
+});
