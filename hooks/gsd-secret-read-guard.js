@@ -202,7 +202,7 @@
 //   `batch`, `make -f -`), an alias the line defines and a later line uses
 //   (`alias g=…`, `shopt -s expand_aliases`, `g status`), the program
 //   `scp -S` / `sftp -S` / `sftp -D` runs, GNU `parallel`, and words xargs reads
-//   from `-a <file>` or a redirected stdin. Two more come from the scan
+//   from `-a <file>` or a file redirected to its stdin (`< list`). Two more come from the scan
 //   underneath: a command directly behind `if`, `then`, `else`, `elif`,
 //   `while`, `until`, `do`, `!` or `coproc` is not resolved as the command
 //   (#6138), so its command-specific checks (git, ssh, a shell's script, eval,
