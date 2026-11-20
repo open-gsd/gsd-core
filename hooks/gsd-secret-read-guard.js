@@ -4488,6 +4488,12 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
 
     // The stage piped in, as before, and past a `cat` reading only stdin or a `tee`, the stage before it (#5492).
     const sources = pipeSources(s, bySeg, sepAfter, ctx);
+    // A here-string or heredoc is the stdin xargs reads its words from, as a pipe is (#5492): read it as an echo of
+    // its words. Without `-a` only; with it, the shell above was given them instead.
+    for (const text of [...heredocs.map((h) => h.text), ...hereStrings]) {
+      charge(ctx, text.length * TOKEN_WORK);
+      sources.push([{ text: 'echo' }, ...text.split(/\s+/).filter(Boolean).map((t) => ({ text: t }))]);
+    }
     if (!sources.length) return null;
     // #5492: piped words become options and scripts of git, an ssh client or a shell (`-c 'core.fsmonitor=…'`,
     // `-o ProxyCommand=…`, `-c '…'`), split by whichever of -I, -0, -d or -n xargs was given. Rather than model
