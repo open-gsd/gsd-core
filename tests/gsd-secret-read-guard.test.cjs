@@ -3944,22 +3944,34 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
     (c) => `echo $((#\`${c}\`))`,
     (c) => `echo $((1 #\`${c}\`))`,
     (c) => `cat <<E\nx\\\nE\ncat <<F\nE\n${c}\nF`,
+    (c) => `<<\r ${c}`,
+    (c) => `E(#$(${c})`,
+    (c) => `{ ${c}}`,
+    (c) => `echo $\${x; ${c}`,
+    (c) => `if true; then {${c}}; fi`,
+    (c) => `! {${c}}`,
+    (c) => `time {${c}}`,
+    (c) => `{ true } always {${c}}`,
+    (c) => `echo $$((1+'\`${c}\`'))`,
   ];
   const READER = fc.constantFrom('cat', 'grep KEY', 'head -1');
   const BENIGN = fc.constantFrom('README.md', 'src/a.js', 'notes.txt', '.envrc');
+  // Every hider gets its own seeded runs, each from its own seed, so none rests on the table alone.
   test('a read behind each construct is denied when it names a secret, allowed when not', () => {
-    fc.assert(fc.property(
-      fc.nat(HIDERS.length - 1), READER, fc.oneof(
-        SECRET.map((name) => ({ name, secret: true })),
-        BENIGN.map((name) => ({ name, secret: false })),
-      ),
-      (h, reader, { name, secret }) => {
-        const cmd = HIDERS[h](`${reader} ${name}`);
-        const r = runHook(bash(cmd));
-        if (secret) assertBlocked(r, cmd, { tool: 'Bash' });
-        else assertAllowed(r, cmd);
-      },
-    ), PROPERTY_RUNS);
+    for (const [i, hider] of HIDERS.entries()) {
+      fc.assert(fc.property(
+        READER, fc.oneof(
+          SECRET.map((name) => ({ name, secret: true })),
+          BENIGN.map((name) => ({ name, secret: false })),
+        ),
+        (reader, { name, secret }) => {
+          const cmd = hider(`${reader} ${name}`);
+          const r = runHook(bash(cmd));
+          if (secret) assertBlocked(r, cmd, { tool: 'Bash' });
+          else assertAllowed(r, cmd);
+        },
+      ), { ...PROPERTY_RUNS, seed: PROPERTY_RUNS.seed + i, numRuns: 10 });
+    }
   });
 
   // #5255's three rules hold for these readings too: a block is `{ code, text }`, every
