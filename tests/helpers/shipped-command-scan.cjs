@@ -205,7 +205,7 @@ const scanLine = (line, quote0 = null) => {
   }
   return { cut: -1, quote };
 };
-const commentPortion = (line) => { const { cut } = scanLine(line); return cut === -1 ? '' : line.slice(cut); };
+const commentPortion = (line, quote = null) => { const { cut } = scanLine(line, quote); return cut === -1 ? '' : line.slice(cut); };
 
 // The explicit opt-out for content that shows the defect ON PURPOSE. A
 // wrong-example is otherwise indistinguishable from a regression — which is
@@ -263,11 +263,10 @@ const declarationReason = (portion) => {
 // `quote` is the quote an earlier line of the same text left open: it prefixes the line, so a closing quote is not read as an opening one.
 const declaredReasonFor = (line, quote = null) => {
   if (tokenize(`${quote ?? ''}${line}`).some((t) => /gsd-scan-ignore:/.test(t.value))) return null;
-  const { cut } = scanLine(line, quote);
-  return declarationReason(cut === -1 ? '' : line.slice(cut));
+  return declarationReason(commentPortion(line, quote));
 };
-const isDeclared = (line) => {
-  const reason = declaredReasonFor(line);
+const isDeclared = (line, quote = null) => {
+  const reason = declaredReasonFor(line, quote);
   return reason !== null && ISSUE_REF_RE.test(reason);
 };
 // An ATTEMPTED declaration that carries no tracking reference — including one
@@ -277,6 +276,8 @@ const isUntrackedDeclaration = (line) => {
   const reason = declaredReasonFor(line);
   return reason !== null && !ISSUE_REF_RE.test(reason);
 };
+// True when the gap `text[a, b)` between two tokens holds a command-ending newline.
+const newlineBetween = (text, a, b) => /(?<!\\)\n/.test(text.slice(a, b));
 
 // A shell invoked with -c runs its next argument AS A COMMAND, so the
 // invocation lives inside a quoted token and no amount of markup-stripping
@@ -342,21 +343,17 @@ const shellDashCPayloads = (str) => {
   return payloads;
 };
 
-const stripComments = (raw) => {
+// One quote-aware walk over the lines of `raw`: the text with every comment cut off, and the set of lines that carry a genuine declaration (isDeclared, with the quote an earlier line left open).
+const commentWalk = (raw) => {
+  const declared = new Set();
   let q = null;
-  return raw.split('\n').map((line) => { const r = scanLine(line, q); q = r.quote; return r.cut === -1 ? line : line.slice(0, r.cut); }).join('\n');
-};
-
-// Lines of `raw` that carry a genuine declaration: the isDeclared predicate, read quote-aware across lines as stripComments does.
-const declaredLines = (raw) => {
-  const set = new Set();
-  let q = null;
-  raw.split('\n').forEach((line, n) => {
-    const reason = declaredReasonFor(line, q);
-    q = scanLine(line, q).quote;
-    if (reason !== null && ISSUE_REF_RE.test(reason)) set.add(n);
-  });
-  return set;
+  const text = raw.split('\n').map((line, n) => {
+    if (isDeclared(line, q)) declared.add(n);
+    const r = scanLine(line, q);
+    q = r.quote;
+    return r.cut === -1 ? line : line.slice(0, r.cut);
+  }).join('\n');
+  return { text, declared };
 };
 
 const isGit = (t) => { const b = bareCommandName(t); return b === 'git' || /\/git$/.test(b); };
@@ -378,10 +375,9 @@ const isExcludeMagic = (a) => /^:(?:\([^)]*\bexclude\b[^)]*\)|\/*[!^])/.test(a);
 // An `echo`/`printf` word that holds `git ... commit` (recovery advice), or an `eval` word, is scanned as a script; other quoted prose is not.
 const unscopedGitCommits = (raw, inline = false) => {
   const out = [];
-  const text = stripComments(raw);
-  const toks = tokenize(text);
   // A commit whose source lines carry a declaration is a deliberate unscoped commit.
-  const declared = declaredLines(raw);
+  const { text, declared } = commentWalk(raw);
+  const toks = tokenize(text);
   const lineOf = (pos) => text.slice(0, pos).split('\n').length - 1;
   const isDeclaredSpan = (a, b) => { for (let n = lineOf(a); n <= lineOf(b); n += 1) if (declared.has(n)) return true; return false; };
   let skipTo = -1;
@@ -390,10 +386,10 @@ const unscopedGitCommits = (raw, inline = false) => {
     if (!isGit(toks[i])) {
       // The command word: after the last operator or newline before token i, past the prefixes `shellDashCPayloads` skips (`then`, `do`, `FOO=1`, redirections) and `{`.
       let k = i - 1;
-      while (k >= 0 && !toks[k].op && !text.slice(toks[k].end, toks[k + 1].start).includes('\n')) k -= 1;
+      while (k >= 0 && !toks[k].op && !newlineBetween(text, toks[k].end, toks[k + 1].start)) k -= 1;
       let w = k + 1;
       while (toks[w] && (skippable(toks[w]) || toks[w].value === '{')) w += 1;
-      if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]{0,200}\bcommit\b/.test(toks[i].value) && !isDeclaredSpan(toks[i].start, toks[i].end)) out.push(...unscopedGitCommits(toks[i].value, inline));
+      if (i > w && ['echo', 'printf', 'eval'].includes(toks[w].value) && !isDeclaredSpan(toks[i].start, toks[i].end)) out.push(...unscopedGitCommits(toks[i].value, inline));
       continue;
     }
     const c = gitSubcommandIdx(toks, i);
@@ -402,7 +398,7 @@ const unscopedGitCommits = (raw, inline = false) => {
     const argvTok = [];
     let prev = toks[c];
     for (let j = c + 1; j < toks.length && !toks[j].op; j += 1) {
-      if (/(?<!\\)\n/.test(text.slice(prev.end, toks[j].start))) break;
+      if (newlineBetween(text, prev.end, toks[j].start)) break;
       if (!toks[j].redir) { argv.push(toks[j].value); argvTok.push(toks[j]); }
       prev = toks[j];
       skipTo = j;
@@ -422,7 +418,7 @@ const unscopedGitCommits = (raw, inline = false) => {
   // bash -c payloads per command line: an unquoted newline ends a command, a newline inside quotes does not.
   let from = 0;
   for (let k = 0; k < toks.length; k += 1) {
-    if (k + 1 < toks.length && !/(?<!\\)\n/.test(text.slice(toks[k].end, toks[k + 1].start))) continue;
+    if (k + 1 < toks.length && !newlineBetween(text, toks[k].end, toks[k + 1].start)) continue;
     if (!isDeclaredSpan(toks[from].start, toks[k].end)) for (const p of shellDashCPayloads(text.slice(toks[from].start, toks[k].end))) out.push(...unscopedGitCommits(p, inline));
     from = k + 1;
   }
