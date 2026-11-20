@@ -123,7 +123,7 @@ export interface NamedArgSpec {
   /**
    * A bare `--name` yields `''` instead of `null`, so presence is read from
    * `data`. Subset of `valueFlags`. Reader: stamp-codebase-map `--files`,
-   * milestone complete `--release-map`.
+   * milestone complete `--release-map` and `--accomplishments-file`.
    */
   bareEmptyFlags?: string[];
   /**
