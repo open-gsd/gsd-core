@@ -7503,21 +7503,28 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
   // the other.
   const agentEntries = codexAgentSourceFiles(agentsSrc).map(file => {
     const source = fs.readFileSync(path.join(agentsSrc, file), 'utf8');
-    return { file, source, name: codexAgentTomlName(file, source) };
+    const name = codexAgentTomlName(file, source);
+    // Confine the per-agent write to the agents/ dir itself: a crafted agent
+    // `name` containing path separators must not escape agents/ (which would let
+    // it clobber config.toml or write elsewhere under the configHome). Resolved
+    // here, before any write, so a bad name never leaves earlier roles half-written.
+    return { file, source, name, agentTomlPath: assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`) };
   });
+  // Case-folded: roles differing only in case share one file on a case-insensitive volume.
   const sourceByRole = new Map();
   for (const { file, name } of agentEntries) {
-    if (sourceByRole.has(name)) {
+    const key = name.toLowerCase();
+    if (sourceByRole.has(key)) {
       throw new Error(
-        `Codex agent role "${name}" is declared by both ${sourceByRole.get(name)} and ${file}; ` +
+        `Codex agent role "${name}" is declared by both ${sourceByRole.get(key)} and ${file}; ` +
         'each role needs exactly one source file, so one would overwrite the other. Rename or remove one.',
       );
     }
-    sourceByRole.set(name, file);
+    sourceByRole.set(key, file);
   }
   const agents = [];
 
-  for (const { file, source, name } of agentEntries) {
+  for (const { file, source, name, agentTomlPath } of agentEntries) {
     const agentTomlSourcePath = path.join(agentsSrc, file);
     // #2995 (epic #1671 Phase 6.4): Codex embeds each agent's prompt into a
     // per-agent `.toml`, reading the source .md independently of the inline
@@ -7566,10 +7573,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // and folds in the frontmatter `name:` for the sandbox decision (F1
     // above) — this call site does not need to pass `name` explicitly.
     const tomlContent = generateCodexAgentToml(fileStem, content, modelOverrides, runtimeResolver, effortCfg, sandboxTier);
-    // Confine the per-agent write to the agents/ dir itself: a crafted agent
-    // `name` containing path separators must not escape agents/ (which would let
-    // it clobber config.toml or write elsewhere under the configHome).
-    const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
     if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath, { allowOptInFollow: symlinkOptIn })) {
       throw new Error(
         installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath),

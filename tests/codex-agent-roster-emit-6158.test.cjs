@@ -166,6 +166,30 @@ describe('#6158: Codex emit writes one .toml per role from the canonical source'
     }
   });
 
+  test('roles differing only in case collide (one file on a case-insensitive volume)', () => {
+    const { src, dest } = makeDirs('case');
+    try {
+      fs.writeFileSync(path.join(src, 'gsd-foo.md'), agentSource('gsd-foo', 'lower'));
+      fs.writeFileSync(path.join(src, 'gsd-foo-upper.md'), agentSource('gsd-FOO', 'upper'));
+      assert.throws(() => installCodexConfig(dest, src), /gsd-foo/i);
+      assert.deepEqual(tomlFiles(dest), []);
+    } finally {
+      cleanup(src); cleanup(dest);
+    }
+  });
+
+  test('an escaping role name in a later source writes no earlier role', () => {
+    const { src, dest } = makeDirs('escape');
+    try {
+      fs.writeFileSync(path.join(src, 'gsd-alpha.md'), agentSource('gsd-alpha', 'fine'));
+      fs.writeFileSync(path.join(src, 'gsd-zeta.md'), agentSource('../config', 'escape'));
+      assert.throws(() => installCodexConfig(dest, src));
+      assert.deepEqual(tomlFiles(dest), []);
+    } finally {
+      cleanup(src); cleanup(dest);
+    }
+  });
+
   test('a compact file with no canonical sibling is not a role: nothing emitted, count 0', () => {
     const { src, dest } = makeDirs('lone');
     try {
