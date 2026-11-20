@@ -9012,7 +9012,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       if (cleaned === null) {
         const removed = writeStrippedCodexConfig(codexConfigPath, cleaned);
         removedCount++;
-        console.log(`  ${green}✓${reset} ${removed ? 'Removed config.toml' : 'Emptied the file config.toml links to'} (was GSD-only)`);
+        console.log(`  ${green}✓${reset} ${removed ? 'Removed config.toml' : 'Emptied config.toml target, symlink kept'} (was GSD-only)`);
       } else if (cleaned !== content) {
         writeStrippedCodexConfig(codexConfigPath, cleaned);
         removedCount++;
