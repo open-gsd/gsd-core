@@ -1792,12 +1792,13 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
       // stderr carries the sentence built from the scope; the other waves print no degrade sentence;
       // nothing goes to stdout.
       test('the degrade sentence is printed to stderr in the degrade wave only, and stdout stays empty', (t) => {
-        const { scopes, stderr, stdout } = runWaves(t, script, 3, { degradeFrom: 2 });
+        const { scopes, notices, stderr, stdout } = runWaves(t, script, 3, { degradeFrom: 2 });
         const sentence = `sequential mode for ${scopes[1]}`;
-        assert.equal(stderr[1].split('\n').filter(l => l.includes(sentence)).length, 1, stderr[1]);
+        // The exact stderr, line by line: the base-check message then the sentence in the degrade wave,
+        // nothing in the wave that checks and does not degrade, nothing in the wave that skips the re-check.
+        assert.deepEqual(stderr.map(s => s.split('\n').filter(Boolean)), [[], ['stub-base-check-message', notices[1]], []]);
+        assert.ok(notices[1].includes(sentence), notices[1]);
         assert.ok(!stderr[1].includes('this wave'), stderr[1]);
-        assert.ok(!stderr[0].includes('sequential mode'), stderr[0]);
-        assert.equal(stderr[2], '', 'a wave that skips the re-check prints nothing');
         assert.deepEqual(stdout, ['', '', '']);
       });
     });
@@ -1824,6 +1825,6 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
     assert.ok(paragraph.includes(`**${scope}**`), `the paragraph after the fence must bold the scope "${scope}"`);
     // The old claim must not survive in this paragraph or any other paragraph of the reference.
     const whole = lines.join(' ').replace(/\s+/g, ' ');
-    assert.ok(!/this wave only|re-enable/i.test(whole), 'the reference must not say a degrade is per wave or that later waves re-enable isolation');
+    assert.ok(!/this wave only|re-?enabl/i.test(whole), 'the reference must not say a degrade is per wave or that later waves re-enable isolation');
   });
 });
