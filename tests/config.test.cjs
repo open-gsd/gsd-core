@@ -5190,16 +5190,32 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
     assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
   });
 
-  test('a save that ends exactly at the cap is written', async (t) => {
-    const before = storeOfSize(CONFIG_MAX_BYTES - 'interactive'.length + 'yolo'.length, 'yolo');
-    const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
+  // The write-side boundary: a save whose result is one byte under, exactly at,
+  // and one byte over the cap. The save grows `mode` from "yolo" to
+  // "interactive", so the store before it is sized to land the result there.
+  for (const [label, resultBytes, written] of [
+    ['one byte under the cap', CONFIG_MAX_BYTES - 1, true],
+    ['exactly at the cap', CONFIG_MAX_BYTES, true],
+    ['one byte over the cap', CONFIG_MAX_BYTES + 1, false],
+  ]) {
+    test(`a save whose result is ${label} is ${written ? 'written' : 'refused and writes nothing'}`, async (t) => {
+      const before = storeOfSize(resultBytes - 'interactive'.length + 'yolo'.length, 'yolo');
+      const { defaultsPath, save } = seed(t, before, { mode: 'interactive' });
 
-    const result = await save();
+      const result = await save();
 
-    assert.strictEqual(result.ok, true, result.err);
-    assert.strictEqual(fs.statSync(defaultsPath).size, CONFIG_MAX_BYTES);
-    assert.strictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')).mode, 'interactive');
-  });
+      if (written) {
+        assert.strictEqual(result.ok, true, result.err);
+        assert.strictEqual(fs.statSync(defaultsPath).size, resultBytes);
+        assert.strictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')).mode, 'interactive');
+      } else {
+        assert.strictEqual(result.ok, false);
+        assert.strictEqual(result.error.reason, 'config_defaults_write_failed');
+        assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
+        assert.deepStrictEqual(fs.readdirSync(path.dirname(defaultsPath)), ['defaults.json']);
+      }
+    });
+  }
 });
 
 // ─── config-set hooks.secret_read_exempt (#4432)────────────────────────────
