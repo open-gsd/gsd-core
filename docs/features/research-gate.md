@@ -6,7 +6,7 @@ group: v1.32 Features
 
 **Part of:** `/gsd-plan-phase`
 
-**Purpose:** Block planning when RESEARCH.md has unresolved open questions, preventing plans built on incomplete information.
+**Purpose:** Fail plan verification while RESEARCH.md has unresolved open questions, so plans built on incomplete information are not accepted. The check runs after the planner has written the plans.
 
 **Resolved means user-decided:** an open question counts as resolved only when every `D-NN` it cites sits under the phase's CONTEXT.md `<decisions>`, outside Claude's Discretion, and one answers it. Only discuss-phase, or the orchestrator recording the user's answer, writes such a `D-NN`; a mark the researcher wrote itself, a `(RESOLVED)` heading suffix included, resolves nothing. A cited source settles a factual gap, so that is not an open question, but no source settles a choice that needs a user ruling. In an area CONTEXT.md leaves to Claude's Discretion, a sourced recommendation is enough.
 

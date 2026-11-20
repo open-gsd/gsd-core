@@ -432,6 +432,35 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
 
 // With no CONTEXT.md, Dimension 11 makes every open research question a BLOCKER that only a ruling recorded by
 // discuss-phase clears, so the option that skips it says so where the user chooses.
+// Dimension 11 runs in the verify loop after the planner has written the plans, and a stop leaves them on disk,
+// so no surface may say the gate blocks planning: it fails the written plans.
+describe('the gate is described as failing the written plans, never as blocking planning (#5438)', () => {
+  test('the Research Gate purpose line, in English and in each translated FEATURES.md', () => {
+    for (const doc of ['docs/features/research-gate.md', 'docs/FEATURES.md']) {
+      assert.match(read(doc), /\*\*Purpose:\*\* Fail plan verification while RESEARCH\.md has unresolved open questions, so plans built on incomplete information are not accepted\. The check runs after the planner has written the plans\./, doc);
+      assert.doesNotMatch(read(doc), /Block planning when RESEARCH\.md/, doc);
+    }
+    const translated = {
+      'docs/ja-JP/FEATURES.md': /\*\*目的:\*\* RESEARCH\.md に未解決のオープンクエスチョンが残っている間はプランの検証を不合格にし、.*このチェックはプランナーがプランを書いた後に実行されます。/,
+      'docs/zh-CN/FEATURES.md': /\*\*目的：\*\* 当 RESEARCH\.md 仍有未解决的开放问题时，计划验证不通过，.*该检查在规划器写出计划之后运行。/,
+      'docs/ko-KR/FEATURES.md': /\*\*목적:\*\* RESEARCH\.md에 미해결 오픈 질문이 남아 있으면 계획 검증을 통과시키지 않아, .*이 검사는 플래너가 계획을 작성한 뒤에 실행됩니다\./,
+    };
+    for (const [doc, purpose] of Object.entries(translated)) assert.match(read(doc), purpose, doc);
+  });
+
+  test('plan-md row 11, and the researcher and template rules, say the checker fails the plans', () => {
+    const row = splitLines(read('docs/reference/plan-md.md')).find((l) => l.startsWith('| **11 — Research Resolution** |'));
+    assert.ok(row, 'plan-md.md carries the Dimension 11 row');
+    assert.doesNotMatch(row, /before planning proceeds/);
+    assert.match(row, /one of which answers it\. The check runs on the written plans\./);
+    assert.match(researcher().replace(/\s+/g, ' '), /The plan-checker fails the plans on every question that cites no such `D-NN`, or any other \(Dimension 11\)\./);
+    assert.match(researchTemplate(), /the plan-checker fails the plans on any other \(Dimension 11\)/);
+    for (const [name, text] of [['researcher', researcher()], ['template', researchTemplate()]]) {
+      assert.doesNotMatch(text.replace(/\s+/g, ' '), /blocks planning/, name);
+    }
+  });
+});
+
 describe('plan-phase\'s no-context option names the Dimension 11 consequence (#5438)', () => {
   test('both forms of "Continue without context" say open research questions block until discuss-phase', () => {
     const lines = splitLines(read('gsd-core/workflows/plan-phase.md')).filter((l) => /Continue without context\W* — /.test(l));
