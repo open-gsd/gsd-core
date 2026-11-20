@@ -40,7 +40,8 @@
        _DEGRADE_MSG=$(gsd_run query worktree.base-check --mode "$ISOLATION" --pick message 2>/dev/null || true)
        [ -n "$_DEGRADE_MSG" ] && printf '%s\n' "$_DEGRADE_MSG" >&2
        _DEGRADE_SCOPE="remaining waves"
-       printf 'Degrading to sequential mode for %s: HEAD advanced past worktree fork base after wave %s merge (#1369).\n' "${_DEGRADE_SCOPE}" "${N}" >&2
+       _DEGRADE_NOTICE="Degrading to sequential mode for ${_DEGRADE_SCOPE}: HEAD advanced past worktree fork base after wave ${N} merge (#1369)."
+       printf '%s\n' "$_DEGRADE_NOTICE" >&2
        # Both must move together (#2652): dispatch keys on ISOLATION.
        USE_WORKTREES=false
        ISOLATION=none

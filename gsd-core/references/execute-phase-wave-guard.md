@@ -18,7 +18,8 @@
        _WAVE_DEGRADE_MSG=$(gsd_run query worktree.base-check --mode "$ISOLATION" --pick message 2>/dev/null || true)
        [ -n "$_WAVE_DEGRADE_MSG" ] && printf '%s\n' "$_WAVE_DEGRADE_MSG" >&2
        _DEGRADE_SCOPE="remaining waves"
-       echo "⚠ [#1369] Worktree fork base diverged from orchestrator HEAD (wave merges advanced HEAD past origin/HEAD). Auto-degrading to sequential mode for ${_DEGRADE_SCOPE} to avoid base-mismatch halts." >&2
+       _DEGRADE_NOTICE="⚠ [#1369] Worktree fork base diverged from orchestrator HEAD (wave merges advanced HEAD past origin/HEAD). Auto-degrading to sequential mode for ${_DEGRADE_SCOPE} to avoid base-mismatch halts."
+       printf '%s\n' "$_DEGRADE_NOTICE" >&2
        # Both must move together (#2652): dispatch keys on ISOLATION.
        USE_WORKTREES=false
        ISOLATION=none

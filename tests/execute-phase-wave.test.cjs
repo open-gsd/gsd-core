@@ -1713,7 +1713,7 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
     ].join('\n');
     const body = [];
     for (let n = 1; n <= waves; n++) {
-      body.push(`N=${n}`, script, 'printf "%s %s %s %s\\n" "$N" "$ISOLATION" "$USE_WORKTREES" "${_DEGRADE_SCOPE:--}" >> "$STATE_DIR/state"');
+      body.push(`N=${n}`, script, 'printf "%s %s %s %s\\n" "$N" "$ISOLATION" "$USE_WORKTREES" "${_DEGRADE_SCOPE:--}" >> "$STATE_DIR/state"', 'printf "%s\\n" "${_DEGRADE_NOTICE:--}" >> "$STATE_DIR/notices"');
     }
     const r = runHook('-c', [`${prelude}\n${body.join('\n')}`], {
       interpreter: 'bash',
@@ -1722,9 +1722,12 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
     assert.equal(r.exitCode, 0, r.stderr);
     const calls = splitLines(fs.readFileSync(path.join(dir, 'calls'), { encoding: 'utf-8', flag: 'a+' })).filter(Boolean);
     const state = splitLines(fs.readFileSync(path.join(dir, 'state'), 'utf-8')).filter(Boolean).map(l => l.split(' '));
+    const notices = splitLines(fs.readFileSync(path.join(dir, 'notices'), 'utf-8')).filter(Boolean);
     return {
       // The scope the step declared for its degrade ('-' while it has not degraded).
       scopes: state.map(([, , , ...scope]) => scope.join(' ')),
+      // The degrade sentence the step built for the user, read from its variable ('-' before a degrade).
+      notices,
       waves: state.map(([n, iso, wt]) => ({ isolation: iso, worktrees: wt, calls: calls.filter(c => c === n).length })),
     };
   }
@@ -1771,11 +1774,34 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
       test('the degrade declares the remaining waves as its scope, and only once it degrades', (t) => {
         assert.deepEqual(runWaves(t, script, 3, { degradeFrom: 2 }).scopes, ['-', 'remaining waves', 'remaining waves']);
       });
+
+      test('the degrade sentence the user reads names that scope, and only once it degrades', (t) => {
+        const { scopes, notices } = runWaves(t, script, 3, { degradeFrom: 2 });
+        assert.equal(notices[0], '-');
+        // The sentence is built from the declared scope, so a literal that drifts from it fails here.
+        assert.ok(notices[1].includes(`sequential mode for ${scopes[1]}`), notices[1]);
+        assert.ok(!notices[1].includes('this wave'), notices[1]);
+      });
     });
   }
 
   test('both steps declare the same degrade scope', (t) => {
     const [guard, reset] = STEPS.map(({ script }) => runWaves(t, script, 1).scopes[0]);
     assert.equal(guard, reset);
+    assert.notEqual(guard, '-', 'the scope is declared at all');
+  });
+
+  // The step 0.5 paragraph that follows the fence states the lifetime of the degrade. Read it from the
+  // markdown structure (the first paragraph after the fence) and check it names the scope the fence declares,
+  // so the prose and the shell cannot drift apart unnoticed.
+  test('the step 0.5 paragraph after the fence states the scope the fence declares', (t) => {
+    const lines = splitLines(fs.readFileSync(path.join(REFS, 'execute-phase-wave-guard.md'), 'utf-8'));
+    const fence = scanFencedBlocks(lines).find(b => b.closeLineIdx !== -1 && b.infoString.trim() === 'bash');
+    const rest = lines.slice(fence.closeLineIdx + 1);
+    const start = rest.findIndex(l => l.trim() !== '');
+    const end = rest.findIndex((l, i) => i > start && l.trim() === '');
+    const paragraph = rest.slice(start, end).join(' ');
+    const scope = runWaves(t, STEPS[0].script, 1).scopes[0];
+    assert.ok(paragraph.includes(`**${scope}**`), `the paragraph after the fence must bold the scope "${scope}"`);
   });
 });
