@@ -128,7 +128,14 @@
 //   a NON-gitignored `.env`, and a command another program takes as one
 //   string or on stdin rather than as its operands (`tmux new '…'`, `script -c
 //   '…'`, `at`, `batch`, `make -f -`), or `env -S 'script'` (the split string is
-//   skipped as the option's value). Reached through the same gaps and allowed under
+//   skipped as the option's value). Stdin a shell or `source` runs is not
+//   followed further (#5492): a `-c` script that itself reads stdin (`bash -c
+//   '. /dev/stdin' <<< …`, `bash -c bash <<< …`), a process substitution given
+//   as an input redirect (`bash < <(…)`, `source /dev/stdin < <(…)`, `bash
+//   /dev/fd/3 3< <(…)`), an fd name relative to a `cd` (`cd /dev && source
+//   stdin <<< …`), an fd path given through `BASH_ENV` or `--rcfile`
+//   (`BASH_ENV=/dev/stdin bash -c : <<< …`), and a doubled `builtin`
+//   (`builtin builtin source …`). Reached through the same gaps and allowed under
 //   every reading, so the decoded-value check (#5255) does not cover them:
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
 //   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
