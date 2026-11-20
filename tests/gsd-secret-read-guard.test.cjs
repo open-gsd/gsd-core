@@ -915,7 +915,7 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
         const words = [...before.flatMap(([frag, s]) => ['-c', s, `user.name=${frag}`, ' ']), '-c', sep, payload,
           ' status', ...after.map((frag) => ` ${frag}`)];
         const value = words.join('');
-        const git = runGit(['-c', `alias.q=rev-parse --sq-quote ${value}`, 'q'], { timeoutMs: QUICK_SPAWN_TIMEOUT_MS });
+        const git = runGit(['-c', `alias.q=rev-parse --sq-quote ${value}`, 'q'], { timeoutMs: GIT_TIMEOUT_MS });
         const direct = git.exitCode === 0 ? runHook(bash(`git${git.stdout.trimEnd()}`)) : { status: 0, stdout: '' };
         const viaAlias = runHook(bash(`git -c alias.x=${sq(value)} x`));
         assert.equal(viaAlias.status, direct.status, `${JSON.stringify(value)}: alias vs git's split`);
@@ -1107,7 +1107,7 @@ describe('gsd-secret-read-guard: pinned git gaps the guide documents (#5492)', (
   ];
   for (const cmd of stillBlocked) {
     test(`blocks ${JSON.stringify(cmd)}`, () => {
-      assertBlocked(runHook(bash(cmd)), cmd);
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
   }
 });
