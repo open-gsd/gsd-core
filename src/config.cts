@@ -591,10 +591,12 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
   // that sets only the nested spelling (`planning.commit_docs`, the spelling
   // config-save-defaults keeps) would lose to the template's default. Each such
   // key takes the loader's reading (flat, then nested) of the highest layer that
-  // sets either spelling: the choices, then the user defaults. A null is no
-  // setting, and neither is a nested value of another type than the template's
-  // default (a string "false" would read as false to config-get but as true to
-  // check-commit), so such a value stays as inert as it was before. The flat
+  // sets either spelling: the choices, then the user defaults. A flat null
+  // stops the read there, as it stops the loader's nested read, and leaves the
+  // template's default, which is what the loader resolves for it. A nested null
+  // is no setting, and neither is a nested value of another type than the
+  // template's default (a string "false" would read as false to config-get but
+  // as true to check-commit), so such a value stays as inert as it was before. The flat
   // key stays, as the template always writes it: a workstream config needs it
   // to override the root's. A nested twin in the new project is given the same
   // value, so the two spellings agree (#5681).
@@ -604,8 +606,8 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     for (const layer of [choices, safeDefaults] as Record<string, unknown>[]) {
       const layerSection = layer[section];
       const nested = isPlainObject(layerSection) ? layerSection[field] : undefined;
-      if (isSet(layer[key])) {
-        resolved = layer[key];
+      if (layer[key] !== undefined) {
+        if (layer[key] !== null) resolved = layer[key];
         break;
       }
       if (isSet(nested) && typeof nested === typeof hardcoded[key]) {

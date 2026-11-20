@@ -4356,6 +4356,32 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.strictEqual(loadConfig(projectDir).commit_docs, true);
   });
 
+  // A hand-written flat null beside a nested value: the loader's flat-first read
+  // stops at the null and resolves the default, so new-project creation must
+  // resolve the default too, not the nested value behind the null.
+  for (const [key, nestedValue, fallback] of [['commit_docs', false, true], ['search_gitignored', true, false]]) {
+    test(`a null flat ${key} beside a nested value resolves the default in the loader and in a new project alike`, (t) => {
+      const gsdHome = createTempDir('gsd-5681-home-');
+      const projectDir = createTempDir('gsd-5681-proj-');
+      const outside = createTempDir('gsd-5681-outside-');
+      t.after(() => { cleanup(gsdHome); cleanup(projectDir); cleanup(outside); });
+      fs.mkdirSync(path.join(gsdHome, '.gsd'), { recursive: true });
+      fs.writeFileSync(path.join(gsdHome, '.gsd', 'defaults.json'), JSON.stringify({ [key]: null, planning: { [key]: nestedValue } }));
+      const created = runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome });
+      assert.ok(created.success, created.error);
+      const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
+      assert.strictEqual(written[key], fallback, 'new project');
+      if (key === 'commit_docs') {
+        // The global-defaults branch projects commit_docs (not search_gitignored).
+        const loaded = withIsolatedProcessState(() => {
+          process.env.GSD_HOME = gsdHome;
+          return loadConfig(outside);
+        });
+        assert.strictEqual(loaded[key], fallback, 'loader outside a project');
+      }
+    });
+  }
+
   // Every twin the loader reads (CONFIG_KEY_ALIASES, less parallelization, whose
   // nested field sits under the flat key): its nested spelling saved with a
   // value that is not the default, over a store holding the flat default, is
