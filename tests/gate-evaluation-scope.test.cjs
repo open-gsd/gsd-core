@@ -1710,7 +1710,7 @@ describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
   });
 
   test('[boundary] indentation compares in columns: a tab-indented sub-bullet under a 4-space row is nested', () => {
-    assert.deepEqual(extractTaskCommitRefs(section('    - **Task 1: b**', '\t- RED `1111111`')), ['1111111']);
+    assert.deepEqual(extractTaskCommitRefs(section('  - **Task 1: b**', '\t- RED `1111111`')), ['1111111']);
     assert.deepEqual(extractTaskCommitRefs(section('\t- **Task 1: b**', '    - RED `1111111`')), []);
   });
 
