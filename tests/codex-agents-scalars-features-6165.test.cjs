@@ -22,6 +22,7 @@ const {
   extractCodexUserAgentsScalars,
   mergeCodexConfig,
   generateCodexConfigBlock,
+  stripGsdFromCodexConfig,
   ensureCodexHooksFeature,
   repairTrappedFeaturesKeys,
   parseTomlToObject,
@@ -115,6 +116,29 @@ describe('#6165: the four agent keys survive a merge unchanged', () => {
 
     mergeCodexConfig(configPath, block);
     assert.equal(fs.readFileSync(configPath, 'utf8'), first);
+
+    // The reported config also carries dotted [features] keys: the hooks-feature preparation that runs on the
+    // same install must leave them in [features], so the combined result still validates.
+    const prepared = ensureCodexHooksFeature(first).content;
+    assert.equal(validateCodexConfigSchema(prepared).ok, true);
+    assert.equal(parseTomlToObject(prepared).features.multi_agent_v2.batch_size, 5);
+    assert.equal(parseTomlToObject(prepared).agents.default_subagent_model, 'gpt-5');
+  });
+
+  test('uninstall restores the four keys and drops only the GSD-managed max_depth', () => {
+    const configPath = path.join(tmp, 'config.toml');
+    fs.writeFileSync(configPath, ['[agents]', ...FOUR_KEYS, 'max_depth = 9', '', '[model]', 'name = "o3"', ''].join('\n'));
+    mergeCodexConfig(configPath, generateCodexConfigBlock([{ name: 'gsd-foo', description: 'Foo' }], tmp));
+    const uninstalled = stripGsdFromCodexConfig(fs.readFileSync(configPath, 'utf8'));
+    for (const line of FOUR_KEYS) assert.ok(uninstalled.includes(line), `${line} restored`);
+    assert.doesNotMatch(uninstalled, /max_depth/);
+    assert.equal(validateCodexConfigSchema(uninstalled).ok, true);
+  });
+
+  test('a trailing comment, an indent and CRLF endings do not change what is preserved', () => {
+    const config = ['[agents]', 'enabled = true # keep', '  default_subagent_model = "gpt-5"', 'max_depth = 1', ''].join('\r\n');
+    assert.equal(validateCodexConfigSchema(config).ok, true);
+    assert.deepEqual(extractCodexUserAgentsScalars(config), ['enabled = true # keep', 'default_subagent_model = "gpt-5"']);
   });
 });
 
@@ -162,16 +186,19 @@ describe('#6165: dotted assignments under [features] keep their table', () => {
     });
   }
 
-  test('property: any dotted non-boolean assignment under [features] is left untouched', () => {
+  test('property: any dotted assignment under [features] (any value, indent, comment, EOL) is left untouched', () => {
     const segment = fc.stringMatching(/^[a-z][a-z0-9_]{0,8}$/);
     const value = fc.oneof(
       fc.integer({ min: 0, max: 1000000 }).map(String),
       segment.map((s) => `"${s}"`),
+      fc.boolean().map(String),
     );
     fc.assert(
       fc.property(fc.array(segment, { minLength: 2, maxLength: 4 }), value, (segments, v) => {
-        const config = ['[features]', `${segments.join('.')} = ${v}`, ''].join('\n');
-        assert.equal(repairTrappedFeaturesKeys(config), config);
+        for (const [indent, comment, eol] of [['', '', '\n'], ['  ', ' # note', '\r\n']]) {
+          const config = ['[features]', `${indent}${segments.join('.')} = ${v}${comment}`, ''].join(eol);
+          assert.equal(repairTrappedFeaturesKeys(config), config);
+        }
       }),
       { numRuns: 60 },
     );

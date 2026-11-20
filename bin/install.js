@@ -6362,13 +6362,7 @@ function parseTomlToObject(content) {
  *   - `hooks.<Event>` MUST be an array of tables when present (Codex ≥0.124
  *     rejects bare `[hooks.<Event>]` single-bracket maps).
  */
-/**
- * True when a bare `[agents]` table body contains ONLY known AgentsToml scalar
- * keys (CODEX_AGENTS_TOML_SCALAR_KEYS) — i.e. it is a valid AgentsToml struct
- * that Codex's `deny_unknown_fields` will accept, not the break-causing form
- * (#2760) that carries an unknown key. Comments and blank lines are ignored; an
- * empty body is trivially valid. Mirrors isLegacyGsdAgentsSection's line scan.
- */
+/** True when a TOML assignment line's value opens a multiline string (triple single or double quote). */
 function tomlAssignmentStartsMultilineString(recordText) {
   const equalsIndex = findTomlAssignmentEquals(recordText);
   if (equalsIndex === -1) return false;
@@ -6376,6 +6370,13 @@ function tomlAssignmentStartsMultilineString(recordText) {
   return value.startsWith("'''") || value.startsWith('"""');
 }
 
+/**
+ * True when a bare `[agents]` table body contains ONLY known AgentsToml scalar
+ * keys (CODEX_AGENTS_TOML_SCALAR_KEYS) — i.e. it is a valid AgentsToml struct
+ * that Codex's `deny_unknown_fields` will accept, not the break-causing form
+ * (#2760) that carries an unknown key. Comments and blank lines are ignored; an
+ * empty body is trivially valid. Mirrors isLegacyGsdAgentsSection's line scan.
+ */
 function codexBareAgentsHasOnlyKnownScalars(body) {
   const lineRecords = getTomlLineRecords(body);
   for (const record of lineRecords) {
