@@ -21,8 +21,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const fc = require('./helpers/fast-check-setup.cjs');
-const { runGsdTools, createTempGitProject, createTempDir, homeSandboxEnv, cleanup, TOOLS_PATH } = require('./helpers.cjs');
-const { runNode, runHook } = require('./helpers/process-seam.cjs');
+const {
+  runGsdTools, createTempGitProject, createTempDir, homeSandboxEnv, cleanup, TOOLS_PATH, isolateGitConfigEnv, readFileNormalized,
+} = require('./helpers.cjs');
+const { runNode, runHook, runGit } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const sentinel = require('../hooks/lib/isolation-sentinel.js');
 const executorType = require('../gsd-core/bin/lib/executor-type.cjs');
@@ -133,6 +135,12 @@ describe('#4904 a held query keeps the guards\' executor classification current'
     const d = decide(subagentType, phase);
     assert.equal(d.action, 'block', `${subagentType} for phase ${phase} must be guarded`);
     assert.equal(d.reasonCode, REASON_CODE.HARNESS_FLAG_MISSING);
+  }
+  // `git check-ignore -q` answers 0 (ignored) or 1 (not ignored); anything else is a failed probe, never an answer.
+  function ignoredByGit(rel) {
+    const r = runGit(['check-ignore', '-q', rel], { cwd: root, timeoutMs: PROBE_TIMEOUT_MS });
+    assert.ok(r.exitCode === 0 || r.exitCode === 1, `git check-ignore ${rel}: exit ${r.exitCode} ${r.stderr}`);
+    return r.exitCode === 0;
   }
 
   test('case 1: the routed executor changes within the hold (routing switched on)', () => {
@@ -265,7 +273,34 @@ describe('#4904 a held query keeps the guards\' executor classification current'
       schema: 1, phase: '02', plan: '02-01', executor_type: HINTED, executor_types: [],
       executor_types_truncated: false, written_at: LATER,
     });
-    assert.ok(fs.readFileSync(path.join(root, '.gsd', '.gitignore'), 'utf8').length > 0, 'the tool-owned .gsd keeps its ignore file');
+  });
+
+  test('git ignores the held query\'s identity record (fresh .gsd)', (t) => {
+    t.after(isolateGitConfigEnv());
+    writePlan('02-api', '02', '01', HINTED);
+    gsd(['dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01', '--force-isolation', 'none'], WRITTEN_AT);
+    heldQuery(['--phase', '02', '--plan', '02-01']);
+    assert.ok(fs.existsSync(path.join(root, IDENTITY_RECORD_DIR, 'plan+02+02-01.json')), 'precondition');
+    assert.equal(ignoredByGit('.gsd/dispatch-isolation-identity/plan+02+02-01.json'), true);
+  });
+
+  test('a .gsd/.gitignore written before the identity directory existed gains its rule, so the record is ignored', (t) => {
+    t.after(isolateGitConfigEnv());
+    writePlan('02-api', '02', '01', HINTED);
+    // The block an install without the identity directory seeded: every dispatch-sentinel rule but its own.
+    fs.mkdirSync(path.join(root, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.gsd', '.gitignore'), ['# gsd-core dispatch sentinel', '/dispatch-isolation-sentinel.json',
+      '/dispatch-isolation-sentinel.json.tmp-*', '/dispatch-isolation/', '/.gitignore', ''].join('\n'));
+    // Control: git ignores only what the rules name, so the answer below is the rule's and not a global ignore's.
+    fs.writeFileSync(path.join(root, '.gsd', 'untracked-control.txt'), 'x');
+    t.after(() => cleanup(path.join(root, '.gsd', 'untracked-control.txt')));
+    assert.equal(ignoredByGit('.gsd/untracked-control.txt'), false, 'control: .gsd is not ignored wholesale');
+    gsd(['dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01', '--force-isolation', 'none'], WRITTEN_AT);
+    heldQuery(['--phase', '02', '--plan', '02-01']);
+    assert.ok(fs.existsSync(path.join(root, IDENTITY_RECORD_DIR, 'plan+02+02-01.json')), 'precondition');
+    assert.ok(readFileNormalized(path.join(root, '.gsd', '.gitignore')).includes('\n/dispatch-isolation-identity/\n'),
+      'the identity directory\'s rule was appended');
+    assert.equal(ignoredByGit('.gsd/dispatch-isolation-identity/plan+02+02-01.json'), true);
   });
 
   test('an empty derivation replaces the scope\'s record; the decision record still names what it named', () => {
