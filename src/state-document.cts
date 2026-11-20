@@ -834,10 +834,12 @@ export function stateFieldValue(
 }
 
 /**
- * The phase a STATE.md records, in the one order every reader and writer uses
- * (ADR-3180 §7.7): frontmatter or body `Current Phase` over the whole body, then
- * the `Phase:` line of the `## Current Position` section (`prose: true`; the
- * caller parses that value, which is prose such as `19 (Name) — EXECUTING`).
+ * The phase a STATE.md records, in the order `resolveCurrentPhaseId` and
+ * `plannedPhaseCore` share (ADR-3180 §7.7): frontmatter or body `Current Phase`
+ * over the whole body, then the `Phase:` line of the `## Current Position`
+ * section (`prose: true`; the caller parses that value, which is prose such as
+ * `19 (Name) — EXECUTING`). The read-only `resolveStatePhase` keeps its own
+ * ladder on purpose (see its comment in state.cts).
  */
 export function recordedPhaseField(
   fm: Record<string, unknown>,

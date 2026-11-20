@@ -2799,17 +2799,14 @@ function plannedPhaseCore(
     ?? (typeof curatedName === 'string' && curatedName.trim() !== '' && !phaseIdMod.isPlannedPhaseStatusPhrase(curatedName)
       ? curatedName.trim()
       : null);
-  const posSlice = (b: string): string => {
-    const sp = locateCurrentPosition(b);
-    return sp ? b.slice(sp.start, sp.end) : '';
-  };
-  const posBefore = posSlice(beforePos);
+  const posSection = sliceCurrentPositionSection(beforePos);
+  const posBefore = posSection ?? '';
   // #5320: `Plan: A of B in current phase` template shape; advance-plan parses
   // `N of M` from either spelling (#3784 hybrid for `Current Plan:`). A replan
   // keeps the recorded leading N and moves only M; anything else starts at 0.
   // The recorded N carries over only for the SAME phase (`Phase:` or `Current Phase:` leading token).
   // The recorded phase comes from `recordedPhaseField`, the owner `resolveCurrentPhaseId` also calls.
-  const recordedPhase = recordedPhaseField(existingFm, beforePos, sliceCurrentPositionSection(beforePos)).value;
+  const recordedPhase = recordedPhaseField(existingFm, beforePos, posSection).value;
   const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase, intent.directoryContext, intent.phaseIdConvention) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber, intent.directoryContext);
   // #5320: the plan lines advance-plan reads, from the same scope; a refusal writes nothing.
   const planned: ReturnType<typeof planLinesForPlanned> = intent.planCount == null ? {} : planLinesForPlanned(content, intent.planCount, samePhase, totalRecorded);
@@ -2839,7 +2836,7 @@ function plannedPhaseCore(
     if (written === null) return frontmatterOnly('Current Plan');
     body = written;
   }
-  if (!updated.includes('Current Position') && posSlice(body) !== posBefore) updated.push('Current Position');
+  if (!updated.includes('Current Position') && (sliceCurrentPositionSection(body) ?? '') !== posBefore) updated.push('Current Position');
   if (stateExtractField(body, 'Plan') !== stateExtractField(beforePos, 'Plan')) updated.push('Plan');
   if (stateExtractField(body, 'Current Plan') !== stateExtractField(beforePos, 'Current Plan')) updated.push('Current Plan');
 

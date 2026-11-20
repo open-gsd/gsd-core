@@ -5620,6 +5620,32 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.strictEqual(lineOf(runBody(noSection).content), 'Plan: 2 of 6', 'no position section: the body Current Phase is still read');
   });
 
+  test('plannedPhase property: for any generated recorded-phase lines, resolveCurrentPhaseId and the planned-phase same-phase test read the same phase', () => {
+    // parity of the two callers of `recordedPhaseField`; the oracle is the stated ladder: frontmatter, body Current Phase, section Phase
+    const { resolveCurrentPhaseId } = require('../gsd-core/bin/lib/state.cjs');
+    const { extractFrontmatter, stripFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
+    const phase = fc.option(fc.integer({ min: 1, max: 30 }), { nil: null });
+    fc.assert(
+      fc.property(phase, phase, phase, fc.constantFrom('above', 'inside', 'no-section'), (fmPhase, bodyPhase, sectionPhase, where) => {
+        const sectionLines = where === 'no-section' ? [] : ['## Current Position', '', ...(where === 'inside' && bodyPhase !== null ? [`Current Phase: ${bodyPhase}`] : []), ...(sectionPhase !== null ? [`Phase: ${sectionPhase}`] : []), 'Plan: 2 of 5', 'Status: Ready', ''];
+        const content = [
+          ...(fmPhase !== null ? ['---', `current_phase: ${fmPhase}`, '---'] : []),
+          '# Project State', '',
+          ...(where !== 'inside' && bodyPhase !== null ? [`**Current Phase:** ${bodyPhase}`, ''] : []),
+          ...(where === 'no-section' ? ['Plan: 2 of 5', 'Status: Ready', ''] : sectionLines),
+        ].join('\n');
+        const resolved = resolveCurrentPhaseId(extractFrontmatter(content), stripFrontmatter(content));
+        const expected = fmPhase ?? bodyPhase ?? (where === 'no-section' ? null : sectionPhase);
+        if (expected === null) return resolved === null;
+        const run = (n) => transitionCore(content, { kind: 'plannedPhase', phaseNumber: n, phaseName: 'Tbd', planCount: 6 }, deps);
+        return String(resolved) === String(expected)
+          && lineOf(run(expected).content) === 'Plan: 2 of 6'
+          && lineOf(run(expected + 1).content) === 'Plan: 0 of 6 in current phase';
+      }),
+      { seed: 5320, numRuns: 300 },
+    );
+  });
+
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
     const tbd = planned('Plan: 0 TBD in current phase', 3);
     assert.strictEqual(lineOf(tbd.content), 'Plan: 0 of 3 in current phase');
