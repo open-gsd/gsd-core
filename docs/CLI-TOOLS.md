@@ -1383,7 +1383,7 @@ file read need not be the one that gave the plan its completion record:
   then those under `plans/`, each directory in the order Node lists it. On
   Unix that is filename byte order (libuv sorts it; measured on Linux), so
   among the phase directory's files the one whose name sorts last is read. A
-  SUMMARY under `plans/` takes part only when the canonical id of its path is
+  SUMMARY under `plans/` takes part when the canonical id of its path is
   the id being looked up (`plans/01-06-01-SUMMARY-01.md` for
   `06-01-PLAN.md`), and is then read after all of them; an ordinary nested
   SUMMARY such as `plans/SUMMARY-01.md` or `plans/01-06-SUMMARY-01.md` never
