@@ -200,6 +200,16 @@ Contributor requirements (summary):
 - **CI must pass** — all configured matrix jobs must be green. Node 24 is the compatibility floor and primary target; Node 26 compatibility must be preserved for code and tests even when a Node 26 CI lane is not yet available.
 - **Scope matches the approved issue** — if your PR does more than what the issue describes, the extra changes will be asked to be removed or moved to a new issue
 
+### CI/CD efficiency
+
+Keep every required matrix lane, test case, assertion, security check, release artifact check, and quality bound. For each Actions run, inspect progress while it is running and timings after it completes. Look for critical-path delays, repeated work, and slow feedback; record evidence before proposing a change. Count runner-minutes separately from wall time, especially when pull-request, push, and release workflows overlap.
+
+Before a long suite or hosted matrix, run the cheapest relevant consistency checks first: verify test selectors and inventory counts, generated outputs and size bounds, workflow routing, and release manifest, artifact names, and digests. Add a permanent preflight only when it prevents a recurring fault.
+
+Use `act` for locally reproducible workflow jobs, or `act --dryrun` for routing, when it adds coverage beyond the existing local suite. Record hosted-only limits and keep the corresponding hosted checks required. For releases, inspect the release workflow together with CI, including packaging, publication, and archive validation. Prefer measured reductions in duplicate work or critical-path time; add caches, dependencies, concurrency changes, or matrix reductions only when evidence shows full required coverage and release guarantees remain intact.
+
+See [CI timeout signals](docs/how-to/read-ci-timeout-signals.md) for measured job budgets and [the branching and release guide](docs/branching.md) for the release path.
+
 ## CHANGELOG Entries — Drop a Fragment
 
 **Do not edit `CHANGELOG.md` directly.** Two PRs that both append to a `### Fixed` block always conflict on merge — git can't pick a serialization order without a human. Instead, every PR with user-facing changes drops a fragment file in `.changeset/`.
