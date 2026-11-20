@@ -1554,8 +1554,6 @@ describe('qualifiedPlanSubjectPattern — one builder for every plan-id spelling
 // is named exactly like the sha; the resolver then raised ScopeUnreadable and every gate sharing it saw `unresolvable`.
 
 describe('resolveEvaluationScope — sha-named root files (#6179)', () => {
-  const FULL_SHA = /^[0-9a-f]{40}$/;
-
   /** Root-level untracked files named exactly like each sha (a path a bare revision argument would also match). */
   function plantShaNamedFiles(repo, shas) {
     for (const sha of shas) write(repo.dir, sha, 'not a revision\n');
@@ -1583,7 +1581,7 @@ describe('resolveEvaluationScope — sha-named root files (#6179)', () => {
   }
 
   const view = (scope) => ({
-    status: scope.status, source: scope.source, files: scope.files, outsideUnion: scope.outsideUnion, changedFiles: scope.changedFiles,
+    status: scope.status, reason: scope.reason, source: scope.source, files: scope.files, outsideUnion: scope.outsideUnion, changedFiles: scope.changedFiles,
   });
 
   for (const shaChunk of [2, 3, 4]) {
@@ -1613,8 +1611,20 @@ describe('resolveEvaluationScope — sha-named root files (#6179)', () => {
     assert.ok(!scope.changedFiles.includes('src/base.js'), 'the base delta stays out of the scope');
   });
 
-  const passesRevision = (args) => args.some((arg) => FULL_SHA.test(arg.replace(/^\^/, '')));
-  const isRevisionWalk = (args) => args.includes('log') || args.includes('rev-list');
+  // Any positional operand of a log or rev-list call is a revision (a sha, `^sha`, a range or a ref), so every such
+  // call must end its revisions with `--`. Flags and the value of `-n` are not operands.
+  const walkOf = (args) => args.findIndex((arg) => arg === 'log' || arg === 'rev-list');
+  const operandsOf = (args) => {
+    const operands = [];
+    for (let i = walkOf(args) + 1; i < args.length; i++) {
+      if (args[i] === '--') break;
+      if (args[i] === '-n') { i += 1; continue; }
+      if (!args[i].startsWith('-')) operands.push(args[i]);
+    }
+    return operands;
+  };
+  const passesRevision = (args) => operandsOf(args).length > 0;
+  const isRevisionWalk = (args) => walkOf(args) !== -1;
 
   for (const [label, build, options] of [
     ['task commits, chunked', taskCommitRepo, { shaChunk: 2 }],
@@ -1628,6 +1638,9 @@ describe('resolveEvaluationScope — sha-named root files (#6179)', () => {
       assert.equal(scope.status, 'resolved', `reason: ${scope.reason}`);
       const revisionCalls = git.calls.filter((args) => isRevisionWalk(args) && passesRevision(args));
       assert.ok(revisionCalls.length > 0, 'the scenario reaches calls that pass revisions');
+      if (label === 'a listed merge') {
+        assert.ok(revisionCalls.some((args) => args[0] === 'rev-list' && args.some((arg) => arg.startsWith('^'))), 'the merge scenario reaches the base-side rev-list walk');
+      }
       for (const args of revisionCalls) assert.ok(args.includes('--'), `unterminated: git ${args.join(' ')}`);
     });
   }

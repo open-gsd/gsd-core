@@ -1137,7 +1137,7 @@ function resolvePhase(
   scope.source = 'phase-range';
   const max = clampMaxCommits(options.maxCommits);
   scope.commits = parseLog(
-    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max)]),
+    git(['log', `${scope.rangeBase}..${ref}`, logFormat(options.includeBody === true), '-n', String(max), '--']),
     options.includeBody === true,
   );
   finalizeFiles(scope, repoRoot, rangeFiles(git, scope.rangeBase, ref));
@@ -1190,7 +1190,7 @@ function lookupSubjectCommits(
   }
   const rangeArgs = options.allBranches === true ? ['--branches'] : [range];
   const out = git(
-    ['log', ...rangeArgs, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, ...(pathspecs.length > 0 ? ['--', ...pathspecs] : [])],
+    ['log', ...rangeArgs, logFormat(withBody), '-n', String(max * 2), ...sinceArgs, ...grepArgs, '--', ...pathspecs],
   );
   // `--grep` matches ANY message line; a plan lookup is subject-anchored, so filter on the subject.
   const parentsOf: ParentMap = new Map();
