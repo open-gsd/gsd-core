@@ -2178,18 +2178,87 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     assert.equal(files[fx.key], fx.rewritten(), 'the rewritten skill is re-recorded');
   });
 
-  test('a symlink planted at the manifest tmp path is replaced, never written or chmodded through', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, (t) => {
+  test('the manifest tmp file is created exclusively: a symlink at its path is never written or chmodded through', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, (t) => {
     const fx = installedWithOlderSkill(t);
     const victim = path.join(fx.root, 'victim.txt');
     fs.writeFileSync(victim, 'victim\n', { mode: 0o600 });
     fs.chmodSync(victim, 0o600);
     fs.chmodSync(fx.manifestPath, 0o644);
-    fs.symlinkSync(victim, `${fx.manifestPath}.tmp.${process.pid}`);
-    fx.apply();
+    const before = fs.readFileSync(fx.manifestPath, 'utf8');
+    // Pin the random suffix so the test can plant a symlink at the exact tmp
+    // path; an exclusive create then refuses it instead of following it.
+    const crypto = require('node:crypto');
+    const realRandom = crypto.randomBytes;
+    crypto.randomBytes = (n) => Buffer.alloc(n, 0xab);
+    const planted = `${fx.manifestPath}.tmp.${process.pid}.${'ab'.repeat(8)}`;
+    fs.symlinkSync(victim, planted);
+    try {
+      fx.apply();
+    } finally {
+      crypto.randomBytes = realRandom;
+    }
     assert.equal(fs.readFileSync(victim, 'utf8'), 'victim\n', 'the symlink target is not written');
     if (process.platform !== 'win32') assert.equal(fs.statSync(victim).mode & 0o777, 0o600, 'the symlink target keeps its mode');
-    assert.equal(JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files[fx.key], fx.rewritten(), 'the record still lands');
-    assert.equal(fs.existsSync(`${fx.manifestPath}.tmp.${process.pid}`), false, 'no tmp file is left behind');
+    assert.equal(fs.lstatSync(planted).isSymbolicLink(), true, 'the planted path is left as it was, not removed');
+    assert.equal(fs.readFileSync(fx.manifestPath, 'utf8'), before, 'nothing is recorded through the planted path');
+  });
+
+  for (const planted of ['a symlink', 'a directory']) {
+    test(`${planted} at the old predictable tmp path does not block the record`, { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, (t) => {
+      const fx = installedWithOlderSkill(t);
+      const victim = path.join(fx.root, 'victim.txt');
+      fs.writeFileSync(victim, 'victim\n');
+      const oldTmp = `${fx.manifestPath}.tmp.${process.pid}`;
+      if (planted === 'a symlink') fs.symlinkSync(victim, oldTmp);
+      else fs.mkdirSync(path.join(oldTmp, 'inner'), { recursive: true });
+      fx.apply();
+      assert.equal(JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files[fx.key], fx.rewritten(), 'the record lands');
+      assert.equal(fs.readFileSync(victim, 'utf8'), 'victim\n', 'the symlink target is not written');
+      // `<manifest>.tmp.<pid>.<hex>` is this record's tmp name; the planted `<manifest>.tmp.<pid>` stays.
+      const leftovers = fs.readdirSync(fx.configDir).filter((n) => n.startsWith(`${MANIFEST}.tmp.${process.pid}.`));
+      assert.deepEqual(leftovers, [], 'no tmp file of this record is left behind');
+    });
+  }
+
+  test('tryFileHash hashes a regular file exactly as fileHash does, across chunk boundaries', (t) => {
+    const { fileHash, tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-hash-'));
+    t.after(() => cleanup(dir));
+    const MiB = 1024 * 1024;
+    for (const size of [0, 1, MiB - 1, MiB, MiB + 1, 3 * MiB + 7, 17 * MiB]) {
+      const file = path.join(dir, `f-${size}`);
+      const bytes = Buffer.alloc(size);
+      for (let i = 0; i < size; i += 4093) bytes[i] = (i / 4093) & 0xff;
+      fs.writeFileSync(file, bytes);
+      assert.equal(tryFileHash(file), fileHash(file), `${size} bytes`);
+    }
+    assert.equal(tryFileHash(dir), null, 'a directory is not hashed');
+    assert.equal(tryFileHash(path.join(dir, 'missing')), null, 'a missing file is not hashed');
+    // A character device reads like an empty file; only the type check refuses it.
+    if (process.platform !== 'win32') assert.equal(tryFileHash('/dev/null'), null, 'a device is not hashed');
+  });
+
+  test('every descriptor the recorder and tryFileHash open is closed', (t) => {
+    const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-fds-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'new\n');
+    fs.writeFileSync(path.join(dir, MANIFEST), JSON.stringify({ files: { 'a.md': sha256('old\n') } }));
+    const open = new Set();
+    const realOpen = fs.openSync;
+    const realClose = fs.closeSync;
+    fs.openSync = (...args) => { const fd = realOpen(...args); open.add(fd); return fd; };
+    fs.closeSync = (fd) => { open.delete(fd); return realClose(fd); };
+    try {
+      assert.equal(recordManifestFileHashesResult(dir, [{ path: file, preHash: sha256('old\n') }]), 'written');
+      assert.notEqual(tryFileHash(file), null);
+      assert.equal(tryFileHash(dir), null);
+    } finally {
+      fs.openSync = realOpen;
+      fs.closeSync = realClose;
+    }
+    assert.deepEqual([...open], [], 'no descriptor is left open');
   });
 
   test('manifestSkillsRedirect takes the first skills kind, as the installer does', (t) => {

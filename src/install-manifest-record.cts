@@ -7,13 +7,13 @@
  * `bin/install.js` fileHash delegates to this module: one hash function.
  */
 
-import { readFileSync, writeFileSync, unlinkSync, statSync, openSync, closeSync, fchmodSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, unlinkSync, statSync, openSync, closeSync, fchmodSync, fstatSync, readSync,
+  constants as fsConstants,
+} from 'node:fs';
 import { join, relative, isAbsolute } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { retryRenameSync } from './shell-command-projection.cjs';
-// capability-ledger is `export =`, so it is imported this way (as in capability-state.cts).
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import ledgerMod = require('./capability-ledger.cjs');
 
 const MANIFEST_NAME = 'gsd-file-manifest.json';
 
@@ -34,22 +34,39 @@ export interface RewrittenFile {
   key?: string;
 }
 
-/** The largest file tryFileHash reads; a recorded GSD file is far smaller. */
-export const MAX_HASHED_FILE_BYTES = 16 * 1024 * 1024;
+/** Read size for tryFileHash's chunked hash. */
+const HASH_CHUNK_BYTES = 1024 * 1024;
 
 /**
  * fileHash that returns null instead of throwing — for capturing a pre-rewrite
  * hash. A manifest key can name a FIFO, and a blocking read of one never
- * returns (#6331), so this reads through the shared bounded reader: open
- * non-blocking, fstat the descriptor, then only a regular file of at most
- * MAX_HASHED_FILE_BYTES is read.
+ * returns (#6331). So the file is opened non-blocking, its type is checked on
+ * the opened descriptor (a path swapped after a check is caught too), and only
+ * a regular file is read: exactly the size fstat reported, in chunks, with no
+ * size cap, so any file the installer's fileHash hashes gets the same hash.
  */
 export function tryFileHash(filePath: string): string | null {
+  let fd: number | undefined;
   try {
-    const bytes = ledgerMod.readSmallRegularFileBuffer(filePath, MAX_HASHED_FILE_BYTES);
-    return bytes === null ? null : createHash('sha256').update(bytes).digest('hex');
+    fd = openSync(filePath, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+    const st = fstatSync(fd);
+    if (!st.isFile()) return null;
+    const hash = createHash('sha256');
+    const buf = Buffer.allocUnsafe(Math.max(1, Math.min(st.size, HASH_CHUNK_BYTES)));
+    let left = st.size;
+    while (left > 0) {
+      const n = readSync(fd, buf, 0, Math.min(buf.length, left), null);
+      if (n === 0) break; // the file shrank: hash what was there
+      hash.update(buf.subarray(0, n));
+      left -= n;
+    }
+    return hash.digest('hex');
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* already closed */ }
+    }
   }
 }
 
@@ -111,13 +128,15 @@ export function recordManifestFileHashesResult(configDir: string, rewritten: rea
   }
   if (!changed) return 'unchanged';
 
-  const tmpPath = `${manifestPath}.tmp.${process.pid}`;
+  // An unpredictable name, created exclusively: nothing planted at a guessable
+  // path (a symlink, a directory) can redirect or block the write.
+  let tmpPath = '';
+  let created = false; // only a tmp file this call created is ever removed
   try {
+    tmpPath = `${manifestPath}.tmp.${process.pid}.${randomBytes(8).toString('hex')}`;
     const mode = statSync(manifestPath).mode & 0o7777;
-    // Exclusive create: a planted symlink (or a stale file) at the tmp path is
-    // removed, never written or chmodded through.
-    try { unlinkSync(tmpPath); } catch { /* absent */ }
     const fd = openSync(tmpPath, 'wx', mode);
+    created = true;
     try {
       writeFileSync(fd, JSON.stringify(manifest, null, 2));
       fchmodSync(fd, mode); // the umask may have narrowed the create mode
@@ -132,7 +151,9 @@ export function recordManifestFileHashesResult(configDir: string, rewritten: rea
     retryRenameSync(tmpPath, manifestPath);
     return 'written';
   } catch {
-    try { unlinkSync(tmpPath); } catch { /* already gone or never created */ }
+    if (created) {
+      try { unlinkSync(tmpPath); } catch { /* already gone */ }
+    }
     return 'unavailable';
   }
 }
