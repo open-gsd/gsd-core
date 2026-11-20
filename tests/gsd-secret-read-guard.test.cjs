@@ -693,6 +693,17 @@ describe('gsd-secret-read-guard: git command lines beyond -c keys (#5492)', () =
     ["echo ok | xargs -rn 1 git -c sequence.editor='cat .env' rebase -i", '.env'],
     ["echo ok | xargs -I{} git -c sequence.editor='cat .env' rebase -i", '.env'],
     ["echo ok | xargs ssh -o ProxyCommand='cat .env'", '.env'],
+    // BSD xargs's -J, -R and -S take a value too; read as flags, the value
+    // would be taken for the sub-command and the shell behind it missed.
+    ["echo x | xargs -J % sh -c 'cat .env'", '.env'],
+    ["echo x | xargs -R 1 sh -c 'cat .env'", '.env'],
+    ["echo x | xargs -S 9 sh -c 'cat .env'", '.env'],
+    ["echo ok | xargs -J % git -c sequence.editor='cat .env' rebase -i", '.env'],
+    // The replace string is read in the same option walk: BSD -J, a cluster,
+    // a --replace prefix, and the last one given.
+    ["echo 'cat .env' | xargs -J % sh -c %", '.env'],
+    ["xargs -a list -tI{} sh -c 'cat .env {}'", '.env'],
+    ["echo 'cat .env' | xargs -I{} -I@@ sh -c @@", '.env'],
     // sshpass runs ssh after its own options, and -f names the password file.
     ["sshpass -p x ssh -o ProxyCommand='cat .env' host", '.env'],
     ["sshpass -e ssh -o ProxyCommand='cat .env' host", '.env'],
