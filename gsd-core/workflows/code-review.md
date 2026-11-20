@@ -296,8 +296,9 @@ sets (the `## Task Commits` rows of the phase's SUMMARYs), restricted to commits
 (a commit that lives only on another branch is named, never counted), with planning artifacts and
 lockfiles excluded. A range (`base..HEAD`) is deliberately not used: it keeps every interleaved
 non-phase commit in its window (#3926, #4563). The resolver also reports, by name rather than by
-count, what the union dropped: `outsideUnion` (changed in the phase window by other commits) and
-`unreachable` (task commits not on this branch). When the union is empty — a phase with no SUMMARY,
+count, what the union dropped: `outsideUnion` (changed in the phase window by other commits),
+`unreachable` (task commits not on this branch) and `unparsedSummaries` (SUMMARYs whose Task Commits
+section yielded no commit id, so their work is not in the union). When the union is empty — a phase with no SUMMARY,
 no task rows, or only planning paths — the resolver widens to the phase-directory range and says so
 (`status: degraded`, `reason`); an unreadable phase or repository is `unresolvable`, never an empty
 scope that reports success. Its `rangeBase` (the parent of the commit that first added the phase
@@ -331,6 +332,11 @@ SCOPE_UNREACHABLE=$(scope_field unreachable)
 if [ -n "$SCOPE_UNREACHABLE" ]; then
   echo "Task commits not reachable from HEAD (another branch, or dropped by a rebase):"
   printf '%s\n' "$SCOPE_UNREACHABLE" | sed 's/^/  - /'
+fi
+SCOPE_UNPARSED=$(scope_field unparsedSummaries)
+if [ -n "$SCOPE_UNPARSED" ]; then
+  echo "SUMMARYs with a Task Commits section from which no commit id could be read (their work is NOT in the scope below):"
+  printf '%s\n' "$SCOPE_UNPARSED" | sed 's/^/  - /'
 fi
 SCOPE_MISSING=$(scope_field missingOnDisk)
 if [ -n "$SCOPE_MISSING" ]; then
