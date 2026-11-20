@@ -1392,8 +1392,11 @@ shapes as not halted, in both commands and with no entry in `diagnostics[]`:
 - a SUMMARY with lone-CR (`\r`) line endings;
 - a SUMMARY whose frontmatter does not open on its first line (a blank line
   before the opening `---`);
-- frontmatter whose closing `---` lies past the first 64 KiB, the most the
-  predicate reads, wherever `status` sits in it.
+- frontmatter that the first 64 KiB, the most the predicate reads, do not
+  close with a `---` line (trailing spaces or tabs allowed), wherever `status`
+  sits in it. Within those 64 KiB, a line of four or more dashes, or a line
+  that the limit cuts to `---`, closes the frontmatter instead, and the
+  SUMMARY can then read as halted.
 
 #### Large payloads
 
