@@ -1415,19 +1415,18 @@ records the override in STATE.md so verify-phase can re-surface it.
 
 **Why this gate blocks:** failing here is cheap. The plans are the contract
 between discuss-phase and execute-phase; if a decision isn't visible in any
-plan, no executor will implement it. Catching that now beats discovering it
-after thousands of dollars of execution.
+plan, no executor will implement it.
 
 ## 13b. Record Planning Completion in STATE.md
 
-After the gates pass:
+After plans pass all gates, record that planning is complete so STATE.md reflects the new phase status:
 
 ```bash
-PLAN_COUNT=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -er .plan_count) || exit 1
+PLAN_COUNT=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r '.plan_count // 0')
 gsd_run query state.planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
-Sets Ready to execute, plan count, Last Activity. On failure nothing is written: fix the named line.
+This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 
