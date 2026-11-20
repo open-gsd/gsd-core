@@ -68,7 +68,7 @@ describe('heading anchors (#5427)', () => {
     assert.equal(headingSet('## x &;').size, 1);
   });
   test('an entity may be numeric or hex; a name outside its class is plain text', () => {
-    for (const entity of ['&#38;', '&#x26;', '&frac12;', '&#;']) {
+    for (const entity of ['&#38;', '&#x26;', '&#X26;', '&frac12;', '&AMP;', '&#;']) {
       assert.equal(headingSet(`## x ${entity}`).size, 0, entity);
     }
     for (const text of ['x &a-b;', 'x &a b;', 'x & y;']) {
@@ -76,7 +76,7 @@ describe('heading anchors (#5427)', () => {
     }
   });
   test('an HTML tag opener (letter, `/` or `!`) is unslugable; `<` before another is text', () => {
-    for (const text of ['x <b>', 'x </b>', 'x <!-- c -->']) {
+    for (const text of ['x <b>', 'x <B>', 'x </b>', 'x <!-- c -->']) {
       assert.equal(headingSet(`## ${text}`).size, 0, text);
     }
     for (const text of ['x < y', 'x <1>', 'x <-']) {
@@ -112,7 +112,7 @@ describe('heading anchors (#5427)', () => {
     for (const rest of [' ```\n## F', '1. ```\n## F', '* <b>\n## F', '<details>\n## F\n</details>',
       '- x\n\n    ```\n  ## F\n    ```', '- ~~~\n## F', '2) <!--\n## F', '</div>\n## F',
       '<?x\n## F', '<!DOCTYPE x>\n## F', '+ <b>\n## F', '+ ```\n## F', '. <b>\n## F',
-      ') <b>\n## F', '\t<b>\n## F', '0 ~~~\n## F']) {
+      ') <b>\n## F', '\t<b>\n## F', '0 ~~~\n## F', '<DIV>\n## F']) {
       assert.deepEqual(anchors(`## A\n${rest}`), ['a'], JSON.stringify(rest));
     }
   });
@@ -323,6 +323,8 @@ describe('next-ref existence and anchors (#5427)', () => {
       `${NEXT}scripts/ci-test-scope.cjs#L10`], 'tpl.md'), []);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#L5-L2`], 'tpl.md'),
       [miss('CONTRIBUTING.md', 'L5-L2')]);
+    assert.deepEqual(unresolvedAnchors([`${REPO}blame/next/docs#L1`], 'tpl.md'),
+      [miss('docs', 'L1')]); // a directory holds no lines
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#L5`], 'tpl.md'),
       [miss('CONTRIBUTING.md', 'L5')]);
     for (const rel of ['X.md', 'X.MD', 'X.Md']) {
