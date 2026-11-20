@@ -195,7 +195,8 @@
  *     run over the cwd's phases dir (cmdPhaseAdd/cmdPhaseAddBatch) and a sibling worktree's
  *     (collectSiblingWorktreePhaseNums). It builds the set of USED phase numbers across
  *     checkouts, not a milestone-scoped list, so listMilestonePhaseDirs cannot serve it.
- *   - `src/phase.cts` `cmdPhasePlanIndex`: resolves ONE caller-supplied
+ *   - `src/phase.cts` `locatePlanIndexPhaseDir` (shared by `cmdPhasePlanIndex` and #6213
+ *     `resolvePlanAgentHint`): resolves ONE caller-supplied
  *     `phase` id to its directory — a single-phase LOCATION lookup, not an
  *     enumeration of the current milestone's phase set.
  *   - `src/phase.cts` `cmdPhaseInsert`: the same next-free-decimal-id scan as
@@ -323,7 +324,7 @@ const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   // #3849/#5528: collectPhaseDirNums is the allocators' one on-disk scan (the cwd's phases dir for
   // cmdPhaseAdd/cmdPhaseAddBatch, a sibling worktree's for collectSiblingWorktreePhaseNums). It is a
   // used-NUMBER roster across checkouts, not the milestone-scoped list listMilestonePhaseDirs serves.
-  [path.join('src', 'phase.cts'), new Set(['cmdPhasesList', 'cmdPhaseNextDecimal', 'cmdPhasePlanIndex', 'cmdPhaseInsert', 'renameDecimalPhases', 'renameIntegerPhases', 'collectPhaseDirNums'])],
+  [path.join('src', 'phase.cts'), new Set(['cmdPhasesList', 'cmdPhaseNextDecimal', 'locatePlanIndexPhaseDir', 'cmdPhaseInsert', 'renameDecimalPhases', 'renameIntegerPhases', 'collectPhaseDirNums'])],
   [path.join('src', 'audit.cts'), new Set(['listAuditPhaseTargets'])],
   [path.join('src', 'commands.cts'), new Set(['cmdHistoryDigest'])],
   [path.join('src', 'state.cts'), new Set(['cmdStateValidate', 'cmdStateSync', 'cmdStateRebuild', 'countRoadmapPhaseHeadings'])],

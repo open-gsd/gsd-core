@@ -4,14 +4,14 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { cleanup } = require('./helpers.cjs');
 // #6005: full gsd-tools subcommands on a fresh install, not probes; a cold one hit 15 s on Windows.
 const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 test('#4988: installed local CLI syncs and reads its own Claude agents', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'local' });
   try {
     const globalDir = path.join(root, 'global-claude');
     fs.mkdirSync(path.join(globalDir, 'agents'), { recursive: true });

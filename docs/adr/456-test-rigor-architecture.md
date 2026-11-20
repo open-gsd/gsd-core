@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-05-28
+- **Amended by:** [ADR-6315](6315-ci-redesign.md) (Proposed; the amendment takes effect when that ADR is ratified)
 
 Four interrelated policies establish the test-rigor architecture for this codebase: (a) concurrency is tested deterministically via an injectable clock seam rather than real OS races, (b) fast-check property tests and Stryker mutation testing form a PR-gating antagonistic tier, (c) tests assert on typed `--json`/IR fields and exported registries, never on rendered text or source literals, and (d) pass-always, vacuous, source-grep, and racing tests are deleted and replaced with real coverage in the same change, never preserved behind permanent lint-rule debt or permanent quarantine. Real multi-process race tests are deleted once deterministic tests cover the logic.
 

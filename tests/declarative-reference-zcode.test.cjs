@@ -48,7 +48,7 @@ const {
 const { validateCapability } = require('../gsd-core/bin/lib/capability-validator.cjs');
 const { createDeclarativeAdapter } = require('../gsd-core/bin/lib/adapter-declarative.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { walk, runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { walk, copyRuntimeFixture, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 
 const DESC = path.join(__dirname, '..', 'capabilities', 'zcode', 'capability.json');
 const ZCODE_CAP = JSON.parse(fs.readFileSync(DESC, 'utf8'));
@@ -82,7 +82,7 @@ test('the public declarative adapter classifies ZCode as a declarative host', ()
 });
 
 test('a real ZCode install emits an invocable gsd skill/command/agent surface', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'zcode', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'zcode', scope: 'global' });
   try {
     const files = walk(configDir);
     assert.ok(files.length > 0, 'install must emit artifacts');
@@ -140,7 +140,7 @@ test('a partial/empty zcode descriptor degrades to the safe floor, not the decla
 });
 
 test('#4002: zcode command bodies rewrite <execution_context> @-refs to the zcode runtime home', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'zcode', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'zcode', scope: 'global' });
   try {
     const commandsDir = path.join(configDir, 'commands');
     const files = fs.readdirSync(commandsDir).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
@@ -184,7 +184,7 @@ test('#4002: zcode command bodies rewrite <execution_context> @-refs to the zcod
 });
 
 test('#4002 negative space: the project-local shim fallback survives the zcode rewrite', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'zcode', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'zcode', scope: 'global' });
   try {
     // `${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/` is the legitimate
     // project-local fallback (the reporter's OpenCode control keeps exactly

@@ -1023,6 +1023,38 @@ describe('#2142 escalation: milestone.archive-quick — narrow archival entry po
     assert.ok(table, 'Quick Tasks table header must survive the reset');
     assert.strictEqual(table.rows.length, 0, 'all quick task rows must be cleared');
   });
+
+  // #5882 review: W031's remedy (src/health-diagnostic-rules/state-consistency.cts)
+  // says the reset is triggered by directories on disk, not by rows. Pin
+  // that behavior here so the remedy text and the code cannot drift apart.
+  test('quickArchiveResetDependsOnDirectoriesNotRows', () => {
+    // Only directory-less rows (the shape /gsd-fast logs), plus one leftover
+    // directory that no row links to: the rows are still deleted.
+    writeQuickTaskDir(tmpDir, '2026-09-05-unlinked-leftover');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), quickTasksStateWithRows(3));
+
+    const result = runSdkQuery(['milestone.archive-quick', 'v1.0'], tmpDir);
+    assert.ok(result.success, `milestone.archive-quick failed: ${result.error}`);
+    assert.strictEqual(result.data.archived, 1);
+    assert.strictEqual(result.data.state_updated, true);
+    const table = findTableBySchema(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'), 'QuickTasks');
+    assert.ok(table, 'Quick Tasks table header must survive the reset');
+    assert.strictEqual(table.rows.length, 0, 'an unlinked directory still triggers the reset, deleting directory-less rows');
+  });
+
+  test('quickArchiveLeavesTableAloneWhenQuickDirHoldsNoDirectory', () => {
+    // .planning/quick/ exists but holds only a file: nothing to move, so the
+    // directory-less rows stay exactly as they were.
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'quick'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'quick', 'notes.md'), 'not a task dir\n');
+    const state = quickTasksStateWithRows(3);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), state);
+
+    const result = runSdkQuery(['milestone.archive-quick', 'v1.0'], tmpDir);
+    assert.ok(result.success, `milestone.archive-quick failed: ${result.error}`);
+    assert.strictEqual(result.data.archived, 0);
+    assert.strictEqual(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'), state, 'STATE.md must be byte-identical');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

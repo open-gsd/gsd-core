@@ -58,6 +58,7 @@ const DOCS_GUARD_EXEMPT_BASELINE = [
   'gen-context-index.test.cjs',
   'gen-registry.test.cjs',
   'gsd-agent-isolation-guard.test.cjs',
+  'health-validation.test.cjs',
   'hermes-dispatch-upgrade.test.cjs',
   'install-minimal-hooks.test.cjs',
   'install-runtime-artifacts.test.cjs',
@@ -167,6 +168,9 @@ const DOCS_GUARD_EXEMPT_DOCS_PATHS = {
   'gen-context-index.test.cjs': ['docs/CONTEXT-INDEX.json', 'docs/INVENTORY-MANIFEST.json'],
   'gen-registry.test.cjs': ['docs/registries', 'docs/registries/reviewers.json'],
   'gsd-agent-isolation-guard.test.cjs': ['docs/adr/1239-...md', 'docs/adr/1239-gsd-embeddable-orchestration-engine.md'],
+  // #5830: cites docs/adr/3524 in comments only; its one read call is a raw
+  // byte compare of a tmpdir .planning/STATE.md fixture.
+  'health-validation.test.cjs': ['docs/adr/3524-cjs-sdk-hard-seam.md'],
   'hermes-dispatch-upgrade.test.cjs': ['docs/guides/delegation-patterns.md'],
   'install-minimal-hooks.test.cjs': ['docs/en/hooks', 'docs/en/users/features/hooks'],
   'install-runtime-artifacts.test.cjs': ['docs/CONFIGURATION.md', 'docs/adr/58-...md', 'docs/adr/58-runtime-install-policy-module.md', 'docs/cli/slash-commands'],

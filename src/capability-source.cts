@@ -194,6 +194,8 @@ const MAX_STAGED_BUNDLE_BYTES = 128 * 1024 * 1024;
  * unbounded readdir work before the byte cap trips). 100k entries is far more than any real bundle.
  */
 const MAX_STAGED_BUNDLE_ENTRIES = 100_000;
+const GIT_METADATA_RM_MAX_RETRIES = 3;
+const GIT_METADATA_RM_RETRY_DELAY_MS = 100;
 
 /**
  * The low-level `https.get`-shaped transport. Extracted as an overridable module-level reference so
@@ -1032,25 +1034,74 @@ function resolveGit(
     throw new Error('integrity pinning is not supported for git sources; pin the commit with #sha:<commit>');
   }
 
-  const cloneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-git-'));
+  const ref = classifyGitRef(parsed);
+  const refError = gitRefValidationError(parsed, ref);
+  if (refError !== null) throw new Error(refError);
+
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-git-'));
+  const cloneDir = path.join(scratchDir, 'repo');
+  const hooksDir = path.join(scratchDir, 'empty-hooks');
+  const gitConfig = ['-c', `core.hooksPath=${hooksDir}`];
+  const treeWriteTimeoutMs = 60_000;
   try {
-    // Clone (copy only — no hooks execute on clone, no npm install).
-    const cloneResult = execGit(['clone', '--depth', '1', '--', parsed.target, cloneDir], { timeout: 60_000 });
+    // Keep hooks outside the cloned tree: an inherited relative core.hooksPath
+    // could otherwise execute a tracked post-checkout hook during clone/checkout.
+    fs.mkdirSync(hooksDir);
+    const cloneResult = execGit([
+      ...gitConfig, 'clone', '--origin', 'origin', '--depth', '1',
+      ...(ref.kind === 'none' ? [] : ['--no-checkout']),
+      '--', parsed.target, cloneDir,
+    ], { timeout: treeWriteTimeoutMs });
     if (cloneResult.exitCode !== 0) {
       throw new Error(`git clone failed (exit ${cloneResult.exitCode}): ${cloneResult.stderr}`);
     }
 
-    // Optional ref checkout. The ref is a commit-ish (tag/branch/sha), NOT a path,
-    // so it goes BEFORE the `--` pathspec terminator (a leading-dash ref is rejected
-    // at parse time, so it cannot be misread as an option here).
-    if (parsed.ref) {
-      const checkoutResult = execGit(['-C', cloneDir, 'checkout', parsed.ref, '--'], { timeout: 60_000 });
+    if (ref.kind !== 'none') {
+      // The default shallow clone cannot resolve a non-tip pin. Fetch only the
+      // requested target, then checkout FETCH_HEAD rather than a local ref name.
+      // An explicit tag is qualified so a same-named branch cannot replace it.
+      const fetchRef = ref.kind === 'tag' ? `refs/tags/${ref.value}` : ref.value;
+      const fetchResult = execGit([
+        ...gitConfig, '-C', cloneDir, 'fetch', '--depth', '1', '--no-tags', '--', 'origin', fetchRef,
+      ], { timeout: 30_000 });
+      let checkoutTarget = 'FETCH_HEAD';
+      if (fetchResult.exitCode !== 0) {
+        if (ref.kind !== 'bare') {
+          throw new Error(`git fetch "${parsed.ref}" failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr}`);
+        }
+        // Preserve commit-ish spellings the former shallow-clone checkout
+        // accepted when a BARE target is already present at the cloned tip.
+        const localResult = execGit([
+          ...gitConfig, '-C', cloneDir, 'rev-parse', '--verify', `${ref.value}^{commit}`,
+        ], { timeout: 10_000 });
+        if (localResult.exitCode !== 0) {
+          throw new Error(`git fetch "${parsed.ref}" failed (exit ${fetchResult.exitCode}): ${fetchResult.stderr}`);
+        }
+        checkoutTarget = ref.value;
+        process.emitWarning('Git fetch failed; installing the bare ref already present in the shallow clone.', {
+          code: 'GSD_GIT_REF_LOCAL_FALLBACK',
+        });
+      }
+      const checkoutResult = execGit([
+        ...gitConfig, '-C', cloneDir, 'checkout', '--detach', checkoutTarget, '--',
+      ], { timeout: treeWriteTimeoutMs });
       if (checkoutResult.exitCode !== 0) {
         throw new Error(
           `git checkout "${parsed.ref}" failed (exit ${checkoutResult.exitCode}): ${checkoutResult.stderr}`
         );
       }
     }
+
+    // #5298: clone metadata is not bundle content. Remove it only from this
+    // scratch clone before shared staging budgets, validation, and consent hashing.
+    // This is deliberately fail-closed: staging never continues after an
+    // unverified metadata-removal result.
+    fs.rmSync(path.join(cloneDir, '.git'), {
+      recursive: true,
+      force: true,
+      maxRetries: GIT_METADATA_RM_MAX_RETRIES,
+      retryDelay: GIT_METADATA_RM_RETRY_DELAY_MS,
+    });
 
     // Read id from capability.json via the SHARED bounded reader (#1461 finding 2): a cloned repo's
     // oversized/non-regular capability.json is refused, never read unbounded.
@@ -1064,7 +1115,7 @@ function resolveGit(
 
     return stageValidated({ sourceDir: cloneDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
-    try { fs.rmSync(cloneDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 }
 
@@ -1400,6 +1451,33 @@ function classifyGitRef(parsed: ParsedSpec): { kind: 'none' | 'sha' | 'tag' | 'b
   return { kind: 'bare', value: raw };
 }
 
+function gitRefValidationError(parsed: ParsedSpec, ref: ReturnType<typeof classifyGitRef>): string | null {
+  const rawRef = typeof parsed.ref === 'string' ? parsed.ref.trim() : '';
+  const isEmptyTypedPin = /^(?:tag|sha):$/i.test(rawRef);
+  if (isEmptyTypedPin) {
+    return `Invalid git ref: "${parsed.ref}" — typed ref must not be empty`;
+  }
+  // Validate AFTER removing typed prefixes: tag:--foo must not bypass parseSpec's
+  // raw leading-dash check. Empty typed pins must not fall back to default HEAD.
+  if (ref.value.startsWith('+') || ref.value.includes(':')) {
+    return `Unsafe git ref (fetch refspec not allowed): "${parsed.ref}"`;
+  }
+  if (ref.value.startsWith('-')) {
+    return `Unsafe git ref (leading dash not allowed): "${parsed.ref}"`;
+  }
+  // Patterns cannot name one target. Typed tags also forbid revision operators;
+  // bare commit-ish operators retain the previously accepted tip-local fallback.
+  if (/[*?\[]/.test(ref.value) || (ref.kind !== 'bare' && /[\^~]/.test(ref.value))) {
+    return `Unsafe git ref (invalid ref-name character): "${parsed.ref}"`;
+  }
+  if (ref.kind === 'sha' && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(ref.value)) {
+    return `Invalid git ref: "${parsed.ref}" — sha: pin must be a full 40- or 64-hex object name`;
+  }
+
+  return null;
+}
+
+
 /**
  * #1463 Fix 2 (R Medium): resolve a bare ambiguous git ref to its KIND at the remote with a bounded
  * `git ls-remote <url> <ref>` (the SAME safe seam as the tag peek: argv + `--`, never a shell string).
@@ -1483,6 +1561,8 @@ function peekLatestVersion(
       // a newer remote tag is irrelevant; report 'pinned' WITHOUT any peek. A BARE `#<ref>` is ambiguous
       // (tag OR branch): we MUST classify it remotely so a MUTABLE branch is never falsely 'pinned'.
       const refKind = classifyGitRef(parsed);
+      const refError = gitRefValidationError(parsed, refKind);
+      if (refError !== null) return { status: 'unknown', version: null, reason: refError };
       if (refKind.kind === 'sha' || refKind.kind === 'tag') {
         return { status: 'pinned', version: null, reason: `git source pinned to ${refKind.kind} "${refKind.value}"; update will not move it` };
       }

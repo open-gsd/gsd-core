@@ -990,6 +990,44 @@ node gsd-tools.cjs resolve-model <agent-name>
 
 Agent names: `gsd-planner`, `gsd-executor`, `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-roadmapper`, `gsd-debugger`, `gsd-codebase-mapper`, `gsd-nyquist-auditor`
 
+```bash
+# Resolve a specialist executor's model, falling back to another agent's resolution
+node gsd-tools.cjs query resolve-model <agent-name> --fallback-agent gsd-executor
+```
+
+| Flag | Effect |
+|---|---|
+| `--fallback-agent <name>` | When `<agent-name>` has no usable `model_overrides` entry and no catalog tier, `model` and `tier` resolve as `<name>` instead of the generic profile default. `effort` stays resolved by `<agent-name>`. A missing value (the flag as the last token, followed by another flag, or an empty value) is a usage error (`Missing value for --fallback-agent`, exit code 1), as for the other value flags. `<name>` must be a GSD agent; a value that is not one is ignored. JSON output adds `fallback_agent: "<name>"` when the fallback applied. Without the flag, output is unchanged. |
+
+---
+
+## Executor Routing and Dispatch Identity
+
+Used by `execute-phase` for per-plan executor routing (`agent_hint:`, see [PLAN.md](reference/plan-md.md#per-plan-executor-routing)).
+
+```bash
+# Resolve a plan's agent_hint to the subagent_type to dispatch
+node gsd-tools.cjs query resolve-agent --name <hint> [--json]
+# ...or read the hint from the plan on disk (honours workflow.agent_hint_routing)
+node gsd-tools.cjs query resolve-agent --plan <id> [--phase <n>] [--json]
+
+# Resolve and record the dispatch isolation decision for one plan
+node gsd-tools.cjs query dispatch-isolation --phase <n> --plan <id> [--force-isolation <mode>] [--json]
+
+# Record a dispatch isolation decision directly
+node gsd-tools.cjs query record-dispatch-isolation --isolation <harness-worktree|orchestrator-worktree|none> \
+  [--harness-flag <flag>] [--phase <n>] [--plan <id>] [--executor-type <agent>]
+```
+
+| Verb | Executor behavior |
+|---|---|
+| `resolve-agent` | With `--name`: prints the hint when an agent file for it exists on the active runtime, else `gsd-executor`. With `--plan` (and optional `--phase`): reads that plan's `agent_hint:` and resolves it the same way (`--json` carries `requested`, the hint or `null`, and `fallback`, true when the hint was not found or not used, as with `--name`); `workflow.agent_hint_routing: false`, an unknown plan, or a plan id found in more than one phase prints `gsd-executor`. A hint naming a GSD role other than `gsd-executor` (compared trimmed and case-insensitively) is refused: prints `gsd-executor`, writes a warning to stderr, and `--json` adds `refused: "non-executor-role"`. |
+| `dispatch-isolation` | Records the executor with the decision, derived from the plan files with the same rules as `resolve-agent --plan`. With `--plan`: `executor_type` is that plan's routed executor (the phase is looked up when `--phase` is empty). With `--phase` only: `executor_types` lists the routed executors of every plan in the phase other than `gsd-executor` (at most 64; names beyond the cap, or that do not fit the record, are reported on stderr: "capped at 64 names or did not fit the record"). With neither `--phase` nor `--plan`: `executor_types` lists the routed executors of every milestone phase. |
+| `record-dispatch-isolation` | `--executor-type` records that agent as the executor. A value that is not a bare agent name (letters, digits, `.`, `_`, `-`; no `..`; at most 128 characters) is recorded as `null`. An `--executor-type` naming a GSD non-executor role (for example `gsd-verifier`) is refused with a stderr warning (`warning: --executor-type "<name>" names a GSD non-executor role; recording no executor (#6213)`) and records no executor. |
+| `inspect-dispatch-isolation` | Records nothing; recording-only flags are rejected. |
+
+The isolation guards treat a dispatch as an executor when (a) it is `gsd-executor`; (b) any well-formed dispatch record in the project (keyed records under `.gsd/dispatch-isolation/` and the legacy slot), at most 24 hours old by `written_at`, names its type in `executor_type` or `executor_types`, whatever its phase or plan; or (c) its prompt carries the `[gsd:dispatch …]` marker and its type is not a GSD role (a GSD role is never an executor dispatch, and both hooks return before the record scan). Classification fails closed, treating a valid agent name that is not a GSD role as an executor, when the record scan hits its bound (more than 1024 entries in `.gsd/dispatch-isolation`), when `.gsd` or `.gsd/dispatch-isolation` exists but is a link, not a directory or unreadable, when a recent `.json` record file (the suffix is matched case-insensitively, so `.JSON` counts too) or the legacy slot is refused or malformed, when a recent record's `written_at` is more than 5 seconds in the future, or when any recent record has `executor_types_truncated: true`. While any of these holds, every valid non-GSD-role agent, host built-ins such as `Explore` included, must also run in a worktree; recover by case: (i) A legacy slot `.gsd/dispatch-isolation-sentinel.json` that is refused or malformed: remove it (or rewrite it as valid JSON). (ii) `.gsd` or `.gsd/dispatch-isolation` that is a link or any other non-directory: replace it with a real directory. (iii) A truncated record (more than 64 hinted executors in a phase or milestone, or names over the record's byte budget): shorten or reduce the `agent_hint` names; every phase- or milestone-level write rewrites the record, and the case clears 24 hours after the last write. (iv) A recent record whose `written_at` is in the future (beyond the clock-skew allowance), or a future-dated legacy slot: the legacy slot (`.gsd/dispatch-isolation-sentinel.json`) clears on the next dispatch-isolation write; a keyed file clears 24 hours after its mtime (the writer prunes it and the reader stops counting it) or when removed by hand. (v) A scan overflow (more than 1024 entries in `.gsd/dispatch-isolation`): remove stale entries from `.gsd/dispatch-isolation/` until 1024 or fewer remain, or remove the directory (it is recreated on the next write). (vi) An unreadable `.gsd` or `.gsd/dispatch-isolation` directory: restore read and execute permission on it. (vii) A recent keyed record file in `.gsd/dispatch-isolation/` that the reader refuses or rejects (malformed, wrong key, hard link, link, FIFO, device, unreadable (mode 000), no phase, oversize): remove it. Records are otherwise pruned after 24 hours. `--json` on `dispatch-isolation` adds `executor_types_truncated: true` when the phase-level list did not fit the record. Background: [About executor identity](explanation/executor-identity.md).
+
 ---
 
 ## Verification Commands
@@ -1106,6 +1144,28 @@ The JSON result carries `status`, `next_action`, `next_command` (the route proje
 - **Exact match, no folding (behavior change).** The check is an exact string match. Case-folded and legacy statuses — `Passed`, `pending`, `partial` — that `phase complete`'s warning pre-scan and `audit-uat` used to fold into a known status now hard-error like any other out-of-set value, on every command; correct the report's `status:` to an accepted value.
 - **`missing` on `verify-work`.** `/gsd-verify-work` runs the regeneration step for a `stale` report, and for a `missing` one only when every plan has a `SUMMARY.md` (the verify step never ran on an executed phase). A `missing` report on a phase that is not fully executed does not dispatch it: the command blocks with `next_command` (`execute-phase`) instead.
 - **Containment.** Two checks, both before any read. The phase directory must resolve under its phases root, and the report (and each `*-UAT.md` and `*-HUMAN-UAT.md`) must resolve inside its phase directory. Anything that escapes (a symlink out of the project) is never read and none of its content reaches any output: an escaped report reads `missing` from `verification status`, an escaped UAT file is treated as absent, and an escaped phase directory reads `missing` from `verification status` but `phase_dir_not_found` from `init verify-work`.
+
+### `verification all-summarized` (execute-phase's all-plans-summarized decision, #6096)
+
+```bash
+node gsd-tools.cjs verification all-summarized <phase-dir> [--filter-active] [--plan-index <json|@file:path>] [--phase-marked <true|false>] [--pick <field>]
+```
+
+When every plan in a phase has a `SUMMARY.md`, `execute-phase` has no plan work left to dispatch. Whether it then exits, presents a route, or resumes at the verification gates is decided here, by code, so a judgment such as "this change is test-only" cannot override the owner's staleness verdict. The result is `{ "decision": <one of the values below> }`, plus the full `verification status` result (`status`, `next_action`, `next_command`, `route`, ...) whenever the decision needed the report, so a caller can `--pick decision` and, for `present-route`, read `next_action` and `next_command` from the same call.
+
+`--filter-active` says a `--gaps-only` or wave filter is set. `--plan-index` is `phase-plan-index`'s own output (inline JSON, or the `@file:` form it prints for a large one); the blocked and not-ready skips are derived from it by the command, never asserted by the caller: an incomplete plan (no `has_summary`) with a non-empty `blocked_by` is a blocked skip, one with `ready: false` is a not-ready skip. It is required unless `--filter-active` already decides. `--phase-marked` is the roadmap checkbox from `roadmap.analyze` (`roadmap_complete`); any value other than `true`, including an empty one, reads as not marked. An unknown option, a missing or unparseable plan index, and a valueless option are errors.
+
+| `decision` | When (first match wins, in this order) |
+|------------|-----------------------------------------|
+| `exit-filtered` | `--filter-active` |
+| `exit-blocked` | the plan index holds a blocked skip |
+| `exit-not-ready` | the plan index holds a not-ready skip |
+| `resume-at-gates` | the owner's `route` is `execute-phase`: a `stale` or `missing` report, on both sides of `--phase-marked`, whatever the report's own `status` field says |
+| `update-roadmap` | a fresh `passed` report and the phase is not marked complete |
+| `exit-unchanged` | a fresh `passed` report and the phase is marked complete |
+| `present-route` | any other route (`gaps_found`, `human_needed`, `unparseable`, `phase_dir_not_found`) |
+
+The three plan-index exits never read the report, so they answer even when the report's `status` is outside the closed set; every other decision reads it and fails with `verification_status_invalid` like `verification status`. The branch is derived from the same `VERIFICATION_ROUTES` table as `verification status`, not a second one.
 
 ---
 
@@ -1475,6 +1535,11 @@ node gsd-tools.cjs quick-tasks-append --task "<description>" --directory "[<id>-
 node gsd-tools.cjs quick-tasks-append --task "<description>" --quick-id <id> --slug <slug> --status PASS
 # This append touches only the body table — it no longer forces a re-derive of the disk-derived
 # `progress.*` frontmatter, which previously overwrote curated values (#3356).
+# A --task over 240 characters (the #2618 todo-bullet bound; "characters" are UTF-16 code units,
+# JavaScript string length, so an emoji counts as 2) is still written in full and the command
+# still exits 0, but the JSON result's `warnings` (a string[], empty otherwise) carries one entry;
+# under --raw the warning goes to stderr. `quick-batch complete` returns the same `warnings` for
+# the row it appends. Pass a one-line title; detail belongs in the task's SUMMARY (#5830).
 # See "Milestone Commands" below for `milestone archive-quick` (#2142) — sweeps .planning/quick/* into
 # milestones/<version>-quick/ and clears this table, without a full `milestone complete`.
 
