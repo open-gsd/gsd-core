@@ -136,8 +136,8 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
  * #5470: every key the project-config branch of the loader reads from two
  * spellings — the flat top-level key and its nested `<section>.<field>` alias.
  * (With no `.planning/`, the global-defaults branch below projects its own
- * keys from `~/.gsd/defaults.json`, reading each NESTED_TWINS key under either
- * spelling, flat first (#5681).) The flat key
+ * keys from `~/.gsd/defaults.json`; each key it projects that NESTED_TWINS lists
+ * is read under either spelling, flat first (#5681).) The flat key
  * wins, except for `branching_strategy`, `base_branch` and `sub_repos`:
  * normalizeLegacyKeys hoists those legacy flat keys under their section first,
  * and an existing nested value wins there. `_baseConfig` reads them through
