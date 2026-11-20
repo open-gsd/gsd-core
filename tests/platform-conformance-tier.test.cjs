@@ -38,6 +38,7 @@ const {
   CATEGORIES,
   MACOS_CATEGORIES,
   walkTestFiles,
+  readTestFile,
   ALWAYS_REAL_OS,
   PLATFORM_SIBLING_SUFFIX,
   findPlatformSplitViolations,
@@ -1383,49 +1384,97 @@ describe('#6002: detectors match platform behavior, not text', () => {
 // ─── #6166: a test file that vanishes between the walk and the read ─────────
 
 describe('#6166 tree classifiers skip a test file deleted after enumeration', () => {
-  // Make reading `gone.test.cjs` throw `code`, as a file deleted between
-  // walkTestFiles and the read does; every other read goes through.
-  function withFailingRead(t, testsDir, code) {
-    const gone = path.join(testsDir, 'gone.test.cjs');
+  // Make reading `gone.test.cjs` (or `goneName`) throw an error with `code`, as
+  // a file deleted between walkTestFiles and the read does; every other read
+  // goes through.
+  function withFailingRead(t, testsDir, code, { goneName = 'gone.test.cjs', message } = {}) {
+    const gone = path.join(testsDir, goneName);
     const readFileSync = fs.readFileSync;
     t.mock.method(fs, 'readFileSync', (file, ...rest) => {
-      if (file === gone) throw Object.assign(new Error(`${code}: ${file}`), { code });
+      if (file === gone) throw Object.assign(new Error(message ?? `${code}: ${file}`), { code });
       return readFileSync(file, ...rest);
     });
   }
+
+  function withTestsDir(prefix, files, body) {
+    const tmpDir = createTempDir(prefix);
+    try {
+      const testsDir = path.join(tmpDir, 'tests');
+      fs.mkdirSync(testsDir, { recursive: true });
+      for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(testsDir, name), content);
+      body(testsDir);
+    } finally {
+      cleanup(tmpDir);
+    }
+  }
+
+  const DARWIN = "if (process.platform === 'darwin') {}\n";
+  const PLAIN = 'assert.equal(1 + 1, 2);\n';
+
+  test('readTestFile answers null for ENOENT and rethrows every other error', (t) => {
+    withTestsDir('gen-platform-read-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+      const gone = path.join(testsDir, 'gone.test.cjs');
+      assert.equal(readTestFile(gone), PLAIN);
+      assert.equal(readTestFile(path.join(testsDir, 'never-there.test.cjs')), null);
+      assert.throws(() => readTestFile(testsDir), { code: 'EISDIR' });
+
+      withFailingRead(t, testsDir, 'EIO', { message: 'ENOENT: looks gone, but the code says otherwise' });
+      assert.throws(() => readTestFile(gone), { code: 'EIO' });
+    });
+  });
 
   for (const [name, classify] of [
     ['classifyTree', classifyTree],
     ['classifyMacosTree', classifyMacosTree],
   ]) {
     test(`${name}: an ENOENT file is left out of files and total`, (t) => {
-      const tmpDir = createTempDir('gen-platform-vanished-');
-      try {
-        const testsDir = path.join(tmpDir, 'tests');
-        fs.mkdirSync(testsDir, { recursive: true });
-        fs.writeFileSync(path.join(testsDir, 'gone.test.cjs'), "if (process.platform === 'darwin') {}\n");
-        fs.writeFileSync(path.join(testsDir, 'kept.test.cjs'), "if (process.platform === 'darwin') {}\n");
+      withTestsDir('gen-platform-vanished-', { 'gone.test.cjs': DARWIN, 'kept.test.cjs': DARWIN }, (testsDir) => {
         assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/gone.test.cjs', 'tests/kept.test.cjs'] });
 
         withFailingRead(t, testsDir, 'ENOENT');
         assert.deepEqual(classify(testsDir), { total: 1, files: ['tests/kept.test.cjs'] });
-      } finally {
-        cleanup(tmpDir);
-      }
+      });
     });
 
-    test(`${name}: any other read error still throws`, (t) => {
-      const tmpDir = createTempDir('gen-platform-unreadable-');
-      try {
-        const testsDir = path.join(tmpDir, 'tests');
-        fs.mkdirSync(testsDir, { recursive: true });
-        fs.writeFileSync(path.join(testsDir, 'gone.test.cjs'), 'assert.equal(1 + 1, 2);\n');
+    test(`${name}: the files left after a skip are the same, in the same order, as with the file deleted`, (t) => {
+      const files = { 'c.test.cjs': DARWIN, 'gone.test.cjs': DARWIN, 'a.test.cjs': DARWIN, 'b.test.cjs': PLAIN };
+      withTestsDir('gen-platform-order-', files, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT');
+        const skipped = classify(testsDir);
+        t.mock.restoreAll();
 
-        withFailingRead(t, testsDir, 'EACCES');
-        assert.throws(() => classify(testsDir), { code: 'EACCES' });
-      } finally {
-        cleanup(tmpDir);
-      }
+        fs.unlinkSync(path.join(testsDir, 'gone.test.cjs'));
+        assert.deepEqual(skipped, classify(testsDir));
+        assert.deepEqual(skipped, { total: 3, files: ['tests/a.test.cjs', 'tests/c.test.cjs'] });
+      });
+    });
+
+    for (const code of ['EACCES', 'EISDIR', 'EIO']) {
+      test(`${name}: a ${code} read error still throws`, (t) => {
+        withTestsDir('gen-platform-unreadable-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+          withFailingRead(t, testsDir, code);
+          assert.throws(() => classify(testsDir), { code });
+        });
+      });
+    }
+
+    test(`${name}: an error whose message says ENOENT but whose code does not still throws`, (t) => {
+      withTestsDir('gen-platform-message-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+        withFailingRead(t, testsDir, 'EIO', { message: 'ENOENT: looks gone, but the code says otherwise' });
+        assert.throws(() => classify(testsDir), { code: 'EIO' });
+      });
     });
   }
+
+  test('classifyTree: a .platform sibling that vanished never reaches the #5074 split check', (t) => {
+    // Base without signal + sibling with one is a valid split. With the sibling
+    // gone, only the base is left: no split to check, nothing flagged.
+    const files = { 'a.test.cjs': PLAIN, 'a.platform.test.cjs': DARWIN };
+    withTestsDir('gen-platform-split-', files, (testsDir) => {
+      assert.deepEqual(classifyTree(testsDir), { total: 2, files: ['tests/a.platform.test.cjs'] });
+
+      withFailingRead(t, testsDir, 'ENOENT', { goneName: 'a.platform.test.cjs' });
+      assert.deepEqual(classifyTree(testsDir), { total: 1, files: [] });
+    });
+  });
 });

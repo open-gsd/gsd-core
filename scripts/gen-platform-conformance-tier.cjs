@@ -999,6 +999,7 @@ module.exports = {
   NOISY_FOR_SOURCE_REACHABILITY,
   ALWAYS_REAL_OS,
   walkTestFiles,
+  readTestFile,
   classifyTree,
   renderGeneratedFile,
   classifyMacosContent,
