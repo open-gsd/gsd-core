@@ -738,7 +738,8 @@ describe('resolveEvaluationScope — phase-side merges and per-merge failure iso
     assert.ok(!scope.outsideUnion.includes('src/base.js'));
   });
 
-  const isRevListNeg = (args) => args[0] === 'rev-list' && args.length === 3 && args[2].startsWith('^');
+  // `rev-list <p2> ^<base> --`: the revision list ends with the `--` terminator (#6179).
+  const isRevListNeg = (args) => args[0] === 'rev-list' && args.length === 4 && args[2].startsWith('^') && args[3] === '--';
   const failing = [
     ['the second-side rev-list', () => { let n = 0; return (args) => isRevListNeg(args) && (n += 1) === 1; }],
     ['the second-parent ancestry rev-list', () => { let n = 0; return (args) => isRevListNeg(args) && (n += 1) === 2; }],
@@ -1546,4 +1547,102 @@ describe('qualifiedPlanSubjectPattern — one builder for every plan-id spelling
     const out = repo.git('log', '--extended-regexp', `--grep=${qualifiedPlanSubjectPattern('0*1-0*1', 'ws.b')}`, '--format=%s');
     assert.deepEqual(out.split('\n').filter(Boolean).sort(), ['feat(01-01): bare spelling', 'feat(ws.b-01-01): qualified spelling']);
   });
+});
+
+// ─── #6179: a root file named like a commit id must not make the scope unresolvable ───────────────────────────────
+//
+// `git rev-list <sha>` / `git log <sha>` without `--` exit 128 ("both revision and filename") when a root-level file
+// is named exactly like the sha; the resolver then raised ScopeUnreadable and every gate sharing it saw `unresolvable`.
+
+describe('resolveEvaluationScope — sha-named root files (#6179)', () => {
+  /** Root-level untracked files named exactly like each sha (a path a bare revision argument would also match). */
+  function plantShaNamedFiles(repo, shas) {
+    for (const sha of shas) write(repo.dir, sha, 'not a revision\n');
+  }
+
+  /** Three task commits (one non-phase commit between them) listed by a SUMMARY. */
+  function taskCommitRepo() {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    commit(repo, 'other/noise.js', 'fix: noise');
+    const b = commit(repo, 'src/b.js', 'feat(03-01): b');
+    const c = commit(repo, 'src/c.js', 'feat(03-01): c');
+    summarize(repo, [a, b, c]);
+    return { repo, shas: [a, b, c] };
+  }
+
+  /** A phase branch that merged the base into itself, the merge listed in the SUMMARY (the baseSideMergeFiles path). */
+  function catchUpMergeRepo() {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const merge = repo.git('rev-parse', 'HEAD');
+    const parents = [repo.git('rev-parse', `${merge}^1`), repo.git('rev-parse', `${merge}^2`)];
+    summarize(repo, [task, merge]);
+    return { repo, shas: [task, merge, ...parents] };
+  }
+
+  const view = (scope) => ({
+    status: scope.status, reason: scope.reason, source: scope.source, files: scope.files, outsideUnion: scope.outsideUnion, changedFiles: scope.changedFiles,
+  });
+
+  for (const shaChunk of [2, 3, 4]) {
+    test(`[regression] task commits resolve to the control's files with shaChunk ${shaChunk} (limit-1, limit, limit+1 over 3 commits)`, () => {
+      const control = taskCommitRepo();
+      const planted = taskCommitRepo();
+      plantShaNamedFiles(planted.repo, planted.shas);
+      const expected = resolveEvaluationScope(control.repo.dir, { kind: 'phase', phase: '3' }, { shaChunk });
+      assert.equal(expected.status, 'resolved');
+      const scope = resolveEvaluationScope(planted.repo.dir, { kind: 'phase', phase: '3' }, { shaChunk });
+      assert.equal(scope.status, 'resolved', `reason: ${scope.reason}`);
+      assert.equal(scope.source, 'task-commits');
+      assert.deepEqual(view(scope), view(expected));
+      assert.deepEqual(scope.files, ['src/a.js', 'src/b.js', 'src/c.js']);
+    });
+  }
+
+  test('[regression] a listed catch-up merge resolves when root files are named like the merge and both its parents', () => {
+    const control = catchUpMergeRepo();
+    const planted = catchUpMergeRepo();
+    plantShaNamedFiles(planted.repo, planted.shas);
+    const expected = resolveEvaluationScope(control.repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(expected.status, 'resolved');
+    const scope = resolveEvaluationScope(planted.repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved', `reason: ${scope.reason}`);
+    assert.deepEqual(view(scope), view(expected));
+    assert.ok(!scope.changedFiles.includes('src/base.js'), 'the base delta stays out of the scope');
+  });
+
+  // Any positional operand of a log or rev-list call is a revision (a sha, `^sha`, a range or a ref), so every such
+  // call must end its revisions with `--`. Flags and the value of `-n` are not operands.
+  const walkOf = (args) => args.findIndex((arg) => arg === 'log' || arg === 'rev-list');
+  const operandsOf = (args) => {
+    const operands = [];
+    for (let i = walkOf(args) + 1; i < args.length; i++) {
+      if (args[i] === '--') break;
+      if (args[i] === '-n') { i += 1; continue; }
+      if (!args[i].startsWith('-')) operands.push(args[i]);
+    }
+    return operands;
+  };
+  const passesRevision = (args) => operandsOf(args).length > 0;
+  const isRevisionWalk = (args) => walkOf(args) !== -1;
+
+  for (const [label, build, options] of [
+    ['task commits, chunked', taskCommitRepo, { shaChunk: 2 }],
+    ['task commits, one chunk', taskCommitRepo, {}],
+    ['a listed merge', catchUpMergeRepo, {}],
+  ]) {
+    test(`[parity] ${label}: every log or rev-list call that names a commit id carries --`, () => {
+      const { repo } = build();
+      const git = spyGit();
+      const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { ...options, execGit: git });
+      assert.equal(scope.status, 'resolved', `reason: ${scope.reason}`);
+      const revisionCalls = git.calls.filter((args) => isRevisionWalk(args) && passesRevision(args));
+      assert.ok(revisionCalls.length > 0, 'the scenario reaches calls that pass revisions');
+      if (label === 'a listed merge') {
+        assert.ok(revisionCalls.some((args) => args[0] === 'rev-list' && args.some((arg) => arg.startsWith('^'))), 'the merge scenario reaches the base-side rev-list walk');
+      }
+      for (const args of revisionCalls) assert.ok(args.includes('--'), `unterminated: git ${args.join(' ')}`);
+    });
+  }
 });
