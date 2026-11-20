@@ -109,7 +109,8 @@ Read the halt from the fields beside the count rather than calling
 
 ```javascript
 const { completed_plans: done, halted_plans: halted } = snapshot.progress;
-if (done.scope === 'complete') {
+const haltUnknown = snapshot.diagnostics.some((d) => d.code === 'summary_unreadable');
+if (done.scope === 'complete' && !haltUnknown) {
   render(`${done.completed - halted.completed} completed, ${halted.completed} halted, of ${done.total}`);
 }
 
@@ -121,6 +122,10 @@ for (const phase of snapshot.phases) {
   }
 }
 ```
+
+The split is skipped while any `summary_unreadable` diagnostic stands: a
+SUMMARY that could not be read reads as not halted, so the plan would be
+counted as completed and not halted when its halt is unknown.
 
 The loop skips superseded rows because `halted` is set on them too, while
 `halted_count` and `progress.halted_plans` leave them out; without the skip, a
