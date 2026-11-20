@@ -2101,7 +2101,7 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 **Process:**
 1. **Scan** — Dimension 11 collects every question RESEARCH.md leaves open, under any heading
 2. **Gate** — Each one with no qualifying `D-NN` is a blocker; the planner can cite a decision already on record, but cannot add one
-3. **Surface** — With no such decision, the planner returns a conflict naming each question; plan-phase asks the user and records each answer as a `D-NN`, or the user leaves to run `/gsd-discuss-phase <N>` or `/gsd-plan-phase <N> --research`. Where no one can be asked (`--auto`, or plan-phase running as a background or nested agent, as `/gsd-autonomous` runs it when it does not flatten) no answer is recorded: plan-phase escalates at once and stops there rather than proceeding, and `/gsd-autonomous` does not execute the plans; they stay on disk, where `/gsd-progress --next` or `/gsd-execute-phase` can still run them
+3. **Surface** — With no such decision, the planner returns a conflict naming each question; plan-phase asks the user and records each answer as a `D-NN`, or the user leaves to run `/gsd-discuss-phase <N>` or `/gsd-plan-phase <N> --research`. Where no one can be asked (`--auto`, or plan-phase running as a background or nested agent, as `/gsd-autonomous` runs it, or its convergence run, when it does not flatten) no answer is recorded: plan-phase escalates at once and stops there rather than proceeding, and `/gsd-autonomous` does not execute the plans; they stay on disk, where `/gsd-progress --next` or `/gsd-execute-phase` can still run them. `--chain` and `workflow.auto_advance` reach plan-phase as `--auto` through discuss-phase's chain; a plan-phase started by hand asks
 
 ---
 
