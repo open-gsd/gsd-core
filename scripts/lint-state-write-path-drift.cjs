@@ -253,7 +253,7 @@ function toPosixRel(rel) {
  * STATE.md write. A real instance: `src/git-base-branch.cts:479` blanks
  * through line 511 (the next closer is on line 512); no raw write sits in
  * that span, so the guard's zero is unaffected today. The header's
- * known-miss list in `findRawStateWrites` records this shape, a test row pins
+ * known-miss list in `findRawStateWrites` records this shape, test rows pin
  * it, and the syntax-tree follow-up (#5279) is what closes it. The trade this
  * function makes is the opposite one: over-reporting a documentation
  * paragraph that merely DESCRIBES a call (ADR-3180 Amendment 3's exact false
@@ -1213,8 +1213,11 @@ function boundaryAfterLine(write, index) {
  *   - A reassignment the resolver does not see as a statement boundary hides
  *     the earlier STATE.md assignment (`p = path.join(dir, 'STATE.md')`):
  *     the walk back from the write stops at the reassignment, whose
- *     right-hand side has no boundary, so the earlier assignment is never
- *     read. The class: a braceless body, on the same line or on the next
+ *     right-hand side has no boundary. When that right-hand side names no
+ *     variable that resolves to the state path (`p = 'x'`), the earlier
+ *     assignment is not read and the write is missed; when it names one
+ *     (`if (c) p = p + '.tmp';`), the resolver follows it back to the
+ *     earlier assignment and the write is reported. The class: a braceless body, on the same line or on the next
  *     line, after `if`, `else`, `else if`, `for`, `for...in`, `for...of`,
  *     `while` or `do` (`if (c) p = 'x';`, `} else p = 'y';`,
  *     `while (c)` with `p = x;` below it), a `switch` clause body

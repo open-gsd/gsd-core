@@ -1524,7 +1524,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
 
   // The axis matches only the literal text `fs.writeFileSync(`, over
   // `stripComments` output, which does not track strings or regex literals.
-  // The /* row is here because stripComments blanks the lines the call sits on.
+  // The /* rows are here because stripComments blanks the lines the call sits on.
   const KNOWN_MATCH_GAPS = [
     {
       shape: 'wrapped call after a string holding //',
@@ -1676,6 +1676,9 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       ['block-comment opener removed from the string', "const G = 'src/';\nfunction w(statePath, c) {\n  fs.writeFileSync(statePath, c);\n}", [3]],
       ['/* in a string, closed by a later block-comment closer in a string', "const G = 'src/*';\nconst H = 'a*/b';\nfunction w(statePath, c) {\n  fs.writeFileSync(statePath, c);\n}", [4]],
       ['braced if reassignment', W(ASSIGN, "  if (c) { p = 'x'; }", WRITE_P), [4]],
+      ['braced if reassignment with the write on the same line', W(ASSIGN, "  if (c) { p = 'x'; } fs.writeFileSync(p, c);"), [3]],
+      ['switch clause reassignment on the line below a case label, braced clause, write under default', W(ASSIGN, '  switch (c) {', '    case 1: {', "      p = 'x';", '    }', '    default:', '      fs.writeFileSync(p, c);', '  }'), [8]],
+      ['braceless if whose right-hand side names the variable is reported', W(ASSIGN, "  if (c) p = p + '.tmp';", WRITE_P), [4]],
       ['braced else reassignment', W(ASSIGN, '  if (c) {', '  }', "  else { p = 'y'; }", WRITE_P), [6]],
       ['braced for-body reassignment', W(ASSIGN, '  for (const x of xs) { p = x; }', WRITE_P), [4]],
       ['braced else-if reassignment', W(ASSIGN, '  if (c) {', '  } else if (d) { p = x; }', WRITE_P), [5]],
@@ -1699,6 +1702,19 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     for (const [name, text, expected] of controls) {
       assert.deepStrictEqual(lines(text), expected, name);
     }
+  });
+
+  test('reassignment class: the write is missed when the right-hand side names no state-path variable and reported when it names one', () => {
+    const viaRhs = (rhs) => lines(W(ASSIGN, `  if (c) p = ${rhs};`, WRITE_P));
+    const namesNone = [
+      "'x'", "'a' + c", 'c', 'dir', "path.join(dir, 'a.md')", '1', 'null', 'String(c)', 'c.name', '[c][0]', "dir + '/q'", "c + '.md'",
+    ];
+    const namesP = [
+      "p + '.tmp'", "path.join(p, 'a')", 'p', 'String(p)', '`${p}.bak`', 'p || c', 'c ? p : c', '[p][0]',
+      "path.dirname(p) + '/s'", 'p.trim()', '(p)', 'p + c',
+    ];
+    for (const rhs of namesNone) assert.deepStrictEqual(viaRhs(rhs), [], `missed: ${rhs}`);
+    for (const rhs of namesP) assert.deepStrictEqual(viaRhs(rhs), [4], `reported: ${rhs}`);
   });
 
   // Names a generated identifier must not take: JS/TS reserved and keyword-like
