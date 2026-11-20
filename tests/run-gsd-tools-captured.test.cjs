@@ -61,10 +61,11 @@ describe('runGsdToolsCaptured (#6334)', () => {
 
   test('returns the same stdout runGsdTools trims, untrimmed', () => {
     const dir = project();
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), JSON.stringify({ model_profile: 'balanced' }));
     const captured = runGsdToolsCaptured(['config-get', 'model_profile', '--raw'], dir);
     const trimmed = runGsdTools(['config-get', 'model_profile', '--raw'], dir);
     assert.equal(captured.exitCode, 0, captured.stderr);
-    assert.ok(captured.stdout.length > 0);
+    assert.equal(captured.stdout.trim(), 'balanced');
     assert.equal(captured.stdout.trim(), trimmed.output);
   });
 
