@@ -1614,7 +1614,13 @@ describe('subjectsOccurOnHead (#5354)', () => {
     // 12 commits with a 100000-byte subject make a listing of about 1.2 MB, over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
     commit(repo, 'a.txt', 'feat(03-01): a', 'twin\n');
     const filler = 'x'.repeat(100_000);
-    for (let i = 1; i <= 11; i++) commit(repo, `f${i}.txt`, `chore: ${filler} ${i}`);
+    // The subject goes in through a file: one 100 KB argv entry exceeds the Windows command-line limit.
+    for (let i = 1; i <= 11; i++) {
+      write(repo.dir, `f${i}.txt`, `f${i}\n`);
+      write(repo.dir, 'subject.txt', `chore: ${filler} ${i}\n`);
+      repo.git('add', `f${i}.txt`);
+      repo.git('commit', '-F', 'subject.txt');
+    }
     assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'a subject under 1.2 MB of listing is found');
     assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from the whole history is no');
   });

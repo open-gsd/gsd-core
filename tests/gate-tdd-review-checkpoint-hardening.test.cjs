@@ -676,7 +676,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(Object.keys(plans).sort(), ['01-01', '01-99']);
   });
 
-  test('--record that cannot write reports unreadable instead of throwing', () => {
+  test('--record over a seal that is a directory reports unreadable instead of throwing', () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
     fs.mkdirSync(path.join(dir, SEAL));
     const r = run(dir, '--record');
@@ -1221,7 +1221,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   test('a shallow clone cannot tell squashed from un-squashed: an un-squashed skipper still FAILs', () => {
     const { dir } = fixture(['docs(01-01): notes'], { refs: true });
     const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow`);
-    git(path.dirname(dir), 'clone', '--depth', '1', '-q', pathToFileURL(dir).href, clone);
+    gitOrThrow(['clone', '-q', '--depth', '1', pathToFileURL(dir).href, clone], { cwd: path.dirname(dir) });
     dirs.push(clone);
     const r = run(clone);
     assert.equal(r.payload.rows[0].status, 'FAIL');
