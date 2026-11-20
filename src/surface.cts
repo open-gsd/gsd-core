@@ -34,7 +34,7 @@ import path from 'node:path';
 import { platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
 import { armArgsNonce, disarmArgsNonce, readInstalledNonce } from './args-terminator.cjs';
-import { recordManifestFileHashes, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
+import { recordManifestFileHashesResult, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
 import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
@@ -550,7 +550,13 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
         _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
       }
     } finally {
-      recordManifestFileHashes(layout.configDir, recordedBeforeSync);
+      if (recordManifestFileHashesResult(layout.configDir, recordedBeforeSync) === 'conflict') {
+        process.stderr.write(
+          'surface: gsd-file-manifest.json changed while skills were re-staged (a concurrent install?), '
+          + 'so their hashes were not re-recorded. The next install may report those skills as locally '
+          + 'modified and back them up to gsd-local-patches/.\n',
+        );
+      }
     }
 
     if (hasCandidateState) {

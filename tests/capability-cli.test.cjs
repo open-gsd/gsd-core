@@ -1196,7 +1196,7 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
   }
 
   /** Install the capability at v1 and materialize it, as the installer leaves it. */
-  function installedAtV1() {
+  async function installedAtV1() {
     const home = tmpDir('cap-cli-6331-home-');
     const cwd = makeCwd();
     const src = tmpDir('cap-cli-6331-src-');
@@ -1207,19 +1207,19 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     }, null, 2));
     fs.mkdirSync(path.join(src, 'skills', STEM), { recursive: true });
     fs.writeFileSync(path.join(src, 'skills', STEM, 'SKILL.md'), SKILL_V1);
-    const install = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    const install = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
     assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
     const rcd = tmpDir('cap-cli-6331-rcd-');
     fs.writeFileSync(path.join(rcd, '.gsd-source'), path.join(__dirname, '..', 'commands', 'gsd') + '\n');
-    const set = () => {
-      const r = runGsdTools(
+    const set = async () => {
+      const r = await runGsdToolsAsync(
         ['capability', 'set', STEM, '--runtime', 'claude', '--scope', 'global', '--config-dir', rcd, '--raw'],
         cwd, scopeEnv(home),
       );
       assert.equal(r.success, true, `capability set failed: ${r.error || r.output}`);
       assert.deepEqual(parse(r.output).errors, []);
     };
-    set();
+    await set();
     const skillPath = path.join(rcd, 'skills', `gsd-${STEM}`, 'SKILL.md');
     assert.ok(fs.existsSync(skillPath), 'sanity: v1 skill materialized');
     // The installer's record of what it wrote: the v1 skill's hash.
@@ -1243,9 +1243,9 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     return mod.saveLocalPatches(configDir);
   }
 
-  test('a GSD-owned skill rewritten by capability set is recorded, so the next install backs nothing up', () => {
-    const { rcd, skillPath, set } = installedAtV1();
-    set();
+  test('a GSD-owned skill rewritten by capability set is recorded, so the next install backs nothing up', async () => {
+    const { rcd, skillPath, set } = await installedAtV1();
+    await set();
     assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'sanity: v2 skill text materialized');
     const recorded = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files[SKILL_KEY];
     assert.equal(recorded, sha256File(skillPath), 'the manifest records the rewritten skill');
@@ -1253,45 +1253,45 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     assert.equal(fs.existsSync(path.join(rcd, 'gsd-local-patches', SKILL_KEY)), false, 'and creates no patch backup');
   });
 
-  test('a skill the user had edited keeps its stale entry, so the next install still reports it', () => {
-    const { rcd, skillPath, set } = installedAtV1();
+  test('a skill that no longer matched its entry keeps the stale entry, so the next install still lists it', async () => {
+    const { rcd, skillPath, set } = await installedAtV1();
     fs.writeFileSync(skillPath, `${SKILL_V1}\nuser edit\n`);
     const before = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files[SKILL_KEY];
-    set();
+    await set();
     const after = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files[SKILL_KEY];
     assert.equal(after, before, 'an entry that no longer matched the file before the write is left as recorded');
     assert.deepEqual(saveLocalPatches(rcd), [SKILL_KEY], 'the next install still lists it as locally modified');
     assert.ok(fs.existsSync(path.join(rcd, 'gsd-local-patches', SKILL_KEY)), 'and backs it up');
   });
 
-  test('capability set without --runtime leaves the manifest byte-identical', () => {
-    const { rcd, home, cwd } = installedAtV1();
+  test('capability set without --runtime leaves the manifest byte-identical', async () => {
+    const { rcd, home, cwd } = await installedAtV1();
     const manifestPath = path.join(rcd, MANIFEST);
     const before = fs.readFileSync(manifestPath);
-    const r = runGsdTools(['capability', 'set', STEM, '--scope', 'global', '--config-dir', rcd, '--raw'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'set', STEM, '--scope', 'global', '--config-dir', rcd, '--raw'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `capability set failed: ${r.error || r.output}`);
     assert.deepEqual(fs.readFileSync(manifestPath), before, 'no materialize, no manifest write');
   });
 
-  test('an unparseable manifest does not make capability set fail and is left as is', () => {
-    const { rcd, skillPath, set } = installedAtV1();
+  test('an unparseable manifest does not make capability set fail and is left as is', async () => {
+    const { rcd, skillPath, set } = await installedAtV1();
     const manifestPath = path.join(rcd, MANIFEST);
     fs.writeFileSync(manifestPath, '{ not json');
-    set();
+    await set();
     assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'the skill is still re-staged');
     assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{ not json', 'the unparseable manifest is not rewritten');
   });
 
-  test('a missing manifest does not make capability set fail and is not created', () => {
-    const { rcd, skillPath, set } = installedAtV1();
+  test('a missing manifest does not make capability set fail and is not created', async () => {
+    const { rcd, skillPath, set } = await installedAtV1();
     fs.unlinkSync(path.join(rcd, MANIFEST));
-    set();
+    await set();
     assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'the skill is still re-staged');
     assert.equal(fs.existsSync(path.join(rcd, MANIFEST)), false, 'no manifest is invented');
   });
 
-  test('a skill new in the capability\'s new version gets no entry, and the next scan does not report it', () => {
-    const { rcd, home, set } = installedAtV1();
+  test('a skill new in the capability\'s new version gets no entry, and the next scan does not report it', async () => {
+    const { rcd, home, set } = await installedAtV1();
     const NEW_STEM = `${STEM}-extra`;
     const capJson = path.join(capDir(home, STEM), 'capability.json');
     const cap = JSON.parse(fs.readFileSync(capJson, 'utf8'));
@@ -1300,14 +1300,14 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     fs.mkdirSync(path.join(capDir(home, STEM), 'skills', NEW_STEM), { recursive: true });
     fs.writeFileSync(path.join(capDir(home, STEM), 'skills', NEW_STEM, 'SKILL.md'),
       `---\nname: ${NEW_STEM}\ndescription: new in v2\n---\n\n# new\n`);
-    set();
+    await set();
     assert.ok(fs.existsSync(path.join(rcd, 'skills', `gsd-${NEW_STEM}`, 'SKILL.md')), 'sanity: the new skill is materialized');
     const files = JSON.parse(fs.readFileSync(path.join(rcd, MANIFEST), 'utf8')).files;
     assert.deepEqual(Object.keys(files), [SKILL_KEY], 'no entry is added outside the installer (the next install records it)');
     assert.deepEqual(saveLocalPatches(rcd), [], 'an unrecorded skill is never reported as a local patch');
   });
 
-  test('end to end through the real installer: install, capability update, install again backs nothing up', () => {
+  test('end to end through the real installer: install, capability update, install again backs nothing up', async () => {
     const { runMinimalInstall } = require('./helpers/install-shared.cjs');
     const root = tmpDir('cap-cli-6331-e2e-');
     const env = { GSD_HOME: root, GSD_WORKSTREAM: '', GSD_PROJECT: '' };
@@ -1322,20 +1322,20 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     }, null, 2));
     fs.mkdirSync(path.join(src, 'skills', STEM), { recursive: true });
     fs.writeFileSync(path.join(src, 'skills', STEM, 'SKILL.md'), SKILL_V1);
-    const cli = (args) => {
-      const r = runGsdTools(args, cwd, { ...env, HOME: root, USERPROFILE: root });
+    const cli = async (args) => {
+      const r = await runGsdToolsAsync(args, cwd, { ...env, HOME: root, USERPROFILE: root });
       assert.equal(r.success, true, `${args.join(' ')} failed: ${r.error || r.output}`);
     };
     const set = () => cli(['capability', 'set', STEM, '--runtime', 'claude', '--scope', 'global', '--config-dir', configDir, '--raw']);
-    cli(['capability', 'install', src, '--scope', 'global', '--raw']);
-    set();
+    await cli(['capability', 'install', src, '--scope', 'global', '--raw']);
+    await set();
     install(); // records the v1 skill the way a real install does
     const skillPath = path.join(configDir, 'skills', `gsd-${STEM}`, 'SKILL.md');
     const files = JSON.parse(fs.readFileSync(path.join(configDir, MANIFEST), 'utf8')).files;
     assert.equal(files[SKILL_KEY], sha256File(skillPath), 'sanity: the installer recorded the capability skill');
 
     fs.writeFileSync(path.join(capDir(root, STEM), 'skills', STEM, 'SKILL.md'), SKILL_V2);
-    set();
+    await set();
     assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'sanity: v2 skill text materialized');
     const { stdout } = install();
     assert.doesNotMatch(stdout, /locally modified GSD file/, 'the next real install reports no local patches (#6331)');

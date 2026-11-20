@@ -41,8 +41,9 @@ export function tryFileHash(filePath: string): string | null {
  * and only those that were GSD-owned before the rewrite: `preHash` equal to the
  * recorded manifest entry. A file the user had already edited keeps its stale
  * entry so the next install still detects it and backs it up.
- * Skips silently (returns false) when the manifest is absent, unparseable or
- * not the documented shape; publishes via tmp + rename, keeping the manifest's
+ * Returns false without writing when the manifest is absent, unparseable or
+ * not the documented shape, or changed on disk (recordManifestFileHashesResult
+ * says which); publishes via tmp + rename, keeping the manifest's
  * file mode. The installer writes the manifest without a lock, so there is no
  * lock to share. Conflict detection is best effort: when the manifest changed
  * on disk since it was read (a concurrent install), nothing is written. An
@@ -50,20 +51,35 @@ export function tryFileHash(filePath: string): string | null {
  * overwritten; only a lock both writers take would close that window.
  */
 export function recordManifestFileHashes(configDir: string, rewritten: readonly RewrittenFile[]): boolean {
-  if (rewritten.length === 0) return false;
+  return recordManifestFileHashesResult(configDir, rewritten) === 'written';
+}
+
+/**
+ * Why a record did or did not write (#6331): `written`; `unchanged` (no entry
+ * GSD still owned changed); `unavailable` (the manifest is absent, unparseable,
+ * not the documented shape, or the write failed); `conflict` (the manifest
+ * changed on disk after it was read, so nothing was written). A caller that
+ * reports to the user names a `conflict`, since its re-staged files stay
+ * unrecorded until the next re-stage or install.
+ */
+export type ManifestRecordResult = 'written' | 'unchanged' | 'unavailable' | 'conflict';
+
+/** recordManifestFileHashes, returning why it did or did not write. */
+export function recordManifestFileHashesResult(configDir: string, rewritten: readonly RewrittenFile[]): ManifestRecordResult {
+  if (rewritten.length === 0) return 'unchanged';
   const manifestPath = join(configDir, MANIFEST_NAME);
   let manifest: Record<string, unknown>;
   let raw: string;
   try {
     raw = readFileSync(manifestPath, 'utf8');
     const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 'unavailable';
     manifest = parsed as Record<string, unknown>;
   } catch {
-    return false;
+    return 'unavailable';
   }
   const files = manifest['files'];
-  if (!files || typeof files !== 'object' || Array.isArray(files)) return false;
+  if (!files || typeof files !== 'object' || Array.isArray(files)) return 'unavailable';
 
   const entries = files as Record<string, string>;
   let changed = false;
@@ -76,7 +92,7 @@ export function recordManifestFileHashes(configDir: string, rewritten: readonly 
       changed = true;
     } catch { /* unreadable file: leave its entry as recorded */ }
   }
-  if (!changed) return false;
+  if (!changed) return 'unchanged';
 
   const tmpPath = `${manifestPath}.tmp.${process.pid}`;
   try {
@@ -84,11 +100,14 @@ export function recordManifestFileHashes(configDir: string, rewritten: readonly 
     writeFileSync(tmpPath, JSON.stringify(manifest, null, 2), { mode });
     chmodSync(tmpPath, mode); // the umask may have narrowed the create mode
     // #6331: best effort; a concurrent install rewrote the manifest after it was read.
-    if (readFileSync(manifestPath, 'utf8') !== raw) throw new Error('manifest changed since read');
+    if (readFileSync(manifestPath, 'utf8') !== raw) {
+      try { unlinkSync(tmpPath); } catch { /* already gone */ }
+      return 'conflict';
+    }
     retryRenameSync(tmpPath, manifestPath);
-    return true;
+    return 'written';
   } catch {
     try { unlinkSync(tmpPath); } catch { /* already gone or never created */ }
-    return false;
+    return 'unavailable';
   }
 }
