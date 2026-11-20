@@ -87,6 +87,7 @@ module.exports = {
   "tests/cross-runtime-execution.test.cjs",
   "tests/cursor-hooks.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",
+  "tests/custom-phase-readers.process.test.cjs",
   "tests/custom-phase-readers.test.cjs",
   "tests/debug-session-management.test.cjs",
   "tests/defaults-json-fallback.test.cjs",
@@ -354,5 +355,6 @@ module.exports = {
   "tests/worktree-safety.test.cjs",
   "tests/worktree-subdir-effective-root-4885.test.cjs",
   "tests/worktree.test.cjs",
+  "tests/zsh-joined-flag-expansion.test.cjs",
   ],
 };
