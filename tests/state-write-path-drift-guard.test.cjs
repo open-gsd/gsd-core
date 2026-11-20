@@ -1195,7 +1195,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
   });
 
   // Boundary rule: see `resolvesToStatePath`'s header.
-  test('boundary: an outer STATE.md binding shadowed by a const in an if block, a one-line if block or an arrow body is still reported', () => {
+  test('boundary: these rows are reported: an outer STATE.md assignment shadowed by `const p = <expr>` in an if block, a one-line if block or an arrow body', () => {
     const outer = "  const p = path.join(dir, 'STATE.md');";
     const inner = "    const p = path.join(dir, 'ROADMAP.md');";
     assert.deepStrictEqual(lines(W(outer, '  if (x) {', inner, '    use(p);', '  }', '  fs.writeFileSync(p, c);')), [7]);
