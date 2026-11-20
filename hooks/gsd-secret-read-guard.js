@@ -2293,9 +2293,9 @@ function gitConfigsNamed(ctx, key) {
 // (`-c`, `--config-env`) shadows those an outer git command's own did. Git reads a command's own config after the
 // GIT_CONFIG_PARAMETERS it inherits and the last value wins, so the inherited one never runs there; the command that
 // set it scanned it. Within one command every definition still runs, as do those the environment sets.
-function invokedAliasConfigs(ctx, invoked, own) {
+function invokedAliasConfigs(ctx, invoked, own, ownGlobals) {
   const all = gitConfigsNamed(ctx, invoked);
-  if (!own.some((config) => config.key === invoked)) return all;
+  if (!ownGlobals.some((config) => config.key === invoked)) return all;
   return all.filter((config) => own.includes(config) || config.source.startsWith('$'));
 }
 
@@ -2841,6 +2841,8 @@ function scanGitInvocation(operands, depth, ctx) {
     if (typeof config === 'string') addOwn(parseGitConfig(config));
     else for (const entry of gitConfigEnvEntries(config.configEnv, ctx)) own.push(entry);
   }
+  // Only the global entries are applied before git resolves an alias, so only they may shadow one (below).
+  const ownGlobals = [...own];
   for (const [spec, value] of options) if (spec.config) addOwn(parseGitConfig(value));
   // The environment's config comes in at the command the line runs. A
   // plain-alias hop re-enters with it already in force, so it comes in again
@@ -2880,7 +2882,7 @@ function scanGitInvocation(operands, depth, ctx) {
     if (hit !== null) return hit;
     // Every definition of the invoked alias in force runs with the words
     // after it: a variable may hold several values, and only one of them wins.
-    for (const alias of invoked === null ? [] : invokedAliasConfigs(ctx, invoked, own)) {
+    for (const alias of invoked === null ? [] : invokedAliasConfigs(ctx, invoked, own, ownGlobals)) {
       hit = scanGitAlias(alias, rest, depth, ctx, true);
       if (hit !== null) return hit;
     }
