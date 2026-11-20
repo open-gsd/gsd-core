@@ -3913,12 +3913,25 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
     assertBlocked(runHook(bash(cmd)), 'a debugger spawn, then a deep body after a CR and `#`', { code: 'command-too-complex', tool: 'Bash' });
   });
 
-  // A heredoc body of 64,000 lines of three backslashes is one joined line under the join
-  // reading. The run's length is counted once per line, so the hook answers within the file's
-  // spawn backstop (QUICK_SPAWN_TIMEOUT_MS) rather than re-walking the run at every join.
-  test('a long run of joined heredoc lines is allowed within the spawn backstop', () => {
-    const cmd = 'cat <<E\n' + '\\\\\\\n'.repeat(64000) + 'E';
-    assertAllowed(runHook(bash(cmd)), '64,000 joined backslash lines');
+  // A heredoc body of 64,000 lines of three backslashes is one joined line under the readings
+  // that join one. Each line's backslashes are counted once and charged to the reader budget,
+  // so the reader steps grow with the command's length; a count that re-read the run at every
+  // join would grow with its square, and spend the budget (command-too-complex) rather than hang.
+  const joinedRun = (lines) => 'cat <<E\n' + '\\\\\\\n'.repeat(lines) + 'E';
+  test('in process: a long run of joined heredoc lines costs reader steps linear in its length', () => {
+    const { scanBashCommand, workSpent } = require(HOOK_PATH);
+    const steps = (lines) => {
+      assert.equal(scanBashCommand(joinedRun(lines), 2 ** 40, 2 ** 40), null, `${lines} lines`);
+      return workSpent().reader;
+    };
+    const half = steps(4000);
+    const whole = steps(8000);
+    assert.ok(half >= 4000, `4,000 lines took ${half} reader steps: the count is charged`);
+    assert.ok(whole <= 2 * half + 1000, `8,000 lines took ${whole} reader steps, 4,000 took ${half}`);
+    assert.ok(whole <= 8 * joinedRun(8000).length, `${whole} reader steps for ${joinedRun(8000).length} characters`);
+  });
+  test('a long run of joined heredoc lines is allowed', () => {
+    assertAllowed(runHook(bash(joinedRun(64000))), '64,000 joined backslash lines');
   });
 
   // Property: behind each construct, a read is denied exactly when it names a secret.

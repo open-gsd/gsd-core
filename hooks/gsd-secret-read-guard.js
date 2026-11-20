@@ -1583,9 +1583,13 @@ function consumeHeredocBodiesJoined(str, i, tags) {
   return { bodies, end: i };
 }
 
+// The backslashes ending `s`, charged to the reader budget as they are counted: the joined-line
+// count above reads each line's run once, so a count that re-read the run at every join would
+// spend the budget and be denied as too complex rather than run in quadratic time.
 function trailingBackslashes(s) {
   let n = 0;
   while (n < s.length && s[s.length - 1 - n] === '\\') n++;
+  chargeReader(n);
   return n;
 }
 
