@@ -581,7 +581,7 @@ AskUserQuestion([
 
 If "Yes": save with `config-save-defaults`, never by writing the file: it merges into `${GSD_HOME:-$HOME}/.gsd/defaults.json`, keeping keys this flow omits.
 
-Fill each `<current>` with this run's value (the user's answer, else what `read_current` parsed; a toggle defaults to `true`) as JSON: strings quoted and escaped, booleans and numbers bare. Any other setting with no value loses its line and any comma left before `}`. Never write `null`: it deletes the saved default.
+Fill each `<current>` with this run's value (the user's answer, else what `read_current` parsed, its per-key defaults included) as JSON: strings quoted and escaped, booleans and numbers bare. A setting still without a value loses its line and any comma left before `}`. Never write `null`: it deletes the saved default.
 
 ```bash
 DEFAULTS_JSON=$(cat <<'JSON'
