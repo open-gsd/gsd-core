@@ -147,15 +147,19 @@ if [ -n "$FILES_OVERRIDE" ]; then
   _gsd_resolve_path() {
     # The path travels in the environment, never as an argument: node parses an argument that starts with `-` as one of
     # its own options (`--import=…`, `--require=…`), so a hostile list entry would run code.
-    GSD_RESOLVE_PATH="$1" node -e 'const p=require("path"),f=require("fs");let a=p.resolve(process.env.GSD_RESOLVE_PATH);try{a=f.realpathSync(a)}catch(e){}process.stdout.write(a)'
+    # `realpathSync.native` also expands Windows 8.3 short names (RUNNER~1), which git reports in long form.
+    GSD_RESOLVE_PATH="$1" node -e 'const p=require("path"),f=require("fs");let a=p.resolve(process.env.GSD_RESOLVE_PATH);try{a=f.realpathSync.native(a)}catch(e){}process.stdout.write(a)'
   }
   # An empty root (git failed) stays empty: the resolver would turn "" into the working directory, so it is only called
   # on a non-empty answer, and the `-z "$REPO_ROOT"` check below then rejects every entry.
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
   [ -n "$REPO_ROOT" ] && REPO_ROOT=$(_gsd_norm_path "$(_gsd_resolve_path "$(_gsd_norm_path "$REPO_ROOT")")")
 
-  # #6152: split on commas with a portable while-read loop (no `read -a`), here-string so the loop runs in this shell.
-  while IFS= read -r file_path; do
+  # #6152: split on commas with parameter expansion alone (no `read -a`, no subshell, no here-string), so the loop runs
+  # in this shell and behaves the same in bash 3.2, zsh and Git Bash.
+  _gsd_rest="${FILES_OVERRIDE},"
+  while [ -n "$_gsd_rest" ]; do
+    file_path=${_gsd_rest%%,*}; _gsd_rest=${_gsd_rest#*,}
     # Trim leading and trailing blanks so `a.ts, b.ts` lists the two files (no entry names a path with edge blanks).
     file_path="${file_path#"${file_path%%[![:space:]]*}"}"
     file_path="${file_path%"${file_path##*[![:space:]]}"}"
@@ -177,7 +181,7 @@ if [ -n "$FILES_OVERRIDE" ]; then
     else
       echo "Warning: File not found, skipping: ${file_path}"
     fi
-  done <<< "$(printf '%s' "$FILES_OVERRIDE" | tr ',' '\n')"
+  done
 
   # #6152: fail closed. An override that resolves to no reviewable file inside the repository is an error, never a
   # widening to the phase evaluation scope under the `--files override` label.
@@ -679,9 +683,11 @@ rm -f "$EXPLICIT_JOINED_STDERR"
 EXPLICIT_REVIEWER_SLUGS=()
 if [ -n "$EXPLICIT_JOINED" ]; then
   # #6152: portable comma split (`read -a` is bash-only; zsh rejects it and dropped every reviewer-lane flag).
-  while IFS= read -r _gsd_slug; do
+  _gsd_rest="${EXPLICIT_JOINED},"
+  while [ -n "$_gsd_rest" ]; do
+    _gsd_slug=${_gsd_rest%%,*}; _gsd_rest=${_gsd_rest#*,}
     [ -n "$_gsd_slug" ] && EXPLICIT_REVIEWER_SLUGS+=("$_gsd_slug")
-  done <<< "$(printf '%s' "$EXPLICIT_JOINED" | tr ',' '\n')"
+  done
 fi
 
 EXTERNAL_EVIDENCE_BLOCK=""
