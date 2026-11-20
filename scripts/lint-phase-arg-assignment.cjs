@@ -83,13 +83,13 @@ const SHELL_INFO_STRINGS = new Set(['bash', 'sh', 'shell']);
  * this issue's own defect for that input shape. Every `argument-hint` in the
  * repo documents unquoted usage as primary. `positional` strips one quoted
  * `--ws` token the way the workstream parse reads it (#6218); a quoted value
- * holding a space is not a workstream name and is left in place. See
+ * holding a space is not a workstream name and is left in place for xargs to unquote. See
  * tests/lint-phase-arg-assignment.test.cjs's dedicated describe block.
  */
 const CANONICAL_FORMS = Object.freeze({
   /** `/gsd:secure-phase 4` — the phase is the whole argument string, minus a `--ws <name>` pair. */
   positional:
-    'PHASE_ARG=$(echo "$GSD_ARGS" | sed -E \'s/--ws[[:space:]]+["\'\\\'\']?[A-Za-z0-9._-]+["\'\\\'\']?//g\' | xargs)',
+    'PHASE_ARG=$(echo "$GSD_ARGS" | sed -E \'s/--ws[[:space:]]+("[A-Za-z0-9._-]+"|\'\\\'\'[A-Za-z0-9._-]+\'\\\'\'|[A-Za-z0-9._-]+)//g\' | xargs)',
   /** `/gsd:review --phase 4 --codex` — the phase is the value of a named flag. */
   phaseFlag:
     'PHASE_ARG=$(echo "$GSD_ARGS" | sed -nE \'s/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\\1/p\')',
