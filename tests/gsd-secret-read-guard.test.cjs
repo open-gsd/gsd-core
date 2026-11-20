@@ -1058,9 +1058,38 @@ describe('gsd-secret-read-guard: pinned git gaps the guide documents (#5492)', (
     'E=\'!cat .env\'; git -c alias.x="$E" x',
     'E=\'cat .env\'; ssh -o ProxyCommand="$E" host',
   ];
-  for (const cmd of [...behindReservedWord, ...throughVariable]) {
+  // The command-specific checks that do not run behind a reserved word either
+  // (the rescans, prefix assignments and the debugger check). The ssh row is
+  // above.
+  const otherReservedWordGaps = [
+    "if true; then sh -c 'cat .env'; fi",
+    "if true; then eval 'cat .env'; fi",
+    "if true; then find . -exec sh -c 'cat .env' \\;; fi",
+    "if true; then watch 'cat .env'; fi",
+    "if true; then GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env' git status; fi",
+    'if true; then claude --agent gsd-debugger; fi',
+  ];
+  // Wrappers the scan does not follow, and a command substitution in a value.
+  const unfollowed = [
+    "parallel git rebase -x 'cat .env' ::: a",
+    'git -c sequence.editor=$(echo cat .env) rebase -i --root',
+    "coproc git -c core.editor='cat .env #' log",
+  ];
+  for (const cmd of [...behindReservedWord, ...otherReservedWordGaps, ...unfollowed, ...throughVariable]) {
     test(`allowed: ${JSON.stringify(cmd)}`, () => {
       assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // The checks that do run behind a reserved word.
+  const blockedBehindReservedWord = [
+    'if true; then source .env; fi',
+    'if true; then cat < .env; fi',
+    'if true; then echo $(cat .env); fi',
+  ];
+  for (const cmd of blockedBehindReservedWord) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
     });
   }
 
