@@ -309,7 +309,7 @@ Every CLI call spawns `git rev-parse --show-toplevel --git-dir --git-common-dir`
 Files: `tests/helpers/install-shared.cjs`, the `*.install.test.cjs` files, `bin/install.js` (generated from its source).
 79 files run the installer and hold 26.8% of Linux time. On Windows a single installer spawn averages at least 2.8 s.
 
-- AC1: emitted-content tests call `install()` in-process (it is already exported) into a fixture built once per runtime and scope and shared through `createRuntimeFixtureCache`. A test that needs a changed tree copies the fixture.
+- AC1: emitted-content tests read a fixture built once per runtime and scope for the whole run. A test that needs a changed tree copies the fixture. (As first written this said the fixture is built by calling `install()` in-process; measurement replaced that, see "Item 17: the saving is in not installing again" under Decision-rule outcomes.)
 - AC2: the real-process installer runs once per runtime in one install-contract file, plus the tarball smoke test.
 - AC3: `fragment-single-edit-propagation.install.test.cjs` (575 s) builds its 18-runtime install once and derives each row from it.
 - AC4: summed Linux time of the install class drops from 33.2 min to under 10 min, and the count of installer spawns of 2 s or more on a Windows shard drops by at least 80%.
@@ -469,6 +469,7 @@ Two consequences of the swap hold until item 14b lands: in-process calls run one
 |---|---|---|
 | `runGsdTools` | in the test process, synchronously | a command that finishes asynchronously; a `NODE_OPTIONS`-class variable in the per-call `env`; a working directory that does not exist |
 | `await runGsdToolsAsync` | in the test process, any command | the last two of those |
+| `runGsdToolsCaptured` (item 16) | in the test process, synchronously; returns `{ exitCode, stdout, stderr }` as written, where `runGsdTools` keeps stderr only for a failed command and trims stdout | the same three as `runGsdTools` |
 | `runGsdToolsProcess` | a spawned `node gsd-tools.cjs` | nothing; for `*.process.test.cjs` files |
 
 Sixteen test files that called asynchronous commands (`capability`, `review-lane`, `detect-custom-files`, `prompt-budget`, `classify-confidence`, `package-legitimacy`, `extract-messages`, `profile-sample`) moved to `runGsdToolsAsync`. Three tests that injected a failure by preloading a patch into a child with `NODE_OPTIONS=--require` now mock the function in the test process, which is what running in-process makes possible.
@@ -529,3 +530,62 @@ Profiling 100 in-process calls per case, with every subprocess call timed, on ma
 | `state json` | temp dir, no git | 9.9 ms | 1 | 9.0 ms | 0.9 ms |
 
 A spawned call of the same command takes about 147 ms on the same machine. Item 15 removes the Node spawn; item 25 removes what is left.
+
+### 2026-11-19 — Item 17: the saving is in not installing again
+
+Item 17's first acceptance criterion named a mechanism: call `install()` in-process. Measurement before any code changed the mechanism and kept the goal.
+
+**What was measured.** A commit that logged every installer call (process-seam spawns of `bin/install.js`, and in-process `install()`) ran once on the Linux bench.
+
+| | |
+|---|---|
+| Installer calls in one run | 1,553 (1,181 spawned, 372 in-process), in 89 test files |
+| Time in those calls | 1,568 s of 5,201 s summed file time |
+| One call, median | 1.07 s spawned, 0.86 s in-process |
+| Distinct configurations (runtime, scope, flags) | 187 |
+| Time spent on a repeat of a configuration already installed in that run | 1,383 s |
+| A load-only installer process (local) | 0.12 s of a 0.48 to 0.71 s install |
+| A copy of an installed tree (local) | 0.11 s against 0.46 s for an install |
+
+**Decision.**
+
+1. An in-process install is still an install. It saves the process start, about a fifth. `bin/install.js` also reads its flags from `process.argv` when the module loads, so one process cannot run two installs with different flags without loading the module again. The in-process route is not taken.
+2. The installed tree for a configuration is built once per run by a real spawned install, and every test file reads that tree. `installRuntimeFixture` already did this within one file; it now does it across the run, under the run's temp root. No process waits on another: a process that finds no tree builds one and publishes it with a hard link, and the loser of a race discards its own.
+3. A test that changes its tree copies the shared one (`copyRuntimeFixture`). A copy is held equal to a fresh install by a test over every runtime family.
+4. A shared tree is read-only, and that is checked: a test process that leaves one changed fails at exit, and a file that starts later and finds it changed fails before reading it. The check is a digest of paths, permission bits, modification times and sizes, not a rule in prose.
+5. A shared tree holds the same thing whichever file built it: the helper completes the hooks build first (`ensureHooksDist`), since the installer installs no hooks, or only some, without it.
+6. The store adds about 20 MB on disk per shared configuration to the run's temp root for the whole run (410 MB measured for the 19 families; a private copy or a tree that lost a build race is extra until its test or the run ends). The runner's between-chunk sweep spares it and the end-of-run removal takes it. Sharing all 187 configurations would hold about 4 GB, on benches whose temp filesystem has filled before (#4020), so a configuration is shared only when several files read it. The count of shared configurations is a number to watch as files are converted.
+
+**The first conversions, measured.** Every `runMinimalInstall({ runtime, scope })` with no other option became `copyRuntimeFixture` in 36 test files, and two helpers that only read their trees took the shared ones. Two bench runs under different load (the untouched files took 1.51 times as long in the second) put the 38 affected files at 15.8% of summed file time before and 12.2% after: about 147 s at the first run's load. A copy still costs about a third of an install, and the file that happens to build a shared tree first pays for the build. Sharing and copying do not by themselves bring the install class under ten minutes.
+
+**What it does not cover.** A test that puts files in place before installing, or that asserts on the installer's own run, still installs. Those are the upgrade and configuration-merge suites, and they are most of the 372 in-process calls (156 of them `codex` global, in nine files). Converting each remaining file is per-file work that follows this change, measured against the table above.
+
+### 2026-11-19 — Item 18: a git fixture is a copy of a template
+
+Measured locally before the change: `createFixture({ git: true })` took 66 ms, six `git` processes; a copy of the 28-file result took 5 ms. Twenty fixtures in one process went from about 1,320 ms to 189 ms including the one template build, and to 96 ms in a second process that found the templates already built.
+
+**Decision.**
+
+1. The four fixture shapes are each built once per run by the same six git commands, into the run-wide store item 17 added, and a fixture is `fs.cpSync` of the template with timestamps kept.
+2. A copied repository has new inode numbers and change times, so git's plumbing reads every tracked file as possibly changed: `git diff-files --quiet` exits 1 on a clean copy. The template sets `core.trustctime = false` and `core.checkStat = minimal`, which limits git's comparison to modification time and size. A copy then reads as clean with no refresh, and an edited file still reads as modified. Both are tested.
+3. The template is built under a fixed environment (no inherited `GIT_*`, no system config, an empty global config, an empty init template) so its content does not depend on the machine or on which test file built it. The first version kept the machine's init template; review pointed out that its `info/exclude` can ignore `.planning` (#5470), which the tests that isolate their git config had been guarding against by building their fixture after isolating.
+4. A fixture needs no `git` on `PATH`: a test makes fixtures with `PATH` emptied.
+
+**What it saves, measured.** A bench run that logged each fixture counted 1,478 git fixtures in 81 test files, so 8,868 `git` processes a run are gone. On Linux that is about 80 s of summed file time at 55 ms a fixture, which two runs on the same bench could not tell from noise (5,117 s before, 5,180 s after). The research note's "about 7,200 git spawn sites" counted call sites in the source, six for each fixture call, and most git calls in tests are not fixture builds. The Windows lanes pay more for each process, and what this saves there is not measured yet: it shows only in the merge queue's shard times.
+
+**Not in this change.** Acceptance criterion 3 of item 18, the ESLint rule against building a fixture inside a test body, with its 3,939 sites. Copying made each of those builds cheap; whether the rule is still worth its churn is to be measured after this lands.
+
+### 2026-11-19 — Item 16: the six suites were already in-process; what was left was spawn wrappers and the tier line
+
+**What the measurement said.** A full run of `next` at `2bb91a8250` (after item 15; `gsd-test`, holodeck, linux-node24, 62,219 passed) put the six suites at 180.4 s of file time: state 56.7, phase 69.1, init 33.7, custom-phase-readers 10.3, roadmap 7.5, config 3.2. The 974 s in the issue was measured before item 15 made `runGsdTools` in-process, so acceptance criterion 4 (under 200 s) already held when item 16 started. The suites had few direct spawn sites (19 `runNode` or `runHook` calls) but they hid behind wrappers that many cases called: `recordSession` 61, `runTool` 30, `run` and `run2853` 47, `gsd` 18, `runSectionManifestCli` 16, `runPhaseComplete` 8. Each wrapper existed because `runGsdTools` keeps stderr only for a failed command, and these cases assert on a warning a successful command writes to stderr, or on stdout's exact bytes.
+
+**Decision.**
+
+1. `runGsdToolsCaptured(args, cwd, env)` returns `{ exitCode, stdout, stderr }` from the same in-process call as `runGsdTools`, with the same refusals. The spawn wrappers in the six suites call it. `GSD_TEST_CLI_MODE=process` runs it through the spawned CLI, so a suspected in-process difference can still be checked.
+2. A case moves to a `.process.test.cjs` sibling only when its subject is a process or git: an `ExitError` becoming an exit code with a JSON error on stderr, a reader meeting a named pipe (a hang a timeout isolates), the commit a STATE.md was written against, and phase allocation across linked worktrees. Titles and assertions did not change; the multiset of titles across each file and its sibling is 2,394 before and after.
+3. ESLint holds the six unit files to this: they cannot import `tests/helpers/process-seam.cjs` or call `runGsdToolsProcess`. The rule is a block of `no-restricted-syntax` in `eslint.config.mjs`. Git used only to build a repository a case needs stays allowed.
+4. The fixture template of criterion 1 was not applied. `createFixture()` measures 0.22 ms and a git fixture 4 to 7 ms since item 18; a copy of a template cannot be cheaper than the build it replaces.
+
+**Not in this change.** Criterion 2's "the only part in the Windows and macOS tiers": the conformance tier lists are chosen by content signals (`realpath`, case sensitivity, `process.platform`), which the unit files keep, so the OS lanes still run them until item 20 chooses tiers by filename. The cost of the 380 phase and state tests that take 100 to 1000 ms each in the container is not explained by a local measurement (a command is about 3 ms, with no fsync).
+
+**What it saved, measured.** The same run on the branch (`gsd-test`, holodeck, linux-node24, 62,286 passed) puts the six files and their siblings at 95.5 s against 180.4 s: state 56.7 to 17.2 plus 5.0 for `state.process`, phase 69.1 to 44.9 plus 3.7, init 33.7 to 5.8, roadmap 7.5 to 5.9, custom-phase-readers 10.3 to 9.2 plus 0.6, config 3.2 unchanged. The six unit files alone take 86.2 s. The wrappers' processes were the saving; the fixtures were not.

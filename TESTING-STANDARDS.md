@@ -238,33 +238,73 @@ The fields of a `measured` entry:
 
 **Enforcement:** `local/no-adhoc-timeout-literal` (ESLint, `error`) for literals; `tests/timeout-evidence.test.cjs` for the evidence in `tests/helpers/timeouts.cjs`; code review for the comment shape of file-local constants. A non-literal value (an `Identifier`, `MemberExpression`, or `CallExpression`) is trusted; only a resolvable numeric literal is flagged. There is no marker-comment escape — the fix is always to extract a named constant. There is no allowlist. `eslint-rules/no-adhoc-timeout-literal.allowlist.json` grandfathered pre-existing legacy violations; the epic that introduced it (#4445) migrated every site across seventeen batches and deleted the file in its terminal batch, so `local/no-adhoc-timeout-literal` now runs with **no exemption surface**.
 
-### One installer run per runtime configuration per file
+### One installer run per runtime configuration per run
 
-A real `bin/install.js` run is the most expensive thing a test can do. When several tests in one file install the **same** runtime configuration only to read different parts of the result, install it once with `installRuntimeFixture` from `tests/helpers/install-shared.cjs` (#4688):
+A real `bin/install.js` run is the most expensive thing a test can do: about a second, most of it
+writing a thousand files. One bench run made 1,553 of them for 187 distinct configurations (#6335).
+A test that needs an installed tree takes it from `tests/helpers/install-shared.cjs`, by what it
+does with the tree:
+
+| The test | Uses | Cost |
+|---|---|---|
+| only reads the installed tree | `installRuntimeFixture({ runtime, scope })` | one install per configuration for the whole run |
+| writes into the tree, reinstalls over it, or uninstalls it | `copyRuntimeFixture({ runtime, scope })` | a copy, about a quarter of an install |
+| puts files in place before the install, or asserts on the installer's own run (exit code, output, a failure) | `runMinimalInstall({ runtime, scope })` | an install |
 
 ```javascript
-const { installRuntimeFixture } = require('./helpers/install-shared.cjs');
+const { installRuntimeFixture, copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 
 test('settings.json registers the hooks', () => {
   const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' });
   // read-only assertions against configDir
 });
 
-test('settings.json registers the MCP companion', () => {
-  const { configDir } = installRuntimeFixture({ runtime: 'augment', scope: 'global' }); // no second install
-  // read-only assertions against configDir
+test('an uninstall removes the hooks', (t) => {
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'augment', scope: 'global' });
+  t.after(() => cleanup(root));
+  // this tree is the test's own
 });
 ```
 
 | Behavior | Detail |
 |---|---|
 | Key | `runtime`, `scope`, `extraArgs` (order matters) and `extraEnv` (key order does not). Each distinct key installs once. |
-| Lifetime | One test file. `node --test` runs each file in its own process; every cached root is deleted when that process exits. |
-| Result | The same object `runMinimalInstall` returns (`configDir`, `root`, `manifest`, `stdout`, `stderr`), deep-frozen and shared by every caller with that key. |
-| Failure | A failed install throws exactly as `runMinimalInstall` does and is not cached; the next call retries. |
-| `root` | Rejected with a `TypeError`. A shared fixture owns its root. |
+| Lifetime | Under `scripts/run-tests.cjs` (CI, `gsd-test`, `npm test`): the whole run. The trees live under the run's temp root, every test file reads the same ones, and the runner removes them when the run ends. A file started any other way keeps its trees for that one process. |
+| Result | The object `runMinimalInstall` returns (`configDir`, `root`, `manifest`, `stdout`, `stderr`). From `installRuntimeFixture` it is deep-frozen and shared. |
+| Failure | A failed install throws exactly as `runMinimalInstall` does and is not kept; the next call retries. |
+| `root` | Rejected with a `TypeError`. A shared fixture owns its root, and a copy gets a new one. |
 
-**Use it only for read-only tests.** A test that writes into the installed tree, reinstalls, uninstalls, or seeds files before installing changes what every later test sees. Keep `runMinimalInstall` (a fresh root per call) for those. Do not register `t.after(() => cleanup(root))` on a shared fixture: it would delete the tree for the tests after it.
+**A shared tree is read-only, and the helper checks it.** Every test file of the run reads it, so a
+write would change what a file running minutes later sees. The check is a digest taken when the
+tree was built: every path, its kind, permission bits and modification time, and each file's size.
+
+- When a test process exits, the helper compares each shared tree it used with that digest. A
+  difference fails the process and names the test file and the configuration. The tree was intact
+  when the process first read it, so the write happened while that file ran.
+- A file that starts later and asks for the changed tree fails at once with
+  `SharedFixtureModifiedError`, before it can read anything from it.
+
+The digest does not read file contents. A file rewritten with the same length and given its old
+modification time back is not seen. Do not register `t.after(() => cleanup(root))` on a shared
+fixture.
+
+**What a shared tree holds does not depend on which file built it.** The installer copies hooks
+from `hooks/dist`, which is build output and absent, or partial, in a lane that has not built it.
+The fixture helpers call `ensureHooksDist` first, so a file that never needed hooks cannot publish
+a tree without them. The builder's `PATH` still reaches the installer, as it does for any install a test
+runs.
+
+**A copy stands in for a fresh install.** `copyRuntimeFixture` copies the shared tree to a new root
+and writes the new root's name wherever the old one appears, in file contents, symlink targets and
+the manifest's hashes. `tests/shared-install-fixture.install.test.cjs` compares a copy with a real
+install for every runtime family: the same files and the same content, apart from what each
+install draws at random (the heredoc terminator and timestamps). A copy therefore carries its
+source's terminator and its files' modification times. A test about either installs for real.
+
+**Each shared configuration costs disk for the whole run:** about 20 MB under the run's temp root,
+which the runner's sweep between chunks does not reclaim. Share a configuration that several files
+read. A configuration only one test uses is cheaper as that test's own `runMinimalInstall`, removed
+when the test ends.
 
 ### Mutation testing — 80 % threshold
 
@@ -313,9 +353,19 @@ hide. Each rule below names what enforces it. Where nothing does yet, the rule s
    `await runGsdToolsAsync` for an asynchronous one, `runGsdToolsProcess` only when the subject is the process
    itself (exit of a real process, signals, real stdin, what a missing working directory does). The in-process
    helpers never spawn as a fallback; each throws and names the helper to use. *Enforced by the helpers.*
+   A test that asserts on what a successful command wrote to stderr, or on stdout's exact bytes, calls
+   `runGsdToolsCaptured`, which returns `{ exitCode, stdout, stderr }` in-process. `runGsdTools` keeps stderr
+   only for a failed command and trims stdout, so it is not the helper for those. *The choice between the two
+   is not enforced; found in review.*
 2. **A test that needs a real process lives in a `*.process.test.cjs` file and says why in its title.**
    `tests/cli-parity.process.test.cjs` is the model: it starts the real binary on purpose, once per row, so
-   that other tests do not have to. *Enforced by review today;
+   that other tests do not have to. The six command suites (`state`, `phase`, `roadmap`, `config`, `init`,
+   `custom-phase-readers`) are held to this by ESLint: their `*.test.cjs` files cannot import
+   `tests/helpers/process-seam.cjs` or call `runGsdToolsProcess`, so a case whose subject is a process
+   (an `ExitError` becoming an exit code, a reader meeting a named pipe) or git itself (the commit a STATE.md
+   was written against, allocation across linked worktrees) goes in the suite's `.process.test.cjs` sibling.
+   Git used only to build a repository the case needs (`createTempGitProject`, a `gitOrThrow` commit) may stay
+   in the unit file: ESLint does not ban `tests/helpers/git-fixture.cjs`. *Enforced by ESLint for those six files; for every other file by review today, and
    ADR-6315 item 20 adds the lint.*
 3. **Inject a failure by mocking, not by preloading.** The command runs in your process, so
    `t.mock.method(module, 'fn', …)` on the module the command uses is what the command calls. A per-call
@@ -405,6 +455,34 @@ the merge queue ejected a docs-only PR for it (#6375).
   under `require.main === module`.
 
 Raising the spawn limit is not the fix (ADR-6315 invariant I4).
+
+### A git fixture is a copy of a template
+
+`createFixture({ git: true })`, and so `createTempGitProject`, no longer runs git. Each of the four
+shapes a caller can ask for (with or without `.planning/phases`, with or without `PROJECT.md`) is
+built once, by the six git commands the fixture always used, and a fixture is a copy of that
+template (#6336). Inside a test run the templates are shared by every test file, in the same store
+as the installed trees above.
+
+What a test may rely on is unchanged: a repository on `master` with one commit, `initial commit`,
+by `Test <test@test.com>`, with signing off. `tests/git-fixture-template.process.test.cjs` holds a
+copy against a repository built by hand for every shape.
+
+Three things are different, and a test must not depend on the old behavior:
+
+- **Every fixture of a shape in one run has the same commit hash and commit time.** A test that
+  needs two repositories with different histories makes a commit in one.
+- **The repository's config has `core.trustctime = false` and `core.checkStat = minimal`.** A copy
+  has new inode numbers and change times, and without these git's plumbing (`diff-files`,
+  `diff-index`) reports a clean copy as modified until something refreshes the index.
+- **The template is built with no inherited `GIT_*` variable, no system config, an empty global
+  config and an empty init template**, so it does not depend on the machine or on which test file
+  built it. `.git/hooks` and `.git/info` exist and are empty: there are no sample hooks and no
+  `info/exclude`, whatever the machine's git ships (a developer's git can carry `.planning` in
+  that exclude file, #5470). A test that needs a repository shaped by a particular git setup
+  builds that repository itself.
+
+Do not write into a template (`gitTemplateRoot`). A test process that changes one fails at exit.
 
 ---
 

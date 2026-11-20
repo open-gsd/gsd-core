@@ -82,7 +82,7 @@ const {
   walk,
   simulateHookCopy,
   installerEnv,
-  runMinimalInstall,
+  runMinimalInstall, copyRuntimeFixture,
   manifestSkillSet,
   manifestAgentCount,
   collectSkillBasenamesOnDisk,
@@ -90,7 +90,8 @@ const {
 
 /**
  * collectSkillBasenamesOnDisk(configDir, runtime, scope) re-resolves the
- * runtime's skills-kind layout via os.homedir(). runMinimalInstall() already
+ * runtime's skills-kind layout via os.homedir(). runMinimalInstall() (and so the
+ * tree a copy is made from) already
  * sandboxes HOME/USERPROFILE to `root` for the spawned install subprocess,
  * but that sandboxing does not persist into this (parent) process — without
  * re-sandboxing here, Codex's skills-kind `home: ".agents"` override
@@ -3325,7 +3326,7 @@ describe('#3023 pi shared-hooks bundle avoids the host-reserved hooks/ directory
 
   for (const scope of ['local', 'global']) {
     test(`pi ${scope} install: no host-reserved hooks/ dir, bundle staged under ${PI_BUNDLE_DIR}/, manifested`, (t) => {
-      const { manifest, configDir, root } = runMinimalInstall({ runtime: 'pi', scope });
+      const { manifest, configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope });
       t.after(() => cleanup(root));
 
       const reserved = path.join(configDir, PI_RESERVED_DIR);
