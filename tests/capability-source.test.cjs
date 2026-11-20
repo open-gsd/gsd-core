@@ -434,6 +434,31 @@ describe('#5297 git adapter — exact pinned target', {
     assertScratchClonesRemoved('checkout failure');
   });
 
+  // #6441: the scratch clone is removed once, in a `finally`, and a failure of that removal is
+  // swallowed. A removal that fails because a git process is still writing under the directory
+  // (ENOTEMPTY, EBUSY) then left the clone behind with nothing reported, and the test above went
+  // red on `next` at the same commit that passed elsewhere. The filesystem retries those errors
+  // when told to; the `.git` removal in the same function already tells it to.
+  test('#6441: the scratch clone removal is retried by the filesystem, not attempted once and dropped', async (t) => {
+    const realRmSync = fs.rmSync;
+    const scratchRemovals = [];
+    t.mock.method(fs, 'rmSync', (target, options) => {
+      if (cloneDirs.length > 0 && target === path.dirname(cloneDirs[0])) scratchRemovals.push(options);
+      // eslint-disable-next-line local/no-raw-rmsync-in-tests -- #6441 the wrapper forwards production's own call after recording its options
+      return realRmSync(target, options);
+    });
+    const checkoutFailGit = (args, opts) => (args.includes('checkout')
+      ? { exitCode: 1, stdout: '', stderr: 'checkout refused', signal: null, error: null }
+      : localGit(args, opts));
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#v0.3.0`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: checkoutFailGit },
+    }), /git checkout .* failed/);
+    assert.equal(scratchRemovals.length, 1, 'the scratch directory is removed once, as a whole');
+    assert.ok(scratchRemovals[0].maxRetries > 0, 'a transient ENOTEMPTY or EBUSY is retried');
+    assert.ok(scratchRemovals[0].retryDelay > 0, 'the retries are spaced');
+    assertScratchClonesRemoved('scratch removal retried');
+  });
+
   test('missing cloned manifest cleans the scratch clone', async () => {
     const missingManifestGit = (args, opts) => {
       const result = localGit(args, opts);

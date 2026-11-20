@@ -1115,7 +1115,16 @@ function resolveGit(
 
     return stageValidated({ sourceDir: cloneDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
-    try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    // #6441: retried like the `.git` removal above. A git process still writing under the directory
+    // makes a single attempt fail with ENOTEMPTY or EBUSY; swallowed, that left the clone on disk.
+    try {
+      fs.rmSync(scratchDir, {
+        recursive: true,
+        force: true,
+        maxRetries: GIT_METADATA_RM_MAX_RETRIES,
+        retryDelay: GIT_METADATA_RM_RETRY_DELAY_MS,
+      });
+    } catch { /* best-effort */ }
   }
 }
 
