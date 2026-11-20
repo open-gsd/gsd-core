@@ -2157,11 +2157,13 @@ function wrapperReadValues(words, start, end, spec) {
 function resolveCommand(words, timeAssigns = true) {
   let idx = 0;
   const reads = [];
+  const wrappers = [];
   while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
   while (idx < words.length) {
     const name = lastSegment(words[idx].text).toLowerCase();
     const spec = name === 'time' && !timeAssigns ? TIME_WITHOUT_ASSIGNS : WRAPPERS.get(name);
     if (!spec) break;
+    wrappers.push(words[idx]);
     const next = skipWrapperArgs(words, idx + 1, spec);
     // A loop, not push(...): a spread of a command-sized array overflows the stack.
     if (spec.reads) for (const value of wrapperReadValues(words, idx + 1, next, spec)) reads.push(value);
@@ -2170,7 +2172,7 @@ function resolveCommand(words, timeAssigns = true) {
   if (idx >= words.length && reads.length === 0) return null;
   return {
     base: idx < words.length ? lastSegment(words[idx].text).toLowerCase() : '', operands: words.slice(idx + 1), reads,
-    assigns: words.slice(0, idx).map((w) => w.text).filter((t) => ASSIGNMENT_RE.test(t)),
+    assigns: words.slice(0, idx).map((w) => w.text).filter((t) => ASSIGNMENT_RE.test(t)), wrappers,
   };
 }
 
@@ -4193,6 +4195,8 @@ function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySe
     for (let k = j; k < operands.length; k++) if (!nameOnly.has(k)) tail.push(operands[k]);
     const launched = resolveCommand(tail);
     cover(launched, REENTERING_WORDS);
+    // The wrappers the launched command resolves through start nothing this launch does not (`x env time X=1 y …`).
+    for (const w of launched === null ? [] : launched.wrappers) covered.add(w);
     if (launched !== null && launched.base === 'xargs') {
       const { subIdx } = xargsSubCommand(launched.operands);
       if (subIdx !== -1) cover(resolveCommand(launched.operands.slice(subIdx)), XARGS_REENTERING_WORDS);
