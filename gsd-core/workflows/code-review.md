@@ -684,12 +684,9 @@ rm -f "$EXPLICIT_JOINED_STDERR"
 
 EXPLICIT_REVIEWER_SLUGS=()
 if [ -n "$EXPLICIT_JOINED" ]; then
-  # #6152: portable comma split (`read -a` is bash-only; zsh rejects it and dropped every reviewer-lane flag).
+  # #6152: split with parameter expansion; `read -a` is bash-only (zsh rejects it)
   _gsd_rest="${EXPLICIT_JOINED},"
-  while [ -n "$_gsd_rest" ]; do
-    _gsd_slug=${_gsd_rest%%,*}; _gsd_rest=${_gsd_rest#*,}
-    [ -n "$_gsd_slug" ] && EXPLICIT_REVIEWER_SLUGS+=("$_gsd_slug")
-  done
+  while [ -n "$_gsd_rest" ]; do _gsd_slug=${_gsd_rest%%,*}; _gsd_rest=${_gsd_rest#*,}; [ -n "$_gsd_slug" ] && EXPLICIT_REVIEWER_SLUGS+=("$_gsd_slug"); done
 fi
 
 EXTERNAL_EVIDENCE_BLOCK=""
@@ -700,16 +697,10 @@ if [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ] && [ -z "$DIFF_BASE" ]; then
   # generic rejection stand unexplained.
   echo "Warning: external reviewer lane(s) requested (${EXPLICIT_REVIEWER_SLUGS[*]}) but no diff base could be resolved (no prior review, no phase-start commit) — skipping external dispatch." >&2
 elif [ ${#EXPLICIT_REVIEWER_SLUGS[@]} -gt 0 ]; then
-  # #4209 R5: a dedicated run-scoped temp dir (same `${TMPDIR:-/tmp}/gsd-review-*` convention
-  # review.md's gather_context step uses), not $PHASE_DIR directly — lane artifacts
-  # (gsd-review-prompt.md, gsd-review-<slug>.md/.err) are read-once evidence for THIS run, never
-  # meant to be committed, and a second dispatch on the same phase would otherwise silently
-  # overwrite the prior run's files in place. Removed by commit_review once the reviewer agent
-  # has read every cited evidence path. An early exit between here and commit_review (a
-  # checkpoint, a halt) leaves this directory on disk — the same trade-off review.md's own
-  # gather_context/cleanup pair already accepts for the identical resource class: a leftover
-  # $TMPDIR entry is cheaper than a cleanup mechanism (e.g. a trap) that could fire before a
-  # later step reads it. Not a regression to fix; matches established precedent.
+  # #4209 R5: a dedicated run-scoped temp dir (same `${TMPDIR:-/tmp}/gsd-review-*` convention as review.md's
+  # gather_context), not $PHASE_DIR: lane artifacts are read-once evidence for THIS run, never committed, and a
+  # second dispatch must not overwrite them. commit_review removes it once the reviewer has read the evidence; an
+  # early exit leaves it on disk, the same accepted trade-off as review.md's gather_context/cleanup pair.
   LANE_RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-review-lanes-XXXXXX")
   DISPATCH_JSON=$(printf '%s\n' "${REVIEW_FILES[@]}" | gsd_run review-lane dispatch-step \
     --repo-root "$REPO_ROOT" --depth "$REVIEW_DEPTH" --base-sha "$DIFF_BASE" \
