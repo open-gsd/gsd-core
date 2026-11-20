@@ -2409,11 +2409,10 @@ function scriptAssignments(tokens, reading, ctx, depth) {
     if (i === words.length || DECLARATION_COMMANDS.has(words[i])) {
       for (const w of words) if (ASSIGNMENT_RE.test(w)) assignments.push(w);
     } else if (depth < MAX_NESTING_DEPTH && words[i] === 'eval') {
-      runInShell(words.slice(i + 1).join(' '));
+      runInShell(words.slice(words[i + 1] === '--' ? i + 2 : i + 1).join(' ')); // bash's eval takes `--`
     } else if (depth < MAX_NESTING_DEPTH && (words[i] === 'source' || words[i] === '.')) {
       for (const t of segTokens.slice(i + 1)) {
-        const src = t.procsub === undefined ? null : reconstructedProcsub(t.procsub, reading);
-        if (src !== null) runInShell(src);
+        if (t.procsub !== undefined) for (const src of reconstructedProcsubs(t.procsub, reading)) runInShell(src);
       }
     }
   }
@@ -2470,13 +2469,17 @@ function appendChains(frame, name, ctx) {
       chains.push(value);
     }
   };
-  // The early appends run after the later ones, or right after the value.
+  // The early appends (a function's body, say) run after the later ones, right
+  // after the value, or right after it and before the later ones.
   const chainFrom = (start, at) => {
     charge(ctx, appends.length + early.length);
     const later = appends.filter((e) => e.at > at);
     const before = early.filter((e) => e.at < at);
     chain(start, [...later, ...before]);
-    if (later.length && before.length) chain(start, before);
+    if (later.length && before.length) {
+      chain(start, before);
+      chain(start, [...before, ...later]);
+    }
   };
   chainFrom('', -1);
   for (const e of seq) if (!e.append) chainFrom(e.value, e.at);
@@ -3211,37 +3214,44 @@ function copyDestinationIndices(operands) {
   return positional.length === 2 ? new Set([positional[1]]) : new Set();
 }
 
-// The statically-knowable stdin a segment writes: `echo`/`printf` operands
-// joined by a space (for `echo`, leading `-neE` flags dropped). A printf
-// whose format is `%s\n` or `%s\\n` prints its arguments one per line, so
-// they are joined by a newline (#5492), after the words joined as before so that
-// a command the space-joined reading blocked stays blocked; any other format
-// stays joined as is (a bare `%s` too: it prints them run together, and a line
-// each would leave `printf '%s' 'cat ' .env | bash` with no operand to check). Any other source
-// (`cat gen.sh | bash`, `curl … | sh`) is not knowable → null.
+// The statically-knowable stdin a segment writes, as the scripts it may
+// amount to, each scanned on its own: `echo`/`printf` operands joined by a
+// space (for `echo`, leading `-neE` flags dropped), as before. A printf may
+// write more than that reading shows (#5492), so these are added beside it,
+// never in its place, and a command the space-joined reading blocked stays
+// blocked: for a `%s\n` or `%s\\n` format, its arguments a line each; for a
+// `%s`, `%s\n` or `%s\\n` format, its arguments run together (`%s` prints
+// them so); and for a format with no `%`, the format with its escapes read
+// (`printf 'cat\40.env'`), a NUL as a space since xargs -0 splits on it. Any
+// other source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → [].
 const PRINTF_LINE_FORMATS = new Set(['%s\\n', '%s\\\\n']);
-function reconstructedScript(words) {
+function reconstructedScripts(words) {
   const cmd = resolveCommand(words);
-  if (!cmd) return null;
+  if (!cmd) return [];
   if (cmd.base === 'echo') {
     let start = 0;
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
-    return cmd.operands.slice(start).map((w) => w.text).join(' ');
+    return [cmd.operands.slice(start).map((w) => w.text).join(' ')];
   }
-  if (cmd.base === 'printf') {
-    if (cmd.operands.length && PRINTF_LINE_FORMATS.has(cmd.operands[0].text)) {
-      const joined = cmd.operands.map((w) => w.text).join(' ');
-      return `${joined}\n${cmd.operands.slice(1).map((w) => w.text).join('\n')}`;
-    }
-    return cmd.operands.map((w) => w.text).join(' ');
+  if (cmd.base !== 'printf') return [];
+  const texts = cmd.operands.map((w) => w.text);
+  const scripts = [texts.join(' ')];
+  if (!texts.length) return scripts;
+  const [format, ...args] = texts;
+  if (PRINTF_LINE_FORMATS.has(format)) scripts.push(args.join('\n'));
+  if (format === '%s' || PRINTF_LINE_FORMATS.has(format)) scripts.push(args.join(''));
+  if (!format.includes('%')) {
+    const decoded = decodeAnsiCBash(format.replace(/\\0(?![0-7])/g, ' '));
+    if (decoded !== format) scripts.push(decoded);
   }
-  return null;
+  return scripts;
 }
 
-// Same rule applied to a `<( … )` / `>( … )` inner script: what its
-// echo / printf segments write, a line each (#5492: `<(echo a; echo "…")`),
-// or null when none writes anything knowable.
-function reconstructedProcsub(inner, reading) {
+// Same rule applied to a `<( … )` / `>( … )` inner script: the scripts its
+// first segment may amount to, as before, and (#5492: `<(echo a; echo "…")`)
+// what each echo / printf segment writes, a line each. The alternatives are
+// scanned apart, since joining them could let a quote in one swallow another.
+function reconstructedProcsubs(inner, reading) {
   const { tokens } = tokenizeCharged(inner, reading);
   const bySeg = new Map();
   for (const t of tokens) {
@@ -3249,12 +3259,12 @@ function reconstructedProcsub(inner, reading) {
     if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
     bySeg.get(t.seg).push(t);
   }
-  const lines = [];
-  for (const words of bySeg.values()) {
-    const line = reconstructedScript(words);
-    if (line !== null) lines.push(line);
-  }
-  return lines.length ? lines.join('\n') : null;
+  const perSeg = [...bySeg.values()].map((words) => reconstructedScripts(words));
+  const scripts = [];
+  for (const alts of perSeg) for (const a of alts) scripts.push(a);
+  const lines = perSeg.filter((alts) => alts.length).map((alts) => alts[0]);
+  if (lines.length > 1) scripts.push(lines.join('\n'));
+  return scripts;
 }
 
 // The operator connecting segment `s` to the nearest PRECEDING segment that has
@@ -3795,7 +3805,9 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
     // eval concatenates ALL its operands and runs the result.
     if (base === 'eval') {
       if (depth < MAX_NESTING_DEPTH) {
-        const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1, ctx);
+        // bash's eval takes an optional `--` before the words it joins (#5492).
+        const joined = operands.slice(operands.length && operands[0].text === '--' ? 1 : 0);
+        const hit = findSecretRead(joined.map((w) => w.text).join(' '), depth + 1, ctx);
         if (hit) return hit;
       }
       continue;
@@ -3805,8 +3817,7 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
     if (base === 'source' || base === '.') {
       for (const w of operands) {
         if (w.procsub !== undefined && depth < MAX_NESTING_DEPTH) {
-          const src = reconstructedProcsub(w.procsub, reading);
-          if (src !== null) {
+          for (const src of reconstructedProcsubs(w.procsub, reading)) {
             const hit = findSecretRead(src, depth + 1, ctx);
             if (hit) return hit;
           }
@@ -4003,8 +4014,10 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   if (fileTok) {
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
     if (fileTok.procsub !== undefined) {
-      const src = reconstructedProcsub(fileTok.procsub, reading);
-      if (src !== null) return findSecretRead(src, depth + 1, ctx);
+      for (const src of reconstructedProcsubs(fileTok.procsub, reading)) {
+        const hit = findSecretRead(src, depth + 1, ctx);
+        if (hit) return hit;
+      }
     }
     return null;
   }
@@ -4019,8 +4032,10 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   }
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if ((op === '|' || op === '|&') && prevSeg >= 0) {
-    const src = reconstructedScript((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
-    if (src !== null) return findSecretRead(src, depth + 1, ctx);
+    for (const src of reconstructedScripts((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'))) {
+      const hit = findSecretRead(src, depth + 1, ctx);
+      if (hit) return hit;
+    }
   }
   return null;
 }
@@ -4071,6 +4086,11 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
     if (subBase === 'git' || subBase === 'git.exe' || SSH_CLIENTS.has(subBase) || subIsShell) {
       for (const w of upstreamWords) {
         const named = mentionedSecret(w.text) || mentionedSecret(xargsUnquoted(w.text));
+        if (named) return secretRead(named);
+      }
+      // What an echo / printf upstream writes, which printf may run together (`%s`) or spell with escapes.
+      for (const written of reconstructedScripts(upstreamWords)) {
+        const named = mentionedSecret(written);
         if (named) return secretRead(named);
       }
     }
