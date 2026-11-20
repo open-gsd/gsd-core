@@ -724,7 +724,7 @@ on purpose. Without the fixture, the result depends on which runtimes the develo
 If the code under test also searches upward for `.planning/config.json`, start it inside a
 `createHermeticRoot()` directory as well (#4613).
 
-#### The lint rule that enforces it
+#### The lint rule that enforces child-env isolation
 
 `local/no-adhoc-env-isolation` (`eslint-rules/no-adhoc-env-isolation.cjs`) fails two hand-written
 copies under `tests/`:

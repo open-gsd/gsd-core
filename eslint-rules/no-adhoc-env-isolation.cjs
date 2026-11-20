@@ -40,7 +40,7 @@ const path = require('path');
  * string or computed string key), reported once per object, and an assignment
  * to `X.HOME` / `X.USERPROFILE` (or `X['HOME']`) where `X` is not
  * `process.env`. Both build an env by hand: `{ ...process.env, HOME: tmp }`,
- * `runGsdTools(args, cwd, { HOME: tmp })`, `childEnv.HOME = tmp`.
+ * `runNode([script], { env: { HOME: tmp } })`, `childEnv.HOME = tmp`.
  *
  * ## Exempt file and allowlist
  *
@@ -69,7 +69,8 @@ const path = require('path');
  * ## Known gaps (the ratchet is deliberately narrow)
  *
  *   - In-process mutation spelled `process.env.HOME = x` (or `['HOME']`) is
- *     not flagged: the isolation helper covers the env handed to a CHILD, and
+ *     not flagged: the isolation helper covers the env a test hands to a child
+ *     process, and
  *     in-process isolation is `sandboxHome()` / `scrubConfigLocationEnv()` in
  *     `tests/helpers.cjs` (CONTRIBUTING.md). Other spellings of it are flagged:
  *     `globalThis.process.env.HOME = x`, `const env = process.env; env.HOME =
