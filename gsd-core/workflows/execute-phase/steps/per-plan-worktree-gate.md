@@ -145,7 +145,7 @@ elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
   # whatever the phase-level ISOLATION is. Otherwise the plan's isolation is the host's, unchanged.
   # Read only `executorRuntime` and `fallback` from PLAN_DISPATCH: its `isolation` can be a held `none`
   # (#4904) that the force below replaces in the record the guard enforces.
-  PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" --plan "$plan_id" 2>/dev/null) || PLAN_DISPATCH_JSON=""
+  PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" --plan "$plan_id") || PLAN_DISPATCH_JSON=""
   # #4904: this plan decided `true`, so an earlier `none` of its own must not stand: the plain
   # query above holds it, and the guard would then allow a dispatch that omits the flag, past the
   # hold's ten minutes too (an aged `none` governs its own plan). Re-record with the host's declared

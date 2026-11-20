@@ -148,6 +148,21 @@ describe('#6213 the dispatch-isolation calls that can truncate surface the warni
     assert.ok(r.stderr.includes('STUB-TRUNCATION-WARNING'), `the call's stderr must stay visible: ${r.stderr}`);
     assert.equal(r.stdout.trim(), 'RAW=harness-worktree RC=0', 'the warning does not leak into the captured value');
   });
+
+  test('the per-plan gate\'s plan-scoped query lets a held query\'s warning reach the orchestrator (#4904)', () => {
+    // A held plan query writes its executor identity to a record of its own and warns on stderr when it cannot;
+    // the per-plan gate's capture must not discard that warning.
+    const lines = span(GATE, 'PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation', 'PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation');
+    assert.equal(lines.length, 1, 'the capture is one line');
+    const r = runBash(lines, { stdout: '', rc: 0 }, {
+      preamble: ['PHASE_NUMBER=02; plan_id=02-01-api',
+        'gsd_run() { echo "STUB-HELD-IDENTITY-WARNING" >&2; printf \'{"isolation":"none","held":true}\'; }'],
+      probe: 'printf "JSON=%s\\n" "$PLAN_DISPATCH_JSON"',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stderr.includes('STUB-HELD-IDENTITY-WARNING'), `the call's stderr must stay visible: ${r.stderr}`);
+    assert.equal(r.stdout.trim(), 'JSON={"isolation":"none","held":true}', 'the warning does not leak into the captured value');
+  });
 });
 
 describe('#6213 execute-phase dispatches with the routed executor and model', () => {
