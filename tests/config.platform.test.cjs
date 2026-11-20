@@ -601,8 +601,8 @@ describe('#5681: a symlinked defaults store', () => {
       'the save must land in the link target, merged');
   });
 
-  // Codex review: existsSync follows a link, so a dangling one read as a missing
-  // store and the write replaced the link with a regular file.
+  // existsSync follows a link, so a dangling one must not read as a missing
+  // store: the write would replace the link with a regular file.
   test('a dangling symlinked store is refused, and the link is left as it was', { skip: process.platform === 'win32' }, (t) => {
     const gsdHome = createTempDir('gsd-5681-dangling-');
     t.after(() => cleanup(gsdHome));

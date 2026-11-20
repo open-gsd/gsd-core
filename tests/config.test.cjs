@@ -4292,10 +4292,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.strictEqual(config.branching_strategy, 'phase');
   });
 
-  // Review 2026-11-18, Major 1: new-project creation wrote the flat commit_docs
-  // and search_gitignored from fixed defaults, and the loader reads the flat key
-  // first, so a saved nested spelling never reached a new project while the
-  // save had dropped the flat value that did.
+  // New-project creation writes the flat commit_docs and search_gitignored, and
+  // the loader reads the flat key first, so a saved nested spelling must reach
+  // that flat key: the save has dropped the flat value.
   test('a saved nested planning.commit_docs reaches a new project over a stale flat value', (t) => {
     const { config, store } = newProjectAfterSave(t, { commit_docs: true }, { planning: { commit_docs: false } });
     assert.deepStrictEqual(store, { planning: { commit_docs: false } });
@@ -4308,10 +4307,10 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.strictEqual(config.search_gitignored, true);
   });
 
-  // RV6.5 review of this round: a workstream config is merged over the root's
-  // before the loader's flat-first read, so the new project must carry the flat
-  // key with the chosen value. A nested-only workstream config lost to the
-  // root's flat `commit_docs: true`, and planning files were committed.
+  // A workstream config is merged over the root's before the loader's
+  // flat-first read, so the new project must carry the flat key with the chosen
+  // value: a nested-only workstream config would lose to the root's flat
+  // `commit_docs: true`, and planning files would be committed.
   test('a nested choice in a workstream overrides the flat value in the root config', (t) => {
     const { gsdHome } = defaultsHome(t, JSON.stringify({ commit_docs: true, search_gitignored: false }));
     const projectDir = tempProject(t);
@@ -4327,10 +4326,10 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
 
   // The flat key the template writes takes the chosen value, and a nested twin
   // in the new project is given the same value, so the two spellings agree.
-  // RV6.5 review of this round: a nested value of another type than the
-  // template's default counts as no setting. Copied into the flat key, a string
-  // "false" read as false to config-get but as true to check-commit, and a
-  // stored 1e400 (Infinity) was written as null.
+  // A nested value of another type than the template's default counts as no
+  // setting. Copied into the flat key, a string "false" would read as false to
+  // config-get but as true to check-commit, and a stored 1e400 (Infinity) would
+  // be written as null.
   test('a nested commit_docs that is not a boolean is no setting', (t) => {
     for (const bad of ['"false"', '0', '1e400']) {
       for (const [label, store, choices, want] of [
@@ -4469,9 +4468,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.deepStrictEqual(store, { granularity: 'fine' });
   });
 
-  // Codex review: outside a project the loader read these keys flat-only, so a
-  // save that stored the nested spelling and dropped the flat one turned a
-  // saved `workflow.research: false` back into the default.
+  // Outside a project the loader reads these keys flat, then nested, so a save
+  // that stores the nested spelling and drops the flat one keeps a saved
+  // `workflow.research: false`.
   test('turning research off outside a project survives the save that drops the flat spelling', (t) => {
     const { gsdHome } = defaultsHome(t, JSON.stringify({ research: false }));
     const outside = tempProject(t);
@@ -4508,9 +4507,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.deepStrictEqual(Object.fromEntries(keys.map((key) => [key, loaded[key]])), want);
   });
 
-  // Review 2026-11-18, Minor 2: the loader reads a flat research_before_questions
-  // ahead of workflow.research_before_questions, so a stale flat value kept
-  // winning over a saved nested one.
+  // The loader reads a flat research_before_questions ahead of
+  // workflow.research_before_questions, so saving the nested one must drop a
+  // stale flat value.
   test('a saved workflow.research_before_questions replaces a stale flat value', (t) => {
     const { gsdHome, defaultsPath } = defaultsHome(t, JSON.stringify({ research_before_questions: true }));
     const outside = tempProject(t);
@@ -4524,9 +4523,9 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     assert.strictEqual(loaded.research_before_questions, false);
   });
 
-  // Found with Nit 1's sweep: a hand-written `depth` naming an Object.prototype
-  // member read that member from the depth-to-granularity table, and the new
-  // project got no granularity. It is now an unknown depth, kept as given.
+  // A hand-written `depth` naming an Object.prototype member is an unknown depth,
+  // kept as given: read from the depth-to-granularity table it would yield that
+  // member, and the new project would get no granularity.
   test('a stored depth named like an Object.prototype member is kept as the granularity', (t) => {
     const { gsdHome } = defaultsHome(t, JSON.stringify({ depth: 'constructor' }));
     const projectDir = tempProject(t);
@@ -4699,10 +4698,10 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     });
   }
 
-  // Review 2026-11-18, Minor 1 and Nit 1: which reason each prototype-member
-  // name gets. As a setting or section key it is an unknown key, and the
-  // refusal suggests nothing (it suggested `[object Object]` for `__proto__`
-  // and `function Object() { [native code] }` for `constructor`). As an entry
+  // Which reason each prototype-member name gets. As a setting or section key it
+  // is an unknown key, and the refusal suggests nothing (an inherited lookup
+  // would suggest `[object Object]` for `__proto__` and
+  // `function Object() { [native code] }` for `constructor`). As an entry
   // under a setting that takes named entries it reaches the prototype-pollution
   // guard. The JSON is written as text: an object literal's `__proto__` sets
   // the prototype instead of a key.
@@ -4737,8 +4736,8 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     });
   }
 
-  // Codex review: both spellings were stored, and the loader and new-project
-  // creation each read a different one first.
+  // Both spellings in one save would both be stored, and the loader and
+  // new-project creation each read a different one first.
   test('both spellings of one setting in one save is a usage error', (t) => {
     const { defaultsPath, run } = storeWith(t, BEFORE);
     assertRefused(run([JSON.stringify({ commit_docs: false, planning: { commit_docs: true } })]), 'usage');
@@ -4827,9 +4826,9 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
 });
 
 describe('#5681: config-save-defaults reports lock failures through error()', () => {
-  // trek-e review 5814890657 (Minors 1 and 2): a lock that cannot be taken threw
-  // a plain Error (a stack trace from runMain), and a release that threw from
-  // `finally` replaced the save's own result.
+  // A lock that cannot be taken is a typed refusal, not a plain Error (a stack
+  // trace from runMain), and a release that fails never replaces the save's own
+  // result.
   function inProcessHome(t, contents) {
     const home = defaultsHome(t, contents, { inProcess: true });
     fs.mkdirSync(path.dirname(home.defaultsPath), { recursive: true });
@@ -4870,9 +4869,9 @@ describe('#5681: config-save-defaults reports lock failures through error()', ()
   // rows hold the lock with a process they spawn, so they live in
   // config.platform.test.cjs.
 
-  // Review 2026-11-18, Minor 5: a lock file whose contents name no owner (a
-  // crash between creating it and writing its payload) is never reclaimed, so
-  // the refusal names the file and when to remove it.
+  // A lock file whose contents name no owner (a crash between creating it and
+  // writing its payload) is never reclaimed, so the refusal names the file and
+  // when to remove it.
   test('a lock file that names no owner is refused with its path and the remedy, and left in place', async (t) => {
     const before = '{"mode":"interactive"}';
     const { defaultsPath, lockPath, save } = inProcessHome(t, before);

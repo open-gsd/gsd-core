@@ -1474,7 +1474,7 @@ describe('#3532 shadowed global-defaults warning', () => {
     assert.ok(registered, 'nested workflow.research_before_questions must register as shadowed');
   });
 
-  // #5681, review 2026-11-18 Minor 4: the nested workflow keys the /gsd-settings
+  // #5681: the nested workflow keys the /gsd-settings
   // template saves are copied into new projects, so the "ignored for model
   // resolution" warning does not name them. Only the flat keys are reported.
   test('the nested workflow keys the settings template saves do not warn under a project config', () => {
