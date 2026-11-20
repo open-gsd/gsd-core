@@ -211,7 +211,7 @@ gsd_stall_should_recover() {
 # the phase dir up to its nearest existing ancestor (a dangling one too), a phase
 # dir that resolves outside ROOT, is ROOT, or holds a `.git` component below it (in
 # any letter case, and the names Windows reads as `.git`), and a symlinked
-# .gsd-returns or .gitignore (or a .gitignore other than the catch-all `*`) all disable the receipt; the watch then ends on the
+# .gsd-returns or .gitignore (or a .gitignore other than exactly `*` and a newline) all disable the receipt; the watch then ends on the
 # runtime's completion result or as `stalled`. Both sides are compared after
 # `cd -P`/`pwd -P` (macOS temp dirs live under the /var -> /private/var link; Git
 # Bash maps C:/ to /c/ on both sides). Only static, checked-in links are in scope: a
@@ -285,8 +285,9 @@ gsd_receipt_path() {
   if [ -e "$dir/.gsd-returns/.gitignore" ]; then
     # A directory or FIFO there would fail or block the write.
     [ -f "$dir/.gsd-returns/.gitignore" ] || { _gsd_no_receipt '.gsd-returns/.gitignore is not a regular file'; return 1; }
-    # One written by hand that does not hold exactly `*` might let receipts be committed.
-    [ "$(head -c 3 -- "$dir/.gsd-returns/.gitignore" 2>/dev/null)" = '*' ] || { _gsd_no_receipt '.gsd-returns/.gitignore is not the catch-all *'; return 1; }
+    # Any other content (a later `!*` line, say) might let receipts be committed, so only
+    # the exact bytes written below are accepted; an unreadable file fails the compare too.
+    printf '*\n' | cmp -s - "$dir/.gsd-returns/.gitignore" 2>/dev/null || { _gsd_no_receipt '.gsd-returns/.gitignore is not exactly the * line written here, or is unreadable'; return 1; }
   else
     { printf '*\n' > "$dir/.gsd-returns/.gitignore"; } 2>/dev/null || { _gsd_no_receipt 'cannot write .gsd-returns/.gitignore'; return 1; }
   fi

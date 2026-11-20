@@ -1923,12 +1923,16 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       // a .gitignore that cannot be written refuses instead of printing a path.
       [`${P}/ph-file`, '.gsd-returns is a regular file'],
       [`${P}/ph-gi`, '.gsd-returns/.gitignore is a directory'],
-      // Q-4: a hand-written .gitignore that is not the catch-all `*` could let receipts be committed.
-      [`${P}/ph-star`, '.gsd-returns/.gitignore is not *'],
+      // Q-4 and r5 MI-1: a .gitignore other than exactly `*` and a newline could let receipts be
+      // committed (`*`, a blank line, then `!*` un-ignores them); so could `!keep`.
+      [`${P}/ph-star`, '.gsd-returns/.gitignore is *, a blank line and !*'],
+      [`${P}/ph-keep`, '.gsd-returns/.gitignore is !keep'],
     ];
-    const reasonOf = { [`${P}/ph-file`]: 'cannot create .gsd-returns', [`${P}/ph-gi`]: '.gsd-returns/.gitignore is not a regular file', [`${P}/ph-star`]: 'not the catch-all *' };
+    const reasonOf = { [`${P}/ph-file`]: 'cannot create .gsd-returns', [`${P}/ph-gi`]: '.gsd-returns/.gitignore is not a regular file', [`${P}/ph-star`]: 'not exactly the * line', [`${P}/ph-keep`]: 'not exactly the * line' };
     fs.mkdirSync(path.join(proj, 'ph-star', '.gsd-returns'), { recursive: true });
-    fs.writeFileSync(path.join(proj, 'ph-star', '.gsd-returns', '.gitignore'), '!keep\n');
+    fs.writeFileSync(path.join(proj, 'ph-star', '.gsd-returns', '.gitignore'), '*\n\n!*\n');
+    fs.mkdirSync(path.join(proj, 'ph-keep', '.gsd-returns'), { recursive: true });
+    fs.writeFileSync(path.join(proj, 'ph-keep', '.gsd-returns', '.gitignore'), '!keep\n');
     fs.mkdirSync(path.join(proj, 'ph-file'));
     fs.writeFileSync(path.join(proj, 'ph-file', '.gsd-returns'), 'not a directory\n');
     // A directory named .gitignore is refused before any write is tried.
@@ -1944,7 +1948,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.ok(phaseDir === '' || !r.stderr.includes(phaseDir), `${label}: the phase dir itself is never echoed`);
       ran += 1;
     }
-    assert.ok(ran >= 9);
+    assert.ok(ran >= 10);
   });
 
   // Option B (#5192): the input contract. PHASE_DIR and ROOT are canonical absolute paths
@@ -2000,6 +2004,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const good = receiptPathFrom(f, f.dir, ok, proj);
     assert.equal(good.status, 0, good.stderr);
     assert.match(good.stdout.trim(), /\/proj\/\.planning\/phases\/01-x\/\.gsd-returns\/checker\.\d+\.[A-Za-z0-9]+$/i);
+    // Off Windows (where cygpath -m may respell the drive) the path starts with the phase dir passed in.
+    if (process.platform !== 'win32') assert.ok(good.stdout.trim().startsWith(`${ok}/.gsd-returns/checker.`), good.stdout);
     // On Windows init's project_root is the native path (backslashes, no toPosixPath);
     // it is accepted as given.
     if (process.platform === 'win32') {
@@ -2085,9 +2091,12 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const valueFile = path.join(f.dir, 'locale-dir-value.bin');
     for (const [name, refused] of [['u\u0085x', false], ['u x', false], ['u\x01x', true], ['u\x7fx', true]]) {
       fs.writeFileSync(valueFile, `${P}/${name}`);
-      for (const lc of ['C', 'C.UTF-8']) {
-        const r = runBashScript(`export LC_ALL=${lc}\n${helpers}\nIFS= read -r -d '' d < ${q(fwd(valueFile))} || true\ngsd_receipt_path "$d" x ${q(P)}\n`, []);
-        assert.equal(r.status !== 0, refused, `${JSON.stringify(name)} under LC_ALL=${lc}: ${refused ? 'refused' : 'accepted'}`);
+      // bash always; zsh too when it is on PATH (its locale handling is the other one in use).
+      for (const interpreter of [undefined, zshOnPath()].filter((x, i) => i === 0 || x)) {
+        for (const lc of ['C', 'C.UTF-8']) {
+          const r = runBashScript(`export LC_ALL=${lc}\n${helpers}\nIFS= read -r -d '' d < ${q(fwd(valueFile))} || true\ngsd_receipt_path "$d" x ${q(P)}\n`, [], interpreter ? { interpreter } : {});
+          assert.equal(r.status !== 0, refused, `${JSON.stringify(name)} under LC_ALL=${lc} (${interpreter ? 'zsh' : 'bash'}): ${refused ? 'refused' : 'accepted'}`);
+        }
       }
     }
   });
@@ -2520,9 +2529,15 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('gsd_return_marker never reads a receipt with a NUL byte (bash and zsh would disagree)', (t) => {
     const f = fixture(t);
     let ran = 0;
+    const zsh = zshOnPath();
     for (const body of ['## ISSUES\0 FOUND\n', '## ISSUES FOUND\n\0\n', Buffer.from('## ISSUES FOUND\n', 'utf16le')]) {
       fs.writeFileSync(f.receipt, body);
-      assert.equal(runHelpers(`gsd_return_marker ${q(fwd(f.receipt))} '## ISSUES FOUND'`), '', `${JSON.stringify(String(body))}: no marker`);
+      assert.equal(runHelpers(`gsd_return_marker ${q(fwd(f.receipt))} '## ISSUES FOUND'`), '', `${JSON.stringify(String(body))}: no marker (bash)`);
+      if (zsh) {
+        const z = runBashScript(`${extractStallFunctionsBash()}\ngsd_return_marker ${q(fwd(f.receipt))} '## ISSUES FOUND'\n`, [], { interpreter: zsh });
+        assert.equal(z.status, 0, z.stderr);
+        assert.equal(z.stdout.trim(), '', `${JSON.stringify(String(body))}: no marker (zsh)`);
+      }
       ran += 1;
     }
     assert.equal(ran, 3);
