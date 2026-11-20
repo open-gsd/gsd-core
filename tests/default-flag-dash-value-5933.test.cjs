@@ -7,7 +7,7 @@
  * therefore lost `--dry-run` and wrote the config.
  *
  * `--default` now refuses a missing or `--`-led value with the same usage error
- * as its siblings `--cwd`, `--project-dir` and `--pick`, before any token is
+ * as its siblings `--cwd`, `--project-dir`, `--ws` and `--pick`, before any token is
  * removed. An explicit empty string and ordinary values keep working.
  */
 
@@ -120,7 +120,7 @@ describe('the value-taking global options share one refusal rule (#5933)', () =>
     cleanup(tmpDir);
   });
 
-  for (const flag of ['--cwd', '--project-dir', '--pick', '--default']) {
+  for (const flag of ['--cwd', '--project-dir', '--ws', '--pick', '--default']) {
     test(`${flag} refuses a following --x with the usage reason`, () => {
       const result = runCli(['config-get', 'absent.key', flag, '--x'], { cwd: tmpDir });
       assertUsageRefusal(result);
@@ -131,4 +131,9 @@ describe('the value-taking global options share one refusal rule (#5933)', () =>
       assertUsageRefusal(result);
     });
   }
+
+  test('--ws= with an empty value is refused with the usage reason', () => {
+    const result = runCli(['config-get', 'absent.key', '--ws='], { cwd: tmpDir });
+    assertUsageRefusal(result);
+  });
 });
