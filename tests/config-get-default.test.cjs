@@ -2139,3 +2139,63 @@ describe('#6029 acceptance: /gsd-code-review resolve_depth in a project with no 
     });
   });
 }
+
+// #5933: parseConfigGetArgs above is a hand-written copy of how the CLI reads
+// `--default`. These rows tie the copy to the real parser: the copy refuses
+// exactly the argv the CLI refuses with the usage reason, and for every other
+// argv it hands cmdConfigGet what makes it print the CLI's own output.
+describe('parseConfigGetArgs agrees with the CLI on --default (#5933)', () => {
+  const { runCliSync } = require('../gsd-core/bin/gsd-tools.cjs');
+  const gsdUnset = Object.fromEntries(
+    Object.keys(process.env).filter((name) => /^GSD_/i.test(name)).map((name) => [name, undefined]),
+  );
+  let tmpDir;
+  let savedGsdEnv;
+
+  // cmdConfigGet runs in this process, so the parent's GSD_* variables are
+  // cleared for the length of each test as well.
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-config-default-mirror-'));
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    savedGsdEnv = Object.fromEntries(Object.keys(gsdUnset).map((name) => [name, process.env[name]]));
+    for (const name of Object.keys(gsdUnset)) delete process.env[name];
+  });
+
+  afterEach(() => {
+    Object.assign(process.env, savedGsdEnv);
+    cleanup(tmpDir);
+  });
+
+  const rows = [
+    ['config-get', 'absent.key', '--default'],
+    ['config-get', 'absent.key', '--raw', '--default'],
+    ['config-get', 'absent.key', '--default', '--x'],
+    ['config-get', 'absent.key', '--default', '--'],
+    ['config-get', 'absent.key', '--default', ''],
+    ['config-get', 'absent.key', '--default', 'x'],
+    ['config-get', 'absent.key', '--default', '-x'],
+    ['config-get', 'absent.key', '--default', '[]', '--raw'],
+  ];
+
+  for (const argv of rows) {
+    test(`${argv.map((arg) => JSON.stringify(arg)).join(' ')}`, () => {
+      let mirror = null;
+      try {
+        mirror = parseConfigGetArgs(argv);
+      } catch {
+        // The copy refused the argv; compared with the CLI below.
+      }
+      const cli = runCliSync({ argv: ['--json-errors', ...argv], cwd: tmpDir, env: { ...process.env, ...gsdUnset } });
+      const cliRefused = cli.exitCode !== 0 && JSON.parse(cli.stderr.trim()).reason === io.ERROR_REASON.USAGE;
+
+      assert.equal(mirror === null, cliRefused, `the copy and the CLI disagree on refusing ${JSON.stringify(argv)}`);
+      if (!cliRefused) {
+        assert.equal(cli.exitCode, 0, `stderr: ${cli.stderr}`);
+        const out = captureFdWrite(1, () => {
+          config.cmdConfigGet(tmpDir, mirror.keyPath, mirror.raw, mirror.defaultValue);
+        });
+        assert.equal(out, cli.stdout);
+      }
+    });
+  }
+});
