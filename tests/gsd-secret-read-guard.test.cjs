@@ -1313,6 +1313,27 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   ]);
   blocks(["time A=1 BASH_ENV=./.env bash -c ':'"], { path: 'BASH_ENV=./.env' });
   allows(['time GIT_EDITOR=vim git commit', "time GIT_EDITOR='echo .env' git commit"]);
+
+  // `source` / `.` and a shell given `/dev/stdin` (or `/dev/fd/0`, `/proc/self/fd/0`) run their stdin, as a shell
+  // with no file operand does, and so does one given `-s`. A `<( )` operand is still read as the script.
+  blocks([
+    "source /dev/stdin <<< 'cat .env'",
+    ". /dev/stdin <<'EOF'\ncat .env\nEOF",
+    "echo 'cat .env' | source /dev/fd/0",
+    "bash /dev/stdin <<< 'cat .env'",
+    `source /dev/stdin <<< "export GIT_EDITOR='cat .env #'"; git commit`,
+    "bash -s arg <<< 'cat .env'",
+    "source //dev/./stdin <<< 'cat .env'",
+    ". /proc/self/fd/0 <<< 'cat .env'",
+    // Controls.
+    "bash -s <(echo 'cat .env')",
+    "bash <(echo 'cat .env') -s",
+  ]);
+  allows([
+    "source /dev/stdin <<< 'echo .env'",
+    // After the file operand, `-s` is the script's `$1`, and stdin is the script's data.
+    "bash file.sh -s <<< 'cat .env'",
+  ]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
