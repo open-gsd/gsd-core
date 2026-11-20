@@ -999,9 +999,9 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.ok(direct.resolverWork > 0);
   });
 
-  // Counted, not timed. Each name's first lookup reads back to the enclosing
-  // named function, so N writes of N different names read about N * N / 2
-  // lines without the budget. The long second argument makes each line cost
+  // Counted, not timed. Each name's first lookup reads back up the file, so
+  // N writes of N different names read about N * N / 2 lines without the
+  // budget. The long second argument makes each line cost
   // more, so fewer writes reach the budget.
   test('bound: writes that each name a different variable stop at the file\'s budget, and every later write is reported unresolved', () => {
     const { MAX_RAW_WRITE_RESOLVER_WORK: MAX } = guard;
