@@ -30,7 +30,7 @@ const { OUTCOME } = processSeam;
 const runGitSpy = mock.method(processSeam, 'runGit');
 after(() => mock.restoreAll());
 
-const { gitOrThrow, throwIfFailed, toLegacyResult, DEFAULT_GIT_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { gitOrThrow, refShaOrEmpty, throwIfFailed, toLegacyResult, DEFAULT_GIT_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 
 /**
  * Deliberately NOT DEFAULT_GIT_TIMEOUT_MS or any real class norm — chosen
@@ -41,6 +41,7 @@ const { gitOrThrow, throwIfFailed, toLegacyResult, DEFAULT_GIT_TIMEOUT_MS } = re
  */
 const ARBITRARY_OVERRIDE_TIMEOUT_MS = 12345;
 const { createTempDir, cleanup } = require('./helpers.cjs');
+const { gitChildEnv } = require('./helpers/isolated-env.cjs');
 
 /**
  * Runs `fn`, returning the error it throws. Fails the calling test with a
@@ -237,6 +238,55 @@ describe('git-fixture: E — gitOrThrow', () => {
     );
     const author = gitOrThrow(['log', '-1', '--format=%an'], { cwd: dir }).trim();
     assert.equal(author, 'Env Author');
+  });
+});
+
+describe('git-fixture: refShaOrEmpty', () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = initRepo();
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  test('an existing ref gives its sha', () => {
+    const env = gitChildEnv(dir);
+    assert.equal(refShaOrEmpty('HEAD', { cwd: dir, env }), gitOrThrow(['rev-parse', 'HEAD'], { cwd: dir, env }).trim());
+  });
+
+  test('a missing ref (git exit 1) gives the empty string', () => {
+    assert.equal(refShaOrEmpty('refs/heads/does-not-exist', { cwd: dir, env: gitChildEnv(dir) }), '');
+  });
+
+  test('a git exit other than 1 (128: not a repository) rethrows, not "no ref"', (t) => {
+    const notRepo = createTempDir('git-fixture-notrepo-');
+    t.after(() => cleanup(notRepo));
+    // The ceiling keeps git from finding a repository above a TMPDIR that sits inside one.
+    const env = { ...gitChildEnv(notRepo), GIT_CEILING_DIRECTORIES: path.dirname(notRepo) };
+    const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: notRepo, env }));
+    assert.equal(caught.status, 128);
+  });
+
+  test('a spawn failure (status null) rethrows', () => {
+    const caught = captureThrown(() => refShaOrEmpty('refs/heads/x', { cwd: path.join(dir, 'no-such-subdirectory') }));
+    assert.equal(caught.outcome, OUTCOME.SPAWN_FAILED);
+  });
+
+  test('a TIMED_OUT seam result rethrows', () => {
+    runGitSpy.mock.mockImplementationOnce(() => ({
+      outcome: OUTCOME.TIMED_OUT,
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: true,
+      signal: 'SIGTERM',
+      code: 'ETIMEDOUT',
+    }));
+    const caught = captureThrown(() => refShaOrEmpty('HEAD', { cwd: dir }));
+    assert.equal(caught.outcome, OUTCOME.TIMED_OUT);
   });
 });
 
