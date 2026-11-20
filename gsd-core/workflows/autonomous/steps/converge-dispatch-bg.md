@@ -6,6 +6,6 @@ If `PLAN_STRATEGY=converge`, print: `◆ Spawning background plan-convergence lo
 Agent(
   description="Plan convergence phase ${PHASE_NUM}: ${PHASE_NAME}",
   run_in_background=true,
-  prompt="Run plan convergence for phase ${PHASE_NUM}: Skill(skill=\"gsd-plan-review-convergence\", args=\"${PHASE_NUM} ${CONVERGENCE_ARGS}\")"
+  prompt="Background: no AskUserQuestion. Run plan convergence for phase ${PHASE_NUM}: Skill(skill=\"gsd-plan-review-convergence\", args=\"${PHASE_NUM} ${CONVERGENCE_ARGS}\")"
 )
 ```
