@@ -303,6 +303,16 @@ describe('#5354 tdd review checkpoint seal', () => {
   test('every NotEvaluable reason has report text', () => {
     const notEvaluable = Object.values(TDD_ROW_REASON).filter((r) => r !== TDD_ROW_REASON.GREEN_BEFORE_RED).sort();
     assert.deepEqual(Object.keys(TDD_NOT_EVALUABLE_WHY).sort(), notEvaluable);
+    // One literal per reason, so a swapped or emptied text fails (the export is the typed surface, not the rendered report).
+    assert.match(TDD_NOT_EVALUABLE_WHY[TDD_ROW_REASON.SEALED_SHALLOW_HISTORY], /history is incomplete/);
+    assert.match(TDD_NOT_EVALUABLE_WHY[TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE], /SUMMARY task commits are unreachable/);
+  });
+
+  test('a plan file name with control bytes reaches the rows as printable text', () => {
+    const { dir } = fixture([]);
+    w(dir, `${PHASE}/01-\n02-PLAN.md`, '---\nphase: 1\nplan: 2\ntype: tdd\n---\n# Plan\n');
+    const ids = run(dir).payload.rows.map((row) => row.planId).sort();
+    assert.deepEqual(ids, ['01-01', '01-?02']);
   });
 
   test('a plan with reachable commits lacking test()/feat() still fails', () => {
