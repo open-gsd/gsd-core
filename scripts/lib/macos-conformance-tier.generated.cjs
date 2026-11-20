@@ -136,6 +136,7 @@ module.exports = {
   "tests/hooks-opt-in.test.cjs",
   "tests/in-process-cli.test.cjs",
   "tests/init-manager.test.cjs",
+  "tests/init.process.test.cjs",
   "tests/init.test.cjs",
   "tests/install-fs-adapter-seam.test.cjs",
   "tests/install-minimal-hooks.test.cjs",
