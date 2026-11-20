@@ -41,7 +41,7 @@ const { extractFrontmatter } = frontmatterMod;
 /**
  * The one place "does this SUMMARY status value mean halted" is decided.
  * Case-insensitive, trims whitespace. Every halt reader reaches this through
- * `isSummaryFileHalted` below, on whichever SUMMARY that reader paired with
+ * `isSummaryFileHalted` below, on whichever SUMMARY that reader looked up for
  * the plan, so the status value that means "halted" cannot drift between them.
  */
 function isHaltedStatus(status: unknown): boolean {
