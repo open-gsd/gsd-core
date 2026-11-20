@@ -604,15 +604,18 @@ describe('#5354 tdd review checkpoint seal', () => {
     return false;
   }
 
-  // Hostile seals (CONTRIBUTING.md "Parser and project-file inputs"): none is written by hand. A valid seal is built from git's own
+  // Hostile seals (CONTRIBUTING.md "Parser and project-file inputs"): no mutated seal is written by hand. A valid seal is built from git's own
   // answer in the documented shape (never from the gate's --record output), every key path of it is walked, and the checklist is applied to each path: a scalar where an object is
   // expected and an object where a string is expected, an array, null, a missing and an emptied member, a duplicated key, a NUL
-  // or replacement character in a value or a key, a path-traversal-like key, and a truncated text. No key name is typed here.
+  // or replacement character in a value or a key, a path-traversal-like key, and a truncated text. The walker derives every mutation path; only the valid seal is typed, in the documented shape.
   const SEALED_SQUASH = ['test(01-01): red', 'feat(01-01): green'];
-  const pathsOf = (node, prefix = []) => [prefix, ...(node !== null && typeof node === 'object'
-    ? Object.keys(node).flatMap((k) => pathsOf(node[k], [...prefix, k]))
-    : [])];
-  const at = (root, p) => p.reduce((n, k) => n[k], root);
+  function pathsOf(node, prefix = []) {
+    const children = node !== null && typeof node === 'object' ? Object.keys(node).flatMap((k) => pathsOf(node[k], [...prefix, k])) : [];
+    return [prefix, ...children];
+  }
+  function at(root, p) {
+    return p.reduce((n, k) => n[k], root);
+  }
   function withValue(root, p, value) {
     if (p.length === 0) return value;
     const copy = structuredClone(root);
@@ -648,7 +651,9 @@ describe('#5354 tdd review checkpoint seal', () => {
     }
     return `{${parts.join(',')}}`;
   }
-  const kindOf = (v) => (Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v);
+  function kindOf(v) {
+    return Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v;
+  }
   const WRONG_TYPES = [1, 'x', true, [], null, {}];
   const SUFFIXES = ['\u0000', '�'];
   const TRAVERSAL = ['../../', '..\\'];

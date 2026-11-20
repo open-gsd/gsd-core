@@ -12,11 +12,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 const { commitReachability, commitIsGone } = require('../gsd-core/bin/lib/gate-tdd-review-seal.cjs');
 const { commitHistoryComplete } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
-const git = (dir, ...args) => gitOrThrow(['-c', 'user.name=gate-test', '-c', 'user.email=gate-test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd: dir });
+const git = (dir, ...args) => gitOrThrow(['-c', 'user.name=gate-test', '-c', 'user.email=gate-test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, env: isolatedEnv({ home: dir }) });
 
 describe('commitReachability', () => {
   test('tells a reachable, an unreachable and a missing commit apart', (t) => {
