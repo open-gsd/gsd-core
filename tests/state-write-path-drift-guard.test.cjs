@@ -1698,8 +1698,8 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     }
   });
 
-  // `if (c) p = <rhs>;` lines between ASSIGN and WRITE_P. When `c` is false, p
-  // still names STATE.md at the write, so every row below is a STATE.md write.
+  // `if (c) p = <rhs>;` lines between ASSIGN and WRITE_P: when `c` is false, p
+  // still names STATE.md at the write.
   const viaRhs = (rhs) => W(ASSIGN, `  if (c) p = ${rhs};`, WRITE_P);
   const chain = (n) => W(ASSIGN, ...Array.from({ length: n }, (_, k) => `  if (c) p = p + '${k}';`), WRITE_P);
 
