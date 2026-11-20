@@ -28,8 +28,8 @@
       "reductionPct": 12.95
     },
     "plan-phase": {
-      "offTokens": 29009,
-      "onTokens": 25741,
+      "offTokens": 28998,
+      "onTokens": 25730,
       "reductionPct": 11.27
     },
     "verify-work": {
@@ -39,8 +39,8 @@
     }
   },
   "aggregate": {
-    "offTokens": 115007,
-    "onTokens": 97388,
+    "offTokens": 114996,
+    "onTokens": 97377,
     "reductionPct": 15.32
   }
 }
