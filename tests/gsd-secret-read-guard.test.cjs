@@ -2041,14 +2041,23 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
   });
 
   test('property: nested strings are read up to MAX_NESTING_DEPTH and denied past it', () => {
+    // Up to the limit the innermost command decides, with its own block or none, so
+    // a limit one level short (depth 3 denied as split-string-too-deep) fails
+    // whichever command the run draws.
+    const own = { [LAUNCH]: 'debugger-cli-spawn', 'cat .env': 'secret-read', ls: null };
+    let atLimit = 0;
     fc.assert(
       fc.property(fc.integer({ min: 1, max: 6 }), fc.constantFrom(LAUNCH, 'cat .env', 'ls'), (depth, inner) => {
         const r = runHook(bash(nested(inner, depth)));
         if (depth > 3) return r.status === 2 && JSON.parse(r.stdout).code === 'split-string-too-deep';
-        return inner === 'ls' ? r.status === 0 : r.status === 2;
+        if (depth === 3) atLimit++;
+        const code = own[inner];
+        return code === null ? r.status === 0 : r.status === 2 && JSON.parse(r.stdout).code === code;
       }),
       { ...PROPERTY_RUNS, numRuns: 20 },
     );
+    // Not vacuous: some runs sit at the limit itself.
+    assert.ok(atLimit >= 1, `no run drew nesting depth 3 (${atLimit})`);
   });
 });
 
