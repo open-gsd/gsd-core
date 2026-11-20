@@ -2113,6 +2113,18 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     assert.deepStrictEqual(failures, []);
   });
 
+  test('[regression #6218] no workflow expands the persisted $GSD_WS_ARG unquoted: zsh does not word-split it', () => {
+    const bare = [];
+    for (const file of corpus) {
+      for (const fence of fences(fs.readFileSync(file, 'utf-8'))) {
+        for (const l of fence.lines) {
+          if (/(?<![\w{])\$GSD_WS_ARG\b/.test(l.text)) bare.push(`${path.relative(REPO_ROOT, file)}:${l.no} ${l.text.trim()}`);
+        }
+      }
+    }
+    assert.deepStrictEqual(bare, []);
+  });
+
   test('the root-scoped exemptions are not stale: each still has a fenced call', () => {
     for (const name of ROOT_SCOPED) {
       const text = fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf-8');
@@ -2231,10 +2243,19 @@ describe('regressions: workflows forward the started workstream to agent-skills 
         assert.ok(stripLines.length > 0, 'the corpus has arg-stripping lines');
         for (const line of stripLines) {
           const name = line.slice(0, line.indexOf('='));
-          for (const [input, expected] of [['12 --ws feature --auto', '12 --auto'], ['12 --ws "feature" --auto', '12 --auto'], ['12 --ws \'feature\' --auto', '12 --auto']]) {
-            const r = runShellScript(sh, `${line}\nprintf '%s' "$${name}"`, { env: { ...process.env, GSD_ARGS: input } });
+          // [args, the workstream the parse selects, what the strip leaves]: the strip removes exactly the token the
+          // parse captured, and a value the parse refuses is left for xargs as it was before #6218.
+          for (const [input, selected, left] of [
+            ['12 --ws feature --auto', '--ws feature', '12 --auto'],
+            ['12 --ws "feature" --auto', '--ws feature', '12 --auto'],
+            ['12 --ws \'feature\' --auto', '--ws feature', '12 --auto'],
+            ['12 --ws "my team"', '', '12 --ws my team'],
+            ['12 --ws -x', '', '12'],
+            ['12', '', '12'],
+          ]) {
+            const r = runShellScript(sh, `${CANONICAL_PARSE}\n${line}\nprintf '%s|%s' "$GSD_WS" "$${name}"`, { env: { ...process.env, GSD_ARGS: input } });
             assertSeamExit(assert, r, 0, r.stderr);
-            assert.strictEqual(r.stdout, expected, `${line} on ${input}`);
+            assert.strictEqual(r.stdout, `${selected}|${left}`, `${line} on ${input}`);
           }
         }
       });

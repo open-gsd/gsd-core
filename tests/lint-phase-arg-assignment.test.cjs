@@ -171,9 +171,8 @@ describe('#4777 review Minor — canonical forms against a quoted value', { skip
     }
   });
 
-  test('positional: a quoted --ws value holding a space is not a workstream name and leaves its tail behind', () => {
-    const result = runForm(CANONICAL_FORMS.positional, '4 --ws "my team"');
-    assert.notEqual(result, '4', 'the space makes the value unsupported, which the workstream parse also refuses');
+  test('positional: a quoted --ws value holding a space is not a workstream name; the argument is left as xargs unquotes it', () => {
+    assert.equal(runForm(CANONICAL_FORMS.positional, '4 --ws "my team"'), '4 --ws my team');
   });
 
   test('phaseFlag: a quoted --phase value yields an empty PHASE_ARG, reproducing #4777 for this shape', () => {
