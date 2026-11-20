@@ -92,12 +92,9 @@ Error: Phase ${PHASE_ARG} not found. Run /gsd:progress to see available phases.
 
 This runs BEFORE config gate check so user errors are surfaced immediately regardless of config state.
 
-If FILES_OVERRIDE is set, split by comma into array:
-```bash
-if [ -n "$FILES_OVERRIDE" ]; then
-  IFS=',' read -ra FILES_ARRAY <<< "$FILES_OVERRIDE"
-fi
-```
+If FILES_OVERRIDE is set, Tier 1 below splits it by comma inside its own block (#6152): the split
+and its use must share one shell call, because an orchestrator that runs each fenced block as a
+separate shell call loses any array built here, and `read -a` is bash-only (zsh: `bad option: -a`).
 </step>
 
 <step name="check_config_gate">
@@ -145,29 +142,50 @@ if [ -n "$FILES_OVERRIDE" ]; then
   _gsd_norm_path() {
     if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
   }
-  REPO_ROOT=$(_gsd_norm_path "$(git rev-parse --show-toplevel 2>/dev/null)")
-  
-  for file_path in "${FILES_ARRAY[@]}"; do
+  # #6152: resolve a path (symlinks followed when it exists, `..` collapsed when it does not) with node, not GNU
+  # `realpath -m`, which macOS and other BSD userlands do not have.
+  _gsd_resolve_path() {
+    # The path travels in the environment, never as an argument: node parses an argument that starts with `-` as one of
+    # its own options (`--import=…`, `--require=…`), so a hostile list entry would run code.
+    GSD_RESOLVE_PATH="$1" node -e 'const p=require("path"),f=require("fs");let a=p.resolve(process.env.GSD_RESOLVE_PATH);try{a=f.realpathSync(a)}catch(e){}process.stdout.write(a)'
+  }
+  # An empty root (git failed) stays empty: the resolver would turn "" into the working directory, so it is only called
+  # on a non-empty answer, and the `-z "$REPO_ROOT"` check below then rejects every entry.
+  REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  [ -n "$REPO_ROOT" ] && REPO_ROOT=$(_gsd_norm_path "$(_gsd_resolve_path "$(_gsd_norm_path "$REPO_ROOT")")")
+
+  # #6152: split on commas with a portable while-read loop (no `read -a`), here-string so the loop runs in this shell.
+  while IFS= read -r file_path; do
+    # Trim leading and trailing blanks so `a.ts, b.ts` lists the two files (no entry names a path with edge blanks).
+    file_path="${file_path#"${file_path%%[![:space:]]*}"}"
+    file_path="${file_path%"${file_path##*[![:space:]]}"}"
+    [ -n "$file_path" ] || continue
     # Security: validate path is within repository (prevent path traversal). Compare on a path
     # boundary: the root itself or anything under "<root>/" — a sibling such as "<root>-other"
     # shares the prefix but is not inside.
-    ABS_PATH=$(_gsd_norm_path "$(realpath -m "${file_path}" 2>/dev/null || echo "${file_path}")")
+    ABS_PATH=$(_gsd_norm_path "$(_gsd_resolve_path "$(_gsd_norm_path "${file_path}")")")
     # Fail closed on two shapes that cannot be trusted: an empty root (git failed, so nothing can be
-    # "inside" it) and a path that still holds ".." segments (a resolved path never does, so it was
-    # not resolved — no GNU realpath).
+    # "inside" it) and a path that still holds ".." segments (a resolved path never does).
     if [ -z "$REPO_ROOT" ] || [[ "$ABS_PATH" == */../* || "$ABS_PATH" == */.. ]] || [[ "$ABS_PATH" != "$REPO_ROOT" && "$ABS_PATH" != "$REPO_ROOT"/* ]]; then
       echo "Error: File path outside repository, skipping: ${file_path}"
       continue
     fi
-    
+
     # Validate path exists (relative to repo root)
     if [ -f "${REPO_ROOT}/${file_path}" ] || [ -f "${file_path}" ]; then
       REVIEW_FILES+=("$file_path")
     else
       echo "Warning: File not found, skipping: ${file_path}"
     fi
-  done
-  
+  done <<< "$(printf '%s' "$FILES_OVERRIDE" | tr ',' '\n')"
+
+  # #6152: fail closed. An override that resolves to no reviewable file inside the repository is an error, never a
+  # widening to the phase evaluation scope under the `--files override` label.
+  if [ ${#REVIEW_FILES[@]} -eq 0 ]; then
+    echo "Error: --files override resolved to no reviewable file inside the repository; not falling back to phase scope."
+    exit 1
+  fi
+
   echo "File scope: ${#REVIEW_FILES[@]} files from --files override"
 fi
 ```
@@ -314,8 +332,8 @@ if [ -n "$SCOPE_MISSING" ]; then
   printf '%s\n' "$SCOPE_MISSING" | sed 's/^/  - /'
 fi
 
-if [ ${#REVIEW_FILES[@]} -eq 0 ]; then
-  # Full fallback (per D-02): SUMMARY scoping yielded nothing.
+if [ -z "$FILES_OVERRIDE" ] && [ ${#REVIEW_FILES[@]} -eq 0 ]; then
+  # Full fallback (per D-02): SUMMARY scoping yielded nothing. Never reached for a --files override (#6152).
   if [ -n "$SCOPE_FILES" ]; then
     while IFS= read -r file; do
       [ -n "$file" ] && REVIEW_FILES+=("$file")
@@ -659,7 +677,10 @@ rm -f "$EXPLICIT_JOINED_STDERR"
 
 EXPLICIT_REVIEWER_SLUGS=()
 if [ -n "$EXPLICIT_JOINED" ]; then
-  IFS=',' read -ra EXPLICIT_REVIEWER_SLUGS <<< "$EXPLICIT_JOINED"
+  # #6152: portable comma split (`read -a` is bash-only; zsh rejects it and dropped every reviewer-lane flag).
+  while IFS= read -r _gsd_slug; do
+    [ -n "$_gsd_slug" ] && EXPLICIT_REVIEWER_SLUGS+=("$_gsd_slug")
+  done <<< "$(printf '%s' "$EXPLICIT_JOINED" | tr ',' '\n')"
 fi
 
 EXTERNAL_EVIDENCE_BLOCK=""
@@ -1003,10 +1024,10 @@ repository (#5519).
 
 **macOS:** macOS ships with bash 3.2 (GPL licensing). This workflow does NOT use `mapfile` (bash 4+
 only) — all array construction uses portable `while IFS= read -r` loops compatible with bash 3.2.
-The `--files` path validation uses `realpath -m` which requires GNU coreutils (install via
-`brew install coreutils`). Without coreutils, the path guard falls back to fail-closed behavior
-(rejects paths it cannot verify), so security is maintained but valid relative paths may be rejected.
-If `--files` validation fails unexpectedly on macOS, install coreutils or use absolute paths.
+The `--files` path validation resolves paths with `node`, so it needs no GNU `realpath -m` and no
+coreutils on macOS or any BSD userland, and it behaves the same under zsh and bash 3.2 (#6152). A
+`--files` list that resolves to no reviewable file inside the repository is an error (non-zero exit),
+never a fall back to phase scope.
 </platform_notes>
 
 <success_criteria>
