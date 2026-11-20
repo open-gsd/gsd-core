@@ -4144,13 +4144,19 @@ function scanSource(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, 
 const LAUNCHING_BASES = new Set(['git', 'git.exe', ...SSH_CLIENTS, ...SHELL_INTERPRETERS, 'eval', 'source', '.', 'xargs',
   'find', 'find.exe', 'watch', 'if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', 'coproc', 'parallel']);
 // Operand words that start a command when another command runs them (#5492): git, a shell and an ssh client by
-// their last path segment, and eval, xargs, find, watch, dd and the wrappers only as the bare word, so a path or URL
-// ending in one (`packages/watch`, `https://x/eval`) starts nothing.
+// their last path segment, and eval, xargs, find, watch, dd and the wrappers only as the bare word or an absolute
+// path (bareLauncherName), so a relative path or URL ending in one (`packages/watch`, `https://x/eval`) starts nothing.
 const LAUNCHER_WORDS = new Set(['eval', 'xargs', 'find', 'find.exe', 'watch', 'dd', 'dd.exe', ...WRAPPERS.keys()]);
 function isLauncherWord(text) {
   const name = lastSegment(text).toLowerCase();
   return name === 'git' || name === 'git.exe' || SSH_CLIENTS.has(name) || SHELL_INTERPRETERS.has(name)
-    || LAUNCHER_WORDS.has(text.toLowerCase());
+    || LAUNCHER_WORDS.has(bareLauncherName(text));
+}
+
+// The name a bare-only launcher word is matched by: the word, or an absolute path's last segment (`/usr/bin/env`,
+// #5492); a relative path (`packages/watch`) keeps its slash and matches nothing.
+function bareLauncherName(text) {
+  return (text.startsWith('/') ? lastSegment(text) : text).toLowerCase();
 }
 
 // A command the scan has no rule for may run the command its operands name (#5492): `caffeinate git …`, `strace -f
@@ -4168,7 +4174,7 @@ function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySe
   const covered = new Set();
   const cover = (cmd, words) => {
     if (cmd === null || !readsLauncherOperands(cmd.base)) return;
-    for (const w of cmd.operands) if (words.has(w.text.toLowerCase())) covered.add(w);
+    for (const w of cmd.operands) if (words.has(bareLauncherName(w.text))) covered.add(w);
   };
   for (let j = 0; j < operands.length; j++) {
     if (nameOnly.has(j) || covered.has(operands[j]) || !isLauncherWord(operands[j].text)) continue;
