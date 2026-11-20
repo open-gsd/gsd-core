@@ -372,7 +372,7 @@ Continue to stamp_codebase_map.
 Stamp the drift baseline into every document that was just written:
 
 ```bash
-gsd_run stamp-codebase-map ${UPDATED_DOCS:+--files "$UPDATED_DOCS"}
+gsd_run stamp-codebase-map ${UPDATED_DOCS:+--files} ${UPDATED_DOCS:+"$UPDATED_DOCS"}
 ```
 
 This writes `last_mapped_commit: <HEAD sha>` and `last_mapped_at: <date>` into
