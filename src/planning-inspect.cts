@@ -660,13 +660,17 @@ interface PlanRow {
   changedFiles: string[] | null;
   hasSummary: boolean;
   /**
-   * #5823 (additive, #2830's model): true iff the SUMMARY paired with this
-   * plan declares `status: halted` (a designed stop). Paired and read exactly
-   * as `phase-plan-index` does — see `readHalted` — so the SUMMARY is usually
-   * the plan's own but, by canonical id, can be a bare-id SUMMARY written for
-   * another plan. False when no SUMMARY pairs, and when the paired SUMMARY is
-   * unreadable (a `summary_unreadable` diagnostic then names it). `hasSummary`
-   * is untouched and keeps its own, older pairing rule.
+   * #5823 (additive, #2830's model): a designed stop (`status: halted`),
+   * read in `phase-plan-index`'s two steps (see `readHalted`). First, the plan
+   * needs a completion record: `findUnsummarizedPlans` over the SUMMARYs that
+   * are not `status: blocked`; without one it is false. Second, the file whose
+   * `status` is read is looked up by plan id, then by canonical id, the last
+   * match in listing order winning, and blocked SUMMARYs are not skipped, so
+   * it can differ from the file that gave the completion record (and can be a
+   * bare-id SUMMARY written for another plan). False too when that file is
+   * unreadable (a `summary_unreadable` diagnostic then names it). The rules
+   * and their limits: docs/CLI-TOOLS.md, "Which SUMMARY `halted` reads".
+   * `hasSummary` is untouched and keeps its own, older pairing rule.
    */
   halted: boolean;
   /**
@@ -1483,7 +1487,8 @@ function buildPlanningInspectResult(cwd: string): {
       plan_count: phase.planCount,
       summary_count: phase.summaryCount,
       // #5823 (additive): live (non-superseded) plans whose `halted` is true.
-      // Which SUMMARY `halted` reads is described on `PlanRow.halted`.
+      // Which SUMMARY `halted` reads: `PlanRow.halted`, and docs/CLI-TOOLS.md,
+      // "Which SUMMARY `halted` reads".
       // `summary_count` is unchanged and still counts them (#2830's model).
       halted_count: plans.rows.filter((row) => !row.superseded && row.halted).length,
       plans: plans.rows,
