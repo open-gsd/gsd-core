@@ -52,12 +52,6 @@ const { spanReaderSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = hookApi;
 // then both again with spans closed by bash 5's grammar.
 const checkBashCommand = (cmd) => hookApi.scanBashCommand(cmd) || hookApi.scanDebuggerSpawn(cmd)
   || hookApi.scanBashByGrammar(cmd);
-// The same, on a scan budget 64 times the hook's, for the rows whose shapes #5285's
-// budget denies whole (`command-too-complex`) before the readers they test are reached.
-const onBigBudget = (cmd) => {
-  const big = 64 * hookApi.MAX_SCAN_CHARACTERS;
-  return hookApi.scanBashCommand(cmd, big, big) || hookApi.scanDebuggerSpawn(cmd) || hookApi.scanBashByGrammar(cmd);
-};
 // The grammar scan's own verdict and reader steps, run on what main()'s first two scans leave
 // of the command's budgets. Since #6136 the first scan denies a nest more than three levels
 // deep as `nesting-too-deep`, and main() stops there. The grammar scan still meets such a nest
@@ -78,6 +72,88 @@ const grammarScan = (cmd) => {
   const before = hookApi.spanReaderSteps();
   const verdict = run(hookApi.scanBashByGrammar);
   return { verdict, steps: hookApi.spanReaderSteps() - before };
+};
+// Run in a child process by countInChild, never in this file's process: it patches the array
+// builtins, and an iterator patch leaves V8's array-iterator fast path off for the rest of the
+// process. It scans `cmd` as the hook does on a large budget and reports the verdict, the array
+// elements the builtins copied or walked, and the GC events the scan caused. Each call of slice,
+// concat, flat, toSpliced, toSorted, toReversed, with, Array.from and structuredClone is charged
+// the elements it returns; map, filter and an iterator over an array (spread, for...of,
+// destructuring) the elements of the array they walk. Past `cap` a charge throws, so a quadratic
+// copy stops early. A copy written as a hand loop calls none of them and is not counted.
+function measureInChild(hookPath, cmd, cap) {
+  const { PerformanceObserver } = require('node:perf_hooks');
+  const hook = require(hookPath);
+  const AP = Array.prototype;
+  const CAP = new Error('array elements past the cap');
+  let elements = 0;
+  let counting = true;
+  const charge = (n) => {
+    if (!counting) return;
+    elements += n;
+    if (elements > cap) throw CAP;
+  };
+  const countReturned = (name) => {
+    const original = AP[name];
+    if (typeof original !== 'function') return;
+    AP[name] = function () {
+      const out = original.apply(this, arguments);
+      charge(out.length);
+      return out;
+    };
+  };
+  for (const name of ['slice', 'concat', 'flat', 'toSpliced', 'toSorted', 'toReversed', 'with']) countReturned(name);
+  for (const name of ['map', 'filter']) {
+    const original = AP[name];
+    AP[name] = function () {
+      charge(this.length);
+      return original.apply(this, arguments);
+    };
+  }
+  const values = AP[Symbol.iterator];
+  AP[Symbol.iterator] = function () {
+    charge(this.length);
+    return values.call(this);
+  };
+  const from = Array.from;
+  Array.from = function () {
+    const out = from.apply(this, arguments);
+    charge(out.length);
+    return out;
+  };
+  const clone = globalThis.structuredClone;
+  globalThis.structuredClone = function () {
+    const out = clone.apply(this, arguments);
+    if (Array.isArray(out)) charge(out.length);
+    return out;
+  };
+  let gc = 0;
+  const observer = new PerformanceObserver((list) => { gc += list.getEntries().length; });
+  observer.observe({ entryTypes: ['gc'] });
+  const big = 64 * hook.MAX_SCAN_CHARACTERS;
+  let verdict = null;
+  let capped = false;
+  try {
+    verdict = hook.scanBashCommand(cmd, big, big) || hook.scanDebuggerSpawn(cmd) || hook.scanBashByGrammar(cmd);
+  } catch (e) {
+    if (e !== CAP) throw e;
+    capped = true;
+  }
+  counting = false;
+  // GC entries reach the observer after the event: collect the ones still queued.
+  setTimeout(() => {
+    gc += observer.takeRecords().length;
+    observer.disconnect();
+    process.stdout.write(JSON.stringify({ verdict, elements, capped, gc }));
+  }, 200);
+}
+// The command `build` returns, measured by measureInChild in a child process with coverage off
+// (an inherited NODE_V8_COVERAGE slows the scan and adds to its garbage).
+const countInChild = (build, cap) => {
+  const src = `(${measureInChild})(${JSON.stringify(HOOK_PATH)}, (${build})(), ${cap});`;
+  const r = runNode(['-e', src], { env: { ...process.env, NODE_V8_COVERAGE: '' } });
+  assert.equal(r.exitCode, 0, `child exit ${r.exitCode}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
 };
 
 function runHook(payload, { cwd } = {}) {
@@ -1575,31 +1651,50 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
 
   // The other two were quadratic outside any loop: a copy of the waiting
   // heredocs for each `((` read-ahead, and a flattening of the word being
-  // built at each `@(`. No count sees either: the copy is gone from the code,
-  // so there is nothing left to count, and the flattening happens inside V8.
-  // So no test here detects either being put back (on Node 24 the hook took
-  // 10.8 s and 18.4 s with them, against 0.6 s and 1.0 s without). These two
-  // hold the verdict at the size cap, in process: a throw on either path,
-  // which the hook would turn into an allow, still fails them.
-  test('arithmetic probes behind waiting heredocs: blocks the read in the case after them', () => {
+  // built at each `@(`. The reader steps see neither, so each row also scans its
+  // command in a child process (countInChild) and bounds what that leaves:
+  // - A copy is made by an array builtin, so the first row bounds the array
+  //   elements the builtins return or walk at 256 a character. The fixed hook
+  //   uses about 36; the copy put back through slice, concat, spread, Array.from,
+  //   flat, toSpliced or structuredClone reaches the bound. A copy written as a
+  //   hand loop calls no builtin and is not counted.
+  // - The flattening happens inside V8 when a character is read from a string
+  //   built by `+=`, with no builtin call to count, but each one leaves a whole
+  //   copy of the word as garbage. The second row bounds the GC events of the
+  //   scan at 300: 25 to 29 on Node 24 with the fix and 91 on Node 22, against
+  //   about 690 and 2,800 with the flattening put back.
+  // Neither bound is a time. Both rows also hold the verdict at the size cap, in
+  // process: a throw on either path, which the hook would turn into an allow,
+  // still fails them.
+  const waitingCommand = () => {
     // 38,000 heredocs waiting for a body, then 72,000 probes, just under the
     // command-size cap.
     const waiting = ' $(cat <<X)'.repeat(38000);
     const probes = '((1)); '.repeat(72000);
-    const cmd = `echo "$(echo${waiting}; ${probes}case x in x) cat .env;; esac)"\n${'X\n'.repeat(38000)}`;
+    return `echo "$(echo${waiting}; ${probes}case x in x) cat .env;; esac)"\n${'X\n'.repeat(38000)}`;
+  };
+  // Each `@(` asks what the word ends in, which must not be read from the word
+  // as it is being built.
+  const globCommand = () => `echo "$(echo ${'a@(x)'.repeat(209000)}; case x in x) cat .env;; esac)"`;
+
+  test('arithmetic probes behind waiting heredocs: blocks the read in the case after them, copying array elements linear in the command', () => {
+    const cmd = waitingCommand();
     assert.ok(cmd.length <= MAX_COMMAND_LENGTH, `${cmd.length} characters`);
     // #5285's budget denies it whole, as on `next`; the readers are reached on a larger one.
     assert.deepEqual(checkBashCommand(cmd), { code: 'command-too-complex', text: '' });
-    assert.deepEqual(onBigBudget(cmd), { code: 'secret-read', text: '.env' });
+    const cap = 256 * cmd.length;
+    const counted = countInChild(waitingCommand, cap);
+    assert.ok(!counted.capped && counted.elements <= cap, `${counted.elements} array elements for ${cmd.length} characters`);
+    assert.deepEqual(counted.verdict, { code: 'secret-read', text: '.env' });
   });
 
-  test('a long word of extended-glob groups: blocks the read in the case after it', () => {
-    // Each `@(` asks what the word ends in, which must not be read from the
-    // word as it is being built.
-    const cmd = `echo "$(echo ${'a@(x)'.repeat(209000)}; case x in x) cat .env;; esac)"`;
+  test('a long word of extended-glob groups: blocks the read in the case after it, with GC events bounded', () => {
+    const cmd = globCommand();
     assert.ok(cmd.length <= MAX_COMMAND_LENGTH, `${cmd.length} characters`);
     assert.deepEqual(checkBashCommand(cmd), { code: 'command-too-complex', text: '' });
-    assert.deepEqual(onBigBudget(cmd), { code: 'secret-read', text: '.env' });
+    const counted = countInChild(globCommand, 256 * cmd.length);
+    assert.ok(counted.gc <= 300, `${counted.gc} GC events for ${cmd.length} characters`);
+    assert.deepEqual(counted.verdict, { code: 'secret-read', text: '.env' });
   });
 
   const allows = [
