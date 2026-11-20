@@ -707,7 +707,11 @@ describe('#4561: dispatch-isolation vocabulary — single owner, every site cons
     }
   });
 
-  test('the record-dispatch-isolation usage text lists the owner\'s modes, so a fourth mode reaches it', (t) => {
+  // GSD_TEST_CLI_MODE=process spawns the CLI, and a spawned child loads its own
+  // owner module, which the swap below cannot reach.
+  const spawnsTheCli = process.env.GSD_TEST_CLI_MODE === 'process'
+    && 'GSD_TEST_CLI_MODE=process runs the CLI in a child, which the in-process swap cannot reach';
+  test('the record-dispatch-isolation usage text lists the owner\'s modes, so a fourth mode reaches it', { skip: spawnsTheCli }, (t) => {
     // Today's literal and the owner agree byte for byte, so only a changed
     // owner tells a derived list from a copied one. The command runs in this
     // process (#6333), so the owner it reads is the module above: it gets a
