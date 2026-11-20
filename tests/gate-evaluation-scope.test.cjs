@@ -1225,7 +1225,7 @@ describe('evaluateEvaluationScope — the check verb', () => {
     const resolved = evaluateEvaluationScope({ projectDir: repo.dir, args: ['--phase', '3'] });
     assert.deepEqual(Object.keys(resolved.payload), [
       'unit', 'status', 'source', 'reason', 'commits', 'changedFiles', 'files',
-      'missingOnDisk', 'outsideUnion', 'unreachable', 'rangeBase',
+      'missingOnDisk', 'outsideUnion', 'unreachable', 'unparsedSummaries', 'rangeBase',
     ]);
     assert.equal(resolved.outcome, 'pass');
     assert.equal(resolved.block, false);
