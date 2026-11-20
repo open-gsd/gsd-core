@@ -1083,6 +1083,100 @@ describe('gsd-secret-read-guard: pinned git gaps the guide documents (#5492)', (
   }
 });
 
+describe('gsd-secret-read-guard: shapes the 2026-11-19 review found still allowed (#5492)', () => {
+  // Every block row here reads .env through a command git, ssh, a shell, find,
+  // watch or xargs runs; each is allowed until the round-13 hook fix. The
+  // allowed controls run the same shapes on notes.txt.
+  const E = 'export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor';
+  const A = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env'";
+  const shapes = [
+    // --no-literal-pathspecs is a git global flag
+    "git --no-literal-pathspecs ls-remote --upload-pack='cat .env' .",
+    // scp and sftp option tables (-B and -R tell scp's table from sftp's)
+    "sftp -p -o ProxyCommand='cat .env' host",
+    "scp -p -o ProxyCommand='cat .env' a b",
+    "scp -B -o ProxyCommand='cat .env' a b",
+    "scp -R -o ProxyCommand='cat .env' a b",
+    "scp.exe -p -o ProxyCommand='cat .env' a b",
+    "sftp.exe -p -o ProxyCommand='cat .env' host",
+    // xargs: the command line arrives on stdin
+    `echo "-c 'core.fsmonitor=cat .env' status" | xargs git`,
+    `printf '%s\\n' "ls-remote --upload-pack='cat .env' ." | xargs git`,
+    "echo 'cat .env' | xargs -I{} git -c 'alias.x=!{}' x",
+    "printf 'ls-remote\\0--upload-pack=cat .env\\0.' | xargs -0 git",
+    `printf "ls-remote\\n--upload-pack=cat .env\\n." | xargs -d '\\n' git`,
+    `echo "-c 'cat .env'" | xargs sh`,
+    `echo "-o ProxyCommand='cat .env'" | xargs ssh host`,
+    // eval and source
+    `eval "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env'"; git status`,
+    `source <(echo "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env'"); git status`,
+    `. <(printf '%s\\n' "export GIT_EDITOR='cat .env #'"); git commit`,
+    // the sixth shape
+    `echo "\${x-"'"}" ; git -c core.fsmonitor="cat .env" status ; echo "'"`,
+    // find and watch running git directly
+    "find . -exec git rebase -x 'cat .env' \\;",
+    "find . -execdir git rebase -x 'cat .env' \\;",
+    "find . -ok git rebase -x 'cat .env' \\;",
+    "find . -okdir git rebase -x 'cat .env' \\;",
+    "watch -x git rebase -x 'cat .env'",
+    // env-prefix and lost-context regressions
+    `echo x | xargs env ${A} sh -c 'git status'`,
+    `find . -exec env ${A} sh -c 'git status' \\;`,
+    `watch -x env ${A} sh -c 'git status'`,
+    `echo 'git status' | xargs env ${A} sh -c`,
+    `export ${A}; find . -exec sh -c 'git status' \\;`,
+    `export ${A}; watch git status`,
+    `export ${A}; watch -x sh -c 'git status'`,
+    `export ${A}; echo 'git status' | xargs sh -c`,
+    `export ${A}; find . -exec xargs sh -c 'git status' \\;`,
+  ];
+  // `+=` appends build the value out of pieces
+  const appends = [
+    `${E} GIT_CONFIG_VALUE_0='cat .e'; GIT_CONFIG_VALUE_0+='nv'; git status`,
+    `${E} GIT_CONFIG_VALUE_0='cat .'; GIT_CONFIG_VALUE_0+='en'; GIT_CONFIG_VALUE_0+='v'; git status`,
+    `${E}; GIT_CONFIG_VALUE_0+='cat .e'; GIT_CONFIG_VALUE_0+='nv'; git status`,
+    `f(){ GIT_CONFIG_VALUE_0+='nv'; }; ${E} GIT_CONFIG_VALUE_0='cat .e'; f; git status`,
+    `${E} GIT_CONFIG_VALUE_0='cat .e'; bash -c "GIT_CONFIG_VALUE_0+='nv'; git status"`,
+    "export GIT_SSH_COMMAND='cat .e'; GIT_SSH_COMMAND+='nv'; git fetch origin",
+    "export GIT_EDITOR='cat .e'; GIT_EDITOR+='nv #'; git commit",
+    "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='core.fs' GIT_CONFIG_VALUE_0='cat .env'; GIT_CONFIG_KEY_0+='monitor'; git status",
+    `export GIT_CONFIG_PARAMETERS="'core.fsmonitor'='cat .e"; GIT_CONFIG_PARAMETERS+="nv'"; git status`,
+  ];
+  for (const cmd of [...shapes, ...appends]) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+
+  // The same shapes on a name that is not a secret.
+  for (const shape of shapes) {
+    const cmd = shape.replaceAll('.env', 'notes.txt');
+    test(`allowed: ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+  const controls = [
+    `${E} GIT_CONFIG_VALUE_0='cat notes'; GIT_CONFIG_VALUE_0+='.txt'; git status`,
+    'scp -P 22 host:x .',
+    'sftp -b batch host',
+    'find . -type f | xargs grep KEY',
+    'echo a b | xargs git add',
+    // Twenty-five appends must not exhaust the scan.
+    `${Array.from({ length: 25 }, (_, i) => `msg+="line ${i + 1}"`).join('; ')}; echo "$msg"`,
+  ];
+  for (const cmd of controls) {
+    test(`allowed: ${JSON.stringify(cmd.slice(0, 80))}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  // Passes today: the operand check runs behind a reserved word.
+  test('blocks if true; then git show HEAD:.env; fi', () => {
+    const cmd = 'if true; then git show HEAD:.env; fi';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: 'HEAD:.env' });
+  });
+});
+
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
   // A hook that crashes or outlives its timeout allows the command, so each
   // of these must decide. They are the reviewers' payloads, at a size that
