@@ -100,6 +100,48 @@ render(percent === null ? '—' : `${percent}%`);
 
 `percent: 0` under a `complete` scope is a real 0 and should be rendered.
 
+### Tell a halted plan from a finished one
+
+A plan that stopped at a designed halt (`status: halted` in its SUMMARY) still
+counts toward `completed_plans`, because its SUMMARY is a completion record.
+Read the halt from the fields beside the count rather than calling
+`phase-plan-index` a second time:
+
+```javascript
+const { completed_plans: done, halted_plans: halted } = snapshot.progress;
+const haltUnknown = snapshot.diagnostics.some((d) => d.code === 'summary_unreadable');
+if (done.scope === 'complete' && !haltUnknown) {
+  render(`${done.completed - halted.completed} completed, ${halted.completed} halted, of ${done.total}`);
+}
+
+for (const phase of snapshot.phases) {
+  for (const plan of phase.plans) {
+    if (plan.superseded) continue;
+    if (plan.halted) render(`${plan.id}: halted`);
+    else if (plan.blocked_by.length > 0) render(`${plan.id}: waiting on ${plan.blocked_by.join(', ')}`);
+  }
+}
+```
+
+The split is skipped while any `summary_unreadable` diagnostic stands: a
+SUMMARY that could not be read reads as not halted, so the plan would be
+counted as completed and not halted when its halt is unknown.
+
+The loop skips superseded rows because `halted` is set on them too, while
+`halted_count` and `progress.halted_plans` leave them out; without the skip, a
+retired plan would be listed as halted beside a count that does not include it.
+
+The new fields also add to `diagnostics[]`: under a scope that is not
+`complete` it carries a `percent_withheld` entry for `progress.halted_plans`,
+so a consumer that counts or matches `percent_withheld` entries sees one more.
+
+`halted: false` is a real answer only when no `summary_unreadable` diagnostic
+names that plan's SUMMARY, and some SUMMARY shapes read as not halted even
+then. See
+[Halted plans](../CLI-TOOLS.md#halted-plans-counted-as-completed-flagged-beside-the-count-5823)
+for the full rules, including where `planning inspect` and `phase-plan-index`
+differ.
+
 ## 5. Read the three kinds of phase evidence separately
 
 Each entry in `phases[]` reports three independent signals. **They are not
