@@ -1698,21 +1698,33 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     }
   });
 
-  test('reassignment class: the write is missed when the right-hand side names no state-path variable and reported when it names one', () => {
-    const viaRhs = (rhs) => lines(W(ASSIGN, `  if (c) p = ${rhs};`, WRITE_P));
-    const namesNone = [
-      "'x'", "'a' + c", 'c', 'dir', "path.join(dir, 'a.md')", '1', 'null', 'String(c)', 'c.name', '[c][0]', "dir + '/q'", "c + '.md'",
-    ];
+  // `if (c) p = <rhs>;` lines between ASSIGN and WRITE_P. When `c` is false, p
+  // still names STATE.md at the write, so every row below is a STATE.md write.
+  const viaRhs = (rhs) => W(ASSIGN, `  if (c) p = ${rhs};`, WRITE_P);
+  const chain = (n) => W(ASSIGN, ...Array.from({ length: n }, (_, k) => `  if (c) p = p + '${k}';`), WRITE_P);
+
+  // More braceless-if right-hand sides, and a run of MAX_TARGET_RESOLUTION_HOPS
+  // reassignments naming p (ASSIGN would need one more hop).
+  const REASSIGNMENT_GAPS = [
+    ...["'a' + c", 'c', 'dir', "path.join(dir, 'a.md')", '1', 'null', 'String(c)', 'c.name', '[c][0]', "dir + '/q'", "c + '.md'"].map(
+      (rhs) => ({ shape: `a braceless if reassignment to ${rhs} hides the earlier STATE.md assignment`, text: viaRhs(rhs), expected: [4], currentBuggyOutput: [] }),
+    ),
+    {
+      shape: 'a run of MAX_TARGET_RESOLUTION_HOPS braceless if reassignments naming p',
+      text: chain(MAX_TARGET_RESOLUTION_HOPS),
+      expected: [MAX_TARGET_RESOLUTION_HOPS + 3],
+      currentBuggyOutput: [],
+    },
+  ];
+  gapLoop(REASSIGNMENT_GAPS, 'reassignment');
+
+  test('reassignment shapes that are reported: these right-hand sides naming p, and a run of MAX_TARGET_RESOLUTION_HOPS - 1 of them', () => {
     const namesP = [
       "p + '.tmp'", "path.join(p, 'a')", 'p', 'String(p)', '`${p}.bak`', 'p || c', 'c ? p : c', '[p][0]',
       "path.dirname(p) + '/s'", 'p.trim()', '(p)', 'p + c',
     ];
-    for (const rhs of namesNone) assert.deepStrictEqual(viaRhs(rhs), [], `missed: ${rhs}`);
-    for (const rhs of namesP) assert.deepStrictEqual(viaRhs(rhs), [4], `reported: ${rhs}`);
-    // Hop bound, as pinned by two chains: three reassignments naming p report, four miss.
-    const chain = (n) => W(ASSIGN, ...['a', 'b', 'c', 'd'].slice(0, n).map((k) => `  if (c) p = p + '${k}';`), WRITE_P);
-    assert.deepStrictEqual(lines(chain(3)), [6], 'three reassignments naming p are followed');
-    assert.deepStrictEqual(lines(chain(4)), [], 'four reassignments naming p exceed the hop bound');
+    for (const rhs of namesP) assert.deepStrictEqual(lines(viaRhs(rhs)), [4], `reported: ${rhs}`);
+    assert.deepStrictEqual(lines(chain(MAX_TARGET_RESOLUTION_HOPS - 1)), [MAX_TARGET_RESOLUTION_HOPS + 2]);
   });
 
   // Names a generated identifier must not take: JS/TS reserved and keyword-like
