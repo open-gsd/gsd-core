@@ -340,8 +340,10 @@ gsd_stall_watch() {
   # Otherwise find matches the basename with -name inside the quoted directory (a
   # space in PHASE_DIR must not split it), so the shell never globs: this reads the
   # same under bash and under zsh, which has no shopt and does not glob a variable's
-  # value. No match prints nothing, and artifact_fresh stays false.
+  # value. No match prints nothing, and artifact_fresh stays false. A relative path
+  # that starts with `-` gets a `./` prefix, so find reads it as a path, not an option.
   artifact_fresh="false"
+  case "$artifact_glob" in -*) artifact_glob="./$artifact_glob" ;; esac
   local _d="${artifact_glob%/*}" _p="${artifact_glob##*/}"
   [ "$_d" = "$artifact_glob" ] && _d=.
   if [ -n "$artifact_glob" ] && [ -e "$artifact_glob" ]; then

@@ -1913,7 +1913,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     ];
     fs.mkdirSync(path.join(proj, 'ph-file'));
     fs.writeFileSync(path.join(proj, 'ph-file', '.gsd-returns'), 'not a directory\n');
-    // A directory named .gitignore: the write fails for every user, root included, and on Windows.
+    // A directory named .gitignore makes the write fail with EISDIR; a chmod would let root write anyway.
     fs.mkdirSync(path.join(proj, 'ph-gi', '.gsd-returns', '.gitignore'), { recursive: true });
     if (symlinkOrSkip(t, outside, path.join(proj, 'ph', '.gsd-returns'), 'dir')) cases.push(['ph', 'symlinked .gsd-returns']);
     let ran = 0;
@@ -1960,6 +1960,45 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // A normal phase dir under the same root is still accepted.
     const ok = receiptPathFrom(f, proj, `${fwd(proj)}/sub/ph`, proj);
     assert.equal(ok.status, 0, ok.stderr);
+  });
+
+  // Minor 3 and Nit 1, generated: a phase dir built from segments that are plain names,
+  // `.git` in several letter cases, names that merely contain `git`, `.` and `..`, and names
+  // holding a refused character, relative to the project or absolute under it. The oracle
+  // refuses iff the dir is empty or the project root, a segment holds a quote, `$`, backtick,
+  // `<`, `>` or a control character, a segment is `.` or `..`, or a segment lowercases to
+  // `.git`. A refusal prints nothing and one prefixed stderr line; an accepted dir prints a
+  // path under its own .gsd-returns/ and nothing on stderr.
+  test('property: gsd_receipt_path refuses a phase dir iff it is empty or the root, or a segment is unsafe, . or .., or .git in any case; one stderr line per refusal', (t) => {
+    const f = fixture(t);
+    const segArb = fc.constantFrom('a', 'b c', '.git', '.GIT', '.gIt', '.gitx', 'x.git', 'git', '.', '..', 'q"', 'd$', 'e`', 'f<', 'g>', 'h\tt');
+    const caseArb = fc.record({ abs: fc.boolean(), segs: fc.array(segArb, { maxLength: 4 }) });
+    const refusedBy = ({ segs }) => (segs.length === 0) ||
+      segs.some((s) => /['"$`<>]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 0x20) || s === '.' || s === '..' || s.toLowerCase() === '.git');
+    const seen = { accepted: 0, refused: 0 };
+    fc.assert(fc.property(fc.array(caseArb, { minLength: 1, maxLength: 12 }), (cases) => {
+      const proj = fs.mkdtempSync(path.join(f.dir, 'rg-'));
+      const caseDir = fs.mkdtempSync(path.join(f.dir, 'rgc-'));
+      const dirs = cases.map(({ abs, segs }) => (abs ? [fwd(proj), ...segs].join('/') : segs.join('/')));
+      dirs.forEach((d, i) => fs.writeFileSync(path.join(caseDir, `${i}.d`), d));
+      const D = q(fwd(caseDir));
+      const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(proj)}\ni=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; out=$(gsd_receipt_path "$d" x ${q(fwd(proj))} 2>${D}/$i.err); printf '%s\\t%s\\t%s\\n' "$i" "$?" "$out"; i=$((i+1)); done\n`, []);
+      const rows = new Map(r.stdout.split('\n').filter(Boolean).map((l) => { const [i, rc, out] = l.split('\t'); return [Number(i), { rc, out }]; }));
+      const ok = r.status === 0 && cases.every((c, i) => {
+        const row = rows.get(i);
+        const err = fs.readFileSync(path.join(caseDir, `${i}.err`), 'utf8').split('\n').filter(Boolean);
+        if (refusedBy(c)) {
+          seen.refused += 1;
+          return row.rc !== '0' && row.out === '' && err.length === 1 && /^gsd_receipt_path: no receipt: \S/.test(err[0]);
+        }
+        seen.accepted += 1;
+        return row.rc === '0' && err.length === 0 && row.out.toLowerCase().includes(`/${c.segs.join('/')}/.gsd-returns/`.toLowerCase());
+      });
+      cleanup(caseDir);
+      cleanup(proj);
+      return ok;
+    }), { numRuns: 8, examples: [[[{ abs: false, segs: ['a', '.GIT'] }, { abs: true, segs: ['b c', 'x.git'] }, { abs: true, segs: [] }]]] });
+    assert.ok(seen.accepted > 0 && seen.refused > 0, `both verdicts must occur (accepted ${seen.accepted}, refused ${seen.refused})`);
   });
 
   // Review 5563209291 Minor 3: path-shaped generation. Segments are drawn from `a`, `.`,
@@ -2343,8 +2382,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.ok(fs.existsSync(plan), 'control: 01-PLAN.md was present when the non-matching pattern ran');
   });
 
-  // Review 5904580537 Major 1: on macOS Claude Code the orchestrator's Bash calls run in
-  // zsh, which has no `shopt` and does not glob a parameter's value, so the old array
+  // Review 5904580537 Major 1: the review traced the orchestrator's Bash calls on macOS Claude
+  // Code to zsh, which has no `shopt` and does not glob a parameter's value (GLOB_SUBST off), so the old array
   // expansion left the literal pattern in place and a planner still writing plans was
   // reported `stalled`. find now matches the basename itself. This row runs the shipped
   // watch under a real zsh, so it needs a zsh on PATH and is skipped, visibly, where
@@ -2380,5 +2419,54 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(fresh.stdout.trim(), 'active', 'a fresh plan 660 s after dispatch is activity, not a stall');
     // Control: the same call with a pattern no file matches is past the threshold.
     assert.equal(run(`${fwdPhase}/none-*-PLAN.md`).stdout.trim(), 'stalled', 'control: no matching plan at 660 s is stalled');
+  });
+
+  // Major 1, generated: phase dir names with spaces, glob characters, a leading `-` (relative
+  // only) and a non-ASCII letter, each holding a drawn set of entries (regular files or
+  // directories, fresh or an hour old). The oracle: the signal is active iff some entry is a
+  // fresh regular file whose name ends in `-PLAN.md` (find's -name `*` also matches an empty
+  // prefix and a leading dot); otherwise the call is stalled at 660 s. Run under bash, and
+  // under zsh when one is on PATH, one shell spawn per batch.
+  test('property: the *-PLAN.md activity signal matches its oracle under bash and zsh for generated phase dirs and entries (Major 1)', (t) => {
+    const f = fixture(t);
+    const shells = [['bash', undefined]];
+    const zsh = zshOnPath();
+    if (zsh) shells.push(['zsh', zsh]);
+    // `*` and `?` are left out on Windows, where a file name cannot hold them. A literal
+    // entry named `*-PLAN.md` is the literal-path branch, covered by its own row.
+    const segChars = process.platform === 'win32' ? 'ab -[]é\'' : 'ab -[]*?é\'';
+    const segArb = fc.string({ unit: fc.constantFrom(...segChars.split('')), minLength: 1, maxLength: 6 });
+    const nameArb = fc.constantFrom('01-PLAN.md', 'x-PLAN.md', '-PLAN.md', '.h-PLAN.md', '01-plan.md', 'PLAN.md', '01-PLAN.md.bak', '[1]-PLAN.md', 'a b-PLAN.md');
+    const entryArb = fc.record({ name: nameArb, dir: fc.boolean(), fresh: fc.boolean() });
+    const caseArb = fc.record({ seg: segArb, rel: fc.boolean(), entries: fc.uniqueArray(entryArb, { selector: (e) => e.name, maxLength: 4 }) });
+    const old = new Date(Date.now() - 3600 * 1000);
+    const counts = { active: 0, stalled: 0 };
+    fc.assert(fc.property(fc.array(caseArb, { minLength: 1, maxLength: 8 }), (cases) => {
+      const root = fs.mkdtempSync(path.join(f.dir, 'pp-'));
+      const fr = root.replace(/\\/g, '/');
+      cases.forEach((c, i) => {
+        const d = path.join(root, String(i), c.seg);
+        fs.mkdirSync(d, { recursive: true });
+        for (const e of c.entries) {
+          const p = path.join(d, e.name);
+          if (e.dir) fs.mkdirSync(p); else fs.writeFileSync(p, 'x');
+          if (!e.fresh) fs.utimesSync(p, old, old);
+        }
+        fs.writeFileSync(path.join(root, `${i}.g`), c.rel ? `${c.seg}/*-PLAN.md` : `${fr}/${i}/${c.seg}/*-PLAN.md`);
+      });
+      const expected = cases.map((c) => (c.entries.some((e) => !e.dir && e.fresh && e.name.endsWith('-PLAN.md')) ? 'active' : 'stalled'));
+      const clock = `date() { if [ "$1" = "+%s" ]; then echo ${NOW}; else command date "$@"; fi; }`;
+      const loop = `i=0; while [ -f ${q(fr)}/$i.g ]; do IFS= read -r g < ${q(fr)}/$i.g || true; printf '%s %s\\n' "$i" "$(cd ${q(fr)}/$i && gsd_stall_watch ${q(NOW - 660)} '' "$g" '## PLANNING COMPLETE')"; i=$((i+1)); done`;
+      const ok = shells.every(([, interpreter]) => {
+        const r = runBashScript([extractStallFunctionsBash(), 'sleep() { :; }', clock,
+          'PLANNER_STALL_INTERVAL_MINUTES=5', 'PLANNER_STALL_THRESHOLD_MINUTES=10', loop].join('\n') + '\n', [], interpreter ? { interpreter } : {});
+        const got = new Map(r.stdout.split('\n').filter(Boolean).map((l) => [l.slice(0, l.indexOf(' ')), l.slice(l.indexOf(' ') + 1)]));
+        return r.status === 0 && r.stderr === '' && expected.every((x, i) => got.get(String(i)) === x);
+      });
+      for (const x of expected) counts[x] += 1;
+      cleanup(root);
+      return ok;
+    }), { numRuns: 6, examples: [[[{ seg: '-a b', rel: true, entries: [{ name: '01-PLAN.md', dir: false, fresh: true }] }, { seg: 'a', rel: false, entries: [{ name: '02-PLAN.md', dir: true, fresh: true }] }]]] });
+    assert.ok(counts.active > 0 && counts.stalled > 0, `both outcomes must occur (active ${counts.active}, stalled ${counts.stalled})`);
   });
 });
