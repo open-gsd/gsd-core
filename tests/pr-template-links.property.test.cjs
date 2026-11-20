@@ -14,7 +14,9 @@ const {
   REPO, NEXT, hrefsIn, unreadForms, isBadLink, unresolvedAnchors, headingSet,
 } = require('./helpers/pr-template-links.cjs');
 const { extractLinks } = require('../scripts/gen-adr-index.cjs');
-const { stripInlineCode } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const {
+  stripInlineCode, scanFencedBlocks,
+} = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const seg = fc.stringMatching(/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,19}$/); // never `.` or `..`
 const rel = fc.array(seg, { minLength: 1, maxLength: 3 }).map((a) => a.join('/'));
@@ -144,6 +146,16 @@ describe('link extractor properties (#5427)', () => {
     fc.assert(fc.property(lines, (line) => {
       assert.deepEqual(extractLinks(stripInlineCode(line)), extractLinks(line),
         JSON.stringify(line));
+    }));
+  });
+  test('property: the gate and the sectionizer agree that a fence opener line holds no link', () => {
+    const opener = fc.tuple(fc.constantFrom('', ' ', '  ', '   '),
+      fc.constantFrom('```', '````', '~~~'), fc.constantFrom('', 'js', ' x'));
+    fc.assert(fc.property(opener, ([indent, fence, info]) => {
+      const line = `${indent}${fence}${info}[a](x.md)`;
+      assert.equal(scanFencedBlocks([line]).length, 1, JSON.stringify(line));
+      assert.deepEqual(extractLinks(line), [], JSON.stringify(line));
+      assert.deepEqual(hrefsIn(line), [], JSON.stringify(line));
     }));
   });
   test('property: an empty destination yields one empty string', () => {
