@@ -104,6 +104,7 @@ const MANUAL_RESOLUTIONS = [
   { file: 'tests/verification-status.test.cjs', callee: '(not-direct-arg) var=gitOpts', cls: 'SEAM', resolvedCallee: 'gitOrThrow', note: 'gitOpts variable is passed to gitOrThrow' },
   { file: 'tests/hooks-crash-policy.test.cjs', callee: '(not-direct-arg)', cls: 'SEAM', resolvedCallee: 'runHookSeam', note: 'default parameter of runHook, forwarded as opts.timeoutMs to runHookSeam' },
   { file: 'tests/lint-compiled-artifact-sync.test.cjs', callee: '(not-direct-arg) var=options', cls: 'SEAM', resolvedCallee: 'runGit|runNode', note: 'run() helper forwards options to runGit / runNode' },
+  { file: 'tests/code-review-fix-pipeline-regression.test.cjs', callee: '(not-direct-arg) var=T6_OPTS', cls: 'SEAM', resolvedCallee: 'gitOrThrow|runGit|runHook', note: 'T6_OPTS is passed to gitOrThrow, runGit and runHook' },
   { file: 'tests/install-regressions.test.cjs', callee: '(not-direct-arg) var=runOpts', cls: 'SEAM', resolvedCallee: 'runNode', note: 'runOpts is passed to runNode' },
   { file: 'tests/install-regressions.test.cjs', callee: '(not-direct-arg)', cls: 'SEAM', resolvedCallee: 'runNode', note: 'nested options object is passed to runNode' },
   { file: 'tests/helpers/opencode-real.cjs', callee: '(not-direct-arg)', cls: 'DIRECT', resolvedCallee: 'spawn', note: 'realRun default timeoutMs is passed to child_process spawn as {timeout}' },

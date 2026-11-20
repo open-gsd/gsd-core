@@ -1544,7 +1544,7 @@ function cmdEffortSyncOpencode(cwd: string, raw: boolean, dryRun: boolean, confi
 }
 
 /**
- * Detect the phase number for a commit from its `--files` path list.
+ * Detect the phase number for a commit from a declared path list (the caller chooses which lists).
  *
  * #2539: the extraction is anchored to the directory segment immediately under
  * `.planning/phases/` or `.planning/milestones/<version>-phases/`, then run
@@ -2024,6 +2024,11 @@ function stageDeclaredRemovals(cwd: string, removedDeclared: string[]): {
   return { removedEntries, removedPathspec, failures };
 }
 
+// The one owner of which paths a commit declares: --files plus --files-removed.
+function declaredPaths(files: string[] | undefined, filesRemoved: string[] | undefined): string[] {
+  return [...(files ?? []), ...(filesRemoved ?? [])];
+}
+
 /**
  * #6043 (ADR-4908 §3): a committing verb commits in the checkout the process
  * runs in. Returns the typed refusal when it cannot: not a git repository, or
@@ -2076,7 +2081,7 @@ function commitRefusal(
   const inside = (target: string, root: string): boolean => isContainedIn(norm(target), norm(root), { sep: '/' });
   const worktreeRoot = realOrSelf(path.resolve(ctx.worktreeRoot));
   const realCwd = realOrSelf(path.resolve(cwd));
-  const declared = [...(files ?? []), ...(filesRemoved ?? [])];
+  const declared = declaredPaths(files, filesRemoved);
   const targets = declared.length > 0 ? declared : ['.planning/'];
   // Lexical against the canonical cwd: a `.planning` symlink component is not followed.
   const resolveTarget = (t: string): string =>
@@ -2117,7 +2122,8 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // and improvising raw git fallbacks (#3678).
   const commitDocsPolicy = resolveCommitDocsPolicy(
     config,
-    detectPhaseNumberFromFiles(files),
+    // A removal-only commit (--files-removed) still names its phase dir: resolve the tier from both lists.
+    detectPhaseNumberFromFiles(declaredPaths(files, filesRemoved)),
     () => isGitIgnored(cwd, '.planning'),
   );
   if (!commitDocsPolicy.resolved) {

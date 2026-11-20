@@ -310,6 +310,34 @@ describe('commit --files-removed: caller-declared deletions record a move (#4208
     assert.deepStrictEqual(nameStatus(), ['D\t.planning/todos/pending/mine.md']);
   });
 
+  // #5506: a removal-only call under a phase dir resolves the tier-1 phase_commit_docs override.
+  test('a removal-only commit under a phase dir honors phase_commit_docs false', () => {
+    const rel = '.planning/phases/01-x/01-REVIEW-FIX.iter1.md';
+    fs.mkdirSync(path.join(tmpDir, path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, rel), 'backup\n');
+    gitOrThrow(['add', rel], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-m', 'seed a phase backup'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    const head = gitOrThrow(['rev-parse', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ phase_commit_docs: { 1: false } }));
+    fs.unlinkSync(path.join(tmpDir, rel));
+    const parsed = JSON.parse(runGsdTools(['commit', 'docs(01): remove spent backup', '--files-removed', rel], tmpDir).output);
+    assert.strictEqual(parsed.skipped, true, JSON.stringify(parsed));
+    assert.strictEqual(gitOrThrow(['rev-parse', 'HEAD'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS }).trim(), head);
+  });
+
+  // Near case: a `01-` path outside `.planning/phases/` resolves no phase (#2539 anchor), so the override does not apply.
+  test('a removal-only commit of a 01- path outside a phase dir ignores phase_commit_docs false', () => {
+    const rel = '.planning/todos/pending/01-mine.md';
+    fs.writeFileSync(path.join(tmpDir, rel), 'todo\n');
+    gitOrThrow(['add', rel], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    gitOrThrow(['commit', '-m', 'seed a 01- todo'], { cwd: tmpDir, timeoutMs: GIT_TIMEOUT_MS });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ phase_commit_docs: { 1: false } }));
+    fs.unlinkSync(path.join(tmpDir, rel));
+    const parsed = JSON.parse(runGsdTools(['commit', 'docs: drop a todo', '--files-removed', rel], tmpDir).output);
+    assert.strictEqual(parsed.committed, true, JSON.stringify(parsed));
+    assert.deepStrictEqual(nameStatus(), ['D\t' + rel]);
+  });
+
   test('a deletion staged by this call is rolled back when a later entry fails', () => {
     // Ordering: the good removal is processed first, then the contradicted one.
     fs.copyFileSync(path.join(tmpDir, COMPLETED, 'mine.md'), path.join(tmpDir, PENDING, 'stays-put.md'));
