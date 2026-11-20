@@ -522,6 +522,7 @@ process.stdout.write(wave);
     echo "FATAL: worktree.manifest-path returned non-absolute or empty path: '$WAVE_WORKTREE_MANIFEST'" >&2
     exit 1 ;; esac
   EXISTING_MANIFESTS=$(gsd_run query worktree.manifest-path "$_MP_FLAG" "$_MP_VAL" --raw) || exit 1
+  _RECOVERY_HINT="If cleanup reports empty_manifest, inspect the wave worktrees before retrying with --allow-empty. If it reports invalid_manifest_json, preserve the file and reconcile the worktrees manually."
   if [ -n "$EXISTING_MANIFESTS" ]; then
     while IFS= read -r m; do
       [ -z "$m" ] && continue
@@ -530,7 +531,7 @@ process.stdout.write(wave);
         exit 1
       fi
       if [ -f "$m" ]; then
-        echo "BLOCKED: pre-existing wave manifest found at $m from an earlier/interrupted run. Reconcile with: gsd_run query worktree.cleanup-wave --manifest \"$m\"" >&2
+        echo "BLOCKED: pre-existing wave manifest found at $m from an earlier/interrupted run. Reconcile with: gsd_run query worktree.cleanup-wave --manifest \"$m\". $_RECOVERY_HINT" >&2
         exit 1
       fi
     done <<< "$EXISTING_MANIFESTS"
@@ -538,7 +539,7 @@ process.stdout.write(wave);
   # A directory or symlink is not a manifest the finder lists (`lstat` isFile is
   # false), so the loop above does not see it. Refuse before the exclusive create.
   if [ -e "$WAVE_WORKTREE_MANIFEST" ] || [ -L "$WAVE_WORKTREE_MANIFEST" ]; then
-    echo "BLOCKED: pre-existing wave manifest found at $WAVE_WORKTREE_MANIFEST from an earlier/interrupted run. Reconcile with: gsd_run query worktree.cleanup-wave --manifest \"$WAVE_WORKTREE_MANIFEST\"" >&2
+    echo "BLOCKED: pre-existing wave manifest found at $WAVE_WORKTREE_MANIFEST from an earlier/interrupted run. Reconcile with: gsd_run query worktree.cleanup-wave --manifest \"$WAVE_WORKTREE_MANIFEST\". $_RECOVERY_HINT" >&2
     exit 1
   fi
   # Persist dispatch-time orchestrator root to manifest so wave-cleanup pins to orchestrator's OWN worktree (#630).

@@ -14,10 +14,9 @@ if [ -n "$PRIMARY_WT" ] && [ "$(pwd -P 2>/dev/null)" != "$(cd "$PRIMARY_WT" 2>/d
 WT_PATHS_FILE=$(mktemp "${TMPDIR:-/tmp}/gsd-worktree-paths-XXXXXX")
 # JavaScript expands the template literal; the shell must leave it untouched.
 # shellcheck disable=SC2016
-node -e 'const fs=require("fs");const p=process.env.WAVE_WORKTREE_MANIFEST;try{if(!p)throw new Error("WAVE_WORKTREE_MANIFEST is unset");if(!fs.existsSync(p))throw new Error("manifest does not exist");const s=fs.readFileSync(p,"utf8");if(!s.trim())throw new Error("manifest is empty");const j=JSON.parse(s);for(const w of j.worktrees||[])if(w.worktree_path)console.log(w.worktree_path)}catch(e){console.error(`ERROR: cannot read worktree manifest ${p||"(unset)"}: ${e.message}`);process.exit(1)}' > "$WT_PATHS_FILE" || { echo "BLOCKED: cannot read WAVE_WORKTREE_MANIFEST; refusing cleanup (#3384)." >&2; exit 1; }
+node -e 'const fs=require("fs");const p=process.env.WAVE_WORKTREE_MANIFEST;try{if(!p)throw new Error("WAVE_WORKTREE_MANIFEST is unset");if(!fs.existsSync(p))throw new Error("manifest does not exist");const s=fs.readFileSync(p,"utf8");if(!s.trim())throw new Error("manifest is empty");const j=JSON.parse(s);if(!Array.isArray(j.worktrees)||!j.worktrees.length)throw new Error("empty_manifest");for(const w of j.worktrees){if(typeof w.worktree_path!=="string"||!w.worktree_path||typeof w.branch!=="string"||!w.branch||w.branch.includes("\0")||w.worktree_path.includes("\0"))throw new Error("invalid_manifest_entry");process.stdout.write(w.worktree_path+"\0"+w.branch+"\0")}}catch(e){console.error(`ERROR: cannot read worktree manifest ${p||"(unset)"}: ${e.message}`);process.exit(1)}' > "$WT_PATHS_FILE" || { echo "BLOCKED: cannot read WAVE_WORKTREE_MANIFEST; refusing cleanup (#3384)." >&2; rm -f "$WT_PATHS_FILE"; exit 1; }
 CLEANUP_FAILED=0
-while IFS= read -r WT; do
-  [ -z "$WT" ] && continue
+while IFS= read -r -d "" WT && IFS= read -r -d "" RECORDED_BRANCH; do
   WT_BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null)
   if [ "$WT_BRANCH" = "HEAD" ]; then
     # A detached worktree the manifest lists may hold commits on no branch: keep it, and the manifest.
@@ -25,15 +24,24 @@ while IFS= read -r WT; do
     CLEANUP_FAILED=1
     continue
   fi
-  [ -z "$WT_BRANCH" ] && continue
+  if [ "$WT_BRANCH" != "$RECORDED_BRANCH" ] || ! [[ "$WT_BRANCH" =~ ^((worktree-)?agent-|worktree-wf_)[A-Za-z0-9._/-]+$ ]]; then
+    echo "⚠ Residual worktree at $WT does not match its recorded agent branch" >&2
+    CLEANUP_FAILED=1
+    continue
+  fi
+  if ! WT_STATUS=$(git -C "$WT" status --porcelain) || [ -n "$WT_STATUS" ]; then
+    echo "⚠ Residual worktree at $WT is dirty or unreadable" >&2
+    CLEANUP_FAILED=1
+    continue
+  fi
   echo "Cleaning up residual worktree: $WT (branch: $WT_BRANCH)"
   git worktree unlock "$WT" 2>/dev/null || true
-  if ! git worktree remove "$WT" --force; then
+  if ! git worktree remove "$WT"; then
     CLEANUP_FAILED=1
     WT_NAME=$(basename "$WT")
     if [ -f ".git/worktrees/${WT_NAME}/locked" ]; then
       echo "⚠ Worktree $WT is locked — unlock failed; manual cleanup required:"
-      echo "    git worktree unlock \"$WT\" && git worktree remove \"$WT\" --force && git branch -D \"$WT_BRANCH\""
+      echo "    git worktree unlock \"$WT\" && git worktree remove \"$WT\" && git branch -D \"$WT_BRANCH\""
     else
       echo "⚠ Residual worktree at $WT — remove failed; manual cleanup required"
     fi
@@ -48,5 +56,6 @@ if [ "$CLEANUP_FAILED" -eq 0 ] && [ ! -L "$WAVE_WORKTREE_MANIFEST" ] && ! git ls
   unset WAVE_WORKTREE_MANIFEST
 else
   echo "⚠ Residual worktrees remain; preserving manifest at $WAVE_WORKTREE_MANIFEST for reconciliation." >&2
+  exit 1
 fi
 ```

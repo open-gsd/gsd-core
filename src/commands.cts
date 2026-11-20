@@ -2893,10 +2893,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       output(result, raw, 'failed');
       return;
     }
-    const commitOut = (commitResult.stdout + '\n' + commitResult.stderr).toLowerCase();
-    const isNothingToCommit = commitOut.includes('nothing to commit')
-      || commitOut.includes('nothing added to commit');
-    if (isNothingToCommit) {
+    if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
       // Same reading as the guard above: git recorded nothing, so a removal
       // this call staged must not be left behind under a `nothing_to_commit`
       // report. The failure exits below are deliberately NOT restored -- they
