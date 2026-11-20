@@ -16,7 +16,7 @@ The statusline shows context usage to the **user**, but the **agent** has no awa
 The hook is also registered for other lifecycle events on some hosts — including
 `PreCompact` (#772). Those events never emit a warning, because only the
 injection-capable events accept the `additionalContext` envelope. `PreCompact` is
-handled specially: it resets the per-session state described under
+handled specially: for a top-level input it resets the per-session state described under
 [Debounce](#debounce) and returns immediately, without running the debounce or
 breadcrumb bookkeeping.
 
@@ -128,7 +128,7 @@ To avoid spamming the agent with repeated warnings:
 
 ### PreCompact reset
 
-The compaction reset does four things together:
+For a top-level input the compaction reset does four things together (a subagent's `PreCompact` touches none of them; see [Safety](#safety)):
 
 | what | why |
 |---|---|
