@@ -47,7 +47,7 @@ const hrefsIn = (text) => splitLines(text)
 // An href, src or srcset attribute (any case) takes its value after `=`, or on the next line when
 // the name ends the line. After `/` only the `=` form counts: `/src/x.md` and `/src` are paths.
 const URL_ATTR = /(?:^|[\s"'])(?:href|src|srcset)\s*(?:=|$)|\/(?:href|src|srcset)\s*=/i;
-// The lines this guard refuses instead of reading, as `N: "line"`: see the header.
+// The lines this guard refuses instead of reading, as `{ line, text }` (1-based): see the header.
 const unreadForms = (text) => {
   let tagged = false;
   return splitLines(text).flatMap((line, i) => {
@@ -56,7 +56,7 @@ const unreadForms = (text) => {
     const refused = line.includes(']:') || (tagged && URL_ATTR.test(line.slice(tag)))
       || stripInlineCode(line).split('](').length - 1 > linksOf(line).length
       || line.includes('\\`');
-    return refused ? [`${i + 1}: ${JSON.stringify(line)}`] : [];
+    return refused ? [{ line: i + 1, text: line }] : [];
   });
 };
 
@@ -197,7 +197,8 @@ const lineAnchorOk = (anchor, count) => {
     && Number(m[2] ?? m[1]) >= Number(m[1]);
 };
 // Every #fragment on a file on next must exist in the kind of view the link opens.
-// A missing file is missingNext's.
+// A missing file is missingNext's. Each entry is `{ rel, anchor }`, plus the `stop` line text
+// (headingSet) when the heading scan ended early.
 const unresolvedAnchors = (hs, where, seams = {}) => {
   const { headingsOf = headingsOfFile, linesOf = lineCountOf } = seams;
   return hs.filter((h) => nextRel(h)?.includes('#')).flatMap((h) => {
@@ -208,7 +209,7 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
     const set = kind === 'heading' ? headingsOf(rel) : new Set();
     const ok = kind === 'heading' ? set.has(anchor)
       : kind === 'line' && lineAnchorOk(anchor, linesOf(rel));
-    return ok ? [] : [`${rel}#${anchor}${set.stop ? ` (anchors stop at ${set.stop})` : ''}`];
+    return ok ? [] : [{ rel, anchor, ...(set.stop && { stop: set.stop }) }];
   });
 };
 

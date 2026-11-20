@@ -22,7 +22,9 @@ const ROOT = path.join(__dirname, '..');
 const DOCS_ANCHOR = 'CONTRIBUTING.md#documentation-updates--update-the-relevant-docs';
 const hrefsOf = (f) => hrefsIn(readRepoFile(f));
 // The 1-based line numbers of the lines unreadForms refuses.
-const refused = (text) => unreadForms(text).map((entry) => Number.parseInt(entry, 10));
+const refused = (text) => unreadForms(text).map((entry) => entry.line);
+// The entry unresolvedAnchors returns for an anchor that does not resolve.
+const miss = (rel, anchor) => ({ rel, anchor });
 // An anchor list the guard gives is a subset of the ids GitHub renders for the same text.
 const anchors = (md) => [...headingSet(md)];
 
@@ -258,15 +260,16 @@ describe('next-ref existence and anchors (#5427)', () => {
     assert.deepEqual(
       unresolvedAnchors([`${NEXT}CONTRIBUTING.md#nope`,
         `${NEXT}docs/registries/README.md#nope`], 'tpl.md'),
-      ['CONTRIBUTING.md#nope', 'docs/registries/README.md#nope']);
+      [miss('CONTRIBUTING.md', 'nope'), miss('docs/registries/README.md', 'nope')]);
     const seams = { headingsOf: () => new Set(['x_y']) };
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#x%5Fy`], 'tpl.md', seams), []);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#`], 'tpl.md'), []);
     assert.deepEqual(unresolvedAnchors([`${REPO}raw/next/CONTRIBUTING.md#nope`], 'tpl.md'),
-      ['CONTRIBUTING.md#nope']);
+      [miss('CONTRIBUTING.md', 'nope')]);
     const real2 = `CONTRIBUTING.md#${real}`;
+    const missed = miss('CONTRIBUTING.md', real);
     assert.deepEqual(unresolvedAnchors([`${REPO}raw/next/${real2}`,
-      `${REPO}blame/next/${real2}`], 'tpl.md'), [real2, real2]);
+      `${REPO}blame/next/${real2}`], 'tpl.md'), [missed, missed]);
     assert.deepEqual(unresolvedAnchors([`${REPO}tree/next/${real2}`], 'tpl.md'), []);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md`, `${NEXT}no-such.md#a`,
       `${REPO}issues/1#a`], 'tpl.md'), []);
@@ -275,9 +278,8 @@ describe('next-ref existence and anchors (#5427)', () => {
     const set = headingSet('## A\n<!--\n## B');
     const seams = { headingsOf: () => set };
     assert.equal(set.stop, 'line 2: "<!--"'); // the typed field; the report only carries it
-    const [only, ...none] = unresolvedAnchors([`${NEXT}CONTRIBUTING.md#b`], 'tpl.md', seams);
-    assert.deepEqual(none, []);
-    assert.ok(only.startsWith('CONTRIBUTING.md#b') && only.includes(set.stop), only);
+    assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#b`], 'tpl.md', seams),
+      [{ rel: 'CONTRIBUTING.md', anchor: 'b', stop: set.stop }]);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#a`], 'tpl.md', seams), []);
   });
   test('lineCountOf counts a last line with or without a trailing newline', (t) => {
@@ -293,16 +295,16 @@ describe('next-ref existence and anchors (#5427)', () => {
       `${REPO}blame/next/CONTRIBUTING.md#L10`,
       `${NEXT}scripts/ci-test-scope.cjs#L10`], 'tpl.md'), []);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#L5-L2`], 'tpl.md'),
-      ['CONTRIBUTING.md#L5-L2']);
+      [miss('CONTRIBUTING.md', 'L5-L2')]);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#L5`], 'tpl.md'),
-      ['CONTRIBUTING.md#L5']);
+      [miss('CONTRIBUTING.md', 'L5')]);
     for (const rel of ['X.md', 'X.MD', 'X.Md']) {
       const kind = anchorKind({ segs: ['blob', 'next', rel], tail: '' }, rel);
       assert.equal(kind, 'heading', JSON.stringify(rel));
     }
     const heading = DOCS_ANCHOR.split('#')[1];
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?plain=1#${heading}`], 'tpl.md'),
-      [`CONTRIBUTING.md#${heading}`]);
+      [miss('CONTRIBUTING.md', heading)]);
   });
   test('line anchors take a column on either end; the line and column hold 9 digits', () => {
     const view = `${NEXT}CONTRIBUTING.md?plain=1`;
@@ -315,7 +317,7 @@ describe('next-ref existence and anchors (#5427)', () => {
     }
     for (const anchor of ['L5C', 'LC3', 'L5C-L6', 'L1000000000', 'L5C1000000000',
       'L1-L1000000000', 'L1-L2C1000000000']) {
-      assert.deepEqual(found(anchor), [`CONTRIBUTING.md#${anchor}`], anchor);
+      assert.deepEqual(found(anchor), [miss('CONTRIBUTING.md', anchor)], anchor);
     }
   });
 });
@@ -442,9 +444,11 @@ describe('PR template links (#5427)', () => {
   test('no link is bad', () => eachTemplate((f, hs) => hs.filter(isBadLink)));
   test('blob/next links point at existing repo paths',
     () => eachTemplate((f, hs) => missingNext(hs, f)));
-  test('anchors on next resolve', () => eachTemplate((f, hs) => unresolvedAnchors(hs, f)));
+  test('anchors on next resolve', () => eachTemplate((f, hs) => unresolvedAnchors(hs, f)
+    .map(({ rel, anchor, stop }) => `${rel}#${anchor}${stop ? ` (stops at ${stop})` : ''}`)));
   test('no reference definition or HTML link attribute stays unread',
-    () => eachTemplate((f) => unreadForms(readRepoFile(f))));
+    () => eachTemplate((f) => unreadForms(readRepoFile(f))
+      .map(({ line, text }) => `${line}: ${JSON.stringify(text)}`)));
   test('"Using the wrong template?" links keep ?template= and name an existing template', () => {
     const names = ['fix', 'feature', 'enhancement', 'registry-entry'];
     const files = names.map((n) => `.github/PULL_REQUEST_TEMPLATE/${n}.md`);
