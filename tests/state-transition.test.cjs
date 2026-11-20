@@ -5588,6 +5588,26 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     assert.ok(long.length < 300 && long.includes('…'), long.length);
   });
 
+  test('plannedPhase unit: the echo cut keeps 120 characters, adds … only above 120, and never leaves half a surrogate pair', () => {
+    const prefix = 'Plan: 2 of 5.5';
+    const echoed = (tail) => planned(`${prefix}${tail}`, 6).data.message;
+    for (const [length, cut] of [[119, false], [120, false], [121, true]]) {
+      const message = echoed('x'.repeat(length - prefix.length));
+      assert.strictEqual(message.includes('…'), cut, `${length} characters`);
+      assert.ok(message.includes(`${prefix}${'x'.repeat(Math.min(length, 120) - prefix.length)}`), `${length} characters`);
+    }
+    // an emoji that straddles character 120 is dropped whole: no `\ud83d` escape fragment
+    const straddle = echoed(`${'x'.repeat(120 - prefix.length - 1)}😀tail`);
+    assert.ok(straddle.includes('…') && !straddle.includes('\\ud83d') && !straddle.includes('😀'), straddle);
+  });
+
+  test('plannedPhase unit: the recorded phase is read frontmatter first, as the write-path owner reads it', () => {
+    const withFm = (fmPhase) => ['---', `current_phase: ${fmPhase}`, '---', '# Project State', '', '## Current Position', '', 'Phase: 18', 'Plan: 2 of 5', 'Status: Ready', ''].join('\n');
+    const run = (fmPhase) => transitionCore(withFm(fmPhase), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps);
+    assert.strictEqual(lineOf(run(19).content), 'Plan: 2 of 6', 'frontmatter phase 19 is the same phase, so the position stays');
+    assert.strictEqual(lineOf(run(18).content), 'Plan: 0 of 6 in current phase', 'frontmatter phase 18 is another phase, so the position resets');
+  });
+
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {
     const tbd = planned('Plan: 0 TBD in current phase', 3);
     assert.strictEqual(lineOf(tbd.content), 'Plan: 0 of 3 in current phase');

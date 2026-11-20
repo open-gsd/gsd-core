@@ -2,4 +2,4 @@
 type: Fixed
 pr: 5424
 ---
-**`/gsd-plan-phase` step 13b reads the plan count from `find-phase` and stops when that read fails** — it passed `${PLAN_COUNT}` to `state planned-phase --plans`, and nothing in the workflow set that variable.
+**`/gsd-plan-phase` step 13b reads the plan count from `find-phase` and stops when that read fails** — it read the count with a `// 0` fallback, so a failed `find-phase` lookup wrote `--plans 0` into STATE.md.
