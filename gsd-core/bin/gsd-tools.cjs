@@ -5931,12 +5931,12 @@ function captureTranslatingVerificationStatus(run) {
 }
 
 // #5933: the one refusal rule for the value-taking global options (`--cwd`,
-// `--project-dir`, `--pick`, `--default`). A missing value, or a `--`-led token
-// (another flag), is never taken as the value: the caller refuses it with a
-// usage error before removing anything from argv, so the flag still reaches the
-// command's own guard. `--default` alone accepts an explicit empty string. This
-// covers the space-separated form; the `--cwd=` / `--project-dir=` forms carry
-// their value in the same token and only need the empty check.
+// `--project-dir`, `--ws`, `--pick`, `--default`). A missing value, or a `--`-led
+// token (another flag), is never taken as the value: the caller refuses it with
+// a usage error before removing anything from argv, so the flag still reaches
+// the command's own guard. `--default` alone accepts an explicit empty string.
+// This covers the space-separated form; the `--cwd=` / `--project-dir=` / `--ws=`
+// forms carry their value in the same token and only need the empty check.
 function isRefusedGlobalFlagValue(value, { allowEmpty = false } = {}) {
   if (value === undefined) return true;
   if (value === '') return !allowEmpty;
@@ -6098,12 +6098,13 @@ function main() {
   // Priority: --ws flag > GSD_WORKSTREAM env var > session/shared pointer > null.
   // --ws is refused like the other value-taking global options (#5933), before
   // resolution; `--ws=<name>` takes precedence over `--ws <name>`, as in parseCliWorkstream.
+  // Only an empty `--ws=` is a missing value: `--ws=--x` names a workstream.
   // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const wsEqArg = args.find((arg) => arg.startsWith('--ws='));
   // eslint-disable-next-line local/named-args-spec-from-registry -- global flags are parsed once in main() and declared in GLOBAL_FLAGS (src/cli-surface.cts)
   const wsIdx = args.indexOf('--ws');
   const wsRefused = wsEqArg !== undefined
-    ? isRefusedGlobalFlagValue(wsEqArg.slice('--ws='.length).trim())
+    ? wsEqArg.slice('--ws='.length).trim() === ''
     : wsIdx !== -1 && isRefusedGlobalFlagValue(args[wsIdx + 1]);
   if (wsRefused) error('Missing value for --ws', ERROR_REASON.USAGE);
   let workstreamContext = null;

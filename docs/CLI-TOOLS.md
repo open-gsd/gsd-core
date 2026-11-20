@@ -29,10 +29,12 @@ node gsd-tools.cjs <command> [args] [--raw] [--cwd <path>]
 | ------------------- | ---------------------------------------------------------------------------- |
 | `--raw`             | Machine-readable output (JSON or plain text, no formatting)                  |
 | `--cwd <path>`      | Override working directory (for sandboxed subagents)                         |
+| `--project-dir <path>` | Project root to run against; it must contain `.planning/`, and no parent directory is searched |
 | `--ws <name>`       | Workstream context for `.planning/workstreams/<name>` paths |
 | `--pick <field>`    | Extract one field from a command's JSON output — see [`--pick <field>` contract](#--pick-field-contract) below |
+| `--default <value>` | Value `config-get` prints when the key is absent — see `config-get` below |
 
-These global flags are read once, before the command runs, and are never passed on to the command. The full global set is recorded under `global` in [`CLI-SURFACE-MANIFEST.json`](CLI-SURFACE-MANIFEST.json). Besides the flags above, it includes `--project-dir`, `--default`, `--json-errors` and `--exit-contract=<v>`.
+These global flags are read once, before the command runs, and are never passed on to the command. `--cwd`, `--project-dir` and `--ws` also accept `--flag=<value>`. The full global set is recorded under `global` in [`CLI-SURFACE-MANIFEST.json`](CLI-SURFACE-MANIFEST.json). Besides the flags above, it includes `--json-errors` and `--exit-contract=<v>`.
 
 ---
 
