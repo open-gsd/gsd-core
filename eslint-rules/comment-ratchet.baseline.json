@@ -616,6 +616,9 @@
   "scripts/slurm-adapter.cjs": {
     "block": 1
   },
+  "scripts/static-checks/portability-rule-disable-ban.cjs": {
+    "block": 1
+  },
   "scripts/strip-prose-atrefs.cjs": {
     "block": 1
   },
@@ -3111,9 +3114,6 @@
   },
   "tests/policy-release-no-npm-self-upgrade.test.cjs": {
     "directive": 1
-  },
-  "tests/portability-rule-disable-ban.test.cjs": {
-    "block": 1
   },
   "tests/post-planning-gaps-2493.test.cjs": {
     "block": 1
