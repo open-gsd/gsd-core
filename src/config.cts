@@ -713,8 +713,17 @@ function isConfigSection(cwd: string, keyPath: string): boolean {
   return hasChildConfigKeys(cwd, keyPath);
 }
 
+/** Which command is checking its settings, and how it reads a null. */
+interface ConfigChoicesOptions {
+  /** The command named in a refusal. */
+  verb: 'config-new-project' | 'config-save-defaults';
+  /** Keep a null as the request to clear its key, instead of leaving it out. */
+  keepNull: boolean;
+}
+
 /**
- * Hold `config-new-project` choices to the rules `config-set` applies (#5268).
+ * Hold a command's settings to the rules `config-set` applies: the choices of
+ * `config-new-project` (#5268) and the settings of `config-save-defaults` (#5681).
  *
  * Choices arrive nested (`{"workflow":{"research":true}}`) while the schema
  * and `config-set` address dotted leaf paths (`workflow.research`), so the
@@ -728,16 +737,16 @@ function isConfigSection(cwd: string, keyPath: string): boolean {
  * each value is the one `config-set` would persist (a normalizing rule's
  * result where one applies). An empty object is a section with nothing set:
  * refused as an unknown key unless its name is a real section, and left out
- * of the result either way. A null choice is left out too, unless `keepNull`
- * keeps it as the request to clear the key (`config-save-defaults`).
+ * of the result either way. A null choice is left out too, unless
+ * `options.keepNull` keeps it as the request to clear the key.
  */
-function validateNewProjectChoices(
+function validateConfigChoices(
   cwd: string,
   choices: Record<string, unknown>,
+  options: ConfigChoicesOptions,
   prefix = '',
-  keepNull = false,
-  verb = 'config-new-project',
 ): Record<string, unknown> {
+  const { verb, keepNull } = options;
   const checked: Record<string, unknown> = {};
   for (const key of Object.keys(choices)) {
     const kp = prefix ? `${prefix}.${key}` : key;
@@ -772,7 +781,7 @@ function validateNewProjectChoices(
       if (Object.keys(value).length === 0 && !isValidConfigKey(kp, cwd) && !isConfigSection(cwd, kp)) {
         assertKnownConfigKey(cwd, kp);
       }
-      const section = validateNewProjectChoices(cwd, value, kp, keepNull, verb);
+      const section = validateConfigChoices(cwd, value, options, kp);
       // Empty as given, or emptied by null choices: it sets nothing.
       if (Object.keys(section).length > 0) checked[key] = section;
       continue;
@@ -850,7 +859,7 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
   // #5268: refuse what config-set refuses, before the first write — and
   // before the existing-config check, so a refused choice is reported
   // whether or not the project already has a config.
-  const checkedChoices = validateNewProjectChoices(cwd, userChoices);
+  const checkedChoices = validateConfigChoices(cwd, userChoices, { verb: 'config-new-project', keepNull: false });
 
   // Idempotent: don't overwrite existing config
   if (fs.existsSync(configPath)) {
@@ -996,7 +1005,7 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
     .map(({ key }) => key)
     .filter((key) => Object.prototype.hasOwnProperty.call(unchecked, key));
   for (const key of skipped) delete unchecked[key];
-  const patch = validateNewProjectChoices(cwd, unchecked, '', true, 'config-save-defaults');
+  const patch = validateConfigChoices(cwd, unchecked, { verb: 'config-save-defaults', keepNull: true });
   // Both spellings of one setting would both be stored, and the loader and
   // new-project creation each read a different one first.
   const twin = SPELLING_TWINS.find(([legacy, canonical]) => readPath(patch, legacy) !== undefined && readPath(patch, canonical) !== undefined);
