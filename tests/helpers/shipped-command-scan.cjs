@@ -289,6 +289,30 @@ const isUntrackedDeclaration = (line) => {
 // follows; leaving them out is a silent false negative in a function whose
 // entire job is reaching a command the tokenizer cannot see.
 const SHELL_INVOKER_RE = /^(?:.*\/)?(?:ba|da|k|z|a|c|tc|fi|ya)?sh$/;
+// Shell keywords, prompt/list markers, and the command MODIFIERS that
+// pass straight through to the command after them. The modifiers are the
+// mirror of the invoker-set gap: omitting them is a false negative in the
+// same direction, since `time bash -c "…"` really does run the payload.
+//
+// RESIDUAL, named rather than half-solved: a modifier that takes its OWN
+// flags (`sudo -u alice bash -c …`) still stops the search, because
+// skipping arbitrary flag/value pairs here would mean modelling each
+// modifier's option grammar. No live instance exists in the six roots;
+// the failure is a missed candidate, and the declaration marker is not
+// involved either way.
+const NON_COMMAND_PREFIX = new Set([
+  'then', 'else', 'do', '$', '-', '*', '&&', '||',
+  'time', 'exec', 'nohup', 'env', 'command',
+]);
+// AN ASSIGNMENT IS A SKIPPABLE PREFIX ONLY WHEN IT IS NOT A SUBSTITUTION.
+// `FOO=1 bash -c "…"` prefixes the command; `V=$(bash -c "…")` IS the
+// command, and skipping it walks the search past the invoker onto `-c`,
+// which is not one — so the payload is never reached. Found by sweeping
+// the substitution-glues-to-the-binary class across every command-name
+// test rather than only the one the finding named.
+const skippable = (t) => t.redir
+  || (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?=/.test(t.value) && !t.value.includes('$('))
+  || NON_COMMAND_PREFIX.has(t.value);
 const shellDashCPayloads = (str) => {
   const payloads = [];
   let group = [];
@@ -301,30 +325,6 @@ const shellDashCPayloads = (str) => {
     // env assignment, a shell keyword, or a list/prompt marker may precede the
     // command name. Those are not commands; `echo` is, which is exactly the
     // line the search-anywhere version got wrong.
-    // Shell keywords, prompt/list markers, and the command MODIFIERS that
-    // pass straight through to the command after them. The modifiers are the
-    // mirror of the invoker-set gap: omitting them is a false negative in the
-    // same direction, since `time bash -c "…"` really does run the payload.
-    //
-    // RESIDUAL, named rather than half-solved: a modifier that takes its OWN
-    // flags (`sudo -u alice bash -c …`) still stops the search, because
-    // skipping arbitrary flag/value pairs here would mean modelling each
-    // modifier's option grammar. No live instance exists in the six roots;
-    // the failure is a missed candidate, and the declaration marker is not
-    // involved either way.
-    const NON_COMMAND_PREFIX = new Set([
-      'then', 'else', 'do', '$', '-', '*', '&&', '||',
-      'time', 'exec', 'nohup', 'env', 'command',
-    ]);
-    // AN ASSIGNMENT IS A SKIPPABLE PREFIX ONLY WHEN IT IS NOT A SUBSTITUTION.
-    // `FOO=1 bash -c "…"` prefixes the command; `V=$(bash -c "…")` IS the
-    // command, and skipping it walks the search past the invoker onto `-c`,
-    // which is not one — so the payload is never reached. Found by sweeping
-    // the substitution-glues-to-the-binary class across every command-name
-    // test rather than only the one the finding named.
-    const skippable = (t) => t.redir
-      || (/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?=/.test(t.value) && !t.value.includes('$('))
-      || NON_COMMAND_PREFIX.has(t.value);
     const gi = group.findIndex((t) => !skippable(t));
     if (gi !== -1 && SHELL_INVOKER_RE.test(bareCommandName(group[gi]))) {
       const ci = group.findIndex((t, k) => k > gi && !t.redir && /^-[A-Za-z]*c$/.test(t.value));
@@ -350,9 +350,11 @@ const declaredLines = (raw) => {
   const set = new Set();
   let q = null;
   raw.split('\n').forEach((line, n) => {
+    const open = q ?? '';
     const r = scanLine(line, q);
     q = r.quote;
-    if (r.cut === -1 || tokenize(line).some((t) => /gsd-scan-ignore:/.test(t.value))) return;
+    // The open quote of earlier lines prefixes the line, so a closing quote is not read as an opening one.
+    if (r.cut === -1 || tokenize(`${open}${line}`).some((t) => /gsd-scan-ignore:/.test(t.value))) return;
     const reason = declarationReason(line.slice(r.cut));
     if (reason !== null && ISSUE_REF_RE.test(reason)) set.add(n);
   });
@@ -387,10 +389,11 @@ const unscopedGitCommits = (raw, inline = false) => {
   for (let i = 0; i < toks.length; i += 1) {
     if (i <= skipTo || toks[i].op || toks[i].redir) continue;
     if (!isGit(toks[i])) {
+      // The command word: after the last operator or newline before token i, past the prefixes `shellDashCPayloads` skips (`then`, `do`, `FOO=1`, redirections) and `{`.
       let k = i - 1;
-      while (k >= 0 && !toks[k].op) k -= 1;
+      while (k >= 0 && !toks[k].op && !text.slice(toks[k].end, toks[k + 1].start).includes('\n')) k -= 1;
       let w = k + 1;
-      while (toks[w] && (toks[w].redir || toks[w].value === '{')) w += 1;
+      while (toks[w] && (skippable(toks[w]) || toks[w].value === '{')) w += 1;
       if (['echo', 'printf', 'eval'].includes(toks[w]?.value) && /\bgit\b[^\n]*\bcommit\b/.test(toks[i].value) && !isDeclaredSpan(toks[i].start, toks[i].end)) out.push(...unscopedGitCommits(toks[i].value, inline));
       continue;
     }

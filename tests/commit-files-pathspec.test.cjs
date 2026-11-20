@@ -3392,6 +3392,16 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(unscopedGitCommits(`git commit -m "fix: scope git commit calls" -- a`).length, 0);
   });
 
+  test('echoed advice behind then, do, an env assignment or a newline is scanned too', () => {
+    assert.equal(unscopedGitCommits(`if c; then echo "1. git add -A && git commit -m x" >&2; fi`).length, 1);
+    assert.equal(unscopedGitCommits(`for f in a; do echo "git commit -m x"; done`).length, 1);
+    assert.equal(unscopedGitCommits(`FOO=1 echo "git commit -m x"`).length, 1);
+    assert.equal(unscopedGitCommits(`true\necho "git commit -m x"`).length, 1);
+    assert.equal(unscopedGitCommits(`if c; then echo "git commit -m x -- a"; fi`).length, 0);
+    assert.equal(unscopedGitCommits(`true\nprintf '%s\\n' "git commit" >&2`).length, 1);
+    assert.equal(unscopedGitCommits(`ls "git commit -m x"`).length, 0);
+  });
+
   test('a bare git commit (editor mode, no args) is unscoped', () => {
     assert.equal(unscopedGitCommits('git commit').length, 1);
     assert.equal(unscopedGitCommits('git commit', true).length, 0);
@@ -3415,6 +3425,7 @@ describe('shipped prompts scope raw git commit with a pathspec (#5211)', () => {
     assert.equal(unscopedGitCommits('git commit -m "a\n# gsd-scan-ignore: #5211 inside" -- .').length, 1);
     assert.equal(unscopedGitCommits('git commit -m x -- . gsd-scan-ignore:#5211').length, 1);
     assert.equal(unscopedGitCommits('git commit -m x -- .  # gsd-scan-ignore: #5211 one\ngit commit -m y').length, 1);
+    assert.equal(unscopedGitCommits('git commit -m "first\nbody" -- .  # gsd-scan-ignore: #5211 closing line').length, 0);
   });
 
   test('every git commit with arguments carries a -- pathspec', () => {
