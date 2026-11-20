@@ -434,7 +434,7 @@ describe('shell fences name no root .planning/ artifact literal (#5861)', () => 
     { file: 'gsd-core/workflows/progress/steps/forensic-audit.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
     {
       file: 'gsd-core/workflows/pr-branch.md',
-      match: /^\s*#|STRUCTURAL_RE=|MILESTONE_PHASES_RE=|MILESTONE_PHASE_DIRS=/,
+      match: /^\s*#|STRUCTURAL_RE=|MILESTONE_PHASES_RE=|MILESTONE_PHASE_DIRS=|\[ -d \.planning\/milestones \]/,
       why: 'mirrors the drift-guarded root-layout patterns in src/pr-branch-patterns.cts, which classify repo paths rather than read an artifact',
     },
   ];
