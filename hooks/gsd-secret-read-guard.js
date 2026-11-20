@@ -3598,10 +3598,10 @@ function main() {
     } catch (e) {
       // A stack overflow is a limit, not a bug: failing open on it allows a
       // read the check had not reached. findSecretRead turns its own into
-      // `command-too-complex`; the debugger-spawn scan unwraps `timeout`,
-      // which the secret scan does not, so its tokenizer can overflow on a
-      // body the secret scan never read. Any other error fails open — never
-      // block valid tool calls due to hook errors.
+      // `command-too-complex`, and scanBashReadings holds one the debugger-spawn
+      // check throws as the same block. Any RangeError that still reaches this
+      // catch is denied the same way. Any other error fails open — never block
+      // valid tool calls due to hook errors.
       if (e instanceof RangeError && tool === 'Bash') emitBlock('command-too-complex', tool, '');
       // ON_CRASH is declared ALLOW at module top (#3911).
       crash(ON_CRASH, undefined);
