@@ -2893,7 +2893,17 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       output(result, raw, 'failed');
       return;
     }
-    if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
+    const emptyCommit = commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit');
+    let manifestOnlySweep = false;
+    if (!emptyCommit && !explicitFiles && !amend && !isMergeInProgress
+      && commitResult.stdout.includes('nothing added to commit but untracked files present')) {
+      // The default sweep excluded these ephemeral files. Keep other commit failures visible.
+      const untracked = execGit(['ls-files', '--others', '--exclude-standard', '-z', '--', '.planning/'], { cwd });
+      const paths = untracked.stdout.split('\0').filter(Boolean);
+      manifestOnlySweep = untracked.exitCode === 0 && paths.length > 0
+        && paths.every((file) => isWaveManifestPath(file, cwd));
+    }
+    if (emptyCommit || manifestOnlySweep) {
       // Same reading as the guard above: git recorded nothing, so a removal
       // this call staged must not be left behind under a `nothing_to_commit`
       // report. The failure exits below are deliberately NOT restored -- they
