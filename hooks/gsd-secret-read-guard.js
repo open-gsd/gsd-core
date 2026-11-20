@@ -472,7 +472,7 @@ const GIT_GLOBAL_EQUALS_FORM_OPTIONS = new Set([
 const GIT_GLOBAL_FLAGS = new Set([
   '-p', '--paginate', '-P', '--no-pager', '--no-replace-objects', '--no-lazy-fetch',
   '--no-optional-locks', '--no-advice', '--bare',
-  '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+  '--literal-pathspecs', '--no-literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
 ]);
 
 // Git config keys whose value git runs as a command (#5045, #5492; `hook.*.command`
@@ -596,10 +596,13 @@ const GIT_SCRIPT_WORK = 64;
 const GIT_ENTRY_WORK = 8;
 
 // ssh_config(5) options that ssh runs locally through the user's shell
-// (#5492), and the ssh options that take a value (`-o` among them).
+// (#5492), and each client's options that take a value (`-o` among them):
+// ssh(1), scp(1) and sftp(1) differ (`scp -p` and `sftp -p` are flags, `scp -B`
+// is one and `sftp -B` is not).
 const SSH_CLIENTS = new Set(['ssh', 'scp', 'sftp', 'ssh.exe', 'scp.exe', 'sftp.exe']);
 const SSH_LOCAL_COMMAND_OPTIONS = new Set(['proxycommand', 'localcommand', 'knownhostscommand']);
 const SSH_VALUE_FLAGS = 'BbcDEeFIiJLlmOoPpQRSWw';
+const SSH_CLIENT_VALUE_FLAGS = new Map([['ssh', SSH_VALUE_FLAGS], ['scp', 'cDFiJloPSX'], ['sftp', 'BbcDFiJloPRSsX']]);
 const SSH_OPTION_RE = /^\s*"?([A-Za-z]+)"?\s*(?:=\s*|\s+)([\s\S]*)$/;
 
 // #4856: `cp`/`mv` write their destination and never print it, so a secret
@@ -2290,18 +2293,34 @@ function parseGitConfig(text) {
 // in it) and one per command prefix (`VAR=… cmd`, `env`, `sudo`). Nested
 // scripts inherit them, as an exported environment is inherited. Every value
 // a name is given is kept, since assignment order and subshells decide which
-// one a command sees, and all of them are scanned. `gitEnv` caches the
-// frame's gitEnvIndex; `gitEnvScanned` is the scanGitInvocation memo.
+// one a command sees, and all of them are scanned. `vars` holds the values set
+// with `=`; a name given a `+=` here also keeps every assignment to it, in
+// order, in `seqs` (null when none is), for shellVarValues (#5492). `gitEnv`
+// caches the frame's gitEnvIndex; `gitEnvScanned` is the scanGitInvocation memo.
 function shellVarFrame(parent, assignments) {
   if (!assignments.length) return parent;
   const vars = new Map();
+  let seqs = null;
+  const appended = new Set();
   for (const text of assignments) {
     const eq = text.indexOf('=');
-    const name = text.slice(0, text[eq - 1] === '+' ? eq - 1 : eq);
-    if (!vars.has(name)) vars.set(name, new Set());
-    vars.get(name).add(text.slice(eq + 1));
+    if (text[eq - 1] === '+') appended.add(text.slice(0, eq - 1));
   }
-  return { parent, vars, gitEnv: undefined, gitEnvScanned: false };
+  for (const text of assignments) {
+    const eq = text.indexOf('=');
+    const append = text[eq - 1] === '+';
+    const name = text.slice(0, append ? eq - 1 : eq);
+    const value = text.slice(eq + 1);
+    if (appended.has(name)) {
+      if (seqs === null) seqs = new Map();
+      if (!seqs.has(name)) seqs.set(name, []);
+      seqs.get(name).push({ value, append });
+    }
+    if (append) continue;
+    if (!vars.has(name)) vars.set(name, new Set());
+    vars.get(name).add(value);
+  }
+  return { parent, vars, seqs, gitEnv: undefined, gitEnvScanned: false };
 }
 
 // Reserved words that may open a segment ahead of a command run in the same
@@ -2311,10 +2330,9 @@ const LEADING_RESERVED = new Set(['if', 'then', 'do', 'else', 'elif', 'while', '
 // that keep it running (`command -v` only looks the name up).
 const BUILTIN_PREFIXES = new Map([['builtin', ['--']], ['command', ['-p', '--']], ['time', ['-p', '--']]]);
 
-// Whether a segment's words set variables in the script's shell: bare
-// assignments, or a declaration builtin, behind leading reserved words,
-// builtin prefixes and assignment prefixes.
-function isAssignmentSegment(words) {
+// The index of a segment's command word, past leading reserved words,
+// builtin prefixes and assignment prefixes (words.length when none is left).
+function assignmentSegmentStart(words) {
   let i = 0;
   while (i < words.length) {
     const w = words[i];
@@ -2330,13 +2348,16 @@ function isAssignmentSegment(words) {
       break;
     }
   }
-  // Words that ran out leave only assignments to collect, possibly none.
-  return i === words.length || DECLARATION_COMMANDS.has(words[i]);
+  return i;
 }
 
 // The `NAME=value` words of a script's declaration builtins and bare
-// assignment segments.
-function scriptAssignments(tokens) {
+// assignment segments, and of the scripts its `eval` and `source <(…)` /
+// `. <(…)` segments run in the same shell (#5492): eval's joined operands, and
+// what the process substitution's echo / printf write (reconstructedProcsub),
+// read under `reading`, and under every shell reading as well when the plain
+// one meets a form they are for (readsEachWay), at most MAX_NESTING_DEPTH deep.
+function scriptAssignments(tokens, reading, ctx, depth) {
   const bySeg = new Map();
   for (let k = 0; k < tokens.length; k++) {
     const t = tokens[k];
@@ -2347,27 +2368,114 @@ function scriptAssignments(tokens) {
     }
     if (t.kind !== 'word') continue;
     if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
-    bySeg.get(t.seg).push(t.text);
+    bySeg.get(t.seg).push(t);
   }
   const assignments = [];
-  for (const words of bySeg.values()) {
-    if (isAssignmentSegment(words)) {
+  const runInShell = (script) => {
+    charge(ctx, script.length);
+    // A reading that finds what another did adds nothing: a `+=` taken twice would chain onto itself.
+    const found = new Set();
+    for (const shell of reading === false && readsEachWay(script) ? [false, ...READINGS] : [reading]) {
+      let inner;
+      try {
+        inner = tokenizeCharged(script, shell).tokens;
+      } catch (e) {
+        // As in scanEachWay: a limit stops the scan, and a shell reading's bug
+        // costs only that reading.
+        if (shell === false || e instanceof ScanLimitError || e instanceof RangeError || e === SCAN_BUDGET_SPENT) throw e;
+        if (readingBug === null) readingBug = e;
+        continue;
+      }
+      charge(ctx, TOKEN_WORK * inner.length);
+      const words = scriptAssignments(inner, shell, ctx, depth + 1);
+      const key = words.join('\0');
+      if (found.has(key)) continue;
+      found.add(key);
+      for (const w of words) assignments.push(w);
+    }
+  };
+  for (const segTokens of bySeg.values()) {
+    const words = segTokens.map((t) => t.text);
+    const i = assignmentSegmentStart(words);
+    if (i === words.length || DECLARATION_COMMANDS.has(words[i])) {
       for (const w of words) if (ASSIGNMENT_RE.test(w)) assignments.push(w);
+    } else if (depth < MAX_NESTING_DEPTH && words[i] === 'eval') {
+      runInShell(words.slice(i + 1).join(' '));
+    } else if (depth < MAX_NESTING_DEPTH && (words[i] === 'source' || words[i] === '.')) {
+      for (const t of segTokens.slice(i + 1)) {
+        const src = t.procsub === undefined ? null : reconstructedProcsub(t.procsub, reading);
+        if (src !== null) runInShell(src);
+      }
     }
   }
   return assignments;
 }
 
-// Every value `name` is given in `frame` and the frames above it.
+// Every value `name` is given in `frame` and the frames above it. A `+=`
+// builds on the value before it (#5492), so for a name some frame appends to
+// the values also take each value set, and the empty one, followed by every
+// prefix of the appends after it (frames root to leaf, each in source order;
+// an append before any value set in its frame, as a function body defined
+// earlier is, also comes after each value), and each append on its own.
 function shellVarValues(frame, name, ctx) {
   const values = new Set();
+  let appended = false;
   for (let f = frame; f; f = f.parent) {
+    if (f.seqs !== null && f.seqs.has(name)) appended = true;
     for (const value of f.vars.get(name) || []) {
       charge(ctx, 1);
       values.add(value);
     }
   }
+  if (appended) for (const value of appendChains(frame, name, ctx)) values.add(value);
   return [...values];
+}
+
+// The values shellVarValues adds for a name some frame appends to, each
+// charged before it is built.
+function appendChains(frame, name, ctx) {
+  const frames = [];
+  for (let f = frame; f; f = f.parent) frames.push(f);
+  const seq = [];
+  for (let n = frames.length - 1; n >= 0; n--) {
+    const f = frames[n];
+    const own = f.seqs === null ? undefined : f.seqs.get(name);
+    if (own === undefined) {
+      for (const value of f.vars.get(name) || []) seq.push({ value, append: false, early: false, at: seq.length });
+      continue;
+    }
+    let set = false;
+    for (const { value, append } of own) {
+      seq.push({ value, append, early: append && !set, at: seq.length });
+      set = set || !append;
+    }
+  }
+  const appends = seq.filter((e) => e.append);
+  const early = appends.filter((e) => e.early);
+  const chains = [];
+  const chain = (start, steps) => {
+    let value = start;
+    for (const e of steps) {
+      charge(ctx, value.length + e.value.length + 1);
+      value += e.value;
+      chains.push(value);
+    }
+  };
+  // The early appends run after the later ones, or right after the value.
+  const chainFrom = (start, at) => {
+    charge(ctx, appends.length + early.length);
+    const later = appends.filter((e) => e.at > at);
+    const before = early.filter((e) => e.at < at);
+    chain(start, [...later, ...before]);
+    if (later.length && before.length) chain(start, before);
+  };
+  chainFrom('', -1);
+  for (const e of seq) if (!e.append) chainFrom(e.value, e.at);
+  for (const e of appends) {
+    charge(ctx, e.value.length + 1);
+    chains.push(e.value);
+  }
+  return chains;
 }
 
 // `--config-env=<key>=<var>`: the key ends at the last `=`, since a
@@ -2403,7 +2511,13 @@ function gitEnvIndex(frame, ctx) {
     entries.push(gitConfigEntry(source, rawKey, value, key));
   };
   let secretFile = inherited;
-  for (const [name, values] of frame.vars) {
+  // A name some frame appends to (#5492) is read through shellVarValues, which
+  // chains the appends, also when this frame only appends to it.
+  let appends = false;
+  for (let f = frame; f && !appends; f = f.parent) appends = f.seqs !== null;
+  const names = frame.seqs === null ? frame.vars.keys() : new Set([...frame.vars.keys(), ...frame.seqs.keys()]);
+  for (const name of names) {
+    const values = appends ? shellVarValues(frame, name, ctx) : frame.vars.get(name);
     const pair = /^GIT_CONFIG_(KEY|VALUE)_(\d+)$/.exec(name);
     if (pair) {
       // This frame's keys pair with the values set here or above; its values
@@ -2755,15 +2869,17 @@ function scanGitInvocation(operands, depth, ctx) {
 
 // The commands an ssh client's `-o` options run locally (#5492): the value
 // after `-o` (attached, or the next word, also at the end of a bundle), as
-// `Keyword=value` or `Keyword value`; [label, script] pairs.
-function sshOptionScripts(operands) {
+// `Keyword=value` or `Keyword value`; [label, script] pairs. `base` is the
+// client, whose own options decide which letters take a value.
+function sshOptionScripts(base, operands) {
+  const valueFlags = SSH_CLIENT_VALUE_FLAGS.get(base.replace(/\.exe$/, ''));
   const scripts = [];
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
     if (t === '--') break;
     if (!/^-[A-Za-z0-9]/.test(t)) continue;
     for (let i = 1; i < t.length; i++) {
-      if (!SSH_VALUE_FLAGS.includes(t[i])) continue;
+      if (!valueFlags.includes(t[i])) continue;
       const value = i + 1 < t.length ? t.slice(i + 1) : operands[++k] && operands[k].text;
       const m = t[i] === 'o' && typeof value === 'string' && SSH_OPTION_RE.exec(value);
       if (m && SSH_LOCAL_COMMAND_OPTIONS.has(m[1].toLowerCase())) scripts.push([`-o ${m[1]}`, m[2]]);
@@ -3087,8 +3203,14 @@ function copyDestinationIndices(operands) {
 }
 
 // The statically-knowable stdin a segment writes: `echo`/`printf` operands
-// joined by a space (for `echo`, leading `-neE` flags dropped). Any other
-// source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → null.
+// joined by a space (for `echo`, leading `-neE` flags dropped). A printf
+// whose format is `%s\n` or `%s\\n` prints its arguments one per line, so
+// they are joined by a newline (#5492), after the words joined as before so that
+// a command the space-joined reading blocked stays blocked; any other format
+// stays joined as is (a bare `%s` too: it prints them run together, and a line
+// each would leave `printf '%s' 'cat ' .env | bash` with no operand to check). Any other source
+// (`cat gen.sh | bash`, `curl … | sh`) is not knowable → null.
+const PRINTF_LINE_FORMATS = new Set(['%s\\n', '%s\\\\n']);
 function reconstructedScript(words) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
@@ -3097,19 +3219,33 @@ function reconstructedScript(words) {
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
     return cmd.operands.slice(start).map((w) => w.text).join(' ');
   }
-  if (cmd.base === 'printf') return cmd.operands.map((w) => w.text).join(' ');
+  if (cmd.base === 'printf') {
+    if (cmd.operands.length && PRINTF_LINE_FORMATS.has(cmd.operands[0].text)) {
+      const joined = cmd.operands.map((w) => w.text).join(' ');
+      return `${joined}\n${cmd.operands.slice(1).map((w) => w.text).join('\n')}`;
+    }
+    return cmd.operands.map((w) => w.text).join(' ');
+  }
   return null;
 }
 
-// Same rule applied to a `<( … )` / `>( … )` inner script's first segment.
+// Same rule applied to a `<( … )` / `>( … )` inner script: what its
+// echo / printf segments write, a line each (#5492: `<(echo a; echo "…")`),
+// or null when none writes anything knowable.
 function reconstructedProcsub(inner, reading) {
   const { tokens } = tokenizeCharged(inner, reading);
-  const words = [];
+  const bySeg = new Map();
   for (const t of tokens) {
-    if (t.kind === 'sep') break;
-    if (t.kind === 'word') words.push(t);
+    if (t.kind !== 'word') continue;
+    if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+    bySeg.get(t.seg).push(t);
   }
-  return reconstructedScript(words);
+  const lines = [];
+  for (const words of bySeg.values()) {
+    const line = reconstructedScript(words);
+    if (line !== null) lines.push(line);
+  }
+  return lines.length ? lines.join('\n') : null;
 }
 
 // The operator connecting segment `s` to the nearest PRECEDING segment that has
@@ -3536,7 +3672,31 @@ function readsEachWay(command) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   return joined.includes("$'") || joined.includes('$"') || joined.includes('$${') || joined.includes('$$(')
     // zsh's arithmetic holding a quote (zshMathEnd): `$[`, `$((` and `((`.
-    || ((joined.includes('"') || joined.includes("'")) && (joined.includes('((') || joined.includes('$[')));
+    || ((joined.includes('"') || joined.includes("'")) && (joined.includes('((') || joined.includes('$[')))
+    || quotedBraceHoldsQuote(joined);
+}
+
+// Whether a `${` after a `"` holds a quote before its `}` (#5492): the plain
+// reading does not read a `${…}` in double quotes, so that quote ends or opens
+// a quoted run where the shell's does not (`echo "${x-"'"}"; cat .env; echo "'"`).
+// One pass: the latest `${` not closed by a `}` stands for every earlier one.
+function quotedBraceHoldsQuote(text) {
+  if (!text.includes('${')) return false;
+  let afterQuote = false;
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '$' && text[i + 1] === '{') {
+      open = open || afterQuote;
+      i++;
+    } else if (c === '}') {
+      open = false;
+    } else if (c === '"' || c === "'") {
+      if (open) return true;
+      if (c === '"') afterQuote = true;
+    }
+  }
+  return false;
 }
 
 // A Bash block for a read of the secret file `text` names.
@@ -3554,7 +3714,7 @@ function scanCommand(command, depth, reading, ctx, rescan) {
   const tokenized = tokenizeCharged(command, reading, true);
   if (rescan) charge(ctx, TOKEN_WORK * tokenized.tokens.length);
   const saved = ctx.shellVars;
-  ctx.shellVars = shellVarFrame(saved, scriptAssignments(tokenized.tokens));
+  ctx.shellVars = shellVarFrame(saved, scriptAssignments(tokenized.tokens, reading, ctx, depth));
   try {
     return scanScript(tokenized, depth, reading, ctx);
   } finally {
@@ -3656,13 +3816,13 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
 
     // find's -exec/-execdir/-ok/-okdir actions run a command; a shell given a script is read like any other (#6114).
     if ((base === 'find' || base === 'find.exe') && depth < MAX_NESTING_DEPTH) {
-      const hit = scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
+      const hit = scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
       if (hit) return hit;
     }
 
     // procps watch joins its operands with spaces and runs the result through `sh -c` (#6114).
     if (base === 'watch' && depth < MAX_NESTING_DEPTH) {
-      const hit = scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
+      const hit = scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
       if (hit) return hit;
     }
 
@@ -3680,7 +3840,7 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
 
     // ssh runs ProxyCommand-style -o values locally (#5492).
     if (SSH_CLIENTS.has(base) && depth < MAX_NESTING_DEPTH) {
-      for (const [label, script] of sshOptionScripts(operands)) {
+      for (const [label, script] of sshOptionScripts(base, operands)) {
         const hit = via(`${base} ${label}`, findSecretRead(script, depth + 1, ctx));
         if (hit) return hit;
       }
@@ -3860,7 +4020,8 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
 // sub-command reads. Only inferred across a real pipe and when stdin is not
 // redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
-// mode c whether or not a pipe feeds it.
+// mode c whether or not a pipe feeds it. The sub-command's prefix variables
+// (`xargs env GIT_CONFIG_…=… sh -c …`) are in scope for all of it (#5492).
 function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
   const { subIdx, argFile } = xargsSubCommand(operands);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
@@ -3868,48 +4029,74 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx) {
   // The sub-command is resolved through the same wrappers a top-level command is (`xargs sudo sh -c '…'`,
   // `xargs timeout 5 sh -c '…'`, `xargs env sh -c '…'`, #6114); nothing but wrappers left reads as the bare word.
   const resolvedSub = resolveCommand(operands.slice(subIdx));
-  const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
-  const subBase = resolvedSub ? resolvedSub.base : writtenBase;
-  const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
-  const subIsShell = SHELL_INTERPRETERS.has(subBase);
-  if (subIsShell) {
-    // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
-    const hit = scanShellInterpreter(subOperands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
-    if (hit) return hit;
-  } else {
-    // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
-    // command xargs runs; stdin words only add operands after it.
-    const hit = findSecretRead(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth + 1, ctx);
-    if (hit) return hit;
-  }
-  if (argFile) return null; // stdin replaced by a file — no pipeline inference
-  // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
-  // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
-  if (NON_READING_COMMANDS.has(writtenBase)) return null;
+  const saved = ctx.shellVars;
+  ctx.shellVars = shellVarFrame(saved, resolvedSub ? resolvedSub.assigns : []);
+  try {
+    const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
+    const subBase = resolvedSub ? resolvedSub.base : writtenBase;
+    const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
+    const subIsShell = SHELL_INTERPRETERS.has(subBase);
+    if (subIsShell) {
+      // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
+      const hit = scanShellInterpreter(subOperands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
+      if (hit) return hit;
+    } else {
+      // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
+      // command xargs runs; stdin words only add operands after it.
+      const hit = findSecretRead(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth + 1, ctx);
+      if (hit) return hit;
+    }
+    if (argFile) return null; // stdin replaced by a file — no pipeline inference
+    // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
+    // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
+    if (NON_READING_COMMANDS.has(writtenBase)) return null;
 
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if (op !== '|' && op !== '|&') return null;
-  if (prevSeg < 0) return null;
+    const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
+    if (op !== '|' && op !== '|&') return null;
+    if (prevSeg < 0) return null;
 
-  // Every upstream operand is a candidate file name — the NON_READING
-  // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
-  // isSecretBasename still holds.
-  const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
-  if (!prevCmd) return null;
-  if (subIsShell) {
-    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
-    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
-    if (hit) return hit;
+    const upstreamWords = (bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word');
+    // #5492: piped words become options and scripts of git, an ssh client or a shell (`-c 'core.fsmonitor=…'`,
+    // `-o ProxyCommand=…`, `-c '…'`), split by whichever of -I, -0, -d or -n xargs was given. Rather than model
+    // that, fail closed: a pipe into one of them whose words mention a secret name anywhere is a read.
+    if (subBase === 'git' || subBase === 'git.exe' || SSH_CLIENTS.has(subBase) || subIsShell) {
+      for (const w of upstreamWords) {
+        const named = mentionedSecret(w.text) || mentionedSecret(xargsUnquoted(w.text));
+        if (named) return secretRead(named);
+      }
+    }
+
+    // Every upstream operand is a candidate file name — the NON_READING
+    // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
+    // isSecretBasename still holds.
+    const prevCmd = resolveCommand(upstreamWords);
+    if (!prevCmd) return null;
+    if (subIsShell) {
+      // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+      // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+      const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth, ctx);
+      if (hit) return hit;
+    }
+    for (const w of prevCmd.operands) {
+      if (operandNamesSecret(w.text)) return secretRead(w.text);
+      // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+      // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+      const received = xargsUnquoted(w.text);
+      if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+    }
+    return null;
+  } finally {
+    ctx.shellVars = saved;
   }
-  for (const w of prevCmd.operands) {
-    if (operandNamesSecret(w.text)) return secretRead(w.text);
-    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
-    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
-    const received = xargsUnquoted(w.text);
-    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
-  }
-  return null;
+}
+
+// The first piece of `text` that names a secret, or null (#5492). Pieces are cut at whitespace, quotes, a
+// backslash (printf's `\0` and `\n` separate words on their way to xargs -0 / -d) and the characters that end a
+// word or an option name in a shell, an ssh option or a git config value. `/` stays inside a piece, so a piece is
+// judged by its basename, and `.` does too, so `.env.example` keeps its exemption.
+const MENTION_SPLIT_RE = /[\s"'=:;,|&<>()`$!{}@\\]+/;
+function mentionedSecret(text) {
+  return text.split(MENTION_SPLIT_RE).find((piece) => piece !== '' && namesSecretOperand(piece)) || null;
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -3933,7 +4120,7 @@ function xargsReplaceStr(operands, subIdx) {
 // `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
 // operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
 // (quotes and backslashes removed), is read as the script, or substituted into it.
-function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
+function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth, ctx) {
   const cIdx = shellOperands.findIndex((w) => DASH_C_RE.test(w.text));
   if (cIdx === -1) return null;
   const script = shellOperands[cIdx + 1];
@@ -3943,7 +4130,7 @@ function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
     if (!script || (replaceStr !== null && script.text === replaceStr)) text = word;
     else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) text = script.text.split(replaceStr).join(word);
     if (text !== null) {
-      const hit = findSecretRead(text, depth + 1);
+      const hit = findSecretRead(text, depth + 1, ctx);
       if (hit) return hit;
     }
   }
@@ -3951,17 +4138,17 @@ function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
 }
 
 // `find … -exec CMD … ;` / `+` (also -execdir, -ok, -okdir): a shell among the action commands is read through
-// scanShellInterpreter, so `find . -exec sh -c 'cat .env' \;` reads its script. An action whose command is not a
-// shell needs nothing more: its operands are already find's operands, which the ordinary check reads.
+// scanShellInterpreter, so `find . -exec sh -c 'cat .env' \;` reads its script; any other action command is read
+// as scanLaunchedCommand reads it.
 const FIND_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
-function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
+function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
   for (let i = 0; i < operands.length; i++) {
     if (!FIND_ACTIONS.has(operands[i].text)) continue;
     const action = [];
     let j = i + 1;
     while (j < operands.length && operands[j].text !== ';' && operands[j].text !== '+') action.push(operands[j++]);
     i = j;
-    const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading);
+    const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading, ctx);
     if (hit) return hit;
   }
   return null;
@@ -3969,15 +4156,24 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
 
 // A command another program launches (a find action, a `watch -x` command): a shell is read through
 // scanShellInterpreter, and the launchers that re-interpret a string (eval, watch, xargs) are read as they are at the
-// top level. Anything else needs nothing more: its operands are the launcher's, which the ordinary check reads.
-function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
+// top level. Its prefix's files and variables count as a top-level command's do (#5492). Anything else is rescanned
+// as the command it is, so the git and ssh scans see it (`find . -exec git rebase -x …`, #5492); its operands are
+// also the launcher's, which the ordinary check reads.
+function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx) {
   const cmd = resolveCommand(words);
   if (!cmd) return null;
-  if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
-  if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1);
-  if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
-  if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading);
-  return null;
+  for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
+  const saved = ctx.shellVars;
+  ctx.shellVars = shellVarFrame(saved, cmd.assigns);
+  try {
+    if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
+    if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1, ctx);
+    if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading, ctx);
+    if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading, ctx);
+    return findSecretRead(words.map((w) => shellQuote(w.text)).join(' '), depth + 1, ctx);
+  } finally {
+    ctx.shellVars = saved;
+  }
 }
 
 // procps `watch [options] command…`: without -x/--exec the operands are joined with spaces and handed to
@@ -3985,7 +4181,7 @@ function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
 // `watch cat '".env"'` runs `cat .env`, and `watch 'cat .env'` is a whole script). With -x/--exec the command
 // runs without a shell and its operands are plain words, which the ordinary check judges as before.
 const WATCH_INTERVAL_SHORT = 'n';
-function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
+function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
   let exec = false;
   let k = 0;
   for (; k < operands.length; k++) {
@@ -4006,8 +4202,8 @@ function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, r
   if (k >= operands.length) return null;
   // -x/--exec: no shell re-reads the operands (`watch -x cat '".env"'` reads a file named `".env"`), but the command
   // itself may be a shell or a launcher that does (`watch -x sh -c 'cat .env'`).
-  if (exec) return scanLaunchedCommand(operands.slice(k), s, bySeg, sepAfter, depth, reading);
-  return findSecretRead(operands.slice(k).map((w) => w.text).join(' '), depth + 1);
+  if (exec) return scanLaunchedCommand(operands.slice(k), s, bySeg, sepAfter, depth, reading, ctx);
+  return findSecretRead(operands.slice(k).map((w) => w.text).join(' '), depth + 1, ctx);
 }
 
 // ---------------------------------------------------------------------------
