@@ -4452,10 +4452,21 @@ function pipeSources(s, bySeg, sepAfter, ctx) {
     }
     sources.push(words);
     const cmd = resolveCommand(words);
-    if (!cmd || !(cmd.base === 'tee' || (cmd.base === 'cat' && cmd.operands.every((w) => w.text === '-')))) return sources;
+    if (!cmd || !(cmd.base === 'tee' || (cmd.base === 'cat' && catReadsOnlyStdin(cmd.operands)))) return sources;
     charge(ctx, TOKEN_WORK * words.length + 1);
     at = prevSeg;
   }
+}
+
+// A `cat` that reads only its stdin: options that name no file (`-u`, `-n`, `-uv`, …), an optional `--`, then
+// nothing but `-` (#5492).
+const CAT_STDIN_OPTIONS_RE = /^-[uvetAnbsET]+$/;
+function catReadsOnlyStdin(operands) {
+  let k = 0;
+  while (k < operands.length && CAT_STDIN_OPTIONS_RE.test(operands[k].text)) k++;
+  if (k < operands.length && operands[k].text === '--') k++;
+  for (; k < operands.length; k++) if (operands[k].text !== '-') return false;
+  return true;
 }
 
 // `find … | xargs cat`: the upstream segment's operands become file names the
