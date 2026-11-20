@@ -270,10 +270,22 @@ it derives, and nothing else, to an executor-identity record:
   its scope's identity record once the scope's keyed record landed, so the guards read that decision
   for the scope, as on `next` (`record-dispatch-isolation` carries only `--executor-type`, as it does
   there); a snapshot otherwise lasts until the next held query at its scope rewrites it or it ages
-  out after 24 hours. A held query that cannot write its record (a phase or plan that is not a safe key, a
-  directory or an unwritable directory in the way) does not hold: it records its decision as an
-  unheld query on this branch does (the #4222 re-derivation included), rather than keep a hold the guards could not classify by, and says so on stderr (if that
-  decision write fails too, no decision is recorded, as on `next`). An empty
+  out after 24 hours. A held query that cannot write its record still holds and writes no decision
+  record: the caller's `none` stands, and the query says so on stderr. While a hold is possible (a
+  record among those the reader reads meets the resolver's hold conditions: fresh, inside its ten
+  minutes, `none`, decided by the caller), the reader fails classification closed (`scanOverflow`) in
+  these states, each of which stops the write: that record's phase or plan is not a safe key (only the
+  legacy slot can carry one, and the scope has no record name); a directory sits at a name in the
+  writer's grammar (`all.json`, `phase+…`, `plan+…`), whatever its age; the identity directory, or with
+  none `.gsd`, fails an access check for write and search; `.gsd/.gitignore` is a link (the tool-owned
+  `.gsd` owner refuses to write). A linked or non-directory identity path was already overflow. A
+  project with no hold-eligible record reads as before, whatever its `.gsd` permissions. Where an
+  applicable `none` governs the dispatch, it still governs; the wider classification reaches
+  dispatches no record applies to. Residual: a failure these checks cannot see (a transient I/O error
+  such as a full or failing disk, an ACL or mount that an access check reads differently from a create)
+  leaves the names as of the last write until the next held query records them; and for a scope that is
+  not a safe key the fail-closed state ends with the hold, after ten minutes. A prune failure after the
+  record landed does not count as a failed write. An empty
   derivation (routing off, no hinted plans) is a valid snapshot and replaces the scope's previous one;
   a name another recent record carries still classifies.
 - **Truncation.** The decision record's 64-name cap and its 4096-byte budget; names are dropped from
@@ -284,8 +296,8 @@ it derives, and nothing else, to an executor-identity record:
 - **Hostile input.** A recent `.json` entry that is oversize, a link, a hard link, not a regular file,
   not JSON, of the wrong field types, stored under another scope's name, or stamped more than the
   clock-skew allowance in the future sets `scanOverflow`: classification fails closed, it does not
-  ignore the record. A directory named `*.json` is skipped, as in the keyed scan; one at a scope's own
-  name stops that scope's held query from holding (above). The scan has the keyed scan's bounds (1024
+  ignore the record. A directory named `*.json` is skipped by the scan, as in the keyed scan; one at a
+  name in the writer's grammar counts while a hold is possible (above). The scan has the keyed scan's bounds (1024
   entries, newest mtime first).
 - **Reader.** `readSentinelAt` reads the records on its classify path only, in the shape
   `isExecutorDispatch` already consumes, so the two guard hooks are unchanged. Enforcement, the

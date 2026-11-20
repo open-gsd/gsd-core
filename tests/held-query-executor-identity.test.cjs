@@ -128,6 +128,8 @@ describe('#4904 a held query keeps the guards\' executor classification current'
   function decisionBytes() {
     const out = { legacy: fs.readFileSync(path.join(root, SENTINEL_RELATIVE_PATH), 'utf8') };
     const keyed = path.join(root, KEYED_SENTINEL_DIR);
+    // An unsafe scope has no keyed record, so the directory can be absent.
+    if (!fs.existsSync(keyed)) return out;
     for (const name of fs.readdirSync(keyed).sort()) out[name] = fs.readFileSync(path.join(keyed, name), 'utf8');
     return out;
   }
@@ -216,8 +218,9 @@ describe('#4904 a held query keeps the guards\' executor classification current'
     assertGuarded(HINTED, '03');
   });
 
-  // A held query whose identity record cannot be written does not hold: it records the decision as `next`
-  // does, so the guards classify by current names either way (RV6.5 review of this round).
+  // A held query whose identity record cannot be written still holds and writes no decision record (the
+  // 11-17 ruling, option (c)). The guards' reader sees the state that stopped the write and fails executor
+  // classification closed, so the specialist below is guarded although no record names it.
   function plainJson(scopeArgs, now) {
     const r = runNode([TOOLS_PATH, 'dispatch-isolation', '--json', ...scopeArgs],
       { cwd: root, env: { ...process.env, ...envAt(now) }, timeoutMs: PROBE_TIMEOUT_MS });
@@ -225,23 +228,29 @@ describe('#4904 a held query keeps the guards\' executor classification current'
     return { answer: JSON.parse(r.stdout), stderr: r.stderr };
   }
 
-  test('a phase that is not a safe key: the query does not hold, and the specialist stays guarded', () => {
+  test('a phase that is not a safe key: the query holds, writes no decision, and classification fails closed', () => {
     gsd(['dispatch-isolation', '--raw', '--phase', '2 ', '--force-isolation', 'none'], WRITTEN_AT);
     writePlan('02-api', '02', '01', OTHER);
+    const before = decisionBytes();
     const { answer, stderr } = plainJson(['--phase', '2 '], LATER);
-    assert.equal(answer.held, false, 'no identity record can be written for an unsafe scope');
-    assert.match(stderr, /could not record executor identity for a held decision/);
+    assert.equal(answer.held, true, 'the caller\'s none stands');
+    assert.equal(answer.isolation, 'none');
+    assert.match(stderr, /could not record executor identity for a held decision; the decision stands unchanged/);
+    assert.deepEqual(decisionBytes(), before, 'the held query touches no decision record');
+    assert.equal(fs.existsSync(path.join(root, IDENTITY_RECORD_DIR)), false, 'an unsafe scope has no identity record');
     assertGuarded(OTHER, '03');
   });
 
-  test('a directory at the scope\'s identity file name: the query does not hold, and the specialist stays guarded', () => {
+  test('a directory at the scope\'s identity file name: the query holds, writes no decision, and classification fails closed', () => {
     writePlan('02-api', '02', '01', HINTED);
     writePlan('02-api', '02', '02', OTHER);
     gsd(['dispatch-isolation', '--raw', '--phase', '02', '--plan', '02-01', '--force-isolation', 'none'], WRITTEN_AT);
     fs.mkdirSync(path.join(root, IDENTITY_RECORD_DIR, 'phase+02.json'), { recursive: true });
+    const before = decisionBytes();
     const { answer, stderr } = plainJson(['--phase', '02'], LATER);
-    assert.equal(answer.held, false);
+    assert.equal(answer.held, true);
     assert.match(stderr, /could not record executor identity/);
+    assert.deepEqual(decisionBytes(), before, 'the held query touches no decision record');
     assertGuarded(OTHER, '03');
   });
 
@@ -312,6 +321,10 @@ describe('#4904 a held query keeps the guards\' executor classification current'
     assert.ok(readFileNormalized(path.join(root, '.gsd', '.gitignore')).includes('\n/dispatch-isolation-identity/\n'),
       'the identity directory\'s rule was appended');
     assert.equal(ignoredByGit('.gsd/dispatch-isolation-identity/plan+02+02-01.json'), true);
+    // The unscoped held query reads the legacy slot whatever scope it carries, and records `all.json`.
+    heldQuery([]);
+    assert.ok(fs.existsSync(path.join(root, IDENTITY_RECORD_DIR, 'all.json')), 'precondition');
+    assert.equal(ignoredByGit('.gsd/dispatch-isolation-identity/all.json'), true);
   });
 
   test('a held query prunes other scopes\' identity records past the 24-hour window and keeps the rest', () => {
@@ -497,6 +510,72 @@ describe('#4904 identity record reader: boundaries and hostile files fail closed
     plant('phase+02.json', JSON.stringify(valid({ written_at: LATER + CLOCK_SKEW_MS })));
     assert.equal(read().scanOverflow, undefined);
   });
+
+  // The write-blocked states count only while a hold is possible: a hold-eligible caller `none` (safe keys
+  // here, so only the planted state can set scanOverflow) is planted first, except in the gate's control.
+  const plantHold = () => plantLegacy(legacyNone({ phase: '02', plan: '02-01' }));
+
+  test('a directory at a record name fails closed while a hold is possible: it blocks that scope\'s write', () => {
+    plantHold();
+    fs.mkdirSync(path.join(dir(), 'phase+02.json'), { recursive: true });
+    assert.equal(read().scanOverflow, true);
+    assert.equal(classifies(OTHER), true);
+  });
+
+  test('a directory at a record name older than the recency window still fails closed', () => {
+    // A 2033 clock, so the directory's mtime can sit past the window (fs.utimesSync cannot set a time before 1970).
+    const NOW = 2_000_000_000_000;
+    const at = { now: () => NOW };
+    plantLegacy(legacyNone({ phase: '02', plan: '02-01', written_at: NOW - 1000, decided_at: NOW - 1000 }));
+    const d = path.join(dir(), 'plan+02+02-01.json');
+    fs.mkdirSync(d, { recursive: true });
+    const aged = (NOW - AGED_NONE_MAX_MS - CLOCK_SKEW_MS - 3_600_000) / 1000;
+    fs.utimesSync(d, aged, aged);
+    const r = readSentinel(root, { clock: at, subagentType: 'some-agent', dispatchIds: { phase: '03', plan: null } });
+    assert.equal(r.scanOverflow, true);
+  });
+
+  test('control: a directory named outside the record grammar (notes.json) is skipped', () => {
+    plantHold();
+    fs.mkdirSync(path.join(dir(), 'notes.json'), { recursive: true });
+    assert.equal(read().scanOverflow, undefined);
+    assert.equal(classifies(OTHER), false);
+  });
+
+  test('gate control: with no hold-eligible record, a directory at a record name changes nothing', () => {
+    plantLegacy(legacyNone({ phase: '02', plan: '02-01', decided_by: 'resolver' }));
+    fs.mkdirSync(path.join(dir(), 'phase+02.json'), { recursive: true });
+    assert.equal(read().scanOverflow, undefined);
+    assert.equal(classifies(OTHER), false);
+  });
+
+  // A fresh caller `none` in the legacy slot whose scope is not a safe key: a held query there has no identity
+  // record name. The window is the resolver's hold (ten minutes from decided_at, SENTINEL_STALE_MS).
+  const HOLD_MS = 10 * 60 * 1000;
+  const legacyNone = (overrides) => JSON.stringify({
+    isolation: 'none', harness_flag: null, phase: '2 ', plan: null, written_at: LATER - 1000,
+    decided_by: 'caller', decided_at: LATER - 1000, ...overrides,
+  });
+  const plantLegacy = (text) => {
+    fs.mkdirSync(path.join(root, '.gsd'), { recursive: true });
+    fs.writeFileSync(path.join(root, SENTINEL_RELATIVE_PATH), text);
+  };
+  const legacyRows = [
+    ['an unsafe phase', {}, true],
+    ['an unsafe plan', { phase: '02', plan: 'a b' }, true],
+    ['decided one millisecond inside the hold', { decided_at: LATER - HOLD_MS + 1 }, true],
+    ['decided at the hold\'s end (control)', { decided_at: LATER - HOLD_MS }, undefined],
+    ['decided by the resolver (control)', { decided_by: 'resolver' }, undefined],
+    ['a non-none isolation (control)', { isolation: 'harness-worktree', harness_flag: 'isolation' }, undefined],
+    ['safe keys (control)', { phase: '02', plan: '02-01' }, undefined],
+  ];
+  for (const [label, overrides, overflow] of legacyRows) {
+    test(`a held-eligible caller none with ${label}: scanOverflow ${overflow === true ? 'set' : 'unset'}`, () => {
+      plantLegacy(legacyNone(overrides));
+      assert.equal(read().scanOverflow, overflow);
+      assert.equal(classifies(OTHER), overflow === true);
+    });
+  }
 
   test('a directory past the entry bound fails closed', () => {
     plant('phase+02.json', JSON.stringify(valid()));

@@ -3369,13 +3369,14 @@ describe('#5682/#4904: the hold reads the record at the query\'s own scope, so a
   });
 
   // #4904: a held query writes its scope's executor-identity record, and an unsafe phase has no file name, so the
-  // query records its decision instead of holding (held-query-executor-identity.test.cjs covers the guard side).
-  test('a phase that is not a safe key has no keyed or identity record, so the query does not hold and nothing lands outside .gsd', (t) => {
+  // query writes none and still holds (held-query-executor-identity.test.cjs covers the guard side).
+  test('a phase that is not a safe key has no keyed or identity record: the query holds the caller\'s none and nothing lands outside .gsd', (t) => {
     const dir = project(t);
     const unsafe = { phase: '../escape' };
     force(dir, T0, 'none', unsafe);
 
-    assert.equal(plain(dir, T0 + 1000, unsafe).held, false);
+    // Option (c): no identity record can be written, so the hold stands and the reader fails classification closed.
+    assert.equal(plain(dir, T0 + 1000, unsafe).held, true);
     assert.equal(fs.existsSync(path.join(dir, '.gsd', 'dispatch-isolation', '..', 'escape.json')), false);
     assert.equal(fs.existsSync(path.join(dir, '.gsd', 'escape.json')), false);
     const identityDir = path.join(dir, '.gsd', 'dispatch-isolation-identity');

@@ -2603,7 +2603,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // plan, which the guard applies to every plan of the phase. Where the
     // harness forks from origin/HEAD, a flagged spawn on that diverged base is
     // still stopped by the spawn-time branch check (`exit 42`).
-    let heldDegrade = !forcedApplied
+    const heldDegrade = !forcedApplied
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
       : null;
     // WHAT A HELD QUERY REFRESHES (#4904 review 2026-11-17, option (c)). It
@@ -2618,10 +2618,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // without --executor-type. So the held query writes the executor identity
     // it derives, and only that, to its own scope's identity record, which the
     // classification reads beside the decision records (the union of all).
-    // A held query whose identity record cannot be written (a phase or plan
-    // that is not a safe key, a directory or an unwritable directory in the
-    // way) does not hold: it records the decision as an unheld query on this
-    // branch does, rather than keep a hold the guards could not classify by. A
+    // A held query whose identity record cannot be written still holds and
+    // writes no decision record (the option (c) ruling): the caller's `none`
+    // stands. The guards' reader fails executor classification closed in the
+    // states that stop the write (a phase or plan that is not a safe key, a
+    // directory at the record name, an identity directory it cannot write;
+    // isolation-sentinel.js), so a stale name list cannot let a specialist
+    // through; a transient I/O error leaves no such trace (ADR-4630). A
     // decision write removes its scope's identity record: the decision record
     // now carries the same fields. The hold is a read-then-write with no lock:
     // a caller's forced `none` landing between a plain query's read and its
@@ -2641,8 +2644,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       if (identity.recorded) {
         if (identity.dropped.length > 0) warnDropped(identity.dropped);
       } else {
-        heldDegrade = null;
-        process.stderr.write('warning: dispatch-isolation: could not record executor identity for a held decision, so this query does not hold it (#4904)\n');
+        process.stderr.write('warning: dispatch-isolation: could not record executor identity for a held decision; the decision stands unchanged (#4904)\n');
       }
     }
     let recordedIsolation = isolation;
@@ -3450,24 +3452,27 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
       require('./lib/shell-command-projection.cjs').retryRenameSync(tmpPath, file);
       tmpPath = null;
-      // The prune reads at most the reader's entry bound per write, so a crowded directory costs a write
-      // no more than it costs a guard read; each later write prunes further.
-      const cutoff = clock.now() - sentinelLib.AGED_NONE_MAX_MS;
-      const handle = nodeFs.opendirSync(identityDir);
+      // The record has landed: the prune is best-effort and its own failure never voids the write. It reads
+      // at most the reader's entry bound per write, so a crowded directory costs a write no more than it
+      // costs a guard read; each later write prunes further.
       try {
-        let seen = 0;
-        for (let ent = handle.readSync(); ent !== null && seen < sentinelLib.MAX_SCANNED_DIR_ENTRIES; ent = handle.readSync()) {
-          seen += 1;
-          const entry = ent.name;
-          if (entry === name || !(sentinelLib.hasJsonSuffix(entry) || entry.includes('.json.tmp-'))) continue;
-          try {
-            const old = nodePath.join(identityDir, entry);
-            if (nodeFs.lstatSync(old).mtimeMs < cutoff) nodeFs.unlinkSync(old);
-          } catch (_) { /* best-effort prune */ }
+        const cutoff = clock.now() - sentinelLib.AGED_NONE_MAX_MS;
+        const handle = nodeFs.opendirSync(identityDir);
+        try {
+          let seen = 0;
+          for (let ent = handle.readSync(); ent !== null && seen < sentinelLib.MAX_SCANNED_DIR_ENTRIES; ent = handle.readSync()) {
+            seen += 1;
+            const entry = ent.name;
+            if (entry === name || !(sentinelLib.hasJsonSuffix(entry) || entry.includes('.json.tmp-'))) continue;
+            try {
+              const old = nodePath.join(identityDir, entry);
+              if (nodeFs.lstatSync(old).mtimeMs < cutoff) nodeFs.unlinkSync(old);
+            } catch (_) { /* best-effort prune */ }
+          }
+        } finally {
+          handle.closeSync();
         }
-      } finally {
-        handle.closeSync();
-      }
+      } catch (_) { /* best-effort prune: the record is written */ }
       return { recorded: true, dropped };
     } catch (_) {
       return { recorded: false, dropped: [] };

@@ -420,7 +420,12 @@ function readSentinelAt(root, { clock = Date, dispatchIds = null, ownScope = fal
   // #4904: the executor-identity records a held query writes, read on this classify path only. They join the
   // candidates `isExecutorDispatch` reads and nothing else: they carry no decision and never win enforcement.
   const identities = classify ? scanIdentityRecords(root, clock, readText) : [];
-  const scanOverflow = scanned.scanOverflow === true || identities.scanOverflow === true || legacyUnusable;
+  // #4904: while a hold is possible (a hold-eligible record among those read), a state in which a held query
+  // cannot write its identity record fails classification closed. A project with no such record reads as
+  // before, however its `.gsd` is set up.
+  const holdPossible = classify && [legacy, ...keyedCandidates, ...scanned].some(isHoldEligible);
+  const writeBlocked = holdPossible && (heldScopeHasNoIdentityName(legacy) || identityWriteBlocked(root));
+  const scanOverflow = scanned.scanOverflow === true || identities.scanOverflow === true || legacyUnusable || writeBlocked;
 
   const fresh = keyedCandidates.filter((c) => !c.stale);
   if (legacyApplies && !legacy.stale) fresh.push(legacy);
@@ -557,7 +562,8 @@ function listRecentRecordFiles(root, dir, clock) {
  * a recent `.json` entry that is refused (oversize, a link, a hard link, not a regular file), not a well-formed
  * identity record (`parseIdentityRecordFile`), stored under a name other than its own scope's, or stamped
  * more than CLOCK_SKEW_MS in the future sets the non-enumerable `scanOverflow`, and `isExecutorDispatch` then
- * treats a valid non-role name as an executor. Never throws.
+ * treats a valid non-role name as an executor. The states in which a held query cannot write a record are
+ * judged separately, and only while a hold is possible (`identityWriteBlocked`). Never throws.
  */
 function scanIdentityRecords(root, clock, readText = readSentinelText) {
   const out = [];
@@ -581,6 +587,85 @@ function scanIdentityRecords(root, clock, readText = readSentinelText) {
   }
   if (overflow) markScanOverflow(out);
   return out;
+}
+
+/**
+ * #4904: the record-level conditions under which the resolver holds a record (gsd-tools.cjs `heldDegradeRecord`,
+ * minus the scope match): present, well-formed, fresh, inside its hold window, `none`, decided by the caller.
+ */
+function isHoldEligible(record) {
+  return !!record && record.present === true && !record.malformed && !record.stale && !record.holdExpired &&
+    record.isolation === 'none' && record.decidedBy === 'caller';
+}
+
+/**
+ * #4904: a hold-eligible record whose phase or plan is not a safe key. Only the legacy slot can carry one (keyed
+ * paths need safe keys), and a held query at that scope has no identity record name, so it writes nothing the
+ * guards can read.
+ */
+function heldScopeHasNoIdentityName(record) {
+  if (!isHoldEligible(record)) return false;
+  return (record.phase !== null && !isSafeSentinelKey(record.phase)) || (record.plan !== null && !isSafeSentinelKey(record.plan));
+}
+
+/** #4904: an identity record name in the writer's grammar (`identityRecordName`): `all.json`, `phase+…`, `plan+…`. */
+function isIdentityRecordName(name) {
+  if (!hasJsonSuffix(name)) return false;
+  const upper = name.toUpperCase();
+  return upper === 'ALL.JSON' || upper.startsWith('PHASE+') || upper.startsWith('PLAN+');
+}
+
+/**
+ * #4904: does a state stand in which a held query cannot write its executor-identity record? A held query that
+ * cannot keeps its hold and writes no decision record, so the guards cannot learn the names it derived; the
+ * caller (`readSentinelAt`, only while a hold is possible) fails classification closed instead. True when:
+ * the identity directory, or with none `.gsd`, cannot be written and searched by this process (an access check
+ * for W_OK and X_OK, what an exclusive create needs); `.gsd/.gitignore` is a link (the tool-owned `.gsd` owner
+ * refuses to write); or a directory sits at a name in the writer's grammar, whatever its age (a rename cannot
+ * replace it and the prune cannot remove it). Entries past MAX_SCANNED_DIR_ENTRIES, or a directory that cannot
+ * be listed, count as blocked. A link or non-directory identity path is already overflow in the identity scan.
+ * Never throws.
+ */
+function identityWriteBlocked(root) {
+  const gsdDir = path.join(root, '.gsd');
+  const dir = path.join(root, IDENTITY_RECORD_DIR);
+  let dirExists = false;
+  for (const target of [dir, gsdDir]) {
+    try {
+      fs.accessSync(target, fs.constants.W_OK | fs.constants.X_OK);
+      dirExists = target === dir;
+      break;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      return true;
+    }
+  }
+  try {
+    if (fs.lstatSync(path.join(gsdDir, '.gitignore')).isSymbolicLink()) return true;
+  } catch { /* absent: the owner creates it */ }
+  if (!dirExists) return false;
+  let handle = null;
+  try {
+    handle = fs.opendirSync(dir);
+    let seen = 0;
+    for (let ent = handle.readSync(); ent !== null; ent = handle.readSync()) {
+      seen += 1;
+      if (seen > MAX_SCANNED_DIR_ENTRIES) return true;
+      if (!isIdentityRecordName(ent.name)) continue;
+      try {
+        if (fs.lstatSync(path.join(dir, ent.name)).isDirectory()) return true;
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') return true;
+      }
+    }
+  } catch {
+    return true;
+  } finally {
+    if (handle) {
+      try { handle.closeSync(); } catch { /* nothing left to release */ }
+    }
+  }
+  return false;
 }
 
 /**
@@ -990,8 +1075,10 @@ function isRecentRecord(r, clock) {
  * as an executor) when the scan overflowed (`scanOverflow`: too many directory entries, a recent `.json`
  * record that cannot be used (refused, malformed, key-mismatched), a recent legacy slot that cannot be used
  * (checked in `readSentinel`, not in the scan), or a `.gsd` / record directory that is a link, not a
- * directory or unreadable; the identity-record scan fails closed on the same cases and on a record of the wrong
- * shape or under another scope's name), or when any recent record has `executor_types_truncated: true` (names were dropped, by the
+ * directory or unreadable; the identity-record scan fails closed on the same cases, on a record of the wrong
+ * shape or under another scope's name, and, while a hold-eligible caller `none` is among the records read, on
+ * the states in which a held query cannot write its identity record (`identityWriteBlocked`, or that record's
+ * phase or plan not being a safe key)), or when any recent record has `executor_types_truncated: true` (names were dropped, by the
  * writer or by the reader's MAX_EXECUTOR_TYPES cap, so its list cannot rule a type out).
  * Once true, the dispatch follows gsd-executor's enforcement path unchanged.
  */
