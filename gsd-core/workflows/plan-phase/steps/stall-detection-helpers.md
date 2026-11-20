@@ -29,7 +29,7 @@ the orchestrator runs
 `revision`, `outline`, or the plan ID; `PROJECT_ROOT` is init's `project_root`) and substitutes the printed absolute path for `{receipt}`,
 both in the spawn prompt's `<return_receipt>{receipt}</return_receipt>` line and in
 every watch call for that spawn. If `gsd_receipt_path` prints nothing (it fails closed on
-an unsafe or symlinked phase dir, naming the reason on stderr), there is no receipt: omit the `<return_receipt>` line
+input outside its stated contract or a symlinked phase dir, naming the reason on stderr), there is no receipt: omit the `<return_receipt>` line
 and pass `""` as the watch's second argument; the wait then ends on the runtime's
 completion result or as `stalled`. Like `$TS`, it is a literal the orchestrator carries
 across tool calls; nothing persists across fences, so never pass an unexpanded
@@ -189,7 +189,7 @@ gsd_stall_should_recover() {
   echo "waiting"; return 0
 }
 
-# gsd_receipt_path PHASE_DIR SPAWN [ROOT] — print a fresh, absolute return-receipt path
+# gsd_receipt_path PHASE_DIR SPAWN ROOT — print a fresh, absolute return-receipt path
 # PHASE_DIR/.gsd-returns/SPAWN.EPOCH.XXXXXXXX (#5182). The directory is created
 # (with a `*` .gitignore); the file is NOT (a host Write tool may refuse to
 # overwrite a file the agent never read). Absolute because a subagent's cwd may
@@ -197,72 +197,79 @@ gsd_stall_should_recover() {
 # second distinct and EPOCH makes a leftover receipt's dispatch time readable.
 # SPAWN is reduced to [A-Za-z0-9_-], so a plan ID can
 # never leave the directory (the character lists are spelled out, not ranges, so
-# no locale can widen them). Fails closed (prints nothing, returns 1) on an empty
-# PHASE_DIR or one holding a quote, `$`, backtick, `<`, `>` or any control
-# character (newline, tab, CR...), which the orchestrator could not substitute
-# safely into a prompt line or a quoted bash argument. It also fails closed unless
-# the receipt directory sits physically under ROOT, the project root the workflow
-# resolved (init's `project_root`; the orchestrator's `pwd -P` when ROOT is empty, so a
-# phase dir outside a subdirectory cwd is still accepted when ROOT is passed): a checkout can commit the phase dir, `.planning` or `.gsd-returns` as
-# a symlink, and mkdir -p and the .gitignore write would follow it out of the
-# project. So a symlinked or dangling phase dir (or a missing component on the way
-# to it), a phase dir that is the project root or holds a `.git` component below it (in any letter case, and the names Windows reads as `.git`), a phase dir with an empty `//` component, a phase dir with a `..` component (after a missing component it would
-# pass the ancestor check, and mkdir -p would then resolve it outside the project)
-# or a `.` component (init's phase_dir never has one),
-# a phase dir that resolves outside the root, and a symlinked .gsd-returns
-# or .gitignore all disable the receipt; the watch then ends on the runtime's
-# completion result or as `stalled`. Both sides are compared after `cd -P`/`pwd -P`
-# (macOS temp dirs live under the /var -> /private/var link; Git Bash maps C:/ to
-# /c/ on both sides). Only static, checked-in links are in scope: a link swapped in
-# between these checks and the mkdir/printf (check-then-act) is not. Every refusal
-# prints one `gsd_receipt_path: no receipt: <reason>` line on stderr (the reason only,
-# never the phase dir, which may hold control characters) so the orchestrator can name it.
+# no locale can widen them).
+# Input contract: PHASE_DIR (init's phase_dir) and ROOT (init's project_root) are
+# absolute paths (a drive letter counts only where cygpath exists) with no empty,
+# `.` or `..` component, no trailing separator (except a ROOT that is a filesystem
+# root), no quote, `$`, backtick, `<`, `>` or control character, and in PHASE_DIR
+# no backslash; anything else is refused before the filesystem is touched.
+# The receipt directory must also sit physically under ROOT: a checkout can commit
+# the phase dir, `.planning` or `.gsd-returns` as a symlink, and mkdir -p and the
+# .gitignore write would follow it out of the project. So a link on the walk from
+# the phase dir up to its nearest existing ancestor (a dangling one too), a phase
+# dir that resolves outside ROOT, is ROOT, or holds a `.git` component below it (in
+# any letter case, and the names Windows reads as `.git`), and a symlinked
+# .gsd-returns or .gitignore all disable the receipt; the watch then ends on the
+# runtime's completion result or as `stalled`. Both sides are compared after
+# `cd -P`/`pwd -P` (macOS temp dirs live under the /var -> /private/var link; Git
+# Bash maps C:/ to /c/ on both sides). Only static, checked-in links are in scope: a
+# link swapped in between these checks and the mkdir/printf (check-then-act) is not.
+# Every refusal prints one `gsd_receipt_path: no receipt: <reason>` line on stderr
+# (the reason only, never the path, which may hold control characters).
 _gsd_no_receipt() { printf 'gsd_receipt_path: no receipt: %s\n' "$1" >&2; return 1; }
+# _gsd_receipt_arg LABEL VALUE — refuse VALUE unless it meets the input contract above
+# (the backslash rule for PHASE_DIR is applied by the caller).
+_gsd_receipt_arg() {
+  [ -n "$2" ] || { _gsd_no_receipt "$1 is empty"; return 1; }
+  case "$2" in
+    *[[:cntrl:]]*|*[\'\"\$\`\<\>]*) _gsd_no_receipt "$1 holds a quote, \$, backtick, <, > or a control character"; return 1 ;;
+  esac
+  case "$2" in
+    /*) ;;
+    [A-Za-z]:[/\\]*) command -v cygpath >/dev/null 2>&1 || { _gsd_no_receipt "$1 is not absolute"; return 1; } ;;
+    *) _gsd_no_receipt "$1 is not absolute"; return 1 ;;
+  esac
+  [ "$1" = 'project root' ] && case "$2" in /|[A-Za-z]:[/\\]) return 0 ;; esac
+  case "$2" in *[/\\][/\\]*) _gsd_no_receipt "$1 has an empty component"; return 1 ;; esac
+  case "$2/" in *[/\\].[/\\]*|*[/\\]..[/\\]*) _gsd_no_receipt "$1 has a . or .. component"; return 1 ;; esac
+  case "$2" in *[/\\]) _gsd_no_receipt "$1 ends in a separator"; return 1 ;; esac
+  return 0
+}
 gsd_receipt_path() {
   local dir="$1" spawn="${2//[^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]/_}"
-  local root rp a up phys rest got
-  [ -n "$dir" ] || { _gsd_no_receipt 'phase dir is empty or holds a quote, $, backtick, <, > or a control character'; return 1; }
-  case "/$dir/" in *[/\\]..[/\\]*|*[/\\].[/\\]*) _gsd_no_receipt 'phase dir has a . or .. component'; return 1 ;; esac
-  # An empty component (a//b; a leading // is a UNC prefix) would be refused only after mkdir.
-  case "${dir#//}" in *//*) _gsd_no_receipt 'phase dir has an empty component'; return 1 ;; esac
-  case "$dir" in
-    /*|[A-Za-z]:[/\\]*) ;;
-    *) dir="$PWD/$dir" ;;
-  esac
-  # Checked after a relative dir is made absolute, so the working directory is checked too.
-  case "$dir" in
-    *[[:cntrl:]]*|*[\'\"\$\`\<\>]*) _gsd_no_receipt 'phase dir is empty or holds a quote, $, backtick, <, > or a control character'; return 1 ;;
-  esac
-  while [ "${#dir}" -gt 1 ] && [ "${dir%/}" != "$dir" ]; do dir="${dir%/}"; done
-  if [ -n "${3:-}" ]; then
-    root=$(CDPATH='' cd -P -- "$3" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt 'project root does not resolve'; return 1; }
-  else
-    root=$(pwd -P) || { _gsd_no_receipt 'working directory does not resolve'; return 1; }
-  fi
+  local root rp a up phys rest got low
+  _gsd_receipt_arg 'phase dir' "$dir" || return 1
+  case "$dir" in *\\*) _gsd_no_receipt 'phase dir holds a backslash'; return 1 ;; esac
+  _gsd_receipt_arg 'project root' "${3:-}" || return 1
+  root=$(CDPATH='' cd -P -- "$3" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt 'project root does not resolve'; return 1; }
   # The root without a trailing slash ("" for /), held in a variable: bash does not
   # match "${root%/}" written inside a case pattern.
   rp="${root%/}"
   # Walk up to the nearest existing ancestor; any walked component that is a link
-  # (tested before -e, so a dangling one counts) is refused. Trailing slashes are
-  # stripped before the test, or a doubled slash (lnk//ph) would test lnk/, which follows the link.
+  # (tested before -e, so a dangling one counts) is refused. A drive's top is C:/, not C:.
   a="$dir"
   while :; do
-    [ -L "${a%"${a##*[!/]}"}" ] && { _gsd_no_receipt 'a symlink on the path to the phase dir'; return 1; }
+    [ -L "$a" ] && { _gsd_no_receipt 'a symlink on the path to the phase dir'; return 1; }
     [ -e "$a" ] && break
-    up="${a%/*}"; [ -n "$up" ] || up=/
+    up="${a%/*}"
+    case "$up" in '') up=/ ;; [A-Za-z]:) up="$up/" ;; esac
     [ "$up" = "$a" ] && { _gsd_no_receipt 'no existing ancestor of the phase dir'; return 1; }
     a="$up"
   done
   phys=$(CDPATH='' cd -P -- "$a" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt 'the phase dir ancestor does not resolve'; return 1; }
   case "$phys/" in "$rp"/*) ;; *) _gsd_no_receipt 'the phase dir resolves outside the project root'; return 1 ;; esac
-  rest="${dir#"$a"}"
+  # The part of the phase dir below its existing ancestor, with its leading slash
+  # (the ancestor / or C:/ ends in one, so it is cut without it).
+  rest="${dir#"${a%/}"}"
   # The project root itself and anything under a .git component are never a phase dir.
   [ "${phys%/}$rest" = "$rp" ] && { _gsd_no_receipt 'the phase dir is the project root'; return 1; }
   # Only the part under the root is compared, lowercased (on APFS and NTFS .GIT is .git),
   # with each segment's trailing dots and spaces dropped and the 8.3 name git~1 matched
   # (Windows reads .git with a trailing dot or space, and GIT~1, as .git).
-  # An empty result (a failed tr or sed) is refused too.
-  case "$(printf '%s' "${phys#"$rp"}$rest/" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed 's/[. ]*\//\//g')" in ''|*/.git/*|*/git~1/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
+  low=$(printf '%s' "${phys#"$rp"}$rest/" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed 's/[. ]*\//\//g')
+  # The input always ends in /, so an empty result means tr or sed failed.
+  [ -n "$low" ] || { _gsd_no_receipt 'cannot check the phase dir for .git'; return 1; }
+  case "$low" in */.git/*|*/git~1/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
   [ -L "$dir/.gsd-returns" ] && { _gsd_no_receipt '.gsd-returns is a symlink'; return 1; }
   mkdir -p "$dir/.gsd-returns" 2>/dev/null || { _gsd_no_receipt 'cannot create .gsd-returns'; return 1; }
   got=$(CDPATH='' cd -P -- "$dir/.gsd-returns" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt '.gsd-returns does not resolve'; return 1; }

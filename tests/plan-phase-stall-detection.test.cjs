@@ -1555,7 +1555,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       const caseDir = fs.mkdtempSync(path.join(f.dir, 'rp-'));
       labels.forEach((l, i) => fs.writeFileSync(path.join(caseDir, `${i}.s`), l));
       const D = q(caseDir.replace(/\\/g, '/'));
-      const out = runHelpers(`cd ${q(f.dir)}; i=0; while [ -f ${D}/$i.s ]; do IFS= read -r -d '' s < ${D}/$i.s || true; printf '%s\\t%s\\n' "$i" "$(gsd_receipt_path ph "$s")"; i=$((i+1)); done; pwd`);
+      const out = runHelpers(`cd ${q(f.dir)}; P=$(pwd); i=0; while [ -f ${D}/$i.s ]; do IFS= read -r -d '' s < ${D}/$i.s || true; printf '%s\\t%s\\n' "$i" "$(gsd_receipt_path "$P/ph" "$s" "$P")"; i=$((i+1)); done; pwd`);
       cleanup(caseDir);
       const outLines = out.split('\n');
       const root = outLines.pop();
@@ -1579,8 +1579,9 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     }), { numRuns: 12 });
     // Unsafe phase dirs: any dir holding a quote, `$`, backtick, `<`, `>` or a control
     // character (newline, tab, CR, ESC, DEL...) fails closed (no output, non-zero); any
-    // other dir is accepted. Values travel through files and are read with -d '' so a
-    // newline reaches the helper intact.
+    // other dir is accepted. Each dir is a name under the project root, passed in the
+    // absolute form the input contract requires. Values travel through files and are
+    // read with -d '' so a newline reaches the helper intact.
     const dirArb = fc.string({ unit: fc.constantFrom(...'ab -\'"$`<>\n\t\r\x01\x1b\x7f'.split('')), minLength: 1, maxLength: 6 }).map((d) => `p${d}`);
     const unsafeDir = (d) => /['"$`<>]/.test(d) || [...d].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
     let accepted = 0;
@@ -1589,7 +1590,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       const caseDir = fs.mkdtempSync(path.join(f.dir, 'pd-'));
       dirs.forEach((d, i) => fs.writeFileSync(path.join(caseDir, `${i}.d`), d));
       const D = q(caseDir.replace(/\\/g, '/'));
-      const out = runHelpers(`cd ${q(f.dir)}; i=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; if gsd_receipt_path "$d" x >/dev/null; then echo "$i OK"; else echo "$i FAIL"; fi; i=$((i+1)); done`);
+      const out = runHelpers(`cd ${q(f.dir)}; P=$(pwd); i=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; if gsd_receipt_path "$P/$d" x "$P" >/dev/null; then echo "$i OK"; else echo "$i FAIL"; fi; i=$((i+1)); done`);
       cleanup(caseDir);
       const verdict = new Map(out.split('\n').map((l) => l.split(' ')));
       for (const v of verdict.values()) { if (v === 'OK') accepted += 1; else if (v === 'FAIL') refused += 1; }
@@ -1603,7 +1604,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const f = fixture(t);
     const rel = 'phase dir/01-x';
     fs.mkdirSync(path.join(f.dir, rel), { recursive: true });
-    const script = `${extractStallFunctionsBash()}\ncd ${q(f.dir)}\na=$(gsd_receipt_path ${q(rel)} checker)\nb=$(gsd_receipt_path ${q(rel)} checker)\nc=$(gsd_receipt_path ${q(`${f.fwd}/${rel}`)} '../01/x y')\nprintf '%s\\n' "$a" "$b" "$c"\n[ -d "${rel}/.gsd-returns" ] && echo DIR_OK\n[ -e "$a" ] || echo NOT_PRECREATED\n`;
+    const script = `${extractStallFunctionsBash()}\ncd ${q(f.dir)}\nP=$(pwd)\na=$(gsd_receipt_path "$P/"${q(rel)} checker "$P")\nb=$(gsd_receipt_path "$P/"${q(rel)} checker "$P")\nc=$(gsd_receipt_path ${q(`${f.fwd}/${rel}`)} '../01/x y' ${q(f.fwd)})\nprintf '%s\\n' "$a" "$b" "$c"\n[ -d "${rel}/.gsd-returns" ] && echo DIR_OK\n[ -e "$a" ] || echo NOT_PRECREATED\n`;
     const result = runBashScript(script, []);
     assert.equal(result.status, 0, result.stderr);
     const [a, b, c, dirOk, notPre] = result.stdout.trim().split('\n');
@@ -1632,15 +1633,16 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       // stripped (observed in CI: "ph'ase" reached the helper as "phase"). See
       // extractStallFunctionsBash()'s doc comment for the same transport hazard.
       const valueFile = path.join(f.dir, 'phase-dir-value.txt');
-      fs.writeFileSync(valueFile, bad);
+      // A name under the project root in the contract's absolute form ('' stays empty).
+      fs.writeFileSync(valueFile, bad === '' ? '' : `${f.fwd}/${bad}`);
       // -d '' reads the whole file, so an embedded or trailing newline reaches the helper.
-      const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\nIFS= read -r -d '' d < ${q(valueFile.replace(/\\/g, '/'))} || true\nif out=$(gsd_receipt_path "$d" checker); then echo "OK:$out"; else echo FAIL; fi\n`, []);
+      const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\nIFS= read -r -d '' d < ${q(valueFile.replace(/\\/g, '/'))} || true\nif out=$(gsd_receipt_path "$d" checker ${q(f.fwd)}); then echo "OK:$out"; else echo FAIL; fi\n`, []);
       assert.equal(r.stdout.trim(), 'FAIL', `phase dir ${JSON.stringify(bad)} must be refused`);
       refused += 1;
     }
     assert.equal(refused, unsafe.length, 'every unsafe phase dir case must run');
     assert.equal(fs.readdirSync(f.dir).filter((n) => n.startsWith('ph') && n !== 'phase-dir-value.txt').length, 0, 'a refused phase dir is never created');
-    const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker >/dev/null && cat ph/.gsd-returns/.gitignore\n`, []);
+    const r = runBashScript(`${helpers}\ncd ${q(f.dir)}\ngsd_receipt_path "$(pwd)/ph" checker "$(pwd)" >/dev/null && cat ph/.gsd-returns/.gitignore\n`, []);
     assert.equal(r.stdout.trim(), '*', '.gsd-returns/ must ignore its own receipts');
   });
 
@@ -1668,7 +1670,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     t.after(() => cleanup(outside));
     fs.mkdirSync(path.join(f.dir, 'ph'));
     if (!symlinkOrSkip(t, outside, path.join(f.dir, 'ph', '.gsd-returns'), 'dir')) return;
-    const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker\n`, []);
+    const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(f.dir)}\ngsd_receipt_path "$(pwd)/ph" checker "$(pwd)"\n`, []);
     assert.notEqual(r.status, 0, 'a symlinked .gsd-returns must be refused');
     assert.equal(r.stdout, '', 'a refused receipt prints no path');
     assert.deepEqual(fs.readdirSync(outside), [], 'nothing may be created in the link target');
@@ -1683,7 +1685,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const victim = path.join(outside, 'victim.txt');
     fs.writeFileSync(victim, 'ORIGINAL\n');
     if (!symlinkOrSkip(t, victim, path.join(returns, '.gitignore'), 'file')) return;
-    const script = `${extractStallFunctionsBash()}\ncd ${q(f.dir)}\ngsd_receipt_path ph checker\n`;
+    const script = `${extractStallFunctionsBash()}\ncd ${q(f.dir)}\ngsd_receipt_path "$(pwd)/ph" checker "$(pwd)"\n`;
     let r = runBashScript(script, []);
     assert.notEqual(r.status, 0, 'a symlinked .gitignore must be refused');
     assert.equal(r.stdout, '', 'a refused receipt prints no path');
@@ -1843,13 +1845,20 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     return out;
   }
 
-  // gsd_receipt_path run from `cwd`, PHASE_DIR handed over through a file (never argv);
-  // `root` is the optional third argument (init's project_root).
-  function receiptPathFrom(f, cwd, phaseDir, root) {
+  // gsd_receipt_path run from `cwd`, PHASE_DIR and ROOT (the third argument, init's
+  // project_root) handed over through files (never argv). `root` is given forward
+  // slashes unless `raw` is set; an undefined `root` omits the argument.
+  function receiptPathFrom(f, cwd, phaseDir, root, { raw = false } = {}) {
     const valueFile = path.join(f.dir, 'phase-dir-value.bin');
     fs.writeFileSync(valueFile, phaseDir);
-    const rootArg = root === undefined ? '' : ` ${q(fwd(root))}`;
-    return runBashScript(`${extractStallFunctionsBash()}\ncd ${q(cwd)}\nIFS= read -r -d '' d < ${q(fwd(valueFile))} || true\ngsd_receipt_path "$d" checker${rootArg}\n`, []);
+    let rootArg = '';
+    if (root !== undefined) {
+      const rootFile = path.join(f.dir, 'root-value.bin');
+      fs.writeFileSync(rootFile, raw ? root : fwd(root));
+      rootArg = ` "$r"`;
+      return runBashScript(`${extractStallFunctionsBash()}\ncd ${q(cwd)}\nIFS= read -r -d '' d < ${q(fwd(valueFile))} || true\nIFS= read -r -d '' r < ${q(fwd(rootFile))} || true\ngsd_receipt_path "$d" checker${rootArg}\n`, []);
+    }
+    return runBashScript(`${extractStallFunctionsBash()}\ncd ${q(cwd)}\nIFS= read -r -d '' d < ${q(fwd(valueFile))} || true\ngsd_receipt_path "$d" checker\n`, []);
   }
 
   // A refusal names its reason in exactly one stderr line with a fixed prefix (the
@@ -1879,11 +1888,12 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // The same call from a cwd OUTSIDE the project (the orchestrator's cwd no longer matters).
     const fromSibling = receiptPathFrom(f, sibling, fwd(phase), proj);
     assert.equal(fromSibling.status, 0, fromSibling.stderr);
-    // Without the root argument the cwd is the anchor, so the same phase dir is refused, with a reason.
-    const noRoot = receiptPathFrom(f, path.join(proj, 'sub'), fwd(phase));
-    assert.notEqual(noRoot.status, 0, 'with no root argument the cwd anchors the check');
+    // Without the root argument nothing anchors the check (the cwd is never used), so it is refused, with a reason.
+    const noRoot = receiptPathFrom(f, proj, fwd(phase));
+    assert.notEqual(noRoot.status, 0, 'with no root argument the receipt is refused');
     assert.equal(noRoot.stdout, '');
-    assertRefusalReason(noRoot, 'cwd-anchored');
+    assertRefusalReason(noRoot, 'no root');
+    assert.ok(noRoot.stderr.includes('project root is empty'), 'names the missing root');
     // A phase dir outside the passed root is still refused, and nothing is created there.
     const outside = receiptPathFrom(f, proj, `${fwd(sibling)}/ph`, proj);
     assert.notEqual(outside.status, 0, 'a phase dir outside the project root is refused');
@@ -1900,24 +1910,25 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const proj = path.join(f.dir, 'proj');
     fs.mkdirSync(path.join(proj, 'ph'), { recursive: true });
     const outside = outsideDir(t);
+    const P = fwd(proj);
     const cases = [
-      ['ph"ase', 'unsafe character'],
-      ['ph\nase', 'control character'],
+      [`${P}/ph"ase`, 'unsafe character'],
+      [`${P}/ph\nase`, 'control character'],
       ['', 'empty'],
-      ['ph/../ph', '.. component'],
-      ['ph/./x', '. component'],
+      [`${P}/ph/../ph`, '.. component'],
+      [`${P}/ph/./x`, '. component'],
       [`${fwd(outside)}/ph`, 'outside the project'],
       // Review 5904580537 Nit 1: mkdir's own error must not add a second stderr line, and
       // a .gitignore that cannot be written refuses instead of printing a path.
-      ['ph-file', '.gsd-returns is a regular file'],
-      ['ph-gi', '.gsd-returns/.gitignore is a directory'],
+      [`${P}/ph-file`, '.gsd-returns is a regular file'],
+      [`${P}/ph-gi`, '.gsd-returns/.gitignore is a directory'],
     ];
-    const reasonOf = { 'ph-file': 'cannot create .gsd-returns', 'ph-gi': '.gsd-returns/.gitignore is not a regular file' };
+    const reasonOf = { [`${P}/ph-file`]: 'cannot create .gsd-returns', [`${P}/ph-gi`]: '.gsd-returns/.gitignore is not a regular file' };
     fs.mkdirSync(path.join(proj, 'ph-file'));
     fs.writeFileSync(path.join(proj, 'ph-file', '.gsd-returns'), 'not a directory\n');
     // A directory named .gitignore is refused before any write is tried.
     fs.mkdirSync(path.join(proj, 'ph-gi', '.gsd-returns', '.gitignore'), { recursive: true });
-    if (symlinkOrSkip(t, outside, path.join(proj, 'ph', '.gsd-returns'), 'dir')) cases.push(['ph', 'symlinked .gsd-returns']);
+    if (symlinkOrSkip(t, outside, path.join(proj, 'ph', '.gsd-returns'), 'dir')) cases.push([`${P}/ph`, 'symlinked .gsd-returns']);
     let ran = 0;
     for (const [phaseDir, label] of cases) {
       const r = receiptPathFrom(f, proj, phaseDir, proj);
@@ -1925,10 +1936,101 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.equal(r.stdout, '', `${label}: no path printed`);
       assertRefusalReason(r, label);
       if (reasonOf[phaseDir]) assert.ok(r.stderr.includes(reasonOf[phaseDir]), `${label}: names ${reasonOf[phaseDir]}`);
-      assert.ok(!r.stderr.includes(phaseDir) || phaseDir === '' || phaseDir === 'ph', `${label}: the phase dir itself is never echoed`);
+      assert.ok(phaseDir === '' || !r.stderr.includes(phaseDir), `${label}: the phase dir itself is never echoed`);
       ran += 1;
     }
     assert.ok(ran >= 8);
+  });
+
+  // Option B (#5192): the input contract. PHASE_DIR and ROOT are canonical absolute paths
+  // (init's phase_dir and project_root); every other shape is refused, with its reason,
+  // before the filesystem is touched. Each phase dir below is missing, so an accepted
+  // one would be created.
+  test('gsd_receipt_path refuses a phase dir or root outside its input contract before creating anything, and accepts the canonical form', (t) => {
+    const f = fixture(t);
+    const proj = path.join(f.dir, 'proj');
+    fs.mkdirSync(path.join(proj, '.planning', 'phases'), { recursive: true });
+    fs.mkdirSync(path.join(proj, 'sub'));
+    const P = fwd(proj);
+    const ok = `${P}/.planning/phases/01-x`;
+    const before = treeOf(f.dir);
+    const cases = [
+      // [phase dir, root, reason]
+      ['new', P, 'phase dir is not absolute'],
+      ['.planning/phases/01-x', P, 'phase dir is not absolute'],
+      [`${P}/.planning//01-x`, P, 'phase dir has an empty component'],
+      [`${P}/./01-x`, P, 'phase dir has a . or .. component'],
+      [`${P}/sub/../01-x`, P, 'phase dir has a . or .. component'],
+      [`${P}/.planning/phases/01-x/`, P, 'phase dir ends in a separator'],
+      [`${P}/a\\b`, P, 'phase dir holds a backslash'],
+      [ok, '', 'project root is empty'],
+      [ok, 'proj', 'project root is not absolute'],
+      [ok, `${P}/`, 'project root ends in a separator'],
+      [ok, `${P}/sub/..`, 'project root has a . or .. component'],
+      [ok, `${P}/.`, 'project root has a . or .. component'],
+      [ok, `${fwd(f.dir)}//proj`, 'project root has an empty component'],
+      [ok, `${P}\n`, 'project root holds a quote'],
+      [ok, `${P}'`, 'project root holds a quote'],
+    ];
+    // A drive letter is absolute only where cygpath exists (Git Bash); elsewhere C:/x is a relative name.
+    if (process.platform !== 'win32') cases.push(['C:/x', P, 'phase dir is not absolute']);
+    for (const [phaseDir, root, why] of cases) {
+      const r = receiptPathFrom(f, proj, phaseDir, root, { raw: true });
+      const label = `${JSON.stringify(phaseDir)} under ${JSON.stringify(root)}`;
+      assert.notEqual(r.status, 0, `${label}: refused`);
+      assert.equal(r.stdout, '', `${label}: no path printed`);
+      assertRefusalReason(r, label);
+      assert.ok(r.stderr.includes(why), `${label}: names "${why}", got ${JSON.stringify(r.stderr)}`);
+    }
+    const created = treeOf(f.dir).filter((e) => !before.includes(e) && !/^(phase-dir|root)-value\.bin$/.test(e));
+    assert.deepEqual(created, [], 'a refused input creates nothing');
+    // init's canonical form is accepted, from a cwd outside the project.
+    const good = receiptPathFrom(f, f.dir, ok, proj);
+    assert.equal(good.status, 0, good.stderr);
+    assert.ok(good.stdout.trim().startsWith(`${ok}/.gsd-returns/checker.`) || process.platform === 'win32', good.stdout);
+    // On Windows init's project_root is the native path (backslashes, no toPosixPath);
+    // it is accepted as given.
+    if (process.platform === 'win32') {
+      const native = receiptPathFrom(f, f.dir, ok, proj, { raw: true });
+      assert.equal(native.status, 0, native.stderr);
+    }
+  });
+
+  // The contract as an oracle: a phase dir built from tokens (absolute under the root or
+  // relative; segments plain, spaced, empty, `.`, `..` or holding a backslash; an optional
+  // trailing slash) is accepted iff it is absolute and has no empty, `.` or `..` segment, no
+  // backslash and no trailing slash. An accepted dir gets a receipt under its own
+  // .gsd-returns/; a refused one prints nothing and one stderr line.
+  test('property: gsd_receipt_path accepts a generated phase dir iff it meets the input contract', (t) => {
+    const f = fixture(t);
+    const segArb = fc.constantFrom('a', 'b c', 'd-1', '', '.', '..', 'x\\y');
+    const caseArb = fc.record({ abs: fc.boolean(), segs: fc.array(segArb, { minLength: 1, maxLength: 4 }), trail: fc.boolean() });
+    const meets = ({ abs, segs, trail }) => abs && !trail && segs.every((s) => s !== '' && s !== '.' && s !== '..' && !s.includes('\\'));
+    const seen = { accepted: 0, refused: 0 };
+    fc.assert(fc.property(fc.array(caseArb, { minLength: 1, maxLength: 12 }), (cases) => {
+      const proj = fs.mkdtempSync(path.join(f.dir, 'ct-'));
+      const caseDir = fs.mkdtempSync(path.join(f.dir, 'ctc-'));
+      const P = fwd(proj);
+      const dirs = cases.map(({ abs, segs, trail }) => (abs ? `${P}/` : '') + segs.join('/') + (trail ? '/' : ''));
+      dirs.forEach((d, i) => fs.writeFileSync(path.join(caseDir, `${i}.d`), d));
+      const D = q(fwd(caseDir));
+      const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(proj)}\ni=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; out=$(gsd_receipt_path "$d" x ${q(P)} 2>${D}/$i.err); printf '%s\\t%s\\t%s\\n' "$i" "$?" "$out"; i=$((i+1)); done\n`, []);
+      const rows = new Map(r.stdout.split('\n').filter(Boolean).map((l) => { const [i, rc, out] = l.split('\t'); return [Number(i), { rc, out }]; }));
+      const ok = r.status === 0 && cases.every((c, i) => {
+        const row = rows.get(i);
+        const err = splitLines(fs.readFileSync(path.join(caseDir, `${i}.err`), 'utf8')).filter(Boolean);
+        if (!meets(c)) {
+          seen.refused += 1;
+          return row.rc !== '0' && row.out === '' && err.length === 1 && /^gsd_receipt_path: no receipt: \S/.test(err[0]);
+        }
+        seen.accepted += 1;
+        return row.rc === '0' && err.length === 0 && row.out.toLowerCase().includes(`/${c.segs.join('/')}/.gsd-returns/x.`.toLowerCase());
+      });
+      cleanup(caseDir);
+      cleanup(proj);
+      return ok;
+    }), { numRuns: 10, examples: [[[{ abs: true, segs: ['a', 'b c'], trail: false }, { abs: false, segs: ['a'], trail: false }, { abs: true, segs: ['a', ''], trail: false }, { abs: true, segs: ['a'], trail: true }]]] });
+    assert.ok(seen.accepted > 0 && seen.refused > 0, `both verdicts must occur (accepted ${seen.accepted}, refused ${seen.refused})`);
   });
 
   // Review 5692447413 Minor 2: a phase dir that IS the project root, or sits inside
@@ -1965,18 +2067,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(ok.status, 0, ok.stderr);
   });
 
-  // Pre-push review r1 NI-1, NI-2, NI-4 and Q-3.
-  test('gsd_receipt_path: a doubled slash still meets the link check; .git above the root is not the phase dir; a relative dir is checked with its cwd; a FIFO .gitignore is refused', (t) => {
+  // Pre-push review r1 NI-1, NI-2, Q-3 and r2 MI-A.
+  test('gsd_receipt_path: a link on the walked path is refused and a doubled slash is refused before anything is created; .git above the root is not the phase dir; a failed .git check refuses; a FIFO .gitignore is refused', (t) => {
     const f = fixture(t);
     const proj = path.join(f.dir, '.GIT', 'proj');
     fs.mkdirSync(path.join(proj, 'real'), { recursive: true });
+    const P = fwd(proj);
     // NI-2: an ancestor of the project root named .GIT does not refuse every phase.
-    const above = receiptPathFrom(f, proj, `${fwd(proj)}/ph`, proj);
+    const above = receiptPathFrom(f, proj, `${P}/ph`, proj);
     assert.equal(above.status, 0, above.stderr);
-    // NI-1: lnk//ph is the same path as lnk/ph, and lnk is a link.
+    // NI-1: lnk is a link; lnk/ph is refused by the walk, and a doubled slash by the contract.
     if (symlinkOrSkip(t, path.join(proj, 'real'), path.join(proj, 'lnk'), 'dir')) {
-      // lnk//ph is refused for its empty component before anything is created (r2 NI-D).
-      for (const [d, why] of [['lnk/ph', 'a symlink on the path'], ['lnk//ph', 'empty component'], ['real/x//ph', 'empty component']]) {
+      for (const [d, why] of [[`${P}/lnk/ph`, 'a symlink on the path'], [`${P}/lnk//ph`, 'empty component'], [`${P}/real/x//ph`, 'empty component']]) {
         const r = receiptPathFrom(f, proj, d, proj);
         assert.notEqual(r.status, 0, `${d}: refused`);
         assertRefusalReason(r, d);
@@ -1985,30 +2087,17 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.ok(!fs.existsSync(path.join(proj, 'real', 'x')), 'nothing is created before an empty-component refusal');
       assert.ok(!fs.existsSync(path.join(proj, 'real', 'ph')), 'nothing is created through the link');
     }
-    // NI-4: a relative dir under a cwd that holds a quote is refused like the absolute form.
-    const odd = path.join(f.dir, "o'b");
-    fs.mkdirSync(path.join(odd, 'ph'), { recursive: true });
-    for (const d of ['ph', `${fwd(odd)}/ph`]) {
-      const r = receiptPathFrom(f, odd, d, odd);
-      assert.notEqual(r.status, 0, `${d}: refused`);
-      assertRefusalReason(r, d);
+    // r2 MI-A and ADR-3409: if the .git test's tr or sed fails, the dir is refused under its
+    // own reason (not as a .git hit), and nothing is created.
+    for (const [stub, label] of [['sed() { return 1; }', 'failed sed'], ['tr() { return 1; }', 'failed tr']]) {
+      const r = runBashScript(`${extractStallFunctionsBash()}\n${stub}\ngsd_receipt_path ${q(`${P}/ph2`)} x ${q(P)}\n`, []);
+      assert.notEqual(r.status, 0, `${label}: refused`);
+      assertRefusalReason(r, label);
+      assert.ok(r.stderr.includes('cannot check the phase dir for .git'), `${label}: names the failed check`);
+      assert.ok(!fs.existsSync(path.join(proj, 'ph2')), `${label}: nothing is created`);
     }
-    // r2 MI-A: if the .git test's tr or sed fails, the dir is refused, not let through.
-    const sedFails = runBashScript(`${extractStallFunctionsBash()}\nsed() { return 1; }\ngsd_receipt_path ${q(`${fwd(proj)}/ph2`)} x ${q(fwd(proj))}\n`, []);
-    assert.notEqual(sedFails.status, 0, 'a failed sed refuses');
-    assertRefusalReason(sedFails, 'failed sed');
     // Q-3: a FIFO named .gitignore would block the write; it is refused, not opened.
     if (process.platform !== 'win32') {
-      // r2 NI-C: a cwd ending in a newline keeps it ($PWD) and is refused as a control character.
-      const nl = path.join(f.dir, 'nl\n');
-      fs.mkdirSync(path.join(nl, 'ph'), { recursive: true });
-      const cwdFile = path.join(f.dir, 'nl-cwd.bin');
-      fs.writeFileSync(cwdFile, nl);
-      const rn = runBashScript(`${extractStallFunctionsBash()}\nIFS= read -r -d '' c < ${q(fwd(cwdFile))} || true\ncd "$c" || exit 9\ngsd_receipt_path ph x "$c"\n`, []);
-      assert.notEqual(rn.status, 0, 'a relative dir under a newline-ending cwd is refused');
-      assertRefusalReason(rn, 'newline cwd');
-      assert.ok(rn.stderr.includes('control character'), 'refused for the newline the cwd holds');
-      assert.ok(!fs.existsSync(path.join(f.dir, 'nl', 'ph')), 'no sibling dir without the newline is created');
       const fifoPhase = path.join(proj, 'fifo-ph');
       fs.mkdirSync(path.join(fifoPhase, '.gsd-returns'), { recursive: true });
       const made = runBashScript(`mkfifo ${q(path.join(fifoPhase, '.gsd-returns', '.gitignore'))}\n`, []);
@@ -2036,7 +2125,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
 
   // Minor 3 and Nit 1, generated: a phase dir built from segments that are plain names,
   // `.git` in several letter cases, names that merely contain `git`, `.` and `..`, and names
-  // holding a refused character, relative to the project or absolute under it. The oracle
+  // holding a refused character, absolute under the project root. The oracle
   // refuses iff the dir is empty or the project root, a segment holds a quote, `$`, backtick,
   // `<`, `>` or a control character, a segment is `.` or `..`, or a segment lowercases to
   // `.git`. A refusal prints nothing and one prefixed stderr line; an accepted dir prints a
@@ -2044,14 +2133,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('property: gsd_receipt_path refuses a phase dir iff it is empty or the root, or a segment is unsafe, . or .., or .git in any case; one stderr line per refusal', (t) => {
     const f = fixture(t);
     const segArb = fc.constantFrom('a', 'b c', '.git', '.GIT', '.gIt', '.git.', '.GIT ', 'GIT~1', '.gitx', 'x.git', 'git', '.', '..', 'q"', 'd$', 'e`', 'f<', 'g>', 'h\tt');
-    const caseArb = fc.record({ abs: fc.boolean(), segs: fc.array(segArb, { maxLength: 4 }) });
+    const caseArb = fc.record({ segs: fc.array(segArb, { maxLength: 4 }) });
     const refusedBy = ({ segs }) => (segs.length === 0) ||
       segs.some((s) => /['"$`<>]/.test(s) || [...s].some((c) => c.charCodeAt(0) < 0x20) || s === '.' || s === '..' || ['.git', 'git~1'].includes(s.toLowerCase().replace(/[. ]+$/, '')));
     const seen = { accepted: 0, refused: 0 };
     fc.assert(fc.property(fc.array(caseArb, { minLength: 1, maxLength: 12 }), (cases) => {
       const proj = fs.mkdtempSync(path.join(f.dir, 'rg-'));
       const caseDir = fs.mkdtempSync(path.join(f.dir, 'rgc-'));
-      const dirs = cases.map(({ abs, segs }) => (abs ? [fwd(proj), ...segs].join('/') : segs.join('/')));
+      const dirs = cases.map(({ segs }) => [fwd(proj), ...segs].join('/'));
       dirs.forEach((d, i) => fs.writeFileSync(path.join(caseDir, `${i}.d`), d));
       const D = q(fwd(caseDir));
       const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(proj)}\ni=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; out=$(gsd_receipt_path "$d" x ${q(fwd(proj))} 2>${D}/$i.err); printf '%s\\t%s\\t%s\\n' "$i" "$?" "$out"; i=$((i+1)); done\n`, []);
@@ -2069,14 +2158,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       cleanup(caseDir);
       cleanup(proj);
       return ok;
-    }), { numRuns: 8, examples: [[[{ abs: false, segs: ['a', '.GIT'] }, { abs: true, segs: ['b c', 'x.git'] }, { abs: true, segs: [] }]]] });
+    }), { numRuns: 8, examples: [[[{ segs: ['a', '.GIT'] }, { segs: ['b c', 'x.git'] }, { segs: [] }]]] });
     assert.ok(seen.accepted > 0 && seen.refused > 0, `both verdicts must occur (accepted ${seen.accepted}, refused ${seen.refused})`);
   });
 
   // Review 5563209291 Minor 3: path-shaped generation. Segments are drawn from `a`, `.`,
   // `..` and `link`; `proj/link` and `proj/a/link` are links to a directory outside the
   // project, and a `link` segment anywhere else is a plain (missing) directory name. A dir
-  // is relative to the project, absolute under it, or absolute under a sibling outside it.
+  // is absolute under the project or absolute under a sibling outside it.
   // The oracle is the refusal set: a `.` or `..` segment, a `link` segment where the link
   // is, or a sibling base is refused; anything else gets a receipt under <dir>/.gsd-returns/.
   function crossesLink(segs) {
@@ -2096,19 +2185,19 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       // `a` is weighted so accepted paths are common; one fixed case per side is
       // appended to every run below, so both sides of the oracle always execute.
       segs: fc.array(fc.oneof({ arbitrary: fc.constant('a'), weight: 5 }, fc.constantFrom('.', '..', 'link')), { minLength: 1, maxLength: 4 }),
-      base: fc.constantFrom('rel', 'abs', 'sibling'),
+      base: fc.constantFrom('abs', 'sibling'),
     });
     const P = fwd(proj);
     const S = fwd(sibling);
     let accepted = 0;
     let refused = 0;
     fc.assert(fc.property(fc.array(caseArb, { minLength: 1, maxLength: 12 }), (generated) => {
-      const cases = [...generated, { segs: ['a'], base: 'abs' }, { segs: ['link', 'a'], base: 'rel' }];
+      const cases = [...generated, { segs: ['a'], base: 'abs' }, { segs: ['link', 'a'], base: 'abs' }];
       const outsideBefore = treeOf(outside);
       const siblingBefore = treeOf(sibling);
       const dirs = cases.map(({ segs, base }) => {
         const rel = segs.join('/');
-        return base === 'rel' ? rel : base === 'abs' ? `${P}/${rel}` : `${S}/${rel}`;
+        return base === 'abs' ? `${P}/${rel}` : `${S}/${rel}`;
       });
       const script = dirs.map((d, i) =>
         `if p=$(gsd_receipt_path ${q(d)} x ${q(P)} 2>/dev/null); then printf '%s\\t%s\\n' ${i} "$p"; else printf '%s\\tFAIL\\n' ${i}; fi`).join('\n');
@@ -2128,18 +2217,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.ok(accepted > 0 && refused > 0, `both sides of the oracle ran (accepted ${accepted}, refused ${refused})`);
   });
 
-  test('gsd_receipt_path refuses a symlinked phase directory (relative or absolute) and creates nothing in its target', (t) => {
+  test('gsd_receipt_path refuses a symlinked phase directory (the dir itself or a missing child) and creates nothing in its target', (t) => {
     const f = fixture(t);
     const outside = outsideDir(t);
     if (!symlinkOrSkip(t, outside, path.join(f.dir, 'ph'), 'dir')) return;
     let ran = 0;
-    for (const phaseDir of ['ph', `${f.fwd}/ph`, 'ph/sub']) {
-      const r = receiptPathFrom(f, f.dir, phaseDir);
+    for (const phaseDir of [`${f.fwd}/ph`, `${f.fwd}/ph/sub`]) {
+      const r = receiptPathFrom(f, f.dir, phaseDir, f.dir);
       assert.notEqual(r.status, 0, `${phaseDir}: a symlinked phase dir must be refused`);
       assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
       ran += 1;
     }
-    assert.equal(ran, 3);
+    assert.equal(ran, 2);
     assert.deepEqual(treeOf(outside), [], 'nothing may be created in the link target');
   });
 
@@ -2153,8 +2242,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const before = treeOf(outside);
     let ran = 0;
     // An existing phase dir reached through the link, a missing one, and the absolute form.
-    for (const phaseDir of ['.planning/phases/01-x', '.planning/phases/02-new', `${fwd(proj)}/.planning/phases/01-x`]) {
-      const r = receiptPathFrom(f, proj, phaseDir);
+    for (const phaseDir of ['.planning/phases/01-x', '.planning/phases/02-new', '.planning/phases/01-x/sub'].map((d) => `${fwd(proj)}/${d}`)) {
+      const r = receiptPathFrom(f, proj, phaseDir, proj);
       assert.notEqual(r.status, 0, `${phaseDir}: a phase dir that resolves outside the project must be refused`);
       assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
       ran += 1;
@@ -2172,11 +2261,11 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     fs.mkdirSync(path.join(proj, '.planning'), { recursive: true });
     let ran = 0;
     for (const [phaseDir, escaped] of [
-      ['newdir/../../ESCAPED', 'ESCAPED'],
+      [`${fwd(proj)}/newdir/../../ESCAPED`, 'ESCAPED'],
       [`${fwd(proj)}/n2/../../ESC2`, 'ESC2'],
-      ['.planning/../../ESC3', 'ESC3'],
+      [`${fwd(proj)}/.planning/../../ESC3`, 'ESC3'],
     ]) {
-      const r = receiptPathFrom(f, proj, phaseDir);
+      const r = receiptPathFrom(f, proj, phaseDir, proj);
       assert.notEqual(r.status, 0, `${phaseDir}: a .. component must be refused`);
       assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
       assert.equal(fs.existsSync(path.join(f.dir, escaped)), false, `${phaseDir}: nothing may be created outside the project`);
@@ -2201,8 +2290,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     if (!symlinkOrSkip(t, proj, path.join(proj, '.planning', 'up'), 'dir')) return;
     if (!symlinkOrSkip(t, path.join(proj, 'inner'), path.join(proj, '.planning', 'lp'), 'dir')) return;
     let ran = 0;
-    for (const phaseDir of ['.planning/phases/01-link', '.planning/up/NEWCHILD']) {
-      const r = receiptPathFrom(f, proj, phaseDir);
+    for (const phaseDir of ['.planning/phases/01-link', '.planning/up/NEWCHILD'].map((d) => `${fwd(proj)}/${d}`)) {
+      const r = receiptPathFrom(f, proj, phaseDir, proj);
       assert.notEqual(r.status, 0, `${phaseDir}: an in-project link at the phase dir or on the walked path must be refused`);
       assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
       ran += 1;
@@ -2210,7 +2299,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.equal(ran, 2);
     assert.equal(fs.existsSync(path.join(proj, 'inner', 'real', '.gsd-returns')), false, 'nothing is created through the phase-dir link');
     assert.equal(fs.existsSync(path.join(proj, 'NEWCHILD')), false, 'nothing is created through the walked link');
-    const ok = receiptPathFrom(f, proj, '.planning/lp/real');
+    const ok = receiptPathFrom(f, proj, `${fwd(proj)}/.planning/lp/real`, proj);
     assert.equal(ok.status, 0, ok.stderr);
     assert.match(ok.stdout.trim(), /\/\.planning\/lp\/real\/\.gsd-returns\/checker\.\d+\.[A-Za-z0-9]+$/, 'an existing phase dir under an in-project parent link gets a receipt');
   });
@@ -2222,8 +2311,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     if (!symlinkOrSkip(t, path.join(outside, 'absent-returns'), path.join(f.dir, 'ph', '.gsd-returns'), 'dir')) return;
     if (!symlinkOrSkip(t, path.join(outside, 'absent-phase'), path.join(f.dir, 'ph2'), 'dir')) return;
     let ran = 0;
-    for (const phaseDir of ['ph', 'ph2']) {
-      const r = receiptPathFrom(f, f.dir, phaseDir);
+    for (const phaseDir of [`${f.fwd}/ph`, `${f.fwd}/ph2`]) {
+      const r = receiptPathFrom(f, f.dir, phaseDir, f.dir);
       assert.notEqual(r.status, 0, `${phaseDir}: a dangling link must be refused`);
       assert.equal(r.stdout, '', `${phaseDir}: a refused receipt prints no path`);
       ran += 1;
