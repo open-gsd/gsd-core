@@ -1293,16 +1293,17 @@ counting the plan, exactly as before. Four additive fields report the halt:
 
 | Field | Where | Meaning |
 |---|---|---|
-| `halted` | each plan row | `true` when the SUMMARY paired with this plan declares `status: halted` (which SUMMARY, and the limits, below) |
+| `halted` | each plan row | `true` when the SUMMARY this plan's halt is read from declares `status: halted` (which SUMMARY that is, and the limits, below) |
 | `blocked_by` | each plan row | The halted plan ids upstream of this plan, directly or transitively, over its `depends_on` edges; `[]` when nothing upstream halted. In a `depends_on` cycle it names the plans this one waits on instead (below) |
 | `halted_count` | each phase row, beside `summary_count` | Live (non-superseded) plans whose `halted` is `true` |
 | `progress.halted_plans` | beside `progress.completed_plans` | `{completed, total, percent, scope}`: Σ `halted_count` over Σ `plan_count`, under the same percent rule as the other fractions (a withheld percentage gets its own `percent_withheld` diagnostic) |
 
 `halted` and `blocked_by` are computed the way `phase-plan-index` computes its
-fields of the same name: the same SUMMARY pairing, the same halt predicate
-(`isSummaryFileHalted`), the same `depends_on` resolution over the same plans
-(the live, canonically named ones, in the same sorted order), and the same
-propagation. The two commands give the same answers except in these cases:
+fields of the same name: the same SUMMARY pairing and lookup, the same halt
+predicate (`isSummaryFileHalted`), the same `depends_on` resolution over the
+same plans (the live, canonically named ones, in the same sorted order), and
+the same propagation. The two commands give the same answers except in these
+cases:
 
 - **A SUMMARY that resolves outside the planning root** (a symlink out of
   it). `phase-plan-index` reads it for its halt. `planning inspect` does not:
@@ -1335,15 +1336,28 @@ propagation. The two commands give the same answers except in these cases:
   token naming a superseded plan can still resolve to a live plan with the
   same canonical id.)
 
-**Which SUMMARY `halted` reads.** The one the completion rule behind
-`summary_count` pairs with the plan, located by plan id and then by canonical
-id, as `phase-plan-index` locates it. That is usually the plan's own. On a
-slug-named plan whose SUMMARY carries only the bare id
-(`01-06-scaffolding-PLAN.md` with `01-06-SUMMARY.md`) it is that bare-id
-SUMMARY, even when it was written for a superseded `01-06-PLAN.md`.
-`hasSummary` keeps its older filename pairing, so such a row can read
-`hasSummary: false` with `halted: true`. Every plan counted in `halted_count`
-is also counted in `summary_count`, so
+**Which SUMMARY `halted` reads.** Both commands take the same two steps.
+First, the plan must have a completion record under the pairing rule
+`summary_count` counts by, which skips a SUMMARY at `status: blocked`; a plan
+without one reads `halted: false`. Second, the SUMMARY whose `status` is read
+is looked up by the plan's `id`, and by its canonical id only when no SUMMARY
+carries the plan's `id`. The lookup does not skip `status: blocked`, so the
+file read need not be the one that gave the plan its completion record:
+
+- A slug-named plan with a SUMMARY of its own reads that SUMMARY, whatever its
+  `status`. `01-06-scaffolding-PLAN.md` with `01-06-scaffolding-SUMMARY.md` at
+  `status: blocked` or `status: complete` reads `halted: false` beside a
+  halted `01-06-SUMMARY.md`. With its own SUMMARY `blocked`, the plan's
+  completion record comes from the bare-id SUMMARY alone, yet its own file is
+  the one read.
+- A slug-named plan with no SUMMARY of its own reads a SUMMARY of its
+  canonical id: `01-06-scaffolding-PLAN.md` with only `01-06-SUMMARY.md` reads
+  that bare-id SUMMARY, even when it was written for a superseded
+  `01-06-PLAN.md`.
+
+`hasSummary` keeps its older filename pairing, so a plan in the second case
+can read `hasSummary: false` with `halted: true`. Every plan counted in
+`halted_count` is also counted in `summary_count`, so
 `completed_plans.completed - halted_plans.completed` is the number of completed
 plans not reported as halted.
 
