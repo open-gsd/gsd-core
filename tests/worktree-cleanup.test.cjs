@@ -1940,7 +1940,7 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     assert.equal(fs.existsSync(manifestPath), true, 'manifest must be preserved on disk when cleanup fails');
   });
 
-  test('cleanup-tail deletes the manifest when a foreign agent worktree under the same repo does not name this wave', (t) => {
+  test('cleanup-tail preserves an empty manifest and leaves unrecorded worktrees alone', (t) => {
     const cleanupTailBash = extractCleanupTailBash();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-tail-foreign-'));
     t.after(() => {
@@ -1964,8 +1964,9 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repo, worktrees: [] }) + '\n');
 
     const res = runCleanupTail(root, repo, manifestPath, cleanupTailBash);
-    assert.equal(res.status, 0, `foreign agent must not preserve the manifest. stderr: ${res.stderr?.toString()}`);
-    assert.equal(fs.existsSync(manifestPath), false, 'manifest deleted when no owned agent remains');
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /empty_manifest/);
+    assert.equal(fs.existsSync(manifestPath), true);
     assert.equal(fs.existsSync(foreign), true, 'foreign agent worktree stays');
   });
 
@@ -2009,6 +2010,27 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     assert.match(output, /Residual worktrees remain; preserving manifest at/);
     assert.equal(fs.existsSync(manifestPath), true, 'a detached listed worktree may hold unmerged commits');
     assert.equal(fs.existsSync(agent), true);
+  });
+
+  test('cleanup-tail preserves a dirty recorded agent worktree', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-tail-dirty-', { detach: false });
+    const dirtyFile = path.join(agent, 'local.txt');
+    fs.writeFileSync(dirtyFile, 'local work');
+    const result = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /dirty or unreadable/);
+    assert.equal(fs.readFileSync(dirtyFile, 'utf8'), 'local work');
+    assert.equal(fs.existsSync(manifestPath), true);
+  });
+
+  test('cleanup-tail preserves a worktree on a different branch', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-tail-changed-', { detach: false });
+    gitOrThrow(['checkout', '-b', 'feature-user-work'], { cwd: agent });
+    const result = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /does not match its recorded agent branch/);
+    assert.equal(gitOrThrow(['branch', '--show-current'], { cwd: agent }).trim(), 'feature-user-work');
+    assert.equal(fs.existsSync(manifestPath), true);
   });
 
   test('cleanup-tail removes a listed worktree on its branch and then the manifest (#4853)', (t) => {
@@ -2615,11 +2637,6 @@ ${creationBash}
     assert.ok(lsFiles.includes('src/wave-3-manifest.json'), 'git pathspec must NOT exclude file outside .planning');
     assert.ok(lsFiles.includes('sub/.planning/wave-1-manifest.json'), 'git pathspec must NOT exclude nested .planning outside repo root');
 
-    // Parity with execute-phase.md post-wave hook stash pathspec
-    const executePhaseContent = readFileNormalized(EXECUTE_PHASE_PATH);
-    for (const pattern of WAVE_MANIFEST_PATHSPEC_EXCLUDES) {
-      assert.ok(executePhaseContent.includes(`"${pattern}"`), `execute-phase.md stash push must include ${pattern}`); // allow-test-rule: source-text-is-the-product
-    }
   });
 
   test('both dispatch paths name the one creation block in executor-isolation-dispatch.md', () => {
@@ -2640,7 +2657,6 @@ ${creationBash}
       assert.match(doc, /Durable wave manifest/);
       assert.match(doc, /executor-isolation-dispatch\.md/);
     }
-    assert.ok(!executePhase.includes('STASH_OUT'), 'the post-wave stash result is unused');
     assert.match(executePhase, /_WT_GREP_FLAGS="-qFx"/);
     assert.match(executePhase, /process\.platform==='win32'/);
     assert.ok(!executePhase.includes('grep -qiFx'), 'case-folding grep is selected only on win32');

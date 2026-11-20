@@ -9486,21 +9486,6 @@ describe('durable wave worktree manifests (#4853)', () => {
     return [dirLine, numLine].join('\n');
   }
 
-  function extractPostWaveHookStashBash() {
-    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
-    const content = readFileNormalized(wfPath);
-    const lines = splitLines(content);
-    const fence = scanFencedBlocks(lines).find((b) => {
-      if (b.closeLineIdx === -1) return false;
-      const body = lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n');
-      return body.includes('SKIP_HOOKS') && body.includes('gsd-post-wave-hook-$$');
-    });
-    if (!fence) {
-      throw new Error('extractPostWaveHookStashBash: could not find post-wave hook stash block in execute-phase.md');
-    }
-    return lines.slice(fence.openLineIdx + 1, fence.closeLineIdx).join('\n');
-  }
-
   describe('resolveWaveManifestPath', () => {
     test('derives canonical wave manifest path with relative directory', () => {
       const p = resolveWaveManifestPath('.planning/phases/01-feature', 1);
@@ -9655,7 +9640,7 @@ describe('durable wave worktree manifests (#4853)', () => {
             const filenames = waves.map((w) => `wave-${w}-manifest.json`);
             const allFiles = [...filenames, 'other.json', 'wave-abc-manifest.json', 'wave-1-manifest.json.bak'];
             // Permute deterministically using fast-check supplied sort keys to verify sort stability under any directory listing order
-            const keyed = allFiles.map((f, i) => ({ f, k: sortKeys[i] ?? 0 }));
+            const keyed = allFiles.map((f, i) => ({ f, k: sortKeys[i] }));
             keyed.sort((a, b) => a.k - b.k);
             const shuffledFiles = keyed.map((x) => x.f);
 
@@ -10287,6 +10272,41 @@ ${creationBash}
       }
     });
 
+    test('cleanup-wave refuses a manifest replaced between inspection and open', (t) => {
+      const repoDir = fs.realpathSync(createTempDir('cleanup-manifest-swap-'));
+      t.after(() => cleanup(repoDir));
+      const manifestPath = path.join(repoDir, 'wave-1-manifest.json');
+      const replacement = path.join(repoDir, 'replacement.json');
+      const content = JSON.stringify({ orchestrator_root: repoDir, worktrees: [] });
+      fs.writeFileSync(manifestPath, content);
+      fs.writeFileSync(replacement, content);
+
+      const openSync = fs.openSync;
+      const openMock = t.mock.method(fs, 'openSync', (file, ...args) => {
+        if (file === manifestPath) fs.renameSync(replacement, manifestPath);
+        return openSync(file, ...args);
+      });
+      const originalExitCode = process.exitCode;
+      let output = '';
+      try {
+        cmdWorktreeCleanupWave(repoDir, ['--manifest', manifestPath, '--allow-empty'], {
+          execGit: (args) => args[0] === 'ls-files'
+            ? { exitCode: 1, stdout: '', stderr: 'error: pathspec did not match any file(s) known to git' }
+            : { exitCode: 0, stdout: repoDir, stderr: '' },
+          write: (chunk) => { output += chunk; },
+          writeErr: () => {},
+        });
+        assert.equal(process.exitCode, 1);
+        const result = JSON.parse(output);
+        assert.equal(result.reason, 'manifest_symlink_refused');
+        assert.match(result.error, /changed between check and open/);
+        openMock.mock.restore();
+        assert.equal(fs.readFileSync(manifestPath, 'utf8'), content);
+      } finally {
+        process.exitCode = originalExitCode;
+      }
+    });
+
     test('cleanup-wave refuses symlinked manifest', () => {
       const repoDir = createTempDir('cleanup-symlink-manifest-');
       const gitOpts = { cwd: repoDir, timeoutMs: SUBPROCESS_TIMEOUT_MS };
@@ -10589,78 +10609,6 @@ printf "%s|%s" "$PHASE_DIR" "$PHASE_NUMBER"
       assert.equal(entries[1].branch, 'worktree-agent-1');
     });
 
-    test('post-wave hook stash excludes wave manifests under worktree_skip_hooks=true', (t) => {
-      if (process.platform === 'win32') {
-        t.skip('bash script execution test is POSIX-specific');
-        return;
-      }
-      const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4853-skip-hooks-'));
-      try {
-        gitOrThrow(['init', '-q', '-b', 'main'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: repoDir });
-        gitOrThrow(['config', 'user.name', 'test'], { cwd: repoDir });
-        gitOrThrow(['config', 'commit.gpgsign', 'false'], { cwd: repoDir });
-        fs.writeFileSync(path.join(repoDir, 'init.txt'), 'init\n');
-        gitOrThrow(['add', 'init.txt'], { cwd: repoDir });
-        gitOrThrow(['commit', '-q', '-m', 'init'], { cwd: repoDir });
 
-        const manifestPath = path.join(repoDir, '.planning', 'phases', '01-test', 'wave-1-manifest.json');
-        fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-        fs.writeFileSync(manifestPath, JSON.stringify({ orchestrator_root: repoDir, worktrees: [] }));
-
-        // Modify an untracked work file as well
-        fs.writeFileSync(path.join(repoDir, 'work.txt'), 'work\n');
-
-        // Create pre-commit hook that records file existence during hook execution
-        const hooksDir = path.join(repoDir, '.git', 'hooks');
-        fs.mkdirSync(hooksDir, { recursive: true });
-        const hookPath = path.join(hooksDir, 'pre-commit');
-        fs.writeFileSync(hookPath, `#!/usr/bin/env bash
-if [ -f "work.txt" ]; then
-  echo "HOOK_WORK_TXT_PRESENT" > hook-evidence.txt
-else
-  echo "HOOK_WORK_TXT_ABSENT" > hook-evidence.txt
-fi
-if [ -f ".planning/phases/01-test/wave-1-manifest.json" ]; then
-  echo "HOOK_MANIFEST_PRESENT" >> hook-evidence.txt
-else
-  echo "HOOK_MANIFEST_ABSENT" >> hook-evidence.txt
-fi
-exit 0
-`);
-        fs.chmodSync(hookPath, 0o755);
-
-        // Execute extracted post-wave hook stash bash block directly from execute-phase.md
-        const stashBash = extractPostWaveHookStashBash();
-        const script = `
-set -e
-gsd_run() {
-  echo "true"
-}
-${stashBash}
-`;
-        const stashRes = childProcess.spawnSync('bash', ['-c', script], {
-          cwd: repoDir,
-          stdio: 'pipe',
-          timeout: SUBPROCESS_TIMEOUT_MS,
-        });
-
-        assert.equal(stashRes.status, 0, `stash block must exit 0. stderr: ${stashRes.stderr?.toString()}`);
-
-        // Assert evidence recorded during hook execution:
-        // work.txt was stashed (absent during hook), manifest was excluded from stash (present during hook)
-        const evidencePath = path.join(repoDir, 'hook-evidence.txt');
-        assert.ok(fs.existsSync(evidencePath), 'hook must have executed and recorded evidence');
-        const evidence = fs.readFileSync(evidencePath, 'utf8');
-        assert.match(evidence, /HOOK_WORK_TXT_ABSENT/, 'work.txt must be stashed during hook execution');
-        assert.match(evidence, /HOOK_MANIFEST_PRESENT/, 'manifest must remain present during hook execution');
-
-        // Post-condition: after stash pop, both work.txt and manifestPath exist on disk
-        assert.ok(fs.existsSync(path.join(repoDir, 'work.txt')), 'work.txt restored after stash pop');
-        assert.ok(fs.existsSync(manifestPath), 'wave manifest remains on disk');
-      } finally {
-        cleanup(repoDir);
-      }
-    });
   });
 });
