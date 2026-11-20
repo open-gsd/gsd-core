@@ -2581,8 +2581,10 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     fs.utimesSync(old, new Date(), new Date());
     assert.equal(watch(NOW - 11 * 60, f.receipt, fwd(old), ['## OUTLINE COMPLETE'], { interval: 5 }), 'active', 'control: the fresh regular file itself is activity');
     // Ten literal names (glob characters, spaces, a leading dash or dot): each fresh regular
-    // file is activity, and the same name as a fresh link to the old file is not.
-    const names = ['01-PLAN-OUTLINE.md', '02-PLAN.md', 'a b-PLAN.md', '-x-PLAN.md', '.h-PLAN.md', 'q[1]-PLAN.md', 's*t-PLAN.md', 'u?-PLAN.md', 'w{x}-PLAN.md', 'z~-PLAN.md'];
+    // file is activity, and the same name as a fresh link to the old file is not. NTFS has no
+    // `*` or `?` in a name, so Windows tries two other names in their place.
+    const globNames = process.platform === 'win32' ? ['r(1)-PLAN.md', 'v!-PLAN.md'] : ['s*t-PLAN.md', 'u?-PLAN.md'];
+    const names = ['01-PLAN-OUTLINE.md', '02-PLAN.md', 'a b-PLAN.md', '-x-PLAN.md', '.h-PLAN.md', 'q[1]-PLAN.md', ...globNames, 'w{x}-PLAN.md', 'z~-PLAN.md'];
     fs.utimesSync(old, past, past);
     for (const name of names) {
       const file = path.join(f.dir, name);
