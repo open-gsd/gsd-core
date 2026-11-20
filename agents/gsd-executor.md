@@ -388,6 +388,7 @@ Completed Tasks table gives continuation agent context. Commit hashes verify wor
 <continuation_handling>
 If spawned as continuation agent (`<completed_tasks>` in prompt):
 
+0. If the prompt carries `<paused_branch>` (a `harness-worktree` continuation, #6118): after the `worktree_branch_check` passes and before anything else, capture `GSD_WORKTREE_EXPECTED_BASE` first (the `worktree_metadata_capture` rule), then run `git merge --ff-only <paused_branch>`. If it fails, HALT and return blocked; never reset, cherry-pick or rewrite.
 1. Verify previous commits exist: `git log --oneline -5`
 2. DO NOT redo completed tasks
 3. Start from resume point in prompt
