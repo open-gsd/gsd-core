@@ -10,9 +10,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup, captureFdSync, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
-const processSeam = require('./helpers/process-seam.cjs');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runGsdTools, runGsdToolsCaptured, createTempProject, cleanup, captureFdSync } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { scanFencedBlocks, tokenizeHeadings, collectSection, iterateBullets } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitTableRow, isDelimiterRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
@@ -3924,9 +3922,7 @@ Plans:
     });
 
     const runWithStderr = (...extra) => {
-      const r = processSeam.runNode([TOOLS_PATH, 'roadmap', 'annotate-dependencies', '1', ...extra], {
-        cwd: tmpDir, env: { ...process.env, ...TEST_ENV_BASE }, timeoutMs: PROBE_TIMEOUT_MS,
-      });
+      const r = runGsdToolsCaptured(['roadmap', 'annotate-dependencies', '1', ...extra], tmpDir);
       assert.strictEqual(r.exitCode, 0, r.stderr);
       return r;
     };

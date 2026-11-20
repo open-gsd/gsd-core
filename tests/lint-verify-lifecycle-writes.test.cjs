@@ -95,6 +95,17 @@ describe('T19: L2 — raw commit of a coverable phase artifact in post-fingerpri
     const violations = scanText('gsd-core/workflows/execute-phase.md', text, { postFingerprint: false });
     assert.deepStrictEqual(violations.filter((v) => v.rule === 'L2'), []);
   });
+
+  test('#5861: a shared planning doc named through the resolved scope root is inert; a UAT file under it is still flagged', () => {
+    const { scanText } = loadLint();
+    const fence = (files) => ['```bash', `gsd_run query commit "docs: x" --files ${files}`, '```', ''].join('\n');
+    const inert = scanText('gsd-core/workflows/verify-work.md', fence('"${PLANNING_ROOT}/ROADMAP.md"'), { postFingerprint: true });
+    assert.deepStrictEqual(inert.filter((v) => v.rule === 'L2'), []);
+    const inertQuotedRoot = scanText('gsd-core/workflows/verify-work.md', fence('"${PLANNING_ROOT}"/ROADMAP.md'), { postFingerprint: true });
+    assert.deepStrictEqual(inertQuotedRoot.filter((v) => v.rule === 'L2'), []);
+    const uat = scanText('gsd-core/workflows/verify-work.md', fence('"${PLANNING_ROOT}/phases/01-x/01-UAT.md"'), { postFingerprint: true });
+    assert.strictEqual(uat.filter((v) => v.rule === 'L2').length, 1, `a UAT file must stay flagged; got: ${JSON.stringify(uat)}`);
+  });
 });
 
 describe('#5105 review finding 8: L2 runs over backslash-continued lines, same as L1/L3', () => {

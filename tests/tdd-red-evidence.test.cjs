@@ -1419,3 +1419,130 @@ describe('#5721 — gate-level: the crashing file as target blocks, the real fai
     assert.equal(result.payload.verdict, 'RED_EVIDENCE_OK');
   });
 });
+
+// ─── #5879: RED evidence must not block worktree.cleanup-wave ─────────────────
+// tdd.md told the executor to write the RED record "inside the project directory" and named no
+// place; an untracked evidence file in an agent worktree makes worktree.cleanup-wave refuse the
+// wave's merge as worktree_dirty. The reference now names one self-ignoring directory. The fixture
+// below takes the directory template, the ignore file and the confirmation command FROM tdd.md, so
+// a change to the instruction changes what the test exercises.
+describe('#5879: the RED-evidence location named by tdd.md cannot block the wave merge', () => {
+  const { runNode } = require('./helpers/process-seam.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { TOOLS_PATH } = require('./helpers.cjs');
+  const TDD_REFERENCE = path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md');
+  const GIT_ENV = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'r', GIT_AUTHOR_EMAIL: 'r@example.invalid',
+    GIT_COMMITTER_NAME: 'r', GIT_COMMITTER_EMAIL: 'r@example.invalid',
+  };
+
+  /** The location the reference names, read out of its evidence-location bullet. */
+  function documentedLocation() {
+    const bullet = fs.readFileSync(TDD_REFERENCE, 'utf8').split(/\r?\n/).find((l) => l.includes('Evidence location (#5879)'));
+    assert.ok(bullet, 'RED step 4 carries an evidence-location bullet');
+    const spans = bullet.split('`').filter((_, i) => i % 2 === 1); // the code spans between backticks
+    const dirTemplate = spans.find((s) => s.startsWith('.gsd/tdd-evidence/') && s.includes('{phase}-{plan}') && !s.includes('<file>'));
+    const ignoreFile = spans.find((s) => s.endsWith('/.gitignore'));
+    const checkTemplate = spans.find((s) => s.startsWith('git check-ignore -q '));
+    assert.ok(dirTemplate && ignoreFile && checkTemplate, `the bullet names the directory, the ignore file and the check: ${JSON.stringify(spans)}`);
+    assert.ok(/\bSTOP\b/.test(bullet), 'the bullet says to STOP when the check fails');
+    return { dirTemplate, ignoreFile, checkTemplate };
+  }
+
+  const RED_RECORD = {
+    command: 'node --test t.test.cjs', exitCode: 1, output: TARGET_FAILURE_TAP, targetTest: 'rejects empty email',
+  };
+
+  /** One executor worktree with a committed RED test and the evidence written by `writeEvidence`. */
+  function waveWithEvidence(writeEvidence) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5879-'));
+    const git = (cwd, args) => gitOrThrow(args, { cwd, env: GIT_ENV });
+    git(dir, ['init', '-q', '-b', 'main']);
+    fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.planning', 'config.json'), '{}\n');
+    fs.writeFileSync(path.join(dir, '.gitignore'), '.claude/\n');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-qm', 'base']);
+    const base = git(dir, ['rev-parse', 'HEAD']).trim();
+    const wt = path.join(dir, '.claude', 'worktrees', 'agent-a1');
+    git(dir, ['worktree', 'add', '-q', '-b', 'worktree-agent-a1', wt, base]);
+    fs.writeFileSync(path.join(wt, 't.test.js'), "test('t', () => { throw new Error('red'); });\n");
+    git(wt, ['add', 't.test.js']);
+    git(wt, ['commit', '-qm', 'test(01-01): add failing test']);
+    const evidence = writeEvidence(wt, git);
+    const manifest = path.join(dir, 'wave-manifest.json');
+    fs.writeFileSync(manifest, JSON.stringify({ orchestrator_root: dir, worktrees: [] }));
+    const run = (verb, extra) => runNode([TOOLS_PATH, 'query', verb, '--manifest', manifest, ...extra], { cwd: dir, env: GIT_ENV });
+    const recorded = run('worktree.record-agent', ['--agent-id', 'a1', '--path', wt, '--branch', 'worktree-agent-a1', '--base', base, '--files', 't.test.js']);
+    assert.equal(recorded.exitCode, 0, `record-agent failed: ${recorded.stderr}`);
+    const cleaned = run('worktree.cleanup-wave', []);
+    return { dir, cleaned, evidence, head: git(dir, ['log', '--format=%s', '-1']).trim(), parsed: JSON.parse(cleaned.stdout) };
+  }
+
+  test('an evidence file outside any ignored directory blocks the merge as worktree_dirty (the reported failure)', () => {
+    const w = waveWithEvidence((wt) => {
+      fs.mkdirSync(path.join(wt, '.tdd-evidence'), { recursive: true });
+      fs.writeFileSync(path.join(wt, '.tdd-evidence', '01-01-red.json'), JSON.stringify(RED_RECORD));
+    });
+    try {
+      assert.notEqual(w.cleaned.exitCode, 0);
+      const entry = w.parsed.result.entries[0];
+      assert.equal(entry.reason, 'worktree_dirty');
+      assert.ok(entry.stderr.includes('.tdd-evidence/01-01-red.json'), `the dirty line names the evidence file: ${entry.stderr}`);
+      assert.equal(w.head, 'base', 'the RED commit is left unmerged');
+    } finally { cleanup(w.dir); }
+  });
+
+  test('the location tdd.md names: porcelain stays clean, the classifier passes from the worktree root, the wave merges', () => {
+    const { dirTemplate, ignoreFile, checkTemplate } = documentedLocation();
+    const w = waveWithEvidence((wt, git) => {
+      const evidenceDir = path.join(wt, ...dirTemplate.replace('{phase}-{plan}', '01-01').split('/'));
+      fs.mkdirSync(evidenceDir, { recursive: true }); // mkdir -p
+      const ignorePath = path.join(wt, ...ignoreFile.split('/'));
+      if (!fs.existsSync(ignorePath)) fs.writeFileSync(ignorePath, '*\n');
+      const record = path.join(evidenceDir, 'red.json');
+      fs.writeFileSync(record, JSON.stringify(RED_RECORD));
+      fs.writeFileSync(path.join(evidenceDir, 'red.tap'), TARGET_FAILURE_TAP);
+      const rel = path.relative(wt, record).split(path.sep).join('/');
+      // the confirmation the reference requires: exit 1 (throws) if the file is not ignored
+      git(wt, checkTemplate.replace(/^git /, '').split(' ').slice(0, 2).concat(rel));
+      assert.equal(git(wt, ['status', '--porcelain', '--untracked-files=all']).trim(), '', 'nothing untracked');
+      const gate = runNode([TOOLS_PATH, 'check', 'tdd-red-evidence', rel, '--raw'], { cwd: wt, env: GIT_ENV });
+      return { gate };
+    });
+    try {
+      assert.match(w.evidence.gate.stdout, /RED_EVIDENCE_OK/, `the classifier accepts the record at the documented location: ${w.evidence.gate.stdout}${w.evidence.gate.stderr}`);
+      assert.equal(w.cleaned.exitCode, 0, `cleanup-wave failed: ${w.cleaned.stdout}${w.cleaned.stderr}`);
+      assert.equal(w.parsed.result.entries[0].status, 'merged_removed');
+      assert.match(w.head, /merge executor worktree/);
+    } finally { cleanup(w.dir); }
+  });
+
+  test('a linked worktree outside the repository with no .planning/ of its own still passes the classifier for its own record', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5879-gate-'));
+    try {
+      const git = (cwd, args) => gitOrThrow(args, { cwd, env: GIT_ENV });
+      const repo = path.join(base, 'repo');
+      fs.mkdirSync(path.join(repo, '.planning'), { recursive: true });
+      git(repo, ['init', '-q', '-b', 'main']);
+      fs.writeFileSync(path.join(repo, '.planning', 'config.json'), '{}\n');
+      fs.writeFileSync(path.join(repo, '.gitignore'), '.planning/\n.gsd/\n');
+      fs.writeFileSync(path.join(repo, 'x'), 'x\n');
+      git(repo, ['add', 'x', '.gitignore']);
+      git(repo, ['commit', '-qm', 'base']);
+      const wt = path.join(base, 'wt'); // not under <repo>/.claude/worktrees
+      git(repo, ['worktree', 'add', '-q', '-b', 'wtb', wt]);
+      assert.equal(fs.existsSync(path.join(wt, '.planning')), false, 'the fixture worktree has no .planning/');
+      fs.mkdirSync(path.join(wt, '.gsd', 'tdd-evidence', '01-01'), { recursive: true });
+      fs.writeFileSync(path.join(wt, '.gsd', 'tdd-evidence', '01-01', 'red.json'), JSON.stringify(RED_RECORD));
+      const own = runNode([TOOLS_PATH, 'check', 'tdd-red-evidence', '.gsd/tdd-evidence/01-01/red.json', '--raw'], { cwd: wt, env: GIT_ENV });
+      assert.match(own.stdout, /RED_EVIDENCE_OK/, `own-worktree record: ${own.stdout}${own.stderr}`);
+      fs.writeFileSync(path.join(base, 'elsewhere.json'), JSON.stringify(RED_RECORD));
+      const outside = runNode([TOOLS_PATH, 'check', 'tdd-red-evidence', path.join(base, 'elsewhere.json'), '--raw'], { cwd: wt, env: GIT_ENV });
+      assert.notEqual(outside.exitCode, 0);
+      assert.match(outside.stderr + outside.stdout, /path escapes its allowed directory/);
+    } finally { cleanup(base); }
+  });
+});

@@ -18,8 +18,11 @@ gsd capability install https://github.com/some-org/gsd-cap-example.git#v1.0.0
 
 **Git repository pinned to a commit SHA (fully reproducible):**
 
+Use a complete 40- or 64-hex object ID. The server must permit fetching that object
+under its unadvertised-object policy; a refusal fails the typed pin without fallback.
+
 ```bash
-gsd capability install https://github.com/some-org/gsd-cap-example.git#sha:abc123def456...
+gsd capability install https://github.com/some-org/gsd-cap-example.git#sha:0123456789abcdef0123456789abcdef01234567
 ```
 
 **npm package:**

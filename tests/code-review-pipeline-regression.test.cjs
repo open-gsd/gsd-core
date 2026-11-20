@@ -1669,7 +1669,7 @@ describe('#3829 review round — frontmatter scoping, section anchoring, ledger 
   test('docs-parity: section headings are anchored whole and the prior source cell is captured', () => {
     const src = fs.readFileSync(DISPOSITION_STEP_PATH, 'utf8');
     assert.ok(
-      src.includes('/^##\\s+Fixed Issues\\s*\\$/') && src.includes('/^##\\s+Skipped Issues\\s*\\$/'),
+      src.includes('/^##\\s+Fixed(\\s+Issues)?\\s*\\$/') && src.includes('/^##\\s+Skipped(\\s+Issues)?\\s*\\$/'),
       'fix-report section headings must be matched whole, never by prefix'
     );
     // Eighth src.includes() converted -- it pinned the exact source-cell CAPTURE, and that
@@ -3676,6 +3676,51 @@ describe('#3861 round 1 — stale fix reports are stated, not silently ignored',
     const out = runShippedDisposition({ reviewText: review, fixText: recased });
     assert.strictEqual(ledgerRows(out.ledger)[0].disposition, 'open');
     assert.match(out.stdout, /titles its finding differently/);
+  });
+
+  test('#6126: the short section titles Fixed and Skipped reconcile, as whole lines only', () => {
+    const review = ['---', 'status: issues_found', '---', '', '### WR-01: one', '', '### WR-02: two', '', '### IN-01: three'].join('\n');
+    const fixText = ['## Fixed', '', '### WR-01: one', '', '## Skipped', '', '### WR-02: two', '', '## Fixed Notes', '', '### IN-01: three'].join('\n');
+    const out = runShippedDisposition({ reviewText: review, fixText });
+    const by = Object.fromEntries(ledgerRows(out.ledger).map((r) => [r.id, r.disposition]));
+    assert.deepStrictEqual(by, { 'WR-01': 'fixed', 'WR-02': 'skipped', 'IN-01': 'open' });
+    assert.match(out.stdout, /1 fix-report finding heading\(s\) sit under no recognised section/, 'the lookalike section is named, not swallowed');
+    assert.match(out.stdout, /IN-01 in 01-REVIEW-FIX\.md/, 'by id and report file');
+  });
+
+  test('#6126: finding headings under an unrecognised section are named on the verdict line, notes are not', () => {
+    const review = ['---', 'status: issues_found', '---', '', '### WR-01: one', '', '### WR-04: found and fixed in this run'].join('\n');
+    const fixText = ['## Resolved', '', '### WR-01: one', '', '### WR-04: found and fixed in this run', '', '## Notes', '', 'plain prose, no finding heading'].join('\n');
+    const out = runShippedDisposition({ reviewText: review, fixText });
+    assert.match(out.stdout, /2 fix-report finding heading\(s\) sit under no recognised section/);
+    assert.match(out.stdout, /WR-01 in 01-REVIEW-FIX\.md, WR-04 in 01-REVIEW-FIX\.md/, 'every id and the report file');
+    const clean = runShippedDisposition({ reviewText: review, fixText: ['## Fixed Issues', '', '### WR-01: one', '', '## Notes', '', 'prose only'].join('\n') });
+    assert.doesNotMatch(clean.stdout, /no recognised section/, 'a template-titled report and a notes section produce no note');
+  });
+
+  test('#6126: the note is repeated on the unchanged run, and an id orphaned in a report and its iteration backup is named once per file', () => {
+    const review = ['---', 'status: issues_found', '---', '', '### WR-01: one'].join('\n');
+    const fixText = ['## Resolved', '', '### WR-01: one'].join('\n');
+    const first = runShippedDisposition({ reviewText: review, fixText, iterFixText: { 1: fixText } });
+    assert.match(first.stdout, /2 fix-report finding heading\(s\) sit under no recognised section .*not reconciled: WR-01 in 01-REVIEW-FIX\.md, WR-01 in 01-REVIEW-FIX\.iter1\.md/);
+    const again = runShippedDisposition({ reviewText: review, fixText, iterFixText: { 1: fixText }, priorText: first.ledger });
+    assert.strictEqual(again.wroteNothing, true, 'the ledger itself is unchanged');
+    assert.match(again.stdout, /disposition unchanged.*no recognised section/, 'and the unchanged verdict line still names what was ignored');
+  });
+
+  test('#6126: a clean review with no ledger still names a fix-report finding under an unrecognised section', () => {
+    const review = ['---', 'status: clean', '---', ''].join('\n');
+    const fixText = ['## Resolved', '', '### WR-09: acted on, absent from the review'].join('\n');
+    const out = runShippedDisposition({ reviewText: review, fixText });
+    assert.match(out.stdout, /WR-09 in 01-REVIEW-FIX\.md/, 'not lost on the early-return path');
+  });
+
+  test('#6126: an id reconciled under a recognised section is not also reported as orphaned', () => {
+    const review = ['---', 'status: issues_found', '---', '', '### WR-01: one'].join('\n');
+    const fixText = ['## Fixed Issues', '', '### WR-01: one', '', '## Verification', '', '### WR-01: one'].join('\n');
+    const out = runShippedDisposition({ reviewText: review, fixText });
+    assert.strictEqual(ledgerRows(out.ledger)[0].disposition, 'fixed');
+    assert.doesNotMatch(out.stdout, /no recognised section/);
   });
 
   test('a matching fix report reports no mismatch', () => {

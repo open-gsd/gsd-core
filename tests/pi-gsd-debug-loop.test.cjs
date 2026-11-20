@@ -14,7 +14,7 @@ const path = require('node:path');
 
 const fc = require('./helpers/fast-check-setup.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const rac = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
@@ -310,7 +310,7 @@ describe('#5638: the Pi install', () => {
   let root;
   let configDir;
   before(() => {
-    ({ root, configDir } = runMinimalInstall({ runtime: 'pi', scope: 'global' }));
+    ({ root, configDir } = copyRuntimeFixture({ runtime: 'pi', scope: 'global' }));
   });
   after(() => cleanup(root));
 

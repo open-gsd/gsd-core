@@ -32,6 +32,7 @@ const os = require('os');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 /** Return the raw text of every ```bash fenced block in `text`. */
@@ -386,5 +387,278 @@ describe('complete-milestone.md workstream-scoped paths (#4455)', () => {
       assert.ok(!r.stdout.includes('git_call:rm .planning/REQUIREMENTS.md'),
         `must not have targeted the literal root REQUIREMENTS.md path, got: ${r.stdout}`);
     });
+  });
+});
+
+// ─── #5861: no root `.planning/<artifact>` literal in a shipped shell fence ────
+//
+// gsd-tools scopes every artifact path through `planningDir()` (named project
+// `.planning/<project>`, workstream `.planning/workstreams/<ws>`). A shell fence
+// that names `.planning/STATE.md`, `.planning/phases/...` etc. bypasses that and
+// reads or commits the root project's files under a named project / workstream.
+// Fences take the scoped path from the init `*_path` / `*_dir` fields,
+// `config-path --raw` or `planning.inspect --pick generated_from.planning_root`.
+// A literal that is genuinely root-only (a shared artifact, a mirror of the
+// root-layout patterns) is allowlisted below with its reason; an entry that no
+// longer matches a fence line fails as stale.
+describe('shell fences name no root .planning/ artifact literal (#5861)', () => {
+  const REPO_ROOT = path.join(__dirname, '..');
+  const SCAN_DIRS = [
+    path.join('gsd-core', 'workflows'),
+    path.join('gsd-core', 'references'),
+    path.join('gsd-core', 'templates'),
+    path.join('gsd-core', 'contexts'),
+    'agents',
+    path.join('commands', 'gsd'),
+    'capabilities',
+  ];
+  const SHELL_FENCES = new Set(['bash', 'sh', 'shell', 'zsh']);
+  const ROOT_LITERAL = new RegExp(
+    '\\.planning/(?:STATE\\.md|ROADMAP\\.md|REQUIREMENTS\\.md|PROJECT\\.md|config\\.json|phases|quick|research|' +
+    'MILESTONES\\.md|milestones|INGEST-CONFLICTS\\.md|DECISIONS-INDEX\\.md|HANDOFF\\.json|\\.continue-here|' +
+    'RETROSPECTIVE\\.md|reports|v[^/\\s]*MILESTONE-AUDIT)',
+  );
+
+  /** `{file, match, why}`: `match` is tested against the offending fence line of `file`. */
+  const SHARED = 'a shared root artifact: no code resolves a per-scope copy, so every scope uses the one root file (moving it is a placement decision, not a fence fix)';
+  const ALLOWLIST = [
+    { file: 'gsd-core/workflows/complete-milestone.md', match: /\.planning\/RETROSPECTIVE\.md/, why: `RETROSPECTIVE.md is ${SHARED}` },
+    { file: 'agents/gsd-planner.md', match: /\.planning\/RETROSPECTIVE\.md/, why: `RETROSPECTIVE.md is ${SHARED}` },
+    { file: 'gsd-core/workflows/milestone-summary.md', match: /\.planning\/reports/, why: `reports/MILESTONE_SUMMARY is ${SHARED}` },
+    { file: 'gsd-core/workflows/milestone-summary.md', match: /\.planning\/RETROSPECTIVE\.md/, why: `RETROSPECTIVE.md is ${SHARED}` },
+    { file: 'gsd-core/workflows/session-report.md', match: /\.planning\/reports/, why: `reports/SESSION_REPORT is ${SHARED}` },
+    { file: 'gsd-core/workflows/next.md', match: /\.planning\/\.continue-here\.md/, why: `the root .continue-here.md is ${SHARED}` },
+    { file: 'gsd-core/workflows/resume-project.md', match: /\.planning\/\.continue-here/, why: `the root .continue-here*.md is ${SHARED}` },
+    { file: 'gsd-core/workflows/pause-work.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
+    { file: 'gsd-core/workflows/resume-project.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
+    { file: 'gsd-core/workflows/progress/steps/forensic-audit.md', match: /\.planning\/HANDOFF\.json/, why: `HANDOFF.json is ${SHARED}` },
+    {
+      file: 'gsd-core/workflows/pr-branch.md',
+      match: /^\s*#|STRUCTURAL_RE=|MILESTONE_PHASES_RE=|MILESTONE_PHASE_DIRS=/,
+      why: 'mirrors the drift-guarded root-layout patterns in src/pr-branch-patterns.cts, which classify repo paths rather than read an artifact',
+    },
+  ];
+
+  function markdownFiles(dir) {
+    const abs = path.join(REPO_ROOT, dir);
+    if (!fs.existsSync(abs)) return [];
+    const out = [];
+    for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+      const rel = path.join(dir, entry.name);
+      if (entry.isDirectory()) out.push(...markdownFiles(rel));
+      else if (entry.name.endsWith('.md')) out.push(rel);
+    }
+    return out;
+  }
+
+  /** Every shell-fence line (`{file, lineNo, text}`) that names a root artifact literal. */
+  function rootLiteralLines() {
+    const hits = [];
+    for (const rel of SCAN_DIRS.flatMap(markdownFiles)) {
+      const lines = splitLines(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+      for (const block of scanFencedBlocks(lines)) {
+        if (block.closeLineIdx === -1) continue;
+        if (!SHELL_FENCES.has((block.infoString || '').trim())) continue;
+        for (let i = block.openLineIdx + 1; i < block.closeLineIdx; i += 1) {
+          if (ROOT_LITERAL.test(lines[i])) hits.push({ file: rel.split(path.sep).join('/'), lineNo: i + 1, text: lines[i] });
+        }
+      }
+    }
+    return hits;
+  }
+
+  const allowed = (hit) => ALLOWLIST.some((a) => a.file === hit.file && a.match.test(hit.text));
+
+  test('every root-literal fence line is allowlisted with a reason', () => {
+    const offenders = rootLiteralLines().filter((h) => !allowed(h));
+    assert.deepEqual(
+      offenders.map((h) => `${h.file}:${h.lineNo}  ${h.text.trim()}`),
+      [],
+      'shell fences must resolve artifact paths through the init *_path/*_dir fields, `config-path --raw` or ' +
+      '`planning.inspect --pick generated_from.planning_root`, never a root `.planning/<artifact>` literal',
+    );
+  });
+
+  describe('discuss-phase fences run against the real gsd-tools (the #5861 repro)', () => {
+    const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const discussContent = fs.readFileSync(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'discuss-phase.md'), 'utf8');
+    const readFence = extractFenceContaining(discussContent, 'Read project-level and prior phase context', 'Read at most **3**', 'PROJECT_PATH');
+    const updateStateFence = extractFenceContaining(discussContent, '<step name="update_state">', '<step name="auto_advance">', 'state.record-session');
+    let repo;
+
+    beforeEach(() => {
+      repo = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fence-scope-'));
+    });
+    afterEach(() => {
+      cleanup(repo);
+    });
+
+    function git(args) {
+      const r = runHookSeam('-c', [`git ${args}`], { interpreter: 'bash', cwd: repo });
+      throwIfFailed(r, `git ${args}`);
+      return r.stdout;
+    }
+
+    function seed(dir, label) {
+      fs.mkdirSync(path.join(repo, dir, 'phases', '01-x'), { recursive: true });
+      for (const name of ['PROJECT', 'REQUIREMENTS', 'STATE', 'ROADMAP']) {
+        fs.writeFileSync(path.join(repo, dir, `${name}.md`), `# ${name} ${label}\n`);
+      }
+      fs.writeFileSync(path.join(repo, dir, 'config.json'), '{"mode":"yolo"}\n');
+    }
+
+    function setUpRepo(scopedDir, label) {
+      git('init -q');
+      git('config user.email t@example.invalid');
+      git('config user.name t');
+      seed('.planning', 'Root');
+      if (scopedDir) seed(scopedDir, label);
+      git('add -A');
+      git('commit -qm init');
+    }
+
+    function runFence(fence, env) {
+      const prelude = `gsd_run() { node "${GSD_TOOLS}" "$@" 2>/dev/null; }\nPHASE=1; padded_phase=01; phase_dir=.planning/phases/01-x\n`;
+      const r = runHookSeam('-c', [prelude + fence], {
+        interpreter: 'bash',
+        cwd: repo,
+        env: { ...process.env, GSD_SESSION_KEY: 'fence-scope', ...env },
+      });
+      throwIfFailed(r, 'bash <discuss-phase fence>');
+      return r.stdout;
+    }
+
+    test('flat root project: the update_state fence commits the root STATE.md (behavior unchanged)', () => {
+      setUpRepo(null);
+      const out = runFence(readFence, {});
+      assert.ok(out.includes('# STATE Root'), `expected the root STATE.md, got: ${out}`);
+      runFence(updateStateFence, {});
+      assert.equal(git('status --short').trim(), '', 'the root tracking commit leaves a clean tree');
+      assert.ok(git('log -1 --name-only --format=%s').includes('.planning/STATE.md'));
+    });
+
+    test('GSD_PROJECT=beta: reads the project files and commits the project STATE.md', () => {
+      setUpRepo('.planning/beta', 'Beta');
+      const out = runFence(readFence, { GSD_PROJECT: 'beta' });
+      assert.ok(out.includes('# STATE Beta') && out.includes('# REQUIREMENTS Beta') && out.includes('# PROJECT Beta'),
+        `expected the beta project files, got: ${out}`);
+      assert.ok(!out.includes('Root'), `must not read any root project file, got: ${out}`);
+      runFence(updateStateFence, { GSD_PROJECT: 'beta' });
+      assert.equal(git('status --short').trim(), '', 'the scoped tracking commit leaves a clean tree');
+      assert.ok(git('log -1 --name-only --format=%s').includes('.planning/beta/STATE.md'));
+    });
+
+    test('settings.md config fence: GSD_PROJECT=beta resolves the project config.json, flat resolves the root one', () => {
+      const settingsContent = fs.readFileSync(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'settings.md'), 'utf8');
+      const settingsFence = extractFenceContaining(settingsContent, '<step name="ensure_and_load_config">', '<step name="read_current">', 'GSD_CONFIG_PATH');
+      const tail = settingsFence.slice(settingsFence.indexOf('if [[ -z "${GSD_CONFIG_PATH:-}" ]]; then'));
+      setUpRepo('.planning/beta', 'Beta');
+      const echoed = `${tail}\nprintf 'CFG=[%s]\\n' "$GSD_CONFIG_PATH"`;
+      const beta = runFence(echoed, { GSD_PROJECT: 'beta' });
+      assert.ok(beta.includes(`${path.join('.planning', 'beta', 'config.json')}]`), `expected the beta config.json, got: ${beta}`);
+      const flat = runFence(echoed, {});
+      assert.ok(flat.includes(`${path.join('.planning', 'config.json')}]`) && !flat.includes('beta'), `expected the root config.json, got: ${flat}`);
+    });
+
+    test('regression-gate: a phase number that appears in the repo path does not exclude every prior VERIFICATION.md', () => {
+      const gateContent = fs.readFileSync(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate.md'), 'utf8');
+      const gateFence = extractBashBlocks(gateContent).find((b) => b.includes('PRIOR_VERIFICATIONS='));
+      assert.ok(gateFence, 'regression-gate.md has a PRIOR_VERIFICATIONS fence');
+      // The harness prelude below stands in for the launcher preamble the fence carries.
+      const head = gateFence.slice(0, gateFence.indexOf('# gsd-handoff:begin'))
+        .split('\n').filter((l) => !l.startsWith('_GSD_SHIM_NAME=')).join('\n');
+      const parent = repo;
+      repo = path.join(parent, 'proj7'); // the absolute path holds the phase number 7
+      fs.mkdirSync(repo);
+      try {
+        setUpRepo(null);
+        fs.mkdirSync(path.join(repo, '.planning', 'phases', '06-prior'), { recursive: true });
+        fs.writeFileSync(path.join(repo, '.planning', 'phases', '06-prior', '06-VERIFICATION.md'), '# v\n');
+        const out = runFence(`PHASE_NUMBER=7\n${head}\nprintf 'PRIOR=[%s]\\n' "$PRIOR_VERIFICATIONS"`, {});
+        assert.ok(out.includes('06-VERIFICATION.md'), `prior phase verification must be found, got: ${out}`);
+      } finally {
+        repo = parent;
+      }
+    });
+
+    test('an unresolved scope root aborts the fence instead of writing under /', () => {
+      const script = `gsd_run() { :; }\n${discussContent.slice(discussContent.indexOf('PLANNING_ROOT=$(gsd_run query planning.inspect'), discussContent.indexOf('cat "${PROJECT_PATH}"'))}\necho REACHED`;
+      const r = runHookSeam('-c', [script], { interpreter: 'bash', cwd: repo });
+      assert.notEqual(r.exitCode, 0, `an empty PLANNING_ROOT must stop the fence, got: ${r.stdout}`);
+      assert.ok(!r.stdout.includes('REACHED'), 'the fence must not continue past an unresolved root');
+    });
+
+    test('--ws ws1: reads the workstream files and commits the workstream STATE.md', () => {
+      setUpRepo('.planning/workstreams/ws1', 'WS1');
+      const out = runFence(`GSD_WS="--ws ws1"\n${readFence}`, {});
+      assert.ok(out.includes('# STATE WS1') && out.includes('# REQUIREMENTS WS1'), `expected the ws1 files, got: ${out}`);
+      assert.ok(!out.includes('STATE Root'), `must not read the root STATE.md, got: ${out}`);
+      runFence(`GSD_WS="--ws ws1"\n${updateStateFence}`, {});
+      assert.equal(git('status --short').trim(), '', 'the workstream tracking commit leaves a clean tree');
+      assert.ok(git('log -1 --name-only --format=%s').includes('.planning/workstreams/ws1/STATE.md'));
+    });
+  });
+
+  // Prose outside fences steers an agent just as a fence does: "Read `.planning/STATE.md`" sends a
+  // named-project run to the root project's file. The instruction surfaces scan the same names.
+  const PROSE_DIRS = [path.join('gsd-core', 'workflows'), 'agents', path.join('commands', 'gsd')];
+  const PROSE_LITERAL = /\.planning\/(?:STATE\.md|ROADMAP\.md|REQUIREMENTS\.md|config\.json|phases\/)/;
+  const PROSE_ALLOWLIST = [
+    { file: 'gsd-core/workflows/complete-milestone.md', match: /not the literal `\.planning\/ROADMAP\.md`|\.planning\/ROADMAP\.md/, why: 'names the root literal only as the wrong answer next to `$ROADMAP_PATH`' },
+    { file: 'gsd-core/workflows/new-milestone.md', match: /\.planning\/STATE\.md/, why: 'names the root literal only as the wrong answer: STATE.md is resolved through init.new-milestone' },
+    { file: 'gsd-core/workflows/progress.md', match: /\.planning\/phases\//, why: 'negative example: a workstream project does not keep its phases under the root path' },
+    { file: 'gsd-core/workflows/settings.md', match: /hardcode\S* `\.planning\/config\.json`|hardcoded `\.planning\/config\.json`/, why: 'negative example next to `$GSD_CONFIG_PATH`' },
+    { file: 'gsd-core/workflows/settings-advanced.md', match: /\.planning\/config\.json` — workstream installs must route/, why: 'states why the root literal must not be used; the line names `$GSD_CONFIG_PATH`' },
+    { file: 'gsd-core/workflows/smart-entry.md', match: /^\s*- Read `\.planning\/STATE\.md` \(frontmatter \+ body\)/, why: 'gsd-tools-down fallback: runs only when the CLI cannot run, so it cannot ask planning.inspect for the scope root and reads the flat file by construction (lint-state-field-drift PROMPT_LAYER_EXEMPTIONS pins this exact line)' },
+    { file: 'gsd-core/workflows/undo.md', match: /\.planning\/phases\/03-auth/, why: 'historical incident quote, not an instruction' },
+    { file: 'gsd-core/workflows/help/modes/full.md', match: /Result: Creates `\.planning\/phases\/01-foundation/, why: 'example command output for the flat project' },
+    { file: 'gsd-core/workflows/help/modes/full.compact.md', match: /Result: Creates `\.planning\/phases\/01-foundation/, why: 'example command output for the flat project' },
+    { file: 'agents/gsd-roadmapper.md', match: /\.planning\/ROADMAP\.md/, why: 'write targets of the roadmapper are owned by #5859, which names the flat fallback explicitly' },
+    { file: 'agents/gsd-roadmapper.compact.md', match: /\.planning\/ROADMAP\.md/, why: 'write targets of the roadmapper are owned by #5859, which names the flat fallback explicitly' },
+  ];
+
+  function proseRootLiteralLines() {
+    const hits = [];
+    for (const rel of PROSE_DIRS.flatMap(markdownFiles)) {
+      const lines = splitLines(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+      const fenced = new Set();
+      for (const block of scanFencedBlocks(lines)) {
+        const end = block.closeLineIdx === -1 ? lines.length - 1 : block.closeLineIdx;
+        for (let i = block.openLineIdx; i <= end; i += 1) fenced.add(i);
+      }
+      lines.forEach((text, i) => {
+        if (!fenced.has(i) && PROSE_LITERAL.test(text)) hits.push({ file: rel.split(path.sep).join('/'), lineNo: i + 1, text });
+      });
+    }
+    return hits;
+  }
+
+  test('prose in workflows, agents and commands names no root artifact path unless allowlisted', () => {
+    const offenders = proseRootLiteralLines().filter((h) => !PROSE_ALLOWLIST.some((a) => a.file === h.file && a.match.test(h.text)));
+    assert.deepEqual(offenders.map((h) => `${h.file}:${h.lineNo}  ${h.text.trim().slice(0, 120)}`), [],
+      'name the scoped path ({planning_root}/..., an init *_path field or $GSD_CONFIG_PATH), not the root `.planning/<artifact>`');
+    const hits = proseRootLiteralLines();
+    const stale = PROSE_ALLOWLIST.filter((a) => !hits.some((h) => h.file === a.file && a.match.test(h.text)));
+    assert.deepEqual(stale.map((a) => `${a.file} ${a.match}`), [], 'remove prose allowlist entries that no longer match');
+  });
+
+  test('every PLANNING_ROOT assignment in a shipped fence is followed by the unresolved-root guard', () => {
+    const missing = [];
+    for (const rel of SCAN_DIRS.flatMap(markdownFiles)) {
+      const lines = splitLines(fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+      lines.forEach((line, i) => {
+        if (/^\s*PLANNING_ROOT=\$\(/.test(line) && !/^\s*: "\$\{PLANNING_ROOT:\?/.test(lines[i + 1] || '')) {
+          missing.push(`${rel.split(path.sep).join('/')}:${i + 1}`);
+        }
+      });
+    }
+    assert.deepEqual(missing, [], 'an empty PLANNING_ROOT would make "${PLANNING_ROOT}/phases" resolve to /phases');
+  });
+
+  test('every allowlist entry still matches a fence line (no stale entries)', () => {
+    const hits = rootLiteralLines();
+    const stale = ALLOWLIST.filter((a) => !hits.some((h) => h.file === a.file && a.match.test(h.text)));
+    assert.deepEqual(stale.map((a) => `${a.file} ${a.match}`), [], 'remove allowlist entries that no longer match');
+    for (const a of ALLOWLIST) assert.ok(a.why && a.why.length > 10, `allowlist entry for ${a.file} needs a reason`);
   });
 });

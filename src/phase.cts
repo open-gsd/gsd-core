@@ -150,7 +150,7 @@ import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from 
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore, isStatePastPhase } from './state-transition.cjs';
-import { updateTableCell, updateTraceabilityCell, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
+import { updateTableCell, updateTraceabilityCell, leadingRequirementStatus, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
@@ -785,6 +785,8 @@ interface RawPlan {
   halted: boolean;
   /** #1689: optional per-plan specialist executor hint (frontmatter `agent_hint:`). null when unset. */
   agentHint: string | null;
+  /** #6302: optional foreign executor runtime id (frontmatter `executor_runtime:`). null when unset. */
+  executorRuntime: string | null;
   /** #4924: frontmatter `gap_closure: true` — the field execute-phase `--gaps-only` selects on. */
   gapClosure: boolean;
 }
@@ -1076,6 +1078,43 @@ function resolvePlanAgentHintAcrossPhases(cwd: string, planId: string): { matche
   }
 }
 
+/**
+ * #6303 (ADR-3711 D1): the `executor_runtime` of one canonical plan, located the way
+ * `resolvePlanAgentHint` locates it (the given phase, else a scan of every milestone phase
+ * directory that must find exactly one plan carrying the id). Null on any lookup failure.
+ */
+function resolvePlanExecutorRuntime(cwd: string, phase: string | null, planId: string): string | null {
+  try {
+    if (!planId) return null;
+    let planPath: string | null = null;
+    if (phase) {
+      const { phaseDir, ambiguousMatches } = locatePlanIndexPhaseDir(cwd, phase);
+      if (!phaseDir || ambiguousMatches) return null;
+      const planFile = scanPhasePlans(phaseDir).planFiles
+        .filter(isCanonicalPlanFile)
+        .sort()
+        .find((f: string) => planIdFromFile(f) === planId);
+      if (!planFile) return null;
+      planPath = path.join(phaseDir, planFile);
+    } else {
+      const phasesDir = path.join(planningDir(cwd), 'phases');
+      const found: string[] = [];
+      for (const dirName of listMilestonePhaseDirs(phasesDir, { cwd }).value) {
+        const phaseDir = path.join(phasesDir, dirName);
+        for (const planFile of scanPhasePlans(phaseDir).planFiles.filter(isCanonicalPlanFile)) {
+          if (planIdFromFile(planFile) === planId) found.push(path.join(phaseDir, planFile));
+        }
+      }
+      if (found.length !== 1) return null;
+      planPath = found[0];
+    }
+    const declared = parsePlanDocument(fs.readFileSync(planPath, 'utf-8'), planPath).executorRuntime;
+    return typeof declared === 'string' && declared.length > 0 ? declared : null;
+  } catch {
+    return null;
+  }
+}
+
 function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   if (!phase) {
     error('phase required for phase-plan-index');
@@ -1200,6 +1239,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       filesModified: planDoc.filesModified,
       filesDeleted: planDoc.filesDeleted,
       agentHint: planDoc.agentHint,
+      executorRuntime: planDoc.executorRuntime,
       gapClosure: planDoc.gapClosure,
       taskCount: planDoc.taskCount,
       hasSummary,
@@ -1369,6 +1409,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       files_modified: rawPlan.filesModified,
       files_deleted: rawPlan.filesDeleted,
       agent_hint: rawPlan.agentHint,
+      executor_runtime: rawPlan.executorRuntime,
       task_count: rawPlan.taskCount,
       has_summary: rawPlan.hasSummary,
       // #2830: additive fields — halted is this plan's OWN status; blocked_by
@@ -7450,7 +7491,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               const reqUpdate = updateTraceabilityCell(reqContent, reqRowMatch, 'Status', (current) => {
                 // #2788: accept `Gaps Found` too so a phase stranded by revert-phase (the
                 // gaps_found response) can complete without hand-editing the table.
-                if (/^(?:pending|in progress|gaps found)$/i.test(current.trim())) {
+                // #6238: read the status word, so `Pending (note)` advances like `Pending`.
+                if (leadingRequirementStatus(current, ['pending', 'in progress', 'gaps found']) !== null) {
                   tableHit = true;
                   return ' Complete ';
                 }
@@ -8348,6 +8390,7 @@ export = {
   listPhaseAgentHints,
   listAllPhaseAgentHints,
   resolvePlanAgentHintAcrossPhases,
+  resolvePlanExecutorRuntime,
   cmdPhaseAdd,
   cmdPhaseAddBatch,
   cmdPhaseMvpMode,
