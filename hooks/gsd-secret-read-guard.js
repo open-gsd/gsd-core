@@ -4481,6 +4481,9 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
     const subBase = resolvedSub ? resolvedSub.base : writtenBase;
     const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
     const subIsShell = SHELL_INTERPRETERS.has(subBase);
+    // An unknown command whose operands name a shell, git or another launcher (`xargs ionice sh -c`) is read like a
+    // shell sub-command (#5492): its stdin under `-a`, and the piped words fail closed below.
+    const subLaunches = resolvedSub !== null && readsLauncherOperands(subBase) && subOperands.some((w) => isLauncherWord(w.text));
     if (subIsShell) {
       // Heredocs/here-strings belong to xargs, not the sub-shell, unless `-a` leaves xargs's stdin to it (#5492).
       const hit = scanShellInterpreter(subOperands, argFile ? heredocs : [], argFile ? hereStrings : [], s, bySeg, sepAfter, depth, reading, ctx);
@@ -4489,7 +4492,8 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
       // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
       // command xargs runs, at xargs's depth (scanLaunchedCommand); stdin
       // words only add operands after it.
-      const hit = rescanCommand(operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' '), depth, ctx);
+      const stdin = argFile && subLaunches ? [...heredocs.map((h) => h.text), ...hereStrings].map((text) => `<<< ${shellQuote(text)}`) : [];
+      const hit = rescanCommand([...operands.slice(subIdx).map((w) => shellQuote(w.text)), ...stdin].join(' '), depth, ctx);
       if (hit) return hit;
     }
     if (argFile) return null; // stdin replaced by a file — no pipeline inference
@@ -4510,7 +4514,11 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
     // `-o ProxyCommand=…`, `-c '…'`), split by whichever of -I, -0, -d or -n xargs was given. Rather than model
     // that, fail closed: a pipe into one of them whose words mention a secret name anywhere is a read. So is one into
     // wrappers alone (`xargs -0 env`, `xargs sudo`), whose piped words are the command and its assignments.
-    const failClosed = subBase === 'git' || subBase === 'git.exe' || SSH_CLIENTS.has(subBase) || subIsShell;
+    // So is one into an unknown command that launches one, named in its operands or in the piped words
+    // (`echo 'sh -c …' | xargs ionice`).
+    const failClosed = subBase === 'git' || subBase === 'git.exe' || SSH_CLIENTS.has(subBase) || subIsShell || subLaunches
+      || (resolvedSub !== null && readsLauncherOperands(subBase)
+        && sources.some((words) => words.some((w) => w.text.split(/\s+/).some(isLauncherWord))));
     const wrappersOnly = !resolvedSub || subBase === '';
     let hit = readXargsSource(sources[0], failClosed, subIsShell, subOperands, replaceStr, depth, ctx);
     if (hit) return hit;
