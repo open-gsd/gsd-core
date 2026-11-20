@@ -404,6 +404,20 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   });
 
   // Resolve leaves the plans on disk when it stops, and autonomous checked only has_plans before executing.
+  // plan-review-convergence runs plan-phase inline where it first plans (step 4) and where it replans (5d), and its
+  // reviewers never re-run Dimension 11. Each place reads the stop marker itself, before it counts plans or loops,
+  // so the stop does not rest on the model carrying the Resolve step's text into the convergence run.
+  test('plan-review-convergence ends on plan-phase\'s stop marker where it plans and where it replans', () => {
+    const conv = read('gsd-core/workflows/plan-review-convergence.md');
+    const step4 = span(conv, '## 4. Initial Planning', /\n## 5\. /).replace(/\s+/g, ' ');
+    assert.match(step4, /\*\*If plan-phase printed `PLANNING STOPPED`:\*\* a research question needs a user ruling \(`gsd-core\/references\/revision-loop\.md`, Resolve\), which no review cycle can supply\. Display that line and exit this workflow without converging; do not count plans or start step 5\./);
+    assert.ok(step4.indexOf('PLANNING STOPPED') < step4.indexOf('PLAN_COUNT=$('), 'step 4 reads the stop before it counts plans');
+    const replan = span(conv, '### 5d. Replan (Inline)', /\n<\/process>/).replace(/\s+/g, ' ');
+    assert.match(replan, /\*\*If plan-phase printed `PLANNING STOPPED` instead:\*\* stop as step 4 does: display that line and exit this workflow without converging; never go back to step 5a\./);
+    assert.ok(replan.indexOf('PLANNING STOPPED') < replan.indexOf('go back to **step 5a**'), '5d reads the stop before it loops');
+    assert.match(conv, /- \[ \] A plan-phase run that prints `PLANNING STOPPED` \(step 4 or 5d\) ends the workflow; it never converges/);
+  });
+
   test('both stops end plan-phase with a marker line, and autonomous never executes plans whose run carries it', () => {
     assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous` reads so that it does not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
     assert.doesNotMatch(resolve(), /a caller never executes/, 'only autonomous reads the marker');
