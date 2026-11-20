@@ -35,9 +35,16 @@ function tomlFiles(dest) {
   return fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort() : [];
 }
 
+// The emitted payload embeds the install directory in its @-include paths, so two installs
+// into different directories are compared with that directory replaced by a placeholder.
 function snapshot(dest) {
+  const roots = [...new Set([dest, fs.realpathSync(dest)])];
   const out = {};
-  for (const f of tomlFiles(dest)) out[f] = fs.readFileSync(path.join(dest, 'agents', f), 'utf8');
+  for (const f of tomlFiles(dest)) {
+    let text = fs.readFileSync(path.join(dest, 'agents', f), 'utf8');
+    for (const root of roots) text = text.split(root).join('<DEST>');
+    out[f] = text;
+  }
   return out;
 }
 
