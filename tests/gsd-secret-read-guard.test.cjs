@@ -1533,6 +1533,16 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   ]);
   allows(["echo 'echo hi' | xargs ionice sh -c", 'echo a b | xargs ionice ls .env.example']);
 
+  // A bare-only launcher word spelled as an absolute path (`/usr/bin/env`) is that launcher; a relative path
+  // (`packages/watch`, the allow row above) is not.
+  blocks([
+    'echo .env | ionice /usr/bin/xargs cat',
+    "ionice /usr/bin/env GIT_EDITOR='cat .env' git commit --amend",
+    "ionice /usr/bin/eval 'cat .env'",
+  ]);
+  blocks(['ionice /bin/dd if=.env'], { path: 'if=.env' });
+  allows(["ionice ./env GIT_EDITOR='cat .env' git commit"]);
+
   // Documented gaps, pinned as allowed (each really reads .env when run): a command inside a quoted argument of a
   // program or on the stdin of one that is not a shell (D1); a producer that computes what it writes, and printf
   // conversions other than %s, %b, %c and %% (D2); an alias defined on the line and used later on it (D3); and a key,
