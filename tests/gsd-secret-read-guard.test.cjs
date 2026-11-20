@@ -3414,11 +3414,12 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
     test('in process: a commit message holding a reading trigger is scanned to about 52,000 characters', () => {
       // The user guide's figure: two levels, eight scans each, #5513's heredoc
       // passes, and the grammar scan the `$( )` starts (#5267) put main()'s
-      // boundary (checkBashCommand) at 52,445 characters, against 69,921 without
-      // that scan. Pinned at 10% either side, so the guide's "about" stays true.
+      // boundary (checkBashCommand) at 52,445 characters, a message of 52,394, against
+      // 69,921 without that scan. Pinned within 10% of that message on either side
+      // (47,200 and 57,600), so the guide's "about" stays true.
       const message = (n) => `git commit -m "$(cat <<'EOF'\nsubject $'\\t'\n\n${'a'.repeat(n)}\nEOF\n)"`;
-      assert.equal(checkBashCommand(message(47000)), null);
-      assert.deepEqual(checkBashCommand(message(58000)), TOO_COMPLEX);
+      assert.equal(checkBashCommand(message(47200)), null);
+      assert.deepEqual(checkBashCommand(message(57600)), TOO_COMPLEX);
     });
 
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
