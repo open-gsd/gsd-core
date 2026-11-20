@@ -3269,7 +3269,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
 
     assert.equal(result.success, false, result.output);
     assert.match(result.error, /lies outside/i);
-    assert.match(result.error, /Goals for v2\.0/);
+    assert.match(result.error, /v2\.0 Goals/);
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
@@ -4039,6 +4039,10 @@ describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite'
         '| [CK.02] 01 | 0/1 | Planned |',
         '| [CK.02] 02 | 0/1 | Planned |',
         '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        // #6149: `## Progress (v2.0)` only mentions the version, so it no longer ends the milestone window; the next
+        // milestone's own heading does, which keeps the shared table below it outside the window.
+        '## [CK.03] v3.0 — Next 🚧',
         '',
         '## Progress',
         '',
