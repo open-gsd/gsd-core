@@ -1512,3 +1512,159 @@ describe('#6102: the orchestrator marks shared requirements complete once the wa
   });
 });
 }
+
+// ─── #6117 — the stall check sees a worktree executor's commits before the wave merges ──────────────────────
+//
+// An `isolation="worktree"` executor commits to its own unmerged agent branch, so the `${EXPECTED_BRANCH}` probe read
+// no progress from a working executor and the stall pause fired. The progress policy asks the evaluation-scope
+// resolver for the plan's commits across every local branch. The real fence runs here against a real git repository
+// with the variables the ORCHESTRATOR has (`PHASE_NUMBER`, `DISPATCH_TS`, and the `{plan_padded}` placeholder it
+// substitutes): an executor that has committed on an agent branch after dispatch is progress; one that has not, one
+// whose only commits predate dispatch, and a different plan's commits are not. Every date is fixed, so no assertion
+// depends on the clock.
+{
+const { spawnSync: spawnStall } = require('node:child_process');
+const { createTempGitProject: stallProject, cleanup: stallCleanup, TOOLS_PATH: STALL_TOOLS } = require('./helpers.cjs');
+const { HOOK_FANOUT_TIMEOUT_MS: STALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { splitLines: stallSplitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+const POLICY = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-progress-policy.md');
+const POLICY_HEADING = "## A `harness-worktree` executor's commits are not on the expected branch (#6117)";
+
+function probeFence() {
+  const text = fs.readFileSync(POLICY, 'utf8');
+  const heading = text.indexOf(POLICY_HEADING);
+  assert.ok(heading >= 0, 'the progress policy must carry the #6117 section');
+  const open = text.indexOf('```bash\n', heading);
+  assert.ok(open >= 0, 'the #6117 section must carry the probe fence');
+  // the launcher preamble `sync-runtime-launcher` prepends defines the real `gsd_run`; the test supplies its own
+  return stallSplitLines(text.slice(open + 8, text.indexOf('\n```', open + 8))).filter((line) => !line.startsWith('_GSD_SHIM_NAME=')).join('\n');
+}
+
+function stallGit(proj, args, env = {}) {
+  const r = spawnStall('git', args, { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS, env: { ...process.env, ...env } });
+  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout;
+}
+
+/** A commit on `branch` (created off the current HEAD when new) with `subject`, dated `iso` (always explicit). */
+function commitOn(proj, branch, subject, iso) {
+  const exists = spawnStall('git', ['rev-parse', '--verify', '-q', branch], { cwd: proj, timeout: STALL_TIMEOUT_MS }).status === 0;
+  stallGit(proj, exists ? ['checkout', '-q', branch] : ['checkout', '-q', '-b', branch]);
+  stallGit(proj, ['commit', '-q', '--allow-empty', '-m', subject], { GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso });
+}
+
+const epoch = (iso) => Math.floor(Date.parse(iso) / 1000);
+const DISPATCH = '2026-03-10T10:00:00Z';
+const AFTER = '2026-03-10T10:07:00Z';
+const LATER = '2026-03-10T10:09:30Z';
+const BEFORE = '2026-03-10T09:00:00Z';
+
+/** The fence as the orchestrator runs it: `{plan_padded}` substituted, the orchestrator's own variables set. */
+function runProbe(proj, { dispatchTs = DISPATCH, plan = '01', phase = '08', gsdRun = null, fence = probeFence() } = {}) {
+  const run = gsdRun ?? `gsd_run() { node '${STALL_TOOLS}' "$@"; }`;
+  const script = [run, `DISPATCH_TS='${dispatchTs}' PHASE_NUMBER='${phase}'`, fence.split('{plan_padded}').join(plan), 'printf "%s" "$LAST_PLAN_COMMIT"'].join('\n');
+  const r = spawnStall('bash', ['-c', script], { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS });
+  assert.equal(r.status, 0, `the probe must run clean: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
+describe('#6117: the stall probe counts a worktree executor\'s unmerged commits as progress', () => {
+  function repo(t) {
+    const proj = stallProject();
+    t.after(() => stallCleanup(proj));
+    stallGit(proj, ['checkout', '-q', '-b', 'orchestrator']);
+    return proj;
+  }
+
+  test('a commit for the plan on an unmerged agent branch after dispatch is progress, at exactly its commit time', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'test(08-01): add failing tests', AFTER);
+    stallGit(proj, ['checkout', '-q', 'orchestrator']);
+    assert.equal(runProbe(proj), String(epoch(AFTER)));
+    assert.equal(stallGit(proj, ['log', 'orchestrator', `--since=${DISPATCH}`, '--grep=(08-01)', '-F', '--oneline']).trim(), '', 'the expected-branch probe alone reads nothing');
+  });
+
+  test('the latest of several commits, on several agent branches, wins', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'test(08-01): first', AFTER);
+    commitOn(proj, 'worktree-agent-def', 'feat(08-01): second', LATER);
+    stallGit(proj, ['checkout', '-q', 'orchestrator']);
+    assert.equal(runProbe(proj), String(epoch(LATER)));
+  });
+
+  test('no commit for the plan on any branch is no progress', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-02): a different plan', AFTER);
+    assert.equal(runProbe(proj), '');
+  });
+
+  test('commits that predate dispatch are no progress', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): earlier work', BEFORE);
+    assert.equal(runProbe(proj), '');
+  });
+
+  test('a commit made after dispatch is progress and one made before it is not, across the dispatch instant', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): one second before', '2026-03-10T09:59:59Z');
+    assert.equal(runProbe(proj), '', 'one second before dispatch');
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): one second after', '2026-03-10T10:00:01Z');
+    assert.equal(runProbe(proj), String(epoch('2026-03-10T10:00:01Z')), 'one second after dispatch');
+  });
+
+  test('the plan token is matched as the whole plan: another phase and a longer plan number are not progress', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(18-01): another phase', AFTER);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-011): a longer plan number', AFTER);
+    assert.equal(runProbe(proj), '', 'only `(08-01)` itself counts');
+  });
+
+  test('an unpadded phase number finds the padded subject', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): padded subject', AFTER);
+    assert.equal(runProbe(proj, { phase: '8' }), String(epoch(AFTER)), 'phase 8 finds the (08-01) subject');
+  });
+
+  test('a scope the resolver cannot read is no progress and never an error exit', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): work', AFTER);
+    assert.equal(runProbe(proj, { gsdRun: 'gsd_run() { return 69; }' }), '', 'the resolver reports unavailable');
+    assert.equal(runProbe(proj, { gsdRun: 'gsd_run() { echo not-json; }' }), '', 'a non-JSON answer');
+    assert.equal(runProbe(proj, { gsdRun: 'gsd_run() { return 127; }' }), '', 'a missing gsd_run');
+    assert.equal(runProbe(proj, { dispatchTs: '$(touch injected)' }), '', 'an unsafe dispatch timestamp is refused by the resolver, not executed');
+    assert.equal(fs.existsSync(path.join(proj, 'injected')), false, 'nothing was executed');
+  });
+
+  test('the resolver keeps the reachable-from-ref contract without --all-branches, and the flag is for plan and quick units only', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'test(08-01): add failing tests', AFTER);
+    stallGit(proj, ['checkout', '-q', 'orchestrator']);
+    const scope = (...args) => {
+      const r = spawnStall('node', [STALL_TOOLS, 'check', 'evaluation-scope', ...args, '--raw'], { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS });
+      return { status: r.status, json: r.stdout.trim() === '' ? null : JSON.parse(r.stdout) };
+    };
+    const plain = scope('--plan', '08-01', '--commits-only');
+    assert.equal(plain.json.commits.length, 0, 'the unmerged agent branch is not reachable from the orchestrator ref (#5164 contract)');
+    assert.equal('latestCommitTime' in plain.json, false, 'the field exists only with --all-branches');
+    const wide = scope('--plan', '08-01', '--commits-only', '--all-branches');
+    assert.equal(wide.json.commits.length, 1);
+    assert.equal(wide.json.latestCommitTime, epoch(AFTER));
+    assert.equal(scope('--plan', '08-02', '--commits-only', '--all-branches').json.latestCommitTime, null, 'null when nothing matched');
+    const quick = scope('--quick', '260310-abc', '--commits-only', '--all-branches');
+    assert.equal(quick.json.latestCommitTime, null, 'quick units take the flag too');
+    for (const args of [['--phase', '08', '--all-branches'], ['--plan', '08-01', '--all-branches', '--milestone-bound']]) {
+      const r = spawnStall('node', [STALL_TOOLS, 'check', 'evaluation-scope', ...args, '--raw'], { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS });
+      assert.notEqual(r.status, 0, `${args.join(' ')} is a usage failure`);
+    }
+  });
+
+  test('the step names the probe and the policy keeps the sequential probe and the three-option pause', () => {
+    const host = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(host.includes('`harness-worktree` plan: plan commits on any branch, #6117'), 'step 4 names the worktree-isolation probe');
+    assert.ok(host.includes('`continue waiting`, `kill and retry`, or'), 'the three-option pause is unchanged');
+    const policy = fs.readFileSync(POLICY, 'utf8');
+    assert.ok(policy.includes('plans on `none` (sequential) keep the `${EXPECTED_BRANCH}` probe'), 'sequential and none isolation keep the expected-branch probe');
+  });
+});
+}

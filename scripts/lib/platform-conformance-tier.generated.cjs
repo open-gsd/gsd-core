@@ -114,6 +114,7 @@ module.exports = {
   "tests/faulty-deps.test.cjs",
   "tests/feat-2483-review-claude-mds-guard.test.cjs",
   "tests/features-index-gate.test.cjs",
+  "tests/fixture-builder.test.cjs",
   "tests/gate-contained-path-symlinked-planning.test.cjs",
   "tests/gate-decision-coverage-verify-stderr.test.cjs",
   "tests/gate-predicate.unit.test.cjs",

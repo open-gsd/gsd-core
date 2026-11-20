@@ -383,9 +383,10 @@ function defaultMaxUnmeasuredPerChunk(platform) {
 const RUN_TEMP_ROOT_PREFIX = 'gsd-test-run-';
 // Children the runner itself keeps alive across chunks — the sweep must spare
 // them (GSD_HOME's nested-spawn REUSE contract; the chunk-diagnostics events dir).
-// `gsd-fxs-` is the run-wide installed-tree store of
-// tests/helpers/shared-install-fixture.cjs (#6335): every test file of the run
-// reads the same trees, so they must outlive the chunk that built them.
+// `gsd-fxs-` is the run-wide fixture store of
+// tests/helpers/shared-install-fixture.cjs: installed trees (#6335) and git
+// fixture templates (#6336). Every test file of the run reads the same ones,
+// so they must outlive the chunk that built them.
 const RESERVED_TEMP_PREFIXES = ['gsd-test-home-', 'gsd-run-tests-events-', 'gsd-fxs-'];
 
 /**
