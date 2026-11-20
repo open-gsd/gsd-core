@@ -375,9 +375,11 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
     table += `\n\nPlan ${r.planId} GREEN is supplied by dependent plan ${(r.greenFrom ?? []).join(', ')}.`;
   }
 
-  const notEvaluableRows = rows.filter((r): r is Extract<TddPlanRow, { status: 'NotEvaluable' }> => r.status === 'NotEvaluable');
-  for (const r of notEvaluableRows) {
-    table += `\n\nPlan ${r.planId} not evaluable: ${TDD_NOT_EVALUABLE_WHY[r.reason]}`;
+  const notEvaluable: { planId: string; reason: NotEvaluableReason; why: string }[] = rows
+    .filter((r): r is Extract<TddPlanRow, { status: 'NotEvaluable' }> => r.status === 'NotEvaluable')
+    .map(r => ({ planId: r.planId, reason: r.reason, why: TDD_NOT_EVALUABLE_WHY[r.reason] }));
+  for (const n of notEvaluable) {
+    table += `\n\nPlan ${n.planId} not evaluable: ${n.why}`;
   }
 
   if (violations > 0) {
@@ -403,13 +405,14 @@ export function evaluateTddReviewCheckpoint(input: { projectDir: string; args: r
   // Uniform gate contract: block = violations > 0. The gate is advisory (blocking:false in
   // capability.json), so block:true only surfaces as a warning, never halts. The human-readable
   // report is carried in `message` (and `table`) for the dispatch's advisory branch.
-  return gateVerdict(violations > 0 || notEvaluableRows.length > 0 ? 'advisory' : 'pass', violations > 0, {
+  return gateVerdict(violations > 0 || notEvaluable.length > 0 ? 'advisory' : 'pass', violations > 0, {
     block: violations > 0,
     passed: true,
     tddPlans: tddPlanFiles.length,
     violations,
     table,
     rows,
+    notEvaluable,
     message: table,
   });
 }

@@ -189,6 +189,10 @@ describe('#5354 tdd review checkpoint seal', () => {
     sealGit(dir, 'commit', '-m', subject);
   }
   const run = (dir, ...args) => evaluateTddReviewCheckpoint({ projectDir: dir, args: ['1', ...args] });
+  const SEAL = path.join(PHASE, 'TDD-REVIEW-SEAL.json');
+  const sha = (c) => c.repeat(40);
+  const SEAL_CAP = REPO_TEXT_MAX_BYTES;
+  const sealOf = (red, green) => JSON.stringify({ plans: { '01-01': { red, green } } });
 
   test('a record written before the squash keeps the plan passing after git merge --squash', () => {
     const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green']);
@@ -296,14 +300,23 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(Object.keys(TDD_ROW_REASON).sort(), ['GREEN_BEFORE_RED', 'SEALED_SHALLOW_HISTORY', 'UNSEALED_SUMMARY_UNREACHABLE']);
   });
 
-  test('every NotEvaluable reason has report text, and the report prints it', () => {
+  test('every NotEvaluable reason has report text, and the payload carries it per plan', () => {
     const notEvaluable = Object.values(TDD_ROW_REASON).filter((r) => r !== TDD_ROW_REASON.GREEN_BEFORE_RED).sort();
     assert.deepEqual(Object.keys(TDD_NOT_EVALUABLE_WHY).sort(), notEvaluable);
-    const { dir, base } = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
-    squash(dir, base);
-    const r = run(dir);
-    assert.equal(r.payload.rows[0].reason, TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE);
-    assert.ok(r.payload.table.includes(`Plan 01-01 not evaluable: ${TDD_NOT_EVALUABLE_WHY[TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE]}`));
+    const entry = (reason) => ({ planId: '01-01', reason, why: TDD_NOT_EVALUABLE_WHY[reason] });
+    const unsealed = fixture(['test(01-01): red', 'feat(01-01): green'], { refs: true });
+    squash(unsealed.dir, unsealed.base);
+    assert.deepEqual(run(unsealed.dir).payload.notEvaluable, [entry(TDD_ROW_REASON.UNSEALED_SUMMARY_UNREACHABLE)]);
+    const sealed = fixture(['test(01-01): red', 'feat(01-01): green']);
+    run(sealed.dir, '--record');
+    sealGit(sealed.dir, 'add', '-A');
+    sealGit(sealed.dir, 'commit', '-m', 'docs(01-01): seal');
+    squash(sealed.dir, sealed.base);
+    const clone = path.join(path.dirname(sealed.dir), `${path.basename(sealed.dir)}-shallow-why`);
+    dirs.push(clone);
+    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(sealed.dir).href, clone], { cwd: path.dirname(sealed.dir) });
+    assert.deepEqual(run(clone).payload.notEvaluable, [entry(TDD_ROW_REASON.SEALED_SHALLOW_HISTORY)]);
+    assert.deepEqual(run(fixture(['test(01-01): red', 'feat(01-01): green']).dir).payload.notEvaluable, []);
   });
 
   test('a plan with reachable commits lacking test()/feat() still fails', () => {
@@ -338,8 +351,8 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual(r.payload.rows, []);
   });
 
-  // Hostile seals (CONTRIBUTING.md "Parser and project-file inputs"): none is written by hand. A valid seal is taken from the gate's
-  // own --record output, every key path of it is walked, and the checklist is applied to each path: a scalar where an object is
+  // Hostile seals (CONTRIBUTING.md "Parser and project-file inputs"): none is written by hand. A valid seal is built from git's own
+  // answer in the documented shape (never from the gate's --record output), every key path of it is walked, and the checklist is applied to each path: a scalar where an object is
   // expected and an object where a string is expected, an array, null, a missing and an emptied member, a duplicated key, a NUL
   // or replacement character in a value or a key, a path-traversal-like key, and a truncated text. No key name is typed here.
   const SEALED_SQUASH = ['test(01-01): red', 'feat(01-01): green'];
@@ -448,9 +461,6 @@ describe('#5354 tdd review checkpoint seal', () => {
     assert.deepEqual([...seen].sort(), ['duplicate-first-loses', 'duplicate-last-wins', 'key-char', 'missing', 'truncated', 'value-char', 'wrong-type']);
   });
 
-  const SEAL = path.join(PHASE, 'TDD-REVIEW-SEAL.json');
-  const sha = (c) => c.repeat(40);
-  const SEAL_CAP = REPO_TEXT_MAX_BYTES;
   const padTo = (text, size) => text + ' '.repeat(size - Buffer.byteLength(text));
 
   test('fabricated SUMMARY ids (no such object) are NotEvaluable, indistinguishable from a squashed-and-collected commit', () => {
@@ -719,7 +729,6 @@ describe('#5354 tdd review checkpoint seal', () => {
   });
 
   const posix = { skip: process.platform === 'win32' };
-  const sealOf = (red, green) => JSON.stringify({ plans: { '01-01': { red, green } } });
 
   test('a symlinked seal is refused and its target is never written', posix, () => {
     const { dir } = fixture(['test(01-01): red', 'feat(01-01): green']);
