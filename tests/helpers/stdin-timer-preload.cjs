@@ -17,8 +17,9 @@
  * (which is still what `armed` and `fired` report):
  * - `<ms>` schedules the callback at that delay instead, so a held-open stall
  *   cell ends in milliseconds;
- * - `park` arms nothing at all, so the timer can never fire, and a cell whose
- *   stdin closes is decided by the hook's verdict on any host, however slow.
+ * - `park` arms a real, clearable timer that is never due (2^31-1 ms), so the
+ *   hook's callback can never run, and a cell whose stdin closes is decided by
+ *   the hook's verdict on any host, however slow.
  * Unset, the timer runs at the hook's own delay.
  *
  * Same `--require` seam as the context-monitor preloads; one-shot subprocess,
