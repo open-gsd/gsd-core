@@ -148,27 +148,57 @@ describe('#6232: the audit-uat scope text names the archives the scan walks', ()
   // [phase directory seeded, the layout it sits in, the fragment the scope text must carry for that layout]
   const LAYOUTS = [
     ['01-live', ['.planning', 'phases'], 'phases/*/*-UAT.md'],
-    ['01-flat', ['.planning', 'milestones', 'v1.0-phases'], 'milestones/v*-phases'],
-    ['01-wsarch', ['.planning', 'milestones', 'ws-alpha-2026-01-01', 'phases'], 'milestones/ws-*/phases'],
-    ['01-wsflat', ['.planning', 'workstreams', 'beta', 'milestones', 'v2.0-phases'], 'workstreams/<name>'],
-    ['01-wsws', ['.planning', 'workstreams', 'beta', 'milestones', 'ws-gamma-2026-02-01', 'phases'], 'workstreams/<name>'],
+    ['01-flat', ['.planning', 'milestones', 'v1.0-phases'], '.planning/milestones/v*-phases'],
+    ['01-wsarch', ['.planning', 'milestones', 'ws-alpha-2026-01-01', 'phases'], '.planning/milestones/ws-*/phases'],
+    ['01-wsflat', ['.planning', 'workstreams', 'beta', 'milestones', 'v2.0-phases'], '.planning/workstreams/<name>/milestones/v*-phases'],
+    ['01-wsws', ['.planning', 'workstreams', 'beta', 'milestones', 'ws-gamma-2026-02-01', 'phases'], '.planning/workstreams/<name>/milestones/ws-*/phases'],
   ];
+  const VERIFICATION_BODY = ['---', 'status: human_needed', '---', '', '# Verification', '', '## Human Verification', '',
+    '1. **Test:** the route stays deleted', '   - **Result:** pending', ''].join('\n');
 
-  test('every seeded layout is scanned, and every scope text names it', (t) => {
-    const tmpDir = createTempProject('gsd-6232-');
-    t.after(() => cleanup(tmpDir));
+  function seedLayouts(tmpDir) {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmapWith(['01']));
     for (const [dirName, segments] of LAYOUTS) {
       const dir = path.join(tmpDir, ...segments, dirName);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, `${dirName}-UAT.md`), ['---', 'status: human_needed', '---', '', UAT_BODY].join('\n'));
     }
+  }
+
+  test('every seeded layout is scanned, and every scope text names it', (t) => {
+    const tmpDir = createTempProject('gsd-6232-');
+    t.after(() => cleanup(tmpDir));
+    seedLayouts(tmpDir);
     const reported = JSON.stringify(runAudit(tmpDir).results);
     for (const [dirName] of LAYOUTS) assert.ok(reported.includes(dirName), `the scan must reach ${dirName}: ${reported}`);
     for (const rel of DOCS) {
       const text = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
       for (const [dirName, , fragment] of LAYOUTS) assert.ok(text.includes(fragment), `${rel} must name the layout of ${dirName} (${fragment})`);
     }
+  });
+
+  test('the project root archives are scanned whichever workstream is active', (t) => {
+    const tmpDir = createTempProject('gsd-6232-ws-');
+    t.after(() => cleanup(tmpDir));
+    seedLayouts(tmpDir);
+    const active = path.join(tmpDir, '.planning', 'workstreams', 'beta');
+    fs.writeFileSync(path.join(active, 'ROADMAP.md'), roadmapWith(['01']));
+    const r = runGsdTools(['query', 'audit-uat'], tmpDir, { GSD_WORKSTREAM: 'beta' });
+    assert.ok(r.success, r.error);
+    const reported = JSON.stringify(JSON.parse(r.output).results);
+    for (const dirName of ['01-flat', '01-wsarch', '01-wsflat', '01-wsws']) {
+      assert.ok(reported.includes(dirName), `the scan must reach ${dirName} with workstream beta active: ${reported}`);
+    }
+  });
+
+  test('a VERIFICATION file in an archive layout is scanned too', (t) => {
+    const tmpDir = createTempProject('gsd-6232-ver-');
+    t.after(() => cleanup(tmpDir));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmapWith(['01']));
+    const dir = path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-archived');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '01-archived-VERIFICATION.md'), VERIFICATION_BODY);
+    assert.ok(JSON.stringify(runAudit(tmpDir).results).includes('01-archived'));
   });
 
   test('the two scope blocks stay identical', () => {
