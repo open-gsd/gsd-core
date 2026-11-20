@@ -62,6 +62,7 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
     "grep -A 2 -n '.env.local' f",
     // G5: the value of an exclusion option is a name to skip.
     'grep -rn -i token . --exclude=.env',
+    'grep -rn -i --exclude .env token .',
     'grep -rn token . --exclude-dir=.env --exclude=.env.local',
     // G6 (maintainer decision on #5884): the jq program is not a file.
     "jq '.env.DISABLE_AUTOUPDATER' settings.json",
@@ -152,6 +153,7 @@ describe('gsd-secret-read-guard: pattern, exclusion and program operands (#5884)
       // A separate value after the first positional is a file under POSIXLY_CORRECT (#6282).
       if (form === '=') assertAllowed(`grep ${flags}token . ${opt}${form}${name}`);
       else assertBlocked(`grep ${flags}token . ${opt}${form}${name}`);
+      assertAllowed(`grep ${flags}${opt}${form}${name} token .`);
       assertBlocked(`grep ${flags}token . ${opt}${form}${name} .env`);
       assertBlocked(`grep ${flags}token ${opt}${form}${name} ${name}`);
     }), PROPERTY_RUNS);
@@ -239,4 +241,123 @@ describe('gsd-secret-read-guard: a search tool run by xargs keeps no carve-out (
       assertBlockedOn(`echo x | xargs ${xargsFlags}${tool} ${words}`);
     }), PROPERTY_RUNS);
   });
+});
+
+// #6282, Major 1 of the review: the carve-out also rests on seeing every word the tool gets. An expansion the guard
+// does not perform (`"$@"`, `$1`, `$X`, `$( )`, backticks, zsh's `$=X`), a glob, brace or tilde the shell expands,
+// or a variable that changes how the tool parses its words, can hand it `-e KEY` and turn the pattern into a file.
+// Each row exits 0 on `next`.
+describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word may expand unseen (#6282)', () => {
+  function assertBlockedOn(command, file) {
+    const r = runHook(bash(command));
+    assert.equal(r.status, 2, `${command}: expected block (exit 2), got exit ${r.status}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block', command);
+    assert.equal(out.code, 'secret-read', `${command}: code`);
+    assert.equal(out.tool, 'Bash', `${command}: tool`);
+    assert.equal(out.path, file, `${command}: path`);
+  }
+
+  const blocks = [
+    // The review's four forms: a nested script's positional parameters carry words xargs or the caller supplies.
+    ["echo '-e KEY' | xargs sh -c 'grep .env \"$@\"' _", '.env'],
+    ["sh -c 'grep .env \"$@\"' _ -e KEY", '.env'],
+    ["bash -c 'grep .env \"$@\"' _ -e KEY", '.env'],
+    ["sh -c 'grep .env $1 $2' _ -e KEY", '.env'],
+    // The same words from a variable, a substitution, a function's arguments.
+    ["X='-e K'; grep .env $X", '.env'],
+    ['grep .env $(printf -- "-e KEY")', '.env'],
+    ['grep .env `printf -- -e` KEY', '.env'],
+    ['f() { grep .env "$@"; }; f -e KEY', '.env'],
+    ['grep .env "x$*"', '.env'],
+    // A line continuation the nested shell removes: `"$\<newline>@"` is `"$@"`.
+    ["sh -c 'grep .env \"$\\\n@\"' _ -e KEY", '.env'],
+    // zsh's word-splitting, glob and rc-expansion forms, and a NUL cut before one (zsh's reading).
+    ['grep .env $=X', '.env'],
+    ['grep .env $~X', '.env'],
+    ['grep .env $^X', '.env'],
+    ["grep .env $'x\\0'$=X", '.env'],
+    // Every rescan inherits the withdrawal, two hops deep, and a body that lost its substitution keeps it.
+    ['sh -c "grep .env $(printf -- -e) KEY"', '.env'],
+    ['eval "grep .env $(printf -- -e) KEY"', '.env'],
+    ['eval grep .env $(printf -- -e) KEY', '.env'],
+    ['bash <<< "grep .env $(printf -- -e) KEY"', '.env'],
+    ['watch "grep .env $(printf -- -e) KEY"', '.env'],
+    ['echo "grep .env $(printf -- -e) KEY" | bash', '.env'],
+    ['bash <(echo "grep .env $(printf -- -e) KEY")', '.env'],
+    ['source <(echo "grep .env $(printf -- -e) KEY")', '.env'],
+    ['git -c alias.x="!grep .env $(printf -- -e) KEY" x', '.env'],
+    ['sh -c "eval \'grep .env $(printf -- -e) KEY\'"', '.env'],
+    // A substitution before a redirect's digit leaves no word behind (`$( )0<` is fd 0).
+    ["grep .env $(printf -- '-eKEY ')0</dev/null", '.env'],
+    ["grep .env `printf -- '-eKEY '`0</dev/null", '.env'],
+    // A variable that changes the tool's option parsing, however it is set.
+    ["GREP_OPTIONS='-e KEY' grep .env", '.env'],
+    ["env GREP_OPTIONS='-e KEY' grep .env", '.env'],
+    ["export GREP_OPTIONS='-e KEY'; grep .env", '.env'],
+    ["declare -x GREP_OPTIONS='-e KEY'; grep .env", '.env'],
+    ['RIPGREP_CONFIG_PATH=cfg rg .env', '.env'],
+    ['env RIPGREP_CONFIG_PATH=cfg rg .env', '.env'],
+    ['export RIPGREP_CONFIG_PATH=cfg; rg .env', '.env'],
+    ['declare -x RIPGREP_CONFIG_PATH=cfg; rg .env', '.env'],
+    ['POSIXLY_CORRECT=1 grep -n KEY . --exclude=.env', '--exclude=.env'],
+    ['env POSIXLY_CORRECT=1 grep -n KEY . --exclude=.env', '--exclude=.env'],
+    ['export POSIXLY_CORRECT=1; grep -n KEY . --exclude=.env', '--exclude=.env'],
+    ['declare -x POSIXLY_CORRECT=1; grep -n KEY . --exclude=.env', '--exclude=.env'],
+    // ... spelled with quotes or backslashes inside the name, through eval too, built by braces, or decoded.
+    ["env RIPGREP_CONFIG''_PATH=cfg rg .env", '.env'],
+    ["export GREP_OPT\\IONS='-e KEY'; grep .env", '.env'],
+    ['eval \'export GREP_OPT""IONS=-eKEY\'; grep .env', '.env'],
+    ['export GREP_OPT{X,I}ONS=-eKEY; grep .env', '.env'],
+    ['export GREP_OPT{H..J}ONS=-eKEY; grep .env', '.env'],
+    ["export $'\\x47REP_OPTIONS=-eKEY'; grep .env", '.env'],
+    ["eval $'export \\x47REP_OPTIONS=-eKEY'; grep .env", '.env'],
+    // A leading glob, brace or tilde can become an option (a file named `-eKEY`, HOME=-eKEY) ...
+    ['grep .env *', '.env'],
+    ['grep .env {-e,KEY}', '.env'],
+    ['HOME=-eKEY; grep .env ~', '.env'],
+    ["grep .env ''*", '.env'],
+    ['grep .env ""{-e,KEY}', '.env'],
+    // ... and one at or before an exempt word can add or remove words ahead of it.
+    ['grep --label .* .env', '.env'],
+    ['grep --exclude .{,.} .env', '.env'],
+    ["jq -R -L .{,.} '.env'", '.env'],
+    ['rg -m 9{,.} .env', '.env'],
+    // POSIXLY_CORRECT inherited from the environment: a separate exclusion value after the first positional is a file.
+    ['POSIXLY_CORRECT=1 grep -n KEY . --exclude .env', '.env'],
+    ['grep -n KEY . --exclude .env', '.env'],
+    ["rg KEY . -g '!dir/.env'", '!dir/.env'],
+    // A replace string (xargs) or `{}` (find) fills a script with words the guard does not see, from a pipe, an
+    // arg file or a redirect alike.
+    ["cat list | xargs -I{} sh -c 'grep .env {}'", '.env'],
+    ["cat list | xargs -I@@ sh -c 'grep .env @@'", '.env'],
+    ["xargs -a list -I@@ sh -c 'grep .env @@'", '.env'],
+    ["xargs --arg-file=list -I{} sh -c 'grep .env {}'", '.env'],
+    ["xargs -I{} sh -c 'grep .env {}' < list", '.env'],
+    ["cat list | xargs -I{} -- sh -c 'grep .env {}'", '.env'],
+    ["find -- -eKEY -exec sh -c 'grep .env {}' \\;", '.env'],
+    ["find . -execdir sh -c 'grep .env {}' \\;", '.env'],
+    ["find . -exec watch 'grep .env {}' \\;", '.env'],
+  ];
+  for (const [cmd, file] of blocks) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => assertBlockedOn(cmd, file));
+  }
+
+  // Quoted regexes, a glob after the pattern, attached exclusions and an exclusion before the pattern keep it.
+  const allows = [
+    'grep .env docs/*.md',
+    'grep -rn "token$" --exclude=.env .',
+    "grep -rn '[Tt]oken' --exclude=.env .",
+    "grep -rn 'foo.*bar' --exclude=.env .",
+    'grep -n KEY . --exclude=.env',
+    'grep -rn --exclude .env KEY .',
+    "grep -rn '{a,b}' --exclude=.env .",
+    'grep -rn KEY_OPTIONS --exclude=.env .',
+    "rg KEY . -g'!dir/.env'",
+    "jq '.env.X' settings.json",
+    'find . -exec grep -l foo {} +',
+  ];
+  for (const cmd of allows) {
+    test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));
+  }
 });
