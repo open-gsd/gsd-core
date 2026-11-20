@@ -2038,10 +2038,11 @@ describe('regressions: workflows forward the started workstream to agent-skills 
   // one checkout cannot cross-read each other's workstream. (new-milestone.md
   // predates this and keeps its own persisted GSD_WS_ARG file; its calls are
   // held to the same forwarding rule through the `viaFile` branch below.)
-  // #6218: the value may be wrapped in one pair of double or single quotes. No backreference: the macOS sed
-  // mishandles one against an optional empty group, so the three spellings are separate alternatives.
+  // #6218: the name may follow one double or single quote. The closing quote needs no match of its own: the
+  // trailing `.*` consumes it, as it consumes anything after a bare name. (A backreference to the opening
+  // quote is not an option: the macOS sed mishandles one against an optional empty group.)
   const WS_NAME = '[A-Za-z0-9][A-Za-z0-9._-]*';
-  const CANONICAL_PARSE = String.raw`GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +("(${WS_NAME})"|'\''(${WS_NAME})'\''|(${WS_NAME})).*/--ws \2\3\4/p' | head -n 1)`;
+  const CANONICAL_PARSE = String.raw`GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?(${WS_NAME}).*/--ws \1/p' | head -1)`;
   // The single-token call-site expansion: `--ws=<name>` or nothing. One token
   // is what makes it safe under zsh, which does not word-split `$GSD_WS`.
   const FLAG_EXPANSION = '${GSD_WS:+--ws=${GSD_WS##* }}';
@@ -2227,9 +2228,13 @@ describe('regressions: workflows forward the started workstream to agent-skills 
         }
       });
 
-      test('[boundary #6218] a quote that is unterminated, mismatched, empty or holds a space selects nothing', () => {
-        for (const args of ['--ws "feature', '--ws \'feature"', '--ws "feature x"', '--ws ""', '--ws "-x"', '--ws "']) {
+      test('[boundary #6218] a quote with no name behind it selects nothing; a stray quote after the name is read past', () => {
+        for (const args of ['--ws ""', '--ws "-x"', '--ws "', '--ws \'']) {
           assert.strictEqual(expand(args), '0|', args);
+        }
+        // the name ends at its first character outside the name set, exactly as for the bare form
+        for (const args of ['--ws "feature', '--ws \'feature"', '--ws "feature x"', '--ws feature"x']) {
+          assert.strictEqual(expand(args), '1|--ws=feature', args);
         }
       });
 
@@ -2243,13 +2248,12 @@ describe('regressions: workflows forward the started workstream to agent-skills 
         assert.ok(stripLines.length > 0, 'the corpus has arg-stripping lines');
         for (const line of stripLines) {
           const name = line.slice(0, line.indexOf('='));
-          // [args, the workstream the parse selects, what the strip leaves]: the strip removes exactly the token the
-          // parse captured, and a value the parse refuses is left for xargs as it was before #6218.
+          // [args, the workstream the parse selects, what the strip leaves]: a quoted value is removed whole.
           for (const [input, selected, left] of [
             ['12 --ws feature --auto', '--ws feature', '12 --auto'],
             ['12 --ws "feature" --auto', '--ws feature', '12 --auto'],
             ['12 --ws \'feature\' --auto', '--ws feature', '12 --auto'],
-            ['12 --ws "my team"', '', '12 --ws my team'],
+            ['12 --ws "my team"', '--ws my', '12'],
             ['12 --ws -x', '', '12'],
             ['12', '', '12'],
           ]) {
