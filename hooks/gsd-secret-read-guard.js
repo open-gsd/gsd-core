@@ -4156,18 +4156,30 @@ function isLauncherWord(text) {
 // bash -c …`, `docker exec c sh -c …`. From each operand that is a launcher word, every occurrence, the operands from
 // there on are read as the command it starts (scanLaunchedCommand), with the segment's heredocs and here-strings as
 // its stdin; each is charged its length first. A name-only operand (nameOnlyOperandIndices) starts nothing and is
-// left out of what is read, so its exemption holds there too (`grep -r env . --exclude=.env`). When the launched
-// command is one this rule reads again (`x env y env …` launches `y`), its rescan reads the operands after it, so
-// they are not started here as well: starting each of them here too would cost exponentially many rescans.
+// left out of what is read, so its exemption holds there too (`grep -r env . --exclude=.env`). A wrapper or `dd`
+// whose launched command this rule reads again (`x env y env …` launches `y`) is left to that command's rescan,
+// as is a wrapper, `dd`, `xargs`, `find` or `watch` in the command an `xargs` runs (whose stdin is not the
+// segment's pipe): starting each of them here too would cost exponentially many rescans. Every other launcher word
+// is started here, with the segment's pipe, which a rescan does not have.
+const REENTERING_WORDS = new Set(['dd', 'dd.exe', ...WRAPPERS.keys()]);
+const XARGS_REENTERING_WORDS = new Set([...REENTERING_WORDS, 'xargs', 'find', 'find.exe', 'watch']);
 function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
   const covered = new Set();
+  const cover = (cmd, words) => {
+    if (cmd === null || !readsLauncherOperands(cmd.base)) return;
+    for (const w of cmd.operands) if (words.has(w.text.toLowerCase())) covered.add(w);
+  };
   for (let j = 0; j < operands.length; j++) {
     if (nameOnly.has(j) || covered.has(operands[j]) || !isLauncherWord(operands[j].text)) continue;
     charge(ctx, TOKEN_WORK * (operands.length - j));
     const tail = [];
     for (let k = j; k < operands.length; k++) if (!nameOnly.has(k)) tail.push(operands[k]);
     const launched = resolveCommand(tail);
-    if (launched !== null && readsLauncherOperands(launched.base)) for (const w of launched.operands) covered.add(w);
+    cover(launched, REENTERING_WORDS);
+    if (launched !== null && launched.base === 'xargs') {
+      const { subIdx } = xargsSubCommand(launched.operands);
+      if (subIdx !== -1) cover(resolveCommand(launched.operands.slice(subIdx)), XARGS_REENTERING_WORDS);
+    }
     const hit = scanLaunchedCommand(tail, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
     if (hit) return hit;
   }
