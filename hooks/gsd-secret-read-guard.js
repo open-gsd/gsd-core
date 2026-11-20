@@ -2237,8 +2237,9 @@ const shellQuote = (word) => `'${word.replaceAll("'", "'\\''")}'`;
 //   shellVars        the shell variable frames in scope (see shellVarFrame)
 //   work             scan work spent on the command so far, by every reading
 //                    and pass (see MAX_SCAN_WORK)
+//   pipeSourcesRead  the segments pipeSources has handed out (see there)
 function newScanContext(work = 0) {
-  return { gitScope: null, aliasHops: 0, aliasExpansions: 0, alias: null, shellVars: null, work };
+  return { gitScope: null, aliasHops: 0, aliasExpansions: 0, alias: null, shellVars: null, work, pipeSourcesRead: new WeakSet() };
 }
 
 // Thrown past MAX_SCAN_WORK. unfinishedBy counts it as a reading that could
@@ -4426,13 +4427,23 @@ function pipedScripts(s, bySeg, sepAfter, ctx) {
 
 // The word tokens of the stages piped into segment `s`, nearest first: the one right before it, as before, and past
 // each stage that passes its stdin on (`cat` reading only stdin, `tee`), the one before that (#5492), every hop a
-// pipe. [] without a pipe.
+// pipe. [] without a pipe. A source handed out before in this scan is charged its words and four times its bytes
+// before it is read again: every command reading the pipe walks back to it (`… | tee xargs env | tee xargs env …`
+// reaches the producer from each stage), so the reads would otherwise grow as stages times bytes.
 function pipeSources(s, bySeg, sepAfter, ctx) {
   const sources = [];
   for (let at = s; ;) {
     const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
     if ((op !== '|' && op !== '|&') || prevSeg < 0) return sources;
-    const words = (bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word');
+    const seg = bySeg.get(prevSeg) || [];
+    const words = seg.filter((t) => t.kind === 'word');
+    if (ctx.pipeSourcesRead.has(seg)) {
+      let bytes = 0;
+      for (const w of words) bytes += w.text.length;
+      charge(ctx, TOKEN_WORK * (words.length + bytes) + 1);
+    } else {
+      ctx.pipeSourcesRead.add(seg);
+    }
     sources.push(words);
     const cmd = resolveCommand(words);
     if (!cmd || !(cmd.base === 'tee' || (cmd.base === 'cat' && cmd.operands.every((w) => w.text === '-')))) return sources;
