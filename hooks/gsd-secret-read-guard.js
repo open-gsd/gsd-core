@@ -3237,15 +3237,22 @@ function normalizeKimiPayload(data) {
   return data;
 }
 
+// How long the hook waits for its stdin to close (#5784). Exported so the
+// stdin-timer tests build their cells from it rather than repeat it.
+const STDIN_TIMEOUT_MS = 3000;
+
 // The PreToolUse entry. Tests load the scanners in-process (module.exports
 // below); the hook body runs only when the file is executed as the hook.
 function main() {
   let input = '';
-  // A stdin that has not closed within 3 s is a hook failure, not a verdict on
-  // the payload, so it takes the declared crash policy (#5784) rather than an
-  // unconditional allow. The timer is not reset by `data`: a payload written in
-  // full whose stdin stays open is caught here too.
-  const stdinTimeout = setTimeout(() => crashFor('stdin did not close within 3 s'), 3000);
+  // A stdin that has not closed within STDIN_TIMEOUT_MS is a hook failure, not
+  // a verdict on the payload, so it takes the declared crash policy (#5784)
+  // rather than an unconditional allow. The timer is not reset by `data`: a
+  // payload written in full whose stdin stays open is caught here too.
+  const stdinTimeout = setTimeout(
+    () => crashFor(`stdin did not close within ${STDIN_TIMEOUT_MS / 1000} s`),
+    STDIN_TIMEOUT_MS,
+  );
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => input += chunk);
   process.stdin.on('end', () => {
@@ -3327,7 +3334,7 @@ function main() {
 
 module.exports = {
   DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
-  MAX_SCAN_CHARACTERS,
+  MAX_SCAN_CHARACTERS, STDIN_TIMEOUT_MS,
 };
 
 if (require.main === module) main();
