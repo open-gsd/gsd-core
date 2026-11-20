@@ -62,7 +62,7 @@ describe('heading anchors (#5427)', () => {
     assert.deepEqual(anchors('## a\tb\n## a\u00a0b\n## a\u2003b'), []);
   });
   test('an entity of 32 characters or fewer is unslugable; a longer run is plain text', () => {
-    for (const [n, size] of [[31, 0], [32, 0], [33, 1]]) {
+    for (const [n, size] of [[1, 0], [2, 0], [31, 0], [32, 0], [33, 1]]) {
       assert.equal(headingSet(`## x &${'a'.repeat(n)};`).size, size, `entity of ${n}`);
     }
     assert.equal(headingSet('## x &;').size, 1);
@@ -277,7 +277,7 @@ describe('next-ref existence and anchors (#5427)', () => {
   test('an unresolved anchor names the line where the anchors stop', () => {
     const set = headingSet('## A\n<!--\n## B');
     const seams = { headingsOf: () => set };
-    assert.equal(set.stop, 'line 2: "<!--"'); // the typed field; the report only carries it
+    assert.deepEqual(set.stop, { line: 2, text: '<!--' });
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#b`], 'tpl.md', seams),
       [{ rel: 'CONTRIBUTING.md', anchor: 'b', stop: set.stop }]);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#a`], 'tpl.md', seams), []);
@@ -413,6 +413,10 @@ const templateFiles = (root = ROOT) => ['.', 'docs', '.github']
   .map((e) => e.rel)
   .filter(isPrTemplate);
 
+// GitHub resolves a ?template= value against .github/PULL_REQUEST_TEMPLATE/, or .github/ for a path
+const unknownTemplates = (values, all) => values.filter((v) =>
+  !all.includes(`.github/PULL_REQUEST_TEMPLATE/${v}`) && !all.includes(`.github/${v}`));
+
 describe('templateFiles (#5427)', () => {
   test('lists files, never a subdirectory of a template directory', (t) => {
     const dir = createTempDir();
@@ -445,23 +449,25 @@ describe('PR template links (#5427)', () => {
   test('blob/next links point at existing repo paths',
     () => eachTemplate((f, hs) => missingNext(hs, f)));
   test('anchors on next resolve', () => eachTemplate((f, hs) => unresolvedAnchors(hs, f)
-    .map(({ rel, anchor, stop }) => `${rel}#${anchor}${stop ? ` (stops at ${stop})` : ''}`)));
+    .map(({ rel, anchor, stop }) => `${rel}#${anchor}${stop
+      ? ` (stops at line ${stop.line}: ${JSON.stringify(stop.text)})` : ''}`)));
   test('no reference definition or HTML link attribute stays unread',
     () => eachTemplate((f) => unreadForms(readRepoFile(f))
       .map(({ line, text }) => `${line}: ${JSON.stringify(text)}`)));
   test('"Using the wrong template?" links keep ?template= and name an existing template', () => {
-    const names = ['fix', 'feature', 'enhancement', 'registry-entry'];
-    const files = names.map((n) => `.github/PULL_REQUEST_TEMPLATE/${n}.md`);
     const all = templateFiles();
-    for (const f of ['.github/pull_request_template.md', ...files]) {
+    for (const f of all) {
       const values = hrefsOf(f).filter((h) => h.startsWith('?template='))
         .map((h) => h.slice('?template='.length));
       assert.ok(values.length, JSON.stringify(f));
-      // GitHub resolves the value against .github/PULL_REQUEST_TEMPLATE/, or .github/ for a path
-      const missing = values.filter((v) => !all.includes(`.github/PULL_REQUEST_TEMPLATE/${v}`)
-        && !all.includes(`.github/${v}`));
-      assert.deepEqual(missing, [], JSON.stringify(f));
+      assert.deepEqual(unknownTemplates(values, all), [], JSON.stringify(f));
     }
+  });
+  test('a ?template= value that names no template file is unknown', () => {
+    const all = ['.github/PULL_REQUEST_TEMPLATE/feature.md', '.github/pull_request_template.md'];
+    assert.deepEqual(unknownTemplates(['feature.md', 'pull_request_template.md'], all), []);
+    assert.deepEqual(unknownTemplates(['feture.md', '', 'a//b', 'feature.md/'], all),
+      ['feture.md', '', 'a//b', 'feature.md/']);
   });
   for (const n of ['feature', 'enhancement']) {
     test(`${n}: links the Documentation Updates anchor`, () => {

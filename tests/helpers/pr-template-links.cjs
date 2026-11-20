@@ -161,8 +161,8 @@ const headingSet = (source) => {
       seen.set(s, n + 1);
       return n ? `${s}-${n}` : s;
     }));
-  // the stop line goes into the unresolved-anchor message, so a refusal names its cause
-  const stop = at < 0 ? '' : `line ${at + 1}: ${JSON.stringify(lines[at])}`;
+  // the stop line goes into the unresolved-anchor report, so a refusal names its cause
+  const stop = at < 0 ? null : { line: at + 1, text: lines[at] };
   return Object.assign(slugs, { stop });
 };
 // A repo file read through the gate's case-exact walk, which refuses a symlink out of the repo.
@@ -197,8 +197,8 @@ const lineAnchorOk = (anchor, count) => {
     && Number(m[2] ?? m[1]) >= Number(m[1]);
 };
 // Every #fragment on a file on next must exist in the kind of view the link opens.
-// A missing file is missingNext's. Each entry is `{ rel, anchor }`, plus the `stop` line text
-// (headingSet) when the heading scan ended early.
+// A missing file is missingNext's. Each entry is `{ rel, anchor }`, plus the `stop` entry
+// `{ line, text }` (headingSet) when the heading scan ended early.
 const unresolvedAnchors = (hs, where, seams = {}) => {
   const { headingsOf = headingsOfFile, linesOf = lineCountOf } = seams;
   return hs.filter((h) => nextRel(h)?.includes('#')).flatMap((h) => {
