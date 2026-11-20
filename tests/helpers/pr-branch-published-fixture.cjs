@@ -4,9 +4,7 @@
  * Shared fixtures of the #5469 `/gsd-pr-branch` published-marker tests
  * (`tests/pr-branch-published-marker-*.test.cjs`): the shipped bash blocks of
  * `gsd-core/workflows/pr-branch.md` (pr-branch-filter seam), run in order against real git
- * fixtures. The tests run in several files because each publish spawns bash, which costs
- * seconds on Windows: one file held about 24 minutes of Windows runtime, past the 10 minute
- * per-chunk timeout of `scripts/run-tests.cjs`.
+ * fixtures. The tests run in several files because each publish spawns bash, which is slow on Windows.
  */
 
 const { afterEach } = require('node:test');
