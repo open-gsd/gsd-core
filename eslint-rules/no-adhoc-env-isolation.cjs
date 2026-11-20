@@ -58,6 +58,11 @@ const path = require('path');
  * `eslint-disable` comment naming it hides a copy from lint output, but not
  * from that count, so it exempts nothing.
  *
+ * The rule and the count cover only the `.cjs` files under `tests/`, so the
+ * allowlist lists exactly the remaining sites in those files. A copy in any other file is
+ * neither flagged nor counted: a `.mjs`, `.js` or `.cts` file under `tests/`,
+ * or a file outside `tests/`, such as one under `scripts/`.
+ *
  * ## Known gaps (the ratchet is deliberately narrow)
  *
  *   - In-process mutation spelled `process.env.HOME = x` (or `['HOME']`) is
