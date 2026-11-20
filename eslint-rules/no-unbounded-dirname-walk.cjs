@@ -54,7 +54,7 @@
  * it — add the `dirname(cur) !== cur` (or `path.parse(cur).root`) conjunct
  * alongside the other bound, which costs nothing at runtime and is what the
  * shipped #4020/#4220 fix itself does. A false positive is a rule bug, fixed
- * in the rule — see `tests/portability-rule-disable-ban.test.cjs`, which
+ * in the rule — see `scripts/static-checks/portability-rule-disable-ban.cjs`, which
  * independently bans `eslint-disable` of this rule too.
  */
 

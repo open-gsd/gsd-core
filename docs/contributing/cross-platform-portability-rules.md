@@ -12,8 +12,8 @@ this page is the practical reference + how-to.
 > contract, and the step-by-step recipe.
 
 These rules are **hard-fail with zero escape hatches**: there is no `// windows-portability-ok:`
-comment and no `eslint-disable` for them (a `tests/portability-rule-disable-ban.test.cjs` check,
-running outside ESLint, fails the build if you try). Legitimately platform-specific code must be
+comment and no `eslint-disable` for them (the `scripts/static-checks/portability-rule-disable-ban.cjs` check,
+running outside ESLint in `npm run lint:ci`, fails the build if you try). Legitimately platform-specific code must be
 *structured* so the rule recognizes it (see "Platform guards" below) — not annotated around.
 
 ## Reference — the rules
