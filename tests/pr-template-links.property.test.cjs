@@ -1,3 +1,5 @@
+'use strict';
+
 // Properties of the #5427 PR-template link guard (tests/helpers/pr-template-links.cjs).
 // Expected values come from the class tables below, never from the guard's own predicates.
 // Sources of the refused forms: CommonMark 0.31.2 (spec.commonmark.org) for link reference
@@ -160,7 +162,7 @@ describe('heading anchors by construction (#5427)', () => {
   const blocks = {
     real: (w) => `## ${w}`,
     indented: (w) => `   ## ${w}`,
-    fenced: (w) => `\`\`\`\n## ${w}\n> \`\`\`\n\`\`\``,
+    fenced: (w) => `\`\`\`\n## ${w}\n> \`\`\`\n<b>\n\`\`\``,
     tilde: (w) => `~~~\n## ${w}\n~~~`,
     quoted: (w) => `> ## ${w}`,
     marked: (w) => `- ## ${w}`,

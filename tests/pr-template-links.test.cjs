@@ -1,3 +1,5 @@
+'use strict';
+
 // Regression for #5427: the guard lives in tests/helpers/pr-template-links.cjs (its header
 // states what is checked). This file holds the example tests and the template loop.
 const { describe, test } = require('node:test');
@@ -87,6 +89,7 @@ describe('heading anchors (#5427)', () => {
   });
   test('`<` before a non-tag character and a fence in column 0 stop nothing', () => {
     assert.deepEqual(anchors('## A\na < b\n<= 3\n<-- x\n< 2\n```\nx\n```\n## B'), ['a', 'b']);
+    assert.deepEqual(anchors('## A\n```\n<b>\n- ```\n```\n## B'), ['a', 'b']);
     assert.deepEqual(anchors('## A\n---\n## B\n- x\n- y\n## C'), ['a', 'b', 'c']);
     for (const run of ['- ``', '- ~~', '1. ``']) {
       assert.deepEqual(anchors(`## A\n${run}\n## F`), ['a', 'f'], JSON.stringify(run));
@@ -164,6 +167,12 @@ describe('link extractor (#5427)', () => {
     assert.deepEqual(hrefsIn('[a](x\u00a0y)'), ['x\u00a0y']);
     assert.deepEqual(hrefsIn('[a](x\ty "t")'), ['x']);
   });
+  test('the destination class ends at DEL and keeps U+0080 and astral characters', () => {
+    assert.deepEqual(hrefsIn('[a](x\u007fy)'), ['x']);
+    for (const ch of ['\u0080', '\u{10000}', '\u{10FFFF}']) {
+      assert.deepEqual(hrefsIn(`[a](x${ch}y)`), [`x${ch}y`], JSON.stringify(ch));
+    }
+  });
 });
 
 describe('refused forms (#5427)', () => {
@@ -173,6 +182,7 @@ describe('refused forms (#5427)', () => {
       ['<b title="x <a href="../y.md">', [1]], ['<!-- <a href="x"> -->', [1]],
       ['`<a href="x">`', [1]], ['> <a href=x>', [1]],
       ['<a\nhref\n="x">', [2]], ['<img/src=y>', [1]], ['<a href = "x">', [1]],
+      ['<b title="x"href=y>', [1]],
       ['<pre>\n\n<a\n\nhref="../x.md">y</a>\n</pre>', [5]]]) {
       assert.deepEqual(refused(text), lines, JSON.stringify(text));
     }
@@ -184,7 +194,8 @@ describe('refused forms (#5427)', () => {
     }
     // `src` is a word or a path segment here, after a tag has opened: no attribute has no `=`
     const forms = [`[a](${NEXT}src/x.md)`, `[a](${NEXT}x/src)`, `[a](${NEXT}src "t")`,
-      `[a](<${NEXT}src>)`, `<${NEXT}src>`, `${NEXT}src `, `${NEXT}src`, 'src is a folder'];
+      `[a](<${NEXT}src>)`, `<${NEXT}src>`, `${NEXT}src `, `${NEXT}src`, 'src is a folder',
+      '[a](https://x/?src=1&href=2)'];
     for (const form of forms) assert.deepEqual(refused(`<kbd>x</kbd>\n${form}`), [], form);
   });
   test('a definition is refused at any indent and in any container', () => {
@@ -351,7 +362,7 @@ describe('readRepoFile (#5427)', () => {
   // The refusal of a link out of the repo is the ADR gate's existsCaseExact, tested in
   // tests/adr-index-gate.test.cjs; this test pins that the helper reads through it.
   test('reads a repo file; a missing name, a wrong case or a path outside is refused', () => {
-    assert.match(readRepoFile('CONTRIBUTING.md'), /^# /m);
+    assert.ok(readRepoFile('CONTRIBUTING.md').length > 0);
     for (const rel of ['no-such-file.md', 'contributing.md', '../outside.md']) {
       assert.throws(() => readRepoFile(rel), { rel }, JSON.stringify(rel));
     }

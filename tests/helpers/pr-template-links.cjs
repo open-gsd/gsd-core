@@ -1,3 +1,5 @@
+'use strict';
+
 // Link guard for #5427: a PR body renders a relative href against /pull/N, so it 404s.
 // Links: every inline link and image, read line by line with the ADR gate's extractLinks, so a
 // link in a code block, a comment, a quote or an HTML block is checked too (a template holds no
