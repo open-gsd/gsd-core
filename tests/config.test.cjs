@@ -4230,6 +4230,29 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     });
   }
 
+  // The same at any depth: a section patch whose leaves are all `{}` sets
+  // nothing, and neither does a null for a key the stored value does not hold.
+  for (const [label, before, settings] of [
+    ['{"enabled":{}} over a stored parallelization: false', { parallelization: false }, { parallelization: { enabled: {} } }],
+    ['{"enabled":{}} over a stored parallelization: true', { parallelization: true }, { parallelization: { enabled: {} } }],
+    ['{"branching_strategy":{}} over a stored scalar git', { git: 'x' }, { git: { branching_strategy: {} } }],
+    ['{"gsd-planner":{}} over a stored empty model_overrides', { model_overrides: {} }, { model_overrides: { 'gsd-planner': {} } }],
+    ['{"enabled":null} over a stored parallelization: false', { parallelization: false }, { parallelization: { enabled: null } }],
+  ]) {
+    test(`a save of ${label} leaves the store as it was`, (t) => {
+      const { save, read } = store(t, before);
+      const result = save(settings);
+      assert.ok(result.success, result.error);
+      assert.deepStrictEqual(read(), before);
+    });
+  }
+
+  test('a section patch that sets a value replaces a stored non-object', (t) => {
+    const { save, read } = store(t, { parallelization: true });
+    assert.ok(save({ parallelization: { enabled: false } }).success);
+    assert.deepStrictEqual(read(), { parallelization: { enabled: false } });
+  });
+
   test('a saved {} leaves a stored parallelization: false resolving to false', (t) => {
     const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
     const { gsdHome, save } = store(t, { parallelization: false });
@@ -5013,6 +5036,20 @@ describe('#5681: mergeIntoGlobalDefaults properties', () => {
         if (value === null) assert.strictEqual(valueAt(merged, keyPath.join('.')), undefined);
         else assert.deepStrictEqual(valueAt(merged, keyPath.join('.')), value);
       }
+    }));
+  });
+
+  // A patch whose leaves are all `{}` sets nothing, over any base: scalars
+  // under section keys included (`git: 5` patched with `{"git":{"mode":{}}}`).
+  test('a patch whose leaves are all empty objects leaves the base unchanged', () => {
+    const hollow = fc.letrec((tie) => ({
+      node: fc.dictionary(key, fc.oneof({ depthSize: 'small' }, fc.constant({}), tie('node')), { maxKeys: 4 }),
+    })).node;
+    // Compared as JSON, the form the store is written in: fast-check builds
+    // null-prototype objects, and the merge returns plain ones.
+    const asJson = (value) => JSON.parse(JSON.stringify(value));
+    fc.assert(fc.property(tree(false), hollow, (base, patch) => {
+      assert.deepStrictEqual(asJson(mergeIntoGlobalDefaults(base, patch)), asJson(base));
     }));
   });
 

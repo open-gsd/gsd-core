@@ -949,26 +949,36 @@ function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<str
   return result;
 }
 
+/** An object whose leaves are all empty objects (`{}` included): a patch that sets nothing. */
+function isHollowPatch(value: unknown): boolean {
+  return isPlainObject(value) && Object.values(value).every(isHollowPatch);
+}
+
 /**
  * Deep-merge `patch` into the global defaults `base`: objects merge key by key,
- * a null removes the key (as `config-set <key> null` clears one), an empty
- * object sets nothing, and anything else replaces. A section left empty is dropped.
+ * a null removes the key (as `config-set <key> null` clears one), and anything
+ * else replaces. A patch that sets nothing under a key leaves what is stored
+ * there as it was: an empty object, at any depth, sets nothing, and neither
+ * does a null for a key the stored value does not hold. A stored section the
+ * patch empties is dropped.
  */
 function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
       delete merged[key];
-    } else if (isPlainObject(value) && Object.keys(value).length === 0) {
-      // An empty object sets nothing, whatever is stored under its key. It
-      // reaches here only for a setting config-set accepts `{}` for
-      // (`parallelization`, a boolean or an object whose `enabled` holds it),
-      // where `{}` read as the default would turn a stored `false` on (#5681).
+    } else if (isHollowPatch(value)) {
+      // Nothing under this key is set: the stored value stays, untouched.
       continue;
     } else if (isPlainObject(value)) {
-      const section = mergeIntoGlobalDefaults(isPlainObject(merged[key]) ? merged[key] : {}, value);
-      if (Object.keys(section).length === 0) delete merged[key];
-      else merged[key] = section;
+      // A section patch. Over a stored non-object (`parallelization: false`,
+      // a boolean or an object whose `enabled` holds it) it is merged into
+      // nothing, and replaces the stored value only if it sets something: a
+      // `{"enabled":{}}` read as the default would turn a stored `false` on (#5681).
+      const stored = merged[key];
+      const section = mergeIntoGlobalDefaults(isPlainObject(stored) ? stored : {}, value);
+      if (Object.keys(section).length > 0) merged[key] = section;
+      else if (isPlainObject(stored) && Object.keys(stored).length > 0) delete merged[key];
     } else {
       merged[key] = value;
     }
