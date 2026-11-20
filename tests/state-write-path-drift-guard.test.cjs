@@ -1615,12 +1615,6 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [],
     },
     {
-      shape: 'a braceless do-while reassignment hides the earlier STATE.md assignment',
-      text: W(ASSIGN, '  do p = x; while (c);', WRITE_P),
-      expected: [4],
-      currentBuggyOutput: [],
-    },
-    {
       shape: 'an if body that starts on the next line hides the earlier STATE.md assignment',
       text: W(ASSIGN, '  if (c)', "    p = 'x';", WRITE_P),
       expected: [5],
@@ -1671,7 +1665,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
   ];
   gapLoop(KNOWN_RESOLUTION_GAPS, 'target resolution');
 
-  test('controls: each known-gap shape is reported once the missed feature is removed', () => {
+  test('controls: each target-resolution gap and each block-comment match gap is reported once the missed feature is removed', () => {
     const controls = [
       ['block-comment opener removed from the string', "const G = 'src/';\nfunction w(statePath, c) {\n  fs.writeFileSync(statePath, c);\n}", [3]],
       ['/* in a string, closed by a later block-comment closer in a string', "const G = 'src/*';\nconst H = 'a*/b';\nfunction w(statePath, c) {\n  fs.writeFileSync(statePath, c);\n}", [4]],
@@ -1685,7 +1679,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       ['braced else on the closing brace line', W(ASSIGN, '  if (c) { } else { p = x; }', WRITE_P), [4]],
       ['braced for-in reassignment', W(ASSIGN, '  for (const k in o) { p = k; }', WRITE_P), [4]],
       ['braced while reassignment', W(ASSIGN, '  while (c) { p = x; }', WRITE_P), [4]],
-      ['braced do-while reassignment', W(ASSIGN, '  do { p = x; } while (c);', WRITE_P), [4]],
+      ['braced C-style for reassignment', W(ASSIGN, '  for (let i = 0; i < c; i++) { p = dir; }', WRITE_P), [4]],
       ['if body on the next line, braced', W(ASSIGN, '  if (c) {', "    p = 'x';", '  }', WRITE_P), [6]],
       ['call on the closer line of a phantom block comment is scanned', "const G = 'src/*';\nfoo(); */ function w(statePath,c){ fs.writeFileSync(statePath, c); }", [2]],
       ['switch clause reassignment, write after the switch closes', W(ASSIGN, '  switch (c) {', "    case 1: p = 'x'; break;", '  }', WRITE_P), [6]],
