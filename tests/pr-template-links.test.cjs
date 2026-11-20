@@ -14,7 +14,7 @@ const {
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
-  REPO, NEXT, hrefsIn, unreadForms, isBadLink, missingNext, repoPathOf, unresolvedAnchors,
+  REPO, NEXT, NO_REF, hrefsIn, unreadForms, isBadLink, missingNext, repoPathOf, unresolvedAnchors,
   headingSet, anchorKind, lineCountOf, readRepoFile,
 } = require('./helpers/pr-template-links.cjs');
 
@@ -67,6 +67,32 @@ describe('heading anchors (#5427)', () => {
     }
     assert.equal(headingSet('## x &;').size, 1);
   });
+  test('an entity may be numeric or hex; a name outside its class is plain text', () => {
+    for (const entity of ['&#38;', '&#x26;', '&frac12;', '&#;']) {
+      assert.equal(headingSet(`## x ${entity}`).size, 0, entity);
+    }
+    for (const text of ['x &a-b;', 'x &a b;', 'x & y;']) {
+      assert.equal(headingSet(`## ${text}`).size, 1, text);
+    }
+  });
+  test('an HTML tag opener (letter, `/` or `!`) is unslugable; `<` before another is text', () => {
+    for (const text of ['x <b>', 'x </b>', 'x <!-- c -->']) {
+      assert.equal(headingSet(`## ${text}`).size, 0, text);
+    }
+    for (const text of ['x < y', 'x <1>', 'x <-']) {
+      assert.equal(headingSet(`## ${text}`).size, 1, text);
+    }
+  });
+  test('a non-ASCII letter or digit is unslugable; other non-ASCII characters are kept', () => {
+    for (const text of ['x é', 'x ²', 'x ٣']) assert.equal(headingSet(`## ${text}`).size, 0, text);
+    assert.equal(headingSet('## x ☃').size, 1);
+  });
+  test('`_` at the start or end of a word is emphasis; inside a word it is kept', () => {
+    for (const text of ['_a b', 'a_ b', 'a_', 'x (_a) y', 'x (a_) y']) {
+      assert.equal(headingSet(`## ${text}`).size, 0, text);
+    }
+    assert.equal(headingSet('## a_b c_d').size, 1);
+  });
   test('a quoted heading, a list-marker heading and an <a id> give no anchor', () => {
     const md = '## A\n> ## Q\n- ## I\nt <a id="m"></a>\n<a name="n"></a>\n## After';
     assert.deepEqual(anchors(md), ['a']);
@@ -85,7 +111,8 @@ describe('heading anchors (#5427)', () => {
   test('a fence or `<` after indentation or a list marker stops the anchors after it', () => {
     for (const rest of [' ```\n## F', '1. ```\n## F', '* <b>\n## F', '<details>\n## F\n</details>',
       '- x\n\n    ```\n  ## F\n    ```', '- ~~~\n## F', '2) <!--\n## F', '</div>\n## F',
-      '<?x\n## F', '<!DOCTYPE x>\n## F']) {
+      '<?x\n## F', '<!DOCTYPE x>\n## F', '+ <b>\n## F', '+ ```\n## F', '. <b>\n## F',
+      ') <b>\n## F', '\t<b>\n## F', '0 ~~~\n## F']) {
       assert.deepEqual(anchors(`## A\n${rest}`), ['a'], JSON.stringify(rest));
     }
   });
@@ -316,8 +343,28 @@ describe('next-ref existence and anchors (#5427)', () => {
       assert.deepEqual(found(anchor), [], anchor);
     }
     for (const anchor of ['L5C', 'LC3', 'L5C-L6', 'L1000000000', 'L5C1000000000',
-      'L1-L1000000000', 'L1-L2C1000000000']) {
+      'L1-L1000000000', 'L1-L2C1000000000', 'L0', 'L0-L1', 'L0C1']) {
       assert.deepEqual(found(anchor), [miss('CONTRIBUTING.md', anchor)], anchor);
+    }
+  });
+  test('a line anchor holds from line 1 to the last line; an equal range is one line', () => {
+    const view = `${NEXT}CONTRIBUTING.md?plain=1`;
+    const seams = { linesOf: () => 5 };
+    const found = (anchor) => unresolvedAnchors([`${view}#${anchor}`], 'tpl.md', seams);
+    for (const anchor of ['L1', 'L5', 'L1-L5', 'L5-L5', 'L1-L1', 'L2-L2C9']) {
+      assert.deepEqual(found(anchor), [], anchor);
+    }
+    for (const anchor of ['L6', 'L1-L6', 'L6-L6', 'L5-L4', 'L2-L1']) {
+      assert.deepEqual(found(anchor), [miss('CONTRIBUTING.md', anchor)], anchor);
+    }
+  });
+  test('only ?plain=1 shows the source; any other plain value renders the markdown', () => {
+    const real = DOCS_ANCHOR.split('#')[1];
+    for (const query of ['plain=0', 'plain=11', 'plain=']) {
+      assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?${query}#${real}`], 'tpl.md'),
+        [], query);
+      assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md?${query}#L5`], 'tpl.md'),
+        [miss('CONTRIBUTING.md', 'L5')], query);
     }
   });
 });
@@ -345,6 +392,12 @@ describe('link classification (#5427)', () => {
       `${REPO}#readme`, `${REPO}compare/main...next`,
       'https://GitHub.com/OPEN-GSD/GSD-CORE/blob/next/x', '#'];
     assert.deepEqual(ok.filter(isBadLink), []);
+  });
+  test('every view that names no ref is ok; a near miss of each is bad', () => {
+    const views = [...NO_REF];
+    assert.ok(views.length >= 15, views.join());
+    assert.deepEqual(views.map((v) => `${REPO}${v}`).filter(isBadLink), []);
+    assert.deepEqual(views.map((v) => `${REPO}${v}1`).filter((l) => !isBadLink(l)), []);
   });
   test('repoPathOf decodes percent escapes and drops query and anchor', () => {
     assert.equal(repoPathOf(`${NEXT}my%20guide.md?plain=1#a`), 'my guide.md');

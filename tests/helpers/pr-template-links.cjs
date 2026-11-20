@@ -214,6 +214,6 @@ const unresolvedAnchors = (hs, where, seams = {}) => {
 };
 
 module.exports = {
-  REPO, NEXT, hrefsIn, unreadForms, isBadLink, repoPathOf, missingNext,
+  REPO, NEXT, NO_REF, hrefsIn, unreadForms, isBadLink, repoPathOf, missingNext,
   unresolvedAnchors, headingSet, anchorKind, lineCountOf, readRepoFile,
 };
