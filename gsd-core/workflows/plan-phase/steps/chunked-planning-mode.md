@@ -53,6 +53,8 @@ PLAN.md files:
 **Dispatch/wait gate — `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`, resolved in `plan-phase/steps/stall-detection-helpers.md`):**
 - **`true` (default):** use `run_in_background=true` in the Agent() call below, then use `gsd_stall_watch` after it.
 
+**Before the Agent() call, for either toggle:** bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" outline "${PROJECT_ROOT}"`; if it prints nothing, drop the `<return_receipt>` line from the prompt and use `""` for `{receipt}`.
+
 ```javascript
 Agent(
   prompt="{same planning_context as step 8, plus:}
@@ -75,7 +77,7 @@ Agent(
 )
 ```
 
-**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** before dispatch bind `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" outline "${PROJECT_ROOT}"`, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$OUTLINE_FILE" "## OUTLINE COMPLETE")` while waiting/active; after routing any result (stalled/Retry too): `rm -f "{receipt}"`.
+**ORCHESTRATOR RULE — ALL RUNTIMES (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$OUTLINE_FILE" "## OUTLINE COMPLETE")` while waiting/active; after routing any result (stalled/Retry too): `rm -f "{receipt}"`.
 
 - **`false`:** issue the same Agent() call but omit `run_in_background`; await its ordinary runtime-native completion and consume the real returned result. Skip `gsd_stall_watch`, then `rm -f "{receipt}"` (no-op if unbound); treat a recognized `## OUTLINE COMPLETE` return exactly like `marker_received`; empty or unrecognized returns keep the existing Retry/Stop path.
 
@@ -148,7 +150,8 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
    is unchanged per plan; what changes is whether the runnable set's Agent() calls are issued one
    at a time (serial) or together in one message (concurrent, every call still carrying
    `run_in_background=true` exactly as today when `PLANNER_STALL_DETECTION_ENABLED` (config key `planner.stall_detection_enabled`) is `true`
-   (default)):
+   (default)).
+   **Before each entry's Agent() call, for either toggle:** bind that entry's own `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" "{plan_id}" "${PROJECT_ROOT}"`; if it prints nothing, drop the `<return_receipt>` line from that prompt and use `""` for its `{receipt}`.
    ```javascript
    Agent(
      prompt="{same planning_context as step 8, plus:}
@@ -174,7 +177,7 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
    message, before waiting on any of them.
 
 5. **ORCHESTRATOR RULE — ALL RUNTIMES, per batch (when `PLANNER_STALL_DETECTION_ENABLED` is `true`):** for every entry dispatched in this round,
-   bind that entry's own `{receipt}` via `gsd_receipt_path "${PHASE_DIR}" "{plan_id}" "${PROJECT_ROOT}"` before its dispatch, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$PLAN_FILE" "## PLAN COMPLETE")`
+   with the `{receipt}` step 4 bound for it, `TS=$(date +%s)`; repeat `PLANNER_STALL_RESULT=$(gsd_stall_watch "$TS" "{receipt}" "$PLAN_FILE" "## PLAN COMPLETE")`
    while waiting/active for THAT entry; after routing any result (stalled/Retry too): `rm -f "{receipt}"`. Serial dispatch waits on one entry at a time (unchanged).
    Concurrent dispatch waits on every entry issued in step 4 before proceeding — this is the
    "per-batch" join the config makes possible: nothing in step 6 runs until every plan dispatched

@@ -63,10 +63,12 @@ never counted as 0 issues; use 11a and offer Retry checker before Accept. A
 receipt-routed `## VERIFICATION PASSED` whose body has not arrived by the next cycle
 never proceeds to step 13 on the receipt alone, since step 11 reads that body for
 listed findings (#5578): use 11a and offer Retry checker before Accept. A planner
-`## CHECKPOINT REACHED`, `## PHASE SPLIT RECOMMENDED` or `## ⚠ Source Audit` whose body
-(the question, the proposed split, the gap list) has not arrived by the next cycle
-never routes to an empty checkpoint, 9b or 9c: use 9a, name the marker received, and
-offer Retry planner before Accept. A revision `## REVISION_CONFLICT` whose body (the
+`## CHECKPOINT REACHED`, `## PHASE SPLIT RECOMMENDED`, `## ⚠ Source Audit` or
+`## PLANNING INCONCLUSIVE` whose body (the question, the proposed split, the gap list,
+the attempts step 9 shows) has not arrived by the next cycle never routes to an empty
+checkpoint, 9b, 9c or an empty attempts list: use 9a's receipt case, name the marker
+received, and offer Retry planner before Accept; with no plans on disk there is
+nothing to accept, so 9a offers Retry planner or Stop. A revision `## REVISION_CONFLICT` whose body (the
 `CONFLICT_*` fields step 12 records) has not arrived by the next cycle never writes an
 empty conflict record: use that watch's `stalled` menu, name the marker received, and
 offer Retry before Accept.
@@ -204,7 +206,7 @@ gsd_stall_should_recover() {
 # phase dir outside a subdirectory cwd is still accepted when ROOT is passed): a checkout can commit the phase dir, `.planning` or `.gsd-returns` as
 # a symlink, and mkdir -p and the .gitignore write would follow it out of the
 # project. So a symlinked or dangling phase dir (or a missing component on the way
-# to it), a phase dir that is the project root or holds a `.git` component, a phase dir with a `..` component (after a missing component it would
+# to it), a phase dir that is the project root or holds a `.git` component (in any letter case), a phase dir with a `..` component (after a missing component it would
 # pass the ancestor check, and mkdir -p would then resolve it outside the project)
 # or a `.` component (init's phase_dir never has one),
 # a phase dir that resolves outside the root, and a symlinked .gsd-returns
@@ -248,13 +250,18 @@ gsd_receipt_path() {
   rest="${dir#"$a"}"
   # The project root itself and anything under a .git component are never a phase dir.
   [ "${phys%/}$rest" = "$root" ] && { _gsd_no_receipt 'the phase dir is the project root'; return 1; }
-  case "${phys%/}$rest/" in */.git/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
+  # Compared lowercased: on a case-insensitive filesystem (APFS, Windows) .GIT is .git.
+  case "$(printf '%s' "${phys%/}$rest/" | LC_ALL=C tr 'A-Z' 'a-z')" in */.git/*) _gsd_no_receipt 'the phase dir is inside .git'; return 1 ;; esac
   [ -L "$dir/.gsd-returns" ] && { _gsd_no_receipt '.gsd-returns is a symlink'; return 1; }
-  mkdir -p "$dir/.gsd-returns" || { _gsd_no_receipt 'cannot create .gsd-returns'; return 1; }
+  mkdir -p "$dir/.gsd-returns" 2>/dev/null || { _gsd_no_receipt 'cannot create .gsd-returns'; return 1; }
   got=$(CDPATH='' cd -P -- "$dir/.gsd-returns" >/dev/null 2>&1 && pwd -P) || { _gsd_no_receipt '.gsd-returns does not resolve'; return 1; }
   [ "$got" = "${phys%/}$rest/.gsd-returns" ] || { _gsd_no_receipt '.gsd-returns resolves elsewhere'; return 1; }
   [ -L "$dir/.gsd-returns/.gitignore" ] && { _gsd_no_receipt '.gsd-returns/.gitignore is a symlink'; return 1; }
-  [ -f "$dir/.gsd-returns/.gitignore" ] || printf '*\n' > "$dir/.gsd-returns/.gitignore"
+  # The redirection's own error is silenced by the outer 2>/dev/null (an inner one would
+  # apply after the failed open), so a refusal stays one stderr line.
+  if [ ! -f "$dir/.gsd-returns/.gitignore" ]; then
+    { printf '*\n' > "$dir/.gsd-returns/.gitignore"; } 2>/dev/null || { _gsd_no_receipt 'cannot write .gsd-returns/.gitignore'; return 1; }
+  fi
   if command -v cygpath >/dev/null 2>&1; then dir=$(cygpath -m "$dir"); fi
   mktemp -u "$dir/.gsd-returns/${spawn:-spawn}.$(date +%s).XXXXXXXX"
 }
@@ -330,24 +337,17 @@ gsd_stall_watch() {
   # directory plus a basename pattern (`<phase>/*-PLAN.md`) or a literal file
   # (the chunked sites' $OUTLINE_FILE / $PLAN_FILE). A path that exists is that one
   # file, whatever characters its name holds (`outline[1].md` is never a pattern).
-  # Otherwise the directory part stays quoted (a space in PHASE_DIR must not split
-  # it) and only the basename is globbed, under nullglob (restored after) with IFS
-  # empty, so no match gives an empty list and artifact_fresh stays false.
+  # Otherwise find matches the basename with -name inside the quoted directory (a
+  # space in PHASE_DIR must not split it), so the shell never globs: this reads the
+  # same under bash and under zsh, which has no shopt and does not glob a variable's
+  # value. No match prints nothing, and artifact_fresh stays false.
   artifact_fresh="false"
-  local IFS='' files _had_ng=0 _d="${artifact_glob%/*}" _p="${artifact_glob##*/}"
-  files=()
+  local _d="${artifact_glob%/*}" _p="${artifact_glob##*/}"
+  [ "$_d" = "$artifact_glob" ] && _d=.
   if [ -n "$artifact_glob" ] && [ -e "$artifact_glob" ]; then
-    files=("$artifact_glob")
-  elif [ -n "$artifact_glob" ]; then
-    [ "$_d" = "$artifact_glob" ] && _d=.
-    shopt -q nullglob && _had_ng=1
-    shopt -s nullglob
-    # shellcheck disable=SC2206 # the basename is the glob pattern; IFS is empty, so it never splits
-    files=("$_d"/$_p)
-    [ "$_had_ng" = 1 ] || shopt -u nullglob
-  fi
-  if [ "${#files[@]}" -gt 0 ] && [ -n "$(find "${files[@]}" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ]; then
-    artifact_fresh="true"
+    [ -n "$(find "$artifact_glob" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
+  elif [ -n "$artifact_glob" ] && [ -d "$_d" ]; then
+    [ -n "$(find "$_d" -maxdepth 1 -type f -name "$_p" -mmin "-${PLANNER_STALL_INTERVAL_MINUTES}" 2>/dev/null)" ] && artifact_fresh="true"
   fi
   gsd_stall_should_recover "$elapsed" "$PLANNER_STALL_THRESHOLD_MINUTES" "$marker_found" "$artifact_fresh"
 }

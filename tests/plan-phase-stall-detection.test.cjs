@@ -1262,8 +1262,9 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       ['planner', sectionOf(plan, PLANNER_SECTION), PLAN_GLOB, ['## PLANNING COMPLETE', '## PHASE SPLIT RECOMMENDED', '## ⚠ Source Audit', '## CHECKPOINT REACHED', '## PLANNING INCONCLUSIVE'], ['`marker_received` -> step 9', '`stalled` -> 9a']],
       ['checker', sectionOf(plan, CHECKER_SECTION), PLAN_GLOB, ['## VERIFICATION PASSED', '## ISSUES FOUND'], []],
       ['revision', sectionOf(plan, REVISION_SECTION), PLAN_GLOB, ['## REVISION COMPLETE', '## REVISION_CONFLICT'], []],
-      ['chunked outline', sectionOf(chunked, ['### 8.5.1 Outline Phase', '### 8.5.2 Per-Plan Tasks']), '"$OUTLINE_FILE"', ['## OUTLINE COMPLETE'], ['gsd_receipt_path "${PHASE_DIR}" outline "${PROJECT_ROOT}"']],
-      ['chunked per-plan', sectionOf(chunked, ['### 8.5.2 Per-Plan Tasks', '\u0000']), '"$PLAN_FILE"', ['## PLAN COMPLETE'], ['gsd_receipt_path "${PHASE_DIR}" "{plan_id}" "${PROJECT_ROOT}"', 'for THAT entry']],
+      // The chunked binds sit before each Agent() call (row "each chunked site binds ...").
+      ['chunked outline', sectionOf(chunked, ['### 8.5.1 Outline Phase', '### 8.5.2 Per-Plan Tasks']), '"$OUTLINE_FILE"', ['## OUTLINE COMPLETE'], []],
+      ['chunked per-plan', sectionOf(chunked, ['### 8.5.2 Per-Plan Tasks', '\u0000']), '"$PLAN_FILE"', ['## PLAN COMPLETE'], ['for THAT entry']],
     ];
     let ran = 0;
     for (const [label, section, artifact, markers, tokens] of sites) {
@@ -1309,6 +1310,32 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     for (const [label, section] of sections.slice(3)) {
       assert.match(section, /gsd_receipt_path "\$\{PHASE_DIR\}"/, `${label}: must bind {receipt} from gsd_receipt_path`);
     }
+  });
+
+  // Review 5904580537 Minor 2: a chunked site that binds {receipt} only in its `true` rule,
+  // after the Agent() call, sends the planner a literal `{receipt}` (toggle false, or any
+  // toggle in order), and the planner writes a file named `{receipt}` in the project root.
+  // Each chunked site binds once, before its Agent() call, for either toggle, and drops
+  // the prompt line when gsd_receipt_path prints nothing.
+  test('each chunked site binds its own {receipt} once, before its Agent() call, for either toggle (#5182)', () => {
+    const chunked = readChunkedPlanningMode();
+    const sites = [
+      ['chunked outline', sectionOf(chunked, ['### 8.5.1 Outline Phase', '### 8.5.2 Per-Plan Tasks']), 'gsd_receipt_path "${PHASE_DIR}" outline "${PROJECT_ROOT}"'],
+      ['chunked per-plan', sectionOf(chunked, ['### 8.5.2 Per-Plan Tasks', '\u0000']), 'gsd_receipt_path "${PHASE_DIR}" "{plan_id}" "${PROJECT_ROOT}"'],
+    ];
+    let ran = 0;
+    for (const [label, section, bind] of sites) {
+      assert.equal(section.split('gsd_receipt_path').length - 1, 1, `${label}: exactly one bind`);
+      const at = section.indexOf(bind);
+      assert.notEqual(at, -1, `${label}: binds with ${bind}`);
+      const call = section.indexOf('```javascript');
+      assert.notEqual(call, -1, `${label}: the Agent() call is in a javascript fence`);
+      assert.ok(at < call, `${label}: the bind comes before the Agent() call`);
+      inOrder(lineWith(section, bind), ['either toggle', bind, 'prints nothing', 'drop the `<return_receipt>` line'], `${label}: the bind holds for either toggle and drops the prompt line when refused`);
+      assert.ok(!rulePara(section).includes('gsd_receipt_path'), `${label}: the true-only rule no longer binds after dispatch`);
+      ran += 1;
+    }
+    assert.equal(ran, 2);
   });
 
   test('AC2: a checker receipt of ## ISSUES FOUND routes to the revision step, never the pass step', (t) => {
@@ -1453,6 +1480,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       return runHelpers(`gsd_return_marker ${q(f.receipt)}${m}`);
     };
     assert.equal(run(`## PLANNING COMPLETE\n${filler(500)}`), '## PLANNING COMPLETE', 'a marker on line 1 of a long receipt is found');
+    assert.equal(run(`${filler(62)}## PLANNING COMPLETE\n${filler(10)}`), '## PLANNING COMPLETE', 'a marker on line 63 is found');
     assert.equal(run(`${filler(63)}## PLANNING COMPLETE\n${filler(10)}`), '## PLANNING COMPLETE', 'a marker on line 64 is found');
     assert.equal(run(`${filler(64)}## PLANNING COMPLETE\n`), '', 'a marker only on line 65 is past the cap');
   });
@@ -1496,7 +1524,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
   test('property: gsd_return_marker matches iff the line starts with the marker and the next char is end, whitespace or a colon (CR- and BOM-tolerant)', (t) => {
     const f = fixture(t);
     const markerArb = fc.constantFrom('## PLANNING COMPLETE', '## PLAN COMPLETE', '## ISSUES FOUND', '## ⚠ Source Audit', '## REVISION_CONFLICT', '#');
-    // Word and non-word ASCII, non-ASCII letters (must count as a boundary), and
+    // Word and non-word ASCII, non-ASCII letters (must NOT count as a boundary), and
     // marker-ish characters; no newline, CR or NUL inside the line body.
     const charArb = fc.constantFrom(...'aZ9_ -(.:#\té⚠ß'.split(''));
     const freeArb = fc.string({ unit: charArb, maxLength: 8 });
@@ -1555,7 +1583,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     // newline reaches the helper intact.
     const dirArb = fc.string({ unit: fc.constantFrom(...'ab -\'"$`<>\n\t\r\x01\x1b\x7f'.split('')), minLength: 1, maxLength: 6 }).map((d) => `p${d}`);
     const unsafeDir = (d) => /['"$`<>]/.test(d) || [...d].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f);
-    let checked = 0;
+    let accepted = 0;
+    let refused = 0;
     fc.assert(fc.property(fc.array(dirArb, { minLength: 1, maxLength: 15 }), (dirs) => {
       const caseDir = fs.mkdtempSync(path.join(f.dir, 'pd-'));
       dirs.forEach((d, i) => fs.writeFileSync(path.join(caseDir, `${i}.d`), d));
@@ -1563,11 +1592,11 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       const out = runHelpers(`cd ${q(f.dir)}; i=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; if gsd_receipt_path "$d" x >/dev/null; then echo "$i OK"; else echo "$i FAIL"; fi; i=$((i+1)); done`);
       cleanup(caseDir);
       const verdict = new Map(out.split('\n').map((l) => l.split(' ')));
-      checked += verdict.size;
+      for (const v of verdict.values()) { if (v === 'OK') accepted += 1; else if (v === 'FAIL') refused += 1; }
       return verdict.size === dirs.length &&
         dirs.every((d, i) => verdict.get(String(i)) === (unsafeDir(d) ? 'FAIL' : 'OK'));
-    }), { numRuns: 8 });
-    assert.ok(checked > 0, 'the unsafe-dir property must execute at least one case');
+    }), { numRuns: 8, examples: [[['pab', 'p$a']]] });
+    assert.ok(accepted > 0 && refused > 0, `the unsafe-dir property must see both verdicts (accepted ${accepted}, refused ${refused})`);
   });
 
   test('gsd_receipt_path: absolute, unique per call, under <phase>/.gsd-returns/, directory created, label sanitized', (t) => {
@@ -1686,11 +1715,40 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const failClosed = blockAt(readStallHelpersDoc(), 'fails closed:');
     inOrder(failClosed, ['`## REVISION_CONFLICT`', 'never writes an', 'empty conflict record'], 'a body-less REVISION_CONFLICT never writes an empty conflict record');
     let ran = 0;
-    for (const marker of ['## ISSUES FOUND', '## CHECKPOINT REACHED', '## PHASE SPLIT RECOMMENDED', '## ⚠ Source Audit', '## REVISION_CONFLICT']) {
+    // Review 5904580537 Minor 1: ## PLANNING INCONCLUSIVE needs its body too (step 9 shows the attempts).
+    for (const marker of ['## ISSUES FOUND', '## CHECKPOINT REACHED', '## PHASE SPLIT RECOMMENDED', '## ⚠ Source Audit', '## PLANNING INCONCLUSIVE', '## REVISION_CONFLICT']) {
       assert.ok(failClosed.includes(`\`${marker}\``), `${marker} is in the fail-closed list`);
       ran += 1;
     }
-    assert.equal(ran, 5);
+    assert.equal(ran, 6);
+  });
+
+  // Review 5904580537 Minor 1: the helpers send a body-less receipt-routed planner marker
+  // to 9a "and offer Retry planner before Accept". 9a must carry that route itself, as
+  // 11a does: a trigger that covers it, a banner naming the marker, Retry listed before
+  // Accept, and a route for DISK_PLANS = 0 with a marker (never accepted as complete).
+  test('9a covers a receipt-routed planner marker whose body never arrived: names the marker, Retry first, fails closed at 0 plans', () => {
+    inOrder(blockAt(readStallHelpersDoc(), 'fails closed:'), ['`## CHECKPOINT REACHED`', 'use 9a', 'Retry planner before Accept'], 'control: the helpers send a body-less planner marker to 9a');
+    const spine9a = sectionOf(readPlanPhase(), ['## 9a. Filesystem Fallback (Planner)', '## 9b.']);
+    inOrder(lineWith(spine9a, '**Triggered when:**'), ['no recognized marker', 'receipt', 'Retry first'], 'the spine 9a trigger names the receipt case and its order');
+    const detail = readFileNormalized(path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase', 'detail', 'elaboration.md'));
+    const s9a = sectionOf(detail, ['## § 9a', '## § 9b']);
+    inOrder(lineAfter(s9a, 'Fires when'), ['return receipt', 'has not arrived by', 'next cycle'], '9a\'s trigger covers a receipt-routed marker with no body');
+    const at = s9a.indexOf('**If `DISK_PLANS` > 0 and a marker arrived on the receipt without its body:**');
+    assert.notEqual(at, -1, '9a has a case for plans on disk and a marker that arrived without its body');
+    const receiptCase = s9a.slice(at, s9a.indexOf('**If `DISK_PLANS`', at + 1));
+    assert.ok(receiptCase.includes('{MARKER}'), 'the receipt-case banner names the marker that arrived');
+    const retry = receiptCase.indexOf('**Retry planner**');
+    const accept = receiptCase.indexOf('**Accept plans**');
+    assert.ok(retry !== -1 && accept !== -1, 'the receipt case offers both Retry planner and Accept plans');
+    assert.ok(retry < accept, 'the receipt case lists Retry planner before Accept plans');
+    const zero = s9a.indexOf('**If `DISK_PLANS` is 0 and a marker arrived on the receipt without its body:**');
+    assert.notEqual(zero, -1, '9a has a route for no plans on disk and a body-less marker');
+    const zeroCase = s9a.slice(zero, s9a.indexOf('**If `DISK_PLANS`', zero + 1));
+    assert.ok(zeroCase.includes('{MARKER}') && zeroCase.includes('**Retry planner**'), 'the 0-plan receipt case names the marker and offers Retry planner');
+    assert.ok(!zeroCase.includes('**Accept plans**'), 'with no plans on disk there is nothing to accept');
+    // Control: the original empty/truncated route keeps its own banner and Accept-first menu.
+    assert.ok(s9a.includes('did not emit a PLANNING COMPLETE marker'), 'control: the empty/truncated banner stays');
   });
 
   // Merge with next 39bb1b367 (#5578): step 11 now reads a ## VERIFICATION PASSED return's body for
@@ -1848,7 +1906,15 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       ['ph/../ph', '.. component'],
       ['ph/./x', '. component'],
       [`${fwd(outside)}/ph`, 'outside the project'],
+      // Review 5904580537 Nit 1: mkdir's own error must not add a second stderr line, and
+      // a .gitignore that cannot be written refuses instead of printing a path.
+      ['ph-file', '.gsd-returns is a regular file'],
+      ['ph-gi', '.gsd-returns/.gitignore cannot be written'],
     ];
+    fs.mkdirSync(path.join(proj, 'ph-file'));
+    fs.writeFileSync(path.join(proj, 'ph-file', '.gsd-returns'), 'not a directory\n');
+    // A directory named .gitignore: the write fails for every user, root included, and on Windows.
+    fs.mkdirSync(path.join(proj, 'ph-gi', '.gsd-returns', '.gitignore'), { recursive: true });
     if (symlinkOrSkip(t, outside, path.join(proj, 'ph', '.gsd-returns'), 'dir')) cases.push(['ph', 'symlinked .gsd-returns']);
     let ran = 0;
     for (const [phaseDir, label] of cases) {
@@ -1859,7 +1925,7 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       assert.ok(!r.stderr.includes(phaseDir) || phaseDir === '' || phaseDir === 'ph', `${label}: the phase dir itself is never echoed`);
       ran += 1;
     }
-    assert.ok(ran >= 6);
+    assert.ok(ran >= 8);
   });
 
   // Review 5692447413 Minor 2: a phase dir that IS the project root, or sits inside
@@ -1875,6 +1941,10 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       [`${fwd(proj)}/.git`, 'the .git directory'],
       [`${fwd(proj)}/.git/objects`, 'a directory inside .git'],
       [`${fwd(proj)}/.git/new-dir`, 'a missing directory inside .git'],
+      // Review 5904580537 Minor 3: on a case-insensitive filesystem (APFS, Windows)
+      // `.GIT` and `.Git` are the .git directory, so the refusal ignores case.
+      [`${fwd(proj)}/.GIT/objects`, 'a directory inside .GIT'],
+      [`${fwd(proj)}/.Git/new-dir`, 'a missing directory inside .Git'],
     ];
     for (const [phaseDir, label] of cases) {
       const r = receiptPathFrom(f, proj, phaseDir, proj);
@@ -1885,6 +1955,8 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     assert.ok(!fs.existsSync(path.join(proj, '.gsd-returns')), 'nothing is created at the project root');
     assert.ok(!fs.existsSync(path.join(proj, '.git', '.gsd-returns')), 'nothing is created inside .git');
     assert.ok(!fs.existsSync(path.join(proj, '.git', 'objects', '.gsd-returns')), 'nothing is created inside .git/objects');
+    assert.ok(!fs.existsSync(path.join(proj, '.GIT', 'objects', '.gsd-returns')), 'nothing is created inside .GIT/objects');
+    assert.ok(!fs.existsSync(path.join(proj, '.Git', 'new-dir')), 'nothing is created inside .Git');
     // A normal phase dir under the same root is still accepted.
     const ok = receiptPathFrom(f, proj, `${fwd(proj)}/sub/ph`, proj);
     assert.equal(ok.status, 0, ok.stderr);
@@ -2239,9 +2311,18 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
     const shim = [
       'find() {',
       `  printf '%s\\n' "$@" > ${q(fwd(argvLog))}`,
-      '  local mins="" a; local -a paths=()',
-      '  while [ $# -gt 0 ]; do case "$1" in -mmin) mins="${2#-}"; shift 2 ;; *) paths+=("$1"); shift ;; esac; done',
-      '  for a in "${paths[@]}"; do [ "$AGE" -lt $(( mins * 60 )) ] && printf \'%s\\n\' "$a"; done',
+      // The shim models the two argv shapes the watch hands find: a literal file
+      // (`find FILE -mmin -N`), or a directory with a basename pattern
+      // (`find DIR -maxdepth 1 -type f -name PATTERN -mmin -N`). It prints each listed
+      // file, or each regular file in DIR whose name matches PATTERN, when AGE is
+      // inside the window.
+      '  local mins="" name="" a e; local -a paths=()',
+      '  while [ $# -gt 0 ]; do case "$1" in -mmin) mins="${2#-}"; shift 2 ;; -name) name="$2"; shift 2 ;; -maxdepth|-type) shift 2 ;; *) paths+=("$1"); shift ;; esac; done',
+      '  [ "$AGE" -lt $(( mins * 60 )) ] || return 0',
+      '  for a in "${paths[@]}"; do',
+      '    if [ -n "$name" ]; then for e in "$a"/*; do [ -f "$e" ] || continue; case "${e##*/}" in $name) printf \'%s\\n\' "$e" ;; esac; done',
+      '    else printf \'%s\\n\' "$a"; fi',
+      '  done',
       '  return 0',
       '}',
     ].join('\n');
@@ -2251,12 +2332,53 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       return runHelpers(`${shim}\nAGE=${age}\n${call}`, { interval, threshold: 99999 });
     };
     assert.equal(aged(299, 5), 'active', '4m59s old: inside a 5-minute interval');
-    assert.deepEqual(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean), [fwd(plan), '-mmin', '-5'],
-      'find is handed the expanded plan path and the interval as -mmin -N');
+    assert.deepEqual(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean),
+      [f.fwd, '-maxdepth', '1', '-type', 'f', '-name', '*-PLAN.md', '-mmin', '-5'],
+      'find is handed the quoted phase dir, the basename pattern and the interval as -mmin -N');
     assert.equal(aged(300, 5), 'waiting', '5m00s old: outside a 5-minute interval');
+    assert.equal(aged(301, 5), 'waiting', '5m01s old: outside a 5-minute interval');
     assert.equal(aged(300, 7), 'active', 'the window follows the interval: 5m00s is inside 7 minutes');
     assert.equal(splitLines(fs.readFileSync(argvLog, 'utf8')).filter(Boolean).pop(), '-7');
-    assert.equal(aged(0, 5, `${f.fwd}/none-*-PLAN.md`), 'waiting', 'no plan file: find is not run and there is no activity');
-    assert.equal(fs.existsSync(argvLog), false, 'find is not called when the glob matches nothing');
+    assert.equal(aged(0, 5, `${f.fwd}/none-*-PLAN.md`), 'waiting', 'a pattern no file matches gives no activity');
+    assert.ok(fs.existsSync(plan), 'control: 01-PLAN.md was present when the non-matching pattern ran');
+  });
+
+  // Review 5904580537 Major 1: on macOS Claude Code the orchestrator's Bash calls run in
+  // zsh, which has no `shopt` and does not glob a parameter's value, so the old array
+  // expansion left the literal pattern in place and a planner still writing plans was
+  // reported `stalled`. find now matches the basename itself. This row runs the shipped
+  // watch under a real zsh, so it needs a zsh on PATH and is skipped, visibly, where
+  // there is none (PATH is scanned without spawning anything).
+  function zshOnPath() {
+    const name = process.platform === 'win32' ? 'zsh.exe' : 'zsh';
+    for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+      if (!dir) continue;
+      const p = path.join(dir, name);
+      try { if (fs.statSync(p).isFile()) return p; } catch { /* not in this PATH entry */ }
+    }
+    return null;
+  }
+
+  test('under zsh, a fresh *-PLAN.md in a spaced phase dir reads as active, with no shell error (Major 1)', (t) => {
+    const zsh = zshOnPath();
+    if (!zsh) { t.skip('no zsh on PATH'); return; }
+    const f = fixture(t);
+    const phase = path.join(f.dir, 'phase dir');
+    fs.mkdirSync(phase);
+    fs.writeFileSync(path.join(phase, '01-PLAN.md'), '# plan\n');
+    const fwdPhase = phase.replace(/\\/g, '/');
+    const markers = watchCallOf(sectionOf(readPlanPhase(), PLANNER_SECTION)).markers;
+    const clock = `date() { if [ "$1" = "+%s" ]; then echo ${NOW}; else command date "$@"; fi; }`;
+    const run = (glob) => runBashScript([
+      extractStallFunctionsBash(), 'sleep() { :; }', clock,
+      'PLANNER_STALL_INTERVAL_MINUTES=5', 'PLANNER_STALL_THRESHOLD_MINUTES=10',
+      `gsd_stall_watch ${q(NOW - 660)} ${q(f.receipt)} ${q(glob)}${markers.map((x) => ` ${q(x)}`).join('')}`,
+    ].join('\n') + '\n', [], { interpreter: zsh });
+    const fresh = run(`${fwdPhase}/*-PLAN.md`);
+    assert.equal(fresh.status, 0, fresh.stderr);
+    assert.equal(fresh.stderr, '', 'the watch runs under zsh with no shell error');
+    assert.equal(fresh.stdout.trim(), 'active', 'a fresh plan 660 s after dispatch is activity, not a stall');
+    // Control: the same call with a pattern no file matches is past the threshold.
+    assert.equal(run(`${fwdPhase}/none-*-PLAN.md`).stdout.trim(), 'stalled', 'control: no matching plan at 660 s is stalled');
   });
 });

@@ -14,7 +14,7 @@ Elaboration deferred from the `plan-phase.md` spine under ADR-4139 (Compact Cont
 
 ## § 9a — Filesystem Fallback (Planner)
 
-This elaborates the spine's §9a trigger condition (above) — the recovery banner and its three options.
+Fires when the planner's Agent() call comes back with no recognized marker, or when a planner marker (`## CHECKPOINT REACHED`, `## PHASE SPLIT RECOMMENDED`, `## ⚠ Source Audit`, `## PLANNING INCONCLUSIVE`) arrived on the return receipt but the body step 9 reads (the question, the proposed split, the gap list, the attempts) has not arrived by the next cycle (`steps/stall-detection-helpers.md`). This elaborates the spine's §9a — the recovery banners and their options.
 
 ```bash
 # #3218: this asks "did the planner write files to disk at all" — a
@@ -26,7 +26,31 @@ This elaborates the spine's §9a trigger condition (above) — the recovery bann
 
 The spine already computed `DISK_PLANS` (above) before reaching this elaboration.
 
-**If `DISK_PLANS` > 0:** The planner wrote plans to disk but the Agent() return was empty or
+**If `DISK_PLANS` > 0 and a marker arrived on the receipt without its body:** the planner's
+return cannot be read, so the receipt alone never counts as `## PLANNING COMPLETE`. Display:
+
+```text
+◆ Planner receipt says {MARKER}, but its full return has not arrived. {DISK_PLANS} plan(s) exist on disk.
+  Its content cannot be read yet, so the receipt alone is not treated as a result.
+```
+
+Offer 3 options, Retry first:
+1. **Retry planner**: re-spawn the planner with the same prompt (return to step 8)
+2. **Accept plans**: treat the plans on disk as `## PLANNING COMPLETE` and continue through step 9 `## PLANNING COMPLETE` handling
+3. **Stop**: exit; user can re-run `/gsd:plan-phase {N}` to resume
+
+**If `DISK_PLANS` is 0 and a marker arrived on the receipt without its body:** there are no
+plans to accept and the return cannot be read. Display:
+
+```text
+◆ Planner receipt says {MARKER}, but its full return has not arrived, and no plans exist on disk.
+```
+
+Offer 2 options:
+1. **Retry planner**: re-spawn the planner with the same prompt (return to step 8)
+2. **Stop**: exit; user can re-run `/gsd:plan-phase {N}` to resume
+
+**If `DISK_PLANS` > 0 and no marker arrived:** The planner wrote plans to disk but the Agent() return was empty or
 truncated (the Windows stdio hang pattern — the subagent finished but the return never
 arrived). Display:
 
