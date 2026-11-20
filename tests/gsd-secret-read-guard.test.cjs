@@ -1322,6 +1322,18 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     `echo "-c core.fsmonitor='cat .env' status" | xargs time X=/usr/bin/git foo`,
   ]);
   blocks(['time X=/usr/bin/claude --agent gsd-debugger'], { code: 'debugger-cli-spawn', path: undefined });
+  // An unknown command behind `time` and assignments launches what it names with those assignments in scope: the
+  // reading from before, which has none of them, does not stand in for it.
+  blocks([
+    "time GIT_EDITOR='cat .env' caffeinate git commit --amend",
+    "time X=1 GIT_EDITOR='cat .env' caffeinate git commit --amend",
+    "time GIT_SSH_COMMAND='cat .env' strace -f git fetch",
+    "time X=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0='cat .env' ionice git status",
+    "time X=1 GIT_EDITOR='cat .env' caffeinate env git commit",
+    "time X=1 GIT_EDITOR='cat .env' caffeinate bash -c 'git commit'",
+  ]);
+  // caffeinate, like nice or timeout, runs its first operand as the program, so `GIT_EDITOR=…` there runs nothing.
+  allows(["time X=1 caffeinate GIT_EDITOR='cat .env' git commit"]);
 
   // `source` / `.` and a shell given `/dev/stdin` (or `/dev/fd/0`, `/proc/self/fd/0`) run their stdin, as a shell
   // with no file operand does, and so does one given `-s`. A `<( )` operand is still read as the script.
