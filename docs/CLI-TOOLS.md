@@ -825,8 +825,10 @@ names an owner, when that pid is not running.
 
 With `--json-errors`, each refusal carries a typed reason
 ([json-errors.md](json-errors.md#config-errors-config-get-config-set-config-ensure-section-config-save-defaults)):
-`usage` for settings that are not one JSON object (including an empty or blank argument) or
-that give both spellings of one setting (`commit_docs` and `planning.commit_docs`),
+`usage` for settings that are not one JSON object (including an empty or blank argument),
+that give both spellings of one setting (`commit_docs` and `planning.commit_docs`), or that give
+`commit_docs` or `search_gitignored`, under either spelling, a value that is not a boolean (new
+projects would ignore it while the loader read it),
 `config_invalid_key` for a key that is not a known setting, is written dotted
 (`workflow.research` rather than nested) or gives a section a scalar, the reason `config-set` itself
 reports for a value it does not accept (`unknown` for most values, `usage` for a malformed number

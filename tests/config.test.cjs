@@ -4743,6 +4743,31 @@ describe('#5681: config-save-defaults holds the settings to the config-set rules
     assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
   });
 
+  // New-project creation ignores a commit_docs or search_gitignored of another
+  // type than the template's boolean while the loader reads it, so the save
+  // refuses one under either spelling. A JSON 1e400 is Infinity, a number.
+  for (const key of ['commit_docs', 'search_gitignored']) {
+    for (const spelling of [key, `planning.${key}`]) {
+      for (const bad of ['"false"', '0', '1e400', '[]']) {
+        test(`${spelling} given ${bad} is a usage error and the store is left byte-identical`, (t) => {
+          const { defaultsPath, run } = storeWith(t, BEFORE);
+          const json = spelling === key ? `{"${key}":${bad}}` : `{"planning":{"${key}":${bad}}}`;
+          const result = run([json]);
+          assertRefused(result, 'usage');
+          assert.ok(JSON.parse(result.error).message.includes(`"${spelling}" must be a boolean, got ${bad === '1e400' ? 'Infinity' : bad}.`), result.error);
+          assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), BEFORE);
+        });
+      }
+    }
+  }
+
+  test('a boolean commit_docs or search_gitignored under either spelling is saved', (t) => {
+    const { defaultsPath, run } = storeWith(t, BEFORE);
+    assert.ok(run([JSON.stringify({ planning: { commit_docs: false, search_gitignored: true } })]).success);
+    assert.deepStrictEqual(JSON.parse(fs.readFileSync(defaultsPath, 'utf-8')),
+      { model_profile: 'quality', planning: { commit_docs: false, search_gitignored: true } });
+  });
+
   for (const args of [[], ['{}', '{}']]) {
     test(`${args.length} positionals is a usage error`, (t) => {
       const { defaultsPath, run } = storeWith(t, BEFORE);

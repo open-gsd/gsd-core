@@ -966,6 +966,19 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   if (twin) {
     error(`Invalid settings for config-save-defaults: "${twin[0]}" and "${twin[1]}" are one setting; give only one of them.`, ERROR_REASON.USAGE);
   }
+  // New-project creation reads a twin the template writes flat only when its
+  // value has the template's type, while the loader reads any value, so a
+  // stored string "false" would reach the loader and not new projects.
+  for (const { key, section, field } of TEMPLATE_FLAT_TWINS) {
+    const want = typeof TEMPLATE_FLAT_SETTINGS[key];
+    for (const spelling of [key, `${section}.${field}`]) {
+      const value = readPath(patch, spelling);
+      if (value !== undefined && value !== null && typeof value !== want) {
+        const shown = typeof value === 'number' ? String(value) : JSON.stringify(value);
+        error(`Invalid settings for config-save-defaults: "${spelling}" must be a ${want}, got ${shown}.`, ERROR_REASON.USAGE);
+      }
+    }
+  }
 
   const gsdDir = path.join(resolveGsdHome(), '.gsd');
   const defaultsPath = path.join(gsdDir, 'defaults.json');
