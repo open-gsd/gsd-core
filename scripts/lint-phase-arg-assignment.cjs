@@ -89,7 +89,7 @@ const SHELL_INFO_STRINGS = new Set(['bash', 'sh', 'shell']);
 const CANONICAL_FORMS = Object.freeze({
   /** `/gsd:secure-phase 4` — the phase is the whole argument string, minus a `--ws <name>` pair. */
   positional:
-    'PHASE_ARG=$(echo "$GSD_ARGS" | sed -E \'s/--ws[[:space:]]+("[A-Za-z0-9._-]+"|\'\\\'\'[A-Za-z0-9._-]+\'\\\'\'|[A-Za-z0-9._-]+)//g\' | xargs)',
+    'PHASE_ARG=$(echo "$GSD_ARGS" | sed -E \'s/--ws[[:space:]]+("[^"]*"|\'\\\'\'[^\'\\\'\']*\'\\\'\'|[A-Za-z0-9._-]+)//g\' | xargs)',
   /** `/gsd:review --phase 4 --codex` — the phase is the value of a named flag. */
   phaseFlag:
     'PHASE_ARG=$(echo "$GSD_ARGS" | sed -nE \'s/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\\1/p\')',
