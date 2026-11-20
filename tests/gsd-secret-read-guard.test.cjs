@@ -1339,6 +1339,8 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   for (const [cmd, expectedPath] of [
     ['dd if=.env', 'if=.env'],
     ['dd if=.e""nv', 'if=.env'],
+    ['dd.exe if=.env', 'if=.env'],
+    ['DD.EXE if=.env', 'if=.env'],
     // Controls.
     ['dd bs=1 if=./.env', 'if=./.env'],
     ['dd of=./.env', 'of=./.env'],
