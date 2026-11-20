@@ -202,8 +202,8 @@ gsd_stall_should_recover() {
 # absolute paths (a drive letter counts only where cygpath exists) with no empty,
 # `.` or `..` component (so a UNC path, which starts with `//`, is refused), no
 # trailing separator (except a ROOT that is a filesystem root), no quote, `$`,
-# backtick, `<`, `>` or ASCII control character (matched in the C locale, so the
-# caller's locale cannot change the set), and in PHASE_DIR no backslash; anything
+# backtick, `<`, `>` or ASCII control character (matched with LC_ALL=C set
+# locally), and in PHASE_DIR no backslash; anything
 # else is refused before the filesystem is touched.
 # The receipt directory must also sit physically under ROOT: a checkout can commit
 # the phase dir, `.planning` or `.gsd-returns` as a symlink, and mkdir -p and the

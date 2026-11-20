@@ -2016,39 +2016,97 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
 
   // The contract as an oracle: a phase dir built from tokens (absolute under the root or
   // relative; segments plain, spaced, empty, `.`, `..` or holding a backslash; an optional
-  // trailing slash) is accepted iff it is absolute and has no empty, `.` or `..` segment, no
-  // backslash and no trailing slash. An accepted dir gets a receipt under its own
-  // .gsd-returns/; a refused one prints nothing and one stderr line.
-  test('property: gsd_receipt_path accepts a generated phase dir iff it meets the input contract', (t) => {
+  // trailing slash), a ROOT drawn from canonical and non-canonical shapes, and a label of 0 to
+  // 300 safe characters. A case is accepted iff both paths meet the contract; an accepted one
+  // gets a receipt under its own .gsd-returns/ whose label is the first 64 characters; a
+  // refused one prints nothing and one stderr line that echoes neither path.
+  test('property: gsd_receipt_path accepts a generated phase dir and root iff both meet the input contract', (t) => {
     const f = fixture(t);
+    const win = process.platform === 'win32';
     const segArb = fc.constantFrom('a', 'b c', 'd-1', '', '.', '..', 'x\\y');
-    const caseArb = fc.record({ abs: fc.boolean(), segs: fc.array(segArb, { minLength: 1, maxLength: 4 }), trail: fc.boolean() });
-    const meets = ({ abs, segs, trail }) => abs && !trail && segs.every((s) => s !== '' && s !== '.' && s !== '..' && !s.includes('\\'));
-    const seen = { accepted: 0, refused: 0 };
+    // ROOT shapes: canonical (ok, and a filesystem root `/` off Windows) and refused ones.
+    const rootKinds = ['ok', 'ok', 'fsroot', 'trail', 'dot', 'dotdot', 'rel', 'empty', 'dslash', 'quote', 'newline', 'drive'];
+    const caseArb = fc.record({
+      abs: fc.boolean(), segs: fc.array(segArb, { minLength: 1, maxLength: 4 }), trail: fc.boolean(),
+      root: fc.constantFrom(...rootKinds),
+      label: fc.string({ unit: fc.constantFrom('a', 'Z', '9', '_', '-'), maxLength: 300 }),
+    });
+    const phaseMeets = ({ abs, segs, trail }) => abs && !trail && segs.every((s) => s !== '' && s !== '.' && s !== '..' && !s.includes('\\'));
+    // On Windows `/` is Git Bash's own root (not above the temp dir) and C:/x is absolute there.
+    const rootMeets = (k) => k === 'ok' || (k === 'fsroot' && !win) || (k === 'drive' && win);
+    const rootOf = (k, P) => ({
+      ok: P, fsroot: '/', trail: `${P}/`, dot: `${P}/.`, dotdot: `${P}/a/..`, rel: 'rel', empty: '',
+      dslash: P.replace(/\/([^/]*)$/, '//$1'), quote: `${P}'q`, newline: `${P}\n`, drive: win ? P : 'C:/x',
+    })[k];
+    const seen = { accepted: 0, refused: 0, long: 0 };
     fc.assert(fc.property(fc.array(caseArb, { minLength: 1, maxLength: 12 }), (cases) => {
       const proj = fs.mkdtempSync(path.join(f.dir, 'ct-'));
+      fs.mkdirSync(path.join(proj, 'a'));
       const caseDir = fs.mkdtempSync(path.join(f.dir, 'ctc-'));
       const P = fwd(proj);
       const dirs = cases.map(({ abs, segs, trail }) => (abs ? `${P}/` : '') + segs.join('/') + (trail ? '/' : ''));
-      dirs.forEach((d, i) => fs.writeFileSync(path.join(caseDir, `${i}.d`), d));
+      cases.forEach((c, i) => {
+        fs.writeFileSync(path.join(caseDir, `${i}.d`), dirs[i]);
+        fs.writeFileSync(path.join(caseDir, `${i}.r`), rootOf(c.root, P));
+        fs.writeFileSync(path.join(caseDir, `${i}.l`), c.label);
+      });
       const D = q(fwd(caseDir));
-      const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(proj)}\ni=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; out=$(gsd_receipt_path "$d" x ${q(P)} 2>${D}/$i.err); printf '%s\\t%s\\t%s\\n' "$i" "$?" "$out"; i=$((i+1)); done\n`, []);
+      const r = runBashScript(`${extractStallFunctionsBash()}\ncd ${q(proj)}\ni=0; while [ -f ${D}/$i.d ]; do IFS= read -r -d '' d < ${D}/$i.d || true; IFS= read -r -d '' rt < ${D}/$i.r || true; IFS= read -r -d '' l < ${D}/$i.l || true; out=$(gsd_receipt_path "$d" "$l" "$rt" 2>${D}/$i.err); printf '%s\\t%s\\t%s\\n' "$i" "$?" "$out"; i=$((i+1)); done\n`, []);
       const rows = new Map(r.stdout.split('\n').filter(Boolean).map((l) => { const [i, rc, out] = l.split('\t'); return [Number(i), { rc, out }]; }));
       const ok = r.status === 0 && cases.every((c, i) => {
         const row = rows.get(i);
-        const err = splitLines(fs.readFileSync(path.join(caseDir, `${i}.err`), 'utf8')).filter(Boolean);
-        if (!meets(c)) {
+        const errText = fs.readFileSync(path.join(caseDir, `${i}.err`), 'utf8');
+        const err = splitLines(errText).filter(Boolean);
+        if (!(phaseMeets(c) && rootMeets(c.root))) {
           seen.refused += 1;
-          return row.rc !== '0' && row.out === '' && err.length === 1 && /^gsd_receipt_path: no receipt: \S/.test(err[0]);
+          const echoed = [dirs[i], rootOf(c.root, P)].some((p) => p.length > 3 && errText.includes(p));
+          return row.rc !== '0' && row.out === '' && err.length === 1 && /^gsd_receipt_path: no receipt: \S/.test(err[0]) && !echoed;
         }
         seen.accepted += 1;
-        return row.rc === '0' && err.length === 0 && row.out.toLowerCase().includes(`/${c.segs.join('/')}/.gsd-returns/x.`.toLowerCase());
+        if (c.label.length > 64) seen.long += 1;
+        const name = path.posix.basename(row.out);
+        return row.rc === '0' && err.length === 0 && row.out.toLowerCase().includes(`/${c.segs.join('/')}/.gsd-returns/`.toLowerCase()) &&
+          name.split('.')[0] === (c.label.slice(0, 64) || 'spawn');
       });
       cleanup(caseDir);
       cleanup(proj);
       return ok;
-    }), { numRuns: 10, examples: [[[{ abs: true, segs: ['a', 'b c'], trail: false }, { abs: false, segs: ['a'], trail: false }, { abs: true, segs: ['a', ''], trail: false }, { abs: true, segs: ['a'], trail: true }]]] });
-    assert.ok(seen.accepted > 0 && seen.refused > 0, `both verdicts must occur (accepted ${seen.accepted}, refused ${seen.refused})`);
+    }), { numRuns: 12, examples: [[[
+      { abs: true, segs: ['a', 'b c'], trail: false, root: 'ok', label: 'x'.repeat(200) },
+      { abs: false, segs: ['a'], trail: false, root: 'ok', label: 'x' },
+      { abs: true, segs: ['a', ''], trail: false, root: 'ok', label: '' },
+      { abs: true, segs: ['a'], trail: true, root: 'ok', label: 'x' },
+      { abs: true, segs: ['a'], trail: false, root: 'trail', label: 'x' },
+    ]]] });
+    assert.ok(seen.accepted > 0 && seen.refused > 0 && seen.long > 0, `accepted, refused and long-label cases all occur (${JSON.stringify(seen)})`);
+  });
+
+  // r5 MI-1, generated: a .gsd-returns/.gitignore built from `*`, `!*`, `!keep`, blank lines,
+  // spaces, CR, NUL and comment tokens is accepted iff it is exactly `*` and a newline.
+  test('property: an existing .gsd-returns/.gitignore is accepted iff it is exactly the * line', (t) => {
+    const f = fixture(t);
+    const P = f.fwd;
+    const tokArb = fc.constantFrom('*', '\n', '!*', '!keep', ' ', '\r', '\0', '#x', '/*');
+    const seen = { accepted: 0, refused: 0 };
+    fc.assert(fc.property(fc.array(fc.array(tokArb, { maxLength: 5 }).map((a) => a.join('')), { minLength: 1, maxLength: 10 }), (contents) => {
+      const base = fs.mkdtempSync(path.join(f.dir, 'gi-'));
+      const script = contents.map((content, i) => {
+        fs.mkdirSync(path.join(base, `p${i}`, '.gsd-returns'), { recursive: true });
+        fs.writeFileSync(path.join(base, `p${i}`, '.gsd-returns', '.gitignore'), content);
+        return `if gsd_receipt_path ${q(`${fwd(base)}/p${i}`)} x ${q(P)} >/dev/null 2>${q(`${fwd(base)}/e${i}`)}; then echo "${i} OK"; else echo "${i} FAIL"; fi`;
+      }).join('\n');
+      const r = runBashScript(`${extractStallFunctionsBash()}\n${script}\n`, []);
+      const verdict = new Map(r.stdout.split('\n').filter(Boolean).map((l) => l.split(' ')));
+      const ok = r.status === 0 && contents.every((content, i) => {
+        const exact = content === '*\n';
+        if (exact) seen.accepted += 1; else seen.refused += 1;
+        const err = splitLines(fs.readFileSync(path.join(base, `e${i}`), 'utf8')).filter(Boolean);
+        return verdict.get(String(i)) === (exact ? 'OK' : 'FAIL') && err.length === (exact ? 0 : 1);
+      });
+      cleanup(base);
+      return ok;
+    }), { numRuns: 10, examples: [[['*\n', '*\n\n!*\n', '*', '* \n', '\uFEFF*\n', '*\r\n']]] });
+    assert.ok(seen.accepted > 0 && seen.refused > 0, `both verdicts must occur (${JSON.stringify(seen)})`);
   });
 
   // Pre-push r4 NI-9: the contract is checked against what init actually emits, so a change
@@ -2541,6 +2599,14 @@ describe('bug #5182 — the stall watch observes a GSD-owned return receipt, nev
       ran += 1;
     }
     assert.equal(ran, 3);
+    // A NUL at any of these offsets inside the first 4097 bytes keeps the receipt unread.
+    for (const at of [0, 1, 5, 9, 14, 15, 16, 17, 40, 100, 1000, 4000, 4096]) {
+      const body = Buffer.alloc(4200, 'x');
+      Buffer.from('## ISSUES FOUND\n').copy(body, 0);
+      body[at] = 0;
+      fs.writeFileSync(f.receipt, body);
+      assert.equal(runHelpers(`gsd_return_marker ${q(fwd(f.receipt))} '## ISSUES FOUND'`), '', `NUL at ${at}: no marker`);
+    }
     fs.writeFileSync(f.receipt, '## ISSUES FOUND\n');
     assert.equal(runHelpers(`gsd_return_marker ${q(fwd(f.receipt))} '## ISSUES FOUND'`), '## ISSUES FOUND', 'control: a clean receipt is read');
   });
