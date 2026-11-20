@@ -3077,7 +3077,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
 
   describe('pinned: the env -S shapes the header lists under "Documented gaps" stay allowed (#5514)', () => {
     // A shell reserved word before the command, a `${VAR}` that is set, and a
-    // plain command in an `env -S` string behind `xargs` or `find -exec`. Each is
+    // plain command in an `env -S` string behind `xargs`, `find -exec` or
+    // `watch -x`. Each is
     // allowed on `next` too, where no `env -S` string is read. A change that
     // closes one updates the header's list with it. Plain strings: `${` would
     // interpolate.
@@ -3089,6 +3090,7 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       "Z=claude env -S '${Z} --agent gsd-debugger -p x'",
       "xargs env -S 'cat .env'",
       "find . -exec env -S 'cat .env' \\;",
+      "watch -x env -S 'cat .env'",
     ];
     for (const cmd of shapes) {
       test(`allowed: ${JSON.stringify(cmd)}`, () => {

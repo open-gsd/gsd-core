@@ -122,10 +122,12 @@
 //   inside scripts the agent executes, and `glob: '*'` reaching a
 //   NON-gitignored `.env`, a wrapper (or wrapper option taking a
 //   separate value) the WRAPPERS table does not list, and a plain command in
-//   an `env -S` string in the sub-command of `xargs` or a `find -exec` action
-//   (`xargs env -S 'cat .env'`, `find . -exec env -S 'cat .env' \;`), though a
-//   shell script there is read (#6114); the sub-command's own words are still
-//   checked as operands. A shell reserved word before a command (`if`,
+//   an `env -S` string in the sub-command of `xargs`, a `find -exec` action or
+//   `watch -x` (`xargs env -S 'cat .env'`, `find . -exec env -S 'cat .env' \;`,
+//   `watch -x env -S 'cat .env'`), though the secret-read scan does read a
+//   shell script there (#6114; the debugger-spawn check reads none of these
+//   sub-commands, #6147); the sub-command's own words are still checked as
+//   operands. A shell reserved word before a command (`if`,
 //   `then`, `elif`, `else`,
 //   `while`, `until`, `do`, `!`, bash's `coproc`, zsh's `repeat N`,
 //   `nocorrect`, `noglob` and `-`) is taken as the command word, so the
