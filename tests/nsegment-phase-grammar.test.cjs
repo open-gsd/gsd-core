@@ -439,7 +439,7 @@ describe('#4748 — the $((10#$PHASE_INT)) split sites carry a letter suffix int
         }
 
         test(`the commit-scope ERE built from PHASE_N matches both the padded and the unpadded scope of a letter phase${label}`, () => {
-          // Each site feeds PHASE_N into `^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\):`
+          // Each site feeds PHASE_N into `^[a-z]+\((0*${PHASE_N})-(0*${PLAN_N})\)!?:`
           // — the #4003 zero-pad-tolerant scope. Prove the value it now yields
           // for `03A` matches the two subjects an executor could have written,
           // and does NOT match the letter-less phase 3.
@@ -447,7 +447,7 @@ describe('#4748 — the $((10#$PHASE_INT)) split sites carry a letter suffix int
             'set -e',
             splitLine,
             nLine,
-            `SCOPE_RE="^[a-z]+\\((0*\${${site.output}})-(0*1)\\):"`,
+            `SCOPE_RE="^[a-z]+\\((0*\${${site.output}})-(0*1)\\)!?:"`,
             'for s in "feat(3A-01): x" "feat(03A-1): x"; do printf \'%s\\n\' "$s" | grep -qE "$SCOPE_RE" || { echo "MISS $s"; exit 3; }; done',
             'printf \'%s\\n\' "feat(3-01): x" | grep -qE "$SCOPE_RE" && { echo "FALSE-MATCH"; exit 4; }',
             'echo OK',
