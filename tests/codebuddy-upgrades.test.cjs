@@ -5,7 +5,7 @@
  * CodeBuddy capability UPGRADES — ADR-1239 / #2098 (EoS/codebuddy).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) plus a direct negotiation-contract check to prove the
+ * `copyRuntimeFixture`, a copy of a real install) plus a direct negotiation-contract check to prove the
  * two real upgrades CodeBuddy contributes as part of the EoS migration:
  *
  *   UPGRADE 1 — extended hook events: CodeBuddy's `extendedHookEvents` was
@@ -32,7 +32,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const {
   profileOf,
@@ -56,7 +56,7 @@ test('capabilities/codebuddy/capability.json extendedHookEvents contains exactly
 });
 
 test('codebuddy --global: settings.json wires all 4 newly-added extended hook events to the GSD context-monitor hook (UPGRADE 1)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'codebuddy', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'codebuddy', scope: 'global' });
   t.after(() => cleanup(root));
 
   const settingsPath = path.join(configDir, 'settings.json');
@@ -86,7 +86,7 @@ test('codebuddy --global: settings.json wires all 4 newly-added extended hook ev
 });
 
 test('a runtime whose extendedHookEvents omits SubagentStart does NOT get one (descriptor-gated, not a global default)', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
   t.after(() => cleanup(root));
 
   const settingsPath = path.join(configDir, 'settings.json');

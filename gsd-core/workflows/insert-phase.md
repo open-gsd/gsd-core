@@ -64,7 +64,7 @@ The CLI handles:
 - Verifying target phase exists in ROADMAP.md
 - Calculating next decimal phase number (checking existing decimals on disk)
 - Generating slug from description
-- Creating the phase directory (`.planning/phases/{N.M}-{slug}/`)
+- Creating the phase directory (`{planning_root}/phases/{N.M}-{slug}/`) (`{planning_root}`: the active scope's root, from `planning.inspect`)
 - Inserting the phase entry into ROADMAP.md after the target phase with (INSERTED) marker
 
 Extract from result: `phase_number`, `after_phase`, `name`, `slug`, `directory`.
@@ -79,7 +79,7 @@ blocks direct STATE.md writes):
    `{decimal_phase}`:
 
    ```bash
-   gsd_run query state.patch '{"Current Phase":"{decimal_phase}","Next recommended run":"/gsd:plan-phase {decimal_phase}"}'
+   gsd_run query state.patch ${GSD_WS:+--ws=${GSD_WS##* }} '{"Current Phase":"{decimal_phase}","Next recommended run":"/gsd:plan-phase {decimal_phase}"}'
    ```
 
    (Adjust field names to whatever pointers STATE.md exposes — the handler
@@ -90,7 +90,7 @@ blocks direct STATE.md writes):
    and dedupes identical entries:
 
    ```bash
-   gsd_run query state.add-roadmap-evolution \
+   gsd_run query state.add-roadmap-evolution ${GSD_WS:+--ws=${GSD_WS##* }} \
      --phase {decimal_phase} \
      --action inserted \
      --after {after_phase} \

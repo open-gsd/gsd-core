@@ -122,7 +122,7 @@ developer declined).
 **PASS:** Safety Gate contains `view passed — no flags — {date}` or `developer-approved after
 view — {date}`; or no third-party registries listed (shadcn official only, or no shadcn).
 **FLAG:** shadcn not initialized, no manual design system declared; no registry section at all.
-Skip entirely if `workflow.ui_safety_gate` is explicitly `false` in `.planning/config.json`.
+Skip entirely if `workflow.ui_safety_gate` is explicitly `false` in `{planning_root}/config.json` (`{planning_root}`: the active scope's root, from `planning.inspect`).
 Absent key = enabled.
 
 ## Dimension 7: Inventory Provenance

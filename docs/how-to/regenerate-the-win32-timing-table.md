@@ -9,8 +9,8 @@ table, see [Platform-measured timings (win32)](../TESTING-SUITES.md#platform-mea
 **When:** the daily shard-balance check opens or comments on its **CI: Windows
 conformance shard balance regressed** issue (see
 [Read CI timeout signals §4](read-ci-timeout-signals.md#4-the-windows-conformance-shards-drift-apart)),
-the three `conformance test (windows-latest, …)` shards otherwise drift apart
-again (a gap of more than a couple of minutes between their durations), or the
+the `conformance test (windows-latest, …, shard i/n)` shards otherwise drift apart
+again (a median gap over `maxMedianGapMs`, see `SHARD_BALANCE`), or the
 conformance tier gains or loses expensive files. Not on a schedule.
 
 Like the Linux table, it is advisory: nothing fails when it goes stale. Files it
@@ -19,7 +19,7 @@ fallback.
 
 Every `conformance test (windows-latest, …)` job in `test.yml` writes its
 per-file durations to a `test-timings-windows-latest-job<N>` artifact, on red
-runs too (the macOS job uploads `test-timings-macos-latest-job<N>` the same
+runs too (the macOS jobs upload `test-timings-macos-latest-job<N>` the same
 way). Artifacts are kept for 14 days.
 
 ## Steps
@@ -27,7 +27,7 @@ way). Artifacts are kept for 14 days.
 1. Pick one recent, fully completed `Tests` run that ran the conformance jobs: a
    push to `next`, or a `workflow_dispatch` of `test.yml`. Pull-request runs
    skip these jobs unless the change needs the full matrix.
-2. Download the three Windows artifacts:
+2. Download the Windows artifacts, one per shard:
 
    ```bash
    gh run download <run-id> --repo open-gsd/gsd-core \
@@ -56,7 +56,7 @@ way). Artifacts are kept for 14 days.
 
 ## Why one run
 
-Use all three shards of **one** run. Each shard runs a disjoint slice of the
+Use every Windows shard of **one** run. Each shard runs a disjoint slice of the
 tier, so together they price every file once. The generator keeps the max for a
 file seen more than once, so mixing runs biases the table toward each file's
 slowest run.

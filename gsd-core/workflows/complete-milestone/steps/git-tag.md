@@ -14,7 +14,7 @@ Key accomplishments:
 - [Item 2]
 - [Item 3]
 
-See .planning/MILESTONES.md for full details."
+See MILESTONES.md for full details."
 ```
 
 Confirm: "Tagged: v[X.Y]"

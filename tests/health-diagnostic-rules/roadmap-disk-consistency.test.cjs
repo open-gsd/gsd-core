@@ -113,6 +113,44 @@ describe('W006 — ROADMAP phase with no disk dir', () => {
     assert.deepEqual(ruleFor('W006').check(snapshot), []);
   });
 
+  test('#5880: a phase heading quoted in a code span, a sentence or a fenced block is not a ROADMAP phase', (t) => {
+    const cwd = createTempDir('gsd-5880-w006-');
+    t.after(() => cleanup(cwd));
+    writeRoadmap(cwd, [
+      '## v1.0 Current 🚧',
+      '',
+      'See ### Phase 9: Mid sentence for details and `### Phase 8: Quoted`.',
+      '',
+      '```',
+      '### Phase 7: Fenced',
+      '```',
+      '',
+      '### Phase 1: Foo',
+    ].join('\n'));
+    makePhaseDir(cwd, '01-foo');
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.deepEqual(ruleFor('W006').check(snapshot), []);
+  });
+
+  test('#5880: a heading without a space after the hashes or at level 5 is not a ROADMAP phase', (t) => {
+    const cwd = createTempDir('gsd-5880-w006-');
+    t.after(() => cleanup(cwd));
+    writeRoadmap(cwd, [
+      '## v1.0 Current 🚧',
+      '',
+      '###Phase 6: No space',
+      '',
+      '##### Phase 5: Level five',
+      '',
+      '### Phase 1: Foo',
+    ].join('\n'));
+    makePhaseDir(cwd, '01-foo');
+
+    const snapshot = buildPlanningSnapshot(cwd);
+    assert.deepEqual(ruleFor('W006').check(snapshot), []);
+  });
+
   test('does not fire for a sentinel phase id (999.x) even with no matching directory', (t) => {
     const cwd = createTempDir('gsd-3309-w006-3-');
     t.after(() => cleanup(cwd));
