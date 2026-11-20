@@ -332,8 +332,9 @@ if [ -n "$SCOPE_MISSING" ]; then
   printf '%s\n' "$SCOPE_MISSING" | sed 's/^/  - /'
 fi
 
-if [ -z "$FILES_OVERRIDE" ] && [ ${#REVIEW_FILES[@]} -eq 0 ]; then
-  # Full fallback (per D-02): SUMMARY scoping yielded nothing. Never reached for a --files override (#6152).
+if [ ${#REVIEW_FILES[@]} -eq 0 ]; then
+  # Full fallback (per D-02): SUMMARY scoping yielded nothing. Never reached for a --files override: Tier 1 exits
+  # non-zero when the override resolves to nothing (#6152).
   if [ -n "$SCOPE_FILES" ]; then
     while IFS= read -r file; do
       [ -n "$file" ] && REVIEW_FILES+=("$file")
