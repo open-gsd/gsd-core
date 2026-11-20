@@ -137,7 +137,7 @@ test('#5531: the instruction says the whole conditional line, its trailing comme
 });
 
 test('#5531: the executor prompt uses the basename of the durable wave manifest', () => {
-  assert.match(content, /_PROMPT_STEM=.*basename "\$WAVE_WORKTREE_MANIFEST" \.json/); // allow-test-rule: source-text-is-the-product the dispatch fragment defines the wave naming contract
+  assert.match(content, /_PROMPT_STEM=.*basename "\$WAVE_WORKTREE_MANIFEST" \.json/); // allow-test-rule: source-text-is-the-product the dispatch fragment defines the wave naming contract, see #5531
 });
 
 // ─── #5934: quick-batch reuses this fragment, so every placeholder it substitutes needs a value ─────
