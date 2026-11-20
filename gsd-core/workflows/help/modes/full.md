@@ -473,7 +473,7 @@ Create a PR from completed phase work with an auto-generated body, or run a read
 - Optionally requests code review
 - Updates STATE.md with shipping status
 
-Prerequisites for normal shipping: phase verified, `gh` CLI installed and authenticated. Audit-only mode needs no verified phase or `gh` authentication.
+Prerequisites for normal shipping: phase verified, `gh` CLI installed and authenticated. Audit-only mode needs no verified phase; access to private run data requires authentication.
 
 Usage: `/gsd:ship 4`, `/gsd:ship 4 --draft`, or `/gsd:ship --efficiency`
 
