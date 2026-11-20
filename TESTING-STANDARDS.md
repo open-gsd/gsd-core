@@ -353,9 +353,19 @@ hide. Each rule below names what enforces it. Where nothing does yet, the rule s
    `await runGsdToolsAsync` for an asynchronous one, `runGsdToolsProcess` only when the subject is the process
    itself (exit of a real process, signals, real stdin, what a missing working directory does). The in-process
    helpers never spawn as a fallback; each throws and names the helper to use. *Enforced by the helpers.*
+   A test that asserts on what a successful command wrote to stderr, or on stdout's exact bytes, calls
+   `runGsdToolsCaptured`, which returns `{ exitCode, stdout, stderr }` in-process. `runGsdTools` keeps stderr
+   only for a failed command and trims stdout, so it is not the helper for those. *The choice between the two
+   is not enforced; found in review.*
 2. **A test that needs a real process lives in a `*.process.test.cjs` file and says why in its title.**
    `tests/cli-parity.process.test.cjs` is the model: it starts the real binary on purpose, once per row, so
-   that other tests do not have to. *Enforced by review today;
+   that other tests do not have to. The six command suites (`state`, `phase`, `roadmap`, `config`, `init`,
+   `custom-phase-readers`) are held to this by ESLint: their `*.test.cjs` files cannot import
+   `tests/helpers/process-seam.cjs` or call `runGsdToolsProcess`, so a case whose subject is a process
+   (an `ExitError` becoming an exit code, a reader meeting a named pipe) or git itself (the commit a STATE.md
+   was written against, allocation across linked worktrees) goes in the suite's `.process.test.cjs` sibling.
+   Git used only to build a repository the case needs (`createTempGitProject`, a `gitOrThrow` commit) may stay
+   in the unit file: ESLint does not ban `tests/helpers/git-fixture.cjs`. *Enforced by ESLint for those six files; for every other file by review today, and
    ADR-6315 item 20 adds the lint.*
 3. **Inject a failure by mocking, not by preloading.** The command runs in your process, so
    `t.mock.method(module, 'fn', …)` on the module the command uses is what the command calls. A per-call
@@ -445,6 +455,34 @@ the merge queue ejected a docs-only PR for it (#6375).
   under `require.main === module`.
 
 Raising the spawn limit is not the fix (ADR-6315 invariant I4).
+
+### A git fixture is a copy of a template
+
+`createFixture({ git: true })`, and so `createTempGitProject`, no longer runs git. Each of the four
+shapes a caller can ask for (with or without `.planning/phases`, with or without `PROJECT.md`) is
+built once, by the six git commands the fixture always used, and a fixture is a copy of that
+template (#6336). Inside a test run the templates are shared by every test file, in the same store
+as the installed trees above.
+
+What a test may rely on is unchanged: a repository on `master` with one commit, `initial commit`,
+by `Test <test@test.com>`, with signing off. `tests/git-fixture-template.process.test.cjs` holds a
+copy against a repository built by hand for every shape.
+
+Three things are different, and a test must not depend on the old behavior:
+
+- **Every fixture of a shape in one run has the same commit hash and commit time.** A test that
+  needs two repositories with different histories makes a commit in one.
+- **The repository's config has `core.trustctime = false` and `core.checkStat = minimal`.** A copy
+  has new inode numbers and change times, and without these git's plumbing (`diff-files`,
+  `diff-index`) reports a clean copy as modified until something refreshes the index.
+- **The template is built with no inherited `GIT_*` variable, no system config, an empty global
+  config and an empty init template**, so it does not depend on the machine or on which test file
+  built it. `.git/hooks` and `.git/info` exist and are empty: there are no sample hooks and no
+  `info/exclude`, whatever the machine's git ships (a developer's git can carry `.planning` in
+  that exclude file, #5470). A test that needs a repository shaped by a particular git setup
+  builds that repository itself.
+
+Do not write into a template (`gitTemplateRoot`). A test process that changes one fails at exit.
 
 ---
 

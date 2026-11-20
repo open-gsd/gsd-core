@@ -74,6 +74,7 @@ module.exports = {
   "tests/criterion-replay.test.cjs",
   "tests/cross-runtime-dispatch.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",
+  "tests/custom-phase-readers.process.test.cjs",
   "tests/custom-phase-readers.test.cjs",
   "tests/custom-phase-review-round7.test.cjs",
   "tests/debugger-semantic-recall.test.cjs",
