@@ -11709,6 +11709,22 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
   }
 
+  // #5716: when the profile registers no Codex agent roles, this install strips GSD content
+  // from config.toml and the validated rewrite after it always writes the file, so without
+  // GSD_ALLOW_SYMLINKED_DEST a symlinked config.toml is refused even when the strip has
+  // nothing to change. Refuse here, with the other destination preflights and before the
+  // install's first write (the orphan recovery below), so a refused run changes nothing
+  // instead of depending on the best-effort pre-config rollback, which leaves
+  // saveLocalPatches's gsd-local-patches/ backup behind. The roles follow the profile
+  // resolved from a committed Runtime Surface above. A dangling link is skipped, as the
+  // strip skips it.
+  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
+    const codexConfigPath = path.join(targetDir, 'config.toml');
+    if (!_codexAgentRolesEnabled() && fs.existsSync(codexConfigPath)) {
+      assertCodexConfigLinkAllowed(codexConfigPath);
+    }
+  }
+
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and
   // its own restore/discard, BEFORE this run's own preserve step stages
@@ -11737,21 +11753,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     installerMigrationResult = null;
     rollback();
   };
-
-  // #5716: when the profile registers no Codex agent roles, this install strips GSD content
-  // from config.toml and the validated rewrite after it always writes the file, so without
-  // GSD_ALLOW_SYMLINKED_DEST a symlinked config.toml is refused even when the strip has
-  // nothing to change. Refuse here, before the install's first write, so a refused run
-  // changes nothing instead of depending on the best-effort pre-config rollback, which
-  // leaves saveLocalPatches's gsd-local-patches/ backup behind. The roles follow the
-  // profile resolved from a committed Runtime Surface above, before preflight. A dangling
-  // link is skipped, as the strip skips it.
-  if (hostBehaviorsFor(runtime).tomlConfigInstall) {
-    const codexConfigPath = path.join(targetDir, 'config.toml');
-    if (!_codexAgentRolesEnabled() && fs.existsSync(codexConfigPath)) {
-      assertCodexConfigLinkAllowed(codexConfigPath);
-    }
-  }
 
   // Save any locally modified GSD files before they get wiped.
   // The pristine context lets saveLocalPatches populate gsd-pristine/ via
