@@ -191,6 +191,147 @@ describe('each fixed site passes the flag and its value as two arguments under b
   });
 });
 
+// ─── 5. /gsd-code-review --files under zsh, bash and a BSD userland (#6152) ───────────────────────────────────
+//
+// The `--files` list was split with `read -a` (bash-only: zsh `bad option: -a`) in a different fence from the Tier 1 block
+// that used it, containment used GNU `realpath -m` (BSD: `illegal option -- m`, so every relative path looked outside),
+// and an override that resolved to nothing silently widened to the phase scope. The shipped Tier 1 fence and the
+// reviewer-slug split are run here exactly as written, one child shell per case, with a `realpath` that rejects `-m`.
+
+describe('/gsd-code-review --files resolves the listed files under bash and zsh, without GNU realpath (#6152)', () => {
+  const { createTempDir, cleanup } = require('./helpers.cjs');
+  const { runGit } = require('./helpers/process-seam.cjs');
+  const WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md');
+
+  /** The first ```bash fence after the line starting with `heading`. */
+  function fenceAfter(heading) {
+    const lines = splitLines(fs.readFileSync(WORKFLOW, 'utf8'));
+    const at = lines.findIndex((line) => line.startsWith(heading));
+    assert.ok(at >= 0, `code-review.md must carry "${heading}"`);
+    const open = lines.findIndex((line, i) => i > at && line === '```bash');
+    const close = lines.findIndex((line, i) => i > open && line === '```');
+    assert.ok(open > at && close > open, `"${heading}" must carry a bash fence`);
+    return lines.slice(open + 1, close).join('\n');
+  }
+
+  /** A repository with src/a.ts and `dir with space/b.ts`, a sibling `outside/x`, and a symlink inside pointing at it. */
+  function fixture(t) {
+    const parent = createTempDir('gsd-6152-');
+    t.after(() => cleanup(parent));
+    const repo = path.join(parent, 'repo');
+    fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'dir with space'), { recursive: true });
+    fs.mkdirSync(path.join(parent, 'outside'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'src', 'a.ts'), 'a\n');
+    fs.writeFileSync(path.join(repo, 'dir with space', 'b.ts'), 'b\n');
+    fs.writeFileSync(path.join(parent, 'outside', 'x'), 'x\n');
+    if (process.platform !== 'win32') fs.symlinkSync(path.join(parent, 'outside', 'x'), path.join(repo, 'link-out'));
+    assert.equal(runGit(['init', '-q'], { cwd: repo }).exitCode, 0);
+    const stubBin = path.join(parent, 'bin');
+    fs.mkdirSync(stubBin);
+    // a BSD userland: `realpath -m` does not exist
+    fs.writeFileSync(path.join(stubBin, 'realpath'), '#!/bin/sh\necho "realpath: illegal option -- m" >&2\nexit 1\n', { mode: 0o755 });
+    return { repo, parent, env: { ...process.env, PATH: `${stubBin}${path.delimiter}${process.env.PATH}` } };
+  }
+
+  /** Run the shipped Tier 1 fence in a fresh shell with only FILES_OVERRIDE set; report what it left in REVIEW_FILES. */
+  function tier1(shell, fx, filesOverride) {
+    const quoted = `'${filesOverride.replace(/'/g, `'\\''`)}'`;
+    const script = [`FILES_OVERRIDE=${quoted}`, fenceAfter('**Tier 1'), 'printf "COUNT=%s\\n" "${#REVIEW_FILES[@]}"',
+      'for f in "${REVIEW_FILES[@]}"; do printf "FILE=%s\\n" "$f"; done'].join('\n');
+    const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
+    const r = runHook(args[0], args.slice(1), { interpreter: shell, timeoutMs: PROBE_TIMEOUT_MS, cwd: fx.repo, env: fx.env });
+    assert.equal(r.outcome, OUTCOME.EXITED, `${shell} did not complete: ${r.summary}`);
+    const lines = splitLines(r.stdout);
+    return { status: r.exitCode, stdout: r.stdout, files: lines.filter((l) => l.startsWith('FILE=')).map((l) => l.slice(5)) };
+  }
+
+  for (const shell of SHELLS) {
+    test(`${shell}: a relative path, an absolute path and a path with a space are accepted`, (t) => {
+      const fx = fixture(t);
+      assert.deepEqual(tier1(shell, fx, 'src/a.ts').files, ['src/a.ts']);
+      const abs = path.join(fx.repo, 'src', 'a.ts');
+      assert.deepEqual(tier1(shell, fx, abs).files, [abs]);
+      const two = tier1(shell, fx, 'src/a.ts,dir with space/b.ts');
+      assert.deepEqual(two.files, ['src/a.ts', 'dir with space/b.ts']);
+      assert.match(two.stdout, /File scope: 2 files from --files override/);
+      assert.equal(two.status, 0);
+    });
+
+    test(`${shell}: blanks around the commas are trimmed, so \`a, b\` lists the two files`, (t) => {
+      const fx = fixture(t);
+      const r = tier1(shell, fx, ' src/a.ts , dir with space/b.ts ');
+      assert.deepEqual(r.files, ['src/a.ts', 'dir with space/b.ts']);
+      assert.equal(r.status, 0);
+    });
+
+    test(`${shell}: a missing file is skipped with a warning and the valid one is reviewed`, (t) => {
+      const fx = fixture(t);
+      const r = tier1(shell, fx, 'src/missing.ts,src/a.ts');
+      assert.deepEqual(r.files, ['src/a.ts']);
+      assert.match(r.stdout, /Warning: File not found, skipping: src\/missing\.ts/);
+    });
+
+    test(`${shell}: a path outside the repository and a symlink pointing outside are rejected, and nothing widens to phase scope`, { skip: process.platform === 'win32' && 'symlinks need privilege on Windows' }, (t) => {
+      const fx = fixture(t);
+      const outside = tier1(shell, fx, '../outside/x');
+      assert.match(outside.stdout, /Error: File path outside repository, skipping: \.\.\/outside\/x/);
+      assert.notEqual(outside.status, 0, 'every entry invalid exits non-zero');
+      assert.deepEqual(outside.files, []);
+      assert.doesNotMatch(outside.stdout, /File scope:/, 'no scope is logged under the override label');
+      const link = tier1(shell, fx, 'link-out');
+      assert.match(link.stdout, /Error: File path outside repository, skipping: link-out/);
+      assert.notEqual(link.status, 0);
+      assert.deepEqual(link.files, []);
+      const mixed = tier1(shell, fx, 'link-out,src/a.ts');
+      assert.deepEqual(mixed.files, ['src/a.ts'], 'a valid entry beside a rejected one is still reviewed');
+    });
+
+    test(`${shell}: a missing file under a symlinked directory that points outside is rejected, not reported as missing`, { skip: process.platform === 'win32' && 'symlinks need privilege on Windows' }, (t) => {
+      const fx = fixture(t);
+      fs.symlinkSync(path.join(fx.parent, 'outside'), path.join(fx.repo, 'link-dir'), 'dir');
+      const r = tier1(shell, fx, 'link-dir/missing.ts');
+      assert.match(r.stdout, /Error: File path outside repository, skipping: link-dir\/missing\.ts/);
+      assert.doesNotMatch(r.stdout, /Warning: File not found/);
+      assert.deepEqual(r.files, []);
+    });
+
+    test(`${shell}: a list entry shaped like a node option is a path, never an option (it runs nothing)`, (t) => {
+      const fx = fixture(t);
+      const marker = path.join(fx.parent, 'pwned');
+      fs.writeFileSync(path.join(fx.repo, 'planted.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');\n`);
+      for (const entry of ['--require=./planted.js', `--import=data:text/javascript,require('node:fs')`]) {
+        const r = tier1(shell, fx, entry);
+        assert.notEqual(r.status, 0, `${entry} resolves to no file`);
+        assert.deepEqual(r.files, []);
+      }
+      assert.equal(fs.existsSync(marker), false, 'the planted script never ran');
+    });
+
+    test(`${shell}: an empty or all-missing list is an error, not a fall back to phase scope`, (t) => {
+      const fx = fixture(t);
+      for (const list of [',', 'src/nope.ts']) {
+        const r = tier1(shell, fx, list);
+        assert.notEqual(r.status, 0, `${JSON.stringify(list)} exits non-zero`);
+        assert.match(r.stdout, /Error: --files override resolved to no reviewable file/);
+        assert.deepEqual(r.files, []);
+      }
+    });
+
+    test(`${shell}: the reviewer-lane slug list splits on commas`, () => {
+      const text = fs.readFileSync(WORKFLOW, 'utf8');
+      const from = text.indexOf('EXPLICIT_REVIEWER_SLUGS=()');
+      assert.ok(from >= 0, 'the slug split must exist');
+      const snippet = text.slice(from, text.indexOf('\nfi\n', from) + 4);
+      const script = `EXPLICIT_JOINED='codex,gemini,opencode'\n${snippet}\nprintf "COUNT=%s\\n" "\${#EXPLICIT_REVIEWER_SLUGS[@]}"\nfor s in "\${EXPLICIT_REVIEWER_SLUGS[@]}"; do printf "<%s>" "$s"; done`;
+      const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
+      const r = runHook(args[0], args.slice(1), { interpreter: shell, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.match(r.stdout, /COUNT=3\n<codex><gemini><opencode>$/);
+    });
+  }
+});
+
 // ─── 6. the executor path guard under zsh and bash (#6153) ────────────────────────────────────────────────────
 //
 // `_norm` split with bash-only `read -ra` and popped a 0-based array, and `_unquote` / `_resets_cwd` took characters
