@@ -185,6 +185,12 @@ describe('no-adhoc-env-isolation: the header\'s flagged claims', () => {
     ]);
   });
 
+  test('an env built from a destructured HOME local is flagged', () => {
+    run([], [
+      { code: 'const { HOME = y } = o; const env = { ...process.env, HOME };', filename: FILE, errors: [home] },
+    ]);
+  });
+
   test('a PATH read through either arm of ?:, &&, an optional chain or process[\'env\'] is followed', () => {
     run([], [
       { code: "(cond ? '' : process.env.PATH).split(':');", filename: FILE, errors: [pathFilter] },
@@ -261,6 +267,14 @@ describe('no-adhoc-env-isolation: the header\'s known gaps are not flagged', () 
       { code: 'const env = { ...process.env }; [env.HOME, env.USERPROFILE] = [tmp, tmp];', filename: FILE },
       { code: 'const env = { ...process.env }; ({ home: env.HOME } = o);', filename: FILE },
       { code: 'class E { HOME = tmp; } const env = { ...process.env, ...new E() };', filename: FILE },
+    ], []);
+  });
+
+  test('an object pattern with a HOME or USERPROFILE key, with or without a default', () => {
+    run([
+      { code: 'let HOME; ({ HOME } = o);', filename: FILE },
+      { code: 'const { HOME = y } = o;', filename: FILE },
+      { code: 'const f = ({ USERPROFILE }) => USERPROFILE;', filename: FILE },
     ], []);
   });
 

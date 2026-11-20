@@ -97,6 +97,10 @@ const path = require('path');
  *     (`[env.HOME, env.USERPROFILE] = [tmp, tmp]`, `({ home: env.HOME } = o)`)
  *     or by a class field spread into an env (`class E { HOME = tmp }`,
  *     `{ ...process.env, ...new E() }`) is not flagged.
+ *   - An object pattern with a `HOME` or `USERPROFILE` key is not flagged,
+ *     with or without a default: `({ HOME } = o)`, `const { HOME = y } = o`,
+ *     or a `({ USERPROFILE }) => …` parameter. It binds a local; an object
+ *     built from that local (`{ ...process.env, HOME }`) is flagged.
  *   - Windows' other home variables are not flagged: `HOMEDRIVE` / `HOMEPATH`
  *     keys, which `os.homedir()` falls back to when USERPROFILE is unset.
  *   - A split of a direct `process.env.PATH` read is flagged whatever it is

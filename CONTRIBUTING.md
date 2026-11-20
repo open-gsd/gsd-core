@@ -739,7 +739,9 @@ The rule and the count below read `tests/**/*.cjs` files only. A copy in a `.mjs
 `.cts` test file, or in a file outside `tests/`, is neither flagged nor counted.
 
 An in-process assignment spelled `process.env.HOME = …` is not flagged; that case uses
-`sandboxHome()`, above. `tests/helpers/isolated-env.cjs` is the one exempt file. The rule's header
+`sandboxHome()`, above. Three other spellings of it are flagged:
+`globalThis.process.env.HOME = …`, `const env = process.env; env.HOME = …` and
+`Object.assign(process.env, { HOME: … })`. `tests/helpers/isolated-env.cjs` is the one exempt file. The rule's header
 (`eslint-rules/no-adhoc-env-isolation.cjs`, "Known gaps") lists the shapes it does not see, such
 as a `HOME=` inside a shell script string.
 
