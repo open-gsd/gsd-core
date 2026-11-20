@@ -25,8 +25,8 @@
  *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself. The
  *   shared Resolve step (`revision-loop.md`) asks the user and records each answer as a `D-NN`,
  *   so the blocker clears inside the loop. With no CONTEXT.md the user leaves the loop for discuss-phase;
- *   where no one can be asked (`--auto`, or a background or nested agent) no answer is recorded, the planner
- *   is not re-spawned, the workflow stops at the escalation with a marker line, and autonomous never executes
+ *   where no one can be asked (`--auto`, or a background or nested agent, which both of autonomous's background
+ *   dispatches tell the agent it is) no answer is recorded, the planner is not re-spawned, the workflow stops at the escalation with a marker line, and autonomous never executes
  *   plans whose run carries it.
  * - verify-work's gap-closure checker skips Dimension 11: that loop has no CONTEXT.md and no route
  *   to record a ruling, so the spine and the checker prompt both scope the dimension out.
@@ -380,6 +380,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.ok(calls.length >= 3, 'autonomous invokes plan-phase');
     for (const l of calls) assert.doesNotMatch(l, /--auto|--chain/, l);
     assert.match(auto.replace(/\s+/g, ' '), /run_in_background=true, prompt="Background: no AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
+    // The converge strategy's background dispatch runs plan-review-convergence, and plan-phase inside it, in a
+    // background agent as well, so its prompt carries the same line.
+    const convergeBg = read('gsd-core/workflows/autonomous/steps/converge-dispatch-bg.md').replace(/\s+/g, ' ');
+    assert.match(convergeBg, /run_in_background=true, prompt="Background: no AskUserQuestion\. Run plan convergence for phase \$\{PHASE_NUM\}/);
     // Within plan-phase, only step 15 clears a leftover flag, and it runs after the revision loop.
     assert.match(read('gsd-core/workflows/plan-phase/steps/auto-advance-check.md'), /gsd_run query config-set workflow\._auto_chain_active false/);
     const spine = read('gsd-core/workflows/plan-phase.md');
