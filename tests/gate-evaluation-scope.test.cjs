@@ -1733,7 +1733,7 @@ describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', ()
     commit(repo, `${PHASE_DIR}/03-02\nforged line-SUMMARY.md`, 'docs(03-02): summary', '# Summary\n\n## Task Commits\n\n- **Task 1:** none\n');
     const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
     assert.ok(scope.unparsedSummaries.length > 0);
-    for (const name of scope.unparsedSummaries) assert.doesNotMatch(name, /[\u0000-\u001f\u007f]/);
+    for (const name of scope.unparsedSummaries) assert.doesNotMatch(name, /\p{Cc}/u);
   });
 
   test('[boundary] long digit and whitespace runs in a Task Commits section are rows of no id, not a hang or a read', () => {
