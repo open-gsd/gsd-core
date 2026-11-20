@@ -4031,10 +4031,9 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
     if (!words.length) continue;
 
     const heredocs = heredocsBySeg.get(s) || [];
-    // Usually one reading; two where `time` took assignments, the earlier one first (commandReadings). The words a
-    // reading started a launched command from are not started again by the other (scanLauncherOperands).
-    const launchedHere = new Set();
-    for (const cmd of commandReadings(words)) {
+    // Usually one reading; two where `time` took assignments, the earlier one first (commandReadings).
+    const cmds = commandReadings(words);
+    for (const cmd of cmds) {
       const { base, operands } = cmd;
       for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
       // A prefix's variables reach this command and everything it runs.
@@ -4118,8 +4117,12 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
         if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
       }
 
-      if (readsLauncherOperands(base)) {
-        const hit = scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx, launchedHere);
+      // Only the reading that resolved the command, with every assignment `time` took in scope, starts what its
+      // operands name (#5492). The earlier one is kept so a command blocked before stays blocked, and the hook
+      // before #5492 never read launcher operands; started there, they would run without those assignments, and
+      // both readings starting each would double the work at every `time` stage.
+      if (cmd === cmds[cmds.length - 1] && readsLauncherOperands(base)) {
+        const hit = scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
         if (hit) return hit;
       }
     }
@@ -4181,8 +4184,8 @@ function bareLauncherName(text) {
 // is started here, with the segment's pipe, which a rescan does not have.
 const REENTERING_WORDS = new Set(['dd', 'dd.exe', ...WRAPPERS.keys()]);
 const XARGS_REENTERING_WORDS = new Set([...REENTERING_WORDS, 'xargs', 'find', 'find.exe', 'watch']);
-// `covered` holds the words started or left to a rescan so far, shared by a segment's readings.
-function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx, covered = new Set()) {
+function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  const covered = new Set();
   const cover = (cmd, words) => {
     if (cmd === null || !readsLauncherOperands(cmd.base)) return;
     for (const w of cmd.operands) if (words.has(bareLauncherName(w.text))) covered.add(w);
