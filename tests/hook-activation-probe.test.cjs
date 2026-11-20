@@ -25,7 +25,7 @@ const { spawnSync } = require('node:child_process');
 
 const surface = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
 const scenarios = require('./fixtures/hook-registration/run-scenarios.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { STAGED_HOOK_SCRIPT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -157,7 +157,7 @@ describe('activation probe: every runtime × registered hook executes', () => {
           t.skip('the probe executes registered commands through /bin/sh; Windows registration shapes are pinned by the Phase 11 win32 golden scenarios, not executed here');
           return;
         }
-        const install = runMinimalInstall({ runtime: rt.id, scope });
+        const install = copyRuntimeFixture({ runtime: rt.id, scope });
         try {
           const hooksDir = path.join(install.configDir, 'hooks');
           const settings = settingsOf(install.configDir);
@@ -183,7 +183,7 @@ describe('activation probe: every runtime × registered hook executes', () => {
 
 describe('positive controls: the probe goes red on a registration that does not activate', () => {
   function withInstall(fn) {
-    const install = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+    const install = copyRuntimeFixture({ runtime: 'claude', scope: 'local' });
     try {
       const hooksDir = path.join(install.configDir, 'hooks');
       const registered = registeredCommands(settingsOf(install.configDir));
@@ -242,7 +242,7 @@ describe('census boundaries (limit-1 / limit / limit+1) against the real install
   test('dropping one registered hook, or adding one, turns the census red', (t) => {
     if (process.platform === 'win32') { t.skip('POSIX host shell'); return; }
     const rt = scenarios.settingsJsonRuntimes().find((r) => r.id === 'claude');
-    const install = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+    const install = copyRuntimeFixture({ runtime: 'claude', scope: 'local' });
     try {
       const hooksDir = path.join(install.configDir, 'hooks');
       const registered = registeredCommands(settingsOf(install.configDir));

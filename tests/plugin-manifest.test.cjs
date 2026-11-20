@@ -25,6 +25,7 @@ const identity = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'package-iden
 const pkg = require(path.join(ROOT, 'package.json'));
 const { MANAGED_HOOKS } = require(path.join(ROOT, 'hooks', 'managed-hooks-registry.cjs'));
 const { cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
+const { loaderSpawnEnv, loaderSpawnArgs } = require('./helpers/claude-loader-env.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { BLOCKING_GUARD_TIMEOUT_S, BLOCKING_GUARD_NAMES } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-hooks-surface.cjs'));
 
@@ -1019,8 +1020,8 @@ describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
       const st = fs.lstatSync(linkPath);
       assert.ok(st.isSymbolicLink(), `${sub} must be a symlink`);
       assert.equal(
-        fs.realpathSync(linkPath),
-        fs.realpathSync(path.join(bundled, sub)),
+        fs.realpathSync.native(linkPath),
+        fs.realpathSync.native(path.join(bundled, sub)),
         `${sub} link must resolve to the bundled subdir`
       );
       // The @-include target now resolves to real bundled content.
@@ -1140,8 +1141,8 @@ describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
     assert.ok(result.prunedStale.includes('references'), 'stale references link must be pruned');
     // Now resolves to the CURRENT bundle.
     assert.equal(
-      fs.realpathSync(linkPath),
-      fs.realpathSync(path.join(pluginRoot, 'gsd-core', 'references')),
+      fs.realpathSync.native(linkPath),
+      fs.realpathSync.native(path.join(pluginRoot, 'gsd-core', 'references')),
       'references must now point at the current bundled tree'
     );
   });
@@ -1158,8 +1159,8 @@ describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
     const result = ensureCanonicalPath({ pluginRoot, homeDir, platform: 'linux', env: {} });
     assert.equal(result.status, 'ensured');
     assert.equal(
-      fs.realpathSync(path.join(canonical, 'workflows')),
-      fs.realpathSync(path.join(pluginRoot, 'gsd-core', 'workflows')),
+      fs.realpathSync.native(path.join(canonical, 'workflows')),
+      fs.realpathSync.native(path.join(pluginRoot, 'gsd-core', 'workflows')),
       'workflows must be repointed to the current bundle'
     );
   });
@@ -1317,16 +1318,17 @@ describe('H: skills surface projection (#1596)', () => {
   // #5504: `claude plugin details` reports `Skills (72)` whether or not the command-surface
   // duplicates load, so it cannot see this defect. The loader's own `system init` event lists
   // every registered slash command (`<plugin>:<name>`), emitted before any model call, so it is
-  // read here without authentication or a network round trip.
+  // read here without authentication or a network round trip (#6091: the spawn's environment carries no
+  // credential variable and its hooks are disabled, so that is true of the whole run, not only of `init`).
   test('#5504: the Claude Code loader registers each workflow exactly once (opportunistic — skip when claude is not on PATH)', (t) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5504-home-'));
     t.after(() => cleanup(home));
-    const env = { ...process.env, ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') };
+    // #6091: no credential or provider variable, offline npm, and hooks disabled, so this run neither authenticates
+    // (no model call on the developer's account) nor lets the SessionStart update worker reach the registry.
+    const env = loaderSpawnEnv(process.env, { ...TEST_ENV_BASE, HOME: home, USERPROFILE: home, GSD_HOME: home, CLAUDE_CONFIG_DIR: path.join(home, '.claude') });
     const probe = spawnSync('claude', ['--version'], { encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS, env });
     if (probe.error || probe.status !== 0) { t.skip('claude CLI not on PATH'); return; }
-    const res = spawnSync('claude', [
-      '-p', '--plugin-dir', ROOT, '--output-format', 'stream-json', '--verbose', '--max-turns', '1', '--model', 'haiku', 'reply ok',
-    ], { encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT, input: '' });
+    const res = spawnSync('claude', loaderSpawnArgs(ROOT), { encoding: 'utf-8', timeout: CLAUDE_PLUGIN_DETAILS_TIMEOUT_MS, env, cwd: ROOT, input: '' });
     const init = (res.stdout || '').split('\n').map((line) => {
       try { return JSON.parse(line); } catch { return null; }
     }).find((event) => event && event.type === 'system' && event.subtype === 'init');
@@ -1356,3 +1358,91 @@ describe('H: skills surface projection (#1596)', () => {
     );
   });
 });
+
+// ─── #6107 (canonical-path hook) ───────────────────────────────────
+//
+// On a case-insensitive volume `fs.realpathSync` keeps the caller's letter case while `realpathSync.native`
+// (realpath(3)) returns the spelling stored on disk. The suite also runs on case-sensitive hosts, so the volume is
+// simulated: `realpathSync` follows Node's documented behaviour (a followed symlink resolves in the target's
+// on-disk spelling, otherwise the caller's spelling is kept) and `.native` always answers the on-disk spelling.
+
+function simulateCaseInsensitiveVolumeForHook(t) {
+  const original = fs.realpathSync;
+  const native = original.native;
+  const fold = (p) => String(p).replace(/([\\/])root(?=[\\/]|$)/i, '$1Root');
+  const nativeVariant = (p, o) => native(fold(p), o);
+  const jsVariant = (p, o) => {
+    const onDisk = native(fold(p), o);
+    return onDisk === fold(p) ? String(p) : onDisk;
+  };
+  jsVariant.native = nativeVariant;
+  // plain assignment, not mock.method: the mock wrapper forwards `.native` to the ORIGINAL function, and the
+  // simulation must answer `.native` itself
+  fs.realpathSync = jsVariant;
+  t.after(() => { fs.realpathSync = original; });
+}
+const flipCaseForHook = (p) => p.replace(/([\\/])Root(?=[\\/]|$)/, '$1root');
+
+describe('#6107: gsd-ensure-canonical-path resolves two spellings of one plugin root to one bundle', () => {
+  const { resolveBundledTree: resolveBundle, ensureCanonicalPath: ensureCanonical, linkPointsAt: pointsAt, MANAGED_SUBDIRS: MANAGED } =
+    require(path.join(ROOT, 'hooks', 'gsd-ensure-canonical-path.js'));
+
+  /** <base>/Root with `gsd-core` a symlink to <base>/Root/Bundle (the on-disk spelling), as in the issue. */
+  function pluginRoot(t) {
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6107-plugin-')));
+    t.after(() => cleanup(base));
+    const root = path.join(base, 'Root');
+    fs.mkdirSync(path.join(root, 'Bundle'), { recursive: true });
+    for (const sub of MANAGED) fs.mkdirSync(path.join(root, 'Bundle', sub), { recursive: true });
+    fs.symlinkSync(path.join(root, 'Bundle'), path.join(root, 'gsd-core'));
+    return { base, root };
+  }
+
+  test('a symlinked bundle is found under both spellings of the root (the same bundle)', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const { root } = pluginRoot(t);
+    const typed = resolveBundle(root);
+    assert.ok(typed, 'the typed spelling resolves a bundle');
+    assert.equal(resolveBundle(flipCaseForHook(root)), typed, 'the case-flipped spelling resolves the same bundle');
+  });
+
+  test('a link created through one spelling reads as correct through the other (idempotent, no relink)', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const { base, root } = pluginRoot(t);
+    const homeDir = path.join(base, 'home');
+    fs.mkdirSync(homeDir, { recursive: true });
+    const first = ensureCanonical({ pluginRoot: root, homeDir, platform: 'linux', env: {} });
+    assert.equal(first.status, 'ensured');
+    const second = ensureCanonical({ pluginRoot: flipCaseForHook(root), homeDir, platform: 'linux', env: {} });
+    assert.notEqual(second.status, 'noop', 'the flipped spelling is not mistaken for "no bundle"');
+    assert.deepEqual([...second.linked].sort(), [...first.linked].sort(), 'every managed link still reads as correct');
+    assert.deepEqual(second.prunedStale, [], 'nothing is pruned or relinked because a spelling differs');
+  });
+
+  test('a correct managed link is recognised as correct when its expected target is spelled the other way', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const { root } = pluginRoot(t);
+    const linkPath = path.join(root, 'managed-link');
+    const target = path.join(root, 'Bundle', MANAGED[0]);
+    fs.symlinkSync(target, linkPath);
+    assert.equal(pointsAt(linkPath, target), true, 'the on-disk spelling');
+    assert.equal(pointsAt(linkPath, flipCaseForHook(target)), true, 'the case-flipped spelling of the same target');
+    // a link to a DIFFERENT directory is still wrong under either spelling
+    fs.mkdirSync(path.join(root, 'Bundle', 'other'));
+    assert.equal(pointsAt(linkPath, path.join(root, 'Bundle', 'other')), false);
+    assert.equal(pointsAt(linkPath, flipCaseForHook(path.join(root, 'Bundle', 'other'))), false);
+  });
+
+  test('a bundle symlink that escapes the plugin root is still rejected under either spelling', (t) => {
+    simulateCaseInsensitiveVolumeForHook(t);
+    const base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6107-escape-')));
+    t.after(() => cleanup(base));
+    const root = path.join(base, 'Root');
+    fs.mkdirSync(path.join(base, 'Outside'), { recursive: true });
+    fs.mkdirSync(root, { recursive: true });
+    fs.symlinkSync(path.join(base, 'Outside'), path.join(root, 'gsd-core'));
+    assert.equal(resolveBundle(root), null);
+    assert.equal(resolveBundle(flipCaseForHook(root)), null);
+  });
+});
+

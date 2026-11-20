@@ -55,7 +55,7 @@ describe('#4003 / #5164 — safe_resume_gate plan-commit lookups ask the resolve
     const ref = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'references', 'tdd.md'), 'utf8');
     assert.ok(!ref.includes('--grep="^test(${PHASE}-${PLAN})"'),
       'the padded-literal example grep must not remain');
-    assert.ok(ref.includes('--grep="^test\\((0*${PHASE_N})-(0*${PLAN_N})\\):"'),
+    assert.ok(ref.includes('--grep="^test\\((0*${PHASE_N})-(0*${PLAN_N})\\)!?:"'),
       'the RED example is anchored and zero-pad-tolerant');
     assert.ok(ref.includes('PHASE_INT=${PHASE%%[!0-9]*}; PHASE_REST=${PHASE#"$PHASE_INT"}') &&
       ref.includes('PHASE_N="$((10#$PHASE_INT))${PHASE_REST//./\\\\.}"') && ref.includes('PLAN_N=$((10#${PLAN}))'),

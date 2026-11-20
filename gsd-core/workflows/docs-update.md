@@ -768,7 +768,7 @@ Spawn the verifiers in batches of at most `DISPATCH_CAPACITY`, and wait for a ba
 For each doc in `canonical_queue` that was successfully written to disk:
 
 1. Print: `◆ Spawning doc verifier for {doc_path}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
-   Spawn the `gsd-doc-verifier` agent (or invoke sequentially if Task tool is unavailable) with a `<verify_assignment>` block:
+   Spawn the `gsd-doc-verifier` agent with `model="{DOC_VERIFIER_MODEL}"` (or invoke sequentially if Task tool is unavailable) with a `<verify_assignment>` block:
    ```xml
    <verify_assignment>
    doc_path: {relative path to the doc file, e.g. README.md}
@@ -788,7 +788,7 @@ This is NOT optional. Every doc in `review_queue` MUST be verified.
 For each doc in `review_queue` from the manifest:
 
 1. Print: `◆ Spawning doc verifier for {doc_path}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
-   Spawn the `gsd-doc-verifier` agent with the same assignment block as above (including its `result_path`).
+   Spawn the `gsd-doc-verifier` agent with `model="{DOC_VERIFIER_MODEL}"` and the same assignment block as above (including its `result_path`).
 2. Read the result JSON from its `result_path`.
 3. Update the manifest: set `status: "verified"` for each review_queue doc processed.
 
@@ -854,7 +854,7 @@ Exact iteration bookkeeping and the regression-halt report wording: `gsd-core/wo
 </step>
 
 <step name="verify_only_report">
-**Reached when `--verify-only` is present in `$ARGUMENTS`** — an early-exit reporting mode: do not proceed to dispatch, generation, commit, or report steps after this step. Spawn `gsd-doc-verifier` (read-only) for every file in `existing_docs`, count `<!-- VERIFY:` markers in each, and present a combined claims-checked/passed/failed/markers table plus a "how to fix" pointer to `/gsd:docs-update` (or `--force` to regenerate everything). Clean up `{project_root}/.planning/tmp/verify-*.json` afterward. Compute `doc_key`/`result_path` and bound the spawns exactly as `verify_docs` § Result file contract and § Dispatch bound specify. End the workflow here.
+**Reached when `--verify-only` is present in `$ARGUMENTS`** — an early-exit reporting mode: do not proceed to dispatch, generation, commit, or report steps after this step. Spawn `gsd-doc-verifier` (read-only, `model="{DOC_VERIFIER_MODEL}"`) for every file in `existing_docs`, count `<!-- VERIFY:` markers in each, and present a combined claims-checked/passed/failed/markers table plus a "how to fix" pointer to `/gsd:docs-update` (or `--force` to regenerate everything). Clean up `{project_root}/.planning/tmp/verify-*.json` afterward. Compute `doc_key`/`result_path` and bound the spawns exactly as `verify_docs` § Result file contract and § Dispatch bound specify. End the workflow here.
 
 Exact table format and failure-detail wording: `gsd-core/workflows/docs-update/detail/elaboration.md` § 3.
 </step>

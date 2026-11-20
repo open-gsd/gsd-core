@@ -43,7 +43,7 @@ const { describeNpmVersionCheckFailure } = require('./lib/npm-version-check-diag
 //
 // On Windows, npm ships as npm.cmd (a batch wrapper); spawnSync without
 // shell:true requires the exact filename including extension.
-const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const npmCommandFor = (platform) => (platform === 'win32' ? 'npm.cmd' : 'npm');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -78,18 +78,19 @@ function satisfiesConstraint(version, constraint) {
     ];
   }
 
-  const [vMaj, vMin, vPat] = parseTuple(version);
-  const [rMaj, rMin, rPat] = parseTuple(reqVer);
-
-  const vNum = vMaj * 1_000_000 + vMin * 1_000 + vPat;
-  const rNum = rMaj * 1_000_000 + rMin * 1_000 + rPat;
+  // Compared part by part: folding the three into one number made 1.1000.0
+  // equal 2.0.0.
+  const v = parseTuple(version);
+  const r = parseTuple(reqVer);
+  let order = 0;
+  for (let i = 0; i < 3 && order === 0; i += 1) order = Math.sign(v[i] - r[i]);
 
   switch (op) {
-    case '>=': return vNum >= rNum;
-    case '>':  return vNum >  rNum;
-    case '<=': return vNum <= rNum;
-    case '<':  return vNum <  rNum;
-    case '=':  return vNum === rNum;
+    case '>=': return order >= 0;
+    case '>':  return order >  0;
+    case '<=': return order <= 0;
+    case '<':  return order <  0;
+    case '=':  return order === 0;
     default:   return false;
   }
 }
@@ -113,13 +114,20 @@ function pkgField(fieldPath, PROJECT_ROOT) {
   }
 }
 
-function main() {
+/**
+ * The arguments this script hands to npm. Tests pin them, because they are the
+ * whole of the script's contract with npm.
+ */
+const NPM_VERSION_ARGS = Object.freeze(['--version']);
+const NPM_LOCKFILE_SYNC_ARGS = Object.freeze(['ci', '--dry-run', '--ignore-scripts']);
+
+function main(argv = process.argv.slice(2)) {
   // ---------------------------------------------------------------------------
   // Argument parsing
   // ---------------------------------------------------------------------------
   let jsonMode = false;
 
-  for (const arg of process.argv.slice(2)) {
+  for (const arg of argv) {
     if (arg === '--json') {
       jsonMode = true;
     } else if (arg === '--help' || arg === '-h') {
@@ -158,6 +166,63 @@ function main() {
     throw new ExitError(2);
   }
 
+  const { checks, pass: overallPass } = collectChecks({ projectRoot: PROJECT_ROOT, run: spawnSync });
+
+  // ---------------------------------------------------------------------------
+  // Output
+  // ---------------------------------------------------------------------------
+  if (jsonMode) {
+    // Structured JSON: {pass: bool, checks: [{name, status, message}]}
+    const out = {
+      pass: overallPass,
+      checks: checks.map(c => ({ name: c.name, status: c.status, message: c.message })),
+    };
+    process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  } else {
+    // Human-readable report
+    process.stdout.write('=== Environment Check ===\n');
+    for (const { name, status, message } of checks) {
+      const icon = status === 'pass' ? '[PASS]' : status === 'fail' ? '[FAIL]' : '[SKIP]';
+      const namePadded = name.padEnd(25);
+      process.stdout.write(`  ${icon}  ${namePadded}  ${message}\n`);
+    }
+    process.stdout.write('\n');
+    if (overallPass) {
+      process.stdout.write('Result: ALL CHECKS PASSED\n');
+    } else {
+      process.stdout.write('Result: ONE OR MORE CHECKS FAILED — see above\n');
+    }
+  }
+
+  return overallPass ? 0 : 1;
+}
+
+/**
+ * Run every check against one project directory and return the rows.
+ *
+ * Everything the checks read from outside the directory is an argument, so a
+ * test can call this in its own process: `run` stands in for `spawnSync` (the
+ * only way this script reaches npm), and `nodeVersion`, `env` and `platform`
+ * stand in for the running Node. `run` has no default: a caller that forgot it
+ * would start the real npm without saying so (#6375).
+ *
+ * @param {{projectRoot: string, run: typeof spawnSync, nodeVersion?: string,
+ *   env?: Record<string, string|undefined>, platform?: string}} deps
+ * @returns {{pass: boolean, checks: Array<{name: string, status: 'pass'|'fail'|'skip', message: string}>}}
+ */
+function collectChecks({
+  projectRoot: PROJECT_ROOT,
+  run,
+  nodeVersion = process.version,
+  env = process.env,
+  platform = process.platform,
+}) {
+  if (typeof run !== 'function') {
+    throw new TypeError('collectChecks: run (the process runner, spawnSync in the CLI) is required');
+  }
+  const npmCmd = npmCommandFor(platform);
+  const viaShell = platform === 'win32';
+
   /** @type {Array<{name: string, status: 'pass'|'fail'|'skip', message: string}>} */
   const checks = [];
 
@@ -169,10 +234,7 @@ function main() {
   // Check 1: Node version vs engines.node
   // ---------------------------------------------------------------------------
   const enginesNode = pkgField('engines.node', PROJECT_ROOT);
-  let currentNode = '';
-  try {
-    currentNode = process.version.replace(/^v/, '');
-  } catch { /* ignore */ }
+  const currentNode = String(nodeVersion || '').replace(/^v/, '');
 
   if (!currentNode) {
     addCheck('node-version', 'fail', 'node binary not found on PATH');
@@ -199,7 +261,7 @@ function main() {
   // No try/catch needed: spawnSync's documented contract routes ENOENT and a
   // timeout-triggered kill through the RETURNED result's `.error` field, not
   // a thrown exception -- there is nothing here for a catch to intercept.
-  const npmVersionSpawn = spawnSync(npmCmd, ['--version'], { encoding: 'utf8', timeout: NPM_VERSION_TIMEOUT_MS, shell: process.platform === 'win32' });
+  const npmVersionSpawn = run(npmCmd, [...NPM_VERSION_ARGS], { encoding: 'utf8', timeout: NPM_VERSION_TIMEOUT_MS, shell: viaShell });
   const npmVersionResult = {
     exitCode: npmVersionSpawn.status ?? 1,
     stdout: (npmVersionSpawn.stdout || '').toString().trim(),
@@ -247,10 +309,10 @@ function main() {
       // build. Without it, npm would run the `prepare` lifecycle (build:lib via
       // tsc) — which fails when check:env runs before deps are installed (tsc
       // absent), misreporting an out-of-sync lockfile. ADR-457 build-at-publish.
-      const res = spawnSync(npmCmd, ['ci', '--dry-run', '--ignore-scripts'], {
+      const res = run(npmCmd, [...NPM_LOCKFILE_SYNC_ARGS], {
         cwd: PROJECT_ROOT,
         encoding: 'utf8',
-        shell: process.platform === 'win32',
+        shell: viaShell,
       });
       if (res.status === 0) {
         addCheck('lockfile-sync', 'pass', 'package-lock.json is in sync with package.json');
@@ -295,10 +357,10 @@ function main() {
 
   if (!pinnedMajor) {
     addCheck('version-manager-pin', 'skip', 'no .nvmrc, .node-version, or .tool-versions found — skipping');
-  } else if (process.env.CI === 'true') {
+  } else if (env.CI === 'true') {
     addCheck('version-manager-pin', 'skip', 'CI=true — version-manager pin check skipped (matrix tests multiple Node majors)');
   } else {
-    const activeMajor = process.version.replace(/^v/, '').split('.')[0];
+    const activeMajor = currentNode.split('.')[0];
     if (activeMajor === pinnedMajor) {
       addCheck('version-manager-pin', 'pass', `Active Node major (${activeMajor}) matches ${pinSource} pin (${pinnedMajor})`);
     } else {
@@ -306,35 +368,10 @@ function main() {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Output
-  // ---------------------------------------------------------------------------
-  const overallPass = checks.every(c => c.status !== 'fail');
-
-  if (jsonMode) {
-    // Structured JSON: {pass: bool, checks: [{name, status, message}]}
-    const out = {
-      pass: overallPass,
-      checks: checks.map(c => ({ name: c.name, status: c.status, message: c.message })),
-    };
-    process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-  } else {
-    // Human-readable report
-    process.stdout.write('=== Environment Check ===\n');
-    for (const { name, status, message } of checks) {
-      const icon = status === 'pass' ? '[PASS]' : status === 'fail' ? '[FAIL]' : '[SKIP]';
-      const namePadded = name.padEnd(25);
-      process.stdout.write(`  ${icon}  ${namePadded}  ${message}\n`);
-    }
-    process.stdout.write('\n');
-    if (overallPass) {
-      process.stdout.write('Result: ALL CHECKS PASSED\n');
-    } else {
-      process.stdout.write('Result: ONE OR MORE CHECKS FAILED — see above\n');
-    }
-  }
-
-  return overallPass ? 0 : 1;
+  return { pass: checks.every(c => c.status !== 'fail'), checks };
 }
 
-runMain(main);
+module.exports = { main, collectChecks, satisfiesConstraint };
+
+// Run only as the entry script, so a test can require the checks without running them.
+if (require.main === module) runMain(() => main());

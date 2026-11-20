@@ -29,7 +29,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const { SENTINEL_RELATIVE_PATH, SENTINEL_STALE_MS } = require('../hooks/lib/isolation-sentinel.js');
-const { REASON_CODE } = require('../hooks/lib/isolation-deny-reason.js');
+const { REASON_CODE, REMEDY } = require('../hooks/lib/isolation-deny-reason.js');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, toLegacyResult } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -496,6 +496,67 @@ describe('gsd-cursor-subagent-start.js: realpath seam — in-process spoof cover
     const identityRealpath = (p) => p;
     const verdict = cursorHookModule.evaluateRootIsolation(spoofedPath, 'gsd-executor', { realpath: identityRealpath });
     assert.equal(verdict.action, 'allow');
+  });
+});
+
+describe('gsd-cursor-subagent-start.js: #6028 — the deny remedy agrees with a recorded degrade (in-process)', () => {
+  let cursorConfigDir;
+  let managedRootPath;
+  let rootPath;
+  let savedCursorConfigDir;
+  const cursorHookModule = require('../hooks/gsd-cursor-subagent-start.js');
+  const WRITTEN_AT = 1_700_000_000_000;
+  const clock = { now: () => WRITTEN_AT + 1 };
+  const dispatchIds = { phase: '665', plan: '665-02', source: 'marker' };
+  const outsideManagedRoot = (p) => (p === rootPath ? path.join(require('node:os').tmpdir(), 'gsd-cs-6028-primary') : p);
+
+  before(() => {
+    cursorConfigDir = createTempDir('gsd-cs-6028-');
+    managedRootPath = path.join(cursorConfigDir, 'worktrees');
+    rootPath = path.join(managedRootPath, 'root');
+    fs.mkdirSync(rootPath, { recursive: true });
+    gitOrThrow(['init'], { cwd: rootPath, timeoutMs: PROBE_TIMEOUT_MS });
+    gitOrThrow(['config', 'user.email', 'test@test.com'], { cwd: rootPath, timeoutMs: PROBE_TIMEOUT_MS });
+    gitOrThrow(['config', 'user.name', 'Test'], { cwd: rootPath, timeoutMs: PROBE_TIMEOUT_MS });
+    fs.mkdirSync(path.join(rootPath, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(rootPath, '.planning', 'config.json'), JSON.stringify({ runtime: 'cursor' }));
+    savedCursorConfigDir = process.env.CURSOR_CONFIG_DIR;
+    process.env.CURSOR_CONFIG_DIR = cursorConfigDir;
+  });
+  after(() => {
+    if (savedCursorConfigDir === undefined) delete process.env.CURSOR_CONFIG_DIR;
+    else process.env.CURSOR_CONFIG_DIR = savedCursorConfigDir;
+    cleanup(cursorConfigDir);
+  });
+
+  function evaluate() {
+    return cursorHookModule.evaluateRootIsolation(rootPath, 'gsd-executor', { clock, dispatchIds, realpath: outsideManagedRoot });
+  }
+
+  test('a fresh recorded none for ANOTHER phase: still denied with the same reason code, remedy is to record an applicable decision', (t) => {
+    writeSentinel(rootPath, { isolation: 'none', phase: '663', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(rootPath, '.gsd')));
+    const v = evaluate();
+    assert.equal(v.action, 'deny', 'the allow/deny decision is unchanged');
+    assert.equal(v.reasonCode, REASON_CODE.NOT_ISOLATED_WORKTREE, 'the stable reason code is unchanged');
+    assert.equal(v.remedy, REMEDY.RECORD_APPLICABLE_DECISION);
+    assert.equal(v.sentinelDiscarded.sentinel.isolation, 'none');
+  });
+
+  test('no sentinel: denied, the start-an-isolated-session remedy stays', () => {
+    const v = evaluate();
+    assert.equal(v.action, 'deny');
+    assert.equal(v.reasonCode, REASON_CODE.NOT_ISOLATED_WORKTREE);
+    assert.equal(v.remedy, REMEDY.ADD_FLAG);
+    assert.equal(v.sentinelDiscarded, null);
+  });
+
+  test('a fresh recorded harness-worktree for another phase: denied, the original remedy stays', (t) => {
+    writeSentinel(rootPath, { isolation: 'harness-worktree', harnessFlag: 'isolation="worktree"', phase: '663', writtenAt: WRITTEN_AT });
+    t.after(() => cleanup(path.join(rootPath, '.gsd')));
+    const v = evaluate();
+    assert.equal(v.action, 'deny');
+    assert.equal(v.remedy, REMEDY.ADD_FLAG);
   });
 });
 

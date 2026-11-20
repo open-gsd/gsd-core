@@ -75,6 +75,11 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
    remaining entries in THIS manifest — resume picks them up on the next
    round/invocation.
 
+   **Record the HEAD the merge left behind (#6203):** the merged commits are
+   the batch's own, so right after each `worktree.cleanup-wave` call run
+   `gsd_run quick-batch update --batch "$BATCH_ID" --head-revision "$(git rev-parse HEAD)"`;
+   `/gsd:quick-batch --resume` compares the live HEAD to this recorded value, not
+   to the HEAD the batch was created against.
 5. **Route each entry's result:**
    - `status == "merged_removed"`: success. Mark the item's completion pending
      (Step 9 calls `quick-batch complete` for it — do NOT call it here; a
