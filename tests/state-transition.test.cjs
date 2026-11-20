@@ -5606,6 +5606,12 @@ describe('#5320 plan-count / plan-position owner parity', () => {
     const run = (fmPhase) => transitionCore(withFm(fmPhase), { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps);
     assert.strictEqual(lineOf(run(19).content), 'Plan: 2 of 6', 'frontmatter phase 19 is the same phase, so the position stays');
     assert.strictEqual(lineOf(run(18).content), 'Plan: 0 of 6 in current phase', 'frontmatter phase 18 is another phase, so the position resets');
+    // no usable frontmatter phase: the body `Current Phase` is read before the body `Phase`, as resolveCurrentPhaseId reads them
+    const body = (lines) => ['# Project State', '', '## Current Position', '', ...lines, 'Plan: 2 of 5', 'Status: Ready', ''].join('\n');
+    const runBody = (content) => transitionCore(content, { kind: 'plannedPhase', phaseNumber: 19, phaseName: 'Tbd', planCount: 6 }, deps);
+    assert.strictEqual(lineOf(runBody(body(['Current Phase: 19', 'Phase: 18'])).content), 'Plan: 2 of 6', 'body Current Phase 19 wins over Phase 18');
+    const emptyFm = ['---', "current_phase: ''", '---', body(['Phase: 19'])].join('\n');
+    assert.strictEqual(lineOf(runBody(emptyFm).content), 'Plan: 2 of 6', 'an empty frontmatter phase falls through to the body');
   });
 
   test('plannedPhase unit: Plan: 0 TBD records the exact count; a missing line and a lower count are typed refusals', () => {

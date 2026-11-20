@@ -17,7 +17,7 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback, stateReplaceFieldInSession, stateCurrentPositionSlice } from './state-document.cjs';
-import { KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
+import { stateFieldValue, KNOWN_TEMPLATE_DEFAULTS, toFiniteNumber, computeProgressPercent, fieldContinuationEnd } from './state-document.cjs';
 import { tokenizeHeadings, withSection, maskFences } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent, clampPercentFromFraction, renderProgressBar } from './phase-lifecycle.cjs';
@@ -2409,18 +2409,6 @@ function nextPhaseWording(disk: NextPhaseDisk | null): { status: string; current
 }
 
 /**
- * The phase STATE.md records, in the order of the write-path owner `resolveCurrentPhaseId`
- * (src/state.cts): frontmatter `current_phase`, else the body `Current Phase`, else the body `Phase` field.
- * `isStatePastPhase` and `plannedPhaseCore` read it here, so the two cannot drift.
- */
-function recordedStatePhase(fm: Record<string, unknown>, body: string): string | null {
-  const fromFm = fm['current_phase'];
-  const raw = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
-  if (raw !== null && raw.trim() !== '') return raw;
-  return stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
-}
-
-/**
  * #5165: is STATE.md already positioned PAST phase `phaseNum`? True when its
  * current phase (frontmatter `current_phase`, else the body `Current Phase` /
  * `Phase` field's leading phase token) compares greater than `phaseNum`.
@@ -2435,7 +2423,12 @@ export function isStatePastPhase(
   content: string, phaseNum: string | number, sourcePath?: string, convention?: string | null,
 ): boolean {
   const fm = extractFrontmatter(content, sourcePath) as Record<string, unknown>;
-  const raw = recordedStatePhase(fm, stripFrontmatter(content));
+  const fromFm = fm['current_phase'];
+  let raw: string | null = typeof fromFm === 'string' || typeof fromFm === 'number' ? String(fromFm) : null;
+  if (raw === null || raw.trim() === '') {
+    const body = stripFrontmatter(content);
+    raw = stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase') || null;
+  }
   // `Phase 4` / `phase 4 of 9` name phase 4 as surely as `4 of 9` does.
   let id: string | null = null;
   if (raw !== null) {
@@ -2816,7 +2809,7 @@ function plannedPhaseCore(
   // keeps the recorded leading N and moves only M; anything else starts at 0.
   // The recorded N carries over only for the SAME phase (`Phase:` or `Current Phase:` leading token).
   // The recorded phase is read in the order of `resolveCurrentPhaseId`: frontmatter current_phase first.
-  const recordedPhase = recordedStatePhase(existingFm, posBefore);
+  const recordedPhase = stateFieldValue(existingFm, posBefore, 'current_phase', 'Current Phase').value ?? stateExtractField(posBefore, 'Phase');
   const samePhase = phaseIdMod.phaseKeyFromProse(recordedPhase, intent.directoryContext, intent.phaseIdConvention) === phaseIdMod.phaseKeyFromToken(intent.phaseNumber, intent.directoryContext);
   // #5320: the plan lines advance-plan reads, from the same scope; a refusal writes nothing.
   const planned: ReturnType<typeof planLinesForPlanned> = intent.planCount == null ? {} : planLinesForPlanned(content, intent.planCount, samePhase, totalRecorded);
