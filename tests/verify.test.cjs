@@ -1792,37 +1792,36 @@ describe('verify artifacts command', () => {
   // tricks, which root bypasses (yielding a test that passes with zero coverage in
   // root Docker and CI).
   //
-  // The injection runs in the CHILD via `NODE_OPTIONS=--require`, because
-  // `output()` writes fd 1 directly (`writeAllSync(1, …)`, io.cjs) rather than
-  // through console.log, so an in-process call cannot have its JSON captured. The
-  // preload patches the child's own module objects, which the compiled code reads at
-  // call time (`shell_command_projection_cjs_1.platformReadSync(…)`,
-  // `node_fs_1.default.statSync(…)`), and the process exits at the end of the case,
-  // so no restore is needed beyond its lifetime.
+  // The injection is a mock in THIS process (#6333). runGsdTools runs the command
+  // in-process, and the compiled code reads these functions off their module
+  // objects at call time (`shell_command_projection_cjs_1.platformReadSync(…)`,
+  // `node_fs_1.default.statSync(…)`), so a mock installed here is what the command
+  // calls. node:test restores it when the case ends. Before #6333 this needed a
+  // preload injected into a spawned child with `NODE_OPTIONS=--require`.
   describe('#4685: injected I/O failures on one artifact (ADR-3574 monkeypatching)', () => {
-    const LIB = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
+    const shellCommandProjection = require('../gsd-core/bin/lib/shell-command-projection.cjs');
 
-    function withInjection(mode, targetPath) {
-      const preload = path.join(tmpDir, `inject-${mode}.cjs`);
-      fs.writeFileSync(preload, `
-const target = ${JSON.stringify(targetPath)};
-if (${JSON.stringify(mode)} === 'enoent-read') {
-  const sp = require(${JSON.stringify(path.join(LIB, 'shell-command-projection.cjs'))});
-  const orig = sp.platformReadSync;
-  // Match on suffix, not string equality: the child resolves the artifact path
-  // itself, and a /tmp vs /private/tmp prefix difference would silently disarm the
-  // injection and leave the test asserting nothing.
-  sp.platformReadSync = (p, o) => (String(p).endsWith(target) ? null : orig(p, o));
-} else {
-  const nodeFs = require('node:fs');
-  const orig = nodeFs.statSync;
-  nodeFs.statSync = (p, o) => {
-    if (String(p).endsWith(target)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
-    return orig(p, o);
-  };
-}
-`);
-      return { NODE_OPTIONS: `--require ${preload}` };
+    // Match on suffix, not string equality: the command resolves the artifact path
+    // itself, and a /tmp vs /private/tmp prefix difference would silently disarm the
+    // injection and leave the test asserting nothing. `hits` proves it was armed.
+    function inject(t, mode, target) {
+      const hits = { count: 0 };
+      if (mode === 'enoent-read') {
+        const real = shellCommandProjection.platformReadSync;
+        t.mock.method(shellCommandProjection, 'platformReadSync', (p, o) => {
+          if (!String(p).endsWith(target)) return real(p, o);
+          hits.count += 1;
+          return null;
+        });
+      } else {
+        const real = fs.statSync;
+        t.mock.method(fs, 'statSync', (p, o) => {
+          if (!String(p).endsWith(target)) return real.call(fs, p, o);
+          hits.count += 1;
+          throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+        });
+      }
+      return hits;
     }
 
     function writeFixture() {
@@ -1834,18 +1833,17 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
       return path.join('src', 'app.js');
     }
 
-    test('a file that disappears between stat and read fails instead of passing empty', () => {
+    test('a file that disappears between stat and read fails instead of passing empty', (t) => {
       // The latent bug this PR also fixes: `safeReadFile(...) || ''` turned a
       // post-stat ENOENT into empty content, and an entry declaring only
       // `path`/`provides` then had NO criterion left to fail — so it passed, having
       // checked nothing. platformReadSync returns null on ENOENT, so returning null
       // reproduces exactly that window.
       const target = writeFixture();
-      const result = runGsdTools(
-        'verify artifacts .planning/phases/01-test/01-01-PLAN.md',
-        tmpDir,
-        withInjection('enoent-read', target),
-      );
+      const injected = inject(t, 'enoent-read', target);
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+      t.mock.restoreAll();
+      assert.ok(injected.count > 0, 'the injected read failure was never reached');
       assert.strictEqual(result.exitCode, 1, `verify artifacts with an unreadable artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
       const output = JSON.parse(result.output);
@@ -1861,16 +1859,15 @@ if (${JSON.stringify(mode)} === 'enoent-read') {
       assert.strictEqual(output.all_passed, false);
     });
 
-    test('a non-ENOENT errno is reported as that entry\'s failure, carrying its code', () => {
+    test('a non-ENOENT errno is reported as that entry\'s failure, carrying its code', (t) => {
       // The generic catch branch. EACCES is the realistic case (an unreadable parent
       // directory); the assertion pins that the errno reaches the operator rather
       // than a generic message, because EACCES and EIO call for different responses.
       const target = writeFixture();
-      const result = runGsdTools(
-        'verify artifacts .planning/phases/01-test/01-01-PLAN.md',
-        tmpDir,
-        withInjection('eacces-stat', target),
-      );
+      const injected = inject(t, 'eacces-stat', target);
+      const result = runGsdTools('verify artifacts .planning/phases/01-test/01-01-PLAN.md', tmpDir);
+      t.mock.restoreAll();
+      assert.ok(injected.count > 0, 'the injected stat failure was never reached');
       assert.strictEqual(result.exitCode, 1, `verify artifacts with an unreadable artifact exits 1 (verdict negative, #5170): ${result.error}`);
 
       const output = JSON.parse(result.output);

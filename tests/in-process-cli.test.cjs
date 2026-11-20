@@ -8,6 +8,12 @@
  * streams and leaves process state as it found it. runCli is gsd-tools' own
  * main behind that seam. Everything here runs in this process; the one case
  * that needs a fresh process is in in-process-cli.process.test.cjs.
+ *
+ * #6333 (ADR-6315 item 15): runInProcessSync is the same seam for a main that
+ * finishes before it returns, and runGsdTools calls gsd-tools through it. A
+ * main that turns out to be asynchronous is refused, never half-run. That an
+ * in-process call gives the result the spawned binary gives is proved in
+ * cli-parity.process.test.cjs.
  */
 
 const test = require('node:test');
@@ -15,17 +21,24 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const helpers = require('./helpers.cjs');
+const processSeam = require('./helpers/process-seam.cjs');
 
 const {
-  runInProcess, IN_PROCESS_REASON, DEFAULT_MAX_BUFFER_BYTES,
+  createTempDir, cleanup, runGsdTools, runGsdToolsAsync, runGsdToolsProcess, SPAWNED_MAX_BUFFER_BYTES, TOOLS_PATH,
+} = helpers;
+
+const {
+  runInProcess, runInProcessSync, IN_PROCESS_REASON, DEFAULT_MAX_BUFFER_BYTES,
 } = require('../gsd-core/bin/lib/in-process-cli.cjs');
 const {
   registerInvocationReset, unregisterInvocationReset, invocationResetNames,
 } = require('../gsd-core/bin/lib/invocation-scope.cjs');
 const { ExitError, terminateNow } = require('../gsd-core/bin/lib/cli-exit.cjs');
 const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
-const { runCli } = require('../gsd-core/bin/gsd-tools.cjs');
+const {
+  runCli, runCliSync, asyncHostCommandNames, HOST_COMMAND_ROUTERS,
+} = require('../gsd-core/bin/gsd-tools.cjs');
 
 const CELL = Symbol.for('gsd.test.in-process-cell');
 
@@ -37,6 +50,8 @@ function processState() {
     env: { ...process.env },
     exitCode: process.exitCode,
     writeSync: fs.writeSync,
+    readSync: fs.readSync,
+    readFileSync: fs.readFileSync,
     stdoutWrite: process.stdout.write,
     stderrWrite: process.stderr.write,
     exit: process.exit,
@@ -706,7 +721,11 @@ test('runInProcess refuses input it cannot honour (#6332)', async (t) => {
       REENTRANT: 'in_process_reentrant',
       INVALID_ARGV: 'in_process_invalid_argv',
       INVALID_MAX_BUFFER: 'in_process_invalid_max_buffer',
+      INVALID_OPTION: 'in_process_invalid_option',
       OUTPUT_OVERFLOW: 'in_process_output_overflow',
+      BUSY: 'in_process_busy',
+      ASYNC_COMMAND: 'in_process_async_command',
+      ASYNC_STARTED: 'in_process_async_started',
       RESET_FAILED: 'in_process_reset_failed',
       RESTORE_FAILED: 'in_process_restore_failed',
     });
@@ -837,7 +856,12 @@ test('runCli waits for a command whose router finishes asynchronously (#6332)', 
     })}\n`);
     return dir;
   }
-  const env = (dir) => ({ ...process.env, GSD_TEMP_DIR: path.join(dir, 'tmp') });
+  // The commands write their output file under the temp root; keep it inside the test's directory.
+  const env = (dir) => {
+    const root = path.join(dir, 'tmp');
+    fs.mkdirSync(root, { recursive: true });
+    return { ...process.env, TMPDIR: root, TEMP: root, TMP: root };
+  };
 
   await t.test('extract-messages returns its result', async (t2) => {
     const dir = sessions(t2);
@@ -994,5 +1018,561 @@ test('runCli runs gsd-tools in-process (#6332)', async (t) => {
     await runCli({ argv: ['--cwd', path.join(before.cwd, 'no-such-dir-6332'), 'generate-slug', 'Two'] });
 
     assert.deepEqual(processState(), before);
+  });
+});
+
+function thrownBy(run) {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+test('runInProcessSync returns what a synchronous main did (#6333)', async (t) => {
+  await t.test('both streams are captured and a returned number is the exit code', () => {
+    const result = runInProcessSync(() => {
+      fs.writeSync(1, 'a');
+      process.stdout.write('b');
+      process.stderr.write('e');
+      return 4;
+    });
+
+    assert.deepEqual(result, { exitCode: 4, stdout: 'ab', stderr: 'e' });
+  });
+
+  await t.test('process.exit ends main with that code and does not end this process', () => {
+    assert.deepEqual(
+      runInProcessSync(() => { process.exit(3); }),
+      { exitCode: 3, stdout: '', stderr: '' },
+    );
+  });
+
+  await t.test('a thrown ExitError settles as its code and message, as runMain settles it', () => {
+    assert.deepEqual(
+      runInProcessSync(() => { throw new ExitError(7, 'boom'); }),
+      { exitCode: 7, stdout: '', stderr: 'boom\n' },
+    );
+  });
+
+  await t.test('argv, cwd and env are what main sees, and process state is as it was afterwards', (t2) => {
+    const dir = tempDir(t2);
+    const before = processState();
+    globalThis[CELL] = 'outer';
+    t2.after(() => { delete globalThis[CELL]; });
+    const withCell = { ...before, cell: 'outer' };
+
+    const result = runInProcessSync(() => {
+      globalThis[CELL] = 'inner';
+      fs.writeSync(1, JSON.stringify({
+        argv: process.argv.slice(2), cwd: process.cwd(), only: process.env.GSD_SYNC_ONLY, path: process.env.PATH,
+      }));
+    }, { argv: ['one', 'two'], cwd: dir, env: { GSD_SYNC_ONLY: 'yes' } });
+
+    assert.deepEqual(JSON.parse(result.stdout), { argv: ['one', 'two'], cwd: dir, only: 'yes' });
+    assert.deepEqual(processState(), withCell);
+  });
+
+  await t.test('gives the result the asynchronous form gives, for any output and exit code', async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.string(), fc.string(), fc.integer({ min: 0, max: 255 }),
+      async (out, err, code) => {
+        const main = () => {
+          fs.writeSync(1, out);
+          process.stderr.write(err);
+          return code;
+        };
+        assert.deepEqual(runInProcessSync(main), await runInProcess(main));
+      },
+    ));
+  });
+
+  await t.test('output up to maxBufferBytes is returned; one byte more is refused', () => {
+    const write = (text) => () => { fs.writeSync(1, text); };
+
+    assert.equal(runInProcessSync(write('abc'), { maxBufferBytes: 4 }).stdout, 'abc');
+    assert.equal(runInProcessSync(write('abcd'), { maxBufferBytes: 4 }).stdout, 'abcd');
+    assert.equal(
+      thrownBy(() => runInProcessSync(write('abcde'), { maxBufferBytes: 4 }))?.code,
+      IN_PROCESS_REASON.OUTPUT_OVERFLOW,
+    );
+  });
+
+  await t.test('invalid options are refused before main runs', () => {
+    let ran = false;
+    const error = thrownBy(() => runInProcessSync(() => { ran = true; }, { argv: 'not-an-array' }));
+
+    assert.equal(error?.code, IN_PROCESS_REASON.INVALID_ARGV);
+    assert.equal(ran, false);
+  });
+
+  // `env: 5` has no entries: applied, it would empty the environment.
+  await t.test('an option of the wrong type is refused before anything is changed, in both forms', async () => {
+    const before = processState();
+    for (const options of [
+      { env: 5 }, { env: null }, { env: ['A=1'] }, { cwd: 5 }, { stdin: Buffer.from('x') }, { scriptPath: 1 },
+    ]) {
+      let ran = false;
+      const main = () => { ran = true; };
+      assert.equal(thrownBy(() => runInProcessSync(main, options))?.code, IN_PROCESS_REASON.INVALID_OPTION, JSON.stringify(options));
+      await assert.rejects(runInProcess(main, options), { code: IN_PROCESS_REASON.INVALID_OPTION });
+      assert.equal(ran, false);
+    }
+    assert.deepEqual(processState(), before);
+  });
+});
+
+test('runInProcessSync serves standard input from options.stdin (#6333)', async (t) => {
+  await t.test('readFileSync(0) gives the text once, then nothing', () => {
+    const result = runInProcessSync(() => {
+      fs.writeSync(1, `${fs.readFileSync(0, 'utf8')}|${fs.readFileSync(0, 'utf8')}|`);
+    }, { stdin: 'héllo' });
+
+    assert.equal(result.stdout, 'héllo||');
+  });
+
+  await t.test('without an encoding it gives bytes, and with no stdin option it gives none', () => {
+    const result = runInProcessSync(() => {
+      const bytes = fs.readFileSync(0);
+      fs.writeSync(1, `${Buffer.isBuffer(bytes)}:${bytes.length}`);
+    });
+
+    assert.equal(result.stdout, 'true:0');
+  });
+
+  await t.test('readSync(0) drains it in the pieces the caller asks for, then reports end of input', () => {
+    const result = runInProcessSync(() => {
+      const chunk = Buffer.alloc(3);
+      const pieces = [];
+      let count;
+      while ((count = fs.readSync(0, chunk, 0, 3, null)) > 0) pieces.push(chunk.subarray(0, count).toString());
+      fs.writeSync(1, JSON.stringify(pieces));
+    }, { stdin: 'abcdefg' });
+
+    assert.deepEqual(JSON.parse(result.stdout), ['abc', 'def', 'g']);
+  });
+
+  await t.test('readSync(0) refuses an offset or length outside the buffer, as node does, and reads nothing', () => {
+    const result = runInProcessSync(() => {
+      const chunk = Buffer.alloc(4);
+      const codes = [[0, -1], [-1, 2], [5, 1], [0, 5], [1.5, 1], [4, 1]]
+        .map(([offset, length]) => thrownBy(() => fs.readSync(0, chunk, offset, length, null))?.code);
+      // Nothing was consumed by the refused reads: a negative length must not move the cursor back or forward.
+      const count = fs.readSync(0, chunk, 0, 4, null);
+      fs.writeSync(1, JSON.stringify({ codes, count, read: chunk.toString() }));
+    }, { stdin: 'abcdef' });
+
+    assert.deepEqual(JSON.parse(result.stdout), {
+      codes: Array(6).fill('ERR_OUT_OF_RANGE'), count: 4, read: 'abcd',
+    });
+  });
+
+  await t.test('readSync(0) at the edges of the buffer: a zero length, and an offset at the end', () => {
+    const result = runInProcessSync(() => {
+      const chunk = Buffer.alloc(4, '.');
+      const counts = [fs.readSync(0, chunk, 0, 0, null), fs.readSync(0, chunk, 4, 0, null), fs.readSync(0, chunk, 3, 1, null)];
+      fs.writeSync(1, JSON.stringify({ counts, chunk: chunk.toString() }));
+    }, { stdin: 'abcdef' });
+
+    assert.deepEqual(JSON.parse(result.stdout), { counts: [0, 0, 1], chunk: '...a' });
+  });
+
+  await t.test('reads of anything else are the real reads', (t2) => {
+    const file = path.join(tempDir(t2), 'input.txt');
+    fs.writeFileSync(file, 'from-disk');
+
+    const result = runInProcessSync(() => {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const chunk = Buffer.alloc(4);
+        const count = fs.readSync(fd, chunk, 0, 4, 0);
+        fs.writeSync(1, `${fs.readFileSync(file, 'utf8')}|${chunk.subarray(0, count).toString()}`);
+      } finally {
+        fs.closeSync(fd);
+      }
+    }, { stdin: 'not-this' });
+
+    assert.equal(result.stdout, 'from-disk|from');
+  });
+});
+
+test('runInProcessSync refuses what it cannot finish (#6333)', async (t) => {
+  await t.test('a main that returns a promise has started work: refused as started, process state restored', async () => {
+    const before = processState();
+    const pending = Promise.resolve(0);
+
+    const error = thrownBy(() => runInProcessSync(() => {
+      fs.writeSync(1, 'discarded');
+      return pending;
+    }, { argv: ['x'] }));
+    await pending;
+
+    assert.equal(error?.code, IN_PROCESS_REASON.ASYNC_STARTED);
+    assert.deepEqual(processState(), before);
+  });
+
+  await t.test('a rejection of the promise such a main returned is not an unhandled rejection', async (t2) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    t2.after(() => { process.off('unhandledRejection', onUnhandled); });
+
+    const error = thrownBy(() => runInProcessSync(() => Promise.reject(new Error('nobody waited'))));
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    assert.equal(error?.code, IN_PROCESS_REASON.ASYNC_STARTED);
+    assert.deepEqual(unhandled, []);
+  });
+
+  await t.test('a main that refused a command before running it names it: refused as not run', () => {
+    const error = thrownBy(() => runInProcessSync(() => {
+      globalThis[CELL] = 'the-command';
+      throw new ExitError(1);
+    }, { asyncRefusalKey: CELL }));
+
+    assert.equal(error?.code, IN_PROCESS_REASON.ASYNC_COMMAND);
+    assert.equal(error?.command, 'the-command');
+    assert.match(error?.message ?? '', /the-command/);
+    assert.equal(globalThis[CELL], undefined, 'the cell does not outlive the call');
+  });
+
+  await t.test('a main that reports a command whose work had started: refused as started, with its name', () => {
+    const error = thrownBy(() => runInProcessSync(() => {
+      globalThis[CELL] = { started: 'the-command' };
+      throw new ExitError(1);
+    }, { asyncRefusalKey: CELL }));
+
+    assert.equal(error?.code, IN_PROCESS_REASON.ASYNC_STARTED);
+    assert.equal(error?.command, 'the-command');
+    assert.match(error?.message ?? '', /do not run the command again.*the-command/);
+  });
+
+  await t.test('a call from inside a synchronous call is refused as busy; the outer call is unharmed', () => {
+    const result = runInProcessSync(() => {
+      fs.writeSync(1, 'before;');
+      fs.writeSync(1, `${thrownBy(() => runInProcessSync(() => {}))?.code};`);
+      fs.writeSync(1, 'after');
+    });
+
+    assert.deepEqual(result, { exitCode: 0, stdout: `before;${IN_PROCESS_REASON.BUSY};after`, stderr: '' });
+  });
+
+  await t.test('a call while an asynchronous call is open is refused as busy, and works once it has closed', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const open = runInProcess(async () => {
+      await gate;
+      fs.writeSync(1, 'late');
+    });
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    const error = thrownBy(() => runInProcessSync(() => {}));
+    release();
+
+    assert.equal(error?.code, IN_PROCESS_REASON.BUSY);
+    assert.deepEqual(await open, { exitCode: 0, stdout: 'late', stderr: '' });
+    assert.equal(runInProcessSync(() => { fs.writeSync(1, 'ok'); }).stdout, 'ok');
+  });
+});
+
+test('runCliSync and a router that turns out to be asynchronous (#6333)', async (t) => {
+  // A router that is not declared async and is on no list, but returns a
+  // promise: its work has started by the time anyone can know.
+  function withRouter(t2, router) {
+    HOST_COMMAND_ROUTERS['zz-undeclared-async'] = router;
+    t2.after(() => { delete HOST_COMMAND_ROUTERS['zz-undeclared-async']; });
+  }
+
+  await t.test('the call fails as started, names the command, and the next call works', async (t2) => {
+    let finished = false;
+    const work = Promise.resolve().then(() => { finished = true; });
+    withRouter(t2, () => work);
+
+    const error = thrownBy(() => runCliSync({ argv: ['zz-undeclared-async'] }));
+
+    assert.equal(error?.code, IN_PROCESS_REASON.ASYNC_STARTED);
+    assert.equal(error?.command, 'zz-undeclared-async');
+    assert.equal(finished, false, 'the call did not wait');
+    assert.equal(runCliSync({ argv: ['generate-slug', 'Next Call'] }).exitCode, 0);
+    await work;
+  });
+
+  await t.test('a rejection of the abandoned work does not become an unhandled rejection', async (t2) => {
+    const unhandled = [];
+    const onUnhandled = (reason) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    t2.after(() => { process.off('unhandledRejection', onUnhandled); });
+    withRouter(t2, () => Promise.reject(new Error('abandoned work failed')));
+
+    assert.equal(thrownBy(() => runCliSync({ argv: ['zz-undeclared-async'] }))?.code, IN_PROCESS_REASON.ASYNC_STARTED);
+    // Unhandled rejections are reported after the microtask queue drains.
+    await new Promise((resolve) => { setImmediate(resolve); });
+
+    assert.deepEqual(unhandled, []);
+  });
+
+  await t.test('a thenable whose then throws is still reported as started', (t2) => {
+    withRouter(t2, () => ({ then() { throw new Error('then threw'); } }));
+
+    const error = thrownBy(() => runCliSync({ argv: ['zz-undeclared-async'] }));
+
+    assert.equal(error?.code, IN_PROCESS_REASON.ASYNC_STARTED);
+    assert.equal(error?.command, 'zz-undeclared-async');
+  });
+
+  // The switch that makes a call synchronous-only belongs to gsd-tools. A
+  // global cell of that name, set by anything else, must change nothing.
+  await t.test('a global cell cannot make the asynchronous entry refuse an asynchronous command', async (t2) => {
+    const cell = Symbol.for('gsd.cli.syncOnly');
+    globalThis[cell] = true;
+    t2.after(() => { delete globalThis[cell]; });
+    withRouter(t2, async () => { fs.writeSync(1, 'ran'); });
+
+    assert.deepEqual(await runCli({ argv: ['zz-undeclared-async'] }), { exitCode: 0, stdout: 'ran', stderr: '' });
+  });
+
+  await t.test('the asynchronous entry waits for the same router', async (t2) => {
+    let finished = false;
+    withRouter(t2, () => Promise.resolve().then(() => { finished = true; }));
+
+    const result = await runCli({ argv: ['zz-undeclared-async'] });
+
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(finished, true);
+  });
+});
+
+// Module state that was set from the environment when the module loaded: the
+// learnings store kept the home directory, and io kept the temp directory, of
+// whichever command loaded them first. Both are resolved on each use now.
+test('a module default that depends on the environment follows each call (#6333)', async (t) => {
+  await t.test('the learnings store follows the home directory', (t2) => {
+    const learnings = require('../gsd-core/bin/lib/learnings.cjs');
+    for (const home of [tempDir(t2), tempDir(t2)]) {
+      const store = runInProcessSync(() => { fs.writeSync(1, learnings.DEFAULT_STORE_DIR); }, {
+        env: { ...process.env, HOME: home, USERPROFILE: home },
+      }).stdout;
+      assert.equal(store, path.join(home, '.gsd', 'knowledge'));
+    }
+  });
+
+  await t.test('the GSD temp directory follows the temp root', (t2) => {
+    const io = require('../gsd-core/bin/lib/io.cjs');
+    for (const root of [tempDir(t2), tempDir(t2)]) {
+      const result = runInProcessSync(() => {
+        io.ensureGsdTempDir();
+        fs.writeSync(1, JSON.stringify([io.GSD_TEMP_DIR, io.gsdTempDir()]));
+      }, { env: { ...process.env, TMPDIR: root, TEMP: root, TMP: root } });
+      const expected = path.join(root, 'gsd');
+      assert.deepEqual(JSON.parse(result.stdout).map((dir) => fs.realpathSync(dir)), [expected, expected]);
+    }
+  });
+});
+
+test('runGsdTools runs the command in this process (#6333)', async (t) => {
+  // Every case here watches the process seam: a call that reaches it started
+  // a child process (or would have, where the case replaces it).
+  const watchSeam = (t2, implementation) => (implementation === undefined
+    ? t2.mock.method(processSeam, 'runNode')
+    : t2.mock.method(processSeam, 'runNode', implementation));
+
+  const exited = (exitCode, stdout = '', stderr = '') => ({
+    outcome: processSeam.OUTCOME.EXITED, exitCode, stdout, stderr, timedOut: false, signal: null, killed: false, code: null,
+  });
+
+  await t.test('a command string is split as a shell would, and no process is started', (t2) => {
+    const seam = watchSeam(t2);
+
+    assert.deepEqual(
+      runGsdTools('generate-slug "Hello World"'),
+      { success: true, output: '{\n  "slug": "hello-world"\n}', exitCode: 0 },
+    );
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('an argv array is passed as it is', (t2) => {
+    const seam = watchSeam(t2);
+
+    assert.deepEqual(JSON.parse(runGsdTools(['generate-slug', 'A $B "c"']).output), { slug: 'a-b-c' });
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('a failing command gives success false, its stderr as the error and its exit code', (t2) => {
+    const seam = watchSeam(t2);
+
+    assert.deepEqual(
+      runGsdTools('no-such-command-zz'),
+      { success: false, output: '', error: 'Error: Unknown command: no-such-command-zz', exitCode: 1 },
+    );
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('cwd and env reach the command', (t2) => {
+    const dir = tempDir(t2);
+    fs.mkdirSync(path.join(dir, '.planning'));
+
+    const found = JSON.parse(runGsdTools(['verify-path-exists', '.planning'], dir, { HOME: dir, USERPROFILE: dir }).output);
+
+    assert.equal(found.exists, true);
+  });
+
+  await t.test('a command that finishes asynchronously is refused by name, pointed at runGsdToolsAsync, and not spawned', (t2) => {
+    const seam = watchSeam(t2);
+    for (const command of [...asyncHostCommandNames(), 'extract-messages', 'profile-sample', 'run-with-timeout']) {
+      assert.throws(
+        () => runGsdTools([command, '--flag'], tempDir(t2)),
+        (error) => error.message.includes(`"${command}"`) && error.message.includes('runGsdToolsAsync')
+          && error.cause?.code === IN_PROCESS_REASON.ASYNC_COMMAND,
+        command,
+      );
+    }
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('runGsdToolsAsync serves any command in this process, with the same result shape', async (t2) => {
+    const seam = watchSeam(t2);
+    const dir = tempDir(t2);
+
+    assert.deepEqual(
+      await runGsdToolsAsync('generate-slug "Hello World"', dir),
+      { success: true, output: '{\n  "slug": "hello-world"\n}', exitCode: 0 },
+    );
+    const asyncCommand = await runGsdToolsAsync(['capability', 'no-such-subcommand-zz'], dir, { HOME: dir, USERPROFILE: dir });
+    assert.equal(asyncCommand.success, false);
+    assert.equal(asyncCommand.exitCode, 1);
+    assert.match(asyncCommand.error, /Unknown capability subcommand: no-such-subcommand-zz/);
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('both helpers give a synchronous command the same result', async (t2) => {
+    const dir = tempDir(t2);
+    for (const args of ['generate-slug "A b"', 'no-such-command-zz', ['verify-path-exists', '.']]) {
+      assert.deepEqual(await runGsdToolsAsync(args, dir), runGsdTools(args, dir), JSON.stringify(args));
+    }
+  });
+
+  await t.test('the in-process call is given the buffer limit a spawned command has', (t2) => {
+    const tools = require(TOOLS_PATH);
+    const call = t2.mock.method(tools, 'runCliSync', () => ({ exitCode: 0, stdout: 'ok', stderr: '' }));
+
+    runGsdTools('generate-slug x');
+
+    assert.equal(call.mock.calls[0].arguments[0].maxBufferBytes, SPAWNED_MAX_BUFFER_BYTES);
+    assert.equal(SPAWNED_MAX_BUFFER_BYTES, 1024 * 1024);
+  });
+
+  await t.test('output over that limit is the failure the spawned form reports, and the command is not run again', (t2) => {
+    const seam = watchSeam(t2);
+    const tools = require(TOOLS_PATH);
+    const overflow = Object.assign(new Error('stdout exceeded maxBufferBytes'), { code: IN_PROCESS_REASON.OUTPUT_OVERFLOW });
+    t2.mock.method(tools, 'runCliSync', () => { throw overflow; });
+
+    assert.deepEqual(runGsdTools('generate-slug x'), {
+      success: false,
+      output: '',
+      error: 'gsd-tools output exceeded the subprocess buffer limit (code=ENOBUFS)',
+      exitCode: 1,
+    });
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('an ENOENT thrown by the call itself is not mistaken for a missing working directory', (t2) => {
+    const seam = watchSeam(t2);
+    const tools = require(TOOLS_PATH);
+    const failure = Object.assign(new Error('ENOENT: no such file or directory, uv_cwd'), { code: 'ENOENT' });
+    t2.mock.method(tools, 'runCliSync', () => { throw failure; });
+
+    assert.equal(thrownBy(() => runGsdTools('generate-slug x')), failure);
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('a working directory that does not exist is a real-process question: refused, and runGsdToolsProcess answers it', async (t2) => {
+    const seam = watchSeam(t2, () => ({ ...exited(null), outcome: processSeam.OUTCOME.SPAWN_FAILED, code: 'ENOENT' }));
+    const missing = path.join(tempDir(t2), 'not-here');
+    const refused = (error) => error.message.includes('not-here') && error.message.includes('runGsdToolsProcess');
+
+    assert.throws(() => runGsdTools('generate-slug x', missing), refused);
+    await assert.rejects(runGsdToolsAsync('generate-slug x', missing), refused);
+    assert.equal(seam.mock.callCount(), 0);
+
+    assert.deepEqual(
+      runGsdToolsProcess('generate-slug x', missing),
+      { success: false, output: '', error: 'gsd-tools failed to spawn (code=ENOENT)', exitCode: 1 },
+    );
+    assert.equal(seam.mock.callCount(), 1);
+  });
+
+  await t.test('a command whose work had started is never run again in a child process', (t2) => {
+    const seam = watchSeam(t2);
+    const tools = require(TOOLS_PATH);
+    const failure = Object.assign(new Error('started'), { code: IN_PROCESS_REASON.ASYNC_STARTED });
+    t2.mock.method(tools, 'runCliSync', () => { throw failure; });
+
+    assert.equal(thrownBy(() => runGsdTools('generate-slug x')), failure);
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('a NODE_ variable set for the call is refused: it would do nothing in this process', async (t2) => {
+    const seam = watchSeam(t2);
+    for (const name of ['NODE_OPTIONS', 'NODE_PATH', 'NODE_NO_WARNINGS', 'NODE_PENDING_DEPRECATION', 'node_options']) {
+      const refused = (error) => error.message.includes(name) && error.message.includes('runGsdToolsProcess');
+      assert.throws(() => runGsdTools('generate-slug x', process.cwd(), { [name]: 'set-for-this-call' }), refused, name);
+      await assert.rejects(runGsdToolsAsync('generate-slug x', process.cwd(), { [name]: 'set-for-this-call' }), refused, name);
+    }
+    // Not refused: the two a program reads for itself, a key that sets nothing,
+    // and a variable passed through unchanged from this process's environment.
+    const saved = process.env.NODE_NO_WARNINGS;
+    process.env.NODE_NO_WARNINGS = '1';
+    t2.after(() => {
+      if (saved === undefined) delete process.env.NODE_NO_WARNINGS;
+      else process.env.NODE_NO_WARNINGS = saved;
+    });
+    for (const env of [{ NODE_TEST_CONTEXT: '' }, { NODE_ENV: 'test' }, { NODE_OPTIONS: undefined }, { ...process.env }]) {
+      assert.equal(runGsdTools('generate-slug x', process.cwd(), env).success, true, JSON.stringify(Object.keys(env).slice(0, 3)));
+    }
+    assert.throws(() => runGsdTools('generate-slug x', process.cwd(), { NODE_NO_WARNINGS: '0' }), /NODE_NO_WARNINGS/);
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('any other variable set for the call does not', (t2) => {
+    const seam = watchSeam(t2);
+
+    assert.equal(runGsdTools('generate-slug x', process.cwd(), { GSD_ANYTHING: '1', NODEISH: '1' }).success, true);
+    assert.equal(seam.mock.callCount(), 0);
+  });
+
+  await t.test('GSD_TEST_CLI_MODE=process spawns every call', async (t2) => {
+    const seam = watchSeam(t2, () => exited(0, 'from the child'));
+    const saved = process.env.GSD_TEST_CLI_MODE;
+    t2.after(() => {
+      if (saved === undefined) delete process.env.GSD_TEST_CLI_MODE;
+      else process.env.GSD_TEST_CLI_MODE = saved;
+    });
+    process.env.GSD_TEST_CLI_MODE = 'process';
+
+    assert.deepEqual(runGsdTools('generate-slug x'), { success: true, output: 'from the child', exitCode: 0 });
+    assert.deepEqual(await runGsdToolsAsync('websearch x'), { success: true, output: 'from the child', exitCode: 0 });
+    assert.equal(seam.mock.callCount(), 2);
+  });
+
+  await t.test('runGsdToolsProcess always spawns', (t2) => {
+    const seam = watchSeam(t2, () => exited(2, 'out', 'err\n'));
+
+    assert.deepEqual(
+      runGsdToolsProcess(['generate-slug', 'x']),
+      { success: false, output: 'out', error: 'err', exitCode: 2 },
+    );
+    assert.equal(seam.mock.callCount(), 1);
+  });
+
+  await t.test('an error that is not a reason to spawn is thrown to the caller', (t2) => {
+    const seam = watchSeam(t2);
+    const tools = require(TOOLS_PATH);
+    const failure = Object.assign(new Error('restore failed'), { code: IN_PROCESS_REASON.RESTORE_FAILED });
+    t2.mock.method(tools, 'runCliSync', () => { throw failure; });
+
+    assert.equal(thrownBy(() => runGsdTools('generate-slug x')), failure);
+    assert.equal(seam.mock.callCount(), 0);
   });
 });

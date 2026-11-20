@@ -1,6 +1,6 @@
 # GSD Agent Reference
 
-> Full role cards for 22 primary agents plus concise stubs for 13 advanced/specialized agents (35 shipped agents total). The `agents/` directory and [`docs/INVENTORY.md`](../INVENTORY.md) are the authoritative roster; see [Architecture](../ARCHITECTURE.md) for context.
+> Full role cards for 23 primary agents plus concise stubs for 13 advanced/specialized agents (36 shipped agents total). The `agents/` directory and [`docs/INVENTORY.md`](../INVENTORY.md) are the authoritative roster; see [Architecture](../ARCHITECTURE.md) for context.
 
 ---
 
@@ -12,7 +12,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 ### Agent Categories
 
-> The table below covers the **22 primary agents** detailed in this section. Thirteen additional shipped agents (pattern-mapper, debug-session-manager, code-reviewer, code-fixer, ai-researcher, domain-researcher, eval-planner, eval-auditor, framework-selector, intel-updater, doc-classifier, doc-synthesizer, mempalace-curator) have concise stubs in the [Advanced and Specialized Agents](#advanced-and-specialized-agents) section below. For the authoritative 35-agent roster, see [`docs/INVENTORY.md`](../INVENTORY.md) and the `agents/` directory.
+> The table below covers the **23 primary agents** detailed in this section. Thirteen additional shipped agents (pattern-mapper, debug-session-manager, code-reviewer, code-fixer, ai-researcher, domain-researcher, eval-planner, eval-auditor, framework-selector, intel-updater, doc-classifier, doc-synthesizer, mempalace-curator) have concise stubs in the [Advanced and Specialized Agents](#advanced-and-specialized-agents) section below. For the authoritative 36-agent roster, see [`docs/INVENTORY.md`](../INVENTORY.md) and the `agents/` directory.
 
 | Category | Count | Agents |
 |----------|-------|--------|
@@ -23,7 +23,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | Roadmappers | 1 | roadmapper |
 | Executors | 1 | executor |
 | Checkers | 3 | plan-checker, integration-checker, ui-checker |
-| Verifiers | 2 | verifier, dom-verifier |
+| Verifiers | 3 | verifier, dom-verifier, behavior-verifier |
 | Auditors | 3 | nyquist-auditor, ui-auditor, security-auditor |
 | Mappers | 1 | codebase-mapper |
 | Debuggers | 1 | debugger |
@@ -434,6 +434,38 @@ This is the **only** GSD agent carrying browser MCP tools. `gsd-executor` is del
 | `could_not_look` | `target_unreachable` | Nothing serving the target |
 
 **Reference:** [Enable live-DOM verification](../how-to/enable-live-dom-verification.md) · [Explanation](../explanation/live-dom-uat-capability.md)
+
+---
+
+### gsd-behavior-verifier
+
+**Role:** Enumerates the interaction-level behaviors a phase delivered, executes the machine-observable ones against the running app through a browser MCP server, and hands the human only what a human must still confirm. Additive — never blocks UAT.
+
+| Property | Value |
+|----------|-------|
+| **Spawned by** | `deep-verify` capability step at `verify:pre` |
+| **Parallelism** | One per `verify-work` run |
+| **Tools** | Read, Write, Glob, Grep, mcp__playwright__*, mcp__chrome-devtools__*, mcp__claude-in-chrome__* |
+| **Disallowed Tools** | Edit, Bash |
+| **Model (balanced)** | Sonnet |
+| **Color** | Cyan |
+| **Produces** | `{phase}-DEEP-VERIFY.md` (full results), `DEEP-VERIFY-CHECKPOINTS.md` (human checkpoints only; rewritten every run) |
+| **Gated by** | `workflow.deep_verify` (default `false`); `workflow.deep_verify_all_phases` widens it beyond UI phases |
+
+It carries no `Bash`: it does not start dev servers, run git or shell out, so the diff it works from is the SUMMARY's "Files Changed" list plus the files it names. Chrome-family servers are driven only while `workflow.live_dom_uat` is also `true` (an instruction the agent follows, read from `.planning/config.json`; the `tools:` line grants all three families); `mcp__playwright__*` is driven whenever it responds. Only the checkpoint artefact is declared in `produces`, so passed behaviors never reach the human.
+
+**Outcome codes** (`nothing_to_report` and `could_not_look` are never conflated):
+
+| `outcome` | `reason` | Meaning |
+|---|---|---|
+| `verified` | `ok` | Behaviors were enumerated and observed; a partial run counts the unobserved ones in `could_not_look` |
+| `nothing_to_report` | `not_ui_phase` | No `{phase}-UI-SPEC.md` and `workflow.deep_verify_all_phases` is off |
+| `nothing_to_report` | `no_behaviors` | The plan, summary and changed files support no behavior |
+| `could_not_look` | `no_browser_mcp` | No browser MCP answered; every behavior is routed to the human |
+| `could_not_look` | `profile_locked` | Another instance holds the browser profile |
+| `could_not_look` | `target_unreachable` | Nothing serving the target |
+
+**Reference:** [Enable deep verification](../how-to/enable-deep-verification.md)
 
 ---
 
@@ -859,7 +891,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 
 ## Agent Tool Permissions Summary
 
-> **Scope:** this table covers the 22 primary agents only. The 13 advanced/specialized agents listed above carry their own tool surfaces in their `agents/gsd-*.md` frontmatter (summarized in the per-agent stubs above and in [`docs/INVENTORY.md`](../INVENTORY.md)).
+> **Scope:** this table covers the 23 primary agents only. The 13 advanced/specialized agents listed above carry their own tool surfaces in their `agents/gsd-*.md` frontmatter (summarized in the per-agent stubs above and in [`docs/INVENTORY.md`](../INVENTORY.md)).
 
 | Agent | Read | Write | Edit | Bash | Grep | Glob | WebSearch | WebFetch | MCP |
 |-------|------|-------|------|------|------|------|-----------|----------|-----|
@@ -884,6 +916,7 @@ Thirteen additional agents ship under `agents/gsd-*.md` and are used by specialt
 | doc-writer | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | doc-verifier | ✓ | ✓ | | ✓ | ✓ | ✓ | | | |
 | security-auditor | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | | | |
+| behavior-verifier | ✓ | ✓ | | | ✓ | ✓ | | | ✓ |
 
 **Principle of Least Privilege:**
 - Checkers are read-only (no Write/Edit) — they evaluate, never modify

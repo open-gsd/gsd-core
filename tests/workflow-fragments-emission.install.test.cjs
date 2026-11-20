@@ -20,8 +20,10 @@
  * tests/workflow-fragments.test.cjs (unit, rows 1-29/37) and
  * tests/workflow-fragments.property.test.cjs (prop, rows 30-31).
  *
- * Each test builds and tears down its own tmp fixture(s) inline (no shared
- * `before()` install cache) — independence per matrix row 38.
+ * Each test builds and tears down its own overlay install(s) inline. The
+ * install of THIS checkout, which every row only reads, is the run's shared
+ * one (`installRuntimeFixture`, #6335): the tests stay independent because
+ * none of them writes into it (matrix row 38).
  *
  * ── The overlay technique (rows 33/36) ───────────────────────────────────
  *
@@ -52,7 +54,7 @@ const crypto = require('node:crypto');
 const { runNode } = require('./helpers/process-seam.cjs');
 
 const { cleanup } = require('./helpers.cjs');
-const { RUNTIME_META, runMinimalInstall, installerEnv } = require('./helpers/install-shared.cjs');
+const { RUNTIME_META, installRuntimeFixture, installerEnv, foldInstallNonce } = require('./helpers/install-shared.cjs');
 const { buildOverlayRepo } = require('./helpers/overlay-repo.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
 const { composeWorkflow } = require('../gsd-core/bin/lib/workflow-fragments.cjs');
@@ -155,8 +157,8 @@ function stripRoot(text, root) {
 // A second, independent contaminant surfaced fixing the first one: opencode
 // embeds the install's own absolute configDir path into execute-phase.md
 // content (same fact row 33/atRefContractStillResolvesAfterComposition
-// documents for SKILL.md), and `runMinimalInstall`'s temp-dir prefix
-// (`gsd-<runtime>-<scope>-`) is a DIFFERENT length than
+// documents for SKILL.md), and the real install's root name (the shared
+// fixture's `gsd-fxs-<id>-<token>`) is a DIFFERENT length than
 // `spawnGlobalInstall`'s (`gsd-2930-dest-<runtime>-`) — so comparing RAW
 // file sizes between the two installs bakes in a root-path-length delta
 // that has nothing to do with composeWorkflow. Normalize each side's own
@@ -180,15 +182,14 @@ test('emittedWorkflowShrinksByMarkerBytesForEveryRuntime', (t) => {
 
   for (const runtime of RUNTIMES) {
     // Belt-and-braces cleanup: t.after() is the failure-path safety net (a
-    // thrown assertion still tears the temp install dirs down when the test
+    // thrown assertion still tears the stub install down when the test
     // returns), but t.after() alone defers EVERY registered cleanup across
-    // all ~18 runtimes until the whole test finishes, so up to 36 full
-    // install trees would coexist on disk at once. The eager cleanup() calls
-    // below bound peak disk to one iteration's trees on the success path;
+    // all ~18 runtimes until the whole test finishes, so up to 18 full
+    // install trees would coexist on disk at once. The eager cleanup() call
+    // below bounds peak disk to one iteration's tree on the success path;
     // t.after() still fires afterward as a no-op (cleanup is idempotent on
     // an already-removed path — see helpers.cjs).
-    const real = runMinimalInstall({ runtime, scope: 'global' });
-    t.after(() => cleanup(real.root));
+    const real = installRuntimeFixture({ runtime, scope: 'global' });
     const stub = spawnGlobalInstall(path.join(identityStubRepo, 'bin', 'install.js'), runtime);
     t.after(() => cleanup(stub.root));
     assert.equal(
@@ -209,7 +210,6 @@ test('emittedWorkflowShrinksByMarkerBytesForEveryRuntime', (t) => {
       expectedMarkerBytes,
       `${runtime}: emitted size delta (stub ${stubBytes} - real ${realBytes}, root-normalized) must equal exactly the marker bytes stripped (${expectedMarkerBytes})`,
     );
-    cleanup(real.root);
     cleanup(stub.root);
   }
 });
@@ -234,8 +234,7 @@ test('unmarkedWorkflowEmitsByteIdenticalForEveryRuntime', (t) => {
   t.after(() => cleanup(identityStubRepo));
 
   for (const runtime of RUNTIMES) {
-    const real = runMinimalInstall({ runtime, scope: 'global' });
-    t.after(() => cleanup(real.root));
+    const real = installRuntimeFixture({ runtime, scope: 'global' });
     const stub = spawnGlobalInstall(path.join(identityStubRepo, 'bin', 'install.js'), runtime);
     t.after(() => cleanup(stub.root));
     assert.equal(
@@ -255,9 +254,8 @@ test('unmarkedWorkflowEmitsByteIdenticalForEveryRuntime', (t) => {
     // unnormalized compare would report a spurious mismatch driven by
     // temp-path length, not by anything composeWorkflow's wiring did.
     // #5637: each install stamps its own random heredoc terminator; fold it back to the canonical token.
-    const foldNonce = (text) => text.replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
-    const realText = foldNonce(stripRoot(fs.readFileSync(realPath, 'utf8'), real.root));
-    const stubText = foldNonce(stripRoot(fs.readFileSync(stubPath, 'utf8'), stub.root));
+    const realText = foldInstallNonce(stripRoot(fs.readFileSync(realPath, 'utf8'), real.root));
+    const stubText = foldInstallNonce(stripRoot(fs.readFileSync(stubPath, 'utf8'), stub.root));
     assert.equal(
       Buffer.byteLength(realText, 'utf8'),
       Buffer.byteLength(stubText, 'utf8'),
@@ -270,17 +268,15 @@ test('unmarkedWorkflowEmitsByteIdenticalForEveryRuntime', (t) => {
       stubHash,
       `${runtime}: discuss-phase.md content drifted between real compose and identity-stub compose`,
     );
-    cleanup(real.root);
     cleanup(stub.root);
   }
 });
 
 // ─── Row 34: no gsd:section marker survives into any emitted artifact ─────
 
-test('noSectionMarkerLeaksIntoEmittedArtifacts', (t) => {
+test('noSectionMarkerLeaksIntoEmittedArtifacts', () => {
   for (const runtime of RUNTIMES) {
-    const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
-    t.after(() => cleanup(root));
+    const { configDir } = installRuntimeFixture({ runtime, scope: 'global' });
     const emittedPath = path.join(configDir, PILOT_REL);
     assert.ok(fs.existsSync(emittedPath), `${runtime}: emitted execute-phase.md is missing`);
     const emittedText = fs.readFileSync(emittedPath, 'utf8');
@@ -305,7 +301,6 @@ test('noSectionMarkerLeaksIntoEmittedArtifacts', (t) => {
       assert.match(installed, /runtime-native/,
         `${runtime}: ${relativePath} lost the explicit-off ordinary completion branch during conversion`);
     }
-    cleanup(root);
   }
 });
 
@@ -337,10 +332,9 @@ function resolveExecutionContextRefTarget(token, root) {
   return path.join(root, stripped);
 }
 
-test('atRefContractStillResolvesAfterComposition', (t) => {
+test('atRefContractStillResolvesAfterComposition', () => {
   for (const runtime of ['claude', 'opencode']) {
-    const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
-    t.after(() => cleanup(root));
+    const { configDir, root } = installRuntimeFixture({ runtime, scope: 'global' });
     const skillPath = path.join(configDir, 'skills', 'gsd-plan-phase', 'SKILL.md');
     assert.ok(fs.existsSync(skillPath), `${runtime}: installed gsd-plan-phase SKILL.md is missing`);
     const skillContent = fs.readFileSync(skillPath, 'utf8');
@@ -353,7 +347,6 @@ test('atRefContractStillResolvesAfterComposition', (t) => {
         `${runtime}: execution_context @-ref "${token}" resolved to "${target}", which does not exist on disk`,
       );
     }
-    cleanup(root);
   }
 });
 
