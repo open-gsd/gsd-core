@@ -42,9 +42,9 @@ const linksOf = (line) => extractLinks(stripInlineCode(line));
 // Line by line: the gate's fence mask spans lines, and this guard checks code blocks too.
 const hrefsIn = (text) => splitLines(text)
   .flatMap((line) => linksOf(line).map(({ target }) => destOf(target)));
-// A name WHATWG reads as an href, src or srcset attribute (any case). A `/` after the name ends
-// a path segment (`/src/x.md`), so it never closes the name here.
-const URL_ATTR = /(?:^|[\s"'/])(?:href|src|srcset)(?=[\s>=]|$)/i;
+// An href, src or srcset attribute (any case) takes its value after `=`, or on the next line when
+// the name ends the line. After `/` only the `=` form counts: `/src/x.md` and `/src` are paths.
+const URL_ATTR = /(?:^|[\s"'])(?:href|src|srcset)\s*(?:=|$)|\/(?:href|src|srcset)\s*=/i;
 // The lines this guard refuses instead of reading, as `N: "line"`: see the header.
 const unreadForms = (text) => {
   let tagged = false;

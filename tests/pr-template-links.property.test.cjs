@@ -3,7 +3,7 @@
 // Sources of the refused forms: CommonMark 0.31.2 (spec.commonmark.org) for link reference
 // definitions (4.7), inline links and nesting (6.3), raw HTML (6.6) and the entity and escape
 // decoding of a destination (2.4, 2.5); GitHub's render of a PR body for the base-URL rule.
-// The two fixtures below are text of the templates at origin/next before this fix (#5427).
+// The two fixtures below are text of the templates before the #5427 fix.
 const { describe, test } = require('node:test');
 const fc = require('./helpers/fast-check-setup.cjs');
 const assert = require('node:assert/strict');
@@ -51,7 +51,7 @@ describe('repo link grammar (#5427)', () => {
     bad(fc.tuple(fc.constantFrom(...checked), fc.constantFrom('next', 'main'), rel)
       .map(([v, r, p]) => `${REPO}/${v}/${r}/${p}`)),
   );
-  // Lines of .github/pull_request_template.md and PULL_REQUEST_TEMPLATE/feature.md at origin/next.
+  // Lines of .github/pull_request_template.md and PULL_REQUEST_TEMPLATE/feature.md before the fix.
   const before = [
     'See [CONTRIBUTING.md](../CONTRIBUTING.md) for the full process.',
     '> [CONTRIBUTING.md → Documentation Updates](../../CONTRIBUTING.md#documentation-updates'

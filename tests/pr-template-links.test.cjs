@@ -172,7 +172,7 @@ describe('refused forms (#5427)', () => {
       ["<img src='y'>", [1]], ['<img srcset="a 1x">', [1]], ['<a\nhref="x">', [2]],
       ['<b title="x <a href="../y.md">', [1]], ['<!-- <a href="x"> -->', [1]],
       ['`<a href="x">`', [1]], ['> <a href=x>', [1]],
-      ['<kbd>x</kbd>\n\nsrc is a folder', [3]],
+      ['<a\nhref\n="x">', [2]], ['<img/src=y>', [1]], ['<a href = "x">', [1]],
       ['<pre>\n\n<a\n\nhref="../x.md">y</a>\n</pre>', [5]]]) {
       assert.deepEqual(refused(text), lines, JSON.stringify(text));
     }
@@ -182,8 +182,10 @@ describe('refused forms (#5427)', () => {
       '[a](https://x/?src=1&href=2)', '[a](../x.md) and [b](y)', '`[c](../z.md)`']) {
       assert.deepEqual(refused(text), [], JSON.stringify(text));
     }
-    // `src` is a path segment here, after a tag has opened
-    assert.deepEqual(refused(`<kbd>x</kbd>\n[a](${NEXT}src/x.md)\n[b](${NEXT}x/src)`), []);
+    // `src` is a word or a path segment here, after a tag has opened: no attribute has no `=`
+    const forms = [`[a](${NEXT}src/x.md)`, `[a](${NEXT}x/src)`, `[a](${NEXT}src "t")`,
+      `[a](<${NEXT}src>)`, `<${NEXT}src>`, `${NEXT}src `, `${NEXT}src`, 'src is a folder'];
+    for (const form of forms) assert.deepEqual(refused(`<kbd>x</kbd>\n${form}`), [], form);
   });
   test('a definition is refused at any indent and in any container', () => {
     for (const text of ['   > [a]: x', '    > [a]: x', '  > [a]: x', '- [a]: x', '    [a]: x',
@@ -259,9 +261,12 @@ describe('next-ref existence and anchors (#5427)', () => {
       `${REPO}issues/1#a`], 'tpl.md'), []);
   });
   test('an unresolved anchor names the line where the anchors stop', () => {
-    const seams = { headingsOf: () => headingSet('## A\n<!--\n## B') };
-    assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#b`], 'tpl.md', seams),
-      ['CONTRIBUTING.md#b (anchors stop at line 2: "<!--")']);
+    const set = headingSet('## A\n<!--\n## B');
+    const seams = { headingsOf: () => set };
+    assert.equal(set.stop, 'line 2: "<!--"'); // the typed field; the report only carries it
+    const [only, ...none] = unresolvedAnchors([`${NEXT}CONTRIBUTING.md#b`], 'tpl.md', seams);
+    assert.deepEqual(none, []);
+    assert.ok(only.startsWith('CONTRIBUTING.md#b') && only.includes(set.stop), only);
     assert.deepEqual(unresolvedAnchors([`${NEXT}CONTRIBUTING.md#a`], 'tpl.md', seams), []);
   });
   test('lineCountOf counts a last line with or without a trailing newline', (t) => {
