@@ -369,10 +369,10 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(resolve(), /No one can be asked when plan-phase's arguments carry `--auto`, as discuss-phase's chain and transition pass, or when it runs as a background or nested agent, where AskUserQuestion cannot reach the user, as `\/gsd:autonomous` dispatches it, or the convergence run around it, when it does not flatten\./);
     assert.match(resolve(), /A run that calls plan-phase inline without `--auto` asks, and waits for the answer, as `\/gsd:autonomous` does at its own blockers\./);
     assert.doesNotMatch(resolve(), /every chained caller/, 'next.md and plan-review-convergence call plan-phase without --auto');
-    assert.match(resolve(), /`AUTO_CHAIN` \(`workflow\._auto_chain_active`\) is not the key: a chained run passes `--auto` anyway, and a flag an interrupted chain left set, which a manual plan-phase clears only at its step 15, after this loop, would refuse a user who is present, and again on a `--research` re-run, which stops before step 15 too\./);
+    assert.match(resolve(), /`AUTO_CHAIN` \(`workflow\._auto_chain_active`\) is not the key: a chained run passes `--auto` anyway, and a flag an earlier chain left set \(step 15 persists it on success too\), which a manual plan-phase clears only at its step 15, after this loop, would refuse a user who is present, and again on a `--research` re-run, which stops before step 15 too\./);
     assert.doesNotMatch(resolve(), /only plan-phase's step 15 clears/, 'execute-phase, discuss-phase and transition clear the flag too');
     // auto-advance-check parses --chain and reads workflow.auto_advance, so the clause says where each lands.
-    assert.match(resolve(), /`--chain` and `workflow\.auto_advance` are not keys of their own: discuss-phase's chain starts plan-phase with `--auto` on either, and a plan-phase the user starts with `--chain`, or with `auto_advance` on, runs where the user can answer\./);
+    assert.match(resolve(), /`--chain` and `workflow\.auto_advance` are not keys of their own: discuss-phase's chain starts plan-phase with `--auto` on either, and every other run under them is keyed as above, so a plan-phase the user starts with `--chain`, or with `auto_advance` on, asks\./);
     // The grounds the clause states: each chained caller passes --auto; autonomous passes none and backgrounds it.
     const chain = read('gsd-core/workflows/discuss-phase/modes/chain.md');
     assert.match(chain, /\*\*If `--auto` flag present OR `--chain` flag present OR `AUTO_MODE` is\s+true:\*\* display banner and launch plan-phase/);
@@ -398,7 +398,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     const step15 = spine.indexOf('plan-phase/steps/auto-advance-check.md');
     assert.ok(loop !== -1 && step15 !== -1 && step15 > loop, 'auto-advance-check runs after the revision loop');
     for (const doc of ['docs/features/research-gate.md', 'docs/FEATURES.md']) {
-      assert.match(read(doc), /Where no one can be asked \(`--auto`, or plan-phase running as a background or nested agent, as `\/gsd-autonomous` runs it, or its convergence run, when it does not flatten\) no answer is recorded: plan-phase escalates at once and stops there rather than proceeding, and `\/gsd-autonomous` does not execute the plans; they stay on disk, where `\/gsd-progress --next` or `\/gsd-execute-phase` can still run them\. `--chain` and `workflow\.auto_advance` reach plan-phase as `--auto` through discuss-phase's chain; a plan-phase started by hand asks/, doc);
+      assert.match(read(doc), /Where no one can be asked \(`--auto`, or plan-phase running as a background or nested agent, as `\/gsd-autonomous` runs it, or its convergence run, when it does not flatten\) no answer is recorded: plan-phase escalates at once and stops there rather than proceeding, and `\/gsd-autonomous` does not execute the plans; they stay on disk, where `\/gsd-progress --next` or `\/gsd-execute-phase` can still run them\. `--chain` and `workflow\.auto_advance` reach plan-phase as `--auto` through discuss-phase's chain; a plan-phase started by hand without `--auto` asks/, doc);
       assert.match(read(doc), /the user leaves to run `\/gsd-discuss-phase <N>` or `\/gsd-plan-phase <N> --research`\./, doc);
     }
   });
