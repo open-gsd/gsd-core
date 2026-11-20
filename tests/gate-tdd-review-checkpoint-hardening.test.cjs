@@ -337,7 +337,7 @@ describe('#5354 tdd review checkpoint seal', () => {
       const r = run(setup?.(made.dir, made.base) ?? made.dir);
       assert.equal(r.payload.rows[0]?.status, expect.status);
       for (const key of ['missing', 'reason']) if (key in expect) assert.deepEqual(r.payload.rows[0][key], expect[key]);
-      for (const key of ['violations']) if (key in expect) assert.equal(r.payload[key], expect[key]);
+      if ('violations' in expect) assert.equal(r.payload.violations, expect.violations);
       for (const key of ['block', 'outcome']) if (key in expect) assert.equal(r[key], expect[key]);
     });
   }
@@ -496,9 +496,8 @@ describe('#5354 tdd review checkpoint seal', () => {
   const PRIOR = JSON.stringify({ plans: { '01-99': { red: sha('a'), green: sha('b') } } });
   function failFs(t, method, when, code, message) {
     const real = fs[method];
-    let calls = 0;
     t.mock.method(fs, method, (f, ...rest) => {
-      if (when(String(f), ++calls)) throw Object.assign(new Error(message), { code });
+      if (when(String(f))) throw Object.assign(new Error(message), { code });
       return real(f, ...rest);
     });
   }
