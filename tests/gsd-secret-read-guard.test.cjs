@@ -1520,6 +1520,19 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
     'caffeinate git status',
   ]);
 
+  // xargs running an unknown command that launches a shell (its operands, or the words piped in, hold a launcher
+  // word) reads the piped words fail-closed, as for a shell sub-command, and hands it the stdin `-a` leaves.
+  blocks([
+    `echo "cat .env" | xargs -I{} ionice sh -c '{}'`,
+    "printf '%s\\0' 'cat .env' | xargs -0 ionice sh -c",
+    `echo 'sh -c "cat .env"' | xargs ionice`,
+    "xargs -a /dev/null ionice sh <<< 'cat .env'",
+    "printf '%s\\n' 'cat .env' | xargs -d '\\n' -I{} ionice sh -c '{}'",
+    // Control.
+    `echo "cat .env" | xargs -I{} nice sh -c '{}'`,
+  ]);
+  allows(["echo 'echo hi' | xargs ionice sh -c", 'echo a b | xargs ionice ls .env.example']);
+
   // Documented gaps, pinned as allowed (each really reads .env when run): a command inside a quoted argument of a
   // program or on the stdin of one that is not a shell (D1); a producer that computes what it writes, and printf
   // conversions other than %s, %b, %c and %% (D2); an alias defined on the line and used later on it (D3); and a key,
