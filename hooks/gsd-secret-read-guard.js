@@ -2481,18 +2481,22 @@ function scriptAssignments(tokens, reading, ctx, depth) {
       for (const t of segTokens.slice(i + 1)) {
         if (t.procsub !== undefined) for (const src of reconstructedProcsubs(t.procsub, reading)) runInShell(src);
       }
-      if (isStdinPath(sourcedFile(words.slice(i + 1, i + 3)))) {
+      const fd = fdPathNumber(sourcedFile(words.slice(i + 1)));
+      if (fd !== -1) {
         for (const text of stdinBySeg.get(seg) || []) runInShell(text);
-        for (const src of pipedScripts(seg, bySeg, sepAfter)) runInShell(src);
+        if (fd === 0) for (const src of pipedScripts(seg, bySeg, sepAfter)) runInShell(src);
       }
     }
   }
   return assignments;
 }
 
-// The file `source` / `.` runs: its first operand, past bash's optional `--`; '' when there is none.
+// The file `source` / `.` runs: its first operand, past bash 5.3's `-p PATH` (attached or not) and an optional
+// `--`; '' when there is none.
 function sourcedFile(texts) {
-  const at = texts[0] === '--' ? 1 : 0;
+  let at = 0;
+  while (at < texts.length && texts[at].startsWith('-p')) at += texts[at] === '-p' ? 2 : 1;
+  if (texts[at] === '--') at++;
   return at < texts.length ? texts[at] : '';
 }
 
@@ -3922,9 +3926,10 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
             }
           } else if (operandNamesSecret(w.text)) return secretRead(w.text);
         }
-        // `source /dev/stdin` runs its stdin, as a shell in stdin mode does (#5492).
-        if (isStdinPath(sourcedFile(operands.slice(0, 2).map((w) => w.text)))) {
-          const hit = scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+        // `source /dev/stdin` runs its stdin, as a shell in stdin mode does (#5492), and `source /dev/fd/3` fd 3.
+        const fd = fdPathNumber(sourcedFile(operands.map((w) => w.text)));
+        if (fd !== -1) {
+          const hit = scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx, fd === 0);
           if (hit) return hit;
         }
         continue;
@@ -4131,10 +4136,22 @@ function shellOptions(operands) {
   return { modeC, stdin, operand: -1 };
 }
 
-// The paths that open a process's own stdin (#5492), matched with `//` and `/./` collapsed.
-const STDIN_PATHS = new Set(['/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']);
-function isStdinPath(text) {
-  return STDIN_PATHS.has(text.replace(/\/(?:\.?\/)+/g, '/'));
+// The file descriptor a path opens (#5492), or -1: `/dev/stdin`, `/dev/stdout`, `/dev/stderr`, `/dev/fd/N` and
+// `/proc/<self|thread-self|pid>/fd/N`, matched on the path's last segments once `.`, `..` and repeated `/` are
+// resolved. A relative spelling (`../../dev/stdin`) counts whatever the cwd is, which fails closed.
+const STD_STREAMS = new Map([['stdin', 0], ['stdout', 1], ['stderr', 2]]);
+function fdPathNumber(text) {
+  const parts = [];
+  for (const part of text.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..' && parts.length && parts[parts.length - 1] !== '..') parts.pop();
+    else parts.push(part);
+  }
+  const tail = (k) => parts[parts.length - k];
+  if (tail(2) === 'dev' && STD_STREAMS.has(tail(1))) return STD_STREAMS.get(tail(1));
+  if (tail(2) !== 'fd' || !/^\d+$/.test(tail(1))) return -1;
+  if (tail(3) === 'dev' || (tail(4) === 'proc' && /^(?:self|thread-self|\d+)$/.test(tail(3)))) return Number(tail(1));
+  return -1;
 }
 
 // The words a shell may run as its `-c` script, each scanned on its own: the word after the first DASH_C_RE word,
@@ -4167,7 +4184,8 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   if (dashC) return null;
   // Mode file, read as before (the first word that does not start with `-`, past SHELL_VALUE_FLAGS values) and
   // under shellOptions, which reads `+x` and a cluster's `o` value as options and has no file under `-s`; stdin
-  // mode when either finds no file, or a file that is stdin (`bash /dev/stdin`).
+  // mode when either finds no file, or a file that is an fd (`bash /dev/stdin`, `bash /dev/fd/3 3<<< …`), where a
+  // pipe counts only for fd 0.
   let fileTok;
   for (let m = 0; m < operands.length; m++) {
     if (SHELL_VALUE_FLAGS.has(operands[m].text)) { m++; continue; }
@@ -4183,15 +4201,17 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
       if (hit) return hit;
     }
   }
-  const fromStdin = !fileTok || isStdinPath(fileTok.text)
-    || (!options.modeC && (!optionTok || isStdinPath(optionTok.text)));
-  if (!fromStdin) return null;
-  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+  const fileFd = fileTok ? fdPathNumber(fileTok.text) : -1;
+  const optionFd = optionTok ? fdPathNumber(optionTok.text) : -1;
+  const noFile = !fileTok || (!options.modeC && !optionTok);
+  if (!noFile && fileFd === -1 && (options.modeC || optionFd === -1)) return null;
+  const piped = noFile || fileFd === 0 || (!options.modeC && optionFd === 0);
+  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx, piped);
 }
 
-// The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and what a
-// piped echo/printf source writes.
-function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
+// The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and, when
+// `piped`, what a piped echo/printf source writes.
+function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx, piped = true) {
   for (const h of heredocs) {
     const hit = findSecretRead(h.text, depth + 1, ctx);
     if (hit) return hit;
@@ -4200,7 +4220,7 @@ function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
     const hit = findSecretRead(hs, depth + 1, ctx);
     if (hit) return hit;
   }
-  for (const src of pipedScripts(s, bySeg, sepAfter)) {
+  for (const src of piped ? pipedScripts(s, bySeg, sepAfter) : []) {
     const hit = findSecretRead(src, depth + 1, ctx);
     if (hit) return hit;
   }
