@@ -254,16 +254,23 @@ describe('plan-phase decision-coverage-plan gate: a gate that could not run stop
 });
 
 // The Tester Image has no `jq`, so the extracted blocks run against tests/helpers/jq-subset-stub.cjs. It must
-// agree with jq on the two filters the blocks use over the gate handler's JSON (pinned below, 13 documents x 2
-// filters, expected values measured from real jq), refuse any other filter, and keep its known divergences explicit.
+// agree with jq on the filters the blocks use (pinned below: 13 documents x 2 filters over the gate handler's JSON,
+// 5 for `.reason//""` and 5 for `.phase_number // empty`, expected values measured from real jq, which also
+// runs the last five where installed), refuse any other filter, and keep its known divergences explicit.
 describe('jq-subset-stub: jq semantics for the filters the extracted blocks use', () => {
-  const { spawnSync } = require('node:child_process');
+  const { runNode, runHook } = require('./helpers/process-seam.cjs');
   const path = require('node:path');
+  const os = require('node:os');
+  const { isolatedEnv } = require('./helpers/isolated-env.cjs');
   const STUB = path.join(__dirname, 'helpers', 'jq-subset-stub.cjs');
   const PASSED = '(.passed // .data.passed) == true';
   const MESSAGE = '(.message // .data.message // "Decision coverage gate failed.")';
   const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-  const jq = (args, input) => spawnSync(process.execPath, [STUB, ...args], { input, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+  const seamJq = (r) => ({ status: r.exitCode, stdout: r.stdout, stderr: r.stderr });
+  const env = () => isolatedEnv({ home: os.tmpdir() });
+  const jq = (args, input) => seamJq(runNode([STUB, ...args], { input, timeoutMs: PROBE_TIMEOUT_MS, env: env() }));
+  // A real jq runs through the same seam: `runHook` takes the binary as its interpreter and the first flag as its target.
+  const realJqRun = (args, input) => seamJq(runHook(args[0], args.slice(1), { interpreter: 'jq', input, timeoutMs: PROBE_TIMEOUT_MS, env: env() }));
 
   // The pinned matrix: every pair was measured against real jq (1.x) when this was written, so the expected
   // values below ARE jq's. Columns: document, `-e` exit status of PASSED, its stdout, `-r` stdout of MESSAGE.
@@ -305,6 +312,34 @@ describe('jq-subset-stub: jq semantics for the filters the extracted blocks use'
       const r = jq(['-er', REASON], doc);
       assert.equal(r.status, 0);
       assert.equal(r.stdout, `${printed}\n`);
+    });
+  }
+
+  // #4030: the call sites bind PHASE_NUMBER with `jq -r '.phase_number // empty'`; `// empty` prints nothing
+  // for a null or false field, and the value (a number included) otherwise. Under -e, no output exits 4.
+  const PHASE_NUMBER = '.phase_number // empty';
+  const realJq = realJqRun(['--version']).status === 0;
+  for (const [doc, printed, exitE] of [
+    ['{"phase_number":"05"}', '05\n', 0],
+    ['{"phase_number":0}', '0\n', 0],
+    ['{"phase_number":null}', '', 4],
+    ['{"phase_number":false}', '', 4],
+    ['{}', '', 4],
+  ]) {
+    test(`${doc}: -r PHASE_NUMBER prints ${JSON.stringify(printed)} and exits 0; -er exits ${exitE}`, () => {
+      const r = jq(['-r', PHASE_NUMBER], doc);
+      assert.equal(r.status, 0);
+      assert.equal(r.stdout, printed);
+      assert.equal(jq(['-er', PHASE_NUMBER], doc).status, exitE);
+    });
+
+    // Where a real jq is installed the stub answers to it, not to the values above.
+    test(`${doc}: the stub agrees with real jq on -r and -er PHASE_NUMBER`, { skip: !realJq && 'jq is not installed (the Tester Image ships none)' }, () => {
+      for (const flags of [['-r'], ['-er']]) {
+        const stub = jq([...flags, PHASE_NUMBER], doc);
+        const real = realJqRun([...flags, PHASE_NUMBER], doc);
+        assert.deepEqual({ status: stub.status, stdout: stub.stdout }, { status: real.status, stdout: real.stdout }, flags.join(''));
+      }
     });
   }
 

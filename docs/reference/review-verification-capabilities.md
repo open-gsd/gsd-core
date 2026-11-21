@@ -41,8 +41,8 @@ These keys are Capability-owned config keys. They remain valid for `.planning/co
 Workflows use the active hook list from the registry:
 
 ```bash
-EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 The resolver evaluates each hook's `when` key against the project config and the capability config default. If the key is absent and the capability declaration default is `true`, the hook is configured on.
@@ -65,7 +65,7 @@ In that output, `configured` reflects config/default resolution, while `active` 
 `/gsd-execute-phase` runs the `verify:post` steps before its verifier fingerprints the phase. Any workflow that dispatches `verify:post` again after that point (`/gsd-verify-work`, and `/gsd-autonomous` after it transitions a phase) passes the phase directory:
 
 ```bash
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --after-fingerprint "$PHASE_DIR")
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --after-fingerprint "$PHASE_DIR" --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 A `step` hook with a non-empty `produces` list, every entry of which already exists in the phase directory (for example `01-SECURITY.md` for `SECURITY.md`), moves from `activeHooks` to `skippedHooks` with `reason: "produces-present"`. Re-running it would rewrite a file the verification report may cover and leave the report `stale` against the workflow's own write. Hooks with `produces: []`, gates, and contributions are unaffected. A phase directory that does not exist is an error. The direct commands (`/gsd-secure-phase`, `/gsd-validate-phase`, `/gsd-ui-review`) still re-audit on demand; a re-audit whose counts match the previous audit block appends nothing (`gsd_run query verification.append-audit`).

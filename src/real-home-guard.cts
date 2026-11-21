@@ -99,7 +99,9 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
 /**
  * Are these two paths the same directory on disk?
  *
- * Compared by FILESYSTEM IDENTITY — `st_dev` + `st_ino` — not by pathname.
+ * Compared by FILESYSTEM IDENTITY — `st_dev` + `st_ino` — not by pathname
+ * (the exceptions are the equality shortcut and the ino-0 realpath route below;
+ * on ino 0 a bind mount does not compare equal).
  * `path.resolve()` normalizes separators and `..` but resolves neither symlinks
  * nor case, and `realpathSync` returns a canonical *pathname*, which two routes to
  * one directory can still disagree on (a Linux bind mount is the standard case).
@@ -114,8 +116,9 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
  * job is refusing writes into the real home. `{ bigint: true }` reports the
  * true 64-bit values with no precision loss.
  *
- * Fails CLOSED, and "closed" here means returning FALSE. The sole caller is the
- * passwd-less marker branch, which READS a true as permission to proceed:
+ * Fails CLOSED, and "closed" here means returning FALSE. Both callers read a true as
+ * permission to proceed: the passwd-less marker branch, and loop-resolver's `--phase-dir`
+ * cross-check (#4030, "this input names that directory"). The marker branch:
  *
  *     if (marker && sameDirectory(marker, osMod.homedir())) return;   // allows
  *
@@ -125,14 +128,22 @@ const SANDBOX_MARKER = 'GSD_TEST_HOME_SANDBOX';
  * make the caller refuse; that reasoning was inverted with respect to this
  * caller, and it turned an unreadable-stat environment into an unconditional
  * bypass for anyone who set the marker to any value at all. Reported in review of
- * #3725. Only two things now answer yes: the same resolved pathname, or two
- * readable identities that match.
+ * #3725. Only three things now answer yes: the same resolved pathname, two
+ * readable identities with a non-zero inode that match, or — where the
+ * filesystem reports ino 0 for every entry — two readable identities whose
+ * native realpaths are equal.
  */
 function sameDirectory(a: string, b: string): boolean {
   if (path.resolve(a) === path.resolve(b)) return true;
   const ia = identify(a);
   const ib = identify(b);
-  if (ia.kind === 'ok' && ib.kind === 'ok') return ia.dev === ib.dev && ia.ino === ib.ino;
+  if (ia.kind === 'ok' && ib.kind === 'ok') {
+    if (ia.dev !== ib.dev || ia.ino !== ib.ino) return false;
+    if (ia.ino !== 0n) return true;
+    // FAT32, exFAT and some SMB shares report ino 0 for every entry: no identity, so the native
+    // realpaths must also match. A realpath that throws answers NO.
+    try { return fs.realpathSync.native(a) === fs.realpathSync.native(b); } catch { return false; }
+  }
   return false;
 }
 
@@ -454,4 +465,4 @@ function isInside(child: string, rootId: { dev: bigint; ino: bigint }): boolean 
   }
 }
 
-export = { assertTestHomeSandboxed, isTestHomeGuardRefusal, SANDBOX_MARKER };
+export = { assertTestHomeSandboxed, isTestHomeGuardRefusal, sameDirectory, SANDBOX_MARKER };

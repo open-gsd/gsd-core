@@ -11,7 +11,7 @@ Open `src/cli-surface.cts` and find the command's entry in `CLI_SURFACE`. The ke
 | takes one value | `valueFlags` |
 | is a switch | `booleanFlags` |
 | must be given | `requiredFlags`, as well as `valueFlags` |
-| must have a value whenever it is passed | `nonEmptyFlags`, as well as `valueFlags` (`emptyValueFlags` / `emptyEqFlags` let a literal empty `''` / `--name=` through) |
+| must have a value whenever it is passed | `nonEmptyFlags`, as well as `valueFlags` (`emptyValueFlags` / `emptyEqFlags` let a literal empty `''` / `--name=` through; `emptyEqFlags` alone, without `nonEmptyFlags`, reads `--name=` as `''` and never refuses the flag) |
 | may also be written `--name=value` | `eqFlags`, as well as `valueFlags` |
 | may be passed several times | `repeatableFlags`, as well as `valueFlags` |
 | takes several words up to the next flag | `listFlags` or `multiwordFlags` (see [the flag kinds](../CLI-TOOLS.md#command-flags-and-the-cli-surface-manifest)) |

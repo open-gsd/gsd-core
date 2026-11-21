@@ -234,11 +234,14 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
   scaffold: { positionals: 2, valueFlags: ['phase'], multiwordFlags: ['name'] },
   'loop.render-hooks': {
     positionals: 3,
-    valueFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
-    eqFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
+    valueFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'phase', 'phase-dir', 'runtime'],
+    eqFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'phase', 'phase-dir', 'runtime'],
+    // `--phase` and `--phase-dir` are not here: a phase flag without a value must degrade, not fail the render.
     nonEmptyFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
+    // `--phase=` reaches the resolver as '' (it warns and drops); a bare `--phase` reads as omitted.
+    emptyEqFlags: ['phase', 'phase-dir'],
     // Only the `=` form was ever trimmed; a space-form value reaches the handler as typed.
-    trimEqFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'runtime'],
+    trimEqFlags: ['active-cap', 'after-fingerprint', 'config-dir', 'phase', 'phase-dir', 'runtime'],
   },
   // `--json` is accepted and ignored: the index is JSON either way and callers pass it.
   'phase-plan-index': { positionals: 2, booleanFlags: JSON_FLAG },

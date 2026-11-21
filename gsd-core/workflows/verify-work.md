@@ -72,9 +72,14 @@ kind, not gates alone. Each hook is data-driven — resolved from the capability
 registry, not hardcoded here.
 
 ```bash
-VERIFY_PRE_HOOKS_JSON=$(gsd_run loop render-hooks verify:pre --raw)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
 PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
+VERIFY_PRE_HOOKS_JSON=$(gsd_run loop render-hooks verify:pre --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Read the `activeHooks` array from `VERIFY_PRE_HOOKS_JSON` in-context (do NOT pipe through a shell parser).
@@ -83,7 +88,7 @@ Read the `activeHooks` array from `VERIFY_PRE_HOOKS_JSON` in-context (do NOT pip
 
 **Contribution dispatch:** inject every `kind == "contribution"` fragment per @gsd-core/references/loop-hook-dispatch.md (skip when none), before the steps and gates below.
 
-**Step dispatch:** dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md (skip when none) — not one shape of one. A step here is advisory: it never blocks the start of UAT, and a step that errors is routed by its own `onError` without failing verification. ⚠ **Validate `ref.command` in-context before any shell use** (third-party manifest input) — loop-hook-dispatch.md § `step`.
+**Step dispatch:** dispatch every `kind == "step"` hook per @gsd-core/references/loop-hook-dispatch.md (skip when none). A step here is advisory: it never blocks the start of UAT, and a step that errors is routed by its own `onError` without failing verification. ⚠ **Validate `ref.command` in-context before any shell use** (third-party manifest input) — loop-hook-dispatch.md § `step`.
 
 Record the union of `produces` artefact names declared by the active step entries as `VERIFY_PRE_PRODUCED` — `extract_tests` consumes it below. An entry declaring `produces: []` contributes nothing, which is the normal case.
 
@@ -510,7 +515,7 @@ If no more tests → Go to `complete_session`
 </step>
 
 <step name="reconcile_gaps">
-**Reconcile diagnosed gaps against completed gap-closure plans (#1921):** when verify-work resumes after `/gsd:execute-phase --gaps-only`, UAT `## Gaps` entries still read `status: failed` even though their fix plans already executed — without reconciliation they'd be re-diagnosed as fresh blockers. For each `status: failed` gap with a `*-PLAN.md` whose `gap_ids` names it AND a matching `*-SUMMARY.md`, mark it `resolved` (with `resolved_by`/`resolved_at`) in place; otherwise leave it `failed`. Resolved gaps are never re-diagnosed or re-planned; a later regression gets a fresh `gap_id`, not a reopened old one.
+**Reconcile diagnosed gaps against completed gap-closure plans (#1921):** when verify-work resumes after `/gsd:execute-phase --gaps-only`, UAT `## Gaps` entries still read `status: failed` even though their fix plans already executed. For each `status: failed` gap with a `*-PLAN.md` whose `gap_ids` names it AND a matching `*-SUMMARY.md`, mark it `resolved` (with `resolved_by`/`resolved_at`) in place; otherwise leave it `failed`. Resolved gaps are never re-diagnosed or re-planned; a later regression gets a fresh `gap_id`, not a reopened old one.
 
 Exact YAML shape and the announcement line: `gsd-core/workflows/verify-work/detail/elaboration.md` § 1.
 </step>
@@ -606,13 +611,19 @@ Present summary:
 nonzero but every one is a verified gap resolution, #4983)
 
 ```bash
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "$PHASE_DIR" --raw)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
+PHASE_NUMBER=$(printf '%s' "$INIT" | jq -r '.phase_number // empty')
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "$PHASE_DIR" --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
-**Generic step dispatch:** dispatch every `kind == "step"` hook from `VERIFY_POST_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md (skip silently when none). Each step is advisory and best-effort — honor `onError` and continue. The secure-phase handling below is an additional specialization of one such hook, not a replacement for the generic dispatch. `--after-fingerprint "$PHASE_DIR"` (#5105) moves a step whose declared artifact already exists in `$PHASE_DIR` into `skippedHooks` instead of `activeHooks` — execute-phase already dispatched it before its own fingerprint (`execute-phase.md:1202`), so this re-dispatch is a no-op for that step and is not repeated here.
+**Generic step dispatch:** dispatch every `kind == "step"` hook from `VERIFY_POST_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md (skip silently when none). Each step is advisory and best-effort — honor `onError` and continue. The secure-phase handling below is an additional specialization of one such hook, not a replacement for the generic dispatch. `--after-fingerprint "$PHASE_DIR"` (#5105) moves a step whose declared artifact already exists in `$PHASE_DIR` into `skippedHooks` instead of `activeHooks` — execute-phase already dispatched it (`execute-phase.md:1202`), so it is not repeated here.
 
-Resolve whether the secure-phase step hook is enabled: an entry with `kind == "step"` and `ref.skill == "secure-phase"` present in `activeHooks` OR `skippedHooks` of `VERIFY_POST_HOOKS_JSON` both count as enabled. `--after-fingerprint` moves this hook into `skippedHooks` once its declared artifact (`SECURITY.md`) already exists in `$PHASE_DIR` (#5105) — the hook is still enabled, only its re-dispatch is skipped. Each `skippedHooks` entry carries `capId`, `kind`, and `ref.skill` for exactly this resolution.
+Resolve whether the secure-phase step hook is enabled: an entry with `kind == "step"` and `ref.skill == "secure-phase"` present in `activeHooks` OR `skippedHooks` of `VERIFY_POST_HOOKS_JSON` both count as enabled. `--after-fingerprint` moves this hook into `skippedHooks` once its declared artifact (`SECURITY.md`) already exists in `$PHASE_DIR` (#5105); it still counts as enabled.
 
 If the secure-phase step hook is enabled AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
 

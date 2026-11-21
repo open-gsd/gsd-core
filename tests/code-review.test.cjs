@@ -25,7 +25,10 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
-const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+/** True when the fence opens with the info word `bash`, so a ```bash title fence counts too. */
+const isBashFence = (block) => /^bash$/i.test((block.infoString || '').trim().split(/\s+/)[0]);
 
 /** Return the raw text of every ```bash fenced block in `content`. */
 function extractBashBlocks(content) {
@@ -33,16 +36,31 @@ function extractBashBlocks(content) {
   const blocks = [];
   for (const block of scanFencedBlocks(lines)) {
     if (block.closeLineIdx === -1) continue;
-    if ((block.infoString || '').trim().toLowerCase() !== 'bash') continue;
+    if (!isBashFence(block)) continue;
     blocks.push(lines.slice(block.openLineIdx, block.closeLineIdx + 1).join('\n'));
   }
   return blocks;
+}
+
+/**
+ * `content` with the body of every ```bash fence emptied. Shell quotes (a sed bracket class holds one `"`)
+ * would flip the string state of the Skill() walker below for every call after them.
+ */
+function withoutBashFences(content) {
+  const lines = splitLines(content);
+  for (const block of scanFencedBlocks(lines)) {
+    if (!isBashFence(block)) continue;
+    const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
+    for (let i = block.openLineIdx + 1; i < end; i++) lines[i] = '';
+  }
+  return joinLines(lines);
 }
 const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
 const { runNode, runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const GSD_TOOLS_BIN = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
@@ -68,7 +86,8 @@ const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
  * This avoids regex/.includes() text-matching: callers receive a structured list
  * and assert against fields and tokenized args.
  */
-function parseWorkflowSkillInvocations(content) {
+function parseWorkflowSkillInvocations(source) {
+  const content = withoutBashFences(source);
   const invocations = [];
   let i = 0;
   let inString = false;
@@ -712,7 +731,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
     const stepMatch = workflowContent.match(/<step name="dispatch_reviewer_lanes">([\s\S]*?)<\/step>/);
     const stepLines = splitLines(stepMatch[1]);
     return scanFencedBlocks(stepLines)
-      .filter((b) => b.infoString.trim().toLowerCase() === 'bash' && b.closeLineIdx !== -1)
+      .filter((b) => isBashFence(b) && b.closeLineIdx !== -1)
       .map((b) => stepLines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'));
   }
 
@@ -1176,10 +1195,41 @@ describe('CR-INTEGRATION: workflow integration points', () => {
       'quick.md code review step must not read workflow.code_review directly');
   });
 
+  test('parseWorkflowSkillInvocations: a shell quote inside a bash fence never hides a Skill() call after it', () => {
+    const skillCall = 'Skill(skill="gsd-code-review", args="1 --fix")';
+    const after = `\n\n\`\`\`\n${skillCall}\n\`\`\`\n`;
+    // a sed bracket class holds one `"`: an odd count before the call
+    const quote = 'X=$(echo y | sed -nE \'s/["\']//p\')';
+    const skills = (text) => parseWorkflowSkillInvocations(text).map((i) => i.skill);
+    for (const open of ['```bash', '```bash title']) {
+      assert.deepStrictEqual(skills(`${open}\n${quote}\n\`\`\`${after}`), ['gsd-code-review'], open);
+    }
+    // only the info word `bash` opens a bash fence
+    for (const word of ['bash', 'BASH', 'bash title']) assert.ok(isBashFence({ infoString: word }), word);
+    for (const word of ['bashful', 'bash-ish', 'sh', 'text', '']) assert.ok(!isBashFence({ infoString: word }), word);
+    // an unclosed bash fence blanks to the end of the file: the call inside it never parses
+    assert.deepStrictEqual(skills(`\`\`\`bash\n${skillCall}\n`), []);
+    // positive control: the same call with no shell fence before it
+    assert.deepStrictEqual(skills(`\`\`\`\n${skillCall}\n\`\`\`\n`), ['gsd-code-review']);
+  });
+
+  test('withoutBashFences: keeps the line count and every line outside a bash fence', () => {
+    const lineArb = fc.string({ maxLength: 12 }).filter((l) => !/[\r\n`~]/.test(l));
+    fc.assert(fc.property(fc.array(lineArb, { maxLength: 6 }), fc.array(lineArb, { maxLength: 6 }), (inside, outside) => {
+      const text = [...outside, '```bash', ...inside, '```', ...outside].join('\n');
+      const out = splitLines(withoutBashFences(text));
+      assert.strictEqual(out.length, splitLines(text).length);
+      assert.deepStrictEqual(out.slice(0, outside.length + 1), [...outside, '```bash']);
+      assert.deepStrictEqual(out.slice(outside.length + 1, outside.length + 1 + inside.length), inside.map(() => ''));
+      assert.deepStrictEqual(out.slice(outside.length + 1 + inside.length), ['```', ...outside]);
+    }), { seed: 4030, numRuns: 100 });
+  });
+
   // autonomous.md tests read from the repo's canonical workflow source (WORKFLOWS_DIR),
   // not the user-installed plugin dir. The plugin dir can lag behind the repo until the
   // user re-installs, so asserting against it produces false negatives. The repo file
   // is the source of truth and is always present in CI checkouts.
+
   test('autonomous.md contains gsd-code-review skill invocation', () => {
     const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'autonomous.md'), 'utf-8');
 

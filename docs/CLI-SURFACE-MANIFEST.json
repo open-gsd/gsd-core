@@ -427,6 +427,8 @@
         "active-cap": "value",
         "after-fingerprint": "value",
         "config-dir": "value",
+        "phase": "value",
+        "phase-dir": "value",
         "runtime": "value"
       },
       "required": [],
@@ -435,6 +437,8 @@
         "active-cap",
         "after-fingerprint",
         "config-dir",
+        "phase",
+        "phase-dir",
         "runtime"
       ],
       "nonEmpty": [
@@ -442,6 +446,10 @@
         "after-fingerprint",
         "config-dir",
         "runtime"
+      ],
+      "emptyEq": [
+        "phase",
+        "phase-dir"
       ]
     },
     {

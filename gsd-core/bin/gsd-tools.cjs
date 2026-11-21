@@ -235,7 +235,9 @@
  *                                        [--config-dir <path>] [--runtime <r>] [--active-cap <capId>]
  *                                        [--after-fingerprint <phaseDir>] (#5105: skip verify:post
  *                                        steps whose declared artifact already exists in phaseDir)
- *                                        Returns JSON envelope { point, activeHooks, rendered }
+ *                                        [--phase <token>] [--phase-dir <dir>] (#4030: add context:{phase,phaseDir};
+ *                                        --phase-dir only cross-checks --phase)
+ *                                        Returns JSON envelope { point, activeHooks, rendered[, context, warnings, skippedHooks, phaseDrop] }
  *                                        Valid points: discuss:pre/post, plan:pre/post,
  *                                        execute:pre/wave:pre/wave:post/post, verify:pre/post, ship:pre/post
  *                                        --runtime: override the auto-detected runtime (#2003) so the config
@@ -3684,7 +3686,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
             // the config-dir resolution bypasses the persisted-runtime fallback) and
             // --after-fingerprint <phaseDir> (#5105 R2: gate out verify:post steps whose declared
             // artifact already exists) each take a value in the space or `=` form; the seam refuses
-            // a flag that is present without one, before any of it is used.
+            // a flag that is present without one, before any of it is used. --phase <token> and
+            // --phase-dir <dir> take the same forms but the seam does not refuse them without a
+            // value: a missing value reads as omitted, and `--phase=` reaches the resolver as ''.
             const loopParsed = parseNamedArgsOrExit(args, specFor('loop.render-hooks'), error);
             // The spec trims the `=` form (`--runtime= claude` reads as `claude`); a space-form value is as typed.
             const loopValue = (name) => (loopParsed[name] === null ? undefined : loopParsed[name]);
@@ -3694,6 +3698,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               activeCap: loopValue('active-cap'),
               runtime: loopValue('runtime'),
               afterFingerprint: loopValue('after-fingerprint'),
+              phase: loopValue('phase'),
+              phaseDir: loopValue('phase-dir'),
             });
           } else {
             error(

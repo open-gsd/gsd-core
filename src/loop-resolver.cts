@@ -20,27 +20,42 @@
  * registry/config arguments so they are trivially testable without I/O.
  *
  * Dependencies (leaf modules only — no circular risk):
- *   - ./config-loader.cjs  (loadConfig)
- *   - ./io.cjs             (output, error)
+ *   - ./config-loader.cjs  (loadConfigResolved, CONFIG_REASON)
+ *   - ./io.cjs             (output, error, formatDiagnosticToken)
  *   - ./capability-activation.cjs (resolveConfigKey, _resolveActivationValue, _getNestedConfigValue, _readRawConfigKey)
  *   - loop-host-contract.cjs (CANONICAL_POINTS via LOOP_HOST_CONTRACT)
  *   - capability-registry.cjs (byLoopPoint, consumed at call time)
  *   - capability-state.cjs (resolveCapabilityRuntimeState — for capabilities list)
+ *   - ./security.cjs       (requireSafePath, isContainedIn, PathAcceptance)
+ *   - ./phase-locator.cjs  (guardedFindPhase)
+ *   - ./planning-workspace.cjs (planningDir)
+ *   - ./project-context.cjs (resolveProjectContext: the planning root phases are confined to)
+ *   - ./real-home-guard.cjs (sameDirectory: --phase-dir identity)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4030 real-home-guard.cjs is an `export =` module, which only `import x = require` can name
+import realHomeGuard = require('./real-home-guard.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import verificationMod = require('./verification.cjs');
 const { resolvePhaseArtifactFile } = verificationMod;
-import { requireSafePath, PathAcceptance } from './security.cjs';
+import { requireSafePath, isContainedIn, PathAcceptance } from './security.cjs';
+import { resolveProjectContext } from './project-context.cjs';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4030 phase-locator.cjs is an `export =` module, which only `import x = require` can name
+import phaseLocator = require('./phase-locator.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4030 planning-workspace.cjs is an `export =` module, which only `import x = require` can name
+import planningWorkspaceMod = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspaceMod;
+const { guardedFindPhase } = phaseLocator;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
-const { loadConfig } = configLoaderModule;
+const { loadConfigResolved, CONFIG_REASON } = configLoaderModule;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import capabilityStateModule = require('./capability-state.cjs');
@@ -455,7 +470,7 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
 /**
  * Command entry point: load registry + config, resolve + render, emit envelope.
  *
- * Envelope: { point, activeHooks, rendered }
+ * Envelope: { point, activeHooks, rendered, context?, phaseDrop?, phaseEchoed?, phaseMore?, warnings?, skippedHooks? }
  * On invalid point, emits io.error instead of throwing.
  *
  * Config note: FIX 1 replaced _loadMergedConfig (whole-config deep-merge) with a
@@ -494,10 +509,184 @@ function sanitizeLoadFailReason(reason: unknown): string {
   return cleaned || '(no reason given)';
 }
 
+/** The additive, optional field `--phase <token>` resolves into (#4030). */
+interface PhaseContext {
+  phase: string;
+  phaseDir: string;
+}
+
+/** Why a supplied --phase/--phase-dir produced no context. In-process callers, tests and the CLI envelope's `phaseDrop` carry this code. */
+const PHASE_DROP = Object.freeze({
+  ARCHIVED: 'ARCHIVED',
+  ESCAPES_ROOT: 'ESCAPES_ROOT',
+  DIR_MISMATCH: 'DIR_MISMATCH',
+  AMBIGUOUS: 'AMBIGUOUS',
+  UNRESOLVED: 'UNRESOLVED',
+  PHASE_DIR_ALONE: 'PHASE_DIR_ALONE',
+  INVALID_TOKEN: 'INVALID_TOKEN',
+  CONFIG_FAULT: 'CONFIG_FAULT',
+} as const);
+type PhaseDrop = typeof PHASE_DROP[keyof typeof PHASE_DROP];
+/** The grammar a --phase token must match before it is looked up, echoed or spliced into a handler argv. */
+const PHASE_TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 interface ResolvedActiveHooks {
   point: string;
   activeHooks: ActiveHook[];
   warnings: string[];
+  context?: PhaseContext;
+  phaseDrop?: PhaseDrop;
+  /** Each caller- or disk-derived value the drop warning echoes, as printed (capped, JSON-quoted, escaped), in warning order. */
+  phaseEchoed?: string[];
+  /** AMBIGUOUS only: candidate directories beyond the 5 the warning lists. */
+  phaseMore?: number;
+}
+
+/**
+ * #4030: optional --phase <token> → derived context: { phase, phaseDir }.
+ * Resolved via guardedFindPhase (same #2237 foreign-prefix guard as `init.*`),
+ * so a phase-scoped handler gets the task-local phase instead of inferring it
+ * from STATE.current_phase. Unresolvable or ambiguous input degrades to "no
+ * context" plus a warning — never a hard error, never silent.
+ *
+ * `--phase-dir` is only a CHECK against what the token resolved to, never an
+ * independent path: the emitted phaseDir is always the locator's own value, so
+ * there is no caller path to confine, and `--phase 05 --phase-dir <another
+ * in-project phase>` is rejected as incoherent.
+ */
+function resolvePhaseContext(
+  cwd: string,
+  phaseArg: string | undefined,
+  phaseDirArg: string | undefined,
+  projectCode: unknown,
+  phaseNaming: unknown,
+  configFault: string | undefined,
+): { context: PhaseContext | undefined; warnings: string[]; drop?: PhaseDrop; echoed: string[]; more?: number } {
+  let phaseContext: PhaseContext | undefined;
+  let drop: PhaseDrop | undefined;
+  let more: number | undefined;
+  const phaseWarnings: string[] = [];
+  const echoed: string[] = [];
+  // One owner for every caller- or disk-derived value a warning echoes:
+  // the value is capped at 80 characters, then formatDiagnosticToken (io.cts)
+  // JSON-quotes it and escapes control, bidi and invisible characters.
+  // `echoed` records each shown value, so a caller reads the echo from the typed envelope, never from the prose.
+  const shown = (v: string): string => {
+    const token = ioMod.formatDiagnosticToken(v.slice(0, 80));
+    echoed.push(token);
+    return token;
+  };
+  if (phaseArg !== undefined && configFault !== undefined) {
+    drop = PHASE_DROP.CONFIG_FAULT;
+    phaseWarnings.push(
+      `--phase ${shown(phaseArg)} not resolved: .planning/config.json is unusable (${configFault}), ` +
+      'so project_code and phase_naming are unknown; context omitted.',
+    );
+  } else if (phaseArg !== undefined && !PHASE_TOKEN_RE.test(phaseArg)) {
+    drop = PHASE_DROP.INVALID_TOKEN;
+    phaseWarnings.push(`--phase ${shown(phaseArg)} is not a safe phase token; context omitted.`);
+  } else if (phaseArg !== undefined) {
+    // guardedFindPhase is typed Record<string, unknown> | null; narrow once to
+    // the fields read below.
+    type Lookup = {
+      found: boolean;
+      directory: string;
+      phase_number: string;
+      ambiguous_matches?: string[];
+      archived?: string;
+    } | null;
+    let phaseResult: Lookup = null;
+    let lookupFault: string | undefined;
+    try {
+      phaseResult = guardedFindPhase(cwd, phaseArg, projectCode, phaseNaming) as Lookup;
+    } catch (err) {
+      // planningDir throws on a hostile GSD_WORKSTREAM; the docblock promises never a hard error.
+      lookupFault = err instanceof Error ? err.message : String(err);
+    }
+    if (lookupFault !== undefined) {
+      drop = PHASE_DROP.CONFIG_FAULT;
+      phaseWarnings.push(
+        `--phase ${shown(phaseArg)} not resolved: the planning directory is unusable (${shown(lookupFault)}); context omitted.`,
+      );
+    } else if (phaseResult?.found && phaseResult.archived) {
+      // guardedFindPhase falls back to archived milestone phases (init.* guards
+      // the same way). ADR-4030 scopes context to a direct child of the active
+      // .planning/phases, so an archived hit degrades like an unresolved token
+      // rather than pointing a hook at retired plans. Omitting `context` keeps
+      // any `phaseDir` off retired plans; the dispatch table still hands the
+      // handler the host's own PHASE_NUMBER, which init.* resolved the same way.
+      drop = PHASE_DROP.ARCHIVED;
+      phaseWarnings.push(
+        `--phase ${shown(phaseArg)} resolved only to an archived phase ` +
+        `(${shown(phaseResult.directory)}, milestone ${shown(phaseResult.archived)}); ` +
+        'context omitted.',
+      );
+    } else if (phaseResult?.found) {
+      // Confinement first, against the planning root (ProjectContext.planningRoot,
+      // the native realpath of `.planning`, so a `.planning` symlinked to an
+      // external store is a supported layout). Both sides use the same native
+      // realpath: on Windows the JS realpath keeps 8.3 short names, so it never
+      // equals the native planning root. A symlinked workstream, `phases` parent
+      // or phase dir that leaves that root drops, as does a dir that is not a
+      // direct child of the real phases dir. Any throw (dangling symlink) fails
+      // closed.
+      const resolvedDir = path.resolve(cwd, phaseResult.directory);
+      let escapes = false;
+      try {
+        const { planningRoot } = resolveProjectContext(cwd);
+        const realPhases = fs.realpathSync.native(path.join(planningDir(cwd), 'phases'));
+        const realDir = fs.realpathSync.native(resolvedDir);
+        escapes = !isContainedIn(realPhases, planningRoot) || path.dirname(realDir) !== realPhases;
+      } catch { escapes = true; }
+      // A supplied --phase-dir must name the same directory the token resolved
+      // to (real-home-guard's sameDirectory: dev+ino, so case/normalization is
+      // the filesystem's call). It only gates; the emitted phaseDir is always
+      // the locator's value.
+      const sameDir = (): boolean => realHomeGuard.sameDirectory(path.resolve(cwd, phaseDirArg as string), resolvedDir);
+      if (escapes) {
+        drop = PHASE_DROP.ESCAPES_ROOT;
+        phaseWarnings.push(
+          `--phase ${shown(phaseArg)} resolved to ${shown(phaseResult.directory)}, ` +
+          'which escapes the planning root\'s phases tree (symlink or unreadable path); context omitted.',
+        );
+      } else if (phaseDirArg !== undefined && !sameDir()) {
+        drop = PHASE_DROP.DIR_MISMATCH;
+        phaseWarnings.push(
+          `--phase-dir ${shown(phaseDirArg)} does not match the directory ` +
+          `--phase ${shown(phaseArg)} resolves to (${shown(phaseResult.directory)}); context omitted.`,
+        );
+      } else if (!PHASE_TOKEN_RE.test(phaseResult.phase_number)) {
+        // The locator's own value, not the validated token, is what reaches a handler's argv.
+        drop = PHASE_DROP.INVALID_TOKEN;
+        phaseWarnings.push(`--phase ${shown(phaseArg)} resolved to ${shown(String(phaseResult.phase_number))}, which is not a safe phase token; context omitted.`);
+      } else {
+        phaseContext = { phase: phaseResult.phase_number, phaseDir: phaseResult.directory };
+      }
+    } else if (phaseResult?.ambiguous_matches?.length) {
+      // No context even when --phase-dir names a candidate: the directory would
+      // become an independent source of truth, and `init.*` does not
+      // disambiguate here either (#2237). The ambiguity is project state, not
+      // caller input, so the dispatch table still hands the handler the host's
+      // own PHASE_NUMBER, as `init.*` resolves it.
+      drop = PHASE_DROP.AMBIGUOUS;
+      const candidates = phaseResult.ambiguous_matches;
+      more = Math.max(0, candidates.length - 5);
+      phaseWarnings.push(
+        `--phase ${shown(phaseArg)} is ambiguous: ${candidates.length} ` +
+        `directories match (${candidates.slice(0, 5).map((m) => shown(m)).join(', ')}` +
+        `${more > 0 ? `, … ${more} more` : ''}); context omitted.`,
+      );
+    } else {
+      drop = PHASE_DROP.UNRESOLVED;
+      phaseWarnings.push(`--phase ${shown(phaseArg)} did not match a phase directory; context omitted, the host phase is used where the dispatch contract allows it.`);
+    }
+  } else if (phaseDirArg !== undefined) {
+    // Nothing to check it against; honouring it would make it the unconfined
+    // caller path this design avoids (#4354).
+    drop = PHASE_DROP.PHASE_DIR_ALONE;
+    phaseWarnings.push('--phase-dir requires --phase; it is verified against the token\'s resolution, never used alone. Context omitted.');
+  }
+  return { context: phaseContext, warnings: phaseWarnings, drop, echoed, more };
 }
 
 /**
@@ -510,8 +699,10 @@ interface ResolvedActiveHooks {
  * or its rendering at all).
  *
  * Throws on an invalid `point` (mirrors `resolveLoopHooks`); callers convert to their own error
- * channel. Emits the same loud stderr load-failure warnings `cmdLoopRenderHooks` always has,
- * regardless of caller — a skipped gate must never be silently invisible.
+ * channel. `options.phase` / `options.phaseDir` (#4030) are resolved by `resolvePhaseContext` into
+ * the returned `context` (and `phaseDrop` when the token is dropped). Emits the same loud stderr
+ * warnings `cmdLoopRenderHooks` always has, regardless of caller — load failures plus dropped
+ * phase context; a skipped gate must never be silently invisible.
  */
 function resolveActiveHooksForPoint(
   cwd: string,
@@ -535,11 +726,17 @@ function resolveActiveHooksForPoint(
   // (precedence levels 2-3) in each pass; that residual re-read window is
   // pre-existing (unchanged by this consolidation), not introduced here.
   let config: Record<string, unknown>;
+  let configReason: string | undefined;
   try {
-    config = loadConfig(cwd);
+    ({ config, reason: configReason } = loadConfigResolved(cwd));
   } catch {
+    // planningDir throws on a hostile GSD_WORKSTREAM; keep the base behaviour of defaulting.
     config = {};
+    configReason = undefined;
   }
+  const configFault = configReason === CONFIG_REASON.CONFIG_UNPARSEABLE || configReason === CONFIG_REASON.CONFIG_UNREADABLE
+    ? configReason
+    : undefined;
   const state = resolveCapabilityRuntimeState(cwd, runtimeConfigDir, config, runtimeOverride) as {
     warnings?: string[];
     capabilities: Array<{ id: string; enabled?: boolean; active: boolean }>;
@@ -557,6 +754,15 @@ function resolveActiveHooksForPoint(
   }
 
   const resolved: ResolveLoopHooksResult = resolveLoopHooks({ point, registry, config, cwd, capabilityStatesById });
+
+  const { context: phaseContext, warnings: phaseWarnings, drop: phaseDrop, echoed: phaseEchoed, more: phaseMore } = resolvePhaseContext(
+    cwd,
+    typeof options['phase'] === 'string' ? options['phase'] : undefined,
+    typeof options['phaseDir'] === 'string' ? options['phaseDir'] : undefined,
+    config['project_code'],
+    config['phase_naming'],
+    configFault,
+  );
 
   // ── ADR-1244 D2: load-failed capability gates FAIL OPEN with a loud warning ────
   // Decision (#2009): a capability that failed to LOAD must not block the loop.
@@ -603,16 +809,20 @@ function resolveActiveHooksForPoint(
     }
   }
   // Emit loudly to stderr in EVERY output mode (including --active-cap), so a
-  // skipped gate is never silently invisible to the operator/agent.
-  for (const w of loadFailWarnings) {
+  // skipped gate or a dropped #4030 phase context reaches the operator/agent
+  // even when the caller only captures the `*_HOOKS_JSON` envelope. The phase
+  // warnings also stay in the envelope's `warnings`, which loop-hook-dispatch.md
+  // reads (via `phaseDrop`) to choose the ref.command phase argument. state.warnings is only read
+  // here (into combinedWarnings below), never written to stderr.
+  for (const w of [...loadFailWarnings, ...phaseWarnings]) {
     process.stderr.write(`gsd: warning — ${w}\n`);
   }
 
   // Surface capability-state warnings and the #2009 load-failure fail-open warnings together
   // (in addition to the stderr emission above, which is the channel host workflows actually see).
-  const combinedWarnings = [...(state.warnings || []), ...loadFailWarnings];
+  const combinedWarnings = [...(state.warnings || []), ...loadFailWarnings, ...phaseWarnings];
 
-  return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings };
+  return { point: resolved.point, activeHooks: resolved.activeHooks, warnings: combinedWarnings, context: phaseContext, phaseDrop, phaseEchoed, phaseMore };
 }
 
 // ─── #5105 R2: post-fingerprint hook gating ────────────────────────────────
@@ -734,7 +944,7 @@ function cmdLoopRenderHooks(
       coreError(`--after-fingerprint phase directory not found or unreadable: ${afterFingerprintDir} (${msg})`);
       return;
     }
-    result = { point: result.point, activeHooks: partition.activeHooks, warnings: result.warnings };
+    result = { ...result, activeHooks: partition.activeHooks };
     skippedHooks = partition.skippedHooks;
   }
 
@@ -751,11 +961,19 @@ function cmdLoopRenderHooks(
     rendered: string;
     warnings?: string[];
     skippedHooks?: SkippedHook[];
+    context?: PhaseContext; // present when --phase resolved to one phase directory
+    phaseDrop?: PhaseDrop; // present when --phase was dropped, with the typed reason
+    phaseEchoed?: string[]; // present with phaseDrop: the values the warning echoes, as printed
+    phaseMore?: number; // present when an AMBIGUOUS drop lists 5 candidates and N more match
   } = {
     point: result.point,
     activeHooks: result.activeHooks,
     rendered,
   };
+  if (result.context) envelope.context = result.context;
+  if (result.phaseDrop) envelope.phaseDrop = result.phaseDrop;
+  if (result.phaseEchoed?.length) envelope.phaseEchoed = result.phaseEchoed;
+  if (result.phaseMore) envelope.phaseMore = result.phaseMore;
   if (result.warnings.length > 0) {
     envelope.warnings = result.warnings;
   }
@@ -771,6 +989,7 @@ export = {
   renderLoopHooks,
   cmdLoopRenderHooks,
   resolveActiveHooksForPoint,
+  PHASE_DROP, PHASE_TOKEN_RE,
   partitionHooksByFingerprint,
   // Exported for tests
   _getNestedConfigValue,

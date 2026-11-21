@@ -90,8 +90,10 @@ export interface NamedArgSpec {
   emptyValueFlags?: string[];
   /**
    * `--name=` (and a whitespace-only `--name= `) is a value, not a missing one;
-   * it surfaces as typed (`''`). Subset of `eqFlags` and `nonEmptyFlags`.
-   * Reader: resolve-execution, update-context, effort sync.
+   * it surfaces as typed (`''`). Subset of `eqFlags`. Without `nonEmptyFlags`
+   * the flag is never refused: `--name=` reads as `''` and a bare `--name` as
+   * `null`. Reader: resolve-execution, update-context, effort sync, loop
+   * render-hooks.
    */
   emptyEqFlags?: string[];
   /**
@@ -260,7 +262,6 @@ function assertValidSpec(spec: unknown): asserts spec is NamedArgSpec {
   }
   for (const kind of VALUE_SUBSET_KINDS) assertSubsetOf(spec, kind, 'valueFlags');
   assertSubsetOf(spec, 'emptyValueFlags', 'nonEmptyFlags');
-  assertSubsetOf(spec, 'emptyEqFlags', 'nonEmptyFlags');
   assertSubsetOf(spec, 'emptyEqFlags', 'eqFlags');
   assertSubsetOf(spec, 'trimEqFlags', 'eqFlags');
   assertSubsetOf(spec, 'blankIsMissingFlags', 'nonEmptyFlags');

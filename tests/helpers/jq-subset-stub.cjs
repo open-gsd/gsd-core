@@ -17,8 +17,10 @@
  * `false` or `null`, 0 otherwise; `-r` prints a string without quotes; invalid JSON exits 2.
  *
  * Agreement with jq is PINNED, not asserted in general: the 13 documents x 2 filters (plus 5 for
- * `.reason//""`) in tests/gate-consumer-exit-awareness.test.cjs carry expected values measured from
- * real jq. KNOWN DIVERGENCES (each pinned there; none is reachable from the gate handler's or
+ * `.reason//""` and 5 for `.phase_number // empty`) in tests/gate-consumer-exit-awareness.test.cjs
+ * carry expected values measured from real jq. `// empty` yields NO output (not null) for a false or
+ * null left side; under -e that exits 4, as in jq. Where a real jq is installed the `.phase_number // empty`
+ * rows also run against it. KNOWN DIVERGENCES (each pinned there; none is reachable from the gate handler's or
  * update-plan-progress's JSON, which is always an object whose fields are scalars or an object):
  *   - empty stdin: jq exits 4 under -e (0 and no output without it); the stub exits 2 like invalid JSON;
  *   - a `.data` that is a string or an array, or a top-level array: jq errors (exit 5, "Cannot index ...");
@@ -42,6 +44,8 @@ const get = (doc, ...keys) => {
   return cur === undefined ? null : cur;
 };
 
+const NO_OUTPUT = Symbol('no output');
+
 /** filter text -> (document) => output value. Keyed by the exact text the workflows carry. */
 const FILTERS = new Map([
   ['(.passed // .data.passed) == true', (d) => alt(get(d, 'passed'), get(d, 'data', 'passed')) === true],
@@ -51,6 +55,9 @@ const FILTERS = new Map([
   ],
   // #5221: roadmap.update-plan-progress completion step (executor, execute-plan, execute-phase).
   ['.reason//""', (d) => alt(get(d, 'reason'), '')],
+  // #4030: the phase-bind of the discuss, plan, secure, validate and verify-work call sites. `// empty`
+  // produces NO output (not null) when the left side is false or null.
+  ['.phase_number // empty', (d) => (isFalsy(get(d, 'phase_number')) ? NO_OUTPUT : get(d, 'phase_number'))],
 ]);
 
 function main(argv) {
@@ -73,6 +80,7 @@ function main(argv) {
     return 2;
   }
   const out = fn(doc);
+  if (out === NO_OUTPUT) return flags.has('e') ? 4 : 0;
   process.stdout.write(`${flags.has('r') && typeof out === 'string' ? out : JSON.stringify(out)}\n`);
   return flags.has('e') && isFalsy(out) ? 1 : 0;
 }

@@ -103,7 +103,7 @@ Exit workflow.
 </step>
 
 <step name="check_spec">
-Check whether the phase has a SPEC.md (from the spec-phase workflow). SPEC.md locks requirements before implementation decisions. Init already resolved it: use `has_spec` and `spec_path`, which come from one shared definition of "the phase SPEC" (a plain `*-SPEC.md`, never `*-AI-SPEC.md` or `*-UI-SPEC.md`). Do not glob for it.
+Check whether the phase has a SPEC.md (from the spec-phase workflow). SPEC.md locks requirements before implementation decisions. Init resolved it: use `has_spec` and `spec_path`, one shared definition of "the phase SPEC" (a plain `*-SPEC.md`, never `*-AI-SPEC.md` or `*-UI-SPEC.md`). Do not glob for it.
 
 **If `has_spec` is true:**
 1. Read the SPEC.md file at `spec_path`.
@@ -114,7 +114,6 @@ Check whether the phase has a SPEC.md (from the spec-phase workflow). SPEC.md lo
 
 **If `has_spec` is false:** Continue with `spec_loaded = false`.
 
-**Note:** `*-AI-SPEC.md` (from the ai-integration-phase workflow) and `*-UI-SPEC.md` (from the ui-phase workflow) are different artifacts and never count as the phase SPEC.
 </step>
 
 <step name="check_existing">

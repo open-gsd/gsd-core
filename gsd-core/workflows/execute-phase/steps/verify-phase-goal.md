@@ -29,10 +29,13 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 TDD_MODE=${TDD_MODE:-$(gsd_run loop render-hooks execute:post --active-cap tdd)}
 # #4772: this file is Read, not textually substituted - write the parent command's original argument string in place of $ARGUMENTS so --ws reaches the query.
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
+read -ra _gsd_argv <<<"$GSD_ARGS"; set -- "${_gsd_argv[@]}"
+while [ "$#" -gt 0 ]; do case "$1" in --ws|--wave) shift; [ "$#" -gt 0 ] && shift;; -*) shift;; *) break;; esac; done
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${1}" --pick phase_number)}
 VERIFIER_SKILLS=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
 # #5984: capability rules addressed to this verifier (active `contribution` hooks, `into: verifier`, at execute:post). Advisory: any failure leaves the prompt without them and never blocks verification.
 # Hooks with kind == "contribution" reach an agent through that role's landing site: into: verifier here (#5984), into: code-reviewer in code-review.md (#4790).
-VERIFIER_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw 2>/dev/null) || VERIFIER_HOOKS_JSON=""
+VERIFIER_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }} 2>/dev/null) || VERIFIER_HOOKS_JSON=""
 if [[ "$VERIFIER_HOOKS_JSON" == @file:* ]]; then VERIFIER_HOOKS_JSON=$(cat "${VERIFIER_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
 # A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
 VERIFIER_CONTRIBUTIONS=$(printf '%s' "$VERIFIER_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="verifier"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_verifier_rules>").join("<"+String.fromCharCode(92)+"/capability_verifier_rules>"));if(h.length)process.stdout.write("<capability_verifier_rules>\n"+h.join("\n\n")+"\n</capability_verifier_rules>")}catch(e){}})' 2>/dev/null || true)
@@ -48,7 +51,16 @@ fingerprinted yet, and gating on it here would be a no-op by construction (the a
 in `scripts/lint-verify-lifecycle-writes.allowlist.json`).
 
 ```bash
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+# #4772: this file is Read, not textually substituted - write the parent command's original argument string in place of $ARGUMENTS so --ws reaches the query.
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
+read -ra _gsd_argv <<<"$GSD_ARGS"; set -- "${_gsd_argv[@]}"
+while [ "$#" -gt 0 ]; do case "$1" in --ws|--wave) shift; [ "$#" -gt 0 ] && shift;; -*) shift;; *) break;; esac; done
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${1}" --pick phase_number)}
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
@@ -75,7 +87,16 @@ If an active secure-phase step hook exists AND SECURITY.md exists: check frontma
 
 **Capability gate:**
 ```bash
-EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw)}
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+# #4772: this file is Read, not textually substituted - write the parent command's original argument string in place of $ARGUMENTS so --ws reaches the query.
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
+read -ra _gsd_argv <<<"$GSD_ARGS"; set -- "${_gsd_argv[@]}"
+while [ "$#" -gt 0 ]; do case "$1" in --ws|--wave) shift; [ "$#" -gt 0 ] && shift;; -*) shift;; *) break;; esac; done
+PHASE_NUMBER=${PHASE_NUMBER:-$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${1}" --pick phase_number)}
+EXECUTE_POST_HOOKS_JSON=${EXECUTE_POST_HOOKS_JSON:-$(gsd_run loop render-hooks execute:post --raw --phase "${PHASE_NUMBER}" ${GSD_WS:+--ws=${GSD_WS##* }})}
 ```
 
 Dispatch `kind == "step"` hooks per @gsd-core/references/loop-hook-dispatch.md. `ref.skill == "code-review"`:
