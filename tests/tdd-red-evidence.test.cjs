@@ -1887,13 +1887,40 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
 
   test('a repeated-key block with a leading comment before the first key still recovers', () => {
     const result = classifyRedEvidence(validRedInput({
-      output: dupDiagTAP(['  # diagnostic context', "  error: 'first'", "  error: 'second'"]),
+      output: dupDiagTAP(['  ', '  # diagnostic context', "  error: 'first'", "  error: 'second'"]),
       targetTest: 'rejects a malformed token',
       targetFile: undefined,
     }));
     assert.equal(result.verdict, 'RED_EVIDENCE_OK');
     assert.equal(result.reason, 'target_test_failed');
     assert.deepEqual(result.evidence.report_errors, []);
+  });
+
+  test('TAP diagnostics and Go test logs can quote output from the other reporter', () => {
+    const tap = '\n' + dupDiagTAP(['  stack: |-', '    --- FAIL: TestGhost (0.123s)', "  stack: 'another frame'"]);
+    const tapReport = parseTestReport(tap);
+    assert.equal(tapReport.format, 'tap');
+    assert.equal(tapReport.valid, true);
+    assert.deepEqual(tapReport.issues, []);
+    assert.deepEqual(tapReport.tests, [{
+      name: 'rejects a malformed token', identities: ['rejects a malformed token'],
+      group: null, groupIdentities: [], status: 'failed',
+    }]);
+
+    const go = [
+      'stdout: TAP version 13',
+      '--- FAIL: TestGo (0.12s)',
+      '    --- SKIP: TestGo/skipped (0s)',
+      '    --- PASS: TestGo/precondition (0.00s)',
+      '--- FAIL: TestGo (0.12s)',
+      'FAIL\texample.com/pkg\t0.120s', '',
+    ].join('\n');
+    const goReport = parseTestReport(go);
+    assert.equal(goReport.format, 'go-test');
+    assert.equal(goReport.valid, true);
+    assert.deepEqual(goReport.tests.map(({ name, groupIdentities, status }) => [name, groupIdentities, status]), [
+      ['TestGo', [], 'failed'], ['TestGo/skipped', [], 'skipped'], ['TestGo/precondition', [], 'passed'],
+    ]);
   });
 
   // The lone-CR refusal (re-review Minor 1) is removed with its guard: tap-parser's

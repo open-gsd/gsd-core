@@ -71,7 +71,11 @@ test('#4692 property: arbitrary report strings return a deterministic result wit
 
 test('#4692 property: empty and whitespace-only evidence never authorizes GREEN', () => {
   fc.assert(fc.property(fc.array(fc.constantFrom(' ', '\t', '\r', '\n'), { maxLength: 100 }), chars => {
-    assertBlocked(chars.join(''));
+    const output = chars.join('');
+    assert.deepEqual(parseTestReport(output), {
+      format: 'unknown', valid: false, tests: [], issues: ['Unsupported report format'],
+    });
+    assert.equal(classifyRedEvidence(evidence(output)).verdict, 'INVALID_RED');
     for (const output of ['TAP version 13\n1..0\n', '<testsuite tests="0"/>', '<testsuites/>']) {
       assert.equal(classifyRedEvidence(evidence(chars.join('') + output)).verdict, 'INVALID_RED');
     }
@@ -101,6 +105,7 @@ test('#4692 property: incomplete TAP prefixes cannot use a parsed target failure
     // Stop before the final plan, including the boundary after every assertion.
     const beforePlan = output.slice(0, output.lastIndexOf('1..'));
     assertBlocked(beforePlan);
+    assert.ok(parseTestReport(beforePlan).issues.includes('Missing or incomplete TAP plan'));
     const prefix = beforePlan.slice(0, cut % (beforePlan.length + 1));
     // Header-only TAP can normalize to an empty report. It must still block;
     // once any assertion survives truncation, the missing plan is invalid.
@@ -116,8 +121,31 @@ test('#4692 property: a buffered TAP report needs its closing brace even after c
   fc.assert(fc.property(failedCases, fc.boolean(), (rows, planFirst) => {
     const output = tapReport(rows, 'buffered', planFirst);
     assert.equal(classifyRedEvidence(evidence(output)).verdict, 'RED_EVIDENCE_OK');
-    assertBlocked(output.slice(0, -2));
+    const unclosed = output.slice(0, -2);
+    assertBlocked(unclosed);
+    assert.ok(parseTestReport(unclosed).issues.includes('Unclosed buffered TAP subtest'));
   }));
+});
+
+test('TAP without a version starts with a test point or a plan', () => {
+  const pointFirst = parseTestReport('ok 1 - target\n1..1\n');
+  assert.equal(pointFirst.format, 'tap');
+  assert.equal(pointFirst.valid, true);
+  assert.deepEqual(pointFirst.tests.map(({ name, status }) => [name, status]), [['target', 'passed']]);
+
+  const planFirst = parseTestReport('1..2\nnot ok 1 - target\nok 2 - setup\n');
+  assert.equal(planFirst.format, 'tap');
+  assert.equal(planFirst.valid, true);
+  assert.deepEqual(planFirst.tests.map(({ name, status }) => [name, status]), [
+    ['target', 'failed'], ['setup', 'passed'],
+  ]);
+});
+
+test('a buffered TAP point without any child states why it is invalid', () => {
+  const output = 'TAP version 13\nnot ok 1 - suite {\n1..1\n';
+  const report = parseTestReport(output);
+  assert.equal(report.valid, false);
+  assert.deepEqual(report.issues, ['Missing buffered TAP subtest']);
 });
 
 test('#4692 property: TAP bailouts and non-TAP garbage invalidate otherwise usable failures', () => {
