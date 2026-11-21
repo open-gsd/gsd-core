@@ -43,7 +43,8 @@ function makeTree(t, files, contracts) {
   return { root, dir };
 }
 
-const runTree = ({ root, dir }, extra = {}) => textContracts.run({ root, dir, ...extra });
+// The temporary trees hold one or two contracts, not the shipped set; the minimum has its own tests.
+const runTree = ({ root, dir }, extra = {}) => textContracts.run({ root, dir, minContracts: 0, ...extra });
 
 describe('doc.has and doc.lacks', () => {
   test('a satisfied contract reports nothing', (t) => {
