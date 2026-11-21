@@ -1801,9 +1801,6 @@
   "tests/cline-model-override-upgrade.test.cjs": {
     "block": 1
   },
-  "tests/cline-support.test.cjs": {
-    "directive": 1
-  },
   "tests/clock-seam.test.cjs": {
     "block": 2
   },
@@ -2655,9 +2652,6 @@
     "directive": 2,
     "block": 4
   },
-  "tests/inventory-headings-countfree.test.cjs": {
-    "directive": 1
-  },
   "tests/inventory-manifest-sync.test.cjs": {
     "block": 1
   },
@@ -2982,9 +2976,6 @@
     "directive": 9,
     "block": 12
   },
-  "tests/phase6-capability-docs.test.cjs": {
-    "directive": 1
-  },
   "tests/phase6-capstone-conformance.test.cjs": {
     "block": 1
   },
@@ -3078,17 +3069,11 @@
   "tests/platform-conformance-tier.test.cjs": {
     "block": 1
   },
-  "tests/playwright-ui-verify.test.cjs": {
-    "directive": 1
-  },
   "tests/plugin-manifest.test.cjs": {
     "block": 5,
     "directive": 3
   },
   "tests/policy-160-route0-resume.test.cjs": {
-    "directive": 1
-  },
-  "tests/policy-release-no-npm-self-upgrade.test.cjs": {
     "directive": 1
   },
   "tests/post-planning-gaps-2493.test.cjs": {

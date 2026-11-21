@@ -421,6 +421,8 @@ const SHIPPED = [
   'adr-15-progress-converge', 'autonomous-converge',
   'autonomous-allowed-tools', 'autonomous-decomposition', 'autonomous-interactive', 'autonomous-to-flag',
   'chain-flag-plan-phase', 'discuss-checkpoint', 'agent-skills-awareness', 'scan-command', 'analyze-dependencies',
+  'cline-support', 'inventory-headings-countfree', 'policy-release-no-npm-self-upgrade', 'phase6-capability-docs',
+  'playwright-ui-verify',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -440,6 +442,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       'gsd-debugger', 'gsd-integration-checker', 'gsd-security-auditor', 'gsd-nyquist-auditor', 'gsd-codebase-mapper',
       'gsd-roadmapper', 'gsd-eval-auditor', 'gsd-intel-updater', 'gsd-doc-writer',
     ].map((name) => `agents/${name}.md`),
+    '.clinerules', 'docs/INVENTORY.md', '.github/workflows/release.yml', 'docs/how-to/develop-a-capability.md', 'docs/README.md',
+    'gsd-core/workflows/verify-work/steps/automated-ui-verification.md', 'gsd-core/workflows/ui-review.md', 'agents/gsd-ui-auditor.md',
   ];
 
   function copyOfRepoFiles(t) {
@@ -596,6 +600,72 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       fs.writeFileSync(abs, after);
       const findings = runShipped(root, [contract]);
       assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The five batch-4 contracts.
+  const dropAll = (phrase) => (text) => text.split(phrase).join('');
+  const append = (line) => (text) => `${text}\n${line}\n`;
+  for (const [title, rel, edit, contract, expected] of [
+    ['.clinerules loses its test framework mention', '.clinerules',
+      (text) => text.replace(/node:test|node:assert/g, 'a runner'), 'cline-support', /should mention test framework/],
+    ['.clinerules deleted, so the contract has nothing to read', '.clinerules',
+      () => '', 'cline-support', /the file is empty/],
+    ['a "(12 shipped)" count back in an INVENTORY heading', 'docs/INVENTORY.md',
+      append('## Hooks (12 shipped)'), 'inventory-headings-countfree', /still has a hard-count "\(N shipped\)" heading/],
+    ['a count on a heading whose title is 298 characters (limit - 2 of the pattern bound)', 'docs/INVENTORY.md',
+      append(`## ${'t'.repeat(298)} (3 shipped)`), 'inventory-headings-countfree', /still has a hard-count/],
+    ['a count on a heading whose title is 299 characters (the pattern bound)', 'docs/INVENTORY.md',
+      append(`## ${'t'.repeat(299)} (3 shipped)`), 'inventory-headings-countfree', /still has a hard-count/],
+    ['npm install -g npm@latest added to release.yml (#318)', '.github/workflows/release.yml',
+      append('      - run: npm install -g npm@latest'), 'policy-release-no-npm-self-upgrade', /must not contain a runtime global npm self-upgrade step/],
+    ['npm i -g npm added to release.yml (#318)', '.github/workflows/release.yml',
+      append('      - run: npm i -g npm'), 'policy-release-no-npm-self-upgrade', /must not contain a runtime global npm self-upgrade step/],
+    ['npm install --global npm@11 added to release.yml (#318)', '.github/workflows/release.yml',
+      append('  run: npm install --global npm@11'), 'policy-release-no-npm-self-upgrade', /must not contain a runtime global npm self-upgrade step/],
+    ['the capability manual loses the registry --check step', 'docs/how-to/develop-a-capability.md',
+      dropAll('node scripts/gen-capability-registry.cjs --check'), 'phase6-capability-docs', /manual documents the registry --check step/],
+    ['the capability manual loses the render-hooks verification', 'docs/how-to/develop-a-capability.md',
+      dropAll('gsd-tools loop render-hooks plan:pre'), 'phase6-capability-docs', /manual documents render-hooks verification/],
+    ['the docs index no longer links the capability manual', 'docs/README.md',
+      dropAll('how-to/develop-a-capability.md'), 'phase6-capability-docs', /docs index links the Capability developer manual/],
+    ['the capability manual deleted, so the contract has nothing to read', 'docs/how-to/develop-a-capability.md',
+      () => '', 'phase6-capability-docs', /the file is empty/],
+    ['Playwright gone from the automated UI verification step (#2994)', 'gsd-core/workflows/verify-work/steps/automated-ui-verification.md',
+      (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /should mention Playwright/],
+    ['the fallback wording gone from the automated UI verification step (#2994)', 'gsd-core/workflows/verify-work/steps/automated-ui-verification.md',
+      (text) => text.replace(/if available|when available|if Playwright|fall back/g, 'always'), 'playwright-ui-verify', /must be conditional with manual fallback/],
+    ['Playwright gone from ui-review.md', 'gsd-core/workflows/ui-review.md',
+      (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /ui-review\.md should reference Playwright-MCP/],
+    ['Playwright gone from the ui-auditor agent', 'agents/gsd-ui-auditor.md',
+      (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /gsd-ui-auditor\.md should mention/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  test('a count on a heading whose title is 300 characters is past the stated 300-character bound of the pattern', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'docs', 'INVENTORY.md');
+    fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n## ${'t'.repeat(300)} (3 shipped)\n`);
+    assert.deepEqual(runShipped(root, ['inventory-headings-countfree']), []);
+  });
+
+  // The release.yml self-upgrade pattern: lines it must not match stay clean (it was a unit test of its own regex).
+  for (const line of ['npm ci', 'npm install', 'npm install -g some-other-tool', 'npm run build']) {
+    test(`release.yml with the allowed line ${JSON.stringify(line)} still satisfies policy-release-no-npm-self-upgrade`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, '.github', 'workflows', 'release.yml');
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n      - run: ${line}\n`);
+      assert.deepEqual(runShipped(root, ['policy-release-no-npm-self-upgrade']), []);
     });
   }
 
