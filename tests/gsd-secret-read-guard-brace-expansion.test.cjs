@@ -327,7 +327,7 @@ describe('gsd-secret-read-guard: zsh reads a bare `-` as 0 in a numeric range (#
   // No digit at either end, a `+`, a `-1..-`, a zero or missing step: literal or braces dropped, so `.env` stays the pattern.
   const allows = [
     'echo {-..10}',
-    'echo {-..100}',
+    'touch {-..100}',
     'cat .env{..}',
     'grep -m {+..12} .env',
     'grep -m {-1..-} .env',
