@@ -1946,6 +1946,7 @@ function tokenize(str, reading) {
   let wordEnd = 0;
   let braceOpen = false;
   let braceSplit = false;
+  let braceDepth = 0; // unquoted `{` the word has not closed with a `}`, as zsh pairs them
   const rawEdits = [];
   // Whether every word so far in the segment is an assignment, and whether the words are an array's elements
   // (`arr=(…)`): bash and zsh make no words of an assignment's braces, and an array's are values (#6142).
@@ -1970,10 +1971,18 @@ function tokenize(str, reading) {
       if (split) braceWordSeen = true;
       // bash goes on with the word past a CR, a `<(…)` or `>(…)` (`{<(true),.env}` is the substitution and
       // `.env`), and an extglob or zsh glob `(…)` takes it on as a pattern (`{.env,x}?(y)` matches `.env`), so a
-      // word the split here leaves a group open in, or that runs into a `(`, is not read, in any scan. A lone `{`
-      // before a `(` is a group keyword (`{ (…); }`), not a word.
+      // word the split here leaves a group open in, or whose group runs into a `(`, is not read, in any scan. A
+      // lone `{` before a `(…)` that a blank or an operator ends is a group keyword (`{(echo hi); }`), else zsh's
+      // group (`{(x),.env}`); a brace word with no group in it (`{type}(…)`) stays one word.
       const after = str[wordEnd];
-      const cut = braceOpen && ((after === '(' && raw !== '{') || ((after === '\r' || /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)))
+      let paren = false;
+      if (after === '(' && raw === '{') {
+        const close = findParenClose(str, wordEnd + 1, reading);
+        paren = close >= str.length || /^[^ \t\n;&|)]/.test(str.slice(close + 1, close + 2));
+      } else if (after === '(') {
+        paren = braceSplit || braceDepth > 0;
+      }
+      const cut = braceOpen && (paren || ((after === '\r' || /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)))
         && braceGroupOpen(raw, reading)));
       assignsOnly = assignsOnly && BRACE_ASSIGNMENT_RE.test(str.slice(wordStart, wordEnd));
       let words = cut ? BRACE_UNREADABLE : split && bracesSpliced ? braceWords(raw, reading) : undefined;
@@ -1999,6 +2008,7 @@ function tokenize(str, reading) {
     hasWord = false;
     braceOpen = false;
     braceSplit = false;
+    braceDepth = 0;
     rawEdits.length = 0;
   };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
@@ -2307,8 +2317,14 @@ function tokenize(str, reading) {
       }
     }
 
-    if (ch === '{') braceOpen = true;
-    else if (braceOpen && (ch === ',' || ch === '.')) braceSplit = true;
+    if (ch === '{') {
+      braceOpen = true;
+      braceDepth++;
+    } else if (ch === '}' && braceDepth > 0) {
+      braceDepth--;
+    } else if (braceOpen && (ch === ',' || ch === '.')) {
+      braceSplit = true;
+    }
     hasWord = true;
     buf += ch;
     i++;
