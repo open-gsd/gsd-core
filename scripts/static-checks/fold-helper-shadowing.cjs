@@ -1,23 +1,16 @@
 'use strict';
 
 /**
- * fold-helper-shadowing: a helper declared at module scope of a test file must
- * not be re-declared inside a program-level fold block, because the inner
- * declaration shadows the outer one for everything in that fold and the two
- * copies then drift independently (#4409, same class as #4205/#4337).
- *
- * It was tests/fold-helper-shadowing.test.cjs (23 s of Linux test time); it
- * reads repo content, so it runs in scripts/run-static-checks.cjs (ADR-6315
- * item 19, #6434). Three findings, as the test's three rows:
- *   1. SUBJECT declares each helper exactly once (the reported defect);
+ * fold-helper-shadowing: a module-scope helper of a test file must not be
+ * re-declared inside a program-level fold block; the inner copy shadows the
+ * outer one and the two drift (#4409). Was tests/fold-helper-shadowing.test.cjs
+ * (23 s); now a static check (ADR-6315 item 19, #6434). Three findings:
+ *   1. SUBJECT declares each helper once;
  *   2. the shadowed set across tests/ equals KNOWN_FOLD_SHADOWS exactly (a
- *      stale entry fails too, so there is no separate staleness row);
- *   3. every extractShellBlocks in SUBJECT splits lines on /\r?\n/ (a bare
- *      "\n" leaves a trailing \r on every line of a CRLF checkout).
- *
- * Every walk is over an AST. None reads a .cjs and searches its text: "how many
- * declarations exist" is a construct count, and a text search would match the
- * name inside a comment or a string literal too.
+ *      stale entry fails too);
+ *   3. every extractShellBlocks in SUBJECT splits on /\r?\n/.
+ * Every walk is over an AST, never a text search. The long rationale is in
+ * docs/adr/6315-ci-redesign.md, item 19 part 2.
  */
 
 const fs = require('node:fs');
