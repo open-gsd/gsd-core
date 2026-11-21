@@ -665,6 +665,8 @@ describe('gsd-secret-read-guard: an exempt file reached through an alternative (
     // As written `sort {-o,/tmp/out}` reads only; bash makes `sort -o /tmp/out`, which writes.
     assertAllowed(`sort ${dir()}.env.production`, repo);
     assertBlocked(`sort {-o,/tmp/out} ${dir()}.env.production`, { code: 'secret-read', path: path.join(repo, '.env.production') }, repo);
+    // Only bash's and zsh's `$'…'` reading make this alternative `-o`; the plain reading keeps `$-o`.
+    assertBlocked(`sort {$'-o',/tmp/out} ${dir()}.env.production`, { code: 'secret-read', path: path.join(repo, '.env.production') }, repo);
   });
 });
 
