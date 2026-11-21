@@ -25,26 +25,36 @@ run, even when it is ready.
    - a failure is unresolved: a plan of the finished wave failed, and neither a retry completed it nor
      the user chose to continue at step 6 or 7;
    - every plan of the finished wave failed: `failure_handling`'s systemic stop, whatever was chosen.
-3. **Re-read the index** from the orchestrator's worktree. Fenced blocks are separate shells, so the block
-   re-pins the root the way the `execute_waves` cwd-drift guard does (#48), failing closed:
+3. **Re-read the index** from the orchestrator's worktree with the block below. Fenced blocks are separate
+   shells, so it re-pins the root the way the `execute_waves` cwd-drift guard does (#48). It fails closed:
+   it stops on a failed read, and on an answer that carries an `error` or no plans, which is how
+   `phase-plan-index` reports a phase it cannot find or that matches more than one directory, with exit 0.
 
-   ```bash
+```bash
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
-   ORCHESTRATOR_WT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "FATAL: not inside a git worktree (#48)." >&2; exit 1; }
-   case "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" in agent-*|worktree-agent-*|worktree-wf_*) echo "FATAL: orchestrator cwd is inside an agent worktree; run the execute_waves cwd-drift guard (#48)." >&2; exit 1 ;; esac
-   PLAN_INDEX=$(cd "$ORCHESTRATOR_WT" && gsd_run query phase-plan-index "${PHASE_NUMBER}") || { echo "FATAL: the phase-plan-index re-read failed; stop, never dispatch from an empty index." >&2; exit 1; }
-   ```
+ORCHESTRATOR_WT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "FATAL: not inside a git worktree (#48)." >&2; exit 1; }
+case "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" in agent-*|worktree-agent-*|worktree-wf_*) echo "FATAL: orchestrator cwd is inside an agent worktree; run the execute_waves cwd-drift guard (#48)." >&2; exit 1 ;; esac
+PLAN_INDEX=$(cd "$ORCHESTRATOR_WT" && gsd_run query phase-plan-index "${PHASE_NUMBER}") || { echo "FATAL: the phase-plan-index re-read failed; stop, never dispatch from an empty index." >&2; exit 1; }
+case "$PLAN_INDEX" in
+  *'"error":'*|*'"plans": []'*) printf '%s\n' "$PLAN_INDEX" >&2; echo "FATAL: the phase-plan-index re-read found no plans; stop, never dispatch from an empty index." >&2; exit 1 ;;
+  *'"id": "'*) printf '%s\n' "$PLAN_INDEX" ;;
+  *) echo "FATAL: the phase-plan-index re-read is not a plan index; stop, never dispatch from it." >&2; exit 1 ;;
+esac
+```
 
-   Apply § Filtering from step 1 again, the #4628 readiness skip and the `blocked_by` skip included, then:
-   - keep only plans in `RUN_SCOPE`;
-   - drop every plan this run already dispatched (a retry belongs to step 6 or 7, never to a refresh);
-   - drop every plan that depends, directly or through another dropped plan, on a plan this run saw fail
-     at step 6 or 7 and the user continued past. The index counts a written SUMMARY as complete even when
-     its spot-check failed; continuing lets the run go on, never the failed plan's dependents.
+The block prints the index; read the plans from that output. Apply § Filtering from step 1 again, the #4628
+readiness skip and the `blocked_by` skip included, then:
 
-   This re-read is the only thing that widens the selection: a plan that became ready because its
-   predecessor finished is dispatched here, never earlier. From here on, a plan's JSON (`id`,
-   `files_modified` and the rest) comes from this read, not step 1's.
+- keep only plans in `RUN_SCOPE`;
+- drop every plan this run already dispatched (a retry belongs to step 6 or 7, never to a refresh);
+- drop every plan that depends, directly or through another dropped plan, on a plan this run saw fail
+  at step 6 or 7 and the user continued past. The index counts a written SUMMARY as complete even when
+  its spot-check failed; continuing lets the run go on, never the failed plan's dependents.
+
+This re-read is the only thing that widens the selection: a plan that became ready because its
+predecessor finished is dispatched here, never earlier. From here on, a plan's JSON (`id`,
+`files_modified` and the rest) comes from this read, not step 1's.
+
 4. **Stop on no progress:** the refreshed selection is empty while an incomplete plan in `RUN_SCOPE`
    remains. Because a refresh never selects a plan this run already dispatched, it can never select the
    same plans again: each refresh either dispatches plans no earlier wave ran or stops here.

@@ -1548,6 +1548,99 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
   });
 });
 
+// ─── #5966 — the wave-boundary re-read fence, run ───────────────────────────────────────────────────────────
+//
+// The rows above pin the fragment's text. These run its re-read fence under bash, as the orchestrator does, in a
+// real project against the real `phase-plan-index`: the index the refresh filters reaches the block's output, and
+// every answer the refresh must not dispatch from ends the block with exit 1 and nothing on stdout. `Phase not
+// found` and an ambiguous phase are answered with exit 0, so only the block's own check of the answer stops them.
+{
+const { runHook: runRefreshShell, runGit: refreshGit } = require('./helpers/process-seam.cjs');
+const { createTempGitProject: refreshProject, cleanup: refreshCleanup, TOOLS_PATH: REFRESH_TOOLS } = require('./helpers.cjs');
+const { splitLines: refreshSplitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+const REFRESH_FRAGMENT = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'wave-refresh.md');
+const REAL_GSD_RUN = `gsd_run() { node '${REFRESH_TOOLS}' "$@"; }`;
+
+function refreshFence() {
+  const text = fs.readFileSync(REFRESH_FRAGMENT, 'utf8');
+  // at column 0: the launcher line inside it is written at column 0, so an indented opener would end the list item
+  // in rendered Markdown at that line
+  const opener = '\n```bash\n';
+  const open = text.indexOf(opener);
+  assert.ok(open >= 0, 'the re-read fence must open at column 0');
+  const body = open + opener.length;
+  // the launcher preamble `sync-runtime-launcher` prepends defines the real `gsd_run`; the test supplies its own
+  return refreshSplitLines(text.slice(body, text.indexOf('\n```', body))).filter((line) => !line.startsWith('_GSD_SHIM_NAME=')).join('\n');
+}
+
+function refreshFixture(t, phaseDirs = ['01-alpha']) {
+  const proj = refreshProject();
+  t.after(() => refreshCleanup(proj));
+  for (const dir of phaseDirs) {
+    const phaseDir = path.join(proj, '.planning', 'phases', dir);
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '---\nphase: 01\nplan: 01\nwave: 1\n---\n# Plan 01\n');
+  }
+  return proj;
+}
+
+/** The fence as the orchestrator runs it: its own `PHASE_NUMBER` set, a `gsd_run` in place of the launcher's. */
+function runRefresh(proj, { phase = '1', gsdRun = REAL_GSD_RUN, env = {} } = {}) {
+  const script = [gsdRun, `PHASE_NUMBER='${phase}'`, refreshFence()].join('\n');
+  return runRefreshShell('-c', [script], { interpreter: 'bash', cwd: proj, env: { ...process.env, ...env } });
+}
+
+describe('#5966: the wave-boundary re-read fence, run under bash', () => {
+  test('the block prints the index it read, so the plans the refresh filters are in its output', (t) => {
+    const r = runRefresh(refreshFixture(t));
+    assert.equal(r.exitCode, 0, `the re-read must succeed: ${r.stderr}`);
+    const index = JSON.parse(r.stdout);
+    assert.deepEqual(index.plans.map((plan) => plan.id), ['01-01'], 'the index is printed, not only assigned');
+  });
+
+  test('a phase the index cannot find stops the block, though phase-plan-index exits 0 for it', (t) => {
+    const r = runRefresh(refreshFixture(t), { phase: '9' });
+    assert.equal(r.exitCode, 1, 'an index with no plans must never reach the filters');
+    assert.equal(r.stdout, '', 'nothing is printed as an index');
+    assert.match(r.stderr, /Phase not found/, 'the answer is shown');
+    assert.match(r.stderr, /FATAL: the phase-plan-index re-read found no plans/);
+  });
+
+  test('a phase that matches two directories stops the block', (t) => {
+    const r = runRefresh(refreshFixture(t, ['01-alpha', '01-beta']));
+    assert.equal(r.exitCode, 1, 'an ambiguous phase carries an error and no plans');
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /ambiguous/);
+  });
+
+  test('a read that fails stops the block', (t) => {
+    const r = runRefresh(refreshFixture(t), { gsdRun: 'gsd_run() { return 3; }' });
+    assert.equal(r.exitCode, 1);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /FATAL: the phase-plan-index re-read failed/);
+  });
+
+  test('an answer that is not a plan index stops the block', (t) => {
+    const r = runRefresh(refreshFixture(t), { gsdRun: "gsd_run() { printf 'not json\\n'; }" });
+    assert.equal(r.exitCode, 1);
+    assert.equal(r.stdout, '');
+    assert.match(r.stderr, /FATAL: the phase-plan-index re-read is not a plan index/);
+  });
+
+  test('inside an agent branch the block refuses before it reads the index', (t) => {
+    const proj = refreshFixture(t);
+    const branch = refreshGit(['checkout', '-q', '-b', 'worktree-agent-x'], { cwd: proj });
+    assert.equal(branch.exitCode, 0, branch.stderr);
+    const marker = path.join(proj, 'read.flag');
+    const r = runRefresh(proj, { gsdRun: `gsd_run() { : > '${marker}'; node '${REFRESH_TOOLS}' "$@"; }` });
+    assert.equal(r.exitCode, 1);
+    assert.match(r.stderr, /inside an agent worktree/);
+    assert.equal(fs.existsSync(marker), false, 'the index is never read from an agent worktree');
+  });
+});
+}
+
 // ─── #6102 — shared requirements in a parallel worktree wave are marked after the merge ───────────────────
 //
 // A worktree executor's `update_requirements` gate sees only its own SUMMARY, so a requirement ID declared by two
