@@ -306,6 +306,73 @@ describe('gsd-secret-read-guard: zsh reads a group of any two characters around 
   }
 });
 
+describe('gsd-secret-read-guard: zsh reads a bare `-` as 0 in a numeric range (#6142)', () => {
+  // zsh 5.9 reads `{-..10}` as 0 … 10 and `{-..1..1}` as 0 1, where bash leaves the word as written, and drops the
+  // braces of a numeric range it cannot make: `{..5}` is `..5`, `{-..10..0}` is `-..10..0`.
+  const denies = [
+    ['grep -m {-..10} .env', '.env'],
+    ['grep -m {-..1..1} .env', '.env'],
+    ['grep -m {01..-} .env', '.env'],
+    ["grep -m {'-'..10} .env", '.env'],
+    // bash makes `0 -3`, an option after the count; zsh steps down from the higher end, `-3 0`, so `.env` is a file.
+    ['grep -m {0..-5..-3} .env', '.env'],
+    ['cat .env{..5}', '.env..5'],
+    ['cat .env{..5..0}', '.env..5..0'],
+  ];
+  for (const [cmd, alt] of denies) {
+    test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'secret-read', path: alt }));
+    test(`denies bash -c '${cmd}'`, () => assertBlocked(`bash -c '${cmd.replace(/'/g, "'\\''")}'`, { code: 'secret-read', path: alt }));
+  }
+
+  // No digit at either end, a `+`, a `-1..-`, a zero or missing step: literal or braces dropped, so `.env` stays the pattern.
+  const allows = [
+    'echo {-..10}',
+    'echo {-..100}',
+    'cat .env{..}',
+    'grep -m {+..12} .env',
+    'grep -m {-1..-} .env',
+    'grep -m {-..10..0} .env',
+    'grep -m {1..3..} .env',
+    'grep -m {5..} .env',
+    // A step past 1 lands on the lower end: `-5 -2`, so `-2` is an option and `.env` the pattern.
+    'grep -m {-5..-..3} .env',
+  ];
+  for (const cmd of allows) {
+    test(`allows ${cmd}`, () => assertAllowed(cmd));
+  }
+
+  test('a range zsh and bash read alike brings on no third scan', () => {
+    const { scanBashCommand, workSpent } = require(HOOK_PATH);
+    const work = (cmd) => {
+      scanBashCommand(cmd);
+      return workSpent().scan;
+    };
+    // `{-..0}z` brings on the zsh scan, which reads the word once more: about twice the work of the two scans.
+    for (const word of ['x{0..9}y', 'f{a..z}{0..9}', '{1..9}', '{1..64}', '{01..10}', '{1..10..2}', '{10..1}', '{-3..3}', '{a..f}']) {
+      assert.ok(work(`cat ${word} {-..0}z`) > 2 * work(`cat ${word}`), word);
+    }
+  });
+});
+
+describe('gsd-secret-read-guard: a group a process substitution runs into (#6142)', () => {
+  // bash reads `<(…)` and `>(…)` as part of the word they touch, so `{.env,<(echo })}` is `.env` and the
+  // substitution. The guard splits the word there, so an open group it cuts is denied, never read in part.
+  for (const [cmd, word] of [
+    ['cat {.env,<(echo })}', '{.env,'],
+    ['cat d/{x,.env,>(cat)}', 'd/{x,.env,'],
+    ['cat {{.env,a},<(true)}', '{{.env,a},'],
+    // A closed group before the open one: `{,d/}{.env,<(true)}` is `.env` and `d/.env` among the words.
+    ['cat {,d/}{.env,<(true)}', '{,d/}{.env,'],
+  ]) {
+    test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'glob-too-complex', path: word }));
+  }
+
+  // A closed group, a space before the substitution, or no group at all.
+  for (const cmd of ['cat {a,b}<(true)', 'cat {.env, <(echo })}', 'diff <(sort a) <(sort b)', 'cat x<(true)']) {
+    test(`allows ${cmd}`, () => assertAllowed(cmd));
+  }
+});
+
 describe('gsd-secret-read-guard: past the budget, only a word that could name a secret is denied (#6142)', () => {
   // Each makes more than 64 words, none of which can name a secret file: all 0 on next, and allowed still.
   const allows = [
