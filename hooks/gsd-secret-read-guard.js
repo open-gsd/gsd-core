@@ -5009,9 +5009,10 @@ function writesOwnText({ words, cmdWords, feeds }) {
     || (fed && (cmd.base === 'cat' || cmd.base === 'tee')) || (cmd.base === 'cat' && catReadsFilesOnly(cmd.operands))));
 }
 
+// An fd path (`/dev/stdin`, `/dev/fd/0`, isFdPath) may be the pipe, so it counts as `-` (#5492).
 function catReadsFilesOnly(operands) {
   const named = operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
-  return named.length > 0 && !named.some((w) => w.text === '-');
+  return named.length > 0 && !named.some((w) => w.text === '-' || isFdPath(w.text));
 }
 
 // A filtered stage (pipeStages), failing closed: a secret name its words, what it writes, or its heredocs and
