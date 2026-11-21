@@ -4630,7 +4630,7 @@ function stageScripts(stages, ctx) {
   const scripts = [];
   for (const { words, cmdWords, feeds } of stages) {
     for (const script of reconstructedScripts(words, ctx)) scripts.push(script);
-    if (cmdWords.length === words.length && !feeds.heredocs.length) continue; // read above already
+    if (cmdWords.length === words.length && !feeds.heredocs.length && !feeds.hereStrings.length) continue; // read above already
     for (const script of reconstructedScripts(cmdWords, ctx, feeds)) if (!scripts.includes(script)) scripts.push(script);
   }
   return scripts;
@@ -4707,7 +4707,13 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
         inner.push(stage);
         charge(ctx, TOKEN_WORK + 1);
       }
-      if (group.start === -1 || !throughFilters || groupFed(group.close, at, bySeg, bodies, ctx)) return stages;
+      // A heredoc or here-string given to the group is the stdin of each command inside it, and not the pipe.
+      const fed = groupFeeds(group.close, at, bySeg, bodies, ctx);
+      const isFed = fed.heredocs.length > 0 || fed.hereStrings.length > 0;
+      for (const stage of isFed ? inner : []) {
+        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings] };
+      }
+      if (group.start === -1 || !throughFilters || isFed) return stages;
       // The group reads the pipe through each command inside it that reads its stdin, and the walk goes on past it
       // as past a plain stage; when every one writes its own text (`| (echo hi) |`), nothing reads the pipe.
       const passes = inner.some(({ words, cmdWords }) => passesStdinOn(words) || passesStdinOn(cmdWords));
@@ -4753,15 +4759,20 @@ function pipedGroup(last, at, sepAfter, ctx) {
   return { close, start: -1 };
 }
 
-// Whether a group closing after segment `close` is given a heredoc or here-string before the pipe into segment
-// `at` (`(cat) <<< 'x' | sh`): its stdin is then that text, not the pipe. Each token passed is charged.
-function groupFed(close, at, bySeg, bodies, ctx) {
+// The heredoc bodies and here-strings given to a group closing after segment `close`, before the pipe into segment
+// `at` (`(cat) <<< 'x' | sh`), charged their tokens and bytes.
+function groupFeeds(close, at, bySeg, bodies, ctx) {
+  const feeds = { heredocs: [], hereStrings: [] };
   for (let g = close + 1; g < at; g++) {
     const seg = bySeg.get(g) || [];
+    for (const h of (bodies && bodies.get(g)) || []) feeds.heredocs.push(h.text);
+    for (const text of hereStringTargets(seg)) feeds.hereStrings.push(text);
     charge(ctx, TOKEN_WORK * seg.length + 1);
-    if ((bodies && bodies.get(g) && bodies.get(g).length) || hereStringTargets(seg).length) return true;
   }
-  return false;
+  let bytes = 0;
+  for (const text of [...feeds.heredocs, ...feeds.hereStrings]) bytes += text.length;
+  charge(ctx, TOKEN_WORK * bytes);
+  return feeds;
 }
 
 // The segment whose separator opens the group segment `at` sits in, past one right before `at`, whose stdin is
