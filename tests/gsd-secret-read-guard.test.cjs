@@ -1842,6 +1842,36 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     ["echo 'x .env' | xargs -I{} cat {}", '.env'],
   ]) blocks([cmd], { path: expectedPath });
   allows(["echo 'x if=x.txt' | xargs dd", "echo 'a .env.example' | xargs cat", "echo 'see .env' | xargs echo"]);
+
+  // A stage between a producer and a shell that is neither a pass-through (`cat`, `tee`) nor a producer itself
+  // (`head`, `sort`, `uniq`, `pv`, `grep`, `sed` …) changes the text in a way the scan does not compute, so from it
+  // back to the producer every stage's words, and what each writes, fail closed on any mention of a secret name.
+  blocks([
+    "printf 'cat .env' | head | bash",
+    "printf 'cat .env' | head -n 5 | bash",
+    "printf 'cat .env' | sort | bash",
+    "printf 'cat .env' | uniq | bash",
+    "printf 'cat .env' | pv | bash",
+    "printf 'cat .env' | grep cat | bash",
+    "echo 'cat .env' | sort | uniq | sh",
+    "printf 'cat .env' | sort | tee x | bash",
+    "cat <<< 'cat .env' | sort | bash",
+    "cat <<EOF | head | bash\ncat .env\nEOF",
+    "printf 'cat .env' | head | source /dev/stdin",
+    "printf x | sed 's/x/cat .env/' | bash",
+    "grep cat <<< 'cat .env' | bash",
+    // What the producer writes is still read exactly too: the decoded name is read where no mention is.
+    `printf '%s' "cat \\$'.e\\\\x6ev'" | sort | bash`,
+    // Fails closed: the text names a secret it does not read.
+    "echo 'echo .env' | sort | bash",
+  ]);
+  allows([
+    "printf 'echo hi' | head | bash",
+    "printf x | sort | sh",
+    'cat gen.sh | head | bash',
+    "printf 'cat .env' | head",
+    "printf 'cat .env.example' | sort | bash",
+  ]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
@@ -1898,6 +1928,12 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
       const tail = `${stage.repeat(k)}; cat .env`;
       return [`a 1 MiB producer read through ${k} \`${stage.slice(3)}\` stages`,
         `echo '${'a=a '.repeat(Math.floor((1024 * 1024 - tail.length - 20) / 4))}'${tail}`, 'command-too-complex', ''];
+    }),
+    // Each shell walks back through every filter stage to the producer and reads it fail closed, charged each time.
+    ...[60, 1500].map((k) => {
+      const tail = `${' | sort | sh'.repeat(k)}; cat .env`;
+      return [`a 1 MiB producer read through ${k} \`sort | sh\` stages`,
+        `echo '${'a '.repeat(Math.floor((1024 * 1024 - tail.length - 20) / 2))}'${tail}`, 'command-too-complex', ''];
     }),
   ];
   for (const [shape, cmd, code, expectedPath] of blocks) {
@@ -2026,6 +2062,23 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
     const urls = Math.floor((max - w0) / (w1 - w0)) - 1;
     const base = scanWork([make(urls, 0)]).work[0];
     const commands = [-1, 0, 1].map((d) => make(urls, max - base + d));
+    assert.deepEqual(scanWork(commands).work, [max - 1, max, max + 1]);
+    assertAllowed(runHook(bash(commands[0])), 'budget − 1');
+    assertAllowed(runHook(bash(commands[1])), 'budget');
+    assertBlocked(runHook(bash(commands[2])), 'budget + 1', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  // Each shell reads the producer back through the filter stages, charged its bytes each time, so the work grows
+  // by at least that per shell; padded to the budget, a scan spending exactly it is allowed and one unit more blocks.
+  test('a producer read through filter stages spends the work budget at limit - 1, limit and limit + 1', () => {
+    const bytes = 100000;
+    const make = (k, pad) => `printf '${'a'.repeat(bytes)}'${' | sort | sh'.repeat(k)}; bash -c '${' '.repeat(pad)}'`;
+    const { max, work: [w1, w2] } = scanWork([make(1, 0), make(2, 0)]);
+    assert.ok(w2 - w1 >= 4 * bytes, `each further shell re-reads the producer: ${w1}, ${w2}`);
+    let k = Math.floor(max / (w2 - w1));
+    while (scanWork([make(k, 0)]).work[0] >= max - 1) k--;
+    const base = scanWork([make(k, 0)]).work[0];
+    const commands = [-1, 0, 1].map((d) => make(k, max - base + d));
     assert.deepEqual(scanWork(commands).work, [max - 1, max, max + 1]);
     assertAllowed(runHook(bash(commands[0])), 'budget − 1');
     assertAllowed(runHook(bash(commands[1])), 'budget');
