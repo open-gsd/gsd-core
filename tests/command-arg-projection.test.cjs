@@ -1070,19 +1070,26 @@ describe('#6087 list runs and value flags agree', () => {
       missing(parseNamedArgs(['--n'], spec), 'n');
     });
 
-    test('T-N5: the empty-value options must be subsets of nonEmptyFlags (and emptyEqFlags of eqFlags)', () => {
+    test('T-N5: emptyValueFlags must be a subset of nonEmptyFlags, emptyEqFlags of eqFlags', () => {
       assert.throws(
         () => parseNamedArgs([], { valueFlags: ['n'], emptyValueFlags: ['n'], positionals: 0 }),
         (err) => err instanceof TypeError && err.message.includes('emptyValueFlags') && err.message.includes('nonEmptyFlags'),
       );
       assert.throws(
-        () => parseNamedArgs([], { valueFlags: ['n'], nonEmptyFlags: ['n'], emptyEqFlags: ['n'], positionals: 0 }),
-        (err) => err instanceof TypeError && err.message.includes('emptyEqFlags'),
+        () => parseNamedArgs([], { valueFlags: ['n'], emptyEqFlags: ['n'], positionals: 0 }),
+        (err) => err instanceof TypeError && err.message.includes('emptyEqFlags') && err.message.includes('eqFlags'),
       );
       assert.throws(
         () => parseNamedArgs([], { ...base, emptyValueFlags: 'n' }),
         (err) => err instanceof TypeError && err.message.includes('emptyValueFlags'),
       );
+    });
+
+    test('T-N5b: emptyEqFlags without nonEmptyFlags reads --n= as "" and a bare --n as null, never refused', () => {
+      const spec = { valueFlags: ['n'], eqFlags: ['n'], emptyEqFlags: ['n'], booleanFlags: ['b'], positionals: 0 };
+      assert.deepStrictEqual(parseNamedArgs(['--n='], spec), { ok: true, data: { n: '', b: false } });
+      assert.deepStrictEqual(parseNamedArgs(['--n'], spec), { ok: true, data: { n: null, b: false } });
+      assert.deepStrictEqual(parseNamedArgs(['--n', '--b'], spec), { ok: true, data: { n: null, b: true } });
     });
 
     test('T-N6: a repeatable nonEmpty flag is checked on its last occurrence (the one a last-wins reader takes)', () => {

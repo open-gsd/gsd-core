@@ -38,6 +38,20 @@ function extractBashBlocks(content) {
   }
   return blocks;
 }
+
+/**
+ * `content` with the body of every ```bash fence emptied. Shell quotes (a sed bracket class holds one `"`)
+ * would flip the string state of the Skill() walker below for every call after them.
+ */
+function withoutBashFences(content) {
+  const lines = splitLines(content);
+  for (const block of scanFencedBlocks(lines)) {
+    if ((block.infoString || '').trim().toLowerCase() !== 'bash') continue;
+    const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
+    for (let i = block.openLineIdx + 1; i < end; i++) lines[i] = '';
+  }
+  return lines.join('\n');
+}
 const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
 const { runNode, runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
@@ -68,7 +82,8 @@ const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
  * This avoids regex/.includes() text-matching: callers receive a structured list
  * and assert against fields and tokenized args.
  */
-function parseWorkflowSkillInvocations(content) {
+function parseWorkflowSkillInvocations(source) {
+  const content = withoutBashFences(source);
   const invocations = [];
   let i = 0;
   let inString = false;
@@ -1180,6 +1195,15 @@ describe('CR-INTEGRATION: workflow integration points', () => {
   // not the user-installed plugin dir. The plugin dir can lag behind the repo until the
   // user re-installs, so asserting against it produces false negatives. The repo file
   // is the source of truth and is always present in CI checkouts.
+  test('parseWorkflowSkillInvocations: a shell quote inside a bash fence never hides a Skill() call after it', () => {
+    const skillCall = 'Skill(skill="gsd-code-review", args="1 --fix")';
+    // a sed bracket class holds one `"`: an odd count before the call
+    const shell = ['```bash', 'X=$(echo y | sed -nE \'s/["\']//p\')', '```'].join('\n');
+    assert.deepStrictEqual(parseWorkflowSkillInvocations(`${shell}\n\n\`\`\`\n${skillCall}\n\`\`\`\n`).map((i) => i.skill), ['gsd-code-review']);
+    // positive control: the same call with no shell fence before it
+    assert.deepStrictEqual(parseWorkflowSkillInvocations(`\`\`\`\n${skillCall}\n\`\`\`\n`).map((i) => i.skill), ['gsd-code-review']);
+  });
+
   test('autonomous.md contains gsd-code-review skill invocation', () => {
     const content = fs.readFileSync(path.join(WORKFLOWS_DIR, 'autonomous.md'), 'utf-8');
 

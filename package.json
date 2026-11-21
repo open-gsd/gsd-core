@@ -35,6 +35,7 @@
     "!scripts/lint-evaluation-scope-drift.allowlist.json",
     "!scripts/lint-gate-evidence-drift.cjs",
     "!scripts/lint-gate-positive-control.cjs",
+    "!scripts/static-checks/render-hooks-phase-sites.cjs",
     "pi",
     "vscode"
   ],

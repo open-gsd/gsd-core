@@ -68,6 +68,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { tokenize, bareCommandName } = require('../tests/helpers/shipped-command-scan.cjs');
 const { assertWithinAllowlist } = require('./lib/allowlist-ratchet.cjs');
 const { isSharedPlanningDoc, isVerificationReportPath } = require('../gsd-core/bin/lib/verification.cjs');
@@ -75,11 +76,17 @@ const { isSharedPlanningDoc, isVerificationReportPath } = require('../gsd-core/b
 const REPO_ROOT = path.join(__dirname, '..');
 const ALLOWLIST_PATH = path.join(__dirname, 'lint-verify-lifecycle-writes.allowlist.json');
 
+// #4030: the one owner of the `render-hooks <point>` call grammar; `callRe` of
+// scripts/static-checks/render-hooks-phase-sites.cjs builds from it, and its `CALL_POINT_RE` is the
+// discovery twin (it captures the point), pinned to the same spellings by the `[grammar]` parity test.
+function renderHooksCallRe(point) {
+  return new RegExp(`render-hooks\\s+"?${escapeRegex(point)}(?:"|\\b)`);
+}
 // #5105 S12: `verify:post` may appear bare or quoted, and `loop render-hooks`
 // may be separated from it by a backslash-continued line join (a single
 // space is inserted at the join point by `joinContinuations`) — so `\s+`
 // rather than a single literal space between the two words.
-const RENDER_HOOKS_VERIFY_POST_RE = /loop\s+render-hooks\s+"?verify:post"?\b/;
+const RENDER_HOOKS_VERIFY_POST_RE = new RegExp(`loop\\s+${renderHooksCallRe('verify:post').source}`);
 const ISSUE_REF_RE = /#\d+/;
 const SECURE_PHASE_ENABLEMENT_PHRASE_RE = /active secure-phase step hook exists|no active secure-phase step hook/i;
 
@@ -466,5 +473,8 @@ module.exports = {
   isPostFingerprintHost,
   isVerificationReportPath,
   isSharedPlanningDoc,
+  joinContinuations,
+  renderHooksCallRe,
+  RENDER_HOOKS_VERIFY_POST_RE,
   scanForSecurePhaseEnablementPhrasing,
 };
