@@ -1967,7 +1967,8 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   allows(["npm_config_call='echo .env' npx", "npm_config_registry=https://r.example npm install", "npm_config_editor=vim npm edit lodash"]);
 
   // BASH_ENV and ENV count only where a shell runs with them in scope: no shell sources them for any other command.
-  allows(['ENV=.env node deploy.js', 'ENV=.env; echo $ENV', 'export BASH_ENV=.env', 'BASH_ENV=.env', 'BASH_ENV=.env make']);
+  allows(['ENV=.env node deploy.js', 'ENV=.env; echo $ENV', 'export BASH_ENV=.env', 'BASH_ENV=.env']);
+  blocks(['BASH_ENV=.env make'], { path: 'BASH_ENV=.env' });
   // A shell reading its stdin as its script, with an fd BASH_ENV, still reads the stdin, and reads it once.
   blocks(["BASH_ENV=/dev/stdin bash <<< 'cat .env'"]);
   test('an fd-valued BASH_ENV on a shell already reading its stdin scans that stdin once', () => {
