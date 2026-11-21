@@ -1980,7 +1980,7 @@ function tokenize(str, reading) {
         const close = findParenClose(str, wordEnd + 1, reading);
         paren = close >= str.length || /^[^ \t\n;&|)]/.test(str.slice(close + 1, close + 2));
       } else if (after === '(') {
-        paren = braceSplit || braceDepth > 0;
+        paren = split || braceDepth > 0;
       }
       const cut = braceOpen && (paren || ((after === '\r' || /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)))
         && braceGroupOpen(raw, reading)));
