@@ -1914,6 +1914,15 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
 
   // npx and npm behind a wrapper the guard does not list are launched from there like git or a shell.
   blocks(["caffeinate npx -c 'cat .env'", "strace -f npm exec -c 'cat .env'", "caffeinate npm x -c 'cat .env'", "taskset 1 npx --call='cat .env'"]);
+
+  // What a `cat` prints from its heredoc or here-string into `source /dev/stdin` sets variables for the commands
+  // after it, as an echo's text does.
+  blocks([
+    `cat <<< "export GIT_EDITOR='cat .env #'" | source /dev/stdin; git commit`,
+    `cat <<'EOF' | source /dev/stdin\nexport GIT_EDITOR='cat .env #'\nEOF\ngit commit`,
+    `cat <<< "export GIT_EDITOR='cat .env #'" | tee x | . /dev/stdin; git commit`,
+  ]);
+  allows([`cat <<< "export GIT_EDITOR='vi'" | source /dev/stdin; git commit`]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
