@@ -431,8 +431,8 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.doesNotMatch(resolve(), /a caller never executes/, 'only autonomous reads the marker');
     const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
     // One rule covers all three plan runs (3b, the INTERACTIVE wait at 3c, gap closure): autonomous.md sits
-    // just under its 40,960-char limit (tests/autonomous-decomposition.test.cjs), so it is stated once.
-    assert.match(auto, /check `has_plans`\. If false → go to handle_blocker: "Plan phase \$\{PHASE_NUM\} did not produce any plans\." Any plan run \(here, 3c, gap closure\) printing `PLANNING STOPPED` → handle_blocker with it; never execute its plans\./);
+    // just under its 40,960-unit limit (tests/autonomous-decomposition.test.cjs), so it is stated once.
+    assert.match(auto, /check `has_plans`\. If false → go to handle_blocker: "Plan phase \$\{PHASE_NUM\} did not produce any plans\." Any plan run \(here, 3c, gap closure\) printing `PLANNING STOPPED` → handle_blocker; never execute them\./);
     // The background planner is told it cannot ask, so the no-one-can-be-asked stop is observable to it.
     assert.match(auto, /prompt="Background: no AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
   });

@@ -384,7 +384,7 @@ If `PLAN_STRATEGY=local`, run the regular planner:
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM}")
 ```
 
-Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans." Any plan run (here, 3c, gap closure) printing `PLANNING STOPPED` → handle_blocker with it; never execute its plans.
+Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans." Any plan run (here, 3c, gap closure) printing `PLANNING STOPPED` → handle_blocker; never execute them.
 
 **3c. Execute**
 
