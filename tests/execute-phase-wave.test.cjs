@@ -1550,6 +1550,23 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
       'the heartbeat total must not keep step 1\'s wave count after a refresh');
   });
 
+  test('#5966 row 16: a selection cross-AI handled whole reaches the refresh without a wave, and step 2 has nothing to read', () => {
+    const text = flat(refresh());
+    assert.match(text, /When `cross_ai_delegation` sent you here instead, no wave ran and steps 5 to 8 did not/,
+      'the reconcile step must not assume the post-wave steps ran for a delegated selection');
+    assert.match(text, /a failed delegation never reaches this fragment \(its retry, skip and abort choices resolve it first\), so step 2 has no checkpoint or failure to read and the refresh goes on at step 3/);
+    assert.match(flat(stepBlock(workflow(), 'cross_ai_delegation')), /offer \*\*retry\*\* \/ \*\*skip\*\* \(falls back to the normal executor\) \/ \*\*abort\*\*/,
+      'the host still resolves a failed delegation before the refresh');
+  });
+
+  test('#5966 row 17: the run\'s three sets live in its context, and losing one stops the run', () => {
+    const text = flat(refresh());
+    assert.match(text, /the plans it has dispatched, and the plans it saw fail at step 6 or 7 that the user continued past\. All three live in this run's context, not on disk/);
+    assert.match(text, /A resumed run \(`\/gsd:pause-work`, then `\/gsd:execute-phase` in a fresh session\) is a new run: its step 1 records a new `RUN_SCOPE`/);
+    assert.match(text, /if `RUN_SCOPE` or either set can no longer be stated, stop as below rather than refresh from an empty one/,
+      'an empty scope reads as "nothing incomplete" and would continue into verification');
+  });
+
   test('#5966 row 14: a stopped run leaves REQUIREMENTS.md for a later run\'s verification, and says so', () => {
     const text = flat(refresh());
     const stop = text.substring(text.indexOf('## When the run stops'));

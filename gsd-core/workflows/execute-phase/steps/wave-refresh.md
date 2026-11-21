@@ -16,6 +16,14 @@ that first read that the `--gaps-only` filter (when set) keeps, whatever its `re
 value. A refresh never widens it. A plan id that was not in that first read is never dispatched by this
 run, even when it is ready.
 
+The run keeps two more sets beside it: the plans it has dispatched, and the plans it saw fail at step 6 or
+7 that the user continued past. All three live in this run's context, not on disk. A resumed run
+(`/gsd:pause-work`, then `/gsd:execute-phase` in a fresh session) is a new run: its step 1 records a new
+`RUN_SCOPE` from what is still incomplete, both sets start empty, and a plan that failed with a SUMMARY
+reads as complete to it, so its own `verify_phase_goal` judges that plan. Within one run, if `RUN_SCOPE`
+or either set can no longer be stated, stop as below rather than refresh from an empty one: an empty
+scope would read as "nothing incomplete" and continue into verification.
+
 ## One wave per entry
 
 `execute_waves` runs one wave each time it is entered: step 1's selection supplies the first, and this
@@ -27,8 +35,11 @@ change at a refresh.
 
 ## After each wave
 
-1. **Reconcile first.** Every plan in the finished wave has reached a terminal state, and steps 5 to 8
-   have run for it.
+1. **Reconcile first.** After an `execute_waves` wave, every plan in it has reached a terminal state and
+   steps 5 to 8 have run for it. When `cross_ai_delegation` sent you here instead, no wave ran and steps 5
+   to 8 did not: each plan it handled wrote a validated SUMMARY and counts as dispatched, a failed
+   delegation never reaches this fragment (its retry, skip and abort choices resolve it first), so step 2
+   has no checkpoint or failure to read and the refresh goes on at step 3.
 2. **Stop instead of refreshing** when any of these holds:
    - a checkpoint is still awaiting the user's response;
    - a failure is unresolved: a plan of the finished wave failed, and neither a retry completed it nor
