@@ -4659,9 +4659,11 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
   const stages = [];
   const bodies = heredocBodiesBySegMap.get(bySeg);
   let filtered = false;
-  const stageAt = (segIdx) => {
+  // `inner`: a stage inside a group or compound command, read past its leading reserved words (pastReserved).
+  const stageAt = (segIdx, inner = false) => {
     const seg = bySeg.get(segIdx) || [];
-    const words = seg.filter((t) => t.kind === 'word');
+    const all = seg.filter((t) => t.kind === 'word');
+    const words = inner ? pastReserved(all) : all;
     const heredocs = ((bodies && bodies.get(segIdx)) || []).map((h) => h.text);
     if (ctx.pipeSourcesRead.has(seg)) {
       let bytes = 0;
@@ -4671,7 +4673,8 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
     } else {
       ctx.pipeSourcesRead.add(seg);
     }
-    const stage = { words, cmdWords: commandWords(seg), feeds: { heredocs, hereStrings: hereStringTargets(seg) }, filtered };
+    const cmdWords = inner ? pastReserved(commandWords(seg)) : commandWords(seg);
+    const stage = { words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg) }, filtered };
     stages.push(stage);
     return stage;
   };
@@ -4685,7 +4688,7 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       if (opener === UNKNOWN_OPENER) {
         for (let g = at - 1; g >= 0; g--) {
           if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
-          stageAt(g).filtered = true;
+          stageAt(g, true).filtered = true;
           charge(ctx, TOKEN_WORK + 1);
         }
         return stages;
@@ -4710,7 +4713,7 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       const inner = [];
       for (let g = group.close; g > group.start; g--) {
         if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
-        const stage = stageAt(g);
+        const stage = stageAt(g, true);
         stage.filtered = throughFilters;
         inner.push(stage);
         charge(ctx, TOKEN_WORK + 1);
@@ -4735,6 +4738,32 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       if (!passes && !filters) return stages;
       if (filters) filtered = true;
       at = group.start;
+      continue;
+    }
+    // A compound command (`for … done`, `if … fi`, `case … esac`) writes what each command inside it writes: every
+    // one back to its opener is a stage, read fail closed, and the walk goes on past it, every stage before it
+    // filtered; with no opener to match (compoundStart), every segment before it is a stage. A heredoc or
+    // here-string given to it is its stdin, as for a group.
+    if (throughFilters && COMPOUND_CLOSERS.has(commandHead(bySeg.get(prevSeg) || [])[0])) {
+      const opener = compoundStart(prevSeg, bySeg, sepAfter, ctx);
+      stageAt(prevSeg).filtered = true;
+      charge(ctx, TOKEN_WORK + 1);
+      const inner = [];
+      for (let g = prevSeg - 1; g >= Math.max(opener, 0); g--) {
+        if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
+        const stage = stageAt(g, true);
+        stage.filtered = true;
+        inner.push(stage);
+        charge(ctx, TOKEN_WORK + 1);
+      }
+      const fed = groupFeeds(prevSeg - 1, prevSeg + 1, bySeg, bodies, ctx);
+      const isFed = fed.heredocs.length > 0 || fed.hereStrings.length > 0;
+      for (const stage of isFed ? inner : []) {
+        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings] };
+      }
+      if (opener === -1 || (isFed && !fed.fdMoved)) return stages;
+      filtered = true;
+      at = opener;
       continue;
     }
     const stage = stageAt(prevSeg);
@@ -4830,6 +4859,63 @@ function groupOpener(at, bySeg, sepAfter, ctx) {
   let opener = openers[at] ?? -1;
   if (opener >= 0 && opener + 1 === at) opener = openers[opener];
   return opener;
+}
+
+// Words past the reserved words a command inside a group or compound command may follow (`do echo …`, `then printf
+// …`, `while cat`) and a `for`, `select` or `case` opening one, so the stage is read as the command it runs (#5492).
+// Only reserved words are dropped, none of which names a file.
+const COMPOUND_HEADS = new Set(['for', 'select', 'case']);
+function pastReserved(words) {
+  let i = 0;
+  while (i < words.length && words[i].quoted === 'none' && (LEADING_RESERVED.has(words[i].text) || COMPOUND_HEADS.has(words[i].text))) i++;
+  return i ? words.slice(i) : words;
+}
+
+// The segment opening the compound command whose `done`, `fi` or `esac` is segment `close`'s first word: a `for`,
+// `while`, `until` or `select`, an `if`, or a `case … in`, matched by nesting over each segment's leading reserved
+// words, the nearest first. -1 when none matches, or when the match is not sure: a closing word that does not fit,
+// or a reserved word in a segment ending at a `)` other than the `case … in` before its first pattern (a `case`
+// pattern such as `while)`). Each segment passed is charged.
+const COMPOUND_CLOSERS = new Set(['done', 'fi', 'esac']);
+const COMPOUND_OPENERS = new Map([['for', 'done'], ['while', 'done'], ['until', 'done'], ['select', 'done'], ['if', 'fi'], ['case', 'esac']]);
+function compoundStart(close, bySeg, sepAfter, ctx) {
+  const open = [commandHead(bySeg.get(close) || [])[0]];
+  for (let r = close - 1; r >= 0; r--) {
+    charge(ctx, TOKEN_WORK + 1);
+    const { openers, closer } = compoundWords(bySeg.get(r) || []);
+    const pattern = sepAfter.get(r) === ')';
+    if (closer) {
+      if (pattern) return -1;
+      open.push(closer);
+      continue;
+    }
+    if (pattern && openers.length && !(openers.length === 1 && openers[0] === 'case')) return -1;
+    for (let k = openers.length - 1; k >= 0; k--) {
+      if (COMPOUND_OPENERS.get(openers[k]) !== open[open.length - 1]) return -1;
+      open.pop();
+      if (!open.length) return r;
+    }
+  }
+  return -1;
+}
+
+// The compound-command openers among a segment's leading reserved words (`then if while …`), and the closing word
+// it starts with; a quoted word is never a reserved one, and `case` opens only before `WORD in`.
+function compoundWords(segTokens) {
+  const words = segTokens.filter((t) => t.kind === 'word').map((t) => (t.quoted === 'none' ? t.text : null));
+  const openers = [];
+  for (let i = 0; i < words.length; i++) {
+    const text = words[i];
+    if (text === 'if' || text === 'while' || text === 'until') {
+      openers.push(text);
+    } else if (text === 'for' || text === 'select' || (text === 'case' && words[i + 2] === 'in')) {
+      openers.push(text);
+      break;
+    } else if (!LEADING_RESERVED.has(text)) {
+      return { openers, closer: !openers.length && COMPOUND_CLOSERS.has(text) ? text : null };
+    }
+  }
+  return { openers, closer: null };
 }
 
 // The first three words of a segment past leading reserved words (`do`, `then` …), a quoted one as null, since a
