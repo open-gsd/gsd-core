@@ -262,6 +262,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     { name: 'a 7-char SUMMARY id of a squashed-away commit is not evaluable', opts: { refs: true }, setup: (d, b) => squashWithSummary(abbreviated(d, b))(d, b), expect: SQUASHED },
     { name: 'a SUMMARY that lists a squashed-away commit and an unknown id is not evaluable, though its subject survives', subjects: ['chore: red', 'chore: green'], setup: (d, b) => { const squashed = git(d, 'rev-parse', 'HEAD'); squashWithSummary([squashed, 'd'.repeat(40)])(d, b, 'chore: green'); }, expect: { status: 'NotEvaluable', violations: 0 } },
     { name: 'a 7-char SUMMARY id git does not know is not evaluable', subjects: ['chore: x'], setup: (d) => w(d, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['abcdef0'])), expect: { status: 'NotEvaluable' } },
+    ...[['6', 'abcdef'], ['41', 'a'.repeat(41)]].map(([len, id]) => ({ name: `a ${len}-hex SUMMARY id lists no hash, so the plan fails`, subjects: ['chore: x'], setup: (d) => w(d, `${PHASE}/01-01-SUMMARY.md`, summaryOf([id])), expect: { status: 'FAIL' } })),
     { name: 'an uppercase SUMMARY id lists no hash, so the plan fails', subjects: ['chore: x'], setup: (d) => w(d, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['D'.repeat(40)])), expect: { status: 'FAIL' } },
     { name: 'a SUMMARY with CRLF line endings is read like one with LF', opts: { refs: true }, setup: (d, b) => { squashWithSummary(abbreviated(d, b), (t) => t.replace(/\n/g, '\r\n'))(d, b); }, expect: SQUASHED },
     { name: 'a squash whose title repeats one task subject is still not evaluable', subjects: ['chore: red', 'chore: green'], opts: { refs: true }, setup: (d, b) => squash(d, b, 'chore: green'), expect: { status: 'NotEvaluable', violations: 0 } },
@@ -836,8 +837,7 @@ describe('#5354 tdd review checkpoint seal', () => {
     if (prepare) prepare(dir);
     const calls = path.join(path.dirname(dir), `${path.basename(dir)}-calls`);
     dirs.push(calls);
-    const home = `${dir}-home`;
-    fs.mkdirSync(home);
+    const home = createTempDir('gate-5354-home-');
     dirs.push(home);
     // `query commit` stands in for cmdCommit: it commits the seal itself unless COMMIT_OUT is set (then it prints that and commits nothing).
     const stub = real
