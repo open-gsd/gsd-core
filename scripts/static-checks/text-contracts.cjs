@@ -1,12 +1,9 @@
 'use strict';
 
 /**
- * text-contracts: assertions on the text of runtime-loaded repo files (command and workflow
- * markdown, docs) that used to be one `*.test.cjs` each (ADR-6315 item 19, #6337).
- *
- * Each contract is a module in scripts/static-checks/text-contracts/ exporting
- *   { id: string, issue?: string, check(ctx) }
- * and `check` states what a file must and must not say through the context:
+ * text-contracts: assertions on the text of runtime-loaded repo files that used to be one test
+ * each (ADR-6315 item 19, #6337). A contract is a module in scripts/static-checks/text-contracts/
+ * exporting { id, issue?, check(ctx) }; `check` states, through the context:
  *   ctx.doc(rel)              a document (LF-normalised text) or a finding if the file is missing
  *   doc.has(pattern, why)     pattern (RegExp or string) must appear
  *   doc.lacks(pattern, why)   pattern must not appear
