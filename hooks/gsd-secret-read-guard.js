@@ -1739,6 +1739,7 @@ function tokenize(str, reading) {
   let heredocs = [];
   let expectTag = null;
   let unreadable = null;
+  let escaped = false;
 
   const flush = () => {
     if (!hasWord) return;
@@ -1752,10 +1753,13 @@ function tokenize(str, reading) {
       // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
       const nul = reading === 'zsh' ? buf.indexOf('\0') : -1;
       tokens.push({ kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg });
+      // A backslash quotes too: `\while` is a command, not a reserved word (#5492).
+      if (escaped) tokens[tokens.length - 1].escaped = true;
     }
     buf = '';
     quoted = 'none';
     hasWord = false;
+    escaped = false;
   };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
@@ -1868,6 +1872,7 @@ function tokenize(str, reading) {
     if (ch === '\\') {
       if (str[i + 1] === '\n') { i += 2; continue; } // line continuation
       hasWord = true;
+      escaped = true;
       if (i + 1 < str.length) buf += str[i + 1];
       i += 2;
       continue;
@@ -4888,7 +4893,7 @@ function groupOpener(at, bySeg, sepAfter, ctx) {
 const COMPOUND_HEADS = new Set(['for', 'select', 'case']);
 function pastReserved(words) {
   let i = 0;
-  while (i < words.length && words[i].quoted === 'none' && (LEADING_RESERVED.has(words[i].text) || COMPOUND_HEADS.has(words[i].text))) i++;
+  while (i < words.length && plainWord(words[i]) && (LEADING_RESERVED.has(words[i].text) || COMPOUND_HEADS.has(words[i].text))) i++;
   return i ? words.slice(i) : words;
 }
 
@@ -4928,7 +4933,7 @@ function compoundStart(close, bySeg, sepAfter, ctx) {
 // it starts with; a quoted word is never a reserved one, and `case` opens only before `WORD in`. Read on the command
 // words and on every word, which differ where a reserved word is a redirect target (compoundStart).
 function compoundWords(segTokens) {
-  const words = segTokens.filter((t) => t.kind === 'word').map((t) => (t.quoted === 'none' ? t.text : null));
+  const words = segTokens.filter((t) => t.kind === 'word').map((t) => (plainWord(t) ? t.text : null));
   const openers = [];
   for (let i = 0; i < words.length; i++) {
     const text = words[i];
@@ -4949,6 +4954,11 @@ function caseStep([first, , third]) {
   return first === 'case' && third === 'in' ? 1 : first === 'esac' ? -1 : 0;
 }
 
+// A word bash may read as a reserved word: written with no quote or backslash in it.
+function plainWord(t) {
+  return t.quoted === 'none' && !t.escaped;
+}
+
 // The first three words of a segment past leading reserved words (`do`, `then` …), a quoted one as null, since a
 // quoted word is never a reserved one.
 function commandHead(segTokens) {
@@ -4956,7 +4966,7 @@ function commandHead(segTokens) {
   for (const t of segTokens) {
     if (t.kind !== 'word') continue;
     if (out.length === 3) break;
-    const text = t.quoted === 'none' ? t.text : null;
+    const text = plainWord(t) ? t.text : null;
     if (out.length || !LEADING_RESERVED.has(text)) out.push(text);
   }
   return out;
