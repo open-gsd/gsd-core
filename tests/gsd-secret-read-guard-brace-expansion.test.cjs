@@ -409,12 +409,22 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
     ['cat {.env,x}?(y)', '{.env,x}?'],
     ['cat {.env,x}@(|y)', '{.env,x}@'],
     ['cat {.env,x}(|y)', '{.env,x}'],
+    // To zsh a `{` before a `(…)` the word goes on past is a group, not the keyword: `{(x),.env}` is `(x)` and `.env`.
+    ['cat {(x),.env}', '{'],
+    ['cat {(x)y,.env}', '{'],
+    ['cat {(x', '{'],
+    // An open group with no comma yet is still a group to zsh: `{a(x),.env}` is `a(x)` and `.env`.
+    ['cat {a(x),.env}', '{a'],
   ]) {
     test(`denies ${JSON.stringify(cmd)}`, () => assertBlocked(cmd, unreadable(word)));
   }
 
   // A `{` before a `(` is a group keyword (`{(echo hi); }`), not a word.
-  for (const cmd of ['cat {a,b}\r', 'cat x\r', 'cat x?(y)', 'echo (x)', '{(echo hi); }']) {
+  // A brace word with no group in it before a `(` stays one word (`{type}(…)`, a commit-message template).
+  for (const cmd of [
+    'cat {a,b}\r', 'cat x\r', 'cat x?(y)', 'echo (x)', '{(echo hi); }', '{((1+1)); echo ok; }', 'cat {type}(a)',
+    'echo {type}({phase}-{plan}): {task-name}',
+  ]) {
     test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));
   }
 
