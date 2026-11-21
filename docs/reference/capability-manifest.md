@@ -259,40 +259,44 @@ For a minimal `role: "runtime"` example, see [ADR-1016 §Decision 8](../adr/1016
 
 ---
 
-## Reviewer body (`role: "reviewer"`, or on any role)
+<a id="reviewer-body-role-reviewer-or-on-any-role"></a>
 
-[ADR-2782](../adr/2782-reviewer-lane-capability-surface.md) introduces the *reviewer lane*: one external CLI or model endpoint that `/gsd-review` hands a plan to for independent review.
+## Reviewer body (`role: "reviewer"` or `role: "runtime"`)
+
+[ADR-2782](../adr/2782-reviewer-lane-capability-surface.md) introduces the *reviewer lane*: one external CLI or model endpoint that GSD sends a review request to. Which workflow runs which lane is described in [Where an installed lane runs](../how-to/ship-a-reviewer-lane.md#where-an-installed-lane-runs).
 
 To declare one, follow [Ship a reviewer lane in your capability](../how-to/ship-a-reviewer-lane.md). This section is the field reference behind that guide.
 
-The `reviewer` body is **optional and absent-safe at every layer**. A capability with no `reviewer` body is simply not a lane — that is never a validation error. This is a normative forward/backward-compatibility invariant, not a nicety: a plugin, a runtime, or a future GSD version may omit `reviewer` entirely with no consequence.
+A `reviewer` body is **optional** on `role: "runtime"`, **required** on `role: "reviewer"`, and **rejected** on `role: "feature"`. A capability without a `reviewer` body is not a lane.
 
 The shape is **hybrid**:
 
 - A `reviewer` body is admissible on `role: "runtime"`, so an existing runtime capability — `codex`, `antigravity` — keeps **one** manifest that is both an installable runtime and a reviewer lane.
-- A third role, `role: "reviewer"`, exists for lane-only CLIs that GSD never installs into. There are currently 5: `coderabbit`, `gemini`, `llama-cpp`, `lm-studio`, `ollama`.
+- A third role, `role: "reviewer"`, exists for lane-only CLIs that GSD never installs into. There are currently 4: `coderabbit`, `llama-cpp`, `lm-studio`, `ollama`.
 
-Current role counts across `capabilities/`: `feature` 20, `runtime` 19, `reviewer` 5.
+Current role counts across `capabilities/`: `feature` 24, `runtime` 19, `reviewer` 4.
 
-All 12 shipped lane declarations carry all 14 fields below.
+All 11 shipped lane declarations carry all 18 fields below.
 
 | Field | Type | Notes |
 |---|---|---|
 | `slug` | string | Lane identity; grammar `^[a-z0-9][a-z0-9_-]*$`. May use `_` (`lm_studio`, `llama_cpp`) even where the capability *folder id* is kebab-case (`lm-studio`). |
-| `flags` | string[] | User-facing CLI flags that select this lane. A lane may declare more than one — `antigravity` declares `--antigravity` and `--agy`. 12 lanes declare 13 flags in total. |
+| `flags` | string[] | User-facing CLI flags that select this lane. A lane may declare more than one — `antigravity` declares `--antigravity` and `--agy`. 11 lanes declare 12 flags in total. |
 | `transport` | closed enum | `spawn` \| `openai-http`. |
 | `probe` | object | Availability check. `probe.kind` is a closed enum: `command-exists` \| `command-capability` \| `http-reachable`. `command-capability` additionally takes `binary`, `needle`, and a **required** `timeoutMs` — it exists because a bare binary name can be ambiguous (`kimi` is claimed by both the Kimi Code CLI and the legacy Python `kimi-cli`), and the timeout bound is mandatory because an unbounded `--help \| grep` probe is this repo's named Unbounded Subprocesses defect. |
 | `invoke` | object | Shape is selected by `transport`. For `spawn`: `binary`, `args[]`, `promptChannel` (`stdin` \| `argv` \| `argv-file-ref` \| `none`), `outputChannel` (`stdout` \| `file-arg`), `outputArg` (required when `outputChannel` is `file-arg`), `modelArg` (string or `null`), `effortChannel` (`none` \| `argv` \| `env`), `env` (optional; an object of environment name/value pairs, string values only, merged over the inherited environment for that one spawn — keys must match the portable environment-name grammar `[A-Za-z_][A-Za-z0-9_]*`, which is a portability policy rather than an OS limit, and `__proto__` is refused because it would be dropped before reaching the child). For `openai-http`: `hostConfigKey`, `defaultHost`, `path`, `modelDiscovery` (`none` \| `first-from-models-endpoint`), `fallbackModel`, `effortChannel`. `args` supports the `{{model}}`, `{{prompt}}`, `{{effort}}`, and `{{output}}` placeholders. **Every field in this object is disclosed at install and bound to the consent signature** — `env` and `defaultHost` by name in the consent prompt, the rest through a residual, so any change to a declared `invoke` field forces re-consent. `env` additionally **refuses execution-primitive names** — `PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `BASH_ENV`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `GIT_SSH_COMMAND`, `JAVA_TOOL_OPTIONS` and siblings, matched case-insensitively (Windows environment lookup is). A lane needing a specific executable declares an absolute `binary` rather than reshaping the child's `PATH`. That denylist is defence in depth and not the boundary: it cannot be complete against an arbitrary child, and disclosure runs before validation, so install-time consent — which shows every declared pair and warns on execution-primitive names — is what actually gates them. |
 | `timeoutFloorMs` | number | Measured per-lane floor. Lane divergence here is real and correct — the descriptor's job is to declare divergence in one place, not to promise uniformity. |
 | `timeoutConfigKey` | string or `null` | Federated config key holding this lane's outer timeout override, in SECONDS, e.g. `review.timeouts.antigravity`. Falls back to `timeoutFloorMs` when unset or invalid (#3274). |
 | `emptyOutput` | closed enum | `stub-with-stderr` \| `handler-owned`. |
-| `reviewsSection` | string | The `REVIEWS.md` heading this lane renders under. Must be unique across the merged roster. |
+| `reviewsSection` | string | The `REVIEWS.md` heading this lane renders under when `/gsd-review` runs it. Must be unique across the merged roster. |
 | `evidenceClass` | closed enum | `source-grounded` \| `diff-only` (diff-only findings are down-weighted in consensus). |
 | `requiresBinaries` | string[] | Extra binaries the lane needs beyond `invoke.binary`. |
 | `promptBudgetKey` | string or `null` | Federated config key holding this lane's explicit prompt cap. A prompt over the resolved cap refuses the lane (`prompt_exceeds_context`); it is never trimmed. |
 | `contextWindowTokens` | positive number or `null` | Optional. The context window of the lane's default model, in tokens. When no explicit cap applies, the lane's cap is 65% of this. Omit it, or set `null`, when the model is chosen outside GSD and so cannot be known. Any value that is not a positive finite number is treated as `null`. |
 | `contextWindowConfigKey` | string or `null` | Optional. Federated config key, `review.context_window_tokens.<slug>`, that overrides `contextWindowTokens`: `-1` = use the declared window, `0` = no derived cap. `null` for a lane that is sent no prompt. |
 | `modelConfigKey` | string or `null` | Federated config key naming the model, e.g. `review.models.kimi-code`. |
+| `effortConfigKey` | string or `null` | Federated config key, `review.effort.<slug>`, for this lane's reasoning effort; `null` for a lane that takes none. See [Reviewer lane reasoning effort](../CONFIGURATION.md#reviewer-lane-reasoning-effort-revieweffort-4255). |
+| `defaultEffort` | string or `null` | The lane's declared fallback effort; `null` declares none. See the same section. |
 | `handler` | closed enum or `null` | `antigravity` \| `openai-compatible` \| `opencode` \| `null`. |
 
 **`handler` is a closed enum of first-party handler names, not an open escape hatch.** [ADR-1016](../adr/1016-runtime-capability-descriptor.md) explicitly rejected "arbitrary code in the descriptor"; hard shapes are absorbed by adding a named primitive that is reviewed first-party. The consequence, stated plainly: **a third-party reviewer lane is strictly data-only.** A plugin can ship a lane, but not a quirky lane that needs imperative code — a lane requiring behavior beyond the closed `handler` set is not expressible and must be proposed and merged first-party.
