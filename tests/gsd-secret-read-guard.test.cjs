@@ -1946,6 +1946,27 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     assert.ok(scanWork(`echo '${body}' | xargs cat`) >= body.length, 'blank split');
     assert.ok(scanWork(`cat <<EOF | xargs time X=1 env\n${body}\nEOF`) >= 4 * body.length, 'heredoc re-read');
   });
+
+  // npm reads its config from `npm_config_<key>` variables, in any case, and from `--<key>` options: `call` is the
+  // script `npm exec` runs, `shell` the one `npm explore` runs, `browser` the command `npm docs` / `repo` / `bugs`
+  // run through a shell, and `editor` the command `npm edit` / `npm config edit` run. `npm explore`'s words after
+  // `--` are a script too.
+  blocks([
+    "npm_config_call='cat .env' npx",
+    "NPM_CONFIG_CALL='cat .env' npm exec",
+    "Npm_Config_Call='cat .env' npm x",
+    "env npm_config_call='cat .env' npx",
+    "export npm_config_call='cat .env'; npx",
+    "npm_config_shell='cat .env' npm explore lodash",
+    "npm explore lodash --shell='cat .env'",
+    "npm explore lodash -- cat .env",
+    "npm_config_browser='cat .env' npm docs lodash",
+    "npm docs lodash --browser 'cat .env'",
+    "npm_config_editor='cat .env' npm edit lodash",
+    "npm config edit --editor='cat .env'",
+    "caffeinate env npm_config_call='cat .env' npx",
+  ]);
+  allows(["npm_config_call='echo .env' npx", "npm_config_registry=https://r.example npm install", "npm_config_editor=vim npm edit lodash"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
