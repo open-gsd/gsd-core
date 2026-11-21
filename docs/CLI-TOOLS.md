@@ -1384,7 +1384,8 @@ file read need not be the one that gave the plan its completion record:
   `halted: true`, and `halted_count`, which counts plans, counts both. Neither
   command sorts the listing: it holds the phase directory's SUMMARY files and
   then those under `plans/`, each directory in the order Node lists it. On
-  Unix that is filename byte order (libuv sorts it; measured on Linux), so
+  Unix that is filename byte order (libuv's `uv_fs_scandir` sorts the names
+  with `strcmp`), so
   among the phase directory's files the one whose name sorts last is read. A
   SUMMARY under `plans/` takes part when the canonical id of its path is
   the id being looked up (`plans/01-06-01-SUMMARY-01.md` for
