@@ -45,9 +45,12 @@ import noVerificationStatusLiteral from './eslint-rules/no-verification-status-l
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
 import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
 import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-registry.cjs';
+import directiveNamesIssue from './eslint-rules/directive-names-issue.cjs';
+import maxCommentBlockLines from './eslint-rules/max-comment-block-lines.cjs';
 import noAdhocEnvIsolation from './eslint-rules/no-adhoc-env-isolation.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
+const commentRatchetBaseline = require('./eslint-rules/comment-ratchet.baseline.json');
 const adhocEnvIsolationAllowlist = require('./eslint-rules/no-adhoc-env-isolation.allowlist.json');
 
 // The `no-restricted-syntax` selectors every file under tests/ is held to. The block for the six
@@ -100,6 +103,8 @@ const localPlugin = {
     'no-runtime-name-literal': noRuntimeNameLiteral,
     'require-read-only-git-env': requireReadOnlyGitEnv,
     'named-args-spec-from-registry': namedArgsSpecFromRegistry,
+    'directive-names-issue': directiveNamesIssue,
+    'max-comment-block-lines': maxCommentBlockLines,
     'no-adhoc-env-isolation': noAdhocEnvIsolation,
   },
 };
@@ -149,6 +154,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-ledger.cjs',
       // #5759: tsc-generated runtime artifact — lint src/config-file-read.cts, not this.
       'gsd-core/bin/lib/config-file-read.cjs',
+      // #6425: tsc-emitted, gitignored; the comment-ratchet baseline must not depend on whether the build ran.
+      'gsd-core/bin/lib/host-integration-adapters/cline-sdk-binding.cjs',
+      'gsd-core/bin/lib/host-integration-adapters/imperative-hook-bus.cjs',
+      'gsd-core/bin/lib/installer-migrations/006-pi-extension-cjs-to-js.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
       'gsd-core/bin/lib/capability-consent.cjs',
@@ -1125,6 +1134,18 @@ export default tseslint.config(
           message: 'The command router dispatches to gate modules (src/gate-*.cts) only; implement the verb as a gate module that returns a GateResult (ADR-5057 §4, #5219).',
         }],
       }],
+    },
+  },
+
+  // ADR-6315 item 24 (#6342): an exemption directive names its issue, and a comment block is at
+  // most 15 lines. Each file may carry up to its baseline in eslint-rules/comment-ratchet.baseline.json,
+  // which can only shrink (a file under its baseline fails until the entry is lowered).
+  {
+    files: ['**/*.{cjs,js,mjs}', 'src/**/*.cts'],
+    plugins: { local: localPlugin },
+    rules: {
+      'local/directive-names-issue': ['error', { baseline: commentRatchetBaseline }],
+      'local/max-comment-block-lines': ['error', { baseline: commentRatchetBaseline }],
     },
   },
 );

@@ -1,6 +1,6 @@
-# ADR-5812: Residue-removal guard standard for `worktree.reap-orphans` [Proposed]
+# ADR-5812: Residue-removal guard standard for `worktree.reap-orphans` [Accepted]
 
-- **Status:** Proposed. This becomes Accepted once [#5233](https://github.com/open-gsd/gsd-core/pull/5233) merges with every decision below mapped to code.
+- **Status:** Accepted. Implemented for #4941 in `src/worktree-safety.cts` with every decision below mapped to code; the earlier attempt, [#5233](https://github.com/open-gsd/gsd-core/pull/5233), was closed unmerged.
 - **Date:** 2026-10-31
 - **Issue:** [#5812](https://github.com/open-gsd/gsd-core/issues/5812), a sub-issue of [#4941](https://github.com/open-gsd/gsd-core/issues/4941). The maintainer set this ADR as a prerequisite for #5233 (comment 6485710283) and approved it with a ruling on item 4 (comment on #5812, 2026-10-31).
 - **Relationship to prior work:** [ADR-0004](0004-worktree-workstream-seam-module.md) makes the Planning Workspace Module the seam for worktree and workstream state, with a Worktree Root Resolution Adapter; worktree lifecycle safety policy lives in `src/worktree-safety.cts` (the Worktree Safety Policy Module in `CONTEXT.md`). Neither says when that module may delete a directory git no longer tracks. This ADR fills that gap and changes neither. It does not touch [ADR-4630](4630-dispatch-identity-and-isolation-decision-seam.md), which covers isolation decisions, not teardown.
@@ -70,8 +70,8 @@ Whenever a rename back fails, the row names the reserved path instead, because t
 
 ### 6. Reporting contract
 
-- `scan` names which sources were read, so `reaped: 0` never means "did not look". `admin_dir` is `scanned`, `absent`, `unreadable`, `git_dir_unresolved` or `default_branch_unresolved`. `residue_dir` is `scanned`, `absent`, `unreadable`, `aliased`, `not_main_checkout`, `top_unresolved`, `git_mismatch` or `not_scanned`. `scan` is `null` when the sweep threw.
-- A kept candidate is a `skipped` row with one of the reasons above. When `git worktree list` itself fails, every candidate is kept as `worktree_list_failed`. A removed one is `reaped` / `unregistered_residue`, and its `contents` field names what it held at the top level. The checks prove a directory is harness residue, not that nothing in it was wanted.
+- `scan` names which sources were read, so `reaped: 0` never means "did not look". `admin_dir` is `scanned`, `absent`, `unreadable`, `git_dir_unresolved` or `default_branch_unresolved`. `residue_dir` is `scanned`, `absent`, `unreadable`, `aliased`, `not_main_checkout`, `top_unresolved` or `git_mismatch`. `scan` is `null` when the sweep threw.
+- A kept candidate is a `skipped` row with one of the reasons above. When `git worktree list` itself fails, every candidate is kept as `worktree_list_failed`. A removed one is `reaped` / `unregistered_residue`, and its `contents` field names what it held at the top level (at most 50 names). The checks prove a directory is harness residue, not that nothing in it was wanted.
 - On stderr:
   - removed directories and what each held, escaped by `formatDiagnosticToken`, cut to 64 code points, at most five names each;
   - kept directories, counted by reason, not named;
@@ -84,6 +84,8 @@ Whenever a rename back fails, the row names the reserved path instead, because t
 - **Walk-to-rename window.** A file written between the walk and the rename is removed with the directory. The age guard on every entry makes this need a writer that is active at exactly that moment.
 - **Repository created mid-walk.** A repository created inside the candidate after the walk passed its location is not seen (review finding 8). It is subject to the same window.
 - **Case spellings of `.claude`.** On a case-insensitive filesystem, `.claude` and `.Claude` are one directory. The sweep does not reason about spellings. Its one case-sensitive risk, a tracked file listed under another spelling, is covered by the case-insensitive pathspec in decision 3, which keeps the directory.
+- **Repo-configured filters still run.** The throwaway-index calls disable `core.fsmonitor` and point `core.hooksPath` at an empty directory, so no hook runs, but a clean or process filter that the repository's own configuration defines for a path (git-lfs, for example) runs while the index is refreshed, as it does for `git status`. Only the repository's owner can define one: a clone does not carry it.
+- **A reserved-name stub is trusted by its name.** A hand-made `.gsd-reap-<16 hex>` directory holding a `.env` but no `.gitignore` of its own reads that file as not ignored and, skipping decision 2, is removed. The name is reserved for the sweep, and that contract is what the exception rests on.
 - **The user-data pattern set is a list, not a classifier.** An ignored secret under some other name (for example `config/credentials.json`) is disposable, as it is to `git worktree remove`. The set is extended by adding a pathspec to `RESIDUE_USER_DATA_PATHSPECS`, with a test row.
 
 ## Alternatives considered
@@ -95,6 +97,6 @@ Whenever a rename back fails, the row names the reserved path instead, because t
 
 ## Consequences
 
-- #5233 cites this ADR. Every guard it implements maps to a decision above, and every decision maps to code or is named in decision 7. The `CONTEXT.md` pointer lands with #5233, which already rewrites the Worktree Safety Policy Module entry. Adding it here would conflict with that edit.
+- The implementing change cites this ADR. Every guard it implements maps to a decision above, and every decision maps to code or is named in decision 7. The `CONTEXT.md` pointer to the sweep lands with it.
 - A new removal guard, or a relaxed one, is an amendment to this ADR, not a code-only change.
-- #4941 stays open until #5233 merges.
+- #4941 is closed by the implementing change.
