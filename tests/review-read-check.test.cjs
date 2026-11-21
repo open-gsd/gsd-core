@@ -28,7 +28,7 @@ const {
 } = require('../gsd-core/bin/lib/review-read-check.cjs');
 const planDocument = require('../gsd-core/bin/lib/plan-document.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { createTempDir, cleanup, installSpawnEnv } = require('./helpers.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
@@ -891,5 +891,42 @@ describe('#5491 plan task count agrees with the plan parser on fence-free plans 
         return planFacts('p/x-01-PLAN.md', body).tasks === planDocument.parsePlanDocument(body).taskCount;
       }),
     );
+  });
+});
+
+describe('#5491 the real review-lane invoke reads plans through the bounded reader (#6286 Minor 3)', { skip: process.platform === 'win32' && 'the stub agy is a shebang script and the row needs mkfifo' }, () => {
+  // The production deps in gsd-tools.cjs, end to end: a stub `agy` on PATH, a real plan and a FIFO
+  // named like one. Only a reader bound to one descriptor answers the FIFO header, without blocking.
+  const TOOLS = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+  let tmp;
+  before(() => { tmp = fs.realpathSync(createTempDir('gsd-read-check-e2e-')); });
+  after(() => cleanup(tmp));
+
+  test('a plan is checked and a FIFO header is unchecked', () => {
+    const bin = path.join(tmp, 'bin');
+    const repo = path.join(tmp, 'repo');
+    const run = path.join(tmp, 'run');
+    for (const d of [bin, path.join(repo, '.planning', 'p'), run]) fs.mkdirSync(d, { recursive: true });
+    const agy = path.join(bin, 'agy');
+    fs.writeFileSync(agy, [
+      '#!/usr/bin/env node',
+      "if (process.argv.includes('--help')) process.stdout.write('--add-dir');",
+      "else process.stdout.write('Looks fine. see src/a.ts:3\\n');",
+    ].join('\n'));
+    fs.chmodSync(agy, 0o755);
+    fs.writeFileSync(path.join(repo, '.planning', 'p', '12.6-02-PLAN.md'), PLAN_B);
+    const fifo = path.join(repo, '.planning', 'p', 'fifo-01-PLAN.md');
+    throwIfFailed(runHook(fifo, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), `mkfifo ${fifo}`);
+    const prompt = path.join(run, 'gsd-review-prompt.md');
+    fs.writeFileSync(prompt, `#### .planning/p/12.6-02-PLAN.md\n${PLAN_B}\n#### .planning/p/fifo-01-PLAN.md\nbody\n`);
+
+    const r = runNode(
+      [TOOLS, 'review-lane', 'invoke', '--slug', 'antigravity', '--run-dir', run, '--repo-root', repo, '--prompt-file', prompt],
+      { cwd: repo, env: installSpawnEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH}` }) },
+    );
+    assert.equal(r.exitCode, 0, r.summary);
+    const { readCheck } = JSON.parse(r.stdout);
+    assert.deepEqual({ missing: readCheck.missing, unchecked: readCheck.unchecked }, { missing: ['12.6-02'], unchecked: ['fifo-01'] }, r.stdout);
+    assert.match(fs.readFileSync(path.join(run, 'gsd-review-antigravity.md'), 'utf8'), /^> \[incomplete-read\]/);
   });
 });
