@@ -9020,7 +9020,7 @@ describe('#6239 parseDeferredItems: a closure heading under an entry does not ma
   });
 
   test('[boundary] the closure heading may sit one level or several levels below, and may carry a suffix', () => {
-    for (const child of ['#### Resolution', '##### Resolved', '###### Closure: done', '#### Resolution — v1.2']) {
+    for (const child of ['#### Resolution', '##### Resolved', '###### Closure: 2026-11-20', '#### Resolution — v1.2', '#### Resolution – v1.2', '#### **Resolution**']) {
       const doc = deferred('### Item A', '', ...bullets(3), '', child, '', '- **Status:** resolved');
       assert.deepStrictEqual(parseDeferredItems(doc), [], child);
       assert.strictEqual(parseDeferredItemsWithStatus(doc).length, 1, child);
@@ -9040,6 +9040,55 @@ describe('#6239 parseDeferredItems: a closure heading under an entry does not ma
   test('[independence] a child heading that merely starts with the word is a real child entry', () => {
     const doc = deferred('### Item A', '', '- a', '', '#### Resolution plan for the vendor', '', '- b');
     assert.strictEqual(parseDeferredItems(doc).length, 2);
+  });
+
+  test('[independence] a child heading with a free-form suffix is a real child entry, not a closure record', () => {
+    for (const child of ['#### Resolution-plan for the vendor', '#### Resolved — NOT YET, reopened', '#### Closure-notes', '#### Resolution notes']) {
+      const doc = deferred('### Item A', '', '- a', '', child, '', '- b');
+      assert.strictEqual(parseDeferredItems(doc).length, 2, child);
+    }
+  });
+
+  test('[boundary] the status field that comes first in the entry decides, so a stale open status beats a later resolved one', () => {
+    // Surfacing the contradiction (open) is the fail-safe direction, the same rule `status:` already follows in a leaf.
+    const doc = deferred('### Item A', '', '- **Status:** open', '', '#### Resolution', '', '- **Status:** resolved');
+    const got = parseDeferredItemsWithStatus(doc);
+    assert.strictEqual(got.length, 1);
+    assert.strictEqual(got[0].status, 'open');
+    assert.strictEqual(parseDeferredItems(doc).length, 1);
+  });
+
+  test('[boundary] prose bullets under the heading stay one entry, as under any leaf heading (#3457), so the resolution closes them together', () => {
+    const doc = deferred('### Phase 3 leftovers', '', '- flaky test X', '- missing docs Y', '', '#### Resolved', '', '- old item Z', '  - status: resolved');
+    const got = parseDeferredItemsWithStatus(doc);
+    assert.strictEqual(got.length, 1, JSON.stringify(got));
+    assert.strictEqual(got[0].status, 'resolved');
+    // the same bullets under the same leaf heading with the status inline close it just the same
+    const leaf = deferred('### Phase 3 leftovers', '', '- flaky test X', '- missing docs Y', '- old item Z', '  - status: resolved');
+    assert.strictEqual(parseDeferredItems(leaf).length, 0);
+  });
+
+  test('[boundary] an unterminated fence runs to the end of the body: a closure heading inside it is fence content and closes nothing', () => {
+    const doc = deferred('### Item A', '', '- a', '```', 'code with no closing fence', '', '#### Resolution', '', '- **Status:** resolved');
+    const got = parseDeferredItemsWithStatus(doc);
+    assert.strictEqual(got.length, 1, JSON.stringify(got));
+    assert.strictEqual(got[0].status, '');
+    assert.strictEqual(parseDeferredItems(doc).length, 1);
+  });
+
+  test('[boundary] a closure heading at the SAME level as the item is a sibling entry, not part of it', () => {
+    const doc = deferred('### Item A', '', '- a', '', '### Resolution', '', '- **Status:** resolved');
+    const got = parseDeferredItemsWithStatus(doc);
+    assert.strictEqual(got.length, 2);
+    assert.strictEqual(parseDeferredItems(doc).length, 1);
+  });
+
+  test('[boundary] many headings are read in one pass: every entry is found (the fence scan is bounded to its entry)', () => {
+    const body = [];
+    for (let i = 0; i < 3000; i++) body.push(`### Item ${i}`, '', `- fact ${i}`, '', '#### Resolution', '', `- **Status:** ${i % 2 === 0 ? 'resolved' : 'open'}`, '');
+    const doc = deferred(...body);
+    assert.strictEqual(parseDeferredItemsWithStatus(doc).length, 3000);
+    assert.strictEqual(parseDeferredItems(doc).length, 1500);
   });
 
   test('[property] any bullet count and marker, resolved or not, yields exactly one entry whose status is the resolution status', () => {
