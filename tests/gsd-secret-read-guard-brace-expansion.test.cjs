@@ -354,21 +354,38 @@ describe('gsd-secret-read-guard: zsh reads a bare `-` as 0 in a numeric range (#
   });
 });
 
-describe('gsd-secret-read-guard: a group a process substitution runs into (#6142)', () => {
-  // bash reads `<(…)` and `>(…)` as part of the word they touch, so `{.env,<(echo })}` is `.env` and the
-  // substitution. The guard splits the word there, so an open group it cuts is denied, never read in part.
+describe('gsd-secret-read-guard: a group a process substitution or an extglob runs into (#6142)', () => {
+  // bash reads `<(…)`, `>(…)` and, under `shopt -s extglob`, `@(…)` `!(…)` `+(…)` `*(…)` `?(…)` as part of the
+  // word they touch, so `{.env,<(echo })}` is `.env` and the substitution. The guard splits the word there, so an
+  // open group it cuts is denied, never read in part.
   for (const [cmd, word] of [
     ['cat {.env,<(echo })}', '{.env,'],
     ['cat d/{x,.env,>(cat)}', 'd/{x,.env,'],
     ['cat {{.env,a},<(true)}', '{{.env,a},'],
     // A closed group before the open one: `{,d/}{.env,<(true)}` is `.env` and `d/.env` among the words.
     ['cat {,d/}{.env,<(true)}', '{,d/}{.env,'],
+    // The substitution may come first in the group, or right after its `{`.
+    ['cat {<(true),.env}', '{'],
+    ['cat {a<(true),.env}', '{a'],
+    ['cat {>(true),.env}', '{'],
+    ['cat {<(true),{.env,y}}', '{'],
+    ['cat {.env,@(a|b)}', '{.env,@'],
+    ['cat {.env,@( )}', '{.env,@'],
+    ['cat {.env,!(x)}', '{.env,!'],
+    ['cat {.env,+(x)}', '{.env,+'],
+    ['cat {.env,*(x)}', '{.env,*'],
+    ['cat {.env,?(x)}', '{.env,?'],
+    ['bash -O extglob -c "cat {.env,@(a|b)}"', '{.env,@'],
+    ["bash -c 'cat {<(true),.env}'", '{'],
   ]) {
     test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'brace-word-unreadable', path: word }));
   }
 
   // A closed group, a space before the substitution, or no group at all.
-  for (const cmd of ['cat {a,b}<(true)', 'cat {.env, <(echo })}', 'diff <(sort a) <(sort b)', 'cat x<(true)']) {
+  for (const cmd of [
+    'cat {a,b}<(true)', 'cat {.env, <(echo })}', 'diff <(sort a) <(sort b)', 'cat x<(true)', 'cat {}<(true)',
+    "cat '{'<(true)", 'cat \\{<(true),.env}', 'cat ${x}<(true)', 'cat {a,b}@(x)', 'cat x@(a|b)', 'echo {a,b? c}',
+  ]) {
     test(`allows ${cmd}`, () => assertAllowed(cmd));
   }
 });
