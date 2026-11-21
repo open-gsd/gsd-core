@@ -367,7 +367,7 @@ Output: [Artifacts created]
 
 ## STRIDE Threat Register
 
-Threat IDs are unique within a phase. Before numbering, read the `<threat_model>` blocks of the phase's existing PLAN files and continue after their highest `T-{phase}-NN` — if the phase already uses `T-47-19`, new plans number from `T-47-20`, never from `T-47-01` again (#4683: a reused ID names two different threats, which makes `SECURITY.md` rows and `VALIDATION.md`'s Threat Ref column ambiguous). `T-{phase}-SC` is the exception: reserved, and every plan keeps it.
+Threat IDs are unique within a phase. Before numbering, read the `<threat_model>` blocks of the phase's existing PLAN files and continue after their highest `T-{phase}-NN` — if the phase already uses `T-47-19`, new plans number from `T-47-20`, never from `T-47-01` again (#4683). Each register row needs a unique ID, including when applying a threat from another plan: allocate a new ID and point to the original. The scan enforces claims across distinct live PLAN files. Check repeated rows inside the current plan while authoring. Reusing IDs makes `SECURITY.md` rows and `VALIDATION.md`'s Threat Ref column ambiguous. `T-{phase}-SC` is the exception: reserved, and every plan keeps it.
 
 | Threat ID | Category | Component | Severity | Disposition | Mitigation Plan |
 |-----------|----------|-----------|----------|-------------|-----------------|
@@ -895,6 +895,10 @@ Plans:
 </step>
 
 <step name="git_commit">
+Quick and quick-batch dispatches follow their own commit instructions. Skip this entire step in those modes.
+
+For phase-scoped plans, read @__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/plan-phase/steps/threat-id-check.md and follow its planner-agent instructions before committing.
+
 ```bash
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
 : "${PLANNING_ROOT:?}"

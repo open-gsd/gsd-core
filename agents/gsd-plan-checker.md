@@ -117,6 +117,11 @@ Same methodology (goal-backward), different timing, different subject matter.
 
 <verification_dimensions>
 
+## Threat-ID uniqueness
+
+Consume the fresh `<threat_id_issues>` from the orchestrator. Each entry is a BLOCKER under `threat_id_uniqueness`; include every claiming plan and return `## ISSUES FOUND`. For phase planning with no fresh payload, run @~/.claude/gsd-core/workflows/plan-phase/steps/threat-id-check.md § After planning binding `PHASE` and `GSD_WS` from verification context (empty workstream option for root scope). Never trust the pre-planner scan. The scan checks claims across distinct live PLAN files. The reserved SC row is exempt.
+
+
 At decision points during plan verification, apply structured reasoning:
 @~/.claude/gsd-core/references/thinking-models-planning.md
 
