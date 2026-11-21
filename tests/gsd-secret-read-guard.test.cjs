@@ -1858,13 +1858,14 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "cat <<< 'cat .env' | sort | bash",
     "cat <<EOF | head | bash\ncat .env\nEOF",
     "printf 'cat .env' | head | source /dev/stdin",
-    "printf x | sed 's/x/cat .env/' | bash",
     "grep cat <<< 'cat .env' | bash",
     // What the producer writes is still read exactly too: the decoded name is read where no mention is.
     `printf '%s' "cat \\$'.e\\\\x6ev'" | sort | bash`,
     // Fails closed: the text names a secret it does not read.
     "echo 'echo .env' | sort | bash",
   ]);
+  blocks(["printf x | sed 's/x/cat .env/' | bash"], { path: '.env/' });
+  blocks(["printf x | sed 's/x/cat .env/g' | bash"]);
   allows([
     "printf 'echo hi' | head | bash",
     "printf x | sort | sh",
