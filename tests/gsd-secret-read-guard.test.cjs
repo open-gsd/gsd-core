@@ -1889,6 +1889,17 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "npx.cmd -c 'cat .env'",
   ]);
   allows(["npx -c 'echo .env'", "npm exec -c 'ls -a'", 'npx prettier --check .env.example']);
+
+  // Readings no row pinned before. A name-only operand (an `--env-file` value) is neither launched by the unknown
+  // command reading nor handed to what a launcher word starts, and is charged nothing: thousands of them that
+  // happen to be launcher names stay within budget. A wrapper a launched command resolves through is covered, so
+  // a long run of them is launched once. An fd path is matched through `..` (`fd/../stdin` from /dev).
+  allows(['podman run git --env-file .env x', 'docker run git --env-file .env x']);
+  for (const [shape, cmd] of [
+    ['3,000 `--env-file git` operands', `docker run ${'--env-file git '.repeat(3000)}img`],
+    ['an unknown command before 3,000 `env` wrappers', `x ${'env '.repeat(3000)}y`],
+  ]) test(`allows ${shape}`, () => assertAllowed(runHook(bash(cmd)), shape));
+  blocks(["source fd/../stdin <<< 'cat .env'", "bash fd/3/../0 <<< 'cat .env'", "source /proc/self/fd/x/../0 <<< 'cat .env'"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
