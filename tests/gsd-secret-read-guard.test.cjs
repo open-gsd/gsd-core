@@ -3844,9 +3844,6 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['echo .env | xargs -a names cat', 'names'], // -a: the words come from the file, not the pipe
     ['xargs -a n sh -c \'cat "$@"\' _', 'n'],
     ['xargs -a n sh', 'n'],
-    ["printf '\\x2eenv\\n' | xargs cat", '\\x2eenv\\n'],
-    ["printf '%b' '\\x2eenv' | xargs cat", '%b \\x2eenv'],
-    ["echo -e '\\x2eenv' | xargs cat", '-e \\x2eenv'],
     // fd 0 opened read-write, and a redirect xargs inherits from a group, a subshell, `exec` or the shell running it.
     ['xargs cat <> names', 'names'],
     ['{ xargs cat; } < names', 'names'],
@@ -3854,8 +3851,14 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['exec < names; xargs cat', 'names'],
     ["sh -c 'xargs cat' < names", 'names'],
     ['f() { xargs cat; }; f < names', 'names'],
-    // A delimiter xargs would not split at as one character.
-    ['xargs -d ab cat <<< x', 'ab'],
+  ];
+  // The same denial for what a printf or echo it does not render writes, and for a `-d` value it cannot decode,
+  // each under a code of its own, since the block names no file.
+  const UNRENDERED = [
+    ["printf '\\x2eenv\\n' | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv\\n'],
+    ["printf '%b' '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '%b \\x2eenv'],
+    ["echo -e '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '-e \\x2eenv'],
+    ['xargs -d ab cat <<< x', 'xargs-delimiter-undecodable', 'ab'],
   ];
   const ALLOWED = [
     "xargs echo <<< 'cat .env'",
@@ -3886,6 +3889,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
   for (const [cmd, source] of UNSEEN) {
     test(`blocks as unseen: ${JSON.stringify(cmd)}`, () => {
       assertBlocked(runHook(bash(cmd)), cmd, { code: 'xargs-input-unseen', tool: 'Bash', path: source });
+    });
+  }
+  for (const [cmd, code, source] of UNRENDERED) {
+    test(`blocks as ${code}: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { code, tool: 'Bash', path: source });
     });
   }
   for (const cmd of ALLOWED) {
