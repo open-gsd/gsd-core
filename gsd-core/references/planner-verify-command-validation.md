@@ -15,9 +15,23 @@ Each executor then had to decide whether the check or the deliverable was wrong,
 "adjust the deliverable until the check passes", silently corrupts the thing being verified. A parse-only
 pass at plan time removes that judgment call.
 
-**Validate-only means all four:** it does not execute the body, does not write to the tree, does not need
-the command's targets to exist yet, and needs no network or install. A mode that fails any of the four is
-not validate-only, however it is named. Check #2401 grounding (does the target exist) is a separate claim.
+**Validate-only means all three:** the form does not execute the body, does not write to the project tree,
+and needs no network or install. A mode that fails any of the three is not validate-only, however it is
+named. A form may still need a runtime the host lacks (an interpreter, a SQL Server session, a toolchain):
+when it is absent the command is unvalidatable, never validated by a substitute. #2401 grounding (does the
+target exist) is a separate claim.
+
+## What the body is
+
+The body is the exact text between `<automated>` and `</automated>`. Its language is the shell's: the
+`bash-n` form validates that line. Three things are not the body:
+
+- **A payload embedded in the line** (`sqlcmd -Q "SELECT …"`, `node -e '…'`, `python3 -c '…'`, a heredoc) is
+  a second layer in its own language. Validate it with its own form, or mark it unvalidatable.
+- **A file the command runs** (`bash scripts/check.sh`) is a target. `bash -n` over the command line proves
+  nothing about it. Validate the file with its form only if it already exists; when a task creates it, mark
+  the command `[UNVALIDATABLE: target created by task N]`.
+- **A command line with no parseable payload** (`npm --prefix apps/api test`) has only the shell layer.
 
 ## Sanctioned forms
 
@@ -25,15 +39,19 @@ The closed set. Use a form only for the body language it names.
 
 | Id | Body language | Sanctioned form | Needs |
 |---|---|---|---|
-| `bash-n` | POSIX shell | `bash -n` over the body | `bash` |
-| `node-check` | JavaScript | `node --check` over the body saved as a `.cjs` file | `node` |
+| `bash-n` | Shell (bash syntax; `sh -n` when the command runs under `sh`) | `bash -n` over the body | `bash` |
+| `node-check` | JavaScript | `node --check` over the body saved in the OS temp directory as `.cjs` (`.mjs` when it uses `import` or `export`) | `node` |
 | `python-ast` | Python | `python3 -I -c 'import ast,sys; ast.parse(sys.stdin.read())'` with the body on stdin | `python3` |
-| `tsql-parseonly` | T-SQL | `SET PARSEONLY ON;` sent in an open session, then the body, then `SET PARSEONLY OFF;` | a reachable SQL Server session |
-| `cargo-metadata` | Rust target shape | `cargo metadata --no-deps --format-version 1` confirms the package and targets a command names exist | `cargo` and a `Cargo.toml` |
+| `tsql-parseonly` | T-SQL | `SET PARSEONLY ON;`, then the body, then `SET PARSEONLY OFF;`, each as its own batch (`GO`), in a session already open for this phase | a reachable SQL Server session |
+| `cargo-metadata` | Rust target shape | `cargo metadata --no-deps --format-version 1 --locked --offline` confirms the package and targets a command names exist; on any error the command is unvalidatable, never retried without the flags | `cargo`, a `Cargo.toml` and a committed `Cargo.lock` |
 
 `cargo-metadata` validates a command's target shape (the #3172 `--lib` against a binary-only package case),
-not a command line. `tsql-parseonly` examines syntax and resolves no object names, so it works before the
-objects exist, but it needs a live session: with none, the body is unvalidatable.
+not a command line. `--locked` makes cargo stop with an error rather than change `Cargo.lock`, and `--offline`
+stops it using the network. It does not compile, and build scripts run only in the compile phase, so it runs
+no project code (Cargo documentation). `tsql-parseonly` relies on SQL Server only parsing a
+statement while `SET PARSEONLY` is `ON`, without compiling or executing it (Microsoft documentation); it
+resolves no object names, so it works before the objects exist, but with no open session the body is
+unvalidatable. Never open a session for it.
 
 ## Never at plan time
 
@@ -52,6 +70,8 @@ Each of these looks like a validate mode and is not. Do not run them while autho
   of the validator or into a shell string: a body containing `$(…)`, backticks, or quotes must stay inert.
 - **Validate each layer.** `sqlcmd -Q "SELECT …"` is a shell layer wrapping a SQL layer. `bash -n` passing
   validates the shell layer only. Run the inner layer's form on the inner text, or mark it unvalidatable.
+- **The only write is the body file.** A form that needs the body in a file reads it from the OS temp
+  directory; nothing is written under the project tree.
 - **An empty or whitespace-only body is not a validation result.** An empty file parses everywhere, so exit 0
   alone proves nothing. An empty body is also a `<automated>` problem the existing probe already reports.
 - **A failing validator blocks the plan.** Correct the command and run the form again. Never weaken or delete
@@ -98,9 +118,10 @@ For each runnable `<automated>` command in the plan, find its notation line.
 
 Rules:
 
-- **Re-run only the read-only forms** in the sanctioned table, never a form from the Never table, and never
-  a body that builds, installs, or writes. If a form's needs are absent on the checking host, do not mark it
-  failed: report it as not re-run.
+- **Re-run only forms that write nothing under the project tree**: `bash-n`, `node-check` and `python-ast`
+  from the sanctioned table, with the body in the OS temp directory or on stdin. Never re-run a form from the
+  Never table, `tsql-parseonly` (it needs a session the checker does not own), or a body that builds, installs
+  or writes. If a form's needs are absent on the checking host, do not mark it failed: report it as not re-run.
 - **Report, never prescribe.** State which command lacks a record or fails its form. Do not write the
   notation for the planner: a prescribed record is copied verbatim and carries no information.
 - A command that hangs or never returns is not parse-detectable. This check does not claim to catch it.

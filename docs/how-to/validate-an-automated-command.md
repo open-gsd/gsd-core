@@ -24,15 +24,17 @@ two records.
 
 | Body language | Run | Needs |
 |---|---|---|
-| POSIX shell | `bash -n` over the body | `bash` |
-| JavaScript | `node --check` over the body saved as a `.cjs` file | `node` |
+| Shell (bash syntax; `sh -n` when the command runs under `sh`) | `bash -n` over the body | `bash` |
+| JavaScript | `node --check` over the body saved in the OS temp directory as `.cjs` (`.mjs` when it uses `import` or `export`) | `node` |
 | Python | `python3 -I -c 'import ast,sys; ast.parse(sys.stdin.read())'` with the body on stdin | `python3` |
-| T-SQL | `SET PARSEONLY ON;` in an open session, then the body | a reachable SQL Server session |
-| Rust target shape | `cargo metadata --no-deps --format-version 1` | `cargo` and a `Cargo.toml` |
+| T-SQL | `SET PARSEONLY ON;`, then the body, then `SET PARSEONLY OFF;`, each as its own batch (`GO`), in a session already open for this phase | a reachable SQL Server session |
+| Rust target shape | `cargo metadata --no-deps --format-version 1 --locked --offline` confirms the package and targets a command names exist; on any error the command is unvalidatable, never retried without the flags | `cargo`, a `Cargo.toml` and a committed `Cargo.lock` |
 
-Feed the body as a file or on stdin. Never splice it into the validator's argv or into a shell string.
-A command that wraps another language (`sqlcmd -Q "SELECT …"`) has two layers: `bash -n` validates the shell
-layer only, so validate the inner text with its own form or mark it unvalidatable.
+The body is the exact text between `<automated>` and `</automated>`. Feed it as a file in the OS temp
+directory or on stdin. Never splice it into the validator's argv or into a shell string. A command that wraps
+another language (`sqlcmd -Q "SELECT …"`) has two layers: `bash -n` validates the shell layer only, so validate
+the inner text with its own form or mark it unvalidatable. A script the command runs (`bash scripts/check.sh`)
+is a target: validate it only if it already exists, otherwise write `[UNVALIDATABLE: target created by task N]`.
 
 ## Do not use these
 

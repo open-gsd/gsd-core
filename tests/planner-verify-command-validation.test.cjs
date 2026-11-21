@@ -9,10 +9,9 @@
  *
  * The product is agent-loaded Markdown, so it is tested as a typed document: reference
  * tables are parsed header-keyed, wiring files must share one filename, and the sanctioned
- * forms are RUN through the process seam so their safety claims are observed. The notation
- * line is plain text inside `<verify>`; the #2401/#3172 probes must not change because of it.
- * Row ids map to `.gsd/phase/feat-4586-planner-validate-only-tier/50-test-matrix.md`.
- * A test needing `bash` or `python3` skips only when that interpreter is absent from the host.
+ * forms are RUN through the process seam so their safety claims are observed.
+ * Row ids: R reference table, V sanctioned forms run for real, W wiring, N probes undisturbed.
+ * A test needing `bash` or `python` skips only when that interpreter is absent from the host.
  */
 
 const { describe, test } = require('node:test');
@@ -35,6 +34,7 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\
 
 const REFERENCE = 'gsd-core/references/planner-verify-command-validation.md';
 const REFERENCE_NAME = 'planner-verify-command-validation.md';
+const HOWTO = 'docs/how-to/validate-an-automated-command.md';
 
 /** The closed set of sanctioned forms. The reference table must list exactly these ids. */
 const SANCTIONED_IDS = ['bash-n', 'node-check', 'python-ast', 'tsql-parseonly', 'cargo-metadata'];
@@ -54,7 +54,7 @@ const NOTATIONS = [
 // ─── Typed-document helpers ───────────────────────────────────────────────────
 
 /** The text of the `## ` section whose heading matches `headingRe`. */
-function section(md, headingRe) {
+function sectionOf(md, headingRe) {
   const lines = md.split('\n');
   const start = lines.findIndex((l) => /^##\s/.test(l) && headingRe.test(l));
   assert.ok(start >= 0, `a section matching ${headingRe} must exist`);
@@ -66,7 +66,7 @@ function section(md, headingRe) {
 }
 
 /** Parse the first Markdown table in `text` into `{ header, rows }`, rows keyed by header. */
-function table(text) {
+function parseTable(text) {
   const header = [];
   const rows = [];
   for (const line of text.split('\n')) {
@@ -83,11 +83,12 @@ function table(text) {
 }
 
 const stripTicks = (s) => s.replace(/`/g, '');
+const sanctionedRows = () => parseTable(sectionOf(read(REFERENCE), /Sanctioned/i)).rows;
 
 // ─── Plan builders ────────────────────────────────────────────────────────────
 
 /** One task: automated + fails_when, optionally followed by a notation line inside `<verify>`. */
-function task(i, { notation = null, eol = '\n' } = {}) {
+function taskBlock(i, { notation = null, eol = '\n' } = {}) {
   const lines = [
     '<task type="auto">',
     `  <name>task-${i}</name>`,
@@ -101,16 +102,18 @@ function task(i, { notation = null, eol = '\n' } = {}) {
   return lines.join(eol);
 }
 
-function plan(k, opts = {}) {
+function planOf(k, opts = {}) {
   const eol = opts.eol ?? '\n';
   const tasks = [];
-  for (let i = 0; i < k; i += 1) tasks.push(task(i, opts));
+  for (let i = 0; i < k; i += 1) tasks.push(taskBlock(i, opts));
   return ['# Plan', '', ...tasks].join(eol);
 }
 
 const probeView = (text) => JSON.stringify([extractAutomatedCommands(text), extractFailingDirections(text)]);
 
-/** Interpreter availability, probed once per interpreter. */
+// ─── Host interpreters ────────────────────────────────────────────────────────
+
+/** True when `interpreter --version` runs on this host. Probed once per interpreter. */
 const availability = new Map();
 function available(interpreter) {
   if (!availability.has(interpreter)) {
@@ -120,12 +123,34 @@ function available(interpreter) {
   return availability.get(interpreter);
 }
 
+/** The Python 3 interpreter name on this host (`python3`, or `python` on Windows), or null. */
+let pythonName;
+function pythonInterpreter() {
+  if (pythonName === undefined) {
+    pythonName = null;
+    for (const name of ['python3', 'python']) {
+      const r = runHook('--version', [], { interpreter: name, timeoutMs: PROBE_TIMEOUT_MS });
+      if (r.outcome === OUTCOME.EXITED && r.exitCode === 0 && /Python 3/.test(`${r.stdout}${r.stderr}`)) {
+        pythonName = name;
+        break;
+      }
+    }
+  }
+  return pythonName;
+}
+
+/** A marker path inside a fresh temp directory, removed after the test. */
+function markerPath(t) {
+  const dir = createTempDir('gsd-4586-marker-');
+  t.after(() => cleanup(dir));
+  return path.join(dir, 'ran.marker').replace(/\\/g, '/');
+}
+
 // ─── R: the reference as a typed document ─────────────────────────────────────
 
 describe('the validation reference (#4586)', () => {
   test('R1 — the sanctioned table lists exactly the closed set of validate-only forms', () => {
-    const md = read(REFERENCE);
-    const { header, rows } = table(section(md, /Sanctioned/i));
+    const { header, rows } = parseTable(sectionOf(read(REFERENCE), /Sanctioned/i));
     assert.deepEqual(header, ['Id', 'Body language', 'Sanctioned form', 'Needs']);
     assert.deepEqual(rows.map((r) => stripTicks(r.Id)).sort(), [...SANCTIONED_IDS].sort());
     const form = Object.fromEntries(rows.map((r) => [stripTicks(r.Id), r['Sanctioned form']]));
@@ -134,12 +159,14 @@ describe('the validation reference (#4586)', () => {
     assert.match(form['python-ast'], /ast\.parse/);
     assert.match(form['tsql-parseonly'], /SET PARSEONLY ON/);
     assert.match(form['cargo-metadata'], /cargo metadata --no-deps/);
+    assert.match(form['cargo-metadata'], /--locked/);
+    assert.match(form['cargo-metadata'], /--offline/);
   });
 
   test('R2 — forms that execute or write are named as forbidden, never sanctioned', () => {
     const md = read(REFERENCE);
-    const sanctioned = table(section(md, /Sanctioned/i)).rows.map((r) => r['Sanctioned form']).join('\n');
-    const never = table(section(md, /Never/i));
+    const sanctioned = sanctionedRows().map((r) => r['Sanctioned form']).join('\n');
+    const never = parseTable(sectionOf(md, /Never/i));
     assert.equal(never.header[0], 'Form');
     assert.equal(never.rows.length, FORBIDDEN_TOKENS.length);
     for (const tok of FORBIDDEN_TOKENS) {
@@ -154,15 +181,14 @@ describe('the validation reference (#4586)', () => {
   });
 
   test('R3 — the reference documents the closed notation grammar', () => {
-    const notation = section(read(REFERENCE), /Notation/i);
+    const notation = sectionOf(read(REFERENCE), /Notation/i);
     assert.ok(notation.includes('[VALIDATED: <validate-only command> exit 0]'));
     assert.ok(notation.includes('[VALIDATED: prior_verify_commands]'));
     assert.ok(notation.includes('[UNVALIDATABLE: <reason>]'));
   });
 
   test('R4 — placeholder atoms in the reference match the probe\'s atoms', () => {
-    const notation = section(read(REFERENCE), /Notation/i);
-    const line = notation.split('\n').find((l) => /Rejected as a reason/i.test(l));
+    const line = sectionOf(read(REFERENCE), /Notation/i).split('\n').find((l) => /Rejected as a reason/i.test(l));
     assert.ok(line, 'the Notation section must list the rejected placeholder reasons');
     const listed = [...line.matchAll(/`([^`]+)`/g)].map((m) => m[1].toLowerCase());
     assert.deepEqual([...listed].sort(), [...PLACEHOLDER_ATOMS].sort());
@@ -171,10 +197,32 @@ describe('the validation reference (#4586)', () => {
     }
   });
 
-  test('R5 — the checker section states severities and exemptions', () => {
-    const checker = section(read(REFERENCE), /Checker/i);
-    for (const needle of ['WARNING', 'BLOCKER', 'sentinel', 'prior_verify_commands']) {
-      assert.ok(checker.includes(needle), `the Checker section must mention ${needle}`);
+  test('R5 — each checker finding carries its stated severity', () => {
+    const { header, rows } = parseTable(sectionOf(read(REFERENCE), /Checker/i));
+    assert.deepEqual(header, ['Finding', 'Severity']);
+    assert.equal(rows.length, 6);
+    const severityOf = (re) => {
+      const row = rows.find((r) => re.test(r.Finding));
+      assert.ok(row, `a checker row matching ${re}`);
+      return row.Severity;
+    };
+    assert.ok(severityOf(/^no notation/).startsWith('**WARNING**'));
+    assert.ok(severityOf(/read-only re-run of the form/).startsWith('**BLOCKER**'));
+    assert.ok(severityOf(/placeholder or empty reason/).startsWith('**BLOCKER**'));
+    assert.ok(severityOf(/naming a form from the sanctioned table/).startsWith('**WARNING**'));
+    assert.ok(severityOf(/is not in `prior_verify_commands`/).startsWith('**BLOCKER**'));
+    assert.ok(severityOf(/^sentinel command/).startsWith('silent'));
+  });
+
+  test('R6 — an empty or whitespace-only body takes no validation record', () => {
+    assert.ok(sectionOf(read(REFERENCE), /Notation/i).includes('An empty or whitespace-only body takes no notation'));
+    assert.ok(read(REFERENCE).includes('An empty or whitespace-only body is not a validation result'));
+  });
+
+  test('R7 — the body is defined, and an embedded payload or a run script is not the body', () => {
+    const body = sectionOf(read(REFERENCE), /What the body is/i);
+    for (const needle of ['between `<automated>` and `</automated>`', 'embedded in the line', 'A file the command runs']) {
+      assert.ok(body.includes(needle), `the body section must contain: ${needle}`);
     }
   });
 });
@@ -197,17 +245,14 @@ describe('the sanctioned forms validate without executing (external-tool agreeme
       return { dir, r: runNode(['--check', file], { timeoutMs: PROBE_TIMEOUT_MS }) };
     }
     // python-ast: run the exact `-c` program the reference prints, with the body on stdin.
-    const form = table(section(read(REFERENCE), /Sanctioned/i)).rows
-      .find((r) => stripTicks(r.Id) === 'python-ast')['Sanctioned form'];
-    const code = /-c '([^']+)'/.exec(form);
+    const row = sanctionedRows().find((r) => stripTicks(r.Id) === 'python-ast');
+    const code = /-c '([^']+)'/.exec(row['Sanctioned form']);
     assert.ok(code, 'the python-ast form must carry its -c program in single quotes');
     return {
       dir,
-      r: runHook('-I', ['-c', code[1]], { interpreter: 'python3', input: body, cwd: dir, timeoutMs: PROBE_TIMEOUT_MS }),
+      r: runHook('-I', ['-c', code[1]], { interpreter: pythonInterpreter(), input: body, cwd: dir, timeoutMs: PROBE_TIMEOUT_MS }),
     };
   }
-
-  const marker = (dir) => path.join(dir, 'ran.marker').replace(/\\/g, '/');
 
   test('V1 — bash-n accepts a well-formed body', (t) => {
     if (!available('bash')) return t.skip('bash is not installed on this host');
@@ -225,73 +270,76 @@ describe('the sanctioned forms validate without executing (external-tool agreeme
 
   test('V3 — bash-n never executes the body', (t) => {
     if (!available('bash')) return t.skip('bash is not installed on this host');
-    const dir0 = createTempDir('gsd-4586-pre-');
-    t.after(() => cleanup(dir0));
-    const m = marker(dir0);
-    const { r } = validate(t, 'bash-n', `touch "${m}"\n`);
+    const marker = markerPath(t);
+    const { r } = validate(t, 'bash-n', `touch "${marker}"\n`);
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.equal(fs.existsSync(m), false, 'validation must not have run the body');
+    assert.equal(fs.existsSync(marker), false, 'validation must not have run the body');
   });
 
   test('V4 — node-check validates without executing', (t) => {
-    const dir0 = createTempDir('gsd-4586-pre-');
-    t.after(() => cleanup(dir0));
-    const m = marker(dir0);
-    const ok = validate(t, 'node-check', `require('node:fs').writeFileSync(${JSON.stringify(m)}, 'x');\n`);
+    const marker = markerPath(t);
+    const ok = validate(t, 'node-check', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x');\n`);
     assert.equal(ok.r.exitCode, 0, ok.r.stderr);
-    assert.equal(fs.existsSync(m), false, 'validation must not have run the body');
+    assert.equal(fs.existsSync(marker), false, 'validation must not have run the body');
     const bad = validate(t, 'node-check', 'let x = ;\n');
     assert.notEqual(bad.r.exitCode, 0);
   });
 
   test('V5 — python-ast validates without executing', (t) => {
-    if (!available('python3')) return t.skip('python3 is not installed on this host');
-    const dir0 = createTempDir('gsd-4586-pre-');
-    t.after(() => cleanup(dir0));
-    const m = marker(dir0);
-    const ok = validate(t, 'python-ast', `open(${JSON.stringify(m)}, 'w').write('x')\n`);
+    if (!pythonInterpreter()) return t.skip('no Python 3 interpreter on this host');
+    const marker = markerPath(t);
+    const ok = validate(t, 'python-ast', `open(${JSON.stringify(marker)}, 'w').write('x')\n`);
     assert.equal(ok.r.exitCode, 0, ok.r.stderr);
-    assert.equal(fs.existsSync(m), false, 'validation must not have run the body');
+    assert.equal(fs.existsSync(marker), false, 'validation must not have run the body');
     const bad = validate(t, 'python-ast', 'x = (\n');
     assert.notEqual(bad.r.exitCode, 0);
   });
 
   test('V6 — python-ast writes nothing, py_compile does', (t) => {
-    if (!available('python3')) return t.skip('python3 is not installed on this host');
+    if (!pythonInterpreter()) return t.skip('no Python 3 interpreter on this host');
     const { dir } = validate(t, 'python-ast', 'x = 1\n');
     assert.deepEqual(fs.readdirSync(dir), [], 'python-ast must leave the working directory untouched');
     const src = path.join(dir, 'a.py');
     fs.writeFileSync(src, 'x = 1\n');
-    const compiled = runHook('-m', ['py_compile', src], { interpreter: 'python3', cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+    const compiled = runHook('-m', ['py_compile', src], { interpreter: pythonInterpreter(), cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(compiled.exitCode, 0, compiled.stderr);
     assert.ok(fs.existsSync(path.join(dir, '__pycache__')), 'py_compile writes a .pyc — the reason it is forbidden');
   });
 
   test('V7 — an outer-layer pass says nothing about the embedded payload', (t) => {
-    if (!available('bash')) return t.skip('bash is not installed on this host');
+    const inner = validate(t, 'node-check', 'let x = ;\n');
+    assert.notEqual(inner.r.exitCode, 0, 'the embedded layer is not well-formed');
+    if (!available('bash')) return t.skip('bash is not installed on this host (the outer-layer half)');
     const outer = validate(t, 'bash-n', `sh -c "node -e 'let x = ;'"\n`);
     assert.equal(outer.r.exitCode, 0, 'the shell layer is well-formed');
-    const inner = validate(t, 'node-check', 'let x = ;\n');
-    assert.notEqual(inner.r.exitCode, 0, 'the embedded layer is not');
   });
 
   test('V8 — hostile bodies are validated as data', (t) => {
     if (!available('bash')) return t.skip('bash is not installed on this host');
-    const dir0 = createTempDir('gsd-4586-pre-');
-    t.after(() => cleanup(dir0));
-    const m = marker(dir0);
-    const body = [`echo $(touch "${m}") \`touch "${m}"\`; touch "${m}"`, `printf '%s' "a'b"`, ''].join('\n');
+    const marker = markerPath(t);
+    const body = [`echo $(touch "${marker}") \`touch "${marker}"\`; touch "${marker}"`, `printf '%s' "a'b"`, ''].join('\n');
     const { r } = validate(t, 'bash-n', body);
     assert.equal(r.exitCode, 0, r.stderr);
-    assert.equal(fs.existsSync(m), false, 'command substitution must not have run');
+    assert.equal(fs.existsSync(marker), false, 'command substitution must not have run');
   });
 
-  test('V9 — an empty body is not a validation result', (t) => {
+  test('V9 — an empty body parses, so exit 0 alone cannot signal "validated"', (t) => {
     if (!available('bash')) return t.skip('bash is not installed on this host');
     const { r } = validate(t, 'bash-n', '');
-    assert.equal(r.exitCode, 0, 'an empty body parses — so exit 0 alone cannot signal "validated"');
-    assert.ok(/empty or whitespace-only/.test(section(read(REFERENCE), /Notation/i)),
-      'the reference must say an empty or whitespace-only body is not a validation result');
+    assert.equal(r.exitCode, 0);
+  });
+
+  test('V10 — a node-check body that uses import fails as .cjs and passes as .mjs', (t) => {
+    const dir = createTempDir('gsd-4586-esm-');
+    t.after(() => cleanup(dir));
+    const cjs = path.join(dir, 'body.cjs');
+    const mjs = path.join(dir, 'body.mjs');
+    fs.writeFileSync(cjs, "import fs from 'node:fs';\nfs.existsSync('.');\n");
+    fs.writeFileSync(mjs, "import fs from 'node:fs';\nfs.existsSync('.');\n");
+    assert.notEqual(runNode(['--check', cjs], { timeoutMs: PROBE_TIMEOUT_MS }).exitCode, 0);
+    assert.equal(runNode(['--check', mjs], { timeoutMs: PROBE_TIMEOUT_MS }).exitCode, 0);
+    const row = sanctionedRows().find((r) => stripTicks(r.Id) === 'node-check');
+    assert.ok(row['Sanctioned form'].includes('.mjs'), 'the reference must name the .mjs extension');
   });
 });
 
@@ -345,15 +393,30 @@ describe('the contract is wired to one reference file (#4586)', () => {
     assert.ok(src.length < 49152, `gsd-planner.md is ${src.length} LF chars — must stay < 49152`);
     assert.ok(!src.includes('planner-verify-command-validation'));
   });
+
+  test('W7 — the how-to repeats the reference table and the forbidden list exactly', () => {
+    const howto = parseTable(sectionOf(read(HOWTO), /Pick the form/i));
+    assert.deepEqual(howto.header, ['Body language', 'Run', 'Needs']);
+    const ref = sanctionedRows();
+    assert.equal(howto.rows.length, ref.length);
+    for (const row of ref) {
+      const match = howto.rows.find((h) => h['Body language'] === row['Body language']);
+      assert.ok(match, `the how-to must list ${row['Body language']}`);
+      assert.equal(match.Run, row['Sanctioned form']);
+      assert.equal(match.Needs, row.Needs);
+    }
+    const never = sectionOf(read(HOWTO), /Do not use/i);
+    for (const tok of FORBIDDEN_TOKENS) assert.ok(never.includes(tok), `the how-to must name ${tok}`);
+  });
 });
 
 // ─── N: the existing probes are undisturbed ───────────────────────────────────
 
 describe('a notation line does not disturb the #2401/#3172 probes (Hyrum)', () => {
   test('N1 — notation lines do not change what the probes extract', () => {
-    const base = probeView(plan(3));
+    const base = probeView(planOf(3));
     for (const notation of NOTATIONS) {
-      assert.equal(probeView(plan(3, { notation })), base, notation);
+      assert.equal(probeView(planOf(3, { notation })), base, notation);
     }
   });
 
@@ -362,7 +425,7 @@ describe('a notation line does not disturb the #2401/#3172 probes (Hyrum)', () =
       '---', 'phase: 01-test', 'plan: 01', 'type: execute', 'wave: 1', 'depends_on: []',
       'files_modified: [src/a.js]', 'autonomous: true', 'must_haves:', '  truths: ["it works"]', '---', '',
     ].join('\n');
-    const body = (notation) => `${frontmatter}<objective>Do it</objective>\n\n<tasks>\n${task(0, { notation })}\n</tasks>\n\n<output>Write the summary</output>\n`;
+    const body = (notation) => `${frontmatter}<objective>Do it</objective>\n\n<tasks>\n${taskBlock(0, { notation })}\n</tasks>\n\n<output>Write the summary</output>\n`;
     const verdict = (notation) => {
       const tmp = createTempProject();
       t.after(() => cleanup(tmp));
@@ -379,29 +442,34 @@ describe('a notation line does not disturb the #2401/#3172 probes (Hyrum)', () =
   });
 
   test('N3 — P1: arbitrary notation text never changes probe output', () => {
-    const base = probeView(plan(2));
+    const base = probeView(planOf(2));
     const text = fc.string().filter((s) => !/[<>]/.test(s));
     fc.assert(fc.property(text, fc.constantFrom(0, 1), (s, position) => {
       const line = `[VALIDATED: ${s}]`;
       const withLine = position === 0
-        ? plan(2, { notation: line })
-        : plan(2).replace('</verify>', `  ${line}\n  </verify>`);
+        ? planOf(2, { notation: line })
+        : planOf(2).replace('</verify>', `  ${line}\n  </verify>`);
       return probeView(withLine) === base;
     }));
   });
 
   test('N4 — P2: CRLF invariance with notation present', () => {
     fc.assert(fc.property(fc.integer({ min: 1, max: 8 }), fc.constantFrom(...NOTATIONS), (k, notation) => {
-      return probeView(plan(k, { notation, eol: '\n' })) === probeView(plan(k, { notation, eol: '\r\n' }));
+      return probeView(planOf(k, { notation, eol: '\n' })) === probeView(planOf(k, { notation, eol: '\r\n' }));
     }));
   });
 
   test('N5 — notation lines do not shift the probe walk bound', () => {
     // Find the bound by probing, not by hard-coding it: the smallest k at which extraction
-    // returns fewer than k commands is limit + 1.
-    const truncated = (k) => extractAutomatedCommands(plan(k)).length < k;
+    // returns fewer than k commands is limit + 1. The doubling is bounded so a probe that
+    // loses its walk limit fails here instead of looping.
+    const CEILING = 1 << 17;
+    const truncated = (k) => extractAutomatedCommands(planOf(k)).length < k;
     let hi = 1;
-    while (!truncated(hi)) hi *= 2;
+    while (!truncated(hi)) {
+      hi *= 2;
+      assert.ok(hi <= CEILING, `the probe walk bound must lie below ${CEILING}`);
+    }
     let lo = Math.floor(hi / 2);
     while (hi - lo > 1) {
       const mid = Math.floor((lo + hi) / 2);
@@ -409,15 +477,15 @@ describe('a notation line does not disturb the #2401/#3172 probes (Hyrum)', () =
     }
     const limit = hi - 1;
     for (const k of [limit - 1, limit, limit + 1]) {
-      const bare = extractAutomatedCommands(plan(k)).length;
-      const marked = extractAutomatedCommands(plan(k, { notation: NOTATIONS[0] })).length;
+      const bare = extractAutomatedCommands(planOf(k)).length;
+      const marked = extractAutomatedCommands(planOf(k, { notation: NOTATIONS[0] })).length;
       assert.equal(marked, bare, `count at ${k === limit ? 'limit' : k < limit ? 'limit-1' : 'limit+1'} (${k})`);
     }
   });
 
   test('N6 — a notation string outside verify is inert', () => {
-    const base = probeView(plan(1));
-    const prose = plan(1).replace('do the thing', 'record [VALIDATED: bash -n exit 0] in the notes');
+    const base = probeView(planOf(1));
+    const prose = planOf(1).replace('do the thing', 'record [VALIDATED: bash -n exit 0] in the notes');
     assert.equal(probeView(prose), base);
   });
 });
