@@ -3911,6 +3911,12 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     // An `exec` that eval or source runs may redirect every later xargs.
     ["eval 'exec <<< .env'; xargs cat", 'exec'],
     ["source <(echo 'exec <<< .env'); xargs cat", 'exec'],
+    // ... also spelled with quotes or a backslash inside the word.
+    ["eval 'ex\"\"ec <<< .env'; xargs cat", 'exec'],
+    ["eval 'e\\xec <<< .env'; xargs cat", 'exec'],
+    // A re-reading word in the `-c` script, spelled with quotes inside it, still takes the words.
+    ["xargs -a names bash -c 'so\"\"urce /dev/st\"\"din' _", 'names'],
+    ["xargs -a names bash -c 'ev\"\"al x' _", 'names'],
     // A stage reading a process substitution writes what the guard does not render.
     ['cat <(echo .env) | xargs cat', '<( )'],
     ['cat < <(echo .env) | xargs cat', '<( )'],
@@ -3918,6 +3924,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     // A replace string after a protected name or a prefix of one, with stdin the guard cannot know.
     ['ls -A | xargs -I{} cat .env{}', '.env{}'],
     ['xargs -I@ cat config/.e@', 'config/.e@'],
+    // ... or after it, or around it, when some fill drawn from a protected name completes one.
+    ['ls | xargs -I{} cat {}nv', '{}nv'],
+    ['ls | xargs -I{} cat {}.env', '{}.env'],
+    ['ls | xargs -I{} cat x/{}env', 'x/{}env'],
+    ['ls | xargs -I@ cat .se@rets', '.se@rets'],
     // The `-c` script is the first word after the shell's options, `--` included.
     ['xargs sh -c -- \'cat "$1"\' _ < names', 'names'],
     ['xargs sh -c -e \'cat "$1"\' _ < names', 'names'],
@@ -3994,6 +4005,8 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "find . | xargs -d '\\e' cat",
     // A filter given nothing the command shows, and a glob (the documented `cat .e*` gap), stay as they were.
     'ls | sort | xargs cat',
+    'ls | xargs -I{} cat {}.ts',
+    'ls | xargs -I{} mv {} {}.bak',
     // Not covered, as `cat list | xargs cat` is: a program that prints names from its own code.
     "awk 'BEGIN{print \".env\"}' | xargs cat",
     "python3 -c 'print(\".env\")' | xargs cat",
