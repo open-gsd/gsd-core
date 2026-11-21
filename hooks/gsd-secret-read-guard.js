@@ -1750,6 +1750,15 @@ function braceWordInPlace(word, cmd) {
   return !['xargs', 'find', 'find.exe', 'watch', 'git', 'git.exe', 'cp', 'mv'].includes(base);
 }
 
+// Whether segment `s` is the elements of an array assignment (`arr=({1..100})`, `declare -a a+=(…)`): the values
+// bash makes of them are assigned, not run or read, so a word there past the budget can shift no verdict (#6142).
+function braceArrayElements(s, bySeg, sepAfter) {
+  if (s === 0 || sepAfter.get(s - 1) !== '(') return false;
+  const before = bySeg.get(s - 1) || [];
+  const last = before[before.length - 1];
+  return last !== undefined && last.kind === 'word' && /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=$/.test(last.text);
+}
+
 // bash 5.2's brace_gobbler: the index in `text`, from `i`, of the unquoted `satisfy` at brace level 0, or -1. A
 // backslash escapes the next character; quotes, `$( )` and `<( )` are passed over, and `${` raises the level
 // without opening a group. A `{` that starts the text and is followed by `}` (or nothing) is passed over. Looking
@@ -3272,8 +3281,10 @@ function scanCommand(command, depth, reading) {
     if (!words.length) continue;
 
     const cmd = resolveCommand(words);
-    if (budgetHit === null) {
-      const over = words.find((w) => w.braceOverBudget && !braceWordInPlace(w, cmd));
+    if (budgetHit === null && !braceArrayElements(s, bySeg, sepAfter)) {
+      // bash makes no words of a leading assignment's braces (`X={1..100} make`), so it is not held to the budget.
+      const assigned = (k) => words.slice(0, k + 1).every((w) => ASSIGNMENT_RE.test(w.text));
+      const over = words.find((w, k) => w.braceOverBudget && !assigned(k) && !braceWordInPlace(w, cmd));
       if (over !== undefined) budgetHit = { code: 'glob-too-complex', text: over.text };
     }
     if (!cmd) continue;
