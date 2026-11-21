@@ -2550,12 +2550,22 @@ artifact whose purpose is telling triaged from forgotten.
 **The limitation that follows, stated rather than hidden.** When an ID *is* reused, the new finding
 is recorded `open` (nobody decided anything about it) and the earlier decision **loses its row** —
 the ledger keys rows on the finding ID, and two rows under one ID is an ambiguity, not a record. The
-drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision.
+drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision,
+on every path that displaces one: a plain re-review, a fix report that decides the new finding, and a
+row carried only by a fix report (#5802).
 A prior row still sitting at `open` is replaced silently, and deliberately: `open` means nobody had
 decided anything, so there is no decision to lose. Preserving a recorded decision in the file
 was tried and withdrawn: it needed a second identity scheme and produced a fresh defect on each of
 three review passes. Recovery is the ledger's own git history where `commit_docs` is on — which is
 why the console reports the drop rather than pointing at a commit that may not exist.
+
+**Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
+`<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
+into the `unparsed:` shortfall and named on the console ("carry a prefix before the id"). A ledger row
+outside the grammar (`| R1-WR-01 | … |`, or a row with an invalid disposition) is named on the console and
+kept verbatim after the generated rows, not deleted by the whole-file rewrite; a regenerated row of the
+same id takes precedence, and the console says so. A frontmatter `- id:` entry outside the grammar ends
+the previous entry, so its `title:` is never attributed to another finding.
 
 **Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
