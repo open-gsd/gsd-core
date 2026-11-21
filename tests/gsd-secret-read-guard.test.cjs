@@ -2061,6 +2061,26 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     'echo ok | (true; (cat) | bash)',
     '(case x in x) echo hi;; esac; true) | bash',
   ]);
+  // A heredoc or here-string given to a group is the stdin of every command inside it, which a `cat` prints.
+  blocks([
+    "{ cat; } <<'EOF' | bash\ncat .env\nEOF",
+    '(cat) <<EOF | bash\ncat .env\nEOF',
+    '(cat | cat) <<EOF | bash\ncat .env\nEOF',
+    '(head -1) <<EOF | bash\ncat .env\nEOF',
+    '(cat) <<EOF | head | bash\ncat .env\nEOF',
+    '(cat) <<EOF | xargs cat\n.env\nEOF',
+    `(cat) <<< "cat \\$'.e\\\\x6ev'" | bash`,
+    `{ cat; } <<< "cat \\$'.e\\\\x6ev'" | sh`,
+    "(cat) <<< 'cat .e\"\"nv' | bash",
+    "{ cat; } <<< 'cat .e\"\"nv' | sh",
+  ]);
+  allows([
+    "{ cat; } <<'EOF' | bash\necho hi\nEOF",
+    '(cat) <<EOF | bash\necho hi\nEOF',
+    '(cat) <<EOF | xargs cat\nREADME\nEOF',
+    `(cat) <<< "echo \\$'.e\\\\x6ev'" | bash`,
+    "{ cat; } <<< 'echo hi' | sh",
+  ]);
 
   // npm takes a unique prefix of a long option (`--edi` is `--editor`) and `-c=` attached; editor defaults to EDITOR
   // or VISUAL and shell to SHELL (or its Windows twin); and `npm explore <pkg> <words>` runs the words joined, `--` or not.
