@@ -1980,8 +1980,10 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
 
   // Every stage's words are split, a search or listing tool's too: grep prints its pattern in the lines it matches,
   // and find, fd, ls, locate and git ls-files print names matching what they were given.
-  blocks(["grep -r 'API_KEY .env' src | xargs wc -l", "grep -rl -e 'x .env' . | xargs ls -l"]);
-  blocks(["find . -name 'x .env.bak' | xargs ls"], { path: '.env.bak' });
+  blocks(["grep -r 'API_KEY .env' src | xargs wc -l", "grep -rl -e 'x .env' . | xargs cat"]);
+  blocks(["find . -name 'x .env.bak' | xargs cat"], { path: '.env.bak' });
+  // xargs running a command that reads nothing (`ls`) stays allowed whatever it is handed.
+  allows(["grep -rl -e 'x .env' . | xargs ls -l", "find . -name 'x .env.bak' | xargs ls"]);
   // A heredoc or here-string the stage is given is data that flows on, so it is split too.
   blocks(["cat <<< 'x if=.env' | xargs dd"], { path: 'if=.env' });
   blocks(["grep x <<< 'x .env' | xargs cat"]);
