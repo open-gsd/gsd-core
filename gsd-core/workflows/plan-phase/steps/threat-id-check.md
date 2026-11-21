@@ -13,8 +13,9 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 After plan writes and before committing phase plans, scan fresh. In the orchestrator use the bound `PHASE` and `GSD_WS` from init. In agents bind `PHASE` to the dispatched phase and `GSD_WS` to the dispatched workstream option (empty for root scope). Report scan errors and stop before any commit.
 
 ```bash
-if [[ -z "${PHASE:-}" || -z "${GSD_WS+x}" ]]; then
-  echo "BLOCKED: threat-ID scan needs a phase and explicit workstream scope" >&2
+GSD_WS=${GSD_WS?"BLOCKED: threat-ID scan needs explicit workstream scope"}
+if [[ -z "${PHASE:-}" ]]; then
+  echo "BLOCKED: threat-ID scan needs a phase" >&2
   exit 1
 fi
 THREAT_SCAN=$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") || { echo "BLOCKED: threat-ID scan failed" >&2; exit 1; }

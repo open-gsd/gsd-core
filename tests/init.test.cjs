@@ -6,7 +6,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('node:child_process');
+const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runGsdTools, runGsdToolsCaptured, cleanup, absPlanningPath, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
@@ -6380,14 +6380,16 @@ describe('planning threat-ID revision issues from fresh plans', () => {
       block,
       'printf "%s" "$THREAT_ID_ISSUES"',
     ].join('\n');
-    const result = spawnSync('bash', ['-c', script], {
+    const scriptPath = path.join(root, 'threat-scan.sh');
+    fs.writeFileSync(scriptPath, script);
+    const result = runHook(scriptPath, [], {
+      interpreter: 'bash',
       cwd: root,
       env: { ...process.env, GSD_TEST_TOOLS: tools, PHASE: phase, GSD_WS: workstream },
-      encoding: 'utf8',
       // Bash launches the CLI and the issue projection as separate Node processes.
-      timeout: HOOK_FANOUT_TIMEOUT_MS,
+      timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
     });
-    assert.ifError(result.error);
+    assert.equal(result.outcome, OUTCOME.EXITED, result.stderr);
     return result;
   }
   beforeEach(() => {
@@ -6400,7 +6402,7 @@ describe('planning threat-ID revision issues from fresh plans', () => {
   }
   function scan(options) {
     const result = runScan(options);
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.exitCode, 0, result.stderr);
     return JSON.parse(result.stdout);
   }
   test('zero register claimants produces no revision issues', () => {
@@ -6443,20 +6445,20 @@ describe('planning threat-ID revision issues from fresh plans', () => {
   });
   test('an unresolved phase reports the missing phase and blocks planning', () => {
     const result = runScan({ phase: '99' });
-    assert.equal(result.status, 1);
+    assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /threat-ID scan phase not found/);
     assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
     assert.equal(result.stdout, '');
   });
   test('a failed scan blocks planning', () => {
     const result = runScan({ cli: 'return 3' });
-    assert.equal(result.status, 1);
+    assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /BLOCKED: threat-ID scan failed/);
     assert.equal(result.stdout, '');
   });
   test('missing scan fields block planning', () => {
     const result = runScan({ cli: "printf '%s' '{}'" });
-    assert.equal(result.status, 1);
+    assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
     assert.equal(result.stdout, '');
   });
@@ -6468,7 +6470,7 @@ describe('planning threat-ID revision issues from fresh plans', () => {
 
     fs.unlinkSync(path.join(root, 'scan.json'));
     const result = runScan(options);
-    assert.equal(result.status, 1);
+    assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /BLOCKED: cannot read threat-ID scan payload/);
   });
 });
