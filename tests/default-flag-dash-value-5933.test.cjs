@@ -253,9 +253,12 @@ describe('properties of the refusal rule (#5933)', () => {
     .stringMatching(/^[a-z0-9-]{0,8}$/)
     .map((rest) => `--${rest}`)
     .filter((value) => !GLOBAL_TOKENS.has(value));
+  // Led by a letter and not true/false/null, so the ADR 1411 parsing leaves it a
+  // string and `--raw` prints it back unchanged; the table above covers the
+  // values that parse to something else.
   const plainValue = fc
-    .stringMatching(/^[a-zA-Z0-9 ._-]{0,10}$/)
-    .filter((value) => !value.startsWith('--') && !GLOBAL_TOKENS.has(value));
+    .stringMatching(/^[a-zA-Z][a-zA-Z0-9 ._-]{0,9}$/)
+    .filter((value) => !['true', 'false', 'null'].includes(value));
 
   test('property: a missing or --led value is refused with the usage reason, wherever the flag sits', () => {
     fc.assert(
@@ -282,14 +285,15 @@ describe('properties of the refusal rule (#5933)', () => {
     );
   });
 
-  test('property: any other --default value is accepted, and where it sits does not change the result', () => {
+  test('property: any other --default value is accepted and printed as given, wherever it sits', () => {
     fc.assert(
       fc.property(plainValue, (value) => {
         const after = runInProcess(['config-get', 'absent.key', '--default', value, '--raw'], tmpDir);
         const before = runInProcess(['--default', value, 'config-get', 'absent.key', '--raw'], tmpDir);
         assert.equal(after.exitCode, 0, `value ${JSON.stringify(value)}`);
         assert.equal(before.exitCode, 0, `value ${JSON.stringify(value)}`);
-        assert.equal(before.stdout, after.stdout, `value ${JSON.stringify(value)}`);
+        assert.equal(after.stdout, value);
+        assert.equal(before.stdout, value);
       }),
     );
   });
