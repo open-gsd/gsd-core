@@ -209,10 +209,10 @@ const { finalExtension, normalizeWindowsBasename, lastSegment } = require('./lib
 // outer catch states its policy explicitly (#3911). A host that registers this
 // guard with Claude Code's `onFailure: "block"` can opt in to DENY with
 // GSD_SECRET_READ_GUARD_ON_CRASH=deny (#5784): `onFailure` cannot see a failure
-// the hook catches itself and exits 0 on, so without this a crash, a failed
-// shell reading or a stalled stdin still allows. Any other value, or none,
-// keeps ALLOW. Read once, before stdin, so the policy is settled before any
-// failure it governs.
+// the hook catches itself and exits 0 on, so without this a crash, a shell
+// reading that fails on a command no scan blocked, or a stalled stdin still
+// allows. Any other value, or none, keeps ALLOW. Read once, before stdin, so
+// the policy is settled before any failure it governs.
 const ON_CRASH = process.env.GSD_SECRET_READ_GUARD_ON_CRASH === 'deny'
   ? HOOK_ON_CRASH.DENY
   : HOOK_ON_CRASH.ALLOW;
