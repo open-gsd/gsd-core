@@ -431,7 +431,9 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
   // values, so neither is held to the budget; a word after the command still is.
   for (const cmd of [
     'arr=({1..100}); echo "${arr[@]}"', 'X={1..100}', 'X={1..100} make', 'arr+=({1..100})',
-    'declare -a arr=({1..100})', 'local arr=({1..100})',
+    'declare -a arr=({1..100})', 'local arr=({1..100})', 'X+={1..100}', 'X[1]={1..100}', 'a[k]+={1..100} make',
+    // Nor for words it could not prove harmless: they are not made at all.
+    'X={a..z}{a..z} make', 'arr=({a..z}{a..z})', 'X={-e,K}{1..70} grep .env', 'make; X={1..100}',
   ]) {
     test(`allows ${cmd}`, () => assertAllowed(cmd));
   }
@@ -444,6 +446,7 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
     // Only a `(` straight after a word ending `NAME=` opens an array.
     assertBlocked('X= ; grep -m {1..100} .env', { code: 'glob-too-complex', path: '{1..100}' });
     assertBlocked('time (grep -m {1..100} .env)', { code: 'glob-too-complex', path: '{1..100}' });
+    assertBlocked('arr=(a); grep -m {1..100} .env', { code: 'glob-too-complex', path: '{1..100}' });
   });
 
   test('printf joins its operands into what it prints, so a word past the budget there is not judged as written', () => {
