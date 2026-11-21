@@ -61,7 +61,7 @@ Study A, packers (each row also gives the table the packer read):
 | the run's own times | current | 29 | 32 s | 68 s | 13m27s |
 | the run's own times | isolated file × 2 | 29 | 182 s | 202 s | 14m18s |
 
-The scores file has every multiplier tried (1.2, 1.4, 1.6, 2) for each table.
+The scores file has every multiplier tried (1.2, 1.4, 1.6 and 2) for each study A table, and the current packer and × 2 for each study B table. Its `packer` column names them `current`, `isolated x 1.2`, `isolated x 1.4`, `isolated x 1.6` and `isolated x concurrency`; the last is × 2, because `--test-concurrency` is 2 on win32.
 
 Study B, tables, scored on the same 21 runs:
 
@@ -80,10 +80,10 @@ Study B, tables, scored on the same 21 runs:
 2. **The gap comes from the stale win32 table.** The table committed before #6374 was added on 2026-09-28 by #5097, from three shards; its only later change was #6361 renaming one entry. It had 280 entries, of which only 219 were files in the 344-file tier at `8a2b9be6f`, so 125 tier files were weighed by their Linux time. Regenerating it brings the daily-check gap from about 300 s to 30-120 s and takes 1 to 1.5 minutes off the median long pole.
 3. **One run is the right source, as `docs/how-to/regenerate-the-win32-timing-table.md` says.** The generator keeps each file's maximum across the streams it is given, which biases a multi-run table towards slow runs. A table from the single previous run scored a 30 s daily-check gap against 51 s for a table from the three previous runs.
 4. **A one-run table carries that run's noise.** Each source run is compared with every file's median over the other 22 study B runs, counting the files that took at least 10 s in the source run:
-   - run 44652354632 (the table #6374 ships): 118 such files, 12 of them more than × 1.5 off their median, summed time 4.5% above the medians;
+   - run 44652354632 (the table #6374 ships): 118 such files, 12 of them off their median by a factor beyond 1.5 either way (a ratio above 1.5 or below its inverse, 0.667), summed time 4.5% above the medians;
    - run 44559069895 (#6374's first commit): 131 files, 18 off, summed 6.3% above.
 
-   The two regenerated tables in study B differ by about as much as that noise. In run 44652354632, the 12 files off their median are `installer-migrations` (46.3 s against 13.6 s, × 3.40), `defaults-json-fallback` (× 2.36), `kimi-config-toml-symlink` (× 2.24), `gate-tdd-review-checkpoint.unit` (× 2.23), `agent-install-validation` (× 1.88), `review-lane-availability` (× 1.75), `hermes-skills-migration` (× 1.67), `packaging-shipped-scripts-require-only-shipped` (× 1.54), `verify` (× 0.67: 0.666, just past the × 1.5 line), `commands.platform` (× 0.61), `verification-status` (× 0.55) and `context-drift` (× 0.52).
+   The two regenerated tables in study B differ by about as much as that noise. In run 44652354632, the 12 files off their median are `installer-migrations` (46.3 s against 13.6 s, × 3.40), `defaults-json-fallback` (× 2.36), `kimi-config-toml-symlink` (× 2.24), `gate-tdd-review-checkpoint.unit` (× 2.23), `agent-install-validation` (× 1.88), `review-lane-availability` (× 1.75), `hermes-skills-migration` (× 1.67), `packaging-shipped-scripts-require-only-shipped` (× 1.54), `verify` (× 0.67: 0.666, just below 0.667), `commands.platform` (× 0.61), `verification-status` (× 0.55) and `context-drift` (× 0.52).
 
    For the files the #6374 review flagged, the same run gives:
    - `install-write-confinement` × 1.00, `capability-source` × 0.82, `windsurf-hooks-bridge` × 0.74 and `emitted-attribution` × 0.84;
