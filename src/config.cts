@@ -975,16 +975,16 @@ const SCALAR_OR_SECTION = CONFIG_KEY_ALIASES
   .filter(({ key, section }) => section === key)
   .map(({ key, field }) => ({ key, field }));
 
-const isScalarValue = (value: unknown): boolean => value !== undefined && value !== null && !isPlainObject(value);
-
 /**
  * `store` and `patch` with each scalar-or-section setting in one shape where
- * they differ, so the merge keeps what the scalar meant: a stored scalar under
- * a patch that sets a section field is read as `{ <field>: scalar }`, and a
- * saved scalar over a stored section is saved as its `<field>`. A stored
+ * they differ, so the merge keeps what a boolean meant: a stored boolean under a
+ * patch that sets a section field is read as `{ <field>: boolean }`, and a saved
+ * boolean over a stored section is saved as its `<field>`. A stored
  * `parallelization: false` then stays `enabled: false` beside a saved
  * `max_concurrent_agents`, `{"enabled":null}` clears it, and a saved `true`
- * keeps a stored section's other fields (#5681).
+ * keeps a stored section's other fields (#5681). Only a boolean is carried: the
+ * loader reads a top-level non-boolean as the default, and carried into
+ * `enabled` it would be read as itself (a stored `0` would turn the setting off).
  */
 function alignScalarSections(
   store: Record<string, unknown>,
@@ -995,9 +995,9 @@ function alignScalarSections(
   for (const { key, field } of SCALAR_OR_SECTION) {
     const stored = store[key];
     const given = patch[key];
-    if (isScalarValue(stored) && isPlainObject(given) && setsValue(given)) {
+    if (typeof stored === 'boolean' && isPlainObject(given) && setsValue(given)) {
       alignedStore = { ...alignedStore, [key]: { [field]: stored } };
-    } else if (isPlainObject(stored) && isScalarValue(given)) {
+    } else if (isPlainObject(stored) && typeof given === 'boolean') {
       alignedPatch = { ...alignedPatch, [key]: { [field]: given } };
     }
   }

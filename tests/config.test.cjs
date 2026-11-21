@@ -4352,6 +4352,27 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     assert.strictEqual(loaded.parallelization, false);
   });
 
+  // Only a boolean is carried into `enabled`. The loader reads a top-level
+  // non-boolean as the default (on); carried into `enabled` it would be read as
+  // itself, so a stored 0 would turn the setting off when only a sibling was saved.
+  for (const [label, stored] of [['0', 0], ['"false"', 'false'], ['[]', []]]) {
+    test(`parallelization: a section field saved over a stored ${label} keeps reading as the default`, (t) => {
+      const { loadConfig, CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+      const { gsdHome, env, save, read } = store(t, { parallelization: stored });
+      assert.ok(save({ parallelization: { max_concurrent_agents: 3 } }).success);
+      assert.deepStrictEqual(read(), { parallelization: { max_concurrent_agents: 3 } });
+      const outside = tempProject(t);
+      const loaded = withIsolatedProcessState(() => {
+        process.env.GSD_HOME = gsdHome;
+        return loadConfig(outside);
+      });
+      assert.strictEqual(loaded.parallelization, CONFIG_DEFAULTS.parallelization);
+      const projectDir = tempProject(t);
+      assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, env).success);
+      assert.strictEqual(loadConfig(projectDir).parallelization, CONFIG_DEFAULTS.parallelization);
+    });
+  }
+
   test('a saved {} leaves a stored parallelization: false resolving to false', (t) => {
     const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
     const { gsdHome, save } = store(t, { parallelization: false });
