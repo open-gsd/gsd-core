@@ -1549,7 +1549,7 @@ function tokenize(str, reading) {
       const brace = braceUnquoted && (buf.includes(',') || buf.includes('..'));
       tokens.push({
         kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg, leadUnquoted,
-        globUnquoted: globUnquoted || brace, substituted,
+        globUnquoted: globUnquoted || brace, braced: brace, substituted,
       });
     }
     buf = '';
@@ -2984,6 +2984,19 @@ function runsWordsAgain(heads, tokens) {
       && head.cmd.operands[0].text.startsWith('-'))))));
 }
 
+// The names of the functions the tokens define: a word followed by `(` and `)`, or the word after `function`.
+function functionNames(tokens, heads) {
+  const names = new Set();
+  for (let k = 0; k + 2 < tokens.length; k++) {
+    if (tokens[k].kind === 'word' && tokens[k + 1].kind === 'sep' && tokens[k + 1].text === '('
+      && tokens[k + 2].kind === 'sep' && tokens[k + 2].text === ')') names.add(tokens[k].text);
+  }
+  for (const head of heads) {
+    if (head !== null && head.cmd !== null && head.cmd.base === 'function' && head.cmd.operands.length > 0) names.add(head.cmd.operands[0].text);
+  }
+  return names;
+}
+
 // Whether the tokens define a function with a word followed by `(` and `)`; `function f` is a head (RUNS_AGAIN_BASES).
 function definesFunction(tokens) {
   for (let k = 0; k + 2 < tokens.length; k++) {
@@ -3041,15 +3054,23 @@ function scanSegments(command, depth, reading, unseenAt, joined) {
     noSearchCarveOut = true;
   }
 
+  const inheritedStdin = xargsStdinFrom;
+  const ctx = { bySeg, sepAfter, maxSeg, piped: new Map(), compoundOut: new Map(), functions: functionNames(tokens, heads) };
+  ctx.compounds = compoundRanges(tokens, bySeg, maxSeg, heads);
+  // What a stage with no redirect or pipe of its own reads: what the scan inherits, or a group's, loop's or exec's.
+  ctx.ambient = mergedStdin([inheritedStdin, ...ctx.compounds.ranges.map((r) => ownStdin(r.redirectSeg, bySeg))]);
+  const groupStdin = groupStdins(ctx, tokens, heads, rereads);
+
+  // A `$( )` or `<( )` body runs with the stdin of the command it is in, which one is not known here, so with every
+  // segment's together; a `>( )` body reads what its command writes into it, which is not rendered.
+  const nestedStdin = mergedStdin([inheritedStdin,
+    ...Array.from({ length: maxSeg + 1 }, (_, s) => ownStdin(s, bySeg) || pipedStdin(s, ctx))]);
+  const writtenInto = new Set(tokens.filter((t) => t.procsub !== undefined && t.text.startsWith('>(')).map((t) => t.procsub));
   for (const sub of nested) {
+    xargsStdinFrom = writtenInto.has(sub) ? unseenStdin('>( )') : nestedStdin;
     const hit = findSecretRead(sub, depth + 1);
     if (hit) return hit;
   }
-
-  const inheritedStdin = xargsStdinFrom;
-  const ctx = { bySeg, sepAfter, maxSeg, piped: new Map(), compoundOut: new Map() };
-  ctx.compounds = compoundRanges(tokens, bySeg, maxSeg, heads);
-  const groupStdin = groupStdins(ctx, tokens, heads, rereads);
   for (let s = 0; s <= maxSeg; s++) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
@@ -3448,9 +3469,9 @@ const NO_TEXTS = { texts: [], unseen: null };
 const PASSES_STDIN = { texts: [], unseen: null, passes: true };
 const unseenStdin = (text, code = 'xargs-input-unseen') => ({ texts: [], unseen: text, code });
 // An expansion the guard does not perform, in a word or an unquoted heredoc body (`$(cat list)`, `$X`, a backtick,
-// a `<( )` word); a word whose substitution left no text is named `$( )`.
+// a `<( )` word, a brace); a word whose substitution left no text is named `$( )`. A glob is the documented gap.
 const EXPANDS_RE = /[$`]/;
-const expands = (w) => w.substituted || w.procsub !== undefined || EXPANDS_RE.test(w.text);
+const expands = (w) => w.substituted || w.braced || w.procsub !== undefined || EXPANDS_RE.test(w.text);
 const expandedText = (w) => (w.substituted && !EXPANDS_RE.test(w.text) ? `${w.text}$( )` : w.text);
 
 // The stdin of segment `s`: its own redirects, else a pipe into it, else `fallback` (what an enclosing group, loop,
@@ -3500,7 +3521,9 @@ function pipedStdin(s, ctx) {
 }
 
 function upstreamOutput(prevSeg, s, ctx) {
-  for (let q = prevSeg; q < s; q++) {
+  // A segment of redirects alone (`{ …; } 2>/dev/null |`) belongs to the group that closes before it.
+  const from = commandWords(ctx.bySeg.get(prevSeg) || []).length === 0 && prevSeg > 0 ? prevSeg - 1 : prevSeg;
+  for (let q = from; q < s; q++) {
     const sep = ctx.sepAfter.get(q);
     if (sep !== '}' && sep !== ')') continue;
     const range = ctx.compounds.groupByEnd.get(q);
@@ -3511,9 +3534,19 @@ function upstreamOutput(prevSeg, s, ctx) {
     const range = ctx.compounds.blockByClose.get(prevSeg);
     return range ? compoundOutput(range, ctx) : unseenStdin(first.text);
   }
-  const out = stageOutput(prevSeg, ctx);
-  if (out === PASSES_STDIN) return pipedStdin(prevSeg, ctx) || NO_TEXTS;
-  return out || NO_TEXTS;
+  return stageWrites(prevSeg, ctx, null);
+}
+
+// What stage `seg` writes (stageOutput), with what one that passes its stdin on, or a filter, does with its input:
+// the input itself, or, for a filter whose input holds anything, an unseen source named by the filter. `compoundIn` is
+// the stdin of a compound the stage is in, when there is one.
+function stageWrites(seg, ctx, compoundIn) {
+  const out = stageOutput(seg, ctx);
+  if (out !== PASSES_STDIN && out !== FILTER) return out || NO_TEXTS;
+  const input = ownStdin(seg, ctx.bySeg) || pipedStdin(seg, ctx) || compoundIn || ctx.ambient;
+  if (out === PASSES_STDIN) return input || NO_TEXTS;
+  if (input === null || (input.unseen === null && input.texts.length === 0)) return NO_TEXTS;
+  return unseenStdin(stageCommandWords(seg, ctx).base);
 }
 
 // Everything a group's, loop's or conditional's commands write, merged; one that passes its stdin on adds the
@@ -3521,38 +3554,45 @@ function upstreamOutput(prevSeg, s, ctx) {
 function compoundOutput(range, ctx) {
   if (ctx.compoundOut.has(range)) return ctx.compoundOut.get(range);
   chargeScan(range.to - range.from + 1);
+  const compoundIn = mergedStdin([ownStdin(range.redirectSeg, ctx.bySeg), pipedStdin(range.from, ctx)]);
   const outs = [];
-  for (let k = range.from; k <= range.to; k++) {
-    if (!ctx.bySeg.get(k)) continue;
-    const out = stageOutput(k, ctx);
-    outs.push(out === PASSES_STDIN ? pipedStdin(range.from, ctx) : out);
-  }
+  for (let k = range.from; k <= range.to; k++) if (commandWords(ctx.bySeg.get(k) || []).length > 0) outs.push(stageWrites(k, ctx, compoundIn));
   const result = mergedStdin(outs) || NO_TEXTS;
   ctx.compoundOut.set(range, result);
   return result;
 }
 
 // What segment `seg`'s command writes, as far as the guard knows: an echo or printf as printedText renders it
-// (unseen when an operand holds an expansion, unrendered when it cannot render it), a `cat` or `tee` given only
-// here-strings or heredocs their texts, PASSES_STDIN for one that passes its stdin on, else null (not knowable).
-// Reserved words and `builtin` in front are looked past (`builtin printf …`).
-function stageOutput(seg, ctx) {
-  const segTokens = ctx.bySeg.get(seg) || [];
-  const words = commandWords(segTokens);
+// (unseen when an operand holds an expansion, unrendered when it cannot render it); unseen for a script, a function
+// the command defines or a `find` with an action, whose output may be text the command holds; a `cat` or `tee` given
+// only here-strings or heredocs their texts, PASSES_STDIN for one that passes its stdin on, null for a `cat` of a
+// file (not covered); FILTER for any other command, whose output may be its input transformed. Reserved words and
+// `builtin` in front are looked past (`builtin printf …`).
+const FILTER = { texts: [], unseen: null, filter: true };
+const SCRIPT_RUNNERS = new Set(['eval', 'source', '.', 'watch', ...SHELL_INTERPRETERS]);
+const STDIN_PATHS = new Set(['-', '/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']);
+function stageCommandWords(seg, ctx) {
+  const words = commandWords(ctx.bySeg.get(seg) || []);
   let k = 0;
   while (k < words.length && (LEADING_RESERVED.has(words[k].text) || words[k].text === 'builtin')) k++;
-  const cmd = resolveCommand(words.slice(k));
-  if (!cmd) return null;
+  return resolveCommand(words.slice(k)) || { base: '', operands: [] };
+}
+function stageOutput(seg, ctx) {
+  const segTokens = ctx.bySeg.get(seg) || [];
+  const cmd = stageCommandWords(seg, ctx);
+  if (cmd.base === '') return null;
+  if (SCRIPT_RUNNERS.has(cmd.base) || ctx.functions.has(cmd.base)
+    || (cmd.base === 'find' && cmd.operands.some((w) => FIND_ACTIONS.has(w.text)))) return unseenStdin(cmd.base);
   if (cmd.base === 'echo' || cmd.base === 'printf') {
     const expanded = cmd.operands.find(expands);
     if (expanded) return unseenStdin(expandedText(expanded));
     const printed = printedText(cmd);
     return printed === null ? unseenStdin(cmd.operands.map((w) => w.text).join(' '), 'xargs-stdin-unrendered') : { texts: printed, unseen: null };
   }
-  if (cmd.base !== 'cat' && cmd.base !== 'tee') return null;
+  if (cmd.base !== 'cat' && cmd.base !== 'tee') return FILTER;
   if (stdinRedirect(segTokens) !== null) return null;
   const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
-  if (cmd.base === 'cat' && named.length > 0 && !named.some((w) => w.text === '-')) return null;
+  if (cmd.base === 'cat' && named.length > 0 && !named.some((w) => STDIN_PATHS.has(w.text))) return null;
   return segmentFeeds(seg, ctx.bySeg) || PASSES_STDIN;
 }
 
