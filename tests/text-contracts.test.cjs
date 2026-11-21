@@ -153,6 +153,29 @@ describe('doc.slice with several closing markers, and doc.shorterThan', () => {
     }
   });
 
+  test('an empty list of closing markers, and an empty marker in the list, are findings, not a slice to the end', (t) => {
+    const tree = makeTree(t, { 'b.md': branch }, {
+      none: "ctx.doc('b.md').slice('OPEN', []).has(/tail/, 'dead document');",
+      blank: "ctx.doc('b.md').slice('OPEN', ['</step>', '']).has(/tail/, 'dead document');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    for (const message of messages) assert.match(message, /must be a non-empty list of non-empty markers/);
+  });
+
+  test('frontmatter reads a BOM document at the right offsets, and an empty block is an empty document', (t) => {
+    const tree = makeTree(t, {
+      'bom.md': '\uFEFF---\nname: x\ntools:\n  - A\n---\nbody\n  - B\n',
+      'empty.md': '---\n---\nbody\n',
+    }, {
+      bom: "ctx.doc('bom.md').frontmatter().has(/^[ \\t]+-[ \\t]+A$/m, 'A is listed').lacks(/B|body/, 'the body is excluded');",
+      empty: "ctx.doc('empty.md').frontmatter().has(/A/, 'an empty block holds nothing');",
+    });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^empty: an empty block holds nothing/);
+  });
+
   test('frontmatter is the closed block only; a body list item is outside it and a missing or unclosed block is a finding', (t) => {
     const tree = makeTree(t, {
       'f.md': '---\nname: x\ntools:\n  - A\n---\nbody\n  - B\n',
@@ -402,8 +425,10 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       }, 'autonomous-interactive', /success criteria should mention discuss inline/],
     ['TO_PHASE no longer defaults to empty (#1644)', 'gsd-core/workflows/autonomous.md',
       (text) => text.split('TO_PHASE=""').join('TO_PHASE=0'), 'autonomous-to-flag', /TO_PHASE should default to empty/],
-    ['the startup banner stops naming the --to target (#1644)', 'gsd-core/workflows/autonomous.md',
-      (text) => text.split('Stopping after').join('Ending'), 'autonomous-to-flag', /startup banner should display the --to target/],
+    ['the startup banner line stops naming the --to target, the success-criteria checklist still does (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('If `TO_PHASE` is set, display: `Stopping after', 'If `TO_PHASE` is set, display: `Ending'), 'autonomous-to-flag', /startup banner should display the --to target/],
+    ['the already-completed exit message goes, the success-criteria checklist still names it (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('already completed. Nothing to do.', 'done.'), 'autonomous-to-flag', /exit with a message when the --to target is already completed/],
     ['the iterate step renamed, so its section cannot be found (#1644)', 'gsd-core/workflows/autonomous.md',
       (text) => text.replace('<step name="iterate">', '<step name="advance">'), 'autonomous-to-flag', /marker .*iterate.* not found/],
   ]) {

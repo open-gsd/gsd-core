@@ -24,8 +24,9 @@ module.exports = {
       // The grep requires a digit after --to, so a bare --to never activates TO_PHASE (no error needed).
       .has('\\-\\-to\\s+[0-9]', 'workflow grep pattern should require a digit after --to')
       .has('TO_PHASE=""', 'TO_PHASE should default to empty when --to is not provided or has no number')
-      .has(/Stopping after/, 'startup banner should display the --to target phase')
-      .has(/already completed/, 'workflow should handle a --to target that is already completed')
+      // The banner and the exit message themselves, not the success-criteria checklist that also names them.
+      .has('If `TO_PHASE` is set, display: `Stopping after phase ${TO_PHASE}`', 'startup banner should display the --to target phase')
+      .has('already completed. Nothing to do.', 'workflow should exit with a message when the --to target is already completed')
       // --to and --from are usable together; --to parsing must not swallow --only.
       .has('--from', 'workflow should support both --to and --from flags')
       .has(/ONLY_PHASE[\s\S]{0,200}--only/, '--only parsing should still be present and independent');

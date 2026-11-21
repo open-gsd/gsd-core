@@ -62,6 +62,10 @@ function makeContext(root, id, findings) {
         // Closing markers are searched after the opening one, so an end marker that begins like the
         // start marker (`**If ` … `**If `) ends the slice at the next one, not at the start itself.
         const ends = to === undefined ? [] : [].concat(to);
+        if (to !== undefined && (ends.length === 0 || ends.includes(''))) {
+          report(rel, `the closing markers of ${JSON.stringify(from)} must be a non-empty list of non-empty markers`);
+          return documentOf(`${rel}[bad closing markers ${JSON.stringify(from)}]`, '', true);
+        }
         const hits = ends.map((marker) => text.indexOf(marker, start + from.length)).filter((at) => at !== -1);
         if (ends.length > 0 && hits.length === 0) {
           report(rel, `closing marker ${JSON.stringify(to)} not found after ${JSON.stringify(from)}`);
