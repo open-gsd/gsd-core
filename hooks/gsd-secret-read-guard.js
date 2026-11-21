@@ -4646,12 +4646,10 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
   const stages = [];
   const bodies = heredocBodiesBySegMap.get(bySeg);
   let filtered = false;
-  for (let at = s; ;) {
-    const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
-    if ((op !== '|' && op !== '|&') || prevSeg < 0) return stages;
-    const seg = bySeg.get(prevSeg) || [];
+  const stageAt = (segIdx) => {
+    const seg = bySeg.get(segIdx) || [];
     const words = seg.filter((t) => t.kind === 'word');
-    const heredocs = ((bodies && bodies.get(prevSeg)) || []).map((h) => h.text);
+    const heredocs = ((bodies && bodies.get(segIdx)) || []).map((h) => h.text);
     if (ctx.pipeSourcesRead.has(seg)) {
       let bytes = 0;
       for (const w of words) bytes += w.text.length;
@@ -4660,9 +4658,26 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
     } else {
       ctx.pipeSourcesRead.add(seg);
     }
-    const cmdWords = commandWords(seg);
-    const stage = { words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg) }, filtered };
+    const stage = { words, cmdWords: commandWords(seg), feeds: { heredocs, hereStrings: hereStringTargets(seg) }, filtered };
     stages.push(stage);
+    return stage;
+  };
+  for (let at = s; ;) {
+    const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
+    if ((op !== '|' && op !== '|&') || prevSeg < 0) return stages;
+    // A group (`( … )`, `{ …; }`) writes what each command inside it writes: every one is a stage, read fail closed
+    // by a shell (#5492), and the walk ends there.
+    const start = groupStart(prevSeg, at, sepAfter, ctx);
+    if (start !== -1) {
+      for (let g = prevSeg; g > start; g--) {
+        if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
+        stageAt(g).filtered = throughFilters;
+        charge(ctx, TOKEN_WORK + 1);
+      }
+      return stages;
+    }
+    const stage = stageAt(prevSeg);
+    const { words, cmdWords } = stage;
     if (!passesStdinOn(words) && !passesStdinOn(cmdWords)) {
       if (!throughFilters || writesOwnText(stage)) return stages;
       filtered = true;
@@ -4673,6 +4688,27 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
     charge(ctx, TOKEN_WORK * words.length + 1 + (filtered ? GIT_COMMAND_WORK : 0));
     at = prevSeg;
   }
+}
+
+// When the pipe into segment `at` comes from a group closing after segment `last` (a `)` or `}` among the
+// separators between them), the segment whose separator opens it; -1 when no group closes there. Each separator
+// passed is charged.
+function groupStart(last, at, sepAfter, ctx) {
+  let close = -1;
+  for (let q = last; q < at; q++) {
+    charge(ctx, 1);
+    if (sepAfter.get(q) === ')' || sepAfter.get(q) === '}') close = q;
+  }
+  if (close === -1) return -1;
+  let depth = 0;
+  for (let r = close; r >= 0; r--) {
+    charge(ctx, 1);
+    const text = sepAfter.get(r);
+    if (text === ')' || text === '}') depth++;
+    else if (text === '(' || text === '{') depth--;
+    if (depth === 0) return r;
+  }
+  return -1;
 }
 
 // A stage whose output does not come from its stdin: an echo or a printf, a `cat` or `tee` given a heredoc or
