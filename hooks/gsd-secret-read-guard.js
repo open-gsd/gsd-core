@@ -4626,7 +4626,9 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       filtered = true;
       stage.filtered = true;
     }
-    charge(ctx, TOKEN_WORK * words.length + 1);
+    // A hop past a filter reads every reading of the stage several times over, and each shell of a chain of them
+    // walks back to the start (`x | sh | x | sh …`), so it is priced as a git command is.
+    charge(ctx, TOKEN_WORK * words.length + 1 + (filtered ? GIT_COMMAND_WORK : 0));
     at = prevSeg;
   }
 }
