@@ -3084,9 +3084,9 @@ interface FenceScan {
   unterminatedFrom: number;
 }
 
-function scanFencesFrom(lines: string[], from: number): FenceScan {
+function scanFencesFrom(lines: string[], from: number, to: number = lines.length): FenceScan {
   const scan: FenceScan = { fenced: new Set<number>(), openers: new Set<number>(), unterminatedFrom: -1 };
-  for (const block of scanFencedBlocks(deindentedForFences(lines.slice(from)))) {
+  for (const block of scanFencedBlocks(deindentedForFences(lines.slice(from, to)))) {
     const open = block.openLineIdx + from;
     scan.openers.add(open);
     if (block.closeLineIdx === -1) {
@@ -3227,8 +3227,9 @@ function matchListOpener(line: string, markers: BulletMarkers, inList: boolean):
  * one-bullet-per-item files byte-for-byte on the pre-#3457 path.
  *
  * A heading is a CONTAINER (group/provenance/title label, contributes no
- * entry) iff the NEXT heading is deeper — a deeper heading lives inside its
- * span. Otherwise it is a LEAF: an entry boundary. This handles all three
+ * entry) iff a deeper heading follows it that is not a closure record (below)
+ * — a deeper heading lives inside its span. Otherwise it is a LEAF: an entry
+ * boundary. This handles all three
  * corpus shapes without hardcoding a depth: flat `#` title + `##` entries
  * (title's next heading is deeper → container; each `##` followed by a
  * same-or-shallower heading → leaf), a `##` container with `###` entries
@@ -3291,7 +3292,7 @@ function lineOffsets(lines: string[]): { lineStarts: number[]; lineEnds: number[
 }
 
 /** A heading that only records its parent's closure (`### Resolution`, `Resolved`, `Closure`), #6239. */
-const CLOSURE_HEADING = /^(?:resolution|resolved|closure)\s*(?:[:—-].*)?$/i;
+const CLOSURE_HEADING = /^(?:\*\*|__)?(?:resolution|resolved|closure)(?:\*\*|__)?(?:\s*[:–—-]\s*v?\d.*)?$/i;
 
 /**
  * The heading-delimited split, carrying the per-line opener flags the deferred
@@ -3310,7 +3311,7 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
 
   const lines = sectionBody.split('\n');
   const { lineStarts, lineEnds } = lineOffsets(lines);
-  const headingByLine = new Map<number, { text: string; isContainer: boolean; absorbed: boolean }>();
+  const headingByLine = new Map<number, { text: string; isContainer: boolean; absorbed: boolean; end: number }>();
   // #6239: a heading whose deeper headings ALL only record its closure (`### Resolution`) is the entry itself, not
   // a container of entries: its body bullets are its own fields, and the closure heading and its body belong to
   // it, so a closed item is one closed entry and not one open entry per bullet. The headings under it are
@@ -3318,20 +3319,26 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
   let absorbingLevel: number | null = null;
   for (let i = 0; i < headings.length; i++) {
     const level = headings[i].level;
+    // The entry this heading opens (or joins) ends at the next heading, or at the end of the body; no fence spans
+    // that boundary, so the fence scans below read only the lines up to it.
+    const entryEnd = i + 1 < headings.length ? headings[i + 1].line - 1 : lines.length;
     if (absorbingLevel !== null && level > absorbingLevel) {
-      headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: false, absorbed: true });
+      headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: false, absorbed: true, end: entryEnd });
       continue;
     }
     absorbingLevel = null;
     let end = i + 1;
     while (end < headings.length && headings[end].level > level) end++;
     const deeper = headings.slice(i + 1, end);
-    const closureOnly = deeper.length > 0 && deeper.every((h) => CLOSURE_HEADING.test(h.text));
+    // Closure-only is decided from the DIRECT children (the shallowest level below this heading): whatever sits
+    // below a closure heading is part of that closure record.
+    const childLevel = deeper.reduce((least, h) => Math.min(least, h.level), Infinity);
+    const closureOnly = deeper.length > 0 && deeper.every((h) => h.level !== childLevel || CLOSURE_HEADING.test(h.text));
     if (closureOnly) absorbingLevel = level;
     // Container iff a deeper heading follows that is not only a closure record (see doc comment). An empty
     // heading text (`##` alone) does not itself mean container — the flag is carried explicitly so a bare
     // LEAF heading still opens an entry.
-    headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: deeper.length > 0 && !closureOnly, absorbed: false });
+    headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: deeper.length > 0 && !closureOnly, absorbed: false, end: entryEnd });
   }
 
   const entries: DeferredHeadingEntry[] = [];
@@ -3363,7 +3370,10 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
     const ind = indentOf(line);
     return bodyBase !== null && ind <= bodyBase ? bodyBase : ind;
   };
-  let scan = scanFencesFrom(lines, 0);
+  // The preamble runs to the first heading; each entry's fence scan then runs to the next one (#6239: one
+  // scan to the end of the body per heading was quadratic in the heading count).
+  let entryEnd = headings[0].line - 1;
+  let scan = scanFencesFrom(lines, 0, entryEnd);
 
   const flushCurrent = (): void => {
     // Keep the leaf entry only when its body carries a list item; the heading
@@ -3431,7 +3441,8 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
       runs.clear();
       blankSeen = false;
       bodyBase = null;
-      scan = scanFencesFrom(lines, i + 1);
+      entryEnd = heading.end;
+      scan = scanFencesFrom(lines, i + 1, entryEnd);
       push(lines[i].replace(/\r$/, ''), i, false);
       continue;
     }
@@ -3445,7 +3456,8 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
       blankSeen = false;
       bodyBase = null;
       // A heading ends the entry, and with it any unterminated fence (B1).
-      scan = scanFencesFrom(lines, i + 1);
+      entryEnd = heading.end;
+      scan = scanFencesFrom(lines, i + 1, entryEnd);
       if (!heading.isContainer) {
         // Leaf heading: open an entry with the heading text as line 0.
         current = { lines: [heading.text], opener: [false], startLine: i, endLine: i };
@@ -3466,7 +3478,7 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
     // shaped like a top-level item ends it — rescan from there, so a later
     // delimiter is read on its own terms (see `scanFencesFrom`).
     if (scan.unterminatedFrom !== -1 && i > scan.unterminatedFrom && topLevelItemShape(line, DEFERRED_BULLET_MARKERS, bodyBase)) {
-      scan = scanFencesFrom(lines, i);
+      scan = scanFencesFrom(lines, i, entryEnd);
     }
     if (scan.fenced.has(i) || (scan.unterminatedFrom !== -1 && i >= scan.unterminatedFrom)) {
       // Fence content is body text, never list-item evidence (M2) — and
