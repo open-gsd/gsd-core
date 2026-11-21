@@ -3486,41 +3486,45 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.equal(scanBashCommand(cmd, BIG, separators + 1), null, 'limit + 1');
     });
 
-    test('in process: a case-block script a shell reads from a heredoc is denied between 24,000 and 29,000 characters', () => {
+    test('in process: a case-block script a shell reads from a heredoc is first denied at 26,539 characters', () => {
       // One of the shapes behind the user guide's examples. Every pass re-tokenizes the
       // script, so with a reading trigger (the `$((` beside a quote) each
       // character is charged several separators, and the separator budget stops
       // it before the character budget would. The `$((` also starts the grammar
       // scan (#5267), so the verdict is main()'s (checkBashCommand): first denied
-      // at 26,539 characters, against 35,457 without that scan. Pinned either side.
+      // at 26,539 characters, against 35,457 without that scan. The script grows a
+      // block at a time, so the rows are the block before that size, at it, and after.
       const block = (i) => `case "$x" in\n  a${i}) y=1 ;;\n  b${i}) y=2 ;;\n  *) y=0 ;;\nesac\n[ "$y" -gt 0 ] && echo "$((y * ${i}))"\n`;
-      const script = (chars) => {
+      const script = (blocks) => {
         let body = '';
-        for (let i = 0; body.length < chars; i++) body += block(i);
+        for (let i = 0; i < blocks; i++) body += block(i);
         return `bash <<'EOF'\n${body}EOF\n`;
       };
-      const allowed = (cmd) => checkBashCommand(cmd) === null;
-      assert.ok(allowed(script(24000)), '24,000 characters');
-      assert.ok(!allowed(script(29000)), '29,000 characters');
+      assert.deepEqual([273, 274, 275].map((n) => script(n).length), [26441, 26539, 26637]);
+      assert.equal(checkBashCommand(script(273)), null, 'limit - 1');
+      assert.deepEqual(checkBashCommand(script(274)), TOO_COMPLEX, 'limit');
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
+      assert.deepEqual(checkBashCommand(script(275)), TOO_COMPLEX, 'limit + 1');
     });
 
-    test('in process: a strict-mode script inside `$( )` is denied between 2,500 and 3,500 characters', () => {
+    test('in process: a strict-mode script inside `$( )` is first denied at 3,031 characters', () => {
       // One of the shapes behind the user guide's examples. A body nested one level deeper is
       // read again at each outer pass, so a strict-mode script of `(( n += K ))`
       // lines given to `bash <<'EOF'` inside `$( )` is charged about 130
       // separators a character, and the `$( )` adds the grammar scan (#5267):
       // main()'s verdict (checkBashCommand) first denies it at 3,031 characters,
-      // against 4,051 without that scan.
-      const script = (chars) => {
+      // against 4,051 without that scan. The script grows a line at a time, so the
+      // rows are the line before that size, at it, and after.
+      const script = (lines) => {
         let body = "set -euo pipefail\nIFS=$'\\n\\t'\n";
-        for (let k = 0; body.length < chars; k++) body += `(( n += ${k} ))\n`;
+        for (let k = 0; k < lines; k++) body += `(( n += ${k} ))\n`;
         return `out=$(bash <<'EOF'\n${body}EOF\n)\necho "$out"`;
       };
-      const allowed = (cmd) => checkBashCommand(cmd) === null;
-      assert.ok(allowed(script(2500)), '2,500 characters');
-      assert.ok(!allowed(script(3500)), '3,500 characters');
+      assert.deepEqual([204, 205, 206].map((n) => script(n).length), [3016, 3031, 3046]);
+      assert.equal(checkBashCommand(script(204)), null, 'limit - 1');
+      assert.deepEqual(checkBashCommand(script(205)), TOO_COMPLEX, 'limit');
       assert.ok(workSpent().separators > MAX_SCAN_SEPARATORS, 'the separators stop it');
+      assert.deepEqual(checkBashCommand(script(206)), TOO_COMPLEX, 'limit + 1');
     });
 
     test('in process: the debugger-spawn check spends what the secret scan left', () => {
@@ -3551,15 +3555,16 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       assert.deepEqual(scanBashCommand(cmd, whole - 1), TOO_COMPLEX, 'one short of it');
     });
 
-    test('in process: a commit message holding a reading trigger is scanned to about 52,000 characters', () => {
-      // The user guide's figure: two levels, eight scans each, #5513's heredoc
+    test('in process: a commit message holding a reading trigger is first denied at 52,445 characters', () => {
+      // The user guide's "about 52,000": two levels, eight scans each, #5513's heredoc
       // passes, and the grammar scan the `$( )` starts (#5267) put main()'s
       // boundary (checkBashCommand) at 52,445 characters, a message of 52,394, against
-      // 69,921 without that scan. Pinned within 10% of that message on either side
-      // (47,200 and 57,600), so the guide's "about" stays true.
+      // 69,921 without that scan.
       const message = (n) => `git commit -m "$(cat <<'EOF'\nsubject $'\\t'\n\n${'a'.repeat(n)}\nEOF\n)"`;
-      assert.equal(checkBashCommand(message(47200)), null);
-      assert.deepEqual(checkBashCommand(message(57600)), TOO_COMPLEX);
+      assert.equal(message(52394).length, 52445);
+      assert.equal(checkBashCommand(message(52393)), null, 'limit - 1');
+      assert.deepEqual(checkBashCommand(message(52394)), TOO_COMPLEX, 'limit');
+      assert.deepEqual(checkBashCommand(message(52395)), TOO_COMPLEX, 'limit + 1');
     });
 
     test('in process: a budget spent by an earlier command does not carry to the next', () => {
