@@ -5036,53 +5036,49 @@ describe('nothing the scanner denied before #5255 is allowed', () => {
   });
 });
 
-describe('nothing the hook denied at 25f10d345 is allowed (#5492)', () => {
-  // tests/fixtures/secret-read-guard-r13-scanner.cjs is the hook at 25f10d345, frozen, the head trek-e's 2026-11-20
-  // review read. Every fix since adds a reading beside the one before it, so whatever that hook denies, this one
-  // denies too, with no exceptions. A seeded soup of the shapes those fixes touch, in process; a throw in either is
-  // that hook's crash policy, an allow.
-  const before = require('./fixtures/secret-read-guard-r13-scanner.cjs');
-  const { scanBashCommand, scanDebuggerSpawn } = require(HOOK_PATH);
-  // A Bash command is denied by the secret scan or by the debugger-spawn check (main runs both).
-  const denies = (hook, cmd) => [hook.scanBashCommand, hook.scanDebuggerSpawn].some((scan) => {
-    try {
-      return scan(cmd) !== null;
-    } catch {
-      return false;
-    }
-  });
-  const live = { scanBashCommand, scanDebuggerSpawn };
-  const token = fc.constantFrom(
-    'cat ', 'cat .env', '.env', './.env', 'echo ', 'ls ', ' ', ' ', '; ', '\n', ' | ', ' && ', "'", '"', '\\', '$', '(', ')',
-    'time ', 'time -p ', 'X=1 ', 'A=.env ', 'GIT_EDITOR=', "'cat .env #' ", 'builtin ', 'builtin -- ', 'command ', 'caffeinate ',
-    'env ', 'sudo ', 'nice ', 'dd ', 'dd.exe ', 'if=', 'of=', 'bs=1 ', 'source ', '. ', '/dev/stdin ', '/dev/fd/0 ', '/dev/fd/3 ',
-    '3<<< ', '-s ', '-c ', '-x ', '+x ', '-- ', '- ', '-o ', 'pipefail ', '-cx ', 'bash ', 'sh ', 'mksh ', 'printf ', "'%s' ",
-    "'%b' ", "'%s%s' ", "'\\x65' ", "'\\0' ", "'\\c' ", ' | cat | ', ' | tee x | ', ' | cat - | ', 'xargs ', 'xargs -0 ',
-    'xargs -0 sh -c ', 'git ', 'git -c core.fsmonitor=', 'status ', '--env-file ', 'docker run ', 'eval ', 'watch ',
-    'find . -exec ', ' \\;', '<<< ', '<<E\n', 'E\n', '<(', 'strace ', 'x ', 'grep ', '--exclude=', 'rg ', '-g ', "'!", 'cp ',
-    'scripts/git ', 'if true; then ', '; fi', 'X=/bin/echo ', 'X=/usr/bin/git ', 'X=/bin/sh ', 'X=/usr/bin/claude ',
-    'claude ', '--agent gsd-debugger ', 'a=.env.example\u0000x ',
-  );
-  const command = fc.array(token, { minLength: 1, maxLength: 14 }).map((parts) => parts.join(''));
-
-  test('property: every command the 25f10d345 hook denies, the hook denies', () => {
-    let denied = 0;
-    fc.assert(fc.property(command, (cmd) => {
-      if (!denies(before, cmd)) return true;
-      denied++;
-      return denies(live, cmd);
-    }), { seed: 5492, numRuns: 30000 });
-    // A soup the frozen hook never denied would pass this vacuously.
-    assert.ok(denied >= 1000, `the 25f10d345 hook denied ${denied} of 30,000`);
-  });
-
-  test('the frozen hook is what it says: it allows reads the 2026-11-20 review found', () => {
-    for (const cmd of ["bash -c -- 'cat .env'", "caffeinate git -c core.fsmonitor='cat .env' status", 'dd if=.env']) {
-      assert.equal(before.scanBashCommand(cmd), null, cmd);
-      assert.notEqual(scanBashCommand(cmd), null, cmd);
-    }
-    assert.equal(before.scanBashCommand('cat .env').code, 'secret-read');
-  });
+describe('each reading #5492 added denies its read whatever surrounds it (#5492)', () => {
+  // One generator per reading, each its own property, so a reading that stops working reds its own row: what an echo
+  // writes with its escapes read, the assignments `time` takes, a command an unknown command launches from its
+  // operands, and a here-string a shell, `source`, xargs or `cat` reads. Each puts the read among benign segments and
+  // checks the denial names the secret; the same command naming an ordinary file is allowed.
+  const { scanBashCommand } = require(HOOK_PATH);
+  const BENIGN = 'notes.txt';
+  const SOUP = fc.array(fc.constantFrom('ls', 'echo hi', 'true', 'git status', 'X=1', 'cd sub', "printf '%s' a", 'time ls'), { maxLength: 3 });
+  const SEP = fc.constantFrom('; ', ' && ', ' || ', '\n');
+  // Each character as `\xHH` or `\0NNN`, so no reading but the decoded one sees the name.
+  const escaped = (name, picks) => [...name].map((c, i) => {
+    const code = c.charCodeAt(0);
+    return picks[i % picks.length] ? `\\x${code.toString(16)}` : `\\0${code.toString(8).padStart(3, '0')}`;
+  }).join('');
+  const READINGS = {
+    'an echo with its escapes read, piped into a shell': fc.tuple(
+      fc.constantFrom('', '-e ', '-n ', '-ne '), fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }),
+      fc.constantFrom('', 'cat | ', 'tee x | ', 'cat - | '), fc.constantFrom('bash', 'sh', 'dash', 'zsh', 'bash -s', 'sudo bash', 'env sh'),
+    ).map(([flags, picks, stage, shell]) => (name) => `echo ${flags}'cat ${escaped(name, picks)}' | ${stage}${shell}`),
+    'an assignment time takes': fc.tuple(
+      fc.constantFrom('time ', 'time -p '), fc.constantFrom('', 'X=1 ', 'X=1 Y=2 '),
+      fc.constantFrom(['GIT_EDITOR', 'commit --amend'], ['GIT_SSH_COMMAND', 'fetch']), fc.constantFrom('', 'nice ', 'caffeinate ', 'env '),
+    ).map(([time, pad, [key, sub], wrapper]) => (name) => `${time}${pad}${key}='cat ${name}' ${wrapper}git ${sub}`),
+    'a command an unknown command launches': fc.tuple(
+      fc.oneof(fc.constantFrom('caffeinate', 'strace -f', 'taskset 1', 'ionice -c3', 'arch -arm64', 'perf stat', 'screen -dm'),
+        fc.stringMatching(/^q[a-z]{2,6}$/)),
+      fc.constantFrom('git -c core.fsmonitor=%', 'bash -c %', 'ssh -o ProxyCommand=% h', 'eval %', 'env GIT_EDITOR=% git commit'),
+    ).map(([launcher, launched]) => (name) => `${launcher} ${launched.replace('%', `'cat ${name}'`)}`),
+    'a here-string a shell, source, xargs or cat reads': fc.constantFrom(
+      "bash -s <<< 'cat %'", "source /dev/stdin <<< 'cat %'", "sh /dev/fd/0 <<< 'cat %'", 'xargs cat <<< %',
+      "cat <<< 'cat %' | bash", "source <(cat <<< 'cat %')", "xargs -0 sh -c <<< 'cat %'",
+    ).map((shape) => (name) => shape.replace('%', name)),
+  };
+  for (const [reading, shapes] of Object.entries(READINGS)) {
+    test(`property: ${reading} is denied among benign segments, and allowed naming an ordinary file`, () => {
+      fc.assert(fc.property(shapes, SOUP, SOUP, SEP, SECRET, (shape, before, after, sep, name) => {
+        const surround = (core) => [...before, core, ...after].join(sep);
+        const hit = scanBashCommand(surround(shape(name)));
+        assert.ok(hit !== null && hit.code === 'secret-read' && hit.text.endsWith(name), `${surround(shape(name))}: ${JSON.stringify(hit)}`);
+        assert.equal(scanBashCommand(surround(shape(BENIGN))), null, surround(shape(BENIGN)));
+      }), { seed: 5492, numRuns: 400 });
+    });
+  }
 });
 
 describe('findSecretRead returns one result shape (#5255)', () => {
