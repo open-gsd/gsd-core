@@ -176,9 +176,9 @@ so they restate the operative rules inline; this section is the authority they m
    only at its step 15, after this loop, would refuse a user who is present, and again on a
    `--research` re-run, which stops before step 15 too. This stop and leaving the loop both end
    plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which
-   `/gsd:autonomous` and `/gsd:manager` read so that they do not execute the plans. The plans stay
-   on disk, as after the cap gate's Abandon, so `/gsd:progress --next` or `/gsd:execute-phase` can
-   still run them.
+   `/gsd:autonomous`, `/gsd:manager` and transition's `mode: yolo` hand-off read so that they do
+   not execute the plans. The plans stay on disk, as after the cap gate's Abandon, so
+   `/gsd:progress --next` or `/gsd:execute-phase` can still run them.
 4. **Close** — the workflow that wrote the line owns flipping it to `- [x]` once the resolution
    has been applied, appending ` | resolved: {chosen resolution}`. Readers only read. A line left
    open is a live blocker, never a stale artifact.

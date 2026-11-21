@@ -506,6 +506,13 @@ Next: Phase [X+1] — [Name]
 
 Exit skill and invoke SlashCommand("/gsd:plan-phase [X+1] --auto ${GSD_WS}")
 
+If that plan-phase run prints `PLANNING STOPPED` (a research question needs a user ruling, which `--auto` cannot ask for; `gsd-core/references/revision-loop.md`, Resolve), stop the chain: its plans stay on disk and are not executed, and Phase [X+1] is not ready. Display:
+
+```
+Auto-advance stopped: research questions need a user ruling.
+Continue: /gsd:plan-phase [X+1] ${GSD_WS}
+```
+
 **If CONTEXT.md does NOT exist:**
 
 ```

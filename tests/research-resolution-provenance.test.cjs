@@ -394,7 +394,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   });
 
   test('both stops end plan-phase with a marker line, and autonomous never executes plans whose run carries it', () => {
-    assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous` and `\/gsd:manager` read so that they do not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
+    assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous`, `\/gsd:manager` and transition's `mode: yolo` hand-off read so that they do not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
     assert.doesNotMatch(resolve(), /a caller never executes/, 'the line names the callers that execute plans, not every caller');
     const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
     // Each plan run reads the stop where it checks its plans: 3b, the INTERACTIVE wait at 3c, and gap closure.
@@ -428,6 +428,18 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.ok(bg.includes(`"Run inline instead": Dispatch the action inline via the appropriate Skill — use \`Skill(skill="gsd-plan-phase", args="{N}")\` if the failed action was planning, or \`${retry}`), 'other-error retry');
     assert.match(bg, /add \{N\} to `RESEARCH_STOPPED`\. Its plans stay on disk but are not ready to execute\./);
     assert.match(bg, /"Plan inline now": `Skill\(skill="gsd-plan-phase", args="\{N\} \{manager_flags\.plan\}"\)` with any `--auto` removed from the flags, so plan-phase asks each question\. - "Discuss the phase": `Skill\(skill="gsd-discuss-phase", args="\{N\}"\)`\./);
+  });
+
+  // transition's mode: yolo hand-off runs plan-phase with --auto, so a research question stops that run. The chain
+  // stops there, before any execute, and points at a plan-phase run without --auto, where plan-phase asks.
+  test('transition stops its yolo hand-off when the plan-phase run it starts prints the stop', () => {
+    const tr = read('gsd-core/workflows/transition.md').replace(/\s+/g, ' ');
+    const call = 'Exit skill and invoke SlashCommand("/gsd:plan-phase [X+1] --auto ${GSD_WS}")';
+    const at = tr.indexOf(call);
+    assert.ok(at !== -1, 'the yolo hand-off runs plan-phase with --auto');
+    const after = tr.slice(at + call.length, tr.indexOf('**If CONTEXT.md does NOT exist:**', at));
+    assert.ok(after.includes('If that plan-phase run prints `PLANNING STOPPED` (a research question needs a user ruling, which `--auto` cannot ask for; `gsd-core/references/revision-loop.md`, Resolve), stop the chain: its plans stay on disk and are not executed, and Phase [X+1] is not ready.'), 'the stop clause follows the call');
+    assert.ok(after.includes('``` Auto-advance stopped: research questions need a user ruling. Continue: /gsd:plan-phase [X+1] ${GSD_WS} ```'), 'the stop names a plan-phase run without --auto');
   });
 });
 
