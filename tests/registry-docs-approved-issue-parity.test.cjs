@@ -19,10 +19,13 @@ const WORKFLOW = '.github/workflows/auto-close-unsolicited-prs.yml';
 const README = 'docs/registries/README.md';
 const ENTRY = '.github/PULL_REQUEST_TEMPLATE/registry-entry.md';
 const LANE = 'docs/how-to/list-your-reviewer-lane.md';
+// #6109: the page that points an author at the lane registry must name the gate too.
+const SHIP = 'docs/how-to/ship-a-reviewer-lane.md';
 const DOCS = [
   README,
   ENTRY,
   LANE,
+  SHIP,
   'docs/how-to/take-over-a-capability-or-eos.md',
 ];
 // README steps and template items are found by their text, not their number,
@@ -195,6 +198,13 @@ describe('registry submission docs: approved issue first (#5299)', () => {
     const files = readDocs();
     files[README] = editLine(files[README], PR_STEP_TITLE, (l) => `${l} Or \`Fixed\`.`);
     assert.ok(checkApprovedIssueParity(files, readLabels()).includes(`${README}: PR step changeset types are not exactly Added, Changed, Removed`));
+  });
+
+  test('[regression #6109] the ship-a-reviewer-lane page names the approved-issue gate, and the control reports it missing', () => {
+    const files = readDocs();
+    assert.deepEqual(checkGate(files), []);
+    files[SHIP] = files[SHIP].replaceAll(/approved issue/gi, 'issue');
+    assert.ok(checkGate(files).includes(`${SHIP}: no approved-issue-first requirement`));
   });
 
   test('negative control: a README without the gate is reported', () => {
