@@ -2181,6 +2181,17 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "while :; do echo 'cat .env'; \\until :; done | bash",
   ]);
   allows(['for i in 1; do echo hi; \\while :; done | bash']);
+  // A `{` after a command's words (`echo {`) is an argument, which opens no group; a closer pairs only with its own
+  // opener, and one that does not fails closed.
+  blocks([
+    "(echo 'cat .env'; echo {) | bash",
+    "{ echo 'cat .env'; : {; } | bash",
+    "echo 'cat .env' | (cat; : {) | bash",
+    "echo 'cat .env' | { cat; : {; } | bash",
+    "(echo 'cat .env'; echo {) | head | bash",
+    '(echo .env; : {) | xargs cat',
+  ]);
+  allows(['(echo hi; echo {) | bash', 'echo ok | (cat; : {) | bash', 'for i in 1; do { echo hi; }; done | bash']);
   allows([
     "echo ok | (cat) 3<<< 'echo hi' | bash",
     "echo 'cat .env' | (cat) 0<<< 'echo hi' | bash",
