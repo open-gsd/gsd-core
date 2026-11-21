@@ -413,7 +413,6 @@ describe('#5491 runReadCheck', () => {
   };
   const deps = (f) => ({
     exists: (p) => p in f,
-    fileSize: (p) => (p in f ? f[p].length : null),
     readFile: (p) => { if (!(p in f)) throw new Error(`ENOENT ${p}`); return f[p]; },
     readPlanBounded: (p, max) => (p in f && f[p].length <= max ? f[p] : null),
   });
@@ -466,21 +465,16 @@ describe('#5491 runReadCheck reads only bounded regular files inside the repo (#
   });
   after(() => cleanup(tmp));
 
-  // exists and fileSize are the real filesystem, as in production. readFile records the path and
-  // returns a plan without opening anything, so a FIFO reached by mistake fails the row instead of
-  // blocking it.
+  // exists is the real filesystem, as in production; readFile serves only the prompt.
   function fsDeps(prompt) {
     const reads = [];
     return {
       reads,
       exists: (p) => p === PROMPT || fs.existsSync(p),
-      fileSize: (p) => {
-        const st = fs.statSync(p, { throwIfNoEntry: false });
-        return st && st.isFile() ? st.size : null;
-      },
       readFile: (p) => {
+        if (p !== PROMPT) throw new Error(`a plan is read through readPlanBounded, not readFile: ${p}`);
         reads.push(p);
-        return p === PROMPT ? prompt : PLAN_B;
+        return prompt;
       },
       // Stats instead of opening, so a reader regression fails its own child-process rows below
       // rather than blocking this file on the FIFO. Only a plan it returns counts as read.

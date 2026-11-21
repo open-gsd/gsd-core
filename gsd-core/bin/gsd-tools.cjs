@@ -1830,11 +1830,8 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       readFile: (p) => fsx.readFileSync(p, 'utf8'),
       writeFile: (p, c) => fsx.writeFileSync(p, c, 'utf8'),
       exists: (p) => fsx.existsSync(p),
-      // stat follows a symlink, so a link to a FIFO or a directory is not a regular file either.
-      fileSize: (p) => {
-        const st = fsx.statSync(p, { throwIfNoEntry: false });
-        return st && st.isFile() ? st.size : null;
-      },
+      // #5491: a plan the read check reads, through one descriptor and within its bound.
+      readPlanBounded: (p, maxBytes) => require('./lib/review-read-check.cjs').readPlanBounded(p, maxBytes),
       // PATH scan rather than spawning `command -v` / `where`. Two reasons: it spawns nothing at
       // all (a probe that costs a process is a probe you avoid running, which is how the original
       // Kimi probe ended up unbounded), and `shell: true` with an args array is deprecated in

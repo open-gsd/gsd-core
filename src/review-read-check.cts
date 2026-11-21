@@ -1,32 +1,24 @@
 /**
  * Proof-of-reading check for a reviewer lane (#5491).
  *
- * `agy` can review a prompt it only partly read and still exit 0 with a normal-looking review: a
- * single stdin message is cut at ~191 KB and replaced with `<truncated N bytes>`
- * (google-antigravity/antigravity-cli#224), `view_file` pages at ~46 KB, and a session compacts
- * itself at a fixed ~128K-token limit and then reviews from its own summary. Nothing in the lane
- * result told these apart from a full read.
+ * `agy` can review a prompt it only partly read and still exit 0: stdin is cut at ~191 KB with
+ * `<truncated N bytes>` (google-antigravity/antigravity-cli#224), `view_file` pages at ~46 KB, and a
+ * session compacts at ~128K tokens and then reviews from its own summary. So the lane restates, per
+ * plan, four facts only a reader has (`requirements`, `wave`, `depends_on`, the task count), and the
+ * restatement is compared with the plan files. A missing or wrong line, a `<truncated` marker, a
+ * compaction the handler saw or could not rule out, or a plan that could not be checked flags the
+ * lane. Diagnostic only, like the #3301 plan-coverage check: it stamps an evidence-quality discount
+ * marker beside `[reviewed-without-repo-access]` and never fails or blocks the lane.
  *
- * So the lane is asked to restate, per plan, four facts only a reader of that plan has —
- * `requirements`, `wave`, `depends_on` and the task count — and the restatement is compared with
- * the plan files. A missing or wrong line, a `<truncated` marker in the output, or a compaction
- * the handler saw in the session log flags the lane. A live run (agy 1.5.10, 432 KB prompt) read
- * every plan, restated all nine correctly, then compacted while checking repo files and wrote the
- * review from its summary — the restatement alone cannot see that case. Diagnostic only, like the
- * #3301 plan-coverage check: it stamps the review and records the result; it never fails or
- * blocks the lane. The stamp is an evidence-quality discount marker at the plan-review
- * convergence gate, beside `[reviewed-without-repo-access]` and
- * `[reviewed-without-source-citations]`.
- *
- * Lane-agnostic on purpose. Only the antigravity handler wires it in today (the approved scope);
- * another lane opting in needs its prompt to carry `readCheckInstruction()` and its result
- * handling to call `runReadCheck` (passing `compacted` if it can read its own session log).
+ * Lane-agnostic: only the antigravity handler wires it in today. Another lane needs its prompt to
+ * carry `readCheckInstruction()` and its result handling to call `runReadCheck`.
  */
 
+import fs from 'node:fs';
 import frontmatter from './frontmatter.cjs';
 import planScan from './plan-scan.cjs';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
-import { stripFencedCode, stripInlineCode } from './markdown-sectionizer.cjs';
+import { scanFencedBlocks, stripFencedCode, stripInlineCode } from './markdown-sectionizer.cjs';
 
 /** The four facts a lane must restate for one plan. */
 export interface PlanFacts {
@@ -42,12 +34,17 @@ export interface ReadCheck {
   complete: boolean;
   /** The output carries agy's `<truncated` marker outside code. */
   truncated: boolean;
-  /** The session compacted its context before the review was written (reported by the lane's handler). */
-  compacted: boolean;
+  /**
+   * The session compacted its context before the review was written (reported by the lane's
+   * handler); `'unknown'` when the handler could not tell (#6286 Nit 4).
+   */
+  compacted: boolean | 'unknown';
   /** Plan ids with no `READ-CHECK` line. */
   missing: string[];
   /** Plan id → the fields whose restated value disagrees with the plan. */
   mismatched: Record<string, string[]>;
+  /** Plan ids named in the prompt whose file could not be read within bounds, so went unchecked (#6286 Minor 2). */
+  unchecked: string[];
 }
 
 export const READ_CHECK_MARKER = '[incomplete-read]';
@@ -65,16 +62,34 @@ export function readCheckInstruction(): string {
   );
 }
 
-/** Repo-relative plan paths from the prompt's `#### <path>-PLAN.md` headers (review.md build_prompt). */
+/**
+ * Repo-relative plan paths from the prompt's `#### <path>-PLAN.md` headers (review.md build_prompt).
+ * A header inside a closed code fence is a plan's own content, not a plan (#6286 Nit 1). An unclosed
+ * fence is not honoured: it would hide every later header, and so skip those plans' checks.
+ */
 export function planPathsFromPrompt(prompt: string): string[] {
+  const lines = String(prompt ?? '').split(/\r?\n/);
+  const fenced = new Uint8Array(lines.length);
+  for (const b of scanFencedBlocks(lines)) if (b.closeLineIdx !== -1) fenced.fill(1, b.openLineIdx, b.closeLineIdx + 1);
   const paths = new Set<string>();
-  for (const line of String(prompt ?? '').split(/\r?\n/)) {
+  lines.forEach((line, i) => {
     const m = /^#### (\S+)\s*$/.exec(line);
     // plan-scan owns which filenames are plans (lint-plan-count-drift); the canonical rule is the
-    // one review.md's `*-PLAN.md` glob uses.
-    if (m && planScan.isCanonicalPlanFile(m[1].split(/[\\/]/).pop() ?? '')) paths.add(m[1]);
-  }
+    // one review.md's `*-PLAN.md` glob uses. No file name holds a NUL (#6286 Nit 3).
+    if (m && !fenced[i] && !m[1].includes('\0') && planScan.isCanonicalPlanFile(m[1].split(/[\\/]/).pop() ?? '')) paths.add(m[1]);
+  });
   return [...paths];
+}
+
+/** A plan's id: its file name without `-PLAN.md`, NFC-normalized so either spelling matches (#6286 Nit 3). */
+function planIdOf(planPath: string): string {
+  const base = planPath.split(/[\\/]/).pop() ?? planPath;
+  return base.replace(/-PLAN\.md$/, '').normalize('NFC');
+}
+
+/** The key one id is compared by. */
+function idKey(id: string): string {
+  return id.normalize('NFC').toLowerCase();
 }
 
 /** A frontmatter or restated scalar as text; anything else (a nested map) has no comparable value. */
@@ -168,7 +183,6 @@ function countTaskOpenings(prose: string): number {
 /** The expected facts for one plan file's content. */
 export function planFacts(planPath: string, content: string): PlanFacts {
   const fm = frontmatter.extractFrontmatter(content) as Record<string, unknown>;
-  const base = planPath.split(/[\\/]/).pop() ?? planPath;
   // The plan parser's task grammar (`<task>` elements, else plan-document's `## Task N` heading
   // regex), run over the plan's prose only: a fenced example, an HTML comment or an inline-code
   // `<task>` is not a task a reader would count (#6286 Minor 5a). Counted here rather than by
@@ -177,7 +191,7 @@ export function planFacts(planPath: string, content: string): PlanFacts {
   const prose = stripInlineCode(stripFencedCode(stripHtmlComments(content)).text);
   const openings = countTaskOpenings(prose);
   return {
-    id: base.replace(/-PLAN\.md$/, ''),
+    id: planIdOf(planPath),
     requirements: toList(fm.requirements),
     wave: toInt(fm.wave),
     dependsOn: toList(fm.depends_on),
@@ -196,6 +210,7 @@ const ID_SPACE = new Set([' ', '\t', '\r']);
 // way it wraps the label, so its closer is not part of the id.
 const LABEL_WRAPPERS: readonly (readonly [string, string])[] = [['**', '**'], ['`', '`'], ['*', '*'], ['_', '_']];
 const LABEL_CLOSERS = new Set(['*', '`', '_']);
+const MAX_LABEL_WRAPPERS = 8;
 
 /**
  * A restated id without its wrappers, stacked ones too (`` **`12-01`** ``). `opened` is the
@@ -204,7 +219,7 @@ const LABEL_CLOSERS = new Set(['*', '`', '_']);
  * the id's own pairs are off (`**READ-CHECK **12-01**:**` keeps its label's closer after the
  * colon). Index pointers, not repeated slices, so a long wrapper run stays linear (#6286 Minor 2).
  */
-function unwrapId(raw: string, opened: string): string {
+function unwrapId(raw: string, opened: string, tail: string): string {
   let a = 0;
   let b = raw.length;
   while (a < b && ID_SPACE.has(raw[a])) a += 1;
@@ -219,21 +234,57 @@ function unwrapId(raw: string, opened: string): string {
     }
   };
   unwrapPairs();
-  // The wrappers opened right before the label, innermost first. Their closers end the id with
-  // the outermost last; one whose closer sits elsewhere (after the colon) is passed over.
+  // The wrappers opened right before the label, innermost first (a few at most: a longer run is not
+  // a model's emphasis). Their closers end the id with the outermost last; one whose closer sits
+  // elsewhere (after the colon) is passed over.
   const opens: (readonly [string, string])[] = [];
-  for (let o = opened.length; ; ) {
+  for (let o = opened.length; opens.length < MAX_LABEL_WRAPPERS; ) {
     const w = LABEL_WRAPPERS.find(([open]) => o >= open.length && opened.startsWith(open, o - open.length));
     if (!w) break;
     opens.push(w);
     o -= w[0].length;
   }
-  for (let i = opens.length - 1; i >= 0; i -= 1) {
+  // The outermost closers that open `tail`, the text after the separator (`*READ-CHECK 12-01:*`),
+  // are not on the id, so an id's own trailing `*` or `_` stays (#6286 Nit 5).
+  let onId = opens.length;
+  for (let j = 0; j < opens.length; j += 1) {
+    let t = 0;
+    let k = j;
+    while (k < opens.length && tail.startsWith(opens[k][1], t)) {
+      t += opens[k][1].length;
+      k += 1;
+    }
+    if (k === opens.length) {
+      onId = j;
+      break;
+    }
+  }
+  for (let i = onId - 1; i >= 0; i -= 1) {
     const close = opens[i][1];
     if (b - a >= close.length && raw.startsWith(close, b - close.length)) b -= close.length;
   }
   unwrapPairs();
   return raw.slice(a, b);
+}
+
+/**
+ * Where a restated id ends: at a `:` or `|` right after the id's word, else at the last `:` or `|`
+ * in the word before its first `=`. So an id may hold a `:` (#6286 Nit 3) and a note after the id
+ * still ends it (`12-01: note: wave=1`). -1 when the word has no separator. Linear.
+ */
+function idEnd(after: string): number {
+  let i = 0;
+  while (i < after.length && ID_SPACE.has(after[i])) i += 1;
+  const ws = after.slice(i).search(/\s/);
+  const word = ws === -1 ? after.length : i + ws;
+  let j = word;
+  while (j < after.length && ID_SPACE.has(after[j])) j += 1;
+  if (j > word && (after[j] === ':' || after[j] === '|')) return j;
+  const eq = after.indexOf('=', i);
+  for (let k = (eq !== -1 && eq < word ? eq : word) - 1; k >= i; k -= 1) {
+    if (after[k] === ':' || after[k] === '|') return k;
+  }
+  return -1;
 }
 
 /**
@@ -253,17 +304,12 @@ export function parseReadCheckLines(review: string): Map<string, Record<string, 
     while (start < rest.length && LABEL_CLOSERS.has(rest[start])) start += 1;
     const labelClosed = start > LABEL.length && ID_SPACE.has(rest[start]);
     const after = rest.slice(labelClosed ? start : LABEL.length);
-    let end = 0;
-    while (end < after.length && after[end] !== ':' && after[end] !== '|') end += 1;
-    if (end === after.length) continue;
-    const unwrapped = unwrapId(after.slice(0, end), labelClosed ? '' : line.slice(0, line.length - rest.length));
-    if (/\s/.test(unwrapped)) continue;
+    const end = idEnd(after);
+    if (end === -1) continue;
+    const unwrapped = unwrapId(after.slice(0, end), labelClosed ? '' : line.slice(0, line.length - rest.length), after.slice(end + 1));
     // A path in place of the id names the same plan (#6286 Minor 3).
-    const id = unwrapped
-      .slice(Math.max(unwrapped.lastIndexOf('/'), unwrapped.lastIndexOf('\\')) + 1)
-      .replace(/-PLAN\.md$/i, '')
-      .toLowerCase();
-    if (!id) continue;
+    const id = idKey(unwrapped.slice(Math.max(unwrapped.lastIndexOf('/'), unwrapped.lastIndexOf('\\')) + 1).replace(/-PLAN\.md$/i, ''));
+    if (!id || id.includes('\0')) continue;
     const fields: Record<string, string> = {};
     for (const part of after.slice(end + 1).split(/[;|]/)) {
       const eq = part.indexOf('=');
@@ -278,8 +324,8 @@ export function parseReadCheckLines(review: string): Map<string, Record<string, 
 }
 
 function sameSet(a: string[], b: string[]): boolean {
-  const x = [...new Set(a.map((v) => v.toLowerCase()))].sort();
-  const y = [...new Set(b.map((v) => v.toLowerCase()))].sort();
+  const x = [...new Set(a.map(idKey))].sort();
+  const y = [...new Set(b.map(idKey))].sort();
   return x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
@@ -312,33 +358,44 @@ function hasTruncationMarker(review: string): boolean {
   return /<truncated(?![a-z])/i.test(stripInlineCode(stripFencedCode(review).text));
 }
 
-/** Compare a review's restatements with the plans it was given. */
-export function checkRead(review: string, expected: PlanFacts[], compacted = false): ReadCheck {
+/** Compare a review's restatements with the plans it was given; `unchecked` are plans that could not be read. */
+export function checkRead(
+  review: string,
+  expected: PlanFacts[],
+  compacted: boolean | 'unknown' = false,
+  unchecked: string[] = [],
+): ReadCheck {
   const text = String(review ?? '');
   const truncated = hasTruncationMarker(text);
   const lines = parseReadCheckLines(text);
   const missing: string[] = [];
   const mismatched: Record<string, string[]> = {};
   for (const facts of expected) {
-    const got = lines.get(facts.id.toLowerCase());
-    if (!got) {
+    // A matching line is used up, so two plans with one id need two lines (#6286 Minor 4). Taking
+    // the first match is exact: a line that matches two plans means their facts are equal.
+    const got = lines.get(idKey(facts.id)) ?? [];
+    if (got.length === 0) {
       missing.push(facts.id);
       continue;
     }
-    // Any fully matching line proves the read; otherwise report the first line's errors.
     const results = got.map((g) => wrongFields(facts, g));
-    // defineProperty, not assignment: `mismatched['__proto__'] = …` would call the prototype
-    // setter and drop the plan from the result, reading a mismatch as complete (#6286 Nit 2).
-    if (!results.some((bad) => bad.length === 0)) {
-      Object.defineProperty(mismatched, facts.id, { value: results[0], enumerable: true, writable: true, configurable: true });
+    const hit = results.findIndex((bad) => bad.length === 0);
+    if (hit !== -1) {
+      got.splice(hit, 1);
+      continue;
     }
+    // No line matches: report the first line's errors. defineProperty, not assignment:
+    // `mismatched['__proto__'] = …` would call the prototype setter and drop the plan (#6286 Nit 2).
+    Object.defineProperty(mismatched, facts.id, { value: results[0], enumerable: true, writable: true, configurable: true });
   }
   return {
-    complete: !truncated && !compacted && missing.length === 0 && Object.keys(mismatched).length === 0,
+    complete:
+      !truncated && compacted === false && missing.length === 0 && unchecked.length === 0 && Object.keys(mismatched).length === 0,
     truncated,
     compacted,
     missing,
     mismatched,
+    unchecked,
   };
 }
 
@@ -363,6 +420,9 @@ function leadingMarkers(review: string): { end: number; markers: string } {
   }
 }
 
+// How many unchecked plan ids the stamp names before it counts the rest.
+const UNCHECKED_SHOWN = 10;
+
 /**
  * Stamp the down-weight marker on a review that failed the check. It goes after any leading
  * discount marker already there (#6286 Major 1: `[reviewed-without-repo-access]` must stay the
@@ -375,10 +435,17 @@ export function stampIncompleteRead(review: string, check: ReadCheck): string {
   if (lead.markers.includes(`> ${READ_CHECK_MARKER}`)) return review;
   const why: string[] = [];
   if (check.truncated) why.push('its output contains a `<truncated` marker');
-  if (check.compacted) why.push('its session compacted its context before the review was written');
+  if (check.compacted === true) why.push('its session compacted its context before the review was written');
+  if (check.compacted === 'unknown') why.push('whether its session compacted its context could not be checked');
   if (check.missing.length) why.push(`no READ-CHECK line for ${check.missing.join(', ')}`);
   const wrong = Object.entries(check.mismatched).map(([id, f]) => `${id} (${f.join(', ')})`);
   if (wrong.length) why.push(`READ-CHECK disagrees with the plan for ${wrong.join('; ')}`);
+  if (check.unchecked.length) {
+    // A hostile prompt can name any number of plans; the list stays readable (#6286 Minor 1).
+    const shown = check.unchecked.slice(0, UNCHECKED_SHOWN).join(', ');
+    const more = check.unchecked.length > UNCHECKED_SHOWN ? ` and ${check.unchecked.length - UNCHECKED_SHOWN} more` : '';
+    why.push(`the plan file for ${shown}${more} could not be checked`);
+  }
   const stamp =
     `> ${READ_CHECK_MARKER} This review may not rest on a full read of its input: ${why.join('; ')}. ` +
     'Down-weight its verdict in the Consensus Summary.';
@@ -393,31 +460,59 @@ export function stampIncompleteRead(review: string, check: ReadCheck): string {
 export interface ReadCheckDeps {
   exists(p: string): boolean;
   readFile(p: string): string;
-  /** Size in bytes of a regular file; null for anything else (a FIFO, a directory). */
-  fileSize(p: string): number | null;
+  /** A regular file of at most `maxBytes` bytes, read through one descriptor; null for anything else. */
+  readPlanBounded(p: string, maxBytes: number): string | null;
 }
 
-// The prompt names the plan files, so their size is not ours to trust: a bigger one is skipped
-// rather than read into the lane (#6286 Minor 1).
-const MAX_PLAN_BYTES = 1024 * 1024;
+// The prompt names the plan files, so neither their size nor their number is ours to trust
+// (#6286 Minor 1): one plan is read at most this large, at most this many headers are resolved,
+// and at most this many bytes are read in all. A plan past any bound is unchecked.
+export const MAX_PLAN_BYTES = 1024 * 1024;
+export const MAX_PLAN_HEADERS = 100;
+export const MAX_TOTAL_PLAN_BYTES = 8 * MAX_PLAN_BYTES;
+
+/**
+ * The production `readPlanBounded` (#6286 Minor 3): open once without blocking, `fstat` that
+ * descriptor, and read at most `maxBytes + 1` bytes from it. Null for a FIFO, a device, a directory,
+ * a file over `maxBytes`, or one that grew past its `fstat` size after the open. Throws when the
+ * path cannot be opened.
+ */
+export function readPlanBounded(p: string, maxBytes: number): string | null {
+  const fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0));
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > maxBytes) return null;
+    // One byte past the fstat size shows the file grew after the open.
+    const buf = Buffer.alloc(st.size + 1);
+    let off = 0;
+    while (off < buf.length) {
+      const n = fs.readSync(fd, buf, off, buf.length - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    return off > st.size ? null : buf.toString('utf8', 0, off);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 /**
  * Run the check for one lane's review. Plans come from the prompt's plan headers and are read from
  * the repo, so the expected facts are the plans themselves. `compacted` comes from the lane's own
- * session log, which only its handler can read. Returns `undefined` when there is nothing to check
- * (no plan headers, no truncation marker, no compaction); an unreadable prompt or plan is
- * skipped rather than flagged — this check must never invent a failure it cannot see.
+ * session log, which only its handler can read. A header naming no file in the repo is skipped; a
+ * plan file that cannot be read within bounds is recorded as unchecked (#6286 Minor 2). Returns
+ * `undefined` only when there is nothing to report: no plan, no truncation marker, no compaction.
  */
 export function runReadCheck(
   review: string,
   promptPath: string,
   repoRoot: string,
   deps: ReadCheckDeps,
-  opts: { compacted?: boolean } = {},
+  opts: { compacted?: boolean | 'unknown' } = {},
 ): ReadCheck | undefined {
-  // Checked here, outside the per-plan try below: a missing seam would throw inside it and skip
-  // every plan without a trace (#6286 Minor 1).
-  if (typeof deps.fileSize !== 'function') throw new TypeError('runReadCheck: deps.fileSize is required');
+  // Checked here, outside the per-plan try below: a missing seam would throw inside it and leave
+  // every plan unchecked without saying why (#6286 Minor 1).
+  if (typeof deps.readPlanBounded !== 'function') throw new TypeError('runReadCheck: deps.readPlanBounded is required');
   let prompt = '';
   try {
     if (deps.exists(promptPath)) prompt = deps.readFile(promptPath);
@@ -425,21 +520,41 @@ export function runReadCheck(
     prompt = '';
   }
   const expected: PlanFacts[] = [];
+  const unchecked = new Set<string>();
+  const seen = new Set<string>();
+  let budget = MAX_TOTAL_PLAN_BYTES;
   const root = String(repoRoot).replace(/[\\/]+$/, '');
-  for (const rel of planPathsFromPrompt(prompt)) {
-    // A header from the prompt is read only when it names a file inside the repo: relative, no
-    // `..` segment, and still inside after symlinks resolve (#6286 Minor 1). The resolved path is
-    // only the gate; the read keeps the `root/rel` spelling the deps seam is keyed by.
-    if (rel.split(/[\\/]/).includes('..') || tryWithinRoot(rel, root, PathAcceptance.RelativeOnly) === null) continue;
+  const headers = planPathsFromPrompt(prompt);
+  for (let i = 0; i < headers.length; i += 1) {
+    const rel = headers[i];
+    // Past the header cap nothing is resolved or read (#6286 Minor 1).
+    if (i >= MAX_PLAN_HEADERS) {
+      unchecked.add(planIdOf(rel));
+      continue;
+    }
+    // Read only a file inside the repo: relative, no `..` segment, and still inside after symlinks
+    // resolve (#6286 Minor 1). The resolved path dedupes spellings of one plan; the read keeps the
+    // `root/rel` spelling the deps seam is keyed by.
+    if (rel.split(/[\\/]/).includes('..')) continue;
+    const resolved = tryWithinRoot(rel, root, PathAcceptance.RelativeOnly);
+    if (resolved === null || seen.has(resolved)) continue;
+    seen.add(resolved);
     const abs = `${root}/${rel}`;
     try {
-      const size = deps.exists(abs) ? deps.fileSize(abs) : null;
-      if (size !== null && size <= MAX_PLAN_BYTES) expected.push(planFacts(rel, deps.readFile(abs)));
+      if (!deps.exists(abs)) continue;
+      const content = budget > 0 ? deps.readPlanBounded(abs, Math.min(MAX_PLAN_BYTES, budget)) : null;
+      if (content === null) {
+        unchecked.add(planIdOf(rel));
+        continue;
+      }
+      budget -= Buffer.byteLength(content, 'utf8');
+      expected.push(planFacts(rel, content));
     } catch {
-      // unreadable plan: skip it, see above
+      unchecked.add(planIdOf(rel));
     }
   }
-  const check = checkRead(review, expected, opts.compacted === true);
-  if (expected.length === 0 && !check.truncated && !check.compacted) return undefined;
+  const compacted = opts.compacted === 'unknown' ? 'unknown' : opts.compacted === true;
+  const check = checkRead(review, expected, compacted, [...unchecked]);
+  if (expected.length === 0 && unchecked.size === 0 && !check.truncated && check.compacted === false) return undefined;
   return check;
 }

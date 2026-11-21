@@ -34,7 +34,7 @@ import {
   fileRefPrompt as fileRefPromptText,
   configString,
 } from './review-lane-invocation.cjs';
-import { readCheckInstruction, runReadCheck, stampIncompleteRead, type ReadCheck } from './review-read-check.cjs';
+import { planPathsFromPrompt, readCheckInstruction, runReadCheck, stampIncompleteRead, type ReadCheck } from './review-read-check.cjs';
 
 /* ------------------------------------------------------------------ *
  * Injected seams
@@ -61,8 +61,8 @@ export interface RunnerDeps {
   readFile: (p: string) => string;
   writeFile: (p: string, content: string) => void;
   exists: (p: string) => boolean;
-  /** Size in bytes of a regular file; null for anything else (#5491: a plan the read check may read). */
-  fileSize: (p: string) => number | null;
+  /** A regular file of at most `maxBytes` bytes, read through one descriptor; null otherwise (#5491 read check). */
+  readPlanBounded: (p: string, maxBytes: number) => string | null;
   /** `command -v` equivalent. */
   hasBinary: (name: string) => boolean;
   /** Resolved config lookup, for the egress-host re-verification. */
@@ -788,7 +788,7 @@ export function antigravityTranscriptFallback(
   deps: RunnerDeps,
 ): string {
   let latest = '';
-  for (const entry of transcriptEntriesSinceMark(workspace, mark, deps)) {
+  for (const entry of transcriptEntriesSinceMark(workspace, mark, deps) ?? []) {
     if (
       entry.source === 'MODEL' &&
       entry.status === 'DONE' &&
@@ -805,27 +805,29 @@ export function antigravityTranscriptFallback(
  * True when this run's session compacted its context (#5491): a `CHECKPOINT` entry after the
  * watermark. agy then works from its own summary, so the review may rest on text it no longer
  * holds — and it still exits 0. Same watermark rule as the fallback: a prior run's checkpoint
- * must not flag this one.
+ * must not flag this one. `'unknown'` when the watermark could not count this conversation's
+ * lines, so this run's entries cannot be told apart (#6286 Nit 4).
  */
 export function antigravityCompacted(
   workspace: string,
   mark: { convId: string; lines: number; unreadable?: boolean },
   deps: RunnerDeps,
-): boolean {
-  return transcriptEntriesSinceMark(workspace, mark, deps).some((e) => e.type === 'CHECKPOINT');
+): boolean | 'unknown' {
+  const entries = transcriptEntriesSinceMark(workspace, mark, deps);
+  return entries === null ? 'unknown' : entries.some((e) => e.type === 'CHECKPOINT');
 }
 
-/** This run's transcript entries (those after the watermark), or `[]` when none can be trusted. */
+/** This run's transcript entries (those after the watermark); `null` when they cannot be told apart. */
 function transcriptEntriesSinceMark(
   workspace: string,
   mark: { convId: string; lines: number; unreadable?: boolean },
   deps: RunnerDeps,
-): TranscriptEntry[] {
+): TranscriptEntry[] | null {
   const convId = resolveWorkspaceConvId(workspace, deps);
   if (!convId) return [];
   // #3118: the watermark could not read this conversation's transcript, so there is no trustworthy
   // skip for it. Declining is the fail-closed answer; skipping 0 would replay a prior run's review.
-  if (mark.unreadable === true && convId === mark.convId) return [];
+  if (mark.unreadable === true && convId === mark.convId) return null;
   const tx = transcriptPath(deps.homeDir, convId);
   if (!deps.exists(tx)) return [];
   let lines: string[];
@@ -960,16 +962,17 @@ export function resolveSpawnModel(
  * this self-report back out.
  *
  * The trailing READ-CHECK sentence (#5491) asks for a per-plan restatement that `runReadCheck`
- * compares with the plan files, so a partial read stops looking like a complete review.
+ * compares with the plan files, so a partial read stops looking like a complete review. It is
+ * added only when the prompt names a plan (`readCheck`, #6286 Nit 2).
  */
-export function antigravityPrompt(promptPath: string, repoRoot: string): string {
+export function antigravityPrompt(promptPath: string, repoRoot: string, readCheck = false): string {
   return (
     `Read the file at ${promptPath} in full and carry out the review request it contains. ` +
     `The repository under review is at ${repoRoot} — resolve every relative file path in the ` +
     `review request against that absolute root and verify claims against those files. ` +
     `If you cannot read files under ${repoRoot}, begin your output with the exact line ` +
     `REVIEWED-WITHOUT-REPO-ACCESS before the review. Output only the resulting markdown review. ` +
-    `Do not edit any files. ${readCheckInstruction()}`
+    `Do not edit any files.${readCheck ? ` ${readCheckInstruction()}` : ''}`
   );
 }
 
@@ -998,7 +1001,13 @@ export function antigravityArgv(
   deps: RunnerDeps,
 ): string[] {
   const standard = fileRefPromptText(promptPath, repoRoot);
-  const out = argv.map((a) => (a === standard ? antigravityPrompt(promptPath, repoRoot) : a));
+  let namesPlans = false;
+  try {
+    namesPlans = deps.exists(promptPath) && planPathsFromPrompt(deps.readFile(promptPath)).length > 0;
+  } catch {
+    namesPlans = false; // no readable prompt names no plan
+  }
+  const out = argv.map((a) => (a === standard ? antigravityPrompt(promptPath, repoRoot, namesPlans) : a));
 
   let supportsAddDir = false;
   try {
