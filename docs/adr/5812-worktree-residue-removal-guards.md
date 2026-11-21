@@ -1,6 +1,6 @@
-# ADR-5812: Residue-removal guard standard for `worktree.reap-orphans` [Proposed]
+# ADR-5812: Residue-removal guard standard for `worktree.reap-orphans` [Accepted]
 
-- **Status:** Proposed. This becomes Accepted once [#5233](https://github.com/open-gsd/gsd-core/pull/5233) merges with every decision below mapped to code.
+- **Status:** Accepted. Implemented for #4941 in `src/worktree-safety.cts` with every decision below mapped to code; the earlier attempt, [#5233](https://github.com/open-gsd/gsd-core/pull/5233), was closed unmerged.
 - **Date:** 2026-10-31
 - **Issue:** [#5812](https://github.com/open-gsd/gsd-core/issues/5812), a sub-issue of [#4941](https://github.com/open-gsd/gsd-core/issues/4941). The maintainer set this ADR as a prerequisite for #5233 (comment 6485710283) and approved it with a ruling on item 4 (comment on #5812, 2026-10-31).
 - **Relationship to prior work:** [ADR-0004](0004-worktree-workstream-seam-module.md) makes the Planning Workspace Module the seam for worktree and workstream state, with a Worktree Root Resolution Adapter; worktree lifecycle safety policy lives in `src/worktree-safety.cts` (the Worktree Safety Policy Module in `CONTEXT.md`). Neither says when that module may delete a directory git no longer tracks. This ADR fills that gap and changes neither. It does not touch [ADR-4630](4630-dispatch-identity-and-isolation-decision-seam.md), which covers isolation decisions, not teardown.
