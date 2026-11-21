@@ -678,7 +678,9 @@ interface PlanRow {
    * #5823 (additive): the halted plan ids transitively upstream of this plan
    * over the phase's live, canonically named plans — the node set, depends_on
    * resolution and `computeHaltPropagation` pass `phase-plan-index` uses. Empty
-   * when nothing upstream halted, and always empty on a row outside that node
+   * when nothing upstream halted, except in or behind a `depends_on` cycle,
+   * where a non-halted plan names the plans it waits on instead (see
+   * docs/CLI-TOOLS.md, "Halted plans"). Always empty on a row outside that node
    * set (a superseded or non-canonically named plan).
    */
   blocked_by: string[];
