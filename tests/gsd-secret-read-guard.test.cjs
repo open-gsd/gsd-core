@@ -782,19 +782,29 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // A guard-error deny writes the plain reason to stderr, as the scan's own
   // codes do (crash() forwards the hook's stderrPayload on DENY). The payload
   // carries no tool or path, so assertBlocked does not fit.
-  function assertGuardError(r, label) {
+  function assertGuardError(r, label, cause) {
     assert.equal(r.status, 2, `${label}: expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
     const out = JSON.parse(r.stdout);
     assert.equal(out.decision, 'block', label);
     assert.equal(out.code, 'guard-error', `${label}: code`);
+    assert.equal(out.cause, cause, `${label}: cause`);
     assert.equal(typeof out.reason, 'string');
     assert.ok(out.reason.length > 0, `${label}: reason present`);
     assert.equal(r.stderr, out.reason, `${label}: stderr must carry the plain reason string (crash stderrPayload)`);
     return out;
   }
 
+  test('the guard-error causes are exactly the three failure paths', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assert.ok(Object.isFrozen(GUARD_ERROR_CAUSE));
+    assert.deepEqual(Object.keys(GUARD_ERROR_CAUSE).sort(), ['HOOK_ERROR', 'READING_FAILED', 'STDIN_STALL']);
+    // The values are a public contract: the fail-closed how-to tells hosts to match on them.
+    assert.deepEqual({ ...GUARD_ERROR_CAUSE }, { HOOK_ERROR: 'hook-error', READING_FAILED: 'reading-failed', STDIN_STALL: 'stdin-stall' });
+  });
+
   test('opted in: malformed JSON (the outer catch) blocks as guard-error', () => {
-    assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash');
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash', GUARD_ERROR_CAUSE.HOOK_ERROR);
   });
 
   test('opted in: a command nested deep enough to overflow the stack is still command-too-complex', () => {
@@ -840,13 +850,13 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assert.equal(out.decision, 'block');
     assert.equal(out.code, 'guard-error');
     const newline = r.stderr.indexOf('\n');
-    const { DIAGNOSTIC } = require(HOOK_PATH);
+    const { DIAGNOSTIC, GUARD_ERROR_CAUSE } = require(HOOK_PATH);
     assert.deepEqual(JSON.parse(r.stderr.slice(0, newline)), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
     assert.equal(r.stderr.slice(newline + 1), out.reason, 'the diagnostic line, then the plain reason');
     // The failed reading names its own cause, so a host can tell it from a
-    // crash: its reason is not the outer catch's.
-    const crash = assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash');
-    assert.notEqual(out.reason, crash.reason, 'the failed reading must not reuse the outer catch reason');
+    // crash, whose cause is the outer catch's.
+    assert.equal(out.cause, GUARD_ERROR_CAUSE.READING_FAILED, 'cause');
+    assertGuardError(runHook(MALFORMED, { env: DENY_ENV }), 'crash', GUARD_ERROR_CAUSE.HOOK_ERROR);
   });
 
   test('unset: the same failed reading is allowed, and its diagnostic is still written', () => {

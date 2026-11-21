@@ -61,7 +61,7 @@ const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-secret-read-guard.js');
 const TIMER_PRELOAD = path.join(__dirname, 'helpers', 'stdin-timer-preload.cjs');
-const { STDIN_TIMEOUT_MS } = require(HOOK_PATH);
+const { GUARD_ERROR_CAUSE, STDIN_TIMEOUT_MS } = require(HOOK_PATH);
 
 // What the held-open cells schedule the timer at: only the timer can end those
 // runs, so a short delay changes nothing but the wall time. A cell that writes a
@@ -185,13 +185,15 @@ function assertAllowed(r, label) {
   assert.equal(r.stderr, '', `${label}: the default path must emit nothing on stderr`);
 }
 
-// A guard-error deny writes the plain reason to stderr, as the scan's own codes
-// do (crash() forwards the hook's stderrPayload on DENY).
-function assertGuardError(r, label) {
+// A guard-error deny names its failure in the typed `cause` field and writes
+// the plain reason to stderr, as the scan's own codes do (crash() forwards the
+// hook's stderrPayload on DENY).
+function assertGuardError(r, label, cause) {
   assert.equal(r.status, 2, `${label}: expected block (exit 2), got exit ${r.status}; stdout=${r.stdout}`);
   const out = JSON.parse(r.stdout);
   assert.equal(out.decision, 'block', label);
   assert.equal(out.code, 'guard-error', `${label}: code`);
+  assert.equal(out.cause, cause, `${label}: cause`);
   assert.equal(typeof out.reason, 'string');
   assert.ok(out.reason.length > 0, `${label}: reason present`);
   assert.equal(r.stderr, out.reason, `${label}: stderr must carry the plain reason string (crash stderrPayload)`);
@@ -206,13 +208,11 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     // The docs, the changeset and the hook header all state 3 s.
     assert.equal(STDIN_TIMEOUT_MS, 3000, 'the documented stall bound');
     const r = await runPiped({ env: DENY_ENV });
-    const stall = assertGuardError(r, 'stall');
+    assertGuardError(r, 'stall', GUARD_ERROR_CAUSE.STDIN_STALL);
     assertTimer(r, 'stall');
-    assert.match(stall.reason, /stdin did not close within 3 s/, 'the reason names the bound');
     // The two failure paths name different causes, so a runner that closed
     // stdin (and so reached the outer catch) cannot pass as a stall.
-    const crash = assertGuardError(runHook(MALFORMED, DENY_ENV), 'crash');
-    assert.notEqual(stall.reason, crash.reason, 'the stall must come from the stdin timer, not the outer catch');
+    assertGuardError(runHook(MALFORMED, DENY_ENV), 'crash', GUARD_ERROR_CAUSE.HOOK_ERROR);
   });
 
   test('unset: a stalled stdin still allows, silently', async () => {
@@ -228,13 +228,13 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
 
   test('opted in: a full payload whose stdin stays open blocks as guard-error', async () => {
     const w = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: true });
-    const written = assertGuardError(w, 'written stall');
+    // The written stall must end on the stdin timer, like the empty one.
+    assertGuardError(w, 'written stall', GUARD_ERROR_CAUSE.STDIN_STALL);
     assertTimer(w, 'written stall');
     assertReceivedBeforeStall(w, FULL_PAYLOAD, 'written stall');
     const s = await runPiped({ env: DENY_ENV, stallTimer: SHORT_STALL_MS });
-    const stall = assertGuardError(s, 'stall');
+    assertGuardError(s, 'stall', GUARD_ERROR_CAUSE.STDIN_STALL);
     assertTimer(s, 'stall');
-    assert.equal(written.reason, stall.reason, 'the written stall must end on the stdin timer, like the empty one');
   });
 
   test('unset: a full payload whose stdin stays open still allows, silently', async () => {
@@ -255,7 +255,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // the next cell's to catch.
   test('opted in: data arriving while the timer is pending does not restart it', async () => {
     const r = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, stallTimer: SHORT_STALL_MS, fromData: 2, feed: ' ' });
-    assertGuardError(r, 'fed stall');
+    assertGuardError(r, 'fed stall', GUARD_ERROR_CAUSE.STDIN_STALL);
     assertTimer(r, 'fed stall');
     const fired = r.lines.findIndex((l) => l.startsWith('fired '));
     const before = r.lines.slice(0, fired).filter((l) => l.startsWith('data ')).length;
@@ -270,7 +270,7 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
   // arriving, and the run ends only at the backstop.
   test('opted in: data fed through the whole window does not hold off the timer at its own 3 s', async () => {
     const r = await runPiped({ env: DENY_ENV, written: FULL_PAYLOAD, feedEveryMs: FEED_EVERY_MS });
-    assertGuardError(r, 'fed at 3 s');
+    assertGuardError(r, 'fed at 3 s', GUARD_ERROR_CAUSE.STDIN_STALL);
     assertTimer(r, 'fed at 3 s');
   });
 

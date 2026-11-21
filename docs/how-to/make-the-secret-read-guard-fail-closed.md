@@ -42,6 +42,9 @@ echo '{not json' | GSD_SECRET_READ_GUARD_ON_CRASH=deny <the entry's command>; ec
 
 An opted-in guard exits 2, writes a JSON decision with `"code":"guard-error"` to
 stdout, and writes its plain reason to stderr. Neither stream ends in a newline.
+The decision's `cause` field names which failure it was: `hook-error` (this
+check), `reading-failed` or `stdin-stall`. Match on `cause`, not on the reason's
+wording.
 Without the variable the same command exits 0 and prints nothing; if your shell
 already exports it from step 1, clear it for this check:
 

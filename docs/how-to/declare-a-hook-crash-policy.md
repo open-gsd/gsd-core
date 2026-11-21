@@ -138,7 +138,7 @@ write plain text keeps doing so when its crash policy denies.
 `stderrPayload`, and so does its `guard-error` deny (#5784):
 
 ```js
-crash(ON_CRASH, { decision: 'block', code: 'guard-error', reason }, reason);
+crash(ON_CRASH, { decision: 'block', code: 'guard-error', cause, reason }, reason);
 ```
 
 ## The exception: two hooks that must NOT call `deny()`
