@@ -455,6 +455,10 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     "grep -rn '$HOME' --exclude=.env .",
     "grep -rEn '\\$HOME' --exclude=.env .",
     "grep -rn 'x' --exclude=.env . ; echo $?",
+    // ... also when a pattern or operand spells a word that would run words again at a command's place.
+    "grep -rn 'for' --exclude=.env . ; echo $?",
+    "grep -rn 'eval' --exclude=.env . ; echo $?",
+    "echo '()'; grep -rn x --exclude=.env . ; echo $?",
     // A glob that cannot spell one of the variables, or one the command does not set a variable with.
     "env LC_ALL=C grep 'a*' --exclude=.env .",
     'export FOO*; grep -rn KEY --exclude=.env .',

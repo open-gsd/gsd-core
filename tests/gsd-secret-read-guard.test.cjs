@@ -3839,6 +3839,19 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "echo '.e\\x6ev' | xargs cat",
     "echo -E '.e\\0156v' | xargs cat",
     "echo -e '\\x2eenv' | xargs cat",
+    // xargs behind a reserved word (`then`, `do`, `else`, `!`) is the same xargs.
+    'if true; then xargs cat; fi <<< .env',
+    'for i in 1; do xargs cat; done <<< .env',
+    'for i in 1; do xargs cat <<< .env; done',
+    'if false; then :; else xargs cat <<< .env; fi',
+    '! xargs cat <<< .env',
+    "if true; then xargs sh -c 'cat .env'; fi",
+    // A replace string inside an operand is filled with each word xargs reads.
+    'xargs -I{} cat .{} <<< env',
+    'xargs -I{} cat {}nv <<< .e',
+    'xargs -iX cat .X <<< env',
+    "printf '%s\\n' .e | xargs -I@ cat @nv",
+    'echo env | xargs -I{} cat .{}',
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3869,6 +3882,12 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['{ { xargs cat; } < names; } <<< a', 'names'],
     ['{ exec < names; xargs cat; } <<< a', 'names'],
     ['while read l; do :; { xargs cat; } < names; done <<< a', 'names'],
+    ['while true; do xargs cat; done < names', 'names'],
+    ['if true; then xargs cat < names; fi', 'names'],
+    ['if true; then xargs -a names cat; fi', 'names'],
+    ['xargs -I{} cat .{} < names', 'names'],
+    // eval or source may define the function a later call runs.
+    ["eval 'f() { xargs cat; }'; f < names", 'names'],
   ];
   // The same denial for what a printf it does not render writes, and for a `-d` value it cannot decode,
   // each under a code of its own, since the block names no file.
@@ -3894,6 +3913,12 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     'xargs -r cat; { head -1; } < list',
     // echo without -e prints an escape it does not know as it is.
     "echo 'src\\build.log' | xargs cat",
+    'echo notes | xargs -I{} cat {}.txt',
+    // `()` or `case` in an operand defines no function and opens no case.
+    "echo '()'; xargs cat; exec < list",
+    'grep case notes.txt; xargs cat; exec < list',
+    // Nested xargs rescans its words once, not under every reading at each level.
+    "xargs xargs xargs xargs xargs xargs xargs xargs echo '(('",
     // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
     'cat names | xargs cat',
   ];
