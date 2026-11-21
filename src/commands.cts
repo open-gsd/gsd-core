@@ -2996,7 +2996,8 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
     const subStagingFailures: Array<{ file: string; error: string; timed_out: boolean }> = [];
     for (const file of repoFiles) {
       const relativePath = file.slice(repo.length + 1);
-      const addResult = execGit(['add', relativePath], { cwd: repoCwd });
+      // `--` (#6256): same as cmdCommit -- a dash-leading path is a path.
+      const addResult = execGit(['add', '--', relativePath], { cwd: repoCwd });
       if (addResult.exitCode === 0) {
         stagedRelPaths.push(relativePath);
       } else {
