@@ -624,6 +624,7 @@ const MAX_ALIAS_EXPANSIONS = 256;
 // costs more than its bytes: a rescan's tokens (segment-dense text costs
 // about four times as much per byte as one long word), a git command, a
 // script git runs, a config entry.
+
 // Sized from measurement (Node 24, Ryzen AI 9 HX 370): payloads built to
 // reach the budget the costliest way (rescans of segment-dense text) decide
 // in about 1.3 s, and ordinary commands spend little of it: a script of 100
