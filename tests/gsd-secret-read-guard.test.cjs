@@ -1983,6 +1983,23 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   // A heredoc or here-string the stage is given is data that flows on, so it is split too.
   blocks(["cat <<< 'x if=.env' | xargs dd"], { path: 'if=.env' });
   blocks(["grep x <<< 'x .env' | xargs cat"]);
+
+  // BASH_ENV is inherited, and every non-interactive bash a child starts sources it (a bash-shebang script, a make
+  // recipe, an npm script, ssh's ProxyCommand, watch's `sh -c`), so it fails closed for any command run with it set;
+  // only an assignment no command follows is exempt. ENV is sourced only by an interactive shell, so it counts only
+  // where a shell runs.
+  blocks([
+    'BASH_ENV=.env ./script.sh',
+    'SHELLOPTS=xtrace BASH_ENV=.env ./x.sh',
+    "BASH_ENV=.env ssh -o ProxyCommand='nc %h %p' h",
+    'BASH_ENV=.env watch true',
+    'export BASH_ENV=.env; make',
+    'declare -x BASH_ENV=.env; npm test',
+    'env BASH_ENV=.env node app.js',
+    'find . -exec env BASH_ENV=.env ./x.sh \\;',
+  ], { path: 'BASH_ENV=.env' });
+  blocks(["BASH_ENV=/dev/stdin make <<< 'cat .env'", "BASH_ENV=/dev/fd/3 ./x.sh 3<<< 'cat .env'"]);
+  allows(['ENV=.env make', 'export ENV=.env; node app.js']);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
