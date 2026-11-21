@@ -51,8 +51,8 @@ function span(doc, startHeading, endPattern) {
 
 const dim11 = once(() => span(checker(), '## Dimension 11: Research Resolution', /\n## Dimension 12\b/));
 // The numbered Process steps, from **Process:** to the first worked example, each with its
-// whitespace collapsed so a wrap cannot split one step. Assertions below match invariant
-// tokens within a step, never whole sentences.
+// whitespace collapsed so a wrap cannot split one step. The checker's steps are matched by
+// invariant tokens; prompt and doc text whose wording is the contract is pinned as whole sentences.
 const steps = once(() =>
   span(dim11(), '**Process:**', /\n\*\*Example\b/)
     .split(/\n(?=\d+\.\s)/)
