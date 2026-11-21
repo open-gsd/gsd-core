@@ -96,17 +96,25 @@ On any error or timeout, stop and let the phase continue -- capture is best-effo
    # start the daemon from a capture.
    # #4700: MemPalace wraps every mine in a per-palace lock, and a locked palace
    # must never drop the capture silently: a running daemon queues the job
-   # (--daemon --background); otherwise a plain mine is retried with bounded
-   # backoff and a final failure is reported.
-   if mempalace daemon status >/dev/null 2>&1; then
+   # (--daemon --background); otherwise a --direct mine (a plain mine follows a
+   # configured prefer/require policy, which would start the daemon) is retried
+   # with bounded backoff while it exits 1 (a held lock), and a failure is
+   # reported. Exit 2 from the probe is a CLI without the daemon subcommand
+   # (and without --direct): a plain mine. The probe-to-mine window is small
+   # and accepted: a daemon that stops in it is restarted by --daemon.
+   mempalace daemon status >/dev/null 2>&1; PROBE=$?
+   if [ "$PROBE" = 0 ]; then
      mempalace mine "$STAGE" --wing <wing> --daemon --background
    else
+     DIRECT=1; [ "$PROBE" = 2 ] && DIRECT=
      MINED=0
      for DELAY in 1 2 4; do
-       mempalace mine "$STAGE" --wing <wing> && { MINED=1; break; }
-       sleep "$DELAY"
+       mempalace mine "$STAGE" --wing <wing> ${DIRECT:+--direct} && { MINED=1; break; }
+       MRC=$?
+       [ "$MRC" = 1 ] || break
+       [ "$DELAY" = 4 ] || sleep "$DELAY"
      done
-     [ "$MINED" = 1 ] || echo "MemPalace capture skipped — palace locked"
+     [ "$MINED" = 1 ] || { [ "$MRC" = 1 ] && echo "MemPalace capture skipped — palace locked" || echo "MemPalace capture skipped — mine failed (exit $MRC)"; }
    fi
    ```
 3. **Mirror KG facts** unless `config.mempalace.mirror_kg === false` (registry default is true — an absent key means enabled): extract decision/delivery facts and `mempalace_kg_add` them with `valid_from` = the phase date (e.g. `(<project>, decided, <decision>)` from CONTEXT; `(<phase>, delivered, <capability>)` from SUMMARY). Under `augment` these are an *additive* mirror of GSD's native `.planning/graphs/`. Under `kg_backend`/`replace` the palace KG is the *authoritative* fact store — GSD still produces `.planning/graphs/` through its normal graphify, so an unreachable palace never loses a fact.
