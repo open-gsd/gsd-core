@@ -2202,6 +2202,9 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "echo 'cat .env' | cat {fd}<<EOF | bash\nx\nEOF",
   ]);
   allows(['echo ok | cat {fd}<<< x | bash', 'echo ok | cat {fd}<<EOF | bash\nx\nEOF']);
+  // A `{name}` heredoc tag before a redirect names no fd word: the scan neither throws nor drops the command.
+  blocks(['<<{fd}<<< x; cat .env', 'cat <<{fd}<<< x; cat .env']);
+  allows(['{fd}<<< x cat | bash', '<<< {fd}', '{fd}']);
   // An echo, printf or cat whose words hold a `$( )` or backticks may print its stdin (`echo "$(cat)"`): a filter.
   blocks([
     "echo 'cat .env' | echo \"$(cat)\" | bash",
