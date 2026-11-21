@@ -1806,6 +1806,26 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.deepEqual(ordinaryDup.evidence.report_errors, []);
   });
 
+  for (const [description, ...diagnostic] of [
+    ['the error signature written last', "  error: 'other'", "  code: 'ERR_TEST_FAILURE'", "  error: 'test failed'"],
+    ['the code signature written last', "  code: 'OTHER_CODE'", "  error: 'test failed'", "  code: 'ERR_TEST_FAILURE'"],
+    ['a literal scalar signature', '  error: |-', '    test failed', "  code: 'ERR_TEST_FAILURE'", "  error: 'other'"],
+    ['a folded scalar signature', '  error: >-', '    test', '    failed', "  code: 'ERR_TEST_FAILURE'", "  error: 'other'"],
+    ['an inline comment on the signature write', "  error: 'test failed' # context", "  code: 'ERR_TEST_FAILURE'", "  error: 'other'"],
+    ['a separate explicit key and value', '  ? error', "  : 'first'", "  error: 'second'"],
+  ]) {
+    test(`a repeated-key block with ${description} stays refused`, () => {
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP([...diagnostic, "  failureType: 'testCodeFailure'"], ['not ok 1 - crash.test.cjs']),
+        targetTest: 'crash.test.cjs',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'INVALID_RED');
+      assert.equal(result.reason, 'invalid_record');
+      assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+    });
+  }
+
   for (const { signal, error, code } of [
     { signal: 'error', error: 'test failed', code: 'ERR_ASSERTION' },
     { signal: 'code', error: 'expected a malformed token to be rejected', code: 'ERR_TEST_FAILURE' },
@@ -1832,6 +1852,9 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     ['a load-failure message under a different key', "  message: 'test failed'", "  code: 'ERR_TEST_FAILURE'"],
     ['a load-failure code under a different key', "  error: 'test failed'", "  note: 'ERR_TEST_FAILURE'"],
     ['a load-failure message prefix', "  error: 'test failed unexpectedly'", "  code: 'ERR_TEST_FAILURE'"],
+    ['a load-failure code prefix', "  error: 'test failed'", "  code: 'ERR_TEST_FAILURE_X'"],
+    ['a hash character in a quoted error', "  code: 'ERR_TEST_FAILURE'", "  error: 'test failed # details'"],
+    ['a hash line in a literal scalar', '  error: |-', '    test failed', '    # context', "  code: 'ERR_TEST_FAILURE'"],
   ]) {
     test(`a repeated-key block with ${description} still recovers`, () => {
       const result = classifyRedEvidence(validRedInput({
@@ -1927,7 +1950,9 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.ok(result.evidence.report_errors.length > 0);
   });
 
-  for (const [description, closer] of [['a suffix', '...x'], ['trailing whitespace', '... ']]) {
+  for (const [description, closer] of [
+    ['a suffix', '...x'], ['trailing whitespace', '... '], ['an extra dot', '....'], ['mismatched indentation', '  ...'],
+  ]) {
     test(`a repeated-key block with ${description} on the closing delimiter stays refused`, () => {
       const output = dupDiagTAP(["  error: 'first'", "  error: 'second'"])
         .replace('\n  ...\n', `\n  ${closer}\n`);
@@ -1941,6 +1966,71 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
       assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
     });
   }
+
+  test('a nested repeated-key diagnostic with a mismatched closer indent stays refused', () => {
+    const nested = [
+      'TAP version 13', '# Subtest: token validation', '    # Subtest: rejects a malformed token',
+      '    not ok 1 - rejects a malformed token', '      ---', "      error: 'first'", "      error: 'second'",
+      '        ...', '    1..1', 'not ok 1 - token validation', '1..1', '',
+    ].join('\n');
+    const result = classifyRedEvidence(validRedInput({
+      output: nested,
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+  });
+
+  test('a repeated-key diagnostic accepts CRLF with the exact closer and refuses an extra dot', () => {
+    const output = dupDiagTAP(THROWS_REGEXP_DIAG).replaceAll('\n', '\r\n');
+    const input = validRedInput({
+      output,
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    });
+    const recovered = classifyRedEvidence(input);
+    assert.equal(recovered.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(recovered.reason, 'target_test_failed');
+    assert.deepEqual(recovered.evidence.report_errors, []);
+    const refused = classifyRedEvidence({ ...input, output: output.replace('\r\n  ...\r\n', '\r\n  ....\r\n') });
+    assert.equal(refused.verdict, 'INVALID_RED');
+    assert.equal(refused.reason, 'invalid_record');
+    assert.ok(refused.evidence.report_errors.includes('Non-TAP data in report'));
+  });
+
+  const classifyDiagnostic = (lines) => classifyRedEvidence(validRedInput({
+    output: dupDiagTAP(lines),
+    targetTest: 'rejects a malformed token',
+    targetFile: undefined,
+  }));
+
+  test('duplicate recovery accepts 4096 framed lines and refuses an additional line', () => {
+    const diagnostic = ["  error: 'first'", ...Array(4092).fill('  # context'), "  error: 'second'"];
+    assert.equal(classifyDiagnostic(diagnostic).verdict, 'RED_EVIDENCE_OK');
+    const result = classifyDiagnostic([...diagnostic, '  # one more line']);
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+    // The regular TAP path accepts the same block when its keys are unique.
+    assert.equal(classifyDiagnostic([...diagnostic.slice(0, -1), "  stack: 'second'", '  # one more line']).verdict,
+      'RED_EVIDENCE_OK');
+  });
+
+  test('duplicate recovery accepts 1 Mi UTF-16 code units and refuses one more', () => {
+    const diagnostic = ["  error: 'first'", '  # ', "  error: 'second'"];
+    // tap-parser re-emits the root delimiters without indentation.
+    const framing = ['---', ...diagnostic, '...', ''].join('\n');
+    const filler = '界'.repeat(1024 * 1024 - framing.length);
+    diagnostic[1] += filler;
+    assert.equal(classifyDiagnostic(diagnostic).verdict, 'RED_EVIDENCE_OK');
+    diagnostic[1] += 'x';
+    const result = classifyDiagnostic(diagnostic);
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+  });
 
   test('the framing boundary: an empty body is outside recovery either way it arrives', () => {
     // Boundary rows for the `---`/`...` framing (CLAUDE.md boundary coverage): an

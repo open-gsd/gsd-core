@@ -58,7 +58,7 @@ for (const [format, targetTest, verdict, reason] of [
 // block; strict YAML rejected the duplicates and a genuine RED was refused.
 // Captures: node-throws-regexp.tap (root assert.throws), node-rejects-regexp.tap
 // (root await assert.rejects), node-throws-regexp-nested.tap (describe/it, the
-// block arrives indented). Each is the reporter's verbatim stdout (README).
+// block arrives indented). The captures normalize absolute source paths (README).
 for (const capture of ['node-throws-regexp.tap', 'node-rejects-regexp.tap', 'node-throws-regexp-nested.tap']) {
   test(`#5819: a real node:test RegExp-assertion RED (${capture}) proves the target failure`, () => {
     const result = classifyRedEvidence(

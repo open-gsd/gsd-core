@@ -69,11 +69,8 @@ class AnchorDetectedSignal extends Error {}
  * Decode each top-level key/value write before a last-wins merge can hide it.
  * A base-indent key starts a segment with its continuation lines. The YAML parser
  * decodes escapes and explicit keys, and text inside scalar values stays a value.
- * Each segment must parse strictly before the tolerant, anchor-refusing parse.
- * The strict pass catches flow or nested duplicates that could collapse into one
- * distinct key. A parsed segment must contain exactly one mapping entry.
- * An unparseable segment, content shallower than the base indent, or a document
- * marker makes the recovery refuse the block.
+ * A segment must parse strictly as one mapping entry. This rules out nested and
+ * flow duplicates, as well as explicit keys with a separate base-indent `:` line.
  */
 function decodedKeyWrites(body: string, parseSegment: (segment: string) => unknown): Array<{ key: string; value: unknown }> | null {
   const segments: string[][] = [];
@@ -87,12 +84,9 @@ function decodedKeyWrites(body: string, parseSegment: (segment: string) => unkno
     if (base === null) base = indent;
     if (indent < base) return null;
     if (indent === base) {
-      if (/^(?:---|\.\.\.)\s*$/.test(line.trim())) return null;
       segments.push([line]);
-    } else if (segments.length > 0) {
-      segments[segments.length - 1].push(line);
     } else {
-      return null;
+      segments[segments.length - 1].push(line);
     }
   }
   const writes: Array<{ key: string; value: unknown }> = [];
@@ -125,7 +119,12 @@ function decodedKeyWrites(body: string, parseSegment: (segment: string) => unkno
  * recovered. Returns the recovered mapping, or null when the block is not recoverable.
  */
 function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> | null {
-  const lines = extra.split('\n');
+  // Bound the extra YAML work after tap-parser has already refused the block.
+  // Count UTF-16 code units and physical lines, including the framing markers.
+  const maxDiagnosticLines = 4096;
+  if (extra.length > 1024 * 1024) return null;
+  const lines = extra.split('\n', maxDiagnosticLines + 2);
+  if (lines.length > maxDiagnosticLines + 1) return null;
   // Framing: `---`, at least one body line, `...` — the shape tap-parser re-emits for a
   // diagnostic block its YAML refused (emitExtra may indent the whole block by 4 spaces).
   if (lines.at(-1) !== '' || lines.length < 4) return null;
@@ -160,13 +159,10 @@ function recoverDuplicateKeyDiagnostic(extra: string): Record<string, unknown> |
   // Every gate-relevant signal is judged over its WRITES, not the last-wins merge: the
   // interruption signal must be unambiguous (failureType written at most once), and the
   // #5721 load-failure signature must not be maskable by writing a benign value over it.
-  // Each write's key and value are decoded by a strict-then-tolerant parse of its own
+  // Each write's key and value are decoded by a strict parse of its own
   // segment (see decodedKeyWrites); a body whose key set cannot be derived that way —
   // flow mappings included — is refused whole rather than counted in text.
-  const writes = decodedKeyWrites(body, (segment) => {
-    yamlLoad(segment, { schema: FAILSAFE_SCHEMA, ...refuseAnchors });
-    return yamlLoad(segment, { json: true, schema: FAILSAFE_SCHEMA, ...refuseAnchors });
-  });
+  const writes = decodedKeyWrites(body, (segment) => yamlLoad(segment, { schema: FAILSAFE_SCHEMA, ...refuseAnchors }));
   if (writes === null) return null;
   // The interruption signal: `failureType` written twice, in any spelling, is ambiguous.
   if (writes.filter((write) => write.key === 'failureType').length > 1) return null;

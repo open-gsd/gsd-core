@@ -106,13 +106,10 @@ const TOP_LEVEL = '<top-level>';
 //     `locateFrontmatterFence`: kept copies of the owner (#5105) — the plugin loads
 //     from a package/git-spec tree that may carry no built bin/lib. Pinned to the
 //     owner by the same parity test.
-//   - report-parser.cts `recoverDuplicateKeyDiagnostic` and its helper
-//     `decodedKeyWrites` (#5819): their `---` regexes recognize the TAP
-//     yamlish DOCUMENT delimiter (`---` opens a diagnostic block, `...` closes it —
-//     the YAML spec's document markers, not a Markdown fence) of the block tap-parser
-//     re-emits when its YAML refuses the block, possibly indented by emitExtra's
-//     4-space shift. Neither asks where a frontmatter block is, and the owner's
-//     byte-0 `---`…`---` semantics cannot express the `...` closer or the shift.
+//   - report-parser.cts `recoverDuplicateKeyDiagnostic` (#5819): its `---` regex
+//     recognizes the TAP diagnostic block tap-parser re-emits on YAML refusal.
+//     The block closes with `...` and emitExtra may indent it by four spaces,
+//     which the owner's byte-0 `---`…`---` frontmatter semantics cannot express.
 const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [OWNER_FILE, new Set(['locateFrontmatterFence'])],
   [path.join('src', 'phase.cts'), new Set(['phaseEntryInsertOffset'])],
@@ -120,7 +117,7 @@ const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   [path.join('scripts', 'changeset', 'parse.cjs'), new Set(['locateFrontmatterFence'])],
   [path.join('.opencode', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
   [path.join('.kilo', 'plugins', 'gsd-core.js'), new Set(['locateFrontmatterFence'])],
-  [path.join('src', 'report-parser.cts'), new Set(['recoverDuplicateKeyDiagnostic', 'decodedKeyWrites'])],
+  [path.join('src', 'report-parser.cts'), new Set(['recoverDuplicateKeyDiagnostic'])],
 ]);
 
 // FRAGMENT-SCOPED exemptions for DETECTORS (#5105), each pinned to the exact
