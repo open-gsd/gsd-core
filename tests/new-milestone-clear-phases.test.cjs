@@ -230,7 +230,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     const result = runGsdTools('phases clear', tmpDir);
     assert.ok(!result.success);
     assert.match(result.error, /would archive 1 phase directory/);
-    assert.match(result.error, /milestones\/<version>-phases\//);
+    assert.match(result.error, /milestones\/<label>-phases\//);
     assert.doesNotMatch(result.error, /delet|permanent/i);
     assert.match(result.error, /--confirm/);
   });
@@ -245,6 +245,23 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.match(result.error, /archive the phase directories with their uncommitted changes/);
     assert.doesNotMatch(result.error, /delet|permanent/i);
     assert.ok(fs.existsSync(phase1), 'a refused clear must not move anything');
+  });
+
+  test('[regression #5270] --force archives a committed file that has an uncommitted modification', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (committed)');
+    gitOrThrow(['add', '.planning/phases/'], { cwd: tmpDir });
+    gitOrThrow(['commit', '-m', 'add phase'], { cwd: tmpDir });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (modified after commit)');
+    const refused = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(!refused.success);
+    const result = runGsdTools('phases clear --confirm --force', tmpDir);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(
+      fs.readFileSync(path.join(findPhasesArchive(tmpDir), '01-foundation', 'PLAN.md'), 'utf8'),
+      '# Plan (modified after commit)',
+    );
   });
 
   test('[regression #5270] --force archives an uncommitted edit: the content survives in milestones/*-phases/', () => {
