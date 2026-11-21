@@ -1807,6 +1807,21 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "BASH_ENV=/dev/stdin bash -c ':' <<< 'echo .env'",
     'ENV=production npm start',
   ]);
+
+  // Words xargs reads, from a here-string or a pipe, reach a `dd` it runs as its operands, so an `if=` among them
+  // names the file dd reads, with or without `-I`, behind a wrapper or a pass-through stage.
+  for (const [cmd, expectedPath] of [
+    ["xargs dd <<< 'if=.env'", 'if=.env'],
+    ['echo if=.env | xargs dd', 'if=.env'],
+    ["printf 'if=.env' | xargs dd", 'if=.env'],
+    ["xargs -I{} dd {} <<< 'if=.env'", 'if=.env'],
+    ['echo if=.env | xargs -I{} dd {}', 'if=.env'],
+    [`echo 'if=".env"' | xargs dd`, 'if=".env"'],
+    ["xargs dd.exe <<< 'if=.env'", 'if=.env'],
+    ['echo if=.env | xargs sudo dd', 'if=.env'],
+    ['echo if=.env | cat | xargs dd', 'if=.env'],
+  ]) blocks([cmd], { path: expectedPath });
+  allows(["xargs dd <<< 'if=x.txt'", "xargs dd <<< 'if=.env.example'", 'echo of=.env | xargs dd']);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
