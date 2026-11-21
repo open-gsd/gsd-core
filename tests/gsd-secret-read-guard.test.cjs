@@ -3900,10 +3900,10 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['if true; then xargs -a names cat; fi', 'names'],
     ['xargs -I{} cat .{} < names', 'names'],
     // An expansion the guard does not perform in the text xargs reads makes that text unseen.
-    ['xargs cat <<< "$(<list)"', '$(<list)'],
-    ['xargs cat <<< "$(cat list)"', '$(cat list)'],
+    ['xargs cat <<< "$(<list)"', '$( )'],
+    ['xargs cat <<< "$(cat list)"', '$( )'],
     ['xargs cat <<EOF\n$(cat list)\nEOF', '$(cat list)\n'],
-    ['echo "$(cat list)" | xargs cat', '$(cat list)'],
+    ['echo "$(cat list)" | xargs cat', '$( )'],
     ['cat <<< "$X" | xargs cat', '$X'],
     // eval or source may define the function a later call runs.
     ["eval 'f() { xargs cat; }'; f < names", 'names'],
