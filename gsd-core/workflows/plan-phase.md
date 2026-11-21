@@ -1412,20 +1412,19 @@ If `TEXT_MODE` is true, present as a plain-text numbered list. Otherwise use
 AskUserQuestion. Selecting "Proceed anyway" continues to step 13b but
 records the override in STATE.md so verify-phase can re-surface it.
 
-**Why this gate blocks:** failing here is cheap. The plans are the contract
-between discuss-phase and execute-phase; if a decision isn't visible in any
-plan, no executor will implement it.
+**Why this gate blocks:** failing here is cheap; a decision not visible in any plan is never implemented.
 
 ## 13b. Record Planning Completion in STATE.md
 
-After plans pass all gates, record that planning is complete so STATE.md reflects the new phase status:
+After plans pass all gates, record planning completion in STATE.md:
 
 ```bash
-PLAN_COUNT=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r '.plan_count // 0')
+read -r PHASE_NAME PLAN_COUNT < <(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r 'select(.found) | [.phase_name, .plan_count] | @tsv')
+[ -n "$PHASE_NAME" ] || { echo "ERROR: phase ${PHASE_NUMBER} not found" >&2; exit 1; }
 gsd_run query state.planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
-This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity.
+This sets STATUS to "Ready to execute", the plan count, and Last Activity.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 
