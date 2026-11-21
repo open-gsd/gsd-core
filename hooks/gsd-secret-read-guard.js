@@ -2463,21 +2463,34 @@ function scriptAssignments(tokens, reading, ctx, depth) {
   const bySeg = new Map();
   const stdinBySeg = new Map();
   const sepAfter = new Map();
+  // Every word and redirect of each segment, and its heredocs, as scanScript groups them, for pipedScripts (#6182).
+  const fullBySeg = new Map();
+  const heredocsBySeg = new Map();
+  const push = (map, seg, t) => {
+    if (!map.has(seg)) map.set(seg, []);
+    map.get(seg).push(t);
+  };
+  heredocBodiesBySegMap.set(fullBySeg, heredocsBySeg);
   const addStdin = (seg, text) => {
     if (!stdinBySeg.has(seg)) stdinBySeg.set(seg, []);
     stdinBySeg.get(seg).push(text);
   };
   for (let k = 0; k < tokens.length; k++) {
     const t = tokens[k];
+    if (t.kind === 'op' || t.kind === 'word') push(fullBySeg, t.seg, t);
     // A redirect's target is a file name, not a word of the command.
     if (t.kind === 'op') {
       if (!t.dup && tokens[k + 1] && tokens[k + 1].kind === 'word' && tokens[k + 1].seg === t.seg) {
         k++;
+        push(fullBySeg, t.seg, tokens[k]);
         if (t.text.endsWith('<<<')) addStdin(t.seg, tokens[k].text);
       }
       continue;
     }
-    if (t.kind === 'heredoc') addStdin(t.seg, t.text);
+    if (t.kind === 'heredoc') {
+      addStdin(t.seg, t.text);
+      push(heredocsBySeg, t.seg, t);
+    }
     if (t.kind === 'sep') sepAfter.set(t.seg, t.text);
     if (t.kind !== 'word') continue;
     if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
@@ -2520,7 +2533,7 @@ function scriptAssignments(tokens, reading, ctx, depth) {
       }
       if (isFdPath(sourcedFile(words.slice(i + 1)))) {
         for (const text of stdinBySeg.get(seg) || []) runInShell(text);
-        for (const src of pipedScripts(seg, bySeg, sepAfter, ctx)) runInShell(src);
+        for (const src of pipedScripts(seg, fullBySeg, sepAfter, ctx)) runInShell(src);
       }
     }
   }
