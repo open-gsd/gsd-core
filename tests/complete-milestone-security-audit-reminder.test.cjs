@@ -149,6 +149,17 @@ describe('security_audit_phase: complete-milestone.md reminder step', () => {
     );
   });
 
+  test('the prose default is pinned to false', () => {
+    assert.ok(
+      step.includes('default `false`'),
+      'the step must state the key defaults to false'
+    );
+    assert.ok(
+      !/default\s+`true`/.test(step),
+      'the prose default must not be flipped to true'
+    );
+  });
+
   test('the reminder is conditional on missing evidence', () => {
     const evidenceAt = step.indexOf('If no evidence exists');
     assert.ok(evidenceAt !== -1, 'the step must gate the reminder on missing evidence');
