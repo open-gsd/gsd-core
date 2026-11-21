@@ -1265,6 +1265,7 @@ const { execGit: realExecGit } = require('../gsd-core/bin/lib/shell-command-proj
 // A test that stubs `git --version` at 2.37 still sends `--since-as-filter` to the real git, which must accept it.
 const hostGitVersion = realExecGit(['--version'], { cwd: __dirname, env: isolatedEnv({ home: __dirname }) }).stdout;
 const SKIP_HOST_GIT_BEFORE_2_37 = sinceAsFilterSupported(hostGitVersion) ? false : 'the host git before 2.37 rejects --since-as-filter';
+const SKIP_WIN32_NEWLINE_NAME = process.platform === 'win32' ? 'a filename containing a newline cannot exist on Windows (driven: ENOENT)' : false;
 const TIMED_OUT = { exitCode: 1, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true };
 
 /** A git runner that records every argv and delegates to the real git unless `force` answers. */
@@ -2037,8 +2038,7 @@ describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
 });
 
 describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
-  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name',
-  { skip: process.platform === 'win32' ? 'a filename containing a newline cannot exist on Windows (driven: ENOENT)' : false }, () => {
+  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', { skip: SKIP_WIN32_NEWLINE_NAME }, () => {
     const repo = makeRepo();
     const a = commit(repo, 'src/a.js', 'feat(03-01): a');
     summarize(repo, [a], '03-01-SUMMARY.md');
