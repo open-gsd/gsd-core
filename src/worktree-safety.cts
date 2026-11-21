@@ -2664,7 +2664,7 @@ const STRANDED_REAP_NAME_RE = /^\.gsd-reap-[0-9a-f]{16}$/;
 const RESIDUE_WALK_LIMIT = 200000;
 /** D4: the largest file compared byte for byte against the main checkout's copy. */
 const RESIDUE_COPY_MAX_BYTES = 1024 * 1024;
-/** D3: the most top-level names a `reaped` row lists. */
+/** D6: the most top-level names a `reaped` row lists in `contents`. */
 const RESIDUE_CONTENTS_LIMIT = 50;
 /**
  * D4: ignored paths that are secrets or user data, matched case-insensitively at any depth: `.env*` and `.secrets`
@@ -2682,7 +2682,7 @@ const RESIDUE_USER_DATA_PATHSPECS = [
 /** D6: what the admin-directory pass saw. */
 type AdminScan = 'scanned' | 'absent' | 'unreadable' | 'git_dir_unresolved' | 'default_branch_unresolved';
 /** D6: what the residue pass saw. */
-type ResidueScan = 'scanned' | 'absent' | 'unreadable' | 'aliased' | 'not_main_checkout' | 'top_unresolved' | 'git_mismatch' | 'not_scanned';
+type ResidueScan = 'scanned' | 'absent' | 'unreadable' | 'aliased' | 'not_main_checkout' | 'top_unresolved' | 'git_mismatch';
 
 interface ReapScan {
   admin_dir: AdminScan;
@@ -2770,9 +2770,9 @@ interface ResidueWalk {
  * any entry, and every `.gitignore` (D2 asks whether each is tracked).
  */
 function walkResidue(dir: string, dirStat: fs.Stats, deps: WorktreeDeps): ResidueWalk {
-  const readDirSafe = deps.readDirSafe || defaultReadDirSafe;
-  const lstatSafe = deps.lstatSafe || defaultLstatSafe;
   const limit = deps.residueWalkLimit ?? RESIDUE_WALK_LIMIT;
+  const readDirSafe = deps.readDirSafe || ((d: string): string[] | null => readDirBounded(d, limit + 1));
+  const lstatSafe = deps.lstatSafe || defaultLstatSafe;
   const out: ResidueWalk = {
     entries: 0,
     newestMs: Math.max(dirStat.mtimeMs, dirStat.ctimeMs),
@@ -2797,16 +2797,47 @@ function walkResidue(dir: string, dirStat: fs.Stats, deps: WorktreeDeps): Residu
       if (stat === null) { out.ageUnknown = true; continue; }
       out.newestMs = Math.max(out.newestMs, stat.mtimeMs, stat.ctimeMs);
       const childRel = rel === '' ? name : `${rel}/${name}`;
-      if (name === '.gitignore' && stat.isFile()) out.gitignores.push(childRel);
+      // Any case: on a case-insensitive filesystem git reads `.GITIGNORE` as `.gitignore`. D2 compares the path exactly
+      // against the tracked set, so a differently-cased untracked one counts as work.
+      if (name.toLowerCase() === '.gitignore' && stat.isFile()) out.gitignores.push(childRel);
       if (stat.isDirectory() && !stat.isSymbolicLink()) stack.push({ abs: child, rel: childRel });
     }
   }
   return out;
 }
 
-/** Run `fn` with the path of an index file inside a temporary directory, removed afterwards (D2, D4). */
-function withThrowawayIndex<T>(fn: (indexFile: string) => T): T {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reap-index-'));
+/**
+ * The names in a directory, at most `max` of them: the walk bound has to hold before a directory with millions of
+ * entries is read in full, which `fs.readdirSync` would do. Null when the directory cannot be read.
+ */
+function readDirBounded(dir: string, max: number): string[] | null {
+  let handle: fs.Dir | undefined;
+  try {
+    handle = fs.opendirSync(dir);
+    const names: string[] = [];
+    for (let entry = handle.readSync(); entry !== null; entry = handle.readSync()) {
+      names.push(entry.name);
+      if (names.length >= max) break;
+    }
+    return names;
+  } catch {
+    return null;
+  } finally {
+    try { handle?.closeSync(); } catch { /* a read-only directory handle: nothing to lose */ }
+  }
+}
+
+/**
+ * Run `fn` with the path of an index file inside a temporary directory, removed afterwards (D2, D4). When the
+ * temporary directory cannot be made, the answer is `unverified`: the candidate is kept, the verb carries on.
+ */
+function withThrowawayIndex<T>(fn: (indexFile: string) => T, unverified: T): T {
+  let tmp: string;
+  try {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-reap-index-'));
+  } catch {
+    return unverified;
+  }
   try {
     return fn(path.join(tmp, 'index'));
   } finally {
@@ -2827,7 +2858,7 @@ function residueHoldsWork(execGit: ExecGitFn, readDirSafe: (dir: string) => stri
   let compared = false;
   for (const tip of tips) {
     const verdict = withThrowawayIndex((index): WorkVerdict => {
-      const run = (args: string[]): GitResult => execGit(['--work-tree', dir, ...args], { cwd: topLevel, env: { GIT_INDEX_FILE: index } });
+      const run = (args: string[]): GitResult => execGit(['-c', 'core.fsmonitor=false', '--work-tree', dir, ...args], { cwd: topLevel, env: { GIT_INDEX_FILE: index } });
       if (!gitResultOk(run(['read-tree', tip]))) return 'unverified';
       // `--refresh` exits 1 when a file differs from the index: that is the answer `diff-files` gives next, not a failure.
       const refreshed = run(['update-index', '-q', '--refresh']);
@@ -2855,7 +2886,7 @@ function residueHoldsWork(execGit: ExecGitFn, readDirSafe: (dir: string) => stri
         if (inside !== null && inside.length > 0) return 'work';
       }
       return 'clean';
-    });
+    }, 'unverified');
     if (verdict === 'clean') return 'clean';
     if (verdict === 'work') compared = true;
   }
@@ -2890,7 +2921,7 @@ function isHarnessCopy(topLevel: string, dir: string, realDir: string, rel: stri
 function residueHoldsUserData(execGit: ExecGitFn, topLevel: string, dir: string): 'none' | 'present' | 'unverified' {
   return withThrowawayIndex((index): 'none' | 'present' | 'unverified' => {
     const listed = execGit(
-      ['--work-tree', dir, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', ...RESIDUE_USER_DATA_PATHSPECS],
+      ['-c', 'core.fsmonitor=false', '--work-tree', dir, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', '--', ...RESIDUE_USER_DATA_PATHSPECS],
       { cwd: topLevel, env: { GIT_INDEX_FILE: index } },
     );
     if (!gitResultOk(listed)) return 'unverified';
@@ -2899,7 +2930,7 @@ function residueHoldsUserData(execGit: ExecGitFn, topLevel: string, dir: string)
       if (rel !== '' && !isHarnessCopy(topLevel, dir, realDir, rel)) return 'present';
     }
     return 'none';
-  });
+  }, 'unverified');
 }
 
 /**
@@ -2908,7 +2939,7 @@ function residueHoldsUserData(execGit: ExecGitFn, topLevel: string, dir: string)
  * is renamed back and reported, because part of it may already be gone. When a rename back fails, the row names the
  * reserved path, since that is where the files are.
  */
-function removeResidue(sweep: ResidueSweep, dir: string, stranded: boolean, deps: WorktreeDeps, results: ReapResult[], contents: string[]): void {
+function removeResidue(sweep: ResidueSweep, dir: string, expected: fs.Stats, stranded: boolean, deps: WorktreeDeps, results: ReapResult[]): void {
   const lstatSafe = deps.lstatSafe || defaultLstatSafe;
   const renameDir = deps.renameDir || renameWithRetry;
   const removeDir = deps.removeDir || defaultRemoveDir;
@@ -2922,11 +2953,16 @@ function removeResidue(sweep: ResidueSweep, dir: string, stranded: boolean, deps
       && canonicalPath(sweep.root) === sweep.root;
   };
   const isDirectChild = (p: string): boolean => path.dirname(canonicalPath(p)) === sweep.root;
+  const sameIdentity = (a: fs.Stats, b: { dev: number; ino: number }): boolean => a.dev === b.dev && a.ino === b.ino;
 
   // 1. Right before removing: the chain is still real directories, and the candidate is still a real directory
   //    with no `.git` entry, directly inside the root.
+  //    It must also be the very directory the checks read (device and inode), under the same root: a directory
+  //    swapped in while git was being asked would otherwise be removed on the old directory's evidence.
   const stat = lstatSafe(dir);
-  if (!rootStillSafe() || stat === null || stat.isSymbolicLink() || !stat.isDirectory()
+  const rootNow = lstatSafe(sweep.root);
+  if (!rootStillSafe() || rootNow === null || !sameIdentity(rootNow, sweep.rootIdent)
+    || stat === null || stat.isSymbolicLink() || !stat.isDirectory() || !sameIdentity(stat, expected)
     || lstatSafe(path.join(dir, '.git')) !== null || !isDirectChild(dir)) {
     skip(dir, 'residue_unreadable');
     return;
@@ -2948,14 +2984,17 @@ function removeResidue(sweep: ResidueSweep, dir: string, stranded: boolean, deps
     }
     // 3. It must have landed where expected, as a real directory; otherwise put it back.
     const landed = lstatSafe(reserved);
-    if (landed === null || landed.isSymbolicLink() || !landed.isDirectory() || !isDirectChild(reserved)) {
+    if (landed === null || landed.isSymbolicLink() || !landed.isDirectory() || !isDirectChild(reserved) || !sameIdentity(landed, expected)) {
       try { renameDir(reserved, dir); skip(dir, 'residue_unreadable'); } catch { skip(reserved, 'residue_unreadable'); }
       return;
     }
     target = reserved;
   }
 
-  // 4. Remove it. A removal that throws partway is renamed back (the reserved path is named when that fails too).
+  // 4. Remove it. What the row reports it held is read from the directory itself now, not from the earlier look. A
+  //    removal that throws partway is renamed back (the reserved path is named when that fails too).
+  const held = (deps.readDirSafe || ((d: string): string[] | null => readDirBounded(d, RESIDUE_CONTENTS_LIMIT + 1)))(target);
+  const contents = [...(held ?? [])].sort().slice(0, RESIDUE_CONTENTS_LIMIT);
   try {
     removeDir(target);
   } catch {
@@ -2970,7 +3009,8 @@ function removeResidue(sweep: ResidueSweep, dir: string, stranded: boolean, deps
 function findUnregisteredResidue(sweep: ResidueSweep, repoRoot: string, deps: WorktreeDeps, results: ReapResult[]): void {
   const execGit = deps.execGit || execGitDefault;
   const lstatSafe = deps.lstatSafe || defaultLstatSafe;
-  const readDirSafe = deps.readDirSafe || defaultReadDirSafe;
+  const walkLimit = deps.residueWalkLimit ?? RESIDUE_WALK_LIMIT;
+  const readDirSafe = deps.readDirSafe || ((d: string): string[] | null => readDirBounded(d, walkLimit + 1));
   const guardMs = deps.reapMtimeGuardMs !== undefined ? deps.reapMtimeGuardMs : REAP_MTIME_GUARD_MS;
   const nowMs = deps.nowMs ?? Date.now();
   const cwd = canonicalPath(deps.cwd ?? process.cwd());
@@ -2982,15 +3022,17 @@ function findUnregisteredResidue(sweep: ResidueSweep, repoRoot: string, deps: Wo
     const stat = lstatSafe(dir);
     // A link or a plain file is not a candidate; links are never followed.
     if (stat === null || stat.isSymbolicLink() || !stat.isDirectory()) continue;
-    if (sweep.registered === null) { skip(dir, 'worktree_list_failed'); continue; }
-    if (sweep.registered.has(canonicalPath(dir)) || sweep.registered.has(path.resolve(dir))) continue;
     if (lstatSafe(path.join(dir, '.git')) !== null) continue;
     const topNames = readDirSafe(dir);
-    if (topNames === null) { skip(dir, 'residue_unreadable'); continue; }
-    if (topNames.length === 0) continue;
-
     // D1 harness identity: the reserved removal name is trusted by contract and needs neither the harness name nor a branch.
     const stranded = STRANDED_REAP_NAME_RE.test(name);
+    // An empty directory is not residue, except a reserved-name stub a removal left empty: that one is finished off.
+    if (topNames !== null && topNames.length === 0 && !stranded) continue;
+    // Only a candidate gets a row for a registration list git could not give.
+    if (sweep.registered === null) { skip(dir, 'worktree_list_failed'); continue; }
+    if (sweep.registered.has(canonicalPath(dir)) || sweep.registered.has(path.resolve(dir))) continue;
+    if (topNames === null) { skip(dir, 'residue_unreadable'); continue; }
+
     const tips: string[] = [];
     if (!stranded) {
       if (!HARNESS_WORKTREE_NAME_RE.test(name)) { skip(dir, 'residue_not_harness_named'); continue; }
@@ -3027,7 +3069,7 @@ function findUnregisteredResidue(sweep: ResidueSweep, repoRoot: string, deps: Wo
     if (data === 'present') { skip(dir, 'residue_has_user_data'); continue; }
     if (data === 'unverified') { skip(dir, 'residue_unverified'); continue; }
 
-    removeResidue(sweep, dir, stranded, deps, results, [...topNames].sort().slice(0, RESIDUE_CONTENTS_LIMIT));
+    removeResidue(sweep, dir, stat, stranded, deps, results);
   }
 }
 
@@ -3045,6 +3087,15 @@ function reapOrphanWorktreesDetailed(repoRoot: string, deps: WorktreeDeps = {}):
 
 function reapOrphanWorktrees(repoRoot: string, deps: WorktreeDeps = {}): ReapResult[] {
   return reapOrphanWorktreesDetailed(repoRoot, deps).results;
+}
+
+/**
+ * Names under `.claude/worktrees` (and the top-level names a removed directory held) come from a repository or a
+ * branch's tree, and the verb's stdout reaches an agent's context: control, bidirectional and zero-width characters
+ * are written as `\uXXXX` text. Only those are changed, so an ordinary path, a Windows backslash included, is intact.
+ */
+function neutralizeName(value: string): string {
+  return value.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
 /** The reasons a kept residue directory can carry; `worktree.reap-orphans` counts them on stderr (D6). */
@@ -3074,6 +3125,9 @@ function describeResidueReport(results: ReapResult[], scan: ReapScan | null): st
   }
   if (scan !== null && scan.residue_dir !== 'scanned' && scan.residue_dir !== 'absent') {
     lines.push(`[gsd] worktree.reap-orphans: .claude/worktrees was not swept (${scan.residue_dir})\n`);
+  }
+  if (scan !== null && scan.admin_dir !== 'scanned' && scan.admin_dir !== 'absent') {
+    lines.push(`[gsd] worktree.reap-orphans: .git/worktrees was not scanned (${scan.admin_dir})\n`);
   }
   return lines;
 }
@@ -3159,7 +3213,12 @@ function cmdWorktreeReapOrphans(cwd: string, deps: RecordAgentCmdDeps & Worktree
     // Surface skipped entries so operators are aware of unresolved orphans.
     writeErr(`[gsd] worktree.reap-orphans: ${skippedCount} orphan(s) skipped (run with DEBUG=1 for details)\n`);
   }
-  write(`${JSON.stringify({ ok: true, reaped: result.filter((r) => r.status === 'reaped').length, entries: result, scan }, null, 2)}\n`);
+  const entries = result.map((row) => ({
+    ...row,
+    path: neutralizeName(row.path),
+    ...(row.contents === undefined ? {} : { contents: row.contents.map((name) => neutralizeName(Array.from(name).slice(0, 64).join(''))) }),
+  }));
+  write(`${JSON.stringify({ ok: true, reaped: result.filter((r) => r.status === 'reaped').length, entries, scan }, null, 2)}\n`);
 }
 
 // ─── Worker lifecycle records (#4624) ────────────────────────────────────────
