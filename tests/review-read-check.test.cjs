@@ -561,6 +561,14 @@ describe('#5491 runReadCheck reads only bounded regular files inside the repo (#
     assert.match(stampIncompleteRead('body', r), /big-01 could not be checked/);
   });
 
+  test('a plan reached through a symlinked directory is the same plan, read once (#6286 Minor 1)', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => {
+    const alias = path.join(repo, '.planning', 'q');
+    if (!fs.existsSync(alias)) fs.symlinkSync('p', alias);
+    const { reads, missing } = check('.planning/q/ok-01-PLAN.md');
+    assert.deepEqual(reads, [PROMPT, `${repo}/${OK}`]);
+    assert.deepEqual(missing, ['ok-01']);
+  });
+
   test('the stamp names ten unchecked plans and counts the rest', () => {
     const ids = Array.from({ length: 12 }, (_, k) => `z-${k}`);
     const stamp = stampIncompleteRead('body', checkRead('', [], false, ids));
@@ -759,6 +767,19 @@ describe('#5491 runReadCheck reads each plan once, within a header and byte budg
   });
 });
 
+describe('#5491 a plan file that cannot be opened is unchecked (#6286 Minor 2)', () => {
+  test('a reader that throws leaves the plan unchecked and the others checked', () => {
+    const d = memDeps('#### p/12.6-02-PLAN.md\n#### p/locked-01-PLAN.md\n', { '/repo/p/12.6-02-PLAN.md': PLAN_B, '/repo/p/locked-01-PLAN.md': PLAN_B });
+    const read = d.readPlanBounded;
+    d.readPlanBounded = (p, max) => {
+      if (p.endsWith('locked-01-PLAN.md')) throw Object.assign(new Error(`EACCES ${p}`), { code: 'EACCES' });
+      return read(p, max);
+    };
+    const r = runReadCheck(B_LINE, d.PROMPT, '/repo', d);
+    assert.deepEqual({ unchecked: r.unchecked, missing: r.missing, complete: r.complete }, { unchecked: ['locked-01'], missing: [], complete: false });
+  });
+});
+
 describe('#5491 two plans with one id need two READ-CHECK lines (#6286 Minor 4)', () => {
   const D = { id: 'dup', requirements: [], wave: 1, dependsOn: [], tasks: 1 };
   const LINE = 'READ-CHECK dup: requirements=[]; wave=1; depends_on=[]; tasks=1';
@@ -858,6 +879,12 @@ describe('#5491 readPlanBounded opens once and reads within its bound (#6286 Min
       got = null; // Windows refuses to open a directory at all
     }
     assert.equal(got, null);
+  });
+
+  test('a file that holds more than its fstat size is refused', { skip: process.platform !== 'linux' && '/proc is Linux-only' }, () => {
+    // /proc files are regular with an fstat size of 0 but real content: the shape of a plan that
+    // grew after the open.
+    assert.equal(readPlanBounded('/proc/version', 1024), null);
   });
 
   // A child process each: a reader that blocks on a FIFO or streams a device would hang this file.
