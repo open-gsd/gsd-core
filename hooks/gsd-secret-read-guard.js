@@ -77,7 +77,9 @@
 //   options too), a `<( )` file operand, a heredoc / here-string, or a pipe
 //   from a knowable `echo`/`printf` source (`echo cat .env | bash`; printf's
 //   format run over its `%s`/`%b`/`%c` arguments, escapes read, and a `cat`
-//   or `tee` stage passed through); `eval` scans its joined operands;
+//   or `tee` stage passed through) or a bare `cat` printing a heredoc /
+//   here-string (`cat <<'EOF' | bash`, `bash <(cat <<< 'cat .env')`, #6182);
+//   `eval` scans its joined operands;
 //   `source`/`.` scans a `<( )` operand, and like a shell given `/dev/stdin`,
 //   `/dev/fd/N` or `-s`, its heredocs, here-strings and pipe; `dd` reads its
 //   `if=` file; and `find … | xargs cat` infers the upstream segment's names as
@@ -3348,16 +3350,64 @@ function copyDestinationIndices(operands) {
 // and dash's and zsh's echo, which read them unasked), each NUL as a space. Any
 // other source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → [].
 const PRINTF_LINE_FORMATS = new Set(['%s\\n', '%s\\\\n']);
-function reconstructedScripts(words, ctx) {
+const NO_FEEDS = Object.freeze({ heredocs: [], hereStrings: [] });
+function reconstructedScripts(words, ctx, feeds = NO_FEEDS) {
   // Each reading of the command (commandReadings), the earlier first.
   const cmds = commandReadings(words);
-  if (cmds.length < 2) return cmds.length ? scriptsWritten(cmds[0], ctx) : [];
+  if (cmds.length < 2) return cmds.length ? scriptsWritten(cmds[0], ctx, feeds) : [];
   const scripts = [];
-  for (const cmd of cmds) for (const script of scriptsWritten(cmd, ctx)) if (!scripts.includes(script)) scripts.push(script);
+  for (const cmd of cmds) for (const script of scriptsWritten(cmd, ctx, feeds)) if (!scripts.includes(script)) scripts.push(script);
   return scripts;
 }
 
-function scriptsWritten(cmd, ctx) {
+// What a bare `cat` or a `tee` prints when its stdin is a heredoc or here-string in the command text (#6182): `feeds`,
+// the bodies and strings given to it, each on its own and joined by a newline. `cat file` (an operand that is not `-`)
+// reads no stdin, so its output is not knowable here.
+function catPrintedTexts(cmd, feeds) {
+  const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
+  if (named.length > 0 && !named.some((w) => w.text === '-')) return [];
+  return fedTexts(feeds);
+}
+
+function fedTexts(feeds) {
+  const parts = [...feeds.heredocs, ...feeds.hereStrings];
+  return parts.length > 1 ? [...parts, parts.join('\n')] : parts;
+}
+
+// The command words of one segment's tokens: the redirect targets (`<<<` text, `> file`) are not operands of the command.
+function commandWords(segTokens) {
+  const words = [];
+  for (let k = 0; k < segTokens.length; k++) {
+    const t = segTokens[k];
+    if (t.kind === 'op') {
+      if (!t.dup && segTokens[k + 1] && segTokens[k + 1].kind === 'word') k++;
+      continue;
+    }
+    if (t.kind === 'word') words.push(t);
+  }
+  return words;
+}
+
+// The here-string targets of one segment's tokens (`cat <<< 'text'`): the word after each `<<<` operator.
+function hereStringTargets(segTokens) {
+  const out = [];
+  for (let k = 0; k < segTokens.length; k++) {
+    const t = segTokens[k];
+    if (t.kind !== 'op' || t.dup || !t.text.endsWith('<<<')) continue;
+    const target = segTokens[k + 1];
+    if (target && target.kind === 'word') out.push(target.text);
+  }
+  return out;
+}
+
+// The heredoc bodies of each segment, keyed by the `bySeg` map the scan builds, so a shell reading a pipe can reach
+// the bodies of the segment upstream of it without every scanner taking another parameter.
+const heredocBodiesBySegMap = new WeakMap();
+
+// `feeds` is what the command's own heredocs and here-strings give a `cat` or `tee` to print (#6182).
+function scriptsWritten(cmd, ctx, feeds = NO_FEEDS) {
+  if (cmd.base === 'cat') return catPrintedTexts(cmd, feeds);
+  if (cmd.base === 'tee') return fedTexts(feeds); // tee prints its stdin (the files it writes are outputs)
   if (cmd.base === 'echo') {
     let start = 0;
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
@@ -3479,7 +3529,17 @@ function decodePrintfArgument(text) {
 function reconstructedProcsubs(inner, reading, ctx) {
   const { tokens } = tokenizeCharged(inner, reading);
   const bySeg = new Map();
+  const segTokens = new Map();
+  const heredocsBySeg = new Map();
   for (const t of tokens) {
+    if (t.kind === 'heredoc') {
+      if (!heredocsBySeg.has(t.seg)) heredocsBySeg.set(t.seg, []);
+      heredocsBySeg.get(t.seg).push(t.text);
+    }
+    if (t.kind === 'op' || t.kind === 'word') {
+      if (!segTokens.has(t.seg)) segTokens.set(t.seg, []);
+      segTokens.get(t.seg).push(t);
+    }
     if (t.kind !== 'word') continue;
     if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
     bySeg.get(t.seg).push(t);
@@ -3489,6 +3549,14 @@ function reconstructedProcsubs(inner, reading, ctx) {
   for (const alts of perSeg) for (const a of alts) scripts.push(a);
   const lines = perSeg.filter((alts) => alts.length).map((alts) => alts[0]);
   if (lines.length > 1) scripts.push(lines.join('\n'));
+  // Beside those, what a segment's `cat` or `tee` prints from its heredocs and here-strings (#6182:
+  // `bash <(cat <<EOF …)`, `source <(cat <<< '…')`), its redirect targets dropped from its words.
+  for (const [seg, toks] of segTokens) {
+    const feeds = { heredocs: heredocsBySeg.get(seg) || [], hereStrings: hereStringTargets(toks) };
+    const cmdWords = commandWords(toks);
+    if (cmdWords.length === (bySeg.get(seg) || []).length && !feeds.heredocs.length) continue; // read above already
+    for (const a of reconstructedScripts(cmdWords, ctx, feeds)) if (!scripts.includes(a)) scripts.push(a);
+  }
   return scripts;
 }
 
@@ -4007,6 +4075,7 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
     }
   }
 
+  heredocBodiesBySegMap.set(bySeg, heredocsBySeg);
   for (let s = 0; s <= maxSeg; s++) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
@@ -4454,49 +4523,60 @@ function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
   return null;
 }
 
-// What the stages piped into segment `s` write (pipeSources), as reconstructedScripts reads it; [] without a pipe.
+// What the stages piped into segment `s` write (pipeStages), as reconstructedScripts reads them; [] without a pipe.
+// A stage is read with its redirect targets among its words, as before, and without them, given its heredocs and
+// here-strings to print when it is a `cat` or a `tee` (#6182).
 function pipedScripts(s, bySeg, sepAfter, ctx) {
   const scripts = [];
-  for (const words of pipeSources(s, bySeg, sepAfter, ctx)) for (const script of reconstructedScripts(words, ctx)) scripts.push(script);
+  for (const { words, cmdWords, feeds } of pipeStages(s, bySeg, sepAfter, ctx)) {
+    for (const script of reconstructedScripts(words, ctx)) scripts.push(script);
+    if (cmdWords.length === words.length && !feeds.heredocs.length) continue; // read above already
+    for (const script of reconstructedScripts(cmdWords, ctx, feeds)) if (!scripts.includes(script)) scripts.push(script);
+  }
   return scripts;
 }
 
-// The word tokens of the stages piped into segment `s`, nearest first: the one right before it, as before, and past
-// each stage that passes its stdin on (`cat` reading only stdin, `tee`), the one before that (#5492), every hop a
-// pipe. [] without a pipe. A source handed out before in this scan is charged its words and four times its bytes
-// before it is read again: every command reading the pipe walks back to it (`… | tee xargs env | tee xargs env …`
-// reaches the producer from each stage), so the reads would otherwise grow as stages times bytes.
+// The word tokens of the stages piped into segment `s`, as pipeStages finds them.
 function pipeSources(s, bySeg, sepAfter, ctx) {
-  const sources = [];
+  return pipeStages(s, bySeg, sepAfter, ctx).map((stage) => stage.words);
+}
+
+// The stages piped into segment `s`, nearest first: the one right before it, as before, and past each stage that
+// passes its stdin on (passesStdinOn), the one before that (#5492, #6182), every hop a pipe. [] without a pipe. Each
+// is its word tokens (`words`), those without its redirect targets (`cmdWords`), and its heredoc bodies and here-strings
+// (`feeds`). A source handed out before in this scan is charged its words and four times its bytes before it is read
+// again: every command reading the pipe walks back to it (`… | tee xargs env | tee xargs env …` reaches the producer
+// from each stage), so the reads would otherwise grow as stages times bytes.
+function pipeStages(s, bySeg, sepAfter, ctx) {
+  const stages = [];
+  const bodies = heredocBodiesBySegMap.get(bySeg);
   for (let at = s; ;) {
     const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
-    if ((op !== '|' && op !== '|&') || prevSeg < 0) return sources;
+    if ((op !== '|' && op !== '|&') || prevSeg < 0) return stages;
     const seg = bySeg.get(prevSeg) || [];
     const words = seg.filter((t) => t.kind === 'word');
+    const heredocs = ((bodies && bodies.get(prevSeg)) || []).map((h) => h.text);
     if (ctx.pipeSourcesRead.has(seg)) {
       let bytes = 0;
       for (const w of words) bytes += w.text.length;
+      for (const h of heredocs) bytes += h.length;
       charge(ctx, TOKEN_WORK * (words.length + bytes) + 1);
     } else {
       ctx.pipeSourcesRead.add(seg);
     }
-    sources.push(words);
-    const cmd = resolveCommand(words);
-    if (!cmd || !(cmd.base === 'tee' || (cmd.base === 'cat' && catReadsOnlyStdin(cmd.operands)))) return sources;
+    const cmdWords = commandWords(seg);
+    stages.push({ words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg) } });
+    if (!passesStdinOn(words) && !passesStdinOn(cmdWords)) return stages;
     charge(ctx, TOKEN_WORK * words.length + 1);
     at = prevSeg;
   }
 }
 
-// A `cat` that reads only its stdin: options that name no file (`-u`, `-n`, `-uv`, …), an optional `--`, then
-// nothing but `-` (#5492).
-const CAT_STDIN_OPTIONS_RE = /^-[uvetAnbsET]+$/;
-function catReadsOnlyStdin(operands) {
-  let k = 0;
-  while (k < operands.length && CAT_STDIN_OPTIONS_RE.test(operands[k].text)) k++;
-  if (k < operands.length && operands[k].text === '--') k++;
-  for (; k < operands.length; k++) if (operands[k].text !== '-') return false;
-  return true;
+// A stage that passes its stdin on, under any reading of it: a `tee`, or a `cat` whose operands are all options or
+// `-` (#5492, #6182). A heredoc or here-string given to it is read beside, as what it prints.
+function passesStdinOn(words) {
+  return commandReadings(words).some((cmd) => cmd.base === 'tee'
+    || (cmd.base === 'cat' && cmd.operands.every((w) => w.text.startsWith('-'))));
 }
 
 // `find … | xargs cat`: the upstream segment's operands become file names the
