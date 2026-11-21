@@ -89,8 +89,9 @@
 //   the sub-command's read operands. A command with no rule of its own whose
 //   operands name git, a shell, an ssh client, eval, xargs, find, watch, dd or
 //   a wrapper is read as launching it from there (`caffeinate git …`, #5492).
-//   A `BASH_ENV` or `ENV` value, the file a shell sources first, is a read
-//   when it names a secret, and of the command's stdin when it is an fd (#6445).
+//   A `BASH_ENV` or `ENV` value in scope where a shell runs, the file it
+//   sources first, is a read when it names a secret, and of the shell's
+//   stdin when it is an fd (#6445).
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
 // before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
@@ -4072,8 +4073,6 @@ function scanCommand(command, depth, reading, ctx, rescan) {
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, scriptAssignments(tokenized.tokens, reading, ctx, depth));
   try {
-    const sourced = sourcedFileVars(ctx);
-    if (sourced.hit) return sourced.hit;
     return scanScript(tokenized, depth, reading, ctx);
   } finally {
     ctx.shellVars = saved;
@@ -4140,8 +4139,6 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
       for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
       // A prefix's variables reach this command and everything it runs.
       ctx.shellVars = shellVarFrame(scriptScope, cmd.assigns);
-      const hit = sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
-      if (hit) return hit;
 
       // eval concatenates ALL its operands and runs the result.
       if (base === 'eval') {
@@ -4517,6 +4514,10 @@ function shellScriptOperands(operands) {
 
 // A shell interpreter's script comes from `-c`, a file operand, or stdin.
 function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  // The prefix, env/sudo, export and declare values in scope that the shell sources first (#6445). An fd value makes
+  // the stdin a script in every mode, read once below, whichever fd it is on, as for `bash /dev/fd/N`.
+  const sourced = sourcedFileVars(ctx);
+  if (sourced.hit) return sourced.hit;
   const { scripts, dashC } = shellScriptOperands(operands);
   for (const script of scripts) {
     const hit = findSecretRead(script.text, depth + 1, ctx);
@@ -4524,7 +4525,7 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   }
   // Mode c: stdin is DATA (not scanned). Only the first reading of mode c stops here, as before: bash's own reading
   // adds scripts but never drops stdin mode (`bash -cx <<< '…'` has no script, and its stdin is still read).
-  if (dashC) return null;
+  if (dashC) return sourced.fd ? scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) : null;
   // Mode file, read as before (the first word that does not start with `-`, past SHELL_VALUE_FLAGS values) and
   // under shellOptions, which reads `+x` and a cluster's `o` value as options and has no file under `-s`; stdin
   // mode when either finds no file, or a file that may be an fd (`bash /dev/stdin`, `bash /dev/fd/3 3<<< …`).
@@ -4543,15 +4544,15 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
       if (hit) return hit;
     }
   }
-  const fromStdin = !fileTok || isFdPath(fileTok.text)
+  const fromStdin = sourced.fd || !fileTok || isFdPath(fileTok.text)
     || readings.some((o, i) => !o.modeC && (!optionToks[i] || isFdPath(optionToks[i].text)));
   if (!fromStdin) return null;
   return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
 }
 
 // bash sources the file BASH_ENV names before a non-interactive script, and sh the one ENV names when interactive
-// (#6445): a value in scope naming a secret is a read, whatever the command and the shell's mode. `fd` is set when a
-// value is an fd path (`BASH_ENV=/dev/stdin`), which sources the command's stdin.
+// (#6445): with a shell about to run, a value in scope naming a secret is a read, whatever the shell's mode. `fd` is
+// set when a value is an fd path (`BASH_ENV=/dev/stdin`), which sources the shell's stdin.
 const SOURCED_FILE_VARS = ['BASH_ENV', 'ENV'];
 function sourcedFileVars(ctx) {
   let fd = false;
@@ -4562,14 +4563,6 @@ function sourcedFileVars(ctx) {
     }
   }
   return { hit: null, fd };
-}
-
-// sourcedFileVars for one command: with an fd path in scope, its heredocs, here-strings and pipe are read as a
-// shell's stdin, whichever fd they are on, as for `bash /dev/fd/N`.
-function sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
-  const { hit, fd } = sourcedFileVars(ctx);
-  if (hit || !fd) return hit;
-  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
 }
 
 // The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and what a
@@ -4723,8 +4716,6 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, resolvedSub ? resolvedSub.assigns : []);
   try {
-    const sourced = sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
-    if (sourced) return sourced;
     const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
     const subBase = resolvedSub ? resolvedSub.base : writtenBase;
     const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
@@ -4961,8 +4952,6 @@ function scanLaunched(cmd, s, bySeg, sepAfter, depth, reading, ctx, heredocs, he
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, cmd.assigns);
   try {
-    const sourced = sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
-    if (sourced) return sourced;
     if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
     if (cmd.base === 'eval') return scanEval(cmd.operands, depth, ctx);
     if (cmd.base === 'watch') return scanWatch(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
