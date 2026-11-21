@@ -3838,6 +3838,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "echo '.e\\0156v' | xargs cat",
     "echo '.e\\x6ev' | xargs cat",
     "echo -E '.e\\0156v' | xargs cat",
+    "echo -e '\\x2eenv' | xargs cat",
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3865,12 +3866,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['{ case x in a) xargs cat;; esac; } < names', 'names'],
     ['( case x in a) :;; esac; xargs cat ) < names', 'names'],
   ];
-  // The same denial for what a printf or echo it does not render writes, and for a `-d` value it cannot decode,
+  // The same denial for what a printf it does not render writes, and for a `-d` value it cannot decode,
   // each under a code of its own, since the block names no file.
   const UNRENDERED = [
     ["printf '\\x2eenv\\n' | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv\\n'],
     ["printf '%b' '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '%b \\x2eenv'],
-    ["echo -e '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '-e \\x2eenv'],
     ['xargs -d ab cat <<< x', 'xargs-delimiter-undecodable', 'ab'],
   ];
   const ALLOWED = [
