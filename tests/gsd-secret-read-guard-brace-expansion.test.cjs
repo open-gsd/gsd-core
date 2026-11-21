@@ -413,7 +413,8 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
     test(`denies ${JSON.stringify(cmd)}`, () => assertBlocked(cmd, unreadable(word)));
   }
 
-  for (const cmd of ['cat {a,b}\r', 'cat x\r', 'cat x?(y)', 'echo (x)']) {
+  // A `{` before a `(` is a group keyword (`{(echo hi); }`), not a word.
+  for (const cmd of ['cat {a,b}\r', 'cat x\r', 'cat x?(y)', 'echo (x)', '{(echo hi); }']) {
     test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));
   }
 
@@ -438,6 +439,11 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
     assertBlocked('X={1..100} cat .env', { code: 'secret-read', path: '.env' });
     assertBlocked('make X={a..z}{a..z}', { code: 'glob-too-complex', path: 'X={a..z}{a..z}' });
     assertBlocked('arr=({1..100}); cat {a..z}{a..z}', { code: 'glob-too-complex', path: '{a..z}{a..z}' });
+    // An assignment-shaped operand is a word bash makes many of: `-m X=1`, then `X=2` is the pattern.
+    assertBlocked('grep -m X={1..100} .env', { code: 'glob-too-complex', path: 'X={1..100}' });
+    // Only a `(` straight after a word ending `NAME=` opens an array.
+    assertBlocked('X= ; grep -m {1..100} .env', { code: 'glob-too-complex', path: '{1..100}' });
+    assertBlocked('time (grep -m {1..100} .env)', { code: 'glob-too-complex', path: '{1..100}' });
   });
 
   test('printf joins its operands into what it prints, so a word past the budget there is not judged as written', () => {
@@ -667,6 +673,8 @@ describe('gsd-secret-read-guard: an exempt file reached through an alternative (
     assertBlocked(`sort {-o,/tmp/out} ${dir()}.env.production`, { code: 'secret-read', path: path.join(repo, '.env.production') }, repo);
     // Only bash's and zsh's `$'…'` reading make this alternative `-o`; the plain reading keeps `$-o`.
     assertBlocked(`sort {$'-o',/tmp/out} ${dir()}.env.production`, { code: 'secret-read', path: path.join(repo, '.env.production') }, repo);
+    // Only zsh makes `{-..-}o` the option `-o`.
+    assertBlocked(`sort {-..-}o /tmp/out ${dir()}.env.production`, { code: 'secret-read', path: path.join(repo, '.env.production') }, repo);
   });
 });
 
