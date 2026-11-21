@@ -1714,6 +1714,9 @@ describe('#5966: the wave-boundary re-read fence, run under bash', () => {
       const r = runRefreshShell('-c', [[REAL_GSD_RUN, "PHASE_NUMBER='1'", fence].join('\n')], { interpreter: 'bash', cwd: proj });
       assert.equal(r.exitCode, 0, `${path.basename(file)}: ${r.stderr}`);
       assert.deepEqual(JSON.parse(r.stdout).plans.map((plan) => plan.id), ['01-01'], `${path.basename(file)} prints the index, not only assigns it`);
+      const failed = runRefreshShell('-c', [['gsd_run() { echo "read failed" >&2; return 3; }', "PHASE_NUMBER='1'", fence].join('\n')], { interpreter: 'bash', cwd: proj });
+      assert.notEqual(failed.exitCode, 0, `${path.basename(file)}: the print must not replace a failed read's exit status`);
+      assert.equal(failed.stdout, '', `${path.basename(file)}: a failed read prints no index`);
     }
   });
 
