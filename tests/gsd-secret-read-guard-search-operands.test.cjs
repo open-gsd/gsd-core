@@ -400,6 +400,7 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ['POSIXLY_CORRECT=1 grep -n KEY . --exclude .env', '.env'],
     ['grep -n KEY . --exclude .env', '.env'],
     ["rg KEY . -g '!dir/.env'", '!dir/.env'],
+    ["rg KEY . --glob '!dir/.env'", '!dir/.env'],
     // A replace string (xargs) or `{}` (find) fills a script with words the guard does not see, from a pipe, an
     // arg file or a redirect alike.
     ["cat list | xargs -I{} sh -c 'grep .env {}'", '.env'],

@@ -3738,6 +3738,8 @@ describe('gsd-secret-read-guard: xargs options and launcher sub-commands (#6282)
     "echo x | xargs -I {} sh -c 'cat .env'",
     "echo x | xargs --max-args 1 sh -c 'cat .env'",
     "echo x | xargs --delimiter x sh -c 'cat .env'",
+    // An ambiguous abbreviation (`--max`: four options) takes no value, so the shell after it is the sub-command.
+    "echo x | xargs --max sh -c 'cat .env'",
     "echo x | xargs -J % sh -c 'cat .env'",
     "echo x | xargs -R 1 sh -c 'cat .env'",
     "echo x | xargs -S 9 sh -c 'cat .env'",
