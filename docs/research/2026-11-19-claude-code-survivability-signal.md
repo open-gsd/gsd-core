@@ -1,7 +1,8 @@
 # Claude Code: can GSD tell a one-shot `claude -p` session from an interactive one?
 
 Date: 2026-11-19. Point-in-time record for issue #6119 (part of epic #5969). Base: `next` at
-`58619766`. Docs read at code.claude.com on 2026-11-10 and again on 2026-11-19.
+`de0eefe1`. Docs read at code.claude.com on 2026-11-10 and again on 2026-11-19; the sub-agents
+passages quoted below were re-read on 2026-11-21.
 
 Question (the spike #6119 asks for first): is there a **documented** host signal that a hook or a
 `gsd-tools` child process can read to tell a one-shot `claude -p` session from an interactive one?
@@ -48,6 +49,7 @@ The ceiling and its knob are documented:
 | SessionStart `source` (hooks) | `startup`, `resume`, `clear`, `compact`, `fork`. | No. No value names print mode. |
 | Setup event (hooks) | Fires only for `--init-only`, or `--init` / `--maintenance` with `-p`. | No. It does not fire on a normal `-p` run. |
 | Statusline JSON (statusline) | No mode field. | No. |
+| Sub-agents page, nested background behavior (sub-agents) | Documents a difference without a readable marker: in an "Interactive terminal session", "a subagent that launches background subagents waits for their results before it finishes"; under "`claude -p` and the Agent SDK", "the spawning subagent waits only for a foreground nested subagent". | No. It describes the two shapes; it gives a session nothing to read. |
 | `app.entrypoint` (monitoring-usage) | An OpenTelemetry attribute, "How the session was launched, such as `cli`, `sdk-cli`, `sdk-ts`, `sdk-py`, …", exported only with `OTEL_METRICS_INCLUDE_ENTRYPOINT=true`. | Not readable in-session. Its export to Bash or hook children is not documented. |
 
 A full-text search of the docs export (`code.claude.com/docs/llms-full.txt`) and the changelog found
@@ -83,9 +85,16 @@ rule out an environment-variable heuristic.
 
 - `claude` stays flattened. `dispatch-should-flatten` prints `true` for `claude` in every session
   shape, which is today's behavior and the fail-closed default.
+- Mechanically, that `true` comes from the `claude` descriptor's `backgroundDispatch: false`
+  (`capabilities/claude/capability.json`, matrix row `dispatch.backgroundDispatch`), not from any
+  survivability logic. That row's quoted evidence, and the `maxDepth: 5` row's, no longer appear on the
+  live sub-agents page ("up to three layers below the main conversation"). The verdict rests on that
+  row until #6007 corrects it, and #6007 must then keep `claude` at `true` for the reason above.
 - The capability matrix's `claude` section records the ceiling, its knob and this record.
 - `tests/command-routing-hub.test.cjs` pins the `true` verdict with each measured set of undocumented
-  markers, so a later env-var heuristic cannot slip in unnoticed.
+  markers. The rows pin the flatten function's output, not survivability; they go red for a heuristic
+  keyed on `CLAUDE_CODE_ENTRYPOINT` or `CLAUDE_CODE_SESSION_ATTENDED`, and for any change that flips
+  the `claude` verdict to `false`.
 
 #6119's first acceptance criterion (`true` under `-p`, `false` in an interactive session, on a named
 version) is therefore not met by this change. It can be met only if a documented signal appears, or
