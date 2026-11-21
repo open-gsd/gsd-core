@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execGit as execGitSeam, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
 import { isContainedIn } from './security.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4941 io.cts is an `export =` module, which only `import x = require` can name
 import ioMod = require('./io.cjs');
 
 const { formatDiagnosticToken } = ioMod;
