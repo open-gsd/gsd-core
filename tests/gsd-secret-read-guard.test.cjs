@@ -2192,6 +2192,16 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     '(echo .env; : {) | xargs cat',
   ]);
   allows(['(echo hi; echo {) | bash', 'echo ok | (cat; : {) | bash', 'for i in 1; do { echo hi; }; done | bash']);
+  // A `{name}` word before a redirect names the fd it opens, not a file `cat` reads, and a heredoc or here-string on
+  // that fd leaves `cat` reading the pipe.
+  blocks([
+    "echo 'cat .env' | (cat {fd}<<< x) | bash",
+    "echo 'cat .env' | { cat {fd}<<< x; } | sh",
+    "echo 'cat .env' | cat {fd}<<< 'x' | bash",
+    'echo .env | cat {fd}<<< x | xargs cat',
+    "echo 'cat .env' | cat {fd}<<EOF | bash\nx\nEOF",
+  ]);
+  allows(['echo ok | cat {fd}<<< x | bash', 'echo ok | cat {fd}<<EOF | bash\nx\nEOF']);
   allows([
     "echo ok | (cat) 3<<< 'echo hi' | bash",
     "echo 'cat .env' | (cat) 0<<< 'echo hi' | bash",
