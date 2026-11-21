@@ -1527,10 +1527,6 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // window `phaseHeadingAnchor`'s siblings anchor on — and the callback
     // below runs parse -> classify -> (maybe) mutate -> serialize entirely
     // within that section text, mirroring phase.cts's `writePlansField`.
-    const planSectionPattern = new RegExp(
-      `${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*`,
-      'i',
-    );
     const planCountText = isComplete
       ? `${summaryCount}/${planCount} plans complete`
       : `${summaryCount}/${planCount} plans executed`;
@@ -1602,7 +1598,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         : `; ${stillPending.length} ${m[2]}plan${stillPending.length === 1 ? '' : 's'} pending (${stillPending.join(', ')})`;
       return tail.slice(0, m.index) + replacement + tail.slice(m.index + m[0].length);
     };
-    roadmapContent = roadmapContent.replace(planSectionPattern, (sectionText: string): string => {
+    // #6169: the section is the level-bounded, fence-aware phase scope that missing-row
+    // detection reads (`withPhaseSection(..., true)`), so a `####` sub-heading or a fenced
+    // `#` line inside the phase no longer ends it early.
+    roadmapContent = withPhaseSection(roadmapContent, phaseNum, (sectionText: string): string => {
       const parsed = parsePlanningDoc(sectionText, 'ROADMAP.md');
       if (!parsed.ok) {
         // Unreadable section (e.g. an unterminated frontmatter fence) —
@@ -1679,7 +1678,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         return sectionText;
       }
       return out.value;
-    });
+    }, true);
 
     // If complete: check checkbox
     if (isComplete) {
@@ -1830,14 +1829,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       //
       // Pattern A: anchor to bare `Plans:` header (preferred).
       // Pattern B: fallback to bold summary when no bare header exists.
-      const insertRowsPatternA = new RegExp(
-        `(${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
-        'i'
-      );
-      const insertRowsPatternB = new RegExp(
-        `(${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*)[^\\n]*)`,
-        'i'
-      );
+      // #6169: both patterns run against the level-bounded, fence-aware phase scope
+      // (`withPhaseSection(..., true)`, the scope detection reads), so they carry no
+      // heading anchor or section-boundary lookahead of their own.
+      const insertRowsPatternA = /((?:^|\n)Plans:[^\n]*)/i;
+      const insertRowsPatternB = /((?:\*\*Plans\*\*:|\*\*Plans:\*\*)[^\n]*)/i;
 
       const sortedMissing = [...missingPlans].sort();
       const newRows = sortedMissing.map(p => `- [ ] ${p}`).join('\n');
@@ -1845,8 +1841,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
       // Archived `<details>` blocks are already hidden (maskArchivedDetails), so
       // archived duplicate phase headings cannot receive rows.
-      const regionA = roadmapContent.replace(insertRowsPatternA, inserter);
-      const withRows = regionA !== roadmapContent ? regionA : roadmapContent.replace(insertRowsPatternB, inserter);
+      const withRows = withPhaseSection(roadmapContent, phaseNum, (scope: string): string => {
+        const regionA = scope.replace(insertRowsPatternA, inserter);
+        return regionA !== scope ? regionA : scope.replace(insertRowsPatternB, inserter);
+      }, true);
       if (withRows !== roadmapContent) {
         roadmapContent = withRows;
         // Mark any newly-inserted rows that already have summaries as complete
