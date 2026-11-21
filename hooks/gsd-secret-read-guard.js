@@ -4841,24 +4841,40 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
   }
 }
 
-// The scripts npx or npm runs (#5492): the value of `-c` and of each config key npm runs as a command, `call` (`npm
-// exec`), `shell` (`npm explore`), `browser` (`npm docs`, through a shell) and `editor` (`npm edit`), given as an
-// option wherever it sits or as an `npm_config_<key>` variable in scope, in any case; and `npm explore`'s words after
-// `--`, which it joins and runs. Every subcommand is read, failing closed.
+// The scripts npx or npm runs (#5492): the value of `-c` (`-c=…` too) and of each config key npm runs as a command,
+// `call` (`npm exec`), `shell` (`npm explore`), `browser` (`npm docs`, through a shell) and `editor` (`npm edit`), as
+// a long option wherever it sits, spelled by any prefix of two or more letters since npm takes a unique one (`--edi`),
+// or as an `npm_config_<key>` variable in scope, in any case. npm edit / config edit and explore also take editor and
+// shell from EDITOR, VISUAL, SHELL or ComSpec. `npm explore`'s words after the package, `--` or not, are joined and
+// run, so they, and failing closed all its words after `explore`, are a script. Every subcommand is read.
 const NPM_RUNNERS = new Set(['npx', 'npx.cmd', 'npm', 'npm.cmd']);
-const NPM_COMMAND_OPTION_RE = /^--(call|shell|browser|editor)(?:=([\s\S]*))?$/;
+const NPM_COMMAND_KEYS = ['call', 'shell', 'browser', 'editor'];
+const NPM_LONG_OPTION_RE = /^--([a-z][a-z-]+)(?:=([\s\S]*))?$/;
 const NPM_COMMAND_VAR_RE = /^npm_config_(call|shell|browser|editor)$/i;
+const NPM_DEFAULT_VARS = ['EDITOR', 'VISUAL', 'SHELL', 'ComSpec'];
+const NPM_DEFAULT_USERS = new Set(['edit', 'explore', 'config']);
 function npmCallScripts(operands, ctx) {
   const scripts = [];
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
-    const option = NPM_COMMAND_OPTION_RE.exec(t);
-    if (option && option[2] !== undefined) scripts.push(option[2]);
-    else if ((option || t === '-c') && k + 1 < operands.length) scripts.push(operands[k + 1].text);
-    if (t === '--' && operands.some((w) => w.text === 'explore')) scripts.push(operands.slice(k + 1).map((w) => w.text).join(' '));
+    const option = NPM_LONG_OPTION_RE.exec(t);
+    const commandValued = option !== null && NPM_COMMAND_KEYS.some((key) => key.startsWith(option[1]));
+    if (commandValued && option[2] !== undefined) scripts.push(option[2]);
+    else if ((commandValued || t === '-c') && k + 1 < operands.length) scripts.push(operands[k + 1].text);
+    else if (t.startsWith('-c=')) scripts.push(t.slice(3));
+  }
+  const explore = operands.findIndex((w) => w.text === 'explore');
+  if (explore !== -1) {
+    const rest = operands.slice(explore + 1).map((w) => w.text);
+    scripts.push(rest.join(' '));
+    const positional = rest.filter((t) => t !== '--' && !t.startsWith('-'));
+    scripts.push(positional.slice(1).join(' '));
   }
   for (const name of shellVarNames(ctx.shellVars, NPM_COMMAND_VAR_RE, ctx)) {
     for (const value of shellVarValues(ctx.shellVars, name, ctx)) scripts.push(value);
+  }
+  if (operands.some((w) => NPM_DEFAULT_USERS.has(w.text))) {
+    for (const name of NPM_DEFAULT_VARS) for (const value of shellVarValues(ctx.shellVars, name, ctx)) scripts.push(value);
   }
   return scripts;
 }
