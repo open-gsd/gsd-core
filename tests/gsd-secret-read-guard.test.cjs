@@ -2172,6 +2172,15 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "echo 'cat .env' | (cat) {fd}<<EOF | bash\necho hi\nEOF",
   ]);
   allows(["echo ok | (cat) {fd}<<< 'echo hi' | bash"]);
+  // A reserved word written with a backslash in it (`\while`, `wh\ile`) is a plain command, which opens nothing.
+  blocks([
+    "for i in 1; do echo 'cat .env'; \\while :; done | bash",
+    "for i in 1; do echo 'cat .env'; wh\\ile :; done | bash",
+    "if true; then echo 'cat .env'; \\if :; fi | bash",
+    "case x in x) echo 'cat .env';; \\case y in z) :;; esac | bash",
+    "while :; do echo 'cat .env'; \\until :; done | bash",
+  ]);
+  allows(['for i in 1; do echo hi; \\while :; done | bash']);
   allows([
     "echo ok | (cat) 3<<< 'echo hi' | bash",
     "echo 'cat .env' | (cat) 0<<< 'echo hi' | bash",
