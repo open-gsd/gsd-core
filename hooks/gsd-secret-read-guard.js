@@ -4861,11 +4861,13 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
     }
   }
   // xargs splits what it reads at blanks and newlines (#5492), so `echo 'x if=.env' | xargs dd` hands dd `if=.env`:
-  // each piece of what the stage writes, and of the heredocs and here-strings it is given, is judged as an operand
-  // too, as it is and unquoted; its patterns and option values are not what xargs reads. Under `-I` or `-0` a piece
-  // may stay joined to the rest, so this fails closed there.
+  // each piece of the stage's words, of what it writes, and of the heredocs and here-strings it is given, is judged
+  // as an operand too, as it is and unquoted, since a command whose output is not modelled may echo its words. Only
+  // a search or listing tool (XARGS_SPLIT_QUIET) has its words skipped: its patterns and option values are not what
+  // xargs reads. Under `-I` or `-0` a piece may stay joined to the rest, so this fails closed there.
   const feeds = STAGE_FEEDS.get(upstreamWords) || NO_FEEDS;
   const texts = [...feeds.heredocs, ...feeds.hereStrings];
+  if (!commandReadings(upstreamWords).every(splitsQuietly)) for (const w of upstreamWords) texts.push(w.text);
   for (const written of reconstructedScripts(upstreamWords, ctx)) texts.push(written);
   for (const text of texts) {
     if (!XARGS_BLANK_RE.test(text)) continue;
@@ -4877,6 +4879,12 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
     }
   }
   return null;
+}
+const XARGS_SPLIT_QUIET = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'find', 'fd', 'ls', 'locate']);
+const GIT_SPLIT_QUIET = new Set(['grep', 'ls-files']);
+function splitsQuietly(cmd) {
+  if (cmd.base === 'git') return cmd.operands.length > 0 && GIT_SPLIT_QUIET.has(cmd.operands[0].text);
+  return XARGS_SPLIT_QUIET.has(cmd.base);
 }
 const XARGS_BLANK_RE = /[\s\0]/;
 const XARGS_BLANKS_RE = /[\s\0]+/;
