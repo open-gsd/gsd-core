@@ -799,15 +799,19 @@ describe('planning threat-ID revision issues from fresh plans', () => {
   let root;
   const fragment = path.join(__dirname, '..', 'gsd-core/workflows/plan-phase/steps/threat-id-check.md');
   const tools = path.join(__dirname, '..', 'gsd-core/bin/gsd-tools.cjs');
-  function runScan({ workstream = '', phase = '47', cli = 'node "$GSD_TEST_TOOLS" "$@"' } = {}) {
+  function runScan({ workstream = '', phase = '47', cli = 'node "$GSD_TEST_TOOLS" "$@"', importCommit = false, unset = '' } = {}) {
     const content = fs.existsSync(fragment) ? fs.readFileSync(fragment, 'utf8') : '';
     const after = content.split('## After planning')[1] || '';
     const block = after.split('```bash')[1]?.split('```')[0] || '';
+    const importWorkflow = path.join(__dirname, '..', 'gsd-core/workflows/import.md');
+    const finalize = importCommit ? fs.readFileSync(importWorkflow, 'utf8').split('<step name="plan_finalize">')[1] : '';
+    const commitBlock = finalize.split('```bash')[1]?.split('```')[0] || '';
     const script = [
       'set -u',
-      `gsd_run() { ${cli}; }`,
+      `gsd_run() { if [[ "$*" == 'query commit '* ]]; then echo 'commit reached'; else ${cli}; fi; }`,
+      unset,
       block,
-      'printf "%s" "$THREAT_ID_ISSUES"',
+      importCommit ? commitBlock : 'printf "%s" "$THREAT_ID_ISSUES"',
     ].join('\n');
     const scriptPath = path.join(root, 'threat-scan.sh');
     fs.writeFileSync(scriptPath, script);
@@ -887,6 +891,56 @@ describe('planning threat-ID revision issues from fresh plans', () => {
     assert.equal(result.exitCode, 1);
     assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
     assert.equal(result.stdout, '');
+  });
+  test('an imported colliding plan cannot reach the commit boundary', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01') });
+    const clear = runScan({ importCommit: true });
+    assert.equal(clear.exitCode, 0, clear.stderr);
+    assert.match(clear.stdout, /^commit reached/m);
+    seedPhase(root, '47-security', { '47-02-PLAN.md': plan('T-47-01') });
+
+    const result = runScan({ importCommit: true });
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /BLOCKED: imported plan threat-ID scan did not clear.*T-47-01/);
+    assert.equal(result.stdout, '');
+  });
+  for (const [variable, message] of [
+    ['PHASE', /needs a phase/],
+    ['GSD_WS', /needs explicit workstream scope/],
+  ]) {
+    test(`a missing ${variable} binding blocks the scan`, () => {
+      const result = runScan({ unset: `unset ${variable}`, cli: `printf '%s' '{"phase_found":true,"threat_id_duplicates":[],"threat_id_duplicate_count":0}'` });
+      assert.notEqual(result.exitCode, 0);
+      assert.match(result.stderr, message);
+      assert.equal(result.stdout, '');
+    });
+  }
+  for (const [name, duplicates, count] of [
+    ['a mismatched count', [], 1],
+    ['an invalid ID', [{ id: 47, plans: ['01', '02'] }], 1],
+    ['a single reported claimant', [{ id: 'T-47-01', plans: ['01'] }], 1],
+  ]) {
+    test(`scan validation rejects ${name}`, () => {
+      const payload = JSON.stringify({ phase_found: true, threat_id_duplicates: duplicates, threat_id_duplicate_count: count });
+      const result = runScan({ cli: `printf '%s' '${payload}'` });
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
+    });
+  }
+  test('collision threshold preserves every claimant across generated plan sets', () => {
+    const fc = require('fast-check');
+    fc.assert(fc.property(fc.uniqueArray(fc.integer({ min: 1, max: 9 }), { minLength: 3, maxLength: 3 }), planIds => {
+      for (const [index, planId] of planIds.entries()) {
+        seedPhase(root, '47-security', { [`47-0${planId}-PLAN.md`]: plan('T-47-01') });
+        const issues = scan();
+        if (index === 0) assert.deepEqual(issues, []);
+        else {
+          assert.equal(issues.length, 1);
+          assert.equal(issues[0].plan, planIds.slice(0, index + 1).map(id => `47-0${id}-PLAN.md`).sort().join(', '));
+        }
+      }
+      for (const id of planIds) fs.unlinkSync(absPlanningPath(root, 'phases', '47-security', `47-0${id}-PLAN.md`));
+    }), { numRuns: 3 });
   });
   test('file-backed scan data uses the same validation as inline data', () => {
     const payload = '{"phase_found":true,"threat_id_duplicates":[],"threat_id_duplicate_count":0}';

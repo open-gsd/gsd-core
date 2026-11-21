@@ -873,6 +873,24 @@ describe('#3771 preserves everything that legitimately binds', () => {
     assert.match(UI_PHASE, /## 9\. Revision Loop \(Max 2 Iterations\)/);
   });
 
+  test('phase threat-ID collisions stop before offering a revision override', () => {
+    const revision = PLAN_PHASE.split('## 12. Revision Loop')[1].split('## 12.5. Plan Bounce')[0];
+    const limit = revision.split('**If iteration_count >= 3:**')[1];
+    assert.match(revision, /Stall detection:[^\n]*THREAT_ID_ISSUES[^\n]*STOP without committing/); // allow-test-rule: source-text-is-the-product
+    assert.match(limit, /THREAT_ID_ISSUES[^\n]*STOP without committing[\s\S]*Only if `THREAT_ID_ISSUES` is `\[\]`, offer/); // allow-test-rule: source-text-is-the-product
+  });
+
+  test('chunked planning scans with the initialized scope before its per-plan commit', () => {
+    const chunked = read('gsd-core', 'workflows', 'plan-phase', 'steps', 'chunked-planning-mode.md');
+    const perEntry = chunked.split('7. **Commit, per entry')[1];
+    assert.match(perEntry, /threat-id-check\.md[^\n]*`PHASE` and the normalized `GSD_WS`[\s\S]*gsd_run query commit/); // allow-test-rule: source-text-is-the-product
+  });
+
+  test('the planner applies its phase commit scan only to phase-scoped dispatches', () => {
+    const commit = PLANNER.split('<step name="git_commit">')[1].split('</step>')[0];
+    assert.match(commit, /Quick and quick-batch[^\n]*Skip this entire step[\s\S]*For phase-scoped plans[^\n]*threat-id-check\.md/); // allow-test-rule: source-text-is-the-product
+  });
+
   test('required task fields and decision coverage still hold', () => {
     assert.match(PLAN_CHECKER, /\*\*FAIL the verification\*\* if any requirement ID from the roadmap is absent/);
     assert.match(PLANNER_REVISION, /\*\*DO NOT:\*\* Rewrite entire plans for minor issues/);

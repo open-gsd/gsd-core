@@ -1155,7 +1155,7 @@ Parse issue count from checker return: count BLOCKER + WARNING entries in the YA
 
 Display (only when entering the revision loop — skip if the paragraph above already proceeded to step 13): `Revision iteration {N}/3 -- {blocker_count} blockers, {warning_count} warnings`
 
-**Stall detection:** If `issue_count >= prev_issue_count`, apply the scan step’s § Revision stall.
+**Stall detection:** If `issue_count >= prev_issue_count` and `THREAT_ID_ISSUES` is non-empty, display it and STOP without committing. Otherwise apply the scan step’s § Revision stall.
 
 Set `prev_issue_count = issue_count`.
 
@@ -1283,13 +1283,13 @@ Spawn checker again (step 10), then increment `iteration_count`.
 
 **If iteration_count >= 3:**
 
-Apply threat-ID Revision routing.
+If `THREAT_ID_ISSUES` is non-empty, display it and STOP without committing.
 
 Recount BLOCKER + WARNING by the same rule — an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). If `issue_count` is 0 — PASSED with no BLOCKER/WARNING entry in the YAML block or in prose, or every entry in the block is explicitly INFO — display any advisories and proceed to step 13; the gate below fires on everything else (#3724).
 
 Display: `Max iterations reached. {N} issues remain:` + issue list
 
-Offer: 1) Force proceed, 2) Provide guidance and retry, 3) Abandon
+Only if `THREAT_ID_ISSUES` is `[]`, offer: 1) Force proceed, 2) Provide guidance and retry, 3) Abandon
 
 ## 12.5. Plan Bounce (Optional External Refinement)
 

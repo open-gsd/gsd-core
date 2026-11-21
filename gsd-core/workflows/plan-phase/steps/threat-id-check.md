@@ -10,7 +10,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 
 ## After planning
 
-After plan writes and before committing phase plans, scan fresh. In the orchestrator use the bound `PHASE` and `GSD_WS` from init. In agents bind `PHASE` to the dispatched phase and `GSD_WS` to the dispatched workstream option (empty for root scope). Report scan errors and stop before any commit.
+After plan writes and before committing phase plans, scan fresh. Run this block in the same shell as the CLI bootstrap above. Bind `PHASE` to the target phase and `GSD_WS` to the normalized `--ws name` option (a set but empty string for root scope). Callers supply these values from their init or dispatch context. Missing scope, missing phase, and scan errors block the commit. The scan reports IDs claimed by multiple live PLAN files, with the reserved SC row exempt.
 
 ```bash
 GSD_WS=${GSD_WS?"BLOCKED: threat-ID scan needs explicit workstream scope"}
@@ -20,10 +20,10 @@ if [[ -z "${PHASE:-}" ]]; then
 fi
 THREAT_SCAN=$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") || { echo "BLOCKED: threat-ID scan failed" >&2; exit 1; }
 if [[ "$THREAT_SCAN" == @file:* ]]; then THREAT_SCAN=$(cat "${THREAT_SCAN#@file:}") || { echo "BLOCKED: cannot read threat-ID scan payload" >&2; exit 1; }; fi
-THREAT_ID_ISSUES=$(THREAT_SCAN="$THREAT_SCAN" node -e 'const j=JSON.parse(process.env.THREAT_SCAN);if(j.phase_found===false)throw new Error("threat-ID scan phase not found");if(j.phase_found!==true||!Array.isArray(j.threat_id_duplicates)||!Number.isInteger(j.threat_id_duplicate_count)||j.threat_id_duplicate_count!==j.threat_id_duplicates.length)throw new Error("invalid threat-ID scan");const issues=j.threat_id_duplicates.map(d=>{if(typeof d.id!=="string"||!Array.isArray(d.plans)||d.plans.length<2)throw new Error("invalid duplicate claim");return {plan:d.plans.join(", "),dimension:"threat_id_uniqueness",severity:"blocker",required_property:"A numbered threat ID is claimed by at most one live plan in the phase.",description:d.id+" claimed by "+d.plans.join(", "),fix_hint:"Assign the colliding row a new phase threat ID and update its references."}});process.stdout.write(JSON.stringify(issues))') || { echo "BLOCKED: cannot validate threat-ID scan" >&2; exit 1; }
+THREAT_ID_ISSUES=$(THREAT_SCAN="$THREAT_SCAN" node -e 'const j=JSON.parse(process.env.THREAT_SCAN);if(j.phase_found===false)throw new Error("threat-ID scan phase not found");if(j.phase_found!==true||!Array.isArray(j.threat_id_duplicates)||j.threat_id_duplicate_count!==j.threat_id_duplicates.length)throw new Error("invalid threat-ID scan");const issues=j.threat_id_duplicates.map(d=>{if(typeof d.id!=="string"||!Array.isArray(d.plans)||d.plans.length<2)throw new Error("invalid duplicate claim");return {plan:d.plans.join(", "),dimension:"threat_id_uniqueness",severity:"blocker",required_property:"A numbered threat ID is claimed by at most one live plan in the phase.",description:d.id+" claimed by "+d.plans.join(", "),fix_hint:"Assign the colliding row a new phase threat ID and update its references."}});process.stdout.write(JSON.stringify(issues))') || { echo "BLOCKED: cannot validate threat-ID scan" >&2; exit 1; }
 ```
 
-Planner-agent use: before its own commit, correct newly authored rows and rescan; if unresolved, leave plans uncommitted and return the issues to the orchestrator. The following step-number routing applies to the orchestrator.
+Planner-agent use: before its own commit, correct newly authored rows and rescan; if unresolved, leave plans uncommitted and return the issues to the orchestrator. Use the revision routing below only in plan-phase. Import has its own commit guard.
 
 ### Revision routing
 
@@ -33,7 +33,9 @@ If `THREAT_ID_ISSUES` is non-empty (`[]` means empty), merge these BLOCKER issue
 
 ### Revision stall
 
-**Stall detection:** If `issue_count >= prev_issue_count`, first stop if threat-ID collisions remain:
+If threat-ID issues remain, display `THREAT_ID_ISSUES` and STOP without committing or offering a proceed option. Only when the scan is clear may the following stall options run.
+
+**Stall detection:** If `issue_count >= prev_issue_count`:
   Display: `Revision loop stalled — issue count not decreasing ({issue_count} issues remain after {N} iterations)`
 
   **If `stall_reentry_count < 2`:**

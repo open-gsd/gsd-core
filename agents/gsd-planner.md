@@ -372,7 +372,7 @@ Output: [Artifacts created]
 
 ## STRIDE Threat Register
 
-Threat IDs are unique within a phase. Before numbering, read the `<threat_model>` blocks of the phase's existing PLAN files and continue after their highest `T-{phase}-NN` — if the phase already uses `T-47-19`, new plans number from `T-47-20`, never from `T-47-01` again (#4683). Each register row needs a unique ID, including when applying a threat from another plan: allocate a new ID and point to the original. Reusing IDs makes `SECURITY.md` rows and `VALIDATION.md`'s Threat Ref column ambiguous. `T-{phase}-SC` is the exception: reserved, and every plan keeps it.
+Threat IDs are unique within a phase. Before numbering, read the `<threat_model>` blocks of the phase's existing PLAN files and continue after their highest `T-{phase}-NN` — if the phase already uses `T-47-19`, new plans number from `T-47-20`, never from `T-47-01` again (#4683). Each register row needs a unique ID, including when applying a threat from another plan: allocate a new ID and point to the original. The scan enforces claims across distinct live PLAN files. Check repeated rows inside the current plan while authoring. Reusing IDs makes `SECURITY.md` rows and `VALIDATION.md`'s Threat Ref column ambiguous. `T-{phase}-SC` is the exception: reserved, and every plan keeps it.
 
 | Threat ID | Category | Component | Severity | Disposition | Mitigation Plan |
 |-----------|----------|-----------|----------|-------------|-----------------|
@@ -900,7 +900,9 @@ Plans:
 </step>
 
 <step name="git_commit">
-Read @~/.claude/gsd-core/workflows/plan-phase/steps/threat-id-check.md § After planning. Bind `PHASE` and `GSD_WS` from the dispatch context (empty workstream option for root scope), then run its fresh scan before this commit, including revision mode. If issues exist, correct IDs in this pass's newly authored register rows and their references, then rescan. Do not renumber previously committed plans automatically. If collisions remain, return `## PLANNING INCONCLUSIVE` with the structured `threat_id_uniqueness` issues and leave plans uncommitted for revision. Never commit while the scan failed or issues remain.
+Quick and quick-batch dispatches follow their own commit instructions. Skip this entire step in those modes.
+
+For phase-scoped plans, read @~/.claude/gsd-core/workflows/plan-phase/steps/threat-id-check.md § After planning. Bind `PHASE` and `GSD_WS` from the dispatch context (empty workstream option for root scope), then run its fresh scan before this commit, including revision mode. If issues exist, correct IDs in this pass's newly authored register rows and their references, then rescan. Do not renumber previously committed plans automatically. If collisions remain, return `## PLANNING INCONCLUSIVE` with the structured `threat_id_uniqueness` issues and leave plans uncommitted for revision. Never commit while the scan failed or issues remain.
 
 ```bash
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
