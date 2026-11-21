@@ -1151,7 +1151,7 @@ Track `stall_reentry_count` (starts at 0; incremented each time "Adjust approach
 
 **If iteration_count < 3:**
 
-Count BLOCKER + WARNING entries in the YAML issues block (structured output from gsd-plan-checker); an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). Entries a `## VERIFICATION PASSED` return lists in prose count the same way (#5578). If the merged issue list has no BLOCKER or WARNING, treat `issue_count` as 0 and skip the stall check. Proceed to step 13 — likewise when every entry in the block is explicitly INFO (display them as advisories). Advisory format: `ℹ advisory — {dimension}: {description}` per INFO entry, listed once before the step-13 output.
+Parse issue count from checker return: count BLOCKER + WARNING entries in the YAML issues block and include fresh threat-ID issues as directed above; an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). Entries a `## VERIFICATION PASSED` return lists in prose count the same way (#5578). If the merged issue list has no BLOCKER or WARNING, treat `issue_count` as 0 and skip the stall check. Proceed to step 13 — likewise when every entry in the block is explicitly INFO (display them as advisories). Advisory format: `ℹ advisory — {dimension}: {description}` per INFO entry, listed once before the step-13 output.
 
 Display (only when entering the revision loop — skip if the paragraph above already proceeded to step 13): `Revision iteration {N}/3 -- {blocker_count} blockers, {warning_count} warnings`
 
@@ -1282,7 +1282,9 @@ Increment `iteration_count`. Apply threat-ID Revision routing. Spawn checker (st
 
 **If iteration_count >= 3:**
 
-Apply threat-ID Revision routing, then recount BLOCKER + WARNING — an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). If `issue_count` is 0 — PASSED with no BLOCKER/WARNING entry in the YAML block or in prose, or every entry in the block is explicitly INFO — display any advisories and proceed to step 13; the gate below fires on everything else (#3724).
+Apply threat-ID Revision routing.
+
+Recount BLOCKER + WARNING by the same rule — an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). If `issue_count` is 0 — PASSED with no BLOCKER/WARNING entry in the YAML block or in prose, or every entry in the block is explicitly INFO — display any advisories and proceed to step 13; the gate below fires on everything else (#3724).
 
 Display: `Max iterations reached. {N} issues remain:` + issue list
 
