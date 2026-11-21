@@ -226,7 +226,7 @@ earlier install and leaves any hook you wrote yourself in place. The install log
 says so in one line. A host with its own statusline can gain support by wiring a
 bridge writer and dropping the declaration.
 
-The debounce counter (`callsSinceWarn`, written on `PreCompact`) is a
+The debounce counter (`callsSinceWarn`, written on a top-level `PreCompact`) is a
 read-modify-write that assumes one session's hooks run one at a time. That is
 verified for Claude Code, the only host the tool-event monitor is registered on; it is the
 reason the assumption does not need to hold for other hosts, and a host that
