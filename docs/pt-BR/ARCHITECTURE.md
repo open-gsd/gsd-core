@@ -434,7 +434,9 @@ plan-phase
     │           linha STRIDE T-{phase}-SC adicionada para planos com instalação
     ├── Plan Checker → Loop de verificação (máximo 3x)
     │       └── Portão de pesquisa (Dimension 11): reprova os planos enquanto uma questão aberta do
-    │           RESEARCH.md não cita um D-NN de CONTEXT.md <decisions> que a responda
+    │           RESEARCH.md não cita só D-NNs de CONTEXT.md <decisions>, fora de Claude's Discretion,
+    │           um deles a respondendo; uma fonte citada resolve só uma lacuna factual. Pulado com o
+    │           loop de verificação (--skip-verify, workflow.plan_check: false, --research-phase)
     ├── Portão de cobertura de requisitos (REQ-IDs → planos)
     └── Portão de cobertura de decisões (CONTEXT.md `<decisions>` → planos, BLOQUEANTE — #2492)
     │

@@ -418,8 +418,10 @@ plan-phase
     │       └── [ASSUMED]/[SUS] 설치 전에 checkpoint:human-verify 삽입;
     │           설치 포함 계획에 T-{phase}-SC STRIDE 행 추가
     ├── 계획 검사기 → 검증 루프 (최대 3회)
-    │       └── 리서치 게이트 (Dimension 11): RESEARCH.md의 각 미해결 질문이 기록된 사용자 결정
-    │           (CONTEXT.md <decisions>의 D-NN)을 인용할 때까지 계획을 통과시키지 않음
+    │       └── 리서치 게이트 (Dimension 11): RESEARCH.md의 각 미해결 질문이 CONTEXT.md <decisions>의
+    │           D-NN만 Claude's Discretion 밖에서 인용하고 그중 하나가 답할 때까지 계획을 통과시키지
+    │           않음. 인용한 출처는 사실에 관한 공백만 메움. 검증 루프와 함께 건너뜀
+    │           (--skip-verify, workflow.plan_check: false, --research-phase)
     ├── 요구 사항 커버리지 게이트 (REQ-ID → 계획)
     └── 결정 커버리지 게이트 (CONTEXT.md `<decisions>` → 계획, 차단 — #2492)
     │
