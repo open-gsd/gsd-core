@@ -185,7 +185,8 @@
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
 //         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
-//         ansi-c-unterminated | ansi-c-undecodable | xargs-input-unseen | debugger-cli-spawn
+//         ansi-c-unterminated | ansi-c-undecodable | xargs-input-unseen | xargs-stdin-unrendered |
+//         xargs-delimiter-undecodable | debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
@@ -2907,10 +2908,13 @@ function unseenWordsAt(command, joined) {
   return -1;
 }
 
-// #6282: the file an input redirect the scan is inside gives fd 0 (`sh -c 'xargs cat' < list`, `{ xargs cat; } <
-// list`, `exec < list`), which an xargs there with no pipe or redirect of its own reads its words from; else null.
+// #6282: the stdin of the segment the scan is in (segmentStdin), which an xargs there reads its words from, and the
+// shell, group or function it runs inherits (`sh -c 'xargs cat' < list`, `{ xargs cat; } <<< .env`); else null.
 let xargsStdinFrom = null;
-const REDIRECT_WIDE_WORDS = new Set(['exec', 'done', 'fi', 'esac']);
+const NO_STDIN = { texts: [], unseen: null };
+const OPENING_WORDS = new Set(['while', 'until', 'for', 'select', 'if', 'case']);
+const CLOSING_WORDS = new Set(['done', 'fi', 'esac']);
+const DEFINES_FUNCTION_RE = /\(\s*\)|(?<![\w./-])function(?![\w./-])/;
 
 // The separators that end a command for good: what follows one cannot supply the words of the command before it.
 const LIST_SEPS = new Set([';', '\n', '&&', '||', '&']);
@@ -2961,18 +2965,12 @@ function scanSegments(command, depth, reading, unseenAt) {
   }
 
   heredocBodiesBySegMap.set(bySeg, heredocsBySeg);
-  // A redirect on a group, `exec`, or a loop's or conditional's end reaches every command in the scan.
   const inheritedStdin = xargsStdinFrom;
-  let wideStdin = null;
-  for (const segTokens of bySeg.values()) {
-    const from = stdinRedirect(segTokens);
-    const first = commandWords(segTokens)[0];
-    if (from !== null && (!first || REDIRECT_WIDE_WORDS.has(lastSegment(first.text)))) wideStdin = from;
-  }
+  const groupStdin = groupStdins(tokens, bySeg, maxSeg, command);
   for (let s = 0; s <= maxSeg; s++) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
-    xargsStdinFrom = stdinRedirect(segTokens) ?? wideStdin ?? inheritedStdin;
+    xargsStdinFrom = segmentStdin(s, bySeg, sepAfter, groupStdin.get(s) || inheritedStdin);
     noSearchCarveOut = unseenAt === 0 || (unseenAt !== -1 && !(segEnd.get(s) <= unseenAt));
 
     const words = [];
@@ -3285,13 +3283,14 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // #6282: words from a source the guard cannot read (an arg file, `< list`, a printf it does not render) may name
   // a secret the sub-command then reads, so they are denied unless the sub-command takes none of them. So are words
   // split at a `-d` delimiter it cannot decode.
-  const stdin = xargsStdin(s, bySeg, sepAfter);
+  const stdin = xargsStdinFrom || NO_STDIN;
   const split = delimiter === null ? null : xargsDelimiter(delimiter);
-  const unseen = argFile !== null ? argFile : stdin.unseen !== null ? stdin.unseen : delimiter !== null && split === null ? delimiter : null;
-  if (unseen !== null) {
+  let unseen = { code: 'xargs-input-unseen', text: argFile };
+  if (argFile === null) unseen = stdin.unseen !== null ? { code: stdin.code, text: stdin.unseen } : { code: 'xargs-delimiter-undecodable', text: split === null ? delimiter : null };
+  if (unseen.text !== null) {
     if (!xargsSubTakesWords(subIsShell, subOperands, replaceStr)) return null;
     for (const w of operands.slice(0, subIdx)) if (operandNamesSecret(w.text)) return secretRead(w.text);
-    return { code: 'xargs-input-unseen', text: unseen };
+    return unseen;
   }
   // The words of a here-string, heredoc or knowable pipe source, as xargs may split them.
   const stdinWords = xargsStdinWords(stdin.texts, split);
@@ -3335,23 +3334,21 @@ function xargsSubTakesWords(subIsShell, subOperands, replaceStr) {
   return !script || /[$`]/.test(script.text) || (replaceStr !== null && script.text.includes(replaceStr));
 }
 
-// #6282: the stdin xargs reads its words from in segment `s`, as far as the command shows it. `texts` are the
-// here-strings and heredoc bodies given to it, else what the stage piped in writes (pipeSourceText, and an echo or
-// printf as printedText renders it). `unseen` names a source the guard cannot read, else null: an input redirect
-// from a file or another descriptor (`< list`, `<&3`), also one on an enclosing group, `exec` or shell that the
-// segment inherits (xargsStdinFrom), or an echo or printf printedText does not render.
-function xargsStdin(s, bySeg, sepAfter) {
-  const segTokens = bySeg.get(s) || [];
-  const redirected = stdinRedirect(segTokens);
-  if (redirected !== null) return { texts: [], unseen: redirected };
-  const texts = [...hereStringTargets(segTokens), ...((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []).map((h) => h.text)];
-  if (texts.length > 0) return { texts, unseen: null };
+// #6282: the stdin of segment `s`, as far as the command shows it, else `fallback` (what an enclosing group, `exec`,
+// shell or function gives it). `texts` are its here-strings and heredoc bodies, else what the stage piped in writes
+// (pipeSourceText, and an echo or printf as printedText renders it). `unseen` names a source the guard cannot read,
+// with the block's `code`: an input redirect from a file or another descriptor (`< list`, `<&3`), or the operands of
+// an echo or printf printedText does not render. A stage piped in that is not knowable gives no texts.
+function segmentStdin(s, bySeg, sepAfter, fallback) {
+  const own = ownStdin(s, bySeg);
+  if (own !== null) return own;
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if (!((op === '|' || op === '|&') && prevSeg >= 0)) return { texts, unseen: xargsStdinFrom };
+  if (!((op === '|' || op === '|&') && prevSeg >= 0)) return fallback;
+  const texts = [];
   const prev = resolveCommand(commandWords(bySeg.get(prevSeg) || []));
   if (prev && (prev.base === 'echo' || prev.base === 'printf')) {
     const printed = printedText(prev);
-    if (printed === null) return { texts: [], unseen: prev.operands.map((w) => w.text).join(' ') };
+    if (printed === null) return { texts: [], unseen: prev.operands.map((w) => w.text).join(' '), code: 'xargs-stdin-unrendered' };
     texts.push(printed);
   }
   const piped = pipeSourceText(s, bySeg, sepAfter);
@@ -3359,16 +3356,78 @@ function xargsStdin(s, bySeg, sepAfter) {
   return { texts, unseen: null };
 }
 
+// What segment `s`'s own redirects give fd 0: an input redirect (unseen), or its here-strings and heredoc bodies.
+function ownStdin(s, bySeg) {
+  const segTokens = bySeg.get(s) || [];
+  const redirected = stdinRedirect(segTokens);
+  if (redirected !== null) return { texts: [], unseen: redirected, code: 'xargs-input-unseen' };
+  const texts = [...hereStringTargets(segTokens), ...((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []).map((h) => h.text)];
+  return texts.length > 0 ? { texts, unseen: null } : null;
+}
+
+// The stdin each segment gets from a redirect beyond its own (#6282): one on a `{ }` or `( )` group reaches the
+// segments inside it, one on a loop's or conditional's closing word the segments since its opening word, and one on
+// `exec` the segments after it. In a command that defines a function, a redirect on any segment reaches every one,
+// since a call to the function runs a body written elsewhere (`f() { xargs cat; }; f < list`). Innermost first;
+// `next` skips the segments already reached, so nested groups cost one pass, not one per group.
+function groupStdins(tokens, bySeg, maxSeg, command) {
+  const reach = new Map();
+  const next = Array.from({ length: maxSeg + 2 }, (_, k) => k);
+  const unreached = (k) => {
+    while (next[k] !== k) {
+      next[k] = next[next[k]];
+      k = next[k];
+    }
+    return k;
+  };
+  const spread = (from, to, stdin) => {
+    if (stdin === null) return;
+    for (let k = unreached(from); k <= to; k = unreached(k)) {
+      reach.set(k, stdin);
+      next[k] = k + 1;
+    }
+  };
+  const groups = [];
+  for (const t of tokens) {
+    if (t.kind !== 'sep') continue;
+    if (t.text === '{' || t.text === '(') groups.push(t.seg + 1);
+    else if ((t.text === '}' || t.text === ')') && groups.length > 0) spread(groups.pop(), t.seg, ownStdin(t.seg + 1, bySeg));
+  }
+  const blocks = [];
+  for (let s = 0; s <= maxSeg; s++) {
+    const first = commandWords(bySeg.get(s) || [])[0];
+    if (!first) continue;
+    if (OPENING_WORDS.has(first.text)) blocks.push(s);
+    else if (CLOSING_WORDS.has(first.text) && blocks.length > 0) spread(blocks.pop(), s - 1, ownStdin(s, bySeg));
+    else if (lastSegment(first.text) === 'exec') spread(s + 1, maxSeg, ownStdin(s, bySeg));
+  }
+  if (DEFINES_FUNCTION_RE.test(command)) {
+    for (let s = 0; s <= maxSeg; s++) {
+      const own = ownStdin(s, bySeg);
+      if (own !== null) {
+        spread(0, maxSeg, own);
+        break;
+      }
+    }
+  }
+  return reach;
+}
+
 // What an echo or printf writes, for xargs to read (#6282): echo's operands after its `-neE` flags, or printf's
 // format filled with its operands (`%s`, again while operands remain; `%%`), each with `\n`, `\t`, `\\` and a
 // lone `\0` read as what they print. null for anything else, which it does not render: another escape (`\x2e`,
-// `\056`), another conversion (`%b`, `%d`) or a printf option (`-v`).
+// `\056`) in printf or `echo -e`, another conversion (`%b`, `%d`) or a printf option (`-v`).
 function printedText(cmd) {
   const echo = cmd.base === 'echo';
   let words = cmd.operands.map((w) => w.text);
+  // echo without -e prints an escape it does not know as written (`echo 'src\build.log'`).
+  let echoEscapes = false;
   if (echo) {
     let start = 0;
-    while (start < words.length && /^-[neE]+$/.test(words[start])) start++;
+    for (; start < words.length && /^-[neE]+$/.test(words[start]); start++) {
+      const flags = words[start];
+      if (flags.includes('e') || flags.includes('E')) echoEscapes = flags.lastIndexOf('e') > flags.lastIndexOf('E');
+    }
     words = [words.slice(start).join(' ')];
   } else if (words[0] === '--') {
     words = words.slice(1);
@@ -3382,6 +3441,7 @@ function printedText(cmd) {
       if (esc === 'n' || esc === 't') return '\n';
       if (esc === '0') return '\0';
       if (esc === '\\') return '\\';
+      if (echo && !echoEscapes) return m;
     } else if (echo) {
       return m;
     } else if (conv === '%') {
@@ -3398,13 +3458,15 @@ function printedText(cmd) {
 }
 
 // The words xargs may read from `texts`: each text, its lines, its pieces at the `-d`/`-0` delimiter `split` when
-// one is given, and its pieces between blanks, quotes, backslashes and other common delimiters (`,` `;` `:` `|` `=`,
-// NUL), so a name is found however xargs splits it.
+// one is given, else the text with the quotes and backslashes xargs removes taken out (`.e"n"v` is `.env`) and its
+// blank-separated pieces, and its pieces between blanks, quotes, backslashes and other common delimiters (`,` `;`
+// `:` `|` `=`, NUL), so a name is found however xargs splits it.
 function xargsStdinWords(texts, split) {
   const words = [];
   for (const text of texts) {
     words.push(text, ...text.split('\n'), ...text.split(/[\s"'\\,;:|=\0]+/));
     if (split !== null) words.push(...text.split(split));
+    else words.push(...xargsUnquoted(text).split(/\s+/));
   }
   return words.filter((text) => text !== '').map((text) => ({ text }));
 }
@@ -3559,6 +3621,14 @@ function reasonFor(code, tool, target) {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
       'alternatives, or holds too many brace groups to expand, and cannot be checked for ' +
       'secret-file matches. Use a narrower glob.';
+  }
+  if (code === 'xargs-stdin-unrendered') {
+    return `Secret read guard: xargs takes the names its command reads from what '${target}' prints, which uses an ` +
+      "escape or conversion this hook does not render to check for secret-file names. Use printf '%s\\n' and plain names.";
+  }
+  if (code === 'xargs-delimiter-undecodable') {
+    return `Secret read guard: xargs splits the names its command reads at the delimiter '${target}', which this ` +
+      'hook cannot decode to check them for secret-file names. Give -d one character or a single escape.';
   }
   if (code === 'xargs-input-unseen') {
     return `Secret read guard: xargs takes the names its command reads from '${target}', which this hook cannot ` +
