@@ -16,16 +16,20 @@ const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const EXECUTE_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+const CLOSE_TODOS_STEP = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'close-phase-todos.md');
 
-// Extract the close_phase_todos step body so assertions never match unrelated
-// steps elsewhere in the workflow (same isolation pattern as the #2415 test).
+// execute-phase.md keeps the close_phase_todos step and points it at the step file that
+// holds its bash (moved there to keep the host under its ADR-857 ceiling). Assert the
+// pointer, then return the step file, so assertions never match unrelated steps.
 function readClosePhaseTodosStep() {
   const content = fs.readFileSync(EXECUTE_PHASE, 'utf8');
   const stepStart = content.indexOf('<step name="close_phase_todos">');
   assert.ok(stepStart > -1, 'close_phase_todos step must exist in execute-phase.md');
   const stepEnd = content.indexOf('</step>', stepStart);
   assert.ok(stepEnd > stepStart, 'close_phase_todos step must be properly closed');
-  return content.slice(stepStart, stepEnd);
+  assert.match(content.slice(stepStart, stepEnd), /read and execute `execute-phase\/steps\/close-phase-todos\.md`/,
+    'close_phase_todos must read the step file that carries its bash');
+  return fs.readFileSync(CLOSE_TODOS_STEP, 'utf8');
 }
 
 // Strip bash `#` comment lines so doc prose mentioning a name doesn't satisfy a
