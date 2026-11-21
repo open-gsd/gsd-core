@@ -1754,15 +1754,13 @@ function braceCannotNameSecret(raw, reading, shell) {
 // (resolveCommand): only as an operand, not the command or a wrapper's operand, of a command whose operands are
 // all judged by name, so the number and order of the words it makes cannot change a verdict. A positional
 // carve-out (search tools, git pathspecs, cp/mv destinations, container `--env-file`), or a command that reads its
-// operands by position (xargs, find, watch, a shell), could: `grep -m {1..100} .env` makes `.env` a file. `piped`:
-// the segment's output feeds a pipe.
-function braceWordInPlace(word, cmd, piped) {
+// operands by position (xargs, find, watch, a shell), could: `grep -m {1..100} .env` makes `.env` a file.
+function braceWordInPlace(word, cmd) {
   if (cmd === null || !cmd.operands.includes(word)) return false;
   const { base } = cmd;
   if (SEARCH_TOOLS.has(base) || CONTAINER_RUNTIMES.has(base) || SHELL_INTERPRETERS.has(base)) return false;
-  // A printf piped on prints its operands for whatever reads the pipe (reconstructedScript feeds a shell them).
-  if (base === 'printf' && piped) return false;
-  return !['xargs', 'find', 'find.exe', 'watch', 'git', 'git.exe', 'cp', 'mv'].includes(base);
+  // echo and printf print their operands for whatever reads their output, a shell among them (reconstructedScript).
+  return !['xargs', 'find', 'find.exe', 'watch', 'git', 'git.exe', 'cp', 'mv', 'echo', 'printf'].includes(base);
 }
 
 // Whether segment `s` is the elements of an array assignment (`arr=({1..100})`, `declare -a a+=(…)`): the values
@@ -3299,8 +3297,7 @@ function scanCommand(command, depth, reading) {
     if (budgetHit === null && !braceArrayElements(s, bySeg, sepAfter)) {
       // bash makes no words of a leading assignment's braces (`X={1..100} make`), so it is not held to the budget.
       const assigned = (k) => words.slice(0, k + 1).every((w) => ASSIGNMENT_RE.test(w.text));
-      const piped = sepAfter.get(s) === '|' || sepAfter.get(s) === '|&';
-      const over = words.find((w, k) => w.braceOverBudget && !assigned(k) && !braceWordInPlace(w, cmd, piped));
+      const over = words.find((w, k) => w.braceOverBudget && !assigned(k) && !braceWordInPlace(w, cmd));
       if (over !== undefined) budgetHit = { code: 'glob-too-complex', text: over.text };
     }
     if (!cmd) continue;
