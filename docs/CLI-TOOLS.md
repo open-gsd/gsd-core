@@ -1427,7 +1427,18 @@ shapes as not halted, in both commands and with no entry in `diagnostics[]`:
   `---` whose CR is the last byte read is not one), wherever `status` sits in
   it. Within those 64 KiB, a line of four or more dashes, or a last line that
   the limit cuts to `---` followed only by spaces or tabs, closes the
-  frontmatter instead, and the SUMMARY can then read as halted.
+  frontmatter instead, and the SUMMARY can then read as halted;
+- frontmatter that `extractFrontmatter` rejects as a whole, which then reads
+  as empty: a YAML syntax error anywhere in it, before or after `status`, or
+  an anchor (`&a`) or alias (`*a`) anywhere in it;
+- a `status` that is not a single value: a sequence, whether flow
+  (`status: [halted]`) or block (`- halted` on the line under `status:`);
+- a `status` nested under another key rather than at the top level;
+- a SUMMARY encoded as UTF-16, with or without a BOM.
+
+With more than one top-level `status` key, the last one decides, whichever
+way it reads: `status: halted` then `status: complete` reads as not halted,
+and the reverse reads as halted.
 
 #### Large payloads
 
