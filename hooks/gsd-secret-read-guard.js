@@ -1740,8 +1740,11 @@ function tokenize(str, reading) {
   let expectTag = null;
   let unreadable = null;
   let escaped = false;
+  let nestedMark = 0; // nested.length when the word being built began
 
   const flush = () => {
+    const subst = nested.length > nestedMark;
+    nestedMark = nested.length;
     if (!hasWord) return;
     if (expectTag) {
       // Record the current seg (still the `<<` segment — flush runs before the
@@ -1753,8 +1756,10 @@ function tokenize(str, reading) {
       // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
       const nul = reading === 'zsh' ? buf.indexOf('\0') : -1;
       tokens.push({ kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg });
-      // A backslash quotes too: `\while` is a command, not a reserved word (#5492).
+      // A backslash quotes too: `\while` is a command, not a reserved word; `subst` marks a word holding a `$( )` or
+      // backticks, whose output may be the command's stdin (#5492).
       if (escaped) tokens[tokens.length - 1].escaped = true;
+      if (subst) tokens[tokens.length - 1].subst = true;
     }
     buf = '';
     quoted = 'none';
@@ -1925,7 +1930,8 @@ function tokenize(str, reading) {
       // Emit a word carrying the inner script so a shell / `source` operand
       // (`sh <(echo 'cat .env')`) can reconstruct it; the bare nested recursion
       // above only sees `echo …`, whose operands are not read.
-      tokens.push({ kind: 'word', text: str.slice(i, e + 1), quoted: 'none', seg, procsub: inner });
+      tokens.push({ kind: 'word', text: str.slice(i, e + 1), quoted: 'none', seg, procsub: inner, subst: true });
+      nestedMark = nested.length;
       i = e + 1;
       continue;
     }
@@ -1942,6 +1948,7 @@ function tokenize(str, reading) {
           if (!b.quoted) collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
         }
         heredocs = [];
+        nestedMark = nested.length;
         i = r.end;
       }
       continue;
@@ -4996,6 +5003,7 @@ function commandHead(segTokens) {
 // A stage whose output does not come from its stdin: an echo or a printf, a `cat` or `tee` given a heredoc or
 // here-string of its own on fd 0, or a `cat` naming files and not `-` (`cat gen.sh`, whose text is not knowable).
 function writesOwnText({ words, cmdWords, feeds }) {
+  if (words.some((w) => w.subst)) return false; // `echo "$(cat)"` may print its stdin
   const fed = !feeds.moved && (feeds.heredocs.length > 0 || feeds.hereStrings.length > 0);
   return [words, cmdWords].some((ws) => commandReadings(ws).some((cmd) => cmd.base === 'echo' || cmd.base === 'printf'
     || (fed && (cmd.base === 'cat' || cmd.base === 'tee')) || (cmd.base === 'cat' && catReadsFilesOnly(cmd.operands))));
