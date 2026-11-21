@@ -2033,6 +2033,20 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "npm explore --prefix x lodash 'cat .env'",
   ]);
   allows(["EDITOR='cat .env' npm install", "SHELL='cat .env' npm test", "npm explore lodash ls"]);
+
+  // pnpm exec / dlx (pnpx, pnx) with `-c` / `--shell-mode`, also in a cluster (`-rc`), run their command words through
+  // a shell, and `yarn exec` (Berry) runs its words as a shell script; each is read as one, also behind a wrapper.
+  blocks([
+    "pnpm dlx -c 'cat .env'",
+    "pnpm exec --shell-mode 'cat .env'",
+    "pnpm -rc exec 'cat .env'",
+    "pnpx --package cowsay -c 'cat .env | cowsay'",
+    "pnx -c 'cat .env'",
+    "yarn exec 'cat .env'",
+    "caffeinate pnpm exec -c 'cat .env'",
+    "strace -f yarn exec 'cat .env'",
+  ]);
+  allows(["pnpm exec -c 'echo .env'", "pnpm exec eslint .", "yarn exec 'ls -a'", "pnpm dlx create-vite app"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
