@@ -424,11 +424,16 @@ Report:
 
 **execute:pre (#5848):** read and execute `execute-phase/steps/pre-execute-gate-hooks.md`; a gate block HALTS here.
 
-**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** Every all-filtered arm above has already exited or jumped to `aggregate_results` / `update_roadmap`; reaching here means the post-filter list is non-empty. A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
+**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
 ```bash
+PHASE_NUMBER="{phase_number}"
+PHASE_NAME=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
+PLAN_COUNT=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick plan_count)
+[[ "$PLAN_COUNT" =~ ^[0-9]+$ ]] || { echo "phase ${PHASE_NUMBER} not found" >&2; exit 1; }
+[ -n "$PHASE_NAME" ] || PHASE_NAME=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
 gsd_run query state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
-This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
+This records the active phase and plan counts in STATE.md.
 </step>
 
 <step name="cross_ai_delegation">
