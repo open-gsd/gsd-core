@@ -3488,8 +3488,9 @@ function normalizeKimiPayload(data) {
 // under its own catch. A stack overflow there is held as `command-too-complex`, the
 // deny main's catch gives one; any other error finds nothing. Either way the scans
 // after it still run, and the command gets the crash verdict only when nothing
-// denies it (main). Tests call it in process with a small budget.
-function scanBashReadings(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
+// denies it (main). Tests call it in process with a small budget, and can pass the
+// spawn check (`spawnCheck`): no command is known that overflows it alone.
+function scanBashReadings(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS, spawnCheck = scanDebuggerSpawn) {
   setCommandBudget(budget, separatorBudget);
   splitSeen = false;
   splitTooDeep = false;
@@ -3512,7 +3513,7 @@ function scanBashReadings(command, budget = MAX_SCAN_CHARACTERS, separatorBudget
       // never under the reading that ran first: a split string can hold a
       // command that writes or runs a program where the unsplit reading saw `cat`.
       exemption.bashReadOnly = null;
-      for (const scan of [scanBashReading, scanDebuggerSpawn]) {
+      for (const scan of [scanBashReading, spawnCheck]) {
         const block = attempt(() => scan(command));
         if (block === null) continue;
         if (block.code === 'secret-read' || block.code === 'debugger-cli-spawn' || !splitSeen) return { block, threw };

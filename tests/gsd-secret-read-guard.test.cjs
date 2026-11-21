@@ -1893,6 +1893,22 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
       assert.equal(block === null ? null : block.code, 'command-too-complex', 'split command overflows the spawn check');
     });
 
+    // The row above cannot tell which catch denies: the secret scan overflows on the same
+    // body, and any body deep enough to overflow the spawn check is nested past
+    // MAX_NESTING_DEPTH, which the secret scan denies first (#6136). So this row passes
+    // scanBashReadings a spawn check that overflows the stack, before a split option and
+    // after one: the overflow is denied as command-too-complex, never left to the crash
+    // verdict's allow. Any other error the spawn check throws finds nothing, as on `next`.
+    test('a stack overflow in the debugger-spawn check is denied as command-too-complex, with no split and after one', () => {
+      const overflows = () => { const deeper = (n) => deeper(n + 1) + 1; return deeper(0); };
+      const fails = () => { throw new TypeError('a spawn check bug'); };
+      for (const command of ['echo hi', "env -S 'echo hi'"]) {
+        assert.deepEqual(scanBashReadings(command, undefined, undefined, overflows), { block: { code: 'command-too-complex', text: '' }, threw: true }, command);
+        assert.deepEqual(scanBashReadings(command, undefined, undefined, fails), { block: null, threw: true }, command);
+        assert.deepEqual(scanBashReadings(command), { block: null, threw: false }, `${command}: the real spawn check finds nothing`);
+      }
+    });
+
     // 200,000 separators after the string: one reading's scan and spawn check charge
     // 400,002 of the 524,288, so either reading alone fits, and the reading after
     // the first does not get a budget of its own. (In process the GNU split reading
