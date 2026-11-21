@@ -66,7 +66,7 @@ research → plan → execute → verify pipeline:
 
 | Category | Agents | Typical parallelism |
 |---|---|---|
-| Researchers | `gsd-project-researcher`, `gsd-phase-researcher`, `gsd-ui-researcher`, `gsd-advisor-researcher` | 4 parallel (stack, features, architecture, pitfalls) |
+| Researchers | `gsd-project-researcher`, `gsd-phase-researcher`, `gsd-ui-researcher`, `gsd-advisor-researcher` | Up to 4 parallel (stack, features, architecture, pitfalls) |
 | Synthesisers | `gsd-research-synthesizer` | Sequential, after researchers complete |
 | Planners | `gsd-planner`, `gsd-roadmapper` | Sequential |
 | Checkers | `gsd-plan-checker`, `gsd-integration-checker`, `gsd-ui-checker`, `gsd-nyquist-auditor` | Sequential, up to 3 revision iterations |
