@@ -378,25 +378,20 @@ const WRAPPERS = new Map([
   ['exec', { short: 'a' }],
 ]);
 
-// A further reading of a segment's command (#5779). The walk over WRAPPERS
-// stops at a word it does not know and takes that word as the command, so
-// `then curl …`, `! bash -c …` and `time ! cat …` hide the command behind it.
-// This reading walks past those words too, and the guard runs it as a whole
-// scan of its own (furtherReading), after the plain scans have found nothing.
-// It only adds: the plain scan still checks the operands of the word it stopped
-// at, so what it denies stays denied whatever this reading finds there
-// (`! file -f .env`, `if [ -f .env ]; then`, a script named `repeat`).
-//   keyword  a shell keyword, not only a program, so another keyword or an
-//            assignment may follow it (`time ! cmd`, `time A=b cmd`)
+// A further reading of a segment's command (#5779). The WRAPPERS walk stops at a
+// word it does not know and takes it for the command, so `then curl …`, `! bash
+// -c …` and `time ! cat …` hide the command behind it. This reading walks past
+// those words, as a scan of its own (furtherReading) after the plain scans found
+// nothing. It only adds: the plain scan still checks the operands of the word it
+// stopped at, so what it denies stays denied (`! file -f .env`, `if [ -f .env ];
+// then`, a script named `repeat`).
+//   keyword  a shell keyword, so a keyword or an assignment may follow (`time ! cmd`)
 //   count    the next word is a count, whatever it looks like (`repeat -1+2 cmd`)
-//   assigns  here a pattern, the wrapper's own rule for a word that sets a
-//            variable: env takes any word holding an `=`, sudo's parse_args one
-//            that does not start with `/` or `=`. doas has no such form
-//   dashDashEndsAssigns  a word right after `--` is no assignment: sudo reads
-//            `VAR=value` only while its `got_end_of_args` is false, which tests
-//            whether the previous word is `--`, an option's value included, so
-//            `sudo -- A=b cmd` and `sudo -u -- A=b cmd` run a program named
-//            `A=b`. env still assigns there
+//   assigns  the wrapper's rule for a word that sets a variable: env takes any word
+//            holding `=`, sudo's parse_args one not starting `/` or `=`; doas none
+//   dashDashEndsAssigns  a word right after `--` is no assignment: sudo's
+//            `got_end_of_args` tests whether the previous word is `--`, so
+//            `sudo -- A=b cmd` runs a program named `A=b`. env still assigns there
 //   dash     a lone `-` is an option (env's `-i`)
 const FURTHER_WRAPPERS = new Map([
   ...WRAPPERS,
@@ -2066,25 +2061,19 @@ function isRawNameBefore(str, i, len) {
 }
 
 // Index of the `)` closing the paren opened just before `i`, as bash's
-// parse_matched_pair reads a `((` body (parse_dparen): quotes hide a paren,
-// `$'…'` and backquotes honour a backslash, and no heredoc body is skipped;
-// str.length when none does. It records into `dparen.closes`, keyed by the
-// index after each nested `(`, the close of every paren it passes, so the `((`
-// of a command cost one scan between them.
-//
-// A scan that meets a quote no character closes walks to the end of the string
-// and records nothing for the `((` after it, so each of those walks again: a run
-// of `((x "${"(` cost a scan per `((`, 139 s at 990 KB. So each scan charges the
-// distance it walked to the reader budget (chargeReader), the further reading's
-// own (scanFurtherReading), and a command that spends it is unfinished, which the
-// guard denies as `command-too-complex` (findSecretRead). The same holds for an
-// overflow: the further reading's scanners (dparenClose, subscriptClose) can
-// reach findParenClose inside a `${…}`, which the plain tokenizer skips whole,
-// and findParenClose recurses once per `"$(`, so a long run of them there
-// overflows the stack in this reading alone. The RangeError is not caught here:
-// a `((` whose close is unknown is never read one way or the other, since either
-// guess can change how the rest of the line reads, and the line is denied as
-// unfinished instead.
+// parse_matched_pair reads a `((` body (parse_dparen): quotes hide a paren, `$'…'`
+// and backquotes honour a backslash, and no heredoc body is skipped; str.length
+// when none does. It records in `dparen.closes`, keyed by the index after each
+// nested `(`, the close of every paren it passes, so a command's `((` cost one scan.
+// A scan that meets an unclosed quote walks to the end and records nothing, so each
+// later `((` walks again (a run of `((x "${"(`: 139 s at 990 KB). So each scan
+// charges its distance to the further reading's reader budget (chargeReader), and
+// a command that spends it is denied as `command-too-complex` (findSecretRead).
+// The further reading's scanners (dparenClose, subscriptClose) can reach this
+// inside a `${…}` the plain tokenizer skips, and it recurses once per `"$(`, so a
+// long run overflows the stack in that reading alone. The RangeError is not caught
+// here: either guess at an unknown close can change how the rest of the line
+// reads, so the line is denied as unfinished instead.
 
 // The tokenizer's further-reading lookup, kept out of tokenize so its stack
 // frame stays small (see curlOperandOpensSecret).
@@ -2458,25 +2447,21 @@ function curlAtValueOpensSecret(v) {
   return v.startsWith('ecl:@') && curlNameIsSecret(v.slice(5));
 }
 
-// curl opens a file named inside an option value as well as one given as its
-// own `@file` word (#5779): `-d@f`, `-H@f`, `--data-urlencode name@f`,
-// `--variable name@f`, `-F name=@f`, `-F name=<f`, `-F 'k=v;headers=@f'`.
-// The guard holds no table of curl's options, so each curl argument is read
-// both as a -F value, under every grammar curl has shipped, and as a value of
-// the options that read `@file`. A value attached to short options (`-d@f`,
-// `-sd@f`, `-Fk=@f`) needs no reading of its own: option letters hold no `=`
-// or `@`, so the form reading and the first-`@` reading find its file, and
-// where an `=` in the name stops the latter (`-d@a=b/f`), the file's last
-// path segment is the word's, judged as for every operand. curl 8.23 also
-// takes `--option=value`, so the value after a leading `--name=` is read the
-// same way (`--form=k=@f`, `--data-urlencode=k@f`), as well as the whole word.
-// The cost is a fail-safe denial where the word is read another way than the
-// option curl gives it (`-d k=@.env` read as a form value, a URL's `user@` part
-// read as `name@file`, the text `--form-string f=@.env` sends, and
-// `--data-urlencode n=@.env`, a name and a text value), pinned in tests. A
+// curl opens a file named inside an option value as well as one given as its own
+// `@file` word (#5779): `-d@f`, `-H@f`, `--data-urlencode name@f`, `--variable
+// name@f`, `-F name=@f`, `-F name=<f`, `-F 'k=v;headers=@f'`. Holding no table of
+// curl's options, the guard reads each curl argument both as a -F value, under
+// every grammar curl has shipped, and as a value of the options that read `@file`.
+// A value attached to short options (`-d@f`, `-sd@f`, `-Fk=@f`) needs no reading of
+// its own: option letters hold no `=` or `@`, and where an `=` stops the first-`@`
+// reading (`-d@a=b/f`), the file's last path segment is the word's, judged as every
+// operand is. curl 8.23's `--option=value` is read the same way after the `--name=`
+// (`--form=k=@f`), and as the whole word. The cost is a fail-safe denial where a
+// word is read another way than its option gives it (`-d k=@.env`, a URL's `user@`
+// part, `--form-string f=@.env`, `--data-urlencode n=@.env`), pinned in tests. A
 // value the shell builds when it runs the line, from a variable, a command
-// substitution or a glob (`curl -d @$f`, `curl -T .e*`), is judged as written,
-// as every operand is (Documented gaps).
+// substitution or a glob (`curl -d @$f`, `curl -T .e*`), is judged as written, as
+// every operand is (Documented gaps).
 function curlValueNamesSecret(text) {
   const option = CURL_LONG_OPTION_RE.exec(text);
   return curlWordNamesSecret(text) || (option !== null && curlWordNamesSecret(text.slice(option[0].length)));
@@ -3500,29 +3485,21 @@ function scanDebuggerSpawn(command) {
   }
 }
 
-// The further reading of `command` (#5779, furtherReading): the secret scan and
-// the debugger-spawn scan again, with the command resolved past the words the
-// plain walk stops at. main runs it last, after scanBashCommand and
-// scanDebuggerSpawn allowed, so it can add a denial and cannot lose one. It
-// runs once without bash's subscript joins and, only when that pass saw a
-// place a join could start, once more with them.
-// It has a budget of its own, the size scanBashCommand gives the plain scans,
-// set here: on what the plain scans leave, a prefix that costs them just under
-// the budget leaves this reading nothing, so whether it reads a line would turn
-// on what the plain scans spent. The work on a command is so bounded at twice
-// the plain scans'. `budget` and `separatorBudget` are for tests, as for
-// scanBashCommand. Its verdict is a block or null:
-//   - a stack overflow is `command-too-complex`, as for the plain scans:
-//     findSecretRead returns that block for its own, and one in the spawn scan
-//     is thrown, as from scanDebuggerSpawn, for main to deny;
-//   - a spent budget is `command-too-complex` too, as in scanBashCommand and
-//     scanDebuggerSpawn: a line this reading could not finish is a line it has
-//     not read, and the plain scans' allow says nothing about what it would
-//     find. Both passes share this reading's budget, so a line that needs the
-//     second pass is denied from about half the size the plain scans finish;
+// The further reading of `command` (#5779, furtherReading): the secret and
+// debugger-spawn scans again, with the command resolved past the words the plain
+// walk stops at. main runs it last, after scanBashCommand and scanDebuggerSpawn
+// allowed, so it can add a denial and cannot lose one. It runs once without bash's
+// subscript joins and, only when that pass saw where a join could start, once more
+// with them. Both passes share a budget of its own, the size the plain scans get,
+// so whether it reads a line never turns on what they spent, and a command's work
+// is bounded at twice theirs. `budget` and `separatorBudget` are for tests. Its
+// verdict is a block or null:
+//   - a stack overflow is `command-too-complex`: findSecretRead returns that block
+//     for its own, and one in the spawn scan is thrown, as from scanDebuggerSpawn;
+//   - a spent budget is `command-too-complex` too: a line it could not finish is
+//     unread, and one that needs both passes is denied from half the plain size;
 //   - any other error is a reading's bug (readingBug), and null.
-// What a hook timeout does is the adapter's: Claude Code reads it as no
-// decision; Pi fails this guard closed on a timeout and refuses the command.
+// A hook timeout is the adapter's: Claude Code reads it as no decision; Pi refuses.
 function scanFurtherReading(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
   scanBudget = budget;
   readerSteps = budget;
