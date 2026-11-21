@@ -1341,8 +1341,8 @@ cases:
   `a-01-PLAN.md`). `phase-plan-index` refuses the phase as ambiguous. `planning
   inspect` answers: a `depends_on` token naming either plan's id, or a
   canonical id they share, resolves to the plan that sorts last, and a
-  short-form token (the plan number alone, such as `01`) to the plan that
-  sorts first.
+  short-form token (the plan number alone, such as `01`) to the first plan in
+  sort order with that plan number, which can be a third plan.
 - **A `depends_on` token that resolves to a plan whose id is empty** (a bare
   `PLAN.md`, named by `depends_on: [""]`). `phase-plan-index` leaves that edge
   out of its wave order but keeps it in the halt propagation it runs in that

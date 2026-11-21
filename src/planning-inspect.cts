@@ -943,15 +943,15 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
  * (`phase-plan-index`'s node set) the way `cmdPhasePlanIndex` (`src/phase.cts`)
  * does: the same three-tier depends_on resolution (`resolveDependencyId`) and
  * the same `computeHaltPropagation` pass; a token that resolves to no plan in
- * the set is dropped, as there. Three of the differences docs/CLI-TOOLS.md lists
- * under "Halted plans" arise here. Two because this read never fails where
- * `phase-plan-index` refuses the phase: on a depends_on cycle every non-halted
- * plan the shared propagation cannot order carries a non-empty `blocked_by`,
- * and two plan ids that differ only in case resolve by sort order (body). The
- * third because the shared propagation orders this graph itself, where
- * `phase-plan-index` hands it a wave order that leaves out an edge to a plan
- * whose id is empty (a bare `PLAN.md`), so a halt upstream of that plan reaches
- * the plans whose token resolves to it here, and can miss them there.
+ * the set is dropped, as there. docs/CLI-TOOLS.md ("Halted plans") lists every
+ * difference between the two commands; three arise here. Two because this read
+ * never fails where `phase-plan-index` refuses the phase: on a depends_on cycle
+ * every non-halted plan the shared propagation cannot order gets a non-empty
+ * `blocked_by`, and plan ids that differ only in case resolve by sort order
+ * (body). The third because the shared propagation orders this graph itself,
+ * where `phase-plan-index`'s wave order leaves out an edge to a plan whose id is
+ * empty (a bare `PLAN.md`), so a halt upstream of that plan reaches the plans
+ * whose token resolves to it here, and can miss them there.
  */
 function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }>): void {
   // `cmdPhasePlanIndex` builds its id maps from `planFiles.sort()`, and both
@@ -959,8 +959,9 @@ function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }
   // wins) depend on that order when two plans collide, so sort the same way.
   // On two plan ids that differ only in case, an exact or canonical token
   // naming either then resolves to the one that sorts last (`planMap` and
-  // `canonicalToId` keep the last write), and a short-form token to the one
-  // that sorts first (`buildShortFormToId` keeps the first).
+  // `canonicalToId` keep the last write), and a short-form token to the first
+  // plan in sort order with that plan number (`buildShortFormToId` keeps the
+  // first), which can be a third plan.
   const live = entries
     .slice()
     .sort((a, b) => (a.planFile < b.planFile ? -1 : a.planFile > b.planFile ? 1 : 0))
