@@ -3238,6 +3238,10 @@ function matchListOpener(line: string, markers: BulletMarkers, inList: boolean):
  * rules the issue reports as already tried (split on every heading; shallowest
  * level; deepest level) each mis-count one of these shapes.
  *
+ * A heading whose deeper headings are ALL closure records (`### Resolution`, `Resolved`, `Closure`) is
+ * a LEAF too: those headings and their bodies join its entry, so a closed item stays one closed
+ * entry (#6239).
+ *
  * A leaf entry is [heading text, ...body lines up to the next heading] and is
  * kept only when its body (minus table lines) contains at least one list item
  * — any of `-`, `*`, `+` or a dot-terminated ordered marker (#3702; the
@@ -3286,6 +3290,9 @@ function lineOffsets(lines: string[]): { lineStarts: number[]; lineEnds: number[
   return { lineStarts, lineEnds };
 }
 
+/** A heading that only records its parent's closure (`### Resolution`, `Resolved`, `Closure`), #6239. */
+const CLOSURE_HEADING = /^(?:resolution|resolved|closure)\s*(?:[:—-].*)?$/i;
+
 /**
  * The heading-delimited split, carrying the per-line opener flags the deferred
  * field-extraction path needs (#3702 round 2, round review): the heading path
@@ -3303,13 +3310,28 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
 
   const lines = sectionBody.split('\n');
   const { lineStarts, lineEnds } = lineOffsets(lines);
-  const headingByLine = new Map<number, { text: string; isContainer: boolean }>();
+  const headingByLine = new Map<number, { text: string; isContainer: boolean; absorbed: boolean }>();
+  // #6239: a heading whose deeper headings ALL only record its closure (`### Resolution`) is the entry itself, not
+  // a container of entries: its body bullets are its own fields, and the closure heading and its body belong to
+  // it, so a closed item is one closed entry and not one open entry per bullet. The headings under it are
+  // `absorbed` into the entry instead of opening one.
+  let absorbingLevel: number | null = null;
   for (let i = 0; i < headings.length; i++) {
-    // Container iff the next heading is deeper (see doc comment). An empty
-    // heading text (`##` alone) does not itself mean container — the flag is
-    // carried explicitly so a bare LEAF heading still opens an entry.
-    const isContainer = i + 1 < headings.length && headings[i + 1].level > headings[i].level;
-    headingByLine.set(headings[i].line, { text: headings[i].text, isContainer });
+    const level = headings[i].level;
+    if (absorbingLevel !== null && level > absorbingLevel) {
+      headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: false, absorbed: true });
+      continue;
+    }
+    absorbingLevel = null;
+    let end = i + 1;
+    while (end < headings.length && headings[end].level > level) end++;
+    const deeper = headings.slice(i + 1, end);
+    const closureOnly = deeper.length > 0 && deeper.every((h) => CLOSURE_HEADING.test(h.text));
+    if (closureOnly) absorbingLevel = level;
+    // Container iff a deeper heading follows that is not only a closure record (see doc comment). An empty
+    // heading text (`##` alone) does not itself mean container — the flag is carried explicitly so a bare
+    // LEAF heading still opens an entry.
+    headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: deeper.length > 0 && !closureOnly, absorbed: false });
   }
 
   const entries: DeferredHeadingEntry[] = [];
@@ -3403,6 +3425,16 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
     const heading = headingByLine.get(lineNo);
+    if (heading !== undefined && heading.absorbed) {
+      // A closure heading inside its parent's entry: the entry continues (no flush), its line stays in the entry so
+      // the raw span and `lines` remain one-to-one, and the heading still ends the list/fence/indent state.
+      runs.clear();
+      blankSeen = false;
+      bodyBase = null;
+      scan = scanFencesFrom(lines, i + 1);
+      push(lines[i].replace(/\r$/, ''), i, false);
+      continue;
+    }
     if (heading !== undefined) {
       flushCurrent();
       // Headless-shaped region (preamble / container-direct bullets) ends at
