@@ -375,6 +375,13 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ['export GREP_[O]PTIONS=-eKEY; grep .env', '.env'],
     ['export RIPGREP_C*; rg .env', '.env'],
     ['export POSIXLY_C*; grep -n KEY . --exclude=.env', '--exclude=.env'],
+    // ... also through read, printf -v, mapfile or getopts, and anything set under `set -a` / allexport.
+    ['read GREP_O* < cfg; grep .env', '.env'],
+    ['printf -v GREP_O* %s -eKEY; grep .env', '.env'],
+    ['mapfile RIPGREP_C* < cfg; rg .env .', '.env'],
+    ['set -a; read RIPGREP_C* < cfg; rg .env .', '.env'],
+    ['set -o allexport; read x < cfg; grep .env', '.env'],
+    ['set -ea; getopts o x; grep .env', '.env'],
     ['declare -x GREP_O*; grep .env', '.env'],
     ['export GREP_{O*,x}; grep .env', '.env'],
     ["eval 'export GREP_O*'; grep .env", '.env'],

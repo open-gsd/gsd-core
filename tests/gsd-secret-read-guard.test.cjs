@@ -3872,6 +3872,17 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     'echo .env | echo "$(xargs cat)"',
     '{ cat | xargs cat; } <<< .env',
     'coproc xargs cat <<< .env',
+    // `exec` behind `builtin`, `command`, a reserved word or an assignment still redirects what follows it.
+    'builtin exec <<< .env; xargs cat',
+    'command exec <<< .env; xargs cat',
+    'if true; then exec <<< .env; fi; xargs cat',
+    '! exec <<< .env; xargs cat',
+    'X=1 exec <<< .env; xargs cat',
+    // A pipe followed by a newline or a comment still pipes.
+    'echo .env |\nxargs cat',
+    'echo .env |\n\nxargs cat',
+    'echo .env |  # c\nxargs cat',
+    "printf '.env' |\nsh -c 'xargs cat'",
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3893,6 +3904,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['exec < names; xargs cat', 'names'],
     ["sh -c 'xargs cat' < names", 'names'],
     ['f() { xargs cat; }; f < names', 'names'],
+    ['builtin exec < names; xargs cat', 'names'],
+    // The `-c` script is the first word after the shell's options, `--` included.
+    ['xargs sh -c -- \'cat "$1"\' _ < names', 'names'],
+    ['xargs sh -c -e \'cat "$1"\' _ < names', 'names'],
+    ['xargs -a names sh -c -- \'cat "$1"\' _', 'names'],
     // Every call's stdin counts, and one the guard cannot read outranks one it can.
     ['f() { xargs cat; }; f <<< a; f < names', 'names'],
     ['f() { xargs cat; } <<< a; f < names', 'names'],
@@ -3990,6 +4006,36 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
+});
+
+// ─── #6282: filling xargs's replace string is charged to the scan budget ──────────────────────────────────────────
+//
+// Each operand holding the replace string is filled with each word xargs reads, so the work grows as their product;
+// it is charged before the loop, so a large product is command-too-complex rather than a scan that runs on.
+describe('gsd-secret-read-guard: filling xargs replace strings is charged to the scan budget (#6282)', () => {
+  const { scanBashCommand, workSpent } = require(HOOK_PATH);
+  const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
+  const BIG = 2 ** 40;
+  const fill = (holders, words) => `xargs -I{} cat ${Array(holders).fill('x{}').join(' ')} <<< '${Array(words).fill('w').join(' ')}'`;
+
+  test('the fill is charged at least holders x words x 16', () => {
+    scanBashCommand(fill(40, 40), BIG, BIG);
+    assert.ok(workSpent().scan >= 40 * 40 * 16, `scan ${workSpent().scan}`);
+  });
+
+  test('a budget one short of the work is command-too-complex; the exact work and one more scan clean', () => {
+    const cmd = fill(30, 30);
+    scanBashCommand(cmd, BIG, BIG);
+    const limit = workSpent().scan;
+    assert.deepEqual(scanBashCommand(cmd, limit - 1, BIG), TOO_COMPLEX);
+    assert.equal(scanBashCommand(cmd, limit, BIG), null);
+    assert.equal(scanBashCommand(cmd, limit + 1, BIG), null);
+  });
+
+  test('600 holders filled with 600 words spends the default budget and is command-too-complex', () => {
+    assert.deepEqual(scanBashCommand(fill(600, 600)), TOO_COMPLEX);
+    assert.ok(workSpent().exhausted);
+  });
 });
 
 describe('gsd-secret-read-guard: a heredoc or here-string that cat prints into a shell (#6182)', () => {
