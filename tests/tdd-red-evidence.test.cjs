@@ -1704,6 +1704,18 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     }
   });
 
+  test('a repeated-key block with an unreferenced YAML anchor stays refused', () => {
+    // This anchor has no alias, so resolving a reference in another segment cannot cause the refusal.
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(['  info: &context details', "  error: 'first'", "  error: 'second'"]),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+  });
+
   test('a recovered block still re-applies #5721 file-level load-failure refusal (merge review)', () => {
     // Emergent combination gap found by the independent review of the #5721 merge:
     // upstream flags `not ok N - <file>` with error 'test failed' + ERR_TEST_FAILURE
@@ -1816,6 +1828,23 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     });
   }
 
+  for (const [description, ...diagnostic] of [
+    ['a load-failure message under a different key', "  message: 'test failed'", "  code: 'ERR_TEST_FAILURE'"],
+    ['a load-failure code under a different key', "  error: 'test failed'", "  note: 'ERR_TEST_FAILURE'"],
+    ['a load-failure message prefix', "  error: 'test failed unexpectedly'", "  code: 'ERR_TEST_FAILURE'"],
+  ]) {
+    test(`a repeated-key block with ${description} still recovers`, () => {
+      const result = classifyRedEvidence(validRedInput({
+        output: dupDiagTAP([...diagnostic, "  stack: 'frame one'", "  stack: 'frame two'"]),
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+      assert.equal(result.reason, 'target_test_failed');
+      assert.deepEqual(result.evidence.report_errors, []);
+    });
+  }
+
   test('a repeated-key block with a comment at the key indentation still recovers', () => {
     const result = classifyRedEvidence(validRedInput({
       output: dupDiagTAP([
@@ -1825,6 +1854,17 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
         '  # additional stack context',
         "  stack: 'frame two'",
       ]),
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.deepEqual(result.evidence.report_errors, []);
+  });
+
+  test('a repeated-key block with a leading comment before the first key still recovers', () => {
+    const result = classifyRedEvidence(validRedInput({
+      output: dupDiagTAP(['  # diagnostic context', "  error: 'first'", "  error: 'second'"]),
       targetTest: 'rejects a malformed token',
       targetFile: undefined,
     }));
@@ -1886,6 +1926,21 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     assert.equal(result.reason, 'invalid_record');
     assert.ok(result.evidence.report_errors.length > 0);
   });
+
+  for (const [description, closer] of [['a suffix', '...x'], ['trailing whitespace', '... ']]) {
+    test(`a repeated-key block with ${description} on the closing delimiter stays refused`, () => {
+      const output = dupDiagTAP(["  error: 'first'", "  error: 'second'"])
+        .replace('\n  ...\n', `\n  ${closer}\n`);
+      const result = classifyRedEvidence(validRedInput({
+        output,
+        targetTest: 'rejects a malformed token',
+        targetFile: undefined,
+      }));
+      assert.equal(result.verdict, 'INVALID_RED');
+      assert.equal(result.reason, 'invalid_record');
+      assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+    });
+  }
 
   test('the framing boundary: an empty body is outside recovery either way it arrives', () => {
     // Boundary rows for the `---`/`...` framing (CLAUDE.md boundary coverage): an
