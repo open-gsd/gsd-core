@@ -1430,10 +1430,12 @@ shapes as not halted, in both commands and with no entry in `diagnostics[]`:
   the limit cuts to `---` followed only by spaces or tabs, closes the
   frontmatter instead, and the SUMMARY can then read as halted;
 - frontmatter that `extractFrontmatter` rejects as a whole, which then reads
-  as empty: a YAML syntax error anywhere in it, before or after `status`, or
-  an anchor (`&a`) or alias (`*a`) anywhere in it;
-- a `status` that is not a single value: a sequence, whether flow
-  (`status: [halted]`) or block (`- halted` on the line under `status:`);
+  as empty: one it cannot parse, such as an unclosed `[` before or after
+  `status` (it repairs some YAML errors, such as an unquoted `: ` inside a
+  value, and those parse), or one with an anchor (`&a`) or alias (`*a`)
+  anywhere in it;
+- a `status` whose value is not a string: a sequence, flow (`status: [halted]`)
+  or block (`- halted` on the line under `status:`), a mapping, or nothing;
 - a `status` nested under another key rather than at the top level;
 - a SUMMARY encoded as UTF-16, with or without a BOM.
 
