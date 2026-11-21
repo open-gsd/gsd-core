@@ -1151,11 +1151,11 @@ Track `stall_reentry_count` (starts at 0; incremented each time "Adjust approach
 
 **If iteration_count < 3:**
 
-Parse issue count from checker return: count BLOCKER + WARNING entries in the YAML issues block and include fresh threat-ID issues as directed above; an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). Entries a `## VERIFICATION PASSED` return lists in prose count the same way (#5578). If the merged issue list has no BLOCKER or WARNING, treat `issue_count` as 0 and skip the stall check. Proceed to step 13 — likewise when every entry in the block is explicitly INFO (display them as advisories). Advisory format: `ℹ advisory — {dimension}: {description}` per INFO entry, listed once before the step-13 output.
+Parse issue count from checker return: count BLOCKER + WARNING entries in the YAML issues block and include fresh threat-ID issues as directed above; an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). Entries a `## VERIFICATION PASSED` return lists in prose count the same way (#5578). If the checker returns no YAML block and lists no BLOCKER or WARNING entry in prose, count any fresh threat-ID issues anyway. If the merged issue list has no BLOCKER or WARNING, treat `issue_count` as 0 and skip the stall check. Proceed to step 13 — likewise when every entry in the block is explicitly INFO (display them as advisories). Advisory format: `ℹ advisory — {dimension}: {description}` per INFO entry, listed once before the step-13 output.
 
 Display (only when entering the revision loop — skip if the paragraph above already proceeded to step 13): `Revision iteration {N}/3 -- {blocker_count} blockers, {warning_count} warnings`
 
-Apply the scan step’s § Revision stall before proceeding.
+**Stall detection:** If `issue_count >= prev_issue_count`, apply the scan step’s § Revision stall.
 
 Set `prev_issue_count = issue_count`.
 
@@ -1277,8 +1277,9 @@ if [ "${CONVERGENCE_ENABLED}" = "true" ] && [ -n "${REVIEWS_FILE}" ]; then
 fi
 ```
 
-Run `plan-phase/steps/threat-id-check.md` § After planning.
-Increment `iteration_count`. Apply threat-ID Revision routing. Spawn checker (step 10) only if enabled and verification was not skipped.
+Scan using `plan-phase/steps/threat-id-check.md` § After planning. If collisions remain or the checker is skipped or disabled, increment `iteration_count` and apply threat-ID Revision routing without spawning the checker. Otherwise:
+
+Spawn checker again (step 10), then increment `iteration_count`.
 
 **If iteration_count >= 3:**
 
