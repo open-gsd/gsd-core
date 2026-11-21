@@ -313,6 +313,8 @@ export default tseslint.config(
       // #2873 (epic #2866 Phase 4): tsc-generated runtime artifact — lint the
       // src/health-diagnostic-rules/install-surface-shadowing.cts source.
       'gsd-core/bin/lib/health-diagnostic-rules/install-surface-shadowing.cjs',
+      // #6430: tsc-generated runtime artifact — lint src/health-diagnostic-rules/context-bridge.cts, not this.
+      'gsd-core/bin/lib/health-diagnostic-rules/context-bridge.cjs',
       'gsd-core/bin/lib/shell-command-projection.cjs',
       'gsd-core/bin/lib/security.cjs',
       'gsd-core/bin/lib/command-aliases.cjs',
