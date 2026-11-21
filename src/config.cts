@@ -23,7 +23,7 @@ const {
 } = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5681 installer-migrations.cts is an `export =` module, which only `import x = require` can name
 import installerMigrations = require('./installer-migrations.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
