@@ -868,7 +868,7 @@ export default tseslint.config(
   // many it carries; the rule takes only the file names. Phases 4-7 drain it in
   // sorted order and Phase 8 deletes it. A listed file with no copy left reports
   // its own entry as stale, and tests/no-adhoc-env-isolation.rule.test.cjs holds
-  // every file to its recorded count, so the counts only fall.
+  // every file to its recorded count; CONTRIBUTING.md states the one way a count grows.
   {
     files: ['tests/**/*.cjs'],
     ignores: ['tests/helpers/isolated-env.cjs'],

@@ -82,7 +82,7 @@ const rule = {
         'In-process, use sandboxHome() from tests/helpers.cjs.',
       staleAllowlistEntry:
         '{{file}} no longer contains an ad-hoc env-isolation copy. Delete its line from ' +
-        'eslint-rules/no-adhoc-env-isolation.allowlist.json — the allowlist only ratchets down.',
+        'eslint-rules/no-adhoc-env-isolation.allowlist.json: the allowlist names only files that still carry a copy.',
     },
   },
 

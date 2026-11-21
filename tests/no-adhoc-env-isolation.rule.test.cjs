@@ -670,8 +670,9 @@ describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
     assert.deepStrictEqual(
       diff,
       CLEAN_DIFF,
-      'The allowlist records each file\'s count of hand-written env-isolation copies, and a count may only fall. ' +
-        'grown/added: migrate the new copy onto tests/helpers/isolated-env.cjs instead. ' +
+      'The allowlist records each file\'s count of hand-written env-isolation copies. ' +
+        'grown/added: build the env with isolatedEnv() or the PATH with isolatedPath() from tests/helpers/isolated-env.cjs instead; if neither can, ' +
+        'CONTRIBUTING.md ("The lint rule that enforces child-env isolation") states the one way an entry grows. ' +
         'shrunk/removed: lower the count in eslint-rules/no-adhoc-env-isolation.allowlist.json, or delete the entry at zero.',
     );
   });

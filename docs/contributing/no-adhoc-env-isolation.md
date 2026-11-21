@@ -58,11 +58,11 @@ so its entry is deleted. `eslint.config.mjs` passes the keys of
 
 `tests/no-adhoc-env-isolation.rule.test.cjs` lints every `.cjs` file under `tests/` with the
 allowlist emptied and inline config off, and fails when a listed file's count rises or falls, or an
-unlisted file has a site, so the counts only fall. It also fails when ESLint lints fewer `.cjs`
-files under `tests/` than are on disk: an ESLint ignore over a `tests/` subtree would hide that
-subtree's copies from the rule and the count alike. The rule has no marker comment of its own. An
-`eslint-disable` comment naming it hides a copy from lint output, but not from that count, so it
-exempts nothing.
+unlisted file has a site, so a count falls as copies migrate and grows only by the route
+CONTRIBUTING.md states. It also fails when ESLint lints fewer `.cjs` files under `tests/` than are
+on disk: an ESLint ignore over a `tests/` subtree would hide that subtree's copies from the rule and
+the count alike. The rule has no marker comment of its own. An `eslint-disable` comment naming it
+hides a copy from lint output, but not from that count, so it exempts nothing.
 
 The rule and the count cover only the `.cjs` files under `tests/`, so the allowlist lists exactly
 the remaining sites in those files. A copy in any other file is neither flagged nor counted: a
