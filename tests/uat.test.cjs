@@ -9020,7 +9020,8 @@ describe('#6239 parseDeferredItems: a closure heading under an entry does not ma
   });
 
   test('[boundary] the closure heading may sit one level or several levels below, and may carry a suffix', () => {
-    for (const child of ['#### Resolution', '##### Resolved', '###### Closure: 2026-11-20', '#### Resolution — v1.2', '#### Resolution – v1.2', '#### **Resolution**']) {
+    for (const child of ['#### Resolution', '##### Resolved', '###### Closure: 2026-11-20', '#### Resolution — v1.2', '#### Resolution – v1.2', '#### **Resolution**',
+      '#### **Resolution:**', '#### Resolved:', '#### Resolved 2026-11-01', '#### Resolved (v1.2)', '#### `Resolution`', '#### *Resolution*']) {
       const doc = deferred('### Item A', '', ...bullets(3), '', child, '', '- **Status:** resolved');
       assert.deepStrictEqual(parseDeferredItems(doc), [], child);
       assert.strictEqual(parseDeferredItemsWithStatus(doc).length, 1, child);
@@ -9043,7 +9044,8 @@ describe('#6239 parseDeferredItems: a closure heading under an entry does not ma
   });
 
   test('[independence] a child heading with a free-form suffix is a real child entry, not a closure record', () => {
-    for (const child of ['#### Resolution-plan for the vendor', '#### Resolved — NOT YET, reopened', '#### Closure-notes', '#### Resolution notes']) {
+    for (const child of ['#### Resolution-plan for the vendor', '#### Resolved — NOT YET, reopened', '#### Closure-notes', '#### Resolution notes',
+      '#### Resolved — 2 blockers still open', '#### Resolved - 0 of 3 fixed', '#### Closure: 3 items remain']) {
       const doc = deferred('### Item A', '', '- a', '', child, '', '- b');
       assert.strictEqual(parseDeferredItems(doc).length, 2, child);
     }
@@ -9068,7 +9070,7 @@ describe('#6239 parseDeferredItems: a closure heading under an entry does not ma
     assert.strictEqual(parseDeferredItems(leaf).length, 0);
   });
 
-  test('[boundary] an unterminated fence runs to the end of the body: a closure heading inside it is fence content and closes nothing', () => {
+  test('[boundary] an unterminated column-0 fence runs to the end of the body: a closure heading inside it is fence content and closes nothing', () => {
     const doc = deferred('### Item A', '', '- a', '```', 'code with no closing fence', '', '#### Resolution', '', '- **Status:** resolved');
     const got = parseDeferredItemsWithStatus(doc);
     assert.strictEqual(got.length, 1, JSON.stringify(got));
@@ -9076,11 +9078,38 @@ describe('#6239 parseDeferredItems: a closure heading under an entry does not ma
     assert.strictEqual(parseDeferredItems(doc).length, 1);
   });
 
-  test('[boundary] a closure heading at the SAME level as the item is a sibling entry, not part of it', () => {
+  test('[independence] a closure heading at the SAME level as the item is a sibling entry, not part of it', () => {
     const doc = deferred('### Item A', '', '- a', '', '### Resolution', '', '- **Status:** resolved');
     const got = parseDeferredItemsWithStatus(doc);
     assert.strictEqual(got.length, 2);
     assert.strictEqual(parseDeferredItems(doc).length, 1);
+  });
+
+  test('[boundary] an indented fence left open ends at the next heading, so the list items before it still count', () => {
+    // The heading tokenizer tolerates three spaces of fence indent, the fence scan strips all of it: an open fence
+    // indented deeper used to pair with a later fence across the heading and hide this item entirely.
+    const doc = ['# Deferred Items', '', '## Deferred Items', '', '#### Resolved', '    ```', '- x', '#### H4', '```'].join('\n');
+    assert.strictEqual(parseDeferredItems(doc).length, 1);
+    // an indented fence left open under an absorbed closure heading hides the closure's status: the item reads open
+    const tail = deferred('### Item A', '', '- a', '    ```', 'code', '', '#### Resolution', '', '- **Status:** resolved');
+    const got = parseDeferredItemsWithStatus(tail);
+    assert.strictEqual(got.length, 1, JSON.stringify(got));
+    assert.strictEqual(got[0].status, '');
+  });
+
+  test('[boundary] acknowledging an item on the absorbed shape writes its status and leaves the neighbour open, under LF and CRLF', () => {
+    for (const eol of ['\n', '\r\n']) {
+      const doc = deferred('### Item A', '', '- a', '', '#### Resolution', '', '- fix pending review', '', '### Item B', '', '- b').split('\n').join(eol);
+      const before = parseDeferredItemsWithStatus(doc);
+      assert.strictEqual(before.length, 2, JSON.stringify(before));
+      const got = acknowledgeDeferredItem(doc, before[0].name);
+      assert.strictEqual(got.status, 'ok');
+      const after = parseDeferredItemsWithStatus(got.content);
+      assert.strictEqual(after.length, 2);
+      assert.strictEqual(after[0].status, 'acknowledged');
+      assert.strictEqual(after[1].status, '');
+      if (eol === '\r\n') assert.ok(!/(^|[^\r])\n/.test(got.content), 'no bare LF is introduced into a CRLF file');
+    }
   });
 
   test('[boundary] many headings are read in one pass: every entry is found (the fence scan is bounded to its entry)', () => {
