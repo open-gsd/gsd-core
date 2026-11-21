@@ -4179,6 +4179,14 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
         }
       }
 
+      // npx and `npm exec` / `npm x` run a `-c` / `--call` value through a shell (#5492).
+      if (NPM_RUNNERS.has(base)) {
+        for (const script of npmCallScripts(operands)) {
+          const hit = via(`${base} --call`, findSecretRead(script, depth + 1, ctx));
+          if (hit) return hit;
+        }
+      }
+
       // dd reads the file its `if=` operand names (#5492); every operand is still checked below.
       if (DD_NAMES.has(base)) {
         for (const w of operands) if (ddInputNamesSecret(w.text)) return secretRead(w.text);
@@ -4748,6 +4756,19 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
   } finally {
     ctx.shellVars = saved;
   }
+}
+
+// The scripts npx or npm runs from `-c` / `--call` (#5492): every such value among the operands, wherever it sits,
+// so an npm subcommand other than exec is read too, failing closed.
+const NPM_RUNNERS = new Set(['npx', 'npx.cmd', 'npm', 'npm.cmd']);
+function npmCallScripts(operands) {
+  const scripts = [];
+  for (let k = 0; k < operands.length; k++) {
+    const t = operands[k].text;
+    if ((t === '-c' || t === '--call') && k + 1 < operands.length) scripts.push(operands[k + 1].text);
+    else if (t.startsWith('--call=')) scripts.push(t.slice('--call='.length));
+  }
+  return scripts;
 }
 
 // dd's `if=` operand, naming the file dd reads (#5492).
