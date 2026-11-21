@@ -1900,6 +1900,17 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     ['an unknown command before 3,000 `env` wrappers', `x ${'env '.repeat(3000)}y`],
   ]) test(`allows ${shape}`, () => assertAllowed(runHook(bash(cmd)), shape));
   blocks(["source fd/../stdin <<< 'cat .env'", "bash fd/3/../0 <<< 'cat .env'", "source /proc/self/fd/x/../0 <<< 'cat .env'"]);
+
+  // A command find, watch or an unknown command launches sees the BASH_ENV it is given, and its stdin is the
+  // launcher's: an fd value reads the launcher's heredocs and here-strings.
+  blocks([
+    "find . -exec env BASH_ENV=/dev/stdin bash -c : \\; <<< 'cat .env'",
+    "watch -x env BASH_ENV=/dev/stdin bash -c : <<< 'cat .env'",
+    "caffeinate env BASH_ENV=/dev/stdin bash -c : <<< 'cat .env'",
+    "xargs -a /dev/null env BASH_ENV=/dev/stdin bash -c : <<< 'cat .env'",
+  ]);
+  blocks(["find . -exec env BASH_ENV=.env bash -c : \\;", 'watch env BASH_ENV=.env bash -c :', 'caffeinate env BASH_ENV=.env bash -c :'],
+    { path: 'BASH_ENV=.env' });
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
