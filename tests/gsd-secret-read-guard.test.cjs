@@ -2463,6 +2463,32 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
     assert.ok(w2 - w1 >= 64 * 1000, `1,000 more filter hops: ${w1} -> ${w2}`);
   });
 
+  // A group or compound command with a filter inside is a filter stage the walk goes on past, so each hop past one
+  // is priced as a plain filter hop is.
+  test('each hop a shell walks back past a filtering group or compound command is charged at least 64 units', () => {
+    for (const hop of ['(x) | ', '{ x; } | ', 'for i in 1; do x; done | ', 'if x; then x; fi | ']) {
+      const make = (k) => `${hop.repeat(k)}sh`;
+      const { work: [w1, w2] } = scanWork([make(1000), make(2000)]);
+      assert.ok(w2 - w1 >= 64 * 1000, `1,000 more ${JSON.stringify(hop)} hops: ${w1} -> ${w2}`);
+    }
+  });
+
+  // Each shell reads the producer back through the groups, as through plain filter stages.
+  test('a producer read through groups spends the work budget at limit - 1, limit and limit + 1', () => {
+    const bytes = 100000;
+    const make = (k, pad) => `printf '${'a'.repeat(bytes)}'${' | (sort) | sh'.repeat(k)}; bash -c '${' '.repeat(pad)}'`;
+    const { max, work: [w1, w2] } = scanWork([make(1, 0), make(2, 0)]);
+    assert.ok(w2 - w1 >= 4 * bytes, `each further shell re-reads the producer: ${w1}, ${w2}`);
+    let k = Math.floor(max / (w2 - w1));
+    while (scanWork([make(k, 0)]).work[0] >= max - 1) k--;
+    const base = scanWork([make(k, 0)]).work[0];
+    const commands = [-1, 0, 1].map((d) => make(k, max - base + d));
+    assert.deepEqual(scanWork(commands).work, [max - 1, max, max + 1]);
+    assertAllowed(runHook(bash(commands[0])), 'budget − 1');
+    assertAllowed(runHook(bash(commands[1])), 'budget');
+    assertBlocked(runHook(bash(commands[2])), 'budget + 1', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
   // A command that opens a heredoc is scanned under three readings, all
   // spending one budget: k prefixed git commands each rescan the editor
   // script, the same work in every reading (past the first, which also builds
