@@ -855,6 +855,11 @@ describe('#5491 — antigravity proves it read each plan', () => {
   const PLAN_BODY = '---\nwave: 1\ndepends_on: []\nrequirements: [REQ-01]\n---\n<task type="auto">t</task>\n';
   const RESTATED = 'READ-CHECK 12.6-01: requirements=[REQ-01]; wave=1; depends_on=[]; tasks=1\nsee src/a.ts:3';
   const laneFiles = () => ({ [PROMPT]: `#### ${PLAN_PATH}\n${PLAN_BODY}`, [`${ROOT}/${PLAN_PATH}`]: PLAN_BODY });
+  // A readable agy session with nothing after the watermark: compaction is ruled out, not unknown.
+  const SESSION = {
+    '/home/u/.gemini/antigravity-cli/cache/last_conversations.json': JSON.stringify({ [ROOT]: 'c0' }),
+    '/home/u/.gemini/antigravity-cli/brain/c0/.system_generated/logs/transcript.jsonl': '{"type":"USER_INPUT"}',
+  };
 
   test('the agy prompt asks for the READ-CHECK line', async () => {
     const d = deps({ files: laneFiles(), spawn: (_bin, argv) => { d.spawns.push({ argv }); return { status: 0, stdout: RESTATED, stderr: '' }; } });
@@ -864,7 +869,7 @@ describe('#5491 — antigravity proves it read each plan', () => {
 
   test('a prompt that names no plan header is not asked for READ-CHECK lines (#6286 Nit 2)', async () => {
     const d = deps({
-      files: { [PROMPT]: 'Review this diff.\n```\n#### .planning/p/12.6-01-PLAN.md\n```\n' },
+      files: { ...SESSION, [PROMPT]: 'Review this diff.\n```\n#### .planning/p/12.6-01-PLAN.md\n```\n' },
       spawn: (_bin, argv) => { d.spawns.push({ argv }); return { status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }; },
     });
     const r = await runLane(plan('antigravity'), d, { repoRoot: ROOT });
@@ -875,7 +880,7 @@ describe('#5491 — antigravity proves it read each plan', () => {
 
   test('no restatement → review stamped [incomplete-read] and readCheck in the result', async () => {
     const p = plan('antigravity');
-    const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }) });
+    const d = deps({ files: { ...laneFiles(), ...SESSION }, spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }) });
     const r = await runLane(p, d, { repoRoot: ROOT });
     assert.ok(d.files[p.reviewPath].startsWith('> [incomplete-read]'));
     assert.deepEqual(r.readCheck, { complete: false, truncated: false, compacted: false, missing: ['12.6-01'], mismatched: {}, unchecked: [] });
@@ -902,7 +907,7 @@ describe('#5491 — antigravity proves it read each plan', () => {
 
   test('a correct restatement → no stamp, complete readCheck', async () => {
     const p = plan('antigravity');
-    const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: RESTATED, stderr: '' }) });
+    const d = deps({ files: { ...laneFiles(), ...SESSION }, spawn: () => ({ status: 0, stdout: RESTATED, stderr: '' }) });
     const r = await runLane(p, d, { repoRoot: ROOT });
     assert.ok(!d.files[p.reviewPath].includes('[incomplete-read]'));
     assert.equal(r.readCheck.complete, true);
