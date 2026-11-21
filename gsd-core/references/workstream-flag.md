@@ -87,6 +87,7 @@ carried over between them) and sets `GSD_WS`:
   flag has the highest priority above, so the workstream a command was started for wins over
   the session pointer and the shared marker. The single-token form is required because zsh
   does not word-split an unquoted `$GSD_WS`.
+- The name may be wrapped in one pair of double or single quotes (`--ws "feature"`, `--ws 'feature'`); it selects the same workstream as the bare name. A quote that is unterminated, mismatched, empty or holds a space selects no workstream, as any other value that is not a workstream name does.
 - Workflows recognize the documented spelling `--ws <name>`; `--ws=<name>` is accepted by the
   CLI itself but is not parsed out of `$ARGUMENTS` by workflows.
 - Routing suggestions (`/gsd:plan-phase {X} ${GSD_WS}`) carry the same value to the next command.
