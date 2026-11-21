@@ -1670,9 +1670,6 @@
   "tests/autonomous-allowed-tools.test.cjs": {
     "directive": 2
   },
-  "tests/autonomous-converge.test.cjs": {
-    "directive": 1
-  },
   "tests/autonomous-decomposition.test.cjs": {
     "directive": 1
   },
