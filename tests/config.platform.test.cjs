@@ -76,6 +76,7 @@ const path = require('path');
 const { runGsdTools, createTempProject, createTempDir, cleanup, homeSandboxEnv, installSpawnEnv, TOOLS_PATH } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { defaultsStoreHome } = require('./helpers/defaults-store.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 function readConfig(tmpDir) {
@@ -630,14 +631,7 @@ describe('#5681: the defaults store is read bounded and replaced through an excl
   const CONFIG_LIB_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'config.cjs');
   const PATCH = JSON.stringify({ model_profile: 'balanced' });
 
-  function seedStore(t, contents) {
-    const gsdHome = createTempDir('gsd-5681-bounded-');
-    t.after(() => cleanup(gsdHome));
-    const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    if (contents !== undefined) fs.writeFileSync(defaultsPath, contents);
-    return { gsdHome, defaultsPath };
-  }
+  const seedStore = (t, contents) => defaultsStoreHome(t, contents, { makeDir: true });
 
   // mkfifo runs inside a node child, so the spawn goes through the process seam.
   function makeFifo(fifoPath) {

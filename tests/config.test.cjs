@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, mockPartialWriteThenThrow, suppressFdAsync } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
+const { defaultsStoreHome } = require('./helpers/defaults-store.cjs');
 const configLib = require('../gsd-core/bin/lib/config.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
 
@@ -4106,13 +4107,7 @@ function useGsdHome(t, gsdHome) {
  * process.env.GSD_HOME at it.
  */
 function defaultsHome(t, defaults, { inProcess = false } = {}) {
-  const gsdHome = createTempDir('gsd-5681-home-');
-  t.after(() => cleanup(gsdHome));
-  const defaultsPath = path.join(gsdHome, '.gsd', 'defaults.json');
-  if (defaults !== undefined) {
-    fs.mkdirSync(path.dirname(defaultsPath), { recursive: true });
-    fs.writeFileSync(defaultsPath, typeof defaults === 'string' ? defaults : JSON.stringify(defaults));
-  }
+  const { gsdHome, defaultsPath } = defaultsStoreHome(t, defaults);
   if (inProcess) useGsdHome(t, gsdHome);
   const env = { GSD_HOME: gsdHome };
   const { INSTALL_MIGRATION_LOCK_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
