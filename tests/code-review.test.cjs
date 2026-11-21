@@ -25,7 +25,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
-const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { splitLines, joinLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 /** True when the fence opens with the info word `bash`, so a ```bash title fence counts too. */
 const isBashFence = (block) => /^bash$/i.test((block.infoString || '').trim().split(/\s+/)[0]);
@@ -53,7 +53,7 @@ function withoutBashFences(content) {
     const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
     for (let i = block.openLineIdx + 1; i < end; i++) lines[i] = '';
   }
-  return lines.join('\n');
+  return joinLines(lines);
 }
 const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
@@ -1204,6 +1204,9 @@ describe('CR-INTEGRATION: workflow integration points', () => {
     for (const open of ['```bash', '```bash title']) {
       assert.deepStrictEqual(skills(`${open}\n${quote}\n\`\`\`${after}`), ['gsd-code-review'], open);
     }
+    // only the info word `bash` opens a bash fence
+    for (const word of ['bash', 'BASH', 'bash title']) assert.ok(isBashFence({ infoString: word }), word);
+    for (const word of ['bashful', 'bash-ish', 'sh', 'text', '']) assert.ok(!isBashFence({ infoString: word }), word);
     // an unclosed bash fence blanks to the end of the file: the call inside it never parses
     assert.deepStrictEqual(skills(`\`\`\`bash\n${quote}\n${skillCall}\n`), []);
     // positive control: the same call with no shell fence before it
@@ -1214,8 +1217,8 @@ describe('CR-INTEGRATION: workflow integration points', () => {
     const lineArb = fc.string({ maxLength: 12 }).filter((l) => !/[\r\n`~]/.test(l));
     fc.assert(fc.property(fc.array(lineArb, { maxLength: 6 }), fc.array(lineArb, { maxLength: 6 }), (inside, outside) => {
       const text = [...outside, '```bash', ...inside, '```', ...outside].join('\n');
-      const out = withoutBashFences(text).split('\n');
-      assert.strictEqual(out.length, text.split('\n').length);
+      const out = splitLines(withoutBashFences(text));
+      assert.strictEqual(out.length, splitLines(text).length);
       assert.deepStrictEqual(out.slice(0, outside.length), outside);
       assert.deepStrictEqual(out.slice(outside.length + 1, outside.length + 1 + inside.length), inside.map(() => ''));
       assert.deepStrictEqual(out.slice(outside.length + 1 + inside.length), ['```', ...outside]);
