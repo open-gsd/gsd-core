@@ -4235,7 +4235,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
     if (hit) return hit;
   }
-  return xargsPipedReadsSecret(operands, prevCmd.operands, curl);
+  return xargsPipedReadsSecret(operands, prevCmd, curl);
 }
 
 // The curl that `xargs` runs, as { runs, subCmd } (the index of the command
@@ -4250,8 +4250,11 @@ function xargsCurlTarget(operands) {
 }
 
 // The block for a piped word that names a secret the xargs sub-command
-// reads (secretRead), or null.
-function xargsPipedReadsSecret(operands, piped, curl) {
+// reads (secretRead), or null. `prev` is the upstream command: its operands
+// are the piped words as written, and where it is `printf` or `echo` the
+// words it prints are judged too (printedWords).
+function xargsPipedReadsSecret(operands, prev, curl) {
+  const piped = prev.operands;
   // They become curl's arguments when that command is curl: `xargs sudo curl`.
   // A piped word is a cert option's value where the sub-command's cert option
   // has its value slot open to the input: the option is the last word (xargs
@@ -4273,23 +4276,255 @@ function xargsPipedReadsSecret(operands, piped, curl) {
   // And where a piped word is such an option put in by the replace string, the
   // sub-command word after that string is its value
   // (`printf -E | xargs -I{} curl {} f:pw`).
-  if (toCurl && rep !== null && piped.some((w) => curlTakesCertValue(w.text))) {
+  const printed = printedWords(prev, operands, toCurl ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
+  if (toCurl && rep !== null && (piped.some((w) => curlTakesCertValue(w.text)) || printed.some((w) => curlTakesCertValue(w.text)))) {
     for (let k = subCmd + 1; k + 1 < operands.length; k++) {
       if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return secretRead(curlOpened);
     }
   }
-  for (let j = 0; j < piped.length; j++) {
-    const w = piped[j];
+  return pipedWordsReadSecret(piped, toCurl, certPiped) || pipedWordsReadSecret(printed, toCurl, certPiped);
+}
+
+// The block for one of `words`, piped into xargs, that names a secret its
+// sub-command reads (curl's when `toCurl`), or null.
+function pipedWordsReadSecret(words, toCurl, certPiped) {
+  for (let j = 0; j < words.length; j++) {
+    const w = words[j];
     if (operandNamesSecret(w.text)) return secretRead(w.text);
     // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
     // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
     const received = xargsUnquoted(w.text);
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
     if (!toCurl) continue;
-    if (curlValueNamesSecret(w.text) || curlCertOpensSecret(piped, j)) return secretRead(curlOpened);
+    if (curlValueNamesSecret(w.text) || curlCertOpensSecret(words, j)) return secretRead(curlOpened);
     if (certPiped && curlCertNamesSecret(w.text)) return secretRead(curlOpened);
   }
   return null;
+}
+
+// What a knowable `printf` or `echo` upstream of xargs prints, cut into the
+// words xargs could read from it, as { text } objects; [] for any other
+// command. The words as written miss what only the printing makes: the
+// escapes in printf's format and in its `%b` arguments, and in echo's operands
+// (`printf -- '-d\n@.env\n' | xargs curl x`, `printf '.env\n' | xargs cat`).
+// The text is cut at blanks, newlines and NULs and at a `-d` delimiter, and
+// each line counts as a word too (`-I`, `-L`), which is every way xargs splits
+// it and more, so a reading this adds can deny a command xargs would hand an
+// argument other than the one judged; the words as written are still judged
+// (xargsPipedReadsSecret), so nothing denied before is allowed now. echo is
+// read with its escapes on unless `-E` is its last such option: zsh's echo
+// and bash's under `xpg_echo` decode them without `-e`. The printed text is
+// charged to the reader budget (chargeReader), since printf repeats its format
+// while arguments are left.
+function printedWords(prev, operands, runs) {
+  let text;
+  if (prev.base === 'printf') text = printfOutput(prev.operands);
+  else if (prev.base === 'echo') text = echoOutput(prev.operands);
+  else return [];
+  if (text === null) return [];
+  const to = runs === -1 ? operands.length : runs;
+  const delimiter = xargsDelimiter(operands, to);
+  const lines = xargsReplaceString(operands, 0, to) !== null;
+  // The text was charged as it was printed (printfOutput, echoOutput); under
+  // -I its lines are judged as words too, and are charged again for that.
+  if (lines) chargeReader(text.length * PRINTED_WORD_COST);
+  // Blanks, and the delimiter -d names, end a word; a newline or a NUL ends a line too.
+  const sep = delimiter === null ? /[ \t]/ : new RegExp(`[ \t${delimiter.replace(/[\\\]^-]/g, '\\$&')}]`);
+  const words = [];
+  const cut = (part) => { if (part !== '') words.push({ text: part }); };
+  for (const line of text.split(/[\n\0]/)) {
+    const pieces = line.split(sep);
+    // A line is a word of its own only under -I, and only where it holds more than one piece.
+    if (lines && pieces.length > 1) cut(line.replace(/^[ \t]+/, ''));
+    for (const piece of pieces) cut(piece);
+  }
+  return words;
+}
+
+// The reader-budget charge per character of printed text, on top of one for
+// printing it, for judging the words cut from it (printedWords): each is read
+// as an operand and, under curl, as a -F value under three grammars and as an
+// @file value. At this rate a line whose printed text could hold the most
+// words is denied as too complex in well under a second, before the text is
+// held whole.
+const PRINTED_WORD_COST = 16;
+
+// What printf prints for `operands` (bash's builtin: escapes in the format,
+// `%s`/`%q`/`%b`/`%c` conversions with a precision, the format repeated while
+// arguments are left, `%(fmt)T`'s text), or null when it is given
+// no format or its first word is an option. A numeric
+// conversion prints a number, which names no file, so it is read as `0`; a
+// conversion bash refuses ends the output, as bash's error does.
+function printfOutput(operands) {
+  let i = 0;
+  if (i < operands.length && operands[i].text === '--') i++;
+  if (i >= operands.length) return null;
+  // bash and zsh read a first word starting with `-` as an option, and print
+  // nothing for it: `-v var` prints into a variable, any other is refused.
+  if (i === 0 && operands[0].text.length > 1 && operands[0].text[0] === '-') return null;
+  const format = operands[i].text;
+  const args = operands.slice(i + 1).map((w) => w.text);
+  let out = '';
+  let a = 0;
+  // Each use of the format is charged, and the text it printed, as it is printed.
+  const charged = (start) => chargeReader((out.length - start) * (1 + PRINTED_WORD_COST));
+  for (;;) {
+    chargeReader(format.length);
+    const from = a;
+    const start = out.length;
+    let k = 0;
+    while (k < format.length) {
+      const ch = format[k];
+      if (ch === '\\') {
+        const e = printfEscape(format, k, 'format');
+        out += e.text;
+        k = e.next;
+        continue;
+      }
+      if (ch !== '%') { out += ch; k++; continue; }
+      let j = k + 1;
+      if (format[j] === '%') { out += '%'; k = j + 1; continue; }
+      while (j < format.length && "-+ #0'".includes(format[j])) j++;
+      if (format[j] === '*') { a++; j++; } else while (j < format.length && format[j] >= '0' && format[j] <= '9') j++;
+      let precision = -1;
+      if (format[j] === '.') {
+        j++;
+        // A negative `*` precision is taken as none, as bash takes it.
+        if (format[j] === '*') { precision = parseInt(args[a] || '0', 10) || 0; if (precision < 0) precision = -1; a++; j++; } else {
+          const p = j;
+          while (j < format.length && format[j] >= '0' && format[j] <= '9') j++;
+          precision = parseInt(format.slice(p, j) || '0', 10);
+        }
+      }
+      while (j < format.length && 'hlLjzt'.includes(format[j])) j++;
+      // `%(fmt)T` prints the time as strftime writes `fmt`: its text as it is,
+      // each conversion a number or a name of the date, read as `0`.
+      if (format[j] === '(') {
+        const close = format.indexOf(')T', j);
+        if (close === -1) { charged(start); return out; }
+        out += format.slice(j + 1, close).replace(/%(.?)/g, (m, c) => (c === '%' ? '%' : '0'));
+        a++;
+        k = close + 2;
+        continue;
+      }
+      const conv = format[j];
+      const arg = a < args.length ? args[a] : '';
+      const cutTo = (t) => (precision >= 0 ? t.slice(0, precision) : t);
+      if (conv === 's' || conv === 'q' || conv === 'Q') { out += cutTo(arg); a++; } else if (conv === 'b') {
+        const e = printfEscapes(arg, 'b');
+        out += cutTo(e.text);
+        a++;
+        if (e.stop) { charged(start); return out; }
+      } else if (conv === 'c') { out += arg.slice(0, 1); a++; } else if (conv !== undefined && 'diouxXeEfFgGaA'.includes(conv)) {
+        out += '0';
+        a++;
+      } else {
+        charged(start);
+        return out;
+      }
+      k = j + 1;
+    }
+    charged(start);
+    if (a >= args.length || a === from) break;
+  }
+  return out;
+}
+
+// What echo prints for `operands`: its leading `-n`/`-e`/`-E` words are
+// options, and its escapes are decoded unless the last of `-e`/`-E` is `-E`.
+function echoOutput(operands) {
+  let start = 0;
+  let decode = true;
+  while (start < operands.length && /^-[neE]+$/.test(operands[start].text)) {
+    const t = operands[start].text;
+    const e = t.lastIndexOf('e');
+    const E = t.lastIndexOf('E');
+    if (e !== -1 || E !== -1) decode = e > E;
+    start++;
+  }
+  const text = operands.slice(start).map((w) => w.text).join(' ');
+  chargeReader(text.length * (1 + PRINTED_WORD_COST));
+  return decode ? printfEscapes(text, 'echo').text : text;
+}
+
+// `text` with its backslash escapes decoded, as { text, stop }, the way bash
+// decodes them for `mode`: 'format', printf's format (`\nnn` octal, `\c`
+// kept); 'echo', echo -e's operands (`\0nnn` octal); 'b', a printf `%b`
+// argument (`\0nnn` and `\nnn` octal). Under 'echo' and 'b' a `\c` ends all
+// output (stop).
+function printfEscapes(text, mode) {
+  let out = '';
+  let k = 0;
+  while (k < text.length) {
+    if (text[k] !== '\\') { out += text[k++]; continue; }
+    if (mode !== 'format' && text[k + 1] === 'c') return { text: out, stop: true };
+    const e = printfEscape(text, k, mode);
+    out += e.text;
+    k = e.next;
+  }
+  return { text: out, stop: false };
+}
+
+const PRINTF_ESCAPES = new Map([
+  ['a', '\x07'], ['b', '\b'], ['e', '\x1b'], ['E', '\x1b'], ['f', '\f'], ['n', '\n'], ['r', '\r'],
+  ['t', '\t'], ['v', '\v'], ['\\', '\\'], ['"', '"'], ["'", "'"], ['?', '?'],
+]);
+
+// The escape at text[k] (a backslash) under `mode` (printfEscapes): { text,
+// next }. An escape bash does not know keeps its backslash.
+function printfEscape(text, k, mode) {
+  const c = text[k + 1];
+  if (c === undefined) return { text: '\\', next: k + 1 };
+  const simple = PRINTF_ESCAPES.get(c);
+  if (simple !== undefined) return { text: simple, next: k + 2 };
+  const octal = (ch) => ch !== undefined && ch >= '0' && ch <= '7';
+  if (mode === 'echo' ? c === '0' : octal(c)) {
+    let j = mode !== 'format' && c === '0' ? k + 2 : k + 1;
+    let v = 0;
+    for (let n = 0; n < 3 && octal(text[j]); n++) v = v * 8 + (text.charCodeAt(j++) - 48);
+    return { text: String.fromCharCode(v & 0xff), next: j };
+  }
+  const hexMax = c === 'x' ? 2 : c === 'u' ? 4 : c === 'U' ? 8 : 0;
+  if (hexMax > 0) {
+    let j = k + 2;
+    let v = 0;
+    while (j - k - 2 < hexMax && /[0-9A-Fa-f]/.test(text[j] || '')) v = v * 16 + parseInt(text[j++], 16);
+    if (j === k + 2) return { text: '\\' + c, next: k + 2 };
+    return { text: v <= 0x10ffff ? String.fromCodePoint(v) : '', next: j };
+  }
+  return { text: '\\' + c, next: k + 2 };
+}
+
+// The delimiter xargs's `-d` / `--delimiter` (any unambiguous prefix) sets
+// among its options operands[0..to), as GNU xargs reads them (one character, or
+// a C escape), or null.
+function xargsDelimiter(operands, to) {
+  let d = null;
+  for (let m = 0; m < to; m++) {
+    const t = operands[m].text;
+    if (t === '--' || t.length < 2 || t[0] !== '-') break;
+    let v = null;
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq === -1 ? t : t.slice(0, eq);
+      if (name.length >= 3 && '--delimiter'.startsWith(name)) v = eq !== -1 ? t.slice(eq + 1) : m + 1 < to ? operands[++m].text : null;
+      else if (eq === -1 && XARGS_LONG_VALUE.some((l) => l.startsWith(t))) m++;
+    } else {
+      for (let c = 1; c < t.length; c++) {
+        if (t[c] === 'd') {
+          v = c < t.length - 1 ? t.slice(c + 1) : m + 1 < to ? operands[++m].text : null;
+          break;
+        }
+        if (XARGS_SHORT_ATTACHED.includes(t[c])) break;
+        if (XARGS_SHORT_VALUE.includes(t[c])) {
+          if (c === t.length - 1) m++;
+          break;
+        }
+      }
+    }
+    if (v !== null && v !== '') d = printfEscapes(v, 'format').text.slice(0, 1) || null;
+  }
+  return d;
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -4620,7 +4855,7 @@ function main() {
 
 module.exports = {
   DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, scanFurtherReading, tokenize, workSpent, MAX_SCAN_SEPARATORS,
-  MAX_SCAN_CHARACTERS,
+  MAX_SCAN_CHARACTERS, PRINTED_WORD_COST,
 };
 
 if (require.main === module) main();
