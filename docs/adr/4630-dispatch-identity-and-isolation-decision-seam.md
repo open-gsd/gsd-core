@@ -283,8 +283,11 @@ it derives, and nothing else, to an executor-identity record:
   applicable `none` governs the dispatch, it still governs; the wider classification reaches
   dispatches no record applies to. Residual: a failure these checks cannot see (a transient I/O error
   such as a full or failing disk, an ACL or mount that an access check reads differently from a create)
-  leaves the names as of the last write until the next held query records them; and for a scope that is
-  not a safe key the fail-closed state ends with the hold, after ten minutes. A prune failure after the
+  leaves the names as of the last write until the next held query records them. In each of the states
+  above the fail-closed state lasts while any record the reader reads is hold-eligible, whatever its
+  scope: it ends once none is, at the latest ten minutes after the latest such record's `decided_at`,
+  and sooner when a decision write replaces that record. A linked, non-directory or unlistable identity
+  directory is a scan overflow as well, which does not end with the hold. A prune failure after the
   record landed does not count as a failed write. An empty
   derivation (routing off, no hinted plans) is a valid snapshot and replaces the scope's previous one;
   a name another recent record carries still classifies.

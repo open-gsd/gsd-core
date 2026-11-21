@@ -2624,7 +2624,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // states that stop the write (a phase or plan that is not a safe key, a
     // directory at the record name, an identity directory it cannot write;
     // isolation-sentinel.js), so a stale name list cannot let a specialist
-    // through; a transient I/O error leaves no such trace (ADR-4630). A
+    // through, and in each of those states that ends with the hold, ten
+    // minutes after the held record's `decided_at`; a transient I/O error
+    // leaves no such trace (ADR-4630). A
     // decision write removes its scope's identity record: the decision record
     // now carries the same fields. The hold is a read-then-write with no lock:
     // a caller's forced `none` landing between a plain query's read and its
