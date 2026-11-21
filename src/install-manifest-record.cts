@@ -38,12 +38,17 @@ export interface RewrittenFile {
 const HASH_CHUNK_BYTES = 1024 * 1024;
 
 /**
- * fileHash that returns null instead of throwing — for capturing a pre-rewrite
- * hash. A manifest key can name a FIFO, and a blocking read of one never
- * returns (#6331). So the file is opened non-blocking, its type is checked on
- * the opened descriptor (a path swapped after a check is caught too), and only
- * a regular file is read: exactly the size fstat reported, in chunks, with no
- * size cap, so any file the installer's fileHash hashes gets the same hash.
+ * fileHash that returns null instead of throwing, for a pre-rewrite hash. A
+ * manifest key can name a FIFO, whose blocking read never returns (#6331), so
+ * the open is non-blocking, the type is checked on the descriptor, and only a
+ * regular file is read: exactly the size fstat reported, in chunks, with no
+ * size cap, so it matches the installer's fileHash. A file whose size changed
+ * while it was read gets null, so no partial hash is ever recorded.
+ *
+ * The open follows a leaf symlink on purpose: the key resolver already refuses
+ * a symlinked component unless the user opted into symlinked destinations,
+ * where one is legitimate, and a swap after its check needs write access to
+ * the config dir, which could edit the manifest directly.
  */
 export function tryFileHash(filePath: string): string | null {
   let fd: number | undefined;
@@ -56,10 +61,11 @@ export function tryFileHash(filePath: string): string | null {
     let left = st.size;
     while (left > 0) {
       const n = readSync(fd, buf, 0, Math.min(buf.length, left), null);
-      if (n === 0) break; // the file shrank: hash what was there
+      if (n === 0) return null; // the file shrank while it was read: no partial hash
       hash.update(buf.subarray(0, n));
       left -= n;
     }
+    if (fstatSync(fd).size !== st.size) return null; // it grew while it was read
     return hash.digest('hex');
   } catch {
     return null;

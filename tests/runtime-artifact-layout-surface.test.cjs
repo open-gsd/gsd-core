@@ -2238,6 +2238,76 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     if (process.platform !== 'win32') assert.equal(tryFileHash('/dev/null'), null, 'a device is not hashed');
   });
 
+  test('a record that cannot write (randomBytes throws) is reported, and never throws out of the apply', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const before = fs.readFileSync(fx.manifestPath, 'utf8');
+    const crypto = require('node:crypto');
+    const realRandom = crypto.randomBytes;
+    const realWrite = process.stderr.write;
+    let stderr = '';
+    crypto.randomBytes = () => { throw new Error('injected: no entropy'); };
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    try {
+      assert.doesNotThrow(() => fx.apply());
+    } finally {
+      crypto.randomBytes = realRandom;
+      process.stderr.write = realWrite;
+    }
+    assert.equal(fs.readFileSync(fx.manifestPath, 'utf8'), before, 'nothing is recorded');
+    assert.match(stderr, /gsd-file-manifest\.json could not be read or written after skills were re-staged/, 'the lost record is named');
+  });
+
+  test('a file that grows while tryFileHash reads it is not hashed', (t) => {
+    const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-grow-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'x'.repeat(4096));
+    // The first fstat reports the size before the growth; the check after the
+    // read sees the real, larger size.
+    const realFstat = fs.fstatSync;
+    let calls = 0;
+    fs.fstatSync = (fd, ...rest) => {
+      const st = realFstat(fd, ...rest);
+      if (++calls > 1) return st;
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: st.size - 100 });
+    };
+    try {
+      assert.equal(tryFileHash(file), null);
+    } finally {
+      fs.fstatSync = realFstat;
+    }
+  });
+
+  test('a file that is shorter than fstat reports ends the read and is not hashed', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-shrink-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'y'.repeat(3000));
+    // In a child, with fstat stubbed to report 10 bytes more than the file
+    // holds: a read loop without its end-of-file exit would never return.
+    const lib = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'install-manifest-record.cjs');
+    const script = `
+      const fs = require('fs');
+      const realFstat = fs.fstatSync;
+      fs.fstatSync = (fd, ...rest) => {
+        const st = realFstat(fd, ...rest);
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: st.size + 10 });
+      };
+      const { tryFileHash } = require(${JSON.stringify(lib)});
+      const h = tryFileHash(${JSON.stringify(file)});
+      fs.fstatSync = realFstat;
+      process.stdout.write(JSON.stringify({ h }));
+    `;
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const r = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS, killSignal: 'SIGKILL' });
+    assert.equal(r.timedOut, false, `the read returned: ${r.summary}`);
+    assert.equal(r.exitCode, 0, r.summary);
+    // An early end of file means the file changed while it was read, so no
+    // partial hash is returned, even when the size is back to what fstat said.
+    assert.deepEqual(JSON.parse(r.stdout), { h: null });
+  });
+
   test('every descriptor the recorder and tryFileHash open is closed', (t) => {
     const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-fds-'));

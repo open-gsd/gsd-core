@@ -38,7 +38,7 @@ import { recordManifestFileHashesResult, tryFileHash, type RewrittenFile } from 
 import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- install-engine is an `export =` module, which only `import x = require` can name (#6331)
 import installEngine = require('./install-engine.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import testHomeGuard = require('./real-home-guard.cjs');
@@ -564,9 +564,16 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
         _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
       }
     } finally {
-      if (recordManifestFileHashesResult(layout.configDir, recordedBeforeSync) === 'conflict') {
+      const recorded = recordManifestFileHashesResult(layout.configDir, recordedBeforeSync);
+      if (recorded === 'conflict') {
         process.stderr.write(
           'surface: gsd-file-manifest.json changed while skills were re-staged (a concurrent install?), '
+          + 'so their hashes were not re-recorded. The next install may report those skills as locally '
+          + 'modified and back them up to gsd-local-patches/.\n',
+        );
+      } else if (recorded === 'unavailable' && recordedBeforeSync.length > 0) {
+        process.stderr.write(
+          'surface: gsd-file-manifest.json could not be read or written after skills were re-staged, '
           + 'so their hashes were not re-recorded. The next install may report those skills as locally '
           + 'modified and back them up to gsd-local-patches/.\n',
         );
