@@ -249,6 +249,14 @@ const handleStdinEnd = () => {
       allow(undefined);
     }
 
+    // #6360: a subagent's input carries the PARENT's session_id plus agent_id,
+    // and every path below is keyed on session_id alone, so exit before any of
+    // them is read or written, on every event. Only a non-empty string counts;
+    // the why and the agent_type-only case: docs/context-monitor.md, "Safety".
+    if (typeof data.agent_id === 'string' && data.agent_id !== '') {
+      allow(undefined);
+    }
+
     const tmpDir = os.tmpdir();
     const warnPath = path.join(tmpDir, `claude-ctx-${sessionId}-warned.json`);
     const metricsPath = path.join(tmpDir, `claude-ctx-${sessionId}.json`);
@@ -349,7 +357,7 @@ const handleStdinEnd = () => {
       // enabled, thresholds at the constants above, which `thresholds` already holds)
     }
 
-    // If no metrics file, this is a subagent or fresh session -- exit silently.
+    // If no metrics file, this is a fresh session -- exit silently.
     // Collapsed existsSync+readFileSync: ENOENT → exit 0 (identical to old !existsSync branch),
     // other errors rethrow to the outer catch (swallowed → exit 0, as before).
     //
