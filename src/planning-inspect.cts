@@ -101,10 +101,10 @@ const { tryWithinRoot, PathAcceptance, isContainedIn } = securityMod;
 // this reader and `phase-plan-index` share both rules. Where their answers
 // still differ (a SUMMARY this reader refuses to read, for one), docs/CLI-TOOLS.md
 // lists the cases under "Halted plans".
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5823 the halt engine's compiled CommonJS module, imported like the owners above
 import planDependencyGraphMod = require('./plan-dependency-graph.cjs');
 const { computeHaltPropagation, isSummaryFileHalted, isSummaryFileBlocked, buildSummaryFileIndex } = planDependencyGraphMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5823 phase-plan-index's resolver, from its compiled CommonJS module
 import phaseMod = require('./phase.cjs');
 const { resolveDependencyId, buildShortFormToId, normalizeDependencyToken } = phaseMod;
 
@@ -940,28 +940,27 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
 
 /**
  * #5823: fill `blocked_by` on the phase's live, canonically named plan rows
- * (`phase-plan-index`'s node set) the way `cmdPhasePlanIndex`
- * (`src/phase.cts`) does: the same three-tier depends_on resolution
- * (`resolveDependencyId`) and the same `computeHaltPropagation` pass. A token
- * that resolves to no plan in the set is dropped, as there. docs/CLI-TOOLS.md
- * ("Halted plans") lists every case where the two commands answer
- * differently; three of them arise here. Two because this read never fails
- * where `phase-plan-index` refuses the phase. On a depends_on cycle the shared
- * propagation's fail-closed answer stands: every non-halted plan it cannot
- * order carries a non-empty `blocked_by`. On two plan ids that differ only in
- * case, an exact or canonical token naming either resolves to the one that
- * sorts last (`planMap` and `canonicalToId` keep the last write), and a
- * short-form token to the one that sorts first (`buildShortFormToId` keeps
- * the first). The third because the shared propagation orders this graph
- * itself, where `phase-plan-index` hands it a wave order that leaves out an
- * edge to a plan whose id is empty (a bare `PLAN.md`), so a halt upstream of
- * that plan reaches the plans whose token resolves to it here, and can miss
- * them there.
+ * (`phase-plan-index`'s node set) the way `cmdPhasePlanIndex` (`src/phase.cts`)
+ * does: the same three-tier depends_on resolution (`resolveDependencyId`) and
+ * the same `computeHaltPropagation` pass; a token that resolves to no plan in
+ * the set is dropped, as there. Three of the differences docs/CLI-TOOLS.md lists
+ * under "Halted plans" arise here. Two because this read never fails where
+ * `phase-plan-index` refuses the phase: on a depends_on cycle every non-halted
+ * plan the shared propagation cannot order carries a non-empty `blocked_by`,
+ * and two plan ids that differ only in case resolve by sort order (body). The
+ * third because the shared propagation orders this graph itself, where
+ * `phase-plan-index` hands it a wave order that leaves out an edge to a plan
+ * whose id is empty (a bare `PLAN.md`), so a halt upstream of that plan reaches
+ * the plans whose token resolves to it here, and can miss them there.
  */
 function assignHaltPropagation(entries: Array<{ row: PlanRow; planFile: string }>): void {
   // `cmdPhasePlanIndex` builds its id maps from `planFiles.sort()`, and both
   // the canonical-id map (last write wins) and the short-form map (first write
   // wins) depend on that order when two plans collide, so sort the same way.
+  // On two plan ids that differ only in case, an exact or canonical token
+  // naming either then resolves to the one that sorts last (`planMap` and
+  // `canonicalToId` keep the last write), and a short-form token to the one
+  // that sorts first (`buildShortFormToId` keeps the first).
   const live = entries
     .slice()
     .sort((a, b) => (a.planFile < b.planFile ? -1 : a.planFile > b.planFile ? 1 : 0))

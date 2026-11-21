@@ -186,15 +186,13 @@ function readSummaryFrontmatterPrefix(summaryPath: string): string | null {
  * degrades to the pre-#3345 filename-existence behaviour rather than breaking
  * any caller. Fail-open by design, mirroring `isPlanSuperseded`'s posture.
  *
- * Callers: plan-scan.cts's `scanPhasePlans` (the count side) and phase.cts's
- * `cmdPhasePlanIndex` (the read side) BOTH filter their summary lists through
- * this one predicate, so the count and the `incomplete` list can never
- * re-diverge on the blocked rule. state.cts's `scanOutstanding` filters its
- * list the same way for its named outstanding plans. Other callers use the
- * filtered list for narrower purposes: phase-locator.cts's `searchPhaseInDir`
- * only for its readiness evidence (its `incomplete_plans` list is built from
- * unfiltered summaries), and `planning inspect` only for the pairing its halt
- * read uses.
+ * Callers: plan-scan.cts's `scanPhasePlans` (count side) and phase.cts's
+ * `cmdPhasePlanIndex` (read side) BOTH filter their summary lists through it,
+ * so the count and the `incomplete` list cannot re-diverge on the blocked
+ * rule; state.cts's `scanOutstanding` does the same for its outstanding plans.
+ * Narrower uses: phase-locator.cts's `searchPhaseInDir` for its readiness
+ * evidence only (its `incomplete_plans` list uses unfiltered summaries), and
+ * `planning inspect` only for the pairing its halt read uses.
  */
 function isSummaryFileBlocked(summaryPath: string): boolean {
   const content = readSummaryFrontmatterPrefix(summaryPath);
