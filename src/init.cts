@@ -445,6 +445,8 @@ function withProjectRoot(cwd: string, result: Record<string, unknown>): Record<s
   result['missing_agents'] = agentStatus.missing_agents;
   result['agents_dir'] = agentStatus.agents_dir;
   result['agent_runtime'] = agentStatus.agent_runtime;
+  // #5236: `agents_installed` is null when the check could not run; the reason says why (never set when it ran).
+  if (agentStatus.agents_check_reason !== undefined) result['agents_check_reason'] = agentStatus.agents_check_reason;
   const config = loadConfig(cwd);
   if (config.response_language) {
     result['response_language'] = config.response_language;
@@ -4442,9 +4444,6 @@ function buildAgentSkillsBlock(
     if (diagnostics) diagnostics.warnings.push(message.replace(/\n+$/, ''));
   };
 
-  const runtime = (config && (config['runtime'] as string)) || 'claude';
-  const globalSkillsBase = getGlobalSkillsBase(runtime);
-
   if (!config || !config['agent_skills'] || !agentType) return '';
 
   let skillPaths = (config['agent_skills'] as Record<string, unknown>)[agentType];
@@ -4458,6 +4457,11 @@ function buildAgentSkillsBlock(
     return '';
   }
   if (skillPaths.length === 0) return '';
+
+  // #5236: the skills location is resolved only once there are entries to resolve; an unregistered runtime id with
+  // nothing configured must not throw here.
+  const runtime = (config['runtime'] as string) || 'claude';
+  const globalSkillsBase = getGlobalSkillsBase(runtime);
 
   // Hoist trusted roots computation before the loop: loadTrustedGlobalRoots does
   // realpathSync I/O and should run at most once per call, not once per failing skill.
