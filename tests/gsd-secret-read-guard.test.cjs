@@ -1873,6 +1873,22 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "printf 'cat .env' | head",
     "printf 'cat .env.example' | sort | bash",
   ]);
+
+  // npx and `npm exec` (`npm x`) run a `-c` / `--call` value as a shell script.
+  blocks([
+    "npx -c 'cat .env'",
+    "npx --call 'cat .env'",
+    "npx --call='cat .env'",
+    "npm exec -c 'cat .env'",
+    "npm exec --call 'cat .env'",
+    "npm exec --call='cat .env'",
+    "npm x -c 'cat .env'",
+    "npx -y -c 'cat .env'",
+    "npm exec --yes -c 'cat .env'",
+    `npx -c "git -c core.fsmonitor='cat .env' status"`,
+    "npx.cmd -c 'cat .env'",
+  ]);
+  allows(["npx -c 'echo .env'", "npm exec -c 'ls -a'", 'npx prettier --check .env.example']);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
