@@ -1983,8 +1983,10 @@ function tokenize(str, reading) {
         buf = '';
         hasWord = false;
       } else {
+        const before = tokens.length;
         flush();
-        if (namedFd) tokens[tokens.length - 1].namesFd = true;
+        // Only the word this flush pushed; a heredoc tag (`<<{fd}<<<`) pushes none.
+        if (namedFd && tokens.length === before + 1 && tokens[before].kind === 'word') tokens[before].namesFd = true;
       }
       let j = i;
       let text;
