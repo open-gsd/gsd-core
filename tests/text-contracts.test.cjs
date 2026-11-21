@@ -609,11 +609,17 @@ describe('the shipped contracts hold on the real files, and fail when a contract
   for (const [title, rel, edit, contract, expected] of [
     ['.clinerules loses its test framework mention', '.clinerules',
       (text) => text.replace(/node:test|node:assert/g, 'a runner'), 'cline-support', /should mention test framework/],
-    ['.clinerules deleted, so the contract has nothing to read', '.clinerules',
+    ['.clinerules loses its GSD workflow mention', '.clinerules',
+      (text) => text.replace(/gsd|GSD|workflow/g, 'x'), 'cline-support', /should mention GSD workflows/],
+    ['.clinerules loses its CommonJS standard', '.clinerules',
+      (text) => text.replace(/CommonJS|require/g, 'x'), 'cline-support', /should mention CommonJS standard/],
+    ['.clinerules loses its architecture overview', '.clinerules',
+      (text) => text.replace(/bin\/lib|workflows|agents/g, 'x'), 'cline-support', /should describe project architecture/],
+    ['.clinerules emptied, so the contract has nothing to read', '.clinerules',
       () => '', 'cline-support', /the file is empty/],
     ['a "(12 shipped)" count back in an INVENTORY heading', 'docs/INVENTORY.md',
       append('## Hooks (12 shipped)'), 'inventory-headings-countfree', /still has a hard-count "\(N shipped\)" heading/],
-    ['a count on a heading whose title is 298 characters (limit - 2 of the pattern bound)', 'docs/INVENTORY.md',
+    ['a count on a heading whose title is 298 characters (one under the pattern bound)', 'docs/INVENTORY.md',
       append(`## ${'t'.repeat(298)} (3 shipped)`), 'inventory-headings-countfree', /still has a hard-count/],
     ['a count on a heading whose title is 299 characters (the pattern bound)', 'docs/INVENTORY.md',
       append(`## ${'t'.repeat(299)} (3 shipped)`), 'inventory-headings-countfree', /still has a hard-count/],
@@ -629,7 +635,17 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       dropAll('gsd-tools loop render-hooks plan:pre'), 'phase6-capability-docs', /manual documents render-hooks verification/],
     ['the docs index no longer links the capability manual', 'docs/README.md',
       dropAll('how-to/develop-a-capability.md'), 'phase6-capability-docs', /docs index links the Capability developer manual/],
-    ['the capability manual deleted, so the contract has nothing to read', 'docs/how-to/develop-a-capability.md',
+    ['the capability manual loses its ADR-857 citation', 'docs/how-to/develop-a-capability.md',
+      dropAll('ADR-857'), 'phase6-capability-docs', /manual cites ADR-857/],
+    ['the capability manual loses the GSD 1.5 loop', 'docs/how-to/develop-a-capability.md',
+      dropAll('GSD 1.5'), 'phase6-capability-docs', /GSD 1\.5 capability development loop/],
+    ['the capability manual loses fragment.inline', 'docs/how-to/develop-a-capability.md',
+      dropAll('fragment.inline'), 'phase6-capability-docs', /manual documents fragment\.inline/],
+    ['the capability manual loses the ai-integration cutover', 'docs/how-to/develop-a-capability.md',
+      dropAll('ai-integration'), 'phase6-capability-docs', /ai-integration planning capability cutover/],
+    ['the capability manual loses the pattern-mapper cutover', 'docs/how-to/develop-a-capability.md',
+      dropAll('pattern-mapper'), 'phase6-capability-docs', /pattern-mapper planning capability cutover/],
+    ['the capability manual emptied, so the contract has nothing to read', 'docs/how-to/develop-a-capability.md',
       () => '', 'phase6-capability-docs', /the file is empty/],
     ['Playwright gone from the automated UI verification step (#2994)', 'gsd-core/workflows/verify-work/steps/automated-ui-verification.md',
       (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /should mention Playwright/],
@@ -658,6 +674,44 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n## ${'t'.repeat(300)} (3 shipped)\n`);
     assert.deepEqual(runShipped(root, ['inventory-headings-countfree']), []);
   });
+
+  // A file the contract reads that is gone from the tree is one finding for that file.
+  for (const [rel, contract] of [
+    ['.clinerules', 'cline-support'],
+    ['docs/how-to/develop-a-capability.md', 'phase6-capability-docs'],
+    ['docs/INVENTORY.md', 'inventory-headings-countfree'],
+    ['.github/workflows/release.yml', 'policy-release-no-npm-self-upgrade'],
+    ['agents/gsd-ui-auditor.md', 'playwright-ui-verify'],
+  ]) {
+    test(`${rel} removed from the tree is a finding for ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      fs.unlinkSync(path.join(root, ...rel.split('/')));
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => f.file === rel && /cannot read the file/.test(f.message)), JSON.stringify(findings));
+    });
+  }
+
+  // `npm install -g` and `npm` on separate lines is not a self-upgrade: the original matched line by line.
+  test('npm install -g and npm on separate lines still satisfy policy-release-no-npm-self-upgrade', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, '.github', 'workflows', 'release.yml');
+    fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n      - run: npm install -g\n        npm@latest\n`);
+    assert.deepEqual(runShipped(root, ['policy-release-no-npm-self-upgrade']), []);
+  });
+
+  // The gap between `-g` and the second `npm` is bounded at 2000 characters: limit - 1 and limit are caught,
+  // limit + 1 is the stated edge of the pattern.
+  for (const [gap, caught] of [[1999, true], [2000, true], [2001, false]]) {
+    test(`a self-upgrade line with a ${gap}-character gap after -g ${caught ? 'fails' : 'is past the bound of'} policy-release-no-npm-self-upgrade`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, '.github', 'workflows', 'release.yml');
+      const filler = ` ${'a'.repeat(gap - 2)} `;
+      assert.equal(filler.length, gap);
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n      - run: npm install -g${filler}npm@latest\n`);
+      const findings = runShipped(root, ['policy-release-no-npm-self-upgrade']);
+      assert.equal(findings.length, caught ? 1 : 0, JSON.stringify(findings));
+    });
+  }
 
   // The release.yml self-upgrade pattern: lines it must not match stay clean (it was a unit test of its own regex).
   for (const line of ['npm ci', 'npm install', 'npm install -g some-other-tool', 'npm run build']) {

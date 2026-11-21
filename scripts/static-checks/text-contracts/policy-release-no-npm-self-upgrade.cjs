@@ -7,8 +7,9 @@
 // tests/text-contracts.test.cjs.
 
 // Spaces and tabs only between the words: the pattern is matched against whole-file text, and the
-// original matched one line at a time.
-const NPM_SELF_UPGRADE_RE = /\bnpm[ \t]+(install|i)[ \t]+(-g|--global)\b[^\r\n]{0,300}\bnpm(@|\b)/;
+// original matched one line at a time. The flags-and-paths gap between `-g` and the second `npm` is
+// bounded (no-unbounded-quantifier) at 2000 characters, far past any workflow line; a test pins both sides.
+const NPM_SELF_UPGRADE_RE = /\bnpm[ \t]+(install|i)[ \t]+(-g|--global)\b[^\r\n]{0,2000}\bnpm(@|\b)/;
 
 module.exports = {
   id: 'policy-release-no-npm-self-upgrade',
