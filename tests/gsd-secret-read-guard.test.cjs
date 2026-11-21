@@ -1976,6 +1976,12 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     const plain = scanWork(`bash <<< "${script}"`);
     assert.ok(scanWork(`BASH_ENV=/dev/stdin bash <<< "${script}"`) < plain * 1.2, 'fd BASH_ENV, stdin mode');
   });
+
+  // The blank split reads what the stage writes, not its option values or patterns.
+  allows(["grep -r 'API_KEY .env' src | xargs wc -l", "grep -rl -e 'x .env' . | xargs ls -l", "find . -name 'x .env.bak' | xargs ls"]);
+  // A heredoc or here-string the stage is given is data that flows on, so it is split too.
+  blocks(["cat <<< 'x if=.env' | xargs dd"], { path: 'if=.env' });
+  blocks(["grep x <<< 'x .env' | xargs cat"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
