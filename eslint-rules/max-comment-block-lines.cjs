@@ -7,7 +7,7 @@
  * 15 lines. A longer one is a measurement log or an essay: move it to
  * `docs/research/data/` and link it. Each file may carry up to its baseline of
  * over-long blocks (`comment-ratchet.baseline.json`); a file with fewer than
- * its baseline must lower it. See `lib/comment-ratchet.cjs`.
+ * its baseline is lowered by the generator. See `lib/comment-ratchet.cjs`.
  */
 
 const path = require('node:path');
@@ -22,7 +22,6 @@ module.exports = {
     messages: {
       long: `This comment block is {{lines}} lines; the ceiling is ${MAX_COMMENT_BLOCK_LINES}. Move it to docs/research/data/ and link it.`,
       excess: `This comment block is {{lines}} lines; the ceiling is ${MAX_COMMENT_BLOCK_LINES}. The file has {{count}} over-long blocks and its baseline allows {{allowed}}.`,
-      stale: 'This file has {{count}} over-long comment blocks but a baseline of {{allowed}}. Lower its entry in eslint-rules/comment-ratchet.baseline.json to {{count}} (remove the entry at 0).',
     },
   },
   create(context) {
@@ -40,8 +39,9 @@ module.exports = {
           return !before || before.loc.end.line < comment.loc.start.line;
         };
         const blocks = longBlocks(sourceCode.getAllComments(), MAX_COMMENT_BLOCK_LINES, startsLine);
-        const { excess, stale } = judge(blocks.length, allowed);
+        const { excess } = judge(blocks.length, allowed);
         if (excess > 0) {
+          // A file with FEWER blocks than its entry is not an error (see directive-names-issue.cjs).
           for (const block of blocks.slice(allowed)) {
             context.report({
               loc: block.loc,
@@ -49,8 +49,6 @@ module.exports = {
               data: { lines: block.lines, count: blocks.length, allowed },
             });
           }
-        } else if (stale > 0) {
-          context.report({ loc: { line: 1, column: 0 }, messageId: 'stale', data: { count: blocks.length, allowed } });
         }
       },
     };

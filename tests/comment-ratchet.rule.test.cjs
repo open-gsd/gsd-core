@@ -184,6 +184,9 @@ describe('local/directive-names-issue', () => {
         { code: '// a note that mentions allow-test-rule: in prose\nconst x = 1;', filename: 'tests/a.cjs', options: [{ baseline: {} }] },
         // The baseline covers a file's existing bare directive.
         { code: `// ${KW_NEXT} no-console\nconsole.log(1);`, filename: 'tests/old.cjs', options: [{ baseline: { 'tests/old.cjs': { directive: 1 } } }] },
+        // A file under its baseline is not an error: a PR that merged first and removed a site must not
+        // break every PR queued behind it (the queue ejection of #6427). The generator lowers the entry.
+        { code: 'const x = 1;', filename: 'tests/old.cjs', options: [{ baseline: { 'tests/old.cjs': { directive: 2 } } }] },
       ],
       invalid: [
         {
@@ -205,13 +208,6 @@ describe('local/directive-names-issue', () => {
           options: [{ baseline: { 'tests/old.cjs': { directive: 1 } } }],
           errors: [{ messageId: 'excess', line: 3 }],
         },
-        {
-          // Fewer sites than the baseline: it must be lowered.
-          code: 'const x = 1;',
-          filename: 'tests/old.cjs',
-          options: [{ baseline: { 'tests/old.cjs': { directive: 2 } } }],
-          errors: [{ messageId: 'stale' }],
-        },
       ],
     });
   });
@@ -224,6 +220,8 @@ describe('local/max-comment-block-lines', () => {
         { code: `${lines(15)}\nconst x = 1;`, filename: 'tests/a.cjs', options: [{ baseline: {} }] },
         { code: `${block(15)}\nconst x = 1;`, filename: 'tests/a.cjs', options: [{ baseline: {} }] },
         { code: `${lines(16)}\nconst x = 1;`, filename: 'tests/old.cjs', options: [{ baseline: { 'tests/old.cjs': { block: 1 } } }] },
+        // Under the baseline is not an error (see the directive rule).
+        { code: 'const x = 1;', filename: 'tests/old.cjs', options: [{ baseline: { 'tests/old.cjs': { block: 2 } } }] },
       ],
       invalid: [
         { code: `${lines(16)}\nconst x = 1;`, filename: 'tests/new.cjs', options: [{ baseline: {} }], errors: [{ messageId: 'long', line: 1 }] },
@@ -234,7 +232,6 @@ describe('local/max-comment-block-lines', () => {
           options: [{ baseline: { 'tests/old.cjs': { block: 1 } } }],
           errors: [{ messageId: 'excess', line: 18 }],
         },
-        { code: 'const x = 1;', filename: 'tests/old.cjs', options: [{ baseline: { 'tests/old.cjs': { block: 1 } } }], errors: [{ messageId: 'stale' }] },
       ],
     });
   });

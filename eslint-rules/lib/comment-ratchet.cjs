@@ -16,9 +16,12 @@
  *
  * The baseline is `eslint-rules/comment-ratchet.baseline.json`:
  * `{ "<repo-relative file>": { "directive": N, "block": N } }`. A file may carry
- * up to its baseline of each kind and no more. A file that carries FEWER than
- * its baseline is also an error until the baseline is lowered, so the numbers
- * only ever go down, and an empty baseline is the end state.
+ * up to its baseline of each kind and no more. A file with FEWER sites than its
+ * entry is not an error: a PR that merged first and removed one would otherwise
+ * break every PR queued behind it until the shared file was regenerated. The
+ * entry is lowered by `scripts/gen-comment-ratchet-baseline.cjs --write` (its
+ * `--check` reports every entry above the file's count), so the numbers go down
+ * when a maintainer runs it, and an empty baseline is the end state.
  */
 
 const MAX_COMMENT_BLOCK_LINES = 15;

@@ -9,8 +9,9 @@
  * the two comment rules report every site, and records how many each file has.
  * The baseline can only go down: run this after converting a file, and the file's
  * entry drops (at zero it is removed). `--check` exits 1 when the committed file
- * differs from what a run would write; lint:ci runs the rules themselves, which
- * also fail a file that has fewer sites than its entry.
+ * differs from what a run would write; the rules themselves fail only a
+ * file with MORE sites than its entry, so an entry above the file's count (a PR that merged first and
+ * removed a site) never breaks the queue; run `--write` to lower it.
  *
  * Usage: node scripts/gen-comment-ratchet-baseline.cjs [--write | --check]
  */

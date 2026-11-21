@@ -487,7 +487,7 @@
     "block": 1
   },
   "scripts/lint-phase-arg-assignment.cjs": {
-    "block": 2
+    "block": 1
   },
   "scripts/lint-phase-enumeration-drift.cjs": {
     "block": 1

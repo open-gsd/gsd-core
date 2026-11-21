@@ -7,7 +7,7 @@
  * `allow-unbounded-subprocess:`) must name an issue as `#NNN`, so a reader can
  * find out why it exists and when it can go. Each file may carry up to its
  * baseline of bare directives (`comment-ratchet.baseline.json`); a file with
- * fewer than its baseline must lower it. See `lib/comment-ratchet.cjs`.
+ * fewer than its baseline is lowered by the generator. See `lib/comment-ratchet.cjs`.
  *
  * Limits, stated rather than hidden: ESLint applies a directive to this rule's own report, so a bare
  * `eslint-disable` (all rules) or a directive naming this rule hides the finding, and neither is counted
@@ -28,7 +28,6 @@ module.exports = {
     messages: {
       bare: 'This exemption directive names no issue. Add `#NNN` for the issue that justifies it and says when it can go.',
       excess: 'This file has {{count}} exemption directives with no issue reference and its baseline allows {{allowed}}. The baseline forgives the first {{allowed}} by position, so this may not be the one you added: name an issue (`#NNN`) in the new one.',
-      stale: 'This file has {{count}} exemption directives with no issue reference but a baseline of {{allowed}}. Lower its entry in eslint-rules/comment-ratchet.baseline.json to {{count}} (remove the entry at 0).',
     },
   },
   create(context) {
@@ -41,9 +40,11 @@ module.exports = {
     return {
       Program() {
         const bare = bareDirectives(context.sourceCode.getAllComments());
-        const { excess, stale } = judge(bare.length, allowed);
+        const { excess } = judge(bare.length, allowed);
         if (excess > 0) {
-          // The baseline covers the first `allowed` sites; the rest are the new ones.
+          // The baseline covers the first `allowed` sites; the rest are the new ones. A file with
+          // FEWER sites than its entry is not an error: a PR that merged first and removed one must
+          // not break every PR queued behind it. `gen-comment-ratchet-baseline.cjs --check` reports it.
           for (const comment of bare.slice(allowed)) {
             context.report({
               loc: comment.loc,
@@ -51,8 +52,6 @@ module.exports = {
               data: { count: bare.length, allowed },
             });
           }
-        } else if (stale > 0) {
-          context.report({ loc: { line: 1, column: 0 }, messageId: 'stale', data: { count: bare.length, allowed } });
         }
       },
     };
