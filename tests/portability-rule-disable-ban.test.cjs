@@ -3,293 +3,186 @@
 /**
  * portability-rule-disable-ban.test.cjs
  *
- * Out-of-band disable-ban scan (ADR-1703).
+ * Detection cases for scripts/static-checks/portability-rule-disable-ban.cjs
+ * (ADR-1703). The scan of the real repository is no longer a test: it runs once
+ * in scripts/run-static-checks.cjs (ADR-6315 item 19, #6414). These cases run
+ * the check against small temporary trees, so each one fails when the check
+ * stops detecting what it exists to detect.
  *
- * ESLint inline suppression of portability rules is banned. This test runs
- * OUTSIDE ESLint so it cannot itself be eslint-disabled.
- *
- * PROTECTED_RULES grows as later phases add rules. Each new portability rule
- * in the `local/` namespace should be appended to this list.
- *
- * Hard-fails on:
- *   (a) Any `eslint-disable*` comment that NAMES a protected portability rule.
- *   (b) Any BLANKET `eslint-disable*` comment (no rule list) — these suppress
- *       every rule including the protected ones.
- *
- * NOTE: This file itself is excluded from the scan by absolute path. It
- * references the disable keyword only inside regex/string data structures to
- * avoid being detected as a real directive.
+ * The disable keyword appears below only inside string data built by
+ * concatenation, so this file holds no real directive.
  */
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
-const espree = require('espree');
-const tsEstree = require('@typescript-eslint/typescript-estree');
-const { globSync } = require('glob');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
-// ── Protected portability rules (grows with each ADR-1703 phase) ──────────────
-const PROTECTED_RULES = [
-  'no-path-literal-in-assert',
-  'no-posix-mode-bit-assert',
-  'no-unguarded-nonportable-exec',
-  // ADR-1703 Phase 4 rules (issue #1726)
-  'no-crlf-fragile-split',
-  'no-hardcoded-tmp',
-  'no-bare-npm-exec',
-  'require-userprofile-with-home',
-  // ADR-1703 Phase 5 rule (issue #1733) — applies to src/**/*.cts (production sources)
-  'normalize-path-in-content',
-  // ADR-1703 Phase 6 rule (issue #1740) — applies to src/**/*.cts AND the build/install
-  // surface (bin/install.js, scripts/build-hooks.js) brought under lint by the glob expansion
-  'require-fs-op-fallback',
-  // #4244 hardening (origin #4020 / #4220 Windows CI hang) — applies to tests/**/*.test.cjs
-  'require-full-tmpdir-triad',
-  'no-unbounded-dirname-walk',
-  // #4590 (epic #4589 Phase 1)
-  'no-rendered-text-length-assert',
-];
+const { cleanup } = require('./helpers.cjs');
+const ban = require('../scripts/static-checks/portability-rule-disable-ban.cjs');
 
-// ── Detect disable directives via the comment text ───────────────────────────
+const KW = 'eslint-' + 'disable';
+const KW_NEXT = 'eslint-' + 'disable-next-line';
 
-// The three directive forms ESLint recognises (built as concatenated strings so
-// this source file contains NO real disable directive of its own).
-const D = 'eslint-' + 'disable';
-const DN = 'eslint-' + 'disable-next-line';
-const DL = 'eslint-' + 'disable-line';
-const DISABLE_PREFIXES = [DN, DL, D]; // longest first so prefix-match is greedy
-
-/**
- * Classify a comment node.  Returns:
- *   'blanket'   — a disable with NO rule list (suppresses everything)
- *   'named'     — a disable that lists at least one protected portability rule
- *   null        — not a disable directive, or a non-portability named disable
- */
-function classifyComment(commentValue) {
-  const txt = commentValue.trim();
-  for (const prefix of DISABLE_PREFIXES) {
-    if (txt.startsWith(prefix)) {
-      // Text after the directive keyword
-      const rest = txt.slice(prefix.length).trim();
-      // Blanket: nothing after the keyword, or only a prose comment (starts with --)
-      if (!rest || rest.startsWith('--')) {
-        return 'blanket';
-      }
-      // Named: rest is a comma-separated rule list (possibly with -- prose)
-      const ruleList = rest.split('--')[0]; // strip trailing prose
-      const rules = ruleList.split(',').map(r => r.trim()).filter(Boolean);
-      for (const rule of rules) {
-        for (const protected_ of PROTECTED_RULES) {
-          if (rule === 'local/' + protected_ || rule === protected_) {
-            return 'named';
-          }
-        }
-      }
-      return null; // named disable but not for a protected rule
-    }
+/** A repository root holding the given files (relative POSIX path to text). */
+function makeRoot(t, files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-disable-ban-'));
+  t.after(() => cleanup(root));
+  for (const [rel, text] of Object.entries(files)) {
+    const abs = path.join(root, ...rel.split('/'));
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, text);
   }
-  return null;
+  return root;
 }
 
-// ── Collect scanned files ─────────────────────────────────────────────────────
-//
-// The disable-ban covers:
-//   - tests/**/*.test.cjs  — test sources (phase 1–4 scope)
-//   - src/**/*.cts         — production TypeScript sources (extended in phase 5 to
-//                            protect normalize-path-in-content, which applies to
-//                            src/**/*.cts; an eslint-disable there would bypass the
-//                            production rule entirely)
-//   - bin/install.js + scripts/build-hooks.js — the ADR-1703 Phase 6 glob expansion
-//                            surface (DEFECT.WINDOWS-FS-OPS); an eslint-disable in the
-//                            generated installer or build-side atomic-replace helper
-//                            would bypass require-fs-op-fallback / normalize-path-in-content
-
-const SELF_ABS = __filename;
-
-function collectTestFiles() {
-  const root = path.join(__dirname, '..');
-  const testFiles = globSync('tests/**/*.test.cjs', { cwd: root })
-    .map(rel => path.join(root, rel))
-    .filter(absPath => absPath !== SELF_ABS);
-  const srcFiles = globSync('src/**/*.cts', { cwd: root })
-    .map(rel => path.join(root, rel));
-  // ADR-1703 Phase 6: the two production portability-rule surfaces outside src/ + tests/.
-  const prodExtra = [
-    path.join(root, 'bin', 'install.js'),
-    path.join(root, 'scripts', 'build-hooks.js'),
-  ].filter(absPath => fs.existsSync(absPath));
-  return [...testFiles, ...srcFiles, ...prodExtra];
-}
-
-// ── Scan ──────────────────────────────────────────────────────────────────────
-
-function scanFile(absPath) {
-  let src;
-  try {
-    src = fs.readFileSync(absPath, 'utf-8');
-  } catch (err) {
-    throw new Error(`Could not read ${absPath}: ${err.message}`);
-  }
-
-  // bin/install.js (generated installer) starts with a `#!/usr/bin/env node` shebang
-  // that espree cannot parse. Rewrite the leading `#!` to `//` so it becomes a valid
-  // line comment — this preserves byte length and line numbers so any reported
-  // directive stays at the correct source line.
-  if (src.startsWith('#!')) src = '//' + src.slice(2);
-
-  // .cts files use TypeScript syntax — use @typescript-eslint/typescript-estree.
-  // .cjs files use plain JS — use espree (the original parser).
-  const isCts = absPath.endsWith('.cts');
-
-  let ast;
-  try {
-    if (isCts) {
-      ast = tsEstree.parse(src, { comment: true, loc: true, range: true });
-    } else {
-      ast = espree.parse(src, {
-        comment: true,
-        ecmaVersion: 2022,
-        loc: true,
-        range: true,
-        tolerant: true,
-      });
-    }
-  } catch (parseErr) {
-    // C5: fail CLOSED on parse error — a file that fails to parse must FAIL the
-    // test with its path, not be silently skipped.  Silent skip is a false-green:
-    // an unparseable test file could contain a real disable directive.
-    throw new Error(`Parse error in ${absPath}: ${parseErr.message}`);
-  }
-
-  const blanket = [];
-  const named = [];
-
-  for (const cmt of ast.comments || []) {
-    const kind = classifyComment(cmt.value);
-    if (!kind) continue;
-    const line = cmt.loc ? cmt.loc.start.line : '?';
-    const entry = { file: absPath, line, text: cmt.value.trim() };
-    if (kind === 'blanket') blanket.push(entry);
-    else if (kind === 'named') named.push(entry);
-  }
-
-  return { blanket, named };
-}
-
-// ── C5: parse-error fail-closed ───────────────────────────────────────────────
-
-describe('C5 — scanFile fails closed on parse error', () => {
-  test('C5a: scanFile throws on parse error instead of silently returning empty result (.cjs path, espree)', () => {
-    // Inject a parse error deterministically by monkeypatching espree.parse.
-    // This is the cross-platform approach (works under root/Docker too).
-    const origParse = espree.parse;
-    try {
-      espree.parse = () => { throw new SyntaxError('injected parse error for C5 test'); };
-      // Create a minimal real file to scan (use this test file itself, which exists).
-      assert.throws(
-        () => scanFile(__filename),
-        (err) => {
-          return err instanceof Error &&
-            err.message.includes('injected parse error for C5 test');
-        },
-        'scanFile must throw on parse error, not silently return empty result'
-      );
-    } finally {
-      espree.parse = origParse;
-    }
+describe('classifyComment', () => {
+  test('a disable with no rule list is blanket', () => {
+    assert.equal(ban.classifyComment(` ${KW} `), 'blanket');
+    assert.equal(ban.classifyComment(` ${KW_NEXT} `), 'blanket');
   });
 
-  test('W1/C5b: scanFile throws on parse error for .cts path (tsEstree path — fail-closed)', () => {
-    // W1: The existing C5a test only exercises the espree (.cjs) path.  This test
-    // exercises the tsEstree (.cts) path by monkeypatching tsEstree.parse and
-    // pointing scanFile at a synthetic .cts-suffixed path.
-    //
-    // Cross-platform approach: monkeypatch the module method, not chmod/permissions
-    // (chmod 0o000 is bypassed by root in Docker and behaves differently per OS).
-    //
-    // tsEstree exports 'parse' via a configurable getter (no setter), so we use
-    // Object.defineProperty to inject a throwing stub, then restore the original
-    // descriptor in the finally block.
-    const tsEstreeModule = require('@typescript-eslint/typescript-estree');
-    const origDescriptor = Object.getOwnPropertyDescriptor(tsEstreeModule, 'parse');
-    const injected = () => { throw new SyntaxError('injected tsEstree parse error for W1/C5b test'); };
-    Object.defineProperty(tsEstreeModule, 'parse', {
-      value: injected,
-      writable: true,
-      configurable: true,
-      enumerable: true,
-    });
+  test('a disable with only prose after the keyword is blanket', () => {
+    assert.equal(ban.classifyComment(` ${KW} -- because I said so`), 'blanket');
+  });
 
-    // Also monkeypatch fs.readFileSync to return dummy content for the fake .cts
-    // path, so the .cts branch in scanFile runs without needing a real file.
-    const origReadFileSync = fs.readFileSync;
-    fs.readFileSync = (p, enc) => {
-      if (typeof p === 'string' && p.endsWith('.cts')) return '// dummy cts content';
-      return origReadFileSync.call(fs, p, enc);
-    };
+  test('a disable naming a protected rule, with or without the local/ prefix, is named', () => {
+    assert.equal(ban.classifyComment(` ${KW_NEXT} local/no-hardcoded-tmp`), 'named');
+    assert.equal(ban.classifyComment(` ${KW_NEXT} no-hardcoded-tmp -- reason`), 'named');
+  });
 
-    try {
-      assert.throws(
-        () => scanFile(path.join(__dirname, 'dummy-fixture.cts')),
-        (err) => {
-          return err instanceof Error &&
-            err.message.includes('injected tsEstree parse error for W1/C5b test');
-        },
-        'scanFile must throw on tsEstree parse error for .cts files (fail-closed)'
-      );
-    } finally {
-      fs.readFileSync = origReadFileSync;
-      // Restore original descriptor (getter-only)
-      Object.defineProperty(tsEstreeModule, 'parse', origDescriptor);
+  test('a disable listing a protected rule among others is named', () => {
+    assert.equal(ban.classifyComment(` ${KW_NEXT} no-console, local/no-bare-npm-exec`), 'named');
+  });
+
+  test('a disable naming only a non-portability rule is allowed', () => {
+    assert.equal(ban.classifyComment(` ${KW_NEXT} no-console`), null);
+  });
+
+  test('an ordinary comment is not a directive', () => {
+    assert.equal(ban.classifyComment(' just a comment about disabling things'), null);
+  });
+
+  test('every protected rule is detected by name', () => {
+    for (const rule of ban.PROTECTED_RULES) {
+      assert.equal(ban.classifyComment(` ${KW_NEXT} local/${rule}`), 'named', rule);
     }
   });
 });
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-describe('portability-rule disable-ban (ADR-1703)', () => {
-  const testFiles = collectTestFiles();
-
-  test('test file enumeration finds at least 10 test files', () => {
-    assert.ok(
-      testFiles.length >= 10,
-      `Expected at least 10 test files, got ${testFiles.length}`,
-    );
+describe('run: seeded violations in a temporary tree', () => {
+  test('a named disable of a protected rule in a test file is reported with its line', (t) => {
+    const root = makeRoot(t, {
+      'tests/a.test.cjs': `'use strict';\n// ${KW_NEXT} local/no-hardcoded-tmp\nconst x = 1;\n`,
+    });
+    const findings = ban.run({ root, minFiles: 0 });
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'tests/a.test.cjs');
+    assert.equal(findings[0].line, 2);
+    assert.match(findings[0].message, /protected portability rule/);
   });
 
-  test('no test file contains a named eslint-disable for a portability rule (category a)', () => {
-    const offenders = [];
-    for (const absPath of testFiles) {
-      const { named } = scanFile(absPath);
-      for (const o of named) {
-        offenders.push(`${path.relative(path.join(__dirname, '..'), o.file)}:${o.line} — ${o.text}`);
-      }
-    }
-    assert.deepStrictEqual(
-      offenders,
-      [],
-      'Found inline disable directives suppressing protected portability rules.\n' +
-      'These MUST be removed — the rule exists to enforce cross-platform safety:\n\n' +
-      offenders.map(s => '  ' + s).join('\n'),
-    );
+  test('a blanket disable in a test file is reported', (t) => {
+    const root = makeRoot(t, { 'tests/b.test.cjs': `/* ${KW} */\nconst x = 1;\n` });
+    const findings = ban.run({ root, minFiles: 0 });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /blanket disable/);
   });
 
-  test('no test file contains a blanket eslint-disable (category b — suppresses all rules including portability)', () => {
-    const offenders = [];
-    for (const absPath of testFiles) {
-      const { blanket } = scanFile(absPath);
-      for (const o of blanket) {
-        offenders.push(`${path.relative(path.join(__dirname, '..'), o.file)}:${o.line} — ${o.text}`);
-      }
-    }
-    assert.deepStrictEqual(
-      offenders,
-      [],
-      'Found blanket eslint-disable directives in test files.\n' +
-      'Blanket disables suppress ALL rules including portability rules and are banned.\n' +
-      'Replace with targeted per-rule disables for non-portability rules, or remove:\n\n' +
-      offenders.map(s => '  ' + s).join('\n'),
-    );
+  test('a named disable in a .cts source is reported (the typescript parser path)', (t) => {
+    const root = makeRoot(t, {
+      'src/a.cts': `// ${KW_NEXT} local/normalize-path-in-content\nexport const x: number = 1;\n`,
+    });
+    const findings = ban.run({ root, minFiles: 0 });
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'src/a.cts');
+    assert.equal(findings[0].line, 1);
+    assert.match(findings[0].message, /protected portability rule/);
+  });
+
+  test('a disable in bin/install.js with a shebang is reported at its own line', (t) => {
+    const root = makeRoot(t, {
+      'bin/install.js': `#!/usr/bin/env node\n// ${KW_NEXT} local/require-fs-op-fallback\nconst x = 1;\n`,
+    });
+    const findings = ban.run({ root, minFiles: 0 });
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].line, 2);
+  });
+
+  test('a disable of a non-portability rule, and a tree with none, report nothing', (t) => {
+    const root = makeRoot(t, {
+      'tests/c.test.cjs': `// ${KW_NEXT} no-console\nconsole.log(1);\n`,
+      'tests/d.test.cjs': 'const y = 2;\n',
+    });
+    assert.deepEqual(ban.run({ root, minFiles: 0 }), []);
+  });
+
+  test('every violation in every file is reported, not only the first', (t) => {
+    const root = makeRoot(t, {
+      'tests/e.test.cjs': `/* ${KW} */\n// ${KW_NEXT} local/no-hardcoded-tmp\n`,
+      'tests/f.test.cjs': `/* ${KW} */\n`,
+    });
+    assert.equal(ban.run({ root, minFiles: 0 }).length, 3);
+  });
+});
+
+describe('scanFile fails closed', () => {
+  test('a file that holds the keyword and does not parse is a finding, not a skip', (t) => {
+    const root = makeRoot(t, { 'tests/broken.test.cjs': `const = ;\n// ${KW}\n` });
+    const findings = ban.run({ root, minFiles: 0 });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /Parse error/);
+  });
+
+  test('a .cts file that holds the keyword and does not parse is a finding', (t) => {
+    const root = makeRoot(t, { 'src/broken.cts': `export const : = ;\n// ${KW}\n` });
+    const findings = ban.run({ root, minFiles: 0 });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /Parse error/);
+  });
+
+  test('scanFile throws on an unreadable path', () => {
+    assert.throws(() => ban.scanFile(path.join(os.tmpdir(), 'gsd-no-such-file-6414.cjs')), /Could not read/);
+  });
+
+  test('a file without the keyword is not parsed, so cannot hold a directive', (t) => {
+    const root = makeRoot(t, { 'tests/plain.test.cjs': 'const = ;\n' });
+    assert.deepEqual(ban.scanFile(path.join(root, 'tests', 'plain.test.cjs')), { blanket: [], named: [] });
+  });
+});
+
+describe('run: the scan is not vacuous', () => {
+  test('a tree with fewer files than the minimum is a finding', (t) => {
+    const root = makeRoot(t, { 'tests/a.test.cjs': 'const x = 1;\n' });
+    const findings = ban.run({ root, minFiles: 2 });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /expected at least 2 files to scan, found 1/);
+  });
+
+  test('a tree with exactly the minimum is clean (limit, not limit-1)', (t) => {
+    const root = makeRoot(t, { 'tests/a.test.cjs': 'const x = 1;\n', 'tests/b.test.cjs': 'const y = 2;\n' });
+    assert.deepEqual(ban.run({ root, minFiles: 2 }), []);
+    assert.equal(ban.run({ root, minFiles: 3 }).length, 1);
+  });
+
+  test('the default minimum is 10 files', () => {
+    assert.equal(ban.MIN_FILES, 10);
+  });
+});
+
+describe('collectFiles', () => {
+  test('covers test files, .cts sources, bin/install.js and scripts/build-hooks.js, and nothing else', (t) => {
+    const root = makeRoot(t, {
+      'tests/a.test.cjs': '',
+      'tests/helper.cjs': '',
+      'src/a.cts': '',
+      'src/b.js': '',
+      'bin/install.js': '',
+      'scripts/build-hooks.js': '',
+      'scripts/other.cjs': '',
+    });
+    const rel = ban.collectFiles(root).map((abs) => path.relative(root, abs).split(path.sep).join('/')).sort();
+    assert.deepEqual(rel, ['bin/install.js', 'scripts/build-hooks.js', 'src/a.cts', 'tests/a.test.cjs']);
   });
 });

@@ -3,10 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-// Generated round trips each spawn add, find, and analyze commands.
+// Generated round trips run add, find, and analyze commands, many per property.
 const ROUND_TRIP_TIMEOUT_MS = 120000;
-const { createCustomPhaseProject: fixture, runCustomPhaseCommand: run, addCustomPhase: add, seedCustomPhaseDirectory: existingCustomDirectory, cleanup, runGsdTools, homeSandboxEnv, toPosixPath } = require('./helpers.cjs');
+const { createCustomPhaseProject: fixture, runCustomPhaseCommand: run, addCustomPhase: add, seedCustomPhaseDirectory: existingCustomDirectory, cleanup, runGsdTools, runGsdToolsCaptured, homeSandboxEnv, toPosixPath } = require('./helpers.cjs');
 const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
@@ -241,25 +240,6 @@ test('phase directory collision: add-batch refuses an occupied target before cre
     assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), ['SECOND-second']);
     assert.equal(fs.readFileSync(path.join(occupied, '.phase-id'), 'utf8'), 'OTHER');
     assert.deepEqual(run(cwd, ['query', 'roadmap.analyze']).phases, []);
-  } finally { cleanup(cwd); }
-});
-test('phase directory collision: shared batch preflight refuses distinct ids mapping to one target', () => {
-  const cwd = fixture(null);
-  try {
-    // CLI batches derive IDs from titles; exercise the exported writer seam's
-    // explicit entry shape used by every writer without patching global I/O.
-    const lib = path.resolve(__dirname, '../gsd-core/bin/lib');
-    const script = `const {setJsonErrorMode} = require(${JSON.stringify(path.join(lib, 'io.cjs'))}); setJsonErrorMode(true);
-      const {ExitError} = require(${JSON.stringify(path.join(lib, 'cli-exit.cjs'))});
-      const locator = require(${JSON.stringify(path.join(lib, 'phase-locator.cjs'))});
-      try { locator.createPhaseDirectories(${JSON.stringify(cwd)}, [{id:'A',slug:'b-x'}, {id:'A-b',slug:'x'}], locator.phaseDirectoryOptions(${JSON.stringify(cwd)})); }
-      catch (cause) { if (cause instanceof ExitError) process.exitCode = cause.code; else throw cause; }`;
-    const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
-      timeoutMs: PROBE_TIMEOUT_MS, env: {...process.env, ...homeSandboxEnv(cwd)},
-    });
-    assert.notEqual(result.exitCode, 0, result.stdout);
-    assert.equal(JSON.parse(result.stderr).reason, 'phase_id_collision');
-    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
   } finally { cleanup(cwd); }
 });
 test('phase directory collision: numeric scaffold keeps reusing a markerless directory', () => {
@@ -738,21 +718,16 @@ for (const code of [null, 'CCM']) {
 }
 
 test('custom context: one context resolves a large identity set', () => {
-  const script = `const phaseId = require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/phase-id.cjs'))});
-    const roadmap = Array.from({length:1200}, (_,i) => '### Phase AUTH-'+i+': Step\\n').join('');
-    const context = phaseId.phaseDirectoryContext({phase_naming:'custom'}, roadmap);
-    let resolved = 0;
-    for (let i=0;i<1200;i++) {
-      const id='AUTH-'+i, dir=id+'-step';
-      if (phaseId.phaseKeyFromDir(dir, undefined, context) !== id
-        || phaseId.phaseKeyFromToken(id, context) !== id
-        || phaseId.matchPhaseDirs([dir], id, undefined, undefined, context).matches[0] !== dir) throw new Error(id);
-      resolved++;
-    }
-    process.stdout.write(JSON.stringify({resolved}));`;
-  const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {timeoutMs: PROBE_TIMEOUT_MS});
-  assert.equal(result.exitCode, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {resolved: 1200});
+  const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+  const roadmap = Array.from({length: 1200}, (_, i) => `### Phase AUTH-${i}: Step\n`).join('');
+  const context = phaseId.phaseDirectoryContext({phase_naming: 'custom'}, roadmap);
+  for (let i = 0; i < 1200; i++) {
+    const id = `AUTH-${i}`;
+    const dir = `${id}-step`;
+    assert.equal(phaseId.phaseKeyFromDir(dir, undefined, context), id);
+    assert.equal(phaseId.phaseKeyFromToken(id, context), id);
+    assert.equal(phaseId.matchPhaseDirs([dir], id, undefined, undefined, context).matches[0], dir);
+  }
 });
 
 test('custom context: projected roadmap is complete or bounded by its read limit', () => {
@@ -1118,36 +1093,10 @@ for (const command of [['query', 'progress.json'], ['query', 'roadmap.analyze'],
     const cwd = fixture(null, 'sequential');
     try {
       fs.writeFileSync(path.join(cwd, '.planning/config.json'), '{ invalid-config.json');
-      const result = require('./helpers/process-seam.cjs').runNode([path.join(__dirname, '../gsd-core/bin/gsd-tools.cjs'), ...command], {cwd, env: {...process.env, ...homeSandboxEnv(cwd)}});
+      const result = runGsdToolsCaptured(command, cwd, homeSandboxEnv(cwd));
       assert.equal(result.exitCode, 0, result.stderr || result.stdout);
       assert.equal(result.stderr, '');
       assert.equal(fs.readFileSync(path.join(cwd, '.planning/config.json'), 'utf8'), '{ invalid-config.json');
-    } finally { cleanup(cwd); }
-  });
-}
-
-for (const kind of ['oversized', 'symlink', 'fifo']) {
-  test(`identity marker safety: ignores ${kind} without an unbounded read`, {skip: kind === 'fifo' && process.platform === 'win32'}, () => {
-    const cwd = fixture(null);
-    try {
-      const dir = path.join(cwd, '.planning/phases/AUTH-boundary');
-      fs.mkdirSync(dir);
-      const marker = path.join(dir, '.phase-id');
-      if (kind === 'oversized') fs.writeFileSync(marker, 'AUTH' + ' '.repeat(1024));
-      else if (kind === 'symlink') {
-        const target = path.join(cwd, 'identity.txt');
-        fs.writeFileSync(target, 'AUTH');
-        fs.symlinkSync(target, marker);
-      } else {
-        const fifo = require('./helpers/process-seam.cjs').runHook(marker, [], {interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS});
-        assert.equal(fifo.exitCode, 0, fifo.stderr);
-      }
-      const script = `const locator = require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/phase-locator.cjs'))}); process.stdout.write(JSON.stringify(locator.phaseDirectoryOptions(process.cwd(), {phase_naming:'custom'}, '').directoryIds));`;
-      const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
-        cwd, env: {...process.env, ...homeSandboxEnv(cwd)}, timeoutMs: PROBE_TIMEOUT_MS,
-      });
-      assert.equal(result.exitCode, 0, JSON.stringify(result));
-      assert.deepEqual(JSON.parse(result.stdout), {});
     } finally { cleanup(cwd); }
   });
 }

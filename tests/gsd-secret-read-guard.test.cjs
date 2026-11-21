@@ -171,7 +171,7 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
     });
   }
 
-  // The existing shell scanner documents a depth-3 limit. A Git config
+  // The existing shell scanner documents a depth-3 limit; past it the command is denied by name (#6136). A Git config
   // script consumes one frame, exactly like an interpreter's script.
   for (const [evalFrames, shouldBlock] of [[1, true], [2, true], [3, false]]) {
     test(`Git config script respects scan-depth boundary: ${evalFrames + 1}`, () => {
@@ -180,14 +180,14 @@ describe('gsd-secret-read-guard: command-valued git config (#5045)', () => {
       const cmd = 'git -c alias.x=' + JSON.stringify('!' + script) + ' x';
       const result = runHook(bash(cmd));
       if (shouldBlock) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
-      else assertAllowed(result, cmd);
+      else assertBlocked(result, cmd, { code: 'nesting-too-deep', tool: 'Bash' });
     });
     test(`Git config behind shells respects scan-depth boundary: ${evalFrames + 1}`, () => {
       let cmd = "git -c alias.x='!cat .env' x";
       for (let k = 0; k < evalFrames; k++) cmd = 'eval ' + JSON.stringify(cmd);
       const result = runHook(bash(cmd));
       if (shouldBlock) assertBlocked(result, cmd, { tool: 'Bash', path: '.env' });
-      else assertAllowed(result, cmd);
+      else assertBlocked(result, cmd, { code: 'nesting-too-deep', tool: 'Bash' });
     });
   }
 
@@ -2614,8 +2614,8 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
       });
     }
 
-    // MAX_NESTING_DEPTH is 3: a read inside three nested `"$( )"` is scanned,
-    // a fourth level is not — the same cutoff as the plain reading has.
+    // MAX_NESTING_DEPTH is 3: a read inside three nested `"$( )"` is scanned, a fourth level is denied by name
+    // (#6136), the same cutoff as the plain reading has.
     const nest = (inner, n) => (n === 0 ? inner : nest(`echo "$(${inner})"`, n - 1));
     for (const inner of [R`cat $'.e\x6ev'`, R`echo $'x\'y'; cat .env`, R`cat $'.env.\local'`]) {
       for (const n of [2, 3]) {
@@ -2624,12 +2624,50 @@ describe('regressions: #5255 — dollar-quoting ($\'…\' and $"…")', () => {
           assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash' });
         });
       }
-      test(`pinned: ${JSON.stringify(inner)} at nesting depth 4 is past MAX_NESTING_DEPTH, as \`cat .env\` is`, () => {
+      test(`${JSON.stringify(inner)} at nesting depth 4 is past MAX_NESTING_DEPTH and denied by name (#6136), as \`cat .env\` is`, () => {
         const cmd = nest(inner, 4);
-        assertAllowed(runHook(bash(cmd)), cmd);
-        assertAllowed(runHook(bash(nest('cat .env', 4))), 'plain read at depth 4');
+        assertBlocked(runHook(bash(cmd)), cmd, { code: 'nesting-too-deep', tool: 'Bash' });
+        assertBlocked(runHook(bash(nest('cat .env', 4))), 'plain read at depth 4', { code: 'nesting-too-deep', tool: 'Bash' });
       });
     }
+  });
+
+  describe('a body nested past MAX_NESTING_DEPTH is denied by name, never allowed unscanned (#6136)', () => {
+    // Every way a body is nested: LIMIT - 1 and LIMIT are scanned (a read blocks as secret-read, a benign body is
+    // allowed), LIMIT + 1 and beyond are nesting-too-deep, benign or not.
+    const wrap = {
+      'bash -c': (inner) => `bash -c ${JSON.stringify(inner)}`,
+      'a "$( )" substitution': (inner) => `echo "$(${inner})"`,
+      // inside backticks a backslash is doubled first, then each backtick escaped, so layers nest correctly
+      'a backtick substitution': (inner) => 'echo `' + inner.replace(/\\/g, '\\\\').replace(/`/g, '\\`') + '`',
+      'a process substitution': (inner) => `cat <(${inner})`,
+      'eval': (inner) => `eval ${JSON.stringify(inner)}`,
+      'xargs': (inner) => `echo x | xargs sh -c ${JSON.stringify(inner)}`,
+      'git -c alias': (inner) => `git -c alias.x=${JSON.stringify('!' + inner)} x`,
+    };
+    const layers = (wrapper, inner, n) => (n === 0 ? inner : layers(wrapper, wrapper(inner), n - 1));
+    for (const [label, wrapper] of Object.entries(wrap)) {
+      test(`${label}: 1 to 3 layers scan, 4, 5, 6 and 10 are nesting-too-deep`, () => {
+        for (const n of [1, 2, 3]) {
+          const read = layers(wrapper, 'cat .env', n);
+          assertBlocked(runHook(bash(read)), `${label} x${n}`, { tool: 'Bash', path: '.env' });
+          assertAllowed(runHook(bash(layers(wrapper, 'echo ok', n))), `${label} x${n} benign`);
+        }
+        for (const n of [4, 5, 6, 10]) {
+          assertBlocked(runHook(bash(layers(wrapper, 'cat .env', n))), `${label} x${n}`, { code: 'nesting-too-deep', tool: 'Bash' });
+          assertBlocked(runHook(bash(layers(wrapper, 'echo ok', n))), `${label} x${n} benign`, { code: 'nesting-too-deep', tool: 'Bash' });
+        }
+      });
+    }
+
+    test('an empty nested body past the limit holds nothing to read and is not denied', () => {
+      assertAllowed(runHook(bash('bash -c "bash -c \\"bash -c \\\\\\"eval\\\\\\"\\""')), 'a bare eval three layers deep');
+    });
+
+    test('a secret read found at a shallower level is still the block reported', () => {
+      const deep = layers(wrap['a "$( )" substitution'], 'echo ok', 5);
+      assertBlocked(runHook(bash(`cat .env; ${deep}`)), 'a read beside a too-deep body', { tool: 'Bash', path: '.env' });
+    });
   });
 
   describe("a $'…' span inside ${…} (#5255)", () => {
@@ -3155,17 +3193,15 @@ describe('readings: an error, the block reported, and the heredoc tag', () => {
     assertBlocked(runHook(bash(cmd)), cmd, { code: 'ansi-c-unterminated', tool: 'Bash' });
   });
 
-  test("#5513's earlier tag reading ends a tag holding a $'…' span at any whitespace", () => {
+  test("#5513's earlier tag reading: a heredoc tag holding a $'…' span nested past the limit is denied by name (#6136)", () => {
     const { findSecretRead, findSecretReadUnderOtherReadings } = require(HOOK_PATH);
-    // The word reading keeps the CR in the tag, so `E` ends no heredoc and the
-    // rest of the command is its body; the earlier reading ends the tag at the
-    // CR. A nested rescan re-reads the tag through tokenize, so only at the
-    // nesting limit, where none runs, does the `$( )` reader decide. The `(`
-    // keeps bash 3.2's reading of the span from ending it at the body's `)`.
+    // This body used to sit at the nesting limit, where no rescan runs and the `$( )` reader alone decided, so the
+    // word reading saw no read and the earlier tag reading did. A body past the limit is now denied by name under
+    // every reading, so no reading's disagreement can let it through.
     const cmd = "echo $(echo $(echo $(echo $(cat <<$'E'\r\n(\nE\n); cat .env";
-    assert.equal(findSecretRead(cmd, 0), null, 'the word reading sees no read');
-    assert.deepEqual(findSecretReadUnderOtherReadings(cmd), { code: 'secret-read', text: '.env' });
-    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    assert.deepEqual(findSecretRead(cmd, 0), { code: 'nesting-too-deep', text: '' });
+    assert.deepEqual(findSecretReadUnderOtherReadings(cmd), { code: 'nesting-too-deep', text: '' });
+    assertBlocked(runHook(bash(cmd)), cmd, { code: 'nesting-too-deep', tool: 'Bash' });
   });
 });
 
@@ -3748,4 +3784,83 @@ describe('gsd-secret-read-guard: xargs options and launcher sub-commands (#6282)
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
+});
+
+describe('gsd-secret-read-guard: a heredoc or here-string that cat prints into a shell (#6182)', () => {
+  // Oracle: #6182 requires the text `cat` prints from a heredoc or here-string to get the verdict a heredoc given to the
+  // shell directly gets (`bash <<'EOF'`). The bodies a command that does not run them receives (`wc -l`, bare `cat`) stay data.
+  const BLOCKS = [
+    "cat <<'EOF' | bash\ncat .env\nEOF",
+    'cat <<EOF | bash\ncat .env\nEOF',
+    "cat <<< 'cat .env' | bash",
+    "cat <<<'cat .env' | sh",
+    "bash <(cat <<EOF\ncat .env\nEOF\n)",
+    "source <(cat <<< 'cat .env')",
+    ". <(cat <<'EOF'\ncat .env\nEOF\n)",
+    "cat - <<EOF | sh\ncat .env\nEOF", // `-` is stdin
+    "cat -n <<EOF | bash\ncat .env\nEOF", // an option does not change the stdin
+    "cat <<EOF | sudo bash\ncat .env\nEOF",
+    "cat <<EOF | bash -o pipefail\ncat .env\nEOF",
+    "cat <<'EOF' 2>/dev/null | bash\ncat .env\nEOF",
+    "cat -A <<EOF | bash\ncat .env\nEOF",
+    "cat -- - <<EOF | bash\ncat .env\nEOF",
+    "cat <<-EOF | bash\n\tcat .env\n\tEOF",
+    "cat <<EOF | env bash\ncat .env\nEOF",
+    // A pass-through between the source and the shell (`tee`, a bare `cat`) still delivers the source's text.
+    "cat <<EOF | tee x | bash\ncat .env\nEOF",
+    "cat <<EOF | cat | bash\ncat .env\nEOF",
+    "tee <<EOF | bash\ncat .env\nEOF",
+    "echo cat .env | tee x | bash",
+    // `-s` keeps stdin as the script; the operands after it are positional parameters, not a script file.
+    "cat <<EOF | sh -s -- a\ncat .env\nEOF",
+    "echo cat .env | bash -s",
+  ];
+  const ALLOWS = [
+    'cat <<EOF | wc -l\ncat .env\nEOF',
+    "cat <<'EOF' | grep cat\ncat .env\nEOF",
+    "cat <<'EOF'\ncat .env\nEOF",
+    "cat <<< 'cat .env' | wc -l",
+    "cat <<< 'cat .env'",
+    "cat file.sh <<EOF | bash\ncat .env\nEOF", // a file operand: stdin is never read
+    'cat script.sh | bash',
+    "bash <(cat <<EOF\necho hello\nEOF\n)",
+    "cat <<'EOF' | bash\necho hello\nEOF",
+    "cat <<< 'echo hello' | bash",
+    "cat <<EOF | tee x | bash\necho hello\nEOF",
+    'echo hello | tee x | bash',
+    'cat script.sh | tee x | bash', // a file operand: the text is not knowable
+    "cat <<EOF | bash script.sh\ncat .env\nEOF", // a script file operand: stdin is data
+  ];
+
+  for (const cmd of BLOCKS) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const cmd of ALLOWS) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  test('a heredoc to cat is judged like the same heredoc to the shell: the verdicts agree', () => {
+    for (const body of ['cat .env', 'echo hello', 'ls -a']) {
+      const direct = runHook(bash(`bash <<'EOF'\n${body}\nEOF`)).status;
+      const viaCat = runHook(bash(`cat <<'EOF' | bash\n${body}\nEOF`)).status;
+      assert.equal(viaCat, direct, `body ${JSON.stringify(body)}`);
+    }
+  });
+
+  test('property: any secret name read through a cat-fed shell is blocked, in all four forms', () => {
+    fc.assert(
+      fc.property(SECRET, (name) => {
+        assertBlocked(runHook(bash(`cat <<'EOF' | bash\ncat ${name}\nEOF`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`cat <<< 'cat ${name}' | bash`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`bash <(cat <<EOF\ncat ${name}\nEOF\n)`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`source <(cat <<< 'cat ${name}')`)), name, { tool: 'Bash' });
+        return true;
+      }),
+      PROPERTY_RUNS,
+    );
+  });
 });
