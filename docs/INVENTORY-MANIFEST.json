@@ -584,6 +584,7 @@
       "review-lane-descriptor.cjs",
       "review-lane-invocation.cjs",
       "review-lane-runner.cjs",
+      "review-read-check.cjs",
       "review-reviewer-selection.cjs",
       "reviewer-step-dispatch.cjs",
       "roadmap-command-router.cjs",

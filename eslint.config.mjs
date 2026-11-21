@@ -247,6 +247,7 @@ export default tseslint.config(
       // #5334: tsc-generated runtime artifact — lint src/jsonc-edit.cts, not this.
       'gsd-core/bin/lib/jsonc-edit.cjs',
       'gsd-core/bin/lib/review-lane-runner.cjs',
+      'gsd-core/bin/lib/review-read-check.cjs',
       // #5963: tsc-generated runtime artifact — lint src/http-body-cap.cts, not this.
       'gsd-core/bin/lib/http-body-cap.cjs',
       // #6332: tsc-generated runtime artifacts — lint src/in-process-cli.cts and

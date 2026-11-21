@@ -122,7 +122,8 @@ Under that gate, a HIGH raised by exactly one instance is treated by what the cl
   same concern;
 - a **judgment-class** claim (a design or correctness property) counts unless that instance's own
   section opens with an evidence-quality discount marker — `[reviewed-without-source-citations]`
-  (#3194) or `[reviewed-without-repo-access]` (#2176).
+  (#3194), `[reviewed-without-repo-access]` (#2176) or `[incomplete-read]` (#5491); markers stack,
+  and any of the leading ones discounts.
 
 Judgment-class findings are deliberately exempt from the corroboration requirement: instances catch
 materially different classes of issue, so demanding two of them independently raise the same

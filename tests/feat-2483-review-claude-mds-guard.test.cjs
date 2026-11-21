@@ -106,6 +106,7 @@ function spyDeps(seen) {
     readFile: () => 'prompt',
     writeFile: () => {},
     exists: () => true,
+    readPlanBounded: () => 'prompt',
     hasBinary: () => true,
     configGet: () => undefined,
     homeDir: '/home/test',

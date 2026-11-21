@@ -161,6 +161,7 @@ build/
 /gsd-core/bin/lib/opencode-version.cjs
 /gsd-core/bin/lib/jsonc-edit.cjs
 /gsd-core/bin/lib/review-lane-runner.cjs
+/gsd-core/bin/lib/review-read-check.cjs
 /gsd-core/bin/lib/http-body-cap.cjs
 /gsd-core/bin/lib/in-process-cli.cjs
 /gsd-core/bin/lib/invocation-scope.cjs
