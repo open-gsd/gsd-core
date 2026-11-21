@@ -151,6 +151,7 @@ describe('config-field-docs', () => {
       'git.base_branch',
       'git.phase_branch_template',
       'git.milestone_branch_template',
+      'git.commit_timeout_ms',
     ];
     const missing = gitFields.filter(f => !content.includes(`\`${f}\``));
     assert.deepStrictEqual(
@@ -641,3 +642,24 @@ describe('planning-config.md documents #1494 keys', () => {
 });
   });
 }
+
+describe('git.commit_timeout_ms doc parity (#5231)', () => {
+  const { COMMIT_TIMEOUT_DEFAULT_MS, COMMIT_TIMEOUT_MAX_MS } = require('../gsd-core/bin/lib/git-commit-timeout.cjs');
+  const KEY = 'git.commit_timeout_ms';
+  const rowsOf = (file) => fs.readFileSync(file, 'utf8').split(/\r?\n/)
+    .filter(l => l.trim().startsWith('|')).map(splitTableRow).filter(cells => cells[0] === `\`${KEY}\``);
+
+  test('every planning-config.md and CONFIGURATION.md table row states the exported default and ceiling', () => {
+    const rows = [...rowsOf(REFERENCE_PATH), ...rowsOf(DOCS_CONFIG_PATH)];
+    assert.strictEqual(rows.length, 3, 'planning-config.md documents the key twice and CONFIGURATION.md once');
+    for (const cells of rows) {
+      assert.ok(cells.includes(`\`${COMMIT_TIMEOUT_DEFAULT_MS}\``), `default cell must be ${COMMIT_TIMEOUT_DEFAULT_MS}: ${cells.join(' | ')}`);
+      assert.ok(cells.join(' | ').includes(`1–${COMMIT_TIMEOUT_MAX_MS}`), `range must read 1–${COMMIT_TIMEOUT_MAX_MS}: ${cells.join(' | ')}`);
+    }
+  });
+
+  test('the CONFIGURATION.md config.json example carries the exported default', () => {
+    const [, value] = /"commit_timeout_ms":\s*(\d+)/.exec(fs.readFileSync(DOCS_CONFIG_PATH, 'utf8')) || [];
+    assert.strictEqual(Number(value), COMMIT_TIMEOUT_DEFAULT_MS);
+  });
+});

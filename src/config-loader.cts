@@ -1044,6 +1044,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       base_branch: getAliased('base_branch'),
       protected_branches: getNested('git', 'protected_branches'),
       allow_default_branch_commits: getNested('git', 'allow_default_branch_commits'),
+      commit_timeout_ms: getNested('git', 'commit_timeout_ms'),
       repo_tagging: resolveRepoTagging(getNested('git', 'repo_tagging')),
       phase_branch_template: getAliased('phase_branch_template') ?? defaults.phase_branch_template,
       milestone_branch_template: getAliased('milestone_branch_template') ?? defaults.milestone_branch_template,

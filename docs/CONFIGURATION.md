@@ -12,6 +12,8 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
 
 ### Full Schema
 
+The block below is a reference sample with default values. It is not the file `/gsd-new-project` writes: for example it shows `git.commit_timeout_ms`, which that command leaves out, so the default `30000` applies until you set the key.
+
 ```json
 {
   "mode": "interactive",
@@ -104,6 +106,7 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
   "git": {
     "branching_strategy": "none",
     "create_tag": true,
+    "commit_timeout_ms": 30000,
     "repo_tagging": "single",
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
@@ -1319,6 +1322,7 @@ All four fields are **optional and additive** — STATE.md files without them ke
 | `git.protected_branches` | array of non-empty strings | (none) | Optional additional shared branches that should trigger protected-branch warnings alongside the resolved base branch |
 | `git.allow_default_branch_commits` | boolean | `false` | Escape hatch (#3819): when `true`, the executor's pre-commit guard no longer refuses to commit on the resolved default branch. Explicitly configured `git.protected_branches` names are still enforced. |
 | `git.create_tag` | boolean | `true` | Create a git tag (`v[X.Y]`) on milestone completion. Set to `false` for projects with their own release flow |
+| `git.commit_timeout_ms` | integer (ms), 1–3600000 | `30000` | Timeout for each SDK `git commit` that runs hooks (commit, commit-to-subrepo, pr-subrepo). Raise it when a pre-commit hook legitimately takes longer than 30 s (see [how-to](how-to/raise-the-commit-timeout-for-slow-hooks.md)); on timeout the commit is killed. `config-set` rejects values outside the range; a hand-edited value that is non-numeric (a quoted number such as `"60000"` counts), fractional, `0`, negative, or above `3600000` (one hour) falls back to `30000`. A workstream's own config wins over the root config, and an invalid workstream value shadows a valid root value: root `60000` with workstream `0` gives `30000`. `config-set git.commit_timeout_ms null` deletes the key from the config file `config-set` targets (the active workstream's file when a workstream is active); the root value then applies, else `30000` |
 | `git.repo_tagging` | enum | `single` | Milestone tagging mode (#5706): `single` or `per_repo`. `single` is the existing behavior. `per_repo` opts a multi-repo project into recording one release per configured repository (see [Per-repository release mapping](#per-repository-release-mapping)). Independent of `git.create_tag`; `git.create_tag: false` with `per_repo` records the map and creates no tags. An invalid value in a hand-edited `config.json` reads as `single` |
 | `git.phase_branch_template` | string | `gsd/phase-{phase}-{slug}` | Branch name template for phase strategy |
 | `git.milestone_branch_template` | string | `gsd/{milestone}-{slug}` | Branch name template for milestone strategy |
