@@ -14,7 +14,7 @@
  * hook's own `data` listener received (`data <bytes>`). Every cell asserts that
  * the hook armed exactly the exported STDIN_TIMEOUT_MS, once, and never
  * restarted it, and each cell that holds the pipe open asserts that the timer
- * fired, so no cell reads elapsed time. Two cells let the timer run at the hook's own 3 s. The rest set
+ * fired, so no cell reads elapsed time. Three cells let the timer run at the hook's own 3 s. The rest set
  * GSD_TEST_STALL_TIMER, which the preload alone reads: the held-open cells
  * schedule the timer at 100 ms, counted from the payload's arrival in the
  * cells that write one, and the early-close cell parks it (armed, never due),
