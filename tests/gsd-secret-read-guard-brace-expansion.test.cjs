@@ -364,7 +364,7 @@ describe('gsd-secret-read-guard: a group a process substitution runs into (#6142
     // A closed group before the open one: `{,d/}{.env,<(true)}` is `.env` and `d/.env` among the words.
     ['cat {,d/}{.env,<(true)}', '{,d/}{.env,'],
   ]) {
-    test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'glob-too-complex', path: word }));
+    test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'brace-word-unreadable', path: word }));
   }
 
   // A closed group, a space before the substitution, or no group at all.
