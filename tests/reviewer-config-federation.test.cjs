@@ -23,7 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { createTempProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, createTempDir, cleanup, runGsdToolsAsync } = require('./helpers.cjs');
 const configSchema = require('../gsd-core/bin/lib/config-schema.cjs');
 const capValidator = require('../gsd-core/bin/lib/capability-validator.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
@@ -155,43 +155,43 @@ describe('reviewer config federation — the disclosed tightening (#2797)', () =
 });
 
 describe('reviewer config federation — end-to-end through the CLI (#2797)', () => {
-  test('a federated model key round-trips: set, persist, get', (t) => {
+  test('a federated model key round-trips: set, persist, get', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
-    const set = runGsdTools('config-set review.models.ollama llama3', tmpDir);
+    const set = await runGsdToolsAsync('config-set review.models.ollama llama3', tmpDir);
     assert.ok(set.success, `config-set must accept the federated key: ${set.error || ''}`);
 
     const cfg = JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf-8'));
     assert.equal(cfg.review?.models?.ollama, 'llama3', 'value must be persisted');
 
-    const get = runGsdTools('query config-get review.models.ollama --raw', tmpDir);
+    const get = await runGsdToolsAsync('query config-get review.models.ollama --raw', tmpDir);
     assert.ok(get.success, 'config-get must resolve the federated key');
   });
 
-  test('a federated host key round-trips', (t) => {
+  test('a federated host key round-trips', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
-    const set = runGsdTools('config-set review.ollama_host http://127.0.0.1:9999', tmpDir);
+    const set = await runGsdToolsAsync('config-set review.ollama_host http://127.0.0.1:9999', tmpDir);
     assert.ok(set.success, `config-set must accept the federated host key: ${set.error || ''}`);
 
     const cfg = JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf-8'));
     assert.equal(cfg.review?.ollama_host, 'http://127.0.0.1:9999');
   });
 
-  test('a central survivor still round-trips unchanged', (t) => {
+  test('a central survivor still round-trips unchanged', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
-    const set = runGsdTools('config-set review.max_prompt_tokens 8000', tmpDir);
+    const set = await runGsdToolsAsync('config-set review.max_prompt_tokens 8000', tmpDir);
     assert.ok(set.success, `the global budget must stay settable: ${set.error || ''}`);
 
     const cfg = JSON.parse(fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf-8'));
     assert.equal(cfg.review?.max_prompt_tokens, 8000);
   });
 
-  test('an existing config carrying federated keys loads unchanged — no migration', (t) => {
+  test('an existing config carrying federated keys loads unchanged — no migration', async (t) => {
     // The acceptance criterion: key NAMES and existing files are unchanged; only
     // validation provenance moved. A file written before this phase must still load.
     const tmpDir = createTempProject();
@@ -208,14 +208,14 @@ describe('reviewer config federation — end-to-end through the CLI (#2797)', ()
     };
     fs.writeFileSync(cfgPath, JSON.stringify(pre, null, 2));
 
-    const get = runGsdTools('query config-get review.models.ollama --raw', tmpDir);
+    const get = await runGsdToolsAsync('query config-get review.models.ollama --raw', tmpDir);
     assert.ok(get.success, 'a pre-existing federated value must still resolve');
 
     const after = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
     assert.deepEqual(after, pre, 'reading must not rewrite the file');
   });
 
-  test('an unset per-lane budget resolves to the -1 sentinel, not 0', (t) => {
+  test('an unset per-lane budget resolves to the -1 sentinel, not 0', async (t) => {
     // 0 is a LEGITIMATE per-lane budget meaning "no cap on this lane" — the
     // cap resolver treats it as an explicit disable, never as unset. A
     // federated key always resolves to its declared default, so if that default
@@ -224,46 +224,46 @@ describe('reviewer config federation — end-to-end through the CLI (#2797)', ()
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
-    const get = runGsdTools(
+    const get = await runGsdToolsAsync(
       'query config-get review.max_prompt_tokens_per_reviewer.ollama --raw', tmpDir,
     );
     assert.strictEqual((get.output || '').trim(), '-1',
       'an unset per-lane budget must read back as the -1 sentinel');
   });
 
-  test('an explicit per-lane budget of 0 survives federation', (t) => {
+  test('an explicit per-lane budget of 0 survives federation', async (t) => {
     // The regression this guards: treating 0 as "unset" in the workflow fallback
     // would silently switch a user who disabled trimming for one lane onto the
     // global budget instead.
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
-    const set = runGsdTools('config-set review.max_prompt_tokens_per_reviewer.ollama 0', tmpDir);
+    const set = await runGsdToolsAsync('config-set review.max_prompt_tokens_per_reviewer.ollama 0', tmpDir);
     assert.ok(set.success, `config-set must accept an explicit 0: ${set.error || ''}`);
 
-    const get = runGsdTools(
+    const get = await runGsdToolsAsync(
       'query config-get review.max_prompt_tokens_per_reviewer.ollama --raw', tmpDir,
     );
     assert.strictEqual((get.output || '').trim(), '0',
       'an explicit 0 must survive as 0, distinguishable from unset');
   });
 
-  test('an explicit per-lane budget value round-trips', (t) => {
+  test('an explicit per-lane budget value round-trips', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
-    runGsdTools('config-set review.max_prompt_tokens_per_reviewer.ollama 6000', tmpDir);
-    const get = runGsdTools(
+    await runGsdToolsAsync('config-set review.max_prompt_tokens_per_reviewer.ollama 6000', tmpDir);
+    const get = await runGsdToolsAsync(
       'query config-get review.max_prompt_tokens_per_reviewer.ollama --raw', tmpDir,
     );
     assert.strictEqual((get.output || '').trim(), '6000');
   });
 
-  test('a model key naming no declared lane is rejected by the CLI', (t) => {
+  test('a model key naming no declared lane is rejected by the CLI', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
 
-    const set = runGsdTools('config-set review.models.__not_a_lane__ x', tmpDir);
+    const set = await runGsdToolsAsync('config-set review.models.__not_a_lane__ x', tmpDir);
     assert.equal(set.success, false, 'an unknown lane key must be rejected, not silently accepted');
   });
 });
@@ -411,9 +411,9 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
   }
 
   /** Run `review-lane plan --selected <slugs>` and return the parsed plan array. */
-  function planLanes(tmpDir, slugs) {
+  async function planLanes(tmpDir, slugs) {
     const runDir = path.join(tmpDir, 'run');
-    const r = runGsdTools(
+    const r = await runGsdToolsAsync(
       ['review-lane', 'plan', '--selected', slugs.join(','), '--run-dir', runDir, '--repo-root', tmpDir],
       tmpDir,
     );
@@ -422,23 +422,23 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
   }
 
   /** Run `review-lane plan` for exactly one slug and return its entry. */
-  function planLane(tmpDir, slug) {
-    const entry = planLanes(tmpDir, [slug]).find((e) => e.slug === slug);
+  async function planLane(tmpDir, slug) {
+    const entry = (await planLanes(tmpDir, [slug])).find((e) => e.slug === slug);
     assert.ok(entry, `no plan entry for slug "${slug}"`);
     return entry;
   }
 
-  test('row1 (regression): a CLI spawn lane with only the central global set still reports null today', (t) => {
+  test('row1 (regression): a CLI spawn lane with only the central global set still reports null today', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
     writeReviewConfig(tmpDir, { review: { max_prompt_tokens: 50000 } });
     assert.equal(
-      planLane(tmpDir, 'codex').promptBudget, 50000,
+      (await planLane(tmpDir, 'codex')).promptBudget, 50000,
       'codex must inherit the central global once it declares a promptBudgetKey',
     );
   });
 
-  test('row2 (regression): the -1 per-lane sentinel on an already-budgeted lane must inherit the global', (t) => {
+  test('row2 (regression): the -1 per-lane sentinel on an already-budgeted lane must inherit the global', async (t) => {
     // The exact repro from 10-diagnosis.md.
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
@@ -446,7 +446,7 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
       review: { max_prompt_tokens: 50000, max_prompt_tokens_per_reviewer: { ollama: -1 } },
     });
     assert.equal(
-      planLane(tmpDir, 'ollama').promptBudget, 50000,
+      (await planLane(tmpDir, 'ollama')).promptBudget, 50000,
       'ollama already declares a promptBudgetKey, so this fails purely on defect 2 (the dead global)',
     );
   });
@@ -469,16 +469,16 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
     assert.equal(resolved.config.review.max_prompt_tokens, 50000);
   });
 
-  test('row4 (happy path): a per-lane value overrides the global', (t) => {
+  test('row4 (happy path): a per-lane value overrides the global', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
     writeReviewConfig(tmpDir, {
       review: { max_prompt_tokens: 50000, max_prompt_tokens_per_reviewer: { codex: 12345 } },
     });
-    assert.equal(planLane(tmpDir, 'codex').promptBudget, 12345);
+    assert.equal((await planLane(tmpDir, 'codex')).promptBudget, 12345);
   });
 
-  test('row5 (boundary, limit-1): an explicit per-lane 0 means "do not trim", never the global', (t) => {
+  test('row5 (boundary, limit-1): an explicit per-lane 0 means "do not trim", never the global', async (t) => {
     // The specific regression budgetFor's own comment warns about — 0 is a real
     // value, not the unset sentinel, and must not be silently promoted to the
     // global budget.
@@ -487,35 +487,35 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
     writeReviewConfig(tmpDir, {
       review: { max_prompt_tokens: 50000, max_prompt_tokens_per_reviewer: { codex: 0 } },
     });
-    assert.equal(planLane(tmpDir, 'codex').promptBudget, 0);
+    assert.equal((await planLane(tmpDir, 'codex')).promptBudget, 0);
   });
 
-  test('row6 (boundary, limit): the -1 sentinel inherits the global', (t) => {
+  test('row6 (boundary, limit): the -1 sentinel inherits the global', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
     writeReviewConfig(tmpDir, {
       review: { max_prompt_tokens: 50000, max_prompt_tokens_per_reviewer: { codex: -1 } },
     });
-    assert.equal(planLane(tmpDir, 'codex').promptBudget, 50000);
+    assert.equal((await planLane(tmpDir, 'codex')).promptBudget, 50000);
   });
 
-  test('row7 (boundary, limit+1): a real one-token budget is not read as a sentinel', (t) => {
+  test('row7 (boundary, limit+1): a real one-token budget is not read as a sentinel', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
     writeReviewConfig(tmpDir, {
       review: { max_prompt_tokens: 50000, max_prompt_tokens_per_reviewer: { codex: 1 } },
     });
-    assert.equal(planLane(tmpDir, 'codex').promptBudget, 1);
+    assert.equal((await planLane(tmpDir, 'codex')).promptBudget, 1);
   });
 
-  test('row8 (#4559): no config at all caps exactly the lanes that declare a context window, at floor(window * 0.65)', (t) => {
+  test('row8 (#4559): no config at all caps exactly the lanes that declare a context window, at floor(window * 0.65)', async (t) => {
     // Guards against a "fix" that hard-codes a budget onto every lane: a lane that declares no
     // window (its model is unknowable) stays uncapped, as before.
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
     writeReviewConfig(tmpDir, {});
     const allSlugs = REVIEWER_LANES.map((l) => l.slug);
-    const plans = planLanes(tmpDir, allSlugs);
+    const plans = await planLanes(tmpDir, allSlugs);
     const DERIVED = { claude: 130000, codex: 176800, qwen: 85196, 'kimi-code': 170393 };
     for (const slug of allSlugs) {
       const entry = plans.find((e) => e.slug === slug);
@@ -525,22 +525,22 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
     }
   });
 
-  test('row9 (independence pin, green today and after): the three pre-existing http lanes are unaffected', (t) => {
+  test('row9 (independence pin, green today and after): the three pre-existing http lanes are unaffected', async (t) => {
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
     writeReviewConfig(tmpDir, { review: { max_prompt_tokens_per_reviewer: { ollama: 777 } } });
-    const plans = planLanes(tmpDir, ['ollama', 'lm_studio', 'llama_cpp']);
+    const plans = await planLanes(tmpDir, ['ollama', 'lm_studio', 'llama_cpp']);
     assert.equal(plans.find((e) => e.slug === 'ollama').promptBudget, 777, 'ollama must keep resolving its own configured value');
     assert.equal(plans.find((e) => e.slug === 'lm_studio').promptBudget, null, 'lm_studio must not shift with no config of its own');
     assert.equal(plans.find((e) => e.slug === 'llama_cpp').promptBudget, null, 'llama_cpp must not shift with no config of its own');
   });
 
-  test('row10 (negative space, green today and after): config-set still rejects an unknown per-lane slug', (t) => {
+  test('row10 (negative space, green today and after): config-set still rejects an unknown per-lane slug', async (t) => {
     // #2841 made an unknown `review.max_prompt_tokens_per_reviewer.<x>` slug an
     // error; extending the family to nine more lanes must not loosen that.
     const tmpDir = createTempProject();
     t.after(() => cleanup(tmpDir));
-    const set = runGsdTools('config-set review.max_prompt_tokens_per_reviewer.not_a_lane 5', tmpDir);
+    const set = await runGsdToolsAsync('config-set review.max_prompt_tokens_per_reviewer.not_a_lane 5', tmpDir);
     assert.equal(set.success, false, 'an unknown lane slug must still be rejected, not silently accepted');
   });
 
@@ -563,7 +563,7 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
   // (JSON strings survive the round trip) and exercise the identical
   // `typeof v === 'number' && Number.isFinite(v)` guard: a string is rejected
   // by `typeof` exactly as a real NaN would be rejected by `Number.isFinite`.
-  test('property: per-lane wins when finite and not -1, else the global when finite, else the declared-window default (#4559)', () => {
+  test('property: per-lane wins when finite and not -1, else the global when finite, else the declared-window default (#4559)', async () => {
     const perLaneArb = fc.oneof(
       fc.integer({ min: -1000, max: 1000000 }),
       fc.constantFrom(-1, 0),
@@ -577,8 +577,8 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
       fc.constant(undefined),
     );
 
-    fc.assert(
-      fc.property(perLaneArb, globalArb, (p, g) => {
+    await fc.assert(
+      fc.asyncProperty(perLaneArb, globalArb, async (p, g) => {
         const review = {};
         if (g !== undefined) review.max_prompt_tokens = g;
         if (p !== undefined) review.max_prompt_tokens_per_reviewer = { codex: p };
@@ -587,7 +587,7 @@ describe('reviewer prompt budget — #3691 (CLI lanes cannot receive a cap)', ()
         try {
           fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ review }, null, 2));
           const runDir = path.join(tmpDir, 'run');
-          const r = runGsdTools(
+          const r = await runGsdToolsAsync(
             ['review-lane', 'plan', '--selected', 'codex', '--run-dir', runDir, '--repo-root', tmpDir],
             tmpDir,
           );

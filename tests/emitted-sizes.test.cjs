@@ -23,7 +23,7 @@ const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { BUILD_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const {
   BUILD_SCRIPT,
-  runMinimalInstall,
+  copyRuntimeFixture,
   buildEmittedSizes,
   buildParityManifest,
 } = require('./helpers/install-shared.cjs');
@@ -43,7 +43,7 @@ before(() => {
 let fixture = null;
 
 before(() => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'windsurf', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'windsurf', scope: 'global' });
   fixture = { configDir, root };
 });
 

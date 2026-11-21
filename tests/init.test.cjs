@@ -6,13 +6,11 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const processSeam = require('./helpers/process-seam.cjs');
-const { runGsdTools, cleanup, absPlanningPath, TOOLS_PATH, parseFrontmatter, captureFdSync, homeSandboxEnv, TEST_ENV_BASE } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, cleanup, absPlanningPath, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
 const { executionContextRefs } = require('../scripts/command-contract-helpers.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
-const { GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
  * #3188: write the canonical flat planning docs so an init-query "present" test
@@ -3864,11 +3862,7 @@ describe('init section manifest', () => {
    * a scope-dependent fact; a case's own scope is applied after it.
    */
   function runSectionManifestCli(args, cwd, env = {}) {
-    const seamResult = processSeam.runNode([TOOLS_PATH, 'query', ...args], {
-      cwd,
-      env: { ...process.env, ...TEST_ENV_BASE, GSD_JSON_ERRORS: '1', ...env },
-      timeoutMs: GSD_TOOLS_CLI_MODERATE_TIMEOUT_MS,
-    });
+    const seamResult = runGsdToolsCaptured(['query', ...args], cwd, { GSD_JSON_ERRORS: '1', ...env });
     let stdout = seamResult.stdout || '';
     // output() spills payloads over 50KB to a tmpfile and prints "@file:<path>"
     // (src/io.cts) — dereference it exactly as the workflow itself does.

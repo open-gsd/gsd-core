@@ -28,7 +28,7 @@ const {
   convertClaudeCommandToPiSkill,
 } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { runMinimalInstall, copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -317,7 +317,7 @@ describe('#5547: workflow hand-off decision', () => {
 
 describe('#5547: the installed Pi extension', () => {
   function installedExtension(t) {
-    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope: 'global' });
     t.after(() => cleanup(root));
     const extPath = path.join(configDir, 'extensions', 'gsd.js');
     const ext = require(extPath);
@@ -375,6 +375,7 @@ describe('#5547: the installed Pi extension', () => {
     assert.match(surface, /RUNTIME_CONFIG_DIR="\$\{CLAUDE_CONFIG_DIR:-\$HOME\/\.pi\/agent\}"/);
   });
 
+  // These two install for real: the subject is what the installer run printed.
   test('a pi install reports no unreplaced-path warning', () => {
     const r = runMinimalInstall({ runtime: 'pi', scope: 'global' });
     try {
@@ -427,7 +428,7 @@ describe('#5547: the installed Pi extension', () => {
   });
 
   test('uninstall removes the gsd skills and leaves a user-owned skill alone', (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'pi', scope: 'global' });
     t.after(() => cleanup(root));
     const own = path.join(configDir, 'skills', 'my-own-skill');
     fs.mkdirSync(own, { recursive: true });
@@ -441,7 +442,7 @@ describe('#5547: the installed Pi extension', () => {
 
   test('without sendUserMessage the command tells the user how to start the skill by hand', async (t) => {
     const { configDir, root } = (() => {
-      const r = runMinimalInstall({ runtime: 'pi', scope: 'global' });
+      const r = copyRuntimeFixture({ runtime: 'pi', scope: 'global' });
       t.after(() => cleanup(r.root));
       return r;
     })();

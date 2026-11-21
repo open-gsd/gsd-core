@@ -176,6 +176,7 @@
   - [Structured JSON Error Mode](#142-structured-json-error-mode)
   - [UAT-Passed Predicate](#143-uat-passed-predicate)
   - [Spec-Phase Edge-Completeness Probe](#144-spec-phase-edge-completeness-probe)
+  - [Deep Verify Capability](#3858-deep-verify-capability)
 - [v1.43.0 Features](#v1430-features)
   - [MemPalace Memory Capability](#145-mempalace-memory-capability)
   - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
@@ -2549,12 +2550,27 @@ artifact whose purpose is telling triaged from forgotten.
 **The limitation that follows, stated rather than hidden.** When an ID *is* reused, the new finding
 is recorded `open` (nobody decided anything about it) and the earlier decision **loses its row** —
 the ledger keys rows on the finding ID, and two rows under one ID is an ambiguity, not a record. The
-drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision.
+drop is reported on the console, naming the ID and what had been decided — for a *recorded* decision,
+on every path that displaces one: a plain re-review, a fix report that decides the new finding, and a
+row carried only by a fix report (#5802).
 A prior row still sitting at `open` is replaced silently, and deliberately: `open` means nobody had
 decided anything, so there is no decision to lose. Preserving a recorded decision in the file
 was tried and withdrawn: it needed a second identity scheme and produced a fresh defect on each of
 three review passes. Recovery is the ledger's own git history where `commit_docs` is on — which is
 why the console reports the drop rather than pointing at a commit that may not exist.
+
+**Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
+`<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
+into the `unparsed:` shortfall and named on the console ("carry a prefix before the id"). The same holds for a prefixed heading in a fix report (named, not reconciled) and for a multi-segment
+prefix (`W6-R2-CR-01`). A ledger row
+outside the grammar (`| R1-WR-01 | … |`, an indented row, or a row with an unknown disposition) is named on the console and
+kept verbatim after the generated rows, not deleted by the whole-file rewrite; it is not counted in
+`open:` or `total:`. When a regenerated row takes the id of such a row, the row is reset to `open`
+(a value outside the enum is coerced to the safe default) and the console names it with the
+disposition and reason it held, so a hand-set value is never replaced silently. A disposition is
+read case-insensitively (`Deferred` is `deferred`). Two rows for one id are named (the last is used), and
+console names are masked for control characters and capped. A frontmatter `- id:` entry outside the grammar ends
+the previous entry, so its `title:` is never attributed to another finding.
 
 **Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
 recorded carries none, so its decisions are inherited on the ID alone — refusing there would reset
@@ -3031,7 +3047,7 @@ With `features.global_learnings: true`, phase completion runs the extraction for
 **Requirements:**
 - REQ-TDD-01: `workflow.tdd_mode` config key (boolean, default `false`)
 - REQ-TDD-02: When enabled, planner applies TDD heuristics from `references/tdd.md` to all eligible tasks (business logic, APIs, validations, algorithms, state machines)
-- REQ-TDD-03: Executor enforces gate sequence for `type: tdd` plans — RED commit (`test(...)`) must precede GREEN commit (`feat(...)`)
+- REQ-TDD-03: Executor enforces gate sequence for `type: tdd` plans — RED commit (`test(...)`) must precede GREEN commit (`feat(...)` or `fix(...)`)
 - REQ-TDD-04: Executor fails fast if tests pass unexpectedly during RED phase (feature already exists or test is wrong)
 - REQ-TDD-05: End-of-phase collaborative review checkpoint verifies gate compliance across all TDD plans (advisory, non-blocking)
 - REQ-TDD-06: Gate violations surfaced in SUMMARY.md under `## TDD Gate Compliance` section
@@ -3680,6 +3696,30 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-HONEST-01: At verify time a `backstop` truth that cannot be confirmed with explicit evidence MUST abstain → `human_needed` (reason `insufficient_spec`), never `passed`; an inferable truth MUST never be abstained (over-abstention guard); abstention MUST be exogenous (driven by the `backstop` tag, not self-judgment).
 
 **Reference:** [Edge Probe](gsd-core/references/edge-probe.md)
+
+---
+
+### 3858. Deep Verify Capability
+
+**Config keys:** `workflow.deep_verify` (default `false`), `workflow.deep_verify_all_phases` (default `false`)
+
+**Purpose:** UAT depth was capped by how finely the acceptance criteria were written. A criterion such as "the table renders" produced one checkpoint, while the deliverable held dozens of interaction-level behaviors (filter chips, invalid-sort fallback, keyboard navigation, empty states, scope isolation) that never became checkpoints, so the user found and clicked through each one by hand, phase after phase (#3858).
+
+**Behavior:** A default-off capability owns two boolean keys, one agent and one additive step. When `workflow.deep_verify` is on, `gsd-behavior-verifier` runs at `verify:pre`, enumerates behaviors as `action → expected observable outcome` from the plan's `must_haves` / acceptance criteria, the SUMMARY "Files Changed" list and the files it names, and executes each machine-observable one through a browser MCP server. It writes the full run to `{phase}-DEEP-VERIFY.md` and hands `extract_tests` only what a human must still confirm in `DEEP-VERIFY-CHECKPOINTS.md`: judgment items, failed behaviors and anything it could not run. Failures then enter diagnose-issues and gap-closure planning unchanged. With no browser MCP the step degrades to printing the enumerated list and routing every item to the human.
+
+**Built as a capability, not a `verify-work` edit.** The capability registers a `verify:pre` `step` hook, which `verify-work` dispatches since [#3866](https://github.com/open-gsd/gsd-core/issues/3866), and its `produces` artifact reaches `extract_tests` through the produced-artefact seam. Nothing in core changed. Results travel through `produces` and not through a `contribution`, because a contribution injects prompt prose only ([ADR-857](adr/857-capability-system.md) D4).
+
+**Only the checkpoint artifact is produced.** Listing the full-results file would make the seam parse every passed behavior as a checkpoint and surface it to the human; the results file therefore stays unlisted. The checkpoint file is rewritten on every run (with no entries when nothing needs a human) and carries the bare declared name, because the agent cannot delete a stale file and the seam looks the artifact up by that name. Entries carry just `name` and `expected`, the two fields the seam reads.
+
+**Which phases it runs on.** Once on, it runs only on UI phases, which the agent recognizes by a phase-scoped `{phase}-UI-SPEC.md` in the phase directory (it cannot read the init payload, and nothing in core relays it). `workflow.deep_verify_all_phases` widens it to every phase; on its own it activates nothing.
+
+**The browser contract is the existing two-family one.** `mcp__playwright__*` is driven whenever it responds; the Chrome-family servers only while `workflow.live_dom_uat` is also `true`. The browser grants live on the agent's own `tools:` line, which carries no `Bash` ([ADR-1244](adr/1244-capability-ecosystem.md) D2); `gsd-executor` is not widened.
+
+**`nothing_to_report` is never conflated with `could_not_look`.** The results artifact carries a closed `reason` enum so "the phase had nothing to check" and "I had no browser" stay distinguishable.
+
+**Known limits:** the browser-family gate, the phase-directory boundary and the scope gate are instructions the agent follows, not permissions the runtime enforces; the "diff" is the SUMMARY's changed-file list read with `Read`, not a VCS diff; enumeration is best-effort and not a coverage claim; DOM observation only; #1602 coverage metadata does not reach `{phase}-UAT.md`; no sandbox constrains which origins are reached once browser reach is on ([ADR-1244](adr/1244-capability-ecosystem.md) D5).
+
+**Reference:** [Configuration](CONFIGURATION.md) · [Enable deep verification](how-to/enable-deep-verification.md) · [Agents](reference/agents.md)
 
 
 ---

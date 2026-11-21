@@ -518,7 +518,7 @@ Archive milestone, tag release.
 | CONTEXT questions | `*-CONTEXT.md` | questions left open |
 | **Deferred items** | `deferred-items.md` | entry lacks `status: resolved` |
 
-The four phase-scoped categories above (UAT gaps, Verification gaps, CONTEXT questions, Deferred items) read phase directories from **both** the active `.planning/phases/` root and every archived `.planning/milestones/vX.Y-phases/` root (#3458) — an item still unresolved when its milestone closed and its phase directory archived stays visible in every later audit instead of silently disappearing. In `--json` output, an item sourced from an archived milestone carries an `archived_milestone` field (e.g. `"v1.0"`); active items omit the field entirely. The human-readable report labels an archived item's line with `(archived vX.Y)` so a phase number that repeats across milestones (numbering restarts at `01` after each archive) is not misread as one duplicate line.
+The four phase-scoped categories above (UAT gaps, Verification gaps, CONTEXT questions, Deferred items) read phase directories from **both** the active `.planning/phases/` root and every archived milestone root (#3458): `.planning/milestones/vX.Y-phases/` and `.planning/milestones/ws-*/phases/`, plus the same two shapes under each `.planning/workstreams/<name>/milestones/` — an item still unresolved when its milestone closed and its phase directory archived stays visible in every later audit instead of silently disappearing. In `--json` output, an item sourced from an archived milestone carries an `archived_milestone` field (e.g. `"v1.0"`); active items omit the field entirely. The human-readable report labels an archived item's line with `(archived vX.Y)` so a phase number that repeats across milestones (numbering restarts at `01` after each archive) is not misread as one duplicate line.
 
 If any category is non-empty you are prompted with `[R] Resolve` / `[A] Acknowledge all` / `[C] Cancel`. `[A]` calls `gsd-tools audit-open acknowledge` once per open item — the CLI writer that actually suppresses each item starting at the next `audit-open` scan — then records the same items to `STATE.md` under its own `## Deferred Items` heading (a disclosure record, not the suppression mechanism) and closes as `override_closeout`; an all-clear closes as `verified_closeout`.
 
@@ -1767,9 +1767,11 @@ gsd-tools query project-context --project-dir <dir>   # Resolve as if started fr
 | `repoRoot` | Top level of the main checkout (first non-bare `git worktree list` entry) |
 | `gitCommonDir` | Absolute `git rev-parse --git-common-dir`; `null` outside a git repository |
 | `isLinkedWorktree` | `true` when `worktreeRoot` differs from `repoRoot` |
-| `provenance` | `{ source, reason, degraded, warnings }` — how the answer was reached |
+| `provenance` | `{ source, layout, reason, degraded, warnings }` — how the answer was reached |
 
 `provenance.source` names the rule that found `projectRoot`: `explicit` (`--project-dir`), `ancestor` (a `.planning` in the start directory or one of its parents), `workspace` (the enclosing `planning.sub_repos` workspace), `main-checkout` (a linked worktree with no `.planning` of its own falls back to the main checkout's), or `none` (no `.planning` found; `projectRoot` is the start directory).
+
+`provenance.layout` says how the git facts were obtained: `filesystem` when they were read from `.git`, `gitdir` and `commondir` without starting a process, `git` when `git rev-parse` was asked. A plain checkout, a linked worktree of a non-bare repository and a directory outside any repository are read from the filesystem. Git is asked for anything the reader does not answer for: a start inside a git dir or a bare repository, a worktree of a bare repository, a submodule, a repository with `core.worktree` or `core.bare` set, a config include, an unknown repository format or extension, a config or `HEAD` git would reject, a repository another user owns (on Windows, any repository outside your home directory), and any call with `GIT_CEILING_DIRECTORIES`, `GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_CONFIG_COUNT` or `GIT_CONFIG_PARAMETERS` set. The two paths give the same roots.
 
 `provenance.reason` names the git facts behind the context: `ok`, `bare_main_worktree` (the main repository is bare, so the checkout is its own repo root), `not_git_repo` (not inside a git repository), or one of the degraded reasons `git_timed_out`, `git_unavailable`, `git_error`, `worktree_list_failed`. A degraded context sets `degraded: true` and adds a message to `warnings`; roots fall back to what git had answered or the start directory, and a degraded context never refuses a commit.
 
@@ -1781,7 +1783,7 @@ gsd-tools query project-context --project-dir <dir>   # Resolve as if started fr
   "repoRoot": "/work/app",
   "gitCommonDir": "/work/app/.git",
   "isLinkedWorktree": true,
-  "provenance": { "source": "ancestor", "reason": "ok", "degraded": false, "warnings": [] }
+  "provenance": { "source": "ancestor", "layout": "filesystem", "reason": "ok", "degraded": false, "warnings": [] }
 }
 ```
 

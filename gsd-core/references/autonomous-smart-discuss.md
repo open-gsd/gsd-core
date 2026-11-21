@@ -5,7 +5,7 @@ Smart discuss is the autonomous-optimized variant of `gsd-discuss-phase`. It cla
 **Inputs:** `PHASE_NUM` from execute_phase. Run init to get phase paths:
 
 ```bash
-GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 PHASE_STATE=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} ${PHASE_NUM})
 ```
 

@@ -355,6 +355,7 @@ Behavior differences from the pre-refactor router:
 | `changedFiles` / `files` / `missingOnDisk` | every path the commits touched; the subset that exists on disk (the reviewable set); the subset that no longer exists, **by name** |
 | `outsideUnion` | files changed in the phase window by commits that are *not* the unit's, by name. What a listed catch-up merge (base branch merged into the phase branch) brought in from the base is base work the union deliberately omits, so it is not named here either, under an exact rule: a file is omitted only when it is in the merge's diff against its first parent, no listed commit sits on the merge's second-parent side, no listed non-merge commit is an ancestor of the second parent after the phase start (a branch forked from the phase), every merge-base of the two parents (`git merge-base --all`) is `rangeBase` or an ancestor of it (the fork-point rule: a side forked from phase work is phase work), and no commit of the phase window (`<rangeBase>..<newest listed commit>` minus what the second parent reaches, listed or not, made before or after the merge, the merge itself excluded) touched the file; any other merge commit in that window counts through its own changes against each of its parents (`git log -m`), so a phase-side merge's conflict resolution or edit is phase work, and a clean one over-includes (a file stays named, never hidden). Anything doubtful is named: an advisory false positive is accepted, hidden phase work is not. No merge-base, an empty-tree `rangeBase` (the phase directory arrived with the root commit) or any git call for that merge that fails or times out subtracts nothing for that merge only, and the scope stays `resolved`. Accepted cost: a second catch-up merge forks at the first catch-up's base commit, which is after `rangeBase`, so the base files it brings in are named as an advisory false positive. A SUMMARY whose every listed commit is a merge is `merge-only-task-commits`; a task commit that touched only excluded paths is not a merge, so it keeps the ordinary reasons. A phase branch merged into its base keeps its listed task commits on the merged side, so the base work in the window is still named |
 | `unreachable` | listed task commits that are not reachable from the evaluated ref (another branch, dropped by a rebase), by name |
+| `unparsedSummaries` | phase units: the live SUMMARY files that have a `## Task Commits` section from which no commit id could be read, or in which a task row yielded no id, by name. Their work is not in the scope, so it is reported instead of left to read as complete. A task row may carry a qualifier before its colon (`**Task 1 (tracer):**`, `**Task 1 RED:**`), and the backticked ids on the first list level nested under a task row (a TDD task's RED and GREEN sub-bullets; wrapped description lines allowed, a blank line ends the row) belong to that row |
 | `rangeBase` | the phase-start anchor (the parent of the commit that first added the phase directory, or `--since`), for consumers that need an anchor sha |
 
 The design rules:
@@ -372,9 +373,12 @@ Workflows reach it as `gsd_run check evaluation-scope`:
 gsd_run check evaluation-scope --phase <phase> [--since <sha>] --raw      # a phase (or --phase-dir <dir>; --ref <ref>)
 gsd_run check evaluation-scope --plan <phase>-<plan> --raw                # a plan: --commits-only, --max-commits N,
                                                                           #   --milestone-bound, --committed-since <date>,
-                                                                          #   --pathspec <glob> (repeatable)
+                                                                          #   --pathspec <glob> (repeatable),
+                                                                          #   --all-branches (plan/quick only; see below)
 gsd_run check evaluation-scope --quick <quick-id> --include-files --raw   # a quick task
 ```
+
+`--all-branches` (plan and quick units only; a usage failure on a phase) looks the unit's commits up across every local branch instead of the commits reachable from `--ref`, and adds `latestCommitTime` (unix seconds of the newest match, or `null`) to the payload. It exists for the executor stall probe ([#6117](https://github.com/open-gsd/gsd-core/issues/6117)): a worktree executor's commits sit on its own unmerged agent branch until the wave merges. It is an explicit opt-in; the gates keep the reachable-from-ref contract above, and without the flag the payload is unchanged.
 
 The verb is a resolver, not a policy: it always reports `block: false`, and the caller decides what a `degraded` or `unresolvable` scope means. `scripts/lint-evaluation-scope-drift.cjs` fails CI when a gate module, `verify`, a workflow or an agent derives its own range again (`git log … --all`, `git diff … ..HEAD`, a `HEAD~N` anchor, a hand-rolled phase-start anchor, a commit-message lookup); its allowlist pins exact non-scope sites and is drained, never renewed.
 
@@ -979,7 +983,8 @@ Debounce: 5 tool uses between repeated warnings. Severity escalation (WARNING→
 - All hooks wrap in try/catch, exit silently on error
 - stdin timeout guard (3s) prevents hanging on pipe issues
 - Stale metrics (>60s old) are ignored
-- Missing bridge files handled gracefully (subagents, fresh sessions)
+- Missing bridge files handled gracefully (fresh sessions)
+- Subagent inputs (`agent_id` a non-empty string) exit silently before any bridge or sentinel access: they share the parent's `session_id`, so any reading would be the parent's (#6360)
 - Context monitor is advisory — never issues imperative commands that override user preferences
 
 ### Package Legitimacy Gate (v1.42.1)

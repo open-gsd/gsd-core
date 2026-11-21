@@ -37,7 +37,7 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
   EXECUTOR_RUNTIME=$(printf '%s' "$EXEC_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);process.stdout.write(j.executorRuntime&&!j.fallback?j.executorRuntime:"")}catch{}})')
   gsd_run query worktree.worker-record --path "$WT_PATH" --pid "$WORKER_PID" --plan "{plan_number}" \
     --summary-path "{phase_dir}/{plan_padded}-SUMMARY.md" --log-file "${WT_PATH}.worker.log" \
-    ${EXECUTOR_RUNTIME:+--executor-runtime "$EXECUTOR_RUNTIME"}
+    ${EXECUTOR_RUNTIME:+--executor-runtime} ${EXECUTOR_RUNTIME:+"$EXECUTOR_RUNTIME"}
   ```
 
 - **Completion is reconciliation.** A foreign worker is complete when `completion-reconciliation.md`
