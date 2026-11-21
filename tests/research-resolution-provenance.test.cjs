@@ -437,9 +437,11 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     const call = 'Exit skill and invoke SlashCommand("/gsd:plan-phase [X+1] --auto ${GSD_WS}")';
     const at = tr.indexOf(call);
     assert.ok(at !== -1, 'the yolo hand-off runs plan-phase with --auto');
-    const after = tr.slice(at + call.length, tr.indexOf('**If CONTEXT.md does NOT exist:**', at));
-    assert.ok(after.includes('If that plan-phase run prints `PLANNING STOPPED` (a research question needs a user ruling, which `--auto` cannot ask for; `gsd-core/references/revision-loop.md`, Resolve), stop the chain: its plans stay on disk and are not executed, and Phase [X+1] is not ready.'), 'the stop clause follows the call');
-    assert.ok(after.includes('``` Auto-advance stopped: research questions need a user ruling. Continue: /gsd:plan-phase [X+1] ${GSD_WS} ```'), 'the stop names a plan-phase run without --auto');
+    const end = tr.indexOf('**If CONTEXT.md does NOT exist:**', at);
+    assert.ok(end !== -1, 'the discuss route still follows the plan route');
+    // Everything between the call and the next route is the stop clause and its display, so no condition
+    // can narrow it and no later instruction can run execute-phase after it.
+    assert.equal(tr.slice(at + call.length, end).trim(), 'If that plan-phase run prints `PLANNING STOPPED` (a research question needs a user ruling, which `--auto` cannot ask for; `gsd-core/references/revision-loop.md`, Resolve), stop the chain: its plans stay on disk and are not executed, and Phase [X+1] is not ready. Display: ``` Auto-advance stopped: research questions need a user ruling. Continue: /gsd:plan-phase [X+1] ${GSD_WS} ```');
   });
 });
 
