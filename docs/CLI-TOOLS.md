@@ -815,13 +815,15 @@ changes nothing: a compact hand-written store just under the cap grows past it w
 with indentation, and then no save is accepted until it is made smaller. A write goes to a temp file created exclusively under a
 random name and renamed over the store. The temp file is created with the store's own file mode,
 narrowed by the umask, or `0600` when that mode cannot be read, so a save never opens the store to
-group or others (a `0400` store whose mode cannot be read comes back `0600`). A store nested too
-deeply to merge into is refused and left as it was. The limit is the depth the merge can recurse
-on the JavaScript stack, not a size: about 720 levels with Node 24 on Linux, fewer where the stack
-is smaller, so a store of a few kilobytes can be too deep. A write
+group or others (a `0400` store whose mode cannot be read comes back `0600`). Depth counts toward the 1 MiB limit too:
+each level of nesting adds a level of indentation, so a store of `{"a":…}` 722 levels deep, 4.3 KB
+compact, rewrites to more than 1 MiB and is refused like any oversized save. A store nested too deeply
+to merge into or serialize at all (several thousand levels on Node 24) is refused as such and left as
+it was. A write
 that fails therefore leaves the store as it was, and an existing entry at a temp-file name is never
 opened. A crash between that write and the rename leaves the temp file
-(`defaults.json.tmp.<random>`) beside the store; nothing reads it, and it can be removed. The
+(`defaults.json.tmp.<pid>.<random>`) beside the store, or for a symlinked store beside its target under
+the target's name; nothing reads it, and it can be removed. The
 rename replaces the store's directory entry, so a store kept as a hard link is no longer shared after
 a save: the other name keeps the old contents. Share it with a symlink, which is written through.
 
