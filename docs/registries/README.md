@@ -29,7 +29,7 @@ Three independent catalogs, sharing one schema shape, one non-endorsement stance
 
 - **Community Capability Registry** (`docs/registries/capability-registry.md`, generated from `docs/registries/capabilities.json`) — third-party **Feature Capabilities**: plug-ins that attach at GSD's Loop Extension Points (ADR-857, ADR-894, ADR-1244) and are installed with `gsd capability install <spec>`.
 - **EoS Registry** (`docs/registries/eos-registry.md`, generated from `docs/registries/eos.json`) — third-party **Embeddable Orchestration System (EoS)** host integrations: projects that embed GSD as an orchestration engine inside a host through the ADR-1239 Host-Integration Interface.
-- **Reviewer Lane Registry** (`docs/registries/reviewer-registry.md`, generated from `docs/registries/reviewers.json`) — third-party **reviewer lanes**: `role: "reviewer"` capabilities (ADR-2782) that add an external review lane to `/gsd-review`, installed with `gsd capability install <spec>`. A lane registers on zero Loop Extension Points and owns no artifacts, which is why it cannot be listed as a Feature Capability.
+- **Reviewer Lane Registry** (`docs/registries/reviewer-registry.md`, generated from `docs/registries/reviewers.json`) — third-party **reviewer lanes**: `role: "reviewer"` capabilities (ADR-2782) that add an external reviewer lane, run through `/gsd-code-review <phase> --<flag>`, installed with `gsd capability install <spec>`. A lane registers on zero Loop Extension Points and owns no artifacts, which is why it cannot be listed as a Feature Capability.
 
 All three registries are non-endorsing discoverability catalogs (issue #2182, plus #2904 for the Reviewer Lane Registry). None is the runtime **Capability Registry** (the generated manifest consumed at load time, ADR-894 §5) or the **Capability Registry Overlay** (the runtime loader that merges an installed third-party manifest into that generated registry, ADR-1244 D2) — see `CONTEXT.md` → "Community Capability Registry", "EoS Registry", and "Reviewer Lane Registry" for the full disambiguation.
 
@@ -192,7 +192,7 @@ Example:
 | `flags` | yes, non-empty | The CLI flags that select the lane, e.g. `["--gemini"]`. Each must match `^--[a-z0-9][a-z0-9-]*$` — flags are kebab even when the slug is snake (`lm_studio` → `--lm-studio`). |
 | `transport` | yes | `spawn` or `openai-http`. |
 | `evidenceClass` | yes | `source-grounded` or `diff-only`. |
-| `reviewsSection` | yes | The `REVIEWS.md` heading the lane renders under (max 200 characters). |
+| `reviewsSection` | yes | The section title declared by the lane (max 200 characters). See [Where an installed lane runs](../how-to/ship-a-reviewer-lane.md#where-an-installed-lane-runs) for what GSD does with the lane's output. |
 | `requiresBinaries` | yes | External binaries the lane needs (may be empty). |
 | `configKeys` | yes | Federated config keys it owns (may be empty). |
 | `runtimeCompat` | yes | Array of compatible runtimes; `["all"]` is allowed. |
@@ -207,10 +207,10 @@ Example:
   "name": "Acme Review Lane",
   "type": "reviewer",
   "repo": "some-org/gsd-lane-acme",
-  "description": "Adds an Acme-hosted model as an external reviewer lane for /gsd-review, evaluating diffs against Acme's static-analysis findings.",
+  "description": "Adds an Acme-hosted model as an external reviewer lane for GSD code review, evaluating diffs against Acme's static-analysis findings.",
   "author": "Some Org <hello@some-org.example>",
   "license": "MIT",
-  "enginesGsd": ">=1.8.0",
+  "enginesGsd": ">=1.14.0",
   "install": "gsd capability install https://github.com/some-org/gsd-lane-acme.git#v1.0.0",
   "uninstall": "gsd capability remove acme-review-lane",
   "interactions": {

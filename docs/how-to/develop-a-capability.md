@@ -285,7 +285,7 @@ From GSD 1.6.0, capabilities are versioned (the `version` field is required in `
 - **How-to** — [Import a capability from a URL](../how-to/import-a-capability-from-a-url.md): install a third-party capability from a git URL, tarball, or npm package.
 - **How-to** — [Version and update a capability](../how-to/version-a-capability.md): manage `version`, `engines.gsd`, and `compatVersions`; use `gsd capability update`.
 - **How-to** — [Remove a capability](../how-to/remove-a-capability.md): uninstall cleanly with `gsd capability remove`, including the `--purge-data` option.
-- **How-to** — [Ship a reviewer lane in your capability](../how-to/ship-a-reviewer-lane.md): declare a `reviewer` body (GSD 1.9.0+) so `/gsd-review` discovers and invokes your external review CLI or model endpoint.
+- **How-to** — [Ship a reviewer lane in your capability](../how-to/ship-a-reviewer-lane.md): declare a `reviewer` body so GSD can invoke your external review CLI or model endpoint; an installed lane runs through `/gsd-code-review <phase> --<flag>` (GSD 1.14.0+).
 - **How-to** — [List your reviewer lane in the registry](../how-to/list-your-reviewer-lane.md): publish a lane to the Reviewer Lane Registry (GSD 1.9.1+) so other people can find and install it.
 - **Reference** — [Capability manifest](../reference/capability-manifest.md): all fields and validation rules for `capability.json`.
 - **Reference** — [Capability matrix](../reference/capability-matrix.md): which first-party capabilities exist, their extension points, and their compatibility matrix.

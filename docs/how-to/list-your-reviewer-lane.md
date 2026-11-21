@@ -42,10 +42,10 @@ Append **exactly one** object to `docs/registries/reviewers.json`:
   "name": "Acme Review Lane",
   "type": "reviewer",
   "repo": "some-org/gsd-lane-acme",
-  "description": "Adds an Acme-hosted model as an external reviewer lane for /gsd-review, evaluating diffs against Acme's static-analysis findings.",
+  "description": "Adds an Acme-hosted model as an external reviewer lane for GSD code review, evaluating diffs against Acme's static-analysis findings.",
   "author": "Some Org <hello@some-org.example>",
   "license": "MIT",
-  "enginesGsd": ">=1.9.1",
+  "enginesGsd": ">=1.14.0",
   "install": "gsd capability install https://github.com/some-org/gsd-lane-acme.git#v1.0.0",
   "uninstall": "gsd capability remove acme-review-lane",
   "interactions": {
@@ -68,7 +68,7 @@ Three fields reject entries more often than the rest, so check them before anyth
 - **`interactions.flags`** are kebab even when the slug is snake: `lm_studio` → `--lm-studio`. Each must match `^--[a-z0-9][a-z0-9-]*$`.
 - **`install`** and **`uninstall`** must be exact and copy-pasteable. Someone will paste them verbatim; a placeholder that does not run is the one thing a directory cannot tolerate.
 
-**If a `configKeys` entry holds a live credential, say so in your README.** The example above declares `acme.api_key` to show the shape, and that shape has a consequence worth understanding before you copy it. Config values are written **in plaintext** to `.planning/config.json` — masking applies to display only, and that file is the security boundary. `planning.commit_docs` defaults to `true`, so unless the installing user has gitignored `.planning/`, a credential stored that way lands in their repository. None of the twelve first-party lanes stores a credential this way; they own only `review.models.*`, host, and prompt-budget keys. If your lane genuinely needs a secret, document the exposure for your users rather than leaving them to discover it — and never invent your own storage side-channel to route around it.
+**If a `configKeys` entry holds a live credential, say so in your README.** The example above declares `acme.api_key` to show the shape, and that shape has a consequence worth understanding before you copy it. Config values are written **in plaintext** to `.planning/config.json` — masking applies to display only, and that file is the security boundary. `planning.commit_docs` defaults to `true`, so unless the installing user has gitignored `.planning/`, a credential stored that way lands in their repository. None of the eleven first-party lanes stores a credential this way; the keys they own hold models, hosts, prompt budgets, context windows, timeouts and reasoning effort. If your lane genuinely needs a secret, document the exposure for your users rather than leaving them to discover it — and never invent your own storage side-channel to route around it.
 
 Everything else follows the shared entry shape. For the complete field-by-field table, see the [registry specification](../registries/README.md#reviewer-entries-reviewersjson-type-reviewer).
 
