@@ -4636,12 +4636,12 @@ function stageScripts(stages, ctx) {
   return scripts;
 }
 
-// The word tokens of the stages piped into segment `s`, as pipeStages finds them; each one's heredocs and
-// here-strings are kept in STAGE_FEEDS.
-const STAGE_FEEDS = new WeakMap();
+// The word tokens of the stages piped into segment `s`, as pipeStages finds them through filter stages (#5492);
+// each one's stage (its feeds, whether it is filtered) is kept in STAGE_OF.
+const STAGE_OF = new WeakMap();
 function pipeSources(s, bySeg, sepAfter, ctx) {
-  return pipeStages(s, bySeg, sepAfter, ctx).map((stage) => {
-    STAGE_FEEDS.set(stage.words, stage.feeds);
+  return pipeStages(s, bySeg, sepAfter, ctx, true).map((stage) => {
+    STAGE_OF.set(stage.words, stage);
     return stage.words;
   });
 }
@@ -4923,6 +4923,7 @@ function ddInputNamesSecret(text) {
 // of a secret name; then its operands as the file names the sub-command reads, and a shell sub-command's script.
 // For a `dd` sub-command (`subIsDd`), an operand's `if=` value is the file dd reads (#5492).
 function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replaceStr, depth, ctx, subIsDd) {
+  const stage = STAGE_OF.get(upstreamWords);
   if (mention) {
     const hit = mentionInSource(upstreamWords, ctx);
     if (hit) return hit;
@@ -4952,7 +4953,7 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
   // print its words (grep its pattern in the lines it matches, find or ls the names matching theirs). The split is
   // the same whatever xargs's options: under `-I` or `-0` xargs may keep a piece joined to the rest, which this
   // over-reads.
-  const feeds = STAGE_FEEDS.get(upstreamWords) || NO_FEEDS;
+  const feeds = stage ? stage.feeds : NO_FEEDS;
   const texts = [...feeds.heredocs, ...feeds.hereStrings];
   for (const w of upstreamWords) texts.push(w.text);
   for (const written of reconstructedScripts(upstreamWords, ctx)) texts.push(written);
@@ -4963,6 +4964,11 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
         if (operandNamesSecret(received) || (subIsDd && ddInputNamesSecret(received))) return secretRead(received);
       }
     }
+  }
+  // A filter stage, and every one back to the producer, fails closed as it does for a shell (#5492).
+  if (stage && stage.filtered) {
+    const hit = mentionInStage(stage, ctx);
+    if (hit) return hit;
   }
   return null;
 }
