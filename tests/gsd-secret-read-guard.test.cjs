@@ -1826,6 +1826,22 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   // A read-write redirect opens its file for reading too.
   blocks(['cat <> .env', 'exec 3<> .env', 'cat 0<> .env', 'exec 3<>.env', 'cat <>.env', 'wc -l <> .env', 'sort 0<>.env']);
   allows(['cat <> x.txt', 'exec 3<> .env.example', 'echo hi > .env']);
+
+  // xargs splits what it reads at blanks and newlines, so a piped word holding a space, or what printf writes with
+  // a newline, reaches the sub-command as several operands: each piece is judged as one (raw and unquoted). Under
+  // `-I` xargs keeps a line whole, so that row fails closed.
+  for (const [cmd, expectedPath] of [
+    ["echo 'x if=.env' | xargs dd", 'if=.env'],
+    ["echo 'x if=.env' | xargs -I{} dd {}", 'if=.env'],
+    ["printf '%s' 'bs=1 if=.env' | xargs dd", 'if=.env'],
+    [`echo '"x if=.env"' | xargs dd`, 'if=.env'],
+    ["echo 'x if=.env' | xargs sudo dd", 'if=.env'],
+    ["printf 'x\\nif=.env' | xargs dd", 'if=.env'],
+    ["echo 'x .env' | xargs cat", '.env'],
+    ["printf 'x\\n.env' | xargs cat", '.env'],
+    ["echo 'x .env' | xargs -I{} cat {}", '.env'],
+  ]) blocks([cmd], { path: expectedPath });
+  allows(["echo 'x if=x.txt' | xargs dd", "echo 'a .env.example' | xargs cat", "echo 'see .env' | xargs echo"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
