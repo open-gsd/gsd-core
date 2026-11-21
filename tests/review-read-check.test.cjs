@@ -197,6 +197,10 @@ describe('#5491 checkRead', () => {
     }
   });
 
+  test('a `<truncated` after an unclosed fence still flags: the output was cut mid-block (code review 2)', () => {
+    assert.equal(checkRead('# Review\n\n```js\nconst x = 1;\n<truncated 5000 bytes>\n', []).truncated, true);
+  });
+
   test('a `<truncated` inside a code fence or inline code is a quotation, not a truncation (#6286 Minor 3)', () => {
     const quoted = [
       `${GOOD}\n\`\`\`\n<truncated 12 bytes>\n\`\`\``,
@@ -555,6 +559,16 @@ describe('#5491 runReadCheck reads only bounded regular files inside the repo (#
     assert.match(stampIncompleteRead('body', r), /big-01 could not be checked/);
   });
 
+  test('a plan is read at its resolved path, not the spelling the containment check resolved (code review 2)', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => {
+    const real = path.join(repo, '.planning', 'r');
+    fs.mkdirSync(real, { recursive: true });
+    fs.writeFileSync(path.join(real, 'real-01-PLAN.md'), PLAN_B);
+    const alias = path.join(repo, '.planning', 's');
+    if (!fs.existsSync(alias)) fs.symlinkSync('r', alias);
+    const { reads } = check('.planning/s/real-01-PLAN.md');
+    assert.deepEqual(reads, [PROMPT, `${repo}/${OK}`, `${repo}/.planning/r/real-01-PLAN.md`]);
+  });
+
   test('a plan reached through a symlinked directory is the same plan, read once (#6286 Minor 1)', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => {
     const alias = path.join(repo, '.planning', 'q');
     if (!fs.existsSync(alias)) fs.symlinkSync('p', alias);
@@ -818,6 +832,24 @@ describe('#5491 plan headers inside a closed code fence are plan content (#6286 
     const d = memDeps(`#### p/12.6-02-PLAN.md\n${body}`, { '/repo/p/12.6-02-PLAN.md': body, '/repo/p/ghost-01-PLAN.md': PLAN_B });
     const r = runReadCheck(B_LINE, d.PROMPT, '/repo', d);
     assert.equal(r.complete, true, JSON.stringify(r));
+  });
+});
+
+describe('#5491 code review 2 parse rows', () => {
+  test('a `;` inside a bracketed list is part of the list', () => {
+    const line = 'READ-CHECK 12.6-01: requirements=[REQ-01; REQ-02]; wave=1; depends_on=[]; tasks=2';
+    assert.equal(checkRead(line, [A]).complete, true);
+  });
+
+  test('a bare PLAN.md header is not a plan of the read check (review.md reads `*-PLAN.md` only)', () => {
+    assert.deepEqual(planPathsFromPrompt('#### p/PLAN.md\n#### PLAN.md\n#### p/x-01-PLAN.md'), ['p/x-01-PLAN.md']);
+  });
+
+  test('two plans with one id that both mismatch report the fields of both', () => {
+    const D = { id: 'dup', requirements: [], wave: 1, dependsOn: [], tasks: 1 };
+    const E = { ...D, wave: 2, tasks: 9 };
+    const line = 'READ-CHECK dup: requirements=[]; wave=1; depends_on=[]; tasks=9';
+    assert.deepEqual(checkRead(line, [D, E]).mismatched, { dup: ['wave', 'tasks'] });
   });
 });
 

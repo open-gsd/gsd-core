@@ -945,6 +945,39 @@ describe('#5491 — antigravity proves it read each plan', () => {
       assert.match(d.files[p.reviewPath], /^> \[incomplete-read\][^\n]*whether its session compacted its context could not be checked/);
     });
 
+    // Code review 2: a session log that cannot be found or read cannot rule out a compaction.
+    const unknownWhen = async (files, readFile) => {
+      const p = plan('antigravity');
+      const d = deps({ files, ...(readFile ? { readFile } : {}), spawn: () => ({ status: 0, stdout: RESTATED, stderr: '' }) });
+      return (await runLane(p, d, { repoRoot: ROOT })).readCheck;
+    };
+
+    test('no conversation cache reports compaction as unknown', async () => {
+      const r = await unknownWhen(laneFiles());
+      assert.deepEqual({ compacted: r.compacted, complete: r.complete }, { compacted: 'unknown', complete: false });
+    });
+
+    test('an unparsable conversation cache reports compaction as unknown', async () => {
+      const r = await unknownWhen({ ...laneFiles(), [CACHE]: '{not json' });
+      assert.equal(r.compacted, 'unknown');
+    });
+
+    test('a conversation with no transcript reports compaction as unknown', async () => {
+      const r = await unknownWhen({ ...laneFiles(), [CACHE]: JSON.stringify({ [ROOT]: 'c1' }) });
+      assert.equal(r.compacted, 'unknown');
+    });
+
+    test('a transcript that cannot be read after the run reports compaction as unknown', async () => {
+      const files = { ...laneFiles(), [CACHE]: JSON.stringify({ [ROOT]: 'c1' }), [TX]: '{"type":"USER_INPUT"}' };
+      let reads = 0;
+      const r = await unknownWhen(files, (x) => {
+        if (x === TX && (reads += 1) > 1) throw new Error(`EIO ${x}`);
+        if (!(x in files)) throw new Error(`ENOENT ${x}`);
+        return files[x];
+      });
+      assert.equal(r.compacted, 'unknown');
+    });
+
     test('a checkpoint from a PRIOR run in the same session does not', async () => {
       const { r } = await run([CHECKPOINT], ['{"type":"PLANNER_RESPONSE"}']);
       assert.equal(r.readCheck.compacted, false);
