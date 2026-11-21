@@ -1077,7 +1077,7 @@ function buildUatRows(
     // never carry an affirmative `"complete"`. `foldScope` is what is handed to
     // `worstScope` in the caller, and it is the one with teeth — a non-COMPLETE
     // fold raises `phase_scope_degraded` AND, via `phaseScope`/`makeFraction`,
-    // withholds BOTH progress percentages for the WHOLE milestone.
+    // withholds EVERY progress percentage for the WHOLE milestone.
     //
     // The two now agree: EVERY gap class degrades both, including the
     // fence-suppression shortfall. `shortfallBlocks` is not exempted here
