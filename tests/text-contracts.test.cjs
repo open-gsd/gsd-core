@@ -329,9 +329,98 @@ describe('the run itself fails closed', () => {
   });
 });
 
+describe('ctx.docs, ctx.exists and ctx.absent', () => {
+  test('docs() joins the files into one document an assertion can match in any of them', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'b.md': 'beta\n' }, {
+      ok: "ctx.docs(['a.md', 'b.md']).has('alpha', 'in a').has('beta', 'in b').lacks('gamma', 'in neither');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('docs() fails on a phrase that is in none of the files, naming every file', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'b.md': 'beta\n' }, { c: "ctx.docs(['a.md', 'b.md']).has('gamma', 'needs gamma');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'a.md + b.md');
+  });
+
+  test('docs() with one missing file is one finding for that file and no noise from the assertions after it', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n' }, { c: "ctx.docs(['a.md', 'gone.md']).has('alpha', 'in a').has('zzz', 'in none');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'gone.md');
+    assert.match(findings[0].message, /cannot read the file/);
+  });
+
+  test('docs() with no files is a finding, not a vacuous pass', (t) => {
+    const tree = makeTree(t, {}, { c: "ctx.docs([]).has('x', 'needs x');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /docs\(\) needs at least one repo-relative path/);
+  });
+
+  test('exists() passes for a file and fails for a missing path and for a directory', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'dir/x.md': 'x\n' }, {
+      ok: "ctx.exists('a.md', 'a is there');",
+      gone: "ctx.exists('gone.md', 'gone is there');",
+      dir: "ctx.exists('dir', 'dir is a file');",
+    });
+    const findings = runTree(tree);
+    assert.deepEqual(findings.map((f) => f.file).sort(), ['dir', 'gone.md']);
+    assert.ok(findings.every((f) => /expected a regular file at /.test(f.message)));
+  });
+
+  test('absent() passes for a missing path and fails for a file, a directory and a symlink', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'dir/x.md': 'x\n' }, {
+      ok: "ctx.absent('gone.md', 'gone is gone');",
+      file: "ctx.absent('a.md', 'a must go');",
+      dir: "ctx.absent('dir', 'dir must go');",
+      link: "ctx.absent('link.md', 'link must go');",
+    });
+    fs.symlinkSync(path.join(tree.root, 'a.md'), path.join(tree.root, 'link.md'));
+    const findings = runTree(tree);
+    assert.deepEqual(findings.map((f) => f.file).sort(), ['a.md', 'dir', 'link.md']);
+    assert.ok(findings.every((f) => /expected no file at /.test(f.message)));
+  });
+
+  test('exists() and absent() refuse a path outside the repository and count as assertions', (t) => {
+    const tree = makeTree(t, {}, { out: "ctx.exists('../escape.md', 'x'); ctx.absent('/etc/hosts', 'y');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 2);
+    assert.ok(findings.every((f) => /not a repo-relative path inside the repository/.test(f.message)));
+  });
+
+  test('a symlinked directory in the path cannot redirect doc, docs, exists or absent out of the tree', (t) => {
+    const outside = tempDir(t, 'gsd-text-contracts-outside-');
+    write(outside, 'secret.md', 'secret\n');
+    const tree = makeTree(t, {}, {
+      d: "ctx.doc('link/secret.md').has('secret', 's');",
+      ds: "ctx.docs(['link/secret.md']).has('secret', 's');",
+      e: "ctx.exists('link/secret.md', 'x');",
+      a: "ctx.absent('link/secret.md', 'y');",
+    });
+    fs.symlinkSync(outside, path.join(tree.root, 'link'), 'dir');
+    const findings = runTree(tree);
+    assert.equal(findings.length, 4, JSON.stringify(findings));
+    assert.ok(findings.every((f) => /resolves outside the repository through a symlinked directory/.test(f.message)));
+  });
+
+  test('a symlinked directory that stays inside the tree is still read', (t) => {
+    const tree = makeTree(t, { 'real/a.md': 'alpha\n' }, { ok: "ctx.doc('alias/a.md').has('alpha', 'a');" });
+    fs.symlinkSync(path.join(tree.root, 'real'), path.join(tree.root, 'alias'), 'dir');
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a contract whose only assertion is absent() is not "made no assertion"', (t) => {
+    const tree = makeTree(t, {}, { only: "ctx.absent('gone.md', 'gone');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
 const SHIPPED = [
   'adr-15-progress-converge', 'autonomous-converge',
   'autonomous-allowed-tools', 'autonomous-decomposition', 'autonomous-interactive', 'autonomous-to-flag',
+  'chain-flag-plan-phase', 'discuss-checkpoint', 'agent-skills-awareness', 'scan-command', 'analyze-dependencies',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -343,6 +432,14 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/workflows/autonomous/steps/converge-fail-fast.md', 'gsd-core/workflows/autonomous/steps/converge-dispatch-bg.md',
     'gsd-core/workflows/autonomous/steps/converge-dispatch-inline.md', 'gsd-core/workflows/autonomous/steps/converge-loop.md',
     'gsd-core/references/autonomous-smart-discuss.md',
+    'gsd-core/workflows/plan-phase.md', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+    'gsd-core/workflows/discuss-phase.md', 'gsd-core/workflows/discuss-phase/modes/chain.md',
+    'gsd-core/workflows/discuss-phase/modes/default.md', 'gsd-core/workflows/discuss-phase/templates/checkpoint.json',
+    'commands/gsd/map-codebase.md', 'gsd-core/workflows/scan.md', 'gsd-core/workflows/analyze-dependencies.md',
+    ...[
+      'gsd-debugger', 'gsd-integration-checker', 'gsd-security-auditor', 'gsd-nyquist-auditor', 'gsd-codebase-mapper',
+      'gsd-roadmapper', 'gsd-eval-auditor', 'gsd-intel-updater', 'gsd-doc-writer',
+    ].map((name) => `agents/${name}.md`),
   ];
 
   function copyOfRepoFiles(t) {
@@ -439,6 +536,63 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       const before = fs.readFileSync(abs, 'utf8');
       const after = edit(before);
       assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The five batch-3 contracts: workflows split across files, agent blocks, a consolidated command, a removed one.
+  const without = (phrase) => (text) => text.split(phrase).join('');
+  const AUTO_GUARD_TAIL = ' && [[ ! "$GSD_ARGS" =~ --chain ]]';
+  for (const [title, rel, edit, contract, expected] of [
+    ['the --chain half of the dual-flag guard dropped from the plan-phase step file (#1620)', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+      without(AUTO_GUARD_TAIL), 'chain-flag-plan-phase', /plan-phase should check for both --auto and --chain/],
+    ['the --chain half of the dual-flag guard dropped from discuss-phase chain mode (#1620)', 'gsd-core/workflows/discuss-phase/modes/chain.md',
+      without(AUTO_GUARD_TAIL), 'chain-flag-plan-phase', /discuss-phase .* should use the same dual-flag guard/],
+    ['the chain flag no longer persisted by plan-phase (#1620)', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+      without('config-set workflow._auto_chain_active true'), 'chain-flag-plan-phase', /should persist chain flag/],
+    ['git checkout -b added to plan-phase (#2388)', 'gsd-core/workflows/plan-phase.md',
+      (text) => `${text}\ngit checkout -b gsd/new\n`, 'chain-flag-plan-phase', /must not instruct LLM to create a new branch/],
+    ['plan-phase deleted, so its step file is not enough (#2388)', 'gsd-core/workflows/plan-phase.md',
+      () => '', 'chain-flag-plan-phase', /the file is empty/],
+    ['areas_remaining gone from the checkpoint template (#1485)', 'gsd-core/workflows/discuss-phase/templates/checkpoint.json',
+      without('areas_remaining'), 'discuss-checkpoint', /checkpoint should track remaining areas/],
+    ['rm -f gone from the discuss-phase workflow, so the checkpoint is never cleaned up (#1485)', 'gsd-core/workflows/discuss-phase.md',
+      without('rm -f'), 'discuss-checkpoint', /checkpoint file should be deleted/],
+    ['the success criteria lose the resume requirement (#1485)', 'gsd-core/workflows/discuss-phase.md',
+      (text) => {
+        const at = text.indexOf('<success_criteria>');
+        const close = text.indexOf('</success_criteria>');
+        return text.slice(0, at) + text.slice(at, close).replace(/resume|Resume/g, 'continue') + text.slice(close);
+      }, 'discuss-checkpoint', /success criteria should mention session resume/],
+    ['the Project skills block gone from an agent', 'agents/gsd-roadmapper.md',
+      without('Project skills'), 'agent-skills-awareness', /gsd-roadmapper missing Project skills block/],
+    ['an agent told to load the whole AGENTS.md', 'agents/gsd-debugger.md',
+      (text) => `${text}\nRead AGENTS.md first.\n`, 'agent-skills-awareness', /gsd-debugger should not instruct loading full AGENTS\.md/],
+    ['the doc writer loses its SECURITY note', 'agents/gsd-doc-writer.md',
+      without('SECURITY'), 'agent-skills-awareness', /gsd-doc-writer missing security note/],
+    ['--fast gone from map-codebase', 'commands/gsd/map-codebase.md',
+      without('--fast'), 'scan-command', /must document --fast flag/],
+    ['one focus area gone from the scan workflow', 'gsd-core/workflows/scan.md',
+      without('`concerns`'), 'scan-command', /should document the "concerns" focus area/],
+    ['the scan workflow no longer names the mapper agent', 'gsd-core/workflows/scan.md',
+      without('gsd-codebase-mapper'), 'scan-command', /should reference the gsd-codebase-mapper agent/],
+    ['overlap detection gone from the analyze-dependencies workflow', 'gsd-core/workflows/analyze-dependencies.md',
+      (text) => text.replace(/overlap|conflict/g, 'clash'), 'analyze-dependencies', /should mention file overlap\/conflict detection/],
+    ['the removed command documented again in COMMANDS.md (#2790)', 'docs/COMMANDS.md',
+      (text) => `${text}\n### \`/gsd-analyze-dependencies\`\n`, 'analyze-dependencies', /should not document the removed \/gsd-analyze-dependencies command/],
+    ['the removed command file restored (#2790)', 'commands/gsd/analyze-dependencies.md',
+      () => '---\nname: x\n---\n', 'analyze-dependencies', /should have been deleted in #2790/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const exists = fs.existsSync(abs);
+      const before = exists ? fs.readFileSync(abs, 'utf8') : '';
+      const after = edit(before);
+      assert.ok(!exists || after !== before, 'the mutation changed the file');
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, after);
       const findings = runShipped(root, [contract]);
       assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
