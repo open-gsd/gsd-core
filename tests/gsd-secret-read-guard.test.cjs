@@ -2059,6 +2059,20 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   ]);
   blocks(["grep -r 'API_KEY .env' src | xargs cat", 'find . -name .env | xargs cat', 'git ls-files .env | xargs cat', "rg -l 'x .env' | xargs cat"]);
   allows(["find . -name '*.js' | xargs cat", 'git ls-files | xargs grep foo', 'grep -rl TODO src | xargs wc -l']);
+
+  // What printf or echo writes into xargs is judged whole as well as split: a decoded name with no blank in it
+  // (`printf '\x2eenv'`) is an operand too.
+  blocks([
+    "printf '\\x2eenv' | xargs cat",
+    "printf '.e%s' nv | xargs cat",
+    "printf '\\056env' | xargs cat",
+    "printf '%b' '\\x2eenv' | xargs cat",
+    "echo -e '\\x2eenv' | xargs cat",
+    "printf '\\x2eenv' | xargs -I{} cat {}",
+    "printf '\\x2eenv' | cat | xargs cat",
+  ]);
+  blocks(["printf 'if=.e%s' nv | xargs dd"], { path: 'if=.env' });
+  allows(["printf '.e%s' nv.example | xargs cat", "xargs cat <<< '\\x2eenv'"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
