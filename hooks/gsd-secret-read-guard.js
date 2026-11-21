@@ -3349,7 +3349,7 @@ function segmentStdin(s, bySeg, sepAfter, fallback) {
   if (prev && (prev.base === 'echo' || prev.base === 'printf')) {
     const printed = printedText(prev);
     if (printed === null) return { texts: [], unseen: prev.operands.map((w) => w.text).join(' '), code: 'xargs-stdin-unrendered' };
-    texts.push(printed);
+    texts.push(...printed);
   }
   const piped = pipeSourceText(s, bySeg, sepAfter);
   if (piped !== null) texts.push(piped);
@@ -3367,9 +3367,10 @@ function ownStdin(s, bySeg) {
 
 // The stdin each segment gets from a redirect beyond its own (#6282): one on a `{ }` or `( )` group reaches the
 // segments inside it, one on a loop's or conditional's closing word the segments since its opening word, and one on
-// `exec` the segments after it. In a command that defines a function, a redirect on any segment reaches every one,
-// since a call to the function runs a body written elsewhere (`f() { xargs cat; }; f < list`). Innermost first;
-// `next` skips the segments already reached, so nested groups cost one pass, not one per group.
+// `exec` the segments after it. Innermost first; `next` skips the segments already reached, so nested groups cost
+// one pass, not one per group. Where that matching is unsure (a closer with no opener, an opener left open, or a
+// `case`, whose patterns end in `)`), and in a command that defines a function, whose body runs with every call's
+// stdin (`f() { xargs cat; }; f <<< a; f < list`), every segment gets all of those redirects together instead.
 function groupStdins(tokens, bySeg, maxSeg, command) {
   const reach = new Map();
   const next = Array.from({ length: maxSeg + 2 }, (_, k) => k);
@@ -3387,53 +3388,63 @@ function groupStdins(tokens, bySeg, maxSeg, command) {
       next[k] = k + 1;
     }
   };
+  if (DEFINES_FUNCTION_RE.test(command)) {
+    spread(0, maxSeg, mergedStdin(Array.from({ length: maxSeg + 1 }, (_, s) => ownStdin(s, bySeg))));
+    return reach;
+  }
+  const ranges = [];
+  const unsure = tokens.some((t) => t.kind === 'word' && t.text === 'case');
   const groups = [];
   for (const t of tokens) {
     if (t.kind !== 'sep') continue;
     if (t.text === '{' || t.text === '(') groups.push(t.seg + 1);
-    else if ((t.text === '}' || t.text === ')') && groups.length > 0) spread(groups.pop(), t.seg, ownStdin(t.seg + 1, bySeg));
+    else if (t.text !== '}' && t.text !== ')') continue;
+    else if (groups.length === 0) ranges.push([-1, -1, ownStdin(t.seg + 1, bySeg)]);
+    else ranges.push([groups.pop(), t.seg, ownStdin(t.seg + 1, bySeg)]);
   }
   const blocks = [];
   for (let s = 0; s <= maxSeg; s++) {
     const first = commandWords(bySeg.get(s) || [])[0];
     if (!first) continue;
     if (OPENING_WORDS.has(first.text)) blocks.push(s);
-    else if (CLOSING_WORDS.has(first.text) && blocks.length > 0) spread(blocks.pop(), s - 1, ownStdin(s, bySeg));
-    else if (lastSegment(first.text) === 'exec') spread(s + 1, maxSeg, ownStdin(s, bySeg));
+    else if (CLOSING_WORDS.has(first.text)) ranges.push([blocks.length > 0 ? blocks.pop() : -1, s - 1, ownStdin(s, bySeg)]);
+    else if (lastSegment(first.text) === 'exec') ranges.push([s + 1, maxSeg, ownStdin(s, bySeg)]);
   }
-  if (DEFINES_FUNCTION_RE.test(command)) {
-    for (let s = 0; s <= maxSeg; s++) {
-      const own = ownStdin(s, bySeg);
-      if (own !== null) {
-        spread(0, maxSeg, own);
-        break;
-      }
-    }
+  if (unsure || groups.length > 0 || blocks.length > 0 || ranges.some((r) => r[0] === -1)) {
+    spread(0, maxSeg, mergedStdin(ranges.map((r) => r[2])));
+    return reach;
   }
+  for (const [from, to, stdin] of ranges) spread(from, to, stdin);
   return reach;
 }
 
-// What an echo or printf writes, for xargs to read (#6282): echo's operands after its `-neE` flags, or printf's
-// format filled with its operands (`%s`, again while operands remain; `%%`), each with `\n`, `\t`, `\\` and a
-// lone `\0` read as what they print. null for anything else, which it does not render: another escape (`\x2e`,
-// `\056`) in printf or `echo -e`, another conversion (`%b`, `%d`) or a printf option (`-v`).
+// Several stdins as one, failing closed: the first one the guard cannot read, else all their texts; null for none.
+function mergedStdin(stdins) {
+  const given = stdins.filter((stdin) => stdin !== null);
+  if (given.length === 0) return null;
+  return given.find((stdin) => stdin.unseen !== null) || { texts: given.flatMap((stdin) => stdin.texts), unseen: null };
+}
+
+// What an echo or printf writes, for xargs to read (#6282), as a list of the texts it may be. echo prints its
+// operands after its `-neE` flags, as written and with its escapes read (echoEscaped): zsh, dash and bash's xpg_echo
+// read them without -e, so both count unless -e is given. printf prints its format filled with its operands (`%s`,
+// again while operands remain; `%%`) and `\n`, `\t`, `\\` and a lone `\0` read; null for anything else, which it does
+// not render: another escape (`\x2e`, `\056`), another conversion (`%b`, `%d`) or an option (`-v`).
 function printedText(cmd) {
-  const echo = cmd.base === 'echo';
   let words = cmd.operands.map((w) => w.text);
-  // echo without -e prints an escape it does not know as written (`echo 'src\build.log'`).
-  let echoEscapes = false;
-  if (echo) {
+  if (cmd.base === 'echo') {
     let start = 0;
+    let escapes = false;
     for (; start < words.length && /^-[neE]+$/.test(words[start]); start++) {
       const flags = words[start];
-      if (flags.includes('e') || flags.includes('E')) echoEscapes = flags.lastIndexOf('e') > flags.lastIndexOf('E');
+      if (flags.includes('e') || flags.includes('E')) escapes = flags.lastIndexOf('e') > flags.lastIndexOf('E');
     }
-    words = [words.slice(start).join(' ')];
-  } else if (words[0] === '--') {
-    words = words.slice(1);
+    const text = words.slice(start).join(' ');
+    return escapes ? [echoEscaped(text)] : [text, echoEscaped(text)];
   }
+  if (words[0] === '--') words = words.slice(1);
   const [format = '', ...args] = words;
-  if (!echo && format.startsWith('-')) return null;
+  if (format.startsWith('-')) return null;
   let rendered = true;
   let next = 0;
   const fill = () => format.replace(/\\(0[0-7]*|[\s\S]?)|%([\s\S]?)/g, (m, esc, conv) => {
@@ -3441,9 +3452,6 @@ function printedText(cmd) {
       if (esc === 'n' || esc === 't') return '\n';
       if (esc === '0') return '\0';
       if (esc === '\\') return '\\';
-      if (echo && !echoEscapes) return m;
-    } else if (echo) {
-      return m;
     } else if (conv === '%') {
       return '%';
     } else if (conv === 's') {
@@ -3454,15 +3462,37 @@ function printedText(cmd) {
   });
   let out = fill();
   while (rendered && next > 0 && next < args.length) out += fill();
-  return rendered ? out : null;
+  return rendered ? [out] : null;
+}
+
+// What echo prints for `text` when it reads escapes (bash's -e, zsh, dash): the single-character escapes, `\0NNN`
+// octal, `\xHH`, `\uHHHH` and `\UHHHHHHHH`; `\c`, which ends the output, is read as nothing, so what follows is
+// still judged, and any other escape keeps its backslash.
+const ECHO_ESCAPES = new Map([
+  ['a', '\x07'], ['b', '\b'], ['c', ''], ['e', '\x1b'], ['E', '\x1b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'],
+  ['v', '\v'], ['\\', '\\'],
+]);
+function echoEscaped(text) {
+  return text.replace(/\\(0[0-7]{0,3}|x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[\s\S]?)/g, (m, esc) => {
+    if (ECHO_ESCAPES.has(esc)) return ECHO_ESCAPES.get(esc);
+    if (esc.startsWith('0')) return String.fromCharCode(parseInt(esc.slice(1) || '0', 8) & 0xff);
+    if (esc.length < 2) return m;
+    const code = parseInt(esc.slice(1), 16);
+    if (esc[0] === 'x') return String.fromCharCode(code);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : '';
+  });
 }
 
 // The words xargs may read from `texts`: each text, its lines, its pieces at the `-d`/`-0` delimiter `split` when
 // one is given, else the text with the quotes and backslashes xargs removes taken out (`.e"n"v` is `.env`) and its
 // blank-separated pieces, and its pieces between blanks, quotes, backslashes and other common delimiters (`,` `;`
 // `:` `|` `=`, NUL), so a name is found however xargs splits it.
+const XARGS_WORD_WORK = 16;
 function xargsStdinWords(texts, split) {
   const words = [];
+  // Charged to the scan, a word as a run of characters, since every xargs a group, shell or function holds reads
+  // the same stdin again.
+  for (const text of texts) chargeScan(XARGS_WORD_WORK * (text.length + 1));
   for (const text of texts) {
     words.push(text, ...text.split('\n'), ...text.split(/[\s"'\\,;:|=\0]+/));
     if (split !== null) words.push(...text.split(split));
