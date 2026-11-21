@@ -287,7 +287,8 @@ const RULES = [
       'tests/agent-frontmatter.test.cjs',
       'tests/agent-size-budget.test.cjs',
       'tests/agent-skills.test.cjs',
-      'tests/agent-skills-awareness.test.cjs',
+      // #6478: agent-skills-awareness is now a text contract; its mutation cases live here.
+      'tests/text-contracts.test.cjs',
       'tests/agent-required-reading-consistency.test.cjs',
       'tests/docs-parity-live-registry.test.cjs',
     ],

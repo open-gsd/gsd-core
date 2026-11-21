@@ -126,6 +126,16 @@ function makeContext(root, id, findings) {
     if (typeof rel !== 'string' || rel === '' || path.isAbsolute(rel) || inside.startsWith('..') || path.isAbsolute(inside)) {
       return { ok: false, message: 'the path is not a repo-relative path inside the repository' };
     }
+    // lstat on the last component does not stop a symlinked directory earlier in the path from
+    // redirecting the read out of the tree, so the parent directory is resolved and re-checked.
+    // The realpath-resolved containment check has one owner (src/security.cts).
+    const parent = path.posix.dirname(String(rel).split(path.sep).join('/'));
+    if (parent !== '.') {
+      const { tryWithinRoot } = require('../../gsd-core/bin/lib/security.cjs');
+      if (tryWithinRoot(parent, root) === null) {
+        return { ok: false, message: 'the path resolves outside the repository through a symlinked directory' };
+      }
+    }
     return { ok: true, abs };
   }
 

@@ -390,6 +390,27 @@ describe('ctx.docs, ctx.exists and ctx.absent', () => {
     assert.ok(findings.every((f) => /not a repo-relative path inside the repository/.test(f.message)));
   });
 
+  test('a symlinked directory in the path cannot redirect doc, docs, exists or absent out of the tree', (t) => {
+    const outside = tempDir(t, 'gsd-text-contracts-outside-');
+    write(outside, 'secret.md', 'secret\n');
+    const tree = makeTree(t, {}, {
+      d: "ctx.doc('link/secret.md').has('secret', 's');",
+      ds: "ctx.docs(['link/secret.md']).has('secret', 's');",
+      e: "ctx.exists('link/secret.md', 'x');",
+      a: "ctx.absent('link/secret.md', 'y');",
+    });
+    fs.symlinkSync(outside, path.join(tree.root, 'link'), 'dir');
+    const findings = runTree(tree);
+    assert.equal(findings.length, 4, JSON.stringify(findings));
+    assert.ok(findings.every((f) => /resolves outside the repository through a symlinked directory/.test(f.message)));
+  });
+
+  test('a symlinked directory that stays inside the tree is still read', (t) => {
+    const tree = makeTree(t, { 'real/a.md': 'alpha\n' }, { ok: "ctx.doc('alias/a.md').has('alpha', 'a');" });
+    fs.symlinkSync(path.join(tree.root, 'real'), path.join(tree.root, 'alias'), 'dir');
+    assert.deepEqual(runTree(tree), []);
+  });
+
   test('a contract whose only assertion is absent() is not "made no assertion"', (t) => {
     const tree = makeTree(t, {}, { only: "ctx.absent('gone.md', 'gone');" });
     assert.deepEqual(runTree(tree), []);
@@ -535,7 +556,7 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       (text) => `${text}\ngit checkout -b gsd/new\n`, 'chain-flag-plan-phase', /must not instruct LLM to create a new branch/],
     ['plan-phase deleted, so its step file is not enough (#2388)', 'gsd-core/workflows/plan-phase.md',
       () => '', 'chain-flag-plan-phase', /the file is empty/],
-    ['the checkpoint file name gone from every discuss-phase file (#1485)', 'gsd-core/workflows/discuss-phase/templates/checkpoint.json',
+    ['areas_remaining gone from the checkpoint template (#1485)', 'gsd-core/workflows/discuss-phase/templates/checkpoint.json',
       without('areas_remaining'), 'discuss-checkpoint', /checkpoint should track remaining areas/],
     ['rm -f gone from the discuss-phase workflow, so the checkpoint is never cleaned up (#1485)', 'gsd-core/workflows/discuss-phase.md',
       without('rm -f'), 'discuss-checkpoint', /checkpoint file should be deleted/],
