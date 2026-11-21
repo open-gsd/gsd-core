@@ -47,7 +47,7 @@ const inProcess = runNode(['-p', `typeof require(${JSON.stringify(HOOK_PATH)}).s
   timeoutMs: QUICK_SPAWN_TIMEOUT_MS,
 }).stdout.trim() === 'function';
 const hookApi = inProcess ? require(HOOK_PATH) : {};
-const { spanReaderSteps, MAX_COMMAND_LENGTH, MAX_READER_DEPTH } = hookApi;
+const { spanReaderSteps, MAX_COMMAND_LENGTH } = hookApi;
 // The Bash leg's verdict as main() reaches it: the secret scan, the debugger-spawn check,
 // then both again with spans closed by bash 5's grammar.
 const checkBashCommand = (cmd) => hookApi.scanBashCommand(cmd) || hookApi.scanDebuggerSpawn(cmd)
@@ -1367,32 +1367,28 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     assertBlocked(runHook(bash(`cat .env; echo "$(${'"$('.repeat(12000)}`)), '12000 "$(', { code: 'command-too-complex', tool: 'Bash' });
   });
 
-  // Past MAX_READER_DEPTH nested spans the readers stop, and the grammar scan,
-  // which cannot finish, denies the command as command-too-complex; a stack
-  // overflow does the same at a depth that depends on the runtime. Each row
-  // nests a `case` N spans deep,
-  // with a read after the innermost spans close. bash 5 closes the outermost
-  // span after the read, and only the grammar reading sees it there; paren
-  // counting closes every span one paren early, starting at the pattern's
-  // `)`, so the read is text inside the string. The pre-fix hook allows the
-  // row at every depth. Since #6136 the hook's first scan denies each of these
-  // nests as nesting-too-deep before the grammar scan runs, so each row reads the
-  // grammar scan's own verdict as well (grammarScan).
+  // Past 1,000 nested spans (MAX_READER_DEPTH, the limit the changeset and the
+  // user guide state) the readers stop, and the grammar scan, which cannot
+  // finish, denies the command as command-too-complex; a stack overflow does the
+  // same at a depth that depends on the runtime. Each row nests a `case` N spans
+  // deep, with a read after the innermost spans close. bash 5 closes the
+  // outermost span after the read, and only the grammar reading sees it there;
+  // paren counting closes every span one paren early, starting at the pattern's
+  // `)`, so the read is text inside the string. The pre-fix hook allows the row
+  // at every depth. Since #6136 the hook's first scan denies each of these nests
+  // as nesting-too-deep before the grammar scan runs, so each row reads the
+  // grammar scan's own verdict as well (grammarScan). The depths are written
+  // out, so a change to the limit fails these rows.
   const nestedCase = (n) => `echo "$(${'$('.repeat(n - 1)}case x in y) :;; esac${')'.repeat(n - 1)}; cat .env)"`;
-  test('the readers stop at 1,000 nested spans, the limit the changeset and the user guide state', () => {
-    // The rows below take their depths from the hook, so they move with the constant;
-    // this one holds its value.
-    assert.equal(MAX_READER_DEPTH, 1000);
-  });
-  for (const n of [MAX_READER_DEPTH - 1, MAX_READER_DEPTH]) {
-    test(`a case ${n} spans deep is read by the grammar: blocks the read after it`, () => {
+  for (const n of [999, 1000]) {
+    test(`a case ${n} spans deep: the hook denies it as nesting-too-deep; the grammar scan reads it and finds the read after it`, () => {
       assertBlocked(runHook(bash(nestedCase(n))), `${n} deep`, { code: 'nesting-too-deep', tool: 'Bash' });
       assert.deepEqual(grammarScan(nestedCase(n)).verdict, { code: 'secret-read', text: '.env' });
     });
   }
-  test(`a case ${MAX_READER_DEPTH + 1} spans deep stops the grammar scan: denies as command-too-complex`, () => {
-    assertBlocked(runHook(bash(nestedCase(MAX_READER_DEPTH + 1))), `${MAX_READER_DEPTH + 1} deep`, { code: 'nesting-too-deep', tool: 'Bash' });
-    assert.deepEqual(grammarScan(nestedCase(MAX_READER_DEPTH + 1)).verdict, { code: 'command-too-complex', text: '' });
+  test('a case 1001 spans deep: the hook denies it as nesting-too-deep; the grammar scan stops as command-too-complex', () => {
+    assertBlocked(runHook(bash(nestedCase(1001))), '1001 deep', { code: 'nesting-too-deep', tool: 'Bash' });
+    assert.deepEqual(grammarScan(nestedCase(1001)).verdict, { code: 'command-too-complex', text: '' });
   });
 
   // The size cap on the same scan: a read in a case arm is found up to
