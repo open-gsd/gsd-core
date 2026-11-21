@@ -294,18 +294,20 @@ function lineIsReadOnly(command) {
   try {
     const readings = readsEachWay(command) ? [false, ...READINGS] : [false];
     if (!readings.every((reading) => lineIsReadOnlyUnder(command, reading))) return false;
-    // #6142: and with its brace groups made into words as bash and zsh make them (`sort {-o,out} f` writes).
-    return !command.includes('{') || ['bash', 'zsh'].every((shell) => lineIsReadOnlySpliced(command, shell));
+    // #6142: and with its brace groups made into words as bash and zsh make them (`sort {-o,out} f` writes),
+    // under each reading too (`{$'-o',out}` is `-o` to bash and zsh only).
+    if (!command.includes('{')) return true;
+    return ['bash', 'zsh'].every((shell) => readings.every((reading) => lineIsReadOnlySpliced(command, shell, reading)));
   } catch {
     return false;
   }
 }
 
-function lineIsReadOnlySpliced(command, shell) {
+function lineIsReadOnlySpliced(command, shell, reading) {
   const spliced = bracesSpliced;
   bracesSpliced = shell;
   try {
-    return lineIsReadOnlyUnder(command, false);
+    return lineIsReadOnlyUnder(command, reading);
   } finally {
     bracesSpliced = spliced;
   }
