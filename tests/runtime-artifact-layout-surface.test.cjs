@@ -25,6 +25,7 @@ const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-ar
 const { CLUSTERS, allClusteredSkills } = require('../gsd-core/bin/lib/clusters.cjs');
 const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
 const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
+const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 
@@ -1529,6 +1530,42 @@ describe('codex skills-kind destination: home override (#2911)', () => {
     });
   });
 
+  test('#6331: codex + global: applySurface re-records the manifest hash of a skill it rewrites under $HOME/.agents', (t) => {
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-codex-home-'));
+    t.after(() => cleanup(fakeHome));
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-codex-home-dir-'));
+    t.after(() => cleanup(codexHome));
+    writePackageSourceMarkerFixture(codexHome);
+    const sha256 = (buf) => require('node:crypto').createHash('sha256').update(buf).digest('hex');
+
+    withFakeHome(fakeHome, () => {
+      const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+      writeActiveProfile(codexHome, 'core');
+      const layout = resolveRuntimeArtifactLayout('codex', codexHome, 'global');
+      const skillsKind = layout.kinds.find((k) => k.kind === 'skills');
+      applySurface(codexHome, layout, manifest, CLUSTERS);
+      const skillsRoot = runtimeArtifactInstallPlan.assertDestWithinConfigHome(path.join(fakeHome, '.agents'), skillsKind.destSubpath);
+      const stem = fs.readdirSync(skillsRoot).find((d) => d.startsWith('gsd-') && fs.existsSync(path.join(skillsRoot, d, 'SKILL.md')));
+      assert.ok(stem, 'pre-condition: a gsd-* skill staged under $HOME/.agents');
+      const skillPath = path.join(skillsRoot, stem, 'SKILL.md');
+      const current = fs.readFileSync(skillPath);
+
+      // An earlier GSD version wrote different text, and the manifest recorded it.
+      const OLD = 'older skill text\n';
+      fs.writeFileSync(skillPath, OLD);
+      const key = `skills/${stem}/SKILL.md`;
+      fs.writeFileSync(path.join(codexHome, 'gsd-file-manifest.json'), JSON.stringify({
+        manifestVersion: 2, runtime: 'codex', scope: 'global', files: { [key]: sha256(OLD) },
+      }));
+
+      applySurface(codexHome, layout, manifest, CLUSTERS);
+
+      assert.deepEqual(fs.readFileSync(skillPath), current, 'sanity: the apply rewrote the skill');
+      const recorded = JSON.parse(fs.readFileSync(path.join(codexHome, 'gsd-file-manifest.json'), 'utf8')).files[key];
+      assert.equal(recorded, sha256(current), '#6331: the skills/ key resolves to the $HOME/.agents file and records its new hash');
+    });
+  });
+
   test('codex + local: no home override — surface-apply destination is unchanged (#2911 AC3)', (t) => {
     const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2911-codex-local-'));
     t.after(() => cleanup(codexHome));
@@ -1838,5 +1875,523 @@ describe('#4211: applySurface materializes the kimi-agents kind like a fresh ins
     assert.equal(fs.existsSync(retiredYaml), false, 'a stale GSD subagent must be pruned');
     assert.equal(fs.existsSync(retiredPrompt), false, 'a stale GSD subagent prompt must be pruned');
     assert.ok(fs.existsSync(path.join(agentsDir, 'gsd.yaml')), 'the live root agent must remain');
+  });
+});
+
+// ─── #6331: surface apply keeps gsd-file-manifest.json in step with what it rewrites ──
+
+describe('#6331: applySurface re-records the install manifest (also the /gsd-surface entry)', () => {
+  const crypto = require('node:crypto');
+  const installEngine = require('../gsd-core/bin/lib/install-engine.cjs');
+  const { recordManifestFileHashes, recordManifestFileHashesResult } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+  const MANIFEST = 'gsd-file-manifest.json';
+  const FULL = { baseProfile: 'full', disabledClusters: [], explicitAdds: [], explicitRemoves: [] };
+  const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+  /**
+   * A real claude global install whose first manifest-recorded skill holds the
+   * text an earlier GSD version wrote, recorded as such in the manifest.
+   */
+  function installedWithOlderSkill(t) {
+    const installed = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
+    t.after(() => cleanup(installed.root));
+    const configDir = installed.configDir;
+    const manifestPath = path.join(configDir, MANIFEST);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const skillKeys = Object.keys(manifest.files).filter((k) => /^skills\/gsd-[^/]+\/SKILL\.md$/.test(k)).sort();
+    assert.ok(skillKeys.length >= 2, 'precondition: the install recorded at least two skills');
+    const key = skillKeys[0];
+    const skillPath = path.join(configDir, ...key.split('/'));
+    const OLD = 'older skill text\n';
+    fs.writeFileSync(skillPath, OLD);
+    manifest.files[key] = sha256(OLD);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+    const apply = () => applySurface(configDir, layout, realManifest(), CLUSTERS, undefined, { surfaceState: FULL });
+    // What the apply writes is the surface's own staging of the skill.
+    const rewritten = () => {
+      const bytes = fs.readFileSync(skillPath);
+      assert.notEqual(bytes.toString(), OLD, 'sanity: the apply rewrote the skill');
+      return sha256(bytes);
+    };
+    return { configDir, manifestPath, key, otherKey: skillKeys[1], skillPath, rewritten, apply, root: installed.root, oldHash: sha256(OLD) };
+  }
+
+  function saveLocalPatches(configDir) {
+    const saved = process.env.GSD_TEST_MODE;
+    process.env.GSD_TEST_MODE = '1';
+    const installScript = path.join(__dirname, '..', 'bin', 'install.js');
+    delete require.cache[require.resolve(installScript)];
+    const mod = require(installScript);
+    if (saved === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = saved;
+    return mod.saveLocalPatches(configDir);
+  }
+
+  test('a /gsd-surface profile apply re-records a skill GSD rewrote, so the next install backs nothing up', (t) => {
+    const fx = installedWithOlderSkill(t);
+    fx.apply();
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[fx.key], fx.rewritten(), 'the manifest records the rewritten skill');
+    assert.deepEqual(saveLocalPatches(fx.configDir), [], 'the next install reports no local patches');
+  });
+
+  test('hostile manifest keys and non-string hashes are left unmodified, and so are the files they name', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const outside = path.join(fx.root, 'outside.md');
+    fs.writeFileSync(outside, 'outside\n');
+    const manifest = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8'));
+    const hostile = {
+      '../outside.md': sha256('outside\n'),
+      [outside]: sha256('outside\n'),
+      'skills/../../outside.md': sha256('outside\n'),
+      'skills/..': 'x',
+      'skills//gsd-x/SKILL.md': 'y',
+      [fx.otherKey]: 42,
+    };
+    // Spellings of the re-staged skill's own key that a loose resolver
+    // (path.join, no segment check) maps onto the file the apply rewrites.
+    // Each holds the pre-apply hash, so only the resolver's refusal keeps it.
+    const [, skillDir, skillFile] = fx.key.split('/');
+    for (const alias of [
+      `skills/./${skillDir}/${skillFile}`,
+      `skills//${skillDir}/${skillFile}`,
+      `skills/${skillDir}/../${skillDir}/${skillFile}`,
+      `./${fx.key}`,
+    ]) hostile[alias] = fx.oldHash;
+    Object.assign(manifest.files, hostile);
+    fs.writeFileSync(fx.manifestPath, JSON.stringify(manifest, null, 2));
+    fx.apply();
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    for (const [k, v] of Object.entries(hostile)) assert.deepEqual(files[k], v, `entry ${k} is unchanged`);
+    assert.equal(fs.readFileSync(outside, 'utf8'), 'outside\n', 'the file outside the config dir is untouched');
+    assert.equal(files[fx.key], fx.rewritten(), 'the well-formed owned entry is still re-recorded');
+  });
+
+  // applySurface itself refuses such a manifest earlier (the surface source
+  // check reads it); the recorder must still never write one.
+  for (const [label, files] of [['an array', []], ['a string', 'x'], ['null', null]]) {
+    test(`a manifest whose files is ${label} is left byte-identical by the recorder`, (t) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-shape-'));
+      t.after(() => cleanup(dir));
+      const file = path.join(dir, 'a.md');
+      fs.writeFileSync(file, 'new\n');
+      const manifestPath = path.join(dir, MANIFEST);
+      fs.writeFileSync(manifestPath, JSON.stringify({ files }));
+      const before = fs.readFileSync(manifestPath);
+      assert.equal(recordManifestFileHashes(dir, [{ path: file, preHash: sha256('new\n') }]), false);
+      assert.deepEqual(fs.readFileSync(manifestPath), before);
+    });
+  }
+
+  for (const mode of [0o600, 0o664]) {
+    test(`the manifest keeps its file mode ${mode.toString(8)} when it is rewritten under umask 022`, (t) => {
+      const fx = installedWithOlderSkill(t);
+      fs.chmodSync(fx.manifestPath, mode);
+      const modeBefore = fs.statSync(fx.manifestPath).mode;
+      // 664 is the case the umask narrows on create, so only the chmod keeps it.
+      // For 600 the chmod is stubbed out, so only the create mode keeps it.
+      const savedUmask = process.umask(0o022);
+      const realChmod = fs.fchmodSync;
+      if (mode === 0o600) fs.fchmodSync = () => {};
+      try {
+        fx.apply();
+      } finally {
+        fs.fchmodSync = realChmod;
+        process.umask(savedUmask);
+      }
+      assert.equal(JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files[fx.key], fx.rewritten(), 'sanity: rewritten');
+      assert.equal(fs.statSync(fx.manifestPath).mode, modeBefore, 'the rewrite keeps the mode the manifest had');
+      if (process.platform !== 'win32') assert.equal(modeBefore & 0o777, mode, `precondition: manifest mode ${mode.toString(8)}`);
+    });
+  }
+
+  test('a sync that fails after rewriting skills still records them', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const realCopy = fs.copyFileSync;
+    fs.copyFileSync = () => { throw new Error('injected agents sync failure'); };
+    try {
+      assert.throws(() => fx.apply(), /injected agents sync failure/);
+    } finally {
+      fs.copyFileSync = realCopy;
+    }
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[fx.key], fx.rewritten(), 'the skill rewritten before the failure is recorded');
+  });
+
+  test('recordManifestFileHashes writes nothing when the manifest changed on disk after it was read', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-cas-'));
+    t.after(() => cleanup(dir));
+    const manifestPath = path.join(dir, MANIFEST);
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'old\n');
+    fs.writeFileSync(manifestPath, JSON.stringify({ files: { 'a.md': sha256('old\n') } }));
+    const preHash = sha256('old\n');
+    fs.writeFileSync(file, 'new\n');
+    const concurrent = JSON.stringify({ files: { 'a.md': 'written by a concurrent install' } });
+    const realStat = fs.statSync;
+    fs.statSync = (p, ...rest) => {
+      if (p === manifestPath) fs.writeFileSync(manifestPath, concurrent);
+      return realStat(p, ...rest);
+    };
+    let wrote;
+    try {
+      wrote = recordManifestFileHashes(dir, [{ path: file, preHash }]);
+    } finally {
+      fs.statSync = realStat;
+    }
+    assert.equal(wrote, false);
+    assert.equal(fs.readFileSync(manifestPath, 'utf8'), concurrent, 'the concurrent install\'s manifest stands');
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.includes('.tmp.')), [], 'no temp file is left');
+  });
+
+  test('a surface apply that loses the race to a concurrent install says so', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const base = fs.readFileSync(fx.manifestPath, 'utf8');
+    // Every stat of the manifest is followed by a concurrent install's write,
+    // so whatever the recorder read has changed by the time it checks.
+    let concurrent = base;
+    let writes = 0;
+    const realStat = fs.statSync;
+    const realWrite = process.stderr.write;
+    let stderr = '';
+    fs.statSync = (p, ...rest) => {
+      if (p === fx.manifestPath) {
+        concurrent = base + '\n'.repeat(++writes);
+        fs.writeFileSync(fx.manifestPath, concurrent);
+      }
+      return realStat(p, ...rest);
+    };
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    try {
+      fx.apply();
+    } finally {
+      fs.statSync = realStat;
+      process.stderr.write = realWrite;
+    }
+    assert.equal(fs.readFileSync(fx.manifestPath, 'utf8'), concurrent, 'the concurrent manifest stands');
+    assert.match(stderr, /gsd-file-manifest\.json changed while skills were re-staged/, 'the apply names the lost record');
+  });
+
+  test('recordManifestFileHashesResult says why it did or did not write', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-result-'));
+    t.after(() => cleanup(dir));
+    const manifestPath = path.join(dir, MANIFEST);
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'new\n');
+    assert.equal(recordManifestFileHashesResult(dir, []), 'unchanged');
+    assert.equal(recordManifestFileHashesResult(dir, [{ path: file, preHash: sha256('old\n') }]), 'unavailable', 'no manifest');
+    fs.writeFileSync(manifestPath, JSON.stringify({ files: { 'a.md': 'someone else' } }));
+    assert.equal(recordManifestFileHashesResult(dir, [{ path: file, preHash: sha256('old\n') }]), 'unchanged', 'not GSD-owned');
+    fs.writeFileSync(manifestPath, JSON.stringify({ files: { 'a.md': sha256('old\n') } }));
+    assert.equal(recordManifestFileHashesResult(dir, [{ path: file, preHash: sha256('old\n') }]), 'written');
+  });
+
+  test('a /gsd-surface disable apply re-records the skills it re-stages too', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const stem = fx.key.split('/')[1].replace(/^gsd-/, '');
+    const cluster = Object.keys(CLUSTERS).find((c) => !CLUSTERS[c].includes(stem));
+    assert.ok(cluster, 'precondition: a cluster that does not hold the rewritten skill');
+    const layout = resolveRuntimeArtifactLayout('claude', fx.configDir, 'global');
+    const surfaceState = { ...FULL, disabledClusters: [cluster] };
+    applySurface(fx.configDir, layout, realManifest(), CLUSTERS, undefined, { surfaceState });
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[fx.key], fx.rewritten(), 'the manifest records the rewritten skill');
+    assert.deepEqual(saveLocalPatches(fx.configDir), [], 'the next install reports no local patches');
+  });
+
+  test('a drive-relative key on another drive (X:foo) is refused on Windows by the containment check', { skip: process.platform !== 'win32' && 'win32 path semantics' }, (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-drive-'));
+    t.after(() => cleanup(root));
+    // normalizeInstallRelativePath lets X:foo through (not absolute, no bad
+    // segment). For another drive, path.resolve takes it to that drive's cwd,
+    // outside root; for root's own drive it stays under root.
+    const own = root[0].toUpperCase();
+    const other = own === 'Z' ? 'Y' : 'Z';
+    assert.equal(installEngine.normalizeInstallRelativePath(`${other}:foo`), `${other}:foo`, 'precondition: the segment check alone accepts it');
+    assert.equal(installEngine.resolveInstallRelativePath(root, `${other}:foo`), null, 'another drive escapes root');
+    assert.equal(installEngine.resolveInstallRelativePath(root, `${own}:foo`)?.fullPath, path.join(root, 'foo'), 'the same drive stays under root');
+  });
+
+  test('a manifest key that names a FIFO under a synced destination does not hang the apply', { skip: process.platform === 'win32' && 'no mkfifo on Windows' }, (t) => {
+    const fx = installedWithOlderSkill(t);
+    const fifoKey = `${path.posix.dirname(fx.key)}/notes.md`;
+    const fifoPath = path.join(fx.configDir, ...fifoKey.split('/'));
+    const { runHook } = require('./helpers/process-seam.cjs');
+    const { throwIfFailed } = require('./helpers/git-fixture.cjs');
+    throwIfFailed(runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), `mkfifo ${fifoPath}`);
+    const manifest = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8'));
+    manifest.files[fifoKey] = sha256('fifo\n');
+    fs.writeFileSync(fx.manifestPath, JSON.stringify(manifest, null, 2));
+    // In a child: a blocking read of the FIFO would never return, and the
+    // timeout turns that hang into a failure of this row.
+    const lib = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
+    const script = `
+      const path = require('path');
+      const lib = ${JSON.stringify(lib)};
+      const { applySurface } = require(path.join(lib, 'surface.cjs'));
+      const { loadSkillsManifest } = require(path.join(lib, 'install-profiles.cjs'));
+      const { resolveRuntimeArtifactLayout } = require(path.join(lib, 'runtime-artifact-layout.cjs'));
+      const { CLUSTERS } = require(path.join(lib, 'clusters.cjs'));
+      const configDir = ${JSON.stringify(fx.configDir)};
+      const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+      applySurface(configDir, layout, loadSkillsManifest(${JSON.stringify(REAL_COMMANDS_DIR)}), CLUSTERS, undefined,
+        { surfaceState: ${JSON.stringify(FULL)} });
+      process.stdout.write('applied');
+    `;
+    const { runNode } = require('./helpers/process-seam.cjs');
+    // SIGKILL: the child installs SIGTERM handlers it cannot run while blocked.
+    const r = runNode(['-e', script], { timeoutMs: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL', env: process.env });
+    assert.equal(r.timedOut, false, `the apply returned: ${r.summary}`);
+    assert.equal(r.exitCode, 0, r.summary);
+    assert.equal(r.stdout, 'applied');
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[fifoKey], sha256('fifo\n'), 'the FIFO entry is left as recorded');
+    assert.equal(files[fx.key], fx.rewritten(), 'the rewritten skill is still re-recorded');
+  });
+
+  test('a recorded file outside the synced destinations keeps its entry even if it changes during the apply', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const before = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    const outsideKey = Object.keys(before).find((k) => k.startsWith('gsd-core/') && k.endsWith('.md'));
+    assert.ok(outsideKey, 'precondition: a recorded file outside skills/ and agents/');
+    const outsidePath = path.join(fx.configDir, ...outsideKey.split('/'));
+    assert.equal(sha256(fs.readFileSync(outsidePath)), before[outsideKey], 'precondition: GSD-owned');
+    // The file changes after its pre-apply hash would be taken and before the
+    // recorder re-hashes: when the recorder reads the manifest.
+    const realRead = fs.readFileSync;
+    let changed = false;
+    fs.readFileSync = (p, ...rest) => {
+      if (!changed && p === fx.manifestPath && new Error().stack.includes('recordManifestFileHashesResult')) {
+        changed = true;
+        fs.writeFileSync(outsidePath, 'changed outside the sync\n');
+      }
+      return realRead(p, ...rest);
+    };
+    try {
+      fx.apply();
+    } finally {
+      fs.readFileSync = realRead;
+    }
+    assert.ok(changed, 'precondition: the recorder ran');
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[outsideKey], before[outsideKey], 'the outside entry is not re-recorded');
+    assert.equal(files[fx.key], fx.rewritten(), 'the rewritten skill is re-recorded');
+  });
+
+  test('the manifest tmp file is created exclusively: a symlink at its path is never written or chmodded through', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, (t) => {
+    const fx = installedWithOlderSkill(t);
+    const victim = path.join(fx.root, 'victim.txt');
+    fs.writeFileSync(victim, 'victim\n', { mode: 0o600 });
+    fs.chmodSync(victim, 0o600);
+    fs.chmodSync(fx.manifestPath, 0o644);
+    const before = fs.readFileSync(fx.manifestPath, 'utf8');
+    // Pin the random suffix so the test can plant a symlink at the exact tmp
+    // path; an exclusive create then refuses it instead of following it.
+    const crypto = require('node:crypto');
+    const realRandom = crypto.randomBytes;
+    crypto.randomBytes = (n) => Buffer.alloc(n, 0xab);
+    const planted = `${fx.manifestPath}.tmp.${process.pid}.${'ab'.repeat(8)}`;
+    fs.symlinkSync(victim, planted);
+    try {
+      fx.apply();
+    } finally {
+      crypto.randomBytes = realRandom;
+    }
+    assert.equal(fs.readFileSync(victim, 'utf8'), 'victim\n', 'the symlink target is not written');
+    if (process.platform !== 'win32') assert.equal(fs.statSync(victim).mode & 0o777, 0o600, 'the symlink target keeps its mode');
+    assert.equal(fs.lstatSync(planted).isSymbolicLink(), true, 'the planted path is left as it was, not removed');
+    assert.equal(fs.readFileSync(fx.manifestPath, 'utf8'), before, 'nothing is recorded through the planted path');
+  });
+
+  for (const planted of ['a symlink', 'a directory']) {
+    test(`${planted} at the old predictable tmp path does not block the record`, { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, (t) => {
+      const fx = installedWithOlderSkill(t);
+      const victim = path.join(fx.root, 'victim.txt');
+      fs.writeFileSync(victim, 'victim\n');
+      const oldTmp = `${fx.manifestPath}.tmp.${process.pid}`;
+      if (planted === 'a symlink') fs.symlinkSync(victim, oldTmp);
+      else fs.mkdirSync(path.join(oldTmp, 'inner'), { recursive: true });
+      fx.apply();
+      assert.equal(JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files[fx.key], fx.rewritten(), 'the record lands');
+      assert.equal(fs.readFileSync(victim, 'utf8'), 'victim\n', 'the symlink target is not written');
+      // `<manifest>.tmp.<pid>.<hex>` is this record's tmp name; the planted `<manifest>.tmp.<pid>` stays.
+      const leftovers = fs.readdirSync(fx.configDir).filter((n) => n.startsWith(`${MANIFEST}.tmp.${process.pid}.`));
+      assert.deepEqual(leftovers, [], 'no tmp file of this record is left behind');
+    });
+  }
+
+  test('tryFileHash hashes a regular file exactly as fileHash does, across chunk boundaries', (t) => {
+    const { fileHash, tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-hash-'));
+    t.after(() => cleanup(dir));
+    const MiB = 1024 * 1024;
+    for (const size of [0, 1, MiB - 1, MiB, MiB + 1, 3 * MiB + 7, 17 * MiB]) {
+      const file = path.join(dir, `f-${size}`);
+      const bytes = Buffer.alloc(size);
+      for (let i = 0; i < size; i += 4093) bytes[i] = (i / 4093) & 0xff;
+      fs.writeFileSync(file, bytes);
+      assert.equal(tryFileHash(file), fileHash(file), `${size} bytes`);
+    }
+    assert.equal(tryFileHash(dir), null, 'a directory is not hashed');
+    assert.equal(tryFileHash(path.join(dir, 'missing')), null, 'a missing file is not hashed');
+    // A character device reads like an empty file; only the type check refuses it.
+    if (process.platform !== 'win32') assert.equal(tryFileHash('/dev/null'), null, 'a device is not hashed');
+  });
+
+  test('a record that cannot write (randomBytes throws) is reported, and never throws out of the apply', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const before = fs.readFileSync(fx.manifestPath, 'utf8');
+    const crypto = require('node:crypto');
+    const realRandom = crypto.randomBytes;
+    const realWrite = process.stderr.write;
+    let stderr = '';
+    crypto.randomBytes = () => { throw new Error('injected: no entropy'); };
+    process.stderr.write = (chunk) => { stderr += String(chunk); return true; };
+    try {
+      assert.doesNotThrow(() => fx.apply());
+    } finally {
+      crypto.randomBytes = realRandom;
+      process.stderr.write = realWrite;
+    }
+    assert.equal(fs.readFileSync(fx.manifestPath, 'utf8'), before, 'nothing is recorded');
+    assert.match(stderr, /gsd-file-manifest\.json could not be read or written after skills were re-staged/, 'the lost record is named');
+  });
+
+  test('a file that grows while tryFileHash reads it is not hashed', (t) => {
+    const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-grow-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'x'.repeat(4096));
+    // The first fstat reports the size before the growth; the check after the
+    // read sees the real, larger size.
+    const realFstat = fs.fstatSync;
+    let calls = 0;
+    fs.fstatSync = (fd, ...rest) => {
+      const st = realFstat(fd, ...rest);
+      if (++calls > 1) return st;
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: st.size - 100 });
+    };
+    try {
+      assert.equal(tryFileHash(file), null);
+    } finally {
+      fs.fstatSync = realFstat;
+    }
+  });
+
+  test('a file that is shorter than fstat reports ends the read and is not hashed', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-shrink-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'y'.repeat(3000));
+    // In a child, with fstat stubbed to report 10 bytes more than the file
+    // holds: a read loop without its end-of-file exit would never return.
+    const lib = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'install-manifest-record.cjs');
+    const script = `
+      const fs = require('fs');
+      const realFstat = fs.fstatSync;
+      fs.fstatSync = (fd, ...rest) => {
+        const st = realFstat(fd, ...rest);
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: st.size + 10 });
+      };
+      const { tryFileHash } = require(${JSON.stringify(lib)});
+      const h = tryFileHash(${JSON.stringify(file)});
+      fs.fstatSync = realFstat;
+      process.stdout.write(JSON.stringify({ h }));
+    `;
+    const { runNode } = require('./helpers/process-seam.cjs');
+    const r = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS, killSignal: 'SIGKILL' });
+    assert.equal(r.timedOut, false, `the read returned: ${r.summary}`);
+    assert.equal(r.exitCode, 0, r.summary);
+    // An early end of file means the file changed while it was read, so no
+    // partial hash is returned, even when the size is back to what fstat said.
+    assert.deepEqual(JSON.parse(r.stdout), { h: null });
+  });
+
+  test('every descriptor the recorder and tryFileHash open is closed', (t) => {
+    const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-fds-'));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, 'new\n');
+    fs.writeFileSync(path.join(dir, MANIFEST), JSON.stringify({ files: { 'a.md': sha256('old\n') } }));
+    const open = new Set();
+    const realOpen = fs.openSync;
+    const realClose = fs.closeSync;
+    fs.openSync = (...args) => { const fd = realOpen(...args); open.add(fd); return fd; };
+    fs.closeSync = (fd) => { open.delete(fd); return realClose(fd); };
+    try {
+      assert.equal(recordManifestFileHashesResult(dir, [{ path: file, preHash: sha256('old\n') }]), 'written');
+      assert.notEqual(tryFileHash(file), null);
+      assert.equal(tryFileHash(dir), null);
+    } finally {
+      fs.openSync = realOpen;
+      fs.closeSync = realClose;
+    }
+    assert.deepEqual([...open], [], 'no descriptor is left open');
+  });
+
+  test('manifestSkillsRedirect takes the first skills kind, as the installer does', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-kinds-'));
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, 'cfg');
+    const layout = {
+      kinds: [
+        { kind: 'agents', home: path.join(root, 'agents-home'), destSubpath: 'agents' },
+        { kind: 'skills', home: path.join(root, 'first'), destSubpath: 'skills' },
+        { kind: 'skills', home: path.join(root, 'second'), destSubpath: 'skills' },
+      ],
+    };
+    const redirect = installEngine.manifestSkillsRedirect('codex', layout, configDir);
+    assert.equal(redirect.root, path.join(root, 'first', 'skills'), 'the first skills kind is the redirect root');
+  });
+
+  test('resolveManifestKeyPath: config dir first, redirect fallback, hostile and symlinked keys refused', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-resolve-'));
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, 'cfg');
+    const skillsRoot = path.join(root, 'agents-skills');
+    fs.mkdirSync(path.join(configDir, 'skills', 'gsd-a'), { recursive: true });
+    fs.mkdirSync(path.join(skillsRoot, 'gsd-b'), { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'skills', 'gsd-a', 'SKILL.md'), 'a');
+    fs.writeFileSync(path.join(skillsRoot, 'gsd-b', 'SKILL.md'), 'b');
+    const redirect = { root: skillsRoot, prefix: 'skills/' };
+    const r = (key) => installEngine.resolveManifestKeyPath(configDir, key, redirect);
+    assert.equal(r('skills/gsd-a/SKILL.md').fullPath, path.join(configDir, 'skills', 'gsd-a', 'SKILL.md'));
+    assert.equal(r('skills/gsd-b/SKILL.md').fullPath, path.join(skillsRoot, 'gsd-b', 'SKILL.md'));
+    assert.equal(r('skills/gsd-b/SKILL.md').relPath, 'skills/gsd-b/SKILL.md', 'the key stays the manifest key');
+    for (const bad of [
+      '../x', path.join(root, 'x'), 'skills/..', 'skills/../../x', '', 'a\0b', 42,
+      'skills\\..\\..\\x', '..\\x', 'C:\\x', 'C:/x', '\\x', '\\\\server\\share\\x',
+    ]) {
+      assert.equal(r(bad), null, `hostile key ${String(bad)} is refused`);
+    }
+    if (process.platform !== 'win32') {
+      fs.mkdirSync(path.join(root, 'elsewhere'));
+      fs.writeFileSync(path.join(root, 'elsewhere', 'SKILL.md'), 'x');
+      fs.symlinkSync(path.join(root, 'elsewhere'), path.join(configDir, 'skills', 'gsd-link'));
+      assert.equal(r('skills/gsd-link/SKILL.md'), null, 'a key that crosses a symlink is refused, as the installer does');
+    }
+  });
+
+  test('the installer scan and surface apply resolve every manifest key through the one shared resolver', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const keys = Object.keys(JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files);
+    const real = installEngine.resolveManifestKeyPath;
+    const seen = [];
+    installEngine.resolveManifestKeyPath = (configDir, key, redirect) => { seen.push(key); return real(configDir, key, redirect); };
+    const resolvedBy = (fn) => { seen.length = 0; fn(); return [...seen].sort(); };
+    try {
+      const byApply = resolvedBy(() => fx.apply());
+      const byScan = resolvedBy(() => saveLocalPatches(fx.configDir));
+      // A claude global apply syncs skills/ and agents/. Keys outside them are
+      // dropped on their lexical path, before the resolver's lstat walk.
+      const synced = keys.filter((k) => /^(skills|agents)\//.test(k)).sort();
+      assert.ok(synced.length > 0 && synced.length < keys.length, 'precondition: keys inside and outside the synced destinations');
+      assert.deepEqual(byApply, synced, 'surface apply resolves exactly the keys under its synced destinations');
+      assert.deepEqual(byScan, [...keys].sort(), 'the installer scan resolves each manifest key through resolveManifestKeyPath');
+    } finally {
+      installEngine.resolveManifestKeyPath = real;
+    }
   });
 });

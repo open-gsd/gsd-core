@@ -34,8 +34,12 @@ import path from 'node:path';
 import { platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 import { hostBehaviorsFor } from './runtime-name-policy.cjs';
 import { armArgsNonce, disarmArgsNonce, readInstalledNonce } from './args-terminator.cjs';
+import { recordManifestFileHashesResult, tryFileHash, type RewrittenFile } from './install-manifest-record.cjs';
+import { tryWithinRootLexical } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- install-engine is an `export =` module, which only `import x = require` can name (#6331)
+import installEngine = require('./install-engine.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import testHomeGuard = require('./real-home-guard.cjs');
 
@@ -384,6 +388,49 @@ function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]
 // ---------------------------------------------------------------------------
 
 /**
+ * #6331: the install manifest entries for files under the destinations a
+ * surface apply is about to sync, each with its pre-sync hash, for
+ * recordManifestFileHashes. Keys resolve through resolveManifestKeyPath, the
+ * resolver the installer's local-patch scan uses, so a hostile key, a symlink
+ * and a Codex skills root outside the config dir are handled the same way.
+ * Empty when the manifest is absent or not the documented shape.
+ */
+function manifestEntriesUnder(layout: Layout, kinds: readonly { dest: string }[]): RewrittenFile[] {
+  let files: unknown;
+  try {
+    files = (JSON.parse(fs.readFileSync(path.join(layout.configDir, INSTALL_MANIFEST_FILE_NAME), 'utf8')) as Record<string, unknown>)?.['files'];
+  } catch {
+    return [];
+  }
+  if (!files || typeof files !== 'object' || Array.isArray(files)) return [];
+  const redirect = installEngine.manifestSkillsRedirect(layout.runtime, layout, layout.configDir);
+  // Lexical containment: the dests are not realpath-resolved by the sync either.
+  const dests = kinds.map((k) => path.resolve(k.dest));
+  const entries: RewrittenFile[] = [];
+  for (const key of Object.keys(files)) {
+    // The destination test runs on the lexical path the key names, before the
+    // resolver's per-component lstat walk, so a key outside every synced
+    // destination costs no lstat (#6331). The redirect is chosen as the
+    // resolver chooses it: the config-dir path is missing and the redirected
+    // one exists. The resolver can still refuse a redirect that crosses a
+    // symlink and fall back to the missing config-dir path; that path has no
+    // pre-apply hash, so the recorder never writes its entry.
+    const rel = installEngine.normalizeInstallRelativePath(key);
+    if (rel === null) continue;
+    let lexical = path.resolve(layout.configDir, rel);
+    if (redirect && rel.startsWith(redirect.prefix) && !fs.existsSync(lexical)) {
+      const redirected = path.resolve(redirect.root, rel.slice(redirect.prefix.length));
+      if (fs.existsSync(redirected)) lexical = redirected;
+    }
+    if (!dests.some((d) => tryWithinRootLexical(lexical, d) !== null)) continue;
+    const ref = installEngine.resolveManifestKeyPath(layout.configDir, key, redirect);
+    if (ref === null) continue;
+    entries.push({ path: ref.fullPath, preHash: tryFileHash(ref.fullPath), key });
+  }
+  return entries;
+}
+
+/**
  * Re-stage the active surface using the resolved layout.
  * Iterates layout.kinds and syncs each artifact kind to its destination.
  */
@@ -504,8 +551,33 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
     // successfully. A missing source provider therefore leaves both artifacts
     // and the persisted surface state untouched.
     retiredArtifactCleanup.pruneRetiredRuntimeArtifacts(layout.runtime, layout.configDir);
-    for (const item of stagedKinds) {
-      _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
+    // #6331: the sync rewrites installed files the install manifest records
+    // (a capability's new skill text after `capability set`). Re-record the
+    // ones GSD still owned, as `effort sync --apply` does (#5683), or the next
+    // install reports them as local patches.
+    // Recorded in a finally: a sync that fails part-way has already rewritten
+    // files, and an entry whose file the sync did not reach re-records the
+    // hash it already has.
+    const recordedBeforeSync = manifestEntriesUnder(layout, stagedKinds);
+    try {
+      for (const item of stagedKinds) {
+        _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
+      }
+    } finally {
+      const recorded = recordManifestFileHashesResult(layout.configDir, recordedBeforeSync);
+      if (recorded === 'conflict') {
+        process.stderr.write(
+          'surface: gsd-file-manifest.json changed while skills were re-staged (a concurrent install?), '
+          + 'so their hashes were not re-recorded. The next install may report those skills as locally '
+          + 'modified and back them up to gsd-local-patches/.\n',
+        );
+      } else if (recorded === 'unavailable' && recordedBeforeSync.length > 0) {
+        process.stderr.write(
+          'surface: gsd-file-manifest.json could not be read or written after skills were re-staged, '
+          + 'so their hashes were not re-recorded. The next install may report those skills as locally '
+          + 'modified and back them up to gsd-local-patches/.\n',
+        );
+      }
     }
 
     if (hasCandidateState) {
