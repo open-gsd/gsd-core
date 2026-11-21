@@ -10,9 +10,9 @@
 
 GSD Core can route review requests to any combination of: Claude (separate session), Codex CLI, CodeRabbit, OpenCode, Qwen Code, Cursor, Antigravity CLI, Ollama, LM Studio, llama.cpp, and Kimi Code.
 
-That list is not fixed. Each of those is a declared reviewer lane, and a capability can ship its own — see [Ship a reviewer lane in your capability](ship-a-reviewer-lane.md). To see exactly which lanes your installation has, run `gsd-tools review-lane sections`.
+Each of those is a reviewer lane that ships with GSD, and `/gsd-review` selects from them. A lane installed from a capability runs through `/gsd-code-review <phase> --<flag>` instead — see [Ship a reviewer lane in your capability](ship-a-reviewer-lane.md). To see which lanes your installation has loaded, run `gsd-tools review-lane sections`.
 
-Each reviewer runs the same structured prompt against your `PLAN.md` files independently. Because different models have different blind spots, multi-reviewer consensus catches more issues than any single reviewer.
+Each reviewer that runs reviews independently; all of them except CodeRabbit (which reviews your working-tree diff) get the same structured prompt built from your `PLAN.md` files. Because different models have different blind spots, multi-reviewer consensus catches more issues than any single reviewer.
 
 **If you have no external CLIs installed yet**, install at least one:
 
@@ -68,13 +68,13 @@ GSD invokes each reviewer in sequence, collects structured feedback (Summary, St
 
 Any explicit flag overrides both the `--all` default and `review.default_reviewers` for that run.
 
-### Run every available reviewer in parallel
+### Run every available reviewer
 
 ```bash
 /gsd-review --phase 3 --all
 ```
 
-`--all` always overrides config and runs the full detected set, including any configured local model servers (Ollama, LM Studio, llama.cpp).
+`--all` always overrides config and runs the full detected set, including any configured local model servers (Ollama, LM Studio, llama.cpp). Reviewers still run one at a time unless `review.parallel_lanes` is `true`.
 
 ### Local model server reviewers
 
@@ -102,11 +102,11 @@ The `{padded_phase}-REVIEWS.md` file contains:
 
 Compare two reviewers' verdicts only after checking what actually produced each one — `models:` in the frontmatter gives the model per reviewer, and `model_sources:` gives the mechanism that recovered it.
 
-If a reviewer's entry reads `unknown`, pin it: set `review.models.<slug>` for that lane (the key suffix is not always the lane's slug — Antigravity's is `review.models.agy`) so the next run records `pinned`. See [Code-review CLI routing](../CONFIGURATION.md#code-review-cli-routing) for the full key table.
+If a reviewer's entry reads `unknown` and the lane has a model key, set that key and rerun (the key suffix is not always the lane's slug — Antigravity's is `review.models.agy`). See [Code-review CLI routing](../CONFIGURATION.md#code-review-cli-routing) for the full key table.
 
-Some `unknown` values are expected, not a bug to chase: lanes that accept no model at all (`cursor`, `qwen`, `coderabbit`), and any lane whose CLI didn't disclose one on this run. `pinned` is a certain value; `banner` and `transcript` are recovered from third-party CLI output and can degrade to `unknown` after an upstream release changes that output.
+Some `unknown` values are expected, not a bug to chase: lanes that declare no model key (`qwen`, `coderabbit`), and any lane whose CLI didn't disclose one on this run. `pinned` is a certain value; `banner` and `transcript` are recovered from third-party CLI output and can degrade to `unknown` after an upstream release changes that output.
 
-A `models:` entry like `gpt-5.6-sol (reasoning=high)` is not a formatting quirk: the `(reasoning=<level>)` suffix reflects a reasoning effort GSD itself applied to that lane, driven by your `effort.*` config — not the CLI's own default.
+A `models:` entry like `gpt-5.6-sol (reasoning=high)` is not a formatting quirk: the `(reasoning=<level>)` suffix is the reasoning effort GSD rendered onto that lane's command line, not the CLI's own default; see [Reviewer lane reasoning effort](../CONFIGURATION.md#reviewer-lane-reasoning-effort-revieweffort-4255).
 
 ---
 
