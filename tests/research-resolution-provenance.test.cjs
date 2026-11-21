@@ -7,42 +7,9 @@
  * the agent whose output the gate checks could close the gate itself. Sonnet and Haiku
  * passed such a forgery (#5438); Opus blocked it by reasoning past the text.
  *
- * ## What this suite locks
- *
- * - Dimension 11 collects every question still needing an answer or a ruling, under any heading
- *   or in prose. A cited source closes a factual question only; a Claude's Discretion area of
- *   CONTEXT.md takes a sourced recommendation; an `[ASSUMED]` fact, even unconfirmed, is not a
- *   question. It passes a question only on the provenance it accepts: every `D-NN` it cites sits
- *   under CONTEXT.md's `<decisions>`, outside Claude's Discretion, and one answers it. Only
- *   discuss-phase or the orchestrator, recording the user's answer, writes such a `D-NN`.
- *   It blocks every other question, naming the citation shapes the forgery used (none, a plan, a
- *   "disposition"), and every question when CONTEXT.md is absent. Only the no-questions case
- *   reaches PASS.
- * - Its fix_hint routes to recording a user ruling, not to writing the marker: a decision already
- *   on record is cited; otherwise the user rules, recorded by the orchestrator or by discuss-phase
- *   and a research re-run, or a source settles a factual gap.
- * - `planner-revision.md` carries the same route as a `research_resolution` strategy row, ending
- *   in `## REVISION_CONFLICT`, because the planner cannot reach the binding property itself. The
- *   shared Resolve step (`revision-loop.md`) asks the user and records each answer as a `D-NN`,
- *   so the blocker clears inside the loop. With no CONTEXT.md the user leaves the loop for discuss-phase;
- *   where no one can be asked (`--auto`, or a background or nested agent, which both of autonomous's background
- *   dispatches tell the agent it is) no answer is recorded, the planner is not re-spawned, the workflow stops at the escalation with a marker line, and autonomous never executes
- *   plans whose run carries it.
- * - verify-work's gap-closure checker skips Dimension 11: that loop has no CONTEXT.md and no route
- *   to record a ruling, so the spine and the checker prompt both scope the dimension out.
- * - Its worked examples: the PASS example cites `D-NN`; the self-resolved shape, and a real
- *   `D-NN` that decides something else, are a BLOCKER example.
- * - `<success_criteria>` carries the dimension, so the checklist the agent ends on
- *   includes it.
- * - The researcher and `gsd-core/templates/research.md` forbid self-resolution, and
- *   state the rule outside the RESEARCH.md template, no part of which carries a
- *   `RESOLVED` token a model could copy into the file the checker reads. The template's
- *   Assumptions Log holds facts; a choice awaiting a ruling goes under Open Questions.
- *
- * ## What it cannot prove
- *
- * That a model acts on the text. The subject is an LLM prompt; no test here can run the
- * checker. The #5438 PR body records the before/after model runs on the issue's fixture.
+ * What it cannot prove: that a model acts on the text. The subject is an LLM prompt; no
+ * test here can run the checker. The #5438 PR body records the before/after model runs
+ * on the issue's fixture.
  */
 
 const { describe, test } = require('node:test');
