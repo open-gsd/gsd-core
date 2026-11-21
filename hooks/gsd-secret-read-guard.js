@@ -125,7 +125,8 @@
 // two characters, quotes removed, as the characters between (zshSequence:
 // `cat {-..9}env` reads `.env`), and a bare `-` in a numeric range as 0
 // (`{-..10}`), so a command with such a group is scanned a third time, as zsh
-// reads it.
+// reads it. A group left open where a `<( )`, `>( )` or extglob `@( )` runs
+// into the word (`cat {<(true),.env}`) is denied as `brace-word-unreadable`.
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
@@ -200,7 +201,7 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
+//         glob-too-complex | brace-word-unreadable | command-too-large | command-too-complex | nesting-too-deep |
 //         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
@@ -1533,8 +1534,10 @@ function braceRawWord(str, start, end, edits) {
   return out + str.slice(at, end);
 }
 
-// Whether `raw` holds an unquoted `{` that no `}` closes as a group (braceGobble), such as `{.env,`.
+// Whether `raw` holds an unquoted `{` that no `}` closes as a group (braceGobble), such as `{.env,`. The word goes
+// on past `raw`, so a lone `{` (which braceGobble passes over as a word of its own) is open too.
 function braceGroupOpen(raw, reading) {
+  if (raw === '{') return true;
   for (let i = 0; ;) {
     const c = braceGobble(raw, i, '{', reading);
     if (c === -1) return false;
@@ -1547,7 +1550,7 @@ function braceGroupOpen(raw, reading) {
 // quote removal; undefined when it makes the word itself; BRACE_PAST_BUDGET when it makes more than
 // MAX_GLOB_ALTERNATIVES words that are harmless where they stand (braceCannotNameSecret), so the word is judged
 // as written if the scan finds it in a place they cannot shift a verdict from (braceWordInPlace); null when it
-// makes more than that otherwise, or an alternative that does not read back as one word. Each alternative is read back by
+// makes more than that otherwise; BRACE_UNREADABLE when an alternative does not read back as one word. Each alternative is read back by
 // tokenize, behind a letter so a leading `#` or a lone brace stays word text; an empty one is no word, as in bash.
 function braceWords(raw, reading) {
   const shell = bracesSpliced;
@@ -1564,7 +1567,7 @@ function braceWords(raw, reading) {
     for (const alt of alts) {
       if (alt === '') continue;
       const { tokens } = tokenize(`x${alt}`, reading);
-      if (tokens.length !== 1 || tokens[0].kind !== 'word') return null;
+      if (tokens.length !== 1 || tokens[0].kind !== 'word') return BRACE_UNREADABLE;
       words.push({ text: tokens[0].text.slice(1), quoted: tokens[0].quoted });
     }
   } finally {
@@ -1654,6 +1657,8 @@ function braceConcat(a, b) {
 }
 
 const BRACE_PAST_BUDGET = Symbol('past the brace budget');
+// A word whose brace groups cannot be read word by word (braceWords, tokenize): `brace-word-unreadable`.
+const BRACE_UNREADABLE = Symbol('brace groups not readable');
 
 // Nothing made: braceWords walks a word as zsh reads it only to mark the groups zsh reads apart (braceZshSeen).
 const BRACE_SHAPE = { lit: () => 0, seq: () => 0, join: () => 0, any: () => 0 };
@@ -1938,21 +1943,22 @@ function tokenize(str, reading) {
       // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
       const nul = reading === 'zsh' ? buf.indexOf('\0') : -1;
       const text = nul === -1 ? buf : buf.slice(0, nul);
+      const raw = braceOpen ? braceRawWord(str, wordStart, wordEnd, rawEdits) : '';
       // zsh reads `..` after quote removal, so a quoted dot can make a group too (`{-'..'0}`).
-      const split = braceSplit || (braceOpen && braceRawWord(str, wordStart, wordEnd, rawEdits).includes('.'));
+      const split = braceSplit || raw.includes('.');
       if (split) braceWordSeen = true;
-      const raw = split && bracesSpliced ? braceRawWord(str, wordStart, wordEnd, rawEdits) : '';
-      // bash reads a `<(…)` or `>(…)` the word runs into as part of it (`{.env,<(echo })}` is `.env` and the
-      // substitution), so a group the split here leaves open is too complex to judge.
-      const cut = raw !== '' && /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)) && braceGroupOpen(raw, reading);
-      const words = cut ? null : raw !== '' ? braceWords(raw, reading) : undefined;
+      // bash reads a `<(…)`, a `>(…)` or an extglob `@(…)` the word runs into as part of it (`{<(true),.env}` is
+      // the substitution and `.env`), so a group the split here leaves open is not read, in any scan.
+      const cut = braceOpen && (/^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)) || (str[wordEnd] === '(' && /[@!+*?]$/.test(raw)))
+        && braceGroupOpen(raw, reading);
+      const words = cut ? BRACE_UNREADABLE : split && bracesSpliced ? braceWords(raw, reading) : undefined;
       const prev = tokens[tokens.length - 1];
       if (words === undefined) {
         tokens.push({ kind: 'word', text, quoted, seg });
       } else if (words === BRACE_PAST_BUDGET) {
         tokens.push({ kind: 'word', text, quoted, seg, braceOverBudget: true });
-      } else if (words === null) {
-        if (unreadable === null) unreadable = { code: 'glob-too-complex', text };
+      } else if (words === null || words === BRACE_UNREADABLE) {
+        if (unreadable === null) unreadable = { code: words === null ? 'glob-too-complex' : 'brace-word-unreadable', text };
         tokens.push({ kind: 'word', text, quoted, seg });
       } else if (prev !== undefined && prev.kind === 'op' && !prev.dup) {
         // A redirect's target stays one word; the scan judges its alternatives where it judges the target.
@@ -3686,6 +3692,11 @@ function reasonFor(code, tool, target) {
     return `Secret read guard: the Bash word '${target}' brace-expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
       'words, and some of them could name a secret file, an option or a command, or move another word out of ' +
       'a slot the guard skips, so they cannot be checked for secret-file reads. Use fewer alternatives.';
+  }
+  if (code === 'brace-word-unreadable') {
+    return `Secret read guard: the Bash word '${target}' has a brace group that cannot be read word by word: a ` +
+      '`<( )`, `>( )` or extglob `@( )` runs into it before it closes, or one of its words does not read back as ' +
+      'one, so it cannot be checked for secret-file reads. Quote the braces, or put a space before the substitution.';
   }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
