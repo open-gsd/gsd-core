@@ -2076,6 +2076,18 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   // Fails closed: a here-string xargs reads is read as an echo of its words, escapes decoded as dash's echo does,
   // though xargs itself would hand cat `x2eenv`.
   blocks(["xargs cat <<< '\\x2eenv'"]);
+
+  // A filter stage before xargs (`head`, `sort`, …) passes on what is upstream of it in a way the scan does not
+  // compute, so from it back to the producer every stage fails closed on a mention of a secret name, as for a shell.
+  blocks([
+    'echo .env | head -1 | xargs cat',
+    'echo .env | sort | xargs cat',
+    "printf '%s\\n' .env | sort | xargs cat",
+    'echo .env | sort | uniq | xargs cat',
+    "printf '.e%s' nv | sort | xargs cat",
+    "echo .env | sort | xargs -0 sh -c 'cat \"$0\"'",
+  ]);
+  allows(['echo a.txt | sort | xargs cat', 'git ls-files | grep src | xargs cat', 'cat list.txt | sort | xargs cat']);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
