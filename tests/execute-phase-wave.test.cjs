@@ -1668,3 +1668,165 @@ describe('#6117: the stall probe counts a worktree executor\'s unmerged commits 
   });
 });
 }
+
+// A degrade from the base re-check lasts for the remaining waves of the run (#6049).
+// Each shipped shell fence runs under bash through the process seam, with `gsd_run` stubbed. The shell
+// records what it did in files under a per-test temp dir (the guard calls `gsd_run` inside `$(...)`, a
+// subshell, so a call count has to go through a file); rows assert on those parsed records.
+describe('wave base re-check: a degrade covers the remaining waves (#6049)', { skip: process.platform === 'win32' }, () => {
+  const { runHook } = require('./helpers/process-seam.cjs');
+  const { createTempDir } = require('./helpers.cjs');
+  const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const REFS = path.join(__dirname, '..', 'gsd-core', 'references');
+
+  // Both references carry exactly one bash fence: that fence is the shipped step, located by the fence
+  // scanner and a count rather than by searching the text for a marker.
+  function onlyBashFence(file) {
+    const lines = splitLines(fs.readFileSync(path.join(REFS, file), 'utf-8'));
+    const fences = scanFencedBlocks(lines).filter(b => b.closeLineIdx !== -1 && b.infoString.trim() === 'bash');
+    assert.equal(fences.length, 1, `${file} must carry exactly one bash fence`);
+    return lines.slice(fences[0].openLineIdx + 1, fences[0].closeLineIdx).join('\n');
+  }
+
+  const STEPS = [
+    { name: 'wave guard (step 0.5)', script: onlyBashFence('execute-phase-wave-guard.md') },
+    { name: 'between-wave reset (step 7c)', script: onlyBashFence('execute-phase-between-wave-reset.md') },
+  ];
+
+  // Runs `script` once per wave. The stub answers shouldDegrade with `true` from wave `degradeFrom` on
+  // (`false` before it), or fails every call when `failing` is set. Returns one record per wave.
+  function runWaves(t, script, waves, { degradeFrom = 1, failing = false, isolation = 'harness-worktree', useWorktrees = 'true' } = {}) {
+    const dir = createTempDir('gsd-wave-degrade-');
+    t.after(() => cleanup(dir));
+    const prelude = [
+      'gsd_run() {',
+      '  printf "%s\\n" "$N" >> "$STATE_DIR/calls"',
+      '  [ "$FAILING" = 1 ] && return 1',
+      '  case "$*" in',
+      '    *shouldDegrade*) if [ "$N" -ge "$DEGRADE_FROM" ]; then echo true; else echo false; fi;;',
+      '    *) echo stub-base-check-message;;',
+      '  esac',
+      '}',
+      `ISOLATION=${isolation}`,
+      `USE_WORKTREES=${useWorktrees}`,
+    ].join('\n');
+    const body = [];
+    for (let n = 1; n <= waves; n++) {
+      // Each wave's own stderr/stdout go to per-wave files, so rows can assert on what the shell printed.
+      body.push(`N=${n}`, `{\n${script}\n} >"$STATE_DIR/out.${n}" 2>"$STATE_DIR/err.${n}"`, 'printf "%s %s %s %s\\n" "$N" "$ISOLATION" "$USE_WORKTREES" "${_DEGRADE_SCOPE:--}" >> "$STATE_DIR/state"', 'printf "%s\\n" "${_DEGRADE_NOTICE:--}" >> "$STATE_DIR/notices"');
+    }
+    const r = runHook('-c', [`${prelude}\n${body.join('\n')}`], {
+      interpreter: 'bash',
+      env: { ...process.env, STATE_DIR: dir, DEGRADE_FROM: String(degradeFrom), FAILING: failing ? '1' : '0' },
+    });
+    assert.equal(r.exitCode, 0, r.stderr);
+    const calls = splitLines(fs.readFileSync(path.join(dir, 'calls'), { encoding: 'utf-8', flag: 'a+' })).filter(Boolean);
+    const state = splitLines(fs.readFileSync(path.join(dir, 'state'), 'utf-8')).filter(Boolean).map(l => l.split(' '));
+    const notices = splitLines(fs.readFileSync(path.join(dir, 'notices'), 'utf-8')).filter(Boolean);
+    const stream = (kind, n) => fs.readFileSync(path.join(dir, `${kind}.${n}`), 'utf-8');
+    return {
+      // What the shell wrote to stderr / stdout in each wave, in wave order.
+      stderr: state.map(([n]) => stream('err', n)),
+      stdout: state.map(([n]) => stream('out', n)),
+      // The scope the step declared for its degrade ('-' while it has not degraded).
+      scopes: state.map(([, , , ...scope]) => scope.join(' ')),
+      // The degrade sentence the step built for the user, read from its variable ('-' before a degrade).
+      notices,
+      waves: state.map(([n, iso, wt]) => ({ isolation: iso, worktrees: wt, calls: calls.filter(c => c === n).length })),
+    };
+  }
+
+  const SEQUENTIAL = { isolation: 'none', worktrees: 'false' };
+  const ISOLATED = { isolation: 'harness-worktree', worktrees: 'true' };
+  const wave = (state, calls) => ({ ...state, calls });
+
+  for (const { name, script } of STEPS) {
+    describe(name, () => {
+      test('after a degrade in wave 1 the later waves skip the re-check and stay sequential', (t) => {
+        const { waves } = runWaves(t, script, 3);
+        assert.deepEqual(waves, [wave(SEQUENTIAL, 2), wave(SEQUENTIAL, 0), wave(SEQUENTIAL, 0)]);
+      });
+
+      test('a degrade in wave 2 leaves wave 1 isolated and wave 3 sequential', (t) => {
+        const { waves } = runWaves(t, script, 3, { degradeFrom: 2 });
+        assert.deepEqual(waves, [wave(ISOLATED, 1), wave(SEQUENTIAL, 2), wave(SEQUENTIAL, 0)]);
+      });
+
+      test('a base check that does not degrade keeps isolation and re-checks every wave', (t) => {
+        const { waves } = runWaves(t, script, 3, { degradeFrom: 99 });
+        assert.deepEqual(waves, [wave(ISOLATED, 1), wave(ISOLATED, 1), wave(ISOLATED, 1)]);
+      });
+
+      test('a failing base check does not degrade', (t) => {
+        const { waves } = runWaves(t, script, 2, { failing: true });
+        assert.deepEqual(waves, [wave(ISOLATED, 1), wave(ISOLATED, 1)]);
+      });
+
+      test('no check runs when worktrees are already off or isolation is not the harness worktree', (t) => {
+        const off = runWaves(t, script, 2, { useWorktrees: 'false' }).waves;
+        assert.deepEqual(off, [
+          { isolation: 'harness-worktree', worktrees: 'false', calls: 0 },
+          { isolation: 'harness-worktree', worktrees: 'false', calls: 0 },
+        ]);
+        const none = runWaves(t, script, 2, { isolation: 'none' }).waves;
+        assert.deepEqual(none, [
+          { isolation: 'none', worktrees: 'true', calls: 0 },
+          { isolation: 'none', worktrees: 'true', calls: 0 },
+        ]);
+      });
+
+      test('the degrade declares the remaining waves as its scope, and only once it degrades', (t) => {
+        assert.deepEqual(runWaves(t, script, 3, { degradeFrom: 2 }).scopes, ['-', 'remaining waves', 'remaining waves']);
+      });
+
+      test('the degrade sentence the user reads names that scope, and only once it degrades', (t) => {
+        const { scopes, notices } = runWaves(t, script, 3, { degradeFrom: 2 });
+        assert.equal(notices[0], '-');
+        // The sentence is built from the declared scope, so a literal that drifts from it fails here.
+        assert.ok(notices[1].includes(`sequential mode for ${scopes[1]}`), notices[1]);
+        assert.ok(!notices[1].includes('this wave'), notices[1]);
+      });
+
+      // What the shell actually prints (#6049 was the echo saying "for this wave"): the degrade wave's
+      // stderr carries the sentence built from the scope; the other waves print no degrade sentence;
+      // nothing goes to stdout.
+      test('the degrade sentence is printed to stderr in the degrade wave only, and stdout stays empty', (t) => {
+        const { scopes, notices, stderr, stdout } = runWaves(t, script, 3, { degradeFrom: 2 });
+        const sentence = `sequential mode for ${scopes[1]}`;
+        // The exact stderr, line by line: the base-check message then the sentence in the degrade wave,
+        // nothing in the wave that checks and does not degrade, nothing in the wave that skips the re-check.
+        // Compared as raw strings per wave, so a stray blank line fails too.
+        assert.deepEqual(stderr, ['', `stub-base-check-message\n${notices[1]}\n`, '']);
+        assert.ok(notices[1].includes(sentence), notices[1]);
+        assert.ok(!stderr[1].includes('this wave'), stderr[1]);
+        assert.deepEqual(stdout, ['', '', '']);
+      });
+    });
+  }
+
+  test('both steps declare the same degrade scope', (t) => {
+    const [guard, reset] = STEPS.map(({ script }) => runWaves(t, script, 1).scopes[0]);
+    assert.equal(guard, reset);
+    assert.notEqual(guard, '-', 'the scope is declared at all');
+  });
+
+  // The step 0.5 paragraph that follows the fence states the lifetime of the degrade. Read it from the
+  // markdown structure (the first paragraph after the fence) and check it names the scope the fence declares,
+  // so the prose and the shell cannot drift apart unnoticed.
+  test('the step 0.5 paragraph after the fence states the scope the fence declares', (t) => {
+    const lines = splitLines(fs.readFileSync(path.join(REFS, 'execute-phase-wave-guard.md'), 'utf-8'));
+    const fence = scanFencedBlocks(lines).find(b => b.closeLineIdx !== -1 && b.infoString.trim() === 'bash');
+    const rest = lines.slice(fence.closeLineIdx + 1);
+    const start = rest.findIndex(l => l.trim() !== '');
+    assert.notEqual(start, -1, 'a paragraph follows the fence');
+    const next = rest.findIndex((l, i) => i > start && l.trim() === '');
+    const paragraph = rest.slice(start, next === -1 ? rest.length : next).join(' ');
+    const scope = runWaves(t, STEPS[0].script, 1).scopes[0];
+    assert.ok(paragraph.includes(`**${scope}**`), `the paragraph after the fence must bold the scope "${scope}"`);
+    // The old claim must not survive in this paragraph or any other paragraph of the reference.
+    const whole = lines.join(' ').replace(/\s+/g, ' ');
+    const STALE_CLAIM = /\b(?:this|current|next) wave (?:only|alone)\b|\bjust (?:this|the current|the next) wave\b|\bper[- ]wave\b|\bre[- ]?enabl/i;
+    assert.ok(!STALE_CLAIM.test(whole),'the reference must not say a degrade is per wave or that later waves re-enable isolation');
+  });
+});

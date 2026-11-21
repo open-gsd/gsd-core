@@ -15,8 +15,8 @@ When you run `/gsd-execute-phase` or `/gsd-quick` on a branch that is ahead of t
 ```
 ⚠ Worktree base mismatch: HEAD (abc12345) differs from origin/HEAD (def67890).
 Running this phase sequentially on the main working tree. Parallel worktrees
-return once HEAD is merged/pushed so origin/HEAD matches it, or set
-worktree.baseRef:"head" to fork worktrees from HEAD instead (honored by
+can return in a later run once HEAD is merged/pushed so origin/HEAD matches it,
+or set worktree.baseRef:"head" to fork worktrees from HEAD instead (honored by
 GSD-created worktrees and by the Claude Code harness; #683, #4588).
 ```
 
