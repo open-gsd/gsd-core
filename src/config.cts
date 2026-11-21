@@ -18,7 +18,9 @@ import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, NESTED_TWINS, resolvePlannerStallDetectionEnabled, _getGlobalTwinValue } = configLoader;
+const {
+  CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, NESTED_TWINS, resolvePlannerStallDetectionEnabled, _getGlobalTwinValue,
+} = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -959,6 +961,44 @@ function setsValue(value: unknown): boolean {
 }
 
 /**
+ * Settings that are a scalar or a section: the CONFIG_KEY_ALIASES entries whose
+ * field lives under the flat key itself. `parallelization` is a boolean, or an
+ * object whose `enabled` field holds it.
+ */
+const SCALAR_OR_SECTION = CONFIG_KEY_ALIASES
+  .filter(({ key, section }) => section === key)
+  .map(({ key, field }) => ({ key, field }));
+
+const isScalarValue = (value: unknown): boolean => value !== undefined && value !== null && !isPlainObject(value);
+
+/**
+ * `store` and `patch` with each scalar-or-section setting in one shape where
+ * they differ, so the merge keeps what the scalar meant: a stored scalar under
+ * a patch that sets a section field is read as `{ <field>: scalar }`, and a
+ * saved scalar over a stored section is saved as its `<field>`. A stored
+ * `parallelization: false` then stays `enabled: false` beside a saved
+ * `max_concurrent_agents`, `{"enabled":null}` clears it, and a saved `true`
+ * keeps a stored section's other fields (#5681).
+ */
+function alignScalarSections(
+  store: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): { store: Record<string, unknown>; patch: Record<string, unknown> } {
+  let alignedStore = store;
+  let alignedPatch = patch;
+  for (const { key, field } of SCALAR_OR_SECTION) {
+    const stored = store[key];
+    const given = patch[key];
+    if (isScalarValue(stored) && isPlainObject(given) && setsValue(given)) {
+      alignedStore = { ...alignedStore, [key]: { [field]: stored } };
+    } else if (isPlainObject(stored) && isScalarValue(given)) {
+      alignedPatch = { ...alignedPatch, [key]: { [field]: given } };
+    }
+  }
+  return { store: alignedStore, patch: alignedPatch };
+}
+
+/**
  * Deep-merge `patch` into the global defaults `base`: objects merge key by key,
  * a null removes the key (as `config-set <key> null` clears one), and anything
  * else replaces. A patch that sets nothing under a key leaves what is stored
@@ -975,10 +1015,10 @@ function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<st
       // Nothing under this key is set: the stored value stays, untouched.
       continue;
     } else if (isPlainObject(value)) {
-      // A section patch. Over a stored non-object (`parallelization: false`,
-      // a boolean or an object whose `enabled` holds it) it is merged into
-      // nothing, and replaces the stored value only if it sets something: a
-      // `{"enabled":{}}` read as the default would turn a stored `false` on (#5681).
+      // A section patch. Over a stored non-object it is merged into nothing,
+      // and replaces the stored value only if it sets something. A stored
+      // scalar-or-section setting reaches here already in section form
+      // (alignScalarSections), so its scalar is kept as the section's field.
       const stored = merged[key];
       const section = mergeIntoGlobalDefaults(isPlainObject(stored) ? stored : {}, value);
       if (Object.keys(section).length > 0) merged[key] = section;
@@ -1074,7 +1114,10 @@ function cmdConfigSaveDefaults(cwd: string, settingsJson: string | undefined, ra
   // own result: it is added to that result's one error line.
   let outcome: { created: boolean } | { message: string; reason: ErrorReasonValue };
   try {
-    outcome = updateDefaultsStore(defaultsPath, (existing) => mergeIntoGlobalDefaults(dropShadowedSpellings(existing, patch), patch));
+    outcome = updateDefaultsStore(defaultsPath, (existing) => {
+      const aligned = alignScalarSections(existing, patch);
+      return mergeIntoGlobalDefaults(dropShadowedSpellings(aligned.store, aligned.patch), aligned.patch);
+    });
   } catch (err) {
     try {
       release();

@@ -4237,7 +4237,6 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     ['{"enabled":{}} over a stored parallelization: true', { parallelization: true }, { parallelization: { enabled: {} } }],
     ['{"branching_strategy":{}} over a stored scalar git', { git: 'x' }, { git: { branching_strategy: {} } }],
     ['{"gsd-planner":{}} over a stored empty model_overrides', { model_overrides: {} }, { model_overrides: { 'gsd-planner': {} } }],
-    ['{"enabled":null} over a stored parallelization: false', { parallelization: false }, { parallelization: { enabled: null } }],
   ]) {
     test(`a save of ${label} leaves the store as it was`, (t) => {
       const { save, read } = store(t, before);
@@ -4251,6 +4250,39 @@ describe('#5681 regression: config-save-defaults merges into the global defaults
     const { save, read } = store(t, { parallelization: true });
     assert.ok(save({ parallelization: { enabled: false } }).success);
     assert.deepStrictEqual(read(), { parallelization: { enabled: false } });
+  });
+
+  // parallelization is a boolean, or an object whose `enabled` holds it. Where
+  // the stored value and the saved one differ in shape, the boolean is merged
+  // as `enabled`, so neither a section field nor a boolean turns the stored
+  // setting over, and a null `enabled` clears a stored boolean.
+  for (const [label, before, settings, after] of [
+    ['a section field over a stored false', { parallelization: false }, { parallelization: { max_concurrent_agents: 3 } }, { parallelization: { enabled: false, max_concurrent_agents: 3 } }],
+    ['a section field over a stored true', { parallelization: true }, { parallelization: { max_concurrent_agents: 3 } }, { parallelization: { enabled: true, max_concurrent_agents: 3 } }],
+    ['{"enabled":null} over a stored false', { parallelization: false }, { parallelization: { enabled: null } }, {}],
+    ['{"enabled":null} over a stored true', { parallelization: true }, { parallelization: { enabled: null } }, {}],
+    ['true over a stored section', { parallelization: { enabled: false, max_concurrent_agents: 3 } }, { parallelization: true }, { parallelization: { enabled: true, max_concurrent_agents: 3 } }],
+    ['false over a stored section without enabled', { parallelization: { max_concurrent_agents: 3 } }, { parallelization: false }, { parallelization: { max_concurrent_agents: 3, enabled: false } }],
+    ['null over a stored section', { parallelization: { enabled: false, max_concurrent_agents: 3 } }, { parallelization: null }, {}],
+  ]) {
+    test(`parallelization: a save of ${label} keeps what the stored value meant`, (t) => {
+      const { save, read } = store(t, { model_profile: 'quality', ...before });
+      const result = save(settings);
+      assert.ok(result.success, result.error);
+      assert.deepStrictEqual(read(), { model_profile: 'quality', ...after });
+    });
+  }
+
+  test('parallelization: a section field saved over a stored false still resolves to false', (t) => {
+    const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const { gsdHome, save } = store(t, { parallelization: false });
+    assert.ok(save({ parallelization: { max_concurrent_agents: 3 } }).success);
+    const outside = tempProject(t);
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.strictEqual(loaded.parallelization, false);
   });
 
   test('a saved {} leaves a stored parallelization: false resolving to false', (t) => {

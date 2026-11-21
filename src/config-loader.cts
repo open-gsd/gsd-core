@@ -250,6 +250,18 @@ function _getGlobalTwinValue(
   return fallback === undefined || fallback === null || typeof nested === typeof fallback ? nested : undefined;
 }
 
+/**
+ * The `parallelization` setting a config gives: a boolean as it is, an object's
+ * `enabled` field when it has one, else the default. Both branches of the
+ * loader resolve it this way, so a `{"enabled":false,…}` in `defaults.json` is
+ * off outside a project as it is in one (#5681).
+ */
+function resolveParallelization(val: unknown): unknown {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'object' && val !== null && 'enabled' in val) return (val as Record<string, unknown>)['enabled'];
+  return _getConfigDefault('parallelization');
+}
+
 const CONFIG_DEFAULTS = {
   model_profile: _getConfigDefault('model_profile'),
   commit_docs: _getConfigDefault('commit_docs'),
@@ -1057,12 +1069,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       return _getConfigValue(parsed, key, { section, field });
     };
 
-    const parallelization = (() => {
-      const val = getAliased('parallelization');
-      if (typeof val === 'boolean') return val;
-      if (typeof val === 'object' && val !== null && 'enabled' in (val)) return (val as Record<string, unknown>)['enabled'];
-      return defaults.parallelization;
-    })();
+    const parallelization = resolveParallelization(getAliased('parallelization'));
 
     const _baseConfig: Record<string, unknown> = {
       model_profile: get('model_profile') ?? defaults.model_profile,
@@ -1264,7 +1271,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
         nyquist_validation: globalGet('nyquist_validation') ?? defaults.nyquist_validation,
         post_planning_gaps: globalGet('post_planning_gaps') ?? defaults.post_planning_gaps,
         research_before_questions: globalGet('research_before_questions') ?? defaults.research_before_questions,
-        parallelization: globalGet('parallelization') ?? defaults.parallelization,
+        parallelization: resolveParallelization(globalGet('parallelization')),
         text_mode: globalGet('text_mode') ?? defaults.text_mode,
         resolve_model_ids: globalGet('resolve_model_ids') ?? defaults.resolve_model_ids,
         context_window: globalGet('context_window') ?? defaults.context_window,
