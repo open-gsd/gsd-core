@@ -4721,10 +4721,25 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
   };
   const store = defaultsHome;
 
-  test('the twin pairs are the loader\'s NESTED_TWINS plus depth/granularity', () => {
+  test('the twin pairs are the loader\'s NESTED_TWINS, and depth is retired for granularity', () => {
     const { NESTED_TWINS } = require('../gsd-core/bin/lib/config-loader.cjs');
     assert.deepStrictEqual(SPELLING_TWINS.map(([legacy, canonical]) => `${legacy}=${canonical}`),
-      [...NESTED_TWINS.map(({ key, section, field }) => `${key}=${section}.${field}`), 'depth=granularity']);
+      NESTED_TWINS.map(({ key, section, field }) => `${key}=${section}.${field}`));
+    assert.deepStrictEqual(configLib.RETIRED_SPELLINGS, [['depth', 'granularity']]);
+  });
+
+  // A save of granularity removes a stored depth, which the loader would read
+  // only while granularity is absent; depth itself is refused by the
+  // config-set rules, so it never removes a stored granularity.
+  test('saving granularity drops a stored depth, and depth is refused untouched', (t) => {
+    const { defaultsPath, save, read } = store(t, { mode: 'yolo', depth: 'quick' });
+    assert.ok(save({ granularity: {} }).success);
+    assert.deepStrictEqual(read(), { mode: 'yolo', depth: 'quick' }, 'an empty granularity sets nothing and keeps depth');
+    assert.ok(save({ granularity: 'fine' }).success);
+    assert.deepStrictEqual(read(), { mode: 'yolo', granularity: 'fine' });
+    const before = fs.readFileSync(defaultsPath, 'utf-8');
+    assertRefused(save({ depth: 'quick' }), 'config_invalid_key');
+    assert.strictEqual(fs.readFileSync(defaultsPath, 'utf-8'), before);
   });
 
   test('saving each canonical spelling drops its stale legacy spelling', (t) => {
@@ -4785,7 +4800,7 @@ describe('#5681: a save removes the other spelling of every spelling twin', () =
         }
       }
     }
-    for (const spelling of ['workflow.verifier', 'workflow.text_mode', 'granularity']) {
+    for (const spelling of ['workflow.verifier', 'workflow.text_mode', 'commit_docs']) {
       assert.ok(accepted.includes(spelling), `precondition: an empty ${spelling} is accepted (accepted: ${accepted.join(', ')})`);
     }
   });

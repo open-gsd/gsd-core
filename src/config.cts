@@ -900,15 +900,20 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
 }
 
 /**
- * Settings with a legacy spelling, as [legacy, canonical]: each flat key the
- * loader reads ahead of its nested twin (config-loader's NESTED_TWINS), and
- * `depth`, which the loader and new-project creation read only when
- * `granularity` is absent.
+ * Settings with two spellings, as [legacy, canonical]: each flat key the loader
+ * reads ahead of its nested twin (config-loader's NESTED_TWINS). A save of
+ * either spelling removes the other.
  */
-const SPELLING_TWINS: readonly (readonly [string, string])[] = [
-  ...NESTED_TWINS.map(({ key, section, field }) => [key, `${section}.${field}`] as const),
-  ['depth', 'granularity'],
-];
+const SPELLING_TWINS: readonly (readonly [string, string])[] =
+  NESTED_TWINS.map(({ key, section, field }) => [key, `${section}.${field}`] as const);
+
+/**
+ * Retired keys, as [retired, replacement]: `depth`, which the loader and
+ * new-project creation read only when `granularity` is absent. A save of the
+ * replacement removes the retired key; the `config-set` rules refuse a save of
+ * the retired key itself.
+ */
+const RETIRED_SPELLINGS: readonly (readonly [string, string])[] = [['depth', 'granularity']];
 
 /** The value at a one- or two-segment config path, or undefined. */
 function readPath(obj: Record<string, unknown>, dotted: string): unknown {
@@ -946,6 +951,9 @@ function dropShadowedSpellings(store: Record<string, unknown>, patch: Record<str
   for (const [legacy, canonical] of SPELLING_TWINS) {
     if (setsValue(readPath(patch, canonical))) result = withoutPath(result, legacy);
     if (setsValue(readPath(patch, legacy))) result = withoutPath(result, canonical);
+  }
+  for (const [retired, replacement] of RETIRED_SPELLINGS) {
+    if (setsValue(readPath(patch, replacement))) result = withoutPath(result, retired);
   }
   return result;
 }
@@ -1002,18 +1010,15 @@ function alignScalarSections(
  * Deep-merge `patch` into the global defaults `base`: objects merge key by key,
  * a null removes the key (as `config-set <key> null` clears one), and anything
  * else replaces. A patch that sets nothing under a key leaves what is stored
- * there as it was: an empty object, at any depth, sets nothing, and neither
- * does a null for a key the stored value does not hold. A stored section the
- * patch empties is dropped.
+ * there as it was: an empty object, at any depth, sets nothing (it merges into
+ * a copy of what is stored, or into nothing), and neither does a null for a key
+ * the stored value does not hold. A stored section the patch empties is dropped.
  */
 function mergeIntoGlobalDefaults(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
   const merged: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
       delete merged[key];
-    } else if (isHollowPatch(value)) {
-      // Nothing under this key is set: the stored value stays, untouched.
-      continue;
     } else if (isPlainObject(value)) {
       // A section patch. Over a stored non-object it is merged into nothing,
       // and replaces the stored value only if it sets something. A stored
@@ -2304,6 +2309,7 @@ export = {
   DETECTED_SEARCH_INTEGRATIONS,
   mergeIntoGlobalDefaults,
   SPELLING_TWINS,
+  RETIRED_SPELLINGS,
   cmdConfigPath,
   cmdMigrateConfig,
   // Exported for programmatic use by capability-writer and tests
