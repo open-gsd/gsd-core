@@ -389,6 +389,7 @@ const DOCS_GUARD_TESTS = {
   'tests/registry-docs-approved-issue-parity.test.cjs': [
     'docs/registries/README.md',
     'docs/how-to/list-your-reviewer-lane.md',
+    'docs/how-to/ship-a-reviewer-lane.md',
     'docs/how-to/take-over-a-capability-or-eos.md',
   ],
   'tests/repo-layout.test.cjs': ['docs/contributing/bootstrap.md'],
