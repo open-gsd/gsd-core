@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
+const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { runGsdTools, runGsdToolsCaptured, cleanup, absPlanningPath, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
@@ -6383,7 +6384,8 @@ describe('planning threat-ID revision issues from fresh plans', () => {
       cwd: root,
       env: { ...process.env, GSD_TEST_TOOLS: tools, PHASE: phase, GSD_WS: workstream },
       encoding: 'utf8',
-      timeout: 30000,
+      // Bash launches the CLI and the issue projection as separate Node processes.
+      timeout: HOOK_FANOUT_TIMEOUT_MS,
     });
     assert.ifError(result.error);
     return result;
