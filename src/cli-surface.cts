@@ -49,10 +49,10 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * What `main()` consumes before dispatch (gsd-tools.cjs 5459-5680): `--cwd`,
- * `--project-dir` (also `=`-form), `--ws`, `--pick`, `--default`, `--raw`,
- * `--json-errors`, and the `=`-form-only `--exit-contract`. Help tokens are
- * honored at any position; `--version`/`-v` are always rejected.
+ * What `main()` in gsd-tools.cjs consumes before dispatch: `--cwd`,
+ * `--project-dir` and `--ws` (each also in `=`-form), `--pick`, `--default`,
+ * `--raw`, `--json-errors`, and the `=`-form-only `--exit-contract`. Help tokens
+ * are honored at any position; `--version`/`-v` are always rejected.
  */
 export const GLOBAL_FLAGS: GlobalFlags = deepFreeze({
   valueFlags: ['cwd', 'default', 'pick', 'project-dir', 'ws'],
