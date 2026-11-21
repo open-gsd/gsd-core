@@ -36,8 +36,7 @@ PHASE=$(echo "$GSD_ARGS" | grep -oE '[0-9]+[A-Z]?(\.[0-9]+)*' | head -1)
 MAX_CYCLES=$(echo "$GSD_ARGS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
 if [ -z "$MAX_CYCLES" ]; then MAX_CYCLES=3; fi
 
-GSD_WS=""
-echo "$GSD_ARGS" | grep -qE '\-\-ws\s+\S+' && GSD_WS=$(echo "$GSD_ARGS" | grep -oE '\-\-ws\s+\S+')
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 ```
 
 ## 1.5. Config Gate (feature disabled by default)
@@ -489,8 +488,12 @@ unresolvable conflict escalates rather than deadlocking.
 
 **If HIGH_COUNT == 0 and ACTIONABLE_COUNT == 0 and OPEN_CONFLICTS == 0 (converged):**
 
+The total recorded is the LIVE plan set at this moment (`plan_count`, `status: superseded` excluded), re-read here:
+`PLAN_COUNT` above is the physical count taken before the loop revised the plans (#6122).
+
 ```bash
-gsd_run state planned-phase --phase "${PHASE}" --name "${phase_name}" --plans "${PLAN_COUNT}"
+LIVE_PLAN_COUNT=$(gsd_run query find-phase "${PHASE}" ${GSD_WS:+--ws=${GSD_WS##* }} | jq -r '.plan_count // 0')
+gsd_run state planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE}" --name "${phase_name}" --plans "${LIVE_PLAN_COUNT}"
 ```
 
 Display:

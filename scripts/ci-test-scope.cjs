@@ -135,6 +135,7 @@ const RULES = [
     fullMatrix: true,
     tests: [
       'tests/check-env.test.cjs',
+      'tests/check-env.process.test.cjs',
       'tests/npm-integrity-gate.test.cjs', // #2758: absorbs the former tests/bug-3588-npm-audit-clean.test.cjs (folded into it by consolidation epic #1969 B6 #1975; the stale filename here was a silent coverage hole this rule never actually re-selected)
       'tests/package-manifest.test.cjs',
     ],

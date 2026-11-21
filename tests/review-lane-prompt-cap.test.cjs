@@ -22,7 +22,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
-const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, cleanup, runGsdToolsAsync } = require('./helpers.cjs');
 const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
 const {
   resolveLaneCap,
@@ -381,8 +381,8 @@ function makeProject(t, config = {}) {
   return { dir, binDir, runDir, seen, promptPath: path.join(runDir, 'gsd-review-prompt.md') };
 }
 
-function invoke(p, extraArgs = [], slug = 'claude') {
-  const r = runGsdTools(
+async function invoke(p, extraArgs = [], slug = 'claude') {
+  const r = await runGsdToolsAsync(
     ['review-lane', 'invoke', '--slug', slug, '--run-dir', p.runDir, '--repo-root', p.dir, ...extraArgs],
     p.dir,
     { PATH: `${p.binDir}${path.delimiter}${process.env.PATH}`, HOME: p.dir, USERPROFILE: p.dir },
@@ -391,8 +391,8 @@ function invoke(p, extraArgs = [], slug = 'claude') {
   return JSON.parse(r.output);
 }
 
-function plan(p, slugs) {
-  const r = runGsdTools(
+async function plan(p, slugs) {
+  const r = await runGsdToolsAsync(
     ['review-lane', 'plan', '--selected', slugs.join(','), '--run-dir', p.runDir, '--repo-root', p.dir],
     p.dir,
   );
@@ -401,9 +401,9 @@ function plan(p, slugs) {
 }
 
 describe('#4559 review-lane plan reports the derived cap', () => {
-  test('plan reports derived cap, its source and the window', { skip: POSIX_ONLY }, (t) => {
+  test('plan reports derived cap, its source and the window', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
-    const rows = plan(p, ['claude', 'codex', 'opencode', 'coderabbit']);
+    const rows = await plan(p, ['claude', 'codex', 'opencode', 'coderabbit']);
     const by = Object.fromEntries(rows.map((r) => [r.slug, r]));
     assert.equal(by.claude.promptBudget, 130000);
     assert.equal(by.claude.promptCapSource, 'context-window');
@@ -417,11 +417,11 @@ describe('#4559 review-lane plan reports the derived cap', () => {
     assert.equal(by.coderabbit.promptCapSource, 'none');
   });
 
-  test('plan reports the source of an explicit cap', { skip: POSIX_ONLY }, (t) => {
+  test('plan reports the source of an explicit cap', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t, {
       review: { max_prompt_tokens: 9000, max_prompt_tokens_per_reviewer: { codex: 5000 } },
     });
-    const by = Object.fromEntries(plan(p, ['claude', 'codex']).map((r) => [r.slug, r]));
+    const by = Object.fromEntries((await plan(p, ['claude', 'codex'])).map((r) => [r.slug, r]));
     assert.equal(by.codex.promptBudget, 5000);
     assert.equal(by.codex.promptCapSource, 'lane');
     assert.equal(by.claude.promptBudget, 9000);
@@ -430,10 +430,10 @@ describe('#4559 review-lane plan reports the derived cap', () => {
 });
 
 describe('#4559 review-lane invoke refuses a prompt over the cap', () => {
-  test('invoke refuses over-cap prompt: ok:false, stub at reviewPath, binary never spawned', { skip: POSIX_ONLY }, (t) => {
+  test('invoke refuses over-cap prompt: ok:false, stub at reviewPath, binary never spawned', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
     fs.writeFileSync(p.promptPath, lfText(CHARS_OVER));
-    const res = invoke(p);
+    const res = await invoke(p);
 
     assert.equal(res.ok, false);
     assert.equal(res.slug, 'claude');
@@ -452,59 +452,59 @@ describe('#4559 review-lane invoke refuses a prompt over the cap', () => {
     assert.equal(fs.existsSync(p.seen), false, 'the claude binary must never be spawned for a refused lane');
   });
 
-  test('boundary: cap-1 and cap run, cap+1 is refused', { skip: POSIX_ONLY }, (t) => {
+  test('boundary: cap-1 and cap run, cap+1 is refused', { skip: POSIX_ONLY }, async (t) => {
     for (const [chars, refused] of [[CHARS_UNDER, false], [CHARS_AT, false], [CHARS_OVER, true]]) {
       const p = makeProject(t);
       fs.writeFileSync(p.promptPath, lfText(chars));
-      const res = invoke(p);
+      const res = await invoke(p);
       assert.equal(res.reason === REFUSAL_REASON, refused, `${chars} chars: refused=${refused}`);
       assert.equal('refusal' in res, refused, `${chars} chars: refusal field presence`);
       assert.equal(fs.existsSync(p.seen), !refused, `${chars} chars: binary spawned=${!refused}`);
     }
   });
 
-  test('CRLF prompt: the carriage returns count toward the estimate (cap-1, cap, cap+1)', { skip: POSIX_ONLY }, (t) => {
+  test('CRLF prompt: the carriage returns count toward the estimate (cap-1, cap, cap+1)', { skip: POSIX_ONLY }, async (t) => {
     for (const [chars, refused] of [[CHARS_UNDER, false], [CHARS_AT, false], [CHARS_OVER, true]]) {
       const p = makeProject(t);
       const body = crlfText(chars);
       assert.equal(body.length, chars, 'fixture sanity');
       fs.writeFileSync(p.promptPath, body);
-      const res = invoke(p);
+      const res = await invoke(p);
       assert.equal(res.reason === REFUSAL_REASON, refused, `${chars} CRLF chars: refused=${refused}`);
       if (refused) assert.equal(res.refusal.estimatedTokens, 130001);
     }
   });
 
-  test('a prompt over a lowered window override is refused with the override as the cap', { skip: POSIX_ONLY }, (t) => {
+  test('a prompt over a lowered window override is refused with the override as the cap', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t, { review: { context_window_tokens: { claude: 1000 } } });
     fs.writeFileSync(p.promptPath, lfText(2601));
-    const res = invoke(p);
+    const res = await invoke(p);
     assert.equal(res.reason, REFUSAL_REASON);
     assert.equal(res.refusal.cap, 650);
     assert.equal(res.refusal.capSource, 'context-window');
     assert.equal(res.refusal.estimatedTokens, 651);
   });
 
-  test('a per-lane cap of 0 lets an over-window prompt run', { skip: POSIX_ONLY }, (t) => {
+  test('a per-lane cap of 0 lets an over-window prompt run', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t, { review: { max_prompt_tokens_per_reviewer: { claude: 0 } } });
     fs.writeFileSync(p.promptPath, lfText(CHARS_OVER + 4000));
-    const res = invoke(p);
+    const res = await invoke(p);
     assert.notEqual(res.reason, REFUSAL_REASON);
     assert.equal(fs.existsSync(p.seen), true, 'cap 0 means no cap: the binary runs');
   });
 
-  test('an uncapped lane is never refused, however large the prompt', { skip: POSIX_ONLY }, (t) => {
+  test('an uncapped lane is never refused, however large the prompt', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
     fs.writeFileSync(p.promptPath, lfText(CHARS_OVER + 4000));
-    const res = invoke(p, [], 'coderabbit');
+    const res = await invoke(p, [], 'coderabbit');
     assert.notEqual(res.reason, REFUSAL_REASON);
     assert.equal('refusal' in res, false);
   });
 
-  test('a missing prompt file is not a refusal: the run proceeds and the runner reports its own error', { skip: POSIX_ONLY }, (t) => {
+  test('a missing prompt file is not a refusal: the run proceeds and the runner reports its own error', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
     assert.equal(fs.existsSync(p.promptPath), false, 'fixture sanity: no prompt file');
-    const res = invoke(p);
+    const res = await invoke(p);
     assert.notEqual(res.reason, REFUSAL_REASON);
     assert.equal('refusal' in res, false);
     assert.equal(
@@ -515,31 +515,31 @@ describe('#4559 review-lane invoke refuses a prompt over the cap', () => {
     );
   });
 
-  test('--prompt-file: the size is measured on the file actually sent (small override passes)', { skip: POSIX_ONLY }, (t) => {
+  test('--prompt-file: the size is measured on the file actually sent (small override passes)', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
     fs.writeFileSync(p.promptPath, lfText(CHARS_OVER + 4000));
     const small = path.join(p.runDir, 'gsd-review-prompt-small.md');
     fs.writeFileSync(small, 'a small prompt');
-    const res = invoke(p, ['--prompt-file', small]);
+    const res = await invoke(p, ['--prompt-file', small]);
     assert.notEqual(res.reason, REFUSAL_REASON, 'the combined prompt is huge but the override sent is not');
     assert.equal(fs.existsSync(p.seen), true, 'the binary runs on the small override');
   });
 
-  test('--prompt-file: a large override is refused even when the combined prompt is small', { skip: POSIX_ONLY }, (t) => {
+  test('--prompt-file: a large override is refused even when the combined prompt is small', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
     fs.writeFileSync(p.promptPath, 'a small combined prompt');
     const big = path.join(p.runDir, 'gsd-review-prompt-big.md');
     fs.writeFileSync(big, lfText(CHARS_OVER));
-    const res = invoke(p, ['--prompt-file', big]);
+    const res = await invoke(p, ['--prompt-file', big]);
     assert.equal(res.reason, REFUSAL_REASON);
     assert.equal(res.refusal.estimatedTokens, 130001);
     assert.equal(fs.existsSync(p.seen), false);
   });
 
-  test('--as: the refusal stub is written to the reviewer instance path, not the lane path', { skip: POSIX_ONLY }, (t) => {
+  test('--as: the refusal stub is written to the reviewer instance path, not the lane path', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
     fs.writeFileSync(p.promptPath, lfText(CHARS_OVER));
-    const res = invoke(p, ['--as', 'my-instance']);
+    const res = await invoke(p, ['--as', 'my-instance']);
     assert.equal(res.reason, REFUSAL_REASON);
     assert.equal(res.reviewPath, `${p.runDir}/gsd-review-my-instance.md`);
     const stub = fs.readFileSync(path.join(p.runDir, 'gsd-review-my-instance.md'), 'utf8');
@@ -578,19 +578,19 @@ describe('#4559 a promptChannel none lane receives no prompt, so no cap ever app
     );
   });
 
-  test('plan reports no cap for coderabbit under a global cap', { skip: POSIX_ONLY }, (t) => {
+  test('plan reports no cap for coderabbit under a global cap', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t, { review: { max_prompt_tokens: 1000 } });
-    const by = Object.fromEntries(plan(p, ['claude', 'coderabbit']).map((r) => [r.slug, r]));
+    const by = Object.fromEntries((await plan(p, ['claude', 'coderabbit'])).map((r) => [r.slug, r]));
     assert.equal(by.claude.promptBudget, 1000);
     assert.equal(by.claude.promptCapSource, 'global');
     assert.equal(by.coderabbit.promptBudget, null);
     assert.equal(by.coderabbit.promptCapSource, 'none');
   });
 
-  test('invoke does not refuse coderabbit for a huge prompt under a global cap', { skip: POSIX_ONLY }, (t) => {
+  test('invoke does not refuse coderabbit for a huge prompt under a global cap', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t, { review: { max_prompt_tokens: 1000 } });
     fs.writeFileSync(p.promptPath, lfText(CHARS_OVER));
-    const res = invoke(p, [], 'coderabbit');
+    const res = await invoke(p, [], 'coderabbit');
     assert.notEqual(res.reason, REFUSAL_REASON);
     assert.equal('refusal' in res, false);
   });
@@ -650,10 +650,10 @@ describe('#4559 the refusal remedy names the lane\'s declared keys, not keys bui
 });
 
 describe('#4559 a refusal stub that cannot be written is reported, not swallowed', () => {
-  test('stubWritten is true on success and false when the review path is unwritable', { skip: POSIX_ONLY }, (t) => {
+  test('stubWritten is true on success and false when the review path is unwritable', { skip: POSIX_ONLY }, async (t) => {
     const ok = makeProject(t);
     fs.writeFileSync(ok.promptPath, lfText(CHARS_OVER));
-    const okRes = invoke(ok);
+    const okRes = await invoke(ok);
     assert.equal(okRes.reason, REFUSAL_REASON);
     assert.equal(okRes.stubWritten, true);
 
@@ -661,7 +661,7 @@ describe('#4559 a refusal stub that cannot be written is reported, not swallowed
     fs.writeFileSync(bad.promptPath, lfText(CHARS_OVER));
     // A directory sitting where the stub must go makes the write fail.
     fs.mkdirSync(path.join(bad.runDir, 'gsd-review-claude.md'));
-    const badRes = invoke(bad);
+    const badRes = await invoke(bad);
     assert.equal(badRes.reason, REFUSAL_REASON, 'the refusal itself must still be reported');
     assert.equal(badRes.ok, false);
     assert.equal(badRes.stubWritten, false);
@@ -770,7 +770,7 @@ describe('#4559 the refusal remedy for a lane that declares no cap keys', () => 
 });
 
 describe('#4559 review-lane invoke refuses through the argv-file-ref and openai-http channels', () => {
-  test('kimi-code (argv-file-ref): an oversized --prompt-file is refused before the binary is probed or spawned', { skip: POSIX_ONLY }, (t) => {
+  test('kimi-code (argv-file-ref): an oversized --prompt-file is refused before the binary is probed or spawned', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t);
     fs.writeFileSync(
       path.join(p.binDir, 'kimi'),
@@ -780,7 +780,7 @@ describe('#4559 review-lane invoke refuses through the argv-file-ref and openai-
     const body = lfText(681573); // ceil(681573 / 4) = 170394 > cap 170393
     const big = path.join(p.runDir, 'gsd-review-prompt-big.md');
     fs.writeFileSync(big, body);
-    const res = invoke(p, ['--prompt-file', big], 'kimi-code');
+    const res = await invoke(p, ['--prompt-file', big], 'kimi-code');
     assert.equal(res.ok, false);
     assert.equal(res.reason, REFUSAL_REASON);
     assert.equal(res.refusal.estimatedTokens, Math.ceil(body.length / 4));
@@ -788,12 +788,12 @@ describe('#4559 review-lane invoke refuses through the argv-file-ref and openai-
     assert.equal(fs.existsSync(p.seen), false, 'the kimi binary must not be probed or spawned for a refused lane');
   });
 
-  test('ollama (openai-http): an oversized --prompt-file is refused before any network call', { skip: POSIX_ONLY }, (t) => {
+  test('ollama (openai-http): an oversized --prompt-file is refused before any network call', { skip: POSIX_ONLY }, async (t) => {
     const p = makeProject(t, { review: { context_window_tokens: { ollama: 8192 } } });
     const body = lfText(21297); // ceil(21297 / 4) = 5325 > cap 5324
     const big = path.join(p.runDir, 'gsd-review-prompt-big.md');
     fs.writeFileSync(big, body);
-    const res = invoke(p, ['--prompt-file', big], 'ollama');
+    const res = await invoke(p, ['--prompt-file', big], 'ollama');
     assert.equal(res.ok, false);
     assert.equal(res.reason, REFUSAL_REASON);
     assert.equal(res.refusal.estimatedTokens, Math.ceil(body.length / 4));
