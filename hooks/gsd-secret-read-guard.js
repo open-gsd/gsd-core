@@ -89,9 +89,9 @@
 //   the sub-command's read operands. A command with no rule of its own whose
 //   operands name git, a shell, an ssh client, eval, xargs, find, watch, dd or
 //   a wrapper is read as launching it from there (`caffeinate git …`, #5492).
-//   A `BASH_ENV` or `ENV` value in scope where a shell runs, the file it
-//   sources first, is a read when it names a secret, and of the shell's
-//   stdin when it is an fd (#6445).
+//   A `BASH_ENV` value in scope where any command runs (a bash it starts
+//   sources it), or an `ENV` value where a shell runs, is a read when it
+//   names a secret, and of the stdin when it is an fd (#6445).
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
 // before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
@@ -4139,6 +4139,11 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
       for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
       // A prefix's variables reach this command and everything it runs.
       ctx.shellVars = shellVarFrame(scriptScope, cmd.assigns);
+      // An assignment with no command after it sources nothing; `export` / `declare` themselves run no bash.
+      if (!DECLARATION_COMMANDS.has(base)) {
+        const hit = sourcedFileRead(base, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+        if (hit) return hit;
+      }
 
       // eval concatenates ALL its operands and runs the result.
       if (base === 'eval') {
@@ -4514,8 +4519,9 @@ function shellScriptOperands(operands) {
 
 // A shell interpreter's script comes from `-c`, a file operand, or stdin.
 function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
-  // The prefix, env/sudo, export and declare values in scope that the shell sources first (#6445). An fd value makes
-  // the stdin a script in every mode, read once below, whichever fd it is on, as for `bash /dev/fd/N`.
+  // The BASH_ENV and ENV values in scope, from a prefix, env/sudo, export or declare, that the shell sources first
+  // (#6445). An fd value makes the stdin a script in every mode, read once below, whichever fd it is on, as for
+  // `bash /dev/fd/N`.
   const sourced = sourcedFileVars(ctx);
   if (sourced.hit) return sourced.hit;
   const { scripts, dashC } = shellScriptOperands(operands);
@@ -4551,18 +4557,29 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
 }
 
 // bash sources the file BASH_ENV names before a non-interactive script, and sh the one ENV names when interactive
-// (#6445): with a shell about to run, a value in scope naming a secret is a read, whatever the shell's mode. `fd` is
-// set when a value is an fd path (`BASH_ENV=/dev/stdin`), which sources the shell's stdin.
+// (#6445): a value in scope among `names` naming a secret is a read. `fd` is set when a value is an fd path
+// (`BASH_ENV=/dev/stdin`), which sources the shell's stdin.
 const SOURCED_FILE_VARS = ['BASH_ENV', 'ENV'];
-function sourcedFileVars(ctx) {
+function sourcedFileVars(ctx, names = SOURCED_FILE_VARS) {
   let fd = false;
-  for (const name of SOURCED_FILE_VARS) {
+  for (const name of names) {
     for (const value of shellVarValues(ctx.shellVars, name, ctx)) {
       if (operandNamesSecret(value)) return { hit: secretRead(`${name}=${value}`), fd };
       fd = fd || isFdPath(value);
     }
   }
   return { hit: null, fd };
+}
+
+// BASH_ENV is inherited, and every non-interactive bash a command starts sources it (a bash-shebang script, a make
+// recipe, ssh's ProxyCommand, …), so for any command `base` run with it in scope (#6445): a value naming a secret is
+// a read, and with an fd value the command's heredocs, here-strings and pipe are read as a shell's stdin, unless
+// `base` is a shell or `source`, whose own stdin pass reads them. ENV is sourced only by an interactive shell, so
+// only scanShellInterpreter reads it.
+function sourcedFileRead(base, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
+  const { hit, fd } = sourcedFileVars(ctx, ['BASH_ENV']);
+  if (hit || !fd || SHELL_INTERPRETERS.has(base) || base === 'source' || base === '.') return hit;
+  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
 }
 
 // The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and what a
@@ -4724,6 +4741,8 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
     const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
     const subBase = resolvedSub ? resolvedSub.base : writtenBase;
     const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
+    const sourced = sourcedFileRead(subBase, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+    if (sourced) return sourced;
     const subIsShell = SHELL_INTERPRETERS.has(subBase);
     // An unknown command whose operands name a shell, git or another launcher (`xargs ionice sh -c`) is read like a
     // shell sub-command (#5492): its stdin under `-a`, and the piped words fail closed below.
@@ -4959,6 +4978,8 @@ function scanLaunched(cmd, s, bySeg, sepAfter, depth, reading, ctx, heredocs, he
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, cmd.assigns);
   try {
+    const sourced = sourcedFileRead(cmd.base, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+    if (sourced) return sourced;
     if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
     if (cmd.base === 'eval') return scanEval(cmd.operands, depth, ctx);
     if (cmd.base === 'watch') return scanWatch(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
