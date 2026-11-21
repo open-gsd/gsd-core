@@ -2375,7 +2375,9 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
         });
       }
     } else {
-      const addResult = execGit(['add', file], { cwd });
+      // `--` (#6256): a declared path starting with `-` must reach git as a
+      // path; without it `-A` stages the whole tree and `-n` stages nothing.
+      const addResult = execGit(['add', '--', file], { cwd });
       // Only record paths that actually staged — a failed `git add` (permissions,
       // out-of-repo edge) must not enter the commit pathspec (#2523). Mirrors
       // cmdCommitToSubrepo's exitCode-gated push.

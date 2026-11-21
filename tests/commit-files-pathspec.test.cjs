@@ -3318,3 +3318,40 @@ cmdCommit(${JSON.stringify(tmpDir)}, 'docs: probe', ['.planning/STATE.md'], fals
     assert.equal(result.timed_out, undefined);
   });
 });
+
+// #6256: `git add` ran without `--`, so an existing --files path that starts
+// with `-` reached git as an option: `-A` staged the whole tree and `-n`
+// staged nothing yet exited 0.
+describe('commit --files: a dash-leading path stages as a path, not an option (#6256)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempGitProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  for (const name of ['-A', '-rf', '-n']) {
+    test(`a file named ${name} commits as a path and an undeclared sibling stays out`, () => {
+      fs.writeFileSync(path.join(tmpDir, name), 'dash-leading name\n');
+      fs.writeFileSync(path.join(tmpDir, 'other.txt'), 'never declared\n');
+
+      const result = runGsdTools(['commit', 'docs: dash path', '--files', name], tmpDir);
+      assert.ok(result.success, `commit failed: ${result.error}`);
+
+      const committed = gitOrThrow(['diff', 'HEAD~1', 'HEAD', '--name-only'], {
+        cwd: tmpDir,
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).trim();
+      assert.strictEqual(committed, name, `the commit must hold only ${name}, got:\n${committed}`);
+
+      const status = gitOrThrow(['status', '--porcelain', '--', 'other.txt'], {
+        cwd: tmpDir,
+        timeoutMs: GIT_TIMEOUT_MS,
+      }).trim();
+      assert.strictEqual(status, '?? other.txt', `other.txt must stay untracked, status was:\n${status}`);
+    });
+  }
+});
