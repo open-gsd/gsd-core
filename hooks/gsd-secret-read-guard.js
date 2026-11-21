@@ -3419,7 +3419,9 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // With no text to fill it from, a holder whose text before the replace string names a protected file or the start
   // of one may become one (`ls -A | xargs -I{} cat .env{}`).
   if (stdin.texts.length === 0 && replaceStr !== null && !subIsShell) {
-    const holder = subOperands.find((w) => w.text.includes(replaceStr) && startsSecretName(w.text.split(replaceStr)[0]));
+    const holders = subOperands.filter((w) => w.text.includes(replaceStr));
+    chargeScan(holders.reduce((n, w) => n + w.text.length + XARGS_WORD_WORK, 0) * NAME_FRAGMENTS.length);
+    const holder = holders.find((w) => startsSecretName(w.text.split(replaceStr)[0]) || completesSecretName(w.text, replaceStr));
     if (holder) return { code: 'xargs-input-unseen', text: holder.text };
   }
   // The words of a here-string, heredoc or knowable pipe source, as xargs may split them.
@@ -3457,6 +3459,21 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
   }
   return null;
+}
+
+// Whether filling every replace string in `text` with one piece of a protected name (`.`, `.e`, `nv`, …, or one led
+// by `/`) names a protected file the piece alone does not: the text's own characters complete it (`{}nv`, `x/{}env`,
+// `{}.env`). The whole name as the fill is the stdin's alone, which is not covered (`ls | xargs -I{} cat {}`).
+const NAME_FRAGMENTS = (() => {
+  const pieces = new Set(['']);
+  for (const name of ['.env', '.secrets']) {
+    for (let i = 0; i < name.length; i++) for (let j = i + 1; j <= name.length; j++) if (j - i < name.length) pieces.add(name.slice(i, j));
+  }
+  return [...pieces].flatMap((piece) => [piece, `/${piece}`]);
+})();
+function completesSecretName(text, replaceStr) {
+  const parts = text.split(replaceStr);
+  return NAME_FRAGMENTS.some((piece) => operandNamesSecret(parts.join(piece)));
 }
 
 // Whether `prefix` names a protected file or its last path piece begins one (`.e`, `config/.env`, `.env.`).
@@ -3503,7 +3520,8 @@ function xargsSubTakesWords(subIsShell, subOperands, replaceStr) {
     if (SHELL_VALUE_FLAGS.has(option)) k++;
   }
   const script = subOperands[k];
-  return !script || SCRIPT_TAKES_WORDS_RE.test(script.text) || (replaceStr !== null && script.text.includes(replaceStr));
+  return !script || SCRIPT_TAKES_WORDS_RE.test(script.text) || SCRIPT_TAKES_WORDS_RE.test(script.text.replace(/["']/g, ''))
+    || (replaceStr !== null && script.text.includes(replaceStr));
 }
 // A script that expands words, re-reads text (source, `.`, eval, exec, /dev/stdin, /dev/fd) or holds an escape
 // a printf or echo in it may turn into one (`printf "cat \x241" | source /dev/stdin`).
@@ -3757,7 +3775,7 @@ function groupStdins(ctx, tokens, heads, rereads, rereadText) {
     }
   };
   // An `exec` that an eval, source or `.` runs may redirect any of them (`eval 'exec <<< .env'; xargs cat`).
-  if (rereads && /(?<![\w./-])exec(?![\w./-])/.test(rereadText)) {
+  if (rereads && /(?<![\w./-])exec(?![\w./-])/.test(rereadText.replace(/["'\\]/g, ''))) {
     spread(0, maxSeg, unseenStdin('exec'));
     return reach;
   }
