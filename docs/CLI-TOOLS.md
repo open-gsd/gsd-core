@@ -808,14 +808,20 @@ project-specific settings such as `project_code` or `git.base_branch` included. 
 way the loader reads every config file: one that cannot be read, is not a regular file (a FIFO
 or device), is larger than 1 MiB, is not valid JSON, or is not a JSON object is refused and left
 as it was. The store is written as 2-space JSON, and a save whose result in that form would be
-larger than 1 MiB is refused too, since the loader could not read it; a compact hand-written store
-can reach that size without gaining keys. A write goes to a temp file created exclusively under a
+larger than 1 MiB is refused too, since the loader could not read it. That holds for a save that
+changes nothing: a compact hand-written store just under the cap grows past it when rewritten
+with indentation, and then no save is accepted until it is made smaller. A write goes to a temp file created exclusively under a
 random name and renamed over the store. The temp file is created with the store's own file mode,
 narrowed by the umask, or `0600` when that mode cannot be read, so a save never opens the store to
 group or others (a `0400` store whose mode cannot be read comes back `0600`). A store nested too
-deeply to merge into is refused and left as it was. A write
+deeply to merge into is refused and left as it was. The limit is the depth the merge can recurse
+on the JavaScript stack, not a size: about 720 levels with Node 24 on Linux, fewer where the stack
+is smaller, so a store of a few kilobytes can be too deep. A write
 that fails therefore leaves the store as it was, and an existing entry at a temp-file name is never
-opened.
+opened. A crash between that write and the rename leaves the temp file
+(`defaults.json.tmp.<random>`) beside the store; nothing reads it, and it can be removed. The
+rename replaces the store's directory entry, so a store kept as a hard link is no longer shared after
+a save: the other name keeps the old contents. Share it with a symlink, which is written through.
 
 A save holds the same lock on `$GSD_HOME/.gsd/` as the installer's own updates to the store,
 so two saves, or a save and an install, run one after the other and neither loses the other's

@@ -5306,11 +5306,12 @@ describe('#5681: config-save-defaults reads the store under the #5759 config cap
 
   // A store the loader reads (JSON.parse is iterative) can still be too deep for the
   // recursive merge and serializer. That is a refusal of the store, with its own
-  // reason, not a crash of the command.
+  // reason, not a crash of the command. The depth is the deepest the read cap
+  // admits (6 bytes a level), so it does not rest on one engine's stack size.
   test('a store nested too deeply to merge is refused and left as it was', async (t) => {
-    const depth = 50000;
+    const depth = Math.floor((CONFIG_MAX_BYTES - 1) / '{"a":}'.length);
     const before = '{"a":'.repeat(depth) + '1' + '}'.repeat(depth);
-    assert.ok(Buffer.byteLength(before) < CONFIG_MAX_BYTES, 'precondition: under the cap');
+    assert.ok(Buffer.byteLength(before) <= CONFIG_MAX_BYTES, 'precondition: within the cap');
     const { defaultsPath, save } = seed(t, before);
 
     const result = await save();
