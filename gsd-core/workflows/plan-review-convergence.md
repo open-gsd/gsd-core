@@ -36,8 +36,7 @@ PHASE=$(echo "$GSD_ARGS" | grep -oE '[0-9]+[A-Z]?(\.[0-9]+)*' | head -1)
 MAX_CYCLES=$(echo "$GSD_ARGS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
 if [ -z "$MAX_CYCLES" ]; then MAX_CYCLES=3; fi
 
-GSD_WS=""
-echo "$GSD_ARGS" | grep -qE '\-\-ws\s+\S+' && GSD_WS=$(echo "$GSD_ARGS" | grep -oE '\-\-ws\s+\S+')
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 ```
 
 ## 1.5. Config Gate (feature disabled by default)

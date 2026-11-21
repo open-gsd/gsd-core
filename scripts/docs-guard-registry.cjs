@@ -180,6 +180,8 @@ const DOCS_GUARD_TESTS = {
   // against the milestone-release-map module's exported enums.
   'tests/milestone-release-map.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
+  // #6205: walks the shipped reference, workflow and docs pages for a link to a closed-not-planned upstream tracker.
+  'tests/reference-closed-upstream-trackers-6205.test.cjs': ['docs/explanation/', 'docs/guides/', 'docs/how-to/', 'docs/reference/'],
   'tests/smart-discuss-classification.test.cjs': ['docs/COMMANDS.md'],
   'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
   'tests/autonomous-converge.test.cjs': [
