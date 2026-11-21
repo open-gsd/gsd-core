@@ -86,6 +86,7 @@ Build dashboard from JSON. Symbols: `✓` done, `◆` active, `○` pending, `·
 - `executed` → `✓ ✓ ◆` `◆ Verification required`
 - `partial` → `✓ ✓ ◆` `◆ Executing...`
 - `planned` → `✓ ✓ ○` `○ Ready to execute`
+- A phase in this session's `RESEARCH_STOPPED` list (step 5) → `✓ ⚠ ·` `⚠ Research ruling needed`, whatever its disk_status; drop its execute recommendation from `recommended_actions`, since its plans failed the research gate
 - `discussed` → `✓ ○ ·` `○ Ready to plan`
 - `researched` → `◆ · ·` `○ Ready to plan`
 - `empty`/`no_directory` + `is_next_to_discuss` → `○ · ·` `○ Ready to discuss`
@@ -306,7 +307,7 @@ Display while it runs:
 ◆ Planning Phase {N}: {phase_name}... (runs inline so the plan-checker runs — the dashboard resumes when it returns, ~1–5 min; expected, not a freeze)
 ```
 
-Then loop back to dashboard step.
+If it printed `PLANNING STOPPED`, handle it as step 5 does; otherwise loop back to dashboard step.
 
 ### Execute Phase N
 
@@ -369,6 +370,12 @@ Then loop back to dashboard step.
 ## 5. Background Agent Completion
 
 When notified that a background agent completed:
+
+**If a plan-phase result carries `PLANNING STOPPED`** (a research question needs a user ruling, which `--auto` cannot ask for; `gsd-core/references/revision-loop.md`, Resolve): add {N} to `RESEARCH_STOPPED`. Its plans stay on disk but are not ready to execute. Display `⚠ Phase {N}: planning stopped — research questions need a user ruling`, then ask via AskUserQuestion:
+- "Plan inline now": `Skill(skill="gsd-plan-phase", args="{N} {manager_flags.plan}")`, without `--auto`, so plan-phase asks each question; once it prints `## PLANNING COMPLETE`, remove {N} from `RESEARCH_STOPPED`.
+- "Discuss the phase": `Skill(skill="gsd-discuss-phase", args="{N}")`.
+- "Leave it": the phase keeps its `⚠` status.
+Then loop back to dashboard step.
 
 1. Read the result message from the agent.
 2. Display a brief notification:
