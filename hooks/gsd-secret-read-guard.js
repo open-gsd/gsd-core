@@ -4305,11 +4305,15 @@ function bareLauncherName(text) {
 // whose launched command this rule reads again (`x env y env …` launches `y`) is left to that command's rescan,
 // as is a wrapper, `dd`, `xargs`, `find` or `watch` in the command an `xargs` runs (whose stdin is not the
 // segment's pipe): starting each of them here too would cost exponentially many rescans. Every other launcher word
-// is started here, with the segment's pipe, which a rescan does not have.
+// is started here, with the segment's pipe, which a rescan does not have, and so is a re-entering one when the
+// segment is piped into (the work meter bounds the extra starts).
 const REENTERING_WORDS = new Set(['dd', 'dd.exe', ...WRAPPERS.keys()]);
 const XARGS_REENTERING_WORDS = new Set([...REENTERING_WORDS, 'xargs', 'find', 'find.exe', 'watch']);
 function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
   const covered = new Set();
+  // A rescan has no pipe, so a segment piped into starts its re-entering words here too (#5492).
+  const { op } = precedingOp(s, bySeg, sepAfter);
+  const piped = op === '|' || op === '|&';
   const cover = (cmd, words) => {
     if (cmd === null || !readsLauncherOperands(cmd.base)) return;
     for (const w of cmd.operands) if (words.has(bareLauncherName(w.text))) covered.add(w);
@@ -4321,7 +4325,7 @@ function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySe
     const tail = [];
     for (let k = j; k < operands.length; k++) if (!nameOnly.has(k)) tail.push(operands[k]);
     const launched = resolveCommand(tail);
-    cover(launched, REENTERING_WORDS);
+    if (!piped) cover(launched, REENTERING_WORDS);
     // The wrappers the launched command resolves through start nothing this launch does not (`x env time X=1 y …`).
     for (const w of launched === null ? [] : launched.wrappers) covered.add(w);
     if (launched !== null && launched.base === 'xargs') {
