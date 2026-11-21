@@ -742,8 +742,9 @@ An in-process assignment spelled `process.env.HOME = …` is not flagged; that c
 `sandboxHome()`, above. Three other spellings of it are flagged:
 `globalThis.process.env.HOME = …`, `const env = process.env; env.HOME = …` and
 `Object.assign(process.env, { HOME: … })`. `tests/helpers/isolated-env.cjs` is the one exempt
-file. The rule's header (`eslint-rules/no-adhoc-env-isolation.cjs`, "Known gaps") lists the
-shapes it does not see, such as a `HOME=` inside a shell script string.
+file. [docs/contributing/no-adhoc-env-isolation.md](docs/contributing/no-adhoc-env-isolation.md)
+states the forms each arm recognises. Every other spelling, such as a `HOME=` inside a shell
+script string, is out of scope; the page gives examples.
 
 `eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
 and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.

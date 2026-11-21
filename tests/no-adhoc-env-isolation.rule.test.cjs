@@ -4,19 +4,15 @@
  * no-adhoc-env-isolation.rule.test.cjs
  *
  * #6035 (epic #4635 Phase 3): tests for the local/no-adhoc-env-isolation
- * ESLint rule and its allowlist.
- *
- * - Arm 1: an inline PATH split or filter.
- * - Arm 2: a hand-built HOME / USERPROFILE env.
- * - The allowlist ratchet (a listed file with no copy left reports itself stale).
- * - A red demonstration through the repository's own eslint.config.mjs: a
- *   reintroduced copy in a file the allowlist does not name fails `npm run lint`.
- * - The per-file site counts: every file under tests/ is linted with the
- *   allowlist emptied, and its count must equal the one
- *   eslint-rules/no-adhoc-env-isolation.allowlist.json records (scripts/lib/
- *   allowlist-ratchet.cjs `assertFileBaseline`, #597).
- * - Structural guards on the allowlist, each driven against a synthetic
- *   violation so the guard itself is shown able to fail.
+ * ESLint rule and its allowlist: arm 1 (an inline PATH split or filter), arm 2
+ * (a hand-built HOME / USERPROFILE env), the boundary the rule's reference
+ * page documents (the rule header links it), the stale-entry
+ * ratchet, a red demonstration through the repository's own eslint.config.mjs,
+ * and the per-file site counts: every file under tests/ is linted with the
+ * allowlist emptied, and its count must equal the one
+ * eslint-rules/no-adhoc-env-isolation.allowlist.json records
+ * (scripts/lib/allowlist-ratchet.cjs `assertFileBaseline`, #597). Structural
+ * guards on the allowlist are each driven against a synthetic violation.
  */
 
 const { test, describe } = require('node:test');
@@ -167,13 +163,13 @@ describe('no-adhoc-env-isolation: arm 2 leaves alone what it does not own', () =
   });
 });
 
-// ─── the header's documented boundary ────────────────────────────────────────
-// eslint-rules/no-adhoc-env-isolation.cjs lists what each arm flags and its
-// "Known gaps". Each claim has a row here, so a refactor of isProcessEnv,
+// ─── the documented boundary ─────────────────────────────────────────────────
+// The rule's reference page (its header links it) lists what each arm flags and
+// its "Known gaps". Each claim has a row here, so a refactor of isProcessEnv,
 // readsEnvPath or the key match that moves the boundary fails a row instead of
 // changing documented behaviour silently.
 
-describe('no-adhoc-env-isolation: the header\'s flagged claims', () => {
+describe('no-adhoc-env-isolation: the documented flagged claims', () => {
   const home = { messageId: 'adhocHomeConstruction' };
   const pathFilter = { messageId: 'inlinePathFilter' };
 
@@ -220,7 +216,7 @@ describe('no-adhoc-env-isolation: the header\'s flagged claims', () => {
   });
 });
 
-describe('no-adhoc-env-isolation: the header\'s known gaps are not flagged', () => {
+describe('no-adhoc-env-isolation: the documented known gaps are not flagged', () => {
   test('a PATH read the alias hop does not follow, unfiltered', () => {
     run([
       { code: "const { PATH } = process.env; PATH.split(':');", filename: FILE },
