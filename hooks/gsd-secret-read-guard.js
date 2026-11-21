@@ -368,7 +368,7 @@ function lineIsReadOnlyUnder(command, reading) {
         const target = segTokens[k + 1];
         if (!target || target.kind !== 'word') return false;
         k++;
-        if (!t.read && target.text !== '/dev/null') return false; // output to a file
+        if ((!t.read || t.text.endsWith('<>')) && target.text !== '/dev/null') return false; // output to a file
         if (t.text.endsWith('<<<')) return false;
         continue;
       }
@@ -1974,6 +1974,7 @@ function tokenize(str, reading) {
       else if (str.startsWith('&>', j)) { text = '&>'; j += 2; }
       else if (str.startsWith('>>', j)) { text = '>>'; j += 2; }
       else if (str.startsWith('>|', j)) { text = '>|'; j += 2; }
+      else if (str.startsWith('<>', j)) { text = '<>'; j += 2; } // read-write: a read, and a write
       else { text = ch; j += 1; }
       if (text === '<<' || text === '<<-') {
         expectTag = { stripTabs: text === '<<-' };
