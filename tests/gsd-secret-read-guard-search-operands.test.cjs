@@ -417,6 +417,9 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     // and a grouping brace, which does not end the tool's words.
     ['grep .env; grep() { command grep -eKEY "$@"; }', '.env'],
     ['for i in 1 2; do :; grep .env; export $V; done', '.env'],
+    // ... a loop behind a reserved word too.
+    ['if true; then while :; do :; grep .env; export $V; done; fi', '.env'],
+    ['! until false; do :; grep .env; export $V; done', '.env'],
     ['set -- -eKEY; grep .env; echo $1', '.env'],
     ['X=-eKEY; : "\'"; grep .env $X; : "\'"', '.env'],
     ["grep -rn x --exclude=.env . # it's\necho $X", '--exclude=.env'],
