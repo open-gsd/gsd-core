@@ -4181,8 +4181,8 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
       }
 
       // dd reads the file its `if=` operand names (#5492); every operand is still checked below.
-      if (base === 'dd' || base === 'dd.exe') {
-        for (const w of operands) if (w.text.startsWith('if=') && operandNamesSecret(w.text.slice(3))) return secretRead(w.text);
+      if (DD_NAMES.has(base)) {
+        for (const w of operands) if (ddInputNamesSecret(w.text)) return secretRead(w.text);
       }
 
       if (NON_READING_COMMANDS.has(base)) continue;
@@ -4679,14 +4679,15 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
       || (resolvedSub !== null && readsLauncherOperands(subBase)
         && sources.some((words) => words.some((w) => w.text.split(/\s+/).some(isLauncherWord))));
     const wrappersOnly = !resolvedSub || subBase === '';
-    let hit = readXargsSource(sources[0], failClosed, subIsShell, subOperands, replaceStr, depth, ctx);
+    const subIsDd = DD_NAMES.has(subBase);
+    let hit = readXargsSource(sources[0], failClosed, subIsShell, subOperands, replaceStr, depth, ctx, subIsDd);
     if (hit) return hit;
     if (wrappersOnly) {
       hit = mentionInSource(sources[0], ctx);
       if (hit) return hit;
     }
     for (const upstreamWords of sources.slice(1)) {
-      hit = readXargsSource(upstreamWords, failClosed || wrappersOnly, subIsShell, subOperands, replaceStr, depth, ctx);
+      hit = readXargsSource(upstreamWords, failClosed || wrappersOnly, subIsShell, subOperands, replaceStr, depth, ctx, subIsDd);
       if (hit) return hit;
     }
     // A wrapper-only sub-command's own assignments may take the rest of their value from the piped words.
@@ -4700,9 +4701,16 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
   }
 }
 
+// dd's `if=` operand, naming the file dd reads (#5492).
+const DD_NAMES = new Set(['dd', 'dd.exe']);
+function ddInputNamesSecret(text) {
+  return text.startsWith('if=') && operandNamesSecret(text.slice(3));
+}
+
 // One stage piped into xargs (scanXargsPipe): with `mention`, its words and what it writes checked for any mention
 // of a secret name; then its operands as the file names the sub-command reads, and a shell sub-command's script.
-function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replaceStr, depth, ctx) {
+// For a `dd` sub-command (`subIsDd`), an operand's `if=` value is the file dd reads (#5492).
+function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replaceStr, depth, ctx, subIsDd) {
   if (mention) {
     const hit = mentionInSource(upstreamWords, ctx);
     if (hit) return hit;
@@ -4723,6 +4731,7 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
       // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
       const received = xargsUnquoted(w.text);
       if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+      if (subIsDd && (ddInputNamesSecret(w.text) || ddInputNamesSecret(received))) return secretRead(w.text);
     }
   }
   return null;
