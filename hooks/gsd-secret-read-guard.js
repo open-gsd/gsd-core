@@ -2908,7 +2908,9 @@ function setsParsingWords(heads, bySeg, maxSeg, rereadText) {
   for (let s = 0; s <= maxSeg; s++) {
     const head = heads[s];
     if (head === null) continue;
-    if (head.cmd !== null && head.cmd.base === 'set' && setsAllexport(head.cmd.operands)) return true;
+    const set = head.cmd !== null && head.cmd.base === 'builtin' && head.cmd.operands.length > 0 && head.cmd.operands[0].text === 'set'
+      ? head.cmd.operands.slice(1) : head.cmd !== null && head.cmd.base === 'set' ? head.cmd.operands : null;
+    if (set !== null && setsAllexport(set)) return true;
     let words = commandWords(bySeg.get(s) || []).map((w) => w.text);
     if (head.cmd !== null && SEARCH_TOOLS.has(head.cmd.base)) words = words.slice(0, words.length - head.cmd.operands.length);
     const text = words.join(' ');
@@ -2994,7 +2996,8 @@ function runsWordsAgain(heads, tokens) {
   return definesFunction(tokens) || heads.some((head) => head !== null && (head.reserved.some((w) => RUNS_AGAIN_BASES.has(w))
     || (head.cmd !== null && (RUNS_AGAIN_BASES.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
       && RUNS_AGAIN_BASES.has(head.cmd.operands[0].text)) || (head.cmd.base === 'set' && head.cmd.operands.length > 0
-      && head.cmd.operands[0].text.startsWith('-'))))));
+      && head.cmd.operands[0].text.startsWith('-')) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 1
+      && head.cmd.operands[0].text === 'set' && head.cmd.operands[1].text.startsWith('-'))))));
 }
 
 // The names of the functions the tokens define: a word followed by `(` and `)`, or the word after `function`.
@@ -3072,7 +3075,7 @@ function scanSegments(command, depth, reading, unseenAt, joined) {
   ctx.compounds = compoundRanges(tokens, bySeg, maxSeg, heads);
   // What a stage with no redirect or pipe of its own reads: what the scan inherits, or a group's, loop's or exec's.
   ctx.ambient = mergedStdin([inheritedStdin, ...ctx.compounds.ranges.map((r) => ownStdin(r.redirectSeg, bySeg))]);
-  const groupStdin = groupStdins(ctx, tokens, heads, rereads);
+  const groupStdin = groupStdins(ctx, tokens, heads, rereads, joined);
 
   // A `$( )` or `<( )` body runs with the stdin of the command it is in, which one is not known here, so with every
   // segment's together; a `>( )` body reads what its command writes into it, which is not rendered.
@@ -3088,7 +3091,8 @@ function scanSegments(command, depth, reading, unseenAt, joined) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
     xargsStdinFrom = segmentStdin(s, ctx, groupStdin.get(s) || inheritedStdin);
-    noSearchCarveOut = unseenAt === 0 || (unseenAt > 0 && !(segEnd.get(s) <= unseenAt));
+    // A `(` right after the words (`grep .env @(-e*)`, `+(…)`, `!(…)`, `(…)`): an extglob may expand into options.
+    noSearchCarveOut = unseenAt === 0 || (unseenAt > 0 && !(segEnd.get(s) <= unseenAt)) || sepAfter.get(s) === '(';
 
     const words = [];
     const hereStrings = [];
@@ -3412,6 +3416,12 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     for (const w of operands.slice(0, subIdx)) if (operandNamesSecret(w.text)) return secretRead(w.text);
     return unseen;
   }
+  // With no text to fill it from, a holder whose text before the replace string names a protected file or the start
+  // of one may become one (`ls -A | xargs -I{} cat .env{}`).
+  if (stdin.texts.length === 0 && replaceStr !== null && !subIsShell) {
+    const holder = subOperands.find((w) => w.text.includes(replaceStr) && startsSecretName(w.text.split(replaceStr)[0]));
+    if (holder) return { code: 'xargs-input-unseen', text: holder.text };
+  }
   // The words of a here-string, heredoc or knowable pipe source, as xargs may split them.
   const stdinWords = xargsStdinWords(stdin.texts, split);
   for (const w of stdinWords) if (operandNamesSecret(w.text)) return secretRead(w.text);
@@ -3447,6 +3457,13 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
   }
   return null;
+}
+
+// Whether `prefix` names a protected file or its last path piece begins one (`.e`, `config/.env`, `.env.`).
+function startsSecretName(prefix) {
+  if (prefix === '') return false;
+  const piece = prefix.slice(prefix.lastIndexOf('/') + 1).toLowerCase();
+  return operandNamesSecret(prefix) || (piece !== '' && (piece.startsWith('.env') || '.env'.startsWith(piece) || '.secrets'.startsWith(piece)));
 }
 
 // #6282: each operand holding the replace string, filled with each word xargs reads as given and as xargs unquotes it,
@@ -3486,8 +3503,11 @@ function xargsSubTakesWords(subIsShell, subOperands, replaceStr) {
     if (SHELL_VALUE_FLAGS.has(option)) k++;
   }
   const script = subOperands[k];
-  return !script || /[$`]/.test(script.text) || (replaceStr !== null && script.text.includes(replaceStr));
+  return !script || SCRIPT_TAKES_WORDS_RE.test(script.text) || (replaceStr !== null && script.text.includes(replaceStr));
 }
+// A script that expands words, re-reads text (source, `.`, eval, exec, /dev/stdin, /dev/fd) or holds an escape
+// a printf or echo in it may turn into one (`printf "cat \x241" | source /dev/stdin`).
+const SCRIPT_TAKES_WORDS_RE = /[$`\\]|(?<![\w./-])(?:source|eval|exec|\.)(?![\w./-])|\/dev\/(?:stdin|fd)/;
 
 // #6282: xargs's stdin, as the guard models it. A stdin is { texts, unseen, code }: the texts xargs may read its
 // words from, or, with `unseen` set, a source the guard cannot render exactly, on which a sub-command that reads
@@ -3647,6 +3667,8 @@ function stageOutput(seg, ctx) {
     const printed = printedText(cmd);
     return printed === null ? unseenStdin(cmd.operands.map((w) => w.text).join(' '), 'xargs-stdin-unrendered') : { texts: printed, unseen: null };
   }
+  // A process substitution it reads, as an operand or a redirect, writes what the guard does not render.
+  if (segTokens.some((t) => t.kind === 'word' && t.procsub !== undefined)) return unseenStdin('<( )');
   if (cmd.base !== 'cat' && cmd.base !== 'tee') return FILTER;
   if (stdinRedirect(segTokens) !== null) return null;
   const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
@@ -3716,7 +3738,7 @@ function compoundRanges(tokens, bySeg, maxSeg, heads) {
 // nested groups cost one pass, not one per group. Where that matching is unsure, where two reaches overlap, and in a
 // command that defines a function or re-reads text, whose bodies run with every call's stdin (`f() { xargs cat; };
 // printf .env | f`), every segment gets all of those stdins together instead, the first unseen one winning.
-function groupStdins(ctx, tokens, heads, rereads) {
+function groupStdins(ctx, tokens, heads, rereads, rereadText) {
   const { bySeg, maxSeg } = ctx;
   const reach = new Map();
   const next = Array.from({ length: maxSeg + 2 }, (_, k) => k);
@@ -3734,6 +3756,11 @@ function groupStdins(ctx, tokens, heads, rereads) {
       next[k] = k + 1;
     }
   };
+  // An `exec` that an eval, source or `.` runs may redirect any of them (`eval 'exec <<< .env'; xargs cat`).
+  if (rereads && /(?<![\w./-])exec(?![\w./-])/.test(rereadText)) {
+    spread(0, maxSeg, unseenStdin('exec'));
+    return reach;
+  }
   if (definesFunction(tokens) || rereads) {
     spread(0, maxSeg, mergedStdin(Array.from({ length: maxSeg + 1 }, (_, s) => ownStdin(s, bySeg) || pipedStdin(s, ctx))));
     return reach;
