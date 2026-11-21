@@ -31,9 +31,9 @@ wave-boundary refresh (`execute-phase/steps/wave-refresh.md`, #5966).
 > dispatch the ready wave, then re-run." → exit. Do not fall through to the
 > completion states; nothing here is a completion state. (The ready plans
 > themselves were already dispatched this run — the executor wave loop
-> dispatches every ready plan of the earliest ready wave onward, and the
-> wave-boundary refresh adds each plan whose dependencies complete during the
-> run. A refresh that finds nothing ready stops by `wave-refresh.md`'s rule,
+> dispatches every ready plan of the earliest ready wave, and the
+> wave-boundary refresh dispatches each later wave, adding each plan whose
+> dependencies complete during the run. A refresh that finds nothing ready stops by `wave-refresh.md`'s rule,
 > naming these plans in this report's form.)
 
 This ordering is fail-closed: a later wave is never selected while any

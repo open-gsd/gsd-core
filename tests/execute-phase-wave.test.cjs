@@ -776,13 +776,14 @@ describe('execute-phase: inter-wave worktree base re-check (#1369)', () => {
     assert.ok(content.includes('#1369'), 'step 0.5 must reference #1369 for traceability');
   });
 
-  test('step 0.5 runs worktree.base-check inside the For-each-wave loop', () => {
+  // #5966: `execute_waves` runs one wave per entry, so the per-wave body is headed "For the wave:".
+  test('step 0.5 runs worktree.base-check inside the per-wave body', () => {
     const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-    const forEachIdx = workflow.indexOf('**For each wave:**');
+    const forEachIdx = workflow.indexOf('**For the wave:**');
     const refIdx = workflow.indexOf('execute-phase-wave-guard.md');
-    assert.ok(forEachIdx !== -1, '"For each wave:" section must exist in execute-phase.md');
+    assert.ok(forEachIdx !== -1, '"For the wave:" section must exist in execute-phase.md');
     assert.ok(refIdx !== -1, '@-reference to wave-guard must exist in execute-phase.md');
-    assert.ok(refIdx > forEachIdx, 'wave-guard @-reference must appear AFTER "For each wave:" so step 0.5 runs per-wave');
+    assert.ok(refIdx > forEachIdx, 'wave-guard @-reference must appear AFTER "For the wave:" so step 0.5 runs per-wave');
   });
 
   test('step 0.5 runs worktree.base-check command', () => {
@@ -797,7 +798,7 @@ describe('execute-phase: inter-wave worktree base re-check (#1369)', () => {
 
   test('step 0.5 appears before step 1 (intra-wave overlap check)', () => {
     const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
-    const forEachIdx = workflow.indexOf('**For each wave:**');
+    const forEachIdx = workflow.indexOf('**For the wave:**');
     const refIdx = workflow.indexOf('execute-phase-wave-guard.md');
     const step1Idx = workflow.indexOf('1. **Intra-wave', forEachIdx);
     assert.ok(refIdx !== -1, 'wave-guard @-reference must exist');
@@ -1501,9 +1502,9 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
 
   test('#5966 row 8: 2b names the refresh as what adds newly ready plans, and its stop', () => {
     const text = gate().replace(/>\s*/g, '').replace(/\s+/g, ' ');
-    assert.match(text, /the executor wave loop dispatches every ready plan of the earliest ready wave onward/,
-      '2b keeps its own wording');
-    assert.match(text, /the wave-boundary refresh adds each plan whose dependencies complete during the run/);
+    assert.match(text, /the executor wave loop dispatches every ready plan of the earliest ready wave, and the wave-boundary refresh dispatches each later wave, adding each plan whose dependencies complete during the run/,
+      'the wave loop runs one wave per entry; "onward" told it to run step 1\'s later waves itself');
+    assert.ok(!/earliest ready wave onward/.test(text), 'no wording that has the wave loop run later waves itself');
     assert.match(text, /A refresh that finds nothing ready stops by `wave-refresh\.md`'s rule, naming these plans in this report's form/,
       'one stop rule, not two reports for the same condition');
   });
@@ -1545,6 +1546,8 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
     assert.ok(!/Execute each selected wave in sequence/.test(step),
       'an outer loop over step 1\'s selection would dispatch a wave the refresh already ran');
     assert.match(step, /Execute the earliest selected wave; step 9 picks any next one \(#5966\)/);
+    assert.ok(!/\*\*For each wave:\*\*/.test(step), 'the per-wave body must not read as a loop over step 1\'s waves');
+    assert.match(step, /\*\*For the wave:\*\*/);
     const text = flat(refresh());
     assert.match(text, /`execute_waves` runs one wave each time it is entered: step 1's selection supplies the first, and this fragment supplies every later one, so a plain run never goes back to a later wave of step 1's selection/);
     assert.match(text, /`\{N\}` is the number of waves this run has dispatched, the current one included, and `\{M\}` is `\{N\}` plus the waves after the current one in the selection it came from/,

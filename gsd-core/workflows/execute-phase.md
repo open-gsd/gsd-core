@@ -538,7 +538,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 [checkpoint] phase {PHASE_NUMBER} wave {N}/{M} complete, {P}/{Q} plans done ({wave_success}/{wave_plan_count} ok)
 ```
 
-**For each wave:**
+**For the wave:**
 
 @~/.claude/gsd-core/references/execute-phase-wave-guard.md
 
