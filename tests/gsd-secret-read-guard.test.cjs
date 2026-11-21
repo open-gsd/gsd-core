@@ -886,14 +886,27 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     }
   });
 
+  // Near misses of `deny`, one family per looser match a mutant could make: a
+  // case-insensitive compare, a trim, a prefix or suffix test, a truthy flag.
+  // Any string at all is the last family. An environment value holds no NUL.
+  const PAD = fc.string({ unit: fc.constantFrom(' ', '\t', '\n', '\r'), maxLength: 3 });
+  const nearMissOfDeny = fc.oneof(
+    fc.array(fc.boolean(), { minLength: 4, maxLength: 4 })
+      .map((upper) => [...'deny'].map((c, i) => (upper[i] ? c.toUpperCase() : c)).join('')),
+    fc.tuple(PAD, PAD).map(([head, tail]) => `${head}deny${tail}`),
+    fc.string({ minLength: 1, maxLength: 4 }).map((tail) => `deny${tail}`),
+    fc.string({ minLength: 1, maxLength: 4 }).map((head) => `${head}deny`),
+    fc.constantFrom('1', 'true', 'yes', 'on', 'block', 'den'),
+    fc.string(),
+  ).filter((value) => value !== 'deny' && !value.includes('\0'));
+
   test('property: any value other than exactly deny keeps a crash fail-open', () => {
     fc.assert(fc.property(
-      // An environment value cannot hold a NUL byte.
-      fc.string().filter((value) => value !== 'deny' && !value.includes('\0')),
+      nearMissOfDeny,
       (value) => {
         assertFailOpen(runHook(MALFORMED, { env: { [ON_CRASH_ENV]: value } }), `value ${JSON.stringify(value)}`);
       },
-    ), { seed: 5784, numRuns: 40 });
+    ), { seed: 5784, numRuns: 60 });
   });
 });
 
