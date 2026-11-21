@@ -43,6 +43,7 @@ Each command declares its flags in one place, `src/cli-surface.cts` ([ADR-4909](
 - how many positional words it takes, and whether further words may appear among the flags (`freePositionals`), and whether a short flag such as `-n` is refused instead of read as a word (`rejectShortFlags`);
 - each flag and its kind;
 - the flags it requires;
+- the global value flags it refuses before they are consumed (`rejectedGlobalFlags`), for the commands that declare any;
 - whether the command reads the active workstream.
 
 Regenerate the manifest with `npm run gen:cli-surface-manifest`. `npm run lint:generated-sync` fails when it is stale.
@@ -716,6 +717,9 @@ node gsd-tools.cjs config-get <key> [--default <value>] [--raw]
 # Set model profile
 node gsd-tools.cjs config-set-model-profile <profile>
 
+# Migrate legacy config keys to their canonical names
+node gsd-tools.cjs migrate-config
+
 # Create config.json for a new project from the chosen settings
 node gsd-tools.cjs config-new-project '<choices-json>' [--dry-run]
 ```
@@ -782,6 +786,14 @@ so a refused choice, malformed JSON included, fails even when `config.json` alre
 with valid choices and an existing `config.json`, the command reports `already_exists` and
 leaves it untouched. The user defaults file is read only to build a new config, so a problem in
 it is not reported when the config already exists.
+
+`config-ensure-section`, `config-set-model-profile`, and `migrate-config` accept
+`--raw` but do not support `--dry-run`, `--pick`, or `--default`. They reject unsupported flags with a
+usage error before writing, including `--json`, `--force`, `--workstream` (`--ws` remains supported), and
+repeated global `--cwd` / `--project-dir` flags, including flags before the
+profile argument. Extra positional arguments are refused too. The same contract
+applies with the `query` prefix. `config-set --dry-run` supports previewing an
+individual value change without writing.
 
 ---
 
