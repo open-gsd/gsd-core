@@ -122,8 +122,9 @@ into the `unparsed:` shortfall and named on the console ("carry a prefix before 
 prefix (`W6-R2-CR-01`). A ledger row
 outside the grammar (`| R1-WR-01 | … |`, an indented row, or a row with an unknown disposition) is named on the console and
 kept verbatim after the generated rows, not deleted by the whole-file rewrite; it is not counted in
-`open:` or `total:`. When a regenerated row would take the id of such a row, the run does not rewrite the
-ledger at all and names the row, so a hand-set decision is never replaced silently. A disposition is
+`open:` or `total:`. When a regenerated row takes the id of such a row, the row is reset to `open`
+(a value outside the enum is coerced to the safe default) and the console names it with the
+disposition and reason it held, so a hand-set value is never replaced silently. A disposition is
 read case-insensitively (`Deferred` is `deferred`). Two rows for one id are named (the last is used), and
 console names are masked for control characters and capped. A frontmatter `- id:` entry outside the grammar ends
 the previous entry, so its `title:` is never attributed to another finding.

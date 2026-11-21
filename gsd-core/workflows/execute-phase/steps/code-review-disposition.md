@@ -996,15 +996,16 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const open = rows.filter((r) => r.d === 'open').length;
   const cell0 = (l) => (l.split('|')[1] || '').trim();
   // Ledger text reaches the console: control characters are masked and the list is capped, as the prefixed ids are.
-  const nm = (l) => cell0(l).replace(/[\x00-\x1f\x7f-\x9f]/g, '?').slice(0, 40) || '?';
+  const msk = (x) => String(x).replace(/[\x00-\x1f\x7f-\x9f]/g, '?').slice(0, 40);
+  const nm = (l) => msk(cell0(l)) || '?';
   const names = (a) => a.slice(0, 3).join(', ') + (a.length > 3 ? ', ...' : '');
-  // A row the builder cannot parse whose id a regenerated row now owns would be deleted by the rewrite: refuse, naming it.
-  const collide = badRows.filter((l) => rows.some((r) => r.id === cell0(l)));
-  if (collide.length) {
-    console.log('Code review disposition NOT rewritten: ' + collide.length + ' ledger row(s) for ' + names(collide.map(nm)) + ' are not in the id | severity | disposition | source shape (the disposition must be one of open, fixed, skipped, deferred) and a regenerated row would replace them; correct the row and re-run');
-    return;
-  }
-  const badNote = badRows.length ? ' (' + badRows.length + ' ledger row(s) not in the id | severity | disposition | source shape: ' + names(badRows.map(nm)) + '; kept verbatim, not counted)' : '';
+  // A row outside the grammar whose id a regenerated row now owns is reset to open (a value outside the enum is
+  // coerced to the safe default, ADR-227); it is NAMED with what it held, never replaced silently.
+  const resetRows = badRows.filter((l) => rows.some((r) => r.id === cell0(l)));
+  const keptBad = badRows.filter((l) => resetRows.indexOf(l) === -1);
+  const cellAt = (l, i) => msk((l.split('|')[i] || '').trim());
+  const resetNote = resetRows.length ? ' (' + resetRows.length + ' ledger row(s) not in the id | severity | disposition | source shape were reset to open and their text is not kept: ' + names(resetRows.map((l) => nm(l) + ' was ' + cellAt(l, 3) + ' / ' + cellAt(l, 4))) + ')' : '';
+  const badNote = keptBad.length ? ' (' + keptBad.length + ' ledger row(s) not in the id | severity | disposition | source shape: ' + names(keptBad.map(nm)) + '; kept verbatim, not counted)' : '';
   const dupNote = dupIds.length ? ' (' + dupIds.length + ' finding id(s) have more than one ledger row, and the last row of each was used: ' + names(dupIds) + ')' : '';
   const reusedNote = reused.length ? ' (' + reused.length + ' recorded decision(s) DROPPED -- the id now names a different finding, so the decision no longer has a row: ' + reused.join(', ') + ')' : '';
   const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';
@@ -1012,7 +1013,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const escapePipes = (t) => t.replace(/\\\\.|\|/g, (m) => (m === '|' ? '\\\\|' : m));
   const body = ['# Phase ' + process.env.PADDED + ': Code Review Disposition', '', '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|']
     .concat(rows.map((r) => { const src = escapePipes(r.src || '-'); const mark = r.carried && !/\(not in the current review\)\s*\$/.test(src) ? ' (not in the current review)' : ''; return '| ' + r.id + ' | ' + r.sev + ' | ' + r.d + ' | ' + src + mark + ' |'; }))
-    .concat(badRows)
+    .concat(keptBad)
     .concat(['', 'Dispositions: \`open\` (recorded, not yet triaged), \`fixed\`, \`skipped\`, \`deferred\`.', 'Set \`deferred\` by hand and put the reason in the Source cell; both are preserved. A \`|\` in the reason is kept as prose and escaped on the next run.', 'Re-running the gate keeps every row it can. A row the current review no longer reports is kept and its Source cell flagged, so a finding does not leave this record silently. ONE exception: when a finding id is REUSED by a different finding, the earlier decision cannot keep a row — the id is taken — and it is dropped. A RECORDED decision (anything but \`open\`) is named on the console when that happens; a row still at \`open\` is replaced silently, because \`open\` records no decision to lose.', '']).join('\n');
   // One line: the value feeds a line-oriented record a regex re-reads.
   const oneLine = (t) => String(t === undefined || t === null ? '' : t).replace(/[\r\n]+/g, ' ').trim();
@@ -1035,11 +1036,11 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const stripTs = (t) => t.replace(/^recorded:.*\$/m, 'recorded:');
   const prev = fs.existsSync(process.env.DISPOSITION_FILE) ? norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')) : '';
   if (prev && stripTs(prev) === stripTs(render(''))) {
-    console.log('Code review disposition unchanged: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + prefNote + dupNote + badNote);
+    console.log('Code review disposition unchanged: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + prefNote + dupNote + resetNote + badNote);
     return;
   }
   fs.writeFileSync(process.env.DISPOSITION_FILE, render(new Date().toISOString()));
-  console.log('Code review disposition recorded: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + prefNote + dupNote + badNote + ' — ' + process.env.DISPOSITION_FILE);
+  console.log('Code review disposition recorded: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + prefNote + dupNote + resetNote + badNote + ' — ' + process.env.DISPOSITION_FILE);
   })();
 " || echo "Code review disposition record skipped (non-blocking)."
 
