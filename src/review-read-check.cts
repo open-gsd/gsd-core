@@ -15,6 +15,7 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 import frontmatter from './frontmatter.cjs';
 import planScan from './plan-scan.cjs';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
@@ -69,16 +70,24 @@ export function readCheckInstruction(): string {
  */
 export function planPathsFromPrompt(prompt: string): string[] {
   const lines = String(prompt ?? '').split(/\r?\n/);
-  const fenced = new Uint8Array(lines.length);
-  for (const b of scanFencedBlocks(lines)) if (b.closeLineIdx !== -1) fenced.fill(1, b.openLineIdx, b.closeLineIdx + 1);
+  const fenced = closedFenceLines(lines);
   const paths = new Set<string>();
   lines.forEach((line, i) => {
     const m = /^#### (\S+)\s*$/.exec(line);
-    // plan-scan owns which filenames are plans (lint-plan-count-drift); the canonical rule is the
-    // one review.md's `*-PLAN.md` glob uses. No file name holds a NUL (#6286 Nit 3).
-    if (m && !fenced[i] && !m[1].includes('\0') && planScan.isCanonicalPlanFile(m[1].split(/[\\/]/).pop() ?? '')) paths.add(m[1]);
+    if (!m || fenced[i] || m[1].includes('\0')) return; // no file name holds a NUL (#6286 Nit 3)
+    // plan-scan owns which filenames are plans (lint-plan-count-drift). review.md's glob is
+    // `*-PLAN.md`, so a bare PLAN.md, which has no id to restate, is not one of its plans.
+    const base = m[1].split(/[\\/]/).pop() ?? '';
+    if (planScan.isCanonicalPlanFile(base) && planIdOf(base) !== base.normalize('NFC')) paths.add(m[1]);
   });
   return [...paths];
+}
+
+/** Which lines sit inside a closed code fence; an unclosed fence marks nothing. */
+function closedFenceLines(lines: string[]): Uint8Array {
+  const fenced = new Uint8Array(lines.length);
+  for (const b of scanFencedBlocks(lines)) if (b.closeLineIdx !== -1) fenced.fill(1, b.openLineIdx, b.closeLineIdx + 1);
+  return fenced;
 }
 
 /** A plan's id: its file name without `-PLAN.md`, NFC-normalized so either spelling matches (#6286 Nit 3). */
@@ -132,7 +141,7 @@ function toList(v: unknown): string[] {
   let text = stripEnds(scalar(v), VALUE_DECORATION);
   if (text.startsWith('[') && text.endsWith(']')) text = text.slice(1, -1);
   if (EMPTY_LIST.has(stripEnds(text, VALUE_DECORATION).toLowerCase())) return [];
-  return text.split(',').map((x) => stripEnds(x, VALUE_DECORATION)).filter(Boolean);
+  return text.split(/[,;]/).map((x) => stripEnds(x, VALUE_DECORATION)).filter(Boolean);
 }
 
 /** A frontmatter number (lenient, as frontmatter is the plan's own record). */
@@ -287,6 +296,24 @@ function idEnd(after: string): number {
   return -1;
 }
 
+/** `k=v` parts split at `;` or `|` outside `[…]`, so a list may use `;` between its ids. Linear. */
+function splitFields(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === '[') depth += 1;
+    else if (c === ']' && depth > 0) depth -= 1;
+    else if (depth === 0 && (c === ';' || c === '|')) {
+      parts.push(text.slice(from, i));
+      from = i + 1;
+    }
+  }
+  parts.push(text.slice(from));
+  return parts;
+}
+
 /**
  * Every `READ-CHECK <id>: k=v; …` line in a review, keyed by lower-cased id, all lines kept in
  * order. Markdown around the label, id and values (bold, list and quote markers, table pipes,
@@ -311,7 +338,7 @@ export function parseReadCheckLines(review: string): Map<string, Record<string, 
     const id = idKey(unwrapped.slice(Math.max(unwrapped.lastIndexOf('/'), unwrapped.lastIndexOf('\\')) + 1).replace(/-PLAN\.md$/i, ''));
     if (!id || id.includes('\0')) continue;
     const fields: Record<string, string> = {};
-    for (const part of after.slice(end + 1).split(/[;|]/)) {
+    for (const part of splitFields(after.slice(end + 1))) {
       const eq = part.indexOf('=');
       if (eq <= 0) continue;
       fields[stripEnds(part.slice(0, eq), VALUE_DECORATION).toLowerCase()] = stripEnds(part.slice(eq + 1), VALUE_DECORATION);
@@ -349,13 +376,15 @@ function wrongFields(facts: PlanFacts, got: Record<string, string>): string[] {
 
 /**
  * agy's `<truncated` marker, in the approved prefix form (`<truncated>`, `<truncated 1,234 bytes>`,
- * `<truncated 12 KB>`, …) (#6286 Minor 3). A fenced or inline-code occurrence is a quotation and
- * does not count; an output cut inside an open fence drops that fence's tail, which is the same
- * answer. A bare occurrence in prose does count: an echo of the marker cannot be told from a
- * prose quote, and a diagnostic errs toward flagging.
+ * `<truncated 12 KB>`, …) (#6286 Minor 3). An occurrence in a closed fence or in inline code is a
+ * quotation and does not count. One after an unclosed fence does: output cut mid-block leaves
+ * the fence open, and the marker is then its last line. A bare occurrence in prose counts too: an
+ * echo of the marker cannot be told from a prose quote, and a diagnostic errs toward flagging.
  */
 function hasTruncationMarker(review: string): boolean {
-  return /<truncated(?![a-z])/i.test(stripInlineCode(stripFencedCode(review).text));
+  const lines = review.split('\n');
+  const fenced = closedFenceLines(lines);
+  return /<truncated(?![a-z])/i.test(stripInlineCode(lines.filter((_, i) => !fenced[i]).join('\n')));
 }
 
 /** Compare a review's restatements with the plans it was given; `unchecked` are plans that could not be read. */
@@ -384,9 +413,12 @@ export function checkRead(
       got.splice(hit, 1);
       continue;
     }
-    // No line matches: report the first line's errors. defineProperty, not assignment:
-    // `mismatched['__proto__'] = …` would call the prototype setter and drop the plan (#6286 Nit 2).
-    Object.defineProperty(mismatched, facts.id, { value: results[0], enumerable: true, writable: true, configurable: true });
+    // No line matches: report the first line's errors, merged with an earlier plan's of the same id.
+    // defineProperty, not assignment: `mismatched['__proto__'] = …` would call the prototype setter
+    // and drop the plan (#6286 Nit 2).
+    const seen = Object.prototype.hasOwnProperty.call(mismatched, facts.id) ? mismatched[facts.id] : [];
+    const merged = FIELDS.filter((f) => seen.includes(f) || results[0].includes(f));
+    Object.defineProperty(mismatched, facts.id, { value: merged, enumerable: true, writable: true, configurable: true });
   }
   return {
     complete:
@@ -525,6 +557,7 @@ export function runReadCheck(
   let budget = MAX_TOTAL_PLAN_BYTES;
   const root = String(repoRoot).replace(/[\\/]+$/, '');
   const headers = planPathsFromPrompt(prompt);
+  const realRoot = tryWithinRoot('.', root, PathAcceptance.RelativeOnly);
   for (let i = 0; i < headers.length; i += 1) {
     const rel = headers[i];
     // Past the header cap nothing is resolved or read (#6286 Minor 1).
@@ -533,13 +566,14 @@ export function runReadCheck(
       continue;
     }
     // Read only a file inside the repo: relative, no `..` segment, and still inside after symlinks
-    // resolve (#6286 Minor 1). The resolved path dedupes spellings of one plan; the read keeps the
-    // `root/rel` spelling the deps seam is keyed by.
+    // resolve (#6286 Minor 1). The resolved path dedupes spellings of one plan, and is the path
+    // read, so a symlink the check followed is not followed again: the repo root as given plus
+    // the resolved path below it, the spelling the deps seam is keyed by.
     if (rel.split(/[\\/]/).includes('..')) continue;
     const resolved = tryWithinRoot(rel, root, PathAcceptance.RelativeOnly);
-    if (resolved === null || seen.has(resolved)) continue;
+    if (resolved === null || realRoot === null || seen.has(resolved)) continue;
     seen.add(resolved);
-    const abs = `${root}/${rel}`;
+    const abs = `${root}/${path.relative(realRoot, resolved).split(path.sep).join('/')}`;
     try {
       if (!deps.exists(abs)) continue;
       const content = budget > 0 ? deps.readPlanBounded(abs, Math.min(MAX_PLAN_BYTES, budget)) : null;

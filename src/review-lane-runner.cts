@@ -805,8 +805,14 @@ export function antigravityTranscriptFallback(
  * True when this run's session compacted its context (#5491): a `CHECKPOINT` entry after the
  * watermark. agy then works from its own summary, so the review may rest on text it no longer
  * holds — and it still exits 0. Same watermark rule as the fallback: a prior run's checkpoint
- * must not flag this one. `'unknown'` when the watermark could not count this conversation's
- * lines, so this run's entries cannot be told apart (#6286 Nit 4).
+ * must not flag this one. `'unknown'` when the session log cannot be found or read, so this
+ * run's entries cannot be told apart (#6286 Nit 4).
+ *
+ * Same-workspace runs are sequential within one /gsd:review: the lane loop de-duplicates slugs, and
+ * an ADR-1517 instance is a separate invocation outside `review.parallel_lanes`'s dispatch. Two
+ * concurrent /gsd:review runs against one repo share a conversation id and one transcript, so
+ * either can see the other's CHECKPOINT — the watermark's KNOWN LIMIT above: `agy` gives no
+ * per-invocation id to filter on.
  */
 export function antigravityCompacted(
   workspace: string,
@@ -817,24 +823,28 @@ export function antigravityCompacted(
   return entries === null ? 'unknown' : entries.some((e) => e.type === 'CHECKPOINT');
 }
 
-/** This run's transcript entries (those after the watermark); `null` when they cannot be told apart. */
+/**
+ * This run's transcript entries (those after the watermark), `[]` when the log was read and holds
+ * none; `null` when no conversation resolves, its transcript is missing or unreadable, or the
+ * watermark could not count it, so this run's entries cannot be told apart.
+ */
 function transcriptEntriesSinceMark(
   workspace: string,
   mark: { convId: string; lines: number; unreadable?: boolean },
   deps: RunnerDeps,
 ): TranscriptEntry[] | null {
   const convId = resolveWorkspaceConvId(workspace, deps);
-  if (!convId) return [];
+  if (!convId) return null;
   // #3118: the watermark could not read this conversation's transcript, so there is no trustworthy
   // skip for it. Declining is the fail-closed answer; skipping 0 would replay a prior run's review.
   if (mark.unreadable === true && convId === mark.convId) return null;
   const tx = transcriptPath(deps.homeDir, convId);
-  if (!deps.exists(tx)) return [];
+  if (!deps.exists(tx)) return null;
   let lines: string[];
   try {
     lines = deps.readFile(tx).split(/\r?\n/).filter((l) => l.trim());
   } catch {
-    return [];
+    return null;
   }
   // Same conv-id ⇒ only lines beyond the watermark are this run's. Different id ⇒ fresh session,
   // so every line is new.
