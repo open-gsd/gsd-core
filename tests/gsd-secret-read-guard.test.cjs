@@ -1923,6 +1923,9 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     `cat <<< "export GIT_EDITOR='cat .env #'" | tee x | . /dev/stdin; git commit`,
   ]);
   allows([`cat <<< "export GIT_EDITOR='vi'" | source /dev/stdin; git commit`]);
+  // Matched by the last path segment, as git and the shells are, and with Windows' `.cmd` shims.
+  blocks(["caffeinate node_modules/.bin/npx -c 'cat .env'", "caffeinate npx.cmd -c 'cat .env'", "strace -f ./node_modules/.bin/npm exec -c 'cat .env'",
+    "caffeinate NPM.CMD x -c 'cat .env'", "caffeinate /usr/local/bin/npm exec -c 'cat .env'"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
