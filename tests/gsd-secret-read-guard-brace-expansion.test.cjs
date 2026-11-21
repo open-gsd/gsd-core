@@ -377,6 +377,8 @@ describe('gsd-secret-read-guard: a group a process substitution or an extglob ru
     ['cat {.env,?(x)}', '{.env,?'],
     ['bash -O extglob -c "cat {.env,@(a|b)}"', '{.env,@'],
     ["bash -c 'cat {<(true),.env}'", '{'],
+    // A closed group an extglob runs into is denied too: `{.env,x}?(y)` matches `.env` (see the word-boundary rows).
+    ['cat {a,b}@(x)', '{a,b}@'],
   ]) {
     test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'brace-word-unreadable', path: word }));
   }
@@ -384,7 +386,7 @@ describe('gsd-secret-read-guard: a group a process substitution or an extglob ru
   // A closed group, a space before the substitution, or no group at all.
   for (const cmd of [
     'cat {a,b}<(true)', 'cat {.env, <(echo })}', 'diff <(sort a) <(sort b)', 'cat x<(true)', 'cat {}<(true)',
-    "cat '{'<(true)", 'cat \\{<(true),.env}', 'cat ${x}<(true)', 'cat {a,b}@(x)', 'cat x@(a|b)', 'echo {a,b? c}',
+    "cat '{'<(true)", 'cat \\{<(true),.env}', 'cat ${x}<(true)', 'cat x@(a|b)', 'echo {a,b? c}',
   ]) {
     test(`allows ${cmd}`, () => assertAllowed(cmd));
   }
