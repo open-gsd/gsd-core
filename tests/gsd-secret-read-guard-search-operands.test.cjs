@@ -382,6 +382,12 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ['set -a; read RIPGREP_C* < cfg; rg .env .', '.env'],
     ['set -o allexport; read x < cfg; grep .env', '.env'],
     ['set -ea; getopts o x; grep .env', '.env'],
+    ['builtin set -a; read x < cfg; grep .env .', '.env'],
+    // An extglob or a parenthesis right after the tool's words can expand into options.
+    ['grep .env @(-e*)', '.env'],
+    ['grep .env +(-e*)', '.env'],
+    ['grep .env !(x)', '.env'],
+    ['grep .env (-e*)', '.env'],
     ['declare -x GREP_O*; grep .env', '.env'],
     ['export GREP_{O*,x}; grep .env', '.env'],
     ["eval 'export GREP_O*'; grep .env", '.env'],

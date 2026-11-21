@@ -3905,6 +3905,19 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ["sh -c 'xargs cat' < names", 'names'],
     ['f() { xargs cat; }; f < names', 'names'],
     ['builtin exec < names; xargs cat', 'names'],
+    // A `-c` script that re-reads text (source, `.`, eval, exec, /dev/stdin) or holds an escape takes the words too.
+    ['xargs -a names bash -c \'printf "cat \\x241" | source /dev/stdin\' _', 'names'],
+    ["xargs -a names bash -c 'source /dev/stdin' _ <<< 'cat \"$1\"'", 'names'],
+    // An `exec` that eval or source runs may redirect every later xargs.
+    ["eval 'exec <<< .env'; xargs cat", 'exec'],
+    ["source <(echo 'exec <<< .env'); xargs cat", 'exec'],
+    // A stage reading a process substitution writes what the guard does not render.
+    ['cat <(echo .env) | xargs cat', '<( )'],
+    ['cat < <(echo .env) | xargs cat', '<( )'],
+    ['paste <(echo .env) | xargs cat', '<( )'],
+    // A replace string after a protected name or a prefix of one, with stdin the guard cannot know.
+    ['ls -A | xargs -I{} cat .env{}', '.env{}'],
+    ['xargs -I@ cat config/.e@', 'config/.e@'],
     // The `-c` script is the first word after the shell's options, `--` included.
     ['xargs sh -c -- \'cat "$1"\' _ < names', 'names'],
     ['xargs sh -c -e \'cat "$1"\' _ < names', 'names'],
@@ -3981,6 +3994,9 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "find . | xargs -d '\\e' cat",
     // A filter given nothing the command shows, and a glob (the documented `cat .e*` gap), stay as they were.
     'ls | sort | xargs cat',
+    // Not covered, as `cat list | xargs cat` is: a program that prints names from its own code.
+    "awk 'BEGIN{print \".env\"}' | xargs cat",
+    "python3 -c 'print(\".env\")' | xargs cat",
     "printf '%s\\n' *.md | xargs wc -l",
     // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
     'cat names | xargs cat',
