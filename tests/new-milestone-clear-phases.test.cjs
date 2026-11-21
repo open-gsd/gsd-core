@@ -1,11 +1,11 @@
 /**
  * GSD Tools Tests - New Milestone Clear Phases (#1588, #1447)
  *
- * Verifies that `phases clear` removes all phase subdirectories from
+ * Verifies that `phases clear` archives all phase subdirectories out of
  * .planning/phases/, leaving the directory itself intact.
  *
  * Also covers the #1447 uncommitted-changes guard: phases clear must refuse
- * to delete phase directories that contain uncommitted work.
+ * to archive phase directories that contain uncommitted work.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -189,7 +189,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
       result.error.includes('uncommitted') || result.error.includes('aborted'),
       `expected error about uncommitted changes, got: ${result.error}`
     );
-    // Phase directory must still exist (was not deleted)
+    // Phase directory must still exist (was not moved)
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
@@ -210,7 +210,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
-  test('--force bypasses the uncommitted-changes guard and deletes anyway', () => {
+  test('--force bypasses the uncommitted-changes guard and archives anyway', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     const phase1 = path.join(phasesDir, '01-foundation');
     fs.mkdirSync(phase1, { recursive: true });
@@ -221,7 +221,45 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(result.success, `--force should bypass guard and succeed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.cleared, 1, 'should clear 1 phase directory');
-    assert.ok(!fs.existsSync(phase1), 'phase directory must be removed when --force is passed');
+    assert.ok(!fs.existsSync(phase1), 'phase directory must be moved out of phases/ when --force is passed');
+  });
+
+  // #5270: the gate and guard messages told the operator the directories are deleted; the command only ever archives.
+  test('[regression #5270] the --confirm gate says phase directories are archived, never deleted', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+    const result = runGsdTools('phases clear', tmpDir);
+    assert.ok(!result.success);
+    assert.match(result.error, /would archive 1 phase directory/);
+    assert.match(result.error, /milestones\/<version>-phases\//);
+    assert.doesNotMatch(result.error, /delet|permanent/i);
+    assert.match(result.error, /--confirm/);
+  });
+
+  test('[regression #5270] the uncommitted-changes guard says --force archives the edits, never deletes them', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (uncommitted)');
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(!result.success);
+    assert.match(result.error, /--force/);
+    assert.match(result.error, /archive the phase directories with their uncommitted changes/);
+    assert.doesNotMatch(result.error, /delet|permanent/i);
+    assert.ok(fs.existsSync(phase1), 'a refused clear must not move anything');
+  });
+
+  test('[regression #5270] --force archives an uncommitted edit: the content survives in milestones/*-phases/', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (uncommitted edit)');
+    const result = runGsdTools('phases clear --confirm --force', tmpDir);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(JSON.parse(result.output).cleared, 1);
+    const archive = findPhasesArchive(tmpDir);
+    assert.ok(archive, 'a milestones/*-phases/ archive must exist');
+    assert.strictEqual(
+      fs.readFileSync(path.join(archive, '01-foundation', 'PLAN.md'), 'utf8'),
+      '# Plan (uncommitted edit)',
+    );
   });
 
   test('succeeds without --force when all phase files are committed', () => {
@@ -243,7 +281,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(archive, 'a milestones/*-phases/ archive should be created for committed phase dirs');
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation', 'PLAN.md')),
-      'committed phase content must be preserved in the archive, not hard-deleted',
+      'committed phase content must be preserved in the archive',
     );
   });
 
