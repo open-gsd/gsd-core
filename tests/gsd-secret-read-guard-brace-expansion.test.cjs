@@ -392,6 +392,59 @@ describe('gsd-secret-read-guard: a group a process substitution or an extglob ru
   }
 });
 
+describe('gsd-secret-read-guard: where the guard ends a brace word and bash does not (#6142)', () => {
+  // bash ends a word only at a space, a tab, a newline or an operator; a CR, a `(` an extglob or zsh glob opens,
+  // and a substitution are inside it. A word with a brace group the guard ends at one of them is denied.
+  const unreadable = (word) => ({ code: 'brace-word-unreadable', path: word });
+  for (const [cmd, word] of [
+    ['cat {x\r,.env}', '{x'],
+    ['cat {.env,x\r}', '{.env,x'],
+    ['cat {\r,.env}', '{'],
+    ['cat .e{n\r,n}v', '.e{n'],
+    ["bash -c 'cat {x\r,.env}'", '{x'],
+    // zsh reads `(x)` as a glob group inside the word: `{.env,(x)}` is `.env` and `(x)`.
+    ['cat {.env,(x)}', '{.env,'],
+    ["zsh -c 'cat {.env,(x)}'", '{.env,'],
+    // Under extglob a closed group's words take the pattern: `.env?(y)` and `.env@(|y)` match `.env`.
+    ['cat {.env,x}?(y)', '{.env,x}?'],
+    ['cat {.env,x}@(|y)', '{.env,x}@'],
+    ['cat {.env,x}(|y)', '{.env,x}'],
+  ]) {
+    test(`denies ${JSON.stringify(cmd)}`, () => assertBlocked(cmd, unreadable(word)));
+  }
+
+  for (const cmd of ['cat {a,b}\r', 'cat x\r', 'cat x?(y)', 'echo (x)']) {
+    test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));
+  }
+
+  // A `{` before a form feed or a vertical tab starts a word, as bash reads it, not a group.
+  for (const cmd of ['cat {\f,.env}', 'cat {\v,.env}']) {
+    test(`denies ${JSON.stringify(cmd)}`, () => assertBlocked(cmd, { code: 'secret-read', path: '.env' }));
+  }
+
+  test('a line continuation before a redirect fd does not carry into the target', () => {
+    assertBlocked('cat 1\\\n2<{.env,x}', { code: 'secret-read', path: '.env' });
+  });
+
+  // bash makes no words of an assignment's braces (`X={1..100}` is that text), and an array's elements are
+  // values, so neither is held to the budget; a word after the command still is.
+  for (const cmd of [
+    'arr=({1..100}); echo "${arr[@]}"', 'X={1..100}', 'X={1..100} make', 'arr+=({1..100})',
+    'declare -a arr=({1..100})', 'local arr=({1..100})',
+  ]) {
+    test(`allows ${cmd}`, () => assertAllowed(cmd));
+  }
+  test('an assignment or array does not exempt the rest of the command', () => {
+    assertBlocked('X={1..100} cat .env', { code: 'secret-read', path: '.env' });
+    assertBlocked('make X={a..z}{a..z}', { code: 'glob-too-complex', path: 'X={a..z}{a..z}' });
+    assertBlocked('arr=({1..100}); cat {a..z}{a..z}', { code: 'glob-too-complex', path: '{a..z}{a..z}' });
+  });
+
+  test('printf joins its operands into what it prints, so a word past the budget there is not judged as written', () => {
+    assertBlocked("printf '%s\\n' {1..100} | sh", { code: 'glob-too-complex', path: '{1..100}' });
+  });
+});
+
 describe('gsd-secret-read-guard: past the budget, only a word that could name a secret is denied (#6142)', () => {
   // Each makes more than 64 words, none of which can name a secret file: all 0 on next, and allowed still.
   const allows = [
@@ -592,6 +645,12 @@ describe('gsd-secret-read-guard: an exempt file reached through an alternative (
     assertAllowed(`cat ${dir()}.e{nv.production,x}`, repo);
     assertBlocked(`cat ${dir()}.e{nv,x}`, { code: 'secret-read', path: path.join(repo, '.env') }, repo);
     assertBlocked(`cat ${dir()}.e{nv.production,nv}`, { code: 'secret-read', path: path.join(repo, '.env') }, repo);
+  });
+
+  test('the exemption needs a read-only line under each reading of its groups', () => {
+    // As written `sort {-o,/tmp/out}` reads only; bash makes `sort -o /tmp/out`, which writes.
+    assertAllowed(`sort ${dir()}.env.production`, repo);
+    assertBlocked(`sort {-o,/tmp/out} ${dir()}.env.production`, { code: 'secret-read', path: path.join(repo, '.env.production') }, repo);
   });
 });
 
