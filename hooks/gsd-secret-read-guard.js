@@ -4694,6 +4694,7 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
         return stages;
       }
       filtered = true;
+      charge(ctx, GIT_COMMAND_WORK);
       at = opener + 1;
       continue;
     }
@@ -4728,6 +4729,7 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       if (group.start === -1 || !throughFilters || (isFed && !fed.fdMoved)) return stages;
       if (fed.fdMoved) {
         filtered = true;
+        charge(ctx, GIT_COMMAND_WORK);
         at = group.start;
         continue;
       }
@@ -4737,6 +4739,8 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       const filters = inner.some((stage) => !passesStdinOn(stage.words) && !passesStdinOn(stage.cmdWords) && !writesOwnText(stage));
       if (!passes && !filters) return stages;
       if (filters) filtered = true;
+      // Each hop past a filtering group is priced as one past a filter stage (below).
+      charge(ctx, filtered ? GIT_COMMAND_WORK : 0);
       at = group.start;
       continue;
     }
@@ -4763,6 +4767,7 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       }
       if (opener === -1 || (isFed && !fed.fdMoved)) return stages;
       filtered = true;
+      charge(ctx, GIT_COMMAND_WORK);
       at = opener;
       continue;
     }
