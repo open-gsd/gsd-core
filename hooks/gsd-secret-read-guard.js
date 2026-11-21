@@ -293,9 +293,21 @@ function readOnlyOptionsOnly(base, operands) {
 function lineIsReadOnly(command) {
   try {
     const readings = readsEachWay(command) ? [false, ...READINGS] : [false];
-    return readings.every((reading) => lineIsReadOnlyUnder(command, reading));
+    if (!readings.every((reading) => lineIsReadOnlyUnder(command, reading))) return false;
+    // #6142: and with its brace groups made into words as bash and zsh make them (`sort {-o,out} f` writes).
+    return !command.includes('{') || ['bash', 'zsh'].every((shell) => lineIsReadOnlySpliced(command, shell));
   } catch {
     return false;
+  }
+}
+
+function lineIsReadOnlySpliced(command, shell) {
+  const spliced = bracesSpliced;
+  bracesSpliced = shell;
+  try {
+    return lineIsReadOnlyUnder(command, false);
+  } finally {
+    bracesSpliced = spliced;
   }
 }
 
