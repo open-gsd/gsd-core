@@ -4194,12 +4194,14 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.doesNotMatch(out.stdout, /not in the id/);
   });
 
-  test('[regression #5802] a row with an invalid disposition whose id a regenerated row would take stops the rewrite, naming it', () => {
-    const prior = '| CR-01 | critical | wontfix | the reason |\n';
-    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'), priorText: prior });
-    assert.strictEqual(out.ledger, prior, 'the ledger is left exactly as it was');
-    assert.match(out.stdout, /NOT rewritten: 1 ledger row\(s\) for CR-01/);
-    assert.match(out.stdout, /one of open, fixed, skipped, deferred/);
+  test('[regression #5802] a row with an invalid disposition whose id a regenerated row takes is reset to open and NAMED with what it held', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: '| CR-01 | critical | wontfix | the reason |\n',
+    });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'open');
+    assert.match(out.stdout, /1 ledger row\(s\) not in the id \| severity \| disposition \| source shape were reset to open/);
+    assert.match(out.stdout, /CR-01 was wontfix \/ the reason/, 'the console keeps what the row held');
   });
 
   test('[regression #5802] two rows for one id are named, not collapsed silently', () => {
