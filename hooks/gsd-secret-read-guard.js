@@ -4677,17 +4677,45 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
   };
   for (let at = s; ;) {
     const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
-    if ((op !== '|' && op !== '|&') || prevSeg < 0) return stages;
+    if ((op !== '|' && op !== '|&') || prevSeg < 0) {
+      // A pipe inside a group (`… | (true; cat | bash)`) also reads what is piped into the group: the walk goes on
+      // from its opener, every stage before it filtered, since which command inside reads that is not sorted.
+      const opener = throughFilters ? groupOpener(at, sepAfter, ctx) : -1;
+      if (opener === -1) return stages;
+      filtered = true;
+      at = opener + 1;
+      continue;
+    }
+    // A redirect after a group's closer (`(cat) 2>/dev/null | sh`) is a filtered stage, as before, and the group is
+    // the one behind it.
+    let last = prevSeg;
+    if (!commandWords(bySeg.get(prevSeg) || []).length && GROUP_CLOSERS.has(sepAfter.get(prevSeg - 1))) {
+      const stage = stageAt(prevSeg);
+      stage.filtered = true;
+      charge(ctx, TOKEN_WORK * stage.words.length + 1 + GIT_COMMAND_WORK);
+      last = prevSeg - 1;
+    }
     // A group (`( … )`, `{ …; }`) writes what each command inside it writes: every one is a stage, read fail closed
-    // by a shell (#5492), and the walk ends there.
-    const start = groupStart(prevSeg, at, sepAfter, ctx);
-    if (start !== -1) {
-      for (let g = prevSeg; g > start; g--) {
+    // by a shell (#5492). A closer nothing opens (a `case` pattern's `)`) reads every segment back to the start.
+    const group = pipedGroup(last, at, sepAfter, ctx);
+    if (group) {
+      const inner = [];
+      for (let g = group.close; g > group.start; g--) {
         if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
-        stageAt(g).filtered = throughFilters;
+        const stage = stageAt(g);
+        stage.filtered = throughFilters;
+        inner.push(stage);
         charge(ctx, TOKEN_WORK + 1);
       }
-      return stages;
+      if (group.start === -1 || !throughFilters || groupFed(group.close, at, bySeg, bodies, ctx)) return stages;
+      // The group reads the pipe through each command inside it that reads its stdin, and the walk goes on past it
+      // as past a plain stage; when every one writes its own text (`| (echo hi) |`), nothing reads the pipe.
+      const passes = inner.some(({ words, cmdWords }) => passesStdinOn(words) || passesStdinOn(cmdWords));
+      const filters = inner.some((stage) => !passesStdinOn(stage.words) && !passesStdinOn(stage.cmdWords) && !writesOwnText(stage));
+      if (!passes && !filters) return stages;
+      if (filters) filtered = true;
+      at = group.start;
+      continue;
     }
     const stage = stageAt(prevSeg);
     const { words, cmdWords } = stage;
@@ -4704,24 +4732,61 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
 }
 
 // When the pipe into segment `at` comes from a group closing after segment `last` (a `)` or `}` among the
-// separators between them), the segment whose separator opens it; -1 when no group closes there. Each separator
-// passed is charged.
-function groupStart(last, at, sepAfter, ctx) {
+// separators between them), the segment whose separator closes it (`close`) and the one whose separator opens it
+// (`start`, -1 when none does); null when no group closes there. Each separator passed is charged.
+const GROUP_CLOSERS = new Set([')', '}']);
+function pipedGroup(last, at, sepAfter, ctx) {
   let close = -1;
   for (let q = last; q < at; q++) {
     charge(ctx, 1);
-    if (sepAfter.get(q) === ')' || sepAfter.get(q) === '}') close = q;
+    if (GROUP_CLOSERS.has(sepAfter.get(q))) close = q;
   }
-  if (close === -1) return -1;
+  if (close === -1) return null;
   let depth = 0;
   for (let r = close; r >= 0; r--) {
     charge(ctx, 1);
     const text = sepAfter.get(r);
-    if (text === ')' || text === '}') depth++;
+    if (GROUP_CLOSERS.has(text)) depth++;
     else if (text === '(' || text === '{') depth--;
-    if (depth === 0) return r;
+    if (depth === 0) return { close, start: r };
   }
-  return -1;
+  return { close, start: -1 };
+}
+
+// Whether a group closing after segment `close` is given a heredoc or here-string before the pipe into segment
+// `at` (`(cat) <<< 'x' | sh`): its stdin is then that text, not the pipe. Each token passed is charged.
+function groupFed(close, at, bySeg, bodies, ctx) {
+  for (let g = close + 1; g < at; g++) {
+    const seg = bySeg.get(g) || [];
+    charge(ctx, TOKEN_WORK * seg.length + 1);
+    if ((bodies && bodies.get(g) && bodies.get(g).length) || hereStringTargets(seg).length) return true;
+  }
+  return false;
+}
+
+// The segment whose separator opens the group segment `at` sits in, past one right before `at`, whose stdin is
+// that of the group around it; -1 when there is none. Each segment's innermost opener is found once per script
+// (GROUP_OPENERS), charged a unit a separator, since every command of a script may walk a pipe.
+const GROUP_OPENERS = new WeakMap();
+function groupOpener(at, sepAfter, ctx) {
+  let openers = GROUP_OPENERS.get(sepAfter);
+  if (!openers) {
+    openers = [];
+    const open = [];
+    let last = -1;
+    for (const g of sepAfter.keys()) if (g > last) last = g;
+    for (let g = 0; g <= last + 1; g++) {
+      openers.push(open.length ? open[open.length - 1] : -1);
+      const text = sepAfter.get(g);
+      if (text === '(' || text === '{') open.push(g);
+      else if (GROUP_CLOSERS.has(text)) open.pop();
+    }
+    charge(ctx, openers.length);
+    GROUP_OPENERS.set(sepAfter, openers);
+  }
+  let opener = openers[at] ?? -1;
+  if (opener !== -1 && opener + 1 === at) opener = openers[opener];
+  return opener;
 }
 
 // A stage whose output does not come from its stdin: an echo or a printf, a `cat` or `tee` given a heredoc or
