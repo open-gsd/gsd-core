@@ -4113,6 +4113,120 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.doesNotMatch(out.ledger, /^superseded:/m, 'and no preservation block is written');
   });
 
+  // ── #5802 — a recorded decision must not leave the ledger without the console saying so, on any path ──
+
+  const REVIEW_HEAD = ['---', 'status: issues_found', '---', ''];
+  const deferredCr01 = () => runShippedDisposition({
+    reviewText: [...REVIEW_HEAD, '### CR-01: the original finding'].join('\n'),
+    priorText: '| CR-01 | critical | deferred | waiting on the vendor |\n',
+  }).ledger;
+
+  test('[regression #5802] a reused id decided by a fix report still reports the displaced decision', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: a brand new finding'].join('\n'),
+      priorText: deferredCr01(),
+      fixText: ['## Fixed Issues', '', '### CR-01: a brand new finding'].join('\n'),
+    });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'fixed');
+    assert.match(out.stdout, /decision\(s\) DROPPED/, 'the applied branch must report the displaced decision');
+    assert.match(out.stdout, /CR-01=deferred/);
+  });
+
+  test('[regression #5802] a reused id carried only by a fix report still reports the displaced decision', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### IN-07: unrelated'].join('\n'),
+      priorText: deferredCr01(),
+      iterFixText: { 2: ['## Fixed Issues', '', '### CR-01: an older, different finding'].join('\n') },
+    });
+    assert.match(out.stdout, /CR-01=deferred/, 'the carried-by-report path must name the displaced decision');
+  });
+
+  test('[regression #5802] a same-finding fix outcome over a recorded decision is an update, not a drop', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: the original finding'].join('\n'),
+      priorText: deferredCr01(),
+      fixText: ['## Fixed Issues', '', '### CR-01: the original finding'].join('\n'),
+    });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'fixed');
+    assert.doesNotMatch(out.stdout, /DROPPED/);
+  });
+
+  test('[regression #5802] a review whose headings carry a review-scoped prefix says it recorded nothing, and why', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### W6-CR-01: first', '### W6-WR-02: second'].join('\n'),
+    });
+    assert.match(out.stdout, /2 finding\(s\) recorded NOWHERE/);
+    assert.match(out.stdout, /carry a prefix before the id \(W6-CR-01, W6-WR-02\)/);
+    assert.match(out.ledger, /^unparsed: 2$/m);
+  });
+
+  test('[regression #5802] a prefixed heading inside a fence is an illustration and is not reported', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: real', '', '```', '### W6-CR-01: example', '```'].join('\n'),
+    });
+    assert.doesNotMatch(out.stdout, /carry a prefix/);
+  });
+
+  test('[regression #5802] a ledger row outside the id grammar is named and kept verbatim, and the run is a fixed point', () => {
+    const row = '| R1-WR-01 | warning | deferred | keep me |';
+    const first = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: row + '\n',
+    });
+    assert.ok(first.ledger.split('\n').includes(row), 'the unparseable row must survive the rewrite verbatim');
+    assert.match(first.stdout, /not in the id \| severity \| disposition \| source shape: R1-WR-01; kept verbatim/);
+    const second = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: first.ledger,
+    });
+    assert.ok(second.wroteNothing, 'the kept row re-reads as the same row, so the next run changes nothing');
+    assert.ok(second.ledger.split('\n').includes(row));
+  });
+
+  test('[regression #5802] a ledger row with an invalid disposition is named, and a regenerated row of the same id owns the id', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: '| CR-01 | critical | wontfix | no |\n',
+    });
+    assert.match(out.stdout, /ledger row\(s\) not in the id/);
+    assert.match(out.stdout, /replaced by a row of the same id/);
+    assert.strictEqual(ledgerRows(out.ledger).filter((r) => r.id === 'CR-01').length, 1, 'no duplicate id');
+  });
+
+  test('[regression #5802] a frontmatter id outside the grammar does not hand its title to the previous finding', () => {
+    const prior = [
+      '---', 'phase: 01', 'review: 01-REVIEW.md', 'titles: json', 'findings:',
+      '  - id: CR-01', '    severity: critical', '    disposition: deferred', '    title: "orig"',
+      '  - id: R1-CR-01', '    severity: critical', '    disposition: open', '    title: "other"',
+      'open: 0', 'total: 2', 'recorded: x', '---', '',
+      '| CR-01 | critical | deferred | why |',
+    ].join('\n');
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: orig'].join('\n'), priorText: prior });
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'deferred',
+      'CR-01 still names the same finding, so its decision is inherited');
+    assert.doesNotMatch(out.stdout, /DROPPED/);
+    assert.match(out.ledger, /title: "orig"/);
+    assert.doesNotMatch(out.ledger, /title: "other"/);
+  });
+
+  test('[property #5802] a ledger row with any review-scoped prefix survives a rewrite and is named', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    fc.assert(fc.property(
+      fc.stringMatching(/^[A-Z][A-Z0-9]{0,3}$/),
+      fc.constantFrom('open', 'fixed', 'skipped', 'deferred'),
+      (prefix, disposition) => {
+        const id = prefix + '-WR-01';
+        const row = '| ' + id + ' | warning | ' + disposition + ' | reason |';
+        const out = runShippedDisposition({
+          reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+          priorText: row + '\n',
+        });
+        assert.ok(out.ledger.split('\n').includes(row), id + ' must survive verbatim');
+        assert.ok(out.stdout.includes(id), id + ' must be named on the console');
+      },
+    ), { numRuns: 12 });
+  });
+
   test('a prior decision is NOT inherited when the id now names a different finding', () => {
     const first = runShippedDisposition({
       reviewText: ['---', 'status: issues_found', '---', '', '### CR-01: the original finding'].join('\n'),
