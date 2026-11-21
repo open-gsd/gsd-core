@@ -2,59 +2,30 @@
 
 /**
  * gsd-secret-read-guard.js — the stdin-timer cells of the host crash-policy
- * opt-in (#5784). Each runs the hook file itself and drives its stdin through
- * a raw pipe that this file controls: six hold it open, so the hook's own
- * stall timer (stdin not closed) is what ends them, and one closes it before
- * that timer, so the scan does.
+ * opt-in (#5784). Each runs the hook file and drives its stdin through a raw
+ * pipe: six hold it open, so the hook's own stall timer ends them, and one
+ * closes it before that timer, so the scan does.
  *
- * The timer is observed and steered through a clock seam, never raced. Every
- * spawn loads tests/helpers/stdin-timer-preload.cjs, which reports on fd 3 the
- * delay the hook armed its timer with (`armed <ms>`), whether that timer fired
- * (`fired <ms>`), each restart of it (`refreshed <ms>`), and each chunk the
- * hook's own `data` listener received (`data <bytes>`). Every cell asserts that
- * the hook armed exactly the exported STDIN_TIMEOUT_MS, once, and never
- * restarted it, and each cell that holds the pipe open asserts that the timer
- * fired, so no cell reads elapsed time. Three cells let the timer run at the hook's own 3 s. The rest set
- * GSD_TEST_STALL_TIMER, which the preload alone reads: the held-open cells
- * schedule the timer at 100 ms, counted from the payload's arrival in the
- * cells that write one, and the early-close cell parks it (armed, never due),
- * so no verdict depends on how fast the host runs.
- *
- * The process seam cannot stand in for these: spawnSync with no `input` closes
- * the child's stdin at once, so the hook sees EOF and takes its outer catch,
- * never its stdin timer.
- *
- * Why a file of its own, and not a `.platform` sibling: the child runs only
- * node, which is not a real-OS signal (#6002), so a sibling would carry no
- * signal and break the split invariant (#5074). Nor are these cells in
- * tests/gsd-secret-read-guard.test.cjs: a node-only child beside that file's
- * unlinkSync reads as fs-lock-or-install-child and would move the whole guard
- * suite onto the Windows conformance tier, which nothing here needs.
- *
- * Tests (describe "gsd-secret-read-guard: host opt-in to deny on its own
- * failure (#5784)"):
- *   - "opted in: a stalled stdin blocks as guard-error" — at the hook's own
- *     3 s.
- *   - "unset: a stalled stdin still allows, silently" — at the hook's own 3 s.
- *   - "opted in: a full payload whose stdin stays open blocks as guard-error" —
- *     writes a complete payload into the held-open pipe, and checks the hook
- *     received all of it, so the timer must still fire after data arrived.
- *   - "unset: a full payload whose stdin stays open still allows, silently"
- *   - "opted in: data arriving while the timer is pending does not restart
- *     it" — feeds a chunk for every chunk the hook reports; the timer starts
- *     only after the second, so data is still arriving while it is pending.
- *   - "opted in: data fed through the whole window does not hold off the
- *     timer at its own 3 s" — the same check by behaviour alone: the timer
- *     is not steered, and a chunk goes in every 100 ms until the run ends.
- *   - "opted in: a payload whose stdin closes before the timer gets its
- *     ordinary verdict" — the other side of the bound: the timer is armed and
- *     still pending (parked) when the pipe closes, so the scan's verdict must
- *     decide the run.
+ * The timer is observed and steered through a clock seam, never raced: every
+ * spawn loads tests/helpers/stdin-timer-preload.cjs, whose header lists what it
+ * reports on fd 3. Every cell asserts the hook armed STDIN_TIMEOUT_MS once and
+ * never restarted it, and each held-open cell that the timer fired, so no cell
+ * reads elapsed time. Three cells run the timer at the hook's own 3 s. The rest
+ * set GSD_TEST_STALL_TIMER: 100 ms, counted from arming, or from the hook's first
+ * `data` chunk where the cell writes a payload (the pending-data cell: its
+ * second); the early-close cell parks it (armed, never due).
  */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+// A raw spawn, not the process seam: spawnSync with no `input` closes the
+// child's stdin at once, so the hook takes its outer catch, never its timer.
+// A file of its own, not a `.platform` sibling: the child runs only node, no
+// real-OS signal (#6002), so a sibling would break the split invariant (#5074).
+// Nor in tests/gsd-secret-read-guard.test.cjs: a node-only child beside its
+// unlinkSync reads as fs-lock-or-install-child and would move that whole suite
+// onto the Windows conformance tier.
 const { spawn } = require('node:child_process');
 const { runHook: runHookSeam } = require('./helpers/process-seam.cjs');
 const { QUICK_SPAWN_TIMEOUT_MS } = require('./helpers/timeouts.cjs');

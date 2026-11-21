@@ -1,44 +1,19 @@
 'use strict';
 
 /**
- * Preload fixture for #5784 — a clock seam for gsd-secret-read-guard.js's
- * stdin stall timer, in the SPAWNED hook (`node --require <this> <hook>`).
- * Everything it observes it reports on fd 3, one line per event:
+ * Preload fixture for #5784 — a clock seam for gsd-secret-read-guard.js's stdin
+ * stall timer, in the SPAWNED hook (`node --require <this> <hook>`). It reports
+ * on fd 3, one line per event: `armed <ms>` for each timer the hook arms
+ * (the delay it asked for), `fired <ms>` just before that timer's callback
+ * runs, `refreshed <ms>` whenever refresh() runs on it by any route, and
+ * `data <bytes>` for each chunk delivered to the hook's stdin `data` listener,
+ * before the listener runs.
  *
- * - `armed <ms>` for each timer the hook arms through setTimeout, with the
- *   delay as the number Node schedules by; `fired <ms>` just before such a
- *   timer's callback runs. A cell reads which delay the hook asked for, and
- *   whether the timer is what ended the run, without measuring elapsed time.
- * - `refreshed <ms>` whenever refresh() runs on a timer the hook armed, by any
- *   route to it (the handle's method or the Timeout prototype's), so a cell
- *   can tell a timer that is restarted from one that is not.
- * - `data <bytes>` for each chunk delivered to a `data` listener the hook
- *   registers on process.stdin, before the listener runs. A cell reads that
- *   the hook itself received its payload, not only that the parent wrote it.
- *
- * The seam replaces setTimeout, clearTimeout and clearInterval on both
- * globalThis and node:timers, and resolves a clear by a timer's numeric id to
- * the timer, so a hook arms and cancels through it however it spells the call.
- * A restart it cannot see (another timer API, say) is caught by behaviour
- * instead: the stdin-timer test file's unsteered fed cell.
- *
- * GSD_TEST_STALL_TIMER steers the timer, never the delay the hook asked for
- * (which is still what `armed` and `fired` report):
- * - `<ms>` schedules the callback at that delay instead, so a held-open stall
- *   cell ends in milliseconds;
- * - `after-data:<ms>` schedules it that many ms after the hook's own `data`
- *   listener receives its first chunk (`after-data:<ms>:<n>`: its n-th), so a
- *   cell that writes into a held-open pipe has those chunks delivered before
- *   the timer can fire, on any host. Until then the timer is parked, and a
- *   clear or a refresh() of the hook's timer reaches the scheduled one too; a
- *   timer armed after that chunk is scheduled at `<ms>` at once;
- * - `park` arms a real, clearable timer that is never due (2^31-1 ms), so the
- *   hook's callback can never run, and a cell whose stdin closes is decided by
- *   the hook's verdict on any host, however slow.
- * Unset, the timer runs at the hook's own delay.
- *
- * Same `--require` seam as the context-monitor preloads; one-shot subprocess,
- * nothing restored. The hook itself reads neither the variable nor fd 3.
+ * It replaces setTimeout, clearTimeout and clearInterval on globalThis and node:timers
+ * and resolves a clear by numeric id, so the hook is seen however it spells the call;
+ * a restart it cannot see is caught by behaviour (the unsteered fed cell). Same
+ * `--require` seam as the context-monitor preloads; one-shot, nothing restored.
+ * The hook reads neither GSD_TEST_STALL_TIMER nor fd 3.
  */
 
 const fs = require('node:fs');
@@ -47,6 +22,12 @@ const timers = require('node:timers');
 const realSetTimeout = timers.setTimeout;
 const realClearTimeout = timers.clearTimeout;
 const realClearInterval = timers.clearInterval;
+// GSD_TEST_STALL_TIMER steers when the callback runs, never the delay reported:
+// `<ms>` schedules it at that delay; `after-data:<ms>[:<n>]` parks it until the
+// hook's `data` listener gets its first (or n-th) chunk, then schedules it <ms>
+// later, and a clear or refresh() of the hook's timer reaches the scheduled one
+// (a timer armed after that chunk is scheduled at `<ms>` at once); `park` arms a real,
+// clearable timer that is never due (2^31-1 ms). Unset, the hook's delay runs.
 const mode = process.env.GSD_TEST_STALL_TIMER || '';
 const park = mode === 'park';
 const afterData = /^after-data:([1-9][0-9]*)(?::([1-9][0-9]*))?$/.exec(mode);
