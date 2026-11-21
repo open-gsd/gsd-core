@@ -2557,81 +2557,33 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       process.stderr.write(`note: plan ${planArg} declares executor_runtime${cross.executorRuntime ? ` '${cross.executorRuntime}'` : ''} but is dispatched on the host (${cross.fallback}).\n`);
     }
 
-    // #4222: the #683 worktree base-check degrade is re-derived HERE for the
-    // RECORDED decision, the way #3737 re-derives the opt-out above. Pre-fix
-    // the degrade was decided only in workflow shell, after this resolve;
-    // the shell recorded it with `--force-isolation none`, and any later
-    // plain re-query (the orchestrator's own `--json` harnessFlag read, a
-    // subagent's gsd_run traffic, a wave transition) re-persisted the host
-    // capability over it — the guard then denied the sequential dispatch
-    // the degrade had mandated. Now every unheld write that carries no
-    // `--plan` goes through the same in-process evaluation the shell's
-    // `worktree base-check` runs, so a plain re-query re-derives `none` instead
-    // of overwriting it, and a fresh run on a repo whose HEAD matches its fork
-    // base still records the natural capability (nothing is sticky: the
-    // evaluation reads live git state each time it runs).
-    //
-    // Applied to the sentinel ONLY, deliberately NOT to stdout. The
-    // resolver's stdout is the host CAPABILITY the workflow's decision tree
-    // branches on, and every dispatch site fails closed on an unguarded
-    // `none` from it ("this runtime declares no executor-isolation
-    // primitive", exit 1 — executor-isolation-dispatch.md). Returning
-    // `none` here would turn every diverged-HEAD run into that FATAL. The
-    // shell keeps computing its own base-check for the same reasons it did
-    // before (the user-visible divergence message, `USE_WORKTREES`
-    // co-movement, the fail-closed guard's own inputs); what changes is that
-    // the persisted decision the guard reads no longer depends on the shell
-    // re-recording faster than the next plain call. Applied AFTER
-    // --force-isolation, mirroring #3737: the degrade wins over a force,
-    // because the harness would fork the worktree from the diverged base
-    // regardless of what the caller asked for.
-    //
-    // A PLAN-SCOPED write does not re-derive it: any query that carries
-    // `--plan`, even with an empty value. Execute-phase takes the base check
-    // at the phase-level resolve and again between waves (#1369), and a
-    // degrade at either turns worktrees off for the rest of the run, so every
-    // later plan takes the per-plan gate's forced-`none` branch. A plan reaches
-    // the gate's `true` branch only when neither degraded, and the record it
-    // writes is the per-plan decision the guard holds the dispatch to. HEAD can
-    // still move after that decision: a sequential plan of a mixed wave commits
-    // on the main tree before a worktree plan of the same wave dispatches, or a
-    // wave merges back while the between-wave check did not run. Re-deriving
-    // here would then record `none` for a plan decided `true`, and the guard
-    // would allow the flag-less spawn of a plan meant to be isolated. The flag,
-    // not its value, is the test: an empty `$plan_id` (lost with an earlier
-    // tool call's shell) would otherwise re-derive into a `none` that names no
-    // plan, which the guard applies to every plan of the phase. Where the
-    // harness forks from origin/HEAD, a flagged spawn on that diverged base is
-    // still stopped by the spawn-time branch check (`exit 42`).
+    // #4222: the #683 worktree base-check degrade is re-derived here for the
+    // RECORDED decision, as #3737 re-derives the opt-out above, so a plain
+    // re-query re-derives `none` instead of re-persisting the host capability
+    // over the degrade the shell recorded. It reads live git state each time it
+    // runs, so nothing is sticky. It reaches the sentinel only, never stdout:
+    // stdout is the host capability the dispatch sites branch on, and they
+    // fail closed on an unguarded `none`. It applies after --force-isolation,
+    // as #3737 does, because the harness forks from the diverged base whatever
+    // the caller asked. A query that carries `--plan`, even with an empty
+    // value, does not re-derive it: that write is a plan's record (ADR-4630
+    // Decision 2, "A plan-scoped write does not re-derive the base check").
     const heldDegrade = !forcedApplied
       ? heldDegradeRecord(cwd, { phase: phaseArg, plan: planArg })
       : null;
-    // WHAT A HELD QUERY REFRESHES (#4904 review 2026-11-17, option (c)). It
-    // writes no decision record: isolation, harness_flag, decided_by,
-    // decided_at and written_at of every decision record, legacy slot
-    // included, stay as the caller wrote them, so neither the hold nor the
-    // guards' ten-minute window moves. That also leaves the executor fields
-    // those records carry as of the caller's write, which the guards'
-    // classification reads (isExecutorDispatch): a routed executor changed in
-    // the hold, another plan of a held phase, the all-phase list of an
-    // unscoped query, a plan or hint added in the hold, or a record written
-    // without --executor-type. So the held query writes the executor identity
-    // it derives, and only that, to its own scope's identity record, which the
-    // classification reads beside the decision records (the union of all).
-    // A held query whose identity record cannot be written still holds and
-    // writes no decision record (the option (c) ruling): the caller's `none`
-    // stands. The guards' reader fails executor classification closed in the
-    // states that stop the write (a phase or plan that is not a safe key, a
-    // directory at the record name, an identity directory it cannot write;
-    // isolation-sentinel.js), so a stale name list cannot let a specialist
-    // through, and in each of those states that ends with the hold, ten
-    // minutes after the held record's `decided_at`; a transient I/O error
-    // leaves no such trace (ADR-4630). A
-    // decision write removes its scope's identity record: the decision record
-    // now carries the same fields. The hold is a read-then-write with no lock:
-    // a caller's forced `none` landing between a plain query's read and its
-    // write can still be overwritten by that write (ADR-4630). Decided before
-    // the #4222 re-derivation below, so a query that stops holding re-derives.
+    // WHAT A HELD QUERY REFRESHES (#4904 review 2026-11-17, option (c)): no
+    // decision record, so neither the hold nor the guards' ten-minute window
+    // moves; only the executor identity it derives, to its own scope's
+    // identity record, which the guards' classification (isExecutorDispatch)
+    // unions with the decision records. If that write cannot land, the query
+    // still holds and writes no decision record: the caller's `none` stands.
+    // While any hold-eligible record is among those read, the guards' reader
+    // fails classification closed in the write-stopping states ADR-4630 lists
+    // (a transient I/O error leaves no trace); the state ends once no such
+    // record remains, ten minutes after the latest one's `decided_at` at the
+    // latest. A decision write removes its scope's identity record. Decided
+    // before the #4222 re-derivation below, so a query that stops holding
+    // re-derives (ADR-4630 Decision 2, "A held query refreshes executor identity").
     let truncatedRecord = false;
     const warnDropped = (dropped) => {
       truncatedRecord = true;
@@ -2658,83 +2610,26 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       recordedHarnessFlag = null;
     }
 
-    // #4561: a PLAIN query holds a fresh, in-scope `none` record instead of
-    // overwriting it. Three dispatch sites compute a degrade the resolver
-    // structurally cannot re-derive — which host tool the caller dispatches
-    // through (dispatch-isolation-gate.md's single-agent fallback), the #2474
-    // per-plan submodule intersection (per-plan-worktree-gate.md), and
-    // execute-plan.md's Pattern B unisolated segments — and each records it
-    // with `--force-isolation none`. Before this fix any later plain query in
-    // the same run (the orchestrator's own `--json` harnessFlag read, a
-    // subagent's gsd_run traffic, a wave transition) re-persisted the host
-    // capability over that record, and the guard denied the sequential
-    // dispatch the degrade mandated (#4222's race, on the three producers
-    // #4232 could not reach). Enumerating producers does not terminate; the
-    // resolver instead stops racing the shell for the sentinel:
-    //
-    //   forced  → the shell's decision; always recorded (unchanged).
-    //   plain, a fresh well-formed `none` stands, and every scope identifier
-    //           THIS query names matches the record's → hold: no decision
-    //           write; only its scope's executor-identity record (below).
-    //   plain, otherwise → recorded as before.
-    //
-    // Scope: an identifier the query omits is unconstrained, one it names
-    // must equal the record's. So a same-phase re-query holds a plan-scoped
-    // degrade, and an unscoped re-query, which has no keyed record to name,
-    // holds whatever the legacy slot carries, another orchestrator's degrade
-    // included: at worst it runs sequentially for the rest of that record's
-    // ten minutes. Meanwhile a plain `--plan <other>` re-resolve — a new
-    // record request for a different plan — still writes, and the per-plan
-    // gate forces the host's capability for a plan that decided `true`, when it
-    // has a plan id and reads a worktree mode, so its own earlier `none` does not
-    // hold it (per-plan-worktree-gate.md: "a stale `none` … a LATER,
-    // genuinely harness-worktree plan"). Stale (the reader's 10-minute
-    // window) or malformed records are never held, so nothing is permanently
-    // sticky, and a fresh run with no sentinel records the natural
-    // capability as it always did.
-    //
-    // STDOUT REPORTS THE HELD VALUE (#4904, #5254): a held
-    // query prints `none`, clears `harnessFlag`/`exec` the way a forced
-    // `none` does, and sets `held: true` under --json. The guard and the
-    // workflow then read the same decision. The dispatch sites tell a held
-    // `none` from a host that declares no primitive by that `held` field
-    // (dispatch-isolation-gate.md, "Resolve ISOLATION"), and they read the
-    // host's descriptors (`harnessFlag`, `exec`) from the sentinel-free
-    // `inspect-dispatch-isolation`, which no hold reaches. The one exception is
-    // the orchestrator-worktree exec read, which names its plan so #6303 can
-    // resolve a foreign runtime: a hold reaches it only through that plan's own
-    // caller `none`, which the per-plan gate replaces for a plan decided `true`,
-    // and a held host answer there is exec:null, which halts the wave. The #4222
-    // base-check degrade above stays sentinel-only: it is re-derived from
-    // live git state on every unheld call that carries no `--plan`, and the shell
-    // computes the same check itself.
-    //
-    // The reader is the guards' own (hooks/lib/isolation-sentinel.js), so a
-    // record is fresh and well-formed here exactly when it is for the guard —
-    // a second definition would let the two drift. The windows differ on
-    // purpose: this hold lapses ten minutes after `decided_at`, while the guard
-    // also honours an aged `none` for its own phase for up to
-    // `AGED_NONE_MAX_MS` (#5479).
-    // #4630 child 1 — ORDER CONTRACT for the two mechanisms above, which
-    // arrived as separate PRs (#4232 for the re-derivation, #4620 for the
-    // hold). The hold is decided FIRST: a held query writes no decision, so the
-    // #4222 re-derivation is skipped rather than spending its bounded git
-    // spawns on a value nobody reads. A plain query that is not held then
-    // records the re-derived value. The hold is consulted on EVERY plain
-    // query, including one whose own derivation would also be `none`: writing
-    // that `none` as `resolver` would re-own a caller's record, and when HEAD
-    // caught up the next plain query would record the capability over a degrade
-    // the resolver never owned. That overlap (a producer the resolver cannot
-    // reach, on a repo that is also diverged) is where #4561 would return.
-    // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
-    // Never allowed to affect this query's own stdout contract or throw.
-    // Provenance names who produced the recorded VALUE, not whether a force
-    // was applied. The #3737 opt-out and the #4222 base-check degrade both run
-    // AFTER --force-isolation and can overrule it; a `none` they substitute
-    // for a forced `harness-worktree` is the resolver's own derivation, and
-    // stamping it `caller` would let a later plain query hold it after the
-    // repository caught up. The record is the caller's only when it records
-    // exactly what the caller forced.
+    // #4561: a PLAIN query holds a fresh, in-scope `none` a caller recorded
+    // instead of overwriting it. Three dispatch sites compute a degrade the
+    // resolver cannot re-derive (the gate's single-agent fallback, the #2474
+    // per-plan submodule intersection, execute-plan's Pattern B segments) and
+    // record it with `--force-isolation none`; a later plain query used to
+    // re-persist the host capability over it, and the guard then denied the
+    // sequential dispatch (#4222's race). A forced write always records. A
+    // plain query holds a record that is fresh, well-formed, `none`, decided by
+    // the caller less than ten minutes ago (`decided_at`), and equal to every
+    // scope identifier the query names. A held query prints `none`, `held: true`
+    // under --json and no `harnessFlag` or `exec`, unless its plan goes to
+    // another runtime (#6303). The hold is consulted on every plain query, even
+    // one deriving `none` itself, so a caller's record is never re-owned as
+    // `resolver`. The read-then-write takes no lock. ADR-4630 Decision 2.
+
+    // Side-effect write (#3045 CORE REDESIGN): it never changes this query's
+    // stdout and never throws. Provenance names who produced the recorded
+    // VALUE: the #3737 opt-out and the #4222 degrade run after --force-isolation
+    // and can overrule it, and a `none` they substitute is the resolver's own,
+    // so the record is the caller's only when it records exactly what was forced.
     const decidedBy = forcedApplied && recordedIsolation === forcedIsolation ? 'caller' : 'resolver';
     // `--renew-held <ms>` (#4904): a dispatch site re-recording the
     // `none` its own plain query reported as held passes that answer's
@@ -3638,24 +3533,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 
   /**
    * #4561 — the degrade record a PLAIN `dispatch-isolation` query must not
-   * overwrite, or `null`. Reads the records `writeDispatchIsolationSentinel`
-   * writes (under `<cwd>/.gsd/`, `cwd` already resolved by main()) through the
-   * guards' shared reader, so freshness and shape are judged by the one
-   * definition the guard itself applies. #5682 gave each dispatch its own keyed
-   * record, because a parallel orchestrator's write replaces the legacy slot:
-   * the hold reads the newest fresh record at the query's own scope
-   * (`ownScope`), so that write can neither hide the record nor outrank it.
-   *
-   * Returns the record only when ALL hold: present, fresh, well-formed,
-   * decided less than the freshness window ago (`holdExpired`, measured from
-   * `decided_at`, which a `--renew-held` re-record does not move),
-   * `isolation === 'none'`, and every identifier the query names equals the
-   * record's (an omitted identifier is unconstrained — see the call site).
-   *
-   * Never throws. The reader lives in hooks/lib/, which some runtime
-   * installs omit (`hostBehaviors.skipSharedHooksInstall`); there it cannot
-   * be required and this returns `null` — pre-#4561 behaviour, on exactly
-   * the installs that have no guard hook to deny the dispatch.
+   * overwrite, or `null`. Reads what `writeDispatchIsolationSentinel` writes
+   * under `<cwd>/.gsd/` through the guards' shared reader, at the query's own
+   * scope (`ownScope`; #5682 keyed records), so a parallel orchestrator's write
+   * can neither hide the record nor outrank it. Returns it only when it is
+   * present, fresh, well-formed, inside its hold window (`holdExpired`, from
+   * `decided_at`, which `--renew-held` does not move), `none`, decided by the
+   * caller, and every identifier the query names equals the record's. Never
+   * throws: where hooks/lib/ is not installed
+   * (`hostBehaviors.skipSharedHooksInstall`) it returns `null`, the pre-#4561
+   * behaviour on installs that have no guard hook.
    */
   function heldDegradeRecord(cwd, { phase, plan }) {
     const held = readDegradeRecord(cwd, { phase, plan });

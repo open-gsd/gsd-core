@@ -347,25 +347,16 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null, subagentType = nu
 }
 
 /**
- * #4561: `readSentinel` minus the root resolution — reads the records under
- * exactly `<root>/.gsd/`. Same return shape, same staleness and malformed-shape
- * rules, same injectable `clock`; never throws. For a caller that already holds
- * the resolved project root and needs to read the SAME files it would write
- * (gsd-tools.cjs's `routeDispatchIsolation` writes under `<cwd>/.gsd/` with a cwd
- * its dispatcher has already resolved, and uses this reader to decide whether a
- * fresh degrade record is standing before it overwrites one). Kept in this module
- * so the resolver and the guards share ONE definition of "fresh, well-formed,
- * applicable".
- *
- * `ownScope` narrows the candidates to records AT `dispatchIds`' own scope, for
- * the resolver's hold. The guards' `sentinelAppliesToDispatch` treats a record
- * that names no phase as "cannot compare", so another orchestrator's newer
- * unscoped write would win `latestWritten` and hide this query's own record, and
- * the query would then overwrite it. Here a record counts only when every
- * identifier `dispatchIds` names equals the record's, and a phase with no plan
- * also reads that phase's plan records, which the legacy slot may have lost to
- * another orchestrator's write. A query naming neither has no keyed record to
- * read, so only the legacy slot is read, whatever scope it carries.
+ * #4561: `readSentinel` minus the root resolution. Reads the records under exactly
+ * `<root>/.gsd/` with the same return shape, staleness and shape rules and injectable
+ * `clock`; never throws. gsd-tools.cjs's `routeDispatchIsolation` reads the files it
+ * is about to write through it, so the resolver and the guards share one definition
+ * of fresh, well-formed and applicable. `ownScope` narrows the candidates to records
+ * at `dispatchIds`' own scope, for the resolver's hold: each identifier it names must
+ * equal the record's, a phase with no plan also reads that phase's plan records, and a
+ * query naming neither reads only the legacy slot, whatever scope it carries. Without
+ * it another orchestrator's newer unscoped write would win `latestWritten` and hide
+ * the query's own record (ADR-4630 Decision 2).
  */
 function readSentinelAt(root, { clock = Date, dispatchIds = null, ownScope = false, subagentType = null, readText = readSentinelText } = {}) {
   // #6213: the executor-identity scan feeds only `isExecutorDispatch`, which answers true for gsd-executor
