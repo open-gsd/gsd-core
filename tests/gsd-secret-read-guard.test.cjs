@@ -3810,6 +3810,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     // A launched xargs reads its launcher's stdin; an xargs it runs gets the words as its own operands.
     'find . -exec xargs cat \\; <<< .env',
     'xargs sudo xargs cat <<< .env',
+    // Split at the delimiter `-d` or `-0` names, decoded as xargs decodes it.
+    "printf '.envxb' | xargs -d x cat",
+    'xargs --delimiter=x cat <<< .envxb',
+    "xargs -d '\\x78' cat <<< .envxb",
+    "printf 'a\\0.env\\0' | xargs -0 cat",
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3827,6 +3832,14 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ["printf '\\x2eenv\\n' | xargs cat", '\\x2eenv\\n'],
     ["printf '%b' '\\x2eenv' | xargs cat", '%b \\x2eenv'],
     ["echo -e '\\x2eenv' | xargs cat", '-e \\x2eenv'],
+    // fd 0 opened read-write, and a redirect xargs inherits from a group, a subshell, `exec` or the shell running it.
+    ['xargs cat <> names', 'names'],
+    ['{ xargs cat; } < names', 'names'],
+    ['(xargs cat) < names', 'names'],
+    ['exec < names; xargs cat', 'names'],
+    ["sh -c 'xargs cat' < names", 'names'],
+    // A delimiter xargs would not split at as one character.
+    ['xargs -d ab cat <<< x', 'ab'],
   ];
   const ALLOWED = [
     "xargs echo <<< 'cat .env'",
@@ -3836,6 +3849,10 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     'xargs cat <<< README.md',
     'xargs cat 3< names',
     'xargs -a names echo',
+    '{ xargs echo; } < names',
+    "bash -c 'echo a | xargs cat' < names",
+    'sort < a.txt; ls | xargs cat',
+    'xargs -d x cat <<< a.envxb',
     // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
     'cat names | xargs cat',
   ];

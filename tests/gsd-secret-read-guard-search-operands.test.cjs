@@ -421,6 +421,11 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ["grep -rn x --exclude=.env . # it's\necho $X", '--exclude=.env'],
     ["grep -rn x --exclude=.env . <<EOF\nit's\nEOF\necho $X", '--exclude=.env'],
     ['grep -rn x --exclude=.env .; echo $(date)', '--exclude=.env'],
+    // eval, source, `.` and a process substitution read their text again, so a quote here does not keep a `$` literal.
+    ["grep -rn x --exclude=.env . ; eval '$X'", '--exclude=.env'],
+    ["grep -rn '$HOME' --exclude=.env . ; source x", '--exclude=.env'],
+    ["grep -rn '$HOME' --exclude=.env . ; . x", '--exclude=.env'],
+    ["diff <(grep -rn '$X' --exclude=.env .) y", '--exclude=.env'],
     ['grep .env { $X', '.env'],
     // The rest of the cost the narrowing does not lift: an expansion in the tool's own words, a brace or tilde.
     ['grep -rn x --exclude=.env "$DIR"', '--exclude=.env'],
