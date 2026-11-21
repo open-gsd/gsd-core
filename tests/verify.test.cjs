@@ -4167,6 +4167,110 @@ describe('verifySummaryCore — reusable structured contract (#2572)', () => {
     assert.deepStrictEqual(r.checks.files_created.missing, []);
   });
 
+  // ── #6233: a backtick span naming several paths ──
+  //
+  // Pattern 1's capture `([^`]+\.[a-zA-Z]+)` is the WHOLE span, so a span like
+  // `src/a.py src/b.py` entered the candidate set as one whitespace-joined
+  // string — a path no filesystem can hold. It was reported missing even when
+  // every named file existed, the report said nothing about the real paths,
+  // and the dead candidate consumed budget (default cap: 2) before any
+  // genuine single-path claim was reached. Expected: each token in the span is
+  // filtered through isProbableProjectFile and probed as its own candidate.
+
+  test('#6233: each path inside a multi-file backtick span is checked on its own', () => {
+    const body = '# Summary\n\nBuilt `src/a.py src/b.py` and `src/gone.py`.\n';
+    const dir = repo(body, { 'src/a.py': 'x\n', 'src/b.py': 'x\n' });
+
+    const all = verifySummaryCore(dir, 'SUMMARY.md', Infinity, { checkCommits: false });
+    assert.strictEqual(
+      all.checks.files_created.checked, 3,
+      `the span must contribute two candidates and the lone path one, got ${JSON.stringify(all.checks.files_created)}`,
+    );
+    assert.deepStrictEqual(
+      all.checks.files_created.missing, ['src/gone.py'],
+      `only the genuinely missing file may be reported — the existing span members may not be, ` +
+      `got ${JSON.stringify(all.checks.files_created)}`,
+    );
+  });
+
+  test('#6233: a multi-file span no longer spends the default budget on one dead candidate', () => {
+    // Same fixture as above at the CLI default budget (2): pre-fix the joined
+    // string was candidate #1, so checked=2 found=0 and BOTH reported entries
+    // were wrong (the span plus src/gone.py crowding out the real paths).
+    const dir = repo(
+      '# Summary\n\nBuilt `src/a.py src/b.py` and `src/gone.py`.\n',
+      { 'src/a.py': 'x\n', 'src/b.py': 'x\n' },
+    );
+    const r = verifySummaryCore(dir, 'SUMMARY.md', undefined, { checkCommits: false });
+    assert.deepStrictEqual(
+      r.checks.files_created.missing, [],
+      `the budget now buys two real, existing paths, got ${JSON.stringify(r.checks.files_created)}`,
+    );
+    assert.strictEqual(r.passed, true, `errors: ${JSON.stringify(r.errors)}`);
+  });
+
+  // ── #6233 review: a span that does NOT name several paths stays whole ──
+  //
+  // The review probe showed the blanket whitespace split regressing single
+  // paths whose NAME contains a space (`docs/My File.md` became `docs/My` +
+  // `File.md`, and `docs/My` was reported missing although the file exists —
+  // isProbableProjectFile requires only a `/`, not an extension). The split now
+  // fires only when EVERY token looks like a path with an extension and passes
+  // the filter (trailing `,`/`;` stripped first, which also fixes the
+  // comma-separated span the review flagged); any other multi-token span names
+  // one path and stays one candidate.
+
+  test('#6233 review: a spaced single path that exists stays one candidate and is found', () => {
+    const dir = repo(
+      '# Summary\n\nBuilt `docs/My File.md` and shipped it.\n',
+      { 'docs/My File.md': 'x\n' },
+    );
+    const r = verifySummaryCore(dir, 'SUMMARY.md', Infinity, { checkCommits: false });
+    assert.strictEqual(r.checks.files_created.checked, 1,
+      `the span must stay ONE candidate, got ${JSON.stringify(r.checks.files_created)}`);
+    assert.deepStrictEqual(r.checks.files_created.missing, [],
+      `the spaced path exists and must be found, got ${JSON.stringify(r.checks.files_created)}`);
+  });
+
+  test('#6233 review: an absent spaced single path is reported whole, not split', () => {
+    const dir = repo(
+      '# Summary\n\nBuilt `docs/My File.md` and shipped it.\n',
+      {},
+    );
+    const r = verifySummaryCore(dir, 'SUMMARY.md', Infinity, { checkCommits: false });
+    assert.deepStrictEqual(r.checks.files_created.missing, ['docs/My File.md'],
+      `the WHOLE spaced path must be reported missing — never the split-off 'docs/My', ` +
+      `got ${JSON.stringify(r.checks.files_created.missing)}`);
+  });
+
+  test('#6233 review: a comma-separated span checks each path (trailing separators stripped)', () => {
+    const dir = repo(
+      '# Summary\n\nBuilt `src/a.py, src/b.py` and `src/gone.py`.\n',
+      { 'src/a.py': 'x\n', 'src/b.py': 'x\n' },
+    );
+    const r = verifySummaryCore(dir, 'SUMMARY.md', Infinity, { checkCommits: false });
+    assert.strictEqual(r.checks.files_created.checked, 3,
+      `both comma-separated paths plus the lone path must be probed, got ${JSON.stringify(r.checks.files_created)}`);
+    assert.deepStrictEqual(r.checks.files_created.missing, ['src/gone.py'],
+      `'src/a.py,' with its trailing comma must never be reported missing, ` +
+      `got ${JSON.stringify(r.checks.files_created.missing)}`);
+  });
+
+  test('#6233 review: a shell-command span is not split into path candidates', () => {
+    // `cd src && node tools/run.js` — only the last token looks like a path
+    // with an extension, so the span stays one candidate (matching next's
+    // behavior of reporting the joined string missing).
+    const dir = repo(
+      '# Summary\n\nRan `cd src && node tools/run.js` per the docs.\n',
+      {},
+    );
+    const r = verifySummaryCore(dir, 'SUMMARY.md', Infinity, { checkCommits: false });
+    assert.strictEqual(r.checks.files_created.checked, 1,
+      `the span must stay ONE candidate, got ${JSON.stringify(r.checks.files_created)}`);
+    assert.deepStrictEqual(r.checks.files_created.missing, ['cd src && node tools/run.js'],
+      `got ${JSON.stringify(r.checks.files_created.missing)}`);
+  });
+
   // ── Minor: property coverage over the extractor (it is a parser) ──
 
   test('#2685 property: no synthesized SUMMARY body yields a malformed candidate', () => {
