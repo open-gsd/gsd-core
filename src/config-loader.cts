@@ -515,6 +515,15 @@ function _resetRuntimeWarningCacheForTests(): void {
   _warnedShadowedGlobalKeys.clear();
 }
 
+// #6332: both the warning dedup sets and the git-ignore cache are per
+// invocation. An in-process caller runs many invocations in one process, so
+// they are reset between calls: each call warns as a fresh process would and
+// re-reads a .gitignore that changed.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('config-loader.warnings', _resetRuntimeWarningCacheForTests);
+invocationScopeMod.registerInvocationReset('config-loader.gitIgnoredCache', () => { _gitIgnoredCache.clear(); });
+
 // ─── #3532 (10b): shadowed global-defaults diagnostic ────────────────────────
 
 // The keys Branch D's `_globalBaseCfg` demonstrably honors from

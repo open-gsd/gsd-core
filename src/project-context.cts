@@ -33,6 +33,12 @@ const FIND_PROJECT_ROOT_MAX_DEPTH = 10;
 
 export interface ProjectContextProvenance {
   readonly source: 'explicit' | 'ancestor' | 'workspace' | 'main-checkout' | 'none';
+  /**
+   * How the git facts were obtained (#6355): `filesystem` when the layout was
+   * read from `.git`, `gitdir` and `commondir` with no process started, `git`
+   * when `git rev-parse` answered (a layout the reader does not recognise).
+   */
+  readonly layout: 'filesystem' | 'git';
   readonly reason: string;
   readonly degraded: boolean;
   readonly warnings: readonly string[];
@@ -62,6 +68,12 @@ export interface ResolveProjectContextOptions {
   deps?: {
     execGit?: ExecGitFn;
     fs?: { realpathSync?: (p: string) => string };
+    /**
+     * The filesystem reader of the git layout. Returns the facts, or `null`
+     * for a layout it does not recognise, which then goes to `execGit`.
+     * Default: `readGitLayout`. Pass `() => null` to force the git path.
+     */
+    readGitLayout?: (start: string) => GitFacts | null;
   };
 }
 
@@ -326,7 +338,7 @@ export function walkUpForPlanning(startDir: string): PlanningWalk {
 }
 // ─── Git facts ────────────────────────────────────────────────────────────────
 
-interface GitFacts {
+export interface GitFacts {
   worktreeRoot: string;
   repoRoot: string;
   gitCommonDir: string | null;
@@ -347,6 +359,444 @@ const GIT_WORKTREE_LIST_WARNING =
 
 function lexicalFacts(start: string, reason: string, degraded: boolean, warnings: string[]): GitFacts {
   return { worktreeRoot: start, repoRoot: start, gitCommonDir: null, reason, degraded, warnings };
+}
+
+// ─── Git layout from the filesystem (#6355) ───────────────────────────────
+//
+// `git rev-parse --show-toplevel --git-dir --git-common-dir` costs a process
+// per CLI call (about 9 ms of a 10 ms in-process call on macOS, more on
+// Windows). For the layouts below the same three answers are on disk. The
+// reader is deliberately narrow: it answers only where it can give exactly
+// what git gives, and returns `null` for everything else, which then goes to
+// git as before. tests/git-layout-parity.process.test.cjs compares it
+// with real git over built fixtures.
+//
+// Recognised: no repository; a main checkout (`.git` is a directory); a
+// linked worktree of a non-bare repository; a checkout whose `.git` file
+// names a separate git dir. Left to git: a start inside a git dir or a bare
+// repository, a worktree of a bare repository, a submodule (`core.worktree`),
+// `core.bare`, config includes, a `.git` that is a symlink, a repository
+// another user owns, and any of the environment variables that change
+// discovery.
+
+/**
+ * Variables that change where git looks or what it reports, and that reach
+ * git through the seam. GIT_DIR, GIT_WORK_TREE and GIT_COMMON_DIR are not
+ * here: the seam removes them before it starts git (`scrubGitLocationEnv`,
+ * #5548), so git discovers from the working directory with them set, and so
+ * does this reader.
+ */
+const GIT_DISCOVERY_ENV = Object.freeze([
+  'GIT_CEILING_DIRECTORIES', 'GIT_DISCOVERY_ACROSS_FILESYSTEM', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS',
+]);
+
+/** `.git` files, `commondir` and `gitdir` hold one path; a config that is larger than this goes to git. */
+const GIT_POINTER_MAX_BYTES = 4096;
+const GIT_CONFIG_MAX_BYTES = 256 * 1024;
+/** Deeper than any real path; ends the walk if `dirname` ever stopped converging. */
+const GIT_WALK_MAX_DEPTH = 256;
+
+function lstatOrNull(p: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The text of a small regular file, or null when it is missing, not a regular
+ * file, or too large.
+ *
+ * It must never block. Opening a FIFO for reading waits for a writer, and a
+ * planted FIFO named `config` or `commondir` would hang every CLI call and
+ * hook, where the git process this replaces was bounded by a timeout. So the
+ * entry is checked with lstat first (a symlink is not followed either), and
+ * the open itself is non-blocking and refuses a link where the platform can.
+ */
+function readSmallFile(file: string, maxBytes: number): string | null {
+  if (!lstatOrNull(file)?.isFile()) return null;
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0);
+  let fd: number;
+  try {
+    fd = fs.openSync(file, flags);
+  } catch {
+    return null;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > maxBytes) return null;
+    const buf = Buffer.alloc(st.size);
+    let read = 0;
+    while (read < st.size) {
+      const n = fs.readSync(fd, buf, read, st.size - read, read);
+      if (n === 0) break;
+      read += n;
+    }
+    return buf.subarray(0, read).toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // nothing to do about a failed close of a file that was only read
+    }
+  }
+}
+
+/** A HEAD that git accepts: a symbolic ref under refs/, or an object id (SHA-1 or SHA-256). */
+const VALID_HEAD_RE = /^(?:ref:[ \t]*refs\/\S+|[0-9a-f]{40}(?:[0-9a-f]{24})?)[ \t]*\r?\n?$/;
+
+function isAccessibleDir(dir: string): boolean {
+  if (!lstatOrNull(dir)?.isDirectory()) return false;
+  try {
+    fs.accessSync(dir, fs.constants.R_OK | fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A directory git would accept as a git dir, checked as strictly as git checks
+ * it: a HEAD git can parse, and an `objects` and a `refs` directory it can
+ * enter (a linked worktree's git dir has a `commondir` in their place).
+ *
+ * Strict on purpose. This is what lets the reader stop at a `.git` and call it
+ * the repository. A looser check would stop at a planted `.git` that git walks
+ * straight past, and report a nearer root than git does.
+ */
+function isGitDir(dir: string): boolean {
+  const head = readSmallFile(path.join(dir, 'HEAD'), GIT_POINTER_MAX_BYTES);
+  if (head === null || !VALID_HEAD_RE.test(head)) return false;
+  if (lstatOrNull(path.join(dir, 'commondir'))?.isFile()) return true;
+  return isAccessibleDir(path.join(dir, 'objects')) && isAccessibleDir(path.join(dir, 'refs'));
+}
+
+/**
+ * A directory that might be a git dir. Loose on purpose, the other way round:
+ * the walk leaves anything that might be one to git, because git has no work
+ * tree to report from inside a git dir or a bare repository.
+ */
+function mightBeGitDir(dir: string): boolean {
+  return lstatOrNull(path.join(dir, 'HEAD')) !== null;
+}
+
+/** What the reader needs from a git config file, when git would accept the file. */
+export interface GitConfigFacts {
+  /**
+   * git's own name for each key to its last value: `section.key`, or
+   * `section.subsection.key` under a `[section "subsection"]` header (section
+   * and key lower case, subsection as written). A key with no `=` is `true`.
+   * The subsection is kept because `[core "x"] bare = false` is `core.x.bare`
+   * to git and must not be read as `core.bare`.
+   */
+  values: Map<string, string | true>;
+  /** Every section name seen, lower case, without its subsection. */
+  sections: Set<string>;
+}
+
+/**
+ * Parse a git config file the way git's own reader does, or return null where
+ * git would reject the file. It follows config.c: `#` and `;` comments, a
+ * `[section]` or `[section "subsection"]` header that may be followed by a
+ * key on the same line, keys of letters, digits and `-`, a value that may be
+ * quoted in part, the escapes `\\ \" \n \t \b`, and a backslash at the
+ * end of a line continuing the value.
+ *
+ * The reader must not answer for a repository git refuses to open, and must
+ * read `core.bare` and `core.worktree` exactly as git does, so guessing with
+ * patterns is not enough. tests/git-layout-parity.process.test.cjs compares
+ * this function with `git config --file` over generated files.
+ */
+export function parseGitConfig(input: string): GitConfigFacts | null {
+  const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
+  const values = new Map<string, string | true>();
+  const sections = new Set<string>();
+  let section: string | null = null;
+  let i = 0;
+  const n = text.length;
+  // git's isspace: these four and no others. A form feed or vertical tab is a bad config line to git.
+  const isSpace = (c: string): boolean => c === ' ' || c === '\t' || c === '\r' || c === '\n';
+
+  while (i < n) {
+    const c = text[i];
+    if (isSpace(c)) { i += 1; continue; }
+    if (c === '#' || c === ';') {
+      while (i < n && text[i] !== '\n') i += 1;
+      continue;
+    }
+    if (c === '[') {
+      i += 1;
+      let name = '';
+      let subsection: string | null = null;
+      for (;;) {
+        if (i >= n) return null;
+        const h = text[i];
+        if (h === ']') { i += 1; break; }
+        if (h === ' ' || h === '\t') {
+          // a quoted subsection, then the closing bracket
+          while (i < n && (text[i] === ' ' || text[i] === '\t')) i += 1;
+          if (text[i] !== '"') return null;
+          i += 1;
+          subsection = '';
+          for (;;) {
+            if (i >= n || text[i] === '\n') return null;
+            if (text[i] === '"') { i += 1; break; }
+            if (text[i] === '\\') {
+              i += 1;
+              if (i >= n || text[i] === '\n') return null;
+            }
+            subsection += text[i];
+            i += 1;
+          }
+          if (text[i] !== ']') return null;
+          i += 1;
+          break;
+        }
+        if (!/[A-Za-z0-9.-]/.test(h)) return null;
+        name += h.toLowerCase();
+        i += 1;
+      }
+      if (name === '') return null;
+      section = subsection === null ? name : `${name}.${subsection}`;
+      // `[a.b]` is git's old spelling of a subsection: the section is `a`.
+      sections.add(name.split('.')[0]);
+      continue;
+    }
+    if (!/[A-Za-z]/.test(c)) return null;
+
+    let key = '';
+    while (i < n && /[A-Za-z0-9-]/.test(text[i])) { key += text[i].toLowerCase(); i += 1; }
+    while (i < n && (text[i] === ' ' || text[i] === '\t')) i += 1;
+    // git accepts a key before any section header; it belongs to no section.
+    const full = `${section ?? ''}.${key}`;
+    if (i >= n || text[i] === '\n' || (text[i] === '\r' && text[i + 1] === '\n')) {
+      values.set(full, true);
+      continue;
+    }
+    if (text[i] !== '=') return null;
+    i += 1;
+
+    let value = '';
+    let quoted = false;
+    let pendingSpace = '';
+    let started = false;
+    for (;;) {
+      if (i >= n) {
+        if (quoted) return null;
+        break;
+      }
+      const v = text[i];
+      if (v === '\n') {
+        if (quoted) return null;
+        i += 1;
+        break;
+      }
+      if (!quoted && (v === ';' || v === '#')) {
+        while (i < n && text[i] !== '\n') i += 1;
+        continue;
+      }
+      if (!quoted && isSpace(v)) {
+        if (started) pendingSpace += v;
+        i += 1;
+        continue;
+      }
+      if (v === '"') { quoted = !quoted; started = true; i += 1; continue; }
+      if (v === '\\') {
+        const e = text[i + 1];
+        if (e === '\n') { i += 2; continue; }
+        if (e === undefined) { i += 1; continue; } // a backslash that ends the file continues onto nothing
+        if (e === '\r' && text[i + 2] === '\n') { i += 3; continue; }
+        const mapped = e === 't' ? '\t' : e === 'b' ? '\b' : e === 'n' ? '\n' : e === '\\' || e === '"' ? e : null;
+        if (mapped === null) return null;
+        value += pendingSpace + mapped;
+        pendingSpace = '';
+        started = true;
+        i += 2;
+        continue;
+      }
+      value += pendingSpace + v;
+      pendingSpace = '';
+      started = true;
+      i += 1;
+    }
+    values.set(full, value);
+  }
+  return { values, sections };
+}
+
+/** Extensions that do not change where the work tree or the common dir is. */
+const LAYOUT_NEUTRAL_EXTENSIONS: ReadonlySet<string> = new Set([
+  'worktreeconfig', 'objectformat', 'compatobjectformat', 'refstorage', 'noop', 'noop-v1',
+  'preciousobjects', 'partialclone', 'relativeworktrees',
+]);
+
+/**
+ * Whether a git dir's config leaves the layout as the files on disk show it.
+ * `false` means "ask git": the config cannot be read, git would reject it,
+ * the repository format is one this reader does not know, an extension is
+ * unknown, the file includes another, or `core.bare` / `core.worktree` is set
+ * to anything but a plain false. Reads `config` and `config.worktree` (the
+ * per-worktree file that `extensions.worktreeConfig` turns on; reading it when
+ * the extension is off can only make this stricter). A missing file is fine.
+ */
+function configKeepsLayout(gitDir: string): boolean {
+  for (const name of ['config', 'config.worktree']) {
+    const file = path.join(gitDir, name);
+    if (lstatOrNull(file) === null) continue;
+    const text = readSmallFile(file, GIT_CONFIG_MAX_BYTES);
+    const config = text === null ? null : parseGitConfig(text);
+    if (config === null) return false;
+    if (config.sections.has('include') || config.sections.has('includeif')) return false;
+    if (config.values.has('core.worktree')) return false;
+    const bare = config.values.get('core.bare');
+    if (bare !== undefined && (bare === true || !/^(?:false|no|off|0)$/i.test(bare))) return false;
+    const version = config.values.get('core.repositoryformatversion');
+    if (version !== undefined && version !== '0' && version !== '1') return false;
+    for (const key of config.values.keys()) {
+      if (key.startsWith('extensions.') && !LAYOUT_NEUTRAL_EXTENSIONS.has(key.slice('extensions.'.length))) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * git refuses a repository another user owns (`safe.directory`), and the git
+ * path then degrades to the start directory. The reader must not accept what
+ * git refuses: a `.git` planted in a directory that others can write to (above
+ * the start) would otherwise become the root.
+ *
+ * Where there is a uid, every path the answer rests on must be this user's.
+ * Windows has none to compare, so there the answer must rest only on paths
+ * inside this user's home directory, which other accounts cannot write to;
+ * a repository anywhere else is left to git.
+ */
+function ownedByThisUser(...paths: string[]): boolean {
+  if (typeof process.getuid === 'function') {
+    const uid = process.getuid();
+    return paths.every((p) => lstatOrNull(p)?.uid === uid);
+  }
+  let home: string;
+  try {
+    home = fs.realpathSync.native(os.homedir());
+  } catch {
+    return false;
+  }
+  if (!path.isAbsolute(home) || path.parse(home).root === home) return false;
+  const prefix = (home + path.sep).toLowerCase();
+  return paths.every((p) => (p + path.sep).toLowerCase().startsWith(prefix));
+}
+
+function okFacts(worktreeRoot: string, repoRoot: string, gitCommonDir: string): GitFacts {
+  return { worktreeRoot, repoRoot, gitCommonDir, reason: 'ok', degraded: false, warnings: [] };
+}
+
+/** `dir` (real) holds a `.git` entry: the facts, or null for a layout left to git. */
+function layoutAt(start: string, realStart: string, dir: string, dotGit: string, entry: fs.Stats): GitFacts | null {
+  if (entry.isDirectory()) {
+    // A main checkout. git prints the common dir relative to the working
+    // directory here, and the caller resolves it against `start`, so the
+    // spelling of `start` is kept: `<start>/.git`, or `<start>/../../.git`.
+    if (!isGitDir(dotGit) || lstatOrNull(path.join(dotGit, 'commondir')) !== null) return null;
+    if (!configKeepsLayout(dotGit) || !ownedByThisUser(dir, dotGit)) return null;
+    return okFacts(dir, dir, path.resolve(start, path.relative(realStart, dir), '.git'));
+  }
+  if (!entry.isFile()) return null; // a symlink, or something that is not a git entry
+
+  const pointer = readSmallFile(dotGit, GIT_POINTER_MAX_BYTES);
+  const named = pointer === null ? null : /^gitdir: (.+?)\r?\n?$/.exec(pointer);
+  if (named === null) return null;
+  const gitDir = path.resolve(dir, named[1]);
+  // git reports these paths with links resolved. Where that would differ from
+  // the path as written, the spelling is git's to choose.
+  if (!isRealPath(gitDir) || !isGitDir(gitDir)) return null;
+
+  const commonText = readSmallFile(path.join(gitDir, 'commondir'), GIT_POINTER_MAX_BYTES);
+  if (commonText === null) {
+    // No commondir: a separate git dir (`git init --separate-git-dir`). A
+    // submodule has the same shape plus `core.worktree`, which leaves it to git.
+    if (lstatOrNull(path.join(gitDir, 'commondir')) !== null || !path.isAbsolute(named[1])) return null;
+    if (!configKeepsLayout(gitDir) || !ownedByThisUser(dir, dotGit, gitDir)) return null;
+    return okFacts(dir, dir, gitDir);
+  }
+
+  // A linked worktree: <common>/worktrees/<name>, whose `gitdir` file points
+  // back at this `.git` file. The main checkout is the common dir's parent,
+  // which is what `git worktree list` prints first for a non-bare repository.
+  const commonDir = path.resolve(gitDir, commonText.trim());
+  if (commonText.trim() === '' || !isRealPath(commonDir)) return null;
+  if (path.dirname(gitDir) !== path.join(commonDir, 'worktrees')) return null;
+  const back = readSmallFile(path.join(gitDir, 'gitdir'), GIT_POINTER_MAX_BYTES);
+  if (back === null || back.trim() === '' || !sameRealPath(path.resolve(gitDir, back.trim()), dotGit)) return null;
+  if (path.basename(commonDir) !== '.git' || !lstatOrNull(commonDir)?.isDirectory() || !isGitDir(commonDir)) return null;
+  if (!configKeepsLayout(commonDir) || !configKeepsLayout(gitDir)) return null;
+  // The main checkout is part of the answer (it is the repo root), so it is checked as well.
+  if (!ownedByThisUser(dir, dotGit, gitDir, commonDir, path.dirname(commonDir))) return null;
+  return okFacts(dir, path.dirname(commonDir), commonDir);
+}
+
+function isRealPath(p: string): boolean {
+  try {
+    return fs.realpathSync.native(p) === p;
+  } catch {
+    return false;
+  }
+}
+
+function sameRealPath(a: string, b: string): boolean {
+  try {
+    return fs.realpathSync.native(a) === fs.realpathSync.native(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The git facts for `start` (an absolute path), read from the filesystem.
+ * `null` means "not a layout this reader answers for": ask git.
+ */
+export function readGitLayout(start: string): GitFacts | null {
+  for (const name of GIT_DISCOVERY_ENV) {
+    if (process.env[name] !== undefined && process.env[name] !== '') return null;
+  }
+  let realStart: string;
+  try {
+    realStart = fs.realpathSync.native(start);
+  } catch {
+    return null; // not there, or unreadable: git reports that its own way
+  }
+  // git prints paths in its own spelling on Windows (drive case, short names).
+  // Only a start that is already canonical is known to come out the same.
+  if (process.platform === 'win32' && realStart !== start) return null;
+
+  let dir = realStart;
+  let device: number | null = null;
+  for (let depth = 0; depth < GIT_WALK_MAX_DEPTH; depth += 1) {
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(dir);
+    } catch {
+      return null;
+    }
+    if (!st.isDirectory()) return null;
+    // git does not look past a filesystem boundary (the variable that lets it
+    // is one of those checked above), so nothing above here can be the answer.
+    if (device !== null && st.dev !== device) return lexicalFacts(start, 'not_git_repo', false, []);
+    device = st.dev;
+    // Inside a git dir or a bare repository git has no work tree to report.
+    if (mightBeGitDir(dir)) return null;
+
+    const dotGit = path.join(dir, '.git');
+    const entry = lstatOrNull(dotGit);
+    if (entry !== null) return layoutAt(start, realStart, dir, dotGit, entry);
+
+    const parent = path.dirname(dir);
+    if (parent === dir) return lexicalFacts(start, 'not_git_repo', false, []);
+    dir = parent;
+  }
+  return null;
 }
 
 function readGitFacts(start: string, execGit: ExecGitFn): GitFacts {
@@ -407,11 +857,16 @@ function sameCheckout(a: string, b: string, realpath: (p: string) => string): bo
 
 export function resolveProjectContext(startDir: string, opts: ResolveProjectContextOptions = {}): ProjectContext {
   const execGit = opts.deps?.execGit ?? execGitSeam;
+  const layoutReader = opts.deps?.readGitLayout ?? readGitLayout;
   const realpath = opts.deps?.fs?.realpathSync ?? fs.realpathSync.native;
   const explicit = opts.explicit ? path.resolve(opts.explicit) : null;
   const start = explicit ?? path.resolve(startDir);
 
-  const facts = readGitFacts(start, execGit);
+  // #6355: the filesystem answers first and no process is started. A layout
+  // the reader does not recognise goes to git, as every layout did before.
+  const fromFilesystem = layoutReader(start);
+  const layout: ProjectContextProvenance['layout'] = fromFilesystem === null ? 'git' : 'filesystem';
+  const facts = fromFilesystem ?? readGitFacts(start, execGit);
   const isLinkedWorktree = !sameCheckout(facts.worktreeRoot, facts.repoRoot, realpath);
 
   let projectRoot = start;
@@ -443,6 +898,7 @@ export function resolveProjectContext(startDir: string, opts: ResolveProjectCont
 
   const provenance: ProjectContextProvenance = Object.freeze({
     source,
+    layout,
     reason: facts.reason,
     degraded: facts.degraded,
     warnings: Object.freeze([...facts.warnings]),

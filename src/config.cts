@@ -1448,6 +1448,25 @@ function unsetConfigValue(cwd: string, keyPath: string): UnsetConfigValueResult 
 }
 
 /**
+ * Runtime-state flags whose absence already reads as `false` (config-loader.cts, init.cts). Clearing one of them
+ * when the key is absent changes nothing a reader can see, so it must not touch the committed config (#6124):
+ * the workflows clear `workflow._auto_chain_active` on every plan-phase, execute-phase and transition run, and the
+ * write left `.planning/config.json` modified in every project created without `--auto`.
+ */
+const ABSENT_MEANS_FALSE_FLAGS: ReadonlySet<string> = new Set(['workflow._auto_chain_active']);
+
+function isNoopFlagClear(config: Record<string, unknown>, keyPath: string, parsedValue: unknown): boolean {
+  if (parsedValue !== false || !ABSENT_MEANS_FALSE_FLAGS.has(keyPath)) return false;
+  let current: unknown = config;
+  for (const key of keyPath.split('.')) {
+    if (current === null || typeof current !== 'object' || Array.isArray(current)) return false;
+    if (!Object.prototype.hasOwnProperty.call(current, key)) return true;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current === undefined;
+}
+
+/**
  * Sets a value in the config file, allowing nested values via dot notation (e.g.,
  * "workflow.research").
  *
@@ -1459,6 +1478,10 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
+
+    if (isNoopFlagClear(config, keyPath, parsedValue)) {
+      return { updated: false, key: keyPath, value: parsedValue, previousValue: undefined };
+    }
 
     const previousValue = _setNestedValue(config, keyPath, parsedValue);
 
@@ -1481,10 +1504,14 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
  * compute, rather than a second, hand-maintained traversal that could drift
  * from the real one.
  */
-function previewConfigValue(cwd: string, keyPath: string, parsedValue: unknown): { key: string; value: unknown; previousValue: unknown } {
+function previewConfigValue(cwd: string, keyPath: string, parsedValue: unknown): { key: string; value: unknown; previousValue: unknown; wouldWrite: boolean } {
   const config = loadConfigJson(cwd);
+  // The preview states exactly what the write would do (#4444), so it asks the write's own predicate.
+  if (isNoopFlagClear(config, keyPath, parsedValue)) {
+    return { key: keyPath, value: parsedValue, previousValue: undefined, wouldWrite: false };
+  }
   const previousValue = _setNestedValue(config, keyPath, parsedValue);
-  return { key: keyPath, value: parsedValue, previousValue };
+  return { key: keyPath, value: parsedValue, previousValue, wouldWrite: true };
 }
 
 /**
@@ -1639,7 +1666,7 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
       output({ dry_run: true, would_update: true, key: kp, value: masked, previousValue: maskedPrev, masked: true }, raw, `${kp}=${masked} (dry run)`);
       return;
     }
-    output({ dry_run: true, would_update: true, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
+    output({ dry_run: true, would_update: preview.wouldWrite, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
     return;
   }
 

@@ -150,6 +150,7 @@ describe('#1928 --gemini CLI deprecation redirect', () => {
   });
 
   test('control: an install WITHOUT --gemini does not print the sunset notice', (t) => {
+    // A real install: the subject is what THIS installer run printed.
     const { root, stderr } = runMinimalInstall({ runtime: 'codex', scope: 'global' });
     t.after(() => cleanup(root));
     assert.doesNotMatch(stderr, /sunset by Google/, 'the notice must be conditional on --gemini');

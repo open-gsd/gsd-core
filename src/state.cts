@@ -47,7 +47,7 @@ const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // #3642: hasMilestoneSectioning no longer consumed here — its >=2 semantics answered sibling conflation, but this branch asks asserted-vs-section (>=1). It stays exported from roadmap-parser.cjs for its unit pins.
-const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar } = roadmapParserMod;
+const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar, describeUnscopedMilestone } = roadmapParserMod;
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit, normalizeContent, platformRestoreFileSync, platformReadBytesSync, type FileIdentity } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -485,6 +485,12 @@ const _diskScanCache = new Map<string, {
   // (a heading-existence guard, #1761) — this one is disk-readability.
   phaseDirScope: Scope;
 }>();
+
+// #6332: the cache is per invocation. The binary gets that for free from its
+// one-call process; an in-process caller gets it from this reset.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('state.diskScanCache', () => { _diskScanCache.clear(); });
 
 // Track all lock files held by this process so they can be removed on exit.
 // process.on('exit') fires even on process.exit(1), unlike try/finally which is
@@ -1707,11 +1713,17 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
     // (stateReplaceFieldWithFallback above) for a comparable silent no-op —
     // now routed through the shared `declineNoOp` helper (#3957) so the
     // pairing is structural rather than hand-written per arm.
+    // #6271: UNSCOPED is the one non-COMPLETE scope an operator can fix by hand, and the bare message named neither
+    // cause nor fix, so every call declined and the counters drifted for the life of the project. The
+    // classification itself (ADR-3180 rows 4/5) is unchanged: it keeps a destructive consumer from acting on a
+    // window it could not find. One describer owns the wording (roadmap-parser.cts), shared with `state sync`.
+    const unscopedHint = phaseScope === SCOPE.UNSCOPED && cwd ? describeUnscopedMilestone(cwd) : '';
     declineNoOp(
       raw,
       'updated',
       `phase scope is ${phaseScope}, not complete`,
-      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.`,
+      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.${unscopedHint ? ` ${unscopedHint}` : ''}`,
+      unscopedHint ? { hint: unscopedHint } : {},
     );
     return;
   }
@@ -7284,7 +7296,9 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     // consume `.value`.
     const syncScope: Scope = listMilestonePhaseDirs(phasesDir, { cwd, versionOverride: versionStr }).scope;
     if (syncScope !== SCOPE.COMPLETE) {
-      changes.push(`Progress: skipped — milestone phase scope is "${syncScope}", not COMPLETE (#3217)`);
+      // #6271: the same cause-and-fix as `update-progress`, from the one describer.
+      const syncHint = syncScope === SCOPE.UNSCOPED ? describeUnscopedMilestone(cwd) : '';
+      changes.push(`Progress: skipped — milestone phase scope is "${syncScope}", not COMPLETE (#3217)${syncHint ? `. ${syncHint}` : ''}`);
     } else {
       const p = computeProgressPercent(totalDiskSummaries, totalDiskPlans, diskCompletedPhases, syncTotalPhases, syncScope);
       percent = p !== null ? p : 0;

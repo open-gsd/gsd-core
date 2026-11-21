@@ -45,8 +45,25 @@ import noVerificationStatusLiteral from './eslint-rules/no-verification-status-l
 import noRuntimeNameLiteral from './eslint-rules/no-runtime-name-literal.cjs';
 import requireReadOnlyGitEnv from './eslint-rules/require-read-only-git-env.cjs';
 import namedArgsSpecFromRegistry from './eslint-rules/named-args-spec-from-registry.cjs';
+import directiveNamesIssue from './eslint-rules/directive-names-issue.cjs';
+import maxCommentBlockLines from './eslint-rules/max-comment-block-lines.cjs';
 
 const unconfinedPathJoinAllowlist = require('./eslint-rules/no-unconfined-path-join.allowlist.json');
+const commentRatchetBaseline = require('./eslint-rules/comment-ratchet.baseline.json');
+
+// The `no-restricted-syntax` selectors every file under tests/ is held to. The block for the six
+// in-process command suites (#6334) extends this list; a later flat-config block replaces a rule's
+// options, so the shared part lives here once instead of being copied.
+const TESTS_RESTRICTED_SYNTAX = [
+  {
+    selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
+    message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
+  },
+  {
+    selector: 'CallExpression[callee.object.name="Atomics"][callee.property.name="wait"]',
+    message: 'Atomics.wait() used as a sleep in tests. Use a proper async wait pattern instead.',
+  },
+];
 
 const localPlugin = {
   rules: {
@@ -84,6 +101,8 @@ const localPlugin = {
     'no-runtime-name-literal': noRuntimeNameLiteral,
     'require-read-only-git-env': requireReadOnlyGitEnv,
     'named-args-spec-from-registry': namedArgsSpecFromRegistry,
+    'directive-names-issue': directiveNamesIssue,
+    'max-comment-block-lines': maxCommentBlockLines,
   },
 };
 
@@ -132,6 +151,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-ledger.cjs',
       // #5759: tsc-generated runtime artifact — lint src/config-file-read.cts, not this.
       'gsd-core/bin/lib/config-file-read.cjs',
+      // #6425: tsc-emitted, gitignored; the comment-ratchet baseline must not depend on whether the build ran.
+      'gsd-core/bin/lib/host-integration-adapters/cline-sdk-binding.cjs',
+      'gsd-core/bin/lib/host-integration-adapters/imperative-hook-bus.cjs',
+      'gsd-core/bin/lib/installer-migrations/006-pi-extension-cjs-to-js.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
       'gsd-core/bin/lib/capability-consent.cjs',
@@ -226,6 +249,10 @@ export default tseslint.config(
       'gsd-core/bin/lib/review-lane-runner.cjs',
       // #5963: tsc-generated runtime artifact — lint src/http-body-cap.cts, not this.
       'gsd-core/bin/lib/http-body-cap.cjs',
+      // #6332: tsc-generated runtime artifacts — lint src/in-process-cli.cts and
+      // src/invocation-scope.cts, not these.
+      'gsd-core/bin/lib/in-process-cli.cjs',
+      'gsd-core/bin/lib/invocation-scope.cjs',
       'gsd-core/bin/lib/reviewer-step-dispatch.cjs',
       'gsd-core/bin/lib/clusters.cjs',
       'gsd-core/bin/lib/installer-migrations/001-legacy-orphan-files.cjs',
@@ -919,17 +946,7 @@ export default tseslint.config(
       // so registering here alone would be inert without that gate change.
       'local/no-adhoc-markdown-parsing': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
-      'no-restricted-syntax': [
-        'error',
-        {
-          selector: 'AwaitExpression > NewExpression[callee.name="Promise"] ArrowFunctionExpression CallExpression[callee.name="setTimeout"]',
-          message: 'Raw setTimeout used for synchronization in tests. Use proper async patterns instead.',
-        },
-        {
-          selector: 'CallExpression[callee.object.name="Atomics"][callee.property.name="wait"]',
-          message: 'Atomics.wait() used as a sleep in tests. Use a proper async wait pattern instead.',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...TESTS_RESTRICTED_SYNTAX],
       'no-unused-vars': ['warn', {
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
@@ -941,6 +958,28 @@ export default tseslint.config(
       'no-regex-spaces': 'warn',
       'no-control-regex': 'error',
       'no-irregular-whitespace': 'warn',
+    },
+  },
+
+  // ── #6334 (ADR-6315 item 16): the six command suites are in-process unit files ──
+  // A case that needs a real process (a spawned CLI, a hook, git as the subject) lives in the
+  // `<suite>.process.test.cjs` sibling. ESLint is the enforcement point (ADR-452). The suites listed
+  // here are the same six TESTING-STANDARDS.md names under "A test that needs a real process".
+  {
+    files: ['tests/{state,phase,roadmap,config,init,custom-phase-readers}.test.cjs'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        ...TESTS_RESTRICTED_SYNTAX,
+        {
+          selector: 'CallExpression[callee.name="require"][arguments.0.value=/process-seam/]',
+          message: 'This is an in-process unit file. A case that spawns a process goes in the .process.test.cjs sibling; to capture stderr in-process call runGsdToolsCaptured (tests/helpers.cjs).',
+        },
+        {
+          selector: 'Identifier[name="runGsdToolsProcess"]',
+          message: 'runGsdToolsProcess spawns the real binary: call it from the .process.test.cjs sibling of this suite.',
+        },
+      ],
     },
   },
 
@@ -1073,6 +1112,18 @@ export default tseslint.config(
           message: 'The command router dispatches to gate modules (src/gate-*.cts) only; implement the verb as a gate module that returns a GateResult (ADR-5057 §4, #5219).',
         }],
       }],
+    },
+  },
+
+  // ADR-6315 item 24 (#6342): an exemption directive names its issue, and a comment block is at
+  // most 15 lines. Each file may carry up to its baseline in eslint-rules/comment-ratchet.baseline.json,
+  // which can only shrink (a file under its baseline fails until the entry is lowered).
+  {
+    files: ['**/*.{cjs,js,mjs}', 'src/**/*.cts'],
+    plugins: { local: localPlugin },
+    rules: {
+      'local/directive-names-issue': ['error', { baseline: commentRatchetBaseline }],
+      'local/max-comment-block-lines': ['error', { baseline: commentRatchetBaseline }],
     },
   },
 );

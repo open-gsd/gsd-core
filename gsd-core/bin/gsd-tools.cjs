@@ -296,7 +296,7 @@ try {
 
 const { ExitError, runMain, resolveContractVersion } = require('./lib/cli-exit.cjs');
 const io = require('./lib/io.cjs');
-const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutSyncWrites, resolveAtFileOutput } = io;
+const { error, ERROR_REASON, setJsonErrorMode, output, formatDiagnosticToken, captureStdoutMaybeSync, resolveAtFileOutput } = io;
 const projectRoot = require('./lib/project-root.cjs');
 const { resolveProjectContext, legacyDispatchCwd } = require('./lib/project-context.cjs');
 // Resolve findProjectRoot lazily at call time rather than binding it at module
@@ -534,7 +534,9 @@ function _dispatchNonFamily({ registryCommand, registryArgs, legacyCommand, lega
  * @param {Function} opts.error          Error reporter (io.error)
  * @param {object}   [opts.registry]     Injectable registry (for tests)
  * @param {Function} [opts.requireModule] Injectable module loader (for tests)
- * @returns {boolean} true if the command was dispatched, false otherwise
+ * @returns {boolean | Promise<true>} true if the command was dispatched, false otherwise;
+ *   a promise of true when the router is one its module declares in `asyncRouters` and it
+ *   returned a promise (#6332)
  */
 function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, requireModule }) {
   // Prototype-pollution guard: reject reserved property names as command keys
@@ -604,6 +606,13 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     return true; // consumed — don't emit "Unknown command"
   }
 
+  // #6332: a first-party router its own module declares asynchronous is
+  // waited for. #6333: a synchronous call (runCliSync) refuses it here, before
+  // it runs, so no work is started that the call would not see the end of.
+  const declaredAsync = Object.prototype.hasOwnProperty.call(mod, 'asyncRouters')
+    && Array.isArray(mod.asyncRouters) && mod.asyncRouters.includes(entry.router);
+  refuseAsyncInSyncCall(command, declaredAsync);
+
   let _result;
   try {
     _result = fn({ args, cwd, raw, error });
@@ -616,6 +625,9 @@ function dispatchCapabilityCommand({ command, args, cwd, raw, error, registry, r
     );
   }
   if (_result && typeof _result.then === 'function') {
+    // The caller gets a promise of `true` and main() waits for it, so an
+    // in-process call (runCli) ends when the command has, as the binary does.
+    if (declaredAsync) return _result.then(() => true);
     error(
       'capability command "' + command + '" router "' + entry.router + '" in module "' + entry.module + '" must be synchronous (returned a Promise); async capability routers are not supported.',
       ERROR_REASON.SDK_FAIL_FAST,
@@ -2484,12 +2496,26 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       exec = null;
     }
 
+    // #6303 (ADR-3711): a plan that declares `executor_runtime` resolves to the target runtime's
+    // exec when the gate and every precondition hold, else to `fallback` (one reason) with the host
+    // decision untouched. The single sentinel write below records whichever decision stands.
+    const cross = resolveCrossRuntimeDispatch({ cwd, parsed, hostRuntimeId: runtimeId });
+    const foreign = cross.isolation !== null;
+    if (foreign) {
+      isolation = cross.isolation;
+      exec = cross.exec;
+      harnessFlag = null;
+    } else if (cross.fallback) {
+      process.stderr.write(`note: plan ${planArg} declares executor_runtime${cross.executorRuntime ? ` '${cross.executorRuntime}'` : ''} but is dispatched on the host (${cross.fallback}).\n`);
+    }
+
     // Side-effect write (#3045 CORE REDESIGN) — see the doc comment above.
     // Never allowed to affect this query's own stdout contract or throw.
     let truncatedRecord = false;
     try {
       const written = writeDispatchIsolationSentinel(cwd, {
         isolation, harnessFlag, phase: phaseArg, plan: planArg,
+        ...(foreign ? { producer: 'dispatch-isolation', executorRuntime: cross.executorRuntime } : {}),
         // #6213: a plan-scoped record names its own executor (`executor_type`); a phase-level record
         // (no plan) names every routable hinted executor of its phase (`executor_types`).
         executorType: deriveRecordedExecutor(cwd, phaseArg, planArg).resolved,
@@ -2505,7 +2531,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     }
 
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
+      output({ runtime: runtimeId, executorRuntime: cross.executorRuntime, isolation, exec, harnessFlag, fallback: cross.fallback, ...(truncatedRecord ? { executor_types_truncated: true } : {}) }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -2720,7 +2746,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // id — `-c`, `--config`, `-`, `--`, `-p` are unsafe to hand to
   // resolveOrchestratorExec, whose own `unsafe_leading_dash_model` guard
   // rejects them and fails the WHOLE resolution to `{ ok: false }` ->
-  // exec:null -> a FATAL wave abort (executor-isolation-dispatch.md:299-303),
+  // exec:null -> a FATAL wave abort (the EXEC_OK fail-closed halt of executor-isolation-dispatch.md),
   // even on hosts (e.g. kimi-code) that declare no modelFlag at all and
   // previously ignored the pin entirely. This check MUST run BEFORE
   // MODEL_ID_CHARSET_RE below: the charset is anchored to `[A-Za-z0-9]` at
@@ -2742,13 +2768,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * documented desired behavior of falling back to the session model rather
    * than aborting the wave.
    */
-  function resolveDispatchModelPin(agentName, rawValue) {
+  function resolveDispatchModelPin(agentName, rawValue, { foreignTarget = false } = {}) {
     if (typeof rawValue !== 'string') return undefined; // not a string -> no model
     const trimmed = rawValue.trim();
     if (trimmed === '') return undefined; // whitespace-only -> no model, no warning (#3241)
     if (trimmed.toLowerCase() === 'inherit') return undefined; // sentinel -> no model, no warning
     const { isAnthropicFlavoredModel } = require('./lib/model-catalog.cjs');
-    if (isAnthropicFlavoredModel(trimmed)) {
+    // #6303: the Anthropic-flavored rule guards a Codex host's passive model posture. A foreign target
+    // is chosen by the operator under `execute.models.<runtime>`, and a runtime such as opencode
+    // legitimately takes `anthropic/claude-...`, so only the charset, length and leading-dash rules apply.
+    if (!foreignTarget && isAnthropicFlavoredModel(trimmed)) {
       _warnDispatchModelPinDropped(agentName, rawValue, 'is an Anthropic-flavored model/alias, not a valid Codex model');
       return undefined;
     }
@@ -2827,7 +2856,6 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         const cwdTarget = parsed['cwd-target'];
         if (cwdTarget) {
           const promptArg = parsed.prompt ?? undefined;
-          const hostIntegration = require('./lib/host-integration.cjs');
           // #3714: resolve an EXPLICIT, non-sentinel per-agent model pin for the
           // spawned worktree executor. Passing `null` as the runtime resolver
           // (3rd arg) is LOAD-BEARING, not an oversight — it is what keeps
@@ -2872,22 +2900,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
               'gsd-executor', readGsdEffectiveModelOverrides(cwd), null);
             model = resolveDispatchModelPin('gsd-executor', pinned);
           }
-          let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
-          // eslint-disable-next-line local/named-args-spec-from-registry -- compares a runtime descriptor's cwd flag for the host process argv gsd-tools builds, not a gsd-tools CLI flag
-          if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
-            // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
-            const ocv = require('./lib/opencode-version.cjs');
-            orchestratorExec = ocv.adaptOrchestratorExecForGeneration(orchestratorExec, ocv.detectOpencodeGeneration().generation);
-          }
-          const resolution = hostIntegration.resolveOrchestratorExec(
-            orchestratorExec,
-            cwdTarget,
-            promptArg,
-            model,
-          );
+          const resolution = resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model);
           // A host declaring orchestrator-worktree whose exec descriptor does not
           // resolve halts THIS wave's dispatch: isolation is forced to 'none' here,
-          // and executor-isolation-dispatch.md:299-303 treats a null exec as FATAL
+          // and the EXEC_OK fail-closed halt of executor-isolation-dispatch.md treats a null exec as FATAL
           // (exit 1) after the worktree has already been created — it does not
           // degrade to sequential execution. resolveDispatchModelPin rejects any
           // leading-dash value (flag/option shape) before it ever reaches this
@@ -2909,6 +2925,82 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       harnessFlag = null;
     }
     return { runtimeId, isolation, exec, harnessFlag };
+  }
+
+  /** Resolve one runtime descriptor's `orchestratorExec` against a worktree, prompt and model (shared by the host and the #6303 foreign path). */
+  function resolveRuntimeOrchestratorExec(runtimeId, runtimeEntry, cwdTarget, promptArg, model) {
+    const hostIntegration = require('./lib/host-integration.cjs');
+    let orchestratorExec = runtimeEntry?.runtime?.orchestratorExec;
+    // eslint-disable-next-line local/named-args-spec-from-registry -- compares a runtime descriptor's cwd flag for the host process argv gsd-tools builds, not a gsd-tools CLI flag
+    if (orchestratorExec && orchestratorExec.cwdFlag === '--dir' && runtimeId === 'opencode') {
+      // OpenCode 2.x `run` has no --dir: bind the worktree through the process cwd (ADR-5331 D5).
+      const ocv = require('./lib/opencode-version.cjs');
+      orchestratorExec = ocv.adaptOrchestratorExecForGeneration(orchestratorExec, ocv.detectOpencodeGeneration().generation);
+    }
+    return hostIntegration.resolveOrchestratorExec(orchestratorExec, cwdTarget, promptArg, model);
+  }
+
+  /** True when `command` is a bare name that resolves to an executable file on PATH, through the shared binary-resolution seam. */
+  function commandOnPath(command) {
+    if (typeof command !== 'string' || command.length === 0 || command.includes('/') || command.includes('\\')) return false;
+    return require('./lib/shell-command-projection.cjs').resolveExecutableBinary(command, { requireExecutable: true }) !== null;
+  }
+
+  /**
+   * #6303 (ADR-3711 D1-D3, D7): resolve a plan's `executor_runtime` into a foreign dispatch, or the one
+   * reason it degrades to the host's own dispatch. Returns `{ executorRuntime, fallback, isolation, exec }`;
+   * `isolation`/`exec` are set only when the foreign dispatch is in effect. The branch is the TARGET
+   * descriptor's declared `dispatch.isolation`, never a runtime id; the model is `execute.models.<target>`
+   * only, so the host's pin cannot reach the spawned argv. Never throws.
+   */
+  function resolveCrossRuntimeDispatch({ cwd, parsed, hostRuntimeId }) {
+    const none = { executorRuntime: null, fallback: null, isolation: null, exec: null };
+    try {
+      if (!parsed.plan) return none;
+      const declared = require('./lib/phase.cjs').resolvePlanExecutorRuntime(cwd, parsed.phase || null, parsed.plan);
+      if (declared === null) return none;
+      const target = declared.trim();
+      // The value is plan text. Only a bare runtime id is ever echoed or looked up (verify plan-structure
+      // holds the same grammar); anything else is an unknown runtime reported without its text.
+      const isId = /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(target);
+      const degrade = (fallback) => ({ executorRuntime: isId ? target : null, fallback, isolation: null, exec: null });
+      if (!isId) return degrade('unknown_runtime');
+      const { readScopedConfigValue } = require('./lib/planning-workspace.cjs');
+      const gate = readScopedConfigValue(cwd, ['workflow', 'cross_runtime_execution']);
+      if (!gate.present || gate.value !== true) return degrade('gate_off');
+      if (projectWorktreesOptedOut(cwd)) return degrade('worktrees_off');
+      // A caller that forced this plan's isolation (the #2474 submodule gate, the #683 base-check
+      // degrade) has decided it with context this resolver cannot see; the foreign dispatch never overrides it.
+      if (parsed['force-isolation'] && DISPATCH_ISOLATION_VOCABULARY.has(parsed['force-isolation'])) return degrade('forced_isolation');
+      const runtimes = require('./lib/capability-registry.cjs').runtimes;
+      if (!runtimes || !Object.hasOwn(runtimes, target)) return degrade('unknown_runtime');
+      if (target === hostRuntimeId) return degrade('same_runtime');
+      const entry = runtimes[target];
+      const declaredIsolation = entry?.runtime?.hostIntegration?.dispatch?.isolation;
+      const descriptor = entry?.runtime?.orchestratorExec;
+      if (declaredIsolation !== 'orchestrator-worktree' || !descriptor || typeof descriptor.command !== 'string') return degrade('descriptor_unresolved');
+      // Probe PATH before anything that may spawn (the opencode generation probe runs `opencode --version`).
+      if (!commandOnPath(descriptor.command)) return degrade('binary_absent');
+      // Model: the target runtime's own key only, applied only when its descriptor declares a modelFlag.
+      let model;
+      if (typeof descriptor.modelFlag === 'string' && descriptor.modelFlag.length > 0) {
+        const pin = readScopedConfigValue(cwd, ['execute', 'models', target]);
+        model = resolveDispatchModelPin('gsd-executor', pin.present ? pin.value : null, { foreignTarget: true });
+      }
+      // Without a worktree yet (the per-plan decision is taken before it is created) the descriptor is
+      // proven resolvable against the project directory and no exec is returned.
+      const cwdTarget = parsed['cwd-target'] || cwd;
+      const resolution = resolveRuntimeOrchestratorExec(target, entry, cwdTarget, parsed.prompt ?? undefined, model);
+      if (!resolution.ok) return degrade('descriptor_unresolved');
+      return {
+        executorRuntime: target,
+        fallback: null,
+        isolation: 'orchestrator-worktree',
+        exec: parsed['cwd-target'] ? { command: resolution.command, args: resolution.args, cwd: resolution.cwd } : null,
+      };
+    } catch {
+      return none;
+    }
   }
 
   function routeInspectDispatchIsolation({ args, cwd, raw }) {
@@ -2957,7 +3049,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     //     read has nothing to record.
     const { runtimeId, isolation, exec, harnessFlag } = resolveDispatchIsolationDecision({ parsed, cwd });
     if (parsed.json) {
-      output({ runtime: runtimeId, isolation, exec, harnessFlag }, raw);
+      // #6303: the same key set as `dispatch-isolation --json`, so a consumer written against either verb
+      // reads the other verbatim. This read has no plan (--plan is refused above), so it declares no
+      // executor runtime and never reports a fallback.
+      output({ runtime: runtimeId, executorRuntime: null, isolation, exec, harnessFlag, fallback: null }, raw);
     } else {
       process.stdout.write(isolation);
     }
@@ -3021,7 +3116,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
    * per-plan degrade call site and back-compat/tests) share exactly one
    * write implementation. Never throws — returns `{ recorded, path, error? }`.
    */
-  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, executorType = null, executorTypes = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
+  function writeDispatchIsolationSentinel(cwd, { isolation, harnessFlag = null, phase = null, plan = null, executorType = null, executorTypes = null, producer = null, executorRuntime = null }, { clock = require('./lib/clock.cjs').realClock } = {}) {
     const nodePath = require('path');
     const nodeFs = require('fs');
     const sentinelDir = nodePath.join(cwd, '.gsd');
@@ -3034,6 +3129,9 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       // #6213: a type the guards would refuse to read back is recorded as null (resolved just below).
       executor_type: null,
       written_at: clock.now(),
+      // #6303 (ADR-3711 D8): present only on a foreign dispatch's record, so every other record is unchanged.
+      ...(producer ? { producer } : {}),
+      ...(executorRuntime ? { executor_runtime: executorRuntime } : {}),
     };
     let droppedExecutorTypes = [];
     // A validator that fails to load records no executor type; it never prevents the rest of the
@@ -5010,7 +5108,7 @@ const HOST_COMMAND_ROUTERS = {
 // through. Prototype-pollution-safe: own-property lookup rejects
 // `__proto__`/`constructor`/`prototype` command keys (same guard as
 // dispatchCapabilityCommand).
-async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }) {
+function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }) {
   if (
     command === '__proto__' ||
     command === 'constructor' ||
@@ -5023,8 +5121,11 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
   }
   const router = HOST_COMMAND_ROUTERS[command];
   if (typeof router !== 'function') return false;
-  // `await` so async host routers (e.g. capability's install/upgrade ops)
-  // complete before runCommand returns; sync routers pass through unchanged.
+  // An async host router (e.g. capability's install/upgrade ops) returns a
+  // promise; this returns a promise of `true` for it, so runCommand waits. A
+  // sync router returns a plain value and this returns plain `true` (#6333):
+  // the whole chain up to main() finishes synchronously for those, which is
+  // what lets runCliSync serve them.
   // `invokingCwd` (#4906/#4465): the pre-worktree-remap cwd, for the rare
   // router (currently only `select-revert-commits`) whose own git operation
   // must see the INVOKING worktree's HEAD, never the main-worktree remap
@@ -5033,8 +5134,77 @@ async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValu
   // byte-unaffected.
   // `ctx` (#6043): the ProjectContext main() resolved once; routers that take a
   // named root (commit, project-context) read it, the rest ignore it.
-  await router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx });
+  refuseAsyncInSyncCall(command, isAsyncHostCommand(command));
+  const routed = router({ args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx });
+  if (isThenable(routed)) {
+    if (syncOnlyCall) {
+      // A router that is not on the async list returned a promise during a
+      // synchronous call. Its work has started and may already have changed
+      // files, so this is not the clean refusal above: the call fails with
+      // `in_process_async_started`, which no caller may answer by running the
+      // command again. The remedy is to declare the router asynchronous. The
+      // cell is set first, so the call is reported as started whatever the
+      // thenable does next. Its outcome belongs to nobody: Promise.resolve
+      // adopts it (a `then` that throws becomes a rejection), and the
+      // rejection is handled so it cannot end the host as an unhandled one.
+      globalThis[SYNC_REFUSED_KEY] = { started: command };
+      Promise.resolve(routed).then(() => undefined, () => undefined);
+      throw new ExitError(1);
+    }
+    return routed.then(() => true);
+  }
   return true; // consumed — don't emit "Unknown command"
+}
+
+// ─── #6333: one dispatch chain, synchronous where the command is ─────────────
+
+function isThenable(value) {
+  return value !== null && typeof value === 'object' && typeof value.then === 'function';
+}
+
+function isAsyncFunction(fn) {
+  return typeof fn === 'function' && fn.constructor !== undefined && fn.constructor.name === 'AsyncFunction';
+}
+
+/** `fn(value)` now for a plain value, or after it for a promise. */
+function afterMaybe(value, fn) {
+  return isThenable(value) ? value.then(fn) : fn(value);
+}
+
+// True for the length of a runCliSync call and at no other time. A variable of
+// this module and not a global cell: nothing outside this file, a capability
+// module included, can make the binary refuse its own asynchronous commands.
+let syncOnlyCall = false;
+// How main tells runInProcessSync that it refused. A `gsd.*` cell, so the
+// in-process seam clears and restores it with the rest. Only that seam reads it.
+const SYNC_REFUSED_KEY = Symbol.for('gsd.cli.syncRefused');
+
+/**
+ * In a runCliSync call, refuse a command that cannot finish synchronously.
+ * Called before an async router runs, so no asynchronous work is started that
+ * would outlive the call; called again if a router that is not declared async
+ * returned a promise anyway, where the work has started and the refusal is
+ * the loud signal that the router belongs on the async list.
+ */
+function refuseAsyncInSyncCall(command, isAsync) {
+  if (!isAsync || !syncOnlyCall) return;
+  globalThis[SYNC_REFUSED_KEY] = command;
+  throw new ExitError(1);
+}
+
+// Routers that are not declared `async` but return a promise for some of
+// their subcommands. A command listed here is refused by runCliSync before
+// its router runs. The parity suite fails when a command that returned a
+// promise is missing from this list.
+const MAYBE_ASYNC_HOST_COMMANDS = new Set(['capability']);
+
+function isAsyncHostCommand(command) {
+  return MAYBE_ASYNC_HOST_COMMANDS.has(command) || isAsyncFunction(HOST_COMMAND_ROUTERS[command]);
+}
+
+/** Top-level commands runCliSync cannot serve (fresh array each call). */
+function asyncHostCommandNames() {
+  return Object.keys(HOST_COMMAND_ROUTERS).filter(isAsyncHostCommand);
 }
 
 // ─── Arg parsing helpers ──────────────────────────────────────────────────────
@@ -5374,16 +5544,24 @@ function isVerificationStatusError(err) {
   return err instanceof verification.VerificationStatusError;
 }
 
-async function captureTranslatingVerificationStatus(run) {
-  try {
-    return await captureStdoutSyncWrites(run);
-  } catch (err) {
+// Returns the captured text, or a promise of it when `run` returned a promise.
+function captureTranslatingVerificationStatus(run) {
+  const translate = (err) => {
     if (isVerificationStatusError(err)) verification.failOnVerificationStatusError(err);
     throw err;
+  };
+  let captured;
+  try {
+    captured = captureStdoutMaybeSync(run);
+  } catch (err) {
+    return translate(err);
   }
+  return isThenable(captured) ? captured.then((text) => text, translate) : captured;
 }
 
-async function main() {
+// Not an `async function` (#6333): it returns a promise only when the command
+// it dispatched did, so a synchronous command finishes before it returns.
+function main() {
   let args = process.argv.slice(2);
 
   // These two global-flag blocks (--json-errors, --exit-contract) MUST run
@@ -5450,6 +5628,7 @@ async function main() {
     let rwt = args;
     if (rwt[0] === 'query') rwt = rwt.slice(1);
     if (rwt[0] === 'run-with-timeout') {
+      refuseAsyncInSyncCall('run-with-timeout', true);
       // Return the child's exit code; runMain() maps it to process.exitCode.
       return runWithTimeout(rwt.slice(1));
     }
@@ -5654,32 +5833,32 @@ async function main() {
   // payloads (io.cjs output() writes these for JSON > 50KB) are not
   // themselves JSON text, so resolving late would make every large result a
   // false "output was not JSON" (negative space N8).
+  const runIt = () => runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
+
   if (pickField) {
-    const captured = await captureTranslatingVerificationStatus(async () => {
-      await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
+    return afterMaybe(captureTranslatingVerificationStatus(runIt), (captured) => {
+      const resolved = resolveAtFileOutput(captured);
+      let obj;
+      try {
+        obj = JSON.parse(resolved);
+      } catch {
+        error(`--pick ${formatDiagnosticToken(pickField)}: command output was not JSON`, ERROR_REASON.PICK_OUTPUT_NOT_JSON);
+        return;
+      }
+      const { found, value } = extractField(obj, pickField);
+      if (!found) {
+        const rootDescription = isPlainRecord(obj)
+          ? `available top-level keys: ${Object.keys(obj).map(formatKeyForDiagnosticList).join(', ') || '(none)'}`
+          : `the command's output is a JSON ${describeJsonRootType(obj)}, not an object with that field`;
+        error(`--pick ${formatDiagnosticToken(pickField)}: field not found; ${rootDescription}`, ERROR_REASON.PICK_FIELD_ABSENT);
+        return;
+      }
+      // N1/N2: `null` and `''` are answers, not failures — an absent field
+      // above already exited non-zero, so reaching here means the field EXISTS
+      // and this is its real value (including `0` and `false`, #3365).
+      const result = value === null || value === undefined ? '' : String(value);
+      fs.writeSync(1, result);
     });
-    const resolved = resolveAtFileOutput(captured);
-    let obj;
-    try {
-      obj = JSON.parse(resolved);
-    } catch {
-      error(`--pick ${formatDiagnosticToken(pickField)}: command output was not JSON`, ERROR_REASON.PICK_OUTPUT_NOT_JSON);
-      return;
-    }
-    const { found, value } = extractField(obj, pickField);
-    if (!found) {
-      const rootDescription = isPlainRecord(obj)
-        ? `available top-level keys: ${Object.keys(obj).map(formatKeyForDiagnosticList).join(', ') || '(none)'}`
-        : `the command's output is a JSON ${describeJsonRootType(obj)}, not an object with that field`;
-      error(`--pick ${formatDiagnosticToken(pickField)}: field not found; ${rootDescription}`, ERROR_REASON.PICK_FIELD_ABSENT);
-      return;
-    }
-    // N1/N2: `null` and `''` are answers, not failures — an absent field
-    // above already exited non-zero, so reaching here means the field EXISTS
-    // and this is its real value (including `0` and `false`, #3365).
-    const result = value === null || value === undefined ? '' : String(value);
-    fs.writeSync(1, result);
-    return;
   }
 
   // Intercept stdout to transparently resolve @file: references (#1891).
@@ -5687,10 +5866,9 @@ async function main() {
   // already resolves this, but the normal path wrote @file: to stdout, forcing
   // every workflow to have a bash-specific `if [[ "$INIT" == @file:* ]]` check
   // that breaks on PowerShell and other non-bash shells.
-  const captured = await captureTranslatingVerificationStatus(async () => {
-    await runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext, preWorktreeRemapCwd, ctx);
+  return afterMaybe(captureTranslatingVerificationStatus(runIt), (captured) => {
+    fs.writeSync(1, resolveAtFileOutput(captured));
   });
-  fs.writeSync(1, resolveAtFileOutput(captured));
 }
 
 // captureStdoutSyncWrites and resolveAtFileOutput moved to src/io.cts
@@ -5761,7 +5939,8 @@ function extractField(obj, fieldPath) {
   return { found: true, value: current };
 }
 
-async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd, ctx) {
+// Returns a promise only when the dispatched router did (#6333).
+function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null, invokingCwd, ctx) {
   switch (command) {
 
     default: {
@@ -5771,7 +5950,10 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // dispatchCapabilityCommand routes it to the capability's registered router.
       // commandFamilies now includes migrated capabilities (e.g. graphify → graphify-command-router.cjs);
       // this returns true when a registered capability owns the command, false otherwise.
-      if (dispatchCapabilityCommand({ command, args, cwd, raw, error })) break;
+      const viaCapability = dispatchCapabilityCommand({ command, args, cwd, raw, error });
+      // A router its module declares asynchronous: main() waits for its promise.
+      if (isThenable(viaCapability)) return viaCapability.then(() => undefined);
+      if (viaCapability) break;
 
       // ADR-1244 Phase 5 (D7): if no first-party family owns the command, try an INSTALLED
       // THIRD-PARTY (overlay) capability — dispatched only if committed/consented and only by
@@ -5782,32 +5964,77 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // commands (state, …) routed via their `route*Command` router instead of
       // a hardcoded `case` arm. Tried after capability/overlay dispatch and
       // before the unknown-command error.
-      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx })) break;
+      return afterMaybe(
+        dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext, invokingCwd, ctx }),
+        (consumed) => {
+          if (consumed) return;
 
-      // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
-      // above split it so `command` here is the head ("foo"). Use
-      // originalCommand to reconstruct the original dotted form and suggest
-      // the spaced equivalent — surfacing a useful diagnostic instead of just
-      // "Unknown command: foo".
-      const wasDotted =
-        typeof originalCommand === 'string' &&
-        originalCommand !== command &&
-        originalCommand.includes('.');
-      let suggestion = '';
-      if (wasDotted) {
-        const dotIdx = originalCommand.indexOf('.');
-        const head = originalCommand.slice(0, dotIdx);
-        const rest = originalCommand.slice(dotIdx + 1);
-        suggestion = ` — did you mean: "${head} ${rest}"?`;
-      }
-      error(`Unknown command: ${command}${suggestion}`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
+          // above split it so `command` here is the head ("foo"). Use
+          // originalCommand to reconstruct the original dotted form and suggest
+          // the spaced equivalent — surfacing a useful diagnostic instead of just
+          // "Unknown command: foo".
+          const wasDotted =
+            typeof originalCommand === 'string' &&
+            originalCommand !== command &&
+            originalCommand.includes('.');
+          let suggestion = '';
+          if (wasDotted) {
+            const dotIdx = originalCommand.indexOf('.');
+            const head = originalCommand.slice(0, dotIdx);
+            const rest = originalCommand.slice(dotIdx + 1);
+            suggestion = ` — did you mean: "${head} ${rest}"?`;
+          }
+          error(`Unknown command: ${command}${suggestion}`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        },
+      );
     }
   }
+  return undefined;
 }
 
 // ─── CLI entry point ──────────────────────────────────────────────────────────
 if (require.main === module) {
   runMain(main);
+}
+
+/**
+ * Run this CLI in-process (#6332, ADR-6315 item 14): the same `main` the
+ * entry point above runs, behind the in-process seam. Resolves to
+ * `{ exitCode, stdout, stderr }`, writes nothing to the real streams and
+ * leaves process state as it found it. `argv` is what follows the script path.
+ *
+ * @param {{ argv?: readonly string[], cwd?: string, env?: Record<string, string | undefined> }} [options]
+ * @returns {Promise<{ exitCode: number, stdout: string, stderr: string }>}
+ */
+function runCli(options = {}) {
+  const { runInProcess } = require('./lib/in-process-cli.cjs');
+  return runInProcess(main, { ...options, scriptPath: __filename });
+}
+
+/**
+ * runCli for a command that finishes synchronously (#6333, ADR-6315 item 15):
+ * returns `{ exitCode, stdout, stderr }` directly. A command whose router is
+ * async (asyncHostCommandNames()), and `run-with-timeout`, cannot be served
+ * this way: the call throws an error with code `in_process_async_command`
+ * and the command's name as `command`. Use runCli for those.
+ *
+ * @param {{ argv?: readonly string[], cwd?: string, env?: Record<string, string | undefined> }} [options]
+ * @returns {{ exitCode: number, stdout: string, stderr: string }}
+ */
+function runCliSync(options = {}) {
+  const { runInProcessSync } = require('./lib/in-process-cli.cjs');
+  // A synchronous call cannot be entered twice (the seam refuses a nested one
+  // as busy before main runs), so the flag is restored to what it was.
+  const before = syncOnlyCall;
+  try {
+    return runInProcessSync(() => {
+      syncOnlyCall = true;
+      return main();
+    }, { ...options, scriptPath: __filename, asyncRefusalKey: SYNC_REFUSED_KEY });
+  } finally {
+    syncOnlyCall = before;
+  }
 }
 
 // ─── Exports (for tests) ──────────────────────────────────────────────────────
@@ -5821,6 +6048,9 @@ function hostCommandNames() {
 }
 
 module.exports = {
+  runCli,
+  runCliSync,
+  asyncHostCommandNames,
   hostCommandNames,
   dispatchCapabilityCommand,
   dispatchOverlayCapabilityCommand,
