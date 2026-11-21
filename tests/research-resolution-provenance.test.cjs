@@ -394,7 +394,7 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
   });
 
   test('both stops end plan-phase with a marker line, and autonomous never executes plans whose run carries it', () => {
-    assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous`, `\/gsd:manager` and transition's `mode: yolo` hand-off read so that they do not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
+    assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous`, `\/gsd:manager`, transition's `mode: yolo` hand-off and the `\/gsd:progress --next --auto` chain read so that they do not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so a `\/gsd:progress --next` or `\/gsd:execute-phase` the user starts can still run them\./);
     assert.doesNotMatch(resolve(), /a caller never executes/, 'the line names the callers that execute plans, not every caller');
     const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
     // Each plan run reads the stop where it checks its plans: 3b, the INTERACTIVE wait at 3c, and gap closure.
@@ -442,6 +442,14 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     // Everything between the call and the next route is the stop clause and its display, so no condition
     // can narrow it and no later instruction can run execute-phase after it.
     assert.equal(tr.slice(at + call.length, end).trim(), 'If that plan-phase run prints `PLANNING STOPPED` (a research question needs a user ruling, which `--auto` cannot ask for; `gsd-core/references/revision-loop.md`, Resolve), stop the chain: its plans stay on disk and are not executed, and Phase [X+1] is not ready. Display: ``` Auto-advance stopped: research questions need a user ruling. Continue: /gsd:plan-phase [X+1] ${GSD_WS} ```');
+  });
+
+  // /gsd:progress --next --auto re-invokes itself after each command, and its Route 0 would then execute the plans
+  // a stopped plan-phase run left on disk, so the stop ends that chain. A run the user starts is not a chain.
+  test('the /gsd:progress --next --auto chain ends on the stop instead of re-invoking', () => {
+    const next = read('gsd-core/workflows/next.md');
+    const loop = span(next, '**If `--auto` was passed:**', /\nWhen stopping due to a blocker/);
+    assert.ok(loop.split('\n').includes('- A command in the chain printed `PLANNING STOPPED` (a research question needs a user ruling; `gsd-core/references/revision-loop.md`, Resolve): its plans stay on disk and are not executed, so do not re-invoke'), 'the stop is one of the chain\'s end conditions');
   });
 });
 

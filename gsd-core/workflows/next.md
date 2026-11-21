@@ -345,6 +345,7 @@ Do not ask for confirmation — the whole point of `/gsd:progress --next` is zer
 - A milestone completes (`/gsd:complete-milestone` is reached)
 - A blocking decision is required (safety gate triggers, prior-phase completeness prompt, user input needed)
 - An error or paused state is detected (a recorded pause, Gate 0, ends the chain at `/gsd:resume-work`)
+- A command in the chain printed `PLANNING STOPPED` (a research question needs a user ruling; `gsd-core/references/revision-loop.md`, Resolve): its plans stay on disk and are not executed, so do not re-invoke
 
 When stopping due to a blocker, display:
 ```
