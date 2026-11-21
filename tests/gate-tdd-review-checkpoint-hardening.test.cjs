@@ -81,6 +81,10 @@ function w(dir, rel, content) {
 /** A SUMMARY whose `## Task Commits` lists one row per hash. */
 const summaryOf = (hashes) => `# done\n\n## Task Commits\n\n${hashes.map((h, i) => `${i + 1}. **Task ${i + 1}: x** - \`${h}\``).join('\n')}\n`;
 
+function cloneDepthOne(src, dest, branch) {
+  gitOrThrow(['clone', '-q', '--depth', '1', ...(branch ? ['--branch', branch] : []), pathToFileURL(src).href, dest], { cwd: path.dirname(dest), env: isolatedEnv({ home: src }) });
+}
+
 function commit(dir, file, msg) {
   w(dir, file, msg);
   git(dir, 'add', '-A');
@@ -215,7 +219,7 @@ describe('#5354 tdd review checkpoint seal', () => {
   function shallowClone(dir, suffix = '', branch) {
     const clone = path.join(path.dirname(dir), `${path.basename(dir)}-shallow${suffix}`);
     dirs.push(clone);
-    gitOrThrow(['clone', '-q', '--depth', '1', ...(branch ? ['--branch', branch] : []), pathToFileURL(dir).href, clone], { cwd: path.dirname(dir), env: isolatedEnv({ home: dir }) });
+    cloneDepthOne(dir, clone, branch);
     return clone;
   }
   const ghostSummary = (dir) => w(dir, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['d'.repeat(40)]));
@@ -229,11 +233,11 @@ describe('#5354 tdd review checkpoint seal', () => {
   // The SUMMARY names `hashes`, then the branch is squashed: no listed commit is reachable.
   const abbreviated = (dir, base) => git(dir, 'rev-list', '--reverse', `${base}..HEAD`).split('\n').map((h) => h.slice(0, 7));
   function squashWithSummary(hashes, transform = (text) => text) {
-    return (dir, base) => {
+    return (dir, base, title) => {
       w(dir, `${PHASE}/01-01-SUMMARY.md`, transform(summaryOf(hashes)));
       git(dir, 'add', '-A');
       git(dir, 'commit', '-m', 'docs: summary');
-      squash(dir, base);
+      squash(dir, base, title);
     };
   }
 
@@ -249,13 +253,14 @@ describe('#5354 tdd review checkpoint seal', () => {
     { name: 'a sealed plan squashed with a later test(01-01): commit still passes', setup: (d, b) => { sealThenSquash(d, b, 'feat(01-01): phase one'); commit(d, 'after.txt', 'test(01-01): add case'); }, expect: PASS },
     // The squash is told by the seal's RED no longer being reachable: a reachable one, or none sealed, credits nothing.
     { name: 'a seal whose RED is still reachable credits nothing: live commits that lack GREEN fail', subjects: ['test(01-01): red'], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(git(d, 'rev-parse', 'HEAD'), sha('b'))), expect: { status: 'FAIL', missing: ['GREEN'] } },
-    { name: 'a plan without a live RED whose seal names reachable commits credits nothing', subjects: ['docs(01-01): notes'], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(git(d, 'rev-parse', 'HEAD'), git(d, 'rev-parse', 'HEAD~1'))), expect: { status: 'FAIL', missing: ['RED', 'GREEN'] } },
+    { name: 'a plan without a live RED whose seal names reachable commits credits nothing', subjects: ['chore: x'], opts: { summary: false }, setup: (d) => w(d, SEAL, sealOf(git(d, 'rev-parse', 'HEAD'), git(d, 'rev-parse', 'HEAD~1'))), expect: { status: 'FAIL', missing: ['RED', 'GREEN'] } },
     { name: 'a scoped squash title without a seal fails (live plan commit, nothing sealed)', opts: { refs: true }, setup: (d, b) => squash(d, b, 'feat(01-01): squashed'), expect: { status: 'FAIL', missing: ['RED'] } },
     // No seal, task commits gone: not evaluable, never a failure.
     { name: 'no record and no reachable commits but a SUMMARY is not evaluable, not a failure', opts: { refs: true }, setup: (d, b) => squash(d, b), expect: { ...SQUASHED, outcome: 'advisory' } },
     { name: 'fabricated SUMMARY ids (no such object) are not evaluable, like a squashed-and-collected commit', subjects: ['chore: x'], setup: (d) => ghostSummary(d), expect: { status: 'NotEvaluable' } },
     // The SUMMARY id grammar (extractTaskCommitRefs): 7 to 40 lowercase hex in backticks, CRLF lines allowed.
     { name: 'a 7-char SUMMARY id of a squashed-away commit is not evaluable', opts: { refs: true }, setup: (d, b) => squashWithSummary(abbreviated(d, b))(d, b), expect: SQUASHED },
+    { name: 'a SUMMARY that lists a squashed-away commit and an unknown id is not evaluable, though its subject survives', subjects: ['chore: red', 'chore: green'], setup: (d, b) => { const squashed = git(d, 'rev-parse', 'HEAD'); squashWithSummary([squashed, 'd'.repeat(40)])(d, b, 'chore: green'); }, expect: { status: 'NotEvaluable', violations: 0 } },
     { name: 'a 7-char SUMMARY id git does not know is not evaluable', subjects: ['chore: x'], setup: (d) => w(d, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['abcdef0'])), expect: { status: 'NotEvaluable' } },
     { name: 'an uppercase SUMMARY id lists no hash, so the plan fails', subjects: ['chore: x'], setup: (d) => w(d, `${PHASE}/01-01-SUMMARY.md`, summaryOf(['D'.repeat(40)])), expect: { status: 'FAIL' } },
     { name: 'a SUMMARY with CRLF line endings is read like one with LF', opts: { refs: true }, setup: (d, b) => { squashWithSummary(abbreviated(d, b), (t) => t.replace(/\n/g, '\r\n'))(d, b); }, expect: SQUASHED },
@@ -817,11 +822,13 @@ describe('#5354 tdd review checkpoint seal', () => {
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf8').replace(/\r\n/g, '\n');
     const marker = ship.indexOf('<step name="seal_tdd_review">');
     assert.notEqual(marker, -1, 'ship.md has the seal_tdd_review step');
+    const stepEnd = ship.indexOf('</step>', marker);
+    assert.notEqual(stepEnd, -1, 'the seal step closes');
     const fence = ship.indexOf('```bash\n', marker);
-    assert.notEqual(fence, -1, 'the seal step opens a bash fence');
+    assert.ok(fence !== -1 && fence < stepEnd, 'the seal step opens its own bash fence');
     const from = fence + 8;
     const end = ship.indexOf('\n```', from);
-    assert.notEqual(end, -1, 'the seal step closes its bash fence');
+    assert.ok(end !== -1 && end < stepEnd, 'the seal step closes its own bash fence');
     const script = ship.slice(from, end);
     const { dir } = fixture(subjects, { summary: false });
     const before = git(dir, 'log', '-1', '--format=%s');
@@ -994,7 +1001,7 @@ describe('#5354 tdd review checkpoint in a planning.sub_repos workspace', () => 
     const origin = `${root}-origin`;
     dirs.push(origin);
     fs.renameSync(app, origin);
-    gitOrThrow(['clone', '-q', '--depth', '1', '--branch', 'merged', pathToFileURL(origin).href, 'app'], { cwd: root, env: isolatedEnv({ home: root }) });
+    cloneDepthOne(origin, app, 'merged');
     assert.equal(git(root, 'rev-parse', '--is-shallow-repository'), 'false', 'positive control: the root is complete');
     assert.equal(git(app, 'rev-parse', '--is-shallow-repository'), 'true', 'positive control: the sub-repo is shallow');
     const row = run(root).payload.rows[0];
