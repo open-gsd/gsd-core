@@ -1651,6 +1651,22 @@ describe('#5966: the wave-boundary re-read fence, run under bash', () => {
     }
   });
 
+  test('the step 1 read and the --wave re-read print the index they read too', (t) => {
+    const proj = refreshFixture(t);
+    const steps = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps');
+    for (const [file, assigned] of [[WORKFLOW_PATH, 'PLAN_INDEX=$(gsd_run query phase-plan-index'], [path.join(steps, 'partial-wave.md'), 'POST_PLAN_INDEX=$(gsd_run query phase-plan-index']]) {
+      const text = fs.readFileSync(file, 'utf8');
+      const at = text.indexOf(assigned);
+      assert.ok(at >= 0, `${path.basename(file)} reads the index`);
+      const open = text.lastIndexOf('```bash\n', at);
+      const fence = refreshSplitLines(text.slice(open + 8, text.indexOf('\n```', at)))
+        .filter((line) => !line.startsWith('_GSD_SHIM_NAME=')).join('\n');
+      const r = runRefreshShell('-c', [[REAL_GSD_RUN, "PHASE_NUMBER='1'", fence].join('\n')], { interpreter: 'bash', cwd: proj });
+      assert.equal(r.exitCode, 0, `${path.basename(file)}: ${r.stderr}`);
+      assert.deepEqual(JSON.parse(r.stdout).plans.map((plan) => plan.id), ['01-01'], `${path.basename(file)} prints the index, not only assigns it`);
+    }
+  });
+
   test('inside an agent branch the block refuses before it reads the index', (t) => {
     const proj = refreshFixture(t);
     const branch = refreshGit(['checkout', '-q', '-b', 'worktree-agent-x'], { cwd: proj });
