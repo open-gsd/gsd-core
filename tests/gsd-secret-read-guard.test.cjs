@@ -1926,6 +1926,26 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   // Matched by the last path segment, as git and the shells are, and with Windows' `.cmd` shims.
   blocks(["caffeinate node_modules/.bin/npx -c 'cat .env'", "caffeinate npx.cmd -c 'cat .env'", "strace -f ./node_modules/.bin/npm exec -c 'cat .env'",
     "caffeinate NPM.CMD x -c 'cat .env'", "caffeinate /usr/local/bin/npm exec -c 'cat .env'"]);
+
+  // Readings the merge with #6446 added, each pinned: a cat feed in any segment of a process substitution, a cat
+  // under `time`, a fed tee or cat walked past, and the redirect targets read among the words as before.
+  blocks([
+    "source <(echo a; cat <<< 'cat .env')",
+    "bash <(true; cat <<EOF\ncat .env\nEOF\n)",
+    "time cat <<EOF | bash\ncat .env\nEOF",
+    "echo x | tee <<< 'cat .env' | bash",
+    "cat > out <<< 'cat .env' | bash",
+    'echo cat 2> .env | bash',
+  ]);
+
+  // Work the new readings charge: what xargs reads, split at blanks, at its bytes; a heredoc stage read again (each
+  // reading of the xargs sub-command walks back to it) at four times its bytes.
+  test('the blank split of what xargs reads, and a heredoc stage read again, are charged their bytes', () => {
+    const body = 'a '.repeat(50000);
+    const { scanWork } = require(HOOK_PATH);
+    assert.ok(scanWork(`echo '${body}' | xargs cat`) >= body.length, 'blank split');
+    assert.ok(scanWork(`cat <<EOF | xargs time X=1 env\n${body}\nEOF`) >= 4 * body.length, 'heredoc re-read');
+  });
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
