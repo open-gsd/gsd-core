@@ -2016,6 +2016,23 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "(echo a; (echo 'cat .env'; true)) | sh",
   ]);
   allows(["(echo 'echo hi'; true) | sh", "(cd x && ls) | sh", "(echo 'cat .env'; true); ls | sh"]);
+
+  // npm takes a unique prefix of a long option (`--edi` is `--editor`) and `-c=` attached; editor defaults to EDITOR
+  // or VISUAL and shell to SHELL or ComSpec; and `npm explore <pkg> <words>` runs the words joined, `--` or not.
+  blocks([
+    "npm edit lodash --edi='cat .env'",
+    "npm explore lodash --sh 'cat .env'",
+    "npm docs lodash --brow='cat .env'",
+    "npx --cal='cat .env'",
+    "npx '-c=cat .env'",
+    "EDITOR='cat .env' npm edit lodash",
+    "VISUAL='cat .env' npm config edit",
+    "SHELL='cat .env' npm explore lodash",
+    "export ComSpec='cat .env'; npm explore lodash",
+    "npm explore lodash 'cat .env'",
+    "npm explore --prefix x lodash 'cat .env'",
+  ]);
+  allows(["EDITOR='cat .env' npm install", "SHELL='cat .env' npm test", "npm explore lodash ls"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
