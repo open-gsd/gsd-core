@@ -153,7 +153,7 @@ describe('#5491 planPathsFromPrompt / planFacts', () => {
 
 describe('#5491 checkRead', () => {
   test('a correct restatement of every plan is complete (set order and decoration ignored)', () => {
-    assert.deepEqual(checkRead(GOOD, [A, B]), { complete: true, truncated: false, compacted: false, missing: [], mismatched: {} });
+    assert.deepEqual(checkRead(GOOD, [A, B]), { complete: true, truncated: false, compacted: false, missing: [], mismatched: {}, unchecked: [] });
   });
 
   test('a plan with no READ-CHECK line is missing', () => {
@@ -436,11 +436,11 @@ describe('#5491 runReadCheck', () => {
     assert.equal(runReadCheck('review', '/missing.md', '/repo', deps({}), { compacted: true }).compacted, true);
   });
 
-  test('a seam without fileSize throws instead of skipping every plan (#6286 Minor 1)', () => {
-    // Each plan read sits in a try/catch that skips an unreadable plan; a missing seam inside it
-    // would skip them all and report nothing.
+  test('a seam without readPlanBounded throws instead of leaving every plan unchecked (#6286 Minor 1, Minor 3)', () => {
+    // Each plan read sits in a try/catch; a missing seam inside it would mark every plan unchecked
+    // and hide why.
     const { exists, readFile } = deps(files);
-    assert.throws(() => runReadCheck(GOOD, PROMPT, '/repo', { exists, readFile }), /fileSize/);
+    assert.throws(() => runReadCheck(GOOD, PROMPT, '/repo', { exists, readFile }), /readPlanBounded/);
   });
 });
 
