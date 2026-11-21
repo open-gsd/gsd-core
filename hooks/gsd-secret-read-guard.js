@@ -4735,8 +4735,24 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
       if (subIsDd && (ddInputNamesSecret(w.text) || ddInputNamesSecret(received))) return secretRead(w.text);
     }
   }
+  // xargs splits what it reads at blanks and newlines (#5492), so `echo 'x if=.env' | xargs dd` hands dd `if=.env`:
+  // each piece of an operand, and of what the stage writes, is judged as an operand too, as it is and unquoted. Under
+  // `-I` or `-0` a piece may stay joined to the rest, so this fails closed there.
+  const texts = upstreamWords.map((w) => w.text);
+  for (const written of reconstructedScripts(upstreamWords, ctx)) texts.push(written);
+  for (const text of texts) {
+    if (!XARGS_BLANK_RE.test(text)) continue;
+    charge(ctx, text.length + 1);
+    for (const piece of text.split(XARGS_BLANKS_RE)) {
+      for (const received of new Set([piece, xargsUnquoted(piece)])) {
+        if (operandNamesSecret(received) || (subIsDd && ddInputNamesSecret(received))) return secretRead(received);
+      }
+    }
+  }
   return null;
 }
+const XARGS_BLANK_RE = /[\s\0]/;
+const XARGS_BLANKS_RE = /[\s\0]+/;
 
 // A secret name a piped stage's words mention, as they are or as xargs unquotes them, or what it writes does.
 function mentionInSource(upstreamWords, ctx) {
