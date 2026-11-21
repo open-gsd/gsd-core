@@ -3865,6 +3865,12 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "echo -e '\\x2eenv' | cat | xargs cat",
     "printf '.env\\n' | tee | xargs cat",
     "builtin echo -e '\\x2eenv' | xargs cat",
+    // Own adversarial pass: `cat /dev/stdin`, a group's output behind its redirect, a substitution run in a piped
+    // command, and a group's here-string read through a `cat` in it.
+    "printf '.env' | cat /dev/stdin | xargs cat",
+    "{ printf '.env'; } 2>/dev/null | xargs cat",
+    'echo .env | echo "$(xargs cat)"',
+    '{ cat | xargs cat; } <<< .env',
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3905,6 +3911,16 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['xargs cat <<EOF\n$(cat list)\nEOF', '$(cat list)\n'],
     ['echo "$(cat list)" | xargs cat', '$( )'],
     ['cat <<< "$X" | xargs cat', '$X'],
+    // What a script, a function or a filter writes is not rendered: unseen when it may come from text the command
+    // holds or feeds it, as a `>( )` body's stdin is.
+    ["eval 'echo .env' | xargs cat", 'eval'],
+    ["bash -c 'echo .env' | xargs cat", 'bash'],
+    ['f() { echo .env; }; f | xargs cat', 'f'],
+    ["printf '.env\\n' | sort | xargs cat", 'sort'],
+    ["printf '.env' | xargs echo | xargs cat", 'xargs'],
+    ['echo .env | tee >(xargs cat)', '>( )'],
+    // A brace the shell expands in an echo operand is not rendered either.
+    ['echo .en{v,} | xargs cat', '.en{v,}'],
     // eval or source may define the function a later call runs.
     ["eval 'f() { xargs cat; }'; f < names", 'names'],
   ];
@@ -3946,6 +3962,9 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     'xargs echo <<< "$(cat list)"',
     // A delimiter it cannot decode, with nothing it could split: the piped names are not knowable either way.
     "find . | xargs -d '\\e' cat",
+    // A filter given nothing the command shows, and a glob (the documented `cat .e*` gap), stay as they were.
+    'ls | sort | xargs cat',
+    "printf '%s\\n' *.md | xargs wc -l",
     // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
     'cat names | xargs cat',
   ];
