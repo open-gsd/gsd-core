@@ -121,6 +121,41 @@ describe('doc.slice, doc.step and doc.before', () => {
   });
 });
 
+describe('doc.before is first-to-first; doc.followedBy looks for b after a', () => {
+  test('before fails when a stray b comes before a, even if a later b follows it', (t) => {
+    const tree = makeTree(t, { 'o.md': 'b stray ... a ... b later\n' }, {
+      strict: "ctx.doc('o.md').before('a ', 'b ', 'the first a before the first b');",
+      loose: "ctx.doc('o.md').followedBy('a ', 'b ', 'a b exists after a');",
+    });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^strict:/);
+  });
+
+  test('followedBy passes when b appears after the first a, and fails when only an earlier b exists', (t) => {
+    const tree = makeTree(t, { 'o.md': 'b first, then a\n' }, { only_before: "ctx.doc('o.md').followedBy('a', 'b', 'b after a');" });
+    assert.equal(runTree(tree).length, 1);
+    const ok = makeTree(t, { 'o.md': 'a then b\n' }, { fine: "ctx.doc('o.md').followedBy('a', 'b', 'b after a');" });
+    assert.deepEqual(runTree(ok), []);
+  });
+
+  test('a slice that misses is one finding, and the assertions chained on it add none', (t) => {
+    const tree = makeTree(t, { 'w.md': 'no steps here\n' }, {
+      miss: "ctx.doc('w.md').step('absent').has(/x/, 'h1').has(/y/, 'h2').lacks(/z/, 'l').before('a', 'b', 'o').followedBy('a', 'b', 'f').slice('q');",
+    });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /marker .*absent.* not found/);
+  });
+
+  test('a global or sticky pattern gives the same answer on every call', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha alpha\n' }, {
+      stateful: "const doc = ctx.doc('a.md'); const re = /alpha/g; doc.has(re, 'first').has(re, 'second').has(re, 'third');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
 describe('the run itself fails closed', () => {
   test('a contract that throws is a finding of its own, and the others still run', (t) => {
     const tree = makeTree(t, { 'a.md': 'alpha\n' }, {
@@ -158,11 +193,13 @@ describe('the run itself fails closed', () => {
     assert.match(findings[0].message, /bad\.cjs must export/);
   });
 
-  test('the shipped contracts load, with unique ids', () => {
+  test('the shipped contracts load, with unique ids, and their number is the pinned minimum', () => {
     const ids = textContracts.loadContracts().map((c) => c.id);
     assert.ok(ids.includes('adr-15-progress-converge'));
     assert.ok(ids.includes('autonomous-converge'));
     assert.equal(new Set(ids).size, ids.length);
+    // Deleting a contract file, or adding one without raising MIN_CONTRACTS, fails here.
+    assert.equal(ids.length, textContracts.MIN_CONTRACTS);
   });
 });
 
@@ -203,6 +240,33 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       const findings = runShipped(root);
       assert.ok(findings.length > 0, 'a finding is reported');
       assert.ok(findings.every((f) => f.message.startsWith(`${contract}:`) || f.message.includes(`${contract}:`)), 'and it names the contract');
+    });
+  }
+
+  // Regressions the contracts exist to catch, introduced into a copy by editing one file.
+  for (const [title, rel, edit, expected] of [
+    ['a stray "Proceed to iterate step" before transition.md in the passed branch (#1526)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('**If `passed`:**', '**If `passed`:** Proceed to iterate step'), /passed verification must invoke transition\.md/],
+    ['a hardcoded .planning/STATE.md read back in discover_phases (#4455)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('<step name="discover_phases">', '<step name="discover_phases">\nSTATE_CONTENT=$(cat .planning/STATE.md 2>/dev/null || true)'), /hardcoded root \.planning\/STATE\.md read/],
+    ['disk_status !== "complete" back in discover_phases', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('<step name="discover_phases">', '<step name="discover_phases">\ndisk_status !== "complete"'), /must not filter on disk_status/],
+    ['`exit 1` back in the converge-fail-fast step (#4600)', 'gsd-core/workflows/autonomous/steps/converge-fail-fast.md',
+      (text) => `${text}\nexit 1\n`, /must not stop an explicit-flag run/],
+    ['the override-gate conditional removed from the host workflow (#4600)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.split('if [ "${PLAN_STRATEGY}" = "converge" ]; then').join('if [ "${PLAN_STRATEGY}" = "never" ]; then'), /conditional must exist and append --override-gate/],
+    ['a raw-frontmatter grep back in the human_needed read (#1522)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('After execute, read canonical verification', 'After execute, read canonical verification grep "^status:"'), /must not route stale human_needed reports from raw frontmatter/],
+  ]) {
+    test(`mutation: ${title} fails autonomous-converge`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
     });
   }
 

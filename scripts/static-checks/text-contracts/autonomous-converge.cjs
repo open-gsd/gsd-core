@@ -60,7 +60,7 @@ function checkConvergeFlag(ctx) {
     .lacks(/fail fast unless the existing convergence feature gate/, 'the host must not instruct a runtime agent to fail fast on the gate before the converge step (#4600)')
     // The override is appended conditionally on the converge strategy, never on local-strategy runs.
     // Searched from the conditional: the host prose at the precedence sentence also names the flag.
-    .before('if [ "${PLAN_STRATEGY}" = "converge" ]; then', '--override-gate', 'the PLAN_STRATEGY=converge conditional must exist and append --override-gate (#4600)');
+    .followedBy('if [ "${PLAN_STRATEGY}" = "converge" ]; then', '--override-gate', 'the PLAN_STRATEGY=converge conditional must exist and append --override-gate (#4600)');
   convergence
     .has(/--override-gate/, 'plan-review-convergence must honor a --override-gate dispatch instead of failing fast (#4600)')
     .has(/gsd-plan-review-convergence is disabled \(workflow\.plan_review_convergence=false\)/, 'the 1.5 veto must remain for standalone invocation, where the config gate decides (#4600)')
@@ -112,7 +112,7 @@ function checkVerificationDeferral(ctx) {
   // workflow reads canonical verification status before human-needed promotion (#1522)
   const afterWait = workflow.slice('After execute, read canonical verification');
   afterWait
-    .before('**If `human_needed`:**', 'set VERIFICATION frontmatter `status: passed`', 'the human_needed branch must follow the verification status read and contain the promotion action');
+    .followedBy('**If `human_needed`:**', 'set VERIFICATION frontmatter `status: passed`', 'the human_needed branch must follow the verification status read and contain the promotion action');
   workflow
     .slice('After execute, read canonical verification', '**If `human_needed`:**')
     // #2589: the read uses the native --pick flag (no jq). #5118: stderr kept, and a failed read is a
