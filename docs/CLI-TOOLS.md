@@ -1096,13 +1096,14 @@ Compares the changes since `last_mapped_commit` against the codebase map in `.pl
 | Category | Change | Rule |
 |---|---|---|
 | `new_dir` | added file | its directory is not mapped |
+| `new_root_file` | added file | a root-level file (no directory separator) whose name is not mapped |
 | `barrel` | added file | a barrel export at `(packages\|apps)/*/src/index.*` |
 | `migration` | added file | a migration file |
 | `route` | added file | a route module under `routes/` or `api/` |
 | `modified` | modified file | its directory is mapped |
 | `deleted` | deleted file | its directory is mapped |
 
-A rename counts its old path as `deleted` and its new path as an addition; a typechange counts as `modified`. For an added file the specific category (`migration`, then `route`, then `barrel`) wins over `new_dir`. Every element counts toward `workflow.drift_threshold`.
+A rename counts its old path as `deleted` and its new path as an addition; a typechange counts as `modified`. For an added file the specific category (`migration`, then `route`, then `barrel`) wins over `new_dir`. A root-level file that is not mapped is `new_root_file` rather than `new_dir` (#6236); it shares `new_dir`'s priority. Every element counts toward `workflow.drift_threshold`.
 
 **Skip reasons** (`skipped: true`, with `reason`): `no-structure-md` (no `STRUCTURE.md`), `cannot-read-structure-md` (`STRUCTURE.md` is not a regular file or is larger than 1 MiB), plus the existing git and baseline reasons. Any other document that is not a regular file or is larger than 1 MiB is unreadable: it is left out and listed in `documents_unreadable`.
 

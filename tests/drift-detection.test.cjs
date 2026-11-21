@@ -6,8 +6,8 @@
  * GSD Tools Tests — Codebase Drift Detection (#2003)
  *
  * Unit tests for bin/lib/drift.cjs plus CLI surface via verify codebase-drift.
- * Exercises the six drift categories (new dir, barrel, migration, route,
- * modified, deleted),
+ * Exercises the seven drift categories (new dir, new root file, barrel,
+ * migration, route, modified, deleted),
  * threshold gating, warn vs. auto-remap, last_mapped_commit round-trip,
  * config validation, mapper --paths passthrough, and graceful failure paths.
  */
@@ -146,6 +146,36 @@ describe('detectDrift — categories', () => {
       0,
       'src/lib is mapped — no new_dir drift',
     );
+  });
+
+  test('reports a root-level file as a new file, not a new directory (#6236)', () => {
+    const result = detectDrift({
+      addedFiles: ['engine.py'],
+      modifiedFiles: [],
+      deletedFiles: [],
+      documents: { 'STRUCTURE.md': baseStructure },
+    });
+    assert.deepStrictEqual(
+      result.elements,
+      [{ category: 'new_root_file', path: 'engine.py' }],
+    );
+  });
+
+  test('renders a root-level file under New files, never New directories (#6236)', () => {
+    const result = detectDrift({
+      addedFiles: ['engine.py', 'newpkg/thing.ts'],
+      modifiedFiles: [],
+      deletedFiles: [],
+      documents: { 'STRUCTURE.md': baseStructure },
+      threshold: 2,
+    });
+    const lines = result.message.split('\n');
+    const filesAt = lines.indexOf('New files:');
+    const dirsAt = lines.indexOf('New directories:');
+    assert.ok(filesAt >= 0, `missing New files label in ${JSON.stringify(result.message)}`);
+    assert.strictEqual(lines[filesAt + 1], '  - engine.py');
+    assert.ok(dirsAt >= 0, 'a nested unmapped file is still a new directory');
+    assert.strictEqual(lines[dirsAt + 1], '  - newpkg/thing.ts');
   });
 
   test('identifies new barrel export', () => {
@@ -474,7 +504,7 @@ describe('detectDrift — defensive paths', () => {
     assert.ok(Array.isArray(DRIFT_CATEGORIES));
     assert.deepStrictEqual(
       [...DRIFT_CATEGORIES].sort(),
-      ['barrel', 'deleted', 'migration', 'modified', 'new_dir', 'route'],
+      ['barrel', 'deleted', 'migration', 'modified', 'new_dir', 'new_root_file', 'route'],
     );
   });
 });
