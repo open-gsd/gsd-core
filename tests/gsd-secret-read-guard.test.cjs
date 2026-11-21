@@ -2164,7 +2164,10 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "echo 'cat .env' | (>case x in y; cat | bash)",
     "echo 'cat .env' | (case a in b) 2>esac :;; c) :;; esac; cat | bash)",
     "echo 'cat .env' | (2>esac true; cat | bash)",
+    "echo 'cat .env' | (cat) {fd}<<< 'echo hi' | bash",
+    "echo 'cat .env' | (cat) {fd}<<EOF | bash\necho hi\nEOF",
   ]);
+  allows(["echo ok | (cat) {fd}<<< 'echo hi' | bash"]);
   allows([
     "echo ok | (cat) 3<<< 'echo hi' | bash",
     "echo 'cat .env' | (cat) 0<<< 'echo hi' | bash",
