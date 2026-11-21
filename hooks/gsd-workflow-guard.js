@@ -35,8 +35,50 @@ const { reportIfUndetermined, gitEnv, BLOCKING_GUARD_PROBE_TIMEOUT_MS } = requir
 // explicitly rather than inheriting a default (#3911).
 const ON_CRASH = HOOK_ON_CRASH.ALLOW;
 
+// #6242: split a command string into shell statements at UNQUOTED `;`, `&&`,
+// `||` and `|`, before tokenizing. tokenize() is whitespace- and quote-aware
+// but does not emit those operators as separate tokens when they touch a
+// neighbouring word — `echo hi; git …` tokenizes `hi;` as one word — so a
+// token-level segment split alone never fired for glued operators and the
+// whole line stayed one segment anchored on the first word (`echo`): the
+// `git add -f` in the second statement was never examined, and the hook
+// allowed a command it was written to block. Quote handling mirrors
+// tokenize()'s exactly (single/double quotes span to the closing quote, no
+// escape handling), so an operator inside quotes stays part of its word —
+// `echo "a;b"; git …` splits only after the CLOSING quote, and a quoted
+// standalone `';'` still reaches the token-level split below with its
+// pre-existing (conservative) reading. `||`/`&&` are matched before the
+// single `|`. Empty statements (leading/trailing/doubled operators) are
+// skipped by the caller's length guard.
+function splitStatements(cmd) {
+  const statements = [];
+  let current = '';
+  let i = 0;
+  const len = cmd.length;
+  while (i < len) {
+    const ch = cmd[i];
+    if (ch === "'" || ch === '"') {
+      current += ch;
+      i++;
+      while (i < len && cmd[i] !== ch) current += cmd[i++];
+      if (i < len) current += cmd[i++];
+      continue;
+    }
+    if (ch === ';' || (ch === '&' && cmd[i + 1] === '&') || ch === '|') {
+      statements.push(current);
+      current = '';
+      // Consume `&&`/`||` as one operator; `|` alone is its own.
+      i += ch === '&' || (ch === '|' && cmd[i + 1] === '|') ? 2 : 1;
+      continue;
+    }
+    current += ch;
+    i++;
+  }
+  statements.push(current);
+  return statements;
+}
+
 function forceGitAddCwds(command, defaultCwd) {
-  const tokens = tokenize(command || '');
   const separators = new Set(['&&', '||', ';', '|']);
   const cwdList = [];
   // #3504: per-segment walk driven by git-cmd.js's canonical skipToSubcommand.
@@ -46,12 +88,21 @@ function forceGitAddCwds(command, defaultCwd) {
   // through to a silent exit 0, a no-crash bypass the fail-closed catch is
   // structurally blind to (it only fires on throws). Sharing the classifier
   // makes the block's flag knowledge exactly the classifier's.
+  //
+  // #6242: statements come from splitStatements (the string-level split at
+  // unquoted shell operators), and the token-level split below is kept as a
+  // second layer — it still covers a quoted standalone operator (`echo ';'
+  // git …` tokenizes the quoted `;` to a bare token) exactly as before the
+  // string-level split existed.
   const segments = [];
-  let start = 0;
-  for (let i = 0; i <= tokens.length; i++) {
-    if (i === tokens.length || separators.has(tokens[i])) {
-      if (i > start) segments.push(tokens.slice(start, i));
-      start = i + 1;
+  for (const statement of splitStatements(command || '')) {
+    const tokens = tokenize(statement);
+    let start = 0;
+    for (let i = 0; i <= tokens.length; i++) {
+      if (i === tokens.length || separators.has(tokens[i])) {
+        if (i > start) segments.push(tokens.slice(start, i));
+        start = i + 1;
+      }
     }
   }
   for (const seg of segments) {
