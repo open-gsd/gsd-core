@@ -377,7 +377,7 @@ describe('#4904 a decision write never removes a file through a linked identity 
 });
 
 // #4904: the identity writer refuses a linked record directory, so a held query never writes (or prunes)
-// outside the project; it records its decision instead of holding.
+// outside the project; it keeps the hold and records no decision.
 describe('#4904 a held query never writes through a linked identity directory', { skip: SKIP }, () => {
   const { IDENTITY_RECORD_DIR } = require('../hooks/lib/isolation-sentinel.js');
   const { runGsdTools, createTempGitProject, homeSandboxEnv, TOOLS_PATH } = require('./helpers.cjs');
