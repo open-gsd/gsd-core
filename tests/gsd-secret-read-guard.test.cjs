@@ -3830,6 +3830,14 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "printf '.env' | sh -c 'xargs cat'",
     "echo .env | bash -c 'xargs cat'",
     'f() { xargs cat; }; f <<< .env',
+    'f() { xargs cat; }; f <<< a; f <<< .env',
+    // A case pattern's `)` closes no group.
+    '{ case x in a) xargs cat;; esac; } <<< .env',
+    '{ case x in (a) xargs cat;; esac; } <<< .env',
+    // echo reads escapes in zsh, dash and bash's xpg_echo, so both of its readings are judged.
+    "echo '.e\\0156v' | xargs cat",
+    "echo '.e\\x6ev' | xargs cat",
+    "echo -E '.e\\0156v' | xargs cat",
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3851,6 +3859,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['exec < names; xargs cat', 'names'],
     ["sh -c 'xargs cat' < names", 'names'],
     ['f() { xargs cat; }; f < names', 'names'],
+    // Every call's stdin counts, and one the guard cannot read outranks one it can.
+    ['f() { xargs cat; }; f <<< a; f < names', 'names'],
+    ['f() { xargs cat; } <<< a; f < names', 'names'],
+    ['{ case x in a) xargs cat;; esac; } < names', 'names'],
+    ['( case x in a) :;; esac; xargs cat ) < names', 'names'],
   ];
   // The same denial for what a printf or echo it does not render writes, and for a `-d` value it cannot decode,
   // each under a code of its own, since the block names no file.
