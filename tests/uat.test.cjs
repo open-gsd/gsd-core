@@ -8998,3 +8998,58 @@ describe('#4983: a resolved ## Gaps entry hides its matching ### N. issue row', 
     assert.ok(items.some((i) => i.test === 2 && i.result === 'blocked'));
   });
 });
+
+// ─── #6239: a heading whose only deeper headings record its closure is one entry ─────────────────────────────
+
+describe('#6239 parseDeferredItems: a closure heading under an entry does not make it a container', () => {
+  const deferred = (...body) => ['# Deferred Items', '', '## Deferred Items', '', ...body].join('\n');
+  const bullets = (n) => Array.from({ length: n }, (_, i) => `- body fact ${i + 1}`);
+
+  test('[regression] six body bullets plus a `#### Resolution` child with a resolved status is one closed entry, not open items', () => {
+    const doc = deferred('### Item A', '', ...bullets(6), '', '#### Resolution', '', '- **Status:** resolved', '- fixed in the follow-up plan');
+    assert.deepStrictEqual(parseDeferredItems(doc), []);
+    const withStatus = parseDeferredItemsWithStatus(doc);
+    assert.strictEqual(withStatus.length, 1, JSON.stringify(withStatus));
+    assert.strictEqual(withStatus[0].status, 'resolved');
+    assert.match(withStatus[0].name, /^Item A /);
+  });
+
+  test('[regression] the same shape with no resolved status is one open item, not one per bullet', () => {
+    const doc = deferred('### Item A', '', ...bullets(6), '', '#### Resolution', '', '- still waiting on the vendor');
+    assert.strictEqual(parseDeferredItems(doc).length, 1);
+  });
+
+  test('[boundary] the closure heading may sit one level or several levels below, and may carry a suffix', () => {
+    for (const child of ['#### Resolution', '##### Resolved', '###### Closure: done', '#### Resolution — v1.2']) {
+      const doc = deferred('### Item A', '', ...bullets(3), '', child, '', '- **Status:** resolved');
+      assert.deepStrictEqual(parseDeferredItems(doc), [], child);
+      assert.strictEqual(parseDeferredItemsWithStatus(doc).length, 1, child);
+    }
+    const nested = deferred('### Item A', '', ...bullets(2), '', '#### Resolution', '', '- **Status:** resolved', '', '##### Details', '', '- more');
+    assert.deepStrictEqual(parseDeferredItems(nested), []);
+  });
+
+  test('[independence] a heading with real child entries is still a container, even when one child is a resolution', () => {
+    const doc = deferred('### Group', '', '#### Entry A', '', '- a', '', '#### Resolution', '', '- **Status:** resolved');
+    const names = parseDeferredItemsWithStatus(doc).map((i) => i.name);
+    assert.strictEqual(names.length, 2, JSON.stringify(names));
+    assert.match(names[0], /^Entry A/);
+    assert.match(names[1], /^Resolution/);
+  });
+
+  test('[independence] a child heading that merely starts with the word is a real child entry', () => {
+    const doc = deferred('### Item A', '', '- a', '', '#### Resolution plan for the vendor', '', '- b');
+    assert.strictEqual(parseDeferredItems(doc).length, 2);
+  });
+
+  test('[property] any bullet count and marker, resolved or not, yields exactly one entry whose status is the resolution status', () => {
+    const marker = fc.constantFrom('-', '*', '+');
+    fc.assert(fc.property(fc.integer({ min: 1, max: 8 }), marker, fc.boolean(), fc.constantFrom('\n', '\r\n'), (n, m, resolved, eol) => {
+      const doc = deferred('### Item A', '', ...Array.from({ length: n }, (_, i) => `${m} fact ${i}`), '', '#### Resolution', '', `${m} **Status:** ${resolved ? 'resolved' : 'open'}`).split('\n').join(eol);
+      const got = parseDeferredItemsWithStatus(doc);
+      assert.strictEqual(got.length, 1);
+      assert.strictEqual(got[0].status, resolved ? 'resolved' : 'open');
+      assert.strictEqual(parseDeferredItems(doc).length, resolved ? 0 : 1);
+    }), { numRuns: 100 });
+  });
+});
