@@ -415,6 +415,8 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
     ['cat {(x', '{'],
     // An open group with no comma yet is still a group to zsh: `{a(x),.env}` is `a(x)` and `.env`.
     ['cat {a(x),.env}', '{a'],
+    // A group zsh's quoted-dot range makes runs into a glob too: `.e{n'..'n}(v|)` matches `.env`.
+    ["cat .e{n'..'n}(v|)", '.e{n..n}'],
   ]) {
     test(`denies ${JSON.stringify(cmd)}`, () => assertBlocked(cmd, unreadable(word)));
   }
@@ -423,7 +425,7 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
   // A brace word with no group in it before a `(` stays one word (`{type}(…)`, a commit-message template).
   for (const cmd of [
     'cat {a,b}\r', 'cat x\r', 'cat x?(y)', 'echo (x)', '{(echo hi); }', '{((1+1)); echo ok; }', 'cat {type}(a)',
-    'echo {type}({phase}-{plan}): {task-name}',
+    'echo {type}({phase}-{plan}): {task-name}', 'cat {a {b}(c)',
   ]) {
     test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));
   }
