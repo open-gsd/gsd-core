@@ -1285,7 +1285,9 @@ whenever `scope` is anything other than `complete` — the same rule the roadmap
 and progress surfaces follow, for the same reason. See
 [A non-`COMPLETE` scope withholds the percentage entirely](#a-non-complete-scope-withholds-the-percentage-entirely-3217).
 
-`0` is a real answer under a `complete` scope and is never withheld.
+`0` is a real answer under a `complete` scope and is never withheld. For
+`halted_plans` that holds only while no `summary_unreadable` diagnostic stands:
+a SUMMARY that could not be read counts as not halted (below).
 
 #### Halted plans: counted as completed, flagged beside the count (#5823)
 
