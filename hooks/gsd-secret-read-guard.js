@@ -4247,7 +4247,8 @@ const LAUNCHING_BASES = new Set(['git', 'git.exe', ...SSH_CLIENTS, ...SHELL_INTE
 // Operand words that start a command when another command runs them (#5492): git, a shell and an ssh client by
 // their last path segment, and eval, xargs, find, watch, dd and the wrappers only as the bare word or an absolute
 // path (bareLauncherName), so a relative path or URL ending in one (`packages/watch`, `https://x/eval`) starts nothing.
-const LAUNCHER_WORDS = new Set(['eval', 'xargs', 'find', 'find.exe', 'watch', 'dd', 'dd.exe', ...WRAPPERS.keys()]);
+const LAUNCHER_WORDS = new Set(['eval', 'xargs', 'find', 'find.exe', 'watch', 'dd', 'dd.exe', 'npx', 'npm',
+  ...WRAPPERS.keys()]);
 function isLauncherWord(text) {
   const name = lastSegment(text).toLowerCase();
   return name === 'git' || name === 'git.exe' || SSH_CLIENTS.has(name) || SHELL_INTERPRETERS.has(name)
