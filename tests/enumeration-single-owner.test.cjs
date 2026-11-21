@@ -13,7 +13,7 @@
  *   - row 14  negative space: `P0.0-foundation` is a REAL phase (#1324
  *             letter-prefixed-decimal family), not sentinel milestone 0
  *   - row 38  a `### Phase 999.1:` ROADMAP heading produces a `stats` row
- *   - row 43  `phases clear --confirm` DELETES a `0-*` directory, because
+ *   - row 43  `phases clear --confirm` ARCHIVES a `0-*` directory, because
  *             cmdPhasesClear carries its own 5th sentinel copy
  *             (`/^999(?:\.|$)/`) excluding 999 but NOT 0 — while
  *             `roadmap analyze` treats Phase 0 as a sentinel to preserve.
@@ -21,7 +21,7 @@
  * Assertions are on `--json` output (a typed surface), never on rendered
  * prose — CONTRIBUTING.md bans raw-text matching on test outputs. Row 43 also
  * carries the NEGATIVE PROOF that the directory still exists on disk, because
- * an exit code alone cannot distinguish "refused" from "deleted and reported
+ * an exit code alone cannot distinguish "refused" from "archived and reported
  * success".
  */
 
@@ -213,14 +213,14 @@ test('stats does not list a phase-0 sentinel directory', (t) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════
-// Row 43 — the destructive path: `phases clear` must not delete a sentinel
+// Row 43 — the sweeping path: `phases clear` must not archive a sentinel
 // ═════════════════════════════════════════════════════════════════════════
 
 test('phases clear preserves a phase-0 sentinel directory, with negative proof on disk', (t) => {
   // cmdPhasesClear carries the FIFTH copy of the sentinel rule and the THIRD
   // regex variant — `/^999(?:\.|$)/` — which excludes 999 but NOT 0. So a
   // `0-*` directory that `roadmap analyze` treats as a preserved sentinel is
-  // DELETED here. The exit code alone cannot show this, so the load-bearing
+  // ARCHIVED here. The exit code alone cannot show this, so the load-bearing
   // assertion is that the directory still exists afterwards.
   const cwd = createTempGitProject('gsd-phase-enum-clear-');
   t.after(() => cleanup(cwd));
