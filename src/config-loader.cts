@@ -230,6 +230,26 @@ function nestedTwinOf(key: string): { key: string; section: string; field: strin
   return NESTED_TWINS.find((twin) => twin.key === key);
 }
 
+/**
+ * A NESTED_TWINS setting as `defaults.json` gives it: the flat spelling as
+ * stored (a null included), else the nested spelling when it holds a value of
+ * the type of `fallback` (the setting's default), else undefined. A nested
+ * value of another type is no setting: copied into a new project's flat key, a
+ * string "false" reads as false to config-get but as true to check-commit. The
+ * global-defaults branch below and new-project creation both read the store
+ * through this, so they agree on every store (#5681).
+ */
+function _getGlobalTwinValue(
+  parsed: Record<string, unknown>,
+  twin: { key: string; section: string; field: string },
+  fallback: unknown,
+): unknown {
+  if (parsed[twin.key] !== undefined) return parsed[twin.key];
+  const nested = _getConfigNested(parsed, twin.section, twin.field);
+  if (nested === undefined || nested === null) return undefined;
+  return fallback === undefined || fallback === null || typeof nested === typeof fallback ? nested : undefined;
+}
+
 const CONFIG_DEFAULTS = {
   model_profile: _getConfigDefault('model_profile'),
   commit_docs: _getConfigDefault('commit_docs'),
@@ -1223,14 +1243,17 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       }
       if (globalRead.kind !== 'ok') throw new Error('global defaults absent or unusable');
       const globalDefaults = globalRead.data;
-      // Each setting below is read as in a project config: its flat key, then
-      // its nested twin (NESTED_TWINS) when it has one. `config-save-defaults`
-      // stores the nested spelling and drops the flat one (#5681), so a
-      // flat-only read lost a saved `workflow.research`. #3894 added
-      // `research_before_questions`, which was silently dropped from global
-      // defaults, so it was unavailable at user scope AND inert at project
-      // scope on the /gsd-quick path.
-      const globalGet = (key: string): unknown => _getConfigValue(globalDefaults, key, nestedTwinOf(key));
+      // Each setting below is read by its flat key, then by its nested twin
+      // (NESTED_TWINS) when it has one, as new-project creation reads the store
+      // (_getGlobalTwinValue). `config-save-defaults` stores the nested spelling
+      // and drops the flat one (#5681), so a flat-only read lost a saved
+      // `workflow.research`. #3894 added `research_before_questions`, which was
+      // silently dropped from global defaults, so it was unavailable at user
+      // scope AND inert at project scope on the /gsd-quick path.
+      const globalGet = (key: string): unknown => {
+        const twin = nestedTwinOf(key);
+        return twin ? _getGlobalTwinValue(globalDefaults, twin, (defaults as Record<string, unknown>)[key]) : globalDefaults[key];
+      };
       const _globalBaseCfg: Record<string, unknown> = {
         ...defaults,
         model_profile: globalGet('model_profile') ?? defaults.model_profile,
@@ -1355,6 +1378,7 @@ export = {
   _getNestedConfigDefault,
   _getConfigValue,
   _getConfigNested,
+  _getGlobalTwinValue,
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   _warnedUnknownConfigKeys,

@@ -18,7 +18,7 @@ import cliExitMod = require('./cli-exit.cjs');
 const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
-const { CONFIG_DEFAULTS, NESTED_TWINS, resolvePlannerStallDetectionEnabled } = configLoader;
+const { CONFIG_DEFAULTS, NESTED_TWINS, resolvePlannerStallDetectionEnabled, _getGlobalTwinValue } = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -603,34 +603,25 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     },
   };
 
-  // The template writes `commit_docs` and `search_gitignored` under their flat
-  // spelling, and the loader reads a flat key before its nested twin, so a layer
-  // that sets only the nested spelling (`planning.commit_docs`, the spelling
+  // The template writes `commit_docs` and `search_gitignored` flat, and the
+  // loader reads a flat key before its nested twin, so a layer that sets only
+  // the nested spelling (`planning.commit_docs`, the spelling
   // config-save-defaults keeps) would lose to the template's default. Each such
-  // key takes the loader's reading (flat, then nested) of the highest layer that
-  // sets either spelling: the choices, then the user defaults. A flat null
-  // stops the read there, as it stops the loader's nested read, and leaves the
-  // template's default, which is what the loader resolves for it. A nested null
-  // is no setting, and neither is a nested value of another type than the
-  // template's default (a string "false" would read as false to config-get but
-  // as true to check-commit), so such a value stays as inert as it was before. The flat
-  // key stays, as the template always writes it: a workstream config needs it
-  // to override the root's. A nested twin in the new project is given the same
-  // value, so the two spellings agree (#5681).
-  const isSet = (value: unknown): boolean => value !== undefined && value !== null;
-  for (const { key, section, field } of TEMPLATE_FLAT_TWINS) {
+  // key is read as the loader's global-defaults branch reads the store
+  // (_getGlobalTwinValue) from the highest layer that holds it: the choices,
+  // then the user defaults. A flat null leaves the template's default, as the
+  // loader resolves a null to its default. The flat key stays, as the template
+  // always writes it: a workstream config needs it to override the root's. A
+  // nested twin in the new project is given the same value, so the two
+  // spellings agree (#5681).
+  for (const twin of TEMPLATE_FLAT_TWINS) {
+    const { key, section, field } = twin;
     let resolved: unknown = hardcoded[key];
     for (const layer of [choices, safeDefaults] as Record<string, unknown>[]) {
-      const layerSection = layer[section];
-      const nested = isPlainObject(layerSection) ? layerSection[field] : undefined;
-      if (layer[key] !== undefined) {
-        if (layer[key] !== null) resolved = layer[key];
-        break;
-      }
-      if (isSet(nested) && typeof nested === typeof hardcoded[key]) {
-        resolved = nested;
-        break;
-      }
+      const value = _getGlobalTwinValue(layer, twin, hardcoded[key]);
+      if (value === undefined) continue;
+      if (value !== null) resolved = value;
+      break;
     }
     config[key] = resolved;
     const projectSection = config[section];

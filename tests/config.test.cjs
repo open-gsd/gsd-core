@@ -4373,6 +4373,43 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     }
   });
 
+  // The loader's global-defaults branch reads the store by the same rule, so a
+  // hand-written nested value of another type than the default reads as the
+  // default outside a project too, as it does in a new project.
+  test('outside a project, a stored nested twin that is not of the default type reads as the default', (t) => {
+    const { CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    for (const [stored, key] of [
+      [{ planning: { commit_docs: 'false' } }, 'commit_docs'],
+      [{ workflow: { research: 'false' } }, 'research'],
+      [{ workflow: { post_planning_gaps: 0 } }, 'post_planning_gaps'],
+      [{ workflow: { subagent_timeout: '5' } }, 'subagent_timeout'],
+    ]) {
+      const { gsdHome } = defaultsHome(t, stored);
+      const outside = tempProject(t);
+      const loaded = withIsolatedProcessState(() => {
+        process.env.GSD_HOME = gsdHome;
+        return loadConfig(outside);
+      });
+      assert.strictEqual(loaded[key], CONFIG_DEFAULTS[key], `${JSON.stringify(stored)}: ${key}`);
+    }
+    const { gsdHome } = defaultsHome(t, { planning: { commit_docs: 'false' } });
+    const projectDir = tempProject(t);
+    assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome }).success);
+    assert.strictEqual(loadConfig(projectDir).commit_docs, true);
+  });
+
+  // A nested value of the default's type is read in both places.
+  test('outside a project, a stored nested twin of the default type is read', (t) => {
+    const { gsdHome } = defaultsHome(t, { planning: { commit_docs: false }, workflow: { subagent_timeout: 5000 } });
+    const outside = tempProject(t);
+    const loaded = withIsolatedProcessState(() => {
+      process.env.GSD_HOME = gsdHome;
+      return loadConfig(outside);
+    });
+    assert.strictEqual(loaded.commit_docs, false);
+    assert.strictEqual(loaded.subagent_timeout, 5000);
+  });
+
   test('check-commit refuses planning files when a string "false" was chosen over a stored false', (t) => {
     const { gitOrThrow } = require('./helpers/git-fixture.cjs');
     const { gsdHome } = defaultsHome(t, JSON.stringify({ commit_docs: false }));
