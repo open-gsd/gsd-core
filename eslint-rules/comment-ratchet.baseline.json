@@ -1667,18 +1667,6 @@
   "tests/audit-fix-command.test.cjs": {
     "directive": 1
   },
-  "tests/autonomous-allowed-tools.test.cjs": {
-    "directive": 2
-  },
-  "tests/autonomous-decomposition.test.cjs": {
-    "directive": 1
-  },
-  "tests/autonomous-interactive.test.cjs": {
-    "directive": 2
-  },
-  "tests/autonomous-to-flag.test.cjs": {
-    "directive": 2
-  },
   "tests/backwards-compat-phase-id.test.cjs": {
     "block": 1
   },

@@ -122,6 +122,54 @@ describe('doc.slice, doc.step and doc.before', () => {
   });
 });
 
+describe('doc.slice with several closing markers, and doc.shorterThan', () => {
+  const branch = 'head\nOPEN\nbody A\n**If `x`:** sibling one\n**If `y`:** sibling two\ntail\n</step>\n';
+
+  test('the slice ends at the earliest closing marker present, searched after the opening marker', (t) => {
+    const tree = makeTree(t, { 'b.md': branch }, {
+      early: "ctx.doc('b.md').slice('OPEN', ['</step>', '**If `']).has(/body A/, 'inside').lacks(/sibling/, 'cut at the sibling marker');",
+      // An end marker that begins like the start marker must end the slice at the NEXT one.
+      overlapping: "ctx.doc('b.md').slice('**If `x`:**', ['**If `', '</step>']).has(/sibling one/, 'inside').lacks(/sibling two/, 'cut at the next marker');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a closing marker missing from the list is skipped, and none present at all is a finding', (t) => {
+    const tree = makeTree(t, { 'b.md': branch }, {
+      some: "ctx.doc('b.md').slice('OPEN', ['absent', '</step>']).has(/tail/, 'ends at the one that exists');",
+      none: "ctx.doc('b.md').slice('OPEN', ['absent', 'also absent']).lacks(/x/, 'dead document');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /^none: closing marker .*absent.* not found after "OPEN"/);
+  });
+
+  test('shorterThan is exclusive at the limit: limit - 1 passes, limit and limit + 1 fail', (t) => {
+    for (const [length, fails] of [[9, false], [10, true], [11, true]]) {
+      const tree = makeTree(t, { 's.md': `${'x'.repeat(length - 1)}\n` }, { size: "ctx.doc('s.md').shorterThan(10, 'under ten');" });
+      const findings = runTree(tree);
+      assert.equal(findings.length, fails ? 1 : 0, `length ${length}`);
+      if (fails) assert.match(findings[0].message, new RegExp(`^size: under ten \\(${length} characters, expected fewer than 10\\)$`));
+    }
+  });
+
+  test('frontmatter is the closed block only; a body list item is outside it and a missing or unclosed block is a finding', (t) => {
+    const tree = makeTree(t, {
+      'f.md': '---\nname: x\ntools:\n  - A\n---\nbody\n  - B\n',
+      'n.md': 'no block\n  - A\n',
+      'u.md': '---\nname: x\n  - A\n',
+    }, {
+      inside: "ctx.doc('f.md').frontmatter().has(/^[ \\t]+-[ \\t]+A$/m, 'A is listed').lacks(/B/, 'the body is excluded');",
+      none: "ctx.doc('n.md').frontmatter().has(/A/, 'dead document');",
+      open: "ctx.doc('u.md').frontmatter().has(/A/, 'dead document');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /^none: no closed YAML frontmatter block/);
+    assert.match(messages[1], /^open: no closed YAML frontmatter block/);
+  });
+});
+
 describe('ctx.doc reads only regular, non-empty files inside the repository', () => {
   test('a path that climbs out of the root, an absolute path and an empty path are findings', (t) => {
     const tree = makeTree(t, { 'a.md': 'x\n' }, {
@@ -251,13 +299,17 @@ describe('the run itself fails closed', () => {
 
   test('the shipped contracts load, with unique ids, and their number is the pinned minimum', () => {
     const ids = textContracts.loadContracts().map((c) => c.id);
-    assert.ok(ids.includes('adr-15-progress-converge'));
-    assert.ok(ids.includes('autonomous-converge'));
+    assert.deepEqual([...ids].sort(), [...SHIPPED].sort());
     assert.equal(new Set(ids).size, ids.length);
     // Deleting a contract file, or adding one without raising MIN_CONTRACTS, fails here.
     assert.equal(ids.length, textContracts.MIN_CONTRACTS);
   });
 });
+
+const SHIPPED = [
+  'adr-15-progress-converge', 'autonomous-converge',
+  'autonomous-allowed-tools', 'autonomous-decomposition', 'autonomous-interactive', 'autonomous-to-flag',
+];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
   // The files each contract reads, copied into a temporary root so one phrase can be removed.
@@ -267,6 +319,7 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'commands/gsd/autonomous.md', 'gsd-core/workflows/autonomous.md', 'gsd-core/workflows/plan-review-convergence.md',
     'gsd-core/workflows/autonomous/steps/converge-fail-fast.md', 'gsd-core/workflows/autonomous/steps/converge-dispatch-bg.md',
     'gsd-core/workflows/autonomous/steps/converge-dispatch-inline.md', 'gsd-core/workflows/autonomous/steps/converge-loop.md',
+    'gsd-core/references/autonomous-smart-discuss.md',
   ];
 
   function copyOfRepoFiles(t) {
@@ -275,7 +328,7 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     return root;
   }
 
-  const runShipped = (root) => textContracts.run({ root, only: ['adr-15-progress-converge', 'autonomous-converge'] });
+  const runShipped = (root, only = SHIPPED) => textContracts.run({ root, only });
 
   test('an untouched copy of the files satisfies every shipped contract', (t) => {
     assert.deepEqual(runShipped(copyOfRepoFiles(t)), []);
@@ -323,6 +376,60 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       fs.writeFileSync(abs, after);
       const findings = runShipped(root);
       assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The four autonomous-* contracts: each asserts on the command, the workflow or the smart-discuss reference.
+  const SIZE_LIMIT = 40 * 1024;
+  const dropLine = (line) => (text) => text.split('\n').filter((l) => l.trim() !== line).join('\n');
+  for (const [title, rel, edit, contract, expected] of [
+    ['Agent dropped from the command allowed-tools (#2043)', 'commands/gsd/autonomous.md',
+      dropLine('- Agent'), 'autonomous-allowed-tools', /allowed-tools must include "Agent"/],
+    ['Agent dropped from allowed-tools but listed in the body, outside the frontmatter (#2043)', 'commands/gsd/autonomous.md',
+      (text) => `${dropLine('- Agent')(text)}\n  - Agent\n`, 'autonomous-allowed-tools', /allowed-tools must include "Agent"/],
+    ['the workflow no longer references autonomous-smart-discuss.md (#2196)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.split('autonomous-smart-discuss.md').join('the-extracted-file'), 'autonomous-decomposition', /must reference autonomous-smart-discuss\.md/],
+    ['CONTEXT.md gone from the smart-discuss reference (#2196)', 'gsd-core/references/autonomous-smart-discuss.md',
+      (text) => text.split('CONTEXT.md').join('the context file'), 'autonomous-decomposition', /instructions for writing CONTEXT\.md/],
+    ['--interactive gone from the command argument-hint (#1413)', 'commands/gsd/autonomous.md',
+      (text) => text.replace('[--interactive] ', ''), 'autonomous-interactive', /argument-hint should include --interactive/],
+    ['a sibling **If branch opened straight after the INTERACTIVE marker, so the Skill call falls outside it (#1413)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('**If `INTERACTIVE` is set:**', '**If `INTERACTIVE` is set:**\n**If `other`:**'), 'autonomous-interactive', /INTERACTIVE branch must invoke Skill/],
+    ['the success criteria lose "discuss inline" (#1413)', 'gsd-core/workflows/autonomous.md',
+      (text) => {
+        const at = text.indexOf('discuss inline', text.indexOf('<success_criteria>'));
+        return `${text.slice(0, at)}discuss${text.slice(at + 'discuss inline'.length)}`;
+      }, 'autonomous-interactive', /success criteria should mention discuss inline/],
+    ['TO_PHASE no longer defaults to empty (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.split('TO_PHASE=""').join('TO_PHASE=0'), 'autonomous-to-flag', /TO_PHASE should default to empty/],
+    ['the startup banner stops naming the --to target (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.split('Stopping after').join('Ending'), 'autonomous-to-flag', /startup banner should display the --to target/],
+    ['the iterate step renamed, so its section cannot be found (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('<step name="iterate">', '<step name="advance">'), 'autonomous-to-flag', /marker .*iterate.* not found/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The size ceiling is exclusive: SIZE_LIMIT - 1 characters pass, SIZE_LIMIT and SIZE_LIMIT + 1 fail.
+  for (const [delta, fails] of [[-1, false], [0, true], [1, true]]) {
+    test(`autonomous.md of ${SIZE_LIMIT + delta} characters ${fails ? 'fails' : 'satisfies'} autonomous-decomposition`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'autonomous.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      assert.ok(text.length <= SIZE_LIMIT - 1, 'the real file leaves room to pad up to the boundary');
+      fs.writeFileSync(abs, text + 'x'.repeat(SIZE_LIMIT + delta - text.length));
+      const findings = runShipped(root, ['autonomous-decomposition']);
+      assert.equal(findings.length, fails ? 1 : 0, JSON.stringify(findings));
+      if (fails) assert.match(findings[0].message, /must stay under the 10K-token Read limit/);
     });
   }
 
