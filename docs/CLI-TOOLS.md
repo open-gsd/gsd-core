@@ -639,7 +639,7 @@ rather than a number computed from a truncated, unscoped, or unreadable set:
 | `stats --raw` | `percent: null`, `plan_percent: null` |
 | `query progress --raw` | `percent: null` |
 | `state json --raw` | `progress.percent` is **omitted** from the `progress` object (not `0`, not present as `null`) |
-| `state update-progress --raw` | `false` — no write; `STATE.md`'s Progress field is left untouched, and a `[gsd-tools] WARNING:` line is written to stderr naming the scope |
+| `state update-progress --raw` | `false` — no write; `STATE.md`'s Progress field is left untouched, and a `[gsd-tools] WARNING:` line is written to stderr naming the scope; for an `unscoped` scope the line and a `hint` field also name the cause (STATE.md's milestone has no matching ROADMAP.md heading) and the fix (add the heading, correct STATE.md's milestone, or set `milestone: null` for a ROADMAP with no milestone headings) |
 
 `0` is a legitimate, real answer under a `complete` scope (e.g. a
 freshly-declared milestone with zero phases, or a phase with zero plan files)

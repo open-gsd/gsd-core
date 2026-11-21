@@ -1713,11 +1713,20 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
     // (stateReplaceFieldWithFallback above) for a comparable silent no-op —
     // now routed through the shared `declineNoOp` helper (#3957) so the
     // pairing is structural rather than hand-written per arm.
+    // #6271: UNSCOPED is the one non-COMPLETE scope an operator can fix by hand, and the bare message named
+    // neither cause nor fix: STATE.md's milestone names a version the ROADMAP has no heading for (or the ROADMAP
+    // has milestone headings and STATE names none), so every call declined and the counters drifted for the life
+    // of the project. The classification itself (ADR-3180 rows 4/5) is unchanged: it is what keeps a destructive
+    // consumer from acting on a window it could not find.
+    const unscopedHint = phaseScope === SCOPE.UNSCOPED
+      ? ` Cause: STATE.md's milestone names a version with no matching milestone heading in ROADMAP.md, or ROADMAP.md has milestone headings and STATE.md names none. Fix: add that milestone's heading to ROADMAP.md, set STATE.md's milestone to a heading that exists, or set \`milestone: null\` for a ROADMAP with no milestone headings.`
+      : '';
     declineNoOp(
       raw,
       'updated',
       `phase scope is ${phaseScope}, not complete`,
-      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.`,
+      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.${unscopedHint}`,
+      unscopedHint ? { hint: unscopedHint.trim() } : {},
     );
     return;
   }
