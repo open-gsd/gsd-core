@@ -32,4 +32,8 @@ if [ ${#CLOSED[@]} -gt 0 ]; then
 fi
 ```
 
-No matches: skip silently, never blocks.
+No matching todo: skip silently. The block never blocks the phase, which `update_roadmap` has already
+marked complete. Its first line is the runtime launcher, which exits 1 when no gsd-tools resolves: then no
+todo moves and every one stays pending, where the inline block this replaced moved them and lost only the
+commit. Every earlier block of the run needs gsd-tools too, so that happens only if it went missing
+mid-run; re-run the step once it resolves.

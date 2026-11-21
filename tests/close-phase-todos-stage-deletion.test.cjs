@@ -55,6 +55,16 @@ describe('#2415: close_phase_todos must stage the pending/ deletion alongside co
     assert.match(stepBody, /REMOVED\+=\("\$PENDING_DIR\/\$f"\)/, 'REMOVED must be built from $PENDING_DIR — the source whose deletion #2415 requires');
   });
 
+  test('the step says a missing gsd-tools moves no todo, and why that never blocks the phase (#5966)', () => {
+    const stepBody = fs.readFileSync(CLOSE_TODOS_STEP, 'utf8');
+    const launcher = stepBody.indexOf('_GSD_SHIM_NAME=');
+    assert.ok(launcher > -1 && launcher < stepBody.indexOf('mv "$TODO_FILE"'),
+      'the launcher line runs before any move, which is what the text below must state');
+    const text = stepBody.replace(/\s+/g, ' ');
+    assert.match(text, /The block never blocks the phase, which `update_roadmap` has already marked complete/);
+    assert.match(text, /exits 1 when no gsd-tools resolves: then no todo moves and every one stays pending/);
+  });
+
   test('close_phase_todos uses plain mv (not git mv) so untracked todos and non-git .planning dirs still work', () => {
     const stepBody = fs.readFileSync(CLOSE_TODOS_STEP, 'utf8');
 
