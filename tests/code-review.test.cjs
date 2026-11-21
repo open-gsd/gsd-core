@@ -731,7 +731,7 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
     const stepMatch = workflowContent.match(/<step name="dispatch_reviewer_lanes">([\s\S]*?)<\/step>/);
     const stepLines = splitLines(stepMatch[1]);
     return scanFencedBlocks(stepLines)
-      .filter((b) => b.infoString.trim().toLowerCase() === 'bash' && b.closeLineIdx !== -1)
+      .filter((b) => isBashFence(b) && b.closeLineIdx !== -1)
       .map((b) => stepLines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n'));
   }
 
