@@ -4926,6 +4926,8 @@ function scanLaunched(cmd, s, bySeg, sepAfter, depth, reading, ctx, heredocs, he
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, cmd.assigns);
   try {
+    const sourced = sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+    if (sourced) return sourced;
     if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
     if (cmd.base === 'eval') return scanEval(cmd.operands, depth, ctx);
     if (cmd.base === 'watch') return scanWatch(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
