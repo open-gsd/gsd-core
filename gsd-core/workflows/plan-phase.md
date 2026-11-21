@@ -759,6 +759,7 @@ Planner prompt:
 ```markdown
 <planning_context>
 **Phase:** {phase_number}
+**Workstream option:** {GSD_WS} (empty for root)
 **Mode:** {standard | gap_closure | reviews}
 
 <required_reading>
@@ -1042,6 +1043,7 @@ Checker prompt:
 ```markdown
 <verification_context>
 **Phase:** {phase_number}
+**Workstream option:** {GSD_WS} (empty for root)
 **Phase Goal:** {goal from ROADMAP}
 **Mode:** {standard | gap_closure | reviews}
 
@@ -1141,33 +1143,19 @@ If `DISK_PLANS` is greater than 0 (plans exist on disk; a known Windows stdio ha
 
 ## 12. Revision Loop (Max 3 Iterations)
 
-Track `iteration_count` (starts at 1 after initial plan + check).
+Apply threat-ID Revision routing from the scan step first.
+
+Track `iteration_count` (starts at 1 after the initial pass).
 Track `prev_issue_count` (initialized to `Infinity` before the loop begins).
 Track `stall_reentry_count` (starts at 0; incremented each time "Adjust approach" re-enters step 8).
 
 **If iteration_count < 3:**
 
-Parse issue count from checker return: count BLOCKER + WARNING entries in the YAML issues block (structured output from gsd-plan-checker); an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). Entries a `## VERIFICATION PASSED` return lists in prose count the same way (#5578). If the checker's return contains no YAML issues block and lists no BLOCKER or WARNING entry in prose (i.e., the plan was approved with no issues), treat `issue_count` as 0 and skip the stall check — the plan passed. Proceed to step 13 — likewise when every entry in the block is explicitly INFO (display them as advisories). Advisory format: `ℹ advisory — {dimension}: {description}` per INFO entry, listed once before the step-13 output.
+Count BLOCKER + WARNING entries in the YAML issues block (structured output from gsd-plan-checker); an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). Entries a `## VERIFICATION PASSED` return lists in prose count the same way (#5578). If the checker's return contains no YAML issues block and lists no BLOCKER or WARNING entry in prose (i.e., the plan was approved with no issues), treat `issue_count` as 0 and skip the stall check — the plan passed. Proceed to step 13 — likewise when every entry in the block is explicitly INFO (display them as advisories). Advisory format: `ℹ advisory — {dimension}: {description}` per INFO entry, listed once before the step-13 output.
 
 Display (only when entering the revision loop — skip if the paragraph above already proceeded to step 13): `Revision iteration {N}/3 -- {blocker_count} blockers, {warning_count} warnings`
 
-**Stall detection:** If `issue_count >= prev_issue_count`:
-  Display: `Revision loop stalled — issue count not decreasing ({issue_count} issues remain after {N} iterations)`
-
-  **If `stall_reentry_count < 2`:**
-    Ask user:
-      Question: "Issues remain after {N} revision attempts with no progress. Proceed with current output?"
-      Options: "Proceed anyway" | "Adjust approach"
-    If "Proceed anyway": accept current plans and continue to step 13.
-    If "Adjust approach": increment `stall_reentry_count`, open freeform discussion, then re-enter step 8 (full replanning). Note: re-entry resets `iteration_count` and `prev_issue_count` but `stall_reentry_count` persists across re-entries and is capped at 2.
-
-  **If `stall_reentry_count >= 2`:**
-    Display: `Stall persists after 2 re-planning attempts. The following issues could not be resolved automatically:`
-    List the remaining issues from the checker.
-    Suggest: "Consider resolving these issues manually or running `/gsd:debug` to investigate root causes."
-    Options: "Proceed anyway" | "Abandon"
-    If "Proceed anyway": accept current plans and continue to step 13.
-    If "Abandon": stop workflow.
+Apply the scan step’s § Revision stall before proceeding.
 
 Set `prev_issue_count = issue_count`.
 
@@ -1176,6 +1164,7 @@ Revision prompt:
 ```markdown
 <revision_context>
 **Phase:** {phase_number}
+**Workstream option:** {GSD_WS} (empty for root)
 **Mode:** revision
 
 <required_reading>
@@ -1289,11 +1278,11 @@ fi
 ```
 
 Run `plan-phase/steps/threat-id-check.md` § After planning.
-Spawn checker again (step 10), then increment `iteration_count`.
+Increment `iteration_count`. Apply threat-ID Revision routing. Spawn checker (step 10) only if enabled and verification was not skipped.
 
 **If iteration_count >= 3:**
 
-Recount BLOCKER + WARNING by the same rule — an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). If `issue_count` is 0 — PASSED with no BLOCKER/WARNING entry in the YAML block or in prose, or every entry in the block is explicitly INFO — display any advisories and proceed to step 13; the gate below fires on everything else (#3724).
+Apply threat-ID Revision routing, then recount BLOCKER + WARNING — an entry whose severity is missing or unrecognized counts as a BLOCKER (fail closed). If `issue_count` is 0 — PASSED with no BLOCKER/WARNING entry in the YAML block or in prose, or every entry in the block is explicitly INFO — display any advisories and proceed to step 13; the gate below fires on everything else (#3724).
 
 Display: `Max iterations reached. {N} issues remain:` + issue list
 
@@ -1303,7 +1292,7 @@ Offer: 1) Force proceed, 2) Provide guidance and retry, 3) Abandon
 
 **Skip if:** `--skip-bounce`, `--gaps`, or bounce not activated (`--bounce` flag or `workflow.plan_bounce` config; `--skip-bounce` always wins). Requires `workflow.plan_bounce_script` set to a valid script path — warn and skip if bounce is activated with no script configured.
 
-For each `*-PLAN.md`: back it up to `*-PLAN.pre-bounce.md`, invoke `${BOUNCE_SCRIPT}` with the plan file and `workflow.plan_bounce_passes` (default 2), validate the result's YAML frontmatter integrity, and restore from backup on either broken frontmatter or a non-zero script exit. After all plans are bounced, re-run the plan checker (step 10) on the modified plans, restoring any that fail. Run `plan-phase/steps/threat-id-check.md` § After planning before any bounce commit. Commit surviving bounced plans if at least one survived (`refactor(${padded_phase}): bounce plans through external refinement`), display a `{survived}/{total}` summary, and remove all `*-PLAN.pre-bounce.md` backups. Exact banner text, messages, and commands: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 12.5.
+For each `*-PLAN.md`: back it up to `*-PLAN.pre-bounce.md`, invoke `${BOUNCE_SCRIPT}` with the plan file and `workflow.plan_bounce_passes` (default 2), validate the result's YAML frontmatter integrity, and restore from backup on either broken frontmatter or a non-zero script exit. After bounce, re-run the checker only if enabled and verification was not skipped, restoring plans that fail. Run `plan-phase/steps/threat-id-check.md` § After planning before any bounce commit. Commit surviving bounced plans if at least one survived (`refactor(${padded_phase}): bounce plans through external refinement`), display a `{survived}/{total}` summary, and remove all `*-PLAN.pre-bounce.md` backups. Exact banner text, messages, and commands: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 12.5.
 
 ## 13. Requirements Coverage Gate
 
@@ -1450,7 +1439,7 @@ Skip this step if `plan_count` is 0. Re-running regenerates the annotation from 
 
 ## 13d. Commit Plans if commit_docs is true
 
-Run `plan-phase/steps/threat-id-check.md` § After planning before this commit; unresolved collisions return to step 12.
+Run `plan-phase/steps/threat-id-check.md` § After planning before this commit; apply threat-ID Revision routing before returning collisions to step 12.
 
 If `commit_docs` is true (from the init JSON parsed in step 1), commit the generated plan artifacts (including any ROADMAP.md annotations from step 13c):
 

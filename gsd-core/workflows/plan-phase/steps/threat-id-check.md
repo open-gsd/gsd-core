@@ -10,20 +10,42 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 
 ## After planning
 
-After every planner return (including revisions and bounce), and immediately before committing plans, run this fresh scan. Never reuse the initial payload. This gate applies with `--skip-verify`, disabled plan-checker, and `commit_docs=false`.
+After plan writes and before committing phase plans, scan fresh. In the orchestrator use the bound `PHASE` and `GSD_WS` from init. In agents bind `PHASE` to the dispatched phase and `GSD_WS` to the dispatched workstream option (empty for root scope). Report scan errors and stop before any commit.
 
 ```bash
-IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
-$ARGUMENTS
-GSD_ARGS_END
-GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
-PHASE="${PHASE:-<phase number from planning context>}"
+if [[ -z "${PHASE:-}" || -z "${GSD_WS+x}" ]]; then
+  echo "BLOCKED: threat-ID scan needs a phase and explicit workstream scope" >&2
+  exit 1
+fi
 THREAT_SCAN=$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}") || { echo "BLOCKED: threat-ID scan failed" >&2; exit 1; }
-if [[ "$THREAT_SCAN" == @file:* ]]; then THREAT_SCAN=$(cat "${THREAT_SCAN#@file:}") || exit 1; fi
-THREAT_ID_ISSUES=$(THREAT_SCAN="$THREAT_SCAN" node -e 'const j=JSON.parse(process.env.THREAT_SCAN);if(j.phase_found!==true||!Array.isArray(j.threat_id_duplicates)||!Number.isInteger(j.threat_id_duplicate_count)||j.threat_id_duplicate_count!==j.threat_id_duplicates.length)throw new Error("invalid threat-ID scan");const issues=j.threat_id_duplicates.map(d=>{if(typeof d.id!=="string"||!Array.isArray(d.plans)||d.plans.length<2)throw new Error("invalid duplicate claim");return {plan:d.plans.join(", "),dimension:"threat_id_uniqueness",severity:"blocker",description:d.id+" claimed by "+d.plans.join(", "),fix_hint:"Assign each register row a unique phase threat ID, including cross-references; update its references."}});process.stdout.write(JSON.stringify(issues))') || { echo "BLOCKED: cannot validate threat-ID scan" >&2; exit 1; }
+if [[ "$THREAT_SCAN" == @file:* ]]; then THREAT_SCAN=$(cat "${THREAT_SCAN#@file:}") || { echo "BLOCKED: cannot read threat-ID scan payload" >&2; exit 1; }; fi
+THREAT_ID_ISSUES=$(THREAT_SCAN="$THREAT_SCAN" node -e 'const j=JSON.parse(process.env.THREAT_SCAN);if(j.phase_found===false)throw new Error("threat-ID scan phase not found");if(j.phase_found!==true||!Array.isArray(j.threat_id_duplicates)||!Number.isInteger(j.threat_id_duplicate_count)||j.threat_id_duplicate_count!==j.threat_id_duplicates.length)throw new Error("invalid threat-ID scan");const issues=j.threat_id_duplicates.map(d=>{if(typeof d.id!=="string"||!Array.isArray(d.plans)||d.plans.length<2)throw new Error("invalid duplicate claim");return {plan:d.plans.join(", "),dimension:"threat_id_uniqueness",severity:"blocker",required_property:"A numbered threat ID is claimed by at most one live plan in the phase.",description:d.id+" claimed by "+d.plans.join(", "),fix_hint:"Assign the colliding row a new phase threat ID and update its references."}});process.stdout.write(JSON.stringify(issues))') || { echo "BLOCKED: cannot validate threat-ID scan" >&2; exit 1; }
 ```
 
 Planner-agent use: before its own commit, correct newly authored rows and rescan; if unresolved, leave plans uncommitted and return the issues to the orchestrator. The following step-number routing applies to the orchestrator.
 
-If `THREAT_ID_ISSUES` is non-empty (`[]` means empty), merge these BLOCKER issues into the checker result and enter step 12 before accepting or committing plans. When general verification is skipped, send these issues directly to step 12. Rescan after revision; at the revision limit stop with the collision list rather than force-commit colliding plans. If empty, follow the normal checker/skip route without an extra revision. Give the fresh JSON to the checker as `<threat_id_issues>`. A scan error blocks planning with its diagnostic. The execute-phase gate remains the backstop.
+### Revision routing
+
+Before counting issues in step 12, include the fresh threat-ID issues once. If there is no checker result or checking is disabled or skipped, count the threat issues directly. A fresh scan supersedes prior threat-ID issues. When a collision remains at the revision limit or stall, display `THREAT_ID_ISSUES` and stop the workflow before any commit. Apply this same terminal check when the pre-commit scan finds a collision after revisions are exhausted. Never offer a bypass for this blocker.
+
+If `THREAT_ID_ISSUES` is non-empty (`[]` means empty), merge these BLOCKER issues into the checker result and enter step 12 before accepting or committing plans. When general verification is skipped, send these issues directly to step 12. Rescan after revision; at the revision limit stop with the collision list rather than force-commit colliding plans. If empty and verification is skipped, continue to step 13 without dispatching a checker. Otherwise follow the normal checker route. Give the fresh JSON to the checker as `<threat_id_issues>`. A scan error blocks planning with its diagnostic. The execute-phase gate remains the backstop.
+
+### Revision stall
+
+**Stall detection:** If `issue_count >= prev_issue_count`, first stop if threat-ID collisions remain:
+  Display: `Revision loop stalled — issue count not decreasing ({issue_count} issues remain after {N} iterations)`
+
+  **If `stall_reentry_count < 2`:**
+    Ask user:
+      Question: "Issues remain after {N} revision attempts with no progress. Proceed with current output?"
+      Options: "Proceed anyway" | "Adjust approach"
+    If "Proceed anyway": accept current plans and continue to step 13.
+    If "Adjust approach": increment `stall_reentry_count`, open freeform discussion, then re-enter step 8 (full replanning). Note: re-entry resets `iteration_count` and `prev_issue_count` but `stall_reentry_count` persists across re-entries and is capped at 2.
+
+  **If `stall_reentry_count >= 2`:**
+    Display: `Stall persists after 2 re-planning attempts. The following issues could not be resolved automatically:`
+    List the remaining issues from the checker.
+    Suggest: "Consider resolving these issues manually or running `/gsd:debug` to investigate root causes."
+    Options: "Proceed anyway" | "Abandon"
+    If "Proceed anyway": accept current plans and continue to step 13.
+    If "Abandon": stop workflow.

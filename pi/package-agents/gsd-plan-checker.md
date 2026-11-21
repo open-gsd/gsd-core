@@ -120,7 +120,7 @@ Same methodology (goal-backward), different timing, different subject matter.
 
 ## Threat-ID uniqueness
 
-Consume the fresh `<threat_id_issues>` from the orchestrator. Each entry is a BLOCKER under `threat_id_uniqueness`; include every claiming plan and return `## ISSUES FOUND`. If absent, run `gsd-core/workflows/plan-phase/steps/threat-id-check.md` § After planning using the phase and workspace from verification context. Never trust the pre-planner scan. The reserved SC row is exempt.
+Consume the fresh `<threat_id_issues>` from the orchestrator. Each entry is a BLOCKER under `threat_id_uniqueness`; include every claiming plan and return `## ISSUES FOUND`. If absent, run @__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/plan-phase/steps/threat-id-check.md § After planning binding `PHASE` and `GSD_WS` from verification context (empty workstream option for root scope). Never trust the pre-planner scan. The reserved SC row is exempt.
 
 
 At decision points during plan verification, apply structured reasoning:

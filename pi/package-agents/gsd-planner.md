@@ -895,7 +895,7 @@ Plans:
 </step>
 
 <step name="git_commit">
-Read `gsd-core/workflows/plan-phase/steps/threat-id-check.md` § After planning and run its fresh scan before this commit, including revision mode. If issues exist, correct IDs in this pass's newly authored register rows and their references, then rescan. Do not renumber previously committed plans automatically. If collisions remain, return `## PLANNING INCONCLUSIVE` with the structured `threat_id_uniqueness` issues and leave plans uncommitted for revision. Never commit while the scan failed or issues remain.
+Read @__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/plan-phase/steps/threat-id-check.md § After planning. Bind `PHASE` and `GSD_WS` from the dispatch context (empty workstream option for root scope), then run its fresh scan before this commit, including revision mode. If issues exist, correct IDs in this pass's newly authored register rows and their references, then rescan. Do not renumber previously committed plans automatically. If collisions remain, return `## PLANNING INCONCLUSIVE` with the structured `threat_id_uniqueness` issues and leave plans uncommitted for revision. Never commit while the scan failed or issues remain.
 
 ```bash
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)

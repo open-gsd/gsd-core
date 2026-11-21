@@ -6,7 +6,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { compileFunction } = require('node:vm');
+const { spawnSync } = require('node:child_process');
 const { runGsdTools, runGsdToolsCaptured, cleanup, absPlanningPath, parseFrontmatter, captureFdSync, homeSandboxEnv } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
 const { createTempProject, createTempDir } = require('./helpers.cjs');
@@ -6368,28 +6368,38 @@ describe('init --validate plan-count check (#5786)', () => {
 describe('planning threat-ID revision issues from fresh plans', () => {
   let root;
   const fragment = path.join(__dirname, '..', 'gsd-core/workflows/plan-phase/steps/threat-id-check.md');
-  const content = fs.readFileSync(fragment, 'utf8');
-  const marker = "THREAT_SCAN=\"$THREAT_SCAN\" node -e '";
-  const start = content.indexOf(marker);
-  assert.ok(start >= 0, 'the shipped scan must contain the issue projection');
-  const end = content.indexOf("'", start + marker.length);
-  assert.ok(end > start + marker.length, 'the shipped projection must be delimited');
-  const source = content.slice(start + marker.length, end);
-  const project = compileFunction(source, ['process']);
-  function projectScan(scan) {
-    let output = '';
-    project({ env: { THREAT_SCAN: scan }, stdout: { write: value => { output += value; } } });
-    return JSON.parse(output);
+  const tools = path.join(__dirname, '..', 'gsd-core/bin/gsd-tools.cjs');
+  function runScan({ workstream = '', phase = '47', cli = 'node "$GSD_TEST_TOOLS" "$@"' } = {}) {
+    const content = fs.existsSync(fragment) ? fs.readFileSync(fragment, 'utf8') : '';
+    const after = content.split('## After planning')[1] || '';
+    const block = after.split('```bash')[1]?.split('```')[0] || '';
+    const script = [
+      'set -u',
+      `gsd_run() { ${cli}; }`,
+      block,
+      'printf "%s" "$THREAT_ID_ISSUES"',
+    ].join('\n');
+    const result = spawnSync('bash', ['-c', script], {
+      cwd: root,
+      env: { ...process.env, GSD_TEST_TOOLS: tools, PHASE: phase, GSD_WS: workstream },
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    assert.ifError(result.error);
+    return result;
   }
-  beforeEach(() => { root = fs.realpathSync(createFixture()); });
+  beforeEach(() => {
+    root = fs.realpathSync(createFixture());
+    writePlanningDocs(root);
+  });
   afterEach(() => cleanup(root));
   function plan(id) {
     return `---\nphase: 47\nplan: 01\n---\n<threat_model>\n| Threat ID | Category |\n|---|---|\n| ${id} | Tampering |\n| T-47-SC | Tampering |\n</threat_model>\n`;
   }
-  function scan() {
-    const result = runGsdTools('init plan-phase 47', root);
-    assert.ok(result.success, result.error);
-    return projectScan(result.output);
+  function scan(options) {
+    const result = runScan(options);
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
   }
   test('zero register claimants produces no revision issues', () => {
     seedPhase(root, '47-security', { '47-01-PLAN.md': '# No register' });
@@ -6414,11 +6424,49 @@ describe('planning threat-ID revision issues from fresh plans', () => {
     seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01'), '47-02-PLAN.md': plan('T-47-02') });
     assert.deepEqual(scan(), []);
   });
-  test('an unresolved phase cannot pass as an empty issue list', () => {
-    const scan = JSON.stringify({ phase_found: false, threat_id_duplicates: [], threat_id_duplicate_count: 0 });
-    assert.throws(() => projectScan(scan), /invalid threat-ID scan/);
+  test('a workstream collision blocks revision even when the root phase is clear', () => {
+    seedPhase(root, '47-security', { '47-01-PLAN.md': plan('T-47-01') });
+    const stream = absPlanningPath(root, 'workstreams', 'feature', 'phases', '47-security');
+    fs.mkdirSync(stream, { recursive: true });
+    for (const number of ['01', '02']) {
+      fs.writeFileSync(path.join(stream, `47-${number}-PLAN.md`), plan('T-47-01'));
+    }
+
+    assert.deepEqual(scan(), []);
+    const issues = scan({ workstream: '--ws feature' });
+    assert.equal(issues.length, 1);
+    assert.equal(issues[0].dimension, 'threat_id_uniqueness');
+    assert.match(issues[0].required_property, /at most one live plan/);
+    assert.match(issues[0].description, /T-47-01.*47-01-PLAN.*47-02-PLAN/);
   });
-  test('missing scan fields fail rather than report an empty issue list', () => {
-    assert.throws(() => projectScan('{}'), /invalid threat-ID scan/);
+  test('an unresolved phase reports the missing phase and blocks planning', () => {
+    const result = runScan({ phase: '99' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /threat-ID scan phase not found/);
+    assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
+    assert.equal(result.stdout, '');
+  });
+  test('a failed scan blocks planning', () => {
+    const result = runScan({ cli: 'return 3' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /BLOCKED: threat-ID scan failed/);
+    assert.equal(result.stdout, '');
+  });
+  test('missing scan fields block planning', () => {
+    const result = runScan({ cli: "printf '%s' '{}'" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /BLOCKED: cannot validate threat-ID scan/);
+    assert.equal(result.stdout, '');
+  });
+  test('file-backed scan data uses the same validation as inline data', () => {
+    const payload = '{"phase_found":true,"threat_id_duplicates":[],"threat_id_duplicate_count":0}';
+    fs.writeFileSync(path.join(root, 'scan.json'), payload);
+    const options = { cli: "printf '%s' '@file:scan.json'" };
+    assert.deepEqual(scan(options), []);
+
+    fs.unlinkSync(path.join(root, 'scan.json'));
+    const result = runScan(options);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /BLOCKED: cannot read threat-ID scan payload/);
   });
 });
