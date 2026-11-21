@@ -155,6 +155,30 @@ const countInChild = (build, cap) => {
   assert.equal(r.exitCode, 0, `child exit ${r.exitCode}: ${r.stderr}`);
   return JSON.parse(r.stdout);
 };
+// grammarScan in a child process whose stack is pinned at `stackKb` KB (V8's --stack-size),
+// for a row whose verdict depends on where the stack runs out.
+function grammarScanChild(hookPath, cmd) {
+  const hook = require(hookPath);
+  const run = (scan) => {
+    try {
+      return scan(cmd);
+    } catch (e) {
+      if (!(e instanceof RangeError)) throw e;
+      return { code: 'command-too-complex', text: '' };
+    }
+  };
+  run(hook.scanBashCommand);
+  run(hook.scanDebuggerSpawn);
+  const before = hook.spanReaderSteps();
+  const verdict = run(hook.scanBashByGrammar);
+  process.stdout.write(JSON.stringify({ verdict, steps: hook.spanReaderSteps() - before }));
+}
+const grammarScanOnStack = (build, stackKb) => {
+  const src = `(${grammarScanChild})(${JSON.stringify(HOOK_PATH)}, (${build})());`;
+  const r = runNode([`--stack-size=${stackKb}`, '-e', src], { env: { ...process.env, NODE_V8_COVERAGE: '' } });
+  assert.equal(r.exitCode, 0, `child exit ${r.exitCode}: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+};
 
 function runHook(payload, { cwd } = {}) {
   const r = runHookSeam(HOOK_PATH, [], {
@@ -1593,26 +1617,41 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
     }
     return { verdict, steps: spanReaderSteps() - before };
   };
+  test('10,000 levels, each after a `)` in a comment: the hook denies it; the grammar scan ends as command-too-complex, in steps linear in the command', () => {
+    const cmd = `echo "$(${'# c )\n$( '.repeat(10000)}`;
+    assert.deepEqual(scanOrOverflow(cmd).verdict, { code: 'command-too-complex', text: '' });
+    const { verdict, steps } = grammarScan(cmd);
+    assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+
   // A nest through heredoc tags gets a fresh depth per tag, so the stack, not the
   // depth limit, stops the grammar scan, and with stack enough it reads the nest to
-  // the end: it holds no read, so the grammar scan allows it there. The hook denies
-  // it either way: since #6136 its first scan stops the nest as nesting-too-deep, or
-  // as command-too-complex where the stack runs out first.
-  for (const [shape, cmd, hookCodes, stackBound] of [
-    ['two nests of 1,100 heredoc tags around a long delimiter', `echo $(${'cat <<E$('.repeat(1100)}cat <<${'a'.repeat(100000)}$(${'cat <<E$('.repeat(1100)}`, ['nesting-too-deep', 'command-too-complex'], true],
-    ['10,000 levels, each after a `)` in a comment', `echo "$(${'# c )\n$( '.repeat(10000)}`, ['command-too-complex'], false],
-  ]) {
-    const grammarEnds = stackBound
-      ? 'the grammar scan ends as command-too-complex where the stack runs out, and allows the read-free nest where it does not'
-      : 'the grammar scan ends as command-too-complex';
-    test(`${shape}: the hook denies it; ${grammarEnds}, in steps linear in the command`, () => {
-      const hook = scanOrOverflow(cmd).verdict;
-      assert.ok(hook !== null && hookCodes.includes(hook.code), `hook verdict ${JSON.stringify(hook)}`);
-      const { verdict, steps } = grammarScan(cmd);
-      if (!(stackBound && verdict === null)) assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
-      assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
-    });
-  }
+  // the end: it holds no read, so the grammar scan allows it there. Where the stack
+  // runs out depends on the runtime, so each outcome has its own row: 20 tags are read
+  // to the end on any stack, and 1,100 tags overflow a stack pinned at 200 KB in a
+  // child process (grammarScanOnStack). The hook denies both: since #6136 its first
+  // scan stops the nest as nesting-too-deep, or as command-too-complex where the
+  // stack runs out first.
+  const tagNestsAround = (n) => `echo $(${'cat <<E$('.repeat(n)}cat <<${'a'.repeat(100000)}$(${'cat <<E$('.repeat(n)}`;
+  test('two nests of 20 heredoc tags around a long delimiter: the hook denies it as nesting-too-deep; the grammar scan reads the read-free nest to its end and allows it, in steps linear in the command', () => {
+    const cmd = tagNestsAround(20);
+    assert.deepEqual(scanOrOverflow(cmd).verdict, { code: 'nesting-too-deep', text: '' });
+    const { verdict, steps } = grammarScan(cmd);
+    assert.equal(verdict, null);
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
+  test('two nests of 1,100 heredoc tags around a long delimiter: the hook denies it; on a 200 KB stack the grammar scan ends as command-too-complex, in steps linear in the command', () => {
+    const cmd = tagNestsAround(1100);
+    const hook = scanOrOverflow(cmd).verdict;
+    assert.ok(hook !== null && ['nesting-too-deep', 'command-too-complex'].includes(hook.code), `hook verdict ${JSON.stringify(hook)}`);
+    const { verdict, steps } = grammarScanOnStack(
+      () => `echo $(${'cat <<E$('.repeat(1100)}cat <<${'a'.repeat(100000)}$(${'cat <<E$('.repeat(1100)}`,
+      200,
+    );
+    assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
+    assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
+  });
 
   // A read next to such a nest is denied too. Since #6136 the hook's first scan stops the
   // nest as nesting-too-deep before the grammar scan runs, or as command-too-complex where
