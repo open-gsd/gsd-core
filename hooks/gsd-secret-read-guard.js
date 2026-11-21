@@ -77,8 +77,11 @@
 //   options too), a `<( )` file operand, a heredoc / here-string, or a pipe
 //   from a knowable `echo`/`printf` source (`echo cat .env | bash`; printf's
 //   format run over its `%s`/`%b`/`%c` arguments, escapes read, and a `cat`
-//   or `tee` stage passed through) or a bare `cat` printing a heredoc /
-//   here-string (`cat <<'EOF' | bash`, `bash <(cat <<< 'cat .env')`, #6182);
+//   or `tee` stage passed through, and any other stage, `head`, `sort`,
+//   `grep` …, read fail closed on a mention of a secret name back to the
+//   producer) or a bare `cat` printing a heredoc / here-string (`cat <<'EOF'
+//   | bash`, `bash <(cat <<< 'cat .env')`, #6182); `npx -c` / `npm exec -c`
+//   scripts are scanned; a read-write redirect (`<>`) is a read;
 //   `eval` scans its joined operands;
 //   `source`/`.` scans a `<( )` operand, and like a shell given `/dev/stdin`,
 //   `/dev/fd/N` or `-s`, its heredocs, here-strings and pipe; `dd` reads its
