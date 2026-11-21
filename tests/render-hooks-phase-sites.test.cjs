@@ -156,7 +156,8 @@ describe('render-hooks phase-site static check: counts, unlisted, dead-store', (
     assert.strictEqual(capture(phaseSites.CALL_POINT_RE, 'gsd_run loop render-hooks "${REVIEWER_POINT}" --raw'), '${REVIEWER_POINT}');
     assert.strictEqual(capture(phaseSites.CALL_POINT_RE, 'gsd_run loop render-hooks $P --raw'), '$P');
     assert.strictEqual(capture(phaseSites.CALL_POINT_RE, 'gsd_run loop render-hooks ${P} --raw'), '${P}');
-    assert.strictEqual(phaseSites.CALL_POINT_RE.exec('`gsd_run loop render-hooks <point>`'), null);
+    const placeholder = '`gsd_run loop render-hooks <point>`';
+    assert.strictEqual(phaseSites.CALL_POINT_RE.exec(placeholder), null);
   });
 
   test('[grammar][property] any quoting, spacing and line join of one call is one bare site that discovery reads as the same point', () => {
