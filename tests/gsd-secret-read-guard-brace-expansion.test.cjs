@@ -222,6 +222,71 @@ describe('gsd-secret-read-guard: the brace alternative budget (#6142)', () => {
   });
 });
 
+describe('gsd-secret-read-guard: zsh reads a group of any two characters around `..` as a range (#6142)', () => {
+  // zsh 5.9 expands `{c1..c2}` to every character from c1 to c2 by code point, its quotes removed first, where bash
+  // leaves the word as written: to zsh, `{-..9}env` is `-env .env /env 0env … 9env`. A word whose bash or zsh
+  // reading names a secret is denied.
+  const denies = [
+    ['cat {-..9}env', '.env'],
+    ['cat {%..9}env', '.env'],
+    ['cat {a...}env', '.env'],
+    ['cat {....}env', '.env'],
+    ['cat {9..-}env', '.env'],
+    ['cat {-..0}ENV', '.ENV'],
+    ['cat {-..9}secrets', '.secrets'],
+    ['cat dir/{-..9}env', 'dir/.env'],
+    ['cat {-..9}{env,x}', '.env'],
+    ['cat {x,{-..9}env}', '.env'],
+    // The two ends and the `..` are read with their quotes removed.
+    ["cat {'-'..9}env", '.env'],
+    ['cat {\\-..9}env', '.env'],
+    ['cat {"%"..9}env', '.env'],
+    ["cat {$'-'..9}env", '.env'],
+    ["cat {','..9}env", '.env'],
+    ["cat {-'..'9}env", '.env'],
+    ['cat {-".."9}env', '.env'],
+    ["cat {'-..9'}env", '.env'],
+    ['cat {-\\.\\.9}env', '.env'],
+    ["cat {-.'.'9}env", '.env'],
+    ["cat {-'.'.9}env", '.env'],
+    // A `..` just before a `}` closes no group, so the outer braces stay and the range inside them is read.
+    ['cat {x/{-..9}env..}', '{x/.env..}'],
+    ['grep -n KEY {-..9}env', '.env'],
+    ['echo {-..9}env | xargs cat', '.env'],
+    ['cat < {-..9}env', '.env'],
+    ['echo $(cat {-..9}env)', '.env'],
+  ];
+  for (const [cmd, alt] of denies) {
+    test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'secret-read', path: alt }));
+    test(`denies bash -c '${cmd}'`, () => assertBlocked(`bash -c '${cmd.replace(/'/g, "'\\''")}'`, { code: 'secret-read', path: alt }));
+  }
+
+  test('a range of 64 characters is judged, and one of more is denied as too complex', () => {
+    assertBlocked('cat {-..l}env', { code: 'secret-read', path: '.env' });
+    assertBlocked('cat {-..m}env', { code: 'glob-too-complex', path: '{-..m}env' });
+    assertBlocked('cat {!..~}env', { code: 'glob-too-complex', path: '{!..~}env' });
+    assertBlocked('cat {!..🙃}env', { code: 'glob-too-complex', path: '{!..🙃}env' });
+  });
+
+  const allows = [
+    'echo {-..9}',
+    'echo {%..9}x',
+    'cat x{-..9}env',
+    'cat {a..c}{-..9}env',
+    'cat {🙂..🙃}',
+    // An unquoted comma comes first: `{,..9}env` is `env` and `..9env`, also in the zsh scan `{-..9}x` brings on.
+    'cat {,..9}env',
+    'cat {,..9}env {-..9}x',
+    // Not two characters around `..`, so literal to zsh too.
+    'cat {.....}env',
+    'cat {...}env',
+    'cat {-.9}env',
+  ];
+  for (const cmd of allows) {
+    test(`allows ${cmd}`, () => assertAllowed(cmd));
+  }
+});
+
 describe('gsd-secret-read-guard: past the budget, only a word that could name a secret is denied (#6142)', () => {
   // Each makes more than 64 words, none of which can name a secret file: all 0 on next, and allowed still.
   const allows = [
