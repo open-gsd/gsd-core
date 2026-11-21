@@ -3588,8 +3588,8 @@ describe('#3861 round 12 — block 2 does not compute a shortfall from a self-co
 
 const REVIEWER_AGENT_PATH = path.join(ROOT, 'agents', 'gsd-code-reviewer.md');
 
-// The alternations the shipped script uses to recognise a finding id. There are three —
-// the heading matcher, the ledger row re-parser, and the frontmatter `- id:` matcher —
+// The alternations the shipped script uses to recognise a finding id. There are four —
+// the heading matcher, the prefixed-heading matcher, the ledger row re-parser, and the frontmatter `- id:` matcher —
 // and adding a prefix to only some of them is silent. The severity map below is a fourth
 // copy of the same set; it is not an alternation, so it is extracted separately.
 // This scan is by PATTERN, never a fixed list of sites, which is why round 5's new
@@ -4183,14 +4183,61 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.ok(second.ledger.split('\n').includes(row));
   });
 
-  test('[regression #5802] a ledger row with an invalid disposition is named, and a regenerated row of the same id owns the id', () => {
+  test('[regression #5802] a hand-set disposition in another case is a decision, not an unparseable row', () => {
     const out = runShippedDisposition({
       reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
-      priorText: '| CR-01 | critical | wontfix | no |\n',
+      priorText: '| CR-01 | critical | Deferred | vendor |\n',
     });
-    assert.match(out.stdout, /ledger row\(s\) not in the id/);
-    assert.match(out.stdout, /replaced by a row of the same id/);
-    assert.strictEqual(ledgerRows(out.ledger).filter((r) => r.id === 'CR-01').length, 1, 'no duplicate id');
+    const cr = ledgerRows(out.ledger).find((r) => r.id === 'CR-01');
+    assert.strictEqual(cr.disposition, 'deferred');
+    assert.strictEqual(cr.source, 'vendor');
+    assert.doesNotMatch(out.stdout, /not in the id/);
+  });
+
+  test('[regression #5802] a row with an invalid disposition whose id a regenerated row would take stops the rewrite, naming it', () => {
+    const prior = '| CR-01 | critical | wontfix | the reason |\n';
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'), priorText: prior });
+    assert.strictEqual(out.ledger, prior, 'the ledger is left exactly as it was');
+    assert.match(out.stdout, /NOT rewritten: 1 ledger row\(s\) for CR-01/);
+    assert.match(out.stdout, /one of open, fixed, skipped, deferred/);
+  });
+
+  test('[regression #5802] two rows for one id are named, not collapsed silently', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      priorText: '| CR-01 | critical | deferred | a |\n| CR-01 | critical | skipped | b |\n',
+    });
+    assert.match(out.stdout, /1 finding id\(s\) have more than one ledger row, and the last row of each was used: CR-01/);
+    assert.strictEqual(ledgerRows(out.ledger).find((r) => r.id === 'CR-01').disposition, 'skipped');
+  });
+
+  test('[regression #5802] an indented ledger row is named and kept, not deleted', () => {
+    const row = '  | CR-02 | critical | deferred | indented |';
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'), priorText: row + '\n' });
+    assert.ok(out.ledger.split('\n').includes(row));
+    assert.match(out.stdout, /not in the id \| severity \| disposition \| source shape: CR-02; kept verbatim, not counted/);
+  });
+
+  test('[security #5802] ledger text on the console is masked for control characters and capped', () => {
+    const rows = ['| \u001b[31mred | w | x |', '| ' + 'L'.repeat(100) + ' | w | x |', '| r3 | w | x |', '| r4 | w | x |'];
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'), priorText: rows.join('\n') + '\n' });
+    assert.ok(!out.stdout.includes('\u001b'), 'no escape character reaches the console');
+    assert.match(out.stdout, /\?\[31mred/);
+    assert.ok(!out.stdout.includes('L'.repeat(41)), 'a cell is capped at 40 characters');
+    assert.match(out.stdout, /, \.\.\./, 'the list is capped at three names');
+  });
+
+  test('[regression #5802] a fix-report heading with a prefixed id is named, not ignored', () => {
+    const out = runShippedDisposition({
+      reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
+      fixText: ['## Fixed Issues', '', '### W6-CR-01: x'].join('\n'),
+    });
+    assert.match(out.stdout, /1 fix-report heading\(s\) carry a prefix before the id \(W6-CR-01\) and were not reconciled/);
+  });
+
+  test('[regression #5802] a multi-segment prefix is recognised on a heading', () => {
+    const out = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### W6-R2-CR-01: y'].join('\n') });
+    assert.match(out.stdout, /carry a prefix before the id \(W6-R2-CR-01\)/);
   });
 
   test('[regression #5802] a frontmatter id outside the grammar does not hand its title to the previous finding', () => {
@@ -4209,20 +4256,22 @@ describe('#3861 round 1 — the tests must run what BASH would run', () => {
     assert.doesNotMatch(out.ledger, /title: "other"/);
   });
 
-  test('[property #5802] a ledger row with any review-scoped prefix survives a rewrite and is named', () => {
+  test('[property #5802] a row or heading with any review-scoped prefix survives or is named', () => {
     const fc = require('./helpers/fast-check-setup.cjs');
     fc.assert(fc.property(
-      fc.stringMatching(/^[A-Z][A-Z0-9]{0,3}$/),
+      fc.stringMatching(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,6}$/),
       fc.constantFrom('open', 'fixed', 'skipped', 'deferred'),
       (prefix, disposition) => {
         const id = prefix + '-WR-01';
         const row = '| ' + id + ' | warning | ' + disposition + ' | reason |';
-        const out = runShippedDisposition({
+        const rowRun = runShippedDisposition({
           reviewText: [...REVIEW_HEAD, '### CR-01: x'].join('\n'),
           priorText: row + '\n',
         });
-        assert.ok(out.ledger.split('\n').includes(row), id + ' must survive verbatim');
-        assert.ok(out.stdout.includes(id), id + ' must be named on the console');
+        assert.ok(rowRun.ledger.split('\n').includes(row), id + ' must survive verbatim');
+        assert.ok(rowRun.stdout.includes(id), id + ' must be named on the console');
+        const headingRun = runShippedDisposition({ reviewText: [...REVIEW_HEAD, '### ' + id + ': t'].join('\n') });
+        assert.match(headingRun.stdout, /carry a prefix before the id/, id + ' heading must be refused loudly');
       },
     ), { numRuns: 12 });
   });
