@@ -2871,7 +2871,7 @@ function scanCommand(command, depth, reading) {
   const sticky = inherited || namesParsingVar(joined) || ALIAS_RE.test(joined.replace(/["'\\]/g, ''));
   const unseenAt = sticky ? 0 : unseenWordsAt(command, joined);
   // The bodies it holds are scanned as before, under the whole text's verdict; its segments by unseenAt.
-  noSearchCarveOut = unseenAt !== -1;
+  noSearchCarveOut = unseenAt >= 0;
   try {
     return scanSegments(command, depth, reading, unseenAt);
   } finally {
@@ -2882,14 +2882,15 @@ function scanCommand(command, depth, reading) {
 
 // #6282: where in `command` the first word the guard does not see may come from, or -1 for nowhere: an expansion
 // outside single quotes, which keep a `$` literal (`grep '$HOME'`). 0, the whole command, unless the text is plain
-// enough to place it: no heredoc, comment, dollar-quote, `$( )`, backtick or line continuation, and nothing that
-// runs words again (a function, a loop, `set --`, `trap`, eval, source or `.`, a `<( )`), where an expansion after
-// the search tool, or one a single quote keeps literal here, reaches it.
+// enough to place it: no heredoc, comment, dollar-quote, `$( )`, backtick, `<( )` or line continuation. scanSegments
+// then takes 0 too when a command runs words again (runsWordsAgain), where an expansion after the search tool, or
+// one a single quote keeps literal here, reaches it.
 const ALIAS_RE = /(?<![\w./-])alias(?![\w./-])/;
-const RUNS_AGAIN_RE = /\(\s*\)|(?<![\w./-])(?:function|for|while|until|select|trap|eval|source)(?![\w./-])|(?<![\w./-])set\s+-|(?:^|[;&|(){}\n])\s*\.\s/;
+// unseenWordsAt's answer when every `$` is inside single quotes: nowhere, unless the command runs words again.
+const LITERAL_DOLLAR_ONLY = -2;
 function unseenWordsAt(command, joined) {
   if (!UNSEEN_WORDS_RE.test(joined)) return -1;
-  if (joined !== command || /<<|#|`|\$['"(]|[<>]\(/.test(command) || RUNS_AGAIN_RE.test(command.replace(/["'\\]/g, ''))) return 0;
+  if (joined !== command || /<<|#|`|\$['"(]|[<>]\(/.test(command)) return 0;
   let quote = '';
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
@@ -2905,7 +2906,7 @@ function unseenWordsAt(command, joined) {
       return i;
     }
   }
-  return -1;
+  return LITERAL_DOLLAR_ONLY;
 }
 
 // #6282: the stdin of the segment the scan is in (segmentStdin), which an xargs there reads its words from, and the
@@ -2914,7 +2915,42 @@ let xargsStdinFrom = null;
 const NO_STDIN = { texts: [], unseen: null };
 const OPENING_WORDS = new Set(['while', 'until', 'for', 'select', 'if', 'case']);
 const CLOSING_WORDS = new Set(['done', 'fi', 'esac']);
-const DEFINES_FUNCTION_RE = /\(\s*\)|(?<![\w./-])function(?![\w./-])/;
+// Reserved words a command may follow in its segment (`then xargs cat`, `! xargs cat`). Only the xargs path and the
+// tests below look past them; the rest of the scan's reading of reserved words is #6138's.
+const LEADING_RESERVED = new Set(['!', 'if', 'elif', 'then', 'else', 'do', 'while', 'until']);
+const RUNS_AGAIN_BASES = new Set(['for', 'while', 'until', 'select', 'function', 'trap', 'eval', 'source', '.']);
+const DEFINING_BASES = new Set(['function', 'eval', 'source', '.']);
+
+// The command each segment runs, past leading reserved words: { first, cmd } with `first` the segment's first word
+// and `cmd` resolveCommand's reading of what follows the reserved words, or null for a segment with no words.
+function segmentHeads(bySeg, maxSeg) {
+  const heads = [];
+  for (let s = 0; s <= maxSeg; s++) {
+    const words = commandWords(bySeg.get(s) || []);
+    let k = 0;
+    while (k < words.length && LEADING_RESERVED.has(words[k].text)) k++;
+    heads.push(words.length === 0 ? null : { first: words[0].text, cmd: resolveCommand(words.slice(k)) });
+  }
+  return heads;
+}
+
+// #6282: whether a command runs words again, at a command's place: a loop, a function, `trap`, eval, source or `.`
+// (also behind `builtin`), or `set -…`.
+function runsWordsAgain(heads, tokens) {
+  return definesFunction(tokens) || heads.some((head) => head !== null && (RUNS_AGAIN_BASES.has(head.first)
+    || (head.cmd !== null && (RUNS_AGAIN_BASES.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
+      && RUNS_AGAIN_BASES.has(head.cmd.operands[0].text)) || (head.cmd.base === 'set' && head.cmd.operands.length > 0
+      && head.cmd.operands[0].text.startsWith('-'))))));
+}
+
+// Whether the tokens define a function with a word followed by `(` and `)`; `function f` is a head (RUNS_AGAIN_BASES).
+function definesFunction(tokens) {
+  for (let k = 0; k + 2 < tokens.length; k++) {
+    if (tokens[k].kind === 'word' && tokens[k + 1].kind === 'sep' && tokens[k + 1].text === '('
+      && tokens[k + 2].kind === 'sep' && tokens[k + 2].text === ')') return true;
+  }
+  return false;
+}
 
 // The separators that end a command for good: what follows one cannot supply the words of the command before it.
 const LIST_SEPS = new Set([';', '\n', '&&', '||', '&']);
@@ -2965,13 +3001,15 @@ function scanSegments(command, depth, reading, unseenAt) {
   }
 
   heredocBodiesBySegMap.set(bySeg, heredocsBySeg);
+  const heads = segmentHeads(bySeg, maxSeg);
+  if ((unseenAt > 0 || unseenAt === LITERAL_DOLLAR_ONLY) && runsWordsAgain(heads, tokens)) unseenAt = 0;
   const inheritedStdin = xargsStdinFrom;
-  const groupStdin = groupStdins(tokens, bySeg, maxSeg, command);
+  const groupStdin = groupStdins(tokens, bySeg, maxSeg, heads);
   for (let s = 0; s <= maxSeg; s++) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
     xargsStdinFrom = segmentStdin(s, bySeg, sepAfter, groupStdin.get(s) || inheritedStdin);
-    noSearchCarveOut = unseenAt === 0 || (unseenAt !== -1 && !(segEnd.get(s) <= unseenAt));
+    noSearchCarveOut = unseenAt === 0 || (unseenAt > 0 && !(segEnd.get(s) <= unseenAt));
 
     const words = [];
     const hereStrings = [];
@@ -3018,9 +3056,10 @@ function scanSegments(command, depth, reading, unseenAt) {
       continue;
     }
 
-    // xargs turns stdin file names into a sub-command's operands.
-    if (base === 'xargs') {
-      const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading);
+    // xargs turns stdin file names into a sub-command's operands, also behind a reserved word (`then xargs cat`).
+    const xargsCmd = base === 'xargs' ? cmd : heads[s] !== null && heads[s].cmd !== null && heads[s].cmd.base === 'xargs' ? heads[s].cmd : null;
+    if (xargsCmd !== null) {
+      const hit = scanXargsPipe(xargsCmd.operands, s, bySeg, sepAfter, depth, reading);
       if (hit) return hit;
       // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
       // operand — fall through to the operand check below.
@@ -3273,7 +3312,8 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     // words xargs adds, which the guard does not see (`"$@"`), so a search tool in it keeps no carve-out.
     // At xargs's own depth, as #5492's branch does: the words are xargs's, not a new script body, and each rescan
     // holds one xargs fewer, so it ends.
-    const hit = readEachWay(`${operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' ')} "$@"`, depth);
+    // Scanned once, plainly: the words are quoted, so the readings would only repeat it, at every nested xargs.
+    const hit = scanCommand(`${operands.slice(subIdx).map((w) => shellQuote(w.text)).join(' ')} "$@"`, depth, false);
     if (hit) return hit;
   }
   // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
@@ -3295,6 +3335,8 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // The words of a here-string, heredoc or knowable pipe source, as xargs may split them.
   const stdinWords = xargsStdinWords(stdin.texts, split);
   for (const w of stdinWords) if (operandNamesSecret(w.text)) return secretRead(w.text);
+  const filled = filledReplaceRead(subIsShell ? [] : subOperands, replaceStr, stdinWords);
+  if (filled) return filled;
   if (subIsShell) {
     const hit = scanXargsShellScripts(subOperands, replaceStr, stdinWords, depth);
     if (hit) return hit;
@@ -3315,12 +3357,30 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     const hit = scanXargsShellScripts(subOperands, replaceStr, prevCmd.operands, depth);
     if (hit) return hit;
   }
+  const filledPiped = filledReplaceRead(subIsShell ? [] : subOperands, replaceStr, prevCmd.operands);
+  if (filledPiped) return filledPiped;
   for (const w of prevCmd.operands) {
     if (operandNamesSecret(w.text)) return secretRead(w.text);
     // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
     // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
     const received = xargsUnquoted(w.text);
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+  }
+  return null;
+}
+
+// #6282: each operand holding the replace string, filled with each word xargs reads as given and as xargs unquotes it,
+// judged as the file it names (`xargs -I{} cat .{} <<< env` reads `.env`); null when none names a secret.
+function filledReplaceRead(subOperands, replaceStr, words) {
+  if (replaceStr === null) return null;
+  for (const holder of subOperands) {
+    if (!holder.text.includes(replaceStr)) continue;
+    for (const w of words) {
+      for (const word of [w.text, xargsUnquoted(w.text)]) {
+        const text = holder.text.split(replaceStr).join(word);
+        if (operandNamesSecret(text)) return secretRead(text);
+      }
+    }
   }
   return null;
 }
@@ -3372,7 +3432,7 @@ function ownStdin(s, bySeg) {
 // `case`, whose patterns end in `)`), where two reaches overlap, and in a command that defines a function, whose
 // body runs with every call's stdin (`f() { xargs cat; }; f <<< a; f < list`), every segment gets all of those
 // redirects together instead.
-function groupStdins(tokens, bySeg, maxSeg, command) {
+function groupStdins(tokens, bySeg, maxSeg, heads) {
   const reach = new Map();
   const next = Array.from({ length: maxSeg + 2 }, (_, k) => k);
   const unreached = (k) => {
@@ -3389,12 +3449,14 @@ function groupStdins(tokens, bySeg, maxSeg, command) {
       next[k] = k + 1;
     }
   };
-  if (DEFINES_FUNCTION_RE.test(command)) {
+  // eval, source and `.` may define the function a later call runs (`eval 'f() { xargs cat; }'; f < list`).
+  if (definesFunction(tokens) || heads.some((head) => head !== null && (DEFINING_BASES.has(head.first)
+    || (head.cmd !== null && DEFINING_BASES.has(head.cmd.base))))) {
     spread(0, maxSeg, mergedStdin(Array.from({ length: maxSeg + 1 }, (_, s) => ownStdin(s, bySeg))));
     return reach;
   }
   const ranges = [];
-  const unsure = tokens.some((t) => t.kind === 'word' && t.text === 'case');
+  const unsure = heads.some((head) => head !== null && (head.first === 'case' || (head.cmd !== null && head.cmd.base === 'case')));
   const groups = [];
   for (const t of tokens) {
     if (t.kind !== 'sep') continue;
