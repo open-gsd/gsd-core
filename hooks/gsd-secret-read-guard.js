@@ -4704,11 +4704,14 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
     // A redirect after a group's closer (`(cat) 2>/dev/null | sh`, a `{name}` fd word too) is a filtered stage, as
     // before, and the group is the one behind it.
     let last = prevSeg;
-    const prev = bySeg.get(prevSeg) || [];
-    const prevFeeds = [...prev, ...((bodies && bodies.get(prevSeg)) || [])];
-    charge(ctx, prevFeeds.length);
-    const namesFd = (w) => prevFeeds.some((t) => t.namedFd === w.text || (t.kind === 'heredoc' && t.fd === w.text));
-    if (commandWords(prev).every(namesFd) && GROUP_CLOSERS.has(sepAfter.get(prevSeg - 1))) {
+    let redirectOnly = false;
+    if (GROUP_CLOSERS.has(sepAfter.get(prevSeg - 1))) {
+      const prev = [...(bySeg.get(prevSeg) || []), ...((bodies && bodies.get(prevSeg)) || [])];
+      charge(ctx, prev.length);
+      const named = new Set(prev.map((t) => t.namedFd || (t.kind === 'heredoc' && t.fd)).filter(Boolean));
+      redirectOnly = commandWords(bySeg.get(prevSeg) || []).every((w) => named.has(w.text));
+    }
+    if (redirectOnly) {
       const stage = stageAt(prevSeg);
       stage.filtered = true;
       charge(ctx, TOKEN_WORK * stage.words.length + 1 + GIT_COMMAND_WORK);
