@@ -48,7 +48,7 @@ change at a refresh.
    - every plan of the finished wave failed: `failure_handling`'s systemic stop, whatever was chosen.
 3. **Re-read the index** from the orchestrator's worktree with the block below. Fenced blocks are separate
    shells, so it re-pins the root the way the `execute_waves` cwd-drift guard does (#48). It fails closed:
-   it stops on a failed read, and on an answer that carries an `error` or no plans, which is how
+   it stops on a failed read, and on an answer that carries a top-level `error` or no plans, which is how
    `phase-plan-index` reports a phase it cannot find or that matches more than one directory, with exit 0.
 
 ```bash
@@ -56,9 +56,13 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 ORCHESTRATOR_WT=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "FATAL: not inside a git worktree (#48)." >&2; exit 1; }
 case "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" in agent-*|worktree-agent-*|worktree-wf_*) echo "FATAL: orchestrator cwd is inside an agent worktree; run the execute_waves cwd-drift guard (#48)." >&2; exit 1 ;; esac
 PLAN_INDEX=$(cd "$ORCHESTRATOR_WT" && gsd_run query phase-plan-index ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}") || { echo "FATAL: the phase-plan-index re-read failed; stop, never dispatch from an empty index." >&2; exit 1; }
+# Top-level keys sit at two spaces and plan keys at six in phase-plan-index's JSON; a plan's own field (an
+# objective written as a YAML map, say) is nested deeper, so it can never match these.
+NL='
+'
 case "$PLAN_INDEX" in
-  *'"error":'*|*'"plans": []'*) printf '%s\n' "$PLAN_INDEX" >&2; echo "FATAL: the phase-plan-index re-read found no plans; stop, never dispatch from an empty index." >&2; exit 1 ;;
-  *'"id": "'*) printf '%s\n' "$PLAN_INDEX" ;;
+  *"$NL"'  "error":'*|*"$NL"'  "plans": []'*) printf '%s\n' "$PLAN_INDEX" >&2; echo "FATAL: the phase-plan-index re-read found no plans; stop, never dispatch from an empty index." >&2; exit 1 ;;
+  *"$NL"'      "id": "'*) printf '%s\n' "$PLAN_INDEX" ;;
   *) echo "FATAL: the phase-plan-index re-read is not a plan index; stop, never dispatch from it." >&2; exit 1 ;;
 esac
 ```

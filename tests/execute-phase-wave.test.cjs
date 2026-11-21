@@ -1667,6 +1667,20 @@ describe('#5966: the wave-boundary re-read fence, run under bash', () => {
     assert.match(r.stderr, /ambiguous/);
   });
 
+  test('a plan whose objective is a map with error or plans keys is still read as an index with plans', (t) => {
+    const proj = refreshFixture(t);
+    // a bare `objective:` with indented lines is a YAML map, and phase-plan-index keeps it nested in the plan object
+    fs.writeFileSync(path.join(proj, '.planning', 'phases', '01-alpha', '01-01-PLAN.md'),
+      '---\nphase: 01\nplan: 01\nwave: 1\nobjective:\n  error: boom\n  plans: []\n---\n# Plan 01\n');
+    const direct = runRefreshShell('-c', [`node '${REFRESH_TOOLS}' query phase-plan-index 1`], { interpreter: 'bash', cwd: proj });
+    assert.equal(direct.exitCode, 0, direct.stderr);
+    assert.deepEqual(JSON.parse(direct.stdout).plans[0].objective, { error: 'boom', plans: [] },
+      'control: the index carries the map nested in the plan, so the keys do appear in the text');
+    const r = runRefresh(proj);
+    assert.equal(r.exitCode, 0, `a real plan's fields must not read as a top-level error or an empty plan list: ${r.stderr}`);
+    assert.deepEqual(JSON.parse(r.stdout).plans.map((plan) => plan.id), ['01-01']);
+  });
+
   test('a read that fails stops the block', (t) => {
     const r = runRefresh(refreshFixture(t), { gsdRun: 'gsd_run() { return 3; }' });
     assert.equal(r.exitCode, 1);
