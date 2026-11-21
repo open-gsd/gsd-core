@@ -215,6 +215,7 @@ describe('gsd-secret-read-guard: a search tool run by xargs keeps no carve-out (
     ["echo x | xargs egrep KEY --exclude=.env", '--exclude=.env'],
     ["echo x | xargs fgrep KEY --exclude=.env", '--exclude=.env'],
     ["echo x | xargs rg -g '!dir/.env' KEY", '!dir/.env'],
+    ["echo x | xargs rg KEY . --glob '!dir/.env'", '!dir/.env'],
     ["echo x | xargs rg -- '.env'", '.env'],
     // jq: stdin can supply `-f`, which makes the program word a file.
     ["echo '-f' | xargs jq '.env'", '.env'],
@@ -261,7 +262,7 @@ describe('gsd-secret-read-guard: a search tool run by xargs keeps no carve-out (
     assertBlockedOn('grep .env -e KEY');
   });
 
-  test('property: a protected name among the words of a search tool run by xargs is blocked', () => {
+  test('property: a protected name among the words of a search tool run by xargs is blocked, and no other name is', () => {
     const NAME = fc.constantFrom('.env', '.env.local', '.secrets', 'config/.env.production');
     // Each tool's own slots: jq has no exclusion option, and rg's is a negated glob, path-qualified so it names the
     // protected file (a bare `!.env` names `!.env`).
@@ -275,11 +276,25 @@ describe('gsd-secret-read-guard: a search tool run by xargs keeps no carve-out (
       '-P 2 ', '--max-args 1 ',
     );
     const STDIN = fc.constantFrom('echo x', "echo '-e K'", "printf '%s\\n' -f");
-    fc.assert(fc.property(NAME, TOOL_SLOT, XARGS_FLAGS, STDIN, (name, [tool, slot], xargsFlags, stdin) => {
-      let words = `'${name}'`;
-      if (slot === 'after --') words = `-- '${name}'`;
-      else if (slot === 'exclusion') words = tool === 'rg' ? `-g '!dir/${name}' KEY` : `--exclude=${name} KEY`;
-      assertBlockedOn(`${stdin} | xargs ${xargsFlags}${tool} ${words}`);
+    // The word each slot puts the name in, and the word a block names: the exclusion option's whole word for grep.
+    const wordsFor = (tool, slot, name) => {
+      if (slot === 'after --') return { words: `-- '${name}'`, named: name };
+      if (slot === 'pattern') return { words: `'${name}'`, named: name };
+      if (tool === 'rg') return { words: `-g '!dir/${name}' KEY`, named: `!dir/${name}` };
+      return { words: `--exclude=${name} KEY`, named: `--exclude=${name}` };
+    };
+    const BENIGN = fc.constantFrom('notes.txt', 'src/app.ts', '.env.example');
+    fc.assert(fc.property(NAME, BENIGN, TOOL_SLOT, XARGS_FLAGS, STDIN, (name, benign, [tool, slot], xargsFlags, stdin) => {
+      const secret = wordsFor(tool, slot, name);
+      const out = assertBlockedOn(`${stdin} | xargs ${xargsFlags}${tool} ${secret.words}`);
+      assert.equal(out.path, secret.named, `${stdin} | xargs ${xargsFlags}${tool} ${secret.words}: path`);
+      // Allow-side oracle: the same command naming no protected file is allowed, except that an arg file is a
+      // source of words the guard cannot read, which a search tool would read as files.
+      const plain = `${stdin} | xargs ${xargsFlags}${tool} ${wordsFor(tool, slot, benign).words}`;
+      if (!/-a |--arg-file/.test(xargsFlags)) return assertAllowed(plain);
+      const r = runHook(bash(plain));
+      assert.equal(r.status, 2, `${plain}: an arg file blocks`);
+      assert.deepEqual([JSON.parse(r.stdout).code, JSON.parse(r.stdout).path], ['xargs-input-unseen', 'list'], plain);
     }), { ...PROPERTY_RUNS, numRuns: 300 });
   });
 });
@@ -353,6 +368,23 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ['export GREP_OPT{H..J}ONS=-eKEY; grep .env', '.env'],
     ["export $'\\x47REP_OPTIONS=-eKEY'; grep .env", '.env'],
     ["eval $'export \\x47REP_OPTIONS=-eKEY'; grep .env", '.env'],
+    // ... or by a glob, from a file named `GREP_OPTIONS=-eKEY` in the working directory, in a word that sets a
+    // variable, also in a body eval or source runs, and in a word the shell splits off it.
+    ['export GREP_O*; grep .env', '.env'],
+    ['export GREP_O?TIONS=-eKEY; grep .env', '.env'],
+    ['export GREP_[O]PTIONS=-eKEY; grep .env', '.env'],
+    ['export RIPGREP_C*; rg .env', '.env'],
+    ['export POSIXLY_C*; grep -n KEY . --exclude=.env', '--exclude=.env'],
+    ['declare -x GREP_O*; grep .env', '.env'],
+    ['export GREP_{O*,x}; grep .env', '.env'],
+    ["eval 'export GREP_O*'; grep .env", '.env'],
+    ['eval "export GREP_O?TIONS=-eKEY"; grep .env', '.env'],
+    ["source <(echo 'export GREP_O*'); grep .env", '.env'],
+    ["export 'a;' GREP_O*; grep .env", '.env'],
+    // An alias can hand the tool words too, wherever the command defines it (`alias` is the trigger, #6282 Nit 1).
+    ["alias grep='grep -eKEY'; grep .env", '.env'],
+    ["grep .env; alias grep='grep -eKEY'", '.env'],
+    ["al''ias grep='grep -eKEY'\ngrep .env", '.env'],
     // A leading glob, brace or tilde can become an option (a file named `-eKEY`, HOME=-eKEY) ...
     ['grep .env *', '.env'],
     ['grep .env {-e,KEY}', '.env'],
@@ -379,6 +411,22 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ["find -- -eKEY -exec sh -c 'grep .env {}' \\;", '.env'],
     ["find . -execdir sh -c 'grep .env {}' \\;", '.env'],
     ["find . -exec watch 'grep .env {}' \\;", '.env'],
+    // A `$` after the search tool keeps the withdrawal wherever words may run again or the quoting is not plain: a
+    // function or alias the command defines later, a loop, `set --`, a `'` in a comment or heredoc body, `$( )`,
+    // and a grouping brace, which does not end the tool's words.
+    ['grep .env; grep() { command grep -eKEY "$@"; }', '.env'],
+    ['for i in 1 2; do :; grep .env; export $V; done', '.env'],
+    ['set -- -eKEY; grep .env; echo $1', '.env'],
+    ['X=-eKEY; : "\'"; grep .env $X; : "\'"', '.env'],
+    ["grep -rn x --exclude=.env . # it's\necho $X", '--exclude=.env'],
+    ["grep -rn x --exclude=.env . <<EOF\nit's\nEOF\necho $X", '--exclude=.env'],
+    ['grep -rn x --exclude=.env .; echo $(date)', '--exclude=.env'],
+    ['grep .env { $X', '.env'],
+    // The rest of the cost the narrowing does not lift: an expansion in the tool's own words, a brace or tilde.
+    ['grep -rn x --exclude=.env "$DIR"', '--exclude=.env'],
+    ['grep -rn x{1..3} --exclude=.env .', '--exclude=.env'],
+    ['grep -rn ~root --exclude=.env .', '--exclude=.env'],
+    ['grep -rn ~+ --exclude=.env .', '--exclude=.env'],
   ];
   for (const [cmd, file] of blocks) {
     test(`blocks ${JSON.stringify(cmd)}`, () => assertBlockedOn(cmd, file));
@@ -397,6 +445,13 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     "rg KEY . -g'!dir/.env'",
     "jq '.env.X' settings.json",
     'find . -exec grep -l foo {} +',
+    // A `$` that single quotes keep literal, or one after the list separator that ends the search tool's words.
+    "grep -rn '$HOME' --exclude=.env .",
+    "grep -rEn '\\$HOME' --exclude=.env .",
+    "grep -rn 'x' --exclude=.env . ; echo $?",
+    // A glob that cannot spell one of the variables, or one the command does not set a variable with.
+    "env LC_ALL=C grep 'a*' --exclude=.env .",
+    'export FOO*; grep -rn KEY --exclude=.env .',
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));

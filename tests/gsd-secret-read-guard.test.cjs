@@ -3742,6 +3742,9 @@ describe('gsd-secret-read-guard: xargs options and launcher sub-commands (#6282)
     "echo x | xargs -J % sh -c 'cat .env'",
     "echo x | xargs -R 1 sh -c 'cat .env'",
     "echo x | xargs -S 9 sh -c 'cat .env'",
+    // `-i` takes only an attached value: `a` and `n` are replace strings, not options.
+    'echo .env | xargs -ia cat',
+    "echo x | xargs -in sh -c 'cat .env'",
   ];
   // The piped word is the script, through a replace string found in each form xargs accepts.
   const REPLACE_SCRIPT = [
@@ -3764,6 +3767,10 @@ describe('gsd-secret-read-guard: xargs options and launcher sub-commands (#6282)
     "echo x | xargs git -c alias.x='!cat .env' x",
     // Rescanned at xargs's own depth, so a launcher two shells deep is still read.
     'sh -c "sh -c \\"echo x | xargs watch \'cat .env\'\\""',
+    // xargs launched by find or `watch -x` is read as the same xargs at the top level.
+    "find . -exec xargs sh -c 'cat .env' \\;",
+    "watch -x xargs sh -c 'cat .env'",
+    "find . -exec xargs watch 'cat .env' \\;",
   ];
   const ALLOWED = [
     "echo x | xargs -i sh -c 'cat notes.txt'",
@@ -3781,6 +3788,70 @@ describe('gsd-secret-read-guard: xargs options and launcher sub-commands (#6282)
   }
   for (const cmd of ALLOWED) {
     test(`allows: ${cmd}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
+// ─── #6282: the words xargs reads from a here-string, a heredoc, a printf, or a source the guard cannot read ─────
+//
+// xargs's words come from its stdin or an arg file as well as a pipe. A here-string or heredoc given to it is read
+// as those words, and so is what an echo or printf piped in prints, with `%s` filled and `\n` read as a newline.
+// A source the guard cannot read (`< list`, `<&3`, `-a list`, `-a <( )`, a printf escape or conversion it does not
+// render) is denied as `xargs-input-unseen` unless the sub-command reads nothing (`echo`) or is a shell whose `-c`
+// script is literal and takes no word. Every block row exits 0 on `next`.
+describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an unseen source (#6282)', () => {
+  const READS = [
+    "printf '.env\\n' | xargs cat",
+    "printf '.e%sv\\n' n | xargs cat",
+    'xargs cat <<< .env',
+    "xargs cat <<'EOF'\nREADME.md .env\nEOF",
+    'xargs -d, cat <<< a,.env',
+    "xargs -I{} sh -c 'cat {}' <<< .env",
+    // A launched xargs reads its launcher's stdin; an xargs it runs gets the words as its own operands.
+    'find . -exec xargs cat \\; <<< .env',
+    'xargs sudo xargs cat <<< .env',
+  ];
+  const UNSEEN = [
+    ['xargs cat < names', 'names'],
+    ['xargs cat 0< names', 'names'],
+    ['xargs cat <&3', '<&3'],
+    ['xargs -a <(echo .env) cat', '<(echo .env)'],
+    ['echo .env > n; xargs -a n cat', 'n'],
+    ['xargs -a n cat', 'n'],
+    ['xargs -anames cat', 'names'],
+    ['xargs --arg-file=names cat', 'names'],
+    ['xargs -a n wc', 'n'],
+    ['xargs -a n sh -c \'cat "$@"\' _', 'n'],
+    ['xargs -a n sh', 'n'],
+    ["printf '\\x2eenv\\n' | xargs cat", '\\x2eenv\\n'],
+    ["printf '%b' '\\x2eenv' | xargs cat", '%b \\x2eenv'],
+    ["echo -e '\\x2eenv' | xargs cat", '-e \\x2eenv'],
+  ];
+  const ALLOWED = [
+    "xargs echo <<< 'cat .env'",
+    "xargs -a list bash -c 'echo hi' <<< 'cat .env'",
+    "printf 'a\\n' | xargs cat",
+    "printf '%s\\n' a b | xargs cat",
+    'xargs cat <<< README.md',
+    'xargs cat 3< names',
+    'xargs -a names echo',
+    // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
+    'cat names | xargs cat',
+  ];
+
+  for (const cmd of READS) {
+    test(`blocks: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const [cmd, source] of UNSEEN) {
+    test(`blocks as unseen: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'xargs-input-unseen', tool: 'Bash', path: source });
+    });
+  }
+  for (const cmd of ALLOWED) {
+    test(`allows: ${JSON.stringify(cmd)}`, () => {
       assertAllowed(runHook(bash(cmd)), cmd);
     });
   }
