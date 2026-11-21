@@ -60,6 +60,12 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
     }
   });
 
+  test('the research question is flagged as moot when agents_installed is false', () => {
+    const question = body.indexOf('AskUserQuestion');
+    assert.ok(body.slice(0, question).includes('agents_installed'),
+      'Step 8 must say before the question that research cannot run when agents_installed is false');
+  });
+
   test('(Recommended) is tied to research_enabled and marks one option only', () => {
     const parts = body.split('**If `research_enabled` is `false`:**');
     assert.equal(parts.length, 2, 'expected exactly one false-branch marker');
@@ -145,20 +151,31 @@ describe('new-milestone Step 8 research decision (#5148)', () => {
       /left in place and never read/, 'no stale file may be left behind for the synthesizer or self-heal');
     assert.match(body, /When `agents_installed` is false the parallel research spawn is skipped and the roadmap is generated inline \(Step 7\)/,
       'the clearing must be conditional on the spawn actually going ahead');
-    assert.match(body, /do not print the spawn banner below and do not remove anything — the earlier research files stay on disk/,
-      'the agents_installed=false path must not print the banner and must leave the earlier research files on disk');
+    assert.match(body, /do not print the spawn banner below, do not run the `mkdir` below, and do not remove anything — the earlier research files stay on disk/,
+      'the agents_installed=false path must not print the banner, must not run the mkdir, and must leave the earlier research files on disk');
     assert.match(body, /research did not run: leave `\{research_summary_line\}` empty and take Step 9's "research was skipped" branch/,
       'the agents_installed=false path must state that research did not run, so Step 9 takes the skipped branch and the roadmapper gets no SUMMARY.md');
     const guard = body.indexOf('When `agents_installed` is false the parallel research spawn is skipped');
     const banner = body.indexOf('◆ Spawning {N} researcher(s)');
     assert.ok(guard !== -1 && banner !== -1 && guard < banner,
       'the agents_installed guard must precede the spawn banner, so the no-spawn path never shows it');
+    const mkdir = body.indexOf('mkdir -p "{research_dir}"');
+    assert.ok(guard !== -1 && mkdir !== -1 && guard < mkdir,
+      'the agents_installed guard must precede the mkdir, so the no-spawn path never creates the directory');
+    assert.ok(guard < body.indexOf('Skipping: {dimension(s)}'),
+      'the agents_installed guard must precede the dimension-skip disclosure, so the no-spawn path never announces skipped dimensions');
+    const removal = body.indexOf('Only when this run actually spawns researchers,');
+    assert.notEqual(removal, -1,
+      'the removal paragraph must state that it runs only when this run actually spawns researchers');
+    assert.ok(guard < removal,
+      'the conditional removal must come after the guard, so the no-spawn path removes nothing');
     const noticeStart = body.indexOf('Replacing research files:');
     const notice = body.slice(noticeStart, body.indexOf('`', noticeStart));
     for (const file of ['SUMMARY.md', 'STACK.md', 'FEATURES.md', 'ARCHITECTURE.md', 'PITFALLS.md']) {
       assert.ok(notice.includes(`{research_dir}/${file}`), `the replacement notice must name ${file}`);
     }
   });
+
   test('the Skip branch defines the empty research_summary_line default', () => {
     const skip = body.indexOf('**If "Skip research":**');
     assert.notEqual(skip, -1, 'the Skip research branch is missing');
@@ -178,6 +195,13 @@ describe('new-milestone Step 10 roadmapper uses research from this run (#5148)',
     assert.match(body.slice(0, spawn), /Fill `\{research_summary_line\}` as defined in Step 8, and remove the line when it is empty/);
     assert.match(body.slice(0, spawn), /never a SUMMARY\.md left from earlier runs/);
     assert.match(body.slice(spawn), /<required_reading>\n- \{project_path\}\n- \{requirements_path\}\n\{research_summary_line\}\n/);
+  });
+
+  test('the inline-roadmap branch is stated when agents_installed is false (Step 7)', () => {
+    const banner = body.indexOf('◆ Spawning roadmapper');
+    assert.notEqual(banner, -1, 'Step 10 keeps the spawn banner for the spawn path');
+    assert.ok(body.slice(0, banner).includes('agents_installed'),
+      'Step 10 must state the inline-roadmap branch before the banner, so the no-spawn path neither prints it nor runs the spawn');
   });
 });
 

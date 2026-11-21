@@ -340,6 +340,8 @@ If `section_manifest` is `null` or `"reset-phase-safety"` is in its `included` l
 
 Check `research_enabled` from init JSON (loaded from config).
 
+**When `agents_installed` is `false`, say so before asking:** no research or synthesizer subagent exists (Step 7), so whatever the user answers, no researchers can spawn and the roadmap is generated inline. Tell the user research cannot run this milestone before putting the question below.
+
 **If `research_enabled` is `true`:**
 
 AskUserQuestion: "Research the domain ecosystem for this milestone's work — new features, refactors, and what they couple to or could break in the existing codebase — before defining requirements?"
@@ -358,9 +360,9 @@ AskUserQuestion: "Research the domain ecosystem for this milestone's work — ne
 
 **If user chose "Research first":**
 
-Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{dimensions kept}` is the list of dimensions that will run, in the order stack, features, architecture, pitfalls, and `{N}` is its count. `{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension in `{dimensions kept}`, with `{FILE}` from the FILE row of the table below. `{research_summary_line}` is `- {research_dir}/SUMMARY.md` when research ran and an empty string when it did not.
+When `agents_installed` is false the parallel research spawn is skipped and the roadmap is generated inline (Step 7). On that path research did not run: leave `{research_summary_line}` empty and take Step 9's "research was skipped" branch — do not print the spawn banner below, do not run the `mkdir` below, and do not remove anything — the earlier research files stay on disk.
 
-When `agents_installed` is false the parallel research spawn is skipped and the roadmap is generated inline (Step 7). On that path research did not run: leave `{research_summary_line}` empty and take Step 9's "research was skipped" branch — do not print the spawn banner below and do not remove anything — the earlier research files stay on disk.
+Run one researcher per dimension (stack, features, architecture, pitfalls) by default. Drop a dimension only when it clearly does not apply to this milestone, and tell the user before spawning: `Skipping: {dimension(s)} — {reason}`. Never drop one silently. At least one must run; to run none, the user chooses Skip. `{dimensions kept}` is the list of dimensions that will run, in the order stack, features, architecture, pitfalls, and `{N}` is its count. `{required_reading_lines}` is one line `- {research_dir}/{FILE}` per dimension in `{dimensions kept}`, with `{FILE}` from the FILE row of the table below. `{research_summary_line}` is `- {research_dir}/SUMMARY.md` when research ran and an empty string when it did not.
 
 ```
 ### GSD ► RESEARCHING
@@ -546,6 +548,8 @@ gsd_run query commit "docs: define milestone v[X.Y] requirements" --files "$REQU
 ```
 
 ## 10. Create Roadmap
+
+**When `agents_installed` is `false` (Step 7):** the roadmapper subagent does not exist — do not print the spawn banner below and do not run the roadmapper spawn. Generate the roadmap inline: read `{project_path}`, `{requirements_path}`, and the milestone goals, then write ROADMAP.md, STATE.md, and REQUIREMENTS.md traceability directly, following the numbering mode and write targets below. Continue at **Handle return** as if `## ROADMAP CREATED`.
 
 ```
 ### GSD ► CREATING ROADMAP
