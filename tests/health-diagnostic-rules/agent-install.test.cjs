@@ -260,4 +260,22 @@ describe('agent-install rule (W010)', () => {
     };
     assert.deepStrictEqual(rule.check(snapshot), []);
   });
+
+  test('[regression #5236] an agents check that could not run (agents_installed null) is not a missing install: no diagnostic', () => {
+    const snapshot = {
+      agentInstall: {
+        scope: SCOPE.COMPLETE,
+        value: {
+          agents_installed: null,
+          missing_agents: [],
+          installed_agents: [],
+          incomplete_agents: [],
+          agents_dir: null,
+          agent_runtime: 'example-host',
+          agents_check_reason: 'unknown_runtime',
+        },
+      },
+    };
+    assert.deepStrictEqual(rule.check(snapshot), []);
+  });
 });
