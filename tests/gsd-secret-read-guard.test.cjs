@@ -540,7 +540,6 @@ describe('gsd-secret-read-guard: Bash allows', () => {
     'su root',
     'echo .env | xargs rm',
     'echo .env | xargs',
-    'echo .env | xargs -a names cat', // -a: stdin replaced by a file
     "find . -name '*.ts' | xargs cat",
     'echo .env.example | xargs cat', // template suffix exemption still applies
     'git ls-files | xargs grep -l KEY',
@@ -3822,6 +3821,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['xargs -anames cat', 'names'],
     ['xargs --arg-file=names cat', 'names'],
     ['xargs -a n wc', 'n'],
+    ['echo .env | xargs -a names cat', 'names'], // -a: the words come from the file, not the pipe
     ['xargs -a n sh -c \'cat "$@"\' _', 'n'],
     ['xargs -a n sh', 'n'],
     ["printf '\\x2eenv\\n' | xargs cat", '\\x2eenv\\n'],
