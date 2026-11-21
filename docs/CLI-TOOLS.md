@@ -1395,9 +1395,10 @@ file read need not be the one that gave the plan its completion record:
   takes part. Taking part means being read in the lookup, not giving the
   completion record: a `06-01` whose one SUMMARY is
   `plans/01-06-01-SUMMARY-01.md` reads `halted: false` and is not counted in
-  `summary_count`, whatever that file says. It decides the halt once another
-  SUMMARY gives the record, such as a `06-01-SUMMARY.md` in the phase
-  directory.
+  `summary_count`, whatever that file says. Once another SUMMARY gives the
+  record, such as a `06-01-SUMMARY.md` in the phase directory, the halt is
+  read from the last match as above: that nested file, unless a later match
+  under `plans/` follows it.
 
 `hasSummary` keeps its older filename pairing, so a plan in the second case
 can read `hasSummary: false` with `halted: true`. Every plan counted in
