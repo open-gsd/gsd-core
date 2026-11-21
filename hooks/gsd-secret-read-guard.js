@@ -1201,22 +1201,18 @@ let inHeredocPass = false;
 // #5514: the readings of an `env -S` string, declared once. The Bash path scans
 // the command once per reading, in this order, and any reading's hit denies, so a
 // reading can add a denial but never remove one.
-//  - split: false skips the string as the option's value, the reading before #5514;
-//    with it, resolveCommand reads every command exactly as before #5514. It runs
-//    first, on every command, and its denials are emitted before any reading that
-//    splits.
-//  - vars: 'keep' keeps `${NAME}` as written; 'drop' reads it as an unset name,
-//    which every env expands to nothing.
-//  - escapes: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and macOS, where a backslash
-//    before a blank is that blank) or 'uutils' (uutils coreutils, Ubuntu's env since
-//    25.10, where a backslash before a newline is removed, inside quotes too, and a
-//    comment ends at a newline rather than ending the string). See splitEnvString.
-//  - runs: 'always'; 'split-or-throw' when an earlier reading met a split option or
-//    a scan threw before it could tell; 'split' when one was met. Every splitting
-//    reading runs whenever a split option was met: which strings a reading reaches,
-//    and what they hold, can differ from what the first saw (an escape can build a
-//    `${` or a backslash-blank inside a nested string), so no screen over the
-//    strings the first reading split can tell which readings are needed.
+//  - split: false skips the string as the option's value, so resolveCommand reads every
+//    command as before #5514. It runs first, on every command, and its denials are
+//    emitted before any reading that splits.
+//  - vars: 'keep' keeps `${NAME}` as written; 'drop' reads it as unset, which env expands to nothing.
+//  - escapes: 'gnu' (GNU coreutils), 'bsd' (FreeBSD and macOS: a backslash before a blank
+//    is that blank) or 'uutils' (uutils coreutils, Ubuntu's env since 25.10: a backslash
+//    before a newline is removed, in quotes too, and a comment ends at a newline rather
+//    than ending the string). See splitEnvString.
+//  - runs: 'always'; 'split-or-throw' once a split option was met or a scan threw before it
+//    could tell; 'split' once one was met. Every splitting reading then runs: an escape can
+//    build a `${` or a backslash-blank inside a nested string, so what a reading reaches can
+//    differ from what the first saw, and no screen over the first's strings tells which run.
 const ENV_S_READINGS = Object.freeze([
   { name: 'unsplit', split: false, runs: 'always' },
   { name: 'gnu', split: true, vars: 'keep', escapes: 'gnu', runs: 'split-or-throw' },
