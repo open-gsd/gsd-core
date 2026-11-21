@@ -3369,8 +3369,9 @@ function ownStdin(s, bySeg) {
 // segments inside it, one on a loop's or conditional's closing word the segments since its opening word, and one on
 // `exec` the segments after it. Innermost first; `next` skips the segments already reached, so nested groups cost
 // one pass, not one per group. Where that matching is unsure (a closer with no opener, an opener left open, or a
-// `case`, whose patterns end in `)`), and in a command that defines a function, whose body runs with every call's
-// stdin (`f() { xargs cat; }; f <<< a; f < list`), every segment gets all of those redirects together instead.
+// `case`, whose patterns end in `)`), where two reaches overlap, and in a command that defines a function, whose
+// body runs with every call's stdin (`f() { xargs cat; }; f <<< a; f < list`), every segment gets all of those
+// redirects together instead.
 function groupStdins(tokens, bySeg, maxSeg, command) {
   const reach = new Map();
   const next = Array.from({ length: maxSeg + 2 }, (_, k) => k);
@@ -3410,12 +3411,20 @@ function groupStdins(tokens, bySeg, maxSeg, command) {
     else if (CLOSING_WORDS.has(first.text)) ranges.push([blocks.length > 0 ? blocks.pop() : -1, s - 1, ownStdin(s, bySeg)]);
     else if (lastSegment(first.text) === 'exec') ranges.push([s + 1, maxSeg, ownStdin(s, bySeg)]);
   }
-  if (unsure || groups.length > 0 || blocks.length > 0 || ranges.some((r) => r[0] === -1)) {
+  if (unsure || groups.length > 0 || blocks.length > 0 || ranges.some((r) => r[0] === -1) || overlapping(ranges)) {
     spread(0, maxSeg, mergedStdin(ranges.map((r) => r[2])));
     return reach;
   }
   for (const [from, to, stdin] of ranges) spread(from, to, stdin);
   return reach;
+}
+
+// Whether two of the ranges that carry a stdin reach a segment in common, so which one it gets would hang on the
+// order they are spread in (`{ exec < list; xargs cat; } <<< a`).
+function overlapping(ranges) {
+  const given = ranges.filter((r) => r[2] !== null && r[0] <= r[1]).sort((x, y) => x[0] - y[0]);
+  for (let k = 1; k < given.length; k++) if (given[k][0] <= given[k - 1][1]) return true;
+  return false;
 }
 
 // Several stdins as one, failing closed: the first one the guard cannot read, else all their texts; null for none.
