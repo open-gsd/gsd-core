@@ -1223,6 +1223,7 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
 }
 
 export = {
+  hasNativeModelAliases,
   resolveTierEntry,
   CLAUDE_AGENT_ALIASES,
   resolveModelPolicy,
