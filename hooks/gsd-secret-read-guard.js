@@ -1961,29 +1961,20 @@ function readHeredocTag(str, i, reading) {
   return { tag, quoted, stripTabs, end: i };
 }
 
-// The heredoc at `i` (just past `<<`), read in bash's two steps, so that where a span
-// ends and what is scanned inside it cannot disagree. Step one finds the word: it ends
-// at a metacharacter outside any quote or nested construct. Step two runs only if the
-// word held a quote of its own, and removes quotes across all of its text, nested
-// constructs included. So `$(echo "x")` waits for itself and `'E'$(echo "x")` waits for
-// `E$(echo x)`. The word and any `$( )` or `${ }` in it are read under the scan's shell
-// reading, as the scans that count parens read them, so a `$'…'` opens where that
-// shell opens one: read plainly, the `\'` in `<<E$(echo $'\'')` opens a quote that
-// takes the body with it. One place still differs, as on `next`: zsh 5.9 reads the
-// `$'` of a `${ }` inside "…" as text, where this reads `$'…'`, so `<<E"${x:-$'"'}"`
-// is read to end before zsh ends it. Escapes in `$'…'` other than `\'` and `\\` are not
-// decoded: that reading belongs to the ANSI-C work (#5255). bash 5.2 also rewrites a
-// `$'…'` inside a nested `$( )` or `${ }` as '…' before it compares lines, which this
-// does not, so `<<E$(echo $'a)')F` ends at the line spelled like it, where bash reads
-// on to the end, and a read later in the body is missed, as it is on `next`. A quoted
-// tag is unquoted flat (withoutQuotes), so one whose nested `$( )` or `${ }` holds a
-// `$'…'` (`<<'E'$(echo $'\'')`, `<<'E'"${x:-$'x'}"`) waits for a line bash does not,
-// its body runs past the line bash ends it at, and a read after it is missed, as it is
-// on `next`.
-// tokenize's heredoc under scanByGrammar: the tag word at `i` (just past `<<`), read
-// whole and queued on `heredocs` for segment `seg`; returns where reading resumes. A
-// helper, so that tokenize's own frame, which the counting scans recurse through,
-// stays the size it is on `next`.
+// tokenize's heredoc under scanByGrammar: the tag word at `i` (just past `<<`), queued on
+// `heredocs` for segment `seg`; returns where reading resumes. A helper, so tokenize's frame,
+// which the counting scans recurse through, stays its size on `next`. The word is read in
+// bash's two steps, so where a span ends and what is scanned in it agree: it ends at a
+// metacharacter outside any quote or nested construct, and only a word holding a quote of its
+// own is then unquoted whole, nested constructs included (`$(echo "x")` waits for itself,
+// `'E'$(echo "x")` for `E$(echo x)`). Its `$( )` and `${ }` are read under the scan's shell
+// reading, so the `\'` in `<<E$(echo $'\'')` does not open a quote. Differences, each also on
+// `next`: zsh 5.9 reads the `$'` of a `${ }` inside "…" as text (`<<E"${x:-$'"'}"` is read
+// to its end before zsh ends it); `$'…'` escapes other than `\'` and `\\` are not decoded
+// (#5255); bash 5.2 rewrites a `$'…'` in a nested `$( )` or `${ }` before it compares lines,
+// so `<<E$(echo $'a)')F` ends at the line spelled like it; and a quoted tag is unquoted flat
+// (withoutQuotes), so `<<'E'$(echo $'\'')` or `<<'E'"${x:-$'x'}"` waits for a line bash does
+// not. In the last two a read later in the body is missed.
 function readGrammarHeredoc(str, i, heredocs, seg, reading) {
   const heredoc = readHeredocTag(str, i, reading);
   heredocs.push({ tag: heredoc.tag, quoted: heredoc.quoted, stripTabs: heredoc.stripTabs, seg });
@@ -3284,25 +3275,16 @@ let scanSpent = false;
 // those alone, 1 MiB of `x;y|` after a `$'a'` took about 5.7 s of CPU, and
 // 1 MiB of `a ` 0.6 s. With this budget each such shape is denied in at most
 // 1.5 s wall at load 42, and the costliest shape left spends the character
-// budget (MAX_SCAN_CHARACTERS). Every pass re-tokenizes what it reads, and a
-// nested body is read again at each outer pass, so the charge on a script a
-// shell reads from a heredoc is a fixed multiple of its length, set by its
-// nesting. With a reading trigger in it, each character of a `bash <<'EOF'`
-// script is scanned about 120 times and charged tens of separators (about 48
-// for a script of `:;` lines), and such scripts were denied from about
-// 11,000-70,000 characters in the shapes measured; inside `$( )` or a second
-// heredoc each is scanned about 500 times and charged a few hundred, and they
-// were denied from about 2,800-17,000. A command holding a `$( )`, `$(( ))`,
-// `<( )` or `>( )` the shell expands is scanned once more (scanBashByGrammar),
-// on what those scans leave, so it is denied sooner: at about three quarters
-// of the size in the heredoc scripts measured, about half in a long command of
-// separators, nearly the whole size in a script of short `$( )` lines with no
-// reading trigger, and far sooner when it holds a long `case` arm inside
-// `$( )`, which the counting scans close at the pattern and the grammar scan
-// reads whole. All of these are measured shapes, not bounds: a denser script
-// is denied sooner. The
-// most any of the 1,384,856 real agent commands above needs is 20,043 (a
-// 4,543-character heredoc commit message).
+// budget (MAX_SCAN_CHARACTERS). Every pass re-tokenizes what it reads, so a
+// script a shell reads from a heredoc is charged a fixed multiple of its length,
+// set by its nesting: with a reading trigger, each character of a `bash <<'EOF'`
+// script is scanned about 120 times (denied from about 11,000-70,000 characters
+// in the shapes measured), and about 500 inside `$( )` or a second heredoc
+// (2,800-17,000). A `$( )`, `$(( ))`, `<( )` or `>( )` adds scanBashByGrammar on
+// what is left, which denies at a half to three quarters of the size, far sooner
+// on a long `case` arm in `$( )`. These are measured shapes, not bounds. The most
+// any of the 1,384,856 real agent commands above needs is 20,043 (a 4,543-character
+// heredoc commit message).
 const MAX_SCAN_SEPARATORS = 512 * 1024;
 
 // The separators left in the current command, set with scanBudget.
