@@ -1672,6 +1672,8 @@ function braceConcat(a, b) {
 }
 
 const BRACE_PAST_BUDGET = Symbol('past the brace budget');
+// An assignment word, `NAME=`, `NAME+=` or `NAME[sub]=` and its value (#6142).
+const BRACE_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
 // A word whose brace groups cannot be read word by word (braceWords, tokenize): `brace-word-unreadable`.
 const BRACE_UNREADABLE = Symbol('brace groups not readable');
 
@@ -1763,15 +1765,6 @@ function braceWordInPlace(word, cmd) {
   if (SEARCH_TOOLS.has(base) || CONTAINER_RUNTIMES.has(base) || SHELL_INTERPRETERS.has(base)) return false;
   // echo and printf print their operands for whatever reads their output, a shell among them (reconstructedScript).
   return !['xargs', 'find', 'find.exe', 'watch', 'git', 'git.exe', 'cp', 'mv', 'echo', 'printf'].includes(base);
-}
-
-// Whether segment `s` is the elements of an array assignment (`arr=({1..100})`, `declare -a a+=(…)`): the values
-// bash makes of them are assigned, not run or read, so a word there past the budget can shift no verdict (#6142).
-function braceArrayElements(s, bySeg, sepAfter) {
-  if (s === 0 || sepAfter.get(s - 1) !== '(') return false;
-  const before = bySeg.get(s - 1) || [];
-  const last = before[before.length - 1];
-  return last !== undefined && last.kind === 'word' && /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=$/.test(last.text);
 }
 
 // bash 5.2's brace_gobbler: the index in `text`, from `i`, of the unquoted `satisfy` at brace level 0, or -1. A
@@ -1954,6 +1947,10 @@ function tokenize(str, reading) {
   let braceOpen = false;
   let braceSplit = false;
   const rawEdits = [];
+  // Whether every word so far in the segment is an assignment, and whether the words are an array's elements
+  // (`arr=(…)`): bash and zsh make no words of an assignment's braces, and an array's are values (#6142).
+  let assignsOnly = true;
+  let inArray = false;
 
   const flush = () => {
     if (!hasWord) return;
@@ -1978,7 +1975,10 @@ function tokenize(str, reading) {
       const after = str[wordEnd];
       const cut = braceOpen && ((after === '(' && raw !== '{') || ((after === '\r' || /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)))
         && braceGroupOpen(raw, reading)));
-      const words = cut ? BRACE_UNREADABLE : split && bracesSpliced ? braceWords(raw, reading) : undefined;
+      assignsOnly = assignsOnly && BRACE_ASSIGNMENT_RE.test(str.slice(wordStart, wordEnd));
+      let words = cut ? BRACE_UNREADABLE : split && bracesSpliced ? braceWords(raw, reading) : undefined;
+      // An assignment's or array element's words are values, never run or read: past the budget they stand as written.
+      if ((assignsOnly || inArray) && (words === null || words === BRACE_PAST_BUDGET)) words = undefined;
       const prev = tokens[tokens.length - 1];
       if (words === undefined) {
         tokens.push({ kind: 'word', text, quoted, seg });
@@ -2005,6 +2005,10 @@ function tokenize(str, reading) {
   // (pipe inference) from `a || bash` and to skip grouping seps.
   const sep = (text) => {
     flush();
+    const last = tokens[tokens.length - 1];
+    if (text === '(') inArray = last !== undefined && last.kind === 'word' && BRACE_ASSIGNMENT_RE.test(last.text);
+    else if (text === ')') inArray = false;
+    assignsOnly = true;
     tokens.push({ kind: 'sep', text, quoted: 'none', seg });
     seg++;
   };
@@ -3296,10 +3300,8 @@ function scanCommand(command, depth, reading) {
     if (!words.length) continue;
 
     const cmd = resolveCommand(words);
-    if (budgetHit === null && !braceArrayElements(s, bySeg, sepAfter)) {
-      // bash makes no words of a leading assignment's braces (`X={1..100} make`), so it is not held to the budget.
-      const assigned = (k) => words.slice(0, k + 1).every((w) => ASSIGNMENT_RE.test(w.text));
-      const over = words.find((w, k) => w.braceOverBudget && !assigned(k) && !braceWordInPlace(w, cmd));
+    if (budgetHit === null) {
+      const over = words.find((w) => w.braceOverBudget && !braceWordInPlace(w, cmd));
       if (over !== undefined) budgetHit = { code: 'glob-too-complex', text: over.text };
     }
     if (!cmd) continue;
