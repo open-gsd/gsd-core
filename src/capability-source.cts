@@ -1041,7 +1041,10 @@ function resolveGit(
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cap-git-'));
   const cloneDir = path.join(scratchDir, 'repo');
   const hooksDir = path.join(scratchDir, 'empty-hooks');
-  const gitConfig = ['-c', `core.hooksPath=${hooksDir}`];
+  // The clone is thrown away: automatic maintenance (`gc --auto`, `maintenance run --auto`) would
+  // only detach a git process that keeps writing into the scratch directory after the command
+  // returns, which is what a removal races with (#6441).
+  const gitConfig = ['-c', `core.hooksPath=${hooksDir}`, '-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
   const treeWriteTimeoutMs = 60_000;
   try {
     // Keep hooks outside the cloned tree: an inherited relative core.hooksPath
@@ -1115,7 +1118,26 @@ function resolveGit(
 
     return stageValidated({ sourceDir: cloneDir, id, gsdHome, hostVersion, source: parsed.raw, integrity: null, promote: opts.promote, skipEnginesGate: opts.skipEnginesGate });
   } finally {
-    try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+    // #6441: retried like the `.git` removal above (which is fail-closed; this one is best-effort,
+    // because the result was already returned or thrown). A writer under the directory makes a single
+    // attempt fail with ENOTEMPTY or EBUSY. The retries cover a short hold (about 600 ms in all); a
+    // longer one, or EACCES, still leaves the clone, and that is now reported rather than swallowed.
+    try {
+      fs.rmSync(scratchDir, {
+        recursive: true,
+        force: true,
+        maxRetries: GIT_METADATA_RM_MAX_RETRIES,
+        retryDelay: GIT_METADATA_RM_RETRY_DELAY_MS,
+      });
+    } catch (err) {
+      // The error code only, never its message: an fs error message names the entry that failed, and
+      // entry names inside the clone come from the untrusted repository.
+      const errorCode = typeof (err as NodeJS.ErrnoException)?.code === 'string' ? (err as NodeJS.ErrnoException).code : 'unknown';
+      process.emitWarning(
+        `Could not remove the scratch clone ${scratchDir} (${errorCode}).`,
+        { code: 'GSD_SCRATCH_CLONE_LEFT' },
+      );
+    }
   }
 }
 

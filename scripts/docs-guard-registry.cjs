@@ -159,10 +159,9 @@ function assertNoSuiteCollision(tests) {
 const DOCS_GUARD_TESTS = {
   'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
   'tests/pi-parity-matrix.test.cjs': ['docs/reference/pi-parity-matrix.md'],
-  'tests/adr-15-progress-converge.test.cjs': [
-    'docs/COMMANDS.md',
-    'docs/how-to/run-phases-autonomously.md',
-  ],
+  // #6337: copies the two docs the shipped text contracts read into a temporary root to show a
+  // contract fails when a contracted phrase is removed; a reword of either doc can break it.
+  'tests/text-contracts.test.cjs': ['docs/COMMANDS.md', 'docs/how-to/run-phases-autonomously.md'],
   'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
   // fixture ADRs throughout) and separately reads docs/contributor-standards.md.
@@ -180,12 +179,10 @@ const DOCS_GUARD_TESTS = {
   // against the milestone-release-map module's exported enums.
   'tests/milestone-release-map.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
+  // #6205: walks the shipped reference, workflow and docs pages for a link to a closed-not-planned upstream tracker.
+  'tests/reference-closed-upstream-trackers-6205.test.cjs': ['docs/explanation/', 'docs/guides/', 'docs/how-to/', 'docs/reference/'],
   'tests/smart-discuss-classification.test.cjs': ['docs/COMMANDS.md'],
   'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
-  'tests/autonomous-converge.test.cjs': [
-    'docs/COMMANDS.md',
-    'docs/how-to/run-phases-autonomously.md',
-  ],
   'tests/capability-matrix-sync.test.cjs': ['docs/reference/capability-matrix.md'],
   'tests/capability-registry.test.cjs': [
     'docs/tutorials/build-your-first-capability.md',

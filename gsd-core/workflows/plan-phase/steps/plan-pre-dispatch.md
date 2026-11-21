@@ -21,7 +21,7 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 PHASE_NUMBER="${PHASE_NUMBER:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick phase_number 2>/dev/null)}"
 PHASE_DIR="${PHASE_DIR:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick phase_dir 2>/dev/null)}"
 PHASE_DIR="${PHASE_DIR:-$(gsd_run query init.plan-phase ${GSD_WS:+--ws=${GSD_WS##* }} "$PHASE" --pick expected_phase_dir 2>/dev/null)}"

@@ -78,22 +78,18 @@ const SHELL_INFO_STRINGS = new Set(['bash', 'sh', 'shell']);
  * Compared after collapsing runs of whitespace, so indentation inside a
  * block is free but the pipeline itself is not.
  *
- * Known limitation (#4777 review): neither `positional` nor `phaseFlag`
- * strips a surrounding quote — `positional('4 --ws "my team"')` leaves
- * `--ws`/`my`/`team` tokens in PHASE_ARG instead of stripping the flag, and
- * `phaseFlag('--phase "4"')` yields an empty PHASE_ARG, reproducing this
- * issue's own defect for that input shape. Every `argument-hint` in the
- * repo documents unquoted usage as primary, and `positional` is copied
- * verbatim from verify-work.md's pre-existing shipped form rather than
- * "improved" here — hardening the regex would mean changing production
- * bash text in all 7 shipped workflows this exact-match check compares
- * against. See tests/lint-phase-arg-assignment.test.cjs's dedicated
- * describe block for a live repro.
+ * Known limitation (#4777 review): `phaseFlag` does not strip a surrounding
+ * quote — `phaseFlag('--phase "4"')` yields an empty PHASE_ARG, reproducing
+ * this issue's own defect for that input shape. Every `argument-hint` in the
+ * repo documents unquoted usage as primary. `positional` strips one quoted
+ * `--ws` token the way the workstream parse reads it (#6218); a quoted value
+ * holding a space is not a workstream name and is left in place for xargs to unquote. See
+ * tests/lint-phase-arg-assignment.test.cjs's dedicated describe block.
  */
 const CANONICAL_FORMS = Object.freeze({
   /** `/gsd:secure-phase 4` — the phase is the whole argument string, minus a `--ws <name>` pair. */
   positional:
-    'PHASE_ARG=$(echo "$GSD_ARGS" | sed -E \'s/--ws[[:space:]]+[A-Za-z0-9._-]+//g\' | xargs)',
+    'PHASE_ARG=$(echo "$GSD_ARGS" | sed -E \'s/--ws[[:space:]]+("[^"]*"|\'\\\'\'[^\'\\\'\']*\'\\\'\'|[A-Za-z0-9._-]+)//g\' | xargs)',
   /** `/gsd:review --phase 4 --codex` — the phase is the value of a named flag. */
   phaseFlag:
     'PHASE_ARG=$(echo "$GSD_ARGS" | sed -nE \'s/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\\1/p\')',
