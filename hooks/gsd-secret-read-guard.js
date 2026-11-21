@@ -2569,6 +2569,18 @@ function shellVarValues(frame, name, ctx) {
   return [...values];
 }
 
+// The names in `frame` and the frames above it that match `re`, each charged as it is compared (#5492).
+function shellVarNames(frame, re, ctx) {
+  const names = new Set();
+  for (let f = frame; f; f = f.parent) {
+    for (const name of [...f.vars.keys(), ...(f.seqs === null ? [] : f.seqs.keys())]) {
+      charge(ctx, name.length + 1);
+      if (re.test(name)) names.add(name);
+    }
+  }
+  return names;
+}
+
 // The values shellVarValues adds for a name some frame appends to, each
 // charged before it is built.
 function appendChains(frame, name, ctx) {
@@ -4196,9 +4208,10 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
         }
       }
 
-      // npx and `npm exec` / `npm x` run a `-c` / `--call` value through a shell (#5492).
+      // npx and `npm exec` / `npm x` run a `-c` / `--call` value through a shell, and npm runs other config values
+      // as commands, from its options or the environment (#5492).
       if (NPM_RUNNERS.has(base)) {
-        for (const script of npmCallScripts(operands)) {
+        for (const script of npmCallScripts(operands, ctx)) {
           const hit = via(`${base} --call`, findSecretRead(script, depth + 1, ctx));
           if (hit) return hit;
         }
@@ -4777,15 +4790,24 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
   }
 }
 
-// The scripts npx or npm runs from `-c` / `--call` (#5492): every such value among the operands, wherever it sits,
-// so an npm subcommand other than exec is read too, failing closed.
+// The scripts npx or npm runs (#5492): the value of `-c` and of each config key npm runs as a command, `call` (`npm
+// exec`), `shell` (`npm explore`), `browser` (`npm docs`, through a shell) and `editor` (`npm edit`), given as an
+// option wherever it sits or as an `npm_config_<key>` variable in scope, in any case; and `npm explore`'s words after
+// `--`, which it joins and runs. Every subcommand is read, failing closed.
 const NPM_RUNNERS = new Set(['npx', 'npx.cmd', 'npm', 'npm.cmd']);
-function npmCallScripts(operands) {
+const NPM_COMMAND_OPTION_RE = /^--(call|shell|browser|editor)(?:=([\s\S]*))?$/;
+const NPM_COMMAND_VAR_RE = /^npm_config_(call|shell|browser|editor)$/i;
+function npmCallScripts(operands, ctx) {
   const scripts = [];
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
-    if ((t === '-c' || t === '--call') && k + 1 < operands.length) scripts.push(operands[k + 1].text);
-    else if (t.startsWith('--call=')) scripts.push(t.slice('--call='.length));
+    const option = NPM_COMMAND_OPTION_RE.exec(t);
+    if (option && option[2] !== undefined) scripts.push(option[2]);
+    else if ((option || t === '-c') && k + 1 < operands.length) scripts.push(operands[k + 1].text);
+    if (t === '--' && operands.some((w) => w.text === 'explore')) scripts.push(operands.slice(k + 1).map((w) => w.text).join(' '));
+  }
+  for (const name of shellVarNames(ctx.shellVars, NPM_COMMAND_VAR_RE, ctx)) {
+    for (const value of shellVarValues(ctx.shellVars, name, ctx)) scripts.push(value);
   }
   return scripts;
 }
