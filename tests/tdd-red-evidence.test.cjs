@@ -1852,6 +1852,7 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     ['a load-failure message under a different key', "  message: 'test failed'", "  code: 'ERR_TEST_FAILURE'"],
     ['a load-failure code under a different key', "  error: 'test failed'", "  note: 'ERR_TEST_FAILURE'"],
     ['a load-failure message prefix', "  error: 'test failed unexpectedly'", "  code: 'ERR_TEST_FAILURE'"],
+    ['a trailing space in the load-failure message', "  error: 'test failed '", "  code: 'ERR_TEST_FAILURE'"],
     ['a load-failure code prefix', "  error: 'test failed'", "  code: 'ERR_TEST_FAILURE_X'"],
     ['a hash character in a quoted error', "  code: 'ERR_TEST_FAILURE'", "  error: 'test failed # details'"],
     ['a hash line in a literal scalar', '  error: |-', '    test failed', '    # context', "  code: 'ERR_TEST_FAILURE'"],
@@ -1963,6 +1964,18 @@ describe('#5819 — node:test RED with repeated diagnostic keys', () => {
     }));
     assert.equal(result.verdict, 'INVALID_RED');
     assert.ok(result.evidence.report_errors.includes('Non-TAP data in report'));
+  });
+
+  test('a whitespace-only extra event adds no non-TAP data issue after recovery', () => {
+    const output = dupDiagTAP(THROWS_REGEXP_DIAG).replace('\n1..1\n', '\n \t\n1..1\n');
+    const result = classifyRedEvidence(validRedInput({
+      output,
+      targetTest: 'rejects a malformed token',
+      targetFile: undefined,
+    }));
+    assert.equal(result.verdict, 'INVALID_RED');
+    assert.equal(result.reason, 'invalid_record');
+    assert.deepEqual(result.evidence.report_errors, ['Malformed TAP']);
   });
 
   test('a diagnostic block truncated before its closing ... is a truncated record, never RED', () => {
