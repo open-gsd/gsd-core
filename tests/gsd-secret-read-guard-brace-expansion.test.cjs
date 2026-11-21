@@ -442,6 +442,13 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
 
   test('printf joins its operands into what it prints, so a word past the budget there is not judged as written', () => {
     assertBlocked("printf '%s\\n' {1..100} | sh", { code: 'glob-too-complex', path: '{1..100}' });
+    // Whatever carries its output to a shell: a group, a process substitution, nested command text, or echo.
+    for (const cmd of [
+      "( printf '%s\\n' {1..100} ) | bash", "{ printf '%s\\n' {1..100}; } | sh", "bash <(printf '%s\\n' {1..100})",
+      "source <(printf '%s\\n' {1..100})", 'echo {1..100} | sh', 'bash -c "$(echo {1..100})"', '( echo {1..100} ) | sh',
+    ]) {
+      assertBlocked(cmd, { code: 'glob-too-complex', path: '{1..100}' });
+    }
   });
 });
 
