@@ -2181,12 +2181,15 @@ function searchOperandIndices(spec, operands) {
 // xargs's replace string, or null without one: `-I STR`, `-i[STR]`,
 // `--replace[=STR]` (`{}` without a value) and BSD `-J STR`, in a cluster
 // (`-tI{}`) or under any prefix of `--replace` too; the last one given wins.
+// `delimiter` is the `-d`/`--delimiter` value as written, `\0` for `-0`/`--null`,
+// else null.
 function xargsSubCommand(operands) {
   let argFile = null;
   let replaceStr = null;
+  let delimiter = null;
   for (let m = 0; m < operands.length; m++) {
     const t = operands[m].text;
-    if (t === '--') return { subIdx: m + 1 < operands.length ? m + 1 : -1, argFile, replaceStr };
+    if (t === '--') return { subIdx: m + 1 < operands.length ? m + 1 : -1, argFile, replaceStr, delimiter };
     if (t.startsWith('--')) {
       const eq = t.indexOf('=');
       const name = t.slice(2, eq === -1 ? undefined : eq);
@@ -2194,26 +2197,30 @@ function xargsSubCommand(operands) {
       const long = XARGS_LONG_OPTIONS.has(name) ? name : matches.length === 1 ? matches[0] : null;
       if (long === 'arg-file') argFile = eq === -1 ? (operands[m + 1] || { text: '' }).text : t.slice(eq + 1);
       if (long === 'replace') replaceStr = (eq === -1 ? '' : t.slice(eq + 1)) || '{}';
+      if (long === 'delimiter') delimiter = eq === -1 ? (operands[m + 1] || { text: '' }).text : t.slice(eq + 1);
+      if (long === 'null') delimiter = '\\0';
       if (eq === -1 && XARGS_LONG_OPTIONS.get(long) === 'value') m++;
       continue;
     }
     if (t.length > 1 && t.startsWith('-')) {
       for (let i = 1; i < t.length; i++) {
         if (t[i] === 'i') replaceStr = t.slice(i + 1) || '{}';
+        if (t[i] === '0') delimiter = '\\0';
         if (XARGS_SHORT_OPTIONAL.includes(t[i])) break;
         if (!XARGS_SHORT_VALUE.includes(t[i])) continue;
         // The value is the rest of the word, else the next word, which a trailing `-I` lacks.
         const value = i < t.length - 1 ? t.slice(i + 1) : m + 1 < operands.length ? operands[m + 1].text : null;
         if (t[i] === 'I' || t[i] === 'J') replaceStr = value;
         if (t[i] === 'a') argFile = value === null ? '' : value;
+        if (t[i] === 'd') delimiter = value === null ? '' : value;
         if (i === t.length - 1) m++;
         break;
       }
       continue;
     }
-    return { subIdx: m, argFile, replaceStr };
+    return { subIdx: m, argFile, replaceStr, delimiter };
   }
-  return { subIdx: -1, argFile, replaceStr };
+  return { subIdx: -1, argFile, replaceStr, delimiter };
 }
 
 // #4639: the `--env-file` word, plus the next operand for the bare flag
@@ -2856,6 +2863,7 @@ function globMaySpellAssignment(word) {
 // (bash's, zsh's) uses that shell's `$'…'` values.
 function scanCommand(command, depth, reading) {
   const inherited = noSearchCarveOut;
+  const inheritedStdin = xargsStdinFrom;
   // Tested with `\<newline>` removed, as the shell reads a body: `"$\<newline>@"` is `"$@"`.
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   // An alias can give the tool words too (`alias grep='grep -eKEY'`), so the word withdraws the carve-out as well.
@@ -2867,18 +2875,20 @@ function scanCommand(command, depth, reading) {
     return scanSegments(command, depth, reading, unseenAt);
   } finally {
     noSearchCarveOut = inherited;
+    xargsStdinFrom = inheritedStdin;
   }
 }
 
 // #6282: where in `command` the first word the guard does not see may come from, or -1 for nowhere: an expansion
 // outside single quotes, which keep a `$` literal (`grep '$HOME'`). 0, the whole command, unless the text is plain
 // enough to place it: no heredoc, comment, dollar-quote, `$( )`, backtick or line continuation, and nothing that
-// runs words again later (a function, a loop, `set --`, `trap`), where an expansion after the search tool reaches it.
+// runs words again (a function, a loop, `set --`, `trap`, eval, source or `.`, a `<( )`), where an expansion after
+// the search tool, or one a single quote keeps literal here, reaches it.
 const ALIAS_RE = /(?<![\w./-])alias(?![\w./-])/;
-const RUNS_AGAIN_RE = /\(\s*\)|(?<![\w./-])(?:function|for|while|until|select|trap)(?![\w./-])|(?<![\w./-])set\s+-/;
+const RUNS_AGAIN_RE = /\(\s*\)|(?<![\w./-])(?:function|for|while|until|select|trap|eval|source)(?![\w./-])|(?<![\w./-])set\s+-|(?:^|[;&|(){}\n])\s*\.\s/;
 function unseenWordsAt(command, joined) {
   if (!UNSEEN_WORDS_RE.test(joined)) return -1;
-  if (joined !== command || /<<|#|`|\$['"(]/.test(command) || RUNS_AGAIN_RE.test(command.replace(/["'\\]/g, ''))) return 0;
+  if (joined !== command || /<<|#|`|\$['"(]|[<>]\(/.test(command) || RUNS_AGAIN_RE.test(command.replace(/["'\\]/g, ''))) return 0;
   let quote = '';
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
@@ -2896,6 +2906,11 @@ function unseenWordsAt(command, joined) {
   }
   return -1;
 }
+
+// #6282: the file an input redirect the scan is inside gives fd 0 (`sh -c 'xargs cat' < list`, `{ xargs cat; } <
+// list`, `exec < list`), which an xargs there with no pipe or redirect of its own reads its words from; else null.
+let xargsStdinFrom = null;
+const REDIRECT_WIDE_WORDS = new Set(['exec', 'done', 'fi', 'esac']);
 
 // The separators that end a command for good: what follows one cannot supply the words of the command before it.
 const LIST_SEPS = new Set([';', '\n', '&&', '||', '&']);
@@ -2946,9 +2961,18 @@ function scanSegments(command, depth, reading, unseenAt) {
   }
 
   heredocBodiesBySegMap.set(bySeg, heredocsBySeg);
+  // A redirect on a group, `exec`, or a loop's or conditional's end reaches every command in the scan.
+  const inheritedStdin = xargsStdinFrom;
+  let wideStdin = null;
+  for (const segTokens of bySeg.values()) {
+    const from = stdinRedirect(segTokens);
+    const first = commandWords(segTokens)[0];
+    if (from !== null && (!first || REDIRECT_WIDE_WORDS.has(lastSegment(first.text)))) wideStdin = from;
+  }
   for (let s = 0; s <= maxSeg; s++) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
+    xargsStdinFrom = stdinRedirect(segTokens) ?? wideStdin ?? inheritedStdin;
     noSearchCarveOut = unseenAt === 0 || (unseenAt !== -1 && !(segEnd.get(s) <= unseenAt));
 
     const words = [];
@@ -3225,7 +3249,7 @@ function pipeSourceText(s, bySeg, sepAfter) {
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
 // mode c whether or not a pipe feeds it.
 function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
-  const { subIdx, argFile, replaceStr } = xargsSubCommand(operands);
+  const { subIdx, argFile, replaceStr, delimiter } = xargsSubCommand(operands);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
 
   // The sub-command is resolved through the same wrappers a top-level command is (`xargs sudo sh -c '…'`,
@@ -3259,16 +3283,18 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   if (NON_READING_COMMANDS.has(writtenBase)) return null;
 
   // #6282: words from a source the guard cannot read (an arg file, `< list`, a printf it does not render) may name
-  // a secret the sub-command then reads, so they are denied unless the sub-command takes none of them.
+  // a secret the sub-command then reads, so they are denied unless the sub-command takes none of them. So are words
+  // split at a `-d` delimiter it cannot decode.
   const stdin = xargsStdin(s, bySeg, sepAfter);
-  const unseen = argFile !== null ? argFile : stdin.unseen;
+  const split = delimiter === null ? null : xargsDelimiter(delimiter);
+  const unseen = argFile !== null ? argFile : stdin.unseen !== null ? stdin.unseen : delimiter !== null && split === null ? delimiter : null;
   if (unseen !== null) {
     if (!xargsSubTakesWords(subIsShell, subOperands, replaceStr)) return null;
     for (const w of operands.slice(0, subIdx)) if (operandNamesSecret(w.text)) return secretRead(w.text);
     return { code: 'xargs-input-unseen', text: unseen };
   }
   // The words of a here-string, heredoc or knowable pipe source, as xargs may split them.
-  const stdinWords = xargsStdinWords(stdin.texts);
+  const stdinWords = xargsStdinWords(stdin.texts, split);
   for (const w of stdinWords) if (operandNamesSecret(w.text)) return secretRead(w.text);
   if (subIsShell) {
     const hit = scanXargsShellScripts(subOperands, replaceStr, stdinWords, depth);
@@ -3312,25 +3338,21 @@ function xargsSubTakesWords(subIsShell, subOperands, replaceStr) {
 // #6282: the stdin xargs reads its words from in segment `s`, as far as the command shows it. `texts` are the
 // here-strings and heredoc bodies given to it, else what the stage piped in writes (pipeSourceText, and an echo or
 // printf as printedText renders it). `unseen` names a source the guard cannot read, else null: an input redirect
-// from a file or another descriptor (`< list`, `<&3`), or an echo or printf printedText does not render.
+// from a file or another descriptor (`< list`, `<&3`), also one on an enclosing group, `exec` or shell that the
+// segment inherits (xargsStdinFrom), or an echo or printf printedText does not render.
 function xargsStdin(s, bySeg, sepAfter) {
   const segTokens = bySeg.get(s) || [];
-  for (let k = 0; k < segTokens.length; k++) {
-    const t = segTokens[k];
-    if (t.kind !== 'op' || !t.read) continue;
-    if (/^0?<$/.test(t.text)) return { texts: [], unseen: segTokens[k + 1] ? segTokens[k + 1].text : t.text };
-    if (/^0?<&[1-9]/.test(t.text)) return { texts: [], unseen: t.text };
-  }
+  const redirected = stdinRedirect(segTokens);
+  if (redirected !== null) return { texts: [], unseen: redirected };
   const texts = [...hereStringTargets(segTokens), ...((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []).map((h) => h.text)];
   if (texts.length > 0) return { texts, unseen: null };
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if ((op === '|' || op === '|&') && prevSeg >= 0) {
-    const prev = resolveCommand(commandWords(bySeg.get(prevSeg) || []));
-    if (prev && (prev.base === 'echo' || prev.base === 'printf')) {
-      const printed = printedText(prev);
-      if (printed === null) return { texts: [], unseen: prev.operands.map((w) => w.text).join(' ') };
-      texts.push(printed);
-    }
+  if (!((op === '|' || op === '|&') && prevSeg >= 0)) return { texts, unseen: xargsStdinFrom };
+  const prev = resolveCommand(commandWords(bySeg.get(prevSeg) || []));
+  if (prev && (prev.base === 'echo' || prev.base === 'printf')) {
+    const printed = printedText(prev);
+    if (printed === null) return { texts: [], unseen: prev.operands.map((w) => w.text).join(' ') };
+    texts.push(printed);
   }
   const piped = pipeSourceText(s, bySeg, sepAfter);
   if (piped !== null) texts.push(piped);
@@ -3357,7 +3379,8 @@ function printedText(cmd) {
   let next = 0;
   const fill = () => format.replace(/\\(0[0-7]*|[\s\S]?)|%([\s\S]?)/g, (m, esc, conv) => {
     if (esc !== undefined) {
-      if (esc === 'n' || esc === 't' || esc === '0') return '\n';
+      if (esc === 'n' || esc === 't') return '\n';
+      if (esc === '0') return '\0';
       if (esc === '\\') return '\\';
     } else if (echo) {
       return m;
@@ -3374,12 +3397,41 @@ function printedText(cmd) {
   return rendered ? out : null;
 }
 
-// The words xargs may read from `texts`: each text, its lines, and its pieces between blanks, quotes, backslashes
-// and the delimiters `-d` is commonly given (`,` `;` `:` `|` `=`, NUL), so a name is found however xargs splits it.
-function xargsStdinWords(texts) {
+// The words xargs may read from `texts`: each text, its lines, its pieces at the `-d`/`-0` delimiter `split` when
+// one is given, and its pieces between blanks, quotes, backslashes and other common delimiters (`,` `;` `:` `|` `=`,
+// NUL), so a name is found however xargs splits it.
+function xargsStdinWords(texts, split) {
   const words = [];
-  for (const text of texts) words.push(text, ...text.split('\n'), ...text.split(/[\s"'\\,;:|=\0]+/));
+  for (const text of texts) {
+    words.push(text, ...text.split('\n'), ...text.split(/[\s"'\\,;:|=\0]+/));
+    if (split !== null) words.push(...text.split(split));
+  }
   return words.filter((text) => text !== '').map((text) => ({ text }));
+}
+
+// The character a `-d` value names as GNU xargs reads it: one character, or a `\` escape (`\n`, `\t`, `\0`, `\\`,
+// octal `\NNN`, hex `\xHH`). null for anything else, which xargs rejects or this does not decode.
+const XARGS_DELIMITER_ESCAPES = new Map([['a', '\x07'], ['b', '\b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'], ['v', '\v'], ['\\', '\\']]);
+function xargsDelimiter(text) {
+  if (text.length === 1) return text;
+  if (text.length === 2 && text[0] === '\\' && XARGS_DELIMITER_ESCAPES.has(text[1])) return XARGS_DELIMITER_ESCAPES.get(text[1]);
+  const code = /^\\([0-7]{1,3})$/.exec(text) || /^\\x([0-9A-Fa-f]{1,2})$/.exec(text);
+  if (code === null) return null;
+  return String.fromCharCode(parseInt(code[1], text[1] === 'x' ? 16 : 8) & 0xff);
+}
+
+// The file or descriptor an input redirect in `segTokens` gives fd 0 (`< list`, `0<> list`, `<&3`), else null.
+function stdinRedirect(segTokens) {
+  for (let k = 0; k < segTokens.length; k++) {
+    const t = segTokens[k];
+    if (t.kind !== 'op' || !t.read) continue;
+    if (/^0?<&[1-9]/.test(t.text)) return t.text;
+    if (!/^0?<$/.test(t.text)) continue;
+    let j = k + 1;
+    if (segTokens[j] && segTokens[j].kind === 'op' && segTokens[j].text === '>') j++; // `<>`, read and write
+    return segTokens[j] && segTokens[j].kind === 'word' ? segTokens[j].text : t.text;
+  }
+  return null;
 }
 
 // #6282: the words with each `replaceStr` (an xargs replace string, find's `{}`) replaced by `"$@"`, which stands
