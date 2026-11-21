@@ -471,7 +471,8 @@ const SHELL_VALUE_FLAGS = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-f
 // word, short letters whose optional value must be attached, and long
 // options (any unambiguous prefix) whose value is the next word unless
 // attached with `=`; the optional ones take only `=`. `-a`/`--arg-file`
-// also replaces stdin, so it suppresses the pipeline inference below.
+// also replaces stdin: its file is a source the guard cannot read
+// (scanXargsPipe).
 // BSD xargs's `-J`, `-R` and `-S` take a value as well; GNU xargs rejects
 // them and runs nothing, so reading them as value-taking is safe there.
 const XARGS_SHORT_VALUE = 'adEIJLnPRSs';
@@ -2409,6 +2410,8 @@ function precedingOp(s, bySeg, sepAfter) {
   let op;
   for (let q = p; q < s; q++) {
     const text = sepAfter.get(q);
+    // A newline after a pipe, on a line with no words (`a |` then `b`, or a comment), continues the pipeline (#6282).
+    if (text === '\n' && q > p && (op === '|' || op === '|&')) continue;
     if (text !== undefined && !GROUPING_SEPS.has(text)) op = text; // last non-grouping wins
   }
   return { op, prevSeg: p };
@@ -2836,7 +2839,7 @@ function namesParsingVar(text) {
 // It counts where a word sets a variable: any word after `export`, `declare`, `typeset`, `readonly` or `local`,
 // `env`'s words up to its command, and a word holding `=`. On the text with quotes removed, as above, so a body
 // that eval or source runs later counts in the command that holds it, and a quoted glob counts too.
-const SETTING_WORDS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
+const SETTING_WORDS = new Set(['export', 'declare', 'typeset', 'readonly', 'local', 'read', 'printf', 'mapfile', 'readarray', 'getopts']);
 function globMaySetParsingVar(plain, names = PARSING_VAR_NAMES) {
   if (!/[*?[]/.test(plain)) return false;
   let setting = false;
@@ -2900,16 +2903,26 @@ let homeMaySet = false;
 // a pattern naming one sets nothing in (`grep -rn POSIXLY_CORRECT`); and anywhere in `rereadText`, the text of a
 // command an eval, source or `.` re-reads (`eval 'export GREP_O*'; grep .env`), else null.
 function setsParsingWords(heads, bySeg, maxSeg, rereadText) {
-  if (rereadText !== null && (namesParsingVar(rereadText) || ALIAS_RE.test(rereadText.replace(/["'\\]/g, '')))) return true;
+  if (rereadText !== null && (namesParsingVar(rereadText) || ALIAS_RE.test(rereadText.replace(/["'\\]/g, ''))
+    || ALLEXPORT_RE.test(rereadText.replace(/["'\\]/g, '')))) return true;
   for (let s = 0; s <= maxSeg; s++) {
     const head = heads[s];
     if (head === null) continue;
+    if (head.cmd !== null && head.cmd.base === 'set' && setsAllexport(head.cmd.operands)) return true;
     let words = commandWords(bySeg.get(s) || []).map((w) => w.text);
     if (head.cmd !== null && SEARCH_TOOLS.has(head.cmd.base)) words = words.slice(0, words.length - head.cmd.operands.length);
     const text = words.join(' ');
     if (namesParsingVar(text) || ALIAS_RE.test(text)) return true;
   }
   return false;
+}
+
+// `set -a` / `set -o allexport` exports every variable set after it, so a parsing variable `read` or a glob sets
+// reaches the tool: withdrawn outright (any `a` in a short-option cluster, either sign, or `-o a…`).
+const ALLEXPORT_RE = /(?<![\w./-])set\s+(?:[^;&|\n]*\s)?(?:[-+][A-Za-z]*a[A-Za-z]*|[-+]o\s+a\w*)(?![\w./-])/;
+function setsAllexport(operands) {
+  return operands.some((w, k) => /^[-+][A-Za-z]*a[A-Za-z]*$/.test(w.text)
+    || (/^[-+]o$/.test(w.text) && k + 1 < operands.length && operands[k + 1].text.startsWith('a')));
 }
 
 // Whether a segment's command is eval, source or `.` (also behind reserved words or `builtin`), or defines a function.
@@ -3440,8 +3453,15 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
 // judged as the file it names (`xargs -I{} cat .{} <<< env` reads `.env`); null when none names a secret.
 function filledReplaceRead(subOperands, replaceStr, words) {
   if (replaceStr === null) return null;
-  for (const holder of subOperands) {
-    if (!holder.text.includes(replaceStr)) continue;
+  const holders = subOperands.filter((w) => w.text.includes(replaceStr));
+  if (holders.length === 0) return null;
+  // Charged before the loop: every holder is filled with every word, twice, so the work is their product.
+  let holderWork = 0;
+  for (const holder of holders) holderWork += holder.text.length + XARGS_WORD_WORK;
+  let wordChars = 0;
+  for (const w of words) wordChars += w.text.length;
+  chargeScan(2 * (words.length * holderWork + holders.length * wordChars));
+  for (const holder of holders) {
     for (const w of words) {
       for (const word of [w.text, xargsUnquoted(w.text)]) {
         const text = holder.text.split(replaceStr).join(word);
@@ -3457,7 +3477,15 @@ function filledReplaceRead(subOperands, replaceStr, words) {
 function xargsSubTakesWords(subIsShell, subOperands, replaceStr) {
   if (!subIsShell) return true;
   const cIdx = subOperands.findIndex((w) => DASH_C_RE.test(w.text));
-  const script = cIdx === -1 ? undefined : subOperands[cIdx + 1];
+  if (cIdx === -1) return true;
+  // The script is the first word after the shell's options (`sh -c -e '…'`, `sh -c -- '…'`, `sh -c -o x '…'`).
+  let k = cIdx + 1;
+  while (k < subOperands.length && /^[-+]/.test(subOperands[k].text)) {
+    const option = subOperands[k++].text;
+    if (option === '--') break;
+    if (SHELL_VALUE_FLAGS.has(option)) k++;
+  }
+  const script = subOperands[k];
   return !script || /[$`]/.test(script.text) || (replaceStr !== null && script.text.includes(replaceStr));
 }
 
@@ -3571,7 +3599,8 @@ function pipeLinks(bySeg, sepAfter, maxSeg) {
       op = plainSep;
       closer = closes ? s : -1;
     } else {
-      if (plainSep !== undefined) op = plainSep;
+      // As precedingOp: a newline on a line with no words keeps the pipe before it.
+      if (plainSep !== undefined && !(plainSep === '\n' && (op === '|' || op === '|&'))) op = plainSep;
       if (closes) closer = s;
     }
   }
@@ -3625,6 +3654,17 @@ function stageOutput(seg, ctx) {
   return segmentFeeds(seg, ctx.bySeg) || PASSES_STDIN;
 }
 
+// Where an `exec` in segment `words` sends the redirects on it: 'after' when it is the command, past reserved words,
+// `builtin`, `command` and assignments (`builtin exec <<< x`, `X=1 exec < list`); 'all' when the word `exec` is
+// elsewhere in the segment, which is not certain; else null.
+function execReach(words) {
+  let k = 0;
+  while (k < words.length && (LEADING_RESERVED.has(words[k].text) || words[k].text === 'builtin' || words[k].text === 'command'
+    || ASSIGNMENT_RE.test(words[k].text))) k++;
+  if (k < words.length && lastSegment(words[k].text) === 'exec') return 'after';
+  return words.some((w) => lastSegment(w.text) === 'exec') ? 'all' : null;
+}
+
 // The groups, loops, conditionals and `exec`s of a scan: `ranges` of { from, to, redirectSeg, exec }, the segments
 // each reaches and the one that carries its redirect; `groupByEnd` and `blockByClose` find a group or block by the
 // segment its closer ends or is; `unsure` when the matching is not certain (a `case`, whose patterns end in `)`, a
@@ -3661,8 +3701,10 @@ function compoundRanges(tokens, bySeg, maxSeg, heads) {
       const range = { from: blocks.length > 0 ? blocks.pop() : -1, to: s - 1, redirectSeg: s, exec: false };
       ranges.push(range);
       if (range.from !== -1) blockByClose.set(s, range);
-    } else if (lastSegment(first.text) === 'exec') {
-      ranges.push({ from: s + 1, to: maxSeg, redirectSeg: s, exec: true });
+    } else {
+      const reach = execReach(commandWords(bySeg.get(s) || []));
+      if (reach === 'after') ranges.push({ from: s + 1, to: maxSeg, redirectSeg: s, exec: true });
+      else if (reach === 'all') ranges.push({ from: 0, to: maxSeg, redirectSeg: s, exec: true });
     }
   }
   return { ranges, groupByEnd, blockByClose, unsure: unsure || groups.length > 0 || blocks.length > 0 };
@@ -3758,8 +3800,13 @@ function printedText(cmd) {
     rendered = false;
     return '';
   });
+  // Each pass reads the whole format, and printf repeats it while operands remain: charged per pass.
+  chargeScan(format.length + 1);
   let out = fill();
-  while (rendered && next > 0 && next < args.length) out += fill();
+  while (rendered && next > 0 && next < args.length) {
+    chargeScan(format.length + 1);
+    out += fill();
+  }
   return rendered ? [out] : null;
 }
 
