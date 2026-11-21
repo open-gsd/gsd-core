@@ -2000,6 +2000,10 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   ], { path: 'BASH_ENV=.env' });
   blocks(["BASH_ENV=/dev/stdin make <<< 'cat .env'", "BASH_ENV=/dev/fd/3 ./x.sh 3<<< 'cat .env'"]);
   allows(['ENV=.env make', 'export ENV=.env; node app.js']);
+
+  // A command whose output is not modelled may echo its words, so they are split too; only a search or listing tool,
+  // whose output does not repeat its option values or patterns as words, is skipped.
+  blocks(["foo 'x .env' | xargs cat", "mycli --print 'x .env' | xargs cat", "printf '%s' 'x .env' | xargs cat"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
