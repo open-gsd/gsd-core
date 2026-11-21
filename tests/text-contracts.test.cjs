@@ -351,7 +351,8 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     return root;
   }
 
-  const runShipped = (root, only = SHIPPED) => textContracts.run({ root, only });
+  // The pinned minimum counts the whole directory; a run limited to some contracts must find those.
+  const runShipped = (root, only = SHIPPED) => textContracts.run({ root, only, minContracts: only.length });
 
   test('an untouched copy of the files satisfies every shipped contract', (t) => {
     assert.deepEqual(runShipped(copyOfRepoFiles(t)), []);
