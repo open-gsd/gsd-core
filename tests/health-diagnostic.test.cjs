@@ -7,7 +7,7 @@
  * Test matrix:  .gsd/phase/refactor-3309-health-diagnostic-rule-table/50-test-matrix.md
  *
  * Covers test-matrix section 2 (rows 9-16) against the FULLY WIRED rule
- * table (`RULES` now carries all 35 rules — see the "RULES" describe block
+ * table (`RULES` now carries all 36 rules — see the "RULES" describe block
  * below for the exact per-group count — 31 extracted from
  * `cmdValidateHealth`, `src/verify.cts:1616-2577`, which is one fewer than
  * the design doc's own prose figure of "32" (that doc flags its table and
@@ -286,16 +286,16 @@ describe('evaluateRuleTable — duplicate-code guard (row 13)', () => {
 // agent-install (1: W010) + roadmap-disk-consistency (2: W006/
 // W007) + worktree-health (3: W020/W017/W027) + milestone-archive-hygiene
 // (2: W018/W019) + install-surface-shadowing (1: W028, #2873 epic #2866
-// Phase 4a) = 35. config-validation.cts's W029 (#3586, epic #2292) is
+// Phase 4a) + context-bridge (1: W032, #6430) = 36. config-validation.cts's W029 (#3586, epic #2292) is
 // registered there per this batch's brief even though its subject
 // (`.planning/` tracked-but-ignored) is not config.json-sourced. E001 and
 // the home-directory guard (E010/I010) are deliberately NOT rows (design
 // doc, "Two guards that stay OUTSIDE the rule table entirely").
 
 describe('RULES', () => {
-  test('is the full, frozen 35-rule table with every code unique', () => {
+  test('is the full, frozen 36-rule table with every code unique', () => {
     assert.equal(Array.isArray(RULES), true);
-    assert.equal(RULES.length, 35);
+    assert.equal(RULES.length, 36);
     const codes = RULES.map((r) => r.code);
     assert.equal(new Set(codes).size, codes.length, 'every rule code must be unique');
   });
