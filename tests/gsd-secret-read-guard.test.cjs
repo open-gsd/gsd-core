@@ -2104,6 +2104,53 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "case x in a) :;; esac; echo 'cat .env'; true; cat | bash",
     '(case x in a) :;; esac; echo hi) | bash',
   ]);
+  // A `for`, `while`, `until`, `select`, `if` or `case` command piped on writes what every command inside it writes:
+  // each is a stage, read past its reserved words, failing closed, back to the opener matching its `done`, `fi` or
+  // `esac`, and the walk goes on past it; a closing word with no opener to match reads every segment before it.
+  blocks([
+    "for i in 1; do echo 'cat .env'; done | bash",
+    "while true; do echo 'cat .env'; break; done | bash",
+    "until false; do echo 'cat .env'; break; done | bash",
+    "select i in 1; do echo 'cat .env'; break; done | bash",
+    "if true; then echo 'cat .env'; fi | bash",
+    "if false; then :; else echo 'cat .env'; fi | bash",
+    "if false; then :; elif true; then echo 'cat .env'; fi | bash",
+    "case x in x) echo 'cat .env';; esac | bash",
+    "case x in (x) echo 'cat .env';; esac | bash",
+    "case x in case) echo 'cat .env';; esac | bash",
+    "while echo 'cat .env'; do break; done | bash",
+    "for i do echo 'cat .env'; done | bash",
+    "for i in 1\ndo\n  echo 'cat .env'\ndone | bash",
+    "for i in 1; do printf 'cat .e%s' nv; done | bash",
+    "(if true; then printf 'cat .e%s' nv; fi) | bash",
+    "(for i in 1; do printf 'cat .e%s' nv; done) | bash",
+    'case x in x) echo .env;; esac | xargs cat',
+    "for i in 1; do for j in 2; do echo 'cat .env'; done; done | bash",
+    "if true; then for i in 1; do echo 'cat .env'; done; fi | bash",
+    "if while false; do :; done; then echo 'cat .env'; fi | bash",
+    "for i in 1; do echo 'cat .env'; done 2>/dev/null | bash",
+    "case $i in a) echo 'cat .env';; while) :;; esac | bash",
+    "case x in a) echo 'cat .env';; esac | (cat) | bash",
+    "echo 'cat .env'; done | bash",
+    "echo 'cat .env'; fi | xargs cat",
+    "echo 'cat .env' | for i in 1; do cat; done | bash",
+    "echo 'cat .env' | while read l; do echo \"$l\"; done | bash",
+    "echo 'cat .env' | done | bash",
+    'for i in 1; do cat; done <<EOF | bash\ncat .env\nEOF',
+  ]);
+  allows([
+    'for i in 1; do echo hi; done | bash',
+    'while true; do echo hi; break; done | bash',
+    'if true; then echo hi; fi | bash',
+    'case x in x) echo hi;; esac | bash',
+    'for i in 1; do echo hi; done | xargs cat',
+    'case $i in a) :;; while) :;; esac | bash',
+    'for i in 1; do for j in 2; do echo hi; done; done | bash',
+    'echo ok | for i in 1; do cat; done | bash',
+    'case x in a) echo hi;; esac | (cat) | bash',
+    'for i in 1; do cat; done <<EOF | bash\necho hi\nEOF',
+    "for i in 1; do echo 'cat .env'; done",
+  ]);
 
   // npm takes a unique prefix of a long option (`--edi` is `--editor`) and `-c=` attached; editor defaults to EDITOR
   // or VISUAL and shell to SHELL (or its Windows twin); and `npm explore <pkg> <words>` runs the words joined, `--` or not.
