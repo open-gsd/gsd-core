@@ -1225,7 +1225,7 @@ describe('evaluateEvaluationScope — the check verb', () => {
     const resolved = evaluateEvaluationScope({ projectDir: repo.dir, args: ['--phase', '3'] });
     assert.deepEqual(Object.keys(resolved.payload), [
       'unit', 'status', 'source', 'reason', 'commits', 'changedFiles', 'files',
-      'missingOnDisk', 'outsideUnion', 'unreachable', 'rangeBase',
+      'missingOnDisk', 'outsideUnion', 'unreachable', 'unparsedSummaries', 'rangeBase',
     ]);
     assert.equal(resolved.outcome, 'pass');
     assert.equal(resolved.block, false);
@@ -1645,4 +1645,153 @@ describe('resolveEvaluationScope — sha-named root files (#6179)', () => {
       for (const args of revisionCalls) assert.ok(args.includes('--'), `unterminated: git ${args.join(' ')}`);
     });
   }
+});
+
+// ─── #6215: the task rows gsd-executor writes for TDD tasks are read, or their SUMMARY is named ─────────────────────
+
+describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
+  const section = (...rows) => `# Summary\n\n## Task Commits\n\n${rows.join('\n')}\n\n## Next\n`;
+
+  test('[regression] a qualifier between the task number and the colon is read', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1 (tracer): b** - `aaaaaaa`')), ['aaaaaaa']);
+    assert.deepEqual(extractTaskCommitRefs(section('- **Task 2 RED:** `bbbbbbb`')), ['bbbbbbb']);
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 3 GREEN: c** - `ccccccc`')), ['ccccccc']);
+  });
+
+  test('[regression] sub-bullets nested under a task row belong to the row', () => {
+    const doc = section(
+      '1. **Task 1: b**',
+      '   - RED `1111111` test(01-02): failing test',
+      '   - GREEN `2222222` feat(01-02): implementation',
+      '2. **Task 2: c** - `3333333`',
+    );
+    assert.deepEqual(extractTaskCommitRefs(doc), ['1111111', '2222222', '3333333']);
+  });
+
+  test('[boundary] a sub-bullet is read only directly under a task row and only when nested deeper than it', () => {
+    // a list item at the row's own depth is a sibling, not a continuation
+    assert.deepEqual(extractTaskCommitRefs(section('- **Task 1: b**', '- RED `1111111`')), []);
+    // a blank line ends the row's continuation
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '', '   - RED `1111111`')), []);
+    // a nested item under a line that is not a task row is prose, not a commit
+    assert.deepEqual(extractTaskCommitRefs(section('Notes', '   - RED `1111111`')), []);
+    // prose on the row itself before the closing bold, and the plan-metadata line, stay unread
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: see `9999999`**', '**Plan metadata:** `8888888`')), []);
+  });
+
+  test('[property] any mix of row shapes yields exactly the generated ids, in document order', () => {
+    const sha = fc.stringMatching(/^[0-9a-f]{7,12}$/);
+    const rowShape = fc.record({
+      marker: fc.constantFrom('1. ', '- ', '* ', ''),
+      qualifier: fc.constantFrom('', ' (tracer)', ' RED', ' GREEN'),
+      inline: fc.option(sha, { nil: null }),
+      nested: fc.array(sha, { maxLength: 3 }),
+    });
+    fc.assert(fc.property(fc.array(rowShape, { minLength: 1, maxLength: 5 }), (rows) => {
+      const expected = [];
+      const lines = rows.map((row, i) => {
+        const out = [`${row.marker}**Task ${i + 1}${row.qualifier}: work**${row.inline ? ` - \`${row.inline}\`` : ''}`];
+        if (row.inline) expected.push(row.inline);
+        for (const nested of row.nested) { out.push(`    - RED \`${nested}\` test`); expected.push(nested); }
+        return out.join('\n');
+      });
+      assert.deepEqual(extractTaskCommitRefs(section(...lines)), expected);
+    }), { numRuns: 100 });
+  });
+
+  test('[regression] a wrapped description line between a task row and its sub-bullets keeps the row open', () => {
+    const doc = section('1. **Task 1: b**', '   wrapped description line', '   - RED `1111111`', '   - GREEN `2222222`');
+    assert.deepEqual(extractTaskCommitRefs(doc), ['1111111', '2222222']);
+  });
+
+  test('[boundary] only the first nested level is read; metadata and deeper items are not task commits', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '   - RED `1111111`', '     - reverted by `deadbee`')), ['1111111']);
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '   - RED `1111111`', '   - **Plan metadata:** `8888888`')), ['1111111']);
+  });
+
+  test('[boundary] indentation compares in columns: a tab-indented sub-bullet under a 4-space row is nested', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('  - **Task 1: b**', '\t- RED `1111111`')), ['1111111']);
+    assert.deepEqual(extractTaskCommitRefs(section('\t- **Task 1: b**', '    - RED `1111111`')), []);
+  });
+
+  test('[property] noise between a row and its sub-bullets never adds an id and never hides one', () => {
+    const sha = fc.stringMatching(/^[0-9a-f]{7,12}$/);
+    const noise = fc.constantFrom('   wrapped prose', '   more prose with no id', '     deeper prose');
+    fc.assert(fc.property(fc.array(fc.record({ id: sha, before: fc.array(noise, { maxLength: 2 }) }), { minLength: 1, maxLength: 4 }), (items) => {
+      const lines = ['1. **Task 1: b**'];
+      for (const item of items) lines.push(...item.before, `   - RED \`${item.id}\``);
+      assert.deepEqual(extractTaskCommitRefs(section(...lines)), items.map((item) => item.id));
+    }), { numRuns: 100 });
+  });
+});
+
+describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
+  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    summarize(repo, [a], '03-01-SUMMARY.md');
+    commit(repo, `${PHASE_DIR}/03-02\nforged line-SUMMARY.md`, 'docs(03-02): summary', '# Summary\n\n## Task Commits\n\n- **Task 1:** none\n');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.ok(scope.unparsedSummaries.length > 0);
+    for (const name of scope.unparsedSummaries) assert.doesNotMatch(name, /\p{Cc}/u);
+  });
+
+  test('[boundary] long digit and whitespace runs in a Task Commits section are rows of no id, not a hang or a read', () => {
+    for (const noise of ['**Task 1' + '1'.repeat(50000), ' '.repeat(50000) + 'x']) {
+      assert.deepEqual(extractTaskCommitRefs(`## Task Commits\n\n${noise}\n`), []);
+    }
+  });
+
+  test('[regression] a SUMMARY with one readable row and one unreadable row is named, not partly dropped', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    const b = commit(repo, 'src/b.js', 'feat(03-01): b');
+    commit(repo, `${PHASE_DIR}/03-01-SUMMARY.md`, 'docs(03-01): summary', `# Summary\n\n## Task Commits\n\n1. **Task 1: a** - \`${a}\`\n2. **Task 2 - tracer**\n   - GREEN \`${b}\`\n\n## Next\n`);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.unparsedSummaries, ['03-01-SUMMARY.md']);
+  });
+
+  /** A phase with plan 01 in the canonical shape and plan 02 written with `body` as its Task Commits section. */
+  function twoPlanPhase(secondSection) {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    const red = commit(repo, 'src/b.test.js', 'test(03-02): red b');
+    const green = commit(repo, 'src/b.js', 'feat(03-02): green b');
+    summarize(repo, [a], '03-01-SUMMARY.md');
+    commit(repo, `${PHASE_DIR}/03-02-SUMMARY.md`, 'docs(03-02): summary', `# Summary\n\n## Task Commits\n\n${secondSection({ red, green })}\n\n## Next\n`);
+    return repo;
+  }
+
+  test('[regression] a TDD plan written with sub-bullets contributes its files and is not reported', () => {
+    const repo = twoPlanPhase(({ red, green }) => `1. **Task 1 (tracer): b**\n   - RED \`${red}\` test\n   - GREEN \`${green}\` feat`);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.equal(scope.source, 'task-commits');
+    assert.deepEqual(scope.files, ['src/a.js', 'src/b.js', 'src/b.test.js']);
+    assert.deepEqual(scope.unparsedSummaries, []);
+  });
+
+  test('[regression] a SUMMARY whose Task Commits section yields no id is named, never silently dropped', () => {
+    const repo = twoPlanPhase(({ red, green }) => `- Task one: \`${red}\` and \`${green}\``);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.files, ['src/a.js']);
+    assert.deepEqual(scope.unparsedSummaries, ['03-02-SUMMARY.md']);
+  });
+
+  test('[boundary] a SUMMARY with no Task Commits section is not reported; canonical rows are not reported', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    summarize(repo, [a], '03-01-SUMMARY.md');
+    commit(repo, `${PHASE_DIR}/03-02-SUMMARY.md`, 'docs(03-02): summary', '# Summary\n\nNo commits for this plan.\n');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.unparsedSummaries, []);
+    assert.deepEqual(scope.files, ['src/a.js']);
+  });
+
+  test('[independence] plan and quick units carry an empty unparsedSummaries', () => {
+    const repo = makeRepo();
+    commit(repo, 'src/a.js', 'feat(03-01): a');
+    assert.deepEqual(resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }).unparsedSummaries, []);
+  });
 });

@@ -106,6 +106,81 @@ describe('smart-entry: the STATE.md body starts after the frontmatter block', ()
   }
 });
 
+// #6431: `/gsd-pause-work` writes `.planning/HANDOFF.json` and never `paused_at`; `/gsd-resume-work` deletes the file once
+// resumed. The file is the recorded pause, so the front door must route to resume while it exists and forward after.
+describe('smart-entry: a recorded pause is the pause-work handoff, not only paused_at (#6431)', () => {
+  afterEach(removeAll);
+
+  const FORWARD = state({ status: 'executing', total_phases: 5, current_phase: 2, progress: 60 });
+  const handoffPath = (dir) => path.join(dir, '.planning', 'HANDOFF.json');
+
+  test('after a pause (HANDOFF.json present, no paused_at) the situation is paused and the first action is resume-work', () => {
+    const dir = track(makeProject({ state: FORWARD, roadmap: true }));
+    assert.equal(classifyProject(dir).situation, 'executing', 'precondition: never paused routes forward');
+    fs.writeFileSync(handoffPath(dir), JSON.stringify({ status: 'paused', phase: '2' }));
+
+    const result = classifyProject(dir);
+
+    assert.equal(result.signals.paused, true);
+    assert.equal(result.situation, 'paused');
+    assert.equal(result.recommended, 'resume-work');
+  });
+
+  test('after resume deletes HANDOFF.json the situation routes forward again', () => {
+    const dir = track(makeProject({ state: FORWARD, roadmap: true }));
+    fs.writeFileSync(handoffPath(dir), '{}');
+    assert.equal(classifyProject(dir).situation, 'paused');
+
+    fs.unlinkSync(handoffPath(dir));
+
+    assert.equal(classifyProject(dir).situation, 'executing');
+    assert.equal(detectSignals(dir).paused, false);
+  });
+
+  test('the root handoff is the pause record even when the active scope is a workstream', (t) => {
+    const dir = track(makeProject({ state: FORWARD, roadmap: true }));
+    const scoped = path.join(dir, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(scoped, { recursive: true });
+    fs.writeFileSync(path.join(scoped, 'STATE.md'), FORWARD);
+    fs.writeFileSync(path.join(scoped, 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: A\n');
+    const saved = process.env.GSD_WORKSTREAM;
+    process.env.GSD_WORKSTREAM = 'alpha';
+    t.after(() => { if (saved === undefined) delete process.env.GSD_WORKSTREAM; else process.env.GSD_WORKSTREAM = saved; });
+    assert.equal(detectSignals(dir).paused, false, 'precondition: no handoff yet');
+
+    fs.writeFileSync(handoffPath(dir), '{}');
+
+    assert.equal(detectSignals(dir).paused, true, 'pause-work writes only the root file, whatever the active scope');
+  });
+
+  test('a project that never paused is not routed to resume, with or without a phase-scoped .continue-here.md', () => {
+    const dir = track(makeProject({ state: FORWARD, roadmap: true }));
+    assert.equal(detectSignals(dir).paused, false);
+    const phaseDir = path.join(dir, '.planning', 'phases', '02-two');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '.continue-here.md'), '# checkpoint\n');
+    assert.equal(detectSignals(dir).paused, false, 'a bare .continue-here.md is a checkpoint (next.md Gate 1), not the pause record: HANDOFF.json is');
+  });
+
+  test('a handoff is a pause even before STATE.md exists, and beats blockers like paused_at does', () => {
+    const noState = track(makeProject({ roadmap: true }));
+    fs.writeFileSync(handoffPath(noState), '{}');
+    assert.equal(detectSignals(noState).paused, true);
+
+    const blocked = track(makeProject({ state: state({ status: 'executing', total_phases: 5, current_phase: 2 }) + '\n## Blockers\n\n- b\n', roadmap: true }));
+    assert.equal(classifyProject(blocked).situation, 'blocked');
+    fs.writeFileSync(handoffPath(blocked), '{}');
+    assert.equal(classifyProject(blocked).situation, 'paused');
+  });
+
+  test('no .planning at all is not a pause', () => {
+    const none = track(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-se-nohandoff-')));
+    assert.equal(detectSignals(none).paused, false, 'no .planning at all');
+    const dir = track(makeProject({ state: FORWARD, roadmap: true }));
+    assert.equal(detectSignals(dir).paused, false);
+  });
+});
+
 describe('smart-entry: situation coverage', () => {
   afterEach(removeAll);
 
