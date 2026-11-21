@@ -3865,6 +3865,10 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['f() { xargs cat; } <<< a; f < names', 'names'],
     ['{ case x in a) xargs cat;; esac; } < names', 'names'],
     ['( case x in a) :;; esac; xargs cat ) < names', 'names'],
+    // Redirects whose reach overlaps: the one the guard cannot read wins, whichever is inner or spread first.
+    ['{ { xargs cat; } < names; } <<< a', 'names'],
+    ['{ exec < names; xargs cat; } <<< a', 'names'],
+    ['while read l; do :; { xargs cat; } < names; done <<< a', 'names'],
   ];
   // The same denial for what a printf it does not render writes, and for a `-d` value it cannot decode,
   // each under a code of its own, since the block names no file.
