@@ -560,6 +560,12 @@ describe('#5491 runReadCheck reads only bounded regular files inside the repo (#
     assert.deepEqual(r.unchecked, ['big-01']);
     assert.match(stampIncompleteRead('body', r), /big-01 could not be checked/);
   });
+
+  test('the stamp names ten unchecked plans and counts the rest', () => {
+    const ids = Array.from({ length: 12 }, (_, k) => `z-${k}`);
+    const stamp = stampIncompleteRead('body', checkRead('', [], false, ids));
+    assert.match(stamp, /the plan file for z-0, z-1, z-2, z-3, z-4, z-5, z-6, z-7, z-8, z-9 and 2 more could not be checked/);
+  });
 });
 
 // Seeds come from tests/helpers/fast-check-setup.cjs (42, or GSD_FC_SEED to explore), not a pin
