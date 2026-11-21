@@ -1390,7 +1390,12 @@ file read need not be the one that gave the plan its completion record:
   the id being looked up (`plans/01-06-01-SUMMARY-01.md` for
   `06-01-PLAN.md`), and is then read after all of them; an ordinary nested
   SUMMARY such as `plans/SUMMARY-01.md` or `plans/01-06-SUMMARY-01.md` never
-  takes part.
+  takes part. Taking part means being read in the lookup, not giving the
+  completion record: a `06-01` whose one SUMMARY is
+  `plans/01-06-01-SUMMARY-01.md` reads `halted: false` and is not counted in
+  `summary_count`, whatever that file says. It decides the halt once another
+  SUMMARY gives the record, such as a `06-01-SUMMARY.md` in the phase
+  directory.
 
 `hasSummary` keeps its older filename pairing, so a plan in the second case
 can read `hasSummary: false` with `halted: true`. Every plan counted in
