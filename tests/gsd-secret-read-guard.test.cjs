@@ -2151,6 +2151,28 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     'for i in 1; do cat; done <<EOF | bash\necho hi\nEOF',
     "for i in 1; do echo 'cat .env'; done",
   ]);
+  // Only a heredoc or here-string on fd 0 replaces the pipe as stdin; a reserved word given as a redirect target
+  // (`>for`, `2>esac`) opens and closes nothing, and where the two readings differ the walk fails closed.
+  blocks([
+    "echo 'cat .env' | (cat) 3<<< 'echo hi' | bash",
+    "echo 'cat .env' | { cat; } 3<<< 'echo hi' | sh",
+    "echo 'cat .env' | (cat) 3<<EOF | bash\necho hi\nEOF",
+    "echo 'cat .env' | (cat) 3<<-EOF | bash\necho hi\nEOF",
+    "echo 'cat .env' | for i in 1; do cat; done 3<<< 'echo hi' | bash",
+    "for i in 1; do echo 'cat .env'; >for :; done | bash",
+    "if true; then echo 'cat .env'; >if :; fi | bash",
+    "echo 'cat .env' | (>case x in y; cat | bash)",
+    "echo 'cat .env' | (case a in b) 2>esac :;; c) :;; esac; cat | bash)",
+    "echo 'cat .env' | (2>esac true; cat | bash)",
+  ]);
+  allows([
+    "echo ok | (cat) 3<<< 'echo hi' | bash",
+    "echo 'cat .env' | (cat) 0<<< 'echo hi' | bash",
+    'echo ok | (cat) 3<<EOF | bash\necho hi\nEOF',
+    "echo ok | for i in 1; do cat; done 3<<< 'echo hi' | bash",
+    'for i in 1; do echo hi; >for :; done | bash',
+    'echo ok | (case a in b) 2>esac :;; c) :;; esac; cat | bash)',
+  ]);
 
   // npm takes a unique prefix of a long option (`--edi` is `--editor`) and `-c=` attached; editor defaults to EDITOR
   // or VISUAL and shell to SHELL (or its Windows twin); and `npm explore <pkg> <words>` runs the words joined, `--` or not.
