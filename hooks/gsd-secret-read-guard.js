@@ -4219,6 +4219,14 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
         }
       }
 
+      // pnpm exec / dlx in shell mode and yarn exec run their words through a shell (#5492).
+      if (PNPM_RUNNERS.has(base) || YARN_RUNNERS.has(base)) {
+        for (const script of packageRunnerScripts(base, operands)) {
+          const hit = via(`${base} exec`, findSecretRead(script, depth + 1, ctx));
+          if (hit) return hit;
+        }
+      }
+
       // dd reads the file its `if=` operand names (#5492); every operand is still checked below.
       if (DD_NAMES.has(base)) {
         for (const w of operands) if (ddInputNamesSecret(w.text)) return secretRead(w.text);
@@ -4279,7 +4287,7 @@ const LAUNCHER_WORDS = new Set(['eval', 'xargs', 'find', 'find.exe', 'watch', 'd
 function isLauncherWord(text) {
   const name = lastSegment(text).toLowerCase();
   return name === 'git' || name === 'git.exe' || SSH_CLIENTS.has(name) || SHELL_INTERPRETERS.has(name)
-    || NPM_RUNNERS.has(name) || LAUNCHER_WORDS.has(bareLauncherName(text));
+    || NPM_RUNNERS.has(name) || PNPM_RUNNERS.has(name) || YARN_RUNNERS.has(name) || LAUNCHER_WORDS.has(bareLauncherName(text));
 }
 
 // The name a bare-only launcher word is matched by: the word, or an absolute path's last segment (`/usr/bin/env`,
@@ -4877,6 +4885,27 @@ function npmCallScripts(operands, ctx) {
     for (const name of NPM_DEFAULT_VARS) for (const value of shellVarValues(ctx.shellVars, name, ctx)) scripts.push(value);
   }
   return scripts;
+}
+
+// pnpm exec / dlx (pnpx, pnx) under `-c` / `--shell-mode`, also inside a `-` cluster (`-rc`), run their command
+// through a shell, and yarn exec (Berry) runs its words as a shell script (#5492): the words after the subcommand
+// (all of them for pnpx and pnx, and for a pnpm whose subcommand is not found) but its options, joined and each on
+// its own.
+const PNPM_RUNNERS = new Set(['pnpm', 'pnpm.cmd', 'pnpx', 'pnpx.cmd', 'pnx', 'pnx.cmd']);
+const YARN_RUNNERS = new Set(['yarn', 'yarn.cmd']);
+const PNPM_SHELL_MODE_RE = /^-[a-zA-Z]*c[a-zA-Z]*$/;
+function packageRunnerScripts(base, operands) {
+  const texts = operands.map((w) => w.text);
+  let from;
+  if (YARN_RUNNERS.has(base)) {
+    from = texts.indexOf('exec');
+    if (from === -1) return [];
+  } else {
+    if (!texts.some((t) => t === '--shell-mode' || PNPM_SHELL_MODE_RE.test(t))) return [];
+    from = base.startsWith('pnpm') ? texts.findIndex((t) => t === 'exec' || t === 'dlx') : -1;
+  }
+  const rest = texts.slice(from + 1).filter((t) => !t.startsWith('-'));
+  return [rest.join(' '), ...rest];
 }
 
 // dd's `if=` operand, naming the file dd reads (#5492).
