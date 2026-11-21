@@ -361,6 +361,7 @@ const DOCS_GUARD_TESTS = {
   ],
   'tests/plan-authoring-verification-gaps.test.cjs': ['docs/reference/plan-md.md'],
   'tests/plan-checker-coupling.test.cjs': ['docs/reference/agents.md'],
+  'tests/planner-verify-command-validation.test.cjs': ['docs/how-to/validate-an-automated-command.md'],
   'tests/plan-phase-drift-guard.test.cjs': [
     'docs/CONFIGURATION.md',
     'docs/COMMANDS.md',
