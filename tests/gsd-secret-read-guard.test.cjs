@@ -2202,6 +2202,16 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "echo 'cat .env' | cat {fd}<<EOF | bash\nx\nEOF",
   ]);
   allows(['echo ok | cat {fd}<<< x | bash', 'echo ok | cat {fd}<<EOF | bash\nx\nEOF']);
+  // An echo, printf or cat whose words hold a `$( )` or backticks may print its stdin (`echo "$(cat)"`): a filter.
+  blocks([
+    "echo 'cat .env' | echo \"$(cat)\" | bash",
+    "echo 'cat .env' | (echo \"$(cat)\") | bash",
+    "echo 'cat .env' | printf '%s\\n' \"$(cat)\" | bash",
+    "echo 'cat .env' | echo `cat` | bash",
+    "echo 'cat .env' | cat \"$(cat)\" | bash",
+    'echo .env | echo "$(cat)" | xargs cat',
+  ]);
+  allows(['echo ok | echo "$(cat)" | bash', 'echo "$(date)" | bash']);
   allows([
     "echo ok | (cat) 3<<< 'echo hi' | bash",
     "echo 'cat .env' | (cat) 0<<< 'echo hi' | bash",
