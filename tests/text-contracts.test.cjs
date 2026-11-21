@@ -122,6 +122,61 @@ describe('doc.slice, doc.step and doc.before', () => {
   });
 });
 
+describe('ctx.doc reads only regular, non-empty files inside the repository', () => {
+  test('a path that climbs out of the root, an absolute path and an empty path are findings', (t) => {
+    const tree = makeTree(t, { 'a.md': 'x\n' }, {
+      climb: "ctx.doc('../outside.md').lacks(/x/, 'never a pass');",
+      absolute: "ctx.doc('/etc/hosts').lacks(/x/, 'never a pass');",
+      empty_path: "ctx.doc('').lacks(/x/, 'never a pass');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 3);
+    for (const message of messages) assert.match(message, /not a repo-relative path inside the repository/);
+  });
+
+  test('a symlink and a directory are refused, even when the symlink points at a real file', (t) => {
+    const tree = makeTree(t, { 'real.md': 'content\n', 'dir/inner.md': 'x\n' }, {
+      linked: "ctx.doc('link.md').has(/content/, 'follows nothing');",
+      directory: "ctx.doc('dir').has(/x/, 'a directory is not a document');",
+    });
+    try {
+      fs.symlinkSync(path.join(tree.root, 'real.md'), path.join(tree.root, 'link.md'));
+    } catch (err) {
+      t.skip(`symlinks are unavailable here: ${err.code}`);
+      return;
+    }
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.match(messages.find((m) => m.startsWith('linked:')), /a symlink/);
+    assert.match(messages.find((m) => m.startsWith('directory:')), /not a file/);
+  });
+
+  test('an empty file is a finding, so a lacks-only contract cannot pass on it', (t) => {
+    const tree = makeTree(t, { 'empty.md': '  \n' }, { blank: "ctx.doc('empty.md').lacks(/anything/, 'nothing to find');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /the file is empty/);
+  });
+
+  test('a contract that makes no assertion, and one that is asynchronous, are findings', (t) => {
+    const tree = makeTree(t, { 'a.md': 'x\n' }, {
+      idle: "ctx.doc('a.md');",
+      later: "return Promise.resolve().then(() => ctx.doc('a.md').has(/never collected/, 'dropped'));",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.ok(messages.some((m) => /^idle: the contract made no assertion/.test(m)));
+    assert.ok(messages.some((m) => /^later: check must be synchronous/.test(m)));
+  });
+
+  test('ctx.fail counts as an assertion and is reported', (t) => {
+    const tree = makeTree(t, {}, { explicit: "ctx.fail('x.md', 'stated failure');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^explicit: stated failure/);
+  });
+});
+
 describe('doc.before is first-to-first; doc.followedBy looks for b after a', () => {
   test('before fails when a stray b comes before a, even if a later b follows it', (t) => {
     const tree = makeTree(t, { 'o.md': 'b stray ... a ... b later\n' }, {

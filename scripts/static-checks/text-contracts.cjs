@@ -37,6 +37,7 @@ const found = (text, pattern) => {
 
 function makeContext(root, id, findings) {
   const report = (file, message) => findings.push({ file, line: 0, message: `${id}: ${message}` });
+  let assertions = 0;
 
   // `dead` is a document a slice failed to produce: the failure is already one finding, so its
   // assertions are no-ops (they would only add noise, or pass vacuously on empty text).
@@ -45,10 +46,12 @@ function makeContext(root, id, findings) {
       rel,
       text,
       has(pattern, why) {
+        assertions += 1;
         if (!dead && !found(text, pattern)) report(rel, `${why} (expected ${describePattern(pattern)})`);
         return doc;
       },
       lacks(pattern, why) {
+        assertions += 1;
         if (!dead && found(text, pattern)) report(rel, `${why} (found ${describePattern(pattern)})`);
         return doc;
       },
@@ -70,6 +73,7 @@ function makeContext(root, id, findings) {
         return doc.slice(`<step name="${name}">`, '</step>');
       },
       before(a, b, why) {
+        assertions += 1;
         if (dead) return doc;
         const first = text.indexOf(a);
         const second = text.indexOf(b);
@@ -79,6 +83,7 @@ function makeContext(root, id, findings) {
         return doc;
       },
       followedBy(a, b, why) {
+        assertions += 1;
         if (dead) return doc;
         const first = text.indexOf(a);
         const second = first === -1 ? -1 : text.indexOf(b, first);
@@ -92,15 +97,35 @@ function makeContext(root, id, findings) {
   }
 
   return {
-    fail: report,
+    fail(file, message) {
+      assertions += 1;
+      report(file, message);
+    },
+    assertionCount: () => assertions,
     doc(rel) {
-      const abs = path.join(root, ...rel.split('/'));
-      let text;
+      const abs = path.resolve(root, ...String(rel).split('/'));
+      const inside = path.relative(path.resolve(root), abs);
+      let text = '';
+      if (typeof rel !== 'string' || rel === '' || path.isAbsolute(rel) || inside.startsWith('..') || path.isAbsolute(inside)) {
+        report(String(rel), 'the path is not a repo-relative path inside the repository');
+        return documentOf(String(rel), '', true);
+      }
       try {
+        // A contract reads a regular file the repository owns: a symlink (which could point anywhere)
+        // and a directory are refused, and an empty file is a finding (nothing could fail on it).
+        const stat = fs.lstatSync(abs);
+        if (!stat.isFile()) {
+          report(rel, `not a regular file (${stat.isSymbolicLink() ? 'a symlink' : 'not a file'})`);
+          return documentOf(rel, '', true);
+        }
         text = lf(fs.readFileSync(abs, 'utf8'));
       } catch (err) {
         report(rel, `cannot read the file: ${err.code || err.message}`);
-        text = '';
+        return documentOf(rel, '', true);
+      }
+      if (text.trim() === '') {
+        report(rel, 'the file is empty');
+        return documentOf(rel, '', true);
       }
       return documentOf(rel, text);
     },
@@ -146,7 +171,14 @@ function run({ root, dir = CONTRACT_DIR, minContracts = MIN_CONTRACTS, only }) {
   }
   for (const contract of contracts) {
     try {
-      contract.check(makeContext(root, contract.id, findings));
+      const ctx = makeContext(root, contract.id, findings);
+      const returned = contract.check(ctx);
+      // An async check would be dropped: its findings after the first await are never collected.
+      if (returned && typeof returned.then === 'function') {
+        findings.push({ file: `scripts/static-checks/text-contracts/${contract.id}.cjs`, line: 0, message: `${contract.id}: check must be synchronous` });
+      } else if (ctx.assertionCount() === 0) {
+        findings.push({ file: `scripts/static-checks/text-contracts/${contract.id}.cjs`, line: 0, message: `${contract.id}: the contract made no assertion` });
+      }
     } catch (err) {
       findings.push({ file: `scripts/static-checks/text-contracts/${contract.id}.cjs`, line: 0, message: `${contract.id}: the contract threw: ${err.message}` });
     }
