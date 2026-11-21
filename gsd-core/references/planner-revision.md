@@ -70,6 +70,7 @@ smaller route under Step 2 and report it as addressed.
 | key_links_planned | Add wiring task or update action |
 | scope_sanity | Split into multiple plans |
 | must_haves_derivation | Derive and add must_haves to frontmatter |
+| research_resolution | Cite a `D-NN` already under CONTEXT.md `<decisions>`, outside Claude's Discretion, on the question it answers in RESEARCH.md, dropping any other `D-NN` it cites, and add RESEARCH.md to the Step 6 commit (the orchestrator commits CONTEXT.md when it records an answer). That citation is the only mark you write on a question. Also cite each `D-NN` recorded in this loop in the `<action>` of the task that implements it, or Dimension 7 and the decision-coverage gate flag it as unimplemented. With no such `D-NN`, return `## REVISION_CONFLICT` naming each question, with "the user rules" as the alternative: the orchestrator asks and records each answer as a `D-NN`. Never add a decision yourself |
 
 Each strategy is the usual route, not the only one. Any change that makes the issue's
 `required_property` true is a valid strategy.

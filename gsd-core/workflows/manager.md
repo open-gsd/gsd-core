@@ -78,7 +78,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 Parse the full JSON. Build the dashboard display.
 
-Build dashboard from JSON. Symbols: `✓` done, `◆` active, `○` pending, `·` queued. Progress bar: 20-char `█░`.
+Build dashboard from JSON. Symbols: `✓` done, `◆` active, `○` pending, `·` queued, `⚠` research ruling needed. Progress bar: 20-char `█░`.
 
 **Status mapping** (disk_status → D P E Status):
 
@@ -86,6 +86,7 @@ Build dashboard from JSON. Symbols: `✓` done, `◆` active, `○` pending, `·
 - `executed` → `✓ ✓ ◆` `◆ Verification required`
 - `partial` → `✓ ✓ ◆` `◆ Executing...`
 - `planned` → `✓ ✓ ○` `○ Ready to execute`
+- A phase in this session's `RESEARCH_STOPPED` list (step 5) → `✓ ⚠ ·` `⚠ Research ruling needed`, whatever its disk_status; drop its execute recommendation from `recommended_actions`, since its plans failed the research gate
 - `discussed` → `✓ ○ ·` `○ Ready to plan`
 - `researched` → `◆ · ·` `○ Ready to plan`
 - `empty`/`no_directory` + `is_next_to_discuss` → `○ · ·` `○ Ready to discuss`
@@ -242,7 +243,7 @@ Inline discuss:
 Skill(skill="gsd-discuss-phase", args="{PHASE_NUM} {manager_flags.discuss}")
 ```
 
-After discuss completes, loop back to dashboard step.
+After discuss completes, if it printed `PLANNING STOPPED` (its chain runs plan-phase with `--auto`), handle it as step 5 does; otherwise loop back to dashboard step.
 
 ### Discuss Phase N
 
@@ -252,7 +253,7 @@ Discussion is interactive — needs user input. Run inline with any configured f
 Skill(skill="gsd-discuss-phase", args="{PHASE_NUM} {manager_flags.discuss}")
 ```
 
-After discuss completes, loop back to dashboard step.
+After discuss completes, if it printed `PLANNING STOPPED` (its chain runs plan-phase with `--auto`), handle it as step 5 does; otherwise loop back to dashboard step.
 
 ### Plan Phase N
 
@@ -306,7 +307,7 @@ Display while it runs:
 ◆ Planning Phase {N}: {phase_name}... (runs inline so the plan-checker runs — the dashboard resumes when it returns, ~1–5 min; expected, not a freeze)
 ```
 
-Then loop back to dashboard step.
+If it printed `PLANNING STOPPED`, handle it as step 5 does; otherwise loop back to dashboard step.
 
 ### Execute Phase N
 
@@ -370,6 +371,13 @@ Then loop back to dashboard step.
 
 When notified that a background agent completed:
 
+**If a plan-phase result carries `PLANNING STOPPED`** (a research question needs a user ruling, which `--auto` cannot ask for; `gsd-core/references/revision-loop.md`, Resolve): add {N} to `RESEARCH_STOPPED`. Its plans stay on disk but are not ready to execute. Display `⚠ Phase {N}: planning stopped — research questions need a user ruling`, then ask via AskUserQuestion:
+- "Plan inline now": `Skill(skill="gsd-plan-phase", args="{N} {manager_flags.plan}")` with any `--auto` removed from the flags, so plan-phase asks each question.
+- "Discuss the phase": `Skill(skill="gsd-discuss-phase", args="{N}")`.
+- "Leave it": the phase keeps its `⚠` status.
+If the chosen run ran plan-phase and it ended without printing `PLANNING STOPPED`, remove {N} from `RESEARCH_STOPPED`.
+Then loop back to dashboard step.
+
 1. Read the result message from the agent.
 2. Display a brief notification:
 
@@ -390,7 +398,7 @@ Classify the error:
   - **question:** "Phase {N} failed — permission denied for `{tool_or_command}`. Want me to add it to settings.local.json so it's allowed?"
   - **options:** "Add permission and retry" / "Run this phase inline instead" / "Skip and continue"
   - "Add permission and retry": Use `Skill(skill="update-config")` to add the permission to `settings.local.json`, then re-spawn the background agent. Loop to dashboard.
-  - "Run this phase inline instead": Dispatch the same action inline via the appropriate Skill — use `Skill(skill="gsd-plan-phase", args="{N}")` if the failed action was planning, or `Skill(skill="gsd-execute-phase", args="{N}")` if the failed action was execution. Loop to dashboard after.
+  - "Run this phase inline instead": Dispatch the same action inline via the appropriate Skill — use `Skill(skill="gsd-plan-phase", args="{N}")` if the failed action was planning, or `Skill(skill="gsd-execute-phase", args="{N}")` if the failed action was execution. If the plan run printed `PLANNING STOPPED`, handle it as this step's stop clause does; otherwise loop to dashboard after.
   - "Skip and continue": Loop to dashboard (phase stays in current state).
 
 **Other errors** (git lock, file conflict, logic error, etc.):
@@ -398,7 +406,7 @@ Classify the error:
   - **question:** "Background agent for Phase {N} encountered an issue: {error}. What next?"
   - **options:** "Retry" / "Run inline instead" / "Skip and continue" / "View details"
   - "Retry": Re-spawn the same background agent. Loop to dashboard.
-  - "Run inline instead": Dispatch the action inline via the appropriate Skill — use `Skill(skill="gsd-plan-phase", args="{N}")` if the failed action was planning, or `Skill(skill="gsd-execute-phase", args="{N}")` if the failed action was execution. Loop to dashboard after.
+  - "Run inline instead": Dispatch the action inline via the appropriate Skill — use `Skill(skill="gsd-plan-phase", args="{N}")` if the failed action was planning, or `Skill(skill="gsd-execute-phase", args="{N}")` if the failed action was execution. If the plan run printed `PLANNING STOPPED`, handle it as this step's stop clause does; otherwise loop to dashboard after.
   - "Skip and continue": Loop to dashboard (phase stays in current state).
   - "View details": Read STATE.md blockers section, display, then re-present options.
 

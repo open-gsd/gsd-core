@@ -324,7 +324,7 @@ GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9.
 PHASE_STATE=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} ${PHASE_NUM})
 ```
 
-Check `has_context`. If false → go to handle_blocker: "Discuss for phase ${PHASE_NUM} did not produce CONTEXT.md."
+Check `has_context`. If false → go to handle_blocker: "Discuss for phase ${PHASE_NUM} did not produce CONTEXT.md." If discuss printed `PLANNING STOPPED` (its chain runs plan-phase with `--auto`), go to handle_blocker with that line and never execute its plans.
 
 **3a.5. UI Design Contract (Frontend Phases)**
 
@@ -342,7 +342,7 @@ Read and execute: `$HOME/.claude/gsd-core/references/autonomous-ui-design-contra
 FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
 ```
 
-- **If `FLATTEN` is `false`:** Dispatch plan as a background agent to keep the main context lean. While plan runs, the workflow can immediately start discussing the next phase (see step 4).
+- **If `FLATTEN` is `false`:** Dispatch plan as a background agent to keep the main context lean; meanwhile, discuss the next phase (step 4).
 
   <!-- gsd:section id="converge-dispatch-bg" when="state:plan-strategy-converge" -->
   If `section_manifest` is `null` or `"converge-dispatch-bg"` is in its `included` list: read and execute `gsd-core/workflows/autonomous/steps/converge-dispatch-bg.md`. Otherwise skip — do not read the file.
@@ -354,13 +354,13 @@ FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true"
   Agent(
     description="Plan phase ${PHASE_NUM}: ${PHASE_NAME}",
     run_in_background=true,
-    prompt="Run plan-phase for phase ${PHASE_NUM}: Skill(skill=\"gsd-plan-phase\", args=\"${PHASE_NUM}\")"
+    prompt="Background: no AskUserQuestion. Run plan-phase for phase ${PHASE_NUM}: Skill(skill=\"gsd-plan-phase\", args=\"${PHASE_NUM}\")"
   )
   ```
 
   Store the agent task_id. After discuss for the next phase completes (or if no next phase), wait for the plan agent to finish before proceeding to execute.
 
-- **Otherwise (`FLATTEN` is `true` — run inline):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
+- **Otherwise (`FLATTEN` is `true` — run inline):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here.
 
   <!-- gsd:section id="converge-dispatch-inline" when="state:plan-strategy-converge" -->
   If `section_manifest` is `null` or `"converge-dispatch-inline"` is in its `included` list: read and execute `gsd-core/workflows/autonomous/steps/converge-dispatch-inline.md`. Otherwise skip — do not read the file.
@@ -384,11 +384,11 @@ If `PLAN_STRATEGY=local`, run the regular planner:
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM}")
 ```
 
-Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans."
+Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans." If plan-phase printed `PLANNING STOPPED`, go to handle_blocker with that line and never execute its plans.
 
 **3c. Execute**
 
-**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist. Same rule as the plan dispatch above (#1708): run **inline** unless `dispatch-should-flatten` returns `false`. Resolve first:
+**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist; if it printed `PLANNING STOPPED`, go to handle_blocker with that line and never execute its plans. Same rule as the plan dispatch above (#1708): run **inline** unless `dispatch-should-flatten` returns `false`. Resolve first:
 
 ```bash
 FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
@@ -499,7 +499,7 @@ On **"Run gap closure"**: one gap-closure attempt:
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM} --gaps")
 ```
 
-Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans."
+Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans." If it printed `PLANNING STOPPED`, go to handle_blocker with that line and never execute its plans.
 
 Re-execute:
 ```

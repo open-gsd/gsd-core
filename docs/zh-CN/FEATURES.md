@@ -1746,17 +1746,21 @@ PreToolUse 钩子，检测 Claude 在 GSD 工作流上下文之外尝试文件�
 
 **属于：** `/gsd-plan-phase`
 
-**目的：** 当 RESEARCH.md 有未解决的开放问题时阻止规划，防止在不完整信息基础上制定计划。
+**目的：** 当 RESEARCH.md 仍有未解决的开放问题时，计划验证不通过，防止基于不完整信息的计划被接受。该检查在规划器写出计划之后运行。
+
+**已解决即由用户决定：** 只有当一个开放问题引用的每个 `D-NN` 都位于该阶段 CONTEXT.md 的 `<decisions>` 中、Claude's Discretion 之外，且其中一个回答了该问题时，它才算已解决。只有 discuss-phase，或记录用户回答的编排器，才会写入这样的 `D-NN`；研究员自己写下的标记，包括标题上的 `(RESOLVED)` 后缀，都不能解决任何问题。引用的来源可以填补事实空白，因此那不是开放问题，但任何来源都不能决定需要用户裁决的选择。在 CONTEXT.md 交由 Claude's Discretion 决定的范围内，有来源的建议即可。
+
+**执行位置：** plan-checker 的 Dimension 11，位于 plan-phase 的验证循环中、规划器运行之后（#5438）。plan-phase 没有在入口处拦截的步骤。只有该循环运行时此门控才会运行：`--skip-verify`、`workflow.plan_check: false` 和 `--research-phase`（仅研究）会跳过计划检查器，也就跳过此门控。verify-work 的差距修复检查同样跳过此维度：该循环不向检查器提供 CONTEXT.md，也没有记录用户裁决的途径。
 
 **需求：**
-- REQ-RESGATE-01：规划开始前，系统必须扫描 RESEARCH.md 中未解决的开放问题
-- REQ-RESGATE-02：当存在开放问题时，系统必须阻止进入 plan-phase
+- REQ-RESGATE-01：系统在验证计划时，必须检查 RESEARCH.md 中未解决的开放问题
+- REQ-RESGATE-02：系统必须为每个未解决的开放问题提出阻断项，使计划不被接受
 - REQ-RESGATE-03：系统必须向用户呈现具体的未解决问题
 
 **流程：**
-1. **扫描** — 检查 RESEARCH.md 中带有未解决项目的开放问题节区
-2. **门控** — 发现未解决问题时阻止规划
-3. **呈现** — 显示需要解决的具体开放问题
+1. **扫描** — Dimension 11 收集 RESEARCH.md 中所有仍未解决的问题（无论位于哪个标题下）
+2. **门控** — 每个没有符合条件的 `D-NN` 的问题都是阻断项；规划器可以引用已记录的决定，但不能新增决定
+3. **呈现** — 若没有这样的决定，规划器返回一个列出每个问题的冲突；plan-phase 询问用户并把每个回答记录为 `D-NN`，或者用户离开循环去运行 `/gsd-discuss-phase <N>` 或 `/gsd-plan-phase <N> --research`。在无人可问的情况下（`--auto`，或 plan-phase 作为后台或嵌套代理运行，例如 `/gsd-autonomous` 在不展平时运行它，或其收敛运行）不会记录任何回答：plan-phase 立即升级并就此停止而不继续，`/gsd-autonomous` 和 `/gsd-manager` 不会执行这些计划；计划留在磁盘上，`/gsd-progress --next` 或 `/gsd-execute-phase` 仍可运行它们。`--chain` 和 `workflow.auto_advance` 通过 discuss-phase 的链以 `--auto` 的形式到达 plan-phase；不带 `--auto` 内联运行的 plan-phase 会询问。
 
 ---
 
