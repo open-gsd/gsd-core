@@ -19,7 +19,7 @@ const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
 const {
-  CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, NESTED_TWINS, resolvePlannerStallDetectionEnabled, _getGlobalTwinValue,
+  CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, NESTED_TWINS, resolvePlannerStallDetectionEnabled, _getGlobalTwinValue, _getConfigNested,
 } = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -915,12 +915,10 @@ const SPELLING_TWINS: readonly (readonly [string, string])[] =
  */
 const RETIRED_SPELLINGS: readonly (readonly [string, string])[] = [['depth', 'granularity']];
 
-/** The value at a one- or two-segment config path, or undefined. */
+/** The value at a one- or two-segment config path, or undefined: the loader's nested lookup. */
 function readPath(obj: Record<string, unknown>, dotted: string): unknown {
   const [head, field] = dotted.split('.');
-  if (field === undefined) return obj[head];
-  const section = obj[head];
-  return isPlainObject(section) ? section[field] : undefined;
+  return field === undefined ? obj[head] : _getConfigNested(obj, head, field);
 }
 
 /** `obj` without the value at a one- or two-segment config path; a section left empty is dropped. */
