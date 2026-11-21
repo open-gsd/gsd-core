@@ -367,28 +367,17 @@ export function findWorktreeCreateHook(
 }
 
 /**
- * The base-check evaluation for a project directory — exactly what
+ * The base-check evaluation for a project directory: exactly what
  * `cmdWorktreeBaseCheck` computes, minus the stdout emit and the `--mode` /
- * `--observed-fork-base` argv parse (#4222). Resolves the effective baseRef
- * from `<cwd>/.claude` settings (project local → project shared →
- * user/global), runs the `WorktreeCreate`-hook interlock where it applies
- * (#4588/#4881), and evaluates the #683 divergence against both.
- *
- * The interlock lives HERE, not in the CLI wrapper, because it is derived
- * from settings the resolver can read on every call: were it left in
- * `cmdWorktreeBaseCheck`, a hook host with `baseRef:"head"` would degrade on
- * the CLI and record `harness-worktree` from the resolver — the disagreement
- * this extraction exists to rule out. `observedForkBase` is the one input the
- * resolver cannot supply (a measurement taken inside a created worktree); it
- * passes none, which is the answer the CLI gives without the flag.
- *
- * Extracted so `routeDispatchIsolation` (gsd-tools.cjs) can re-derive the
- * base-check degrade in-process before it records the dispatch decision,
- * the way it already re-derives the #3737 `use_worktrees` opt-out. The CLI
- * subcommand and the resolver share this one derivation so the two can
- * never disagree about what the fork base is.
- *
- * deps.userClaudeDir overrides the user/global config directory resolution
+ * `--observed-fork-base` argv parse (#4222). Resolves the effective baseRef from
+ * `<cwd>/.claude` settings (project local, project shared, user/global), runs the
+ * `WorktreeCreate`-hook interlock where it applies (#4588/#4881) and evaluates the
+ * #683 divergence against both. The interlock lives here, not in the CLI wrapper,
+ * so on the same inputs the CLI and the resolver (`routeDispatchIsolation` in
+ * gsd-tools.cjs, which re-derives this degrade before recording a decision) cannot
+ * disagree about the fork base. `observedForkBase`, a measurement taken inside a created worktree, is
+ * the one input the resolver cannot supply; it passes none, as the CLI does without
+ * the flag. deps.userClaudeDir overrides the user/global config directory
  * (default: getGlobalConfigDir('claude'), which honours CLAUDE_CONFIG_DIR).
  */
 export function evaluateWorktreeBaseDegradeForCwd(

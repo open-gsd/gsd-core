@@ -73,9 +73,8 @@ const HOST_INTEGRATION_AXES = Object.freeze({
   // `undocumented` is NOT a member here; it is the corpus-wide sentinel above.
   // Mechanism-specific ("worktree"), not abstract — same "name only what a
   // host actually has" rule that kept effortSurface from guessing a
-  // config-file member above. A future non-worktree isolation mechanism adds a
-  // `*-container` member then, evidence-backed — to src/dispatch-isolation.cts,
-  // the single owner this axis consumes (#4561).
+  // config-file member above. A future non-worktree mechanism adds a `*-container`
+  // member then, evidence-backed, to src/dispatch-isolation.cts (#4561).
   isolation:       DISPATCH_ISOLATION_MODES,
 });
 

@@ -1,41 +1,17 @@
 /**
- * dispatch-isolation.cts — the single owner of the dispatch-isolation
- * vocabulary (#4561).
+ * dispatch-isolation.cts — the single owner of the dispatch-isolation vocabulary
+ * (#4561): ADR-1239's closed three-member set (#2584) for how a host isolates
+ * concurrent same-wave executors. `harness-worktree`: the host's harness creates
+ * and binds a worktree per executor. `orchestrator-worktree`: GSD creates the
+ * worktree and process-spawns the executor into it. `none`: no primitive;
+ * same-wave plans run inline, sequentially.
  *
- * ADR-1239's Codex-binding amendment (#2584) declares how a host isolates
- * concurrent same-wave executors as a closed three-member vocabulary:
- *
- *   `harness-worktree`      — the host's own harness creates + binds a git
- *                             worktree per executor (host-driven fan-out).
- *   `orchestrator-worktree` — GSD itself creates the worktree and
- *                             process-spawns the executor into it
- *                             (GSD-driven fan-out).
- *   `none`                  — no isolation primitive; same-wave plans run
- *                             inline, sequentially.
- *
- * Until #4561 that set — and its two-member "who creates the worktree"
- * subset the #683 base-check keys on — was hand-written at eight independent
- * sites (`gsd-tools.cjs` ×2, `capability-validator.cjs`,
- * `hooks/lib/isolation-sentinel.js`, `host-integration.cts` ×2,
- * `worktree-base-ref.cts` ×2) with nothing asserting they agreed. Half of
- * them sit outside the TypeScript project, so the compiler related only the
- * `.cts` half to itself. A fourth mode added at one site would have been
- * written to the sentinel, rejected as malformed by the sentinel reader's
- * own copy, and silently degraded to `none` by the guard's registry
- * fallback — a permitted, unisolated dispatch decided three sites away from
- * the one that introduced the mode.
- *
- * This module is the one declaration. Every other runtime site consumes it,
- * and the `.cts` types are DERIVED from the tuple rather than restated —
- * with one deliberate exception: `hooks/lib/isolation-sentinel.js` keeps a
- * literal copy, because the guard hooks must load on a raw plugin-marketplace
- * install where the compiled `gsd-core/bin/lib/` is absent and the
- * self-healing build seam has not yet run (a hook that dies at module load
- * is worse than one carrying a mirror). That mirror is pinned to this module
- * by `tests/host-integration-validator-parity.test.cjs`, so a fourth mode
- * turns into a red test rather than a silent degrade.
- *
- * Pure: no I/O, no config, nothing to throw.
+ * Until #4561 the set and its "who creates the worktree" subset were hand-written
+ * at eight sites with nothing asserting they agreed. Every other JavaScript site now
+ * consumes this module, and the `.cts` types derive from the tuple, except
+ * `hooks/lib/isolation-sentinel.js`, which must load where `gsd-core/bin/lib/` is
+ * absent; it and the workflow-shell validity lists are pinned copies (ADR-4630
+ * Decision 3). Pure: no I/O, no config, nothing to throw.
  */
 
 /**
