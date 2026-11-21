@@ -2004,6 +2004,18 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   // A command whose output is not modelled may echo its words, so they are split too; only a search or listing tool,
   // whose output does not repeat its option values or patterns as words, is skipped.
   blocks(["foo 'x .env' | xargs cat", "mycli --print 'x .env' | xargs cat", "printf '%s' 'x .env' | xargs cat"]);
+
+  // A `( … )` or `{ …; }` group piped on writes what every command inside it writes, so each of them is a stage the
+  // pipe reads, failing closed on a mention of a secret name.
+  blocks([
+    "(echo 'cat .env'; true) | sh",
+    "(echo 'cat .env'; true) | head | sh",
+    "{ echo 'cat .env'; true; } | sh",
+    "(printf 'cat .e%s' nv; true) | bash",
+    '(echo .env; true) | xargs cat',
+    "(echo a; (echo 'cat .env'; true)) | sh",
+  ]);
+  allows(["(echo 'echo hi'; true) | sh", "(cd x && ls) | sh", "(echo 'cat .env'; true); ls | sh"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
