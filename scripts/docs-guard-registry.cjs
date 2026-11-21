@@ -421,6 +421,7 @@ const DOCS_GUARD_TESTS = {
     'docs/ja-JP/ARCHITECTURE.md',
     'docs/zh-CN/ARCHITECTURE.md',
     'docs/ko-KR/ARCHITECTURE.md',
+    'docs/pt-BR/ARCHITECTURE.md',
   ],
   'tests/reversibility-tagging.test.cjs': ['docs/reference/plan-md.md'],
   'tests/reviewer-docs-parity.test.cjs': [

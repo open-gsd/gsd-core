@@ -463,15 +463,15 @@ describe('the gate is described as failing the written plans, never as blocking 
   // The architecture diagrams list the gate inside the plan checker's verify loop, after the planner, never as a
   // plan-phase step ahead of the researcher.
   test('every architecture diagram puts the gate inside the verify loop', () => {
-    for (const doc of ['docs/ARCHITECTURE.md', 'docs/ja-JP/ARCHITECTURE.md', 'docs/zh-CN/ARCHITECTURE.md', 'docs/ko-KR/ARCHITECTURE.md']) {
+    for (const doc of ['docs/ARCHITECTURE.md', 'docs/ja-JP/ARCHITECTURE.md', 'docs/zh-CN/ARCHITECTURE.md', 'docs/ko-KR/ARCHITECTURE.md', 'docs/pt-BR/ARCHITECTURE.md']) {
       const lines = splitLines(read(doc));
-      const gate = lines.findIndex((l) => /Research gate \(Dimension 11\)|리서치 게이트 \(Dimension 11\)/.test(l));
-      const checker = lines.findIndex((l) => /├── (Plan Checker → Verify loop|계획 검사기 → 검증 루프)/.test(l));
-      const planner = lines.findIndex((l) => /├── (Planner \(with reachability check\)|플래너 \(도달 가능성 검사 포함\))/.test(l));
+      const gate = lines.findIndex((l) => /Research gate \(Dimension 11\)|리서치 게이트 \(Dimension 11\)|Portão de pesquisa \(Dimension 11\)/.test(l));
+      const checker = lines.findIndex((l) => /├── (Plan Checker → Verify loop|계획 검사기 → 검증 루프|Plan Checker → Loop de verificação)/.test(l));
+      const planner = lines.findIndex((l) => /├── (Planner \(with reachability check\)|플래너 \(도달 가능성 검사 포함\)|Planner \(com verificação de alcançabilidade\))/.test(l));
       assert.ok(gate !== -1 && checker !== -1 && planner !== -1, `${doc}: gate, planner and checker rows`);
       assert.equal(gate, checker + 1, `${doc}: the gate row sits under the verify loop`);
       assert.ok(planner < checker, `${doc}: the planner runs before the checker`);
-      assert.ok(!lines.some((l) => /├── (Research gate \(blocks if|리서치 게이트 \(RESEARCH\.md에 미해결)/.test(l)), `${doc}: no pre-research gate step`);
+      assert.ok(!lines.some((l) => /├── (Research gate \(blocks if|리서치 게이트 \(RESEARCH\.md에 미해결|Portão de pesquisa \(bloqueia se)/.test(l)), `${doc}: no pre-research gate step`);
     }
   });
 
