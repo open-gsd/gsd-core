@@ -397,9 +397,11 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
     assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous` and `\/gsd:manager` read so that they do not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
     assert.doesNotMatch(resolve(), /a caller never executes/, 'only autonomous and manager read the marker');
     const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
-    // One rule covers all three plan runs (3b, the INTERACTIVE wait at 3c, gap closure): autonomous.md sits
-    // just under its 40,960-unit limit (tests/autonomous-decomposition.test.cjs), so it is stated once.
-    assert.match(auto, /check `has_plans`\. If false → go to handle_blocker: "Plan phase \$\{PHASE_NUM\} did not produce any plans\." Any plan run \(here, 3c, gap closure\) printing `PLANNING STOPPED` → handle_blocker; never execute them\./);
+    // Each plan run reads the stop where it checks its plans: 3b, the INTERACTIVE wait at 3c, and gap closure.
+    const stop = 'go to handle_blocker with that line and never execute its plans.';
+    assert.ok(auto.includes(`check \`has_plans\`. If false → go to handle_blocker: "Plan phase \${PHASE_NUM} did not produce any plans." If plan-phase printed \`PLANNING STOPPED\`, ${stop}`), '3b');
+    assert.ok(auto.includes(`Wait for the plan agent to complete (if not already) and verify plans exist; if it printed \`PLANNING STOPPED\`, ${stop}`), '3c wait');
+    assert.ok(auto.includes(`handle_blocker: "Gap closure planning for phase \${PHASE_NUM} did not produce plans." If it printed \`PLANNING STOPPED\`, ${stop}`), 'gap closure');
     // The background planner is told it cannot ask, so the no-one-can-be-asked stop is observable to it.
     assert.match(auto, /prompt="Background: no AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
   });
