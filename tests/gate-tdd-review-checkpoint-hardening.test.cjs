@@ -23,7 +23,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { execFileSync } = require('node:child_process');
 const { runHook } = require('./helpers/process-seam.cjs');
-const { GIT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { GIT_TIMEOUT_MS, HOOK_FANOUT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { createTempGitProject, createTempDir, cleanup, runGsdTools } = require('./helpers.cjs');
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
@@ -616,7 +616,7 @@ describe('#5354 tdd review checkpoint seal', () => {
 
   // True when the FIFO exists; otherwise skips the test. Runs through the seam's bash interpreter.
   function mkfifo(t, fifo) {
-    const r = runHook('-c', ['mkfifo "$1"', '_', fifo], { interpreter: 'bash', timeoutMs: GIT_TIMEOUT_MS, env: isolatedEnv({ home: path.dirname(fifo) }) });
+    const r = runHook('-c', ['mkfifo "$1"', '_', fifo], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS, env: isolatedEnv({ home: path.dirname(fifo) }) });
     if (r.exitCode === 0) return true;
     t.skip('mkfifo unavailable');
     return false;
@@ -815,8 +815,14 @@ describe('#5354 tdd review checkpoint seal', () => {
   // Execute ship.md's seal step against a stubbed `gsd_run`, so the branches (not their text) are what is tested.
   function runSealStep({ recordRc = 0, picked = '1', seal, ws = '', prepare, commitOut, commitRc = 0, subjects = [], real = false, checkIgnoreExit, statusExit }) {
     const ship = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md'), 'utf8').replace(/\r\n/g, '\n');
-    const from = ship.indexOf('```bash\n', ship.indexOf('<step name="seal_tdd_review">')) + 8;
-    const script = ship.slice(from, ship.indexOf('\n```', from));
+    const marker = ship.indexOf('<step name="seal_tdd_review">');
+    assert.notEqual(marker, -1, 'ship.md has the seal_tdd_review step');
+    const fence = ship.indexOf('```bash\n', marker);
+    assert.notEqual(fence, -1, 'the seal step opens a bash fence');
+    const from = fence + 8;
+    const end = ship.indexOf('\n```', from);
+    assert.notEqual(end, -1, 'the seal step closes its bash fence');
+    const script = ship.slice(from, end);
     const { dir } = fixture(subjects, { summary: false });
     const before = git(dir, 'log', '-1', '--format=%s');
     if (seal !== undefined) w(dir, SEAL, seal);
@@ -831,7 +837,7 @@ describe('#5354 tdd review checkpoint seal', () => {
       ? 'gsd_run() { node -e "console.log(JSON.stringify(process.argv.slice(1)))" -- "$@" >> "$CALLS"; node "$GSD_TOOLS_BIN" "$@"; }\n'
       : 'gsd_run() { node -e "console.log(JSON.stringify(process.argv.slice(1)))" -- "$@" >> "$CALLS"; case "$*" in "run-with-timeout "*) shift 3; case "$*" in "git check-ignore"*) if [ -n "${CHECK_IGNORE_EXIT+x}" ]; then return "$CHECK_IGNORE_EXIT"; fi;; "git status"*) if [ -n "${STATUS_EXIT+x}" ]; then return "$STATUS_EXIT"; fi;; esac; "$@"; return $?;; "query commit"*) if [ -n "${COMMIT_OUT+x}" ]; then echo "$COMMIT_OUT"; else git add "$SEAL" && git commit -q -m "$3" -- "$SEAL" && git rev-parse HEAD || return 1; fi; return "${COMMIT_RC:-0}";; *--record*) echo "$PICK"; return "$REC";; *) echo "$PICK";; esac; }\n';
     const r = runHook('-c', [stub + script], {
-      interpreter: 'bash', cwd: dir, timeoutMs: GIT_TIMEOUT_MS,
+      interpreter: 'bash', cwd: dir, timeoutMs: HOOK_FANOUT_TIMEOUT_MS,
       env: isolatedEnv({ home, override: { ...(commitOut === undefined ? {} : { COMMIT_OUT: commitOut }), ...(checkIgnoreExit === undefined ? {} : { CHECK_IGNORE_EXIT: String(checkIgnoreExit) }), ...(statusExit === undefined ? {} : { STATUS_EXIT: String(statusExit) }), COMMIT_RC: String(commitRc), GSD_TOOLS_BIN: path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), CALLS: calls, GSD_WS: ws, REC: String(recordRc), PICK: picked, PHASE_DIR: PHASE, PHASE_NUMBER: '1', padded_phase: '01', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' } }),
     });
     return { r, dir, before, subject: git(dir, 'log', '-1', '--format=%s'), calls: fs.readFileSync(calls, 'utf8').split(/\r?\n/).filter(Boolean).map((c) => JSON.parse(c)).filter((argv) => argv[0] !== 'run-with-timeout') };
