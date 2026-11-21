@@ -1822,6 +1822,10 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     ['echo if=.env | cat | xargs dd', 'if=.env'],
   ]) blocks([cmd], { path: expectedPath });
   allows(["xargs dd <<< 'if=x.txt'", "xargs dd <<< 'if=.env.example'", 'echo of=.env | xargs dd']);
+
+  // A read-write redirect opens its file for reading too.
+  blocks(['cat <> .env', 'exec 3<> .env', 'cat 0<> .env', 'exec 3<>.env', 'cat <>.env', 'wc -l <> .env', 'sort 0<>.env']);
+  allows(['cat <> x.txt', 'exec 3<> .env.example', 'echo hi > .env']);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
