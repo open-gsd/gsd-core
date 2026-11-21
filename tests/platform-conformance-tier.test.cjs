@@ -630,6 +630,26 @@ describe('gen-platform-conformance-tier.cjs — real repo tree, macOS target (re
 
 // ─── #4641: narrow the Windows conformance tier away from house-idiom noise ───
 
+/**
+ * Count the unit-suite files under `testsDir` that `classify` puts in the tier,
+ * out of those that could be read. Other tests create and remove probe files
+ * under the live tree, so a file the walk listed may be gone by the read
+ * (#6166): it is left out of both counts.
+ */
+function tierCountsOf(testsDir, classify) {
+  const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
+  let eligibleCount = 0;
+  let tierCount = 0;
+  for (const absPath of walkTestFiles(testsDir)) {
+    if (suiteOf(absPath) !== null) continue;
+    const content = readTestFile(absPath);
+    if (content === null) continue;
+    eligibleCount++;
+    if (classify(content).needsRealOs) tierCount++;
+  }
+  return { eligibleCount, tierCount };
+}
+
 describe('conformance tier narrowing (#4641)', () => {
   // WINDOWS_TIER_RATIO_CEILING / MACOS_TIER_RATIO_CEILING are hoisted to
   // module scope above (shared with the real-repo-tree regression case
@@ -637,21 +657,7 @@ describe('conformance tier narrowing (#4641)', () => {
   // independently-drifting copy of it).
 
   test('conformance tier stays a tier, not the suite (#4641)', () => {
-    const realTestsDir = path.join(ROOT, 'tests');
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
-
-    const absoluteFiles = walkTestFiles(realTestsDir);
-    const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    let eligibleCount = 0;
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      // Other tests create and remove probe files under the live tree (#6166).
-      const content = readTestFile(absPath);
-      if (content === null) continue;
-      eligibleCount++;
-      const { needsRealOs } = classifyContent(content);
-      if (needsRealOs) tierCount++;
-    }
+    const { eligibleCount, tierCount } = tierCountsOf(path.join(ROOT, 'tests'), classifyContent);
 
     const ratio = tierCount / eligibleCount;
     assert.ok(
@@ -662,21 +668,7 @@ describe('conformance tier narrowing (#4641)', () => {
   });
 
   test('macos conformance tier stays within its evidence-backed ceiling (#4641)', () => {
-    const realTestsDir = path.join(ROOT, 'tests');
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
-
-    const absoluteFiles = walkTestFiles(realTestsDir);
-    const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    let eligibleCount = 0;
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      // Other tests create and remove probe files under the live tree (#6166).
-      const content = readTestFile(absPath);
-      if (content === null) continue;
-      eligibleCount++;
-      const { needsRealOs } = classifyMacosContent(content);
-      if (needsRealOs) tierCount++;
-    }
+    const { eligibleCount, tierCount } = tierCountsOf(path.join(ROOT, 'tests'), classifyMacosContent);
 
     const ratio = tierCount / eligibleCount;
     assert.ok(
@@ -1356,14 +1348,17 @@ describe('#6002: detectors match platform behavior, not text', () => {
 // ─── #6166: a test file that vanishes between the walk and the read ─────────
 
 describe('#6166 tree classifiers skip a test file deleted after enumeration', () => {
-  // Make reading `gone.test.cjs` (or `goneName`) throw an error with `code`, as
-  // a file deleted between walkTestFiles and the read does; every other read
-  // goes through.
-  function withFailingRead(t, testsDir, code, { goneName = 'gone.test.cjs', message } = {}) {
-    const gone = path.join(testsDir, goneName);
+  // Make reading `gone.test.cjs` (or each of `goneNames`) throw an error with
+  // `code` (none when `code` is null), as a file deleted between walkTestFiles
+  // and the read does; every other read goes through.
+  function withFailingRead(t, testsDir, code, { goneNames = ['gone.test.cjs'], message } = {}) {
+    const gone = new Set(goneNames.map((name) => path.join(testsDir, name)));
     const readFileSync = fs.readFileSync;
     t.mock.method(fs, 'readFileSync', (file, ...rest) => {
-      if (file === gone) throw Object.assign(new Error(message ?? `${code}: ${file}`), { code });
+      if (gone.has(file)) {
+        const err = new Error(message ?? `${code}: ${file}`);
+        throw code === null ? err : Object.assign(err, { code });
+      }
       return readFileSync(file, ...rest);
     });
   }
@@ -1392,6 +1387,7 @@ describe('#6166 tree classifiers skip a test file deleted after enumeration', ()
 
       withFailingRead(t, testsDir, 'EIO', { message: 'ENOENT: looks gone, but the code says otherwise' });
       assert.throws(() => readTestFile(gone), { code: 'EIO' });
+      assert.equal(readTestFile(path.join(testsDir, 'never-there.test.cjs')), null);
     });
   });
 
@@ -1421,7 +1417,7 @@ describe('#6166 tree classifiers skip a test file deleted after enumeration', ()
       });
     });
 
-    for (const code of ['EACCES', 'EISDIR', 'EIO']) {
+    for (const code of ['EACCES', 'EISDIR', 'EIO', 'EMFILE', 'ENOTDIR', 'EBUSY']) {
       test(`${name}: a ${code} read error still throws`, (t) => {
         withTestsDir('gen-platform-unreadable-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
           withFailingRead(t, testsDir, code);
@@ -1429,6 +1425,36 @@ describe('#6166 tree classifiers skip a test file deleted after enumeration', ()
         });
       });
     }
+
+    test(`${name}: two files that vanish in one run are both left out of total`, (t) => {
+      const files = { 'a.test.cjs': DARWIN, 'gone.test.cjs': DARWIN, 'gone-too.test.cjs': PLAIN };
+      withTestsDir('gen-platform-two-vanished-', files, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['gone.test.cjs', 'gone-too.test.cjs'] });
+        assert.deepEqual(classify(testsDir), { total: 1, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an empty file is read, counted in total and not flagged`, () => {
+      withTestsDir('gen-platform-empty-', { 'empty.test.cjs': '', 'a.test.cjs': DARWIN }, (testsDir) => {
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/a.test.cjs'] });
+      });
+    });
+
+    test(`${name}: an error with no code still throws`, (t) => {
+      withTestsDir('gen-platform-codeless-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
+        withFailingRead(t, testsDir, null, { message: 'read failed' });
+        assert.throws(() => classify(testsDir), { message: 'read failed' });
+      });
+    });
+
+    test(`${name}: a suite-tagged file is counted in total but never read or flagged`, (t) => {
+      // Suite files are filtered out before the read, so a vanished one stays in
+      // total, as on next; only unit-suite files are read and can be skipped.
+      withTestsDir('gen-platform-suite-', { 'x.install.test.cjs': DARWIN, 'a.test.cjs': DARWIN }, (testsDir) => {
+        withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['x.install.test.cjs'] });
+        assert.deepEqual(classify(testsDir), { total: 2, files: ['tests/a.test.cjs'] });
+      });
+    });
 
     test(`${name}: an error whose message says ENOENT but whose code does not still throws`, (t) => {
       withTestsDir('gen-platform-message-', { 'gone.test.cjs': PLAIN }, (testsDir) => {
@@ -1438,6 +1464,17 @@ describe('#6166 tree classifiers skip a test file deleted after enumeration', ()
     });
   }
 
+  test('the #4641 ratio counts leave out a file that vanished before the read', (t) => {
+    const files = { 'a.test.cjs': DARWIN, 'b.test.cjs': PLAIN, 'gone.test.cjs': DARWIN, 'x.slow.test.cjs': DARWIN };
+    withTestsDir('gen-platform-ratio-', files, (testsDir) => {
+      assert.deepEqual(tierCountsOf(testsDir, classifyContent), { eligibleCount: 3, tierCount: 2 });
+
+      withFailingRead(t, testsDir, 'ENOENT');
+      assert.deepEqual(tierCountsOf(testsDir, classifyContent), { eligibleCount: 2, tierCount: 1 });
+      assert.deepEqual(tierCountsOf(testsDir, classifyMacosContent), { eligibleCount: 2, tierCount: 1 });
+    });
+  });
+
   test('classifyTree: a .platform sibling that vanished never reaches the #5074 split check', (t) => {
     // Base without signal + sibling with one is a valid split. With the sibling
     // gone, only the base is left: no split to check, nothing flagged.
@@ -1445,7 +1482,7 @@ describe('#6166 tree classifiers skip a test file deleted after enumeration', ()
     withTestsDir('gen-platform-split-', files, (testsDir) => {
       assert.deepEqual(classifyTree(testsDir), { total: 2, files: ['tests/a.platform.test.cjs'] });
 
-      withFailingRead(t, testsDir, 'ENOENT', { goneName: 'a.platform.test.cjs' });
+      withFailingRead(t, testsDir, 'ENOENT', { goneNames: ['a.platform.test.cjs'] });
       assert.deepEqual(classifyTree(testsDir), { total: 1, files: [] });
     });
   });
