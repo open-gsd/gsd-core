@@ -2619,14 +2619,16 @@ describe('plan-review-convergence workflow: converged planned-phase records the 
     const close = lines.findIndex((line, i) => i > open && line === '```');
     const fence = lines.slice(open + 1, close).join('\n');
     const project = phaseProject(t, [['08-01-PLAN.md', null], ['08-02-PLAN.md', 'superseded'], ['08-03-PLAN.md', null]]);
+    // #6257: the fence assigns its own phase number from the runtime placeholder and reads the curated name from the
+    // ROADMAP and the live count from find-phase, so nothing is preset here: an unassigned variable would be an error.
+    fs.writeFileSync(path.join(project, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 8: Demo\n- [ ] w\n');
     const script = [
+      'set -u',
       'gsd_run() { if [ "$1" = query ] && [ "$2" = state.planned-phase ]; then shift; printf "STATE:%s\\n" "$*"; else node "$GSD_TOOLS_PATH" "$@"; fi; }',
-      JQ_SHIM,
-      "PHASE_NUMBER='08'; PHASE_NAME='demo'; unset PLAN_COUNT",
-      fence,
+      fence.replaceAll('{phase_number}', '08'),
     ].join('\n');
     const out = execFileSync('bash', ['-c', script], { cwd: project, encoding: 'utf8', env: { ...process.env, GSD_TOOLS_PATH }, timeout: NESTED_BASH_GSD_TOOLS_TIMEOUT_MS }).trim();
-    assert.equal(out, 'STATE:state.planned-phase --phase 08 --name demo --plans 2');
+    assert.equal(out, 'STATE:state.planned-phase --phase 08 --name Demo --plans 2');
   });
 
   test('the initial planning check keeps the physical count', () => {
