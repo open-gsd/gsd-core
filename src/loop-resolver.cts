@@ -37,7 +37,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4030 real-home-guard.cjs is an `export =` module, which only `import x = require` can name
 import realHomeGuard = require('./real-home-guard.cjs');
 const { output: coreOutput, error: coreError } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -46,9 +46,9 @@ const { resolvePhaseArtifactFile } = verificationMod;
 import { requireSafePath, isContainedIn, PathAcceptance } from './security.cjs';
 import { resolveProjectContext } from './project-context.cjs';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4030 phase-locator.cjs is an `export =` module, which only `import x = require` can name
 import phaseLocator = require('./phase-locator.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4030 planning-workspace.cjs is an `export =` module, which only `import x = require` can name
 import planningWorkspaceMod = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspaceMod;
 const { guardedFindPhase } = phaseLocator;
