@@ -4680,8 +4680,16 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
     if ((op !== '|' && op !== '|&') || prevSeg < 0) {
       // A pipe inside a group (`… | (true; cat | bash)`) also reads what is piped into the group: the walk goes on
       // from its opener, every stage before it filtered, since which command inside reads that is not sorted.
-      const opener = throughFilters ? groupOpener(at, sepAfter, ctx) : -1;
+      const opener = throughFilters ? groupOpener(at, bySeg, sepAfter, ctx) : -1;
       if (opener === -1) return stages;
+      if (opener === UNKNOWN_OPENER) {
+        for (let g = at - 1; g >= 0; g--) {
+          if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
+          stageAt(g).filtered = true;
+          charge(ctx, TOKEN_WORK + 1);
+        }
+        return stages;
+      }
       filtered = true;
       at = opener + 1;
       continue;
@@ -4707,13 +4715,19 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
         inner.push(stage);
         charge(ctx, TOKEN_WORK + 1);
       }
-      // A heredoc or here-string given to the group is the stdin of each command inside it, and not the pipe.
+      // A heredoc or here-string given to the group is the stdin of each command inside it, and not the pipe, unless
+      // an fd is duplicated or redirected beside it (`(cat <&3) 3<&0 <<< x`): the walk then goes on, failing closed.
       const fed = groupFeeds(group.close, at, bySeg, bodies, ctx);
       const isFed = fed.heredocs.length > 0 || fed.hereStrings.length > 0;
       for (const stage of isFed ? inner : []) {
         stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings] };
       }
-      if (group.start === -1 || !throughFilters || isFed) return stages;
+      if (group.start === -1 || !throughFilters || (isFed && !fed.fdMoved)) return stages;
+      if (fed.fdMoved) {
+        filtered = true;
+        at = group.start;
+        continue;
+      }
       // The group reads the pipe through each command inside it that reads its stdin, and the walk goes on past it
       // as past a plain stage; when every one writes its own text (`| (echo hi) |`), nothing reads the pipe.
       const passes = inner.some(({ words, cmdWords }) => passesStdinOn(words) || passesStdinOn(cmdWords));
@@ -4760,11 +4774,13 @@ function pipedGroup(last, at, sepAfter, ctx) {
 }
 
 // The heredoc bodies and here-strings given to a group closing after segment `close`, before the pipe into segment
-// `at` (`(cat) <<< 'x' | sh`), charged their tokens and bytes.
+// `at` (`(cat) <<< 'x' | sh`), charged their tokens and bytes; `fdMoved` when an fd is duplicated or another input
+// redirected there, which may keep the pipe readable.
 function groupFeeds(close, at, bySeg, bodies, ctx) {
-  const feeds = { heredocs: [], hereStrings: [] };
+  const feeds = { heredocs: [], hereStrings: [], fdMoved: false };
   for (let g = close + 1; g < at; g++) {
     const seg = bySeg.get(g) || [];
+    if (seg.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<'))))) feeds.fdMoved = true;
     for (const h of (bodies && bodies.get(g)) || []) feeds.heredocs.push(h.text);
     for (const text of hereStringTargets(seg)) feeds.hereStrings.push(text);
     charge(ctx, TOKEN_WORK * seg.length + 1);
@@ -4777,27 +4793,56 @@ function groupFeeds(close, at, bySeg, bodies, ctx) {
 
 // The segment whose separator opens the group segment `at` sits in, past one right before `at`, whose stdin is
 // that of the group around it; -1 when there is none. Each segment's innermost opener is found once per script
-// (GROUP_OPENERS), charged a unit a separator, since every command of a script may walk a pipe.
+// (GROUP_OPENERS), charged a unit a separator, since every command of a script may walk a pipe. A `)` inside a
+// `case` closing no group opened in it is a pattern's; a closer matching no opener, or an `esac` with a group it
+// opened still open, leaves every opener after it UNKNOWN_OPENER.
 const GROUP_OPENERS = new WeakMap();
-function groupOpener(at, sepAfter, ctx) {
+const UNKNOWN_OPENER = -2;
+function groupOpener(at, bySeg, sepAfter, ctx) {
   let openers = GROUP_OPENERS.get(sepAfter);
   if (!openers) {
     openers = [];
     const open = [];
+    let cases = 0;
+    let unknown = false;
     let last = -1;
     for (const g of sepAfter.keys()) if (g > last) last = g;
     for (let g = 0; g <= last + 1; g++) {
-      openers.push(open.length ? open[open.length - 1] : -1);
+      const top = open.length ? open[open.length - 1] : null;
+      openers.push(unknown ? UNKNOWN_OPENER : top ? top.seg : -1);
+      const [first, , third] = commandHead(bySeg.get(g) || []);
+      if (first === 'case' && third === 'in') cases++;
+      else if (first === 'esac') {
+        if (!cases || (top && top.cases === cases)) unknown = true;
+        cases--;
+      }
       const text = sepAfter.get(g);
-      if (text === '(' || text === '{') open.push(g);
-      else if (GROUP_CLOSERS.has(text)) open.pop();
+      if (text === '(' || text === '{') open.push({ seg: g, text, cases });
+      else if (text === ')' && cases > 0 && (!top || top.cases < cases)) continue; // a case pattern
+      else if (GROUP_CLOSERS.has(text)) {
+        if (!top || top.cases !== cases || top.text !== (text === ')' ? '(' : '{')) unknown = true;
+        open.pop();
+      }
     }
     charge(ctx, openers.length);
     GROUP_OPENERS.set(sepAfter, openers);
   }
   let opener = openers[at] ?? -1;
-  if (opener !== -1 && opener + 1 === at) opener = openers[opener];
+  if (opener >= 0 && opener + 1 === at) opener = openers[opener];
   return opener;
+}
+
+// The first three words of a segment past leading reserved words (`do`, `then` …), a quoted one as null, since a
+// quoted word is never a reserved one.
+function commandHead(segTokens) {
+  const out = [];
+  for (const t of segTokens) {
+    if (t.kind !== 'word') continue;
+    if (out.length === 3) break;
+    const text = t.quoted === 'none' ? t.text : null;
+    if (out.length || !LEADING_RESERVED.has(text)) out.push(text);
+  }
+  return out;
 }
 
 // A stage whose output does not come from its stdin: an echo or a printf, a `cat` or `tee` given a heredoc or
