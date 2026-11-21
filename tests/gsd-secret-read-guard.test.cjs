@@ -3817,6 +3817,19 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     'xargs --delimiter=x cat <<< .envxb',
     "xargs -d '\\x78' cat <<< .envxb",
     "printf 'a\\0.env\\0' | xargs -0 cat",
+    // Without -d or -0, xargs removes the quotes and backslashes in what it reads.
+    "xargs cat <<< '.e\"n\"v'",
+    "xargs cat <<< '.e\\nv'",
+    "xargs cat <<'EOF'\n.e\"n\"v\nEOF",
+    "printf '.e%sn%sv' '\"' '\"' | xargs cat",
+    // The stdin a group, a subshell, a shell or a function is given reaches the xargs inside it.
+    '{ xargs cat; } <<< .env',
+    '( xargs cat ) <<< .env',
+    "sh -c 'xargs cat' <<< .env",
+    "sh -c 'xargs cat' <<EOF\n.env\nEOF",
+    "printf '.env' | sh -c 'xargs cat'",
+    "echo .env | bash -c 'xargs cat'",
+    'f() { xargs cat; }; f <<< .env',
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3840,6 +3853,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['(xargs cat) < names', 'names'],
     ['exec < names; xargs cat', 'names'],
     ["sh -c 'xargs cat' < names", 'names'],
+    ['f() { xargs cat; }; f < names', 'names'],
     // A delimiter xargs would not split at as one character.
     ['xargs -d ab cat <<< x', 'ab'],
   ];
@@ -3855,6 +3869,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "bash -c 'echo a | xargs cat' < names",
     'sort < a.txt; ls | xargs cat',
     'xargs -d x cat <<< a.envxb',
+    // A redirect on a group or an `exec` reaches only the commands inside the group, or after the `exec`.
+    'xargs cat; exec < list',
+    'xargs -r cat; { head -1; } < list',
+    // echo without -e prints an escape it does not know as it is.
+    "echo 'src\\build.log' | xargs cat",
     // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
     'cat names | xargs cat',
   ];
