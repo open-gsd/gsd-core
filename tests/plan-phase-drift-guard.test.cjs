@@ -1834,3 +1834,67 @@ test('§8.5.2 crash-resume (non-reviews) still skips written plans (#2762 negati
 });
   });
 }
+
+// ─── #6257: step 13b passes real values to `state planned-phase` ──────────────────
+
+describe('plan-phase step 13b records the phase name and plan count (#6257)', () => {
+  const fs13 = require('fs');
+  const os13 = require('os');
+  const path13 = require('path');
+  const { runHook: runBash } = require('./helpers/process-seam.cjs');
+  const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const { cleanup: cleanup13 } = require('./helpers.cjs');
+
+  const HAS_TOOLS = runBash('-c', ['command -v jq'], { interpreter: 'bash' }).exitCode === 0;
+
+  // The fence that calls state.planned-phase, exactly as shipped.
+  function step13bFence() {
+    const lines = splitLines(workflow);
+    const hit = scanFencedBlocks(lines).find((b) => b.closeLineIdx !== -1
+      && lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n').includes('state.planned-phase'));
+    assert.ok(hit, 'step 13b must still call state.planned-phase in a fence');
+    return lines.slice(hit.openLineIdx + 1, hit.closeLineIdx).join('\n');
+  }
+
+  // `set -u`: any variable the fence uses without assigning it is an error, which is the defect.
+  function run13b(findPhaseJson) {
+    const dir = fs13.mkdtempSync(path13.join(os13.tmpdir(), 'gsd-6257-'));
+    const log = path13.join(dir, 'planned-phase.log');
+    const script = [
+      'set -u',
+      'gsd_run() { if [ "$2" = find-phase ]; then printf %s "$FIND_JSON"; else printf "%s\\n" "$*" > "$CALL_LOG"; fi; }',
+      step13bFence(),
+    ].join('\n');
+    try {
+      const res = runBash('-c', [script], {
+        interpreter: 'bash',
+        env: { ...process.env, PHASE_NUMBER: '01', FIND_JSON: findPhaseJson, CALL_LOG: log },
+      });
+      return { res, call: fs13.existsSync(log) ? fs13.readFileSync(log, 'utf8').trim() : null };
+    } finally {
+      cleanup13(dir);
+    }
+  }
+
+  const FOUND = (extra) => JSON.stringify({ found: true, phase_number: '01', phase_name: 'foundation', plan_count: 2, ...extra });
+
+  test('a found phase passes its number, name and plan count to state.planned-phase', { skip: !HAS_TOOLS }, () => {
+    const { res, call } = run13b(FOUND({}));
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.match(call, /--phase 01 --name foundation --plans 2$/);
+  });
+
+  test('a phase with zero plans records zero, not an empty count', { skip: !HAS_TOOLS }, () => {
+    const { res, call } = run13b(FOUND({ plan_count: 0 }));
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.match(call, /--plans 0$/);
+  });
+
+  test('a phase find-phase cannot locate stops the step and records nothing', { skip: !HAS_TOOLS }, () => {
+    const { res, call } = run13b(JSON.stringify({ found: false, phase_number: null, phase_name: null, plan_count: null }));
+    assert.notStrictEqual(res.exitCode, 0, 'the step must stop');
+    assert.match(res.stderr, /phase 01 not found/);
+    assert.strictEqual(call, null, 'state.planned-phase must not run with empty values');
+  });
+});
