@@ -1314,8 +1314,8 @@ had already reported it (below).
 fields of the same name: the same SUMMARY pairing and lookup, the same halt
 predicate (`isSummaryFileHalted`), the same `depends_on` resolution over the
 same plans (the live, canonically named ones, in the same sorted order), and
-the same propagation. The two commands give the same answers except in these
-cases:
+the same propagation. These are the cases where the two commands are known to
+give different answers:
 
 - **A SUMMARY that resolves outside the planning root** (a symlink out of
   it). `phase-plan-index` reads it for its halt. `planning inspect` does not:
@@ -1344,7 +1344,10 @@ cases:
   inspect` answers: a `depends_on` token naming either plan's id, or a
   canonical id they share, resolves to the plan that sorts last, and a
   short-form token (the plan number alone, such as `01`) to the first plan in
-  sort order with that plan number, which can be a third plan.
+  sort order with that plan number, which can be a third plan; an exact or
+  canonical match to another plan is taken before the short form.
+- **A phase directory that cannot be listed.** `phase-plan-index` throws; `planning
+  inspect` reports the phase `unreadable` with no plan rows (`phase_scope_degraded`).
 - **A `depends_on` token that resolves to a plan whose id is empty** (a bare
   `PLAN.md`, named by `depends_on: [""]`). `phase-plan-index` leaves that edge
   out of its wave order but keeps it in the halt propagation it runs in that

@@ -943,8 +943,8 @@ function buildPlanRows(phaseDir: string, diagnostics: Diagnostic[], planningRoot
  * (`phase-plan-index`'s node set) the way `cmdPhasePlanIndex` (`src/phase.cts`)
  * does: the same three-tier depends_on resolution (`resolveDependencyId`) and
  * the same `computeHaltPropagation` pass; a token that resolves to no plan in
- * the set is dropped, as there. docs/CLI-TOOLS.md ("Halted plans") lists every
- * difference between the two commands; three arise here. Two because this read
+ * the set is dropped, as there. docs/CLI-TOOLS.md ("Halted plans") lists the
+ * differences between the two commands; three arise here. Two because this read
  * never fails where `phase-plan-index` refuses the phase: on a depends_on cycle
  * every non-halted plan the shared propagation cannot order gets a non-empty
  * `blocked_by`, and plan ids that differ only in case resolve by sort order
