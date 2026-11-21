@@ -2657,7 +2657,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // (the injection case above — the .toml surface never had to consider this
   // because TOML string-quoting isn't a shell argv boundary) is dropped with
   // a warning rather than ever reaching child_process argv.
-  // Single source of truth for the model-id "allowed characters" notion
+  // Single source of truth for the model-id "allowed characters" notion (owned by src/model-catalog.cts since #5328, which the Agent model guard also reads)
   // (#3714 follow-up — "Generative Fix Divergence"): the accept regex
   // (MODEL_ID_CHARSET_RE, used to ADMIT a pin) and the sanitizer keep-class
   // (MODEL_ID_SANITIZE_STRIP_RE, used to RENDER a rejected pin into a
@@ -2669,42 +2669,48 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // "chat-bison@001"), which are legitimate model ids reachable through a
   // custom model_provider.
   // This body is interpolated raw into BOTH a positive character class
-  // (MODEL_ID_CHARSET_RE, `[BODY]`) and a negated one
-  // (MODEL_ID_SANITIZE_STRIP_RE, `[^BODY]`) below — only plain characters
+  // (`charsetRe`, `[BODY]`) and a negated one (`stripReG`, `stripRe`,
+  // `[^BODY]`) in getModelIdPatterns below — only plain characters
   // and `x-y` ranges are safe here. A class metacharacter (`^`, `]`, `\`)
-  // would mean different things in the two derived regexes if ever added.
-  const MODEL_ID_CHARSET_BODY = 'A-Za-z0-9._:/@-';
-  // The first character must be alphanumeric (#3714 hardening): a leading
-  // '.', '_', ':', '/', or '@' has no legitimate model-id use case and, for
-  // resolveOrchestratorExec's documented role as a GENERAL descriptor→argv
-  // seam other hosts may adopt, a leading '@' or '/' is exactly the shape an
-  // @-response-file or /-switch parser would key on. The leading-dash shape
-  // is enforced separately by LEADING_DASH_RE below — it is NOT relaxed
-  // here, since a flag-shaped value ("-c", "--config") must still fail the
-  // resolver's own unsafe_leading_dash_model guard path via that dedicated
-  // check, not this charset.
-  const MODEL_ID_CHARSET_RE = new RegExp(`^[A-Za-z0-9][${MODEL_ID_CHARSET_BODY}]*$`);
-  // Keep-class for sanitizing a REJECTED pin before it reaches the warning
-  // (a guaranteed-reachable raw-to-TTY sink — the dispatch step runs with no
-  // `2>` redirect). Built from the same MODEL_ID_CHARSET_BODY as the accept
-  // regex above, so every character the matcher accepts also survives the
-  // sanitizer unchanged, and a widened charset can never diverge from its
-  // rendering again.
-  //
-  // This `g`-flagged instance is for internal `.replace()` use ONLY — a
-  // `/g` regex is stateful (`.lastIndex` persists across calls) and
-  // `.test()` on it alternates true/false/true across repeated calls on the
-  // same string, a false-green trap for any test that reaches for `.test()`
-  // instead of `.replace()`. To make that trap impossible rather than just
-  // documenting it, this `g`-flagged object is never exported; the exported
-  // `MODEL_ID_SANITIZE_STRIP_RE` below is a separate, non-global instance
-  // built from the same body, safe for `.test()`/`.match()` in tests.
-  const MODEL_ID_SANITIZE_STRIP_RE_G = new RegExp(`[^${MODEL_ID_CHARSET_BODY}]`, 'g');
-  // Non-global companion of MODEL_ID_SANITIZE_STRIP_RE_G, exported for
-  // tests. Do not use with `.replace()` on a value containing more than one
-  // disallowed character — it only replaces the first match. Production
-  // code must use the `g`-flagged instance above instead.
-  const MODEL_ID_SANITIZE_STRIP_RE = new RegExp(`[^${MODEL_ID_CHARSET_BODY}]`);
+  // would mean different things in the derived regexes if ever added.
+  // The owner module loads at first use, not at load: a require here would undo the lazy lib load (#5865).
+  let modelIdPatterns;
+  function getModelIdPatterns() {
+    if (!modelIdPatterns) {
+      const body = loadLib('./lib/model-catalog.cjs').MODEL_ID_CHARSET_BODY;
+      modelIdPatterns = {
+        body,
+        // The first character must be alphanumeric (#3714 hardening): a leading
+        // '.', '_', ':', '/', or '@' has no legitimate model-id use case and, for
+        // resolveOrchestratorExec's documented role as a GENERAL descriptor→argv
+        // seam other hosts may adopt, a leading '@' or '/' is exactly the shape an
+        // @-response-file or /-switch parser would key on. The leading-dash shape
+        // is enforced separately by LEADING_DASH_RE below — it is NOT relaxed
+        // here, since a flag-shaped value ("-c", "--config") must still fail the
+        // resolver's own unsafe_leading_dash_model guard path via that dedicated
+        // check, not this charset.
+        charsetRe: new RegExp(`^[A-Za-z0-9][${body}]*$`),
+        // Keep-class for sanitizing a REJECTED pin before it reaches the warning
+        // (a guaranteed-reachable raw-to-TTY sink — the dispatch step runs with no
+        // `2>` redirect). Built from the same body as charsetRe, so every
+        // character the matcher accepts also survives the sanitizer unchanged,
+        // and a widened charset can never diverge from its rendering again.
+        // This `g`-flagged instance is for internal `.replace()` use ONLY — a
+        // `/g` regex is stateful (`.lastIndex` persists across calls) and
+        // `.test()` on it alternates true/false/true across repeated calls on the
+        // same string, a false-green trap for any test that reaches for `.test()`
+        // instead of `.replace()`. The exported MODEL_ID_SANITIZE_STRIP_RE is
+        // `stripRe`, a separate non-global instance, so the `g` object is never
+        // exported.
+        stripReG: new RegExp(`[^${body}]`, 'g'),
+        // Non-global companion of stripReG, exported for tests. Do not use with
+        // `.replace()` on a value containing more than one disallowed character:
+        // it only replaces the first match. Production code uses stripReG.
+        stripRe: new RegExp(`[^${body}]`),
+      };
+    }
+    return modelIdPatterns;
+  }
   // A model id has no legitimate reason to be long; this also keeps a
   // pathological pin away from the Windows argv ceiling (execFileSync aborts
   // if argv > 32,767 chars — CLAUDE.md "Windows ARGV Overflow"). A pin over
@@ -2725,7 +2731,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // a truncated escape sequence can never survive (e.g. an SGR sequence
     // cut before its reset, leaving sticky terminal state) — truncation
     // only ever cuts already-safe characters.
-    const sanitized = String(rawValue).replace(MODEL_ID_SANITIZE_STRIP_RE_G, '?');
+    const sanitized = String(rawValue).replace(getModelIdPatterns().stripReG, '?');
     const safe = sanitized.length > 64 ? `${sanitized.slice(0, 64)}…` : sanitized;
     process.stderr.write(
       `gsd: warning — dispatch model pin for agent "${agentName}" (value "${safe}") ${reason}; ` +
@@ -2739,7 +2745,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   // exec:null -> a FATAL wave abort (the EXEC_OK fail-closed halt of executor-isolation-dispatch.md),
   // even on hosts (e.g. kimi-code) that declare no modelFlag at all and
   // previously ignored the pin entirely. This check MUST run BEFORE
-  // MODEL_ID_CHARSET_RE below: the charset is anchored to `[A-Za-z0-9]` at
+  // the `charsetRe` test below: the charset is anchored to `[A-Za-z0-9]` at
   // the first character, so every dash-leading value already fails the
   // charset test and would otherwise be swallowed by the generic "unsafe
   // characters" message, losing the more specific and more actionable
@@ -2775,7 +2781,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       _warnDispatchModelPinDropped(agentName, rawValue, 'looks like a flag/option, not a model id (leading "-")');
       return undefined;
     }
-    if (!MODEL_ID_CHARSET_RE.test(trimmed)) {
+    if (!getModelIdPatterns().charsetRe.test(trimmed)) {
       _warnDispatchModelPinDropped(agentName, rawValue, 'does not look like a model id (unsafe characters)');
       return undefined;
     }
@@ -4969,6 +4975,28 @@ const HOST_COMMAND_ROUTERS = {
   // ran before the router in the old `case 'init':` arm.
   init: (ctx) => {
     try { warnIfStaleBake(ctx.cwd); } catch { /* guard must never break init */ }
+    // #5328: the Agent model guard compares against the workstream `init` used; the hook never sees --ws, so carry it.
+    // Only where the guard applies (Claude Code, guard not off) is anything read, so only there is anything written or swept.
+    const ws = ctx.workstreamContext;
+    const flagged = Boolean(ws && ws.source === 'cli');
+    try {
+      const esc = require('./lib/model-escalation.cjs');
+      const root = esc.escalationRoot(ctx.cwd);
+      if (esc.guardApplies(root)) {
+        const store = require('./lib/active-workstream-store.cjs');
+        const now = require('./lib/clock.cjs').realClock.now();
+        // Only a workstream init resolves (the directory its config loader reads): a --ws naming none adds no guard baseline.
+        if (flagged && fs.statSync(planningDir(root, ws.ws), { throwIfNoEntry: false })?.isDirectory() === true) {
+          if (!store.recordInitWorkstream(root, process.env.CLAUDE_CODE_SESSION_ID, ws.ws, now)) {
+            process.stderr.write(`${esc.formatNotRecorded(ws.ws)}\n`);
+          }
+        } else {
+          store.pruneInitWorkstreams(root, now);
+        }
+      }
+    } catch (e) {
+      if (flagged) process.stderr.write(`${require('./lib/model-escalation.cjs').formatNotRecorded(ws.ws, e.message)}\n`);
+    }
     routeInitCommand({ init, ...ctx });
   },
   // capability → routeCapabilityCommand (ADR-2346 P2). The router is async
@@ -6056,17 +6084,18 @@ module.exports = {
   // policy (charset accept/render parity, max-length boundary, leading-char
   // anchor) is otherwise unreachable from outside the dispatchOverlayCapabilityCommand closure.
   resolveDispatchModelPin,
-  MODEL_ID_CHARSET_RE,
+  // Getters: the patterns build at first read (see getModelIdPatterns), so requiring this file loads no model-catalog.
+  get MODEL_ID_CHARSET_RE() { return getModelIdPatterns().charsetRe; },
   // The shared character-class body both MODEL_ID_CHARSET_RE and
   // MODEL_ID_SANITIZE_STRIP_RE are derived from — exported so a test can
   // assert its own expected charset literal EQUALS this value, making a
   // silent widening of the production body fail the test instead of only
   // the (unexported) regexes built from it.
-  MODEL_ID_CHARSET_BODY,
+  get MODEL_ID_CHARSET_BODY() { return getModelIdPatterns().body; },
   // Non-global companion of the internal g-flagged sanitize regex — see the
   // comment at its definition for why the g-flagged instance is never
   // exported.
-  MODEL_ID_SANITIZE_STRIP_RE,
+  get MODEL_ID_SANITIZE_STRIP_RE() { return getModelIdPatterns().stripRe; },
   MODEL_ID_MAX_LENGTH,
 };
 

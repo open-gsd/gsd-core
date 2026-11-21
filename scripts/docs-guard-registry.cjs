@@ -158,6 +158,7 @@ function assertNoSuiteCollision(tests) {
  */
 const DOCS_GUARD_TESTS = {
   'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
+  'tests/agent-model-guard-vocabulary.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/pi-parity-matrix.test.cjs': ['docs/reference/pi-parity-matrix.md'],
   'tests/adr-15-progress-converge.test.cjs': [
     'docs/COMMANDS.md',

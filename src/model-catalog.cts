@@ -94,6 +94,24 @@ export const VALID_TIERS: Set<string> = new Set([...Object.values(_catalog.adapt
 // model_policy.runtime_tiers), which does not accept 'inherit' as a tier.
 export const ADAPTIVE_TIER_VALUES: Set<string> = new Set(Object.values(_catalog.adaptiveTierMap));
 
+/**
+ * The model-id character-class body (#3714): gsd-tools.cjs derives its pin accept regex and sanitizer from it, and
+ * hooks/lib/agent-model-check.js its echo sanitizer. Plain characters and `x-y` ranges only: it is interpolated raw
+ * into both `[BODY]` and `[^BODY]`.
+ */
+export const MODEL_ID_CHARSET_BODY = 'A-Za-z0-9._:/@-';
+
+/** Longest model id echoed into a message; hooks/lib/isolation-deny-reason.js REASON_INTERPOLATION_MAX_LEN is the same bound (a test pins the two equal). */
+export const MODEL_ECHO_MAX_LEN = 64;
+
+/**
+ * A model id (model-authored or from repo config) made safe to echo into a hook reason or a stderr line: only the
+ * model-id charset plus `[` `]` (the host's `[1m]` context-window suffix) survives, the rest becomes `?`, capped.
+ */
+export function sanitizeModelForMessage(value: string): string {
+  return value.replace(new RegExp(`[^[\\]${MODEL_ID_CHARSET_BODY}]`, 'g'), '?').slice(0, MODEL_ECHO_MAX_LEN);
+}
+
 /** Per-profile model slots for each agent. */
 export interface AgentModelProfiles {
   quality: string;

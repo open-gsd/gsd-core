@@ -462,6 +462,17 @@ test('the real repo corpus is clean and its index is current', () => {
   assert.equal(res.status, 0, `docs/adr/ must satisfy its own gate:\n${res.stderr}`);
 });
 
+test('the carry ADR the maintainer accepted on 2026-11-11 is indexed as Accepted (#5328)', () => {
+  // The index is generated from the ADR status line and the gate above proves it current,
+  // so the parsed Status cell is the observable of the accepted status.
+  const readme = fs.readFileSync(path.join(REPO_ROOT, 'docs', 'adr', 'README.md'), 'utf8');
+  const table = findTableWithColumns(readme, ['ADR', 'Title', 'Status', 'Read first']);
+  assert.ok(table, 'the generated README has an ADR/Title/Status/Read first table');
+  const row = table.rows.find((r) => r.ADR === '[ADR-5328](5328-agent-model-guard-workstream-carry.md)');
+  assert.ok(row, 'a row for the carry ADR exists');
+  assert.equal(row.Status, 'Accepted');
+});
+
 // --- insert-only invariant (#3251) ------------------------------------------
 //
 // The generated region is a shared, committed artifact rewritten by every

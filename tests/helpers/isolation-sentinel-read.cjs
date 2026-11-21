@@ -105,10 +105,10 @@ function runCursor(root) {
   return spawnBounded([CURSOR_HOOK], { input: JSON.stringify(payload), cwd: os.tmpdir() });
 }
 
-/** Project whose config resolves the agent guard to harness-worktree (a flag-less dispatch is denied). */
+/** Project whose config resolves the agent guard to harness-worktree (a flag-less dispatch is denied); the #5328 model guard is off, so the isolation verdict is the only one. */
 function makeGuardProject() {
   const root = createFixture({ prefix: 'gsd-5758-guard-', planning: true, git: true, projectDoc: false });
-  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude' }));
+  fs.writeFileSync(path.join(root, '.planning', 'config.json'), JSON.stringify({ runtime: 'claude', hooks: { agent_model_guard: false } }));
   return root;
 }
 
