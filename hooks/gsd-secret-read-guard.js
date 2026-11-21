@@ -1977,6 +1977,7 @@ function tokenize(str, reading) {
         hasWord = false;
       } else {
         flush();
+        if (namedFd) tokens[tokens.length - 1].namesFd = true;
       }
       let j = i;
       let text;
@@ -3415,7 +3416,8 @@ function fedTexts(feeds) {
   return parts.length > 1 ? [...parts, parts.join('\n')] : parts;
 }
 
-// The command words of one segment's tokens: the redirect targets (`<<<` text, `> file`) are not operands of the command.
+// The command words of one segment's tokens: the redirect targets (`<<<` text, `> file`) are not operands of the
+// command, nor is a `{name}` word naming the fd a redirect opens (`{fd}<<< x`).
 function commandWords(segTokens) {
   const words = [];
   for (let k = 0; k < segTokens.length; k++) {
@@ -3424,7 +3426,7 @@ function commandWords(segTokens) {
       if (!t.dup && segTokens[k + 1] && segTokens[k + 1].kind === 'word') k++;
       continue;
     }
-    if (t.kind === 'word') words.push(t);
+    if (t.kind === 'word' && !t.namesFd) words.push(t);
   }
   return words;
 }
@@ -4682,7 +4684,8 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       ctx.pipeSourcesRead.add(seg);
     }
     const cmdWords = inner ? pastReserved(commandWords(seg)) : commandWords(seg);
-    const stage = { words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg) }, filtered };
+    const moved = fdMoved(seg, (bodies && bodies.get(segIdx)) || []);
+    const stage = { words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg), moved }, filtered };
     stages.push(stage);
     return stage;
   };
@@ -4739,7 +4742,8 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       const fed = groupFeeds(group.close, at, bySeg, bodies, ctx);
       const isFed = fed.heredocs.length > 0 || fed.hereStrings.length > 0;
       for (const stage of isFed ? inner : []) {
-        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings] };
+        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings],
+          moved: stage.feeds.moved || fed.fdMoved };
       }
       if (group.start === -1 || !throughFilters || (isFed && !fed.fdMoved)) return stages;
       if (fed.fdMoved) {
@@ -4779,7 +4783,8 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       const fed = groupFeeds(prevSeg - 1, prevSeg + 1, bySeg, bodies, ctx);
       const isFed = fed.heredocs.length > 0 || fed.hereStrings.length > 0;
       for (const stage of isFed ? inner : []) {
-        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings] };
+        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings],
+          moved: stage.feeds.moved || fed.fdMoved };
       }
       if (opener === -1) return stages;
       filtered = true;
@@ -4842,10 +4847,7 @@ function groupFeeds(close, at, bySeg, bodies, ctx) {
   const feeds = { heredocs: [], hereStrings: [], fdMoved: false };
   for (let g = close + 1; g < at; g++) {
     const seg = bySeg.get(g) || [];
-    if (seg.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<')) || (t.text.endsWith('<<<') && (t.namedFd || !STDIN_FEED_RE.test(t.text)))))) {
-      feeds.fdMoved = true;
-    }
-    if (((bodies && bodies.get(g)) || []).some((h) => h.fd !== undefined && h.fd !== '' && h.fd !== '0')) feeds.fdMoved = true;
+    if (fdMoved(seg, (bodies && bodies.get(g)) || [])) feeds.fdMoved = true;
     for (const h of (bodies && bodies.get(g)) || []) feeds.heredocs.push(h.text);
     for (const text of hereStringTargets(seg)) feeds.hereStrings.push(text);
     charge(ctx, TOKEN_WORK * seg.length + 1);
@@ -4854,6 +4856,14 @@ function groupFeeds(close, at, bySeg, bodies, ctx) {
   for (const text of [...feeds.heredocs, ...feeds.hereStrings]) bytes += text.length;
   charge(ctx, TOKEN_WORK * bytes);
   return feeds;
+}
+
+// Whether a segment's tokens duplicate an fd or redirect another input, or give a heredoc or here-string on an fd
+// other than 0 (`3<<< x`, `{fd}<<EOF`): what is then on stdin may still be the pipe.
+function fdMoved(segTokens, heredocs) {
+  return segTokens.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<'))
+    || (t.text.endsWith('<<<') && (t.namedFd || !STDIN_FEED_RE.test(t.text)))))
+    || heredocs.some((h) => h.fd !== undefined && h.fd !== '' && h.fd !== '0');
 }
 
 // The segment whose separator opens the group segment `at` sits in, past one right before `at`, whose stdin is
@@ -4984,9 +4994,9 @@ function commandHead(segTokens) {
 }
 
 // A stage whose output does not come from its stdin: an echo or a printf, a `cat` or `tee` given a heredoc or
-// here-string of its own, or a `cat` naming files and not `-` (`cat gen.sh`, whose text is not knowable).
+// here-string of its own on fd 0, or a `cat` naming files and not `-` (`cat gen.sh`, whose text is not knowable).
 function writesOwnText({ words, cmdWords, feeds }) {
-  const fed = feeds.heredocs.length > 0 || feeds.hereStrings.length > 0;
+  const fed = !feeds.moved && (feeds.heredocs.length > 0 || feeds.hereStrings.length > 0);
   return [words, cmdWords].some((ws) => commandReadings(ws).some((cmd) => cmd.base === 'echo' || cmd.base === 'printf'
     || (fed && (cmd.base === 'cat' || cmd.base === 'tee')) || (cmd.base === 'cat' && catReadsFilesOnly(cmd.operands))));
 }
