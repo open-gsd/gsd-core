@@ -1686,7 +1686,7 @@ function consumeHeredocBodies(str, i, tags) {
       if (probe === t.tag) { terminated = true; break; }
       body += line + '\n';
     }
-    bodies.push({ body, quoted: t.quoted, seg: t.seg });
+    bodies.push({ body, quoted: t.quoted, seg: t.seg, fd: t.fd });
     if (!terminated) break;
   }
   return { bodies, end: i };
@@ -1745,7 +1745,7 @@ function tokenize(str, reading) {
     if (expectTag) {
       // Record the current seg (still the `<<` segment — flush runs before the
       // newline sep increments it) so pass 2 can attach the body to the shell.
-      heredocs.push({ tag: buf, quoted: quoted !== 'none', stripTabs: expectTag.stripTabs, seg });
+      heredocs.push({ tag: buf, quoted: quoted !== 'none', stripTabs: expectTag.stripTabs, seg, fd: expectTag.fd });
       expectTag = null;
     } else {
       // zsh keeps a `\0` escape's NUL in the word and hands a command the
@@ -1933,7 +1933,7 @@ function tokenize(str, reading) {
         for (const b of r.bodies) {
           // Emit a heredoc token per body (quoted included) — the body is the
           // stdin script only a shell interpreter runs. Kept out of `words`.
-          tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
+          tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg, fd: b.fd });
           if (!b.quoted) collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
         }
         heredocs = [];
@@ -1983,7 +1983,7 @@ function tokenize(str, reading) {
       else if (str.startsWith('<>', j)) { text = '<>'; j += 2; } // read-write: a read, and a write
       else { text = ch; j += 1; }
       if (text === '<<' || text === '<<-') {
-        expectTag = { stripTabs: text === '<<-' };
+        expectTag = { stripTabs: text === '<<-', fd };
         i = j;
         continue;
       }
@@ -4804,12 +4804,16 @@ function pipedGroup(last, at, sepAfter, ctx) {
 
 // The heredoc bodies and here-strings given to a group closing after segment `close`, before the pipe into segment
 // `at` (`(cat) <<< 'x' | sh`), charged their tokens and bytes; `fdMoved` when an fd is duplicated or another input
-// redirected there, which may keep the pipe readable.
+// redirected there, or one is given on another fd than 0 (`3<<< x`), which may keep the pipe readable.
+const STDIN_FEED_RE = /^0?<<<$/;
 function groupFeeds(close, at, bySeg, bodies, ctx) {
   const feeds = { heredocs: [], hereStrings: [], fdMoved: false };
   for (let g = close + 1; g < at; g++) {
     const seg = bySeg.get(g) || [];
-    if (seg.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<'))))) feeds.fdMoved = true;
+    if (seg.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<')) || (t.text.endsWith('<<<') && !STDIN_FEED_RE.test(t.text))))) {
+      feeds.fdMoved = true;
+    }
+    if (((bodies && bodies.get(g)) || []).some((h) => h.fd !== undefined && h.fd !== '' && h.fd !== '0')) feeds.fdMoved = true;
     for (const h of (bodies && bodies.get(g)) || []) feeds.heredocs.push(h.text);
     for (const text of hereStringTargets(seg)) feeds.hereStrings.push(text);
     charge(ctx, TOKEN_WORK * seg.length + 1);
@@ -4823,8 +4827,8 @@ function groupFeeds(close, at, bySeg, bodies, ctx) {
 // The segment whose separator opens the group segment `at` sits in, past one right before `at`, whose stdin is
 // that of the group around it; -1 when there is none. Each segment's innermost opener is found once per script
 // (GROUP_OPENERS), charged a unit a separator, since every command of a script may walk a pipe. A `)` inside a
-// `case` closing no group opened in it is a pattern's; a closer matching no opener, or an `esac` with a group it
-// opened still open, leaves every opener after it UNKNOWN_OPENER.
+// `case` closing no group opened in it is a pattern's; a closer matching no opener, an `esac` with any group still
+// open, or a `case` or `esac` that is also a redirect target leaves every opener after it UNKNOWN_OPENER.
 const GROUP_OPENERS = new WeakMap();
 const UNKNOWN_OPENER = -2;
 function groupOpener(at, bySeg, sepAfter, ctx) {
@@ -4839,12 +4843,13 @@ function groupOpener(at, bySeg, sepAfter, ctx) {
     for (let g = 0; g <= last + 1; g++) {
       const top = open.length ? open[open.length - 1] : null;
       openers.push(unknown ? UNKNOWN_OPENER : top ? top.seg : -1);
-      const [first, , third] = commandHead(bySeg.get(g) || []);
-      if (first === 'case' && third === 'in') cases++;
-      else if (first === 'esac') {
-        if (!cases || (top && top.cases === cases)) unknown = true;
-        cases--;
-      }
+      // Counted on the command words, past redirect targets (`>case`), and unsure where the words with them differ.
+      const segTokens = bySeg.get(g) || [];
+      charge(ctx, segTokens.length);
+      const step = caseStep(commandHead(commandWords(segTokens)));
+      if (step !== caseStep(commandHead(segTokens))) unknown = true;
+      if (step < 0 && (!cases || top)) unknown = true;
+      cases += step;
       const text = sepAfter.get(g);
       if (text === '(' || text === '{') open.push({ seg: g, text, cases });
       else if (text === ')' && cases > 0 && (!top || top.cases < cases)) continue; // a case pattern
@@ -4882,7 +4887,11 @@ function compoundStart(close, bySeg, sepAfter, ctx) {
   const open = [commandHead(bySeg.get(close) || [])[0]];
   for (let r = close - 1; r >= 0; r--) {
     charge(ctx, TOKEN_WORK + 1);
-    const { openers, closer } = compoundWords(bySeg.get(r) || []);
+    const seg = bySeg.get(r) || [];
+    charge(ctx, seg.length);
+    const { openers, closer } = compoundWords(commandWords(seg));
+    const written = compoundWords(seg);
+    if (written.closer !== closer || written.openers.join(' ') !== openers.join(' ')) return -1; // `>for`, `2>esac`
     const pattern = sepAfter.get(r) === ')';
     if (closer) {
       if (pattern) return -1;
@@ -4900,7 +4909,8 @@ function compoundStart(close, bySeg, sepAfter, ctx) {
 }
 
 // The compound-command openers among a segment's leading reserved words (`then if while …`), and the closing word
-// it starts with; a quoted word is never a reserved one, and `case` opens only before `WORD in`.
+// it starts with; a quoted word is never a reserved one, and `case` opens only before `WORD in`. Read on the command
+// words and on every word, which differ where a reserved word is a redirect target (compoundStart).
 function compoundWords(segTokens) {
   const words = segTokens.filter((t) => t.kind === 'word').map((t) => (t.quoted === 'none' ? t.text : null));
   const openers = [];
@@ -4916,6 +4926,11 @@ function compoundWords(segTokens) {
     }
   }
   return { openers, closer: null };
+}
+
+// +1 for a segment head opening a `case`, -1 for an `esac`, else 0.
+function caseStep([first, , third]) {
+  return first === 'case' && third === 'in' ? 1 : first === 'esac' ? -1 : 0;
 }
 
 // The first three words of a segment past leading reserved words (`do`, `then` …), a quoted one as null, since a
