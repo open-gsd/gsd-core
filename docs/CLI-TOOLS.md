@@ -243,7 +243,7 @@ node gsd-tools.cjs phase-plan-index <phase>
 # List phases with filtering
 node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--include-archived]
 
-# Archive every current phase directory into milestones/<version>-phases/ —
+# Archive every current phase directory into milestones/<label>-phases/ (label: the outgoing version, `--archive-version`, or `archived-<date>`) —
 # used by /gsd-new-milestone before roadmapping the next cycle.
 # --force skips the uncommitted-changes check only; nothing is deleted.
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
@@ -327,7 +327,7 @@ sentinel and out-of-window directories.
 ### `phases clear` and sentinel directories
 
 `phases clear` moves every phase directory under `.planning/phases/` except
-sentinels into `milestones/<version>-phases/`; it never deletes. `--force`
+sentinels into `milestones/<label>-phases/` (the outgoing version, `--archive-version`, or `archived-<date>`); it never deletes. `--force`
 skips only the uncommitted-changes check, and those edits are archived with the
 directory. It excludes both `999.*` (backlog) and `0-*` (pre-milestone)
 directories via the same canonical sentinel predicate `phases list` uses —

@@ -1323,8 +1323,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
 function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
   const phasesDir = planningPaths(cwd).phases;
   const confirm = Array.isArray(args) && args.includes('--confirm');
-  // --force bypasses the uncommitted-changes guard. Only use when the caller
-  // has already archived or explicitly accepts loss of uncommitted work. (#1447)
+  // --force skips only the uncommitted-changes guard (#1447); the directories,
+  // uncommitted edits included, are still archived.
   const force = Array.isArray(args) && args.includes('--force');
   // #2288: explicit outgoing-version override for the archive destination.
   // new-milestone.md runs `state.milestone-switch` BEFORE `phases.clear --confirm`,
@@ -1359,8 +1359,8 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     // #3185 (ADR-3180 Decision 1): this carried the FIFTH copy of the
     // sentinel rule and its THIRD regex variant — `/^999(?:\.|$)/` — which
     // excluded 999 but NOT 0. That divergence meant a `0-*` directory
-    // `roadmap analyze` preserves as a sentinel was ARCHIVED here. Routed through the canonical predicate so
-    // every reader of "is this a sentinel phase" agrees by construction.
+    // `roadmap analyze` preserves as a sentinel was ARCHIVED here. Routed
+    // through the canonical predicate so every reader of "is this a sentinel phase" agrees by construction.
     // #3639: the DIR-AWARE recognizer — the convention-less id predicate
     // never saw bracket sentinel dirs (GSD.999-07-icebox), so they were
     // counted for archiving here while the disk guards (post-#3639) preserve
@@ -1370,7 +1370,7 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     if (dirs.length > 0 && !confirm) {
       error(
         `phases clear would archive ${dirs.length} phase director${dirs.length === 1 ? 'y' : 'ies'} ` +
-          `into milestones/<version>-phases/ under the planning directory. ` +
+          `into milestones/<label>-phases/ under the planning directory. ` +
           `Pass --confirm to proceed.`,
       );
     }
