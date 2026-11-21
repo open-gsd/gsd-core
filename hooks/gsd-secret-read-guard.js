@@ -1964,6 +1964,8 @@ function tokenize(str, reading) {
 
     if (ch === '<' || ch === '>' || (ch === '&' && str[i + 1] === '>')) {
       let fd = '';
+      // A `{name}` word right before it opens a new fd (`{fd}<<< x`); it stays a word, and the op records it (#5492).
+      const namedFd = hasWord && quoted === 'none' && /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(buf) ? buf : '';
       if (hasWord && quoted === 'none' && /^\d+$/.test(buf)) {
         fd = buf;
         buf = '';
@@ -1983,7 +1985,7 @@ function tokenize(str, reading) {
       else if (str.startsWith('<>', j)) { text = '<>'; j += 2; } // read-write: a read, and a write
       else { text = ch; j += 1; }
       if (text === '<<' || text === '<<-') {
-        expectTag = { stripTabs: text === '<<-', fd };
+        expectTag = { stripTabs: text === '<<-', fd: fd || namedFd };
         i = j;
         continue;
       }
@@ -1996,6 +1998,7 @@ function tokenize(str, reading) {
         dup = true;
       }
       op(fd + text, text[0] === '<' && text !== '<<<', dup);
+      if (namedFd) tokens[tokens.length - 1].namedFd = namedFd;
       i = j;
       continue;
     }
@@ -4698,10 +4701,14 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       at = opener + 1;
       continue;
     }
-    // A redirect after a group's closer (`(cat) 2>/dev/null | sh`) is a filtered stage, as before, and the group is
-    // the one behind it.
+    // A redirect after a group's closer (`(cat) 2>/dev/null | sh`, a `{name}` fd word too) is a filtered stage, as
+    // before, and the group is the one behind it.
     let last = prevSeg;
-    if (!commandWords(bySeg.get(prevSeg) || []).length && GROUP_CLOSERS.has(sepAfter.get(prevSeg - 1))) {
+    const prev = bySeg.get(prevSeg) || [];
+    const prevFeeds = [...prev, ...((bodies && bodies.get(prevSeg)) || [])];
+    charge(ctx, prevFeeds.length);
+    const namesFd = (w) => prevFeeds.some((t) => t.namedFd === w.text || (t.kind === 'heredoc' && t.fd === w.text));
+    if (commandWords(prev).every(namesFd) && GROUP_CLOSERS.has(sepAfter.get(prevSeg - 1))) {
       const stage = stageAt(prevSeg);
       stage.filtered = true;
       charge(ctx, TOKEN_WORK * stage.words.length + 1 + GIT_COMMAND_WORK);
@@ -4815,7 +4822,7 @@ function groupFeeds(close, at, bySeg, bodies, ctx) {
   const feeds = { heredocs: [], hereStrings: [], fdMoved: false };
   for (let g = close + 1; g < at; g++) {
     const seg = bySeg.get(g) || [];
-    if (seg.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<')) || (t.text.endsWith('<<<') && !STDIN_FEED_RE.test(t.text))))) {
+    if (seg.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<')) || (t.text.endsWith('<<<') && (t.namedFd || !STDIN_FEED_RE.test(t.text)))))) {
       feeds.fdMoved = true;
     }
     if (((bodies && bodies.get(g)) || []).some((h) => h.fd !== undefined && h.fd !== '' && h.fd !== '0')) feeds.fdMoved = true;
