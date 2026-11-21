@@ -435,6 +435,10 @@ describe('gsd-secret-read-guard: where the guard ends a brace word and bash does
     test(`denies ${JSON.stringify(cmd)}`, () => assertBlocked(cmd, { code: 'secret-read', path: '.env' }));
   }
 
+  // Not covered: an extglob before the word's first brace splits it before the guard sees a group, as it splits
+  // `cat x?(y)/.env` with no brace at all (shell globs are a documented gap).
+  test('allows cat x?(y),{d/.env, the extglob gap, until globs are read', () => assertAllowed('cat x?(y),{d/.env'));
+
   test('a line continuation before a redirect fd does not carry into the target', () => {
     assertBlocked('cat 1\\\n2<{.env,x}', { code: 'secret-read', path: '.env' });
   });
