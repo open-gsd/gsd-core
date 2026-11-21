@@ -23646,24 +23646,23 @@ describe('legacy phase-heading counting reads real headings only (#5880)', () =>
 // ─── #6271: an unscoped update-progress decline names its cause and its fix ──────────────────────────────────
 
 describe('state update-progress: an unscoped decline names the cause and the fix (#6271)', () => {
+  const { isolateWorkstreamEnv, restoreWorkstreamEnv } = require('./helpers.cjs');
   let proj;
-  let savedWorkstream;
 
   beforeEach(() => {
     // The host suite forces GSD_WORKSTREAM, which runGsdTools propagates and which redirects the project lookup.
-    savedWorkstream = process.env.GSD_WORKSTREAM;
-    delete process.env.GSD_WORKSTREAM;
+    isolateWorkstreamEnv();
     proj = createTempProject();
   });
 
   afterEach(() => {
     cleanup(proj);
-    if (savedWorkstream === undefined) delete process.env.GSD_WORKSTREAM;
-    else process.env.GSD_WORKSTREAM = savedWorkstream;
+    restoreWorkstreamEnv();
   });
 
   const FLAT_ROADMAP = '# Roadmap\n\n## Phases\n\n- [ ] Phase 1: Alpha\n\n## Phase Details\n\n### Phase 1: Alpha\n**Goal:** x\n';
   const OTHER_MILESTONE_ROADMAP = '# Roadmap\n\n## v0.2.0 Next\n\n### Phase 1: Alpha\n**Goal:** x\n';
+  const PHASE_TITLE_ROADMAP = '# Roadmap\n\n## Phases\n\n### Phase 1: Migrate to v2.0 API\n**Goal:** x\n';
 
   function seed(milestoneLine, roadmap) {
     const phaseDir = path.join(proj, '.planning', 'phases', '01-alpha');
@@ -23677,37 +23676,73 @@ describe('state update-progress: an unscoped decline names the cause and the fix
     ].join('\n'));
   }
 
-  const run = () => {
-    const r = runGsdTools('state update-progress', proj);
+  const run = (args = 'state update-progress') => {
+    const r = runGsdTools(args, proj);
     assert.ok(r.success, r.error);
     return JSON.parse(r.output);
   };
 
-  test("a STATE milestone with no ROADMAP heading declines with the cause and the fix, the reason unchanged", () => {
+  test('row 5, a flat ROADMAP: the decline names the version and offers milestone: null, the reason unchanged', () => {
     seed('milestone: v0.1.0', FLAT_ROADMAP);
     const out = run();
     assert.strictEqual(out.updated, false);
     assert.strictEqual(out.reason, 'phase scope is unscoped, not complete');
-    assert.match(out.hint, /no matching milestone heading in ROADMAP\.md/);
-    assert.match(out.hint, /add that milestone's heading to ROADMAP\.md/);
-    assert.match(out.hint, /`milestone: null`/);
+    assert.match(out.hint, /STATE\.md names milestone "v0\.1\.0", but ROADMAP\.md has no milestone headings at all/);
+    assert.match(out.hint, /set the milestone field in STATE\.md to null/);
+    assert.match(out.hint, /add a heading for "v0\.1\.0" above its phases/);
   });
 
-  test('the named fix works: milestone: null on the same roadmap refreshes the counters', () => {
+  test('the named fix works: milestone: null on the same roadmap refreshes the counters, on every run', () => {
     seed('milestone: null', FLAT_ROADMAP);
-    const out = run();
-    assert.strictEqual(out.updated, true);
-    assert.strictEqual(out.completed, 1);
-    assert.strictEqual(out.total, 2);
-    assert.ok(!('hint' in out));
+    for (let i = 0; i < 2; i += 1) {
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      assert.strictEqual(out.completed, 1);
+      assert.strictEqual(out.total, 2);
+      assert.ok(!('hint' in out));
+    }
   });
 
-  test('a ROADMAP with other milestone headings but not the STATE milestone keeps declining, with the hint', () => {
+  test('row 5, a ROADMAP with other milestone headings: the version, and the heading goes above its phases', () => {
     seed('milestone: v0.1.0', OTHER_MILESTONE_ROADMAP);
     const out = run();
     assert.strictEqual(out.updated, false);
     assert.strictEqual(out.reason, 'phase scope is unscoped, not complete');
-    assert.match(out.hint, /ROADMAP\.md has milestone headings and STATE\.md names none/);
+    assert.match(out.hint, /STATE\.md names milestone "v0\.1\.0", but ROADMAP\.md has no milestone heading for it/);
+    assert.match(out.hint, /add a heading for "v0\.1\.0" above its phases/);
+    assert.doesNotMatch(out.hint, /to null/, 'milestone: null is not the fix for a ROADMAP that has milestone headings');
+  });
+
+  test('row 4, STATE names no milestone and the ROADMAP has milestone headings: name one in STATE', () => {
+    seed('milestone: null', OTHER_MILESTONE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.match(out.hint, /STATE\.md names no milestone, but ROADMAP\.md has milestone headings/);
+    assert.match(out.hint, /set the milestone field in STATE\.md to one of them/);
+  });
+
+  test('row 4 on a Phase title that contains a version: the title is the cause, and milestone: null is not offered', () => {
+    seed('milestone: null', PHASE_TITLE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.match(out.hint, /a Phase title contains a version \(vX\.Y\), which reads as one/);
+    assert.match(out.hint, /reword that Phase title/);
+    assert.doesNotMatch(out.hint, /to null/);
+  });
+
+  test('state sync names the same cause where it skips Progress on an unscoped scope', () => {
+    seed('milestone: null', PHASE_TITLE_ROADMAP);
+    const out = run('state sync');
+    const skipped = out.changes.find((c) => c.startsWith('Progress: skipped'));
+    assert.ok(skipped, `a skipped Progress change expected; got: ${JSON.stringify(out.changes)}`);
+    assert.match(skipped, /phase scope is "unscoped", not COMPLETE \(#3217\)\. Cause: ROADMAP\.md has no milestone heading, but a Phase title contains a version/);
+  });
+
+  test('STATE.md text echoed in the hint is escaped: a control character in the milestone cannot reach the terminal', () => {
+    seed('milestone: "v0.1.0\\u001b[31mX"', FLAT_ROADMAP);
+    const out = run();
+    assert.ok(!out.hint.includes('\u001b'), 'no raw escape character');
+    assert.match(out.hint, /v0\.1\.0\\u001b\[31mX/);
   });
 
   test('a decline for another scope (no ROADMAP.md: unreadable) carries no unscoped hint', () => {
@@ -23718,4 +23753,3 @@ describe('state update-progress: an unscoped decline names the cause and the fix
     assert.ok(!('hint' in out));
   });
 });
-
