@@ -358,7 +358,7 @@ FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true"
   )
   ```
 
-  Store the agent task_id; after the next phase's discuss (if any), wait for it before executing.
+  Store the agent task_id. After discuss for the next phase completes (or if no next phase), wait for the plan agent to finish before proceeding to execute.
 
 - **Otherwise (`FLATTEN` is `true` — run inline):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here.
 
@@ -384,11 +384,11 @@ If `PLAN_STRATEGY=local`, run the regular planner:
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM}")
 ```
 
-Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans." Any plan run (here, 3c, gap closure) printing `PLANNING STOPPED` → handle_blocker; never execute them.
+Verify plan produced output — re-run `init phase-op` and check `has_plans`. If false → go to handle_blocker: "Plan phase ${PHASE_NUM} did not produce any plans." If plan-phase printed `PLANNING STOPPED`, go to handle_blocker with that line and never execute its plans.
 
 **3c. Execute**
 
-**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist. Same rule as the plan dispatch above (#1708): run **inline** unless `dispatch-should-flatten` returns `false`. Resolve first:
+**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist; if it printed `PLANNING STOPPED`, go to handle_blocker with that line and never execute its plans. Same rule as the plan dispatch above (#1708): run **inline** unless `dispatch-should-flatten` returns `false`. Resolve first:
 
 ```bash
 FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
@@ -499,7 +499,7 @@ On **"Run gap closure"**: one gap-closure attempt:
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM} --gaps")
 ```
 
-Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans."
+Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans." If it printed `PLANNING STOPPED`, go to handle_blocker with that line and never execute its plans.
 
 Re-execute:
 ```
