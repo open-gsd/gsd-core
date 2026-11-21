@@ -107,6 +107,7 @@ function spyDeps(seen) {
     writeFile: () => {},
     exists: () => true,
     fileSize: () => 'prompt'.length,
+    readPlanBounded: () => 'prompt',
     hasBinary: () => true,
     configGet: () => undefined,
     homeDir: '/home/test',

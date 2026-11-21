@@ -86,6 +86,7 @@ function deps(overrides = {}) {
     writeFile: (p, c) => { files[p] = c; },
     exists: (p) => p in files,
     fileSize: (p) => (p in files ? files[p].length : null),
+    readPlanBounded: (p, max) => (p in files && files[p].length <= max ? files[p] : null),
     hasBinary: () => true,
     configGet: () => undefined,
     homeDir: '/home/u',
@@ -862,6 +863,17 @@ describe('#5491 — antigravity proves it read each plan', () => {
     assert.ok(d.spawns.some((s) => s.argv.some((a) => a.includes('READ-CHECK <plan id>:'))));
   });
 
+  test('a prompt that names no plan header is not asked for READ-CHECK lines (#6286 Nit 2)', async () => {
+    const d = deps({
+      files: { [PROMPT]: 'Review this diff.\n```\n#### .planning/p/12.6-01-PLAN.md\n```\n' },
+      spawn: (_bin, argv) => { d.spawns.push({ argv }); return { status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }; },
+    });
+    const r = await runLane(plan('antigravity'), d, { repoRoot: ROOT });
+    assert.ok(d.spawns.some((s) => s.argv.some((a) => a.includes('REVIEWED-WITHOUT-REPO-ACCESS'))), 'the agy prompt was built');
+    assert.ok(!d.spawns.some((s) => s.argv.some((a) => a.includes('READ-CHECK'))));
+    assert.equal(r.readCheck, undefined);
+  });
+
   test('no restatement → review stamped [incomplete-read] and readCheck in the result', async () => {
     const p = plan('antigravity');
     const d = deps({ files: laneFiles(), spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }) });
@@ -914,6 +926,24 @@ describe('#5491 — antigravity proves it read each plan', () => {
       assert.equal(r.readCheck.compacted, true);
       assert.equal(r.readCheck.complete, false);
       assert.ok(review.startsWith('> [incomplete-read]'));
+    });
+
+    test('an unreadable watermark on the same conversation reports compaction as unknown (#6286 Nit 4)', async () => {
+      const p = plan('antigravity');
+      const files = { ...laneFiles(), [CACHE]: JSON.stringify({ [ROOT]: 'c1' }), [TX]: CHECKPOINT };
+      const d = deps({
+        files,
+        readFile: (x) => {
+          if (x === TX) throw new Error(`EACCES ${x}`);
+          if (!(x in files)) throw new Error(`ENOENT ${x}`);
+          return files[x];
+        },
+        spawn: () => ({ status: 0, stdout: RESTATED, stderr: '' }),
+      });
+      const r = await runLane(p, d, { repoRoot: ROOT });
+      assert.equal(r.readCheck.compacted, 'unknown');
+      assert.equal(r.readCheck.complete, false);
+      assert.match(d.files[p.reviewPath], /^> \[incomplete-read\][^\n]*whether its session compacted its context could not be checked/);
     });
 
     test('a checkpoint from a PRIOR run in the same session does not', async () => {
@@ -1155,6 +1185,7 @@ describe('#2494 — a failed lane writes a diagnosable stub, not a zero-byte fil
       writeFile: (p, c) => { files[p] = c; },
       exists: (p) => p in files,
       fileSize: (p) => (p in files ? files[p].length : null),
+      readPlanBounded: (p, max) => (p in files && files[p].length <= max ? files[p] : null),
       hasBinary: () => true,
       configGet: () => undefined,
       homeDir: '/home/u',
@@ -1261,6 +1292,7 @@ describe('#2605 local OpenAI-compatible lanes produce diagnosable output', () =>
       writeFile: (p, c) => { files[p] = c; },
       exists: (p) => p in files,
       fileSize: (p) => (p in files ? files[p].length : null),
+      readPlanBounded: (p, max) => (p in files && files[p].length <= max ? files[p] : null),
       hasBinary: () => true,
       configGet: () => undefined,
       homeDir: '/home/u',
@@ -1371,6 +1403,7 @@ describe('#2794 qwen reviewer stderr capture', () => {
       writeFile: (p, c) => { files[p] = c; },
       exists: (p) => p in files,
       fileSize: (p) => (p in files ? files[p].length : null),
+      readPlanBounded: (p, max) => (p in files && files[p].length <= max ? files[p] : null),
       hasBinary,
       configGet: () => undefined,
       homeDir: '/home/u',

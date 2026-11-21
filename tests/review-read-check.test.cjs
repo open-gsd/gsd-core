@@ -20,7 +20,11 @@ const {
   stampIncompleteRead,
   runReadCheck,
   readCheckInstruction,
+  readPlanBounded,
   READ_CHECK_MARKER,
+  MAX_PLAN_BYTES,
+  MAX_PLAN_HEADERS,
+  MAX_TOTAL_PLAN_BYTES,
 } = require('../gsd-core/bin/lib/review-read-check.cjs');
 const planDocument = require('../gsd-core/bin/lib/plan-document.cjs');
 const { runNode, runHook } = require('./helpers/process-seam.cjs');
@@ -412,6 +416,7 @@ describe('#5491 runReadCheck', () => {
     exists: (p) => p in f,
     fileSize: (p) => (p in f ? f[p].length : null),
     readFile: (p) => { if (!(p in f)) throw new Error(`ENOENT ${p}`); return f[p]; },
+    readPlanBounded: (p, max) => (p in f && f[p].length <= max ? f[p] : null),
   });
 
   test('expected facts are read from the plan files the prompt names', () => {
@@ -478,14 +483,22 @@ describe('#5491 runReadCheck reads only bounded regular files inside the repo (#
         reads.push(p);
         return p === PROMPT ? prompt : PLAN_B;
       },
+      // Stats instead of opening, so a reader regression fails its own child-process rows below
+      // rather than blocking this file on the FIFO. Only a plan it returns counts as read.
+      readPlanBounded: (p, max) => {
+        const st = fs.statSync(p);
+        if (!st.isFile() || st.size > max) return null;
+        reads.push(p);
+        return PLAN_B;
+      },
     };
   }
 
-  /** Run the check with the in-repo control plan plus `header`; return what was read and missed. */
+  /** Run the check with the in-repo control plan plus `header`; return what was read, missed and left unchecked. */
   function check(header) {
     const d = fsDeps(`#### ${OK}\nbody\n#### ${header}\nbody\n`);
     const r = runReadCheck('no restatement', PROMPT, repo, d);
-    return { reads: d.reads, missing: r.missing };
+    return { reads: d.reads, missing: r.missing, unchecked: r.unchecked };
   }
 
   /** Only the prompt and the control plan are read; only the control plan is missing. */
@@ -527,6 +540,26 @@ describe('#5491 runReadCheck reads only bounded regular files inside the repo (#
     const { reads, missing } = check('.planning/p/edge-01-PLAN.md');
     assert.deepEqual(reads, [PROMPT, `${repo}/${OK}`, `${repo}/.planning/p/edge-01-PLAN.md`]);
     assert.deepEqual(missing, ['ok-01', 'edge-01']);
+  });
+
+  test('a FIFO, a directory or an over-1-MiB plan is recorded as unchecked, not dropped (#6286 Minor 2)', { skip: process.platform === 'win32' && 'no mkfifo on Windows' }, () => {
+    const fifo = path.join(repo, '.planning', 'p', 'fifo-01-PLAN.md');
+    if (!fs.existsSync(fifo)) throwIfFailed(runHook(fifo, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), `mkfifo ${fifo}`);
+    for (const name of ['fifo-01', 'dir-01', 'big-01']) {
+      assert.deepEqual(check(`.planning/p/${name}-PLAN.md`).unchecked, [name], name);
+    }
+    assert.deepEqual(check('.planning/p/edge-01-PLAN.md').unchecked, [], 'an in-bound plan is checked');
+    assert.deepEqual(check('../../outside/secret-PLAN.md').unchecked, [], 'a header outside the repo names no plan of this repo');
+    assert.deepEqual(check('.planning/p/absent-01-PLAN.md').unchecked, [], 'a header naming no file is still skipped');
+  });
+
+  test('when every named plan is unchecked the result says so instead of returning undefined (#6286 Minor 2)', () => {
+    const d = fsDeps('#### .planning/p/big-01-PLAN.md\nbody\n');
+    const r = runReadCheck('review', PROMPT, repo, d);
+    assert.notEqual(r, undefined);
+    assert.equal(r.complete, false);
+    assert.deepEqual(r.unchecked, ['big-01']);
+    assert.match(stampIncompleteRead('body', r), /big-01 could not be checked/);
   });
 });
 
@@ -620,6 +653,221 @@ describe('#5491 properties (#6286 Minor 2)', () => {
         },
       ),
       { seed: 6286, numRuns: 500 },
+    );
+  });
+});
+
+const B_LINE = 'READ-CHECK 12.6-02: requirements=[REQ-03]; wave=2; depends_on=[12.6-01]; tasks=1';
+const lineFor = (id) => B_LINE.replace('12.6-02', id);
+
+/** In-memory seams over normalized paths, so two spellings of one plan reach one file; counts every bounded read. */
+function memDeps(prompt, plans) {
+  const PROMPT = '/run/gsd-review-prompt.md';
+  const norm = (p) => path.posix.normalize(p);
+  const calls = [];
+  return {
+    PROMPT,
+    calls,
+    exists: (p) => p === PROMPT || norm(p) in plans,
+    readFile: (p) => {
+      if (p !== PROMPT) throw new Error(`a plan is read through readPlanBounded, not readFile: ${p}`);
+      return prompt;
+    },
+    readPlanBounded: (p, max) => {
+      calls.push({ p, max });
+      const content = plans[norm(p)];
+      return content !== undefined && Buffer.byteLength(content) <= max ? content : null;
+    },
+  };
+}
+
+describe('#5491 runReadCheck reads each plan once, within a header and byte budget (#6286 Minor 1)', () => {
+  test('one plan named in many spellings is read once', () => {
+    const spellings = Array.from({ length: 50 }, (_, k) => `.planning/${'./'.repeat(k)}p/12.6-02-PLAN.md`);
+    const d = memDeps(spellings.map((h) => `#### ${h}`).join('\n'), { '/repo/.planning/p/12.6-02-PLAN.md': PLAN_B });
+    const r = runReadCheck(B_LINE, d.PROMPT, '/repo', d);
+    assert.equal(d.calls.length, 1, JSON.stringify(d.calls.slice(0, 3)));
+    assert.equal(r.complete, true);
+  });
+
+  test('up to MAX_PLAN_HEADERS headers are read; the next is unchecked without being read', () => {
+    const ids = Array.from({ length: MAX_PLAN_HEADERS + 1 }, (_, k) => `x-${k}`);
+    const plans = Object.fromEntries(ids.map((id) => [`/repo/p/${id}-PLAN.md`, PLAN_B]));
+    const lines = ids.map(lineFor).join('\n');
+    const prompt = (n) => ids.slice(0, n).map((id) => `#### p/${id}-PLAN.md`).join('\n');
+
+    const atLimit = memDeps(prompt(MAX_PLAN_HEADERS), plans);
+    const ok = runReadCheck(lines, atLimit.PROMPT, '/repo', atLimit);
+    assert.equal(atLimit.calls.length, MAX_PLAN_HEADERS);
+    assert.equal(ok.complete, true);
+
+    const over = memDeps(prompt(MAX_PLAN_HEADERS + 1), plans);
+    const r = runReadCheck(lines, over.PROMPT, '/repo', over);
+    assert.equal(over.calls.length, MAX_PLAN_HEADERS);
+    assert.deepEqual(r.unchecked, [ids[MAX_PLAN_HEADERS]]);
+    assert.equal(r.complete, false);
+  });
+
+  test('each read is bounded by the byte budget left; a plan past it is unchecked', () => {
+    const n = MAX_TOTAL_PLAN_BYTES / MAX_PLAN_BYTES;
+    assert.ok(Number.isInteger(n) && n > 1, 'the budget is a whole number of maximal plans');
+    const full = PLAN_B + ' '.repeat(MAX_PLAN_BYTES - Buffer.byteLength(PLAN_B));
+    const ids = Array.from({ length: n + 1 }, (_, k) => `y-${k}`);
+    const prompt = ids.map((id) => `#### p/${id}-PLAN.md`).join('\n');
+    const lines = ids.map(lineFor).join('\n');
+
+    // n maximal plans spend the whole budget: the last plan is not read at all.
+    const spent = memDeps(prompt, Object.fromEntries(ids.map((id, k) => [`/repo/p/${id}-PLAN.md`, k < n ? full : PLAN_B])));
+    const r = runReadCheck(lines, spent.PROMPT, '/repo', spent);
+    assert.deepEqual(spent.calls.map((c) => c.max), Array(n).fill(MAX_PLAN_BYTES));
+    assert.deepEqual(r.unchecked, [ids[n]]);
+    assert.deepEqual(r.missing, []);
+
+    // One byte left: the last read is asked for at most that byte, so the plan is unchecked.
+    const short = memDeps(prompt, Object.fromEntries(ids.map((id, k) => [`/repo/p/${id}-PLAN.md`, k < n - 1 ? full : k === n - 1 ? full.slice(1) : PLAN_B])));
+    const r2 = runReadCheck(lines, short.PROMPT, '/repo', short);
+    assert.deepEqual(short.calls.map((c) => c.max), [...Array(n).fill(MAX_PLAN_BYTES), 1]);
+    assert.deepEqual(r2.unchecked, [ids[n]]);
+  });
+});
+
+describe('#5491 two plans with one id need two READ-CHECK lines (#6286 Minor 4)', () => {
+  const D = { id: 'dup', requirements: [], wave: 1, dependsOn: [], tasks: 1 };
+  const LINE = 'READ-CHECK dup: requirements=[]; wave=1; depends_on=[]; tasks=1';
+
+  test('one line vouches for one plan only', () => {
+    const r = checkRead(LINE, [D, D]);
+    assert.equal(r.complete, false);
+    assert.deepEqual(r.missing, ['dup']);
+    assert.equal(checkRead(`${LINE}\n${LINE}`, [D, D]).complete, true);
+  });
+
+  test('each plan takes a line that matches its own facts', () => {
+    const E = { ...D, wave: 2 };
+    assert.equal(checkRead(`${LINE.replace('wave=1', 'wave=2')}\n${LINE}`, [D, E]).complete, true);
+    assert.deepEqual(checkRead(`${LINE}\n${LINE}`, [D, E]).mismatched, { dup: ['wave'] });
+  });
+
+  test('q/dup-PLAN.md and r/dup-PLAN.md are two plans', () => {
+    const plans = { '/repo/q/dup-PLAN.md': PLAN_B, '/repo/r/dup-PLAN.md': PLAN_B };
+    const d = memDeps('#### q/dup-PLAN.md\n#### r/dup-PLAN.md\n', plans);
+    assert.deepEqual(runReadCheck(lineFor('dup'), d.PROMPT, '/repo', d).missing, ['dup']);
+    assert.equal(runReadCheck(`${lineFor('dup')}\n${lineFor('dup')}`, d.PROMPT, '/repo', d).complete, true);
+  });
+});
+
+describe('#5491 plan headers inside a closed code fence are plan content (#6286 Nit 1)', () => {
+  test('a fenced header is not a plan; an unclosed fence does not hide later headers', () => {
+    const prompt = [
+      '#### p/a-01-PLAN.md',
+      '```md',
+      '#### p/ghost-01-PLAN.md',
+      '```',
+      '#### p/b-01-PLAN.md',
+      '~~~',
+      '#### p/c-01-PLAN.md',
+    ].join('\n');
+    assert.deepEqual(planPathsFromPrompt(prompt), ['p/a-01-PLAN.md', 'p/b-01-PLAN.md', 'p/c-01-PLAN.md']);
+  });
+
+  test('a plan body quoting a header in a fence adds no expected plan', () => {
+    const body = `${PLAN_B}\n\`\`\`\n#### p/ghost-01-PLAN.md\n\`\`\`\n`;
+    const d = memDeps(`#### p/12.6-02-PLAN.md\n${body}`, { '/repo/p/12.6-02-PLAN.md': body, '/repo/p/ghost-01-PLAN.md': PLAN_B });
+    const r = runReadCheck(B_LINE, d.PROMPT, '/repo', d);
+    assert.equal(r.complete, true, JSON.stringify(r));
+  });
+});
+
+describe('#5491 ids compare as Unicode text and may hold a colon (#6286 Nit 3)', () => {
+  const TAIL = 'requirements=[]; wave=1; depends_on=[]; tasks=1';
+  const facts = (id) => ({ id, requirements: [], wave: 1, dependsOn: [], tasks: 1 });
+
+  test('an NFD plan id matches an NFC restatement, and the reverse', () => {
+    const nfc = 'café-01';
+    const nfd = 'café-01';
+    assert.equal(checkRead(`READ-CHECK ${nfc}: ${TAIL}`, [facts(nfd)]).complete, true);
+    assert.equal(checkRead(`READ-CHECK ${nfd}: ${TAIL}`, [facts(nfc)]).complete, true);
+    assert.equal(planFacts(`p/${nfd}-PLAN.md`, PLAN_B).id, nfc, 'the id read from a file name is NFC');
+  });
+
+  test('a `:` in a plan id is part of the id', () => {
+    assert.equal(checkRead(`READ-CHECK a:b-01: ${TAIL}`, [facts('a:b-01')]).complete, true);
+    assert.equal(checkRead(`READ-CHECK a:b-01:${TAIL}`, [facts('a:b-01')]).complete, true);
+    assert.equal(checkRead(`| READ-CHECK a:b-01 | ${TAIL.replaceAll(';', ' |')} |`, [facts('a:b-01')]).complete, true);
+    assert.deepEqual(planPathsFromPrompt('#### p/a:b-01-PLAN.md'), ['p/a:b-01-PLAN.md']);
+  });
+
+  test('a note after the id still ends the id at its colon', () => {
+    assert.deepEqual([...parseReadCheckLines('READ-CHECK 12.6-01: note: wave=1').keys()], ['12.6-01']);
+  });
+
+  test('a NUL in a plan header or a restated id is rejected', () => {
+    assert.deepEqual(planPathsFromPrompt('#### p/a\0b-01-PLAN.md\n#### p/ok-01-PLAN.md'), ['p/ok-01-PLAN.md']);
+    assert.equal(parseReadCheckLines(`READ-CHECK a\0b-01: ${TAIL}`).size, 0);
+  });
+});
+
+describe('#5491 readPlanBounded opens once and reads within its bound (#6286 Minor 3)', () => {
+  let dir;
+  before(() => { dir = fs.realpathSync(createTempDir('gsd-read-bounded-')); });
+  after(() => cleanup(dir));
+
+  test('a regular file of at most maxBytes is read; one byte over is not', () => {
+    const f = path.join(dir, 'ten-PLAN.md');
+    fs.writeFileSync(f, '0123456789');
+    assert.equal(readPlanBounded(f, 10), '0123456789');
+    assert.equal(readPlanBounded(f, 9), null);
+  });
+
+  test('a directory is not read', () => {
+    const d = path.join(dir, 'dir-PLAN.md');
+    fs.mkdirSync(d);
+    let got;
+    try {
+      got = readPlanBounded(d, 10);
+    } catch (e) {
+      if (!e.code) throw e;
+      got = null; // Windows refuses to open a directory at all
+    }
+    assert.equal(got, null);
+  });
+
+  // A child process each: a reader that blocks on a FIFO or streams a device would hang this file.
+  // The seam's bounded timeout is a backstop; the row asserts the reader's answer.
+  const answer = (target) => runNode(['-e', [
+    `const { readPlanBounded } = require(${JSON.stringify(LIB)});`,
+    `process.stdout.write(JSON.stringify(readPlanBounded(${JSON.stringify(target)}, 1024)));`,
+  ].join('\n')]);
+
+  test('a FIFO with no writer is refused without blocking', { skip: process.platform === 'win32' && 'no mkfifo on Windows' }, () => {
+    const fifo = path.join(dir, 'fifo-PLAN.md');
+    throwIfFailed(runHook(fifo, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), `mkfifo ${fifo}`);
+    const r = answer(fifo);
+    assert.equal(r.stdout, 'null', r.summary);
+  });
+
+  test('a link to an endless character device is refused, not streamed', { skip: process.platform === 'win32' && 'no /dev/zero on Windows' }, () => {
+    const link = path.join(dir, 'zero-PLAN.md');
+    fs.symlinkSync('/dev/zero', link);
+    const r = answer(link);
+    assert.equal(r.stdout, 'null', r.summary);
+  });
+});
+
+describe('#5491 plan task count agrees with the plan parser on fence-free plans (#6286 Minor 5)', () => {
+  // No backtick, `~~~` or `<!--`: planFacts deliberately ignores code and comments, which the
+  // plan parser counts. Sizes stay small because the plan parser's count is quadratic (#6420).
+  const piece = fc.constantFrom(
+    '<task>', '<task type="auto">', '<TASK\n  type="x">', '<Task\t>', '</task>', '<tasks>', '</tasks>',
+    '<task-foo>', '<task ', '<task note="<task x">', '>', '<', '## Task 3: a', '##Task 1 b', '### Task 2',
+    '## task', '## Task x', 'prose', ' ', '\n', '\n\n',
+  );
+  test('planFacts(...).tasks equals parsePlanDocument(...).taskCount', () => {
+    fc.assert(
+      fc.property(fc.array(piece, { maxLength: 40 }), (pieces) => {
+        const body = `---\nwave: 1\n---\n${pieces.join('')}`;
+        return planFacts('p/x-01-PLAN.md', body).tasks === planDocument.parsePlanDocument(body).taskCount;
+      }),
     );
   });
 });
