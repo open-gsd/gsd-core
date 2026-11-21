@@ -382,6 +382,8 @@ const DOCS_GUARD_TESTS = {
     'docs/ARCHITECTURE.md',
   ],
   'tests/planner-estimate-emission.test.cjs': ['docs/reference/plan-md.md', 'docs/CONFIGURATION.md'],
+  // #5427: walks docs/ for PR templates and resolves their links against the tree.
+  'tests/pr-template-links.test.cjs': ['*'],
   'tests/precondition-element.test.cjs': ['docs/reference/plan-md.md'],
   'tests/product-name-purity.test.cjs': [
     'docs/README.md',
