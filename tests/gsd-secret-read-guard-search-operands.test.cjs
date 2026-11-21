@@ -389,6 +389,8 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ['grep .env *', '.env'],
     ['grep .env {-e,KEY}', '.env'],
     ['HOME=-eKEY; grep .env ~', '.env'],
+    ['HOME=-eKEY; grep .env ~/a', '.env'],
+    ['export HOM?=-eKEY; grep .env ~/a', '.env'],
     ["grep .env ''*", '.env'],
     ['grep .env ""{-e,KEY}', '.env'],
     // ... and one at or before an exempt word can add or remove words ahead of it.
@@ -462,6 +464,13 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     "grep -rn 'for' --exclude=.env . ; echo $?",
     "grep -rn 'eval' --exclude=.env . ; echo $?",
     "echo '()'; grep -rn x --exclude=.env . ; echo $?",
+    // `~/` is HOME's, which the command does not set; a pattern naming alias or a parsing variable sets nothing; a
+    // glob after the `=` of an attached option only adds options of that kind.
+    'grep -rn x --exclude=.env ~/proj',
+    'grep -rn alias --exclude=.env .',
+    'grep -rn POSIXLY_CORRECT --exclude=.env .',
+    "grep -rn 'GREP_OPTIONS' --exclude=.env .",
+    'grep -rn x --exclude-dir=node* --exclude=.env .',
     // A glob that cannot spell one of the variables, or one the command does not set a variable with.
     "env LC_ALL=C grep 'a*' --exclude=.env .",
     'export FOO*; grep -rn KEY --exclude=.env .',

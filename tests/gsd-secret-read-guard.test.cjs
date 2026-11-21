@@ -3852,6 +3852,19 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     'xargs -iX cat .X <<< env',
     "printf '%s\\n' .e | xargs -I@ cat @nv",
     'echo env | xargs -I{} cat .{}',
+    // A pipe into a group, subshell, function call, loop or conditional reaches every command inside it.
+    "printf '.env\\n' | { true; xargs cat; }",
+    "printf '.env\\n' | ( true; xargs cat )",
+    "f() { xargs cat; }; printf '.env\\n' | f",
+    "printf '.env\\n' | while true; do xargs cat; break; done",
+    "printf '.env\\n' | if true; then xargs cat; fi",
+    // A group's or loop's output piped in is every command's in it.
+    '{ echo .env; echo a; } | xargs cat',
+    'for i in 1; do echo .env; done | xargs cat',
+    // echo or printf is read as it prints, through a `cat` or `tee` that passes its stdin on, and behind `builtin`.
+    "echo -e '\\x2eenv' | cat | xargs cat",
+    "printf '.env\\n' | tee | xargs cat",
+    "builtin echo -e '\\x2eenv' | xargs cat",
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
@@ -3886,6 +3899,12 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['if true; then xargs cat < names; fi', 'names'],
     ['if true; then xargs -a names cat; fi', 'names'],
     ['xargs -I{} cat .{} < names', 'names'],
+    // An expansion the guard does not perform in the text xargs reads makes that text unseen.
+    ['xargs cat <<< "$(<list)"', '$(<list)'],
+    ['xargs cat <<< "$(cat list)"', '$(cat list)'],
+    ['xargs cat <<EOF\n$(cat list)\nEOF', '$(cat list)\n'],
+    ['echo "$(cat list)" | xargs cat', '$(cat list)'],
+    ['cat <<< "$X" | xargs cat', '$X'],
     // eval or source may define the function a later call runs.
     ["eval 'f() { xargs cat; }'; f < names", 'names'],
   ];
@@ -3895,6 +3914,9 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ["printf '\\x2eenv\\n' | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv\\n'],
     ["printf '%b' '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '%b \\x2eenv'],
     ['xargs -d ab cat <<< x', 'xargs-delimiter-undecodable', 'ab'],
+    ["printf '\\x2eenv' | cat | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv'],
+    ["printf '\\x2eenv' | tee | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv'],
+    ["builtin printf '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv'],
   ];
   const ALLOWED = [
     "xargs echo <<< 'cat .env'",
@@ -3919,6 +3941,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     'grep case notes.txt; xargs cat; exec < list',
     // Nested xargs rescans its words once, not under every reading at each level.
     "xargs xargs xargs xargs xargs xargs xargs xargs echo '(('",
+    // A quoted heredoc delimiter keeps the body literal; a command that reads nothing reads no expansion either.
+    "xargs cat <<'EOF'\n$(cat list)\nEOF",
+    'xargs echo <<< "$(cat list)"',
+    // A delimiter it cannot decode, with nothing it could split: the piped names are not knowable either way.
+    "find . | xargs -d '\\e' cat",
     // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
     'cat names | xargs cat',
   ];
