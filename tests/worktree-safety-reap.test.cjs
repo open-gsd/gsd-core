@@ -994,3 +994,451 @@ describe('#3057 cmdWorktreeReapOrphans / pruneOrphanedWorktrees output verdicts'
     assert.deepStrictEqual(err, [], 'the degraded-health warning belongs to the timeout arm only');
   });
 });
+
+// ─── ADR-5812 / #4941: removal of unregistered residue under .claude/worktrees ────────────────────────────────
+
+describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () => {
+  /** A fixed instant far after any fixture timestamp: the race guard reads it, never the wall clock. */
+  const FAR_FUTURE_MS = Date.UTC(2100, 0, 1);
+  const GUARD_MS = 5 * 60 * 1000;
+  const NAME = 'agent-a1b2c3d4e5f6';
+  let tmpBase;
+
+  beforeEach(() => {
+    tmpBase = fs.mkdtempSync(path.join(resolvedTmpDir(), 'gsd-5812-residue-'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpBase);
+  });
+
+  function adrRepo() {
+    const dir = path.join(tmpBase, 'repo');
+    initRepo(dir);
+    fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n.env*\n.secrets/\n.planning/\n');
+    git(['add', '-A'], dir);
+    git(['commit', '-m', 'ignore rules'], dir);
+    return dir;
+  }
+
+  const rootOf = (repo) => path.join(repo, '.claude', 'worktrees');
+
+  /**
+   * A harness worktree whose git bookkeeping is then forgotten: the `.git` file is deleted and (unless `prune:false`)
+   * the admin entry is pruned. It holds an ignored node_modules, as the real residue does.
+   */
+  function residueDir(repo, { name = NAME, branch = `worktree-${name}`, prune = true } = {}) {
+    const wt = path.join(rootOf(repo), name);
+    fs.mkdirSync(rootOf(repo), { recursive: true });
+    if (branch === null) git(['worktree', 'add', '--detach', wt], repo);
+    else git(['worktree', 'add', wt, '-b', branch], repo);
+    fs.mkdirSync(path.join(wt, 'node_modules', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(wt, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+    cleanup(path.join(wt, '.git'));
+    if (prune) git(['worktree', 'prune'], repo);
+    return wt;
+  }
+
+  const rows = (repo, deps = {}) => reapOrphanWorktrees(repo, { nowMs: FAR_FUTURE_MS, ...deps }).map((r) => [path.basename(r.path), r.status, r.reason]);
+
+  function verb(repo, deps = {}) {
+    const out = [];
+    const err = [];
+    cmdWorktreeReapOrphans(repo, { nowMs: FAR_FUTURE_MS, write: (s) => out.push(s), writeErr: (s) => err.push(s), ...deps });
+    return { json: JSON.parse(out.join('')), stderr: err.join('') };
+  }
+
+  describe('D1 location, shape, registration and identity', () => {
+    test('[regression] a forgotten harness directory is reaped, its top-level contents are named, and the node_modules goes with it', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+
+      const { json } = verb(repo);
+
+      assert.strictEqual(json.reaped, 1);
+      assert.deepStrictEqual(json.entries.map((e) => [path.basename(e.path), e.status, e.reason]), [[NAME, 'reaped', 'unregistered_residue']]);
+      assert.deepStrictEqual(json.entries[0].contents, ['README.md', 'node_modules']);
+      assert.ok(!fs.existsSync(wt));
+    });
+
+    test('[boundary] the verb says which sources it read: an absent admin directory is "absent", not "did not look"', () => {
+      const repo = adrRepo();
+      residueDir(repo);
+      assert.deepStrictEqual(verb(repo).json.scan, { admin_dir: 'absent', residue_dir: 'scanned' });
+      assert.deepStrictEqual(verb(adrRepoWith('absent')).json.scan, { admin_dir: 'absent', residue_dir: 'absent' });
+    });
+
+    function adrRepoWith() {
+      const dir = path.join(tmpBase, 'repo-plain');
+      initRepo(dir);
+      return dir;
+    }
+
+    test('[security] a registered worktree is never residue, even with its .git file deleted and no prune (the prunable case)', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo, { prune: false });
+      fs.writeFileSync(path.join(wt, 'precious.txt'), 'uncommitted\n');
+
+      assert.deepStrictEqual(rows(repo), []);
+      assert.ok(fs.existsSync(path.join(wt, 'precious.txt')));
+    });
+
+    test('[independence] a live worktree, a directory with a .git entry, an empty directory, a file and a link are not candidates', () => {
+      const repo = adrRepo();
+      fs.mkdirSync(rootOf(repo), { recursive: true });
+      git(['worktree', 'add', path.join(rootOf(repo), 'agent-a0000000live'), '-b', 'worktree-agent-a0000000live'], repo);
+      fs.mkdirSync(path.join(rootOf(repo), 'agent-a0000000gitf'));
+      fs.writeFileSync(path.join(rootOf(repo), 'agent-a0000000gitf', '.git'), 'gitdir: /elsewhere\n');
+      fs.mkdirSync(path.join(rootOf(repo), 'agent-a0000000empt'));
+      fs.writeFileSync(path.join(rootOf(repo), 'agent-a0000000file'), 'not a directory\n');
+      const outside = path.join(tmpBase, 'outside');
+      fs.mkdirSync(outside);
+      try { fs.symlinkSync(outside, path.join(rootOf(repo), 'agent-a0000000link'), 'dir'); } catch { /* no symlinks here */ }
+
+      assert.deepStrictEqual(rows(repo), []);
+    });
+
+    test('[boundary] the name must be agent-a followed by at least seven hex digits, and a harness branch must exist', () => {
+      const repo = adrRepo();
+      residueDir(repo, { name: 'agent-a123456' });                       // six digits: too short
+      residueDir(repo, { name: 'agent-b1234567' });                      // wrong letter
+      residueDir(repo, { name: 'agent-a1234567', branch: 'unrelated' }); // seven digits, no harness branch
+      residueDir(repo, { name: 'agent-a7654321', branch: 'agent-a7654321' }); // the other accepted branch spelling
+      residueDir(repo, { name: 'agent-a1234567x', branch: 'worktree-agent-a1234567x' }); // trailing non-hex
+
+      assert.deepStrictEqual(rows(repo).sort(), [
+        ['agent-a123456', 'skipped', 'residue_not_harness_named'],
+        ['agent-a1234567', 'skipped', 'residue_no_harness_branch'],
+        ['agent-a1234567x', 'skipped', 'residue_not_harness_named'],
+        ['agent-a7654321', 'reaped', 'unregistered_residue'],
+        ['agent-b1234567', 'skipped', 'residue_not_harness_named'],
+      ]);
+    });
+
+    test('[security] .claude or .claude/worktrees as a link is aliased: nothing is read or removed through it', (t) => {
+      const repo = adrRepo();
+      const victim = path.join(tmpBase, 'victim');
+      fs.mkdirSync(path.join(victim, NAME), { recursive: true });
+      fs.writeFileSync(path.join(victim, NAME, 'keep.txt'), 'must survive\n');
+      fs.mkdirSync(path.join(repo, '.claude'));
+      try { fs.symlinkSync(victim, rootOf(repo), 'dir'); } catch { t.skip('cannot create symlinks on this host'); return; }
+
+      assert.strictEqual(verb(repo).json.scan.residue_dir, 'aliased');
+      cleanup(rootOf(repo));
+      cleanup(path.join(repo, '.claude'));
+      fs.symlinkSync(path.join(victim, '..'), path.join(repo, '.claude'), 'dir');
+      assert.strictEqual(verb(repo).json.scan.residue_dir, 'aliased');
+      assert.strictEqual(fs.readFileSync(path.join(victim, NAME, 'keep.txt'), 'utf8'), 'must survive\n');
+    });
+
+    test('[independence] run from a linked worktree the sweep does not look, and says so', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo, { name: 'agent-a0000000aaaa' });
+      const linked = path.join(tmpBase, 'linked');
+      git(['worktree', 'add', linked, '-b', 'other'], repo);
+
+      assert.strictEqual(verb(linked).json.scan.residue_dir, 'not_main_checkout');
+      assert.ok(fs.existsSync(wt));
+    });
+
+    test('[boundary] a git directory that does not lead back to the top (core.worktree), unresolvable top, and unreadable root are reported, not swept', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const faulty = makeFaultyGit({ faults: [{ kind: 'exit', exitCode: 128, when: ['rev-parse', '--show-toplevel'] }], passthrough: realExecGit });
+      assert.strictEqual(verb(repo, { execGit: faulty }).json.scan.residue_dir, 'top_unresolved');
+      assert.strictEqual(verb(repo, { readDirSafe: (d) => (d === rootOf(repo) ? null : fs.readdirSync(d)) }).json.scan.residue_dir, 'unreadable');
+      git(['config', 'core.worktree', path.join(tmpBase)], repo);
+      assert.strictEqual(verb(repo).json.scan.residue_dir, 'git_mismatch');
+      git(['config', '--unset', 'core.worktree'], repo);
+      assert.ok(fs.existsSync(wt));
+    });
+
+    test('[boundary] when git cannot list its worktrees every candidate is kept as worktree_list_failed', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const faulty = makeFaultyGit({ faults: [{ kind: 'exit', exitCode: 128, when: ['worktree', 'list'] }], passthrough: realExecGit });
+
+      assert.deepStrictEqual(rows(repo, { execGit: faulty }), [[NAME, 'skipped', 'worktree_list_failed']]);
+      assert.ok(fs.existsSync(wt));
+    });
+  });
+
+  describe('D2 no work git lacks', () => {
+    for (const [label, mutate] of [
+      ['a modified tracked file', (wt) => fs.writeFileSync(path.join(wt, 'README.md'), 'changed\n')],
+      ['a deleted tracked file', (wt) => cleanup(path.join(wt, 'README.md'))],
+      ['an untracked file that is not ignored', (wt) => fs.writeFileSync(path.join(wt, 'notes.txt'), 'new\n')],
+      ['an untracked .gitignore that ignores everything', (wt) => fs.writeFileSync(path.join(wt, '.gitignore'), '*\n')],
+      ['an untracked .gitignore at depth', (wt) => { fs.mkdirSync(path.join(wt, 'sub')); fs.writeFileSync(path.join(wt, 'sub', '.gitignore'), '*\n'); }],
+    ]) {
+      test(`[regression] ${label} keeps the directory as residue_has_work`, () => {
+        const repo = adrRepo();
+        const wt = residueDir(repo);
+        mutate(wt);
+
+        assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_has_work']]);
+        assert.ok(fs.existsSync(wt));
+      });
+    }
+
+    test('[independence] ignored files (a node_modules, a build directory the rules ignore) are disposable', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      fs.mkdirSync(path.join(wt, 'node_modules', 'deep', 'er'), { recursive: true });
+      fs.writeFileSync(path.join(wt, 'node_modules', 'deep', 'er', 'f.js'), '1');
+
+      assert.deepStrictEqual(rows(repo), [[NAME, 'reaped', 'unregistered_residue']]);
+    });
+
+    test('[independence] the directory may match either harness branch tip: the one it was created from is enough', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo, { name: 'agent-a5555555', branch: 'agent-a5555555' });
+      git(['branch', 'worktree-agent-a5555555', 'HEAD~1'], repo);
+
+      assert.deepStrictEqual(rows(repo), [['agent-a5555555', 'reaped', 'unregistered_residue']]);
+      assert.ok(!fs.existsSync(wt));
+    });
+
+    test('[boundary] when git cannot compare (read-tree fails) the directory is kept as residue_unverified', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const faulty = makeFaultyGit({ faults: [{ kind: 'exit', exitCode: 128, when: ['--work-tree'] }], passthrough: realExecGit });
+
+      assert.deepStrictEqual(rows(repo, { execGit: faulty }), [[NAME, 'skipped', 'residue_unverified']]);
+      assert.ok(fs.existsSync(wt));
+    });
+  });
+
+  describe('D3 disqualifiers', () => {
+    test('[security] a file git tracks under the name keeps the directory, whatever the case of the pathspec', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      cleanup(wt);
+      fs.mkdirSync(wt, { recursive: true });
+      fs.writeFileSync(path.join(wt, 'tracked.txt'), 'committed content\n');
+      git(['add', '-f', path.join('.claude', 'worktrees', NAME, 'tracked.txt')], repo);
+      git(['commit', '-m', 'track a file under the harness name'], repo);
+      git(['branch', `worktree-${NAME}`], repo);
+
+      assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_tracked']]);
+      assert.ok(fs.existsSync(path.join(wt, 'tracked.txt')));
+    });
+
+    test('[security] a repository at any depth keeps the directory, a nested .git entry or a bare layout, even inside node_modules', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      fs.mkdirSync(path.join(wt, 'node_modules', 'pkg', 'vendored', '.GIT'), { recursive: true });
+      assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_contains_repository']]);
+      cleanup(path.join(wt, 'node_modules', 'pkg', 'vendored'));
+      for (const n of ['HEAD', 'objects', 'refs']) fs.mkdirSync(path.join(wt, 'node_modules', 'bare', n), { recursive: true });
+      assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_contains_repository']]);
+      assert.ok(fs.existsSync(wt));
+    });
+
+    test('[boundary] an entry younger than the race guard keeps the directory silently; at the guard it goes', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const newest = (dir) => fs.readdirSync(dir, { withFileTypes: true }).reduce((acc, e) => {
+        const full = path.join(dir, e.name);
+        const s = fs.lstatSync(full);
+        const inner = e.isDirectory() ? newest(full) : 0;
+        return Math.max(acc, s.mtimeMs, s.ctimeMs, inner);
+      }, Math.max(fs.lstatSync(dir).mtimeMs, fs.lstatSync(dir).ctimeMs));
+      const youngest = newest(wt);
+
+      assert.deepStrictEqual(rows(repo, { nowMs: youngest + GUARD_MS - 1 }), []);
+      assert.ok(fs.existsSync(wt), 'limit-1: kept');
+      assert.deepStrictEqual(rows(repo, { nowMs: youngest + GUARD_MS }), [[NAME, 'reaped', 'unregistered_residue']]);
+      assert.ok(!fs.existsSync(wt), 'limit: reaped');
+    });
+
+    test('[security] a directory holding the process working directory or the sweep root is kept as residue_contains_cwd', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      fs.mkdirSync(path.join(wt, 'node_modules', 'here'), { recursive: true });
+      assert.deepStrictEqual(rows(repo, { cwd: path.join(wt, 'node_modules', 'here') }), [[NAME, 'skipped', 'residue_contains_cwd']]);
+      assert.ok(fs.existsSync(wt));
+    });
+
+    test('[boundary] the walk bound: limit-1 and limit entries are read, limit+1 is kept as residue_unverified', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      let count = 0;
+      const countEntries = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { count += 1; if (e.isDirectory()) countEntries(path.join(dir, e.name)); } };
+      countEntries(wt);
+
+      assert.deepStrictEqual(rows(repo, { residueWalkLimit: count - 1 }), [[NAME, 'skipped', 'residue_unverified']]);
+      assert.deepStrictEqual(rows(repo, { residueWalkLimit: count }), [[NAME, 'reaped', 'unregistered_residue']]);
+    });
+
+    test('[security] a link inside the directory is unlinked, never followed: the target survives', (t) => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const outside = path.join(tmpBase, 'outside-target');
+      fs.mkdirSync(outside);
+      fs.writeFileSync(path.join(outside, 'keep.txt'), 'must survive\n');
+      try { fs.symlinkSync(outside, path.join(wt, 'node_modules', 'linked'), 'dir'); } catch { t.skip('cannot create symlinks on this host'); return; }
+
+      assert.deepStrictEqual(rows(repo), [[NAME, 'reaped', 'unregistered_residue']]);
+      assert.strictEqual(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'must survive\n');
+    });
+  });
+
+  describe('D4 ignored secrets and user data', () => {
+    for (const rel of ['.env', '.env.local', '.env.example', path.join('app', '.env'), path.join('.secrets', 'token'), path.join('.planning', 'STATE.md')]) {
+      test(`[regression] an ignored ${rel.replace(/\\/g, '/')} the harness did not create keeps the directory as residue_has_user_data`, () => {
+        const repo = adrRepo();
+        const wt = residueDir(repo);
+        fs.mkdirSync(path.dirname(path.join(wt, rel)), { recursive: true });
+        fs.writeFileSync(path.join(wt, rel), 'SECRET=1\n');
+
+        assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_has_user_data']]);
+        assert.ok(fs.existsSync(path.join(wt, rel)));
+      });
+    }
+
+    test('[independence] a file the harness copied (same bytes, same path in the main checkout) is not user data', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      fs.writeFileSync(path.join(wt, '.env'), 'SECRET=1\n');
+      assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_has_user_data']]);
+
+      fs.writeFileSync(path.join(repo, '.env'), 'SECRET=1\n');
+      assert.deepStrictEqual(rows(repo), [[NAME, 'reaped', 'unregistered_residue']]);
+    });
+
+    test('[boundary] a copy that differs, or is larger than 1 MiB, is not a copy', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      fs.writeFileSync(path.join(repo, '.env'), 'SECRET=1\n');
+      fs.writeFileSync(path.join(wt, '.env'), 'SECRET=2\n');
+      assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_has_user_data']]);
+
+      const big = Buffer.alloc(1024 * 1024 + 1, 'a');
+      fs.writeFileSync(path.join(repo, '.env'), big);
+      fs.writeFileSync(path.join(wt, '.env'), big);
+      assert.deepStrictEqual(rows(repo), [[NAME, 'skipped', 'residue_has_user_data']]);
+      const atLimit = Buffer.alloc(1024 * 1024, 'a');
+      fs.writeFileSync(path.join(repo, '.env'), atLimit);
+      fs.writeFileSync(path.join(wt, '.env'), atLimit);
+      assert.deepStrictEqual(rows(repo), [[NAME, 'reaped', 'unregistered_residue']]);
+    });
+  });
+
+  describe('D5 removal protocol and the reserved name', () => {
+    test('[boundary] a rename that fails keeps the directory as residue_remove_failed', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      assert.deepStrictEqual(rows(repo, { renameDir: () => { throw new Error('EBUSY'); } }), [[NAME, 'skipped', 'residue_remove_failed']]);
+      assert.ok(fs.existsSync(wt));
+    });
+
+    test('[independence] a rename that fails because a concurrent sweep already took the directory reports no row', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const taken = (from) => { cleanup(from); throw new Error('ENOENT'); };
+      assert.deepStrictEqual(rows(repo, { renameDir: taken }), []);
+      assert.ok(!fs.existsSync(wt));
+    });
+
+    test('[boundary] a removal that stops partway is renamed back and reported as residue_remove_incomplete', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const failing = (dir) => { cleanup(path.join(dir, 'node_modules')); throw new Error('EPERM'); };
+
+      assert.deepStrictEqual(rows(repo, { removeDir: failing }), [[NAME, 'skipped', 'residue_remove_incomplete']]);
+      assert.ok(fs.existsSync(wt), 'what is left sits at the original path');
+      assert.ok(!fs.existsSync(path.join(wt, 'node_modules')));
+    });
+
+    test('[boundary] when the rename back fails too, the row names the reserved path where the files are', () => {
+      const repo = adrRepo();
+      residueDir(repo);
+      let renames = 0;
+      const realRename = (from, to) => fs.renameSync(from, to);
+      const flaky = (from, to) => { renames += 1; if (renames === 2) throw new Error('EBUSY'); realRename(from, to); };
+
+      const result = reapOrphanWorktrees(repo, { nowMs: FAR_FUTURE_MS, renameDir: flaky, removeDir: () => { throw new Error('EPERM'); } });
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].reason, 'residue_remove_incomplete');
+      assert.match(path.basename(result[0].path), /^\.gsd-reap-[0-9a-f]{16}$/);
+      assert.ok(fs.existsSync(result[0].path));
+    });
+
+    test('[security] a root that turns into a link between the checks and the removal keeps the directory as residue_unreadable', (t) => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      let rootChecks = 0;
+      const lstat = (p) => {
+        const real = fs.lstatSync(p, { throwIfNoEntry: false }) ?? null;
+        if (p === rootOf(repo) && real !== null && ++rootChecks > 1) {
+          return Object.assign(Object.create(real), { isSymbolicLink: () => true });
+        }
+        return real;
+      };
+      void t;
+      assert.deepStrictEqual(rows(repo, { lstatSafe: lstat }), [[NAME, 'skipped', 'residue_unreadable']]);
+      assert.ok(fs.existsSync(wt));
+    });
+
+    test('[independence] a reserved-name stub is taken to be this sweep\'s stranded removal: it needs no harness name or branch, and goes when old', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const stub = path.join(rootOf(repo), '.gsd-reap-0123456789abcdef');
+      fs.renameSync(wt, stub);
+
+      assert.deepStrictEqual(rows(repo), [['.gsd-reap-0123456789abcdef', 'reaped', 'unregistered_residue']]);
+      assert.ok(!fs.existsSync(stub));
+    });
+
+    test('[boundary] a stub younger than the guard stays in place, and a stub holding user data is kept like any other directory', () => {
+      const repo = adrRepo();
+      const wt = residueDir(repo);
+      const stub = path.join(rootOf(repo), '.gsd-reap-0123456789abcdef');
+      fs.renameSync(wt, stub);
+      const ctime = fs.lstatSync(stub).ctimeMs;
+      assert.deepStrictEqual(rows(repo, { nowMs: ctime + 1 }), []);
+      assert.ok(fs.existsSync(stub));
+
+      fs.writeFileSync(path.join(stub, '.env'), 'SECRET=1\n');
+      assert.deepStrictEqual(rows(repo), [['.gsd-reap-0123456789abcdef', 'skipped', 'residue_has_user_data']]);
+    });
+  });
+
+  describe('D6 reporting', () => {
+    test('[regression] stderr names removed directories with their contents, counts kept ones by reason, and reports a location not swept', () => {
+      const repo = adrRepo();
+      residueDir(repo, { name: 'agent-a1111111' });
+      const kept = residueDir(repo, { name: 'agent-a2222222' });
+      fs.writeFileSync(path.join(kept, 'work.txt'), 'x');
+      const { stderr } = verb(repo);
+
+      assert.match(stderr, /removed residue "agent-a1111111" holding "README\.md", "node_modules"/);
+      assert.match(stderr, /kept residue directories: residue_has_work=1/);
+      assert.ok(!stderr.includes('agent-a2222222'), 'kept directories are counted, not named');
+
+      const link = verb(repo, { execGit: makeFaultyGit({ faults: [{ kind: 'exit', exitCode: 128, when: ['rev-parse', '--show-toplevel'] }], passthrough: realExecGit }) });
+      assert.match(link.stderr, /\.claude\/worktrees was not swept \(top_unresolved\)/);
+    });
+
+    test('[boundary] a name longer than 64 code points is cut, and a directory holding more than five names lists five and an ellipsis', () => {
+      const repo = path.join(tmpBase, 'repo-many');
+      initRepo(repo);
+      fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n.env*\n');
+      for (const n of ['f1', 'f2', 'f3', 'f4', 'f5']) fs.writeFileSync(path.join(repo, n), `${n}\n`);
+      git(['add', '-A'], repo);
+      git(['commit', '-m', 'files'], repo);
+      const longName = `.env${'x'.repeat(80)}`;
+      fs.writeFileSync(path.join(repo, longName), 'COPIED=1\n');
+      residueDir(repo);
+      fs.writeFileSync(path.join(rootOf(repo), NAME, longName), 'COPIED=1\n');
+
+      const { stderr } = verb(repo);
+
+      assert.ok(stderr.includes(`"${longName.slice(0, 64)}"`), stderr);
+      assert.ok(!stderr.includes(longName.slice(0, 65)), 'cut at 64 code points');
+      assert.match(stderr, /holding [^\n]*, \.\.\.\n/);
+    });
+  });
+});
