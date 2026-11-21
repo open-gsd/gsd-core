@@ -928,6 +928,16 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     config.cmdConfigNewProject(cwd, positionals[0], raw, { dryRun: parsed['dry-run'] });
   }
 
+  // #5681: merge the chosen settings into the global defaults store. One JSON
+  // positional, no flags — the settings workflow is the only caller.
+  function routeConfigSaveDefaults({ args, cwd, raw }) {
+    parseNamedArgsOrExit(args, specFor('config-save-defaults'), error);
+    if (args[1] === undefined) {
+      error('Usage: config-save-defaults <settings-json>', ERROR_REASON.USAGE);
+    }
+    config.cmdConfigSaveDefaults(cwd, args[1], raw);
+  }
+
   function routeConfigPath({ args, cwd, raw, workstreamContext }) {
     parseNamedArgsOrExit(args, specFor('config-path'), error);
     config.cmdConfigPath(cwd, raw, workstreamContext);
@@ -5007,6 +5017,7 @@ const HOST_COMMAND_ROUTERS = {
   },
   'estimate-calibrate': ({ args, cwd, raw }) => estimateCli.cmdEstimateCalibrate(cwd, args.slice(1), raw),
   'config-new-project': routeConfigNewProject,
+  'config-save-defaults': routeConfigSaveDefaults,
   'config-path': routeConfigPath,
   'migrate-config': routeMigrateConfig,
   'research-store': routeResearchStore,
@@ -5422,7 +5433,7 @@ function runWithTimeout(argv) {
 // drifting apart when a query command was added to only one or two.
 const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--project-dir <path>] [--ws <name>] [--json-errors] [--exit-contract=<v>]\n' +
   'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-docs-guard, commit-to-subrepo, pr-subrepo, project-context, ' +
-  'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
+  'config-ensure-section, config-get, config-new-project, config-path, config-save-defaults, config-set, migrate-config, normalize-test-command, resolve-package-manager, ' +
   'context-predicates, current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
   'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
   'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +

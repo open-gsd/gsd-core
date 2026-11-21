@@ -1464,6 +1464,31 @@ describe('#3532 shadowed global-defaults warning', () => {
     assert.ok(registered, 'nested workflow.post_planning_gaps must register as shadowed');
   });
 
+  // #3894: the nested research_before_questions alias reports like
+  // post_planning_gaps above.
+  test('canary: nested workflow.research_before_questions warns under a project config', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({ workflow: { research_before_questions: true } });
+    loadConfigResolved(tmpDir);
+    const registered = [...configLoader._warnedShadowedGlobalKeys].some(set => set.split(',').includes('workflow.research_before_questions'));
+    assert.ok(registered, 'nested workflow.research_before_questions must register as shadowed');
+  });
+
+  // #5681: the nested workflow keys the /gsd-settings
+  // template saves are copied into new projects, so the "ignored for model
+  // resolution" warning does not name them. Only the flat keys are reported.
+  test('the nested workflow keys the settings template saves do not warn under a project config', () => {
+    writeConfig(tmpDir, { model_profile: 'balanced' });
+    writeGlobalDefaults({
+      model_profile: 'quality',
+      workflow: { research: false, plan_check: false, verifier: false, nyquist_validation: false, text_mode: true, subagent_timeout: 1 },
+    });
+    loadConfigResolved(tmpDir);
+    const reported = [...configLoader._warnedShadowedGlobalKeys].flatMap(set => set.split(','));
+    assert.ok(reported.includes('model_profile'), 'precondition: the flat model_profile is reported');
+    assert.deepEqual(reported.filter(k => k.startsWith('workflow.')), []);
+  });
+
   // List parity, both directions: the implementation's exported list (minus
   // effort) must equal this file's expected list — a key _globalBaseCfg grows
   // without updating GLOBAL_DEFAULTS_RESOLUTION_KEYS goes silently unwarned,

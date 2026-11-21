@@ -136,7 +136,8 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
  * #5470: every key the project-config branch of the loader reads from two
  * spellings — the flat top-level key and its nested `<section>.<field>` alias.
  * (With no `.planning/`, the global-defaults branch below projects its own
- * keys from `~/.gsd/defaults.json` and does not use this table.) The flat key
+ * keys from `~/.gsd/defaults.json`; each key it projects that NESTED_TWINS lists
+ * is read under either spelling, flat first (#5681).) The flat key
  * wins, except for `branching_strategy`, `base_branch` and `sub_repos`:
  * normalizeLegacyKeys hoists those legacy flat keys under their section first,
  * and an existing nested value wins there. `_baseConfig` reads them through
@@ -206,6 +207,27 @@ function readResolvedAlias(config: Record<string, unknown>, alias: ConfigKeyAlia
       : undefined;
   }
   return value;
+}
+
+/**
+ * Every setting a flat key and a nested `<section>.<field>` spelling both name
+ * in `~/.gsd/defaults.json`: each CONFIG_KEY_ALIASES entry whose nested field
+ * sits in another section, and `research_before_questions`, which only the
+ * global-defaults branch reads nested (#3894). `parallelization` is not one:
+ * its nested field lives under the flat key itself. The global-defaults branch
+ * reads these, `config-save-defaults` keeps one spelling of each, and
+ * new-project creation resolves them, all from this list (#5681).
+ */
+const NESTED_TWINS: readonly { key: string; section: string; field: string }[] = Object.freeze([
+  ...CONFIG_KEY_ALIASES
+    .filter((alias) => alias.section !== alias.key)
+    .map(({ key, section, field }) => ({ key, section, field })),
+  { key: 'research_before_questions', section: 'workflow', field: 'research_before_questions' },
+]);
+
+/** The NESTED_TWINS entry for a flat key, or undefined when it has no nested spelling. */
+function nestedTwinOf(key: string): { key: string; section: string; field: string } | undefined {
+  return NESTED_TWINS.find((twin) => twin.key === key);
 }
 
 const CONFIG_DEFAULTS = {
@@ -1210,28 +1232,29 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       }
       if (globalRead.kind !== 'ok') throw new Error('global defaults absent or unusable');
       const globalDefaults = globalRead.data;
+      // Each setting below is read as in a project config: its flat key, then
+      // its nested twin (NESTED_TWINS) when it has one. `config-save-defaults`
+      // stores the nested spelling and drops the flat one (#5681), so a
+      // flat-only read lost a saved `workflow.research`. #3894 added
+      // `research_before_questions`, which was silently dropped from global
+      // defaults, so it was unavailable at user scope AND inert at project
+      // scope on the /gsd-quick path.
+      const globalGet = (key: string): unknown => _getConfigValue(globalDefaults, key, nestedTwinOf(key));
       const _globalBaseCfg: Record<string, unknown> = {
         ...defaults,
-        model_profile: (globalDefaults['model_profile']) ?? defaults.model_profile,
-        commit_docs: (globalDefaults['commit_docs']) ?? defaults.commit_docs,
-        research: (globalDefaults['research']) ?? defaults.research,
-        plan_checker: (globalDefaults['plan_checker']) ?? defaults.plan_checker,
-        verifier: (globalDefaults['verifier']) ?? defaults.verifier,
-        nyquist_validation: (globalDefaults['nyquist_validation']) ?? defaults.nyquist_validation,
-        post_planning_gaps: (globalDefaults['post_planning_gaps'])
-          ?? (globalDefaults['workflow'] as Record<string, unknown> | undefined)?.['post_planning_gaps']
-          ?? defaults.post_planning_gaps,
-        // #3894: same nested-alias shape as post_planning_gaps above — the key
-        // was silently dropped from global defaults, so it was unavailable at
-        // user scope AND inert at project scope on the /gsd-quick path.
-        research_before_questions: (globalDefaults['research_before_questions'])
-          ?? (globalDefaults['workflow'] as Record<string, unknown> | undefined)?.['research_before_questions']
-          ?? defaults.research_before_questions,
-        parallelization: (globalDefaults['parallelization']) ?? defaults.parallelization,
-        text_mode: (globalDefaults['text_mode']) ?? defaults.text_mode,
-        resolve_model_ids: (globalDefaults['resolve_model_ids']) ?? defaults.resolve_model_ids,
-        context_window: (globalDefaults['context_window']) ?? defaults.context_window,
-        subagent_timeout: (globalDefaults['subagent_timeout']) ?? defaults.subagent_timeout,
+        model_profile: globalGet('model_profile') ?? defaults.model_profile,
+        commit_docs: globalGet('commit_docs') ?? defaults.commit_docs,
+        research: globalGet('research') ?? defaults.research,
+        plan_checker: globalGet('plan_checker') ?? defaults.plan_checker,
+        verifier: globalGet('verifier') ?? defaults.verifier,
+        nyquist_validation: globalGet('nyquist_validation') ?? defaults.nyquist_validation,
+        post_planning_gaps: globalGet('post_planning_gaps') ?? defaults.post_planning_gaps,
+        research_before_questions: globalGet('research_before_questions') ?? defaults.research_before_questions,
+        parallelization: globalGet('parallelization') ?? defaults.parallelization,
+        text_mode: globalGet('text_mode') ?? defaults.text_mode,
+        resolve_model_ids: globalGet('resolve_model_ids') ?? defaults.resolve_model_ids,
+        context_window: globalGet('context_window') ?? defaults.context_window,
+        subagent_timeout: globalGet('subagent_timeout') ?? defaults.subagent_timeout,
         planner_stall_detection_enabled: resolvePlannerStallDetectionEnabled(
           (globalDefaults['planner'] as Record<string, unknown> | undefined)?.['stall_detection_enabled'],
         ),
@@ -1334,6 +1357,7 @@ export = {
   isGitIgnored,
   CONFIG_DEFAULTS,
   CONFIG_KEY_ALIASES,
+  NESTED_TWINS,
   configKeyAliasFor,
   readResolvedAlias,
   _getConfigDefault,

@@ -683,7 +683,9 @@ function acquireInstallMigrationLock(
         }
         if (clock.now() - started >= timeoutMs) {
           const holderInfo = lockData ? ` (held by pid ${lockData.pid} since ${lockData.acquiredAt})` : '';
-          throw new Error(`installer migration lock is held: ${lockPath}${holderInfo}`);
+          // `lockHolder` carries the same holder as data, for a caller that
+          // reports it as structured error fields (config-save-defaults, #5681).
+          throw Object.assign(new Error(`installer migration lock is held: ${lockPath}${holderInfo}`), { lockHolder: lockData });
         }
         clock.sleep(Math.min(50, Math.max(1, timeoutMs - (clock.now() - started))));
         continue;

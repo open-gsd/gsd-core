@@ -96,6 +96,8 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
     rejectShortFlags: true,
     unknownFlagMessage: 'Unknown flag for config-new-project: {flag}',
   },
+  // The settings JSON is the one positional (#5681); a second one is refused.
+  'config-save-defaults': { positionals: 2 },
   'config-path': { positionals: 1 },
   'migrate-config': { positionals: 1 },
 

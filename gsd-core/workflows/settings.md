@@ -579,22 +579,22 @@ AskUserQuestion([
 ])
 ```
 
-If "Yes": write the same config object (minus project-specific fields like `brave_search`) to the global defaults store, `${GSD_HOME:-$HOME}/.gsd/defaults.json` (`~/.gsd/defaults.json` unless `GSD_HOME` is set):
+If "Yes": save with `config-save-defaults`, never by writing the file: it merges into `${GSD_HOME:-$HOME}/.gsd/defaults.json`, keeping keys this flow omits.
+
+Fill each `<current>` with this run's value (the user's answer, else what `read_current` parsed, its per-key defaults included) as JSON: strings quoted and escaped, booleans and numbers bare. A setting still without a value loses its line and any comma left before `}`. Never write `null`: it deletes the saved default.
 
 ```bash
-mkdir -p "${GSD_HOME:-$HOME}/.gsd"
-```
-
-Write `${GSD_HOME:-$HOME}/.gsd/defaults.json` with:
-```json
+DEFAULTS_JSON=$(cat <<'JSON'
 {
   "mode": <current>,
   "granularity": <current>,
   "model_profile": <current>,
   "commit_docs": <current>,
   "parallelization": <current>,
-  "branching_strategy": <current>,
-  "quick_branch_template": <current>,
+  "git": {
+    "branching_strategy": <current>,
+    "quick_branch_template": <current>
+  },
   "workflow": {
     "research": <current>,
     "plan_check": <current>,
@@ -624,7 +624,12 @@ Write `${GSD_HOME:-$HOME}/.gsd/defaults.json` with:
     "auto_update": <current>
   }
 }
+JSON
+)
+gsd_run query config-save-defaults "$DEFAULTS_JSON"
 ```
+
+Non-zero exit: show the error and report Saved as Defaults: No, unless the error reads "Error: Saved" (the save landed). A held lock can take 30 s.
 </step>
 
 <step name="confirm">
