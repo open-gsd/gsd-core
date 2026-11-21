@@ -4724,7 +4724,7 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
     }
     // A group (`( … )`, `{ …; }`) writes what each command inside it writes: every one is a stage, read fail closed
     // by a shell (#5492). A closer nothing opens (a `case` pattern's `)`) reads every segment back to the start.
-    const group = pipedGroup(last, at, sepAfter, ctx);
+    const group = pipedGroup(last, at, bySeg, sepAfter, ctx);
     if (group) {
       const inner = [];
       for (let g = group.close; g > group.start; g--) {
@@ -4803,24 +4803,35 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
 
 // When the pipe into segment `at` comes from a group closing after segment `last` (a `)` or `}` among the
 // separators between them), the segment whose separator closes it (`close`) and the one whose separator opens it
-// (`start`, -1 when none does); null when no group closes there. Each separator passed is charged.
+// (`start`, -1 when none does or a closer meets an opener of the other kind); null when no group closes there. A
+// `{` after a command's words (`echo {`) is an argument, not an opener (opensGroup). Each separator passed is charged.
 const GROUP_CLOSERS = new Set([')', '}']);
-function pipedGroup(last, at, sepAfter, ctx) {
+function pipedGroup(last, at, bySeg, sepAfter, ctx) {
   let close = -1;
   for (let q = last; q < at; q++) {
     charge(ctx, 1);
     if (GROUP_CLOSERS.has(sepAfter.get(q))) close = q;
   }
   if (close === -1) return null;
-  let depth = 0;
+  const closers = [];
   for (let r = close; r >= 0; r--) {
     charge(ctx, 1);
     const text = sepAfter.get(r);
-    if (GROUP_CLOSERS.has(text)) depth++;
-    else if (text === '(' || text === '{') depth--;
-    if (depth === 0) return { close, start: r };
+    if (GROUP_CLOSERS.has(text)) {
+      closers.push(text);
+    } else if (opensGroup(text, bySeg.get(r))) {
+      if (closers.pop() !== (text === '(' ? ')' : '}')) return { close, start: -1 };
+      if (!closers.length) return { close, start: r };
+    }
   }
   return { close, start: -1 };
+}
+
+// Whether separator `text` ending a segment of `segTokens` opens a group: a `(`, or a `{` that no word but a
+// reserved one (`do {`, `then {`) comes before.
+function opensGroup(text, segTokens) {
+  if (text === '(') return true;
+  return text === '{' && (segTokens || []).every((t) => t.kind !== 'word' || (plainWord(t) && LEADING_RESERVED.has(t.text)));
 }
 
 // The heredoc bodies and here-strings given to a group closing after segment `close`, before the pipe into segment
@@ -4872,7 +4883,7 @@ function groupOpener(at, bySeg, sepAfter, ctx) {
       if (step < 0 && (!cases || top)) unknown = true;
       cases += step;
       const text = sepAfter.get(g);
-      if (text === '(' || text === '{') open.push({ seg: g, text, cases });
+      if (opensGroup(text, segTokens)) open.push({ seg: g, text, cases });
       else if (text === ')' && cases > 0 && (!top || top.cases < cases)) continue; // a case pattern
       else if (GROUP_CLOSERS.has(text)) {
         if (!top || top.cases !== cases || top.text !== (text === ')' ? '(' : '{')) unknown = true;
