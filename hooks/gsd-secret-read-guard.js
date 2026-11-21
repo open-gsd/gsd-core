@@ -1529,8 +1529,13 @@ function tokenize(str, reading) {
   let heredocs = [];
   let expectTag = null;
   let unreadable = null;
+  // #6282: how many nested bodies were collected before the current word, so a word that held a `$( )` or backtick
+  // span, which leaves no text in it, is marked `substituted` (segmentFeeds, stageOutput).
+  let nestedMark = 0;
 
   const flush = () => {
+    const substituted = nested.length > nestedMark;
+    nestedMark = nested.length;
     if (!hasWord) return;
     if (expectTag) {
       // Record the current seg (still the `<<` segment — flush runs before the
@@ -1544,7 +1549,7 @@ function tokenize(str, reading) {
       const brace = braceUnquoted && (buf.includes(',') || buf.includes('..'));
       tokens.push({
         kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg, leadUnquoted,
-        globUnquoted: globUnquoted || brace,
+        globUnquoted: globUnquoted || brace, substituted,
       });
     }
     buf = '';
@@ -2000,12 +2005,16 @@ function nameOnlyOperandIndices(base, operands) {
 // HOME=-eKEY), and one at or before an exempt word can add or remove words ahead of it, so the exempt index is no
 // longer the pattern or exclusion value the tool reads (`grep --label .* .env`). A glob after every exempt word
 // (`grep .env docs/*.md`) only adds files.
+// `~/…` is HOME's, which only a command that sets HOME can make an option (homeMaySet); a glob or brace after the
+// `=` of an attached option (`--exclude-dir=node*`) expands only to more options of that kind.
 const LEAD_EXPANSION_RE = /^[*?[~]/;
+const ATTACHED_OPTION_RE = /^-[^=*?[{]*=/;
 function expansionMayShift(operands, exempt) {
   let last = -1;
   for (const k of exempt) if (k > last) last = k;
-  return operands.some((w, k) => (w.leadUnquoted && (LEAD_EXPANSION_RE.test(w.text) || (w.text.startsWith('{') && w.globUnquoted)))
-    || (k <= last && w.globUnquoted));
+  const leads = (w) => (LEAD_EXPANSION_RE.test(w.text) && !(w.text.startsWith('~/') && !homeMaySet))
+    || (w.text.startsWith('{') && w.globUnquoted);
+  return operands.some((w, k) => (w.leadUnquoted && leads(w)) || (k <= last && w.globUnquoted && !ATTACHED_OPTION_RE.test(w.text)));
 }
 
 // #5884: grep-family, ripgrep and jq command lines. Their pattern or program
@@ -2828,12 +2837,12 @@ function namesParsingVar(text) {
 // `env`'s words up to its command, and a word holding `=`. On the text with quotes removed, as above, so a body
 // that eval or source runs later counts in the command that holds it, and a quoted glob counts too.
 const SETTING_WORDS = new Set(['export', 'declare', 'typeset', 'readonly', 'local']);
-function globMaySetParsingVar(plain) {
+function globMaySetParsingVar(plain, names = PARSING_VAR_NAMES) {
   if (!/[*?[]/.test(plain)) return false;
   let setting = false;
   let envWords = false;
   for (const word of plain.split(/[\s;&|()`]+/)) {
-    if ((setting || envWords || word.includes('=')) && /[*?[]/.test(word) && globMaySpellAssignment(word)) return true;
+    if ((setting || envWords || word.includes('=')) && /[*?[]/.test(word) && globMaySpellAssignment(word, names)) return true;
     const base = lastSegment(word);
     if (SETTING_WORDS.has(base)) setting = true;
     else if (envWords && !word.startsWith('-') && !word.includes('=')) envWords = false;
@@ -2844,8 +2853,8 @@ function globMaySetParsingVar(plain) {
 
 // Whether glob `word` can match `NAME=…` for one of those names: each character matches the name's in turn (`?` and
 // a bracket any one), up to its `=`, unless a `*` or a brace, which may stand for any run, comes first.
-function globMaySpellAssignment(word) {
-  return PARSING_VAR_NAMES.some((name) => {
+function globMaySpellAssignment(word, names) {
+  return names.some((name) => {
     const target = `${name}=`;
     let j = 0;
     for (let i = 0; i < word.length && j < target.length; i++, j++) {
@@ -2865,19 +2874,49 @@ function globMaySpellAssignment(word) {
 function scanCommand(command, depth, reading) {
   const inherited = noSearchCarveOut;
   const inheritedStdin = xargsStdinFrom;
+  const inheritedHome = homeMaySet;
   // Tested with `\<newline>` removed, as the shell reads a body: `"$\<newline>@"` is `"$@"`.
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
-  // An alias can give the tool words too (`alias grep='grep -eKEY'`), so the word withdraws the carve-out as well.
-  const sticky = inherited || namesParsingVar(joined) || ALIAS_RE.test(joined.replace(/["'\\]/g, ''));
-  const unseenAt = sticky ? 0 : unseenWordsAt(command, joined);
-  // The bodies it holds are scanned as before, under the whole text's verdict; its segments by unseenAt.
+  const plain = joined.replace(/["'\\]/g, '');
+  homeMaySet = inheritedHome || plain.includes('HOME') || globMaySetParsingVar(plain, ['HOME']);
+  const unseenAt = inherited ? 0 : unseenWordsAt(command, joined);
+  // The bodies it holds are scanned under the whole text's verdict; its segments by unseenAt (scanSegments).
   noSearchCarveOut = unseenAt >= 0;
   try {
-    return scanSegments(command, depth, reading, unseenAt);
+    return scanSegments(command, depth, reading, unseenAt, joined);
   } finally {
     noSearchCarveOut = inherited;
     xargsStdinFrom = inheritedStdin;
+    homeMaySet = inheritedHome;
   }
+}
+
+// #6282: set while a scan runs whose text, or any text it was reached from, may set HOME (`HOME=-eKEY`), which
+// makes `~/…` a word the guard does not see (expansionMayShift).
+let homeMaySet = false;
+
+// #6282: whether the command sets a variable that changes how a search tool parses its words, or an alias (`alias
+// grep='grep -eKEY'`): in a word of a segment, as the reading decodes it, other than a search tool's operands, which
+// a pattern naming one sets nothing in (`grep -rn POSIXLY_CORRECT`); and anywhere in `rereadText`, the text of a
+// command an eval, source or `.` re-reads (`eval 'export GREP_O*'; grep .env`), else null.
+function setsParsingWords(heads, bySeg, maxSeg, rereadText) {
+  if (rereadText !== null && (namesParsingVar(rereadText) || ALIAS_RE.test(rereadText.replace(/["'\\]/g, '')))) return true;
+  for (let s = 0; s <= maxSeg; s++) {
+    const head = heads[s];
+    if (head === null) continue;
+    let words = commandWords(bySeg.get(s) || []).map((w) => w.text);
+    if (head.cmd !== null && SEARCH_TOOLS.has(head.cmd.base)) words = words.slice(0, words.length - head.cmd.operands.length);
+    const text = words.join(' ');
+    if (namesParsingVar(text) || ALIAS_RE.test(text)) return true;
+  }
+  return false;
+}
+
+// Whether a segment's command is eval, source or `.` (also behind reserved words or `builtin`), or defines a function.
+function rereadsText(heads) {
+  return heads.some((head) => head !== null && (head.reserved.some((w) => DEFINING_BASES.has(w)) || (head.cmd !== null
+    && (DEFINING_BASES.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
+      && DEFINING_BASES.has(head.cmd.operands[0].text))))));
 }
 
 // #6282: where in `command` the first word the guard does not see may come from, or -1 for nowhere: an expansion
@@ -2959,13 +2998,9 @@ const LIST_SEPS = new Set([';', '\n', '&&', '||', '&']);
 
 // The scan of `command` itself (scanCommand). A segment keeps the search carve-out only when the command's first
 // unseen word (unseenAt) lies after the list separator that ends it (`grep …; echo $?`).
-function scanSegments(command, depth, reading, unseenAt) {
+function scanSegments(command, depth, reading, unseenAt, joined) {
   const { tokens, nested, unreadable } = tokenizeCharged(command, reading, true);
-  // A word as the reading decodes it can name one too (`export $'\x47REP_OPTIONS=-eK'`).
-  if (unseenAt !== 0 && tokens.some((t) => t.kind === 'word' && (namesParsingVar(t.text) || t.text === 'alias'))) {
-    unseenAt = 0;
-    noSearchCarveOut = true;
-  }
+  if (!homeMaySet && tokens.some((t) => t.kind === 'word' && t.text.includes('HOME'))) homeMaySet = true;
   const segEnd = new Map();
   let open = [];
   for (const t of tokens) {
@@ -2974,11 +3009,6 @@ function scanSegments(command, depth, reading, unseenAt) {
     if (!LIST_SEPS.has(t.text)) continue;
     for (const seg of open) segEnd.set(seg, t.at);
     open = [];
-  }
-
-  for (const sub of nested) {
-    const hit = findSecretRead(sub, depth + 1);
-    if (hit) return hit;
   }
 
   // Group by seg, not separator order: heredoc tokens carry their `<<`
@@ -3004,13 +3034,26 @@ function scanSegments(command, depth, reading, unseenAt) {
 
   heredocBodiesBySegMap.set(bySeg, heredocsBySeg);
   const heads = segmentHeads(bySeg, maxSeg);
-  if ((unseenAt > 0 || unseenAt === LITERAL_DOLLAR_ONLY) && runsWordsAgain(heads, tokens)) unseenAt = 0;
+  const rereads = rereadsText(heads);
+  if (unseenAt !== 0 && (setsParsingWords(heads, bySeg, maxSeg, rereads ? joined : null)
+    || ((unseenAt > 0 || unseenAt === LITERAL_DOLLAR_ONLY) && runsWordsAgain(heads, tokens)))) {
+    unseenAt = 0;
+    noSearchCarveOut = true;
+  }
+
+  for (const sub of nested) {
+    const hit = findSecretRead(sub, depth + 1);
+    if (hit) return hit;
+  }
+
   const inheritedStdin = xargsStdinFrom;
-  const groupStdin = groupStdins(tokens, bySeg, maxSeg, heads);
+  const ctx = { bySeg, sepAfter, maxSeg, piped: new Map(), compoundOut: new Map() };
+  ctx.compounds = compoundRanges(tokens, bySeg, maxSeg, heads);
+  const groupStdin = groupStdins(ctx, tokens, heads, rereads);
   for (let s = 0; s <= maxSeg; s++) {
     const segTokens = bySeg.get(s);
     if (!segTokens) continue;
-    xargsStdinFrom = segmentStdin(s, bySeg, sepAfter, groupStdin.get(s) || inheritedStdin);
+    xargsStdinFrom = segmentStdin(s, ctx, groupStdin.get(s) || inheritedStdin);
     noSearchCarveOut = unseenAt === 0 || (unseenAt > 0 && !(segEnd.get(s) <= unseenAt));
 
     const words = [];
@@ -3328,7 +3371,8 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   const stdin = xargsStdinFrom || NO_STDIN;
   const split = delimiter === null ? null : xargsDelimiter(delimiter);
   let unseen = { code: 'xargs-input-unseen', text: argFile };
-  if (argFile === null) unseen = stdin.unseen !== null ? { code: stdin.code, text: stdin.unseen } : { code: 'xargs-delimiter-undecodable', text: split === null ? delimiter : null };
+  // An undecodable delimiter counts only with texts to split: a pipe from a stage it cannot know gives none anyway.
+  if (argFile === null) unseen = stdin.unseen !== null ? { code: stdin.code, text: stdin.unseen } : { code: 'xargs-delimiter-undecodable', text: split === null && stdin.texts.length > 0 ? delimiter : null };
   if (unseen.text !== null) {
     if (!xargsSubTakesWords(subIsShell, subOperands, replaceStr)) return null;
     for (const w of operands.slice(0, subIdx)) if (operandNamesSecret(w.text)) return secretRead(w.text);
@@ -3396,45 +3440,173 @@ function xargsSubTakesWords(subIsShell, subOperands, replaceStr) {
   return !script || /[$`]/.test(script.text) || (replaceStr !== null && script.text.includes(replaceStr));
 }
 
-// #6282: the stdin of segment `s`, as far as the command shows it, else `fallback` (what an enclosing group, `exec`,
-// shell or function gives it). `texts` are its here-strings and heredoc bodies, else what the stage piped in writes
-// (pipeSourceText, and an echo or printf as printedText renders it). `unseen` names a source the guard cannot read,
-// with the block's `code`: an input redirect from a file or another descriptor (`< list`, `<&3`), or the operands of
-// an echo or printf printedText does not render. A stage piped in that is not knowable gives no texts.
-function segmentStdin(s, bySeg, sepAfter, fallback) {
-  const own = ownStdin(s, bySeg);
+// #6282: xargs's stdin, as the guard models it. A stdin is { texts, unseen, code }: the texts xargs may read its
+// words from, or, with `unseen` set, a source the guard cannot render exactly, on which a sub-command that reads
+// files is denied with `code`. A stage whose output is not knowable at all (`cat list`, `find .`) gives no texts:
+// those names are not covered, since denying them would deny every `find … | xargs`.
+const NO_TEXTS = { texts: [], unseen: null };
+const PASSES_STDIN = { texts: [], unseen: null, passes: true };
+const unseenStdin = (text, code = 'xargs-input-unseen') => ({ texts: [], unseen: text, code });
+// An expansion the guard does not perform, in a word or an unquoted heredoc body (`$(cat list)`, `$X`, a backtick,
+// a `<( )` word); a word whose substitution left no text is named `$( )`.
+const EXPANDS_RE = /[$`]/;
+const expands = (w) => w.substituted || w.procsub !== undefined || EXPANDS_RE.test(w.text);
+const expandedText = (w) => (w.substituted && !EXPANDS_RE.test(w.text) ? `${w.text}$( )` : w.text);
+
+// The stdin of segment `s`: its own redirects, else a pipe into it, else `fallback` (what an enclosing group, loop,
+// `exec`, shell or function gives it).
+function segmentStdin(s, ctx, fallback) {
+  const own = ownStdin(s, ctx.bySeg);
   if (own !== null) return own;
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if (!((op === '|' || op === '|&') && prevSeg >= 0)) return fallback;
-  const texts = [];
-  const prev = resolveCommand(commandWords(bySeg.get(prevSeg) || []));
-  if (prev && (prev.base === 'echo' || prev.base === 'printf')) {
-    const printed = printedText(prev);
-    if (printed === null) return { texts: [], unseen: prev.operands.map((w) => w.text).join(' '), code: 'xargs-stdin-unrendered' };
-    texts.push(...printed);
-  }
-  const piped = pipeSourceText(s, bySeg, sepAfter);
-  if (piped !== null) texts.push(piped);
-  return { texts, unseen: null };
+  const piped = pipedStdin(s, ctx);
+  return piped !== null ? piped : fallback;
 }
 
 // What segment `s`'s own redirects give fd 0: an input redirect (unseen), or its here-strings and heredoc bodies.
 function ownStdin(s, bySeg) {
+  const redirected = stdinRedirect(bySeg.get(s) || []);
+  return redirected !== null ? unseenStdin(redirected) : segmentFeeds(s, bySeg);
+}
+
+// The texts segment `s`'s here-strings and heredocs feed fd 0, null for none, unseen when one holds an expansion
+// (a `<( )` here-string word too); a heredoc whose delimiter is quoted is literal.
+function segmentFeeds(s, bySeg) {
   const segTokens = bySeg.get(s) || [];
-  const redirected = stdinRedirect(segTokens);
-  if (redirected !== null) return { texts: [], unseen: redirected, code: 'xargs-input-unseen' };
-  const texts = [...hereStringTargets(segTokens), ...((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []).map((h) => h.text)];
+  const texts = [];
+  for (let k = 0; k < segTokens.length; k++) {
+    const t = segTokens[k];
+    const target = segTokens[k + 1];
+    if (t.kind !== 'op' || t.dup || !t.text.endsWith('<<<') || !target || target.kind !== 'word') continue;
+    if (expands(target)) return unseenStdin(expandedText(target));
+    texts.push(target.text);
+  }
+  for (const h of (heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []) {
+    if (!h.quoted && EXPANDS_RE.test(h.text)) return unseenStdin(h.text);
+    texts.push(h.text);
+  }
   return texts.length > 0 ? { texts, unseen: null } : null;
 }
 
-// The stdin each segment gets from a redirect beyond its own (#6282): one on a `{ }` or `( )` group reaches the
-// segments inside it, one on a loop's or conditional's closing word the segments since its opening word, and one on
-// `exec` the segments after it. Innermost first; `next` skips the segments already reached, so nested groups cost
-// one pass, not one per group. Where that matching is unsure (a closer with no opener, an opener left open, or a
-// `case`, whose patterns end in `)`), where two reaches overlap, and in a command that defines a function, whose
-// body runs with every call's stdin (`f() { xargs cat; }; f <<< a; f < list`), every segment gets all of those
-// redirects together instead.
-function groupStdins(tokens, bySeg, maxSeg, heads) {
+// The stdin a pipe into segment `s` gives it, or null when none does: what the stage before it writes, through any
+// `cat` or `tee` that passes its own stdin on, and all of a group's, loop's or conditional's output when one ends
+// there. Memoized per scan, so a long chain is walked once.
+function pipedStdin(s, ctx) {
+  if (ctx.piped.has(s)) return ctx.piped.get(s);
+  ctx.piped.set(s, null);
+  const { op, prevSeg } = precedingOp(s, ctx.bySeg, ctx.sepAfter);
+  const result = (op === '|' || op === '|&') && prevSeg >= 0 ? upstreamOutput(prevSeg, s, ctx) : null;
+  ctx.piped.set(s, result);
+  return result;
+}
+
+function upstreamOutput(prevSeg, s, ctx) {
+  for (let q = prevSeg; q < s; q++) {
+    const sep = ctx.sepAfter.get(q);
+    if (sep !== '}' && sep !== ')') continue;
+    const range = ctx.compounds.groupByEnd.get(q);
+    return range ? compoundOutput(range, ctx) : unseenStdin(sep);
+  }
+  const first = commandWords(ctx.bySeg.get(prevSeg) || [])[0];
+  if (first && CLOSING_WORDS.has(first.text)) {
+    const range = ctx.compounds.blockByClose.get(prevSeg);
+    return range ? compoundOutput(range, ctx) : unseenStdin(first.text);
+  }
+  const out = stageOutput(prevSeg, ctx);
+  if (out === PASSES_STDIN) return pipedStdin(prevSeg, ctx) || NO_TEXTS;
+  return out || NO_TEXTS;
+}
+
+// Everything a group's, loop's or conditional's commands write, merged; one that passes its stdin on adds the
+// compound's own.
+function compoundOutput(range, ctx) {
+  if (ctx.compoundOut.has(range)) return ctx.compoundOut.get(range);
+  chargeScan(range.to - range.from + 1);
+  const outs = [];
+  for (let k = range.from; k <= range.to; k++) {
+    if (!ctx.bySeg.get(k)) continue;
+    const out = stageOutput(k, ctx);
+    outs.push(out === PASSES_STDIN ? pipedStdin(range.from, ctx) : out);
+  }
+  const result = mergedStdin(outs) || NO_TEXTS;
+  ctx.compoundOut.set(range, result);
+  return result;
+}
+
+// What segment `seg`'s command writes, as far as the guard knows: an echo or printf as printedText renders it
+// (unseen when an operand holds an expansion, unrendered when it cannot render it), a `cat` or `tee` given only
+// here-strings or heredocs their texts, PASSES_STDIN for one that passes its stdin on, else null (not knowable).
+// Reserved words and `builtin` in front are looked past (`builtin printf …`).
+function stageOutput(seg, ctx) {
+  const segTokens = ctx.bySeg.get(seg) || [];
+  const words = commandWords(segTokens);
+  let k = 0;
+  while (k < words.length && (LEADING_RESERVED.has(words[k].text) || words[k].text === 'builtin')) k++;
+  const cmd = resolveCommand(words.slice(k));
+  if (!cmd) return null;
+  if (cmd.base === 'echo' || cmd.base === 'printf') {
+    const expanded = cmd.operands.find(expands);
+    if (expanded) return unseenStdin(expandedText(expanded));
+    const printed = printedText(cmd);
+    return printed === null ? unseenStdin(cmd.operands.map((w) => w.text).join(' '), 'xargs-stdin-unrendered') : { texts: printed, unseen: null };
+  }
+  if (cmd.base !== 'cat' && cmd.base !== 'tee') return null;
+  if (stdinRedirect(segTokens) !== null) return null;
+  const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
+  if (cmd.base === 'cat' && named.length > 0 && !named.some((w) => w.text === '-')) return null;
+  return segmentFeeds(seg, ctx.bySeg) || PASSES_STDIN;
+}
+
+// The groups, loops, conditionals and `exec`s of a scan: `ranges` of { from, to, redirectSeg, exec }, the segments
+// each reaches and the one that carries its redirect; `groupByEnd` and `blockByClose` find a group or block by the
+// segment its closer ends or is; `unsure` when the matching is not certain (a `case`, whose patterns end in `)`, a
+// closer with no opener, an opener left open).
+function compoundRanges(tokens, bySeg, maxSeg, heads) {
+  const ranges = [];
+  const groupByEnd = new Map();
+  const blockByClose = new Map();
+  let unsure = heads.some((head) => head !== null && (head.reserved.includes('case') || (head.cmd !== null && head.cmd.base === 'case')));
+  const groups = [];
+  for (const t of tokens) {
+    if (t.kind !== 'sep') continue;
+    if (t.text === '{' || t.text === '(') {
+      groups.push(t.seg + 1);
+    } else if (t.text === '}' || t.text === ')') {
+      if (groups.length === 0) {
+        unsure = true;
+        ranges.push({ from: -1, to: -1, redirectSeg: t.seg + 1, exec: false });
+        continue;
+      }
+      const range = { from: groups.pop(), to: t.seg, redirectSeg: t.seg + 1, exec: false };
+      ranges.push(range);
+      groupByEnd.set(t.seg, range);
+    }
+  }
+  const blocks = [];
+  for (let s = 0; s <= maxSeg; s++) {
+    const first = commandWords(bySeg.get(s) || [])[0];
+    if (!first) continue;
+    if (OPENING_WORDS.has(first.text)) {
+      blocks.push(s);
+    } else if (CLOSING_WORDS.has(first.text)) {
+      if (blocks.length === 0) unsure = true;
+      const range = { from: blocks.length > 0 ? blocks.pop() : -1, to: s - 1, redirectSeg: s, exec: false };
+      ranges.push(range);
+      if (range.from !== -1) blockByClose.set(s, range);
+    } else if (lastSegment(first.text) === 'exec') {
+      ranges.push({ from: s + 1, to: maxSeg, redirectSeg: s, exec: true });
+    }
+  }
+  return { ranges, groupByEnd, blockByClose, unsure: unsure || groups.length > 0 || blocks.length > 0 };
+}
+
+// The stdin each segment gets from beyond its own redirects and pipe (#6282): a redirect on a `{ }` or `( )` group,
+// or a pipe into it, reaches the segments inside it; one on, or into, a loop or conditional the segments since its
+// opening word; one on `exec` the segments after it. Innermost first; `next` skips the segments already reached, so
+// nested groups cost one pass, not one per group. Where that matching is unsure, where two reaches overlap, and in a
+// command that defines a function or re-reads text, whose bodies run with every call's stdin (`f() { xargs cat; };
+// printf .env | f`), every segment gets all of those stdins together instead, the first unseen one winning.
+function groupStdins(ctx, tokens, heads, rereads) {
+  const { bySeg, maxSeg } = ctx;
   const reach = new Map();
   const next = Array.from({ length: maxSeg + 2 }, (_, k) => k);
   const unreached = (k) => {
@@ -3451,43 +3623,27 @@ function groupStdins(tokens, bySeg, maxSeg, heads) {
       next[k] = k + 1;
     }
   };
-  // eval, source and `.` may define the function a later call runs (`eval 'f() { xargs cat; }'; f < list`).
-  if (definesFunction(tokens) || heads.some((head) => head !== null && (head.reserved.some((w) => DEFINING_BASES.has(w))
-    || (head.cmd !== null && DEFINING_BASES.has(head.cmd.base))))) {
-    spread(0, maxSeg, mergedStdin(Array.from({ length: maxSeg + 1 }, (_, s) => ownStdin(s, bySeg))));
+  if (definesFunction(tokens) || rereads) {
+    spread(0, maxSeg, mergedStdin(Array.from({ length: maxSeg + 1 }, (_, s) => ownStdin(s, bySeg) || pipedStdin(s, ctx))));
     return reach;
   }
-  const ranges = [];
-  const unsure = heads.some((head) => head !== null && (head.reserved.includes('case') || (head.cmd !== null && head.cmd.base === 'case')));
-  const groups = [];
-  for (const t of tokens) {
-    if (t.kind !== 'sep') continue;
-    if (t.text === '{' || t.text === '(') groups.push(t.seg + 1);
-    else if (t.text !== '}' && t.text !== ')') continue;
-    else if (groups.length === 0) ranges.push([-1, -1, ownStdin(t.seg + 1, bySeg)]);
-    else ranges.push([groups.pop(), t.seg, ownStdin(t.seg + 1, bySeg)]);
-  }
-  const blocks = [];
-  for (let s = 0; s <= maxSeg; s++) {
-    const first = commandWords(bySeg.get(s) || [])[0];
-    if (!first) continue;
-    if (OPENING_WORDS.has(first.text)) blocks.push(s);
-    else if (CLOSING_WORDS.has(first.text)) ranges.push([blocks.length > 0 ? blocks.pop() : -1, s - 1, ownStdin(s, bySeg)]);
-    else if (lastSegment(first.text) === 'exec') ranges.push([s + 1, maxSeg, ownStdin(s, bySeg)]);
-  }
-  if (unsure || groups.length > 0 || blocks.length > 0 || ranges.some((r) => r[0] === -1) || overlapping(ranges)) {
-    spread(0, maxSeg, mergedStdin(ranges.map((r) => r[2])));
+  const { ranges, unsure } = ctx.compounds;
+  const carried = ranges.map((r) => ({
+    ...r, stdin: mergedStdin([ownStdin(r.redirectSeg, bySeg), r.exec || r.from === -1 ? null : pipedStdin(r.from, ctx)]),
+  }));
+  if (unsure || overlapping(carried)) {
+    spread(0, maxSeg, mergedStdin(carried.map((r) => r.stdin)));
     return reach;
   }
-  for (const [from, to, stdin] of ranges) spread(from, to, stdin);
+  for (const r of carried) spread(r.from, r.to, r.stdin);
   return reach;
 }
 
 // Whether two of the ranges that carry a stdin reach a segment in common, so which one it gets would hang on the
 // order they are spread in (`{ exec < list; xargs cat; } <<< a`).
 function overlapping(ranges) {
-  const given = ranges.filter((r) => r[2] !== null && r[0] <= r[1]).sort((x, y) => x[0] - y[0]);
-  for (let k = 1; k < given.length; k++) if (given[k][0] <= given[k - 1][1]) return true;
+  const given = ranges.filter((r) => r.stdin !== null && r.from <= r.to).sort((x, y) => x.from - y.from);
+  for (let k = 1; k < given.length; k++) if (given[k].from <= given[k - 1].to) return true;
   return false;
 }
 
