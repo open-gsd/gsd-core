@@ -2020,6 +2020,48 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   ]);
   allows(["(echo 'echo hi'; true) | sh", "(cd x && ls) | sh", "(echo 'cat .env'; true); ls | sh"]);
 
+  // A group piped into reads the pipe through every command inside it that reads its stdin, so the walk goes on
+  // past it to the producer, through any redirect after its closer, and failing closed when a command inside is a
+  // filter; a group whose commands all write their own text, or that is given a here-string, reads no pipe. A pipe
+  // inside a group ending a walk reads what is piped into the group. A closer with no opener (a `case` pattern)
+  // reads every segment before it, failing closed.
+  blocks([
+    "echo 'cat .env' | (cat) | bash",
+    "echo 'cat .env' | { cat; } | sh",
+    'echo .env | (cat) | xargs cat',
+    "echo 'cat .env' | (cat | cat) | bash",
+    "echo 'cat .env' | ((cat)) | bash",
+    "echo 'cat .env' | ( (cat) ) | bash",
+    "echo 'cat .env' | (cat) 2>/dev/null | bash",
+    "echo 'cat .env' | (cat) > /dev/stdout | bash",
+    "echo 'cat .env' | { cat; } 2>/dev/null | sh",
+    "echo 'cat .env' | (head -1) | bash",
+    "echo 'cat .env' | (echo hi; cat) | bash",
+    "echo 'cat .env' | (cat) | (cat) | bash",
+    "echo 'cat .env' | head | (cat) | bash",
+    "echo 'cat .env' | (cat) | head | bash",
+    "echo 'cat .env' |& (cat) | bash",
+    "echo x | (cat) < <(echo 'cat .env') | bash",
+    '(cat) > .env | bash',
+    "echo hi | (echo 'cat .env'; true) | sh",
+    "echo 'cat .env' | ) | bash",
+    "(case x in x) echo 'cat .env';; esac; true) | bash",
+    "echo 'cat .env' | (case x in x) cat;; esac) | bash",
+    "echo 'cat .env' | (true; (cat) | bash)",
+    "echo 'cat .env' | { true; cat | bash; }",
+  ]);
+  allows([
+    'echo ok | (cat) | bash',
+    'echo ok | { cat; } | sh',
+    'echo .env | (echo hi) | bash',
+    "echo 'cat .env' | (echo hi) | bash",
+    'echo x; (cat) | bash',
+    "echo 'cat .env' || (cat) | bash",
+    "echo 'cat .env' | (cat) <<< 'echo hi' | bash",
+    'echo ok | (true; (cat) | bash)',
+    '(case x in x) echo hi;; esac; true) | bash',
+  ]);
+
   // npm takes a unique prefix of a long option (`--edi` is `--editor`) and `-c=` attached; editor defaults to EDITOR
   // or VISUAL and shell to SHELL (or its Windows twin); and `npm explore <pkg> <words>` runs the words joined, `--` or not.
   blocks([
