@@ -2952,8 +2952,13 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
     if (SHELL_INTERPRETERS.has(base)) {
       const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
       if (cIdx !== -1 && operands[cIdx + 1] && depth < MAX_NESTING_DEPTH) {
-        const hit = findDebuggerCliSpawn(operands[cIdx + 1].text, depth + 1);
-        if (hit) return hit;
+        // `bash -c -- 'script'`: -- ends the options, so the script is the
+        // operand after it (#6202); every other shape keeps its operand.
+        const script = operands[cIdx + 1].text === '--' ? operands[cIdx + 2] : operands[cIdx + 1];
+        if (script) {
+          const hit = findDebuggerCliSpawn(script.text, depth + 1);
+          if (hit) return hit;
+        }
       }
       continue;
     }
@@ -2977,7 +2982,11 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
   if (cIdx !== -1) {
     // Mode c: the next operand is the script; stdin is DATA (not scanned).
-    const script = operands[cIdx + 1];
+    // `bash -c -- 'script'`: -- ends the options, so the script is the
+    // operand after it (#6202); every other shape keeps its operand.
+    const script = operands[cIdx + 1] && operands[cIdx + 1].text === '--'
+      ? operands[cIdx + 2]
+      : operands[cIdx + 1];
     if (script) return findSecretRead(script.text, depth + 1);
     return null;
   }
