@@ -5467,6 +5467,17 @@ describe('gsd-secret-read-guard: hooks.secret_read_exempt (#4432)', () => {
     assertAllowed(run(bash(`cat ${pq} $'x'`)), "a $'…' word on a read-only line");
   });
 
+  // A read-write redirect (`<>`) can write its target, so it withdraws the exemption whatever it opens, `/dev/null`
+  // included, as it did while `<>` was read as `<` then `>` (#5492).
+  test('a read-write redirect keeps the exemption withdrawn', () => {
+    listed('.env.production');
+    const p = abs('.env.production');
+    const pq = absq('.env.production');
+    assertBlocked(run(bash(`cat ${pq} <> /dev/null`)), 'cat with <> /dev/null', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat ${pq} 3<>/dev/null`)), 'cat with 3<>/dev/null', { tool: 'Bash', path: p });
+    assertBlocked(run(bash(`cat <> ${pq}`)), 'cat <> the exempt file', { tool: 'Bash', path: p });
+  });
+
   // `time X=1 cat` was read as the unknown command `X=1`, which withdraws the exemption; reading `X=1` as the
   // prefix `time` takes (#5492) must not bring it back.
   test('a time prefix holding an assignment keeps the exemption withdrawn', () => {
