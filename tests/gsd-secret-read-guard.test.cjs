@@ -1978,8 +1978,10 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     assert.ok(scanWork(`BASH_ENV=/dev/stdin bash <<< "${script}"`) < plain * 1.2, 'fd BASH_ENV, stdin mode');
   });
 
-  // The blank split reads what the stage writes, not its option values or patterns.
-  allows(["grep -r 'API_KEY .env' src | xargs wc -l", "grep -rl -e 'x .env' . | xargs ls -l", "find . -name 'x .env.bak' | xargs ls"]);
+  // Every stage's words are split, a search or listing tool's too: grep prints its pattern in the lines it matches,
+  // and find, fd, ls, locate and git ls-files print names matching what they were given.
+  blocks(["grep -r 'API_KEY .env' src | xargs wc -l", "grep -rl -e 'x .env' . | xargs ls -l"]);
+  blocks(["find . -name 'x .env.bak' | xargs ls"], { path: '.env.bak' });
   // A heredoc or here-string the stage is given is data that flows on, so it is split too.
   blocks(["cat <<< 'x if=.env' | xargs dd"], { path: 'if=.env' });
   blocks(["grep x <<< 'x .env' | xargs cat"]);
@@ -2001,8 +2003,7 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   blocks(["BASH_ENV=/dev/stdin make <<< 'cat .env'", "BASH_ENV=/dev/fd/3 ./x.sh 3<<< 'cat .env'"]);
   allows(['ENV=.env make', 'export ENV=.env; node app.js']);
 
-  // A command whose output is not modelled may echo its words, so they are split too; only a search or listing tool,
-  // whose output does not repeat its option values or patterns as words, is skipped.
+  // A command whose output is not modelled may echo its words, so they are split too.
   blocks(["foo 'x .env' | xargs cat", "mycli --print 'x .env' | xargs cat", "printf '%s' 'x .env' | xargs cat"]);
 
   // A `( … )` or `{ …; }` group piped on writes what every command inside it writes, so each of them is a stage the
