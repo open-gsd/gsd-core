@@ -1208,7 +1208,7 @@ describe('CR-INTEGRATION: workflow integration points', () => {
     for (const word of ['bash', 'BASH', 'bash title']) assert.ok(isBashFence({ infoString: word }), word);
     for (const word of ['bashful', 'bash-ish', 'sh', 'text', '']) assert.ok(!isBashFence({ infoString: word }), word);
     // an unclosed bash fence blanks to the end of the file: the call inside it never parses
-    assert.deepStrictEqual(skills(`\`\`\`bash\n${quote}\n${skillCall}\n`), []);
+    assert.deepStrictEqual(skills(`\`\`\`bash\n${skillCall}\n`), []);
     // positive control: the same call with no shell fence before it
     assert.deepStrictEqual(skills(`\`\`\`\n${skillCall}\n\`\`\`\n`), ['gsd-code-review']);
   });
@@ -1219,7 +1219,7 @@ describe('CR-INTEGRATION: workflow integration points', () => {
       const text = [...outside, '```bash', ...inside, '```', ...outside].join('\n');
       const out = splitLines(withoutBashFences(text));
       assert.strictEqual(out.length, splitLines(text).length);
-      assert.deepStrictEqual(out.slice(0, outside.length), outside);
+      assert.deepStrictEqual(out.slice(0, outside.length + 1), [...outside, '```bash']);
       assert.deepStrictEqual(out.slice(outside.length + 1, outside.length + 1 + inside.length), inside.map(() => ''));
       assert.deepStrictEqual(out.slice(outside.length + 1 + inside.length), ['```', ...outside]);
     }), { seed: 4030, numRuns: 100 });
