@@ -2072,7 +2072,10 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "printf '\\x2eenv' | cat | xargs cat",
   ]);
   blocks(["printf 'if=.e%s' nv | xargs dd"], { path: 'if=.env' });
-  allows(["printf '.e%s' nv.example | xargs cat", "xargs cat <<< '\\x2eenv'"]);
+  allows(["printf '.e%s' nv.example | xargs cat"]);
+  // Fails closed: a here-string xargs reads is read as an echo of its words, escapes decoded as dash's echo does,
+  // though xargs itself would hand cat `x2eenv`.
+  blocks(["xargs cat <<< '\\x2eenv'"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
