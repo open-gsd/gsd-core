@@ -257,20 +257,14 @@ describe('bug #3381: verify-work forwards workstream context', () => {
     // (GSD_WS reaching every workstream-sensitive query below) is
     // unaffected by the narrower class, so only the literal pattern here
     // is updated — the asserted forwarding property is unchanged.
-    assert.match(workflow, /GSD_WS=""/, 'verify-work must initialize GSD_WS');
-    assert.match(
-      workflow,
-      /grep -qE -- '--ws\[\[:space:\]\]\+\[A-Za-z0-9\._-\]\+'/,
-      'verify-work must detect --ws in $ARGUMENTS',
+    // #6218: verify-work parses --ws with the same canonical line as every other workflow (one optional quote
+    // before the name) and strips a quoted value whole; the earlier grep-based copy is gone.
+    assert.ok(
+      workflow.includes(String.raw`GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)`),
+      'verify-work must extract the --ws flag pair from $GSD_ARGS with the canonical parse line',
     );
-    assert.match(
-      workflow,
-      /grep -oE -- '--ws\[\[:space:\]\]\+\[A-Za-z0-9\._-\]\+'/,
-      'verify-work must extract the --ws flag pair from $ARGUMENTS',
-    );
-    assert.match(
-      workflow,
-      /PHASE_ARG=\$\(echo "\$GSD_ARGS" \| sed -E 's\/--ws\[\[:space:\]\]\+\[A-Za-z0-9\._-\]\+\/\/g' \| xargs\)/,
+    assert.ok(
+      workflow.includes(String.raw`PHASE_ARG=$(echo "$GSD_ARGS" | sed -E 's/--ws[[:space:]]+("[^"]*"|'\''[^'\'']*'\''|[A-Za-z0-9._-]+)//g' | xargs)`),
       'verify-work must derive PHASE_ARG after removing --ws',
     );
     // After #3797 architectural fix, callsites use gsd_run

@@ -174,7 +174,7 @@ fires on Windows.
   in-flight, not yet merged) #4220 fix.
 
 Both rules join the catalog's **zero-escape-hatch** discipline (rule 3 above): neither carries a
-bespoke `// allow-*` comment marker, and both are added to `tests/portability-rule-disable-ban.test.cjs`'s
+bespoke `// allow-*` comment marker, and both are added to `scripts/static-checks/portability-rule-disable-ban.cjs`'s
 `PROTECTED_RULES` list so an `eslint-disable` naming them is independently banned outside ESLint
 too. `no-unbounded-dirname-walk` is registered on **both** `tests/**/*.cjs` and `scripts/**/*.cjs`
 (the narrower `scripts/**/*.cjs`-only block, alongside `no-private-binary-resolution`) — the
@@ -364,8 +364,9 @@ coverage audit (#1749):
 
 - **Disable-ban mechanism — meta-rule → out-of-band test.** §"Strictness" specified a
   `local/no-portability-disable` ESLint meta-rule to ban inline disables of portability
-  rules. What shipped is [`tests/portability-rule-disable-ban.test.cjs`](../../tests/portability-rule-disable-ban.test.cjs)
-  — a `node:test` that scans files for disable directives **outside ESLint**, so it cannot
+  rules. What shipped is `tests/portability-rule-disable-ban.test.cjs`, since moved (2026-11-19, #6414) to
+  [`scripts/static-checks/portability-rule-disable-ban.cjs`](../../scripts/static-checks/portability-rule-disable-ban.cjs)
+  — a static check, run by `scripts/run-static-checks.cjs`, that scans files for disable directives **outside ESLint**, so it cannot
   itself be eslint-disabled (an advantage over an in-process meta-rule, which the ADR noted
   as the motivating risk). The substitution is at least as strong; recorded here so the
   ADR's written mechanism matches the as-built one.
