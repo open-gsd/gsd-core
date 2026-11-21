@@ -2921,15 +2921,17 @@ const LEADING_RESERVED = new Set(['!', 'if', 'elif', 'then', 'else', 'do', 'whil
 const RUNS_AGAIN_BASES = new Set(['for', 'while', 'until', 'select', 'function', 'trap', 'eval', 'source', '.']);
 const DEFINING_BASES = new Set(['function', 'eval', 'source', '.']);
 
-// The command each segment runs, past leading reserved words: { first, cmd } with `first` the segment's first word
-// and `cmd` resolveCommand's reading of what follows the reserved words, or null for a segment with no words.
+// The command each segment runs, past leading reserved words: { reserved, cmd } with `reserved` the segment's leading
+// reserved words, or its first word when it has none, and `cmd` resolveCommand's reading of what follows them; null
+// for a segment with no words.
 function segmentHeads(bySeg, maxSeg) {
   const heads = [];
   for (let s = 0; s <= maxSeg; s++) {
     const words = commandWords(bySeg.get(s) || []);
     let k = 0;
     while (k < words.length && LEADING_RESERVED.has(words[k].text)) k++;
-    heads.push(words.length === 0 ? null : { first: words[0].text, cmd: resolveCommand(words.slice(k)) });
+    const reserved = words.slice(0, Math.max(k, 1)).map((w) => w.text);
+    heads.push(words.length === 0 ? null : { reserved, cmd: resolveCommand(words.slice(k)) });
   }
   return heads;
 }
@@ -2937,7 +2939,7 @@ function segmentHeads(bySeg, maxSeg) {
 // #6282: whether a command runs words again, at a command's place: a loop, a function, `trap`, eval, source or `.`
 // (also behind `builtin`), or `set -…`.
 function runsWordsAgain(heads, tokens) {
-  return definesFunction(tokens) || heads.some((head) => head !== null && (RUNS_AGAIN_BASES.has(head.first)
+  return definesFunction(tokens) || heads.some((head) => head !== null && (head.reserved.some((w) => RUNS_AGAIN_BASES.has(w))
     || (head.cmd !== null && (RUNS_AGAIN_BASES.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
       && RUNS_AGAIN_BASES.has(head.cmd.operands[0].text)) || (head.cmd.base === 'set' && head.cmd.operands.length > 0
       && head.cmd.operands[0].text.startsWith('-'))))));
@@ -3450,13 +3452,13 @@ function groupStdins(tokens, bySeg, maxSeg, heads) {
     }
   };
   // eval, source and `.` may define the function a later call runs (`eval 'f() { xargs cat; }'; f < list`).
-  if (definesFunction(tokens) || heads.some((head) => head !== null && (DEFINING_BASES.has(head.first)
+  if (definesFunction(tokens) || heads.some((head) => head !== null && (head.reserved.some((w) => DEFINING_BASES.has(w))
     || (head.cmd !== null && DEFINING_BASES.has(head.cmd.base))))) {
     spread(0, maxSeg, mergedStdin(Array.from({ length: maxSeg + 1 }, (_, s) => ownStdin(s, bySeg))));
     return reach;
   }
   const ranges = [];
-  const unsure = heads.some((head) => head !== null && (head.first === 'case' || (head.cmd !== null && head.cmd.base === 'case')));
+  const unsure = heads.some((head) => head !== null && (head.reserved.includes('case') || (head.cmd !== null && head.cmd.base === 'case')));
   const groups = [];
   for (const t of tokens) {
     if (t.kind !== 'sep') continue;
