@@ -1846,7 +1846,7 @@ describe('plan-phase step 13b records the phase name and plan count (#6257)', ()
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
   const { cleanup: cleanup13 } = require('./helpers.cjs');
 
-  const HAS_TOOLS = runBash('-c', ['command -v jq'], { interpreter: 'bash' }).exitCode === 0;
+  const HAS_BASH = runBash('-c', ['command -v bash'], { interpreter: 'bash' }).exitCode === 0;
 
   // The fence that calls state.planned-phase, exactly as shipped.
   function step13bFence() {
@@ -1857,44 +1857,63 @@ describe('plan-phase step 13b records the phase name and plan count (#6257)', ()
     return lines.slice(hit.openLineIdx + 1, hit.closeLineIdx).join('\n');
   }
 
-  // `set -u`: any variable the fence uses without assigning it is an error, which is the defect.
-  function run13b(findPhaseJson) {
+  // `gsd_run` is a stub that answers the two lookups from env and logs every call. `set -u`: a variable the
+  // fence uses without assigning it is an error, which is the defect (each fence is its own shell, #4915).
+  function run13b({ name = 'Foundation Setup', nameRc = 0, count = '2', ws = '' }) {
     const dir = fs13.mkdtempSync(path13.join(os13.tmpdir(), 'gsd-6257-'));
-    const log = path13.join(dir, 'planned-phase.log');
+    const log = path13.join(dir, 'calls.log');
     const script = [
       'set -u',
-      'gsd_run() { if [ "$2" = find-phase ]; then printf %s "$FIND_JSON"; else printf "%s\\n" "$*" > "$CALL_LOG"; fi; }',
-      step13bFence(),
+      'gsd_run() { printf "%s\\n" "$*" >> "$CALL_LOG"; case "$2" in',
+      '  roadmap.get-phase) printf %s "$NAME_OUT"; return "$NAME_RC";;',
+      '  find-phase) printf %s "$COUNT_OUT";;',
+      'esac; }',
+      // the placeholder the runtime fills in with the phase being planned
+      step13bFence().replaceAll('{phase_number}', '01'),
     ].join('\n');
     try {
-      const res = runBash('-c', [script], {
-        interpreter: 'bash',
-        env: { ...process.env, PHASE_NUMBER: '01', FIND_JSON: findPhaseJson, CALL_LOG: log },
-      });
-      return { res, call: fs13.existsSync(log) ? fs13.readFileSync(log, 'utf8').trim() : null };
+      const env = { ...process.env, NAME_OUT: name, NAME_RC: String(nameRc), COUNT_OUT: count, CALL_LOG: log };
+      if (ws) env.GSD_WS = ws; else delete env.GSD_WS;
+      const res = runBash('-c', [script], { interpreter: 'bash', env });
+      const calls = fs13.existsSync(log) ? splitLines(fs13.readFileSync(log, 'utf8')).filter(Boolean) : [];
+      return { res, calls, planned: calls.filter((c) => c.includes('state.planned-phase')) };
     } finally {
       cleanup13(dir);
     }
   }
 
-  const FOUND = (extra) => JSON.stringify({ found: true, phase_number: '01', phase_name: 'foundation', plan_count: 2, ...extra });
-
-  test('a found phase passes its number, name and plan count to state.planned-phase', { skip: !HAS_TOOLS }, () => {
-    const { res, call } = run13b(FOUND({}));
+  test('a found phase passes its number, curated display name and plan count to state.planned-phase', { skip: !HAS_BASH }, () => {
+    const { res, planned } = run13b({});
     assert.strictEqual(res.exitCode, 0, res.stderr);
-    assert.match(call, /--phase 01 --name foundation --plans 2$/);
+    assert.strictEqual(planned.length, 1);
+    assert.match(planned[0], /--phase 01 --name Foundation Setup --plans 2$/);
   });
 
-  test('a phase with zero plans records zero, not an empty count', { skip: !HAS_TOOLS }, () => {
-    const { res, call } = run13b(FOUND({ plan_count: 0 }));
+  test('a phase with zero plans records zero, not an empty count', { skip: !HAS_BASH }, () => {
+    const { res, planned } = run13b({ count: '0' });
     assert.strictEqual(res.exitCode, 0, res.stderr);
-    assert.match(call, /--plans 0$/);
+    assert.match(planned[0], /--plans 0$/);
   });
 
-  test('a phase find-phase cannot locate stops the step and records nothing', { skip: !HAS_TOOLS }, () => {
-    const { res, call } = run13b(JSON.stringify({ found: false, phase_number: null, phase_name: null, plan_count: null }));
-    assert.notStrictEqual(res.exitCode, 0, 'the step must stop');
-    assert.match(res.stderr, /phase 01 not found/);
-    assert.strictEqual(call, null, 'state.planned-phase must not run with empty values');
+  for (const [label, count] of [['an empty', ''], ['a non-numeric', 'null'], ['a negative', '-1'], ['a decimal', '1.5']]) {
+    test(`${label} plan count stops the step and records nothing`, { skip: !HAS_BASH }, () => {
+      const { res, planned } = run13b({ count });
+      assert.notStrictEqual(res.exitCode, 0, 'the step must stop');
+      assert.match(res.stderr, /phase 01 not found/);
+      assert.strictEqual(planned.length, 0, 'state.planned-phase must not run');
+    });
+  }
+
+  test('a phase the ROADMAP does not name still records its plan count, with an empty name (the curated name is kept)', { skip: !HAS_BASH }, () => {
+    const { res, planned } = run13b({ name: '', nameRc: 1 });
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.match(planned[0], /--name\s+--plans 2$/);
+  });
+
+  test('a workstream scope reaches every lookup and the write', { skip: !HAS_BASH }, () => {
+    const { res, calls } = run13b({ ws: '--ws alpha' });
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.strictEqual(calls.length, 3);
+    for (const c of calls) assert.ok(c.includes('--ws=alpha'), `missing --ws=alpha in: ${c}`);
   });
 });
