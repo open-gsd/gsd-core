@@ -122,9 +122,10 @@
 // option or a command (braceCannotNameSecret: `for i in {1..120}`) and it is
 // an operand of a command with no positional carve-out (braceWordInPlace), and
 // is otherwise denied as `glob-too-complex`. zsh also reads `{c1..c2}` of any
-// two characters, quotes removed, as the characters between (zshCharRange:
-// `cat {-..9}env` reads `.env`), so a command with such a group is scanned a
-// third time, as zsh reads it.
+// two characters, quotes removed, as the characters between (zshSequence:
+// `cat {-..9}env` reads `.env`), and a bare `-` in a numeric range as 0
+// (`{-..10}`), so a command with such a group is scanned a third time, as zsh
+// reads it.
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
@@ -1532,6 +1533,16 @@ function braceRawWord(str, start, end, edits) {
   return out + str.slice(at, end);
 }
 
+// Whether `raw` holds an unquoted `{` that no `}` closes as a group (braceGobble), such as `{.env,`.
+function braceGroupOpen(raw, reading) {
+  for (let i = 0; ;) {
+    const c = braceGobble(raw, i, '{', reading);
+    if (c === -1) return false;
+    if (braceGobble(raw, c + 1, '}', reading) === -1) return true;
+    i = c + 1;
+  }
+}
+
 // The words bash makes of the word `raw` (braceRawWord) by brace expansion (#6142), as { text, quoted } after
 // quote removal; undefined when it makes the word itself; BRACE_PAST_BUDGET when it makes more than
 // MAX_GLOB_ALTERNATIVES words that are harmless where they stand (braceCannotNameSecret), so the word is judged
@@ -1567,7 +1578,7 @@ function braceWords(raw, reading) {
 // unquoted top-level commas and each part expanded (expandAmble); else it is a sequence expression or literal.
 // `alg` builds the result from literal text (`lit`), sequences (`seq`), concatenation (`join`) and the parts of an
 // amble (`any`): BRACE_WORDS makes the words, BRACE_SUMMARY sums up what they can hold.
-// `shell` 'zsh' reads the same text with zsh's character ranges (zshCharRange) where it has no unquoted comma.
+// `shell` 'zsh' reads the same text with zsh's own ranges (zshSequence) where it has no unquoted comma.
 function braceExpand(text, reading, alg, shell = 'bash') {
   let i = 0;
   let open = -1;
@@ -1580,16 +1591,16 @@ function braceExpand(text, reading, alg, shell = 'bash') {
     else open = c;
   }
   const amble = text.slice(open + 1, close);
-  const range = shell === 'zsh' && braceGobble(amble, 0, ',', reading) === -1 ? zshCharRange(amble, reading) : undefined;
+  const range = shell === 'zsh' && braceGobble(amble, 0, ',', reading) === -1 ? zshSequence(amble, reading) : undefined;
   let tack;
   let j = 0;
   while (j < amble.length && amble[j] !== ',') j += amble[j] === '\\' ? 2 : 1;
   if (range !== undefined) {
     if (braceSequence(amble) === undefined) braceZshSeen = true;
-    tack = alg.seq(range);
+    tack = range === ZSH_UNBRACED ? alg.lit(amble) : alg.seq(range);
   } else if (j >= amble.length) {
     const seq = braceSequence(amble);
-    if (seq === undefined && shell === 'bash' && zshCharRange(amble, reading) !== undefined) braceZshSeen = true;
+    if (shell === 'bash' && zshReadsApart(zshSequence(amble, reading), seq)) braceZshSeen = true;
     if (seq !== undefined) tack = alg.seq(seq);
     else if (close + 1 === text.length) return alg.lit(text);
     else tack = alg.lit(text.slice(open, close + 1));
@@ -1813,10 +1824,13 @@ function braceSequence(amble) {
   return { letters: m[1] === undefined, from, to, by, width, count: (to > from ? to - from : from - to) / by + 1n };
 }
 
-// zsh 5.9's bracechardots (glob.c): an amble that is two characters around `..` once its quotes are removed
-// (`-..9`, `'%'..9`, `a...`), as a sequence of the characters between them by code point (braceSequence's
-// shape, with `quote`), or undefined.
-function zshCharRange(amble, reading) {
+// zsh 5.9's bracechardots and numeric ranges (glob.c), on an amble once its quotes are removed: two characters
+// around `..` (`-..9`, `'%'..9`, `a...`) are the characters between them by code point (braceSequence's shape,
+// with `quote`); else `[-]digits..[-]digits[..[-]digits]` with a digit first or last is a numeric range in which a
+// bare `-` is 0 (`{-..10}`), or ZSH_UNBRACED when an end is missing or the step is 0 (`{..5}` is `..5`); else
+// undefined.
+const ZSH_UNBRACED = Symbol('zsh drops the braces');
+function zshSequence(amble, reading) {
   const spliced = bracesSpliced;
   bracesSpliced = false;
   let tokens;
@@ -1826,11 +1840,46 @@ function zshCharRange(amble, reading) {
     bracesSpliced = spliced;
   }
   if (tokens.length !== 1 || tokens[0].kind !== 'word') return undefined;
-  const chars = [...tokens[0].text.slice(1)];
-  if (chars.length !== 4 || chars[1] !== '.' || chars[2] !== '.') return undefined;
-  const from = BigInt(chars[0].codePointAt(0));
-  const to = BigInt(chars[3].codePointAt(0));
-  return { letters: true, quote: true, from, to, by: 1n, width: 0, count: (to > from ? to - from : from - to) + 1n };
+  const text = tokens[0].text.slice(1);
+  const chars = [...text];
+  // Two digits make the same words either way; read as numbers, they compare equal to bash's (zshReadsApart).
+  if (chars.length === 4 && chars[1] === '.' && chars[2] === '.' && !/^\d\.\.\d$/.test(text)) {
+    const from = BigInt(chars[0].codePointAt(0));
+    const to = BigInt(chars[3].codePointAt(0));
+    return { letters: true, quote: true, from, to, by: 1n, width: 0, count: (to > from ? to - from : from - to) + 1n };
+  }
+  const m = /^(-?\d*)\.\.(-?\d*)(?:\.\.(-?\d*))?$/.exec(text);
+  if (m === null || !/^\d|\d$/.test(text)) return undefined;
+  if (m[1] === '' || m[2] === '' || m[3] === '' || /^-?0*$/.test(m[3] || '1')) return ZSH_UNBRACED;
+  return zshNumbers(m[1], m[2], m[3]);
+}
+
+// Whether zsh's reading `z` of an amble (zshSequence) makes other words than bash's sequence `seq`, undefined
+// when bash leaves the group as written. Where both read numbers they read the same ends and step, so only the
+// order can differ, and it starts the words elsewhere (`{0..-5..-3}` is `0 -3` to bash, `-3 0` to zsh); a reading
+// zsh drops the braces of (ZSH_UNBRACED) has no `from`. Zero padding changes no word into a file name or option.
+function zshReadsApart(z, seq) {
+  return z !== undefined && (seq === undefined || z.from !== seq.from);
+}
+
+// zsh's numeric range of the texts `a`, `b` and the step `c` (zstrtol reads a bare `-` as 0): the values step
+// down from the higher end, which a step past 1 first moves to land on the lower when `a` is lower; the step's
+// sign and a higher `a` each reverse the order. zsh's zero padding is left out (zshReadsApart).
+function zshNumbers(a, b, c) {
+  const num = (t) => (t === '-' ? 0n : BigInt(t));
+  let lo = num(a);
+  let hi = num(b);
+  let by = c === undefined ? 1n : num(c);
+  let rev = by < 0n;
+  if (rev) by = -by;
+  if (lo > hi) {
+    [lo, hi] = [hi, lo];
+    rev = !rev;
+  } else {
+    hi -= (hi - lo) % by;
+  }
+  lo = hi - ((hi - lo) / by) * by; // the values step down from `hi`
+  return { letters: false, from: rev ? hi : lo, to: rev ? lo : hi, by, width: 0, count: (hi - lo) / by + 1n };
 }
 
 // bash's mkseq: the values of a sequence (braceSequence), or null past MAX_GLOB_ALTERNATIVES. zsh's characters
@@ -1892,7 +1941,11 @@ function tokenize(str, reading) {
       // zsh reads `..` after quote removal, so a quoted dot can make a group too (`{-'..'0}`).
       const split = braceSplit || (braceOpen && braceRawWord(str, wordStart, wordEnd, rawEdits).includes('.'));
       if (split) braceWordSeen = true;
-      const words = split && bracesSpliced ? braceWords(braceRawWord(str, wordStart, wordEnd, rawEdits), reading) : undefined;
+      const raw = split && bracesSpliced ? braceRawWord(str, wordStart, wordEnd, rawEdits) : '';
+      // bash reads a `<(…)` or `>(…)` the word runs into as part of it (`{.env,<(echo })}` is `.env` and the
+      // substitution), so a group the split here leaves open is too complex to judge.
+      const cut = raw !== '' && /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)) && braceGroupOpen(raw, reading);
+      const words = cut ? null : raw !== '' ? braceWords(raw, reading) : undefined;
       const prev = tokens[tokens.length - 1];
       if (words === undefined) {
         tokens.push({ kind: 'word', text, quoted, seg });
