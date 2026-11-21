@@ -1368,6 +1368,7 @@ describe('execute-phase: stall surveillance must not steer a working executor (#
   });
 });
 
+// allow-test-rule: source-text-is-the-product (see #5966) — the workflow .md is what the orchestrator reads
 /**
  * #5966: a plain run (no --wave) re-reads phase-plan-index at each wave boundary.
  *
