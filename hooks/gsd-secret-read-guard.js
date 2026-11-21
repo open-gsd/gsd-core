@@ -4754,7 +4754,8 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
     // A compound command (`for … done`, `if … fi`, `case … esac`) writes what each command inside it writes: every
     // one back to its opener is a stage, read fail closed, and the walk goes on past it, every stage before it
     // filtered; with no opener to match (compoundStart), every segment before it is a stage. A heredoc or
-    // here-string given to it is its stdin, as for a group.
+    // here-string given to it is given to each command inside, and the walk still goes on: the opener matched may
+    // be reached by a pipe of its own (`… | for | done <<< x`).
     if (throughFilters && COMPOUND_CLOSERS.has(commandHead(bySeg.get(prevSeg) || [])[0])) {
       const opener = compoundStart(prevSeg, bySeg, sepAfter, ctx);
       stageAt(prevSeg).filtered = true;
@@ -4772,7 +4773,7 @@ function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
       for (const stage of isFed ? inner : []) {
         stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings] };
       }
-      if (opener === -1 || (isFed && !fed.fdMoved)) return stages;
+      if (opener === -1) return stages;
       filtered = true;
       charge(ctx, GIT_COMMAND_WORK);
       at = opener;
