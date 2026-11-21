@@ -371,7 +371,8 @@ function lineIsReadOnlyUnder(command, reading) {
         const target = segTokens[k + 1];
         if (!target || target.kind !== 'word') return false;
         k++;
-        if ((!t.read || t.text.endsWith('<>')) && target.text !== '/dev/null') return false; // output to a file
+        if (t.text.endsWith('<>')) return false; // read-write: it can write, even to /dev/null
+        if (!t.read && target.text !== '/dev/null') return false; // output to a file
         if (t.text.endsWith('<<<')) return false;
         continue;
       }
