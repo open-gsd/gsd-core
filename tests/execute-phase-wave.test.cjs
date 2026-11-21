@@ -1796,7 +1796,8 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
         const sentence = `sequential mode for ${scopes[1]}`;
         // The exact stderr, line by line: the base-check message then the sentence in the degrade wave,
         // nothing in the wave that checks and does not degrade, nothing in the wave that skips the re-check.
-        assert.deepEqual(stderr.map(s => s.split('\n').filter(Boolean)), [[], ['stub-base-check-message', notices[1]], []]);
+        // Compared as raw strings per wave, so a stray blank line fails too.
+        assert.deepEqual(stderr, ['', `stub-base-check-message\n${notices[1]}\n`, '']);
         assert.ok(notices[1].includes(sentence), notices[1]);
         assert.ok(!stderr[1].includes('this wave'), stderr[1]);
         assert.deepEqual(stdout, ['', '', '']);
@@ -1825,6 +1826,7 @@ describe('wave base re-check: a degrade covers the remaining waves (#6049)', { s
     assert.ok(paragraph.includes(`**${scope}**`), `the paragraph after the fence must bold the scope "${scope}"`);
     // The old claim must not survive in this paragraph or any other paragraph of the reference.
     const whole = lines.join(' ').replace(/\s+/g, ' ');
-    assert.ok(!/this wave only|re-?enabl/i.test(whole), 'the reference must not say a degrade is per wave or that later waves re-enable isolation');
+    const STALE_CLAIM = /\b(?:this|current|next) wave (?:only|alone)\b|\bjust (?:this|the current|the next) wave\b|\bper[- ]wave\b|\bre[- ]?enabl/i;
+    assert.ok(!STALE_CLAIM.test(whole),'the reference must not say a degrade is per wave or that later waves re-enable isolation');
   });
 });
