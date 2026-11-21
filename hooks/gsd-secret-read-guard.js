@@ -125,8 +125,9 @@
 // two characters, quotes removed, as the characters between (zshSequence:
 // `cat {-..9}env` reads `.env`), and a bare `-` in a numeric range as 0
 // (`{-..10}`), so a command with such a group is scanned a third time, as zsh
-// reads it. A group left open where a `<( )`, `>( )` or extglob `@( )` runs
-// into the word (`cat {<(true),.env}`) is denied as `brace-word-unreadable`.
+// reads it. A group left open where a CR, `<( )` or `>( )` runs into the word
+// (`cat {<(true),.env}`), and a brace word that runs into a `(` (an extglob or
+// zsh glob, `cat {.env,x}?(y)`), are denied as `brace-word-unreadable`.
 //
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
@@ -1946,10 +1947,13 @@ function tokenize(str, reading) {
       // zsh reads `..` after quote removal, so a quoted dot can make a group too (`{-'..'0}`).
       const split = braceSplit || raw.includes('.');
       if (split) braceWordSeen = true;
-      // bash reads a `<(…)`, a `>(…)` or an extglob `@(…)` the word runs into as part of it (`{<(true),.env}` is
-      // the substitution and `.env`), so a group the split here leaves open is not read, in any scan.
-      const cut = braceOpen && (/^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)) || (str[wordEnd] === '(' && /[@!+*?]$/.test(raw)))
-        && braceGroupOpen(raw, reading);
+      // bash goes on with the word past a CR, a `<(…)` or `>(…)` (`{<(true),.env}` is the substitution and
+      // `.env`), and an extglob or zsh glob `(…)` takes it on as a pattern (`{.env,x}?(y)` matches `.env`), so a
+      // word the split here leaves a group open in, or that runs into a `(`, is not read, in any scan. A lone `{`
+      // before a `(` is a group keyword (`{ (…); }`), not a word.
+      const after = str[wordEnd];
+      const cut = braceOpen && ((after === '(' && raw !== '{') || ((after === '\r' || /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)))
+        && braceGroupOpen(raw, reading)));
       const words = cut ? BRACE_UNREADABLE : split && bracesSpliced ? braceWords(raw, reading) : undefined;
       const prev = tokens[tokens.length - 1];
       if (words === undefined) {
@@ -2191,6 +2195,7 @@ function tokenize(str, reading) {
         fd = buf;
         buf = '';
         hasWord = false;
+        rawEdits.length = 0; // a digit-only word holds no brace, but may hold a line continuation
       } else {
         flush();
       }
@@ -2261,8 +2266,10 @@ function tokenize(str, reading) {
     }
     // A brace where a heredoc tag is due is the tag (`<<}; cat .env` is tag `}`,
     // then the read), never a group: every shell takes a `{` there, and bash
-    // and dash a `}`.
-    if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
+    // and dash a `}`. A `{` is a group only before a blank, a newline or an operator, as bash reads it: before a
+    // CR or a form feed it starts a word (`{\r,.env}` is a CR and `.env`, #6142).
+    const groupEnd = ch === '{' ? /[ \t\n;&|)]/ : /[\s;&|)]/;
+    if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || groupEnd.test(str[i + 1]))) {
       if (expectTag && heredocTagsAsWords && heredocBraceTags) {
         braceTagRead = true;
       } else {
@@ -3694,8 +3701,9 @@ function reasonFor(code, tool, target) {
   }
   if (code === 'brace-word-unreadable') {
     return `Secret read guard: the Bash word '${target}' has a brace group that cannot be read word by word: a ` +
-      '`<( )`, `>( )` or extglob `@( )` runs into it before it closes, or one of its words does not read back as ' +
-      'one, so it cannot be checked for secret-file reads. Quote the braces, or put a space before the substitution.';
+      'CR, `<( )` or `>( )` runs into it before it closes, a `(` an extglob or zsh glob takes on follows it, or one ' +
+      'of its words does not read back as one, so it cannot be checked for secret-file reads. Quote the braces, or ' +
+      'put a space before the substitution.';
   }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
