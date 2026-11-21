@@ -66,23 +66,14 @@ const INTERRUPTION_ISSUE = 'Test run interrupted by cancellation, hook failure, 
 class AnchorDetectedSignal extends Error {}
 
 /**
- * Decode every top-level mapping write of a diagnostic-block body as (key, value)
- * pairs, one per segment (#5819 review: key identity is decided by the YAML parser,
- * never by scanning text; the re-review added that gate-relevant VALUES are judged
- * per write too, not on the last-wins merge). The body is split into one segment per
- * top-level key line — the key line at the block's base indent plus every deeper line
- * belonging to it (values, block scalars, nested maps, explicit-key `: value` lines,
- * quoted-key continuations) — and each segment is parsed on its own: STRICTLY first
- * (a segment that only parses with the duplicate-key relaxation — a flow mapping whose
- * repeated entries collapse to one distinct key, a nested duplicate — carries more
- * entries than distinct keys and the whole block is refused), then with the tolerant,
- * anchor-refusing options; the single distinct key of the result IS the decoded key and
- * its value the decoded value. Spellings a text scan misses — `"\U00000066ailureType"`,
- * an explicit `? failureType # c` — decode identically here, and `failureType:` inside
- * a VALUE stays a value. Anything that is not a clean block mapping of single-key
- * segments — a flow-mapping body, a scalar body, a segment that does not parse, content
- * shallower than the base indent, a document marker — returns null: a key set the
- * recovery cannot derive from the parse is an ambiguity it fails closed on.
+ * Decode each top-level key/value write before a last-wins merge can hide it.
+ * A base-indent key starts a segment with its continuation lines. The YAML parser
+ * decodes escapes and explicit keys, and text inside scalar values stays a value.
+ * Each segment must parse strictly before the tolerant, anchor-refusing parse.
+ * The strict pass catches flow or nested duplicates that could collapse into one
+ * distinct key. A parsed segment must contain exactly one mapping entry.
+ * An unparseable segment, content shallower than the base indent, or a document
+ * marker makes the recovery refuse the block.
  */
 function decodedKeyWrites(body: string, parseSegment: (segment: string) => unknown): Array<{ key: string; value: unknown }> | null {
   const segments: string[][] = [];
