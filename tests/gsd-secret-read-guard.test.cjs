@@ -3871,6 +3871,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "{ printf '.env'; } 2>/dev/null | xargs cat",
     'echo .env | echo "$(xargs cat)"',
     '{ cat | xargs cat; } <<< .env',
+    'coproc xargs cat <<< .env',
   ];
   const UNSEEN = [
     ['xargs cat < names', 'names'],
