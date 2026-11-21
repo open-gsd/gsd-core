@@ -324,7 +324,7 @@ GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9.
 PHASE_STATE=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} ${PHASE_NUM})
 ```
 
-Check `has_context`. If false → go to handle_blocker: "Discuss for phase ${PHASE_NUM} did not produce CONTEXT.md."
+Check `has_context`. If false → go to handle_blocker: "Discuss for phase ${PHASE_NUM} did not produce CONTEXT.md." If discuss printed `PLANNING STOPPED` (its chain runs plan-phase with `--auto`), go to handle_blocker with that line and never execute its plans.
 
 **3a.5. UI Design Contract (Frontend Phases)**
 
