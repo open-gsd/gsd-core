@@ -741,9 +741,9 @@ The rule and the count below read `tests/**/*.cjs` files only. A copy in a `.mjs
 An in-process assignment spelled `process.env.HOME = …` is not flagged; that case uses
 `sandboxHome()`, above. Three other spellings of it are flagged:
 `globalThis.process.env.HOME = …`, `const env = process.env; env.HOME = …` and
-`Object.assign(process.env, { HOME: … })`. `tests/helpers/isolated-env.cjs` is the one exempt file. The rule's header
-(`eslint-rules/no-adhoc-env-isolation.cjs`, "Known gaps") lists the shapes it does not see, such
-as a `HOME=` inside a shell script string.
+`Object.assign(process.env, { HOME: … })`. `tests/helpers/isolated-env.cjs` is the one exempt
+file. The rule's header (`eslint-rules/no-adhoc-env-isolation.cjs`, "Known gaps") lists the
+shapes it does not see, such as a `HOME=` inside a shell script string.
 
 `eslint-rules/no-adhoc-env-isolation.allowlist.json` records each file that still carries a copy
 and how many copies it carries. The waves of #4635 drain it in sorted order and then delete it.
@@ -751,8 +751,8 @@ A count may only fall. A new copy in a file the list does not name fails lint, a
 `tests/no-adhoc-env-isolation.rule.test.cjs` counts every `tests/**/*.cjs` file: it fails when a
 listed file holds more copies than its count, or fewer. The count reads the files ESLint lints, and
 it also fails when ESLint skips a `.cjs` file under `tests/`, so an ESLint ignore over a `tests/`
-subtree cannot hide that subtree's copies. When you migrate copies, lower the count,
-and delete the entry when it reaches zero (until you do, lint reports the entry as stale). Never add a file
+subtree cannot hide that subtree's copies. When you migrate copies, lower the count, and delete
+the entry when it reaches zero (until you do, lint reports the entry as stale). Never add a file
 to the list or raise a count. Build the env with the helper instead. An `eslint-disable` comment
 for this rule does not exempt a copy: the count runs with inline config off and still sees it.
 Entries are repository-relative, so run lint from the repository root, as `npm run lint` does.
