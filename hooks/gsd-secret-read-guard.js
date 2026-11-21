@@ -1746,8 +1746,7 @@ function braceWordInPlace(word, cmd) {
   if (cmd === null || !cmd.operands.includes(word)) return false;
   const { base } = cmd;
   if (SEARCH_TOOLS.has(base) || CONTAINER_RUNTIMES.has(base) || SHELL_INTERPRETERS.has(base)) return false;
-  if (['xargs', 'find', 'find.exe', 'watch', 'git', 'git.exe', 'cp', 'mv'].includes(base)) return false;
-  return nameOnlyOperandIndices(base, cmd.operands).size === 0;
+  return !['xargs', 'find', 'find.exe', 'watch', 'git', 'git.exe', 'cp', 'mv'].includes(base);
 }
 
 // bash 5.2's brace_gobbler: the index in `text`, from `i`, of the unquoted `satisfy` at brace level 0, or -1. A
