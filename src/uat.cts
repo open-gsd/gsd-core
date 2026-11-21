@@ -3292,7 +3292,20 @@ function lineOffsets(lines: string[]): { lineStarts: number[]; lineEnds: number[
 }
 
 /** A heading that only records its parent's closure (`### Resolution`, `Resolved`, `Closure`), #6239. */
-const CLOSURE_HEADING = /^(?:\*\*|__)?(?:resolution|resolved|closure)(?:\*\*|__)?(?:\s*[:–—-]\s*v?\d.*)?$/i;
+const CLOSURE_HEADING = /^(?:resolution|resolved|closure)(?:\s*[:–—-])?(?:\s*\(?v?\d[\d.\-/]*\)?)?$/i;
+
+/**
+ * Whether a heading's text only records a closure: the word (`Resolution`, `Resolved`, `Closure`), optionally
+ * followed by a colon or dash and a version or date reference, with emphasis or code marks around it. Free text
+ * after the word makes it a real child entry, so a heading like `Resolved — 2 blockers still open` is not one.
+ */
+function isClosureHeading(text: string): boolean {
+  let from = 0;
+  let to = text.length;
+  while (from < to && '*_`'.includes(text.charAt(from))) from++;
+  while (to > from && '*_`'.includes(text.charAt(to - 1))) to--;
+  return CLOSURE_HEADING.test(text.slice(from, to));
+}
 
 /**
  * The heading-delimited split, carrying the per-line opener flags the deferred
@@ -3319,8 +3332,11 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
   let absorbingLevel: number | null = null;
   for (let i = 0; i < headings.length; i++) {
     const level = headings[i].level;
-    // The entry this heading opens (or joins) ends at the next heading, or at the end of the body; no fence spans
-    // that boundary, so the fence scans below read only the lines up to it.
+    // The entry this heading opens (or joins) ends at the next heading, or at the end of the body, and the fence
+    // scans below read only the lines up to it (#6239: a scan to the end of the body per heading was quadratic).
+    // The heading tokenizer tolerates at most three spaces of fence indent while the scan strips all of it, so
+    // a fence indented deeper that is left open now ends at the heading instead of pairing with a later fence:
+    // the entry's list items count, which only ever reports more items, never fewer.
     const entryEnd = i + 1 < headings.length ? headings[i + 1].line - 1 : lines.length;
     if (absorbingLevel !== null && level > absorbingLevel) {
       headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: false, absorbed: true, end: entryEnd });
@@ -3333,7 +3349,7 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
     // Closure-only is decided from the DIRECT children (the shallowest level below this heading): whatever sits
     // below a closure heading is part of that closure record.
     const childLevel = deeper.reduce((least, h) => Math.min(least, h.level), Infinity);
-    const closureOnly = deeper.length > 0 && deeper.every((h) => h.level !== childLevel || CLOSURE_HEADING.test(h.text));
+    const closureOnly = deeper.length > 0 && deeper.every((h) => h.level !== childLevel || isClosureHeading(h.text));
     if (closureOnly) absorbingLevel = level;
     // Container iff a deeper heading follows that is not only a closure record (see doc comment). An empty
     // heading text (`##` alone) does not itself mean container — the flag is carried explicitly so a bare
@@ -3436,8 +3452,10 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
     const lineNo = i + 1;
     const heading = headingByLine.get(lineNo);
     if (heading !== undefined && heading.absorbed) {
-      // A closure heading inside its parent's entry: the entry continues (no flush), its line stays in the entry so
-      // the raw span and `lines` remain one-to-one, and the heading still ends the list/fence/indent state.
+      // A closure heading inside its parent's entry: the entry continues (no flush) and its line stays in the entry,
+      // so the raw span and `lines` remain one-to-one. In this walk it ends the list/indent state and restarts the
+      // fence scan; the field reader scans the merged entry as one run, so a fence left open above it still hides
+      // the closure's fields there (the item then reads open, the fail-safe direction).
       runs.clear();
       blankSeen = false;
       bodyBase = null;
