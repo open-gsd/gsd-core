@@ -464,6 +464,7 @@
       "health-diagnostic-rules/agent-install.cjs",
       "health-diagnostic-rules/config-validation.cjs",
       "health-diagnostic-rules/consistency.cjs",
+      "health-diagnostic-rules/context-bridge.cjs",
       "health-diagnostic-rules/install-surface-shadowing.cjs",
       "health-diagnostic-rules/milestone-archive-hygiene.cjs",
       "health-diagnostic-rules/phase-structure.cjs",

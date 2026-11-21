@@ -5,12 +5,12 @@
  * each (ADR-6315 item 19, #6337). A contract is a module in scripts/static-checks/text-contracts/
  * exporting { id, issue?, check(ctx) }; `check` states, through the context:
  *   ctx.doc(rel)              a document (LF-normalised text) or a finding if the file is missing
- *   doc.has(pattern, why)     pattern (RegExp or string) must appear
- *   doc.lacks(pattern, why)   pattern must not appear
- *   doc.slice(from, to)       the document between two markers (a finding if a marker is absent)
+ *   doc.has/lacks(pattern, why)  pattern (RegExp or string) must / must not appear
+ *   doc.slice(from, to)       the document between two markers; `to` may list several, earliest wins
  *   doc.step(name)            the `<step name="…">` … `</step>` body of a workflow
- *   doc.before(a, b, why)     the first a precedes the first b (both appear)
- *   doc.followedBy(a, b, why) b appears somewhere after the first a
+ *   doc.frontmatter()         the closed YAML frontmatter block (a finding if there is none)
+ *   doc.before(a, b, why)     the first a precedes the first b; doc.followedBy(a, b, why): b after a
+ *   doc.shorterThan(n, why)   the text is under n characters
  *   ctx.fail(rel, why)        a finding of its own
  * A failed assertion is one finding naming the file and the contract. A contract that throws is
  * a finding too, and a directory with no contracts fails the run, so nothing passes by absence.
@@ -22,7 +22,7 @@ const path = require('node:path');
 const CONTRACT_DIR = path.join(__dirname, 'text-contracts');
 // The number of shipped contracts. A test pins it to the directory's count, so deleting a contract
 // file (or adding one without raising this) fails instead of passing by absence.
-const MIN_CONTRACTS = 2;
+const MIN_CONTRACTS = 6;
 
 const lf = (text) => text.replace(/\r\n/g, '\n');
 const describePattern = (pattern) => (pattern instanceof RegExp ? String(pattern) : JSON.stringify(pattern));
@@ -59,12 +59,36 @@ function makeContext(root, id, findings) {
           report(rel, `marker ${JSON.stringify(from)} not found`);
           return documentOf(`${rel}[missing ${JSON.stringify(from)}]`, '', true);
         }
-        const end = to === undefined ? text.length : text.indexOf(to, start);
-        if (end === -1) {
+        // Closing markers are searched after the opening one, so an end marker that begins like the
+        // start marker (`**If ` … `**If `) ends the slice at the next one, not at the start itself.
+        const ends = to === undefined ? [] : [].concat(to);
+        if (to !== undefined && (ends.length === 0 || ends.includes(''))) {
+          report(rel, `the closing markers of ${JSON.stringify(from)} must be a non-empty list of non-empty markers`);
+          return documentOf(`${rel}[bad closing markers ${JSON.stringify(from)}]`, '', true);
+        }
+        const hits = ends.map((marker) => text.indexOf(marker, start + from.length)).filter((at) => at !== -1);
+        if (ends.length > 0 && hits.length === 0) {
           report(rel, `closing marker ${JSON.stringify(to)} not found after ${JSON.stringify(from)}`);
           return documentOf(`${rel}[unterminated ${JSON.stringify(from)}]`, '', true);
         }
+        const end = ends.length === 0 ? text.length : Math.min(...hits);
         return documentOf(`${rel} [${from}]`, text.slice(start, end));
+      },
+      frontmatter() {
+        if (dead) return doc;
+        // The fence rules (BOM, byte-0 opening fence, whole-line closing fence) have one owner.
+        const { locateFrontmatterFence } = require('../../gsd-core/bin/lib/frontmatter-fence.cjs');
+        const fence = locateFrontmatterFence(text);
+        if (!fence || !fence.closed) {
+          report(rel, 'no closed YAML frontmatter block');
+          return documentOf(`${rel}[no frontmatter]`, '', true);
+        }
+        return documentOf(`${rel} [frontmatter]`, text.slice(fence.openEnd, fence.bodyEnd));
+      },
+      shorterThan(limit, why) {
+        assertions += 1;
+        if (!dead && !(text.length < limit)) report(rel, `${why} (${text.length} characters, expected fewer than ${limit})`);
+        return doc;
       },
       step(name) {
         return doc.slice(`<step name="${name}">`, '</step>');

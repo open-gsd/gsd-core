@@ -9,7 +9,7 @@
     "backfill: 444 files absent from the table (incl. custom-phase-readers 221s, lint-gate-evidence-drift 133s) added from gsd-test linux node24 runs 421b36fb/6800cc59/2bedeb9d, max of 3, scaled x1.08 (sum ratio over the 247 files both measured) to match this table's units (next run 40803043818, shard 2/3 cap overrun). Existing entries untouched.",
     "ci-calibrated: per-file test:summary durations from the unit shards of push run 40895178866 on next (fdc4e7a3bd; c8-instrumented, GitHub ubuntu-latest, node 24; artifacts test-timings-ubuntu-unit-job1..3) override the Docker-measured entries for the 1126 unit files they cover (#5805). Aux-suite (integration/install/security/slow/qa) entries keep their Docker measurements."
   ],
-  "file_count": 1217,
+  "file_count": 1213,
   "timings": {
     "4213-progress-helpers.property.test.cjs": 55,
     "5100-win32-bare-bash-sentinel.property.test.cjs": 50,
@@ -89,10 +89,6 @@
     "augment-upgrades.test.cjs": 5947,
     "auto-chain-transition-delegation.test.cjs": 17,
     "auto-select-attribute.test.cjs": 2344,
-    "autonomous-allowed-tools.test.cjs": 9,
-    "autonomous-decomposition.test.cjs": 19,
-    "autonomous-interactive.test.cjs": 16,
-    "autonomous-to-flag.test.cjs": 18,
     "autonomous-ui-steps.test.cjs": 23,
     "backwards-compat-phase-id.test.cjs": 24,
     "benchmark-compact-content.test.cjs": 9134,
