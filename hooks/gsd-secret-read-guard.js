@@ -86,6 +86,8 @@
 //   the sub-command's read operands. A command with no rule of its own whose
 //   operands name git, a shell, an ssh client, eval, xargs, find, watch, dd or
 //   a wrapper is read as launching it from there (`caffeinate git …`, #5492).
+//   A `BASH_ENV` or `ENV` value, the file a shell sources first, is a read
+//   when it names a secret, and of the command's stdin when it is an fd (#6445).
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
 // before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
@@ -135,8 +137,8 @@
 //   '. /dev/stdin' <<< …`, `bash -c bash <<< …`), a process substitution given
 //   as an input redirect (`bash < <(…)`, `source /dev/stdin < <(…)`, `bash
 //   /dev/fd/3 3< <(…)`), an fd name relative to a `cd` (`cd /dev && source
-//   stdin <<< …`), an fd path given through `BASH_ENV` or `--rcfile`
-//   (`BASH_ENV=/dev/stdin bash -c : <<< …`), and a doubled `builtin`
+//   stdin <<< …`), an fd path given through `--rcfile` (`bash -i --rcfile
+//   /dev/stdin <<< …`), and a doubled `builtin`
 //   (`builtin builtin source …`). Reached through the same gaps and allowed under
 //   every reading, so the decoded-value check (#5255) does not cover them:
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
@@ -4042,6 +4044,8 @@ function scanCommand(command, depth, reading, ctx, rescan) {
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, scriptAssignments(tokenized.tokens, reading, ctx, depth));
   try {
+    const sourced = sourcedFileVars(ctx);
+    if (sourced.hit) return sourced.hit;
     return scanScript(tokenized, depth, reading, ctx);
   } finally {
     ctx.shellVars = saved;
@@ -4108,6 +4112,8 @@ function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
       for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
       // A prefix's variables reach this command and everything it runs.
       ctx.shellVars = shellVarFrame(scriptScope, cmd.assigns);
+      const hit = sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+      if (hit) return hit;
 
       // eval concatenates ALL its operands and runs the result.
       if (base === 'eval') {
@@ -4506,6 +4512,29 @@ function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfte
   return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
 }
 
+// bash sources the file BASH_ENV names before a non-interactive script, and sh the one ENV names when interactive
+// (#6445): a value in scope naming a secret is a read, whatever the command and the shell's mode. `fd` is set when a
+// value is an fd path (`BASH_ENV=/dev/stdin`), which sources the command's stdin.
+const SOURCED_FILE_VARS = ['BASH_ENV', 'ENV'];
+function sourcedFileVars(ctx) {
+  let fd = false;
+  for (const name of SOURCED_FILE_VARS) {
+    for (const value of shellVarValues(ctx.shellVars, name, ctx)) {
+      if (operandNamesSecret(value)) return { hit: secretRead(`${name}=${value}`), fd };
+      fd = fd || isFdPath(value);
+    }
+  }
+  return { hit: null, fd };
+}
+
+// sourcedFileVars for one command: with an fd path in scope, its heredocs, here-strings and pipe are read as a
+// shell's stdin, whichever fd they are on, as for `bash /dev/fd/N`.
+function sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
+  const { hit, fd } = sourcedFileVars(ctx);
+  if (hit || !fd) return hit;
+  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+}
+
 // The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and what a
 // piped echo/printf source writes.
 function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
@@ -4605,6 +4634,8 @@ function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, byS
   const saved = ctx.shellVars;
   ctx.shellVars = shellVarFrame(saved, resolvedSub ? resolvedSub.assigns : []);
   try {
+    const sourced = sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+    if (sourced) return sourced;
     const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
     const subBase = resolvedSub ? resolvedSub.base : writtenBase;
     const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
