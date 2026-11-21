@@ -231,23 +231,31 @@ function nestedTwinOf(key: string): { key: string; section: string; field: strin
 }
 
 /**
+ * The twins new-project creation writes under their flat key (config.cts's
+ * template): it copies a layer's nested value into that flat key. Their nested
+ * value is read only when it has the setting's default type, because copied
+ * flat, a string "false" reads as false to config-get but as true to
+ * check-commit. config.cts derives TEMPLATE_FLAT_TWINS from this list.
+ */
+const FLAT_WRITTEN_TWIN_KEYS: readonly string[] = Object.freeze(['commit_docs', 'search_gitignored']);
+
+/**
  * A NESTED_TWINS setting as `defaults.json` gives it: the flat spelling as
- * stored (a null included), else the nested spelling when it holds a value of
- * the type of `fallback` (the setting's default), else undefined. A nested
- * value of another type is no setting: copied into a new project's flat key, a
- * string "false" reads as false to config-get but as true to check-commit. The
- * global-defaults branch below and new-project creation both read the store
- * through this, so they agree on every store (#5681).
+ * stored (a null included), else the nested spelling (not a null), else
+ * undefined. For FLAT_WRITTEN_TWIN_KEYS a nested value of another type than
+ * the setting's default is no setting. Every other twin is read as stored,
+ * as new-project creation copies it, so the global-defaults branch below and a
+ * new project made from the same store read the same value (#5681).
  */
 function _getGlobalTwinValue(
   parsed: Record<string, unknown>,
   twin: { key: string; section: string; field: string },
-  fallback: unknown,
 ): unknown {
   if (parsed[twin.key] !== undefined) return parsed[twin.key];
   const nested = _getConfigNested(parsed, twin.section, twin.field);
   if (nested === undefined || nested === null) return undefined;
-  return fallback === undefined || fallback === null || typeof nested === typeof fallback ? nested : undefined;
+  if (!FLAT_WRITTEN_TWIN_KEYS.includes(twin.key)) return nested;
+  return typeof nested === typeof _getConfigDefault(twin.key) ? nested : undefined;
 }
 
 /**
@@ -554,10 +562,10 @@ const _warnedShadowedGlobalKeys = new Set<string>();
 function _warnShadowedGlobalDefaults(globalDefaults: Record<string, unknown>, globalPath: string): void {
   const shadowed = GLOBAL_DEFAULTS_RESOLUTION_KEYS.filter(k =>
     k !== 'effort' && Object.prototype.hasOwnProperty.call(globalDefaults, k));
-  // Branch D also honors the nested alias workflow.post_planning_gaps (the
-  // `?? globalDefaults['workflow']?.['post_planning_gaps']` fallback in
-  // _globalBaseCfg) — a global file using only the nested form is equally
-  // shadowed, so it reports under its dotted name.
+  // Branch D also honors the nested alias workflow.post_planning_gaps (its
+  // nested twin, read through _getGlobalTwinValue in _globalBaseCfg) — a global
+  // file using only the nested form is equally shadowed, so it reports under its
+  // dotted name.
   // #3894: research_before_questions gets the same nested-alias reporting.
   const nestedAliasKeys = ['post_planning_gaps', 'research_before_questions'];
   const wf = globalDefaults['workflow'];
@@ -1268,7 +1276,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // scope AND inert at project scope on the /gsd-quick path.
       const globalGet = (key: string): unknown => {
         const twin = nestedTwinOf(key);
-        return twin ? _getGlobalTwinValue(globalDefaults, twin, (defaults as Record<string, unknown>)[key]) : globalDefaults[key];
+        return twin ? _getGlobalTwinValue(globalDefaults, twin) : globalDefaults[key];
       };
       const _globalBaseCfg: Record<string, unknown> = {
         ...defaults,
@@ -1395,6 +1403,7 @@ export = {
   _getConfigValue,
   _getConfigNested,
   _getGlobalTwinValue,
+  FLAT_WRITTEN_TWIN_KEYS,
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   _warnedUnknownConfigKeys,

@@ -19,7 +19,8 @@ const { ExitError } = cliExitMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoader = require('./config-loader.cjs');
 const {
-  CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, NESTED_TWINS, resolvePlannerStallDetectionEnabled, _getGlobalTwinValue, _getConfigNested,
+  CONFIG_DEFAULTS, CONFIG_KEY_ALIASES, NESTED_TWINS, FLAT_WRITTEN_TWIN_KEYS, resolvePlannerStallDetectionEnabled,
+  _getGlobalTwinValue, _getConfigNested,
 } = configLoader;
 import { platformWriteSync, platformEnsureDir, retryRenameSync, openExclusiveTempSync } from './shell-command-projection.cjs';
 import { resolveGsdHome } from './runtime-homes.cjs';
@@ -439,12 +440,12 @@ const TEMPLATE_FLAT_SETTINGS: Readonly<Record<string, unknown>> = Object.freeze(
 });
 
 /**
- * The twins whose flat key the template writes (`commit_docs`,
- * `search_gitignored`). The loader reads a flat key before its nested twin, so
- * new-project creation reads each layer's nested spelling into the flat key
- * itself (#5681).
+ * The twins whose flat key the template writes (config-loader's
+ * FLAT_WRITTEN_TWIN_KEYS: `commit_docs`, `search_gitignored`). The loader reads
+ * a flat key before its nested twin, so new-project creation reads each layer's
+ * nested spelling into the flat key itself (#5681).
  */
-const TEMPLATE_FLAT_TWINS = NESTED_TWINS.filter(({ key }) => Object.prototype.hasOwnProperty.call(TEMPLATE_FLAT_SETTINGS, key));
+const TEMPLATE_FLAT_TWINS = NESTED_TWINS.filter(({ key }) => FLAT_WRITTEN_TWIN_KEYS.includes(key));
 
 /**
  * Plan a fully-materialized config object for a new project. Writes nothing:
@@ -620,7 +621,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
     const { key, section, field } = twin;
     let resolved: unknown = hardcoded[key];
     for (const layer of [choices, safeDefaults] as Record<string, unknown>[]) {
-      const value = _getGlobalTwinValue(layer, twin, hardcoded[key]);
+      const value = _getGlobalTwinValue(layer, twin);
       if (value === undefined) continue;
       if (value !== null) resolved = value;
       break;

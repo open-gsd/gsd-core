@@ -4493,16 +4493,20 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
     }
   });
 
-  // The loader's global-defaults branch reads the store by the same rule, so a
-  // hand-written nested value of another type than the default reads as the
-  // default outside a project too, as it does in a new project.
-  test('outside a project, a stored nested twin that is not of the default type reads as the default', (t) => {
+  // Outside a project the loader reads the store as a new project made from it
+  // does. commit_docs and search_gitignored, which the template writes flat, take
+  // a nested value only of the default's type (copied flat, a string "false"
+  // would read as true to check-commit); every other twin is read as stored,
+  // because new-project creation copies it as stored.
+  test('outside a project and in a new project, a stored nested twin reads the same', (t) => {
     const { CONFIG_DEFAULTS } = require('../gsd-core/bin/lib/config-loader.cjs');
-    for (const [stored, key] of [
-      [{ planning: { commit_docs: 'false' } }, 'commit_docs'],
-      [{ workflow: { research: 'false' } }, 'research'],
-      [{ workflow: { post_planning_gaps: 0 } }, 'post_planning_gaps'],
-      [{ workflow: { subagent_timeout: '5' } }, 'subagent_timeout'],
+    for (const [stored, key, want] of [
+      [{ planning: { commit_docs: 'false' } }, 'commit_docs', CONFIG_DEFAULTS.commit_docs],
+      [{ planning: { commit_docs: false } }, 'commit_docs', false],
+      [{ workflow: { research: 'false' } }, 'research', 'false'],
+      [{ workflow: { post_planning_gaps: 0 } }, 'post_planning_gaps', 0],
+      [{ workflow: { subagent_timeout: '5' } }, 'subagent_timeout', '5'],
+      [{ workflow: { subagent_timeout: 5000 } }, 'subagent_timeout', 5000],
     ]) {
       const { gsdHome } = defaultsHome(t, stored);
       const outside = tempProject(t);
@@ -4510,24 +4514,23 @@ describe('#5681 regression: a saved setting replaces its legacy flat or nested t
         process.env.GSD_HOME = gsdHome;
         return loadConfig(outside);
       });
-      assert.strictEqual(loaded[key], CONFIG_DEFAULTS[key], `${JSON.stringify(stored)}: ${key}`);
+      assert.strictEqual(loaded[key], want, `${JSON.stringify(stored)}: ${key} outside a project`);
+      const projectDir = tempProject(t);
+      assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome }).success);
+      assert.strictEqual(loadConfig(projectDir)[key], want, `${JSON.stringify(stored)}: ${key} in a new project`);
     }
-    const { gsdHome } = defaultsHome(t, { planning: { commit_docs: 'false' } });
-    const projectDir = tempProject(t);
-    assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome }).success);
-    assert.strictEqual(loadConfig(projectDir).commit_docs, true);
   });
 
-  // A nested value of the default's type is read in both places.
-  test('outside a project, a stored nested twin of the default type is read', (t) => {
-    const { gsdHome } = defaultsHome(t, { planning: { commit_docs: false }, workflow: { subagent_timeout: 5000 } });
-    const outside = tempProject(t);
-    const loaded = withIsolatedProcessState(() => {
-      process.env.GSD_HOME = gsdHome;
-      return loadConfig(outside);
-    });
-    assert.strictEqual(loaded.commit_docs, false);
-    assert.strictEqual(loaded.subagent_timeout, 5000);
+  // The two twins the template writes flat are the loader's FLAT_WRITTEN_TWIN_KEYS:
+  // a new project writes each of them flat.
+  test('the flat-written twins are the ones a new project writes flat', (t) => {
+    const { FLAT_WRITTEN_TWIN_KEYS } = require('../gsd-core/bin/lib/config-loader.cjs');
+    const projectDir = tempProject(t);
+    const { gsdHome } = defaultsHome(t);
+    assert.ok(runGsdTools(['config-new-project', '{}'], projectDir, { GSD_HOME: gsdHome }).success);
+    const written = JSON.parse(fs.readFileSync(path.join(projectDir, '.planning', 'config.json'), 'utf-8'));
+    assert.deepStrictEqual([...FLAT_WRITTEN_TWIN_KEYS].sort(), ['commit_docs', 'search_gitignored']);
+    for (const key of FLAT_WRITTEN_TWIN_KEYS) assert.ok(Object.prototype.hasOwnProperty.call(written, key), key);
   });
 
   test('check-commit refuses planning files when a string "false" was chosen over a stored false', (t) => {

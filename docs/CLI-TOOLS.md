@@ -800,7 +800,7 @@ spelled the way `config-set` accepts it: `git.branching_strategy`, not `branchin
 (a few flat spellings, such as `commit_docs`, are accepted). Saving either spelling of a
 setting (a value or a `null`; an empty object is neither) removes the other from the store (`research` for `workflow.research`,
 `planning.commit_docs` for `commit_docs`), and saving `granularity` removes the retired `depth`, so a
-stale value cannot keep winning or be copied into new projects. Outside a project the loader reads the store the way new-project creation does: a setting's flat spelling as stored, else its nested spelling when that holds a value of the setting's default type, so a hand-written `{"planning":{"commit_docs":"false"}}` is no setting to either and both read the default. A missing file is created, and a store kept as a
+stale value cannot keep winning or be copied into new projects. Outside a project the loader reads each setting it takes from the store (a fixed list: `search_gitignored`, for one, is read only from a project config) as a new project made from it reads that setting: its flat spelling as stored, else its nested spelling. For `commit_docs` and `search_gitignored`, which new projects write flat, a nested value counts only when it is a boolean, so a hand-written `{"planning":{"commit_docs":"false"}}` is no setting to either and both read the default; every other nested value is read as stored in both places. A missing file is created, and a store kept as a
 symlink is written through to its target, so the link survives; a link whose target is missing
 is refused. These keys are never saved: the search flags that new projects detect from this machine
 (`brave_search`, `firecrawl`, `exa_search`, `tavily_search`, `ref_search`, `perplexity`,
