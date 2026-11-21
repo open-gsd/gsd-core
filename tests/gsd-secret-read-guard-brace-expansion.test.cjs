@@ -449,16 +449,23 @@ describe('gsd-secret-read-guard: past the budget, only a word that could name a 
   // Each makes more than 64 words, none of which can name a secret file: all 0 on next, and allowed still.
   const allows = [
     'for i in {1..120}; do sleep 5; done',
-    'echo {1..100}',
     'mkdir d{1..100}',
     'touch f{a..z}{0..9}',
-    "printf '%s\\n' {001..500}",
     'touch f{1..100}.txt',
     'cat x{1..100}',
   ];
   for (const cmd of allows) {
     test(`allows ${cmd}`, () => assertAllowed(cmd));
     test(`allows bash -c '${cmd}'`, () => assertAllowed(`bash -c '${cmd.replace(/'/g, "'\\''")}'`));
+  }
+
+  // echo and printf print their operands for whatever reads their output, a shell among them, so a word past the
+  // budget is never judged as written there.
+  for (const [cmd, word] of [['echo {1..100}', '{1..100}'], ["printf '%s\\n' {001..500}", '{001..500}']]) {
+    test(`denies ${cmd}`, () => assertBlocked(cmd, { code: 'glob-too-complex', path: word }));
+    test(`denies bash -c '${cmd}'`, () => {
+      assertBlocked(`bash -c '${cmd.replace(/'/g, "'\\''")}'`, { code: 'glob-too-complex', path: word });
+    });
   }
 
   // [command, the block]. A word that could name a secret is denied unread; one written as a secret name is
