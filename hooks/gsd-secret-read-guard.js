@@ -3368,9 +3368,7 @@ function reconstructedScripts(words, ctx, feeds = NO_FEEDS) {
 // the bodies and strings given to it, each on its own and joined by a newline. `cat file` (an operand that is not `-`)
 // reads no stdin, so its output is not knowable here.
 function catPrintedTexts(cmd, feeds) {
-  const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
-  if (named.length > 0 && !named.some((w) => w.text === '-')) return [];
-  return fedTexts(feeds);
+  return catReadsFilesOnly(cmd.operands) ? [] : fedTexts(feeds);
 }
 
 function fedTexts(feeds) {
@@ -4537,7 +4535,7 @@ function sourcedFileRead(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) 
 }
 
 // The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and what a
-// piped echo/printf source writes.
+// piped echo/printf source writes; past a filter stage, every stage back to the producer fails closed (#5492).
 function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
   for (const h of heredocs) {
     const hit = findSecretRead(h.text, depth + 1, ctx);
@@ -4547,19 +4545,29 @@ function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
     const hit = findSecretRead(hs, depth + 1, ctx);
     if (hit) return hit;
   }
-  for (const src of pipedScripts(s, bySeg, sepAfter, ctx)) {
+  const stages = pipeStages(s, bySeg, sepAfter, ctx, true);
+  for (const src of stageScripts(stages, ctx)) {
     const hit = findSecretRead(src, depth + 1, ctx);
+    if (hit) return hit;
+  }
+  for (const stage of stages) {
+    const hit = stage.filtered ? mentionInStage(stage, ctx) : null;
     if (hit) return hit;
   }
   return null;
 }
 
-// What the stages piped into segment `s` write (pipeStages), as reconstructedScripts reads them; [] without a pipe.
-// A stage is read with its redirect targets among its words, as before, and without them, given its heredocs and
-// here-strings to print when it is a `cat` or a `tee` (#6182).
+// What the stages piped into segment `s` write (pipeStages, through filter stages), as stageScripts reads them.
 function pipedScripts(s, bySeg, sepAfter, ctx) {
+  return stageScripts(pipeStages(s, bySeg, sepAfter, ctx, true), ctx);
+}
+
+// What each stage writes, as reconstructedScripts reads it; [] without a pipe. A stage is read with its redirect
+// targets among its words, as before, and without them, given its heredocs and here-strings to print when it is a
+// `cat` or a `tee` (#6182).
+function stageScripts(stages, ctx) {
   const scripts = [];
-  for (const { words, cmdWords, feeds } of pipeStages(s, bySeg, sepAfter, ctx)) {
+  for (const { words, cmdWords, feeds } of stages) {
     for (const script of reconstructedScripts(words, ctx)) scripts.push(script);
     if (cmdWords.length === words.length && !feeds.heredocs.length) continue; // read above already
     for (const script of reconstructedScripts(cmdWords, ctx, feeds)) if (!scripts.includes(script)) scripts.push(script);
@@ -4578,9 +4586,13 @@ function pipeSources(s, bySeg, sepAfter, ctx) {
 // (`feeds`). A source handed out before in this scan is charged its words and four times its bytes before it is read
 // again: every command reading the pipe walks back to it (`… | tee xargs env | tee xargs env …` reaches the producer
 // from each stage), so the reads would otherwise grow as stages times bytes.
-function pipeStages(s, bySeg, sepAfter, ctx) {
+// With `throughFilters` (a shell's stdin, #5492), the walk also goes on past a stage that neither passes its stdin
+// on nor writes text of its own (`head`, `sort`, `grep` …): that stage and every one before it is `filtered`, read
+// fail closed by mentionInStage since what reaches the shell is not computed.
+function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
   const stages = [];
   const bodies = heredocBodiesBySegMap.get(bySeg);
+  let filtered = false;
   for (let at = s; ;) {
     const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
     if ((op !== '|' && op !== '|&') || prevSeg < 0) return stages;
@@ -4596,11 +4608,47 @@ function pipeStages(s, bySeg, sepAfter, ctx) {
       ctx.pipeSourcesRead.add(seg);
     }
     const cmdWords = commandWords(seg);
-    stages.push({ words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg) } });
-    if (!passesStdinOn(words) && !passesStdinOn(cmdWords)) return stages;
+    const stage = { words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg) }, filtered };
+    stages.push(stage);
+    if (!passesStdinOn(words) && !passesStdinOn(cmdWords)) {
+      if (!throughFilters || writesOwnText(stage)) return stages;
+      filtered = true;
+      stage.filtered = true;
+    }
     charge(ctx, TOKEN_WORK * words.length + 1);
     at = prevSeg;
   }
+}
+
+// A stage whose output does not come from its stdin: an echo or a printf, a `cat` or `tee` given a heredoc or
+// here-string of its own, or a `cat` naming files and not `-` (`cat gen.sh`, whose text is not knowable).
+function writesOwnText({ words, cmdWords, feeds }) {
+  const fed = feeds.heredocs.length > 0 || feeds.hereStrings.length > 0;
+  return [words, cmdWords].some((ws) => commandReadings(ws).some((cmd) => cmd.base === 'echo' || cmd.base === 'printf'
+    || (fed && (cmd.base === 'cat' || cmd.base === 'tee')) || (cmd.base === 'cat' && catReadsFilesOnly(cmd.operands))));
+}
+
+function catReadsFilesOnly(operands) {
+  const named = operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
+  return named.length > 0 && !named.some((w) => w.text === '-');
+}
+
+// A filtered stage (pipeStages), failing closed: a secret name its words, what it writes, or its heredocs and
+// here-strings mention, a `/` read as a break too (`sed 's/x/cat .env/'`), charged its words and eight times its
+// bytes first.
+function mentionInStage({ words, feeds }, ctx) {
+  const fed = [...feeds.heredocs, ...feeds.hereStrings];
+  let bytes = 0;
+  for (const w of words) bytes += w.text.length;
+  for (const text of fed) bytes += text.length;
+  charge(ctx, 2 * TOKEN_WORK * (words.length + bytes) + 1);
+  const hit = mentionInSource(words, ctx);
+  if (hit) return hit;
+  for (const text of [...words.map((w) => w.text), ...fed]) {
+    const named = mentionedSecret(text) || mentionedSecret(text.replaceAll('/', ' '));
+    if (named) return secretRead(named);
+  }
+  return null;
 }
 
 // A stage that passes its stdin on, under any reading of it: a `tee`, or a `cat` whose operands are all options or
