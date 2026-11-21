@@ -188,6 +188,7 @@ module.exports = {
   "tests/lockfile-cve-audit.test.cjs",
   "tests/locking-bugs-1909-1916-1925-1927.test.cjs",
   "tests/mcp-catalog.test.cjs",
+  "tests/mempalace-capture-headless-invocation.test.cjs",
   "tests/milestone-archive.test.cjs",
   "tests/milestone-lock.test.cjs",
   "tests/milestone-release-map-archive.test.cjs",
