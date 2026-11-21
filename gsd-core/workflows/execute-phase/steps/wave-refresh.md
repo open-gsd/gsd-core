@@ -17,8 +17,9 @@ value. A refresh never widens it. A plan id that was not in that first read is n
 run, even when it is ready.
 
 The run keeps two more sets beside it: the plans it has dispatched, and the plans it saw fail at step 6 or
-7 that the user continued past. All three live in this run's context, not on disk. A resumed run
-(`/gsd:pause-work`, then `/gsd:execute-phase` in a fresh session) is a new run: its step 1 records a new
+7 that the user continued past. Retrying and continuing are separate choices there, and a refresh never
+re-dispatches a plan, so a plan a retry completed never enters the second set. All three live in this
+run's context, not on disk. A resumed run (`/gsd:pause-work`, then `/gsd:execute-phase` in a fresh session) is a new run: its step 1 records a new
 `RUN_SCOPE` from what is still incomplete, both sets start empty, and a plan that failed with a SUMMARY
 reads as complete to it, so its own `verify_phase_goal` judges that plan. Within one run, if `RUN_SCOPE`
 or either set can no longer be stated, stop as below rather than refresh from an empty one: an empty

@@ -1565,8 +1565,11 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
 
   test('#5966 row 17: the run\'s three sets live in its context, and losing one stops the run', () => {
     const text = flat(refresh());
-    assert.match(text, /the plans it has dispatched, and the plans it saw fail at step 6 or 7 that the user continued past\. All three live in this run's context, not on disk/);
+    assert.match(text, /the plans it has dispatched, and the plans it saw fail at step 6 or 7 that the user continued past\./);
+    assert.match(text, /All three live in this run's context, not on disk/);
     assert.match(text, /A resumed run \(`\/gsd:pause-work`, then `\/gsd:execute-phase` in a fresh session\) is a new run: its step 1 records a new `RUN_SCOPE`/);
+    assert.match(text, /a plan a retry completed never enters the second set/,
+      'the continued-past stop must not fire on a plan a retry completed');
     assert.match(text, /if `RUN_SCOPE` or either set can no longer be stated, stop as below rather than refresh from an empty one/,
       'an empty scope reads as "nothing incomplete" and would continue into verification');
   });
