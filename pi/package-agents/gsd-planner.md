@@ -897,7 +897,7 @@ Plans:
 <step name="git_commit">
 Quick and quick-batch dispatches follow their own commit instructions. Skip this entire step in those modes.
 
-For phase-scoped plans, read @__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/plan-phase/steps/threat-id-check.md § After planning. Bind `PHASE` and `GSD_WS` from the dispatch context (empty workstream option for root scope), then run its fresh scan before this commit, including revision mode. If issues exist, correct IDs in this pass's newly authored register rows and their references, then rescan. Do not renumber previously committed plans automatically. If collisions remain, return `## PLANNING INCONCLUSIVE` with the structured `threat_id_uniqueness` issues and leave plans uncommitted for revision. Never commit while the scan failed or issues remain.
+For phase-scoped plans, read @__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/plan-phase/steps/threat-id-check.md and follow its planner-agent instructions before committing.
 
 ```bash
 PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)

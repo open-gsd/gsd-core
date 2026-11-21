@@ -23,7 +23,7 @@ if [[ "$THREAT_SCAN" == @file:* ]]; then THREAT_SCAN=$(cat "${THREAT_SCAN#@file:
 THREAT_ID_ISSUES=$(THREAT_SCAN="$THREAT_SCAN" node -e 'const j=JSON.parse(process.env.THREAT_SCAN);if(j.phase_found===false)throw new Error("threat-ID scan phase not found");if(j.phase_found!==true||!Array.isArray(j.threat_id_duplicates)||j.threat_id_duplicate_count!==j.threat_id_duplicates.length)throw new Error("invalid threat-ID scan");const issues=j.threat_id_duplicates.map(d=>{if(typeof d.id!=="string"||!Array.isArray(d.plans)||d.plans.length<2)throw new Error("invalid duplicate claim");return {plan:d.plans.join(", "),dimension:"threat_id_uniqueness",severity:"blocker",required_property:"A numbered threat ID is claimed by at most one live plan in the phase.",description:d.id+" claimed by "+d.plans.join(", "),fix_hint:"Assign the colliding row a new phase threat ID and update its references."}});process.stdout.write(JSON.stringify(issues))') || { echo "BLOCKED: cannot validate threat-ID scan" >&2; exit 1; }
 ```
 
-Planner-agent use: before its own commit, correct newly authored rows and rescan; if unresolved, leave plans uncommitted and return the issues to the orchestrator. Use the revision routing below only in plan-phase. Import has its own commit guard.
+Planner-agent use: bind `PHASE` and `GSD_WS` from the dispatch context. Scan before the agent commit, including revision mode. Fix IDs and references in newly authored rows, then rescan. Preserve prior committed IDs. On unresolved collisions, return `## PLANNING INCONCLUSIVE` with the structured `threat_id_uniqueness` issues and leave plans uncommitted. A scan failure also blocks the commit. Use the revision routing below only in plan-phase. Import has its own commit guard.
 
 ### Revision routing
 
