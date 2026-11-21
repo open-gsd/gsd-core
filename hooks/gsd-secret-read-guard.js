@@ -4606,9 +4606,14 @@ function stageScripts(stages, ctx) {
   return scripts;
 }
 
-// The word tokens of the stages piped into segment `s`, as pipeStages finds them.
+// The word tokens of the stages piped into segment `s`, as pipeStages finds them; each one's heredocs and
+// here-strings are kept in STAGE_FEEDS.
+const STAGE_FEEDS = new WeakMap();
 function pipeSources(s, bySeg, sepAfter, ctx) {
-  return pipeStages(s, bySeg, sepAfter, ctx).map((stage) => stage.words);
+  return pipeStages(s, bySeg, sepAfter, ctx).map((stage) => {
+    STAGE_FEEDS.set(stage.words, stage.feeds);
+    return stage.words;
+  });
 }
 
 // The stages piped into segment `s`, nearest first: the one right before it, as before, and past each stage that
@@ -4837,9 +4842,11 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
     }
   }
   // xargs splits what it reads at blanks and newlines (#5492), so `echo 'x if=.env' | xargs dd` hands dd `if=.env`:
-  // each piece of an operand, and of what the stage writes, is judged as an operand too, as it is and unquoted. Under
-  // `-I` or `-0` a piece may stay joined to the rest, so this fails closed there.
-  const texts = upstreamWords.map((w) => w.text);
+  // each piece of what the stage writes, and of the heredocs and here-strings it is given, is judged as an operand
+  // too, as it is and unquoted; its patterns and option values are not what xargs reads. Under `-I` or `-0` a piece
+  // may stay joined to the rest, so this fails closed there.
+  const feeds = STAGE_FEEDS.get(upstreamWords) || NO_FEEDS;
+  const texts = [...feeds.heredocs, ...feeds.hereStrings];
   for (const written of reconstructedScripts(upstreamWords, ctx)) texts.push(written);
   for (const text of texts) {
     if (!XARGS_BLANK_RE.test(text)) continue;
