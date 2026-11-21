@@ -1524,8 +1524,26 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
 
   test('#5966 row 10: a plan added mid-run keeps a finished scope out of verification', () => {
     const text = flat(refresh());
-    assert.match(text, /If the index lists an incomplete plan whose id was not in step 1's read, stop as below and name it/,
+    assert.match(text, /Stop as below, naming the plan, when either holds: - the index lists an incomplete plan whose id was not in step 1's read;/,
       'the loop may only complete into verification when no incomplete plan is left in the phase from this run\'s view');
+  });
+
+  test('#5966 row 13: a failed plan the user continued past stops the run even when no plan is left incomplete', () => {
+    const text = flat(refresh());
+    const done = text.indexOf('**When the refreshed selection is empty and no incomplete plan in `RUN_SCOPE` remains**');
+    assert.ok(done >= 0, 'the loop-done paragraph should exist');
+    const paragraph = text.substring(done, text.indexOf('Otherwise continue to `aggregate_results` as before', done));
+    assert.match(paragraph, /this run continued past a failed plan at step 6 or 7: its SUMMARY makes it complete to the index, and this run counts it failed/,
+      'with no dependents left incomplete, nothing else stops a run that continued past a failed spot-check before verification');
+    assert.match(text, /Every stop above ends here, the one for a failed plan the user continued past included/);
+    assert.match(flat(read(COMMANDS_DOC_PATH)), /if it stops with plans still incomplete, or after you continued past a failed plan, it names them, skips phase verification/);
+  });
+
+  test('#5966 row 14: a stopped run leaves REQUIREMENTS.md for a later run\'s verification, and says so', () => {
+    const text = flat(refresh());
+    const stop = text.substring(text.indexOf('## When the run stops'));
+    assert.match(stop, /Leave `REQUIREMENTS\.md` as the waves left it, and say so in the report when this run counts a plan failed/);
+    assert.match(stop, /stays marked until a later run reaches `verify_phase_goal`, whose `gaps_found` verdict reverts it \(`execute-phase-requirement-revert\.md`\)/);
   });
 
   test('#5966 row 11: failure handling no longer offers to attempt not-ready dependents', () => {

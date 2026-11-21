@@ -65,13 +65,17 @@ predecessor finished is dispatched here, never earlier. From here on, a plan's J
    handles all of them, run this fragment again from step 1.
 
 **When the refreshed selection is empty and no incomplete plan in `RUN_SCOPE` remains**, the wave loop is
-done. If the index lists an incomplete plan whose id was not in step 1's read, stop as below and name it.
+done. Stop as below, naming the plan, when either holds:
+
+- the index lists an incomplete plan whose id was not in step 1's read;
+- this run continued past a failed plan at step 6 or 7: its SUMMARY makes it complete to the index, and
+  this run counts it failed.
+
 Otherwise continue to `aggregate_results` as before.
 
 ## When the run stops
 
-Every stop above ends here, including one where the index counts every plan complete because a
-failed plan wrote its SUMMARY: this run counts that plan as failed. This is the partial-wave rule
+Every stop above ends here, the one for a failed plan the user continued past included. This is the partial-wave rule
 (`partial-wave.md`) applied to a plain run, and it replaces
 `aggregate_results` for this run. Print the `aggregate_results` table for what did run, headed
 `## Phase {X}: {Name} Execution Stopped` instead of `Execution Complete`, then:
@@ -81,6 +85,10 @@ failed plan wrote its SUMMARY: this run counts that plan as failed. This is the 
   `ready-wave-gate.md`); waiting on failed `{plan ids}`; failed; or awaiting a checkpoint. Name every
   incomplete plan whose id was not in step 1's read as added after this run started.
 - Do NOT run `verify_phase_goal`, and do NOT mark the phase complete in ROADMAP or STATE.
+- Leave `REQUIREMENTS.md` as the waves left it, and say so in the report when this run counts a plan
+  failed: a requirement that plan's SUMMARY let its executor or step 5.7 (`post-wave-requirements.md`)
+  mark `Complete` stays marked until a later run reaches `verify_phase_goal`, whose `gaps_found` verdict
+  reverts it (`execute-phase-requirement-revert.md`).
 - Present the footer below, then exit: skip the rest of `execute-phase.md`.
 
 ```markdown
