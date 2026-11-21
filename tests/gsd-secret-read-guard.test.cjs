@@ -2137,6 +2137,10 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "echo 'cat .env' | while read l; do echo \"$l\"; done | bash",
     "echo 'cat .env' | done | bash",
     'for i in 1; do cat; done <<EOF | bash\ncat .env\nEOF',
+    // The opener may itself be reached by a pipe, so a here-string on the closing word does not end the walk.
+    "echo 'cat .env' | for | done <<< 'x' | bash",
+    "echo 'cat .env' | if | fi <<< 'x' | bash",
+    "echo .env | for | done <<< 'x' | xargs cat",
   ]);
   allows([
     'for i in 1; do echo hi; done | bash',
