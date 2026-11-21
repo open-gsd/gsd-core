@@ -442,7 +442,7 @@ Exact bash and per-branch wording: `gsd-core/workflows/execute-phase/detail/elab
 </step>
 
 <step name="execute_waves">
-Execute each selected wave in sequence. Within a wave: parallel if `PARALLELIZATION=true`, sequential if `false`.
+Execute the earliest selected wave; step 9 picks any next one (#5966). Within a wave: parallel if `PARALLELIZATION=true`, sequential if `false`.
 
 **Orchestrator cwd-drift guard (FIRST ACTION at execute_waves entry — #48):**
 

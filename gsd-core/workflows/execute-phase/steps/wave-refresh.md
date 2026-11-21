@@ -16,6 +16,15 @@ that first read that the `--gaps-only` filter (when set) keeps, whatever its `re
 value. A refresh never widens it. A plan id that was not in that first read is never dispatched by this
 run, even when it is ready.
 
+## One wave per entry
+
+`execute_waves` runs one wave each time it is entered: step 1's selection supplies the first, and this
+fragment supplies every later one, so a plain run never goes back to a later wave of step 1's selection.
+Its heartbeats (`wave {N}/{M}`) count across the run: `{N}` is the number of waves this run has
+dispatched, the current one included, and `{M}` is `{N}` plus the waves after the current one in the
+selection it came from (step 1's for the first wave, the latest refresh's after that), so `{M}` can
+change at a refresh.
+
 ## After each wave
 
 1. **Reconcile first.** Every plan in the finished wave has reached a terminal state, and steps 5 to 8

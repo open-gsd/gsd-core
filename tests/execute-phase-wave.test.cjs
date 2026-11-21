@@ -1539,6 +1539,17 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
     assert.match(flat(read(COMMANDS_DOC_PATH)), /if it stops with plans still incomplete, or after you continued past a failed plan, it names them, skips phase verification/);
   });
 
+  test('#5966 row 15: execute_waves runs one wave per entry, so the refresh is the only way to a later wave', () => {
+    const step = flat(stepBlock(workflow(), 'execute_waves'));
+    assert.ok(!/Execute each selected wave in sequence/.test(step),
+      'an outer loop over step 1\'s selection would dispatch a wave the refresh already ran');
+    assert.match(step, /Execute the earliest selected wave; step 9 picks any next one \(#5966\)/);
+    const text = flat(refresh());
+    assert.match(text, /`execute_waves` runs one wave each time it is entered: step 1's selection supplies the first, and this fragment supplies every later one, so a plain run never goes back to a later wave of step 1's selection/);
+    assert.match(text, /`\{N\}` is the number of waves this run has dispatched, the current one included, and `\{M\}` is `\{N\}` plus the waves after the current one in the selection it came from/,
+      'the heartbeat total must not keep step 1\'s wave count after a refresh');
+  });
+
   test('#5966 row 14: a stopped run leaves REQUIREMENTS.md for a later run\'s verification, and says so', () => {
     const text = flat(refresh());
     const stop = text.substring(text.indexOf('## When the run stops'));
