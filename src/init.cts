@@ -52,6 +52,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { resolveReportedRuntime } from './host-runtime-detection.cjs';
 import { tryWithinRoot, loadTrustedGlobalRoots, PathAcceptance } from './security.cjs';
 import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getGlobalConfigDir } from './runtime-homes.cjs';
+import { resolveRuntimeNameFromCandidates, UnknownRuntimeError } from './runtime-name-policy.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
@@ -424,6 +425,8 @@ function withProjectRoot(cwd: string, result: Record<string, unknown>): Record<s
   result['missing_agents'] = agentStatus.missing_agents;
   result['agents_dir'] = agentStatus.agents_dir;
   result['agent_runtime'] = agentStatus.agent_runtime;
+  // #5236: `agents_installed` is null when the check could not run; the reason says why (never set when it ran).
+  if (agentStatus.agents_check_reason !== undefined) result['agents_check_reason'] = agentStatus.agents_check_reason;
   const config = loadConfig(cwd);
   if (config.response_language) {
     result['response_language'] = config.response_language;
@@ -4421,9 +4424,6 @@ function buildAgentSkillsBlock(
     if (diagnostics) diagnostics.warnings.push(message.replace(/\n+$/, ''));
   };
 
-  const runtime = (config && (config['runtime'] as string)) || 'claude';
-  const globalSkillsBase = getGlobalSkillsBase(runtime);
-
   if (!config || !config['agent_skills'] || !agentType) return '';
 
   let skillPaths = (config['agent_skills'] as Record<string, unknown>)[agentType];
@@ -4437,6 +4437,18 @@ function buildAgentSkillsBlock(
     return '';
   }
   if (skillPaths.length === 0) return '';
+
+  // #5236: the skills location is resolved only once there are entries to resolve, and an id GSD does not resolve
+  // has no global skills directory (the same answer as a runtime that does not use one), so a project-relative
+  // entry still works there. The id is read the way `init` reads it (normalised, aliases canonicalised), not raw.
+  const runtime = resolveRuntimeNameFromCandidates(config['runtime']) || 'claude';
+  let globalSkillsBase: string | null;
+  try {
+    globalSkillsBase = getGlobalSkillsBase(runtime);
+  } catch (err) {
+    if (!(err instanceof UnknownRuntimeError)) throw err;
+    globalSkillsBase = null;
+  }
 
   // Hoist trusted roots computation before the loop: loadTrustedGlobalRoots does
   // realpathSync I/O and should run at most once per call, not once per failing skill.
@@ -4627,7 +4639,7 @@ function cmdAgentSkills(
   // persona back into itself as if it were a skills block.
   let agentPayloadVariant: 'compact' | 'canonical' | null = null;
   if (!block && !skillsOnly) {
-    const runtime = (config && (config['runtime'] as string)) || process.env['GSD_RUNTIME'] || 'claude';
+    const runtime = resolveRuntimeNameFromCandidates(config ? config['runtime'] : undefined, process.env['GSD_RUNTIME']) || 'claude';
     if (runtime !== 'claude') {
       const agentCheck = checkAgentsInstalled(runtime, projectRoot) as unknown as { agents_dir?: string } | null;
       const agentsDir = agentCheck?.agents_dir;
