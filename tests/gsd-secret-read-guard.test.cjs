@@ -2081,6 +2081,29 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     `(cat) <<< "echo \\$'.e\\\\x6ev'" | bash`,
     "{ cat; } <<< 'echo hi' | sh",
   ]);
+  // An fd duplicated beside the group's heredoc or here-string may still be the pipe, so the walk goes on, failing
+  // closed. A `case` pattern's `)` closes no group, and a closer nothing opens leaves where a group starts unknown:
+  // a pipe after it reads every segment before it, failing closed.
+  blocks([
+    "echo 'cat .env' | (cat <&3) 3<&0 <<< 'echo hi' | bash",
+    "echo 'cat .env' | { cat <&3; } 3<&0 <<< 'echo hi' | sh",
+    "echo 'cat .env' | (cat <&3) 3>&0 <<< 'echo hi' | bash",
+    "echo 'cat .env' | (cat <&3) 3< /dev/stdin <<< 'echo hi' | bash",
+    "echo .env | (cat <&3) 3<&0 <<< 'x' | xargs cat",
+    "echo 'cat .env' | (case x in a) :;; esac; cat | bash)",
+    "echo 'cat .env' | { case x in a) :;; esac; cat | bash; }",
+    "echo 'cat .env' | (case x in a) (true);; esac; cat | bash)",
+    "echo 'cat .env' | (case x in (a) :;; esac; cat | bash)",
+    "echo 'cat .env' | (x); ) ; (true; cat | bash)",
+    "(case x in a) :;; esac; echo 'cat .env') | bash",
+  ]);
+  allows([
+    "echo ok | (cat <&3) 3<&0 <<< 'echo hi' | bash",
+    "echo 'cat .env' | (cat) 2>/dev/null <<< 'echo hi' | bash",
+    'echo ok | (case x in a) :;; esac; cat | bash)',
+    "case x in a) :;; esac; echo 'cat .env'; true; cat | bash",
+    '(case x in a) :;; esac; echo hi) | bash',
+  ]);
 
   // npm takes a unique prefix of a long option (`--edi` is `--editor`) and `-c=` attached; editor defaults to EDITOR
   // or VISUAL and shell to SHELL (or its Windows twin); and `npm explore <pkg> <words>` runs the words joined, `--` or not.
