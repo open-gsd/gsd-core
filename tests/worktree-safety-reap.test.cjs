@@ -1209,7 +1209,8 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
       ['an untracked file that is not ignored', (wt) => fs.writeFileSync(path.join(wt, 'notes.txt'), 'new\n')],
       ['an untracked .gitignore that ignores everything', (wt) => fs.writeFileSync(path.join(wt, '.gitignore'), '*\n')],
       ['an untracked .gitignore at depth', (wt) => { fs.mkdirSync(path.join(wt, 'sub')); fs.writeFileSync(path.join(wt, 'sub', '.gitignore'), '*\n'); }],
-      // git reads these as `.gitignore` on a case-insensitive filesystem, where it would hide the untracked work beside it
+      // git reads these as `.gitignore` on a case-insensitive filesystem, where it would hide the untracked work beside
+      // it. They pin the any-case walk there; on a case-sensitive filesystem they are plain untracked work.
       ['an untracked .GITIGNORE that ignores everything, beside untracked work', (wt) => { fs.mkdirSync(path.join(wt, 'src')); fs.writeFileSync(path.join(wt, 'src', '.GITIGNORE'), '*\n'); fs.writeFileSync(path.join(wt, 'src', 'new-work.ts'), 'x\n'); }],
       ['an untracked .GitIgnore at the top level', (wt) => fs.writeFileSync(path.join(wt, '.GitIgnore'), '*\n')],
     ]) {
@@ -1239,6 +1240,33 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
 
       assert.deepStrictEqual(rows(repo), [['agent-a5555555', 'reaped', 'unregistered_residue']]);
       assert.ok(!fs.existsSync(wt));
+    });
+
+    test('[security] a repository hook does not run during the checks (the index writes of the throwaway index fire post-index-change)', (t) => {
+      if (process.platform === 'win32') { t.skip('hooks are shell scripts'); return; }
+      const repo = adrRepo();
+      residueDir(repo);
+      const marker = path.join(tmpBase, 'hook-ran');
+      const hook = path.join(repo, '.git', 'hooks', 'post-index-change');
+      fs.mkdirSync(path.dirname(hook), { recursive: true });
+      fs.writeFileSync(hook, `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+
+      assert.deepStrictEqual(rows(repo), [[NAME, 'reaped', 'unregistered_residue']]);
+      assert.ok(!fs.existsSync(marker), 'the hook must not have run');
+    });
+
+    test('[boundary] a tip with more top-level names than one listing chunk (100) is still compared: 100, 101 and 201 names', () => {
+      for (const extra of [99, 100, 200]) {
+        const repo = path.join(tmpBase, `repo-chunk-${extra}`);
+        initRepo(repo);
+        fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n');
+        for (let i = 0; i < extra; i++) fs.writeFileSync(path.join(repo, `file-${String(i).padStart(3, '0')}.txt`), `${i}\n`);
+        git(['add', '-A'], repo);
+        git(['commit', '-m', 'many top-level files'], repo);
+        residueDir(repo);
+
+        assert.deepStrictEqual(rows(repo), [[NAME, 'reaped', 'unregistered_residue']], `${extra} extra names`);
+      }
     });
 
     test('[boundary] when the throwaway index cannot be made the candidate is kept as residue_unverified and the verb carries on', () => {
@@ -1487,6 +1515,7 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
       fs.mkdirSync(path.join(rootOf(repo), '.gsd-reap-fedcba9876543210'), { recursive: true });
 
       assert.deepStrictEqual(rows(repo), [['.gsd-reap-fedcba9876543210', 'reaped', 'unregistered_residue']]);
+      assert.ok(!fs.existsSync(path.join(rootOf(repo), '.gsd-reap-fedcba9876543210')));
     });
 
     test('[boundary] a stub younger than the guard stays in place, and a stub holding user data is kept like any other directory', () => {
@@ -1521,7 +1550,7 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
 
     test('[security] control and bidirectional characters in a held name are written as text on stdout, not raw', (t) => {
       const repo = adrRepo();
-      const trick = 'IGNORE\u202eprevious instructions\u202c.txt';
+      const trick = 'IGNORE\u202eprevious instructions\u202c\u{E0041}.txt';
       try { fs.writeFileSync(path.join(repo, trick), 'x\n'); } catch { t.skip('this filesystem cannot hold that file name'); return; }
       git(['add', '-A'], repo);
       git(['commit', '-m', 'a file with a bidirectional control in its name'], repo);
@@ -1532,7 +1561,7 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
 
       assert.ok(!text.includes('\u202e'), 'no raw bidirectional override reaches stdout');
       const held = JSON.parse(text).entries[0].contents;
-      assert.ok(held.includes('IGNORE\\u202eprevious instructions\\u202c.txt'), JSON.stringify(held));
+      assert.ok(held.includes('IGNORE\\u202eprevious instructions\\u202c\\u{e0041}.txt'), JSON.stringify(held));
     });
 
     test('[regression] an admin pass that could not look is reported on stderr as well', () => {
