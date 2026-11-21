@@ -193,6 +193,12 @@
 //        overflow the parser's stack, or one that needs more than the scan's
 //        work budget, is denied as `command-too-complex` (#5255), because
 //        failing open there allows a read the scan had not yet reached.
+//        Any other error in one of the readings that run beside the plain
+//        one — the dollar-quoting readings (#5255) and the further reading
+//        (#5779) — is a bug, and the hook fails open on it as on a crash:
+//        that reading's denials are lost, the other readings' stand, and when
+//        nothing denies the command the hook writes one `reading-failed` line
+//        on stderr (DIAGNOSTIC.READING_FAILED).
 
 'use strict';
 
@@ -2466,7 +2472,11 @@ function curlAtValueOpensSecret(v) {
 // same way (`--form=k=@f`, `--data-urlencode=k@f`), as well as the whole word.
 // The cost is a fail-safe denial where the word is read another way than the
 // option curl gives it (`-d k=@.env` read as a form value, a URL's `user@` part
-// read as `name@file`), pinned in tests.
+// read as `name@file`, the text `--form-string f=@.env` sends, and
+// `--data-urlencode n=@.env`, a name and a text value), pinned in tests. A
+// value the shell builds when it runs the line, from a variable, a command
+// substitution or a glob (`curl -d @$f`, `curl -T .e*`), is judged as written,
+// as every operand is (Documented gaps).
 function curlValueNamesSecret(text) {
   const option = CURL_LONG_OPTION_RE.exec(text);
   return curlWordNamesSecret(text) || (option !== null && curlWordNamesSecret(text.slice(option[0].length)));
