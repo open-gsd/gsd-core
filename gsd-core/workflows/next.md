@@ -44,6 +44,13 @@ If `--force` flag was passed, skip all gates, Route 0, and the prior-phase compl
 Print a one-line warning: `⚠ --force: skipping safety gates`
 Then proceed directly to `determine_next_action`. (Route 0 and `prior_phase_completeness` are NOT reached under `--force`.)
 
+**Gate 0: Paused (#6431)**
+`/gsd:pause-work` always writes `.planning/HANDOFF.json`, whichever scope its `.continue-here.md` lands in, and `/gsd:resume-work` deletes it once resumed:
+```bash
+[ -f .planning/HANDOFF.json ]
+```
+If found, or if STATE.md shows `paused_at`, do not route forward: the next action is `/gsd:resume-work` (Route 8). Skip Gate 1 and the other gates and routes and continue at `show_and_execute`.
+
 **Gate 1: Unresolved checkpoint**
 Check if `.planning/.continue-here.md` exists:
 ```bash
@@ -85,7 +92,7 @@ Use `--force` to bypass this check.
 ```
 Exit.
 
-After all three hard-stop gates pass, continue to `resume_incomplete_phase`.
+After Gate 0 and the three hard-stop gates pass, continue to `resume_incomplete_phase`.
 </step>
 
 <step name="resume_incomplete_phase">
@@ -95,7 +102,7 @@ This catches the common failure mode where a session died mid-execution (hang, t
 
 **Skip if `--no-resume` was passed** (fall through to `prior_phase_completeness`). (`--force` already bypassed all gates and Route 0 at `safety_gates` — it never reaches this step.)
 
-**Why Route 0 runs here (after Gates 1-3, before the prior-phase defer prompt):** This step is a hard invariant independent of `current_phase`'s value — it must run before any routing rule that reads `current_phase`. Gates 1-3 are cheap repo/state validity checks that must always run — skipping them on the resume path would risk advancing into a broken-state project. The prior-phase completeness-scan DEFER PROMPT, however, must NOT run in the default (no-flag) case when Route 0 is about to resume the phase automatically: that would force a double-decision (prompt first, then resume anyway), overriding the user's choice. Route 0 placed here means: default = resume silently (no defer prompt); `--no-resume` = skip Route 0 and fall through to the prior-phase defer prompt in `prior_phase_completeness`; `--force` = jump straight to `determine_next_action` at `safety_gates` (never reaches Route 0 or `prior_phase_completeness` at all).
+**Why Route 0 runs here (after Gates 1-3, before the prior-phase defer prompt):** This step is a hard invariant independent of `current_phase`'s value — it must run before any routing rule that reads `current_phase`. Gates 1-3 are cheap repo/state validity checks that must always run before any advancement (Gate 0 only diverts a recorded pause to `/gsd:resume-work`, which advances nothing) — skipping them on the resume path would risk advancing into a broken-state project. The prior-phase completeness-scan DEFER PROMPT, however, must NOT run in the default (no-flag) case when Route 0 is about to resume the phase automatically: that would force a double-decision (prompt first, then resume anyway), overriding the user's choice. Route 0 placed here means: default = resume silently (no defer prompt); `--no-resume` = skip Route 0 and fall through to the prior-phase defer prompt in `prior_phase_completeness`; `--force` = jump straight to `determine_next_action` at `safety_gates` (never reaches Route 0 or `prior_phase_completeness` at all).
 
 Scan ALL phases in ROADMAP order (lowest-numbered to highest) for incomplete-execution state. Use `gsd_run query roadmap.analyze` to get the phase list, then for each phase number `N` query `gsd_run query find-phase <N>` JSON and inspect its `plans` and `summaries` arrays. A phase is **incomplete-execution** when `plans.length > summaries.length` (at least one PLAN.md has no matching SUMMARY.md).
 
@@ -265,7 +272,7 @@ If all phases are complete:
 → Next action: `/gsd:complete-milestone`
 
 **Route 8: Paused → resume**
-If STATE.md shows paused_at:
+If `.planning/HANDOFF.json` exists or STATE.md shows paused_at (Gate 0):
 → Next action: `/gsd:resume-work`
 </step>
 
@@ -337,7 +344,7 @@ Do not ask for confirmation — the whole point of `/gsd:progress --next` is zer
 **If `--auto` was passed:** after the determined command completes, automatically re-invoke `/gsd:progress --next --auto` (forwarding `--converge`/`--cross-ai` and any reviewer flags if they were originally passed) to continue chaining to the next step. Repeat until one of:
 - A milestone completes (`/gsd:complete-milestone` is reached)
 - A blocking decision is required (safety gate triggers, prior-phase completeness prompt, user input needed)
-- An error or paused state is detected
+- An error or paused state is detected (a recorded pause, Gate 0, ends the chain at `/gsd:resume-work`)
 
 When stopping due to a blocker, display:
 ```
@@ -351,7 +358,7 @@ Resume with: `/gsd:progress --next --auto` once resolved.
 
 <success_criteria>
 - [ ] Project state correctly detected
-- [ ] Gates 1-3 (repo/state validity) run first — always, even on the resume path
+- [ ] A recorded pause (Gate 0) routes to `/gsd:resume-work`; otherwise Gates 1-3 (repo/state validity) run first — always, even on the resume path
 - [ ] Route 0 (resume_incomplete_phase) runs AFTER Gates 1-3 and BEFORE the prior-phase defer prompt — no double-decision in the default (no-flag) case
 - [ ] Default (no flag): Route 0 resumes incomplete phase silently, exits — user never sees the prior-phase defer prompt
 - [ ] `--no-resume`: Route 0 skipped, prior_phase_completeness defer prompt runs as before
