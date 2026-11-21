@@ -1636,56 +1636,55 @@ describe('regressions: #5267 — a `case` pattern paren does not close a substit
   // depth limit, stops the grammar scan, and with stack enough it reads the nest to
   // the end: it holds no read, so the grammar scan allows it there. Where the stack
   // runs out depends on the runtime, so each outcome has its own row: 20 tags are read
-  // to the end on any stack, and 1,100 tags overflow a stack pinned at 200 KB in a
-  // child process (grammarScanOnStack). The hook denies both: since #6136 its first
-  // scan stops the nest as nesting-too-deep, or as command-too-complex where the
-  // stack runs out first.
+  // to the end on a default stack (measured down to 100 KB), and 1,100 tags overflow a
+  // stack pinned at 200 KB in a child process (grammarScanOnStack). The hook denies
+  // both: since #6136 its first scan stops the nest as nesting-too-deep, or as
+  // command-too-complex where the stack runs out first.
   const tagNestsAround = (n) => `echo $(${'cat <<E$('.repeat(n)}cat <<${'a'.repeat(100000)}$(${'cat <<E$('.repeat(n)}`;
   test('two nests of 20 heredoc tags around a long delimiter: the hook denies it as nesting-too-deep; the grammar scan reads the read-free nest to its end and allows it, in steps linear in the command', () => {
     const cmd = tagNestsAround(20);
     assert.deepEqual(scanOrOverflow(cmd).verdict, { code: 'nesting-too-deep', text: '' });
     const { verdict, steps } = grammarScan(cmd);
     assert.equal(verdict, null);
+    // It read the whole command: a grammar scan that stopped early, or never ran, takes fewer steps.
+    assert.ok(steps >= cmd.length, `${steps} reader steps for ${cmd.length} characters`);
     assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
   });
   test('two nests of 1,100 heredoc tags around a long delimiter: the hook denies it; on a 200 KB stack the grammar scan ends as command-too-complex, in steps linear in the command', () => {
     const cmd = tagNestsAround(1100);
     const hook = scanOrOverflow(cmd).verdict;
     assert.ok(hook !== null && ['nesting-too-deep', 'command-too-complex'].includes(hook.code), `hook verdict ${JSON.stringify(hook)}`);
-    const { verdict, steps } = grammarScanOnStack(
-      () => `echo $(${'cat <<E$('.repeat(1100)}cat <<${'a'.repeat(100000)}$(${'cat <<E$('.repeat(1100)}`,
-      200,
-    );
+    const { verdict, steps } = grammarScanOnStack(`() => (${tagNestsAround})(1100)`, 200);
     assert.deepEqual(verdict, { code: 'command-too-complex', text: '' });
     assert.ok(steps <= linearSteps(cmd), `${steps} reader steps for ${cmd.length} characters`);
   });
 
   // A read next to such a nest is denied too. Since #6136 the hook's first scan stops the
-  // nest as nesting-too-deep before the grammar scan runs, or as command-too-complex where
-  // the stack runs out first. The grammar scan that would find the read cannot finish
-  // either, and ends as command-too-complex. Behind 1,200 heredoc tags, whether it finishes
-  // depends on where the stack runs out: with more stack it does, and finds the read. That
-  // row takes either code at each step; every one is a block.
+  // nest as nesting-too-deep before the grammar scan runs. The grammar scan that would find
+  // the read cannot finish either, and ends as command-too-complex.
   const front = 'echo "$(case x in x) cat .env;; esac)"; ';
   const deep = `${'$('.repeat(1001)}x${')'.repeat(1001)}`;
-  for (const [where, cmd, stackBound] of [
-    ['in front of two nests past the depth limit in a delimiter', `${front}cat <<E${deep}F${deep}\nE\n`, false],
-    ['in front of a nest of 1,200 heredoc tags', `${front}echo $(${'cat <<E$('.repeat(1200)}`, true],
-    ['after a nest past the depth limit', `echo ${deep}; ${front}`, false],
+  for (const [where, cmd] of [
+    ['in front of two nests past the depth limit in a delimiter', `${front}cat <<E${deep}F${deep}\nE\n`],
+    ['after a nest past the depth limit', `echo ${deep}; ${front}`],
   ]) {
-    test(`a read ${where}: denies as nesting-too-deep${stackBound ? ', or as command-too-complex where the stack runs out' : ''}; the grammar scan, as command-too-complex${stackBound ? ', or secret-read where the stack suffices' : ''}`, () => {
-      const r = runHook(bash(cmd));
-      let code = 'nesting-too-deep';
-      if (stackBound) {
-        code = r.status === 2 ? JSON.parse(r.stdout).code : undefined;
-        assert.ok(['nesting-too-deep', 'command-too-complex'].includes(code), `${where}: code ${code}`);
-      }
-      assertBlocked(r, where, { code, tool: 'Bash' });
-      const grammar = JSON.stringify(grammarScan(cmd).verdict);
-      const grammarCodes = [{ code: 'command-too-complex', text: '' }, ...(stackBound ? [{ code: 'secret-read', text: '.env' }] : [])];
-      assert.ok(grammarCodes.some((v) => JSON.stringify(v) === grammar), `${where}: grammar scan ${grammar}`);
+    test(`a read ${where}: denies as nesting-too-deep; the grammar scan, as command-too-complex`, () => {
+      assertBlocked(runHook(bash(cmd)), where, { code: 'nesting-too-deep', tool: 'Bash' });
+      assert.deepEqual(grammarScan(cmd).verdict, { code: 'command-too-complex', text: '' });
     });
   }
+  // Behind 1,200 heredoc tags the stack, not the depth limit, decides where both scans stop:
+  // with more stack the grammar scan finishes and finds the read. The hook process's stack is
+  // not the test's to set, so its row takes either deny code; the grammar scan runs on a stack
+  // pinned at 200 KB in a child process, where it cannot finish and must deny.
+  const frontOfTags = () => `echo "$(case x in x) cat .env;; esac)"; echo $(${'cat <<E$('.repeat(1200)}`;
+  test('a read in front of a nest of 1,200 heredoc tags: denies as nesting-too-deep, or as command-too-complex where the stack runs out; on a 200 KB stack the grammar scan ends as command-too-complex', () => {
+    const r = runHook(bash(frontOfTags()));
+    const code = r.status === 2 ? JSON.parse(r.stdout).code : undefined;
+    assert.ok(['nesting-too-deep', 'command-too-complex'].includes(code), `hook code ${code}`);
+    assertBlocked(r, '1,200 heredoc tags', { code, tool: 'Bash' });
+    assert.deepEqual(grammarScanOnStack(frontOfTags, 200).verdict, { code: 'command-too-complex', text: '' });
+  });
 
   test('a read paren counting finds is denied before any grammar reading runs', () => {
     // The span here runs to the end of the command under the grammar reading,
