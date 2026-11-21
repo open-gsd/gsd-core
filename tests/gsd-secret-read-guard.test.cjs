@@ -2113,6 +2113,14 @@ describe('gsd-secret-read-guard: large git command lines decide within the scan 
     assertBlocked(runHook(bash(commands[2])), 'budget + 1', { code: 'command-too-complex', tool: 'Bash', path: '' });
   });
 
+  // A shell walking back past a filter stage reads each stage under every reading of it, and each shell of a chain
+  // walks back to its start (`x | sh | x | sh …`), so each hop past a filter is priced at least as a git command is.
+  test('each hop a shell walks back past a filter stage is charged at least 64 units', () => {
+    const make = (k) => `${'x | '.repeat(k)}sh`;
+    const { work: [w1, w2] } = scanWork([make(1000), make(2000)]);
+    assert.ok(w2 - w1 >= 64 * 1000, `1,000 more filter hops: ${w1} -> ${w2}`);
+  });
+
   // A command that opens a heredoc is scanned under three readings, all
   // spending one budget: k prefixed git commands each rescan the editor
   // script, the same work in every reading (past the first, which also builds
