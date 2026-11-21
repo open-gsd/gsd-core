@@ -177,28 +177,28 @@ describe('#4700 / #6266 — headless mine: daemon only when running, bounded ret
     return lines.slice(from, to + 1).map((l) => l.replace(/^ {3}/, '')).join('\n').replaceAll('<wing>', 'w');
   }
 
-  // `mempalace` is a stub that logs every call: `daemon status` answers DAEMON_RC, and `mine` fails (a held lock)
-  // for its first MINE_FAILS calls. `sleep` is a no-op so the backoff costs nothing.
-  function runCapture(rel, { daemonRc, mineFails }) {
+  // `mempalace` is a stub that logs every call: `daemon status` answers DAEMON_RC, and `mine` exits MINE_RC
+  // (1 = a held lock) for its first MINE_FAILS calls. `sleep` logs its delay so the backoff is visible.
+  function runCapture(rel, { daemonRc, mineFails, mineRc = 1 }) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6266-'));
     const log = path.join(dir, 'calls.log');
     const script = [
       'STAGE=/stage',
-      'sleep() { :; }',
+      'sleep() { printf "sleep %s\\n" "$1" >> "$CALL_LOG"; }',
       'mempalace() { printf "%s\\n" "$*" >> "$CALL_LOG"; case "$1" in',
       '  daemon) return "$DAEMON_RC";;',
-      '  mine) [ "$(grep -c "^mine " "$CALL_LOG")" -gt "$MINE_FAILS" ];;',
+      '  mine) if [ "$(grep -c "^mine " "$CALL_LOG")" -gt "$MINE_FAILS" ]; then return 0; else return "$MINE_RC"; fi;;',
       'esac; }',
       snippetOf(rel),
     ].join('\n');
     try {
       const res = runHook('-c', [script], {
         interpreter: 'bash',
-        env: { ...process.env, CALL_LOG: log, DAEMON_RC: String(daemonRc), MINE_FAILS: String(mineFails) },
+        env: { ...process.env, CALL_LOG: log, DAEMON_RC: String(daemonRc), MINE_FAILS: String(mineFails), MINE_RC: String(mineRc) },
         timeoutMs: PROBE_TIMEOUT_MS,
       });
       const calls = fs.existsSync(log) ? splitLines(fs.readFileSync(log, 'utf8')).filter(Boolean) : [];
-      return { res, calls, mines: calls.filter((c) => c.startsWith('mine ')) };
+      return { res, calls, mines: calls.filter((c) => c.startsWith('mine ')), sleeps: calls.filter((c) => c.startsWith('sleep ')) };
     } finally {
       cleanup(dir);
     }
@@ -215,7 +215,7 @@ describe('#4700 / #6266 — headless mine: daemon only when running, bounded ret
     test(`${rel}: with no daemon running a plain mine runs and the daemon is never started`, () => {
       const { res, calls, mines } = runCapture(rel, { daemonRc: 1, mineFails: 0 });
       assertSeamExit(assert, res, 0, 'the snippet must run to completion');
-      assert.deepEqual(mines, ['mine /stage --wing w']);
+      assert.deepEqual(mines, ['mine /stage --wing w --direct'], 'a plain mine would follow a prefer/require policy and start the daemon');
       assert.ok(!calls.some((c) => c.includes('--daemon') || c.startsWith('daemon start')), 'no daemon may be started');
       assert.doesNotMatch(res.stdout, /skipped/);
     });
@@ -231,7 +231,25 @@ describe('#4700 / #6266 — headless mine: daemon only when running, bounded ret
         assert.equal(lost.mines.length, 3, `${fails} failures: still exactly three attempts`);
         assert.match(lost.res.stdout, /MemPalace capture skipped — palace locked/);
         assert.ok(!lost.calls.some((c) => c.includes('--daemon')), 'the daemon is not started as a fallback');
+        assert.deepEqual(lost.sleeps, ['sleep 1', 'sleep 2'], 'no sleep after the final failure');
       }
+    });
+
+    test(`${rel}: a failure that is not a held lock is reported as that, at once, without retries`, () => {
+      for (const mineRc of [2, 127]) {
+        const { res, mines, sleeps } = runCapture(rel, { daemonRc: 1, mineFails: 9, mineRc });
+        assertSeamExit(assert, res, 0, 'a skipped capture never fails the step (onError: skip)');
+        assert.equal(mines.length, 1, `exit ${mineRc}: not retried`);
+        assert.equal(sleeps.length, 0);
+        assert.match(res.stdout, new RegExp(`MemPalace capture skipped — mine failed \\(exit ${mineRc}\\)`));
+        assert.doesNotMatch(res.stdout, /palace locked/);
+      }
+    });
+
+    test(`${rel}: a CLI without the daemon subcommand (probe exit 2) gets a plain mine, retried like any other`, () => {
+      const { res, mines } = runCapture(rel, { daemonRc: 2, mineFails: 1 });
+      assertSeamExit(assert, res, 0, 'the snippet must run to completion');
+      assert.deepEqual(mines, ['mine /stage --wing w', 'mine /stage --wing w']);
     });
 
     test(`${rel}: every mempalace mine line sits inside the daemon guard, and the report names queued and skipped captures`, () => {
@@ -249,6 +267,7 @@ describe('#4700 / #6266 — headless mine: daemon only when running, bounded ret
     const frag = 'capabilities/mempalace/fragments/capture-problems.md';
     const content = fs.readFileSync(path.join(ROOT, frag), 'utf8');
     assert.match(content, /`--daemon --background` only when `mempalace daemon status` already reports a running daemon, never starting one/);
+    assert.doesNotMatch(content, /the background queue defers the write/, 'the queue claim is true only with a running daemon');
     assert.doesNotMatch(content, /mempalace mine --daemon --background/, 'the unconditional daemon invocation must not return');
   });
 });
