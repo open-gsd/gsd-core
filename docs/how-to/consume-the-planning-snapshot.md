@@ -98,7 +98,9 @@ const { percent } = snapshot.progress.completed_plans;
 render(percent === null ? '—' : `${percent}%`);
 ```
 
-`percent: 0` under a `complete` scope is a real 0 and should be rendered.
+`percent: 0` under a `complete` scope is a real 0 and should be rendered. For
+`halted_plans` that holds only while no `summary_unreadable` diagnostic stands:
+a SUMMARY that could not be read counts as not halted (next section).
 
 ### Tell a halted plan from a finished one
 
