@@ -1015,8 +1015,8 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
     cleanup(tmpBase);
   });
 
-  function adrRepo() {
-    const dir = path.join(tmpBase, 'repo');
+  function adrRepo(base = tmpBase) {
+    const dir = path.join(base, 'repo');
     initRepo(dir);
     fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules/\n.env*\n.secrets/\n.planning/\n');
     git(['add', '-A'], dir);
@@ -1187,8 +1187,7 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
         const base = tmpBase + '-' + Math.random().toString(16).slice(2);
         fs.mkdirSync(base);
         try {
-          const repo = path.join(base, 'repo');
-          initRepo(repo);
+          const repo = adrRepo(base);
           const hex = '1234567890abcdef'.repeat(2).slice(0, digits);
           const name = kind === 'hex' ? `agent-a${hex}` : kind === 'upper' ? `agent-a${hex.toUpperCase()}Z` : `agent-a${hex}-x`;
           residueDir(repo, { name });
@@ -1549,7 +1548,7 @@ describe('ADR-5812 reapOrphanWorktrees: the .claude/worktrees residue pass', () 
 
     test('[boundary] the 64-name cut counts code points, not UTF-16 units', () => {
       const repo = adrRepo();
-      const emoji = `.env${'\u{1F600}'.repeat(70)}`;
+      const emoji = `.env${'\u{1F600}'.repeat(62)}`;
       fs.writeFileSync(path.join(repo, emoji), 'COPIED=1\n');
       residueDir(repo);
       fs.writeFileSync(path.join(rootOf(repo), NAME, emoji), 'COPIED=1\n');
