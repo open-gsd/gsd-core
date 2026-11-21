@@ -2956,7 +2956,7 @@ const OPENING_WORDS = new Set(['while', 'until', 'for', 'select', 'if', 'case'])
 const CLOSING_WORDS = new Set(['done', 'fi', 'esac']);
 // Reserved words a command may follow in its segment (`then xargs cat`, `! xargs cat`). Only the xargs path and the
 // tests below look past them; the rest of the scan's reading of reserved words is #6138's.
-const LEADING_RESERVED = new Set(['!', 'if', 'elif', 'then', 'else', 'do', 'while', 'until']);
+const LEADING_RESERVED = new Set(['!', 'if', 'elif', 'then', 'else', 'do', 'while', 'until', 'coproc']);
 const RUNS_AGAIN_BASES = new Set(['for', 'while', 'until', 'select', 'function', 'trap', 'eval', 'source', '.']);
 const DEFINING_BASES = new Set(['function', 'eval', 'source', '.']);
 
