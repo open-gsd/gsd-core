@@ -3055,7 +3055,7 @@ function scanSegments(command, depth, reading, unseenAt, joined) {
   }
 
   const inheritedStdin = xargsStdinFrom;
-  const ctx = { bySeg, sepAfter, maxSeg, piped: new Map(), compoundOut: new Map(), functions: functionNames(tokens, heads) };
+  const ctx = { bySeg, sepAfter, maxSeg, piped: new Map(), compoundOut: new Map(), functions: functionNames(tokens, heads), ...pipeLinks(bySeg, sepAfter, maxSeg) };
   ctx.compounds = compoundRanges(tokens, bySeg, maxSeg, heads);
   // What a stage with no redirect or pipe of its own reads: what the scan inherits, or a group's, loop's or exec's.
   ctx.ambient = mergedStdin([inheritedStdin, ...ctx.compounds.ranges.map((r) => ownStdin(r.redirectSeg, bySeg))]);
@@ -3514,7 +3514,8 @@ function segmentFeeds(s, bySeg) {
 function pipedStdin(s, ctx) {
   if (ctx.piped.has(s)) return ctx.piped.get(s);
   ctx.piped.set(s, null);
-  const { op, prevSeg } = precedingOp(s, ctx.bySeg, ctx.sepAfter);
+  const prevSeg = ctx.prevWorded[s];
+  const op = ctx.opSince[s];
   const result = (op === '|' || op === '|&') && prevSeg >= 0 ? upstreamOutput(prevSeg, s, ctx) : null;
   ctx.piped.set(s, result);
   return result;
@@ -3522,12 +3523,11 @@ function pipedStdin(s, ctx) {
 
 function upstreamOutput(prevSeg, s, ctx) {
   // A segment of redirects alone (`{ …; } 2>/dev/null |`) belongs to the group that closes before it.
-  const from = commandWords(ctx.bySeg.get(prevSeg) || []).length === 0 && prevSeg > 0 ? prevSeg - 1 : prevSeg;
-  for (let q = from; q < s; q++) {
-    const sep = ctx.sepAfter.get(q);
-    if (sep !== '}' && sep !== ')') continue;
+  let q = ctx.closerSince[s];
+  if (q === -1 && commandWords(ctx.bySeg.get(prevSeg) || []).length === 0) q = ctx.closerSince[prevSeg];
+  if (q !== -1) {
     const range = ctx.compounds.groupByEnd.get(q);
-    return range ? compoundOutput(range, ctx) : unseenStdin(sep);
+    return range ? compoundOutput(range, ctx) : unseenStdin(ctx.sepAfter.get(q));
   }
   const first = commandWords(ctx.bySeg.get(prevSeg) || [])[0];
   if (first && CLOSING_WORDS.has(first.text)) {
@@ -3549,11 +3549,40 @@ function stageWrites(seg, ctx, compoundIn) {
   return unseenStdin(stageCommandWords(seg, ctx).base);
 }
 
+// precedingOp for every segment at once, so a run of empty segments (`{ { {`) is walked once, not once per segment:
+// `prevWorded[s]` is the nearest earlier segment with words, `opSince[s]` the last non-grouping separator since it,
+// and `closerSince[s]` the segment the last `}` or `)` since it ends, the outermost group closing there, or -1.
+function pipeLinks(bySeg, sepAfter, maxSeg) {
+  const prevWorded = [];
+  const opSince = [];
+  const closerSince = [];
+  let lastWorded = -1;
+  let op;
+  let closer = -1;
+  for (let s = 0; s <= maxSeg; s++) {
+    prevWorded.push(lastWorded);
+    opSince.push(op);
+    closerSince.push(closer);
+    const sep = sepAfter.get(s);
+    const plainSep = sep !== undefined && !GROUPING_SEPS.has(sep) ? sep : undefined;
+    const closes = sep === '}' || sep === ')';
+    if ((bySeg.get(s) || []).some((t) => t.kind === 'word')) {
+      lastWorded = s;
+      op = plainSep;
+      closer = closes ? s : -1;
+    } else {
+      if (plainSep !== undefined) op = plainSep;
+      if (closes) closer = s;
+    }
+  }
+  return { prevWorded, opSince, closerSince };
+}
+
 // Everything a group's, loop's or conditional's commands write, merged; one that passes its stdin on adds the
 // compound's own.
 function compoundOutput(range, ctx) {
   if (ctx.compoundOut.has(range)) return ctx.compoundOut.get(range);
-  chargeScan(range.to - range.from + 1);
+  chargeScan(XARGS_WORD_WORK * (range.to - range.from + 1));
   const compoundIn = mergedStdin([ownStdin(range.redirectSeg, ctx.bySeg), pipedStdin(range.from, ctx)]);
   const outs = [];
   for (let k = range.from; k <= range.to; k++) if (commandWords(ctx.bySeg.get(k) || []).length > 0) outs.push(stageWrites(k, ctx, compoundIn));
