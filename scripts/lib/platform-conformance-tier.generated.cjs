@@ -323,6 +323,7 @@ module.exports = {
   "tests/tdd-review-checkpoint-cross-plan.test.cjs",
   "tests/teams-status.test.cjs",
   "tests/test-gate-watch-mode.test.cjs",
+  "tests/text-contracts.test.cjs",
   "tests/timeout-evidence-from-ci.test.cjs",
   "tests/timeout-evidence.test.cjs",
   "tests/todos-workstream-scope.test.cjs",
