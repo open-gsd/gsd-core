@@ -164,12 +164,12 @@ describe('no-adhoc-env-isolation: arm 2 leaves alone what it does not own', () =
 });
 
 // ─── the documented boundary ─────────────────────────────────────────────────
-// The rule's reference page (its header links it) lists what each arm flags and
-// its "Known gaps". Each claim has a row here, so a refactor of isProcessEnv,
+// The rule's reference page (its header links it) lists the forms each arm
+// recognises and examples of what is out of scope. Each has a row here, so a refactor of isProcessEnv,
 // readsEnvPath or the key match that moves the boundary fails a row instead of
 // changing documented behaviour silently.
 
-describe('no-adhoc-env-isolation: the documented flagged claims', () => {
+describe('no-adhoc-env-isolation: every documented recognised form is flagged', () => {
   const home = { messageId: 'adhocHomeConstruction' };
   const pathFilter = { messageId: 'inlinePathFilter' };
 
@@ -214,15 +214,66 @@ describe('no-adhoc-env-isolation: the documented flagged claims', () => {
   test('any object with a HOME key is flagged, whatever it is for', () => {
     run([], [{ code: 'const fixture = { HOME: "/home/someone" };', filename: FILE, errors: [home] }]);
   });
+
+  test('each spelling of a process PATH read, a delimiter and a HOME key the page names is flagged', () => {
+    run([], [
+      { code: "(process.env.PATH || '').split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "(x || process.env.PATH).split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "(process.env.PATH ?? '').split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "(x ?? process.env.PATH).split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "(x && process.env.PATH).split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "(c ? process.env.PATH : '').split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "process.env?.PATH.split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "process?.env.PATH.split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "process['env']['PATH'].split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "process.env.Path.split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "String(process.env.PATH).split(':');", filename: FILE, errors: [pathFilter] },
+      { code: "const p = process.env.PATH; p.split(':');", filename: FILE, errors: [pathFilter] },
+      { code: 'x.split(delimiter).filter(f);', filename: FILE, errors: [pathFilter] },
+      { code: 'x.split(path.win32.delimiter).filter(f);', filename: FILE, errors: [pathFilter] },
+      { code: 'const e = { HOME };', filename: FILE, errors: [home] },
+      { code: "env['USERPROFILE'] ||= x;", filename: FILE, errors: [home] },
+      { code: "process.env.PATH['split'](':');", filename: FILE, errors: [pathFilter] },
+      { code: "x['split'](path['delimiter'])['filter'](f);", filename: FILE, errors: [pathFilter] },
+    ]);
+  });
+
+  test('a compound or logical assignment to HOME or USERPROFILE is flagged', () => {
+    run([], [
+      { code: 'env.HOME += x;', filename: FILE, errors: [home] },
+      { code: 'env.HOME ||= x;', filename: FILE, errors: [home] },
+      { code: 'env.USERPROFILE ??= x;', filename: FILE, errors: [home] },
+    ]);
+  });
 });
 
-describe('no-adhoc-env-isolation: the documented known gaps are not flagged', () => {
+describe('no-adhoc-env-isolation: the documented out-of-scope examples are not flagged', () => {
   test('a PATH read the alias hop does not follow, unfiltered', () => {
     run([
       { code: "const { PATH } = process.env; PATH.split(':');", filename: FILE },
       { code: "const env = process.env; env.PATH.split(':');", filename: FILE },
       { code: "globalThis.process.env.PATH.split(':');", filename: FILE },
       { code: "`${process.env.PATH}`.split(':');", filename: FILE },
+      { code: "const { env } = process; env.PATH.split(':');", filename: FILE },
+      { code: "require('node:process').env.PATH.split(':');", filename: FILE },
+      { code: "require('process').env.PATH.split(':');", filename: FILE },
+      { code: "getPath().split(':');", filename: FILE },
+      { code: "(process?.env).PATH.split(':');", filename: FILE },
+      { code: "process.env['PA' + 'TH'].split(':');", filename: FILE },
+      { code: "const p = process.env.PATH; const q = p; q.split(':');", filename: FILE },
+      { code: "const env = process.env; env.PATH.split(':').filter(Boolean);", filename: FILE },
+      { code: "let p = process.env.PATH; p.split(':');", filename: FILE },
+      { code: "var p = process.env.PATH; p.split(':');", filename: FILE },
+    ], []);
+  });
+
+  test('a PATH taken apart without a direct .split call on it', () => {
+    run([
+      { code: 'String.prototype.split.call(process.env.PATH, path.delimiter).filter(Boolean);', filename: FILE },
+      { code: "Reflect.apply(String.prototype.split, process.env.PATH, [':']);", filename: FILE },
+      { code: 'process.env.PATH.split.call(process.env.PATH, path.delimiter);', filename: FILE },
+      { code: 'process.env.PATH.match(/[^:]+/g).filter(Boolean);', filename: FILE },
+      { code: '[...process.env.PATH.matchAll(/[^:]+/g)].map((m) => m[0]).filter(keep);', filename: FILE },
     ], []);
   });
 
@@ -255,13 +306,21 @@ describe('no-adhoc-env-isolation: the documented known gaps are not flagged', ()
       { code: '[...basePath.split(path.delimiter)].filter(keep);', filename: FILE },
       { code: 'basePath.split(path.delimiter).map(norm).filter(Boolean);', filename: FILE },
       { code: 'basePath.split(/[;:]/).filter(keep);', filename: FILE },
+      { code: 'basePath.split(path.delimiter).slice(1).filter(Boolean);', filename: FILE },
+      { code: 'Array.from(basePath.split(path.delimiter)).filter(keep);', filename: FILE },
+      { code: 'basePath.split(path.delimiter).reduce(f, []);', filename: FILE },
+      { code: '(basePath?.split(path.delimiter)).filter(Boolean);', filename: FILE },
+      { code: 'basePath.split(path?.delimiter).filter(Boolean);', filename: FILE },
     ], []);
   });
 
-  test('HOME set by a destructuring assignment or a class field', () => {
+  test('HOME set as a destructuring or for-of / for-in target, by an update, or by a class field', () => {
     run([
       { code: 'const env = { ...process.env }; [env.HOME, env.USERPROFILE] = [tmp, tmp];', filename: FILE },
       { code: 'const env = { ...process.env }; ({ home: env.HOME } = o);', filename: FILE },
+      { code: 'const env = { ...process.env }; for (env.HOME of [tmp]) {}', filename: FILE },
+      { code: 'const env = { ...process.env }; for (env.USERPROFILE in o) {}', filename: FILE },
+      { code: 'env.HOME++;', filename: FILE },
       { code: 'class E { HOME = tmp; } const env = { ...process.env, ...new E() };', filename: FILE },
     ], []);
   });
@@ -274,8 +333,9 @@ describe('no-adhoc-env-isolation: the documented known gaps are not flagged', ()
     ], []);
   });
 
-  test("Windows' HOMEDRIVE / HOMEPATH keys, and a lowercase process.env.path read", () => {
+  test("other home and config variables, Windows' HOMEDRIVE / HOMEPATH, and a lowercase process.env.path read", () => {
     run([
+      { code: 'const e = { ...process.env, GSD_HOME: x, XDG_CONFIG_HOME: x, CLAUDE_CONFIG_DIR: x };', filename: FILE },
       { code: "const env = { ...process.env, HOMEDRIVE: 'C:', HOMEPATH: tmp };", filename: FILE },
       { code: "process.env.path.split(':');", filename: FILE },
     ], []);
@@ -292,8 +352,13 @@ describe('no-adhoc-env-isolation: the documented known gaps are not flagged', ()
   test('HOME built without a static key', () => {
     run([
       { code: 'env[key] = x;', filename: FILE },
+      { code: 'const e = { [k]: x };', filename: FILE },
+      { code: "const e = { ['HO' + 'ME']: x };", filename: FILE },
       { code: "const e = Object.fromEntries([['HOME', x]]);", filename: FILE },
       { code: "Object.defineProperty(env, 'HOME', { value: x });", filename: FILE },
+      { code: "Reflect.defineProperty(env, 'HOME', { value: x });", filename: FILE },
+      { code: 'Object.assign(env, JSON.parse(\'{"HOME":"/tmp/x"}\'));', filename: FILE },
+      { code: "const e = Object.fromEntries(Object.entries(process.env).map(([k, v]) => [k, k === 'HOME' ? tmp : v]));", filename: FILE },
       { code: "Reflect.set(env, 'HOME', x);", filename: FILE },
       { code: "const entries = ['HOME=' + x];", filename: FILE },
       { code: 'execSync(`export HOME=${x}; run`);', filename: FILE },

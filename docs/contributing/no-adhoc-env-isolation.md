@@ -8,30 +8,44 @@ from being added under `tests/**` while the remaining ones are migrated (Phases 
 allowlist is deleted (Phase 8). How to build an env with the helper, and what to do when a count
 fails, is in CONTRIBUTING.md, "The lint rule that enforces child-env isolation".
 
-## Arm 1: an inline PATH split or filter (`inlinePathFilter`)
+## What the rule recognises
 
-The rule flags two shapes:
+The rule is a syntactic check on the forms below, not a check that a test isolates its env. It flags
+these forms and no others; every other spelling is out of scope, whatever env it builds. A member
+named below (`split`, `filter`, `delimiter`, `env`, `PATH`, `HOME`) may be written as an identifier
+or a string key (`x['split'](…)`).
 
-- `X.split(...)` of any argument, where `X` reads `process.env.PATH` (or `process.env.Path`, the key
-  Windows enumerates; `process['env']` too) directly, through either side of `||` / `??` / `&&`,
-  either arm of `?:`, an optional chain, a one-argument `String(...)`, or a single `const` alias
-  hop. This is #4411's `makeIsolatedPath`, which split the full system PATH, prepended a directory
-  and re-joined it, isolating nothing, without ever calling `.filter`.
-- `X.split(<delimiter>).filter(...)`, whatever `X` is, where `<delimiter>` is `path.delimiter` (any
-  `*.delimiter` member) or a bare `delimiter` identifier. This is the filter copy #4348 counted: its
+### Arm 1: an inline PATH split or filter (`inlinePathFilter`)
+
+- A `.split(...)` call, with any argument, whose receiver is a process PATH read. A process PATH
+  read is `process.env.PATH` or `process.env.Path` (the key Windows enumerates), where `process` is
+  the bare identifier and `env` and `PATH` are identifiers or string keys
+  (`process['env']['PATH']`); an optional chain over it (`process.env?.PATH`, `process?.env.PATH`);
+  either operand of `||`, `??` or `&&` around one; either branch of `?:` around one; `String(...)`
+  with exactly one argument around one; or an identifier declared once with `const` and initialised
+  to one of these (one hop: a second hop, or a `let` or `var` alias, is not followed). This is
+  #4411's `makeIsolatedPath`, which split the full system PATH, prepended a directory and re-joined
+  it, isolating nothing, without ever calling `.filter`.
+- `X.split(<delimiter>).filter(...)`, whatever `X` is, where `<delimiter>` is a member named
+  `delimiter` (`path.delimiter`, `path.win32.delimiter`) or the bare identifier `delimiter`, and the
+  split's result is called with `.filter` directly. This is the filter copy #4348 counted: its
   receiver was a parameter defaulting to `process.env.PATH`
   (`(basePath ?? '').split(path.delimiter).filter(...)`), so a rule keyed on reading
   `process.env.PATH` alone would miss it.
 
-A split of a PATH some other object carries (`result.path`, the `env` the code under test returned)
-is not flagged unless it is filtered.
+### Arm 2: direct HOME / USERPROFILE construction (`adhocHomeConstruction`)
 
-## Arm 2: direct HOME / USERPROFILE construction (`adhocHomeConstruction`)
+- An object literal with a `HOME` or `USERPROFILE` key, written as an identifier (shorthand
+  `{ HOME }` included), a string, or a computed string or expression-free template (`['HOME']`, ``
+  [`HOME`] ``), reported once per object.
+- An assignment, with any assignment operator (`=`, `+=`, `||=`, `??=`), to a member named `HOME` or
+  `USERPROFILE` (`X.HOME`, `X['HOME']`) where `X` is not spelled `process.env` or `process['env']`.
+  So `globalThis.process.env.HOME = x` and `const env = process.env; env.HOME = x` are flagged.
 
-The rule flags an object literal with a `HOME` or `USERPROFILE` key (identifier, string or computed
-string key), reported once per object, and an assignment to `X.HOME` / `X.USERPROFILE` (or
-`X['HOME']`) where `X` is not `process.env`. Both build an env by hand:
-`{ ...process.env, HOME: tmp }`, `runNode([script], { env: { HOME: tmp } })`, `childEnv.HOME = tmp`.
+Both arms flag a form whatever it is for: a split of a process PATH read that only counts its
+entries, a `csv.delimiter` split that is filtered, an object with a `HOME` key used as a fixture.
+Both build an env by hand in the case the rule exists for: `{ ...process.env, HOME: tmp }`,
+`runNode([script], { env: { HOME: tmp } })`, `childEnv.HOME = tmp`.
 
 ## Exempt file, allowlist and count
 
@@ -55,49 +69,55 @@ the remaining sites in those files. A copy in any other file is neither flagged 
 `.mjs`, `.js` or `.cts` file under `tests/`, or a file outside `tests/`, such as one under
 `scripts/`.
 
-## Known gaps (the ratchet is deliberately narrow)
+## Out of scope: examples
 
-These are shapes the rule is known not to flag. Each entry, and each flagged spelling it names, has
-a row in `tests/no-adhoc-env-isolation.rule.test.cjs`, so a change that moves the boundary fails a
-row.
+Any spelling that is not one of the forms above is not flagged. The examples below are spellings
+that have been checked; they show where the boundary falls and are not a list of everything outside
+it. Each example, and each form above, has a row in `tests/no-adhoc-env-isolation.rule.test.cjs`, so
+a change that moves the boundary fails a row.
 
-- In-process mutation spelled `process.env.HOME = x` (or `['HOME']`) is not flagged: the isolation
-  helper covers the env a test hands to a child process, and in-process isolation is `sandboxHome()`
-  / `scrubConfigLocationEnv()` in `tests/helpers.cjs` (CONTRIBUTING.md). Other spellings of it are
-  flagged: `globalThis.process.env.HOME = x`, `const env = process.env; env.HOME = x`, and
-  `Object.assign(process.env, { HOME: x })` (an object literal).
-- A PATH read the alias hop does not follow is not flagged unless its split is filtered:
-  `const { PATH } = process.env`, `const env = process.env; env.PATH`,
-  `globalThis.process.env.PATH`, and a template literal around it. Only a direct `process.env.PATH`
-  read, through `||` / `??` / `&&`, `?:`, an optional chain, a one-argument `String(...)` or one
-  `const` hop, is followed.
-- A PATH filter written as a loop, over a split held in a variable, over a spread or `.map(...)` of
-  the split, or over a split by a regular expression, whose receiver is not such a read is not
-  flagged: only a split consumed directly by `.filter(...)` is.
-- A filtered split by a string literal or a variable delimiter is not flagged when its receiver is
-  not such a read: `basePath.split(':').filter(...)`, or
-  `const SEP = isWin ? ';' : ':'; parts.split(SEP).filter(...)`. Only a `*.delimiter` member or a
-  bare `delimiter` identifier counts as a path delimiter.
-- A PATH set or assembled without a split is not flagged: a `PATH` key
-  (`{ ...process.env, PATH: dir }`), an assignment to `env.PATH`, or a prepend by concatenation,
-  template literal or `[...].join(delimiter)` around a `process.env.PATH` read.
-- Removing HOME or USERPROFILE is not flagged: `delete env.HOME`, `delete env.USERPROFILE` or
-  `Reflect.deleteProperty(env, 'HOME')` on a spread env is neither an assignment nor an object key.
-- HOME or USERPROFILE set by a destructuring assignment (`[env.HOME, env.USERPROFILE] = [tmp, tmp]`,
-  `({ home: env.HOME } = o)`) or by a class field spread into an env (`class E { HOME = tmp }`,
-  `{ ...process.env, ...new E() }`) is not flagged.
-- An object pattern with a `HOME` or `USERPROFILE` key is not flagged, with or without a default:
-  `({ HOME } = o)`, `const { HOME = y } = o`, or a `({ USERPROFILE }) => …` parameter. It binds a
-  local; an object built from that local (`{ ...process.env, HOME }`) is flagged.
-- Windows' other home variables are not flagged: `HOMEDRIVE` / `HOMEPATH` keys, which `os.homedir()`
-  falls back to when USERPROFILE is unset.
-- A split of a direct `process.env.PATH` read is flagged whatever it is for, a diagnostic that only
-  counts its entries included; and any `*.delimiter` argument counts as a path delimiter. The rule
-  cannot tell a count from a copy, or `csv.delimiter` from `path.delimiter`.
-- HOME built without a static key is not flagged: a variable key (`env[key]`),
-  `Object.fromEntries([['HOME', x]])`, `Object.defineProperty` / `Reflect.set`, a `'HOME=' + x` env
-  array entry, or `HOME=` inside a shell script string (`export HOME=...`).
+- In-process mutation spelled `process.env.HOME = x` (or `['HOME']`): the isolation helper covers
+  the env a test hands to a child process, and in-process isolation is `sandboxHome()` /
+  `scrubConfigLocationEnv()` in `tests/helpers.cjs` (CONTRIBUTING.md).
+- Other variables that locate a home or config: `GSD_HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`,
+  and Windows' `HOMEDRIVE` / `HOMEPATH`. `isolatedEnv()` blanks them; the rule looks only at `HOME`,
+  `USERPROFILE` and PATH.
+- Key names that differ in case: `Home` or `userprofile` keys, and a `process.env.path` read
+  (Windows env names are case-insensitive; only `PATH` and `Path` are read).
+- A PATH read that is not a process PATH read: `const { PATH } = process.env`,
+  `const env = process.env; env.PATH`, `const { env } = process; env.PATH`,
+  `globalThis.process.env.PATH`, `require('node:process').env.PATH` (or `require('process')`),
+  `(process?.env).PATH`, `process.env['PA' + 'TH']`, a template literal around a read, a second
+  `const` hop, a `let` or `var` alias, or a PATH a function returns (`getPath()`). Their splits are
+  flagged only when they match the second form of Arm 1.
+- PATH taken apart without a direct `.split(...)` call on it:
+  `String.prototype.split.call(process.env.PATH, …)`,
+  `Reflect.apply(String.prototype.split, process.env.PATH, …)`, `process.env.PATH.split.call(…)`, or
+  `process.env.PATH.match(…)` / `matchAll(…)`.
+- A delimiter split that `.filter(...)` does not consume directly: a loop over it, a split held in a
+  variable, a spread, `.map(...)` or `.slice(...)` before the filter, `Array.from(...)`,
+  `.reduce(...)`, or a parenthesised optional chain (`(x?.split(path.delimiter)).filter(…)`).
+- A filtered split whose delimiter is not a `delimiter` member or identifier: a string literal
+  (`basePath.split(':').filter(…)`), a variable
+  (`const SEP = isWin ? ';' : ':'; parts.split(SEP).filter(…)`), a regular expression, or an
+  optional member (`path?.delimiter`).
+- A PATH set or assembled without a split: a `PATH` key (`{ ...process.env, PATH: dir }`), an
+  assignment to `env.PATH`, or a prepend by concatenation, template literal or
+  `[...].join(delimiter)` around a `process.env.PATH` read.
+- HOME or USERPROFILE removed: `delete env.HOME`, `delete env.USERPROFILE` or
+  `Reflect.deleteProperty(env, 'HOME')`.
+- HOME or USERPROFILE set by something other than an assignment expression: the target of a
+  destructuring assignment (`[env.HOME, env.USERPROFILE] = [tmp, tmp]`, `({ home: env.HOME } = o)`)
+  or of a `for...of` / `for...in` loop (`for (env.HOME of [tmp]) {}`), an update (`env.HOME++`), or
+  a class field spread into an env (`class E { HOME = tmp }`, `{ ...process.env, ...new E() }`).
+- An object pattern with a `HOME` or `USERPROFILE` key, with or without a default: `({ HOME } = o)`,
+  `const { HOME = y } = o`, or a `({ USERPROFILE }) => …` parameter. It binds a local; an object
+  built from that local (`{ ...process.env, HOME }`) is flagged.
+- HOME set without a static key: a variable key (`env[key]`), a computed key that is not a string or
+  an expression-free template (`{ [k]: x }`, `{ ['HO' + 'ME']: x }`),
+  `Object.fromEntries([['HOME', x]])`, an `Object.entries(...).map(...)` that substitutes HOME by
+  comparing keys, `Object.defineProperty` / `Reflect.defineProperty` / `Reflect.set`,
+  `Object.assign(env, JSON.parse('{"HOME": …}'))`, a `'HOME=' + x` env array entry, or `HOME=`
+  inside a shell script string (`export HOME=...`).
 - An object spread of the process env, `{ ...process.env }`, with no HOME/USERPROFILE key and no
-  PATH filter is not flagged; any object with a `HOME` key is, whatever it is for.
-- Key names match exactly: `Home` or `userprofile` keys are not flagged, and a `process.env.path`
-  read is not followed (Windows env names are case-insensitive; only `PATH` and `Path` are read).
+  PATH filter.
