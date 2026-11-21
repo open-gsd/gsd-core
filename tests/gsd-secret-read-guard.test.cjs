@@ -2046,6 +2046,14 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     "strace -f yarn exec 'cat .env'",
   ]);
   allows(["pnpm exec -c 'echo .env'", "pnpm exec eslint .", "yarn exec 'ls -a'", "pnpm dlx create-vite app"]);
+
+  // A wrapper in what an npm, pnpm or yarn word launches is started here as well when the segment is piped into: the
+  // runner's rescan does not have the pipe, so leaving it there would read the launched xargs without its words.
+  blocks([
+    `echo "-c core.fsmonitor='cat .env' status" | caffeinate npm exec -- nice ./xargs git`,
+    `echo "-c core.fsmonitor='cat .env' status" | caffeinate pnpm exec nice ./xargs git`,
+    "npm edit 'cat .env #' | tee x | {} bash pnpm exec -c X=/usr/bin/xargs ENV=yarn exec",
+  ]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
