@@ -2055,6 +2055,8 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     `echo "-c core.fsmonitor='cat .env' status" | caffeinate pnpm exec nice ./xargs git`,
     "npm edit 'cat .env #' | tee x | {} bash pnpm exec -c X=/usr/bin/xargs ENV=yarn exec",
   ]);
+  blocks(["grep -r 'API_KEY .env' src | xargs cat", 'find . -name .env | xargs cat', 'git ls-files .env | xargs cat', "rg -l 'x .env' | xargs cat"]);
+  allows(["find . -name '*.js' | xargs cat", 'git ls-files | xargs grep foo', 'grep -rl TODO src | xargs wc -l']);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
