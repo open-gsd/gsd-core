@@ -35,6 +35,22 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const LIB = require.resolve('../gsd-core/bin/lib/review-read-check.cjs');
 
+/**
+ * `fn(lib, n)` (given as source) evaluated in a child at n and at 4n. The row asserts both answers,
+ * not a time (#6286 Nit 6): a linear reading gives them, while a quadratic one cannot finish the 4n
+ * leg and the child is stopped by the seam's bounded timeout, a backstop only. The same 1x/4x shape
+ * as tests/adr-612-bracket-read-tolerance.test.cjs. A child because a synchronous regex cannot be
+ * interrupted by node:test's own timeout.
+ */
+function atOneAndFourTimes(fnSource, n) {
+  const r = runNode(['-e', [
+    `const lib = require(${JSON.stringify(LIB)});`,
+    `const fn = ${fnSource};`,
+    `process.stdout.write(JSON.stringify([fn(lib, ${n}), fn(lib, ${4 * n})]));`,
+  ].join('\n')]);
+  return { answers: r.exitCode === 0 ? JSON.parse(r.stdout) : null, summary: r.summary };
+}
+
 const PLAN_A = [
   '---',
   'phase: 12.6',
@@ -126,28 +142,17 @@ describe('#5491 planPathsFromPrompt / planFacts', () => {
     }
   });
 
-  // A child process each, so a quadratic count fails on the seam's bounded timeout instead of
-  // hanging this file. Sized so the plan parser's quadratic overruns that bound several times over
-  // (100,000 openings took 19 s there); the linear scan takes milliseconds.
-  test('an unclosed `<task ` run is counted in linear time (#6286 Minor 6)', () => {
-    const script = [
-      `const { planFacts } = require(${JSON.stringify(LIB)});`,
-      "if (planFacts('x-01-PLAN.md', '<task '.repeat(400000)).tasks !== 0) process.exit(3);",
-    ].join('\n');
-    const r = runNode(['-e', script]);
-    assert.equal(r.timedOut, false, 'the count must not run away');
-    assert.equal(r.exitCode, 0, r.summary);
+  // Sized so the plan parser's quadratic cannot finish even the 1x leg (100,000 openings took 19 s
+  // there); the linear scan answers both legs in milliseconds.
+  test('an unclosed `<task ` run is counted at 1x and 4x its length (#6286 Minor 6, Nit 6)', () => {
+    const { answers, summary } = atOneAndFourTimes("(lib, n) => lib.planFacts('x-01-PLAN.md', '<task '.repeat(n)).tasks", 400000);
+    assert.deepEqual(answers, [0, 0], summary);
   });
 
-  test('an `<objective>` followed by a newline run is counted in linear time (#6286 Minor 6)', () => {
+  test('an `<objective>` followed by a newline run is counted at 1x and 4x its length (#6286 Minor 6, Nit 6)', () => {
     // plan-document's objective regex is quadratic on this shape; the count does not call it.
-    const script = [
-      `const { planFacts } = require(${JSON.stringify(LIB)});`,
-      "if (planFacts('x-01-PLAN.md', '<objective>' + '\\n'.repeat(600000)).tasks !== 0) process.exit(3);",
-    ].join('\n');
-    const r = runNode(['-e', script]);
-    assert.equal(r.timedOut, false, 'the count must not run away');
-    assert.equal(r.exitCode, 0, r.summary);
+    const { answers, summary } = atOneAndFourTimes("(lib, n) => lib.planFacts('x-01-PLAN.md', '<objective>' + '\\n'.repeat(n)).tasks", 600000);
+    assert.deepEqual(answers, [0, 0], summary);
   });
 });
 
@@ -253,19 +258,17 @@ describe('#5491 checkRead', () => {
     assert.deepEqual(checkRead(line('1abc'), [facts]).mismatched, { '12.6-01': ['wave'] });
   });
 
-  test('a long whitespace run on a READ-CHECK line parses in linear time (#6286 Minor 2)', () => {
-    // A child process, so a quadratic regex fails on the seam's bounded timeout instead of hanging
-    // this file: a synchronous regex cannot be interrupted by node:test's own timeout.
-    const lib = require.resolve('../gsd-core/bin/lib/review-read-check.cjs');
-    const script = [
-      `const { parseReadCheckLines } = require(${JSON.stringify(lib)});`,
-      "const line = 'READ-CHECK 12.6-01: wave=1;' + ' '.repeat(1000000) + 'x';",
-      "const got = parseReadCheckLines(line).get('12.6-01');",
-      "if (!got || got[0].wave !== '1') process.exit(3);",
-    ].join('\n');
-    const r = runNode(['-e', script]);
-    assert.equal(r.timedOut, false, 'the parse must not run away');
-    assert.equal(r.exitCode, 0, r.summary);
+  test('a long whitespace run on a READ-CHECK line parses at 1x and 4x its length (#6286 Minor 2, Nit 6)', () => {
+    const fn = "(lib, n) => (lib.parseReadCheckLines('READ-CHECK 12.6-01: wave=1;' + ' '.repeat(n) + 'x').get('12.6-01') || [{}])[0].wave";
+    const { answers, summary } = atOneAndFourTimes(fn, 1000000);
+    assert.deepEqual(answers, ['1', '1'], summary);
+  });
+
+  test('a long colon run parses at 1x and 4x its length (#6286 Nit 3, Nit 6)', () => {
+    // An id may hold a `:`, so the id's end is searched for; it must not be searched again per colon.
+    const fn = "(lib, n) => [...lib.parseReadCheckLines('READ-CHECK 12-01' + ':'.repeat(n) + 'wave=1').keys()].map((k) => k.length)";
+    const { answers, summary } = atOneAndFourTimes(fn, 1000000);
+    assert.deepEqual(answers, [[1000000 + 4], [4000000 + 4]], summary);
   });
 
   test('the instruction carries the exact line shape the parser reads', () => {
@@ -323,18 +326,14 @@ describe('#5491 checkRead', () => {
     for (const l of spellings) assert.equal(checkRead(l, [A]).complete, true, l);
   });
 
-  test('a long decoration run inside the id still parses in linear time (#6286 Nit 2)', () => {
-    const script = [
-      `const { parseReadCheckLines } = require(${JSON.stringify(LIB)});`,
-      "const w = '**'.repeat(500000);",
-      "const ticks = '`'.repeat(1000000);",
-      "if (!parseReadCheckLines('READ-CHECK ' + w + '12-01' + w + ': wave=1').has('12-01')) process.exit(3);",
-      "parseReadCheckLines('**READ-CHECK 12-01' + ticks + ': wave=1');",
-      "parseReadCheckLines('READ-CHECK ' + '<'.repeat(1000000) + '12-01: wave=1');",
-    ].join('\n');
-    const r = runNode(['-e', script]);
-    assert.equal(r.timedOut, false, 'the parse must not run away');
-    assert.equal(r.exitCode, 0, r.summary);
+  test('a long decoration run inside the id parses at 1x and 4x its length (#6286 Nit 2, Nit 6)', () => {
+    const fn = `(lib, n) => [
+      lib.parseReadCheckLines('READ-CHECK ' + '**'.repeat(n / 2) + '12-01' + '**'.repeat(n / 2) + ': wave=1').has('12-01'),
+      lib.parseReadCheckLines('**READ-CHECK 12-01' + '\`'.repeat(n) + ': wave=1').size,
+      lib.parseReadCheckLines('READ-CHECK ' + '<'.repeat(n) + '12-01: wave=1').size,
+    ]`;
+    const { answers, summary } = atOneAndFourTimes(fn, 1000000);
+    assert.deepEqual(answers, [[true, 1, 1], [true, 1, 1]], summary);
   });
 });
 
@@ -563,10 +562,23 @@ describe('#5491 runReadCheck reads only bounded regular files inside the repo (#
   });
 });
 
-describe('#5491 properties (#6286 Minor 2)', () => {
-  const planId = fc
-    .tuple(fc.integer({ min: 1, max: 99 }), fc.option(fc.integer({ min: 1, max: 9 }), { nil: null }), fc.integer({ min: 1, max: 99 }))
-    .map(([phase, sub, n]) => `${phase}${sub === null ? '' : `.${sub}`}-${String(n).padStart(2, '0')}`);
+// Seeds come from tests/helpers/fast-check-setup.cjs (42, or GSD_FC_SEED to explore), not a pin
+// per property (#6286 Nit 5).
+describe('#5491 properties (#6286 Minor 2, Nit 5)', () => {
+  // A plan's own id may start or end with `_` or `*` and hold a `:` (#6286 Nit 2, Nit 3, Nit 5).
+  // Ids inside a depends_on list do not take the `_`/`*` ends: list values lose their emphasis on
+  // both sides of the comparison, the plan's frontmatter included.
+  const idOf = (pres, posts) => fc
+    .tuple(
+      fc.constantFrom(...pres),
+      fc.integer({ min: 1, max: 99 }),
+      fc.option(fc.integer({ min: 1, max: 9 }), { nil: null }),
+      fc.integer({ min: 1, max: 99 }),
+      fc.constantFrom(...posts),
+    )
+    .map(([pre, phase, sub, n, post]) => `${pre}${phase}${sub === null ? '' : `.${sub}`}-${String(n).padStart(2, '0')}${post}`);
+  const planId = idOf(['', '_', '*', '__', 'q:'], ['', '_', '*', ':x']);
+  const listedId = idOf(['', 'q:'], ['', ':x']);
   const reqIds = fc.uniqueArray(fc.integer({ min: 1, max: 999 }).map((n) => `REQ-${n}`), { maxLength: 4 });
   const list = (ids, empty) => (ids.length ? `[${ids.join(', ')}]` : empty);
 
@@ -595,7 +607,7 @@ describe('#5491 properties (#6286 Minor 2)', () => {
     id: planId,
     requirements: reqIds,
     wave: fc.integer({ min: 0, max: 20 }),
-    dependsOn: fc.uniqueArray(planId, { maxLength: 3 }),
+    dependsOn: fc.uniqueArray(listedId, { maxLength: 3 }),
     tasks: fc.integer({ min: 0, max: 40 }),
   });
   const decoration = fc.record({
@@ -612,15 +624,25 @@ describe('#5491 properties (#6286 Minor 2)', () => {
     eol: fc.constantFrom('\n', '\r\n'),
   });
 
-  test('a decorated correct restatement is complete; a wrong task count is not', () => {
+  /** `f` with exactly one field changed so it no longer matches. */
+  const mutation = fc.oneof(
+    fc.integer({ min: 1, max: 5 }).map((off) => ['tasks', (f) => ({ ...f, tasks: f.tasks + off })]),
+    fc.integer({ min: 1, max: 5 }).map((off) => ['wave', (f) => ({ ...f, wave: f.wave + off })]),
+    fc.constant(['requirements', (f) => ({ ...f, requirements: [...f.requirements, 'REQ-1000'] })]),
+    fc.constant(['requirements', (f) => ({ ...f, requirements: f.requirements.length ? f.requirements.slice(1) : ['REQ-1000'] })]),
+    fc.constant(['depends_on', (f) => ({ ...f, dependsOn: [...f.dependsOn, '100-01'] })]),
+    fc.constant(['depends_on', (f) => ({ ...f, dependsOn: f.dependsOn.length ? f.dependsOn.slice(1) : ['100-01'] })]),
+  );
+
+  test('a decorated correct restatement is complete; one wrong field is named alone', () => {
     fc.assert(
-      fc.property(facts, decoration, fc.integer({ min: 1, max: 5 }), (f, d, off) => {
-        const review = (tasks) => ['## Review', render({ ...f, tasks }, d), 'Looks fine.'].join(d.eol);
-        const right = checkRead(review(f.tasks), [f]);
-        const wrong = checkRead(review(f.tasks + off), [f]);
-        return right.complete && !wrong.complete && wrong.mismatched[f.id].join() === 'tasks';
+      fc.property(facts, decoration, mutation, (f, d, [field, change]) => {
+        const review = (restated) => ['## Review', render(restated, d), 'Looks fine.'].join(d.eol);
+        const right = checkRead(review(f), [f]);
+        const wrong = checkRead(review({ ...change(f), id: f.id }), [f]);
+        return right.complete && !wrong.complete && wrong.mismatched[f.id].join() === field;
       }),
-      { seed: 6286, numRuns: 500 },
+      { numRuns: 500 },
     );
   });
 
@@ -652,7 +674,7 @@ describe('#5491 properties (#6286 Minor 2)', () => {
           );
         },
       ),
-      { seed: 6286, numRuns: 500 },
+      { numRuns: 500 },
     );
   });
 });
