@@ -1893,12 +1893,15 @@ describe('gsd-secret-read-guard: the command inside an env -S string (#5514)', (
       assert.equal(block === null ? null : block.code, 'command-too-complex', 'split command overflows the spawn check');
     });
 
-    // The row above cannot tell which catch denies: the secret scan overflows on the same
-    // body, and any body deep enough to overflow the spawn check is nested past
-    // MAX_NESTING_DEPTH, which the secret scan denies first (#6136). So this row passes
-    // scanBashReadings a spawn check that overflows the stack, before a split option and
-    // after one: the overflow is denied as command-too-complex, never left to the crash
-    // verdict's allow. Any other error the spawn check throws finds nothing, as on `next`.
+    // The row above cannot tell which catch denies: the secret scan overflows on the same body.
+    // The secret scan reads every body the spawn check tokenizes, and denies it first: as
+    // nesting-too-deep past MAX_NESTING_DEPTH (#6136), or as command-too-complex when its own
+    // scan overflows, which in every shape measured happens at a smaller depth than the spawn
+    // check's (a `${x:-"..."}` run overflows both with nothing nested). No command was found on
+    // which the spawn check overflows and the secret scan does not, so this row passes
+    // scanBashReadings a spawn check that overflows the stack, before a split option and after
+    // one: the overflow is denied as command-too-complex, never left to the crash verdict's
+    // allow. Any other error the spawn check throws finds nothing, as on `next`.
     test('a stack overflow in the debugger-spawn check is denied as command-too-complex, with no split and after one', () => {
       const overflows = () => { const deeper = (n) => deeper(n + 1) + 1; return deeper(0); };
       const fails = () => { throw new TypeError('a spawn check bug'); };
