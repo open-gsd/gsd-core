@@ -2212,6 +2212,15 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
     'echo .env | echo "$(cat)" | xargs cat',
   ]);
   allows(['echo ok | echo "$(cat)" | bash', 'echo "$(date)" | bash']);
+  // `cat /dev/stdin` (or /dev/fd/0, /proc/self/fd/0) reads the pipe as `cat -` does.
+  blocks([
+    "echo 'cat .env' | cat /dev/stdin | bash",
+    "echo 'cat .env' | (cat /dev/stdin) | bash",
+    "echo 'cat .env' | cat /dev/fd/0 | bash",
+    "echo 'cat .env' | cat /proc/self/fd/0 | bash",
+    'echo .env | cat /dev/stdin | xargs cat',
+  ]);
+  allows(['echo ok | cat /dev/stdin | bash', "echo 'cat .env' | cat notes.txt | bash"]);
   allows([
     "echo ok | (cat) 3<<< 'echo hi' | bash",
     "echo 'cat .env' | (cat) 0<<< 'echo hi' | bash",
