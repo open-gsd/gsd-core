@@ -866,6 +866,23 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assert.deepEqual(JSON.parse(r.stderr), { hook: 'gsd-secret-read-guard', code: DIAGNOSTIC.READING_FAILED, message: 'decoder bug' });
   });
 
+  // The outer catch keeps a stack overflow on a Bash command as
+  // command-too-complex before the crash policy runs. Every overflowing
+  // command is denied by the scan first, so this fixture raises a real
+  // RangeError after both scans: the failed reading's message overflows when
+  // main() reads it for the diagnostic line.
+  const OVERFLOWING_ERROR = path.join(__dirname, 'fixtures', 'secret-read-guard-overflowing-reading-error.cjs');
+  const runOverflowAfterScans = (extraEnv) => runHook(bash(String.raw`echo $'\x41OVERFLOW'; ls`),
+    { env: { NODE_OPTIONS: `--require ${OVERFLOWING_ERROR}`, ...extraEnv } });
+
+  test('opted in: a stack overflow after the scans is still command-too-complex, not guard-error', () => {
+    assertBlocked(runOverflowAfterScans(DENY_ENV), 'overflow after the scans, opted in', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
+  test('unset: the same overflow after the scans is command-too-complex', () => {
+    assertBlocked(runOverflowAfterScans({}), 'overflow after the scans, unset', { code: 'command-too-complex', tool: 'Bash', path: '' });
+  });
+
   test('opted in: verdicts on a parsed payload are unchanged', () => {
     assertAllowed(runHook(bash('ls -la'), { env: DENY_ENV }), 'allow');
     assertBlocked(runHook(read('/p/.env'), { env: DENY_ENV }), 'Read', { code: 'secret-read', tool: 'Read', path: '/p/.env' });
