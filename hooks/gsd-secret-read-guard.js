@@ -4947,18 +4947,18 @@ function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replac
     }
   }
   // xargs splits what it reads at blanks and newlines (#5492), so `echo 'x if=.env' | xargs dd` hands dd `if=.env`:
-  // each piece of the stage's words, of what it writes, and of the heredocs and here-strings it is given, is judged
-  // as an operand too, as it is and unquoted, since any stage may print its words (grep its pattern in the lines it
-  // matches, find or ls the names matching theirs). Under `-I` or `-0` a piece may stay joined to the rest, so this
-  // fails closed there.
+  // the stage's words, what it writes (a decoded `printf '\x2eenv'` included) and the heredocs and here-strings it
+  // is given are each judged whole and piece by piece as an operand, as they are and unquoted, since any stage may
+  // print its words (grep its pattern in the lines it matches, find or ls the names matching theirs). The split is
+  // the same whatever xargs's options: under `-I` or `-0` xargs may keep a piece joined to the rest, which this
+  // over-reads.
   const feeds = STAGE_FEEDS.get(upstreamWords) || NO_FEEDS;
   const texts = [...feeds.heredocs, ...feeds.hereStrings];
   for (const w of upstreamWords) texts.push(w.text);
   for (const written of reconstructedScripts(upstreamWords, ctx)) texts.push(written);
   for (const text of texts) {
-    if (!XARGS_BLANK_RE.test(text)) continue;
     charge(ctx, text.length + 1);
-    for (const piece of text.split(XARGS_BLANKS_RE)) {
+    for (const piece of XARGS_BLANK_RE.test(text) ? text.split(XARGS_BLANKS_RE) : [text]) {
       for (const received of new Set([piece, xargsUnquoted(piece)])) {
         if (operandNamesSecret(received) || (subIsDd && ddInputNamesSecret(received))) return secretRead(received);
       }
