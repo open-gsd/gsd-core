@@ -72,13 +72,27 @@
 //   fail closed: an option they do not list withdraws them from the segment.
 //   A git global option the walker does not know also keeps the #5045 `-c`
 //   scan running over every later word (see walkGitGlobals).
-//   A shell interpreter (bash/sh/zsh/dash/ksh/su) has its script scanned
-//   whether it arrives via `-c '…'`, a `<( )` file operand, a heredoc /
-//   here-string, or a pipe from a knowable `echo`/`printf` source
-//   (`echo cat .env | bash`) or a bare `cat` printing a heredoc / here-string
-//   (`cat <<'EOF' | bash`, `bash <(cat <<< 'cat .env')`, #6182); `eval` scans
-//   its joined operands; `source`/`.` scans a `<( )` operand; and `find … | xargs cat` infers the upstream
-//   segment's names as the sub-command's read operands.
+//   A shell interpreter (bash/sh/zsh/dash/ksh/su, mksh, yash, …) has its script
+//   scanned whether it arrives via `-c '…'` (found past `--`, `-x` and other
+//   options too), a `<( )` file operand, a heredoc / here-string, or a pipe
+//   from a knowable `echo`/`printf` source (`echo cat .env | bash`; printf's
+//   format run over its `%s`/`%b`/`%c` arguments, escapes read, and a `cat`
+//   or `tee` stage passed through, and any other stage, `head`, `sort`,
+//   `grep` …, read fail closed on a mention of a secret name back to the
+//   producer) or a bare `cat` printing a heredoc / here-string (`cat <<'EOF'
+//   | bash`, `bash <(cat <<< 'cat .env')`, #6182; a `( … )` group's every
+//   command); `npx -c`, npm's command-valued config, `pnpm exec -c` and
+//   `yarn exec` scripts are scanned; a read-write redirect (`<>`) is a read;
+//   `eval` scans its joined operands;
+//   `source`/`.` scans a `<( )` operand, and like a shell given `/dev/stdin`,
+//   `/dev/fd/N` or `-s`, its heredocs, here-strings and pipe; `dd` reads its
+//   `if=` file; and `find … | xargs cat` infers the upstream segment's names as
+//   the sub-command's read operands. A command with no rule of its own whose
+//   operands name git, a shell, an ssh client, eval, xargs, find, watch, dd or
+//   a wrapper is read as launching it from there (`caffeinate git …`, #5492).
+//   A `BASH_ENV` value in scope where any command runs (a bash it starts
+//   sources it), or an `ENV` value where a shell runs, is a read when it
+//   names a secret, and of the stdin when it is an fd (#6445).
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
 // before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
@@ -115,11 +129,22 @@
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
 //   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`), shell globs
 //   (`cat .e*`), interpreter one-liners (`python -c "open('.env')"`), a piped
-//   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), reads
-//   inside scripts the agent executes, and `glob: '*'` reaching a
-//   NON-gitignored `.env`, and a wrapper (or wrapper option taking a
-//   separate value) the WRAPPERS table does not list, or `env -S 'script'` (the split string is skipped as
-//   the option's value). Reached through the same gaps and allowed under
+//   script from a non-echo source (`cat gen.sh | bash`, `curl … | sh`), or
+//   from a producer that computes what it writes (`base64 -d`, `tr`, `rev`,
+//   `sed`, `awk`, `perl`, a printf conversion other than `%s`, `%b`, `%c` and
+//   `%%`, with or without a width or precision), into a shell or `xargs`
+//   (#5492), reads inside scripts the agent executes, and `glob: '*'` reaching
+//   a NON-gitignored `.env`, and a command another program takes as one
+//   string or on stdin rather than as its operands (`tmux new '…'`, `script -c
+//   '…'`, `at`, `batch`, `make -f -`), or `env -S 'script'` (the split string is
+//   skipped as the option's value). Stdin a shell or `source` runs is not
+//   followed further (#5492): a `-c` script that itself reads stdin (`bash -c
+//   '. /dev/stdin' <<< …`, `bash -c bash <<< …`), a process substitution given
+//   as an input redirect (`bash < <(…)`, `source /dev/stdin < <(…)`, `bash
+//   /dev/fd/3 3< <(…)`), an fd name relative to a `cd` (`cd /dev && source
+//   stdin <<< …`), an fd path given through `--rcfile` (`bash -i --rcfile
+//   /dev/stdin <<< …`), and a doubled `builtin`
+//   (`builtin builtin source …`). Reached through the same gaps and allowed under
 //   every reading, so the decoded-value check (#5255) does not cover them:
 //   a `${…}` default spelled with `$'…'` (`cat ${x:-$'.env'}`,
 //   `cat ${x-$'.e\x6ev'}`), since the text inside `${…}` is not scanned; a
@@ -167,6 +192,52 @@
 //   re-reading the template after each edit, the flow the issue asks for.
 //   (3) A file inside a git submodule cannot be exempted: the submodule's
 //   `.git` is a file the reader does not follow.)
+//   Git (#5045, #5492): scanGitInvocation scans what a git command line runs
+//   — the command-valued `-c` keys, the alias it invokes (with the words
+//   after it, through other aliases, bounded by alias hops rather than
+//   nesting depth), the options and trailing words its subcommand runs, and
+//   ext:: URLs — and blocks a config value naming a secret file; ssh's
+//   ProxyCommand-style `-o` values are scanned too. Config the command line
+//   sets in the environment counts like `-c`: `GIT_CONFIG_KEY_<n>` /
+//   `GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`, `--config-env` and the
+//   GIT_ENV_CONFIG_KEYS twins (`GIT_EDITOR`, `GIT_SSH_COMMAND`, …), set as a
+//   `VAR=…` prefix, through `env` / `sudo`, or by `export` / `declare` / a
+//   bare assignment anywhere in the script (inside `eval` or a `source <(…)`
+//   script too), with `VAR+=…` appends built on, and inherited by what it runs.
+//   A find action or `watch` running git or ssh is scanned too; words piped
+//   into `xargs git|ssh|<shell>`, or into xargs running wrappers alone
+//   (`xargs -0 env`, `xargs sudo`), that mention a secret name block outright,
+//   since xargs re-splits them (-I, -0, -d, -n) in ways not modelled here.
+//   Values the command line does not set (the inherited environment) and
+//   config files (and commands that write one) are not scanned, nor are
+//   program-path keys and options
+//   (`difftool.<tool>.path`, `core.hooksPath`, `--exec-path`, a merge
+//   strategy) whose program the hook cannot see, or a command inside the
+//   quoted argument of a program other than ssh's `-o` (`vim -c`, `tmux new
+//   "…"`, `script -c`) or on the stdin of one that is not a shell (`at`,
+//   `batch`, `make -f -`), an alias the line defines and a later line uses
+//   (`alias g=…`, `shopt -s expand_aliases`, `g status`), the program
+//   `scp -S` / `sftp -S` / `sftp -D` runs, GNU `parallel`, and words xargs reads
+//   from `-a <file>` or a file redirected to its stdin (`< list`). Two more come from the scan
+//   underneath: a command directly behind `if`, `then`, `else`, `elif`,
+//   `while`, `until`, `do`, `!` or `coproc` is not resolved as the command
+//   (#6138), so its command-specific checks (git, ssh, a shell's script, eval,
+//   find, watch, a `VAR=…` prefix, the debugger check) never run on it
+//   (`if true; then git -c core.editor='cat .env #' log; fi`), while operands,
+//   `<ref>:<path>`, `source <file>`, redirects and substitutions are still
+//   read; and a key, value or option that arrives through a shell variable
+//   (one `read` or `printf -v` sets included) or a `$( )` output is not
+//   expanded (`E='cat .env #'; git -c core.editor="$E" log`), the `$VAR` gap
+//   above.
+//   The tests pin both as allowed. `core.pager`
+//   / `pager.*` / `GIT_PAGER` / `PAGER` are allowed on purpose (no TTY,
+//   nothing printed), a value naming a secret file included, except for a
+//   bare `git grep -O`, which runs the pager regardless: its command is
+//   scanned, while a bare name (`core.pager=.env`) is only exec'd and stays
+//   allowed. The scan is bounded by alias hops, alias invocations and a work
+//   budget for the whole command (MAX_SCAN_WORK); past one it blocks
+//   (`alias-too-complex`, `command-too-complex`) rather than crash or stall, and
+//   a block names the git steps it went through (`via`).
 //
 // A second, unrelated contract is enforced on the Bash leg because this is the
 // one hook that already parses EVERY Bash command (#5214): a Bash command that
@@ -184,8 +255,9 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
-//         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
+//         glob-too-complex | command-too-large | alias-too-complex |
+//         command-too-complex | nesting-too-deep | ansi-c-unterminated |
+//         ansi-c-undecodable | debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
 //        session; the crash policy is declared once below). One error is
@@ -301,6 +373,7 @@ function lineIsReadOnlyUnder(command, reading) {
         const target = segTokens[k + 1];
         if (!target || target.kind !== 'word') return false;
         k++;
+        if (t.text.endsWith('<>')) return false; // read-write: it can write, even to /dev/null
         if (!t.read && target.text !== '/dev/null') return false; // output to a file
         if (t.text.endsWith('<<<')) return false;
         continue;
@@ -308,9 +381,13 @@ function lineIsReadOnlyUnder(command, reading) {
       words.push(t);
     }
     if (words.length === 0) return false;
-    const cmd = resolveCommand(words);
-    if (!cmd || !READ_ONLY_COMMANDS.has(cmd.base)) return false;
-    if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    // Every reading of the segment must be read-only (`time X=1 cat` is the unknown command `X=1` too).
+    const cmds = commandReadings(words);
+    if (cmds.length === 0) return false;
+    for (const cmd of cmds) {
+      if (!READ_ONLY_COMMANDS.has(cmd.base)) return false;
+      if (!readOnlyOptionsOnly(cmd.base, cmd.operands)) return false;
+    }
   }
   return true;
 }
@@ -346,22 +423,26 @@ const NON_SECRET_ENV_SUFFIXES = new Set(['example', 'sample', 'template', 'dist'
 //   short    letters of short options that take a value (`-n 5`, `-n5`)
 //   long     long options that take a SEPARATE value word (`--adjustment 5`);
 //            `--opt=value` is one word and needs no entry
-//   assigns  leading `VAR=value` words belong to the wrapper (env)
+//   assigns  leading `VAR=value` words belong to the wrapper (env, sudo)
+//   reads    letters of short options whose value is a file the wrapper reads
+//            (`sshpass -f <file>`), checked like an operand
 //   operands positional words after the options (timeout's DURATION)
 // Taken from sudo(8), doas(1), env(1), nice(1), time(1), timeout(1),
-// stdbuf(1), setsid(1) and bash's `command`/`exec`. A wrong entry fails open
+// stdbuf(1), setsid(1), sshpass(1) and bash's `command`/`exec`. A wrong entry fails open
 // (the option's value becomes the command word), so keep it to the man pages.
 const WRAPPERS = new Map([
   ['sudo', { short: 'aCcDghpRrTtUu', long: ['--auth-type', '--close-from', '--login-class', '--chdir', '--group', '--host', '--prompt', '--chroot', '--role', '--command-timeout', '--type', '--other-user', '--user'],
     // No-value long options, so an exact one never prefix-matches a longer
     // valued one (`--login` vs `--login-class`).
-    flags: ['--askpass', '--background', '--bell', '--edit', '--help', '--list', '--login', '--non-interactive', '--preserve-env', '--preserve-groups', '--remove-timestamp', '--reset-timestamp', '--set-home', '--shell', '--stdin', '--validate', '--version'] }],
+    flags: ['--askpass', '--background', '--bell', '--edit', '--help', '--list', '--login', '--non-interactive', '--preserve-env', '--preserve-groups', '--remove-timestamp', '--reset-timestamp', '--set-home', '--shell', '--stdin', '--validate', '--version'],
+    assigns: true }],
   ['doas', { short: 'aCu' }],
   ['env', { short: 'uCSaP', long: ['--unset', '--chdir', '--split-string', '--argv0'], assigns: true }],
   ['nice', { short: 'n', long: ['--adjustment'] }],
   ['nohup', {}],
   ['command', {}],
-  ['time', { short: 'fo', long: ['--format', '--output'] }],
+  // bash's `time` keyword times a pipeline, which may start with assignments (#5492); see commandReadings.
+  ['time', { short: 'fo', long: ['--format', '--output'], assigns: true }],
   ['timeout', { short: 'sk', long: ['--signal', '--kill-after'], operands: 1 }],
   ['stdbuf', { short: 'ioe', long: ['--input', '--output', '--error'] }],
   ['setsid', {}],
@@ -370,7 +451,9 @@ const WRAPPERS = new Map([
   ['chroot', { operands: 1 }],
   ['flock', { short: 'wE', long: ['--timeout', '--wait', '--conflict-exit-code'], operands: 1 }],
   ['exec', { short: 'a' }],
+  ['sshpass', { short: 'fdpP', reads: 'f' }],
 ]);
+const TIME_WITHOUT_ASSIGNS = { ...WRAPPERS.get('time'), assigns: false };
 
 // Commands whose ordinary operands are file NAMES, never file CONTENTS. A
 // closed set on purpose: anything not listed is assumed to read.
@@ -437,8 +520,139 @@ const GIT_GLOBAL_EQUALS_FORM_OPTIONS = new Set([
 const GIT_GLOBAL_FLAGS = new Set([
   '-p', '--paginate', '-P', '--no-pager', '--no-replace-objects', '--no-lazy-fetch',
   '--no-optional-locks', '--no-advice', '--bare',
-  '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
+  '--literal-pathspecs', '--no-literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs',
 ]);
+
+// Git config keys whose value git runs as a command (#5045, #5492; `hook.*.command`
+// is git 2.54's config-based hooks), by shape:
+// `section.name`, or `section.*.name` for any subsection (see gitConfigShape).
+// `core.pager` / `pager.*` are deliberately absent: with no TTY they print
+// nothing. `core.askpass`, `core.gitproxy` and `sendemail.smtpserver` exec a
+// program rather than a shell, so a value with arguments never runs; they are
+// scanned conservatively anyway. A submodule update is a script only behind a
+// leading `!` (otherwise it is a mode word). A credential helper is a script
+// behind `!`, and also when it is an absolute path or holds shell
+// metacharacters: git runs any other value as `git credential-<value>`
+// through the shell, where a plain word only names a helper
+// (gitcredentials(7)). The built-in `store` helper is the exception: it reads
+// the file it is given, and `git credential fill` prints a URL line from it.
+const GIT_COMMAND_CONFIG_KEYS = new Set([
+  'diff.external', 'sequence.editor', 'core.editor', 'core.sshcommand', 'core.fsmonitor', 'gpg.program',
+  'diff.*.textconv', 'diff.*.command', 'filter.*.clean', 'filter.*.smudge', 'filter.*.process',
+  'gpg.*.program', 'merge.*.driver',
+  'core.askpass', 'core.gitproxy', 'core.alternaterefscommand', 'uploadpack.packobjectshook',
+  'gc.recentobjectshook', 'interactive.difffilter', 'imap.tunnel', 'instaweb.httpd',
+  'difftool.*.cmd', 'mergetool.*.cmd', 'browser.*.cmd', 'man.*.cmd', 'guitool.*.cmd',
+  'trailer.*.cmd', 'trailer.*.command', 'gpg.*.defaultkeycommand', 'tar.*.command',
+  'remote.*.uploadpack', 'remote.*.receivepack',
+  'sendemail.smtpserver', 'sendemail.sendmailcmd', 'sendemail.tocmd', 'sendemail.cccmd', 'sendemail.headercmd',
+  'sendemail.*.smtpserver', 'sendemail.*.sendmailcmd', 'sendemail.*.tocmd', 'sendemail.*.cccmd',
+  'sendemail.*.headercmd', 'hook.*.command',
+]);
+const GIT_BANG_COMMAND_CONFIG_KEYS = new Set(['submodule.*.update']);
+const GIT_CREDENTIAL_HELPER_KEYS = new Set(['credential.helper', 'credential.*.helper']);
+const ABSOLUTE_PATH_RE = /^(?:[A-Za-z]:)?[\\/]/;
+// What can start a second command, substitute output or redirect.
+const SHELL_CONTROL_RE = /[;&|<>()$`\n]/;
+// Case-insensitive: `git credential-Store` finds the store helper on macOS
+// and Windows filesystems.
+const STORE_HELPER_RE = /^store(?:\s|$)/i;
+// git's isspace (ctype.c): space, tab, newline and carriage return only.
+const GIT_SPACE_RE = /[ \t\n\r]/;
+const GIT_BOOLEAN_RE = /^(?:true|false|yes|no|on|off|1|0|)$/i;
+
+// Environment variables git reads in place of a config key (#5492; git(1)
+// ENVIRONMENT, git-var(1), checked live on git 2.43). Where both are set git
+// prefers one (GIT_EDITOR over core.editor over VISUAL over EDITOR; GIT_PAGER
+// over core.pager over PAGER), but every value is scanned, so the order does
+// not matter here. GIT_SSH execs a program, like core.askPass; it is scanned
+// conservatively.
+const GIT_ENV_CONFIG_KEYS = new Map([
+  ['GIT_EDITOR', 'core.editor'], ['VISUAL', 'core.editor'], ['EDITOR', 'core.editor'],
+  ['GIT_SEQUENCE_EDITOR', 'sequence.editor'], ['GIT_SSH_COMMAND', 'core.sshcommand'], ['GIT_SSH', 'core.sshcommand'],
+  ['GIT_EXTERNAL_DIFF', 'diff.external'], ['GIT_ASKPASS', 'core.askpass'], ['SSH_ASKPASS', 'core.askpass'],
+  ['GIT_PROXY_COMMAND', 'core.gitproxy'], ['GIT_PAGER', 'core.pager'], ['PAGER', 'core.pager'],
+]);
+// Variables naming a config file git reads (and may quote in an error).
+const GIT_CONFIG_FILE_VARS = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG'];
+
+// Subcommand options whose value git runs as a command (#5492; git 2.56
+// sources: builtin/rebase.c, connect.c, builtin/grep.c, git-difftool--helper.sh,
+// git-filter-branch.sh, git-send-email.perl, git-instaweb.sh, daemon.c,
+// git-svn.perl). A `short` letter takes its value attached or as the next
+// word, also at the end of a bundle (`-ix cmd`). A `long` name matches any
+// prefix of at least `min` (default 1) characters: parse_options takes an
+// unambiguous prefix (`ls-remote --u=<cmd>`), and an ambiguous one makes git
+// exit, so matching it only over-scans. An `optional` value must be attached (`grep -O<pager>`); a
+// bare one runs the configured pager. `getopt` options (Perl's
+// Getopt::Long) also take one dash or `+` and any case. Their `min` is the
+// shortest prefix Getopt::Long resolves to that option among all of
+// git-send-email.perl's (master), so `--to` / `--cc` stay recipients;
+// `attachedMin` is shorter when an earlier pass takes the bare prefix for a
+// flag (`-h` is help, but `-h=<cmd>` reaches `--header-cmd`). clone's
+// `config` option sets a key like a global `-c`.
+const GIT_COMMAND_OPTIONS = new Map([
+  ['rebase', [{ short: 'x', long: 'exec' }]],
+  ['fetch', [{ long: 'upload-pack' }]],
+  ['pull', [{ long: 'upload-pack' }]],
+  ['clone', [{ short: 'u', long: 'upload-pack' }, { short: 'c', long: 'config', config: true }]],
+  ['ls-remote', [{ long: 'upload-pack' }, { long: 'exec' }]],
+  ['fetch-pack', [{ long: 'upload-pack' }, { long: 'exec' }]],
+  ['push', [{ long: 'receive-pack' }, { long: 'exec' }]],
+  ['send-pack', [{ long: 'receive-pack' }, { long: 'exec' }]],
+  ['archive', [{ long: 'exec' }]],
+  ['grep', [{ short: 'O', long: 'open-files-in-pager', optional: true }]],
+  ['difftool', [{ short: 'x', long: 'extcmd' }]],
+  ['filter-branch', ['setup', 'env-filter', 'tree-filter', 'index-filter', 'parent-filter', 'msg-filter',
+    'commit-filter', 'tag-name-filter'].map((long) => ({ long }))],
+  ['send-email', [{ long: 'to-cmd', min: 5 }, { long: 'cc-cmd', min: 5 }, { long: 'header-cmd', min: 2, attachedMin: 1 },
+    { long: 'sendmail-cmd', min: 5 }, { long: 'smtp-server', min: 11 }].map((spec) => ({ ...spec, getopt: true }))],
+  ['instaweb', [{ short: 'd', long: 'httpd' }]],
+  ['daemon', [{ long: 'access-hook' }]],
+  ['svn', [{ long: 'authors-prog' }]],
+]);
+
+// Plain-alias hops on the current expansion path, and alias invocations in
+// one git command (a definition nothing invokes is still scanned, but only
+// spends scan work). Alias hops spend no scan depth (#5492), so these bound
+// the scan instead (git itself only stops a repeated name); past either one
+// the scan fails closed on the alias.
+const MAX_ALIAS_HOPS = 16;
+const MAX_ALIAS_EXPANSIONS = 256;
+
+// Scan work for one Bash command, all its heredoc readings together (#5492).
+// A hook that crashes or outlives its runtime's timeout allows the command
+// (OpenCode kills it at 8 s), so every loop whose size comes from the command
+// charges this budget BEFORE it allocates or compares, and past it the scan
+// stops and blocks: `alias-too-complex` inside an alias expansion,
+// `command-too-complex` elsewhere. A unit is about one byte of work: each byte
+// rescanned (the command itself is not charged: MAX_COMMAND_LENGTH bounds
+// it), each git config value, alias expansion byte, URL rewrite comparison
+// and config entry the environment pairs up. The fixed charges price what
+// costs more than its bytes: a rescan's tokens (segment-dense text costs
+// about four times as much per byte as one long word), a git command, a
+// script git runs, a config entry.
+
+// Sized from measurement (Node 24, Ryzen AI 9 HX 370): payloads built to
+// reach the budget the costliest way (rescans of segment-dense text) decide
+// in about 1.3 s, and ordinary commands spend little of it: a script of 100
+// git commands 0.1%, 300 aliases under 1%, 1 MiB of shell nested three deep
+// about a quarter per reading. At 24 Mi the slowest case took 2.3 s.
+const MAX_SCAN_WORK = 16 * 1024 * 1024;
+const TOKEN_WORK = 4;
+const GIT_COMMAND_WORK = 64;
+const GIT_SCRIPT_WORK = 64;
+const GIT_ENTRY_WORK = 8;
+
+// ssh_config(5) options that ssh runs locally through the user's shell
+// (#5492), and each client's options that take a value (`-o` among them):
+// ssh(1), scp(1) and sftp(1) differ (`scp -p` and `sftp -p` are flags, `scp -B`
+// is one and `sftp -B` is not).
+const SSH_CLIENTS = new Set(['ssh', 'scp', 'sftp', 'ssh.exe', 'scp.exe', 'sftp.exe']);
+const SSH_LOCAL_COMMAND_OPTIONS = new Set(['proxycommand', 'localcommand', 'knownhostscommand']);
+const SSH_VALUE_FLAGS = 'BbcDEeFIiJLlmOoPpQRSWw';
+const SSH_CLIENT_VALUE_FLAGS = new Map([['ssh', SSH_VALUE_FLAGS], ['scp', 'cDFiJloPSX'], ['sftp', 'BbcDFiJloPRSsX']]);
+const SSH_OPTION_RE = /^\s*"?([A-Za-z]+)"?\s*(?:=\s*|\s+)([\s\S]*)$/;
 
 // #4856: `cp`/`mv` write their destination and never print it, so a secret
 // name that is ONLY the destination of a one-source copy or move is a name
@@ -458,18 +672,32 @@ const COPY_NAME_ONLY_FLAGS = new Set(['-f', '--force', '-i', '--interactive', '-
 // (heredoc / here-string / piped `echo`|`printf`). `su` is here for its `-c`
 // form (`su [user] -c 'cmd'`); a bare `su user` resolves to file mode, which
 // only runs the ordinary operand check. `eval`, `source`/`.` and `xargs` are
-// their own cases below; they are not in this set.
-const SHELL_INTERPRETERS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'su', 'ash', 'fish', 'csh', 'tcsh']);
+// their own cases below; they are not in this set. Each has its `.exe` name too (#5492).
+const SHELL_NAMES = ['bash', 'sh', 'zsh', 'dash', 'ksh', 'su', 'ash', 'fish', 'csh', 'tcsh',
+  'mksh', 'lksh', 'oksh', 'loksh', 'pdksh', 'ksh93', 'posh', 'yash', 'rbash'];
+const SHELL_INTERPRETERS = new Set([...SHELL_NAMES, ...SHELL_NAMES.map((name) => `${name}.exe`)]);
 
 // Shell flags whose VALUE is the next operand (`bash -o pipefail`,
 // `bash --rcfile x <<EOF`): skipped when locating a script-file operand, so a
 // flag value is not mistaken for the script and stdin mode still applies.
 const SHELL_VALUE_FLAGS = new Set(['-o', '-O', '+o', '+O', '--rcfile', '--init-file']);
 
-// Value-taking `xargs` flags (long `--flag=value` forms are single words).
-// `-a`/`--arg-file` additionally replaces stdin, so it suppresses the pipeline
-// inference below.
-const XARGS_VALUE_FLAGS = new Set(['-n', '-I', '-i', '-L', '-l', '-P', '-s', '-d', '-E', '-a']);
+// GNU xargs(1) options: short letters whose value is attached or the next
+// word, short letters whose optional value must be attached, and long
+// options (any unambiguous prefix) whose value is the next word unless
+// attached with `=`; the optional ones take only `=`. `-a`/`--arg-file`
+// also replaces stdin, so it suppresses the pipeline inference below.
+// BSD xargs's `-J`, `-R` and `-S` take a value as well; GNU xargs rejects
+// them and runs nothing, so reading them as value-taking is safe there.
+const XARGS_SHORT_VALUE = 'adEIJLnPRSs';
+const XARGS_SHORT_OPTIONAL = 'eil';
+const XARGS_LONG_OPTIONS = new Map([
+  ['arg-file', 'value'], ['delimiter', 'value'], ['max-args', 'value'], ['max-procs', 'value'],
+  ['max-chars', 'value'], ['process-slot-var', 'value'], ['eof', 'optional'], ['replace', 'optional'],
+  ['max-lines', 'optional'], ['null', 'flag'], ['no-run-if-empty', 'flag'], ['verbose', 'flag'],
+  ['interactive', 'flag'], ['exit', 'flag'], ['open-tty', 'flag'], ['show-limits', 'flag'],
+  ['version', 'flag'], ['help', 'flag'],
+]);
 
 // Probe names a Grep glob alternative is matched against. `.env` and
 // `.secrets` are the exact names; the rest stand in for the open-ended
@@ -1458,7 +1686,7 @@ function consumeHeredocBodies(str, i, tags) {
       if (probe === t.tag) { terminated = true; break; }
       body += line + '\n';
     }
-    bodies.push({ body, quoted: t.quoted, seg: t.seg });
+    bodies.push({ body, quoted: t.quoted, seg: t.seg, fd: t.fd });
     if (!terminated) break;
   }
   return { bodies, end: i };
@@ -1511,23 +1739,32 @@ function tokenize(str, reading) {
   let heredocs = [];
   let expectTag = null;
   let unreadable = null;
+  let escaped = false;
+  let nestedMark = 0; // nested.length when the word being built began
 
   const flush = () => {
+    const subst = nested.length > nestedMark;
+    nestedMark = nested.length;
     if (!hasWord) return;
     if (expectTag) {
       // Record the current seg (still the `<<` segment — flush runs before the
       // newline sep increments it) so pass 2 can attach the body to the shell.
-      heredocs.push({ tag: buf, quoted: quoted !== 'none', stripTabs: expectTag.stripTabs, seg });
+      heredocs.push({ tag: buf, quoted: quoted !== 'none', stripTabs: expectTag.stripTabs, seg, fd: expectTag.fd });
       expectTag = null;
     } else {
       // zsh keeps a `\0` escape's NUL in the word and hands a command the
       // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
       const nul = reading === 'zsh' ? buf.indexOf('\0') : -1;
       tokens.push({ kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg });
+      // A backslash quotes too: `\while` is a command, not a reserved word; `subst` marks a word holding a `$( )` or
+      // backticks, whose output may be the command's stdin (#5492).
+      if (escaped) tokens[tokens.length - 1].escaped = true;
+      if (subst) tokens[tokens.length - 1].subst = true;
     }
     buf = '';
     quoted = 'none';
     hasWord = false;
+    escaped = false;
   };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
@@ -1640,6 +1877,7 @@ function tokenize(str, reading) {
     if (ch === '\\') {
       if (str[i + 1] === '\n') { i += 2; continue; } // line continuation
       hasWord = true;
+      escaped = true;
       if (i + 1 < str.length) buf += str[i + 1];
       i += 2;
       continue;
@@ -1692,7 +1930,8 @@ function tokenize(str, reading) {
       // Emit a word carrying the inner script so a shell / `source` operand
       // (`sh <(echo 'cat .env')`) can reconstruct it; the bare nested recursion
       // above only sees `echo …`, whose operands are not read.
-      tokens.push({ kind: 'word', text: str.slice(i, e + 1), quoted: 'none', seg, procsub: inner });
+      tokens.push({ kind: 'word', text: str.slice(i, e + 1), quoted: 'none', seg, procsub: inner, subst: true });
+      nestedMark = nested.length;
       i = e + 1;
       continue;
     }
@@ -1705,10 +1944,11 @@ function tokenize(str, reading) {
         for (const b of r.bodies) {
           // Emit a heredoc token per body (quoted included) — the body is the
           // stdin script only a shell interpreter runs. Kept out of `words`.
-          tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
+          tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg, fd: b.fd });
           if (!b.quoted) collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
         }
         heredocs = [];
+        nestedMark = nested.length;
         i = r.end;
       }
       continue;
@@ -1736,12 +1976,17 @@ function tokenize(str, reading) {
 
     if (ch === '<' || ch === '>' || (ch === '&' && str[i + 1] === '>')) {
       let fd = '';
+      // A `{name}` word right before it opens a new fd (`{fd}<<< x`); it stays a word, and the op records it (#5492).
+      const namedFd = hasWord && quoted === 'none' && /^\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(buf) ? buf : '';
       if (hasWord && quoted === 'none' && /^\d+$/.test(buf)) {
         fd = buf;
         buf = '';
         hasWord = false;
       } else {
+        const before = tokens.length;
         flush();
+        // Only the word this flush pushed; a heredoc tag (`<<{fd}<<<`) pushes none.
+        if (namedFd && tokens.length === before + 1 && tokens[before].kind === 'word') tokens[before].namesFd = true;
       }
       let j = i;
       let text;
@@ -1752,9 +1997,10 @@ function tokenize(str, reading) {
       else if (str.startsWith('&>', j)) { text = '&>'; j += 2; }
       else if (str.startsWith('>>', j)) { text = '>>'; j += 2; }
       else if (str.startsWith('>|', j)) { text = '>|'; j += 2; }
+      else if (str.startsWith('<>', j)) { text = '<>'; j += 2; } // read-write: a read, and a write
       else { text = ch; j += 1; }
       if (text === '<<' || text === '<<-') {
-        expectTag = { stripTabs: text === '<<-' };
+        expectTag = { stripTabs: text === '<<-', fd: fd || namedFd };
         i = j;
         continue;
       }
@@ -1767,6 +2013,7 @@ function tokenize(str, reading) {
         dup = true;
       }
       op(fd + text, text[0] === '<' && text !== '<<<', dup);
+      if (namedFd) tokens[tokens.length - 1].namedFd = namedFd;
       i = j;
       continue;
     }
@@ -1862,7 +2109,10 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecretOperand(v.slice(end + 1));
 }
 
-const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// `NAME=value`, or bash's appending `NAME+=value`.
+const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+// Builtins whose `NAME=value` operands set (and may export) a variable.
+const DECLARATION_COMMANDS = new Set(['export', 'declare', 'typeset', 'local', 'readonly']);
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
 const DASH_C_RE = /^-[A-Za-z]*c$/;
@@ -1904,48 +2154,915 @@ function skipWrapperArgs(words, start, spec) {
       break;
     }
   }
-  if (!spec.operands) return idx;
+  // A trailing valued option (`sshpass -f`) steps past the end; callers index words up to the result.
+  if (!spec.operands) return Math.min(idx, words.length);
   idx = Math.min(idx + spec.operands, words.length);
   // `timeout 5 -- cmd`: some getopt builds still accept `--` after DURATION.
   return idx < words.length && words[idx].text === '--' ? idx + 1 : idx;
 }
 
+// The values a wrapper's `reads` options take in words[start, end).
+function wrapperReadValues(words, start, end, spec) {
+  const values = [];
+  for (let k = start; k < end; k++) {
+    const t = words[k].text;
+    if (!/^-[^-]/.test(t)) continue;
+    for (let i = 1; i < t.length; i++) {
+      if (!(spec.short || '').includes(t[i])) continue;
+      if (spec.reads.includes(t[i])) values.push(i + 1 < t.length ? t.slice(i + 1) : words[k + 1] ? words[k + 1].text : '');
+      break;
+    }
+  }
+  return values;
+}
+
 // Command base + operands after leading `VAR=val` assignments and prefix
 // wrappers with their own options (`sudo -u root`, `env -i VAR=x`,
-// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes remain.
-function resolveCommand(words) {
+// `timeout -s KILL 5`, `nice -n 5`, …), or null when nothing but prefixes
+// remain. `assigns` are the prefix's `VAR=val` words, which the command and
+// everything it runs inherit; `reads` are files a wrapper reads itself. A
+// wrapper reads them whatever it runs (`sshpass -f .env`, `sshpass -f .env
+// env`), so prefixes with reads and no command give an empty `base`. `timeAssigns` false reads `time` as it was
+// read before #5492, taking no assignments (commandReadings).
+function resolveCommand(words, timeAssigns = true) {
   let idx = 0;
+  const reads = [];
+  const wrappers = [];
   while (idx < words.length && ASSIGNMENT_RE.test(words[idx].text)) idx++;
   while (idx < words.length) {
-    const spec = WRAPPERS.get(lastSegment(words[idx].text).toLowerCase());
+    const name = lastSegment(words[idx].text).toLowerCase();
+    const spec = name === 'time' && !timeAssigns ? TIME_WITHOUT_ASSIGNS : WRAPPERS.get(name);
     if (!spec) break;
-    idx = skipWrapperArgs(words, idx + 1, spec);
+    wrappers.push(words[idx]);
+    const next = skipWrapperArgs(words, idx + 1, spec);
+    // A loop, not push(...): a spread of a command-sized array overflows the stack.
+    if (spec.reads) for (const value of wrapperReadValues(words, idx + 1, next, spec)) reads.push(value);
+    idx = next;
   }
-  if (idx >= words.length) return null;
-  return { base: lastSegment(words[idx].text).toLowerCase(), operands: words.slice(idx + 1) };
+  if (idx >= words.length && reads.length === 0) return null;
+  return {
+    base: idx < words.length ? lastSegment(words[idx].text).toLowerCase() : '', operands: words.slice(idx + 1), reads,
+    assigns: words.slice(0, idx).map((w) => w.text).filter((t) => ASSIGNMENT_RE.test(t)), wrappers,
+  };
+}
+
+// The commands a segment's words may run: resolveCommand's, and where it read assignments after `time` (#5492), the
+// reading from before, first, which took the first of them for the command (`time X=1 ls .env` ran `X=1` with the
+// operands `ls .env`), so a command blocked before is still blocked, for the same reason. `keepNull` keeps a null
+// reading (nothing but prefixes) in the list.
+function commandReadings(words, keepNull = false) {
+  const cmds = [resolveCommand(words)];
+  if (words.some((w) => lastSegment(w.text).toLowerCase() === 'time')) {
+    const before = resolveCommand(words, false);
+    if (before !== null && (cmds[0] === null || before.operands.length !== cmds[0].operands.length)) cmds.unshift(before);
+  }
+  return keepNull ? cmds : cmds.filter((cmd) => cmd !== null);
+}
+
+// A lowercased git key reduced to its section and name. The subsection is
+// everything between the first and last dot (it may itself hold dots, as in
+// `credential.https://x.com.helper`), so it collapses to `*`.
+function gitConfigShape(key) {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  return first === last ? key : `${key.slice(0, first)}.*${key.slice(last)}`;
+}
+
+// An alias value split into words the way git's split_cmdline (alias.c)
+// does: whitespace separates, quotes group, and a backslash outside single
+// quotes escapes the next character. `;`, `|` and `&` are ordinary
+// characters. null for an unclosed quote or a trailing backslash, which git
+// rejects without running anything.
+function splitGitAlias(value) {
+  const words = [];
+  let word = null;
+  let quote = null;
+  for (let i = 0; i < value.length; i++) {
+    let c = value[i];
+    if (!quote && GIT_SPACE_RE.test(c)) {
+      if (word !== null) words.push(word);
+      word = null;
+      continue;
+    }
+    if (word === null) word = '';
+    if (!quote && (c === "'" || c === '"')) quote = c;
+    else if (c === quote) quote = null;
+    else {
+      if (c === '\\' && quote !== "'") {
+        if (++i === value.length) return null;
+        c = value[i];
+      }
+      word += c;
+    }
+  }
+  if (quote) return null;
+  if (word !== null) words.push(word);
+  return words;
+}
+
+const shellQuote = (word) => `'${word.replaceAll("'", "'\\''")}'`;
+
+// The state of one Bash command's scan, threaded through the recursion and
+// shared by every reading and pass over the command (see scanBashCommand).
+// Each field below except `work` is set and restored around the step that
+// changes it, so a reading starts from the state the one before it found:
+//   gitScope         the git config in force: git exports -c values to every
+//                    child git (GIT_CONFIG_PARAMETERS), so an alias or pager an
+//                    outer command sets reaches the git commands its scripts
+//                    and aliases run. A stack of { parent, index } layers.
+//   aliasHops        plain-alias hops on the current expansion path
+//   aliasExpansions  alias invocations in the current git command
+//   alias            the alias key being expanded, which a work overrun names
+//   shellVars        the shell variable frames in scope (see shellVarFrame)
+//   work             scan work spent on the command so far, by every reading
+//                    and pass (see MAX_SCAN_WORK)
+//   pipeSourcesRead  the segments pipeSources has handed out (see there)
+function newScanContext(work = 0) {
+  return { gitScope: null, aliasHops: 0, aliasExpansions: 0, alias: null, shellVars: null, work, pipeSourcesRead: new WeakSet() };
+}
+
+// Thrown past MAX_SCAN_WORK. unfinishedBy counts it as a reading that could
+// not finish and keeps the first one, which findSecretRead returns as the
+// block, so it never reaches main()'s fail-open catch.
+class ScanLimitError extends Error {
+  constructor(code, target) {
+    super(code);
+    this.code = code;
+    this.target = target;
+  }
+}
+
+function charge(ctx, units) {
+  ctx.work += units;
+  if (ctx.work > MAX_SCAN_WORK) {
+    throw ctx.alias === null ? new ScanLimitError('command-too-complex', '') : new ScanLimitError('alias-too-complex', ctx.alias);
+  }
+}
+
+// The hit with the git step it came through added, as the hit unwinds: `via`
+// travels on the hit, outermost step first, so a reading whose hit is
+// dropped leaves nothing behind.
+function via(label, hit) {
+  return hit === null ? null : { ...hit, via: [label, ...(hit.via || [])] };
+}
+
+// One layer of config in force: its own entries, each key's values in order
+// (every one is kept: a later value does not hide an earlier one from the
+// scan), its url.<base>.insteadOf rewrites, and whether it sets
+// remote.<name>.vcs=ext. `next` is the layer below it in the same scope.
+function gitConfigIndex(entries, next) {
+  const byKey = new Map();
+  const rewrites = [];
+  let vcsExt = false;
+  for (const config of entries) {
+    const same = byKey.get(config.key);
+    if (same) same.push(config);
+    else byKey.set(config.key, [config]);
+    if (/^url\..*\.(?:push)?insteadof$/.test(config.key)) {
+      rewrites.push([config.value, config.rawKey.slice(4, config.rawKey.lastIndexOf('.'))]);
+    }
+    if (config.shape === 'remote.*.vcs' && config.value.toLowerCase() === 'ext') vcsExt = true;
+  }
+  return { entries, byKey, rewrites, vcsExt, next };
+}
+
+function withGitConfigs(ctx, index, hops, scan) {
+  const saved = [ctx.gitScope, ctx.aliasHops];
+  if (index !== null) ctx.gitScope = { parent: ctx.gitScope, index, frame: ctx.shellVars };
+  ctx.aliasHops = hops;
+  try {
+    return scan();
+  } finally {
+    [ctx.gitScope, ctx.aliasHops] = saved;
+  }
+}
+
+// The config layers in force, innermost first, each once: a nested git
+// command pushes the environment's layers again, over the ones its outer
+// command already has in force.
+function gitIndexesInForce(ctx) {
+  const seen = new Set();
+  for (let scope = ctx.gitScope; scope; scope = scope.parent) {
+    for (let index = scope.index; index; index = index.next) {
+      charge(ctx, 1);
+      seen.add(index);
+    }
+  }
+  return seen;
+}
+
+// Whether `layer` is `index` or a layer below it.
+function gitIndexHolds(index, layer) {
+  for (let at = index; at; at = at.next) if (at === layer) return true;
+  return false;
+}
+
+// Every value of `key` in force, innermost first.
+function gitConfigsNamed(ctx, key) {
+  const found = [];
+  for (const index of gitIndexesInForce(ctx)) {
+    const configs = index.byKey.get(key);
+    if (!configs) continue;
+    charge(ctx, configs.length);
+    for (let i = configs.length - 1; i >= 0; i--) found.push(configs[i]);
+  }
+  return found;
+}
+
+// The definitions of the alias a git command invokes: every one in force, except that one the command sets itself
+// (`-c`, `--config-env`) shadows those an outer git command's own did. Git reads a command's own config after the
+// GIT_CONFIG_PARAMETERS it inherits and the last value wins, so the inherited one never runs there; the command that
+// set it scanned it. Within one command every definition still runs, as do those the environment sets.
+function invokedAliasConfigs(ctx, invoked, own, ownGlobals) {
+  const all = gitConfigsNamed(ctx, invoked);
+  if (!ownGlobals.some((config) => config.key === invoked)) return all;
+  return all.filter((config) => own.includes(config) || config.source.startsWith('$'));
+}
+
+// Every url.<base>.insteadOf rewrite in force, and whether vcs=ext is.
+function gitRewritesInForce(ctx) {
+  const rewrites = [];
+  let vcsExt = false;
+  for (const index of gitIndexesInForce(ctx)) {
+    charge(ctx, index.rewrites.length);
+    for (const rewrite of index.rewrites) rewrites.push(rewrite);
+    vcsExt = vcsExt || index.vcsExt;
+  }
+  return { rewrites, vcsExt };
+}
+
+// A config entry; `rawKey` keeps its case (url.<base>.insteadOf needs the
+// base). `source` is where it was set (`-c`, `--config-env`, `$VAR`).
+function gitConfigEntry(source, rawKey, value, key = rawKey.toLowerCase()) {
+  return { source, rawKey, key, shape: gitConfigShape(key), value };
+}
+
+// The step a config contributes to a block's resolution chain.
+function configLabel(config) {
+  return config.source === `$${config.rawKey}` ? config.source : `${config.source} ${config.rawKey}`;
+}
+
+function parseGitConfig(text) {
+  const eq = text.indexOf('=');
+  if (eq === -1) return null;
+  return gitConfigEntry('-c', text.slice(0, eq), text.slice(eq + 1));
+}
+
+// Shell variables the command line sets (#5492), as a stack of frames: one
+// per script (its `export` / `declare` / bare assignments, wherever they sit
+// in it) and one per command prefix (`VAR=… cmd`, `env`, `sudo`). Nested
+// scripts inherit them, as an exported environment is inherited. Every value
+// a name is given is kept, since assignment order and subshells decide which
+// one a command sees, and all of them are scanned. `vars` holds the values set
+// with `=`; a name given a `+=` here also keeps every assignment to it, in
+// order, in `seqs` (null when none is), for shellVarValues (#5492). `gitEnv`
+// caches the frame's gitEnvIndex; `gitEnvScanned` is the scanGitInvocation memo.
+function shellVarFrame(parent, assignments) {
+  if (!assignments.length) return parent;
+  const vars = new Map();
+  let seqs = null;
+  const appended = new Set();
+  for (const text of assignments) {
+    const eq = text.indexOf('=');
+    if (text[eq - 1] === '+') appended.add(text.slice(0, eq - 1));
+  }
+  for (const text of assignments) {
+    const eq = text.indexOf('=');
+    const append = text[eq - 1] === '+';
+    const name = text.slice(0, append ? eq - 1 : eq);
+    const value = text.slice(eq + 1);
+    if (appended.has(name)) {
+      if (seqs === null) seqs = new Map();
+      if (!seqs.has(name)) seqs.set(name, []);
+      seqs.get(name).push({ value, append });
+    }
+    if (append) continue;
+    if (!vars.has(name)) vars.set(name, new Set());
+    vars.get(name).add(value);
+  }
+  return { parent, vars, seqs, gitEnv: undefined, gitEnvScanned: false };
+}
+
+// Reserved words that may open a segment ahead of a command run in the same
+// shell; `{` is a word when a line continuation follows it.
+const LEADING_RESERVED = new Set(['if', 'then', 'do', 'else', 'elif', 'while', 'until', '!', '{']);
+// Builtin prefixes that run a builtin in the current shell, with the options
+// that keep it running (`command -v` only looks the name up).
+const BUILTIN_PREFIXES = new Map([['builtin', ['--']], ['command', ['-p', '--']], ['time', ['-p', '--']]]);
+
+// The index of a segment's command word, past leading reserved words,
+// builtin prefixes and assignment prefixes (words.length when none is left).
+function assignmentSegmentStart(words) {
+  let i = 0;
+  while (i < words.length) {
+    const w = words[i];
+    if (ASSIGNMENT_RE.test(w) || LEADING_RESERVED.has(w)) {
+      i++;
+    } else if ((w === 'for' || w === 'select') && words[i + 2] === 'do') {
+      i += 3; // `for NAME do …` without `in` puts the body in this segment
+    } else if (BUILTIN_PREFIXES.has(w)) {
+      const options = BUILTIN_PREFIXES.get(w);
+      i++;
+      while (i < words.length && options.includes(words[i])) i++;
+    } else {
+      break;
+    }
+  }
+  return i;
+}
+
+// The `NAME=value` words of a script's declaration builtins and bare
+// assignment segments, and of the scripts its `eval` and `source <(…)` /
+// `. <(…)` segments run in the same shell (#5492): eval's joined operands, and
+// what the process substitution's echo / printf write (reconstructedProcsubs),
+// read under `reading`, and under every shell reading as well when the plain
+// one meets a form they are for (readsEachWay), at most MAX_NESTING_DEPTH deep.
+// `source /dev/stdin` runs its segment's heredocs, here-strings and piped
+// producer in the same shell too (#5492).
+function scriptAssignments(tokens, reading, ctx, depth) {
+  const bySeg = new Map();
+  const stdinBySeg = new Map();
+  const sepAfter = new Map();
+  // Every word and redirect of each segment, and its heredocs, as scanScript groups them, for pipedScripts (#6182).
+  const fullBySeg = new Map();
+  const heredocsBySeg = new Map();
+  const push = (map, seg, t) => {
+    if (!map.has(seg)) map.set(seg, []);
+    map.get(seg).push(t);
+  };
+  heredocBodiesBySegMap.set(fullBySeg, heredocsBySeg);
+  const addStdin = (seg, text) => {
+    if (!stdinBySeg.has(seg)) stdinBySeg.set(seg, []);
+    stdinBySeg.get(seg).push(text);
+  };
+  for (let k = 0; k < tokens.length; k++) {
+    const t = tokens[k];
+    if (t.kind === 'op' || t.kind === 'word') push(fullBySeg, t.seg, t);
+    // A redirect's target is a file name, not a word of the command.
+    if (t.kind === 'op') {
+      if (!t.dup && tokens[k + 1] && tokens[k + 1].kind === 'word' && tokens[k + 1].seg === t.seg) {
+        k++;
+        push(fullBySeg, t.seg, tokens[k]);
+        if (t.text.endsWith('<<<')) addStdin(t.seg, tokens[k].text);
+      }
+      continue;
+    }
+    if (t.kind === 'heredoc') {
+      addStdin(t.seg, t.text);
+      push(heredocsBySeg, t.seg, t);
+    }
+    if (t.kind === 'sep') sepAfter.set(t.seg, t.text);
+    if (t.kind !== 'word') continue;
+    if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+    bySeg.get(t.seg).push(t);
+  }
+  const assignments = [];
+  const runInShell = (script) => {
+    charge(ctx, script.length);
+    // A reading that finds what another did adds nothing: a `+=` taken twice would chain onto itself.
+    const found = new Set();
+    for (const shell of reading === false && readsEachWay(script) ? [false, ...READINGS] : [reading]) {
+      let inner;
+      try {
+        inner = tokenizeCharged(script, shell).tokens;
+      } catch (e) {
+        // As in scanEachWay: a limit stops the scan, and a shell reading's bug
+        // costs only that reading.
+        if (shell === false || e instanceof ScanLimitError || e instanceof RangeError || e === SCAN_BUDGET_SPENT) throw e;
+        if (readingBug === null) readingBug = e;
+        continue;
+      }
+      charge(ctx, TOKEN_WORK * inner.length);
+      const words = scriptAssignments(inner, shell, ctx, depth + 1);
+      const key = words.join('\0');
+      if (found.has(key)) continue;
+      found.add(key);
+      for (const w of words) assignments.push(w);
+    }
+  };
+  for (const [seg, segTokens] of bySeg) {
+    const words = segTokens.map((t) => t.text);
+    const i = assignmentSegmentStart(words);
+    if (i === words.length || DECLARATION_COMMANDS.has(words[i])) {
+      for (const w of words) if (ASSIGNMENT_RE.test(w)) assignments.push(w);
+    } else if (depth < MAX_NESTING_DEPTH && words[i] === 'eval') {
+      runInShell(words.slice(words[i + 1] === '--' ? i + 2 : i + 1).join(' ')); // bash's eval takes `--`
+    } else if (depth < MAX_NESTING_DEPTH && (words[i] === 'source' || words[i] === '.')) {
+      for (const t of segTokens.slice(i + 1)) {
+        if (t.procsub !== undefined) for (const src of reconstructedProcsubs(t.procsub, reading, ctx)) runInShell(src);
+      }
+      if (isFdPath(sourcedFile(words.slice(i + 1)))) {
+        for (const text of stdinBySeg.get(seg) || []) runInShell(text);
+        for (const src of pipedScripts(seg, fullBySeg, sepAfter, ctx)) runInShell(src);
+      }
+    }
+  }
+  return assignments;
+}
+
+// The file `source` / `.` runs: its first operand, past bash 5.3's `-p PATH` (attached or not) and an optional
+// `--`; '' when there is none.
+function sourcedFile(texts) {
+  let at = 0;
+  while (at < texts.length && texts[at].startsWith('-p')) at += texts[at] === '-p' ? 2 : 1;
+  if (texts[at] === '--') at++;
+  return at < texts.length ? texts[at] : '';
+}
+
+// Every value `name` is given in `frame` and the frames above it. A `+=`
+// builds on the value before it (#5492), so for a name some frame appends to
+// the values also take each value set, and the empty one, followed by every
+// prefix of the appends after it (frames root to leaf, each in source order;
+// an append before any value set in its frame, as a function body defined
+// earlier is, also comes after each value), and each append on its own.
+function shellVarValues(frame, name, ctx) {
+  const values = new Set();
+  let appended = false;
+  for (let f = frame; f; f = f.parent) {
+    if (f.seqs !== null && f.seqs.has(name)) appended = true;
+    for (const value of f.vars.get(name) || []) {
+      charge(ctx, 1);
+      values.add(value);
+    }
+  }
+  if (appended) for (const value of appendChains(frame, name, ctx)) values.add(value);
+  return [...values];
+}
+
+// The names in `frame` and the frames above it that match `re`, each charged as it is compared (#5492).
+function shellVarNames(frame, re, ctx) {
+  const names = new Set();
+  for (let f = frame; f; f = f.parent) {
+    for (const name of [...f.vars.keys(), ...(f.seqs === null ? [] : f.seqs.keys())]) {
+      charge(ctx, name.length + 1);
+      if (re.test(name)) names.add(name);
+    }
+  }
+  return names;
+}
+
+// The values shellVarValues adds for a name some frame appends to, each
+// charged before it is built.
+function appendChains(frame, name, ctx) {
+  const frames = [];
+  for (let f = frame; f; f = f.parent) frames.push(f);
+  const seq = [];
+  for (let n = frames.length - 1; n >= 0; n--) {
+    const f = frames[n];
+    const own = f.seqs === null ? undefined : f.seqs.get(name);
+    if (own === undefined) {
+      for (const value of f.vars.get(name) || []) seq.push({ value, append: false, early: false, at: seq.length });
+      continue;
+    }
+    let set = false;
+    for (const { value, append } of own) {
+      seq.push({ value, append, early: append && !set, at: seq.length });
+      set = set || !append;
+    }
+  }
+  const appends = seq.filter((e) => e.append);
+  const early = appends.filter((e) => e.early);
+  const chains = [];
+  const chain = (start, steps) => {
+    let value = start;
+    for (const e of steps) {
+      charge(ctx, value.length + e.value.length + 1);
+      value += e.value;
+      chains.push(value);
+    }
+  };
+  // The early appends (a function's body, say) run after the later ones, right
+  // after the value, or right after it and before the later ones.
+  const chainFrom = (start, at) => {
+    charge(ctx, appends.length + early.length);
+    const later = appends.filter((e) => e.at > at);
+    const before = early.filter((e) => e.at < at);
+    chain(start, [...later, ...before]);
+    if (later.length && before.length) {
+      chain(start, before);
+      chain(start, [...before, ...later]);
+    }
+  };
+  chainFrom('', -1);
+  for (const e of seq) if (!e.append) chainFrom(e.value, e.at);
+  for (const e of appends) {
+    charge(ctx, e.value.length + 1);
+    chains.push(e.value);
+  }
+  return chains;
+}
+
+// `--config-env=<key>=<var>`: the key ends at the last `=`, since a
+// subsection may hold one and a variable name may not (git's config.c).
+function gitConfigEnvEntries(spec, ctx) {
+  const eq = spec.lastIndexOf('=');
+  if (eq <= 0) return [];
+  const entries = [];
+  for (const value of shellVarValues(ctx.shellVars, spec.slice(eq + 1), ctx)) {
+    charge(ctx, spec.length + value.length + GIT_ENTRY_WORK);
+    entries.push(gitConfigEntry('--config-env', spec.slice(0, eq), value));
+  }
+  return entries;
+}
+
+// The config git takes from the environment a frame and the frames above it
+// set: GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> pairs (whatever
+// GIT_CONFIG_COUNT says, which may come from the inherited environment),
+// GIT_CONFIG_PARAMETERS (its `'key'='value'` words, split at every `=` since
+// a subsection may hold one), and the GIT_ENV_CONFIG_KEYS twins, named by
+// their variable; `secretFile` is a GIT_CONFIG_FILE_VARS value naming a
+// secret file. Built once per frame as a layer over its parent's (a pair may
+// take its key from one frame and its value from another), so the git
+// commands of a script do not each rebuild it.
+function gitEnvIndex(frame, ctx) {
+  if (frame === null) return null;
+  if (frame.gitEnv !== undefined) return frame.gitEnv;
+  const parent = gitEnvIndex(frame.parent, ctx);
+  const inherited = parent === null ? null : parent.secretFile;
+  const entries = [];
+  const add = (source, rawKey, value, key) => {
+    charge(ctx, rawKey.length + value.length + GIT_ENTRY_WORK);
+    entries.push(gitConfigEntry(source, rawKey, value, key));
+  };
+  let secretFile = inherited;
+  // A name some frame appends to (#5492) is read through shellVarValues, which
+  // chains the appends, also when this frame only appends to it.
+  let appends = false;
+  for (let f = frame; f && !appends; f = f.parent) appends = f.seqs !== null;
+  const names = frame.seqs === null ? frame.vars.keys() : new Set([...frame.vars.keys(), ...frame.seqs.keys()]);
+  for (const name of names) {
+    const values = appends ? shellVarValues(frame, name, ctx) : frame.vars.get(name);
+    const pair = /^GIT_CONFIG_(KEY|VALUE)_(\d+)$/.exec(name);
+    if (pair) {
+      // This frame's keys pair with the values set here or above; its values
+      // with the keys set above (the keys set here are paired already).
+      const keyName = `GIT_CONFIG_KEY_${pair[2]}`;
+      const own = pair[1] === 'KEY';
+      const keys = own ? values : shellVarValues(frame.parent, keyName, ctx);
+      const paired = own ? shellVarValues(frame, `GIT_CONFIG_VALUE_${pair[2]}`, ctx) : values;
+      for (const key of keys) for (const value of paired) add(`$${keyName}`, key, value);
+    } else if (name === 'GIT_CONFIG_PARAMETERS') {
+      for (const parameters of values) {
+        for (const word of splitGitAlias(parameters) || []) {
+          for (let eq = word.indexOf('='); eq !== -1; eq = word.indexOf('=', eq + 1)) {
+            charge(ctx, word.length + GIT_ENTRY_WORK);
+            entries.push(gitConfigEntry(`$${name}`, word.slice(0, eq), word.slice(eq + 1)));
+          }
+        }
+      }
+    } else if (GIT_ENV_CONFIG_KEYS.has(name)) {
+      for (const value of values) add(`$${name}`, name, value, GIT_ENV_CONFIG_KEYS.get(name));
+    } else if (GIT_CONFIG_FILE_VARS.includes(name) && secretFile === null) {
+      for (const value of values) {
+        if (namesSecret(value)) {
+          secretFile = { label: `$${name}`, value };
+          break;
+        }
+      }
+    }
+  }
+  if (entries.length === 0 && secretFile === inherited) {
+    frame.gitEnv = parent;
+  } else {
+    frame.gitEnv = gitConfigIndex(entries, parent);
+    frame.gitEnv.secretFile = secretFile;
+  }
+  return frame.gitEnv;
+}
+
+// The script a command-valued key runs, or null (#5045, #5492).
+function gitConfigScript({ shape, value }) {
+  if (GIT_COMMAND_CONFIG_KEYS.has(shape)) return value;
+  if (value.startsWith('!') && (GIT_BANG_COMMAND_CONFIG_KEYS.has(shape) || GIT_CREDENTIAL_HELPER_KEYS.has(shape))) {
+    return value.slice(1);
+  }
+  if (GIT_CREDENTIAL_HELPER_KEYS.has(shape)
+    && (ABSOLUTE_PATH_RE.test(value) || SHELL_CONTROL_RE.test(value) || STORE_HELPER_RE.test(value))) {
+    return value;
+  }
+  return null;
+}
+
+function aliasLimit(config) {
+  return { code: 'alias-too-complex', text: config.rawKey };
+}
+
+// Scan alias `config` run with the words `rest` after it. A `!` alias is a
+// shell script; a plain alias is the git command its words (split as git
+// splits them) make, scanned at the same depth (#5492) as a rescan, never as
+// a new command (rescanCommand), so what the scan holds survives it. Only an `invoked`
+// alias spends the expansion budget; every expansion is charged its bytes
+// (quoting at most quadruples a word) before it is built.
+function scanGitAlias(config, rest, depth, ctx, invoked) {
+  if (invoked && ++ctx.aliasExpansions > MAX_ALIAS_EXPANSIONS) return aliasLimit(config);
+  const { value } = config;
+  let restBytes = 0;
+  for (const word of rest) restBytes += 4 * word.length + 3;
+  const saved = ctx.alias;
+  ctx.alias = config.rawKey;
+  try {
+    charge(ctx, value.length + restBytes + GIT_SCRIPT_WORK);
+    const label = `alias ${config.rawKey.slice('alias.'.length)}`;
+    if (value.startsWith('!')) {
+      return via(label, withGitConfigs(ctx, null, 0,
+        () => findSecretRead([value.slice(1), ...rest.map(shellQuote)].join(' '), depth + 1, ctx)));
+    }
+    const words = splitGitAlias(value);
+    if (!words) return null;
+    if (ctx.aliasHops >= MAX_ALIAS_HOPS) return aliasLimit(config);
+    return via(label, withGitConfigs(ctx, null, ctx.aliasHops + 1,
+      () => rescanCommand(['git', ...words, ...rest].map(shellQuote).join(' '), depth, ctx)));
+  } finally {
+    ctx.alias = saved;
+  }
+}
+
+// The values `args` gives the options in `specs` (see GIT_COMMAND_OPTIONS),
+// as [spec, value] pairs; a bare optional value is null. git permutes
+// options, and an option's value may be `--` itself (`-X -- -x <cmd>`), so
+// every word is walked: a word after a real `--` only over-scans.
+function gitOptionValues(specs, args) {
+  const found = [];
+  const getopt = specs.some((spec) => spec.getopt);
+  for (let k = 0; k < args.length; k++) {
+    const t = args[k];
+    if (t === '--') continue;
+    const long = t.startsWith('--') ? t.slice(2) : getopt && /^[-+][^-]./.test(t) ? t.slice(1) : null;
+    if (long !== null) {
+      const eq = long.indexOf('=');
+      const name = getopt ? (eq === -1 ? long : long.slice(0, eq)).toLowerCase() : eq === -1 ? long : long.slice(0, eq);
+      const min = (s) => (eq !== -1 && s.attachedMin) || s.min || 1;
+      const spec = specs.find((s) => s.long && name.length >= min(s) && s.long.startsWith(name));
+      if (!spec) continue;
+      if (eq !== -1) found.push([spec, long.slice(eq + 1)]);
+      else if (spec.optional) found.push([spec, null]);
+      else if (k + 1 < args.length) found.push([spec, args[++k]]);
+      continue;
+    }
+    if (!/^-[^-]/.test(t)) continue;
+    for (let i = 1; i < t.length; i++) {
+      const spec = specs.find((s) => s.short === t[i]);
+      if (!spec) continue;
+      if (i + 1 < t.length) found.push([spec, t.slice(i + 1)]);
+      else if (spec.optional) found.push([spec, null]);
+      else if (k + 1 < args.length) found.push([spec, args[++k]]);
+      break;
+    }
+  }
+  return found;
+}
+
+// The pagers a bare `git grep -O` may run: GIT_PAGER, pager.grep unless it
+// is a boolean, core.pager and PAGER, in git's order; all are scanned. It
+// runs with no terminal, unlike paging.
+function gitGrepPagers(ctx) {
+  return [...gitConfigsNamed(ctx, 'pager.grep').filter((config) => !GIT_BOOLEAN_RE.test(config.value)),
+    ...gitConfigsNamed(ctx, 'core.pager')];
+}
+
+// Pager keys run with no terminal, so their value is not a file git quotes.
+const isGitPagerKey = (key) => key === 'core.pager' || key.startsWith('pager.');
+
+// Scripts a subcommand runs from its trailing words, as [label, script]
+// pairs, rebuilt the way git runs them: `submodule foreach` as
+// `sh -c '<first> "$@"'`, `bisect run` as its words single-quoted under
+// `sh -c`, `for-each-repo` as a nested git command line, `remote-ext` as an
+// ext:: command.
+function gitTrailingScripts(sub, args) {
+  if (sub === 'submodule' || sub === 'submodule--helper') {
+    let k = 0;
+    while (k < args.length && args[k].startsWith('-')) k++;
+    if (args[k] !== 'foreach') return [];
+    for (k++; k < args.length && args[k].startsWith('-'); k++) {
+      if (args[k] === '--') {
+        k++;
+        break;
+      }
+    }
+    return k < args.length ? [[`${sub} foreach`, [args[k], ...args.slice(k + 1).map(shellQuote)].join(' ')]] : [];
+  }
+  if (sub === 'bisect' && args[0] === 'run') return [['bisect run', args.slice(1).map(shellQuote).join(' ')]];
+  if (sub === 'for-each-repo') {
+    let k = 0;
+    while (k < args.length && args[k].startsWith('-')) {
+      if (args[k++] === '--') break;
+      if (args[k - 1] === '--config') k++;
+    }
+    return [[sub, ['git', ...args.slice(k)].map(shellQuote).join(' ')]];
+  }
+  if (sub === 'remote-ext' && args.length > 1) return [[sub, extCommand(args[1])]];
+  return [];
+}
+
+// git-remote-ext's command (builtin/remote-ext.c): words split on a space,
+// `% ` is a space and `%%` a percent inside a word, and `%G…` / `%V…` words
+// are the helper's own. The words are exec'd, not run through a shell.
+function extCommand(spec) {
+  const argv = [];
+  let word = '';
+  let raw = '';
+  for (let i = 0; i <= spec.length; i++) {
+    if (i === spec.length || spec[i] === ' ') {
+      if (!/^%[GV]/.test(raw)) argv.push(word);
+      word = '';
+      raw = '';
+    } else if (spec[i] === '%' && (spec[i + 1] === ' ' || spec[i + 1] === '%')) {
+      word += spec[++i];
+      raw += `%${spec[i]}`;
+    } else {
+      word += spec[i];
+      raw += spec[i];
+    }
+  }
+  return argv.map(shellQuote).join(' ');
+}
+
+// A script git runs, scanned one level down.
+function scanGitScript(script, label, depth, ctx) {
+  if (!script) return null;
+  charge(ctx, GIT_SCRIPT_WORK);
+  return via(label, findSecretRead(script, depth + 1, ctx));
+}
+
+// The commands ext:: URLs run: in any subcommand word (after an option's
+// `=`) or config value, after the url.<base>.insteadOf rewrites in force;
+// with remote.<name>.vcs=ext in force a plain URL is an ext command too.
+function scanGitExtUrls(urls, { rewrites, vcsExt }, depth, ctx) {
+  // Decoding walks the whole URL, and a decoded command may be empty (only
+  // the helper's own %G / %V words), which scans nothing, so the decode is
+  // charged first.
+  const scan = (candidate) => {
+    const ext = /^ext::/i.test(candidate);
+    if (!ext && !vcsExt) return null;
+    charge(ctx, candidate.length + 1);
+    return scanGitScript(extCommand(ext ? candidate.slice(5) : candidate), 'ext::', depth, ctx);
+  };
+  for (const url of urls) {
+    let hit = scan(url);
+    if (hit !== null) return hit;
+    for (const [prefix, base] of rewrites) {
+      charge(ctx, Math.min(prefix.length, url.length) + 1);
+      if (!prefix || !url.startsWith(prefix)) continue;
+      charge(ctx, base.length + url.length - prefix.length);
+      hit = scan(base + url.slice(prefix.length));
+      if (hit !== null) return hit;
+    }
+  }
+  return null;
+}
+
+// The scripts of command-valued configs, and a config value naming a secret
+// file, which git may quote in an error (a pager's value is not one: with no
+// terminal git only execs it).
+function scanGitConfigValues(configs, depth, ctx) {
+  for (const config of configs) {
+    charge(ctx, config.value.length + GIT_ENTRY_WORK);
+    if (config.key.startsWith('alias.')) continue;
+    const script = gitConfigScript(config);
+    const hit = script === null ? null : scanGitScript(script, configLabel(config), depth, ctx);
+    if (hit !== null) return hit;
+    if (!isGitPagerKey(config.key) && namesSecret(config.value)) return via(configLabel(config), secretRead(config.value));
+  }
+  return null;
+}
+
+// Another alias or script may run any alias defined here, so every
+// definition but the invoked one is scanned on its own as well.
+function scanGitAliasDefinitions(configs, invoked, depth, ctx) {
+  for (const config of configs) {
+    if (!config.key.startsWith('alias.') || config.key === invoked) continue;
+    const hit = scanGitAlias(config, [], depth, ctx, false);
+    if (hit !== null) return hit;
+  }
+  return null;
 }
 
 /**
- * Rescan only the command-valued -c keys selected by #5045. This deliberately
- * does not resolve config files, --config-env/GIT_CONFIG_* values, or other
- * executing keys (diff drivers, filters, credential helpers, ssh, gpg).
- * Those are documented gaps, not a promise of complete Git config analysis.
- * Global option values and subcommand arguments are data, not more -c flags.
+ * Scan a git command line for commands git runs (#5045, #5492): the scripts
+ * of the command-valued -c keys (global or `clone -c`), a -c value naming a
+ * secret file (git may quote it in an error), the alias the subcommand
+ * invokes with the words after it and every other alias defined there, the
+ * options and trailing words the subcommand runs, and ext:: URLs. Config
+ * set in the environment the command line sets (GIT_CONFIG_*,
+ * --config-env, the GIT_EDITOR-style twins) counts like -c, and -c values
+ * stay in force for nested git commands, as git exports them. This
+ * deliberately does not resolve config files, environment values the
+ * command line does not set, program-path keys, or keys outside those sets:
+ * documented gaps, not a promise of complete Git config analysis.
  */
-function scanGitConfig(operands, depth) {
-  for (const config of walkGitGlobals(operands).configs) {
-    const eq = config.indexOf('=');
-    if (eq === -1) continue;
-    const key = config.slice(0, eq).toLowerCase();
-    const value = config.slice(eq + 1);
-    let script;
-    if (key.startsWith('alias.') && value.startsWith('!')) script = value.slice(1);
-    else if (key === 'diff.external') script = value;
-    else continue;
-    const hit = findSecretRead(script, depth + 1);
-    if (hit) return hit;
+function scanGitInvocation(operands, depth, ctx) {
+  charge(ctx, GIT_COMMAND_WORK + operands.length);
+  // The alias budget is per git command, however it is reached; a nested git
+  // inside an alias or a script shares its outer command's budget.
+  if (ctx.aliasHops === 0 && ctx.gitScope === null) ctx.aliasExpansions = 0;
+  const { sub, configs: globals } = walkGitGlobals(operands);
+  const name = sub === -1 ? null : operands[sub].text;
+  const rest = sub === -1 ? [] : operands.slice(sub + 1).map((w) => w.text);
+  // Case-folded, as a case-insensitive filesystem finds git-<name> (the
+  // #4856 pathspec exemption stays case-sensitive: both fail closed).
+  const command = name && name.toLowerCase();
+  const options = gitOptionValues(GIT_COMMAND_OPTIONS.get(command) || [], rest);
+  const envIndex = gitEnvIndex(ctx.shellVars, ctx);
+  if (envIndex !== null && envIndex.secretFile !== null) return via(envIndex.secretFile.label, secretRead(envIndex.secretFile.value));
+  const own = [];
+  const addOwn = (entry) => {
+    if (entry !== null) own.push(entry);
+  };
+  for (const config of globals) {
+    if (typeof config === 'string') addOwn(parseGitConfig(config));
+    else for (const entry of gitConfigEnvEntries(config.configEnv, ctx)) own.push(entry);
   }
-  return null;
+  // Only the global entries are applied before git resolves an alias, so only they may shadow one (below).
+  const ownGlobals = [...own];
+  for (const [spec, value] of options) if (spec.config) addOwn(parseGitConfig(value));
+  // The environment's config comes in at the command the line runs. A
+  // plain-alias hop re-enters with it already in force, so it comes in again
+  // only when the hop sets config of its own.
+  const env = ctx.aliasHops === 0 || own.length ? envIndex : null;
+  // A frame's environment config scans the same way at every depth-0 git
+  // command that sets no config of its own and runs inside no other, so it is
+  // scanned once per frame there (a prefix assignment makes a new frame).
+  const frame = ctx.shellVars;
+  const memo = env !== null && depth === 0 && ctx.gitScope === null && own.length === 0;
+  const invoked = name === null ? null : `alias.${name.toLowerCase()}`;
+  // A git command an alias or script runs, with no config of its own and no
+  // new shell variables, sees exactly what the git command around it scanned:
+  // the innermost scope holds this environment under this frame. Anything
+  // new (its own -c, a variable a rewrite, vcs=ext or --config-env reads)
+  // rescans the whole environment under it.
+  const inherited = env !== null && own.length === 0 && ctx.gitScope !== null
+    && ctx.gitScope.frame === frame && gitIndexHolds(ctx.gitScope.index, env);
+  const index = own.length ? gitConfigIndex(own, env) : inherited ? null : env;
+  return withGitConfigs(ctx, index, ctx.aliasHops, () => {
+    if (env !== null && !inherited && !(memo && frame.gitEnvScanned)) {
+      const inForce = gitRewritesInForce(ctx);
+      // The invoked alias is scanned below with the words after it, as with
+      // -c, so it is not scanned here as a definition too; a frame that skipped
+      // it is not marked scanned, since a later command may not invoke it.
+      let skipped = false;
+      for (let layer = env; layer; layer = layer.next) {
+        if (invoked !== null && layer.byKey.has(invoked)) skipped = true;
+        const hit = scanGitConfigValues(layer.entries, depth, ctx)
+          ?? scanGitAliasDefinitions(layer.entries, invoked, depth, ctx)
+          ?? scanGitExtUrls(layer.entries.map((config) => config.value), inForce, depth, ctx);
+        if (hit !== null) return hit;
+      }
+      if (memo && !skipped) frame.gitEnvScanned = true;
+    }
+    let hit = scanGitConfigValues(own, depth, ctx);
+    if (hit !== null) return hit;
+    // Every definition of the invoked alias in force runs with the words
+    // after it: a variable may hold several values, and only one of them wins.
+    for (const alias of invoked === null ? [] : invokedAliasConfigs(ctx, invoked, own, ownGlobals)) {
+      hit = scanGitAlias(alias, rest, depth, ctx, true);
+      if (hit !== null) return hit;
+    }
+    hit = scanGitAliasDefinitions(own, invoked, depth, ctx);
+    if (hit !== null) return hit;
+    let bare = null;
+    for (const [spec, value] of options) {
+      if (spec.config) continue;
+      if (spec.optional && value === null) bare = spec;
+      else if ((hit = scanGitScript(value, `${command} --${spec.long}`, depth, ctx)) !== null) return hit;
+    }
+    // A bare `grep -O` runs the pagers in force, however many times it is given.
+    for (const pager of bare === null ? [] : gitGrepPagers(ctx)) {
+      hit = via(`${command} --${bare.long}`, scanGitScript(pager.value, configLabel(pager), depth, ctx));
+      if (hit !== null) return hit;
+    }
+    for (const [label, script] of gitTrailingScripts(command, rest)) {
+      hit = scanGitScript(script, label, depth, ctx);
+      if (hit !== null) return hit;
+    }
+    const inForce = gitRewritesInForce(ctx);
+    const urls = [];
+    for (const w of rest) urls.push(w.startsWith('-') && w.includes('=') ? w.slice(w.indexOf('=') + 1) : w);
+    for (const config of own) urls.push(config.value);
+    for (const [, base] of inForce.rewrites) urls.push(base);
+    return scanGitExtUrls(urls, inForce, depth, ctx);
+  });
+}
+
+// The commands an ssh client's `-o` options run locally (#5492): the value
+// after `-o` (attached, or the next word, also at the end of a bundle), as
+// `Keyword=value` or `Keyword value`; [label, script] pairs. `base` is the
+// client, whose own options decide which letters take a value.
+function sshOptionScripts(base, operands) {
+  const valueFlags = SSH_CLIENT_VALUE_FLAGS.get(base.replace(/\.exe$/, ''));
+  const scripts = [];
+  for (let k = 0; k < operands.length; k++) {
+    const t = operands[k].text;
+    if (t === '--') break;
+    if (!/^-[A-Za-z0-9]/.test(t)) continue;
+    for (let i = 1; i < t.length; i++) {
+      if (!valueFlags.includes(t[i])) continue;
+      const value = i + 1 < t.length ? t.slice(i + 1) : operands[++k] && operands[k].text;
+      const m = t[i] === 'o' && typeof value === 'string' && SSH_OPTION_RE.exec(value);
+      if (m && SSH_LOCAL_COMMAND_OPTIONS.has(m[1].toLowerCase())) scripts.push([`-o ${m[1]}`, m[2]]);
+      break;
+    }
+  }
+  return scripts;
 }
 
 // Operand indices the segment's command consumes as a NAME, never as
@@ -2126,19 +3243,45 @@ function searchOperandIndices(spec, operands) {
 }
 
 // `xargs <sub-command words>`: the word index of the sub-command, or -1.
-// `argFile` is true when `-a`/`--arg-file` replaces stdin.
+// `argFile` is true when `-a`/`--arg-file` replaces stdin. `replaceStr` is
+// xargs's replace string, or null without one: `-I STR`, `-i[STR]`,
+// `--replace[=STR]` (`{}` without a value) and BSD `-J STR`, in a cluster
+// (`-tI{}`) or under any prefix of `--replace` too; the last one given wins.
 function xargsSubCommand(operands) {
   let argFile = false;
+  let replaceStr = null;
   for (let m = 0; m < operands.length; m++) {
     const t = operands[m].text;
-    if (t === '-a' || t === '--arg-file') { argFile = true; m++; continue; }
-    if (t.startsWith('--arg-file=')) { argFile = true; continue; }
-    if (XARGS_VALUE_FLAGS.has(t)) { m++; continue; }
-    if (t.startsWith('--') && t.includes('=')) continue;
-    if (t.startsWith('-')) continue; // no-value flag (-0 -r -t -p) or long flag
-    return { subIdx: m, argFile };
+    if (t === '--') return { subIdx: m + 1 < operands.length ? m + 1 : -1, argFile, replaceStr };
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = t.slice(2, eq === -1 ? undefined : eq);
+      const matches = [...XARGS_LONG_OPTIONS.keys()].filter((long) => long.startsWith(name));
+      const long = XARGS_LONG_OPTIONS.has(name) ? name : matches.length === 1 ? matches[0] : null;
+      if (long === 'arg-file') argFile = true;
+      if (long === 'replace') replaceStr = (eq === -1 ? '' : t.slice(eq + 1)) || '{}';
+      if (eq === -1 && XARGS_LONG_OPTIONS.get(long) === 'value') m++;
+      continue;
+    }
+    if (t.length > 1 && t.startsWith('-')) {
+      for (let i = 1; i < t.length; i++) {
+        if (t[i] === 'a') argFile = true;
+        if (t[i] === 'i') replaceStr = t.slice(i + 1) || '{}';
+        if (XARGS_SHORT_OPTIONAL.includes(t[i])) break;
+        if (!XARGS_SHORT_VALUE.includes(t[i])) continue;
+        if (t[i] === 'I' || t[i] === 'J') {
+          // The value is the rest of the word, else the next word, which a trailing `-I` lacks.
+          if (i < t.length - 1) replaceStr = t.slice(i + 1);
+          else replaceStr = m + 1 < operands.length ? operands[m + 1].text : null;
+        }
+        if (i === t.length - 1) m++;
+        break;
+      }
+      continue;
+    }
+    return { subIdx: m, argFile, replaceStr };
   }
-  return { subIdx: -1, argFile };
+  return { subIdx: -1, argFile, replaceStr };
 }
 
 // The carve-out for a search sub-command run by xargs, shifted to xargs's own
@@ -2176,25 +3319,36 @@ function isListedFlag(text, flags) {
 
 // Walks git's global options (see GIT_GLOBAL_VALUE_OPTIONS). `sub` is the
 // subcommand's index, or -1 when an unlisted option (or the end of the words)
-// comes first; `configs` holds every `-c` value seen on the way, in order.
-// Past an unlisted option the subcommand cannot be located, so `configs`
-// conservatively takes the word after every later `-c` as well: a read
-// still needs a command-valued key, so a harmless value stays allowed.
+// comes first; `configs` holds every `-c` value and `--config-env` spec
+// seen on the way, in order, as git applies them (a spec as
+// `{ configEnv }`). Past an unlisted option the subcommand cannot be located,
+// so `configs` conservatively takes the word after every later `-c` /
+// `--config-env` as well: a read still needs a command-valued key, so a
+// harmless value stays allowed.
 function walkGitGlobals(operands) {
   const configs = [];
+  const collect = (option, value) => {
+    if (option === '-c') configs.push(value);
+    else if (option === '--config-env') configs.push({ configEnv: value });
+  };
   for (let k = 0; k < operands.length; k++) {
     const t = operands[k].text;
     if (!t.startsWith('-')) return { sub: k, configs };
     if (GIT_GLOBAL_VALUE_OPTIONS.has(t)) {
-      if (t === '-c' && k + 1 < operands.length) configs.push(operands[k + 1].text);
+      if (k + 1 < operands.length) collect(t, operands[k + 1].text);
       k++;
       continue;
     }
     if (GIT_GLOBAL_FLAGS.has(t)) continue;
     const eq = t.indexOf('=');
-    if (t.startsWith('--') && eq !== -1 && GIT_GLOBAL_EQUALS_FORM_OPTIONS.has(t.slice(0, eq))) continue;
-    for (let j = k + 1; j + 1 < operands.length; j++) {
-      if (operands[j].text === '-c') configs.push(operands[++j].text);
+    if (t.startsWith('--') && eq !== -1 && GIT_GLOBAL_EQUALS_FORM_OPTIONS.has(t.slice(0, eq))) {
+      collect(t.slice(0, eq), t.slice(eq + 1));
+      continue;
+    }
+    for (let j = k + 1; j < operands.length; j++) {
+      const w = operands[j].text;
+      if ((w === '-c' || w === '--config-env') && j + 1 < operands.length) collect(w, operands[++j].text);
+      else if (w.startsWith('--config-env=')) collect('--config-env', w.slice('--config-env='.length));
     }
     return { sub: -1, configs };
   }
@@ -2235,28 +3389,44 @@ function copyDestinationIndices(operands) {
   return positional.length === 2 ? new Set([positional[1]]) : new Set();
 }
 
-// What a bare `cat` prints when its stdin is a heredoc or here-string in the command text (#6182): the bodies and
-// strings joined by a newline. `cat file` (an operand that is not `-`) reads no stdin, so its output is not knowable here.
-function catPrintedText(cmd, feeds) {
-  const named = cmd.operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
-  if (named.length > 0 && !named.some((w) => w.text === '-')) return null;
-  return fedText(feeds);
+// The statically-knowable stdin a segment writes, as the scripts it may
+// amount to, each scanned on its own: `echo`/`printf` operands joined by a
+// space (for `echo`, leading `-neE` flags dropped), as before. A printf may
+// write more than that reading shows (#5492), so these are added beside it,
+// never in its place, and a command the space-joined reading blocked stays
+// blocked: for a `%s\n` or `%s\\n` format, its arguments a line each; for a
+// `%s`, `%s\n` or `%s\\n` format, its arguments run together (`%s` prints
+// them so); and for a format with no `%`, the format with its escapes read
+// (`printf 'cat\40.env'`), a NUL as a space since xargs -0 splits on it.
+// Beside those (#5492): what printf writes, as printfOutput reads it, and for
+// an echo holding a backslash, what it writes with its escapes read (`echo -e`,
+// and dash's and zsh's echo, which read them unasked), each NUL as a space. Any
+// other source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → [].
+const PRINTF_LINE_FORMATS = new Set(['%s\\n', '%s\\\\n']);
+const NO_FEEDS = Object.freeze({ heredocs: [], hereStrings: [] });
+function reconstructedScripts(words, ctx, feeds = NO_FEEDS) {
+  // Each reading of the command (commandReadings), the earlier first.
+  const cmds = commandReadings(words);
+  if (cmds.length < 2) return cmds.length ? scriptsWritten(cmds[0], ctx, feeds) : [];
+  const scripts = [];
+  for (const cmd of cmds) for (const script of scriptsWritten(cmd, ctx, feeds)) if (!scripts.includes(script)) scripts.push(script);
+  return scripts;
 }
 
-function fedText(feeds) {
+// What a bare `cat` or a `tee` prints when its stdin is a heredoc or here-string in the command text (#6182): `feeds`,
+// the bodies and strings given to it, each on its own and joined by a newline. `cat file` (an operand that is not `-`)
+// reads no stdin, so its output is not knowable here.
+function catPrintedTexts(cmd, feeds) {
+  return catReadsFilesOnly(cmd.operands) ? [] : fedTexts(feeds);
+}
+
+function fedTexts(feeds) {
   const parts = [...feeds.heredocs, ...feeds.hereStrings];
-  return parts.length > 0 ? parts.join('\n') : null;
+  return parts.length > 1 ? [...parts, parts.join('\n')] : parts;
 }
 
-// A command that passes its stdin through unchanged when nothing is fed to it directly (`… | tee out | bash`,
-// `… | cat | bash`): the text a shell reads is then that of the segment upstream of it.
-function passesStdinThrough(cmd, feeds) {
-  if (fedText(feeds) !== null) return false;
-  if (cmd.base === 'tee') return true;
-  return cmd.base === 'cat' && cmd.operands.every((w) => w.text.startsWith('-'));
-}
-
-// The command words of one segment's tokens: the redirect targets (`<<<` text, `> file`) are not operands of the command.
+// The command words of one segment's tokens: the redirect targets (`<<<` text, `> file`) are not operands of the
+// command, nor is a `{name}` word naming the fd a redirect opens (`{fd}<<< x`).
 function commandWords(segTokens) {
   const words = [];
   for (let k = 0; k < segTokens.length; k++) {
@@ -2265,7 +3435,7 @@ function commandWords(segTokens) {
       if (!t.dup && segTokens[k + 1] && segTokens[k + 1].kind === 'word') k++;
       continue;
     }
-    if (t.kind === 'word') words.push(t);
+    if (t.kind === 'word' && !t.namesFd) words.push(t);
   }
   return words;
 }
@@ -2286,38 +3456,160 @@ function hereStringTargets(segTokens) {
 // the bodies of the segment upstream of it without every scanner taking another parameter.
 const heredocBodiesBySegMap = new WeakMap();
 
-// The statically-knowable stdin a segment writes: `echo`/`printf` operands
-// joined by a space (for `echo`, leading `-neE` flags dropped), or the text a
-// bare `cat` prints from a heredoc or here-string given to it (#6182). Any other
-// source (`cat gen.sh | bash`, `curl … | sh`) is not knowable → null.
-function reconstructedScript(words, feeds = { heredocs: [], hereStrings: [] }) {
-  const cmd = resolveCommand(words);
-  if (!cmd) return null;
-  if (cmd.base === 'cat') return catPrintedText(cmd, feeds);
-  if (cmd.base === 'tee') return fedText(feeds); // tee prints its stdin (the files it writes are outputs)
+// `feeds` is what the command's own heredocs and here-strings give a `cat` or `tee` to print (#6182).
+function scriptsWritten(cmd, ctx, feeds = NO_FEEDS) {
+  if (cmd.base === 'cat') return catPrintedTexts(cmd, feeds);
+  if (cmd.base === 'tee') return fedTexts(feeds); // tee prints its stdin (the files it writes are outputs)
   if (cmd.base === 'echo') {
     let start = 0;
     while (start < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[start].text)) start++;
-    return cmd.operands.slice(start).map((w) => w.text).join(' ');
+    const joined = cmd.operands.slice(start).map((w) => w.text).join(' ');
+    if (!joined.includes('\\')) return [joined];
+    charge(ctx, joined.length);
+    const decoded = decodePrintfArgument(joined).text.replaceAll('\0', ' ');
+    return decoded === joined ? [joined] : [joined, decoded];
   }
-  if (cmd.base === 'printf') return cmd.operands.map((w) => w.text).join(' ');
-  return null;
+  if (cmd.base !== 'printf') return [];
+  const texts = cmd.operands.map((w) => w.text);
+  const scripts = [texts.join(' ')];
+  if (!texts.length) return scripts;
+  const [format, ...args] = texts;
+  if (PRINTF_LINE_FORMATS.has(format)) scripts.push(args.join('\n'));
+  if (format === '%s' || PRINTF_LINE_FORMATS.has(format)) scripts.push(args.join(''));
+  if (!format.includes('%')) {
+    const decoded = decodeAnsiCBash(format.replace(/\\0(?![0-7])/g, ' '));
+    if (decoded !== format) scripts.push(decoded);
+  }
+  const written = printfOutput(texts[0] === '--' ? texts.slice(1) : texts, ctx);
+  if (written !== null && !scripts.includes(written.replaceAll('\0', ' '))) scripts.push(written.replaceAll('\0', ' '));
+  return scripts;
 }
 
-// Same rule applied to a `<( … )` / `>( … )` inner script's first segment.
-function reconstructedProcsub(inner, reading) {
-  const { tokens } = tokenizeCharged(inner, reading);
-  const first = [];
-  const heredocs = [];
-  let sawSeparator = false;
-  for (const t of tokens) {
-    // The body of a heredoc opened on the first line is emitted after that line's newline separator.
-    if (t.kind === 'heredoc' && first.length > 0 && t.seg === first[0].seg) heredocs.push(t.text);
-    else if (sawSeparator) continue;
-    else if (t.kind === 'sep') sawSeparator = true;
-    else first.push(t);
+// What printf writes for its format and arguments (#5492): the format run over the arguments as many times as it
+// takes to consume them, ending after a pass that consumes none. `%s`, `%b`, `%c` and `%%` are read; any other
+// conversion (`%d`, `%q`, a flag, width or precision) gives null, which adds no reading. Each pass, and each
+// argument it writes, is charged before it is built.
+function printfOutput(texts, ctx) {
+  if (!texts.length) return null;
+  const [format, ...args] = texts;
+  let out = '';
+  let next = 0;
+  for (;;) {
+    const before = next;
+    charge(ctx, format.length + 1);
+    for (let i = 0; i < format.length; i++) {
+      if (format[i] === '\\') {
+        const escape = printfEscape(format, i, false);
+        out += escape.text;
+        i = escape.end - 1;
+        continue;
+      }
+      if (format[i] !== '%') {
+        out += format[i];
+        continue;
+      }
+      const conversion = format[++i];
+      if (conversion === '%') {
+        out += '%';
+        continue;
+      }
+      if (conversion !== 's' && conversion !== 'b' && conversion !== 'c') return null;
+      const arg = next < args.length ? args[next++] : '';
+      charge(ctx, arg.length);
+      if (conversion === 's') out += arg;
+      else if (conversion === 'c') out += arg.slice(0, 1);
+      else {
+        const decoded = decodePrintfArgument(arg);
+        out += decoded.text;
+        if (decoded.stop) return out;
+      }
+    }
+    if (next === before || next >= args.length) return out;
   }
-  return reconstructedScript(commandWords(first), { heredocs, hereStrings: hereStringTargets(first) });
+}
+
+// One printf escape, at `str[i]` === '\\', as bash's printf reads it (#5492): in the format (`inArgument` false),
+// `\NNN` is octal and `\c` is written as it stands; in a `%b` argument and echo's operands, `\0NNN` and `\NNN` are
+// octal and `\c` ends the output (`stop`). Both read `\xHH`, `\uHHHH`, `\UHHHHHHHH` and the C escapes, and leave
+// any other backslash as it stands. `end` is the index after the escape.
+const PRINTF_ESCAPES = new Map([
+  ['a', '\x07'], ['b', '\b'], ['e', '\x1b'], ['E', '\x1b'], ['f', '\f'], ['n', '\n'], ['r', '\r'], ['t', '\t'], ['v', '\v'],
+  ['\\', '\\'],
+]);
+const PRINTF_HEX_DIGITS = new Map([['x', 2], ['u', 4], ['U', 8]]);
+function printfEscape(str, i, inArgument) {
+  const c = str[i + 1];
+  if (c === undefined) return { text: '\\', end: i + 1, stop: false };
+  if (PRINTF_ESCAPES.has(c)) return { text: PRINTF_ESCAPES.get(c), end: i + 2, stop: false };
+  if (!inArgument && (c === '"' || c === "'" || c === '?')) return { text: c, end: i + 2, stop: false };
+  if (c === 'c') return inArgument ? { text: '', end: i + 2, stop: true } : { text: '\\c', end: i + 2, stop: false };
+  const from = inArgument && c === '0' ? i + 2 : i + 1;
+  const octal = /^[0-7]{1,3}/.exec(str.slice(from, from + 3));
+  if (octal || from === i + 2) {
+    const digits = octal ? octal[0] : '';
+    return { text: String.fromCharCode(parseInt(digits || '0', 8) & 0xff), end: from + digits.length, stop: false };
+  }
+  const width = PRINTF_HEX_DIGITS.get(c);
+  const hex = width && /^[0-9A-Fa-f]+/.exec(str.slice(i + 2, i + 2 + width));
+  if (hex) {
+    const v = parseInt(hex[0], 16);
+    if (c === 'x' || v <= 0x10ffff) return { text: c === 'x' ? String.fromCharCode(v) : String.fromCodePoint(v), end: i + 2 + hex[0].length, stop: false };
+  }
+  return { text: `\\${c}`, end: i + 2, stop: false };
+}
+
+// A `%b` argument, or echo's operands, with printfEscape's escapes read; `stop` when a `\c` ended it.
+function decodePrintfArgument(text) {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '\\') {
+      out += text[i];
+      continue;
+    }
+    const escape = printfEscape(text, i, true);
+    if (escape.stop) return { text: out, stop: true };
+    out += escape.text;
+    i = escape.end - 1;
+  }
+  return { text: out, stop: false };
+}
+
+// Same rule applied to a `<( … )` / `>( … )` inner script: the scripts its
+// first segment may amount to, as before, and (#5492: `<(echo a; echo "…")`)
+// what each echo / printf segment writes, a line each. The alternatives are
+// scanned apart, since joining them could let a quote in one swallow another.
+function reconstructedProcsubs(inner, reading, ctx) {
+  const { tokens } = tokenizeCharged(inner, reading);
+  const bySeg = new Map();
+  const segTokens = new Map();
+  const heredocsBySeg = new Map();
+  for (const t of tokens) {
+    if (t.kind === 'heredoc') {
+      if (!heredocsBySeg.has(t.seg)) heredocsBySeg.set(t.seg, []);
+      heredocsBySeg.get(t.seg).push(t.text);
+    }
+    if (t.kind === 'op' || t.kind === 'word') {
+      if (!segTokens.has(t.seg)) segTokens.set(t.seg, []);
+      segTokens.get(t.seg).push(t);
+    }
+    if (t.kind !== 'word') continue;
+    if (!bySeg.has(t.seg)) bySeg.set(t.seg, []);
+    bySeg.get(t.seg).push(t);
+  }
+  const perSeg = [...bySeg.values()].map((words) => reconstructedScripts(words, ctx));
+  const scripts = [];
+  for (const alts of perSeg) for (const a of alts) scripts.push(a);
+  const lines = perSeg.filter((alts) => alts.length).map((alts) => alts[0]);
+  if (lines.length > 1) scripts.push(lines.join('\n'));
+  // Beside those, what a segment's `cat` or `tee` prints from its heredocs and here-strings (#6182:
+  // `bash <(cat <<EOF …)`, `source <(cat <<< '…')`), its redirect targets dropped from its words.
+  for (const [seg, toks] of segTokens) {
+    const feeds = { heredocs: heredocsBySeg.get(seg) || [], hereStrings: hereStringTargets(toks) };
+    const cmdWords = commandWords(toks);
+    if (cmdWords.length === (bySeg.get(seg) || []).length && !feeds.heredocs.length) continue; // read above already
+    for (const a of reconstructedScripts(cmdWords, ctx, feeds)) if (!scripts.includes(a)) scripts.push(a);
+  }
+  return scripts;
 }
 
 // The operator connecting segment `s` to the nearest PRECEDING segment that has
@@ -2340,15 +3632,16 @@ function precedingOp(s, bySeg, sepAfter) {
 // command that opens a heredoc can read differently, so the extra passes are skipped for
 // every other command. One that met a brace tag gets both span readings with the brace
 // read the earlier way as well: that test is the flag, not the text, because a body can
-// spell its `<<` so that only the nested scan sees it (`eval ': <''<} …'`).
-function findSecretReadUnderOtherReadings(command) {
+// spell its `<<` so that only the nested scan sees it (`eval ': <''<} …'`). Every pass
+// shares `ctx`, so MAX_SCAN_WORK bounds the whole command.
+function findSecretReadUnderOtherReadings(command, ctx = newScanContext()) {
   const scanUnder = (bodiesSkipped, tagsAsWords, braceTags) => {
     heredocBodiesSkippedInSpans = bodiesSkipped;
     heredocTagsAsWords = tagsAsWords;
     heredocBraceTags = braceTags;
     inHeredocPass = true;
     try {
-      return findSecretRead(command, 0);
+      return findSecretRead(command, 0, ctx);
     } finally {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
@@ -2385,11 +3678,15 @@ function findDebuggerCliSpawnEitherWay(command) {
 // continuations removed, because bash joins them before it reads a quote:
 // `$\<newline>'x'` is `$'x'`. A run of 2+ `$` before `{` or `(` always ends in
 // `$${` or `$$(`, so a substring test finds it in linear time.
-function findSecretRead(command, depth) {
-  if (depth > 0) return readEachWay(command, depth);
+// A body the scan rescans (depth > 0) goes to rescanCommand; depth 0 is the
+// command itself. `ctx` is the command's git and work state (newScanContext);
+// a scan past MAX_SCAN_WORK returns the limit it hit (scanLimit).
+function findSecretRead(command, depth, ctx = newScanContext()) {
+  if (depth > 0) return rescanCommand(command, depth, ctx);
   if (!inHeredocPass) braceTagRead = false;
   heldNested = null;
   scanUnfinished = false;
+  scanLimit = null;
   readingsRan = false;
   if (!budgetHeld) {
     scanBudget = MAX_SCAN_CHARACTERS;
@@ -2403,7 +3700,7 @@ function findSecretRead(command, depth) {
   let hit = null;
   let failure = null;
   try {
-    hit = readEachWay(command, 0);
+    hit = readEachWay(command, 0, ctx);
   } catch (e) {
     if (unfinishedBy(e)) scanUnfinished = true;
     else failure = e;
@@ -2412,10 +3709,11 @@ function findSecretRead(command, depth) {
   // header), but only after the scan with the `${…}` reader off has had its say, and
   // a scan that could not finish is still denied.
   const unfinished = scanUnfinished;
-  if (hit === null && readingsRan && (!unfinished || failure !== null)) hit = readAsBefore(command);
+  if (hit === null && readingsRan && (!unfinished || failure !== null)) hit = readAsBefore(command, ctx);
   if (hit !== null) return hit;
   // A scan that could not finish is the more specific verdict than a body held for being nested too deep (#6136).
   if (heldNested !== null && !(heldNested.code === 'nesting-too-deep' && (unfinished || scanUnfinished))) return heldNested;
+  if (scanLimit !== null) return scanLimit;
   if (unfinished || scanUnfinished) return { code: 'command-too-complex', text: '' };
   if (failure !== null) throw failure;
   return null;
@@ -2440,6 +3738,7 @@ let budgetSize = MAX_SCAN_CHARACTERS;
 // the whole command. `budget` is for tests, which pin the boundary on a small
 // one; the hook passes none.
 function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget = MAX_SCAN_SEPARATORS) {
+  const ctx = newScanContext();
   scanBudget = budget;
   readerSteps = budget;
   budgetSize = budget;
@@ -2449,11 +3748,11 @@ function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget 
   scanSpent = false;
   budgetHeld = true;
   try {
-    const first = findSecretRead(command, 0);
+    const first = findSecretRead(command, 0, ctx);
     if (first !== null && first.code !== 'nesting-too-deep') return first;
     // A body held for being nested too deep leaves the other readings their say: a read or an unfinished scan they
     // report outranks it (#6136), and it stands when they find nothing more.
-    const second = findSecretReadUnderOtherReadings(command);
+    const second = findSecretReadUnderOtherReadings(command, ctx);
     return second !== null && second.code !== 'nesting-too-deep' ? second : (first || second);
   } finally {
     budgetHeld = false;
@@ -2502,12 +3801,12 @@ let asBefore = false;
 // (`command-too-complex`). A command the readings could not finish is denied
 // anyway, so it is not read again; nor is one no reading reached, which that
 // scan reads exactly as the plain one does.
-function readAsBefore(command) {
+function readAsBefore(command, ctx) {
   asBefore = true;
   scanUnfinished = false;
   let hit = null;
   try {
-    hit = readEachWay(command, 0);
+    hit = readEachWay(command, 0, ctx);
   } catch (e) {
     if (!unfinishedBy(e)) throw e;
     scanUnfinished = true;
@@ -2649,10 +3948,21 @@ function unclosed(str, read) {
 }
 const SCAN_BUDGET_SPENT = new Error('secret read guard: scan budget spent');
 
-// Whether `e` means a reading could not finish, rather than a parser bug.
+// Whether `e` means a reading could not finish, rather than a parser bug. A
+// git scan past MAX_SCAN_WORK (ScanLimitError) is one too, and the first is
+// kept (scanLimit) so the block names it: `alias-too-complex` and the alias,
+// or `command-too-complex`.
 function unfinishedBy(e) {
+  if (e instanceof ScanLimitError) {
+    if (scanLimit === null) scanLimit = { code: e.code, text: e.target };
+    return true;
+  }
   return e instanceof RangeError || e === SCAN_BUDGET_SPENT;
 }
+
+// The first MAX_SCAN_WORK overrun in the current command (unfinishedBy), or
+// null. findSecretRead resets it per command.
+let scanLimit = null;
 
 // The first error in a reading that was not a limit: a bug. The hook reports it
 // when it has found nothing to deny (main), as one JSON line on stderr whose
@@ -2672,8 +3982,18 @@ const DIAGNOSTIC = Object.freeze({ READING_FAILED: 'reading-failed' });
 // either way, so what it costs is the name of a read only a later pass sees.
 let heldNested = null;
 
+// A body the scan rescans, at `depth`: charged its length to MAX_SCAN_WORK,
+// then read each way. A plain git alias's command is rescanned at the depth
+// of the git that ran it, which is 0 for a top-level git, so it comes here
+// rather than through findSecretRead, whose depth 0 starts a new command.
+function rescanCommand(command, depth, ctx) {
+  charge(ctx, command.length);
+  return readEachWay(command, depth, ctx, true);
+}
+
 // The readings of `command`, then the plain scan, as described above.
-function readEachWay(command, depth) {
+// `rescan` charges each reading's tokens to MAX_SCAN_WORK (scanCommand).
+function readEachWay(command, depth, ctx, rescan = false) {
   // A body nested past MAX_NESTING_DEPTH is not scanned, so it is denied, named, not allowed unread (#6136). It is held
   // like a word with no value to check: a secret read found elsewhere in the pass is still the block reported.
   if (depth > MAX_NESTING_DEPTH) {
@@ -2681,22 +4001,28 @@ function readEachWay(command, depth) {
     if (heldNested === null) heldNested = { code: 'nesting-too-deep', text: '' };
     return null;
   }
-  const hit = scanEachWay(command, depth);
+  const hit = scanEachWay(command, depth, ctx, rescan);
   if (depth === 0 || hit === null || hit.code === 'secret-read') return hit;
   if (heldNested === null) heldNested = hit;
   return null;
 }
 
 // A secret read outranks a word with no value to check, so which block a
-// command gets does not hang on which reading reported first.
-function scanEachWay(command, depth) {
-  if (!readsEachWay(command)) return scanCommand(command, depth, false);
+// command gets does not hang on which reading reported first. Each reading
+// counts the git alias invocations it reaches from the same start, and the
+// most any reading counted stands, so reading a script four ways does not
+// spend MAX_ALIAS_EXPANSIONS four times.
+function scanEachWay(command, depth, ctx, rescan) {
+  if (!readsEachWay(command)) return scanCommand(command, depth, false, ctx, rescan);
   readingsRan = true;
   let unreadable = null;
+  const start = ctx.aliasExpansions;
+  let most = start;
   for (const shell of READINGS) {
     let hit = null;
+    ctx.aliasExpansions = start;
     try {
-      hit = scanCommand(command, depth, shell);
+      hit = scanCommand(command, depth, shell, ctx, rescan);
     } catch (e) {
       // These readings can reach code the plain one does not: an ANSI-C
       // reading decodes text the plain reading takes literally — a `bash -c $'…'` body whose
@@ -2710,8 +4036,12 @@ function scanEachWay(command, depth) {
     }
     if (hit !== null && hit.code === 'secret-read') return hit;
     if (unreadable === null) unreadable = hit;
+    most = Math.max(most, ctx.aliasExpansions);
   }
-  return scanCommand(command, depth, false) || unreadable;
+  ctx.aliasExpansions = start;
+  const hit = scanCommand(command, depth, false, ctx, rescan);
+  ctx.aliasExpansions = Math.max(most, ctx.aliasExpansions);
+  return hit || unreadable;
 }
 
 // Whether `command` holds a form the readings are for (findSecretRead).
@@ -2719,7 +4049,31 @@ function readsEachWay(command) {
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   return joined.includes("$'") || joined.includes('$"') || joined.includes('$${') || joined.includes('$$(')
     // zsh's arithmetic holding a quote (zshMathEnd): `$[`, `$((` and `((`.
-    || ((joined.includes('"') || joined.includes("'")) && (joined.includes('((') || joined.includes('$[')));
+    || ((joined.includes('"') || joined.includes("'")) && (joined.includes('((') || joined.includes('$[')))
+    || quotedBraceHoldsQuote(joined);
+}
+
+// Whether a `${` after a `"` holds a quote before its `}` (#5492): the plain
+// reading does not read a `${…}` in double quotes, so that quote ends or opens
+// a quoted run where the shell's does not (`echo "${x-"'"}"; cat .env; echo "'"`).
+// One pass: the latest `${` not closed by a `}` stands for every earlier one.
+function quotedBraceHoldsQuote(text) {
+  if (!text.includes('${')) return false;
+  let afterQuote = false;
+  let open = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '$' && text[i + 1] === '{') {
+      open = open || afterQuote;
+      i++;
+    } else if (c === '}') {
+      open = false;
+    } else if (c === '"' || c === "'") {
+      if (open) return true;
+      if (c === '"') afterQuote = true;
+    }
+  }
+  return false;
 }
 
 // A Bash block for a read of the secret file `text` names.
@@ -2729,12 +4083,26 @@ function secretRead(text) {
 
 // One reading of `command`: `reading` is false for the plain reading, or the
 // shell ('bash' | 'zsh' | 'dash') whose reading it is; an ANSI-C reading
-// (bash's, zsh's) uses that shell's `$'…'` values.
-function scanCommand(command, depth, reading) {
-  const { tokens, nested, unreadable } = tokenizeCharged(command, reading, true);
+// (bash's, zsh's) uses that shell's `$'…'` values. The script's own variable
+// assignments are in scope for everything it runs, nested spans included. A
+// rescan's tokens are charged to MAX_SCAN_WORK (its bytes were, by
+// rescanCommand); the command itself is not, as MAX_COMMAND_LENGTH bounds it.
+function scanCommand(command, depth, reading, ctx, rescan) {
+  const tokenized = tokenizeCharged(command, reading, true);
+  if (rescan) charge(ctx, TOKEN_WORK * tokenized.tokens.length);
+  const saved = ctx.shellVars;
+  ctx.shellVars = shellVarFrame(saved, scriptAssignments(tokenized.tokens, reading, ctx, depth));
+  try {
+    return scanScript(tokenized, depth, reading, ctx);
+  } finally {
+    ctx.shellVars = saved;
+  }
+}
 
+function scanScript({ tokens, nested, unreadable }, depth, reading, ctx) {
+  const scriptScope = ctx.shellVars;
   for (const sub of nested) {
-    const hit = findSecretRead(sub, depth + 1);
+    const hit = findSecretRead(sub, depth + 1, ctx);
     if (hit) return hit;
   }
 
@@ -2783,74 +4151,215 @@ function scanCommand(command, depth, reading) {
     }
     if (!words.length) continue;
 
-    const cmd = resolveCommand(words);
-    if (!cmd) continue;
-    const { base, operands } = cmd;
     const heredocs = heredocsBySeg.get(s) || [];
-
-    // eval concatenates ALL its operands and runs the result.
-    if (base === 'eval') {
-      const hit = findSecretRead(operands.map((w) => w.text).join(' '), depth + 1);
-      if (hit) return hit;
-      continue;
-    }
-
-    // `source` / `.` reads a file (or a process-substitution script).
-    if (base === 'source' || base === '.') {
-      for (const w of operands) {
-        if (w.procsub !== undefined) {
-          const src = reconstructedProcsub(w.procsub, reading);
-          if (src !== null) {
-            const hit = findSecretRead(src, depth + 1);
-            if (hit) return hit;
-          }
-        } else if (operandNamesSecret(w.text)) return secretRead(w.text);
+    // Usually one reading; two where `time` took assignments, the earlier one first (commandReadings).
+    const cmds = commandReadings(words);
+    for (const cmd of cmds) {
+      const { base, operands } = cmd;
+      for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
+      // A prefix's variables reach this command and everything it runs.
+      ctx.shellVars = shellVarFrame(scriptScope, cmd.assigns);
+      // An assignment with no command after it sources nothing; `export` / `declare` themselves run no bash.
+      if (!DECLARATION_COMMANDS.has(base)) {
+        const hit = sourcedFileRead(base, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+        if (hit) return hit;
       }
-      continue;
-    }
 
-    // xargs turns stdin file names into a sub-command's operands.
-    if (base === 'xargs') {
-      const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading);
-      if (hit) return hit;
-      // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
-      // operand — fall through to the operand check below.
-    }
+      // eval concatenates ALL its operands and runs the result.
+      if (base === 'eval') {
+        const hit = scanEval(operands, depth, ctx);
+        if (hit) return hit;
+        continue;
+      }
 
-    // find's -exec/-execdir/-ok/-okdir actions run a command; a shell given a script is read like any other (#6114).
-    if (base === 'find' || base === 'find.exe') {
-      const hit = scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
-      if (hit) return hit;
-    }
+      // `source` / `.` reads a file (or a process-substitution script).
+      if (base === 'source' || base === '.') {
+        const hit = scanSource(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+        continue;
+      }
 
-    // procps watch joins its operands with spaces and runs the result through `sh -c` (#6114).
-    if (base === 'watch') {
-      const hit = scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
-      if (hit) return hit;
-    }
+      // `builtin` runs `source`, `.` and `eval` as they run unprefixed (#5492). It is not a wrapper: `builtin echo
+      // .env` is still the unknown command `builtin`, whose operands are checked below.
+      if (base === 'builtin') {
+        const rest = operands.length && operands[0].text === '--' ? operands.slice(1) : operands;
+        const name = rest.length ? rest[0].text : '';
+        const hit = name === 'eval' ? scanEval(rest.slice(1), depth, ctx)
+          : name === 'source' || name === '.' ? scanSource(rest.slice(1), heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx)
+            : null;
+        if (hit) return hit;
+      }
 
-    if (SHELL_INTERPRETERS.has(base)) {
-      const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading);
-      if (hit) return hit;
-      // `bash .env` (file mode) is caught by the operand check below.
-    }
+      // xargs turns stdin file names into a sub-command's operands.
+      if (base === 'xargs') {
+        const hit = scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+        if (hit) return hit;
+        // `.env` given to xargs itself (`xargs -a .env cat`) is an ordinary
+        // operand — fall through to the operand check below.
+      }
 
-    // Git -c can carry a shell script instead of a file-name operand (#5045).
-    if (base === 'git' || base === 'git.exe') {
-      const hit = scanGitConfig(operands, depth);
-      if (hit) return hit;
-    }
+      // find's -exec/-execdir/-ok/-okdir actions run a command; a shell given a script is read like any other (#6114).
+      if (base === 'find' || base === 'find.exe') {
+        const hit = scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+      }
 
-    if (NON_READING_COMMANDS.has(base)) continue;
+      // procps watch joins its operands with spaces and runs the result through `sh -c` (#6114).
+      if (base === 'watch') {
+        const hit = scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+      }
 
-    const nameOnly = nameOnlyOperandIndices(base, operands);
-    for (let k = 0; k < operands.length; k++) {
-      if (nameOnly.has(k)) continue;
-      if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
+      if (SHELL_INTERPRETERS.has(base)) {
+        const hit = scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+        // `bash .env` (file mode) is caught by the operand check below.
+      }
+
+      // Git runs commands from -c values, aliases, options and URLs (#5045, #5492).
+      if (base === 'git' || base === 'git.exe') {
+        const hit = scanGitInvocation(operands, depth, ctx);
+        if (hit) return hit;
+      }
+
+      // ssh runs ProxyCommand-style -o values locally (#5492).
+      if (SSH_CLIENTS.has(base)) {
+        for (const [label, script] of sshOptionScripts(base, operands)) {
+          const hit = via(`${base} ${label}`, findSecretRead(script, depth + 1, ctx));
+          if (hit) return hit;
+        }
+      }
+
+      // npx and `npm exec` / `npm x` run a `-c` / `--call` value through a shell, and npm runs other config values
+      // as commands, from its options or the environment (#5492).
+      if (NPM_RUNNERS.has(base)) {
+        for (const script of npmCallScripts(operands, ctx)) {
+          const hit = via(`${base} --call`, findSecretRead(script, depth + 1, ctx));
+          if (hit) return hit;
+        }
+      }
+
+      // pnpm exec / dlx in shell mode and yarn exec run their words through a shell (#5492).
+      if (PNPM_RUNNERS.has(base) || YARN_RUNNERS.has(base)) {
+        for (const script of packageRunnerScripts(base, operands)) {
+          const hit = via(`${base} exec`, findSecretRead(script, depth + 1, ctx));
+          if (hit) return hit;
+        }
+      }
+
+      // dd reads the file its `if=` operand names (#5492); every operand is still checked below.
+      if (DD_NAMES.has(base)) {
+        for (const w of operands) if (ddInputNamesSecret(w.text)) return secretRead(w.text);
+      }
+
+      if (NON_READING_COMMANDS.has(base)) continue;
+
+      const nameOnly = nameOnlyOperandIndices(base, operands);
+      for (let k = 0; k < operands.length; k++) {
+        if (nameOnly.has(k)) continue;
+        if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
+      }
+
+      // Only the reading that resolved the command, with every assignment `time` took in scope, starts what its
+      // operands name (#5492). The earlier one is kept so a command blocked before stays blocked, and the hook
+      // before #5492 never read launcher operands; started there, they would run without those assignments, and
+      // both readings starting each would double the work at every `time` stage.
+      if (cmd === cmds[cmds.length - 1] && readsLauncherOperands(base)) {
+        const hit = scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+        if (hit) return hit;
+      }
     }
   }
   // No secret read found; a `$'…'` word with no value to check still denies.
   return unreadable;
+}
+
+// eval's operands, past bash's optional `--` (#5492), joined and read as a script.
+function scanEval(operands, depth, ctx) {
+  const joined = operands.slice(operands.length && operands[0].text === '--' ? 1 : 0);
+  return findSecretRead(joined.map((w) => w.text).join(' '), depth + 1, ctx);
+}
+
+// `source` / `.`: a `<( )` operand's script, every other operand as a file it reads, and for an fd path its stdin.
+function scanSource(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  for (const w of operands) {
+    if (w.procsub !== undefined) {
+      for (const src of reconstructedProcsubs(w.procsub, reading, ctx)) {
+        const hit = findSecretRead(src, depth + 1, ctx);
+        if (hit) return hit;
+      }
+    } else if (operandNamesSecret(w.text)) return secretRead(w.text);
+  }
+  // `source /dev/stdin` runs its stdin, as a shell in stdin mode does (#5492), and `source /dev/fd/3` fd 3.
+  if (isFdPath(sourcedFile(operands.map((w) => w.text)))) return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+  return null;
+}
+
+// Commands with a rule of their own for what they launch, which scanLauncherOperands leaves to that rule; and the
+// reserved words and `coproc` of #6138 and GNU `parallel` (#6419), documented gaps of their own that it leaves as
+// they were.
+const LAUNCHING_BASES = new Set(['git', 'git.exe', ...SSH_CLIENTS, ...SHELL_INTERPRETERS, 'eval', 'source', '.', 'xargs',
+  'find', 'find.exe', 'watch', 'if', 'then', 'else', 'elif', 'while', 'until', 'do', '!', 'coproc', 'parallel']);
+// Operand words that start a command when another command runs them (#5492): git, a shell and an ssh client by
+// their last path segment, and eval, xargs, find, watch, dd and the wrappers only as the bare word or an absolute
+// path (bareLauncherName), so a relative path or URL ending in one (`packages/watch`, `https://x/eval`) starts nothing.
+const LAUNCHER_WORDS = new Set(['eval', 'xargs', 'find', 'find.exe', 'watch', 'dd', 'dd.exe', ...WRAPPERS.keys()]);
+function isLauncherWord(text) {
+  const name = lastSegment(text).toLowerCase();
+  return name === 'git' || name === 'git.exe' || SSH_CLIENTS.has(name) || SHELL_INTERPRETERS.has(name)
+    || NPM_RUNNERS.has(name) || PNPM_RUNNERS.has(name) || YARN_RUNNERS.has(name) || LAUNCHER_WORDS.has(bareLauncherName(text));
+}
+
+// The name a bare-only launcher word is matched by: the word, or an absolute path's last segment (`/usr/bin/env`,
+// #5492); a relative path (`packages/watch`) keeps its slash and matches nothing.
+function bareLauncherName(text) {
+  return (text.startsWith('/') ? lastSegment(text) : text).toLowerCase();
+}
+
+// A command the scan has no rule for may run the command its operands name (#5492): `caffeinate git …`, `strace -f
+// bash -c …`, `docker exec c sh -c …`. From each operand that is a launcher word, every occurrence, the operands from
+// there on are read as the command it starts (scanLaunchedCommand), with the segment's heredocs and here-strings as
+// its stdin; each is charged its length first. A name-only operand (nameOnlyOperandIndices) starts nothing and is
+// left out of what is read, so its exemption holds there too (`grep -r env . --exclude=.env`). A wrapper or `dd`
+// whose launched command this rule reads again (`x env y env …` launches `y`) is left to that command's rescan,
+// as is a wrapper, `dd`, `xargs`, `find` or `watch` in the command an `xargs` runs (whose stdin is not the
+// segment's pipe): starting each of them here too would cost exponentially many rescans. Every other launcher word
+// is started here, with the segment's pipe, which a rescan does not have, and so is a re-entering one when the
+// segment is piped into (the work meter bounds the extra starts).
+const REENTERING_WORDS = new Set(['dd', 'dd.exe', ...WRAPPERS.keys()]);
+const XARGS_REENTERING_WORDS = new Set([...REENTERING_WORDS, 'xargs', 'find', 'find.exe', 'watch']);
+function scanLauncherOperands(operands, nameOnly, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  const covered = new Set();
+  // A rescan has no pipe, so a segment piped into starts its re-entering words here too (#5492).
+  const { op } = precedingOp(s, bySeg, sepAfter);
+  const piped = op === '|' || op === '|&';
+  const cover = (cmd, words) => {
+    if (cmd === null || !readsLauncherOperands(cmd.base)) return;
+    for (const w of cmd.operands) if (words.has(bareLauncherName(w.text))) covered.add(w);
+  };
+  for (let j = 0; j < operands.length; j++) {
+    if (nameOnly.has(j) || covered.has(operands[j]) || !isLauncherWord(operands[j].text)) continue;
+    charge(ctx, TOKEN_WORK * (operands.length - j));
+    covered.add(operands[j]);
+    const tail = [];
+    for (let k = j; k < operands.length; k++) if (!nameOnly.has(k)) tail.push(operands[k]);
+    const launched = resolveCommand(tail);
+    if (!piped) cover(launched, REENTERING_WORDS);
+    // The wrappers the launched command resolves through start nothing this launch does not (`x env time X=1 y …`).
+    for (const w of launched === null ? [] : launched.wrappers) covered.add(w);
+    if (launched !== null && launched.base === 'xargs') {
+      const { subIdx } = xargsSubCommand(launched.operands);
+      if (subIdx !== -1) cover(resolveCommand(launched.operands.slice(subIdx)), XARGS_REENTERING_WORDS);
+    }
+    const hit = scanLaunchedCommand(tail, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// Whether scanScript runs scanLauncherOperands on a command with this base.
+function readsLauncherOperands(base) {
+  return base !== '' && !LAUNCHING_BASES.has(base) && !SEARCH_TOOLS.has(base) && !NON_READING_COMMANDS.has(base);
 }
 
 // ---------------------------------------------------------------------------
@@ -2937,150 +4446,839 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
     }
     if (!words.length) continue;
 
-    const cmd = resolveCommand(words);
-    if (!cmd) continue;
-    const { base, operands } = cmd;
+    // Each reading of the command (commandReadings), the earlier first.
+    for (const cmd of commandReadings(words)) {
+      const { base, operands } = cmd;
 
-    if (base === 'eval') {
-      if (depth < MAX_NESTING_DEPTH) {
-        const hit = findDebuggerCliSpawn(operands.map((w) => w.text).join(' '), depth + 1);
-        if (hit) return hit;
+      if (base === 'eval') {
+        if (depth < MAX_NESTING_DEPTH) {
+          const hit = findDebuggerCliSpawn(operands.map((w) => w.text).join(' '), depth + 1);
+          if (hit) return hit;
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (SHELL_INTERPRETERS.has(base)) {
-      const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
-      if (cIdx !== -1 && operands[cIdx + 1] && depth < MAX_NESTING_DEPTH) {
-        const hit = findDebuggerCliSpawn(operands[cIdx + 1].text, depth + 1);
-        if (hit) return hit;
+      if (SHELL_INTERPRETERS.has(base)) {
+        for (const script of depth < MAX_NESTING_DEPTH ? shellScriptOperands(operands).scripts : []) {
+          const hit = findDebuggerCliSpawn(script.text, depth + 1);
+          if (hit) return hit;
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (!CLAUDE_BINARY_RE.test(base)) continue;
-    for (let k = 0; k < operands.length; k++) {
-      const text = operands[k].text;
-      if (text === '--agent') {
-        const value = operands[k + 1];
-        if (value && isDebuggerAgent(value.text)) return value.text;
-      } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
-        return text.slice('--agent='.length);
+      if (!CLAUDE_BINARY_RE.test(base)) continue;
+      for (let k = 0; k < operands.length; k++) {
+        const text = operands[k].text;
+        if (text === '--agent') {
+          const value = operands[k + 1];
+          if (value && isDebuggerAgent(value.text)) return value.text;
+        } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
+          return text.slice('--agent='.length);
+        }
       }
     }
   }
   return null;
+}
+
+// bash's reading of a shell's leading options (#5492): `c` anywhere in a `-` or `+` cluster is mode c (`-xc`, `+c`),
+// an `s` reads the script from stdin (`-s`, `-xs`), each `o` / `O` in one takes the next word as its value
+// (`-coo a b`), so do `--rcfile` / `--init-file`, any other long option takes none (`--norc`), and `--` or `-`
+// ends them. `operand` is the index of the first word after them, or -1. With `oneDashLong`, a bash long option
+// spelled with one dash (`-rcfile FILE`, `-norc`), which bash also takes, is read as that option, not as a cluster.
+const BASH_LONG_OPTIONS = new Set(['debug', 'debugger', 'dump-po-strings', 'dump-strings', 'help', 'init-file', 'login',
+  'noediting', 'noprofile', 'norc', 'posix', 'pretty-print', 'protected', 'rcfile', 'restricted', 'rpm-requires',
+  'verbose', 'version', 'wordexp']);
+function shellOptions(operands, oneDashLong = false) {
+  let modeC = false;
+  let stdin = false;
+  for (let k = 0; k < operands.length; k++) {
+    const t = operands[k].text;
+    if (t === '--' || t === '-') return { modeC, stdin, operand: k + 1 < operands.length ? k + 1 : -1 };
+    if (t.startsWith('--')) {
+      if (SHELL_VALUE_FLAGS.has(t)) k++;
+    } else if (oneDashLong && t[0] === '-' && BASH_LONG_OPTIONS.has(t.slice(1))) {
+      if (SHELL_VALUE_FLAGS.has(`-${t}`)) k++;
+    } else if (t.length > 1 && (t[0] === '-' || t[0] === '+')) {
+      for (let i = 1; i < t.length; i++) {
+        if (t[i] === 'c') modeC = true;
+        else if (t[i] === 's') stdin = true;
+        else if (t[i] === 'o' || t[i] === 'O') k++;
+      }
+    } else {
+      return { modeC, stdin, operand: k };
+    }
+  }
+  return { modeC, stdin, operand: -1 };
+}
+
+// shellOptions's two readings of the options: as clusters, and with one-dash long options.
+function shellReadings(operands) {
+  return [shellOptions(operands), shellOptions(operands, true)];
+}
+
+// Whether a path may open a file descriptor (#5492), failing closed rather than following the kernel's links: past
+// `.` and repeated `/` it ends in `fd/<N>`, or in `stdin`, `stdout` or `stderr` under a `dev` segment, or it holds a
+// `..` segment and names `fd` or `dev` anywhere. A relative spelling counts whatever the cwd is.
+const STD_STREAMS = new Set(['stdin', 'stdout', 'stderr']);
+function isFdPath(text) {
+  const parts = text.split('/').filter((part) => part !== '' && part !== '.');
+  if (parts.includes('..') && (text.includes('fd') || text.includes('dev'))) return true;
+  const last = parts[parts.length - 1];
+  if (parts[parts.length - 2] === 'fd' && /^\d+$/.test(last)) return true;
+  return STD_STREAMS.has(last) && parts.slice(0, -1).includes('dev');
+}
+
+// The words a shell may run as its `-c` script, each scanned on its own: the word after the first DASH_C_RE word,
+// as before (`su -c cmd user`, `su - root -c cmd`), and in mode c under shellOptions, the first word after the
+// options (`bash -c -- cmd`), under either of shellReadings, when that is another word. `scriptless` is set when
+// any reading is in mode c with no script word, and `dashC` when the first one is in mode c, from a word that is not
+// a one-dash long option (`-norc` matches DASH_C_RE, but bash reads it as `--norc`).
+function shellScriptOperands(operands) {
+  const scripts = [];
+  let scriptless = false;
+  const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
+  if (cIdx !== -1) {
+    if (cIdx + 1 < operands.length) scripts.push(operands[cIdx + 1]);
+    else scriptless = true;
+  }
+  for (const { modeC, operand } of shellReadings(operands)) {
+    if (modeC && operand === -1) scriptless = true;
+    else if (modeC && !scripts.includes(operands[operand])) scripts.push(operands[operand]);
+  }
+  return { scripts, scriptless, dashC: cIdx !== -1 && !BASH_LONG_OPTIONS.has(operands[cIdx].text.slice(1)) };
 }
 
 // A shell interpreter's script comes from `-c`, a file operand, or stdin.
-function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
-  const cIdx = operands.findIndex((w) => DASH_C_RE.test(w.text));
-  if (cIdx !== -1) {
-    // Mode c: the next operand is the script; stdin is DATA (not scanned).
-    const script = operands[cIdx + 1];
-    if (script) return findSecretRead(script.text, depth + 1);
-    return null;
+function scanShellInterpreter(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
+  // The BASH_ENV and ENV values in scope, from a prefix, env/sudo, export or declare, that the shell sources first
+  // (#6445). An fd value makes the stdin a script in every mode, read once below, whichever fd it is on, as for
+  // `bash /dev/fd/N`.
+  const sourced = sourcedFileVars(ctx);
+  if (sourced.hit) return sourced.hit;
+  const { scripts, dashC } = shellScriptOperands(operands);
+  for (const script of scripts) {
+    const hit = findSecretRead(script.text, depth + 1, ctx);
+    if (hit) return hit;
   }
+  // Mode c: stdin is DATA (not scanned). Only the first reading of mode c stops here, as before: bash's own reading
+  // adds scripts but never drops stdin mode (`bash -cx <<< '…'` has no script, and its stdin is still read).
+  if (dashC) return sourced.fd ? scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) : null;
+  // Mode file, read as before (the first word that does not start with `-`, past SHELL_VALUE_FLAGS values) and
+  // under shellOptions, which reads `+x` and a cluster's `o` value as options and has no file under `-s`; stdin
+  // mode when either finds no file, or a file that may be an fd (`bash /dev/stdin`, `bash /dev/fd/3 3<<< …`).
   let fileTok;
-  let stdinScript = false;
   for (let m = 0; m < operands.length; m++) {
     if (SHELL_VALUE_FLAGS.has(operands[m].text)) { m++; continue; }
-    // `-s` keeps stdin as the script: the operands that follow (`sh -s -- a`) are its positional parameters (#6182).
-    if (/^-[A-Za-z]*s[A-Za-z]*$/.test(operands[m].text)) { stdinScript = true; break; }
     if (!operands[m].text.startsWith('-')) { fileTok = operands[m]; break; }
   }
-  if (fileTok && !stdinScript) {
+  const readings = shellReadings(operands);
+  const optionToks = readings.map((o) => (o.modeC || o.stdin || o.operand === -1 ? undefined : operands[o.operand]));
+  for (const tok of new Set([fileTok, ...optionToks])) {
     // Mode file: `bash <(echo 'cat .env')`; a plain file is checked as an operand.
-    if (fileTok.procsub !== undefined) {
-      const src = reconstructedProcsub(fileTok.procsub, reading);
-      if (src !== null) return findSecretRead(src, depth + 1);
+    if (tok === undefined || tok.procsub === undefined) continue;
+    for (const src of reconstructedProcsubs(tok.procsub, reading, ctx)) {
+      const hit = findSecretRead(src, depth + 1, ctx);
+      if (hit) return hit;
     }
-    return null;
   }
-  // Mode stdin: heredoc bodies, here-strings, and a piped echo/printf source.
+  const fromStdin = sourced.fd || !fileTok || isFdPath(fileTok.text)
+    || readings.some((o, i) => !o.modeC && (!optionToks[i] || isFdPath(optionToks[i].text)));
+  if (!fromStdin) return null;
+  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+}
+
+// bash sources the file BASH_ENV names before a non-interactive script, and sh the one ENV names when interactive
+// (#6445): a value in scope among `names` naming a secret is a read. `fd` is set when a value is an fd path
+// (`BASH_ENV=/dev/stdin`), which sources the shell's stdin.
+const SOURCED_FILE_VARS = ['BASH_ENV', 'ENV'];
+function sourcedFileVars(ctx, names = SOURCED_FILE_VARS) {
+  let fd = false;
+  for (const name of names) {
+    for (const value of shellVarValues(ctx.shellVars, name, ctx)) {
+      if (operandNamesSecret(value)) return { hit: secretRead(`${name}=${value}`), fd };
+      fd = fd || isFdPath(value);
+    }
+  }
+  return { hit: null, fd };
+}
+
+// BASH_ENV is inherited, and every non-interactive bash a command starts sources it (a bash-shebang script, a make
+// recipe, ssh's ProxyCommand, …), so for any command `base` run with it in scope (#6445): a value naming a secret is
+// a read, and with an fd value the command's heredocs, here-strings and pipe are read as a shell's stdin, unless
+// `base` is a shell or `source`, whose own stdin pass reads them. ENV is sourced only by an interactive shell, so
+// only scanShellInterpreter reads it.
+function sourcedFileRead(base, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
+  const { hit, fd } = sourcedFileVars(ctx, ['BASH_ENV']);
+  if (hit || !fd || SHELL_INTERPRETERS.has(base) || base === 'source' || base === '.') return hit;
+  return scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+}
+
+// The scripts on a stdin-mode shell's stdin, or `source /dev/stdin`'s: heredoc bodies, here-strings, and what a
+// piped echo/printf source writes; past a filter stage, every stage back to the producer fails closed (#5492).
+function scanShellStdin(heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx) {
   for (const h of heredocs) {
-    const hit = findSecretRead(h.text, depth + 1);
+    const hit = findSecretRead(h.text, depth + 1, ctx);
     if (hit) return hit;
   }
   for (const hs of hereStrings) {
-    const hit = findSecretRead(hs, depth + 1);
+    const hit = findSecretRead(hs, depth + 1, ctx);
     if (hit) return hit;
   }
-  const src = pipeSourceText(s, bySeg, sepAfter);
-  if (src !== null) return findSecretRead(src, depth + 1);
+  const stages = pipeStages(s, bySeg, sepAfter, ctx, true);
+  for (const src of stageScripts(stages, ctx)) {
+    const hit = findSecretRead(src, depth + 1, ctx);
+    if (hit) return hit;
+  }
+  for (const stage of stages) {
+    const hit = stage.filtered ? mentionInStage(stage, ctx) : null;
+    if (hit) return hit;
+  }
   return null;
 }
 
-// The statically-knowable text piped into segment `s`: the nearest upstream segment's, looking through `tee` and a bare
-// `cat` that only pass their own stdin along (#6182). Each hop moves to an earlier segment, so the walk ends.
-function pipeSourceText(s, bySeg, sepAfter) {
-  let seg = s;
-  for (;;) {
-    const { op, prevSeg } = precedingOp(seg, bySeg, sepAfter);
-    if (!((op === '|' || op === '|&') && prevSeg >= 0)) return null;
-    const upstream = bySeg.get(prevSeg) || [];
-    const feeds = {
-      heredocs: ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(prevSeg) || []).map((h) => h.text),
-      hereStrings: hereStringTargets(upstream),
-    };
-    const words = commandWords(upstream);
-    const own = reconstructedScript(words, feeds);
-    if (own !== null) return own;
-    const cmd = resolveCommand(words);
-    if (!cmd || !passesStdinThrough(cmd, feeds)) return null;
-    seg = prevSeg;
+// What the stages piped into segment `s` write (pipeStages, through filter stages), as stageScripts reads them.
+function pipedScripts(s, bySeg, sepAfter, ctx) {
+  return stageScripts(pipeStages(s, bySeg, sepAfter, ctx, true), ctx);
+}
+
+// What each stage writes, as reconstructedScripts reads it; [] without a pipe. A stage is read with its redirect
+// targets among its words, as before, and without them, given its heredocs and here-strings to print when it is a
+// `cat` or a `tee` (#6182).
+function stageScripts(stages, ctx) {
+  const scripts = [];
+  for (const { words, cmdWords, feeds } of stages) {
+    for (const script of reconstructedScripts(words, ctx)) scripts.push(script);
+    if (cmdWords.length === words.length && !feeds.heredocs.length && !feeds.hereStrings.length) continue; // read above already
+    for (const script of reconstructedScripts(cmdWords, ctx, feeds)) if (!scripts.includes(script)) scripts.push(script);
   }
+  return scripts;
+}
+
+// The word tokens of the stages piped into segment `s`, as pipeStages finds them through filter stages (#5492);
+// each one's stage (its feeds, whether it is filtered) is kept in STAGE_OF.
+const STAGE_OF = new WeakMap();
+function pipeSources(s, bySeg, sepAfter, ctx) {
+  return pipeStages(s, bySeg, sepAfter, ctx, true).map((stage) => {
+    STAGE_OF.set(stage.words, stage);
+    return stage.words;
+  });
+}
+
+// The stages piped into segment `s`, nearest first: the one right before it, as before, and past each stage that
+// passes its stdin on (passesStdinOn), the one before that (#5492, #6182), every hop a pipe. [] without a pipe. Each
+// is its word tokens (`words`), those without its redirect targets (`cmdWords`), and its heredoc bodies and here-strings
+// (`feeds`). A source handed out before in this scan is charged its words and four times its bytes before it is read
+// again: every command reading the pipe walks back to it (`… | tee xargs env | tee xargs env …` reaches the producer
+// from each stage), so the reads would otherwise grow as stages times bytes.
+// With `throughFilters` (a shell's stdin, #5492), the walk also goes on past a stage that neither passes its stdin
+// on nor writes text of its own (`head`, `sort`, `grep` …): that stage and every one before it is `filtered`, read
+// fail closed by mentionInStage since what reaches the shell is not computed.
+function pipeStages(s, bySeg, sepAfter, ctx, throughFilters = false) {
+  const stages = [];
+  const bodies = heredocBodiesBySegMap.get(bySeg);
+  let filtered = false;
+  // `inner`: a stage inside a group or compound command, read past its leading reserved words (pastReserved).
+  const stageAt = (segIdx, inner = false) => {
+    const seg = bySeg.get(segIdx) || [];
+    const all = seg.filter((t) => t.kind === 'word');
+    const words = inner ? pastReserved(all) : all;
+    const heredocs = ((bodies && bodies.get(segIdx)) || []).map((h) => h.text);
+    if (ctx.pipeSourcesRead.has(seg)) {
+      let bytes = 0;
+      for (const w of words) bytes += w.text.length;
+      for (const h of heredocs) bytes += h.length;
+      charge(ctx, TOKEN_WORK * (words.length + bytes) + 1);
+    } else {
+      ctx.pipeSourcesRead.add(seg);
+    }
+    const cmdWords = inner ? pastReserved(commandWords(seg)) : commandWords(seg);
+    const moved = fdMoved(seg, (bodies && bodies.get(segIdx)) || []);
+    const stage = { words, cmdWords, feeds: { heredocs, hereStrings: hereStringTargets(seg), moved }, filtered };
+    stages.push(stage);
+    return stage;
+  };
+  for (let at = s; ;) {
+    const { op, prevSeg } = precedingOp(at, bySeg, sepAfter);
+    if ((op !== '|' && op !== '|&') || prevSeg < 0) {
+      // A pipe inside a group (`… | (true; cat | bash)`) also reads what is piped into the group: the walk goes on
+      // from its opener, every stage before it filtered, since which command inside reads that is not sorted.
+      const opener = throughFilters ? groupOpener(at, bySeg, sepAfter, ctx) : -1;
+      if (opener === -1) return stages;
+      if (opener === UNKNOWN_OPENER) {
+        for (let g = at - 1; g >= 0; g--) {
+          if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
+          stageAt(g, true).filtered = true;
+          charge(ctx, TOKEN_WORK + 1);
+        }
+        return stages;
+      }
+      filtered = true;
+      charge(ctx, GIT_COMMAND_WORK);
+      at = opener + 1;
+      continue;
+    }
+    // A redirect after a group's closer (`(cat) 2>/dev/null | sh`, a `{name}` fd word too) is a filtered stage, as
+    // before, and the group is the one behind it.
+    let last = prevSeg;
+    let redirectOnly = false;
+    if (GROUP_CLOSERS.has(sepAfter.get(prevSeg - 1))) {
+      const prev = [...(bySeg.get(prevSeg) || []), ...((bodies && bodies.get(prevSeg)) || [])];
+      charge(ctx, prev.length);
+      const named = new Set(prev.map((t) => t.namedFd || (t.kind === 'heredoc' && t.fd)).filter(Boolean));
+      redirectOnly = commandWords(bySeg.get(prevSeg) || []).every((w) => named.has(w.text));
+    }
+    if (redirectOnly) {
+      const stage = stageAt(prevSeg);
+      stage.filtered = true;
+      charge(ctx, TOKEN_WORK * stage.words.length + 1 + GIT_COMMAND_WORK);
+      last = prevSeg - 1;
+    }
+    // A group (`( … )`, `{ …; }`) writes what each command inside it writes: every one is a stage, read fail closed
+    // by a shell (#5492). A closer nothing opens (a `case` pattern's `)`) reads every segment back to the start.
+    const group = pipedGroup(last, at, bySeg, sepAfter, ctx);
+    if (group) {
+      const inner = [];
+      for (let g = group.close; g > group.start; g--) {
+        if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
+        const stage = stageAt(g, true);
+        stage.filtered = throughFilters;
+        inner.push(stage);
+        charge(ctx, TOKEN_WORK + 1);
+      }
+      // A heredoc or here-string given to the group is the stdin of each command inside it, and not the pipe, unless
+      // an fd is duplicated or redirected beside it (`(cat <&3) 3<&0 <<< x`): the walk then goes on, failing closed.
+      const fed = groupFeeds(group.close, at, bySeg, bodies, ctx);
+      const isFed = fed.heredocs.length > 0 || fed.hereStrings.length > 0;
+      for (const stage of isFed ? inner : []) {
+        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings],
+          moved: stage.feeds.moved || fed.fdMoved };
+      }
+      if (group.start === -1 || !throughFilters || (isFed && !fed.fdMoved)) return stages;
+      if (fed.fdMoved) {
+        filtered = true;
+        charge(ctx, GIT_COMMAND_WORK);
+        at = group.start;
+        continue;
+      }
+      // The group reads the pipe through each command inside it that reads its stdin, and the walk goes on past it
+      // as past a plain stage; when every one writes its own text (`| (echo hi) |`), nothing reads the pipe.
+      const passes = inner.some(({ words, cmdWords }) => passesStdinOn(words) || passesStdinOn(cmdWords));
+      const filters = inner.some((stage) => !passesStdinOn(stage.words) && !passesStdinOn(stage.cmdWords) && !writesOwnText(stage));
+      if (!passes && !filters) return stages;
+      if (filters) filtered = true;
+      // Each hop past a filtering group is priced as one past a filter stage (below).
+      charge(ctx, filtered ? GIT_COMMAND_WORK : 0);
+      at = group.start;
+      continue;
+    }
+    // A compound command (`for … done`, `if … fi`, `case … esac`) writes what each command inside it writes: every
+    // one back to its opener is a stage, read fail closed, and the walk goes on past it, every stage before it
+    // filtered; with no opener to match (compoundStart), every segment before it is a stage. A heredoc or
+    // here-string given to it is given to each command inside, and the walk still goes on: the opener matched may
+    // be reached by a pipe of its own (`… | for | done <<< x`).
+    if (throughFilters && COMPOUND_CLOSERS.has(commandHead(bySeg.get(prevSeg) || [])[0])) {
+      const opener = compoundStart(prevSeg, bySeg, sepAfter, ctx);
+      stageAt(prevSeg).filtered = true;
+      charge(ctx, TOKEN_WORK + 1);
+      const inner = [];
+      for (let g = prevSeg - 1; g >= Math.max(opener, 0); g--) {
+        if (!(bySeg.get(g) || []).some((t) => t.kind === 'word')) continue;
+        const stage = stageAt(g, true);
+        stage.filtered = true;
+        inner.push(stage);
+        charge(ctx, TOKEN_WORK + 1);
+      }
+      const fed = groupFeeds(prevSeg - 1, prevSeg + 1, bySeg, bodies, ctx);
+      const isFed = fed.heredocs.length > 0 || fed.hereStrings.length > 0;
+      for (const stage of isFed ? inner : []) {
+        stage.feeds = { heredocs: [...stage.feeds.heredocs, ...fed.heredocs], hereStrings: [...stage.feeds.hereStrings, ...fed.hereStrings],
+          moved: stage.feeds.moved || fed.fdMoved };
+      }
+      if (opener === -1) return stages;
+      filtered = true;
+      charge(ctx, GIT_COMMAND_WORK);
+      at = opener;
+      continue;
+    }
+    const stage = stageAt(prevSeg);
+    const { words, cmdWords } = stage;
+    if (!passesStdinOn(words) && !passesStdinOn(cmdWords)) {
+      if (!throughFilters || writesOwnText(stage)) return stages;
+      filtered = true;
+      stage.filtered = true;
+    }
+    // A hop past a filter reads every reading of the stage several times over, and each shell of a chain of them
+    // walks back to the start (`x | sh | x | sh …`), so it is priced as a git command is.
+    charge(ctx, TOKEN_WORK * words.length + 1 + (filtered ? GIT_COMMAND_WORK : 0));
+    at = prevSeg;
+  }
+}
+
+// When the pipe into segment `at` comes from a group closing after segment `last` (a `)` or `}` among the
+// separators between them), the segment whose separator closes it (`close`) and the one whose separator opens it
+// (`start`, -1 when none does or a closer meets an opener of the other kind); null when no group closes there. A
+// `{` after a command's words (`echo {`) is an argument, not an opener (opensGroup). Each separator passed is charged.
+const GROUP_CLOSERS = new Set([')', '}']);
+function pipedGroup(last, at, bySeg, sepAfter, ctx) {
+  let close = -1;
+  for (let q = last; q < at; q++) {
+    charge(ctx, 1);
+    if (GROUP_CLOSERS.has(sepAfter.get(q))) close = q;
+  }
+  if (close === -1) return null;
+  const closers = [];
+  for (let r = close; r >= 0; r--) {
+    charge(ctx, 1);
+    const text = sepAfter.get(r);
+    if (GROUP_CLOSERS.has(text)) {
+      closers.push(text);
+    } else if (opensGroup(text, bySeg.get(r))) {
+      if (closers.pop() !== (text === '(' ? ')' : '}')) return { close, start: -1 };
+      if (!closers.length) return { close, start: r };
+    }
+  }
+  return { close, start: -1 };
+}
+
+// Whether separator `text` ending a segment of `segTokens` opens a group: a `(`, or a `{` that no word but a
+// reserved one (`do {`, `then {`) comes before.
+function opensGroup(text, segTokens) {
+  if (text === '(') return true;
+  return text === '{' && (segTokens || []).every((t) => t.kind !== 'word' || (plainWord(t) && LEADING_RESERVED.has(t.text)));
+}
+
+// The heredoc bodies and here-strings given to a group closing after segment `close`, before the pipe into segment
+// `at` (`(cat) <<< 'x' | sh`), charged their tokens and bytes; `fdMoved` when an fd is duplicated or another input
+// redirected there, or one is given on another fd than 0 (`3<<< x`), which may keep the pipe readable.
+const STDIN_FEED_RE = /^0?<<<$/;
+function groupFeeds(close, at, bySeg, bodies, ctx) {
+  const feeds = { heredocs: [], hereStrings: [], fdMoved: false };
+  for (let g = close + 1; g < at; g++) {
+    const seg = bySeg.get(g) || [];
+    if (fdMoved(seg, (bodies && bodies.get(g)) || [])) feeds.fdMoved = true;
+    for (const h of (bodies && bodies.get(g)) || []) feeds.heredocs.push(h.text);
+    for (const text of hereStringTargets(seg)) feeds.hereStrings.push(text);
+    charge(ctx, TOKEN_WORK * seg.length + 1);
+  }
+  let bytes = 0;
+  for (const text of [...feeds.heredocs, ...feeds.hereStrings]) bytes += text.length;
+  charge(ctx, TOKEN_WORK * bytes);
+  return feeds;
+}
+
+// Whether a segment's tokens duplicate an fd or redirect another input, or give a heredoc or here-string on an fd
+// other than 0 (`3<<< x`, `{fd}<<EOF`): what is then on stdin may still be the pipe.
+function fdMoved(segTokens, heredocs) {
+  return segTokens.some((t) => t.kind === 'op' && (t.dup || (t.read && !t.text.endsWith('<<<'))
+    || (t.text.endsWith('<<<') && (t.namedFd || !STDIN_FEED_RE.test(t.text)))))
+    || heredocs.some((h) => h.fd !== undefined && h.fd !== '' && h.fd !== '0');
+}
+
+// The segment whose separator opens the group segment `at` sits in, past one right before `at`, whose stdin is
+// that of the group around it; -1 when there is none. Each segment's innermost opener is found once per script
+// (GROUP_OPENERS), charged a unit a separator, since every command of a script may walk a pipe. A `)` inside a
+// `case` closing no group opened in it is a pattern's; a closer matching no opener, an `esac` with any group still
+// open, or a `case` or `esac` that is also a redirect target leaves every opener after it UNKNOWN_OPENER.
+const GROUP_OPENERS = new WeakMap();
+const UNKNOWN_OPENER = -2;
+function groupOpener(at, bySeg, sepAfter, ctx) {
+  let openers = GROUP_OPENERS.get(sepAfter);
+  if (!openers) {
+    openers = [];
+    const open = [];
+    let cases = 0;
+    let unknown = false;
+    let last = -1;
+    for (const g of sepAfter.keys()) if (g > last) last = g;
+    for (let g = 0; g <= last + 1; g++) {
+      const top = open.length ? open[open.length - 1] : null;
+      openers.push(unknown ? UNKNOWN_OPENER : top ? top.seg : -1);
+      // Counted on the command words, past redirect targets (`>case`), and unsure where the words with them differ.
+      const segTokens = bySeg.get(g) || [];
+      charge(ctx, segTokens.length);
+      const step = caseStep(commandHead(commandWords(segTokens)));
+      if (step !== caseStep(commandHead(segTokens))) unknown = true;
+      if (step < 0 && (!cases || top)) unknown = true;
+      cases += step;
+      const text = sepAfter.get(g);
+      if (opensGroup(text, segTokens)) open.push({ seg: g, text, cases });
+      else if (text === ')' && cases > 0 && (!top || top.cases < cases)) continue; // a case pattern
+      else if (GROUP_CLOSERS.has(text)) {
+        if (!top || top.cases !== cases || top.text !== (text === ')' ? '(' : '{')) unknown = true;
+        open.pop();
+      }
+    }
+    charge(ctx, openers.length);
+    GROUP_OPENERS.set(sepAfter, openers);
+  }
+  let opener = openers[at] ?? -1;
+  if (opener >= 0 && opener + 1 === at) opener = openers[opener];
+  return opener;
+}
+
+// Words past the reserved words a command inside a group or compound command may follow (`do echo …`, `then printf
+// …`, `while cat`) and a `for`, `select` or `case` opening one, so the stage is read as the command it runs (#5492).
+// Only reserved words are dropped, none of which names a file.
+const COMPOUND_HEADS = new Set(['for', 'select', 'case']);
+function pastReserved(words) {
+  let i = 0;
+  while (i < words.length && plainWord(words[i]) && (LEADING_RESERVED.has(words[i].text) || COMPOUND_HEADS.has(words[i].text))) i++;
+  return i ? words.slice(i) : words;
+}
+
+// The segment opening the compound command whose `done`, `fi` or `esac` is segment `close`'s first word: a `for`,
+// `while`, `until` or `select`, an `if`, or a `case … in`, matched by nesting over each segment's leading reserved
+// words, the nearest first. -1 when none matches, or when the match is not sure: a closing word that does not fit,
+// or a reserved word in a segment ending at a `)` other than the `case … in` before its first pattern (a `case`
+// pattern such as `while)`). Each segment passed is charged.
+const COMPOUND_CLOSERS = new Set(['done', 'fi', 'esac']);
+const COMPOUND_OPENERS = new Map([['for', 'done'], ['while', 'done'], ['until', 'done'], ['select', 'done'], ['if', 'fi'], ['case', 'esac']]);
+function compoundStart(close, bySeg, sepAfter, ctx) {
+  const open = [commandHead(bySeg.get(close) || [])[0]];
+  for (let r = close - 1; r >= 0; r--) {
+    charge(ctx, TOKEN_WORK + 1);
+    const seg = bySeg.get(r) || [];
+    charge(ctx, seg.length);
+    const { openers, closer } = compoundWords(commandWords(seg));
+    const written = compoundWords(seg);
+    if (written.closer !== closer || written.openers.join(' ') !== openers.join(' ')) return -1; // `>for`, `2>esac`
+    const pattern = sepAfter.get(r) === ')';
+    if (closer) {
+      if (pattern) return -1;
+      open.push(closer);
+      continue;
+    }
+    if (pattern && openers.length && !(openers.length === 1 && openers[0] === 'case')) return -1;
+    for (let k = openers.length - 1; k >= 0; k--) {
+      if (COMPOUND_OPENERS.get(openers[k]) !== open[open.length - 1]) return -1;
+      open.pop();
+      if (!open.length) return r;
+    }
+  }
+  return -1;
+}
+
+// The compound-command openers among a segment's leading reserved words (`then if while …`), and the closing word
+// it starts with; a quoted word is never a reserved one, and `case` opens only before `WORD in`. Read on the command
+// words and on every word, which differ where a reserved word is a redirect target (compoundStart).
+function compoundWords(segTokens) {
+  const words = segTokens.filter((t) => t.kind === 'word').map((t) => (plainWord(t) ? t.text : null));
+  const openers = [];
+  for (let i = 0; i < words.length; i++) {
+    const text = words[i];
+    if (text === 'if' || text === 'while' || text === 'until') {
+      openers.push(text);
+    } else if (text === 'for' || text === 'select' || (text === 'case' && words[i + 2] === 'in')) {
+      openers.push(text);
+      break;
+    } else if (!LEADING_RESERVED.has(text)) {
+      return { openers, closer: !openers.length && COMPOUND_CLOSERS.has(text) ? text : null };
+    }
+  }
+  return { openers, closer: null };
+}
+
+// +1 for a segment head opening a `case`, -1 for an `esac`, else 0.
+function caseStep([first, , third]) {
+  return first === 'case' && third === 'in' ? 1 : first === 'esac' ? -1 : 0;
+}
+
+// A word bash may read as a reserved word: written with no quote or backslash in it.
+function plainWord(t) {
+  return t.quoted === 'none' && !t.escaped;
+}
+
+// The first three words of a segment past leading reserved words (`do`, `then` …), a quoted one as null, since a
+// quoted word is never a reserved one.
+function commandHead(segTokens) {
+  const out = [];
+  for (const t of segTokens) {
+    if (t.kind !== 'word') continue;
+    if (out.length === 3) break;
+    const text = plainWord(t) ? t.text : null;
+    if (out.length || !LEADING_RESERVED.has(text)) out.push(text);
+  }
+  return out;
+}
+
+// A stage whose output does not come from its stdin: an echo or a printf, a `cat` or `tee` given a heredoc or
+// here-string of its own on fd 0, or a `cat` naming files and not `-` (`cat gen.sh`, whose text is not knowable).
+function writesOwnText({ words, cmdWords, feeds }) {
+  if (words.some((w) => w.subst)) return false; // `echo "$(cat)"` may print its stdin
+  const fed = !feeds.moved && (feeds.heredocs.length > 0 || feeds.hereStrings.length > 0);
+  return [words, cmdWords].some((ws) => commandReadings(ws).some((cmd) => cmd.base === 'echo' || cmd.base === 'printf'
+    || (fed && (cmd.base === 'cat' || cmd.base === 'tee')) || (cmd.base === 'cat' && catReadsFilesOnly(cmd.operands))));
+}
+
+// An fd path (`/dev/stdin`, `/dev/fd/0`, isFdPath) may be the pipe, so it counts as `-` (#5492).
+function catReadsFilesOnly(operands) {
+  const named = operands.filter((w) => !w.text.startsWith('-') || w.text === '-');
+  return named.length > 0 && !named.some((w) => w.text === '-' || isFdPath(w.text));
+}
+
+// A filtered stage (pipeStages), failing closed: a secret name its words, what it writes, or its heredocs and
+// here-strings mention, a `/` read as a break too (`sed 's/x/cat .env/'`), charged its words and eight times its
+// bytes first.
+function mentionInStage({ words, feeds }, ctx) {
+  const fed = [...feeds.heredocs, ...feeds.hereStrings];
+  let bytes = 0;
+  for (const w of words) bytes += w.text.length;
+  for (const text of fed) bytes += text.length;
+  charge(ctx, 2 * TOKEN_WORK * (words.length + bytes) + 1);
+  const hit = mentionInSource(words, ctx);
+  if (hit) return hit;
+  for (const text of [...words.map((w) => w.text), ...fed]) {
+    const named = mentionedSecret(text) || mentionedSecret(text.replaceAll('/', ' '));
+    if (named) return secretRead(named);
+  }
+  return null;
+}
+
+// A stage that passes its stdin on, under any reading of it: a `tee`, or a `cat` whose operands are all options or
+// `-` (#5492, #6182). A heredoc or here-string given to it is read beside, as what it prints.
+function passesStdinOn(words) {
+  return commandReadings(words).some((cmd) => cmd.base === 'tee'
+    || (cmd.base === 'cat' && cmd.operands.every((w) => w.text.startsWith('-'))));
 }
 
 // `find … | xargs cat`: the upstream segment's operands become file names the
 // sub-command reads. Only inferred across a real pipe and when stdin is not
 // redirected by `-a`/`--arg-file`. A sub-command that is itself a shell
 // (`xargs -I{} sh -c 'cat .env'`) carries a literal script and is scanned in
-// mode c whether or not a pipe feeds it.
-function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
-  const { subIdx, argFile } = xargsSubCommand(operands);
+// mode c whether or not a pipe feeds it. The sub-command's prefix variables
+// (`xargs env GIT_CONFIG_…=… sh -c …`) are in scope for all of it (#5492).
+function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading, ctx, heredocs = [], hereStrings = []) {
+  const { subIdx, argFile, replaceStr } = xargsSubCommand(operands);
   if (subIdx === -1) return null; // no sub-command: xargs defaults to echo
 
   // The sub-command is resolved through the same wrappers a top-level command is (`xargs sudo sh -c '…'`,
   // `xargs timeout 5 sh -c '…'`, `xargs env sh -c '…'`, #6114); nothing but wrappers left reads as the bare word.
-  const resolvedSub = resolveCommand(operands.slice(subIdx));
-  const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
-  const subBase = resolvedSub ? resolvedSub.base : writtenBase;
-  const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
-  const subIsShell = SHELL_INTERPRETERS.has(subBase);
-  if (subIsShell) {
-    // Heredocs/here-strings belong to xargs, not the sub-shell; pass none.
-    const hit = scanShellInterpreter(subOperands, [], [], s, bySeg, sepAfter, depth, reading);
+  // Each reading of it is read (commandReadings), the earlier first.
+  for (const resolvedSub of commandReadings(operands.slice(subIdx), true)) {
+    const hit = scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
     if (hit) return hit;
   }
-  if (argFile) return null; // stdin replaced by a file — no pipeline inference
-  // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
-  // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
-  if (NON_READING_COMMANDS.has(writtenBase)) return null;
+  return null;
+}
 
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if (op !== '|' && op !== '|&') return null;
-  if (prevSeg < 0) return null;
+// scanXargsPipe for one reading of the sub-command, `resolvedSub` (null when only wrappers are left).
+function scanXargsSub(resolvedSub, operands, subIdx, argFile, replaceStr, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings) {
+  const saved = ctx.shellVars;
+  ctx.shellVars = shellVarFrame(saved, resolvedSub ? resolvedSub.assigns : []);
+  try {
+    const writtenBase = lastSegment(operands[subIdx].text).toLowerCase();
+    const subBase = resolvedSub ? resolvedSub.base : writtenBase;
+    const subOperands = resolvedSub ? resolvedSub.operands : operands.slice(subIdx + 1);
+    const sourced = sourcedFileRead(subBase, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+    if (sourced) return sourced;
+    const subIsShell = SHELL_INTERPRETERS.has(subBase);
+    // An unknown command whose operands name a shell, git or another launcher (`xargs ionice sh -c`) is read like a
+    // shell sub-command (#5492): its stdin under `-a`, and the piped words fail closed below.
+    const subLaunches = resolvedSub !== null && readsLauncherOperands(subBase) && subOperands.some((w) => isLauncherWord(w.text));
+    if (subIsShell) {
+      // Heredocs/here-strings belong to xargs, not the sub-shell, unless `-a` leaves xargs's stdin to it (#5492).
+      const hit = scanShellInterpreter(subOperands, argFile ? heredocs : [], argFile ? hereStrings : [], s, bySeg, sepAfter, depth, reading, ctx);
+      if (hit) return hit;
+    } else {
+      // Any other sub-command (`git -c …`, `ssh -o …`) is scanned as the
+      // command xargs runs, at xargs's depth (scanLaunchedCommand); stdin
+      // words only add operands after it.
+      const stdin = argFile && subLaunches ? [...heredocs.map((h) => h.text), ...hereStrings].map((text) => `<<< ${shellQuote(text)}`) : [];
+      const hit = rescanCommand([...operands.slice(subIdx).map((w) => shellQuote(w.text)), ...stdin].join(' '), depth, ctx);
+      if (hit) return hit;
+    }
+    if (argFile) return null; // stdin replaced by a file — no pipeline inference
+    // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
+    // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
+    if (NON_READING_COMMANDS.has(writtenBase)) return null;
 
+    // The stage piped in, as before, and past a `cat` reading only stdin or a `tee`, the stage before it (#5492).
+    const sources = pipeSources(s, bySeg, sepAfter, ctx);
+    // A here-string or heredoc is the stdin xargs reads its words from, as a pipe is (#5492): read it as an echo of
+    // its words. Without `-a` only; with it, the shell above was given them instead.
+    for (const text of [...heredocs.map((h) => h.text), ...hereStrings]) {
+      charge(ctx, text.length * TOKEN_WORK);
+      sources.push([{ text: 'echo' }, ...text.split(/\s+/).filter(Boolean).map((t) => ({ text: t }))]);
+    }
+    if (!sources.length) return null;
+    // #5492: piped words become options and scripts of git, an ssh client or a shell (`-c 'core.fsmonitor=…'`,
+    // `-o ProxyCommand=…`, `-c '…'`), split by whichever of -I, -0, -d or -n xargs was given. Rather than model
+    // that, fail closed: a pipe into one of them whose words mention a secret name anywhere is a read. So is one into
+    // wrappers alone (`xargs -0 env`, `xargs sudo`), whose piped words are the command and its assignments.
+    // So is one into an unknown command that launches one, named in its operands or in the piped words
+    // (`echo 'sh -c …' | xargs ionice`).
+    const failClosed = subBase === 'git' || subBase === 'git.exe' || SSH_CLIENTS.has(subBase) || subIsShell || subLaunches
+      || (resolvedSub !== null && readsLauncherOperands(subBase)
+        && sources.some((words) => words.some((w) => w.text.split(/\s+/).some(isLauncherWord))));
+    const wrappersOnly = !resolvedSub || subBase === '';
+    const subIsDd = DD_NAMES.has(subBase);
+    let hit = readXargsSource(sources[0], failClosed, subIsShell, subOperands, replaceStr, depth, ctx, subIsDd);
+    if (hit) return hit;
+    if (wrappersOnly) {
+      hit = mentionInSource(sources[0], ctx);
+      if (hit) return hit;
+    }
+    for (const upstreamWords of sources.slice(1)) {
+      hit = readXargsSource(upstreamWords, failClosed || wrappersOnly, subIsShell, subOperands, replaceStr, depth, ctx, subIsDd);
+      if (hit) return hit;
+    }
+    // A wrapper-only sub-command's own assignments may take the rest of their value from the piped words.
+    for (const w of wrappersOnly ? operands.slice(subIdx) : []) {
+      const named = ASSIGNMENT_RE.test(w.text) && mentionedSecret(w.text);
+      if (named) return secretRead(named);
+    }
+    return null;
+  } finally {
+    ctx.shellVars = saved;
+  }
+}
+
+// The scripts npx or npm runs (#5492): the value of `-c` (`-c=…` too) and of each config key npm runs as a command,
+// `call` (`npm exec`), `shell` (`npm explore`), `browser` (`npm docs`, through a shell) and `editor` (`npm edit`), as
+// a long option wherever it sits, spelled by any prefix of two or more letters since npm takes a unique one (`--edi`),
+// or as an `npm_config_<key>` variable in scope, in any case. npm edit / config edit and explore also take editor and
+// shell from EDITOR, VISUAL, SHELL or ComSpec. `npm explore`'s words after the package, `--` or not, are joined and
+// run, so they, and failing closed all its words after `explore`, are a script. Every subcommand is read.
+const NPM_RUNNERS = new Set(['npx', 'npx.cmd', 'npm', 'npm.cmd']);
+const NPM_COMMAND_KEYS = ['call', 'shell', 'browser', 'editor'];
+const NPM_LONG_OPTION_RE = /^--([a-z][a-z-]+)(?:=([\s\S]*))?$/;
+const NPM_COMMAND_VAR_RE = /^npm_config_(call|shell|browser|editor)$/i;
+const NPM_DEFAULT_VARS = ['EDITOR', 'VISUAL', 'SHELL', 'ComSpec'];
+const NPM_DEFAULT_USERS = new Set(['edit', 'explore', 'config']);
+function npmCallScripts(operands, ctx) {
+  const scripts = [];
+  for (let k = 0; k < operands.length; k++) {
+    const t = operands[k].text;
+    const option = NPM_LONG_OPTION_RE.exec(t);
+    const commandValued = option !== null && NPM_COMMAND_KEYS.some((key) => key.startsWith(option[1]));
+    if (commandValued && option[2] !== undefined) scripts.push(option[2]);
+    else if ((commandValued || t === '-c') && k + 1 < operands.length) scripts.push(operands[k + 1].text);
+    else if (t.startsWith('-c=')) scripts.push(t.slice(3));
+  }
+  const explore = operands.findIndex((w) => w.text === 'explore');
+  if (explore !== -1) {
+    const rest = operands.slice(explore + 1).map((w) => w.text);
+    scripts.push(rest.join(' '));
+    const positional = rest.filter((t) => t !== '--' && !t.startsWith('-'));
+    scripts.push(positional.slice(1).join(' '));
+  }
+  for (const name of shellVarNames(ctx.shellVars, NPM_COMMAND_VAR_RE, ctx)) {
+    for (const value of shellVarValues(ctx.shellVars, name, ctx)) scripts.push(value);
+  }
+  if (operands.some((w) => NPM_DEFAULT_USERS.has(w.text))) {
+    for (const name of NPM_DEFAULT_VARS) for (const value of shellVarValues(ctx.shellVars, name, ctx)) scripts.push(value);
+  }
+  return scripts;
+}
+
+// pnpm exec / dlx (pnpx, pnx) under `-c` / `--shell-mode`, also inside a `-` cluster (`-rc`), run their command
+// through a shell, and yarn exec (Berry) runs its words as a shell script (#5492): the words after the subcommand
+// (all of them for pnpx and pnx, and for a pnpm whose subcommand is not found) but its options, joined and each on
+// its own.
+const PNPM_RUNNERS = new Set(['pnpm', 'pnpm.cmd', 'pnpx', 'pnpx.cmd', 'pnx', 'pnx.cmd']);
+const YARN_RUNNERS = new Set(['yarn', 'yarn.cmd']);
+const PNPM_SHELL_MODE_RE = /^-[a-zA-Z]*c[a-zA-Z]*$/;
+function packageRunnerScripts(base, operands) {
+  const texts = operands.map((w) => w.text);
+  let from;
+  if (YARN_RUNNERS.has(base)) {
+    from = texts.indexOf('exec');
+    if (from === -1) return [];
+  } else {
+    if (!texts.some((t) => t === '--shell-mode' || PNPM_SHELL_MODE_RE.test(t))) return [];
+    from = base.startsWith('pnpm') ? texts.findIndex((t) => t === 'exec' || t === 'dlx') : -1;
+  }
+  const rest = texts.slice(from + 1).filter((t) => !t.startsWith('-'));
+  return [rest.join(' '), ...rest];
+}
+
+// dd's `if=` operand, naming the file dd reads (#5492).
+const DD_NAMES = new Set(['dd', 'dd.exe']);
+function ddInputNamesSecret(text) {
+  return text.startsWith('if=') && operandNamesSecret(text.slice(3));
+}
+
+// One stage piped into xargs (scanXargsPipe): with `mention`, its words and what it writes checked for any mention
+// of a secret name; then its operands as the file names the sub-command reads, and a shell sub-command's script.
+// For a `dd` sub-command (`subIsDd`), an operand's `if=` value is the file dd reads (#5492).
+function readXargsSource(upstreamWords, mention, subIsShell, subOperands, replaceStr, depth, ctx, subIsDd) {
+  const stage = STAGE_OF.get(upstreamWords);
+  if (mention) {
+    const hit = mentionInSource(upstreamWords, ctx);
+    if (hit) return hit;
+  }
   // Every upstream operand is a candidate file name — the NON_READING
   // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
   // isSecretBasename still holds.
-  const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
-  if (!prevCmd) return null;
-  if (subIsShell) {
-    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
-    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
+  for (const prevCmd of commandReadings(upstreamWords)) {
+    if (subIsShell) {
+      // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+      // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+      const hit = scanXargsShellScripts(subOperands, replaceStr, prevCmd.operands, depth, ctx);
+      if (hit) return hit;
+    }
+    for (const w of prevCmd.operands) {
+      if (operandNamesSecret(w.text)) return secretRead(w.text);
+      // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+      // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+      const received = xargsUnquoted(w.text);
+      if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+      if (subIsDd && (ddInputNamesSecret(w.text) || ddInputNamesSecret(received))) return secretRead(w.text);
+    }
+  }
+  // xargs splits what it reads at blanks and newlines (#5492), so `echo 'x if=.env' | xargs dd` hands dd `if=.env`:
+  // the stage's words, what it writes (a decoded `printf '\x2eenv'` included) and the heredocs and here-strings it
+  // is given are each judged whole and piece by piece as an operand, as they are and unquoted, since any stage may
+  // print its words (grep its pattern in the lines it matches, find or ls the names matching theirs). The split is
+  // the same whatever xargs's options: under `-I` or `-0` xargs may keep a piece joined to the rest, which this
+  // over-reads.
+  const feeds = stage ? stage.feeds : NO_FEEDS;
+  const texts = [...feeds.heredocs, ...feeds.hereStrings];
+  for (const w of upstreamWords) texts.push(w.text);
+  for (const written of reconstructedScripts(upstreamWords, ctx)) texts.push(written);
+  for (const text of texts) {
+    charge(ctx, text.length + 1);
+    for (const piece of XARGS_BLANK_RE.test(text) ? text.split(XARGS_BLANKS_RE) : [text]) {
+      for (const received of new Set([piece, xargsUnquoted(piece)])) {
+        if (operandNamesSecret(received) || (subIsDd && ddInputNamesSecret(received))) return secretRead(received);
+      }
+    }
+  }
+  // A filter stage, and every one back to the producer, fails closed as it does for a shell (#5492).
+  if (stage && stage.filtered) {
+    const hit = mentionInStage(stage, ctx);
     if (hit) return hit;
   }
-  for (const w of prevCmd.operands) {
-    if (operandNamesSecret(w.text)) return secretRead(w.text);
-    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
-    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
-    const received = xargsUnquoted(w.text);
-    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+  return null;
+}
+const XARGS_BLANK_RE = /[\s\0]/;
+const XARGS_BLANKS_RE = /[\s\0]+/;
+
+// A secret name a piped stage's words mention, as they are or as xargs unquotes them, or what it writes does.
+function mentionInSource(upstreamWords, ctx) {
+  for (const w of upstreamWords) {
+    const named = mentionedSecret(w.text) || mentionedSecret(xargsUnquoted(w.text));
+    if (named) return secretRead(named);
+  }
+  // What an echo / printf upstream writes, which printf may run together (`%s`) or spell with escapes.
+  for (const written of reconstructedScripts(upstreamWords, ctx)) {
+    const named = mentionedSecret(written);
+    if (named) return secretRead(named);
   }
   return null;
+}
+
+// The first piece of `text` that names a secret, or null (#5492). Pieces are cut at whitespace, quotes, a
+// backslash (printf's `\0` and `\n` separate words on their way to xargs -0 / -d) and the characters that end a
+// word or an option name in a shell, an ssh option or a git config value. `/` stays inside a piece, so a piece is
+// judged by its basename, and `.` does too, so `.env.example` keeps its exemption.
+// A NUL (a decoded `\0`) splits too, read beside the split that keeps it inside a piece (`.env.example<NUL>x`).
+const MENTION_SPLIT_RE = /[\s"'=:;,|&<>()`$!{}@\\]+/;
+const MENTION_SPLIT_NUL_RE = /[\s"'=:;,|&<>()`$!{}@\\\0]+/;
+function mentionedSecret(text) {
+  const named = (piece) => piece !== '' && namesSecretOperand(piece);
+  return text.split(MENTION_SPLIT_RE).find(named) || (text.includes('\0') && text.split(MENTION_SPLIT_NUL_RE).find(named)) || null;
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -3088,33 +5286,22 @@ function xargsUnquoted(text) {
   return text.replace(/["'\\]/g, '');
 }
 
-// xargs's replace string: `-I STR`, `-ISTR`, `-i[STR]`, `--replace[=STR]` (default `{}`), or null without one.
-function xargsReplaceStr(operands, subIdx) {
-  for (let i = 0; i < subIdx; i++) {
-    const t = operands[i].text;
-    if (t === '-I') return operands[i + 1] ? operands[i + 1].text : null;
-    if (t.startsWith('-I') && t.length > 2) return t.slice(2);
-    if (t === '-i' || t === '--replace') return '{}';
-    if (t.startsWith('-i') && t.length > 2 && !t.startsWith('--')) return t.slice(2);
-    if (t.startsWith('--replace=')) return t.slice('--replace='.length) || '{}';
-  }
-  return null;
-}
-
 // `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
 // operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
 // (quotes and backslashes removed), is read as the script, or substituted into it.
-function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
-  const cIdx = shellOperands.findIndex((w) => DASH_C_RE.test(w.text));
-  if (cIdx === -1) return null;
-  const script = shellOperands[cIdx + 1];
+function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth, ctx) {
+  // Every script word shellScriptOperands finds, and the piped word itself when either of its readings has none.
+  const { scripts, scriptless } = shellScriptOperands(shellOperands);
+  if (!scripts.length && !scriptless) return null;
   for (const w of upstream) {
     const word = xargsUnquoted(w.text);
-    let text = null;
-    if (!script || (replaceStr !== null && script.text === replaceStr)) text = word;
-    else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) text = script.text.split(replaceStr).join(word);
-    if (text !== null) {
-      const hit = findSecretRead(text, depth + 1);
+    const texts = new Set(scriptless ? [word] : []);
+    for (const script of scripts) {
+      if (replaceStr !== null && script.text === replaceStr) texts.add(word);
+      else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) texts.add(script.text.split(replaceStr).join(word));
+    }
+    for (const text of texts) {
+      const hit = findSecretRead(text, depth + 1, ctx);
       if (hit) return hit;
     }
   }
@@ -3122,17 +5309,17 @@ function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
 }
 
 // `find … -exec CMD … ;` / `+` (also -execdir, -ok, -okdir): a shell among the action commands is read through
-// scanShellInterpreter, so `find . -exec sh -c 'cat .env' \;` reads its script. An action whose command is not a
-// shell needs nothing more: its operands are already find's operands, which the ordinary check reads.
+// scanShellInterpreter, so `find . -exec sh -c 'cat .env' \;` reads its script; any other action command is read
+// as scanLaunchedCommand reads it.
 const FIND_ACTIONS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
-function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
+function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
   for (let i = 0; i < operands.length; i++) {
     if (!FIND_ACTIONS.has(operands[i].text)) continue;
     const action = [];
     let j = i + 1;
     while (j < operands.length && operands[j].text !== ';' && operands[j].text !== '+') action.push(operands[j++]);
     i = j;
-    const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading);
+    const hit = scanLaunchedCommand(action, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
     if (hit) return hit;
   }
   return null;
@@ -3140,15 +5327,41 @@ function scanFindActions(operands, heredocs, hereStrings, s, bySeg, sepAfter, de
 
 // A command another program launches (a find action, a `watch -x` command): a shell is read through
 // scanShellInterpreter, and the launchers that re-interpret a string (eval, watch, xargs) are read as they are at the
-// top level. Anything else needs nothing more: its operands are the launcher's, which the ordinary check reads.
-function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
-  const cmd = resolveCommand(words);
-  if (!cmd) return null;
-  if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
-  if (cmd.base === 'eval') return findSecretRead(cmd.operands.map((w) => w.text).join(' '), depth + 1);
-  if (cmd.base === 'watch') return scanWatch(cmd.operands, [], [], s, bySeg, sepAfter, depth, reading);
-  if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading);
-  return null;
+// top level. Its prefix's files and variables count as a top-level command's do (#5492). Anything else is rescanned
+// as the command it is, so the git and ssh scans see it (`find . -exec git rebase -x …`, #5492); its operands are
+// also the launcher's, which the ordinary check reads. That rescan is at the launcher's depth: the launched words are
+// the launcher's own, not a new script body, and each rescan holds fewer of them, so it ends.
+// Each reading of the command (commandReadings), the earlier first. The rescan of anything else reads the words
+// themselves, whatever the reading, so it runs once (#5492): once per reading would double at each `time` stage.
+const RESCAN_WORDS = Symbol('rescan the launched words');
+function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading, ctx, heredocs = [], hereStrings = []) {
+  let rescan = false;
+  for (const cmd of commandReadings(words)) {
+    const hit = scanLaunched(cmd, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+    if (hit === RESCAN_WORDS) rescan = true;
+    else if (hit) return hit;
+  }
+  if (!rescan) return null;
+  // The launcher's stdin goes with the words it launches (#5492): a heredoc body as a here-string.
+  const stdin = [...heredocs.map((h) => h.text), ...hereStrings].map((text) => `<<< ${shellQuote(text)}`);
+  return rescanCommand([...words.map((w) => shellQuote(w.text)), ...stdin].join(' '), depth, ctx);
+}
+
+function scanLaunched(cmd, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings) {
+  for (const file of cmd.reads) if (namesSecret(file)) return secretRead(file);
+  const saved = ctx.shellVars;
+  ctx.shellVars = shellVarFrame(saved, cmd.assigns);
+  try {
+    const sourced = sourcedFileRead(cmd.base, heredocs, hereStrings, s, bySeg, sepAfter, depth, ctx);
+    if (sourced) return sourced;
+    if (SHELL_INTERPRETERS.has(cmd.base)) return scanShellInterpreter(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+    if (cmd.base === 'eval') return scanEval(cmd.operands, depth, ctx);
+    if (cmd.base === 'watch') return scanWatch(cmd.operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx);
+    if (cmd.base === 'xargs') return scanXargsPipe(cmd.operands, s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+    return RESCAN_WORDS;
+  } finally {
+    ctx.shellVars = saved;
+  }
 }
 
 // procps `watch [options] command…`: without -x/--exec the operands are joined with spaces and handed to
@@ -3156,7 +5369,7 @@ function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
 // `watch cat '".env"'` runs `cat .env`, and `watch 'cat .env'` is a whole script). With -x/--exec the command
 // runs without a shell and its operands are plain words, which the ordinary check judges as before.
 const WATCH_INTERVAL_SHORT = 'n';
-function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
+function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading, ctx) {
   let exec = false;
   let k = 0;
   for (; k < operands.length; k++) {
@@ -3177,8 +5390,8 @@ function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, r
   if (k >= operands.length) return null;
   // -x/--exec: no shell re-reads the operands (`watch -x cat '".env"'` reads a file named `".env"`), but the command
   // itself may be a shell or a launcher that does (`watch -x sh -c 'cat .env'`).
-  if (exec) return scanLaunchedCommand(operands.slice(k), s, bySeg, sepAfter, depth, reading);
-  return findSecretRead(operands.slice(k).map((w) => w.text).join(' '), depth + 1);
+  if (exec) return scanLaunchedCommand(operands.slice(k), s, bySeg, sepAfter, depth, reading, ctx, heredocs, hereStrings);
+  return findSecretRead(operands.slice(k).map((w) => w.text).join(' '), depth + 1, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -3187,7 +5400,7 @@ function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, r
 
 const PATTERN_TEXT = '.env, .env.<suffix> (except .env.example/.sample/.template/.dist), .secrets';
 
-function reasonFor(code, tool, target) {
+function reasonFor(code, tool, target, via = []) {
   if (code === 'command-too-large') {
     return `Secret read guard: this Bash command is over ${MAX_COMMAND_LENGTH} characters and ` +
       'cannot be checked for secret-file reads. Split it into smaller commands.';
@@ -3198,13 +5411,19 @@ function reasonFor(code, tool, target) {
   }
   if (code === 'command-too-complex') {
     return 'Secret read guard: this Bash command is nested deep enough to overflow the parser, or ' +
-      'needs more work than the scan allows, so it cannot be checked for secret-file reads. ' +
+      'needs more work than the scan allows (its nested scripts, git configuration, aliases or URLs ' +
+      `included, up to ${MAX_SCAN_WORK} units), so it cannot be checked for secret-file reads. ` +
       'Split it into smaller commands.';
   }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
       'alternatives, or holds too many brace groups to expand, and cannot be checked for ' +
       'secret-file matches. Use a narrower glob.';
+  }
+  if (code === 'alias-too-complex') {
+    return `Secret read guard: the git aliases in this command ('${target}') expand more than ${MAX_ALIAS_HOPS} ` +
+      `hops deep, ${MAX_ALIAS_EXPANSIONS} times or past the scan budget, and cannot be checked for ` +
+      'secret-file reads. Run the expanded git command instead.';
   }
   if (code === 'debugger-cli-spawn') {
     return `Debugger spawn guard: this Bash command launches the debugger as a CLI process ('--agent ${target}'). ` +
@@ -3222,7 +5441,8 @@ function reasonFor(code, tool, target) {
       'refuses. Spell the word with plain quotes, or let the command decode the bytes itself ' +
       "(printf '\\xNN').";
   }
-  return `Secret read guard: ${tool} would read '${target}', which matches a protected secret-file ` +
+  const chain = via.length ? ` (via ${via.join(' → ')})` : '';
+  return `Secret read guard: ${tool} would read '${target}'${chain}, which matches a protected secret-file ` +
     `pattern (${PATTERN_TEXT}). Secret values must not be read into the conversation. ` +
     'If you need a specific value, ask the user for it; if you need the variable NAMES, ' +
     'read the non-secret template (.env.example) instead.' +
@@ -3232,10 +5452,12 @@ function reasonFor(code, tool, target) {
 }
 
 // stdout gets the typed JSON block; stderr gets the plain reason string
-// (Kimi's hook bus reads stderr verbatim back to the model — #3911).
-function emitBlock(code, tool, target) {
-  const reason = reasonFor(code, tool, target);
-  deny({ decision: 'block', code, tool, path: target, reason }, reason);
+// (Kimi's hook bus reads stderr verbatim back to the model — #3911). `via`,
+// the git steps a Bash read was reached through, is present only when there
+// are some.
+function emitBlock(code, tool, target, via = []) {
+  const reason = reasonFor(code, tool, target, via);
+  deny({ decision: 'block', code, tool, path: target, reason, ...(via.length ? { via } : {}) }, reason);
 }
 
 // Strips a `module:` prefix so Kimi's `kimi_cli.tools.file:Grep` (not in the
@@ -3386,7 +5608,7 @@ function main() {
       if (command.length > MAX_COMMAND_LENGTH) emitBlock('command-too-large', tool, '');
       exemption.bashLine = command;
       const hit = scanBashCommand(command);
-      if (hit !== null) emitBlock(hit.code, tool, hit.text);
+      if (hit !== null) emitBlock(hit.code, tool, hit.text, hit.via);
       const spawn = scanDebuggerSpawn(command);
       if (spawn !== null) emitBlock(spawn.code, tool, spawn.text);
       if (readingBug !== null) {
@@ -3407,9 +5629,19 @@ function main() {
   });
 }
 
+// The git scan's key sets and environment twins are exported so a parity
+// test compares them with its own oracle (#5492), and scanWork gives the
+// MAX_SCAN_WORK units one reading of a command spends, so the budget's
+// boundary rows sit exactly at it.
 module.exports = {
   DIAGNOSTIC, decodeAnsiC, doubleQuoteEnd, findSecretRead, findSecretReadUnderOtherReadings, scanBashCommand, scanDebuggerSpawn, tokenize, workSpent, MAX_SCAN_SEPARATORS,
   MAX_SCAN_CHARACTERS,
+  GIT_COMMAND_CONFIG_KEYS, GIT_BANG_COMMAND_CONFIG_KEYS, GIT_CREDENTIAL_HELPER_KEYS, GIT_ENV_CONFIG_KEYS, MAX_SCAN_WORK,
+  scanWork(command) {
+    const ctx = newScanContext();
+    findSecretRead(command, 0, ctx);
+    return ctx.work;
+  },
 };
 
 if (require.main === module) main();
