@@ -395,30 +395,39 @@ describe('a research_resolution blocker has a route to the user (#5438)', () => 
 
   test('both stops end plan-phase with a marker line, and autonomous never executes plans whose run carries it', () => {
     assert.match(resolve(), /This stop and leaving the loop both end plan-phase with the line `PLANNING STOPPED: research questions need a user ruling`, which `\/gsd:autonomous` and `\/gsd:manager` read so that they do not execute the plans\. The plans stay on disk, as after the cap gate's Abandon, so `\/gsd:progress --next` or `\/gsd:execute-phase` can still run them\./);
-    assert.doesNotMatch(resolve(), /a caller never executes/, 'only autonomous and manager read the marker');
+    assert.doesNotMatch(resolve(), /a caller never executes/, 'the line names the callers that execute plans, not every caller');
     const auto = read('gsd-core/workflows/autonomous.md').replace(/\s+/g, ' ');
     // Each plan run reads the stop where it checks its plans: 3b, the INTERACTIVE wait at 3c, and gap closure.
     const stop = 'go to handle_blocker with that line and never execute its plans.';
     assert.ok(auto.includes(`check \`has_plans\`. If false → go to handle_blocker: "Plan phase \${PHASE_NUM} did not produce any plans." If plan-phase printed \`PLANNING STOPPED\`, ${stop}`), '3b');
     assert.ok(auto.includes(`Wait for the plan agent to complete (if not already) and verify plans exist; if it printed \`PLANNING STOPPED\`, ${stop}`), '3c wait');
+    assert.ok(auto.includes(`Check \`has_context\`. If false → go to handle_blocker: "Discuss for phase \${PHASE_NUM} did not produce CONTEXT.md." If discuss printed \`PLANNING STOPPED\` (its chain runs plan-phase with \`--auto\`), ${stop}`), '3a discuss');
     assert.ok(auto.includes(`handle_blocker: "Gap closure planning for phase \${PHASE_NUM} did not produce plans." If it printed \`PLANNING STOPPED\`, ${stop}`), 'gap closure');
     // The background planner is told it cannot ask, so the no-one-can-be-asked stop is observable to it.
     assert.match(auto, /prompt="Background: no AskUserQuestion\. Run plan-phase for phase \$\{PHASE_NUM\}/);
   });
 
-  // manager plans with --auto (inline and in the background), so a research question stops that run. The user is at
-  // the dashboard, so manager reads the stop on both paths, never offers the phase for execution, and offers a plan
-  // run without --auto, where plan-phase asks.
-  test('manager reads the stop on both plan paths and never offers the stopped phase for execution', () => {
+  // manager plans with --auto (inline and in the background), and its discuss calls can chain into plan-phase --auto,
+  // so a research question stops those runs. The user is at the dashboard, so manager reads the stop after each,
+  // never offers the phase for execution, and offers a plan run without --auto, where plan-phase asks.
+  test('manager reads the stop after every run that can plan and never offers the stopped phase for execution', () => {
     const mgr = read('gsd-core/workflows/manager.md').replace(/\s+/g, ' ');
+    assert.match(mgr, /Symbols: `✓` done, `◆` active, `○` pending, `·` queued, `⚠` research ruling needed\./);
+    // discuss-phase chains into plan-phase with --auto, so both discuss calls read the stop.
+    const discuss = 'Skill(skill="gsd-discuss-phase", args="{PHASE_NUM} {manager_flags.discuss}") ``` After discuss completes, if it printed `PLANNING STOPPED` (its chain runs plan-phase with `--auto`), handle it as step 5 does; otherwise loop back to dashboard step.';
+    assert.ok(mgr.includes(`Inline discuss: \`\`\` ${discuss}`), 'compound inline discuss');
+    assert.ok(mgr.includes(`Run inline with any configured flags: \`\`\` ${discuss}`), 'Discuss Phase N');
     assert.match(mgr, /- A phase in this session's `RESEARCH_STOPPED` list \(step 5\) → `✓ ⚠ ·` `⚠ Research ruling needed`, whatever its disk_status; drop its execute recommendation from `recommended_actions`, since its plans failed the research gate/);
     assert.match(mgr, /Skill\(skill="gsd-plan-phase", args="\{N\} --auto \{manager_flags\.plan\}"\) ``` Display while it runs: ``` ◆ Planning Phase \{N\}[^`]*``` If it printed `PLANNING STOPPED`, handle it as step 5 does; otherwise loop back to dashboard step\./);
     const bg = span(read('gsd-core/workflows/manager.md'), '<step name="background_completion">', /<\/step>/).replace(/\s+/g, ' ');
     const stop = bg.indexOf('**If a plan-phase result carries `PLANNING STOPPED`**');
     assert.ok(stop !== -1 && stop < bg.indexOf('Display a brief notification'), 'the stop is read before the success notification');
+    assert.match(bg, /- "Leave it": the phase keeps its `⚠` status\. If the chosen run ran plan-phase and it ended without printing `PLANNING STOPPED`, remove \{N\} from `RESEARCH_STOPPED`\. Then loop back to dashboard step\. 1\. Read the result message/, 'the stop clause ends at the dashboard, never in the success notification');
+    const retry = 'Skill(skill="gsd-execute-phase", args="{N}")` if the failed action was execution. If the plan run printed `PLANNING STOPPED`, handle it as this step\'s stop clause does; otherwise loop to dashboard after.';
+    assert.ok(bg.includes(`"Run this phase inline instead": Dispatch the same action inline via the appropriate Skill — use \`Skill(skill="gsd-plan-phase", args="{N}")\` if the failed action was planning, or \`${retry}`), 'permission-error retry');
+    assert.ok(bg.includes(`"Run inline instead": Dispatch the action inline via the appropriate Skill — use \`Skill(skill="gsd-plan-phase", args="{N}")\` if the failed action was planning, or \`${retry}`), 'other-error retry');
     assert.match(bg, /add \{N\} to `RESEARCH_STOPPED`\. Its plans stay on disk but are not ready to execute\./);
-    assert.match(bg, /"Plan inline now": `Skill\(skill="gsd-plan-phase", args="\{N\} \{manager_flags\.plan\}"\)`, without `--auto`, so plan-phase asks each question; once it prints `## PLANNING COMPLETE`, remove \{N\} from `RESEARCH_STOPPED`\./);
-    assert.match(bg, /"Discuss the phase": `Skill\(skill="gsd-discuss-phase", args="\{N\}"\)`\. - "Leave it": the phase keeps its `⚠` status\./);
+    assert.match(bg, /"Plan inline now": `Skill\(skill="gsd-plan-phase", args="\{N\} \{manager_flags\.plan\}"\)` with any `--auto` removed from the flags, so plan-phase asks each question\. - "Discuss the phase": `Skill\(skill="gsd-discuss-phase", args="\{N\}"\)`\./);
   });
 });
 
