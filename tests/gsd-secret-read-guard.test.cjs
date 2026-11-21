@@ -1754,6 +1754,62 @@ describe('gsd-secret-read-guard: shapes the 2026-11-20 review found (#5492)', ()
   });
 });
 
+describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', () => {
+  // Each `blocks` row runs a command that reads a secret and was allowed at df120928d, except the controls, which
+  // were blocked there and stay blocked. Each `allows` row names a secret or reads an ordinary file.
+  const blocks = (cmds, expected = {}) => {
+    for (const cmd of cmds) {
+      test(`blocks ${JSON.stringify(cmd)}`, () => assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env', ...expected }));
+    }
+  };
+  const allows = (cmds) => {
+    for (const cmd of cmds) test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(runHook(bash(cmd)), cmd));
+  };
+
+  // bash sources the file BASH_ENV names before a non-interactive script, and sh the one ENV names when interactive
+  // (#6445). A value naming a secret is a read wherever the assignment is made and whatever the shell's mode.
+  for (const [cmd, expectedPath] of [
+    ["BASH_ENV=./.env bash -c ':'", 'BASH_ENV=./.env'],
+    ["BASH_ENV=.env bash -c 'true'", 'BASH_ENV=.env'],
+    ['env BASH_ENV=./.env bash script.sh', 'BASH_ENV=./.env'],
+    ["ENV=./.env sh -i -c ':'", 'ENV=./.env'],
+    ["ENV=.env sh -ic ':'", 'ENV=.env'],
+    ['ENV=.secrets sh -i', 'ENV=.secrets'],
+    ["sudo BASH_ENV=.env bash -c ':'", 'BASH_ENV=.env'],
+    ["env -i BASH_ENV=.env bash -c ':'", 'BASH_ENV=.env'],
+    ["time BASH_ENV=.env bash -c ':'", 'BASH_ENV=.env'],
+    ["export BASH_ENV=.env; bash -c 'echo hi'", 'BASH_ENV=.env'],
+    ['export BASH_ENV=.env', 'BASH_ENV=.env'],
+    ["declare -x BASH_ENV=.env; bash -c ':'", 'BASH_ENV=.env'],
+    ['BASH_ENV=.env', 'BASH_ENV=.env'],
+    ["BASH_ENV=.env; bash -c ':'", 'BASH_ENV=.env'],
+    ['BASH_ENV=.env make', 'BASH_ENV=.env'],
+    ["BASH_ENV=.e; BASH_ENV+=nv; bash -c ':'", 'BASH_ENV=.env'],
+    ["echo x | xargs env BASH_ENV=.env bash -c ':'", 'BASH_ENV=.env'],
+    [`bash -c "BASH_ENV=.env bash -c ':'"`, 'BASH_ENV=.env'],
+    // Control.
+    ["export BASH_ENV=./.env; bash -c ':'", 'BASH_ENV=./.env'],
+  ]) blocks([cmd], { path: expectedPath });
+  // A value that is an fd path sources the command's stdin: its heredocs, here-strings and pipe are read as a shell's,
+  // whichever fd they are on.
+  blocks([
+    "BASH_ENV=/dev/stdin bash -c ':' <<< 'cat .env'",
+    "BASH_ENV=/dev/fd/3 bash -c ':' 3<<< 'cat .env'",
+    "BASH_ENV=/dev/fd/0 bash -c ':' <<EOF\ncat .env\nEOF",
+    "echo 'cat .env' | BASH_ENV=/dev/stdin bash -c ':'",
+    "export BASH_ENV=/dev/stdin; bash -c ':' <<< 'cat .env'",
+    "env BASH_ENV=/proc/self/fd/0 bash -c : <<< 'cat .env'",
+  ]);
+  allows([
+    "BASH_ENV=./setup.sh bash -c ':'",
+    "ENV=/etc/profile sh -c ':'",
+    "BASH_ENV=.env.example bash -c ':'",
+    "export BASH_ENV=~/.bashrc; cat .env.example",
+    "BASH_ENV=/dev/stdin bash -c ':' <<< 'echo .env'",
+    'ENV=production npm start',
+  ]);
+});
+
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
   // A hook that crashes or outlives its timeout allows the command, so each
   // of these must decide. They are the reviewers' payloads, at a size that
