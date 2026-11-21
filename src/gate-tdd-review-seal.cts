@@ -11,7 +11,7 @@ import path from 'node:path';
 import { evidenceFound, evidenceFromError, evidenceUnreadable, isPlainObject, lstatEvidence, readBoundedTextEvidence, type Evidence } from './gate-evidence.cjs';
 import { extractTaskCommitRefs, commitIsAncestor, commitIsKnown, subjectsOccurOnHead } from './gate-evaluation-scope.cjs';
 import { platformWriteSync, toPosixPath } from './shell-command-projection.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module (#5354)
 import coreUtilsMod = require('./core-utils.cjs');
 const { summaryCandidates } = coreUtilsMod;
 
@@ -94,20 +94,16 @@ export function commitIsGone(reach: CommitReachability | null, historyComplete: 
 /**
  * #5354: a plan was squashed away when it has no live plan commit and no seal entry, and its SUMMARY
  * names task commits none of which is reachable from HEAD. A missing object counts as unreachable only
- * in a complete history.
+ * in a complete history. A never-existing id looks the same as a squashed commit that was garbage-collected
+ * or never fetched, so it is `NotEvaluable` by rule: the gate stays advisory and the row names the plan.
  *
- * A never-existing id looks the same as a squashed commit that was garbage-collected or never fetched,
- * so it is `NotEvaluable` by rule: the gate stays advisory and the row names the plan and its reason.
+ * The first existing candidate name (`summaryCandidates`) decides. These are ordinary failures: an
+ * unreadable SUMMARY (a symlink, a non-regular file, or over `REPO_TEXT_MAX_BYTES`), no SUMMARY, no listed
+ * hash, more than SUMMARY_REFS_MAX distinct hashes, and any reachable hash.
  *
- * The first existing candidate name (`summaryCandidates`) decides, and no later name is tried. These are
- * ordinary failures: an unreadable SUMMARY (a symlink or other non-regular file, or over
- * `REPO_TEXT_MAX_BYTES`), no SUMMARY, no listed hash, more than SUMMARY_REFS_MAX distinct hashes, and
- * any reachable hash.
- *
- * When every ref exists and its subject still occurs on a commit reachable from HEAD but not from the
- * refs, a rebase or amend rewrote the plan. It was not squashed, so it is not unreachable. Squash
- * evidence for a plan whose task subjects survive is the seal (`--record` before the squash), which
- * `planRow` reads first.
+ * When every ref exists and its subject still occurs on a commit reachable from HEAD but not from the refs,
+ * a rebase or amend rewrote the plan; it was not squashed. Squash evidence for a plan whose task subjects
+ * survive is the seal (`--record` before the squash), which `planRow` reads first.
  */
 export function summaryCommitsAllUnreachable(projectDir: string, phaseDir: string, planPath: string, historyComplete: () => boolean): boolean {
   const rel = toPosixPath(path.relative(phaseDir, planPath));
