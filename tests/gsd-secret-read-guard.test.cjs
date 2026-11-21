@@ -1911,6 +1911,9 @@ describe('gsd-secret-read-guard: shapes the 2026-11-21 review found (#5492)', ()
   ]);
   blocks(["find . -exec env BASH_ENV=.env bash -c : \\;", 'watch env BASH_ENV=.env bash -c :', 'caffeinate env BASH_ENV=.env bash -c :'],
     { path: 'BASH_ENV=.env' });
+
+  // npx and npm behind a wrapper the guard does not list are launched from there like git or a shell.
+  blocks(["caffeinate npx -c 'cat .env'", "strace -f npm exec -c 'cat .env'", "caffeinate npm x -c 'cat .env'", "taskset 1 npx --call='cat .env'"]);
 });
 
 describe('gsd-secret-read-guard: large git command lines decide within the scan budget (#5492)', () => {
