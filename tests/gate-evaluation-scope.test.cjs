@@ -16,8 +16,9 @@ const os = require('node:os');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const {
   resolveEvaluationScope,
   evaluateEvaluationScope,
@@ -25,8 +26,11 @@ const {
   planSubjectPattern,
   qualifiedPlanSubjectPattern,
   isSafeRefArgument,
+  isFullSha,
+  subjectsOccurOnHead,
   parseGitVersion,
   remergeDiffSupported,
+  sinceAsFilterSupported,
   SCOPE_EXCLUSION_PATHSPECS,
 } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
@@ -48,7 +52,8 @@ function write(dir, rel, content) {
 function makeRepo({ deferScaffold = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-'));
   dirs.push(dir);
-  const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
+  const gitWith = (env, ...args) => gitOrThrow(args, { cwd: dir, env: isolatedEnv({ home: dir, override: { ...IDENTITY, ...env } }) }).trim();
+  const git = (...args) => gitWith({}, ...args);
   git('init', '--initial-branch=main');
   git('config', 'user.email', 'test@test.io');
   git('config', 'user.name', 'Test');
@@ -59,16 +64,19 @@ function makeRepo({ deferScaffold = false } = {}) {
     git('commit', '-m', 'docs(03): scaffold phase');
   };
   if (!deferScaffold) scaffold();
-  return { dir, git, scaffold };
+  return { dir, git, gitWith, scaffold };
 }
 
-/** Commit one real file; returns the full sha. */
-function commit(repo, rel, message, content = `${rel}\n`) {
+/** Commit one real file (`env` adds git environment such as the author and committer dates); returns the full sha. */
+function commit(repo, rel, message, content = `${rel}\n`, env = {}) {
   write(repo.dir, rel, content);
   repo.git('add', rel);
-  repo.git('commit', '-m', message);
+  repo.gitWith(env, 'commit', '-m', message);
   return repo.git('rev-parse', 'HEAD');
 }
+
+/** Unix-second author and committer dates as git environment (a rewrite keeps the author time and moves the committer time). */
+const datesAt = (author, committer = author) => ({ GIT_AUTHOR_DATE: `@${author} +0000`, GIT_COMMITTER_DATE: `@${committer} +0000` });
 
 /** Write a SUMMARY whose `## Task Commits` rows name `shas`, and commit it. */
 function summarize(repo, shas, name = '03-01-SUMMARY.md') {
@@ -1254,6 +1262,10 @@ describe('evaluateEvaluationScope — the check verb', () => {
 // ─── Seams driven through an injected git runner ──────────────────────────────
 
 const { execGit: realExecGit } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
+// A test that stubs `git --version` at 2.37 still sends `--since-as-filter` to the real git, which must accept it.
+const hostGitVersion = realExecGit(['--version'], { cwd: __dirname, env: isolatedEnv({ home: __dirname }) }).stdout;
+const SKIP_HOST_GIT_BEFORE_2_37 = sinceAsFilterSupported(hostGitVersion) ? false : 'the host git before 2.37 rejects --since-as-filter';
+const SKIP_WIN32_NEWLINE_NAME = process.platform === 'win32' ? 'a filename containing a newline cannot exist on Windows (driven: ENOENT)' : false;
 const TIMED_OUT = { exitCode: 1, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true };
 
 /** A git runner that records every argv and delegates to the real git unless `force` answers. */
@@ -1549,6 +1561,306 @@ describe('qualifiedPlanSubjectPattern — one builder for every plan-id spelling
   });
 });
 
+describe('isFullSha (#5354)', () => {
+  test('accepts exactly 40 lowercase hex characters', () => {
+    assert.equal(isFullSha('a'.repeat(40)), true);
+    for (const bad of ['a'.repeat(39), 'a'.repeat(41), 'A'.repeat(40), `${'a'.repeat(39)}g`, '', 40, null, undefined]) {
+      assert.equal(isFullSha(bad), false, String(bad));
+    }
+  });
+
+  test('every commit the resolver returns carries a full sha', () => {
+    const repo = makeRepo();
+    commit(repo, 'a.txt', 'feat(03-01): a');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { commitsOnly: true });
+    assert.equal(scope.commits.length, 1);
+    assert.ok(scope.commits.every((c) => isFullSha(c.sha)));
+  });
+});
+
+/** The call of `subjectsOccurOnHead` that lists HEAD's history: the only one that names HEAD. */
+const isHeadListing = (args) => args.includes('HEAD');
+
+/** Wrap a runner: `onCall(args, run, opts)` answers each call (`run()` is the wrapped runner's answer). */
+function intercept(runner, onCall) {
+  return (args, opts) => onCall(args, () => runner(args, opts), opts);
+}
+
+describe('subjectsOccurOnHead (#5354)', () => {
+  test('true after an amend, false after a squash, null when git cannot answer', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    const b = commit(repo, 'b.txt', 'test(03-01): b');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
+    commit(repo, 'b.txt', 'test(03-01): b', 'amended\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), true, 'every subject survives a rewrite');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'one dropped subject is enough');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03): squashed phase');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), false, 'a squash drops the subject');
+    assert.equal(subjectsOccurOnHead(repo.dir, ['f'.repeat(40)]), null, 'an unknown id is no answer');
+    assert.equal(subjectsOccurOnHead(repo.dir, ['--all']), null, 'an option-like id is never passed to git');
+    assert.equal(subjectsOccurOnHead(repo.dir, []), null);
+  });
+
+  /** Commit with explicit author and committer unix times (a rewrite keeps the author time and moves the committer time). */
+  const commitDated = (repo, rel, message, { author, committer = author }, content = `${rel}\n`) => commit(repo, rel, message, content, datesAt(author, committer));
+  const T = 1_800_000_000;
+
+  test('[negative] a history larger than the default runner buffer still answers', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    // The originals are older than every filler commit, so the date bound keeps the whole filler in the listing.
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: 1_699_999_990 });
+    const b = commitDated(repo, 'b.txt', 'test(03-01): b', { author: 1_699_999_991 });
+    repo.git('reset', '--hard', base);
+    // 11 commits with a 100000-byte subject make a listing of about 1.1 MB, over the 1 MiB default of spawnSync; the oldest holds `a`'s subject.
+    commit(repo, 'a.txt', 'feat(03-01): a', 'twin\n');
+    const filler = 'x'.repeat(100_000);
+    // The subject goes in through a file: one 100 KB argv entry exceeds the Windows command-line limit.
+    for (let i = 1; i <= 11; i++) {
+      write(repo.dir, `f${i}.txt`, `f${i}\n`);
+      write(repo.dir, 'subject.txt', `chore: ${filler} ${i}\n`);
+      repo.git('add', `f${i}.txt`);
+      repo.git('commit', '-F', 'subject.txt');
+    }
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true, 'a subject under 1.2 MB of listing is found');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b]), false, 'a subject absent from the whole history is no');
+  });
+
+  test('[happy] the HEAD listing is bounded by date and has no output cap of its own', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    const seen = [];
+    subjectsOccurOnHead(repo.dir, [a], intercept(gitReporting('2.37.0').runner, (args, run, opts) => { seen.push({ args, opts }); return run(); }));
+    const listing = seen.find((call) => isHeadListing(call.args));
+    const lookups = seen.filter((call) => call !== listing);
+    assert.equal(lookups.some((call) => 'maxBuffer' in call.opts), false, 'the id lookups keep the default cap');
+    assert.ok(listing.args.includes(`--since-as-filter=@${T}`), 'the listing starts at the oldest id');
+    assert.equal(listing.opts.maxBuffer, Infinity, 'the date window is the bound, not a byte cap');
+  });
+
+  test('[boundary] a twin subject dated limit-1 is not a rewrite; limit and limit+1 are (git 2.37 and git 2.36 alike)', { skip: SKIP_HOST_GIT_BEFORE_2_37 }, () => {
+    for (const version of ['2.37.0', '2.36.9']) {
+      for (const [offset, expected] of [[-1, false], [0, true], [1, true]]) {
+        const repo = makeRepo();
+        const base = repo.git('rev-parse', 'HEAD');
+        const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+        repo.git('reset', '--hard', base);
+        commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T + offset }, 'twin\n');
+        assert.equal(subjectsOccurOnHead(repo.dir, [a], gitReporting(version).runner), expected, `git ${version}, twin at limit${offset}`);
+      }
+    }
+  });
+
+  test('[negative] a listing record without a numeric commit time on a git without the filter is no answer', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    // Replace the time field of each record (`<sha>\x1f<ct>\x1f<subject>\x1e`) with a non-number, or with nothing.
+    for (const bad of ['x', '']) {
+      const garble = (record) => { const [sha, , ...subject] = record.split('\x1f'); return [sha, bad, ...subject].join('\x1f'); };
+      const garbled = intercept(gitReporting('2.36.9').runner, (args, run) => {
+        const result = run();
+        return isHeadListing(args) ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : garble(r))).join('\x1e') } : result;
+      });
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], garbled), null, `time field ${JSON.stringify(bad)}`);
+    }
+  });
+
+  test('[negative] a listing record whose first field is not a full sha is skipped, never read as a commit', { skip: SKIP_HOST_GIT_BEFORE_2_37 }, () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    // The twin's record keeps its subject but loses its sha: it must not count as the plan commit's twin.
+    const headless = intercept(gitReporting('2.37.0').runner, (args, run) => {
+      const result = run();
+      return isHeadListing(args) ? { ...result, stdout: result.stdout.split('\x1e').map((r) => (r.trim() === '' ? r : `zz${r.slice(r.indexOf('\x1f'))}`)).join('\x1e') } : result;
+    });
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], headless), false);
+  });
+
+  test('[boundary] a kept twin under a child dated before the window is still found (the date filters, it does not cut the walk)', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
+  });
+
+  test('[boundary] the window opens at the earliest id: a twin of the older id dated between the two ids counts', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const older = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 1000 });
+    const newer = commitDated(repo, 'b.txt', 'test(03-01): b', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 500 }, 'twin a\n');
+    commitDated(repo, 'b.txt', 'test(03-01): b', { author: T }, 'twin b\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [newer, older]), true);
+  });
+
+  test('[negative] a commit time git does not report is no answer, never a wider or narrower window', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    const b = commitDated(repo, 'b.txt', 'test(03-01): b', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin a\n');
+    commitDated(repo, 'b.txt', 'test(03-01): b', { author: T }, 'twin b\n');
+    // The commit-time lookup is the call that asks for `%ct` and `%at`; drop one line of its output.
+    const dropping = (drop) => intercept(realExecGit, (args, run) => {
+      const r = run();
+      return args.some((arg) => String(arg).includes('%ct%x1f%at')) ? { ...r, stdout: r.stdout.split('\n').filter((l) => !l.startsWith(drop)).join('\n') } : r;
+    });
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b], dropping(b)), null);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, b], dropping('')), null);
+  });
+
+  test('[negative] two spellings of one commit are one commit, not a missing time', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T }, 'twin\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a, a.slice(0, 10)]), true);
+  });
+
+  test('[hostile] log.showSignature never puts gpg lines into the records of a signed commit', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell script fixture'); return; }
+    const scratch = createTempDir('gsd-scope-gpg-');
+    dirs.push(scratch);
+    const program = path.join(scratch, 'fake-gpg.sh');
+    fs.writeFileSync(program, '#!/bin/sh\necho "gpg: fake verdict" >&2\nexit 1\n', { mode: 0o755 });
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    // A commit object carrying a gpgsig header: `git log` with showSignature prints the gpg output before its record.
+    const signedAt = (subject) => {
+      const raw = `tree ${repo.git('rev-parse', `${base}^{tree}`)}\nparent ${base}\nauthor T <t@t.io> ${T} +0000\ncommitter T <t@t.io> ${T} +0000\n`
+        + `gpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\n${subject}\n`;
+      const file = path.join(scratch, 'signed-commit.txt');
+      fs.writeFileSync(file, raw);
+      return repo.git('hash-object', '-t', 'commit', '-w', file);
+    };
+    repo.git('config', 'log.showSignature', 'true');
+    repo.git('config', 'gpg.program', program);
+    const signed = signedAt('feat(03-01): a');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03): squashed phase');
+    assert.equal(subjectsOccurOnHead(repo.dir, [signed]), false, 'a signed original is read, so its dropped subject is a squash');
+    repo.git('reset', '--hard', base);
+    const original = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    repo.git('reset', '--hard', signedAt('feat(03-01): a'));
+    assert.equal(subjectsOccurOnHead(repo.dir, [original]), true, 'a signed twin is read, so the rewrite is found');
+  });
+
+  test('[boundary] one date window on git 2.36 (no flag, filtered in code) and git 2.37 (`--since-as-filter`); the probe reads `git --version`', { skip: SKIP_HOST_GIT_BEFORE_2_37 }, () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.git('reset', '--hard', base);
+    // A twin dated before the window, under a child that is too old as well: neither git counts it.
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 10 }, 'old twin\n');
+    commitDated(repo, 'c.txt', 'chore: child on a slow clock', { author: T - 1000 });
+    const withVersion = (version, seen) => intercept(gitReporting(version).runner, (args, run) => { seen.push(args); return run(); });
+    const old = [];
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.36.9', old)), false, 'the same window applies without the git flag');
+    assert.equal(old.some((args) => args.some((arg) => String(arg).startsWith('--since-as-filter'))), false);
+    const current = [];
+    assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion('2.37.0', current)), false, 'the filtered listing hides a twin dated before the window');
+    assert.ok(current.find(isHeadListing).includes(`--since-as-filter=@${T}`));
+    for (const [version, flagged] of [['2.38.1', true], ['3.0.0', true], ['garbled', false]]) {
+      const seen = [];
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], withVersion(version, seen)), false, `git ${version}`);
+      assert.equal(seen.find(isHeadListing).includes(`--since-as-filter=@${T}`), flagged, `git ${version}: flag ${flagged ? 'sent' : 'withheld'}`);
+    }
+  });
+
+  test('[boundary] an original committed before its author time opens the window at the committer time (limit-1, limit, limit+1)', () => {
+    for (const [offset, expected] of [[-1, false], [0, true], [1, true]]) {
+      const repo = makeRepo();
+      const base = repo.git('rev-parse', 'HEAD');
+      const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 100 });
+      repo.git('reset', '--hard', base);
+      commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T, committer: T - 100 + offset }, 'twin\n');
+      assert.equal(subjectsOccurOnHead(repo.dir, [a]), expected, `twin committed at limit${offset}`);
+    }
+  });
+
+  test('[negative] a rewrite whose committer clock runs behind still counts (the author time is kept)', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 100, committer: T });
+    repo.git('reset', '--hard', base);
+    commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T - 100, committer: T - 50 }, 'rebased on a slow clock\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
+  });
+
+  test('[negative] an amend keeps the author time and moves the committer time forward: still counts', () => {
+    const repo = makeRepo();
+    const a = commitDated(repo, 'a.txt', 'feat(03-01): a', { author: T });
+    repo.gitWith({ GIT_COMMITTER_DATE: datesAt(T, T + 3600).GIT_COMMITTER_DATE }, 'commit', '--amend', '--no-edit', '-m', 'feat(03-01): a');
+    assert.notEqual(repo.git('rev-parse', 'HEAD'), a, 'the amend made a new commit');
+    assert.equal(repo.git('log', '-1', '--format=%at%x20%ct'), `${T} ${T + 3600}`);
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
+  });
+
+  test('[negative] a HEAD listing git cannot deliver is no answer, never a "no"', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    repo.git('reset', '--hard', base);
+    // The HEAD listing is the call that names HEAD: a failed git reads as exit 1, a hang as a timeout.
+    const failing = (listing, version) => intercept(gitReporting(version).runner, (args, run) => (isHeadListing(args) ? listing : run()));
+    const failed = { exitCode: 1, stdout: '', stderr: '', signal: null, error: null, timedOut: false };
+    // On a git before 2.37 the listing is the whole history, so the timeout is what limits that read.
+    for (const version of ['2.37.0', '2.36.9']) {
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], failing(failed, version)), null, `git ${version}, failed listing`);
+      assert.equal(subjectsOccurOnHead(repo.dir, [a], failing({ ...failed, timedOut: true }, version)), null, `git ${version}, timed-out listing`);
+    }
+  });
+
+  test('[negative] an id named like a working-tree file is read as a revision', () => {
+    const repo = makeRepo();
+    const base = repo.git('rev-parse', 'HEAD');
+    const a = commit(repo, 'a.txt', 'feat(03-01): a');
+    repo.git('reset', '--hard', base);
+    commit(repo, 'a.txt', 'feat(03-01): a', 'amended\n');
+    fs.writeFileSync(path.join(repo.dir, a), 'file named like the id\n');
+    assert.equal(subjectsOccurOnHead(repo.dir, [a]), true);
+  });
+
+  test('property: true exactly when every named subject is on a kept commit (empty, spaced, unicode, repeated)', () => {
+    const subject = fc.stringMatching(/^[ aé]{0,3}$/);
+    fc.assert(fc.property(fc.array(fc.tuple(subject, fc.boolean()), { minLength: 1, maxLength: 3 }), (rows) => {
+      const repo = makeRepo();
+      const base = repo.git('rev-parse', 'HEAD');
+      const make = (msg) => { repo.git('commit', '--allow-empty', '--allow-empty-message', '--cleanup=verbatim', '-m', msg); return repo.git('rev-parse', 'HEAD'); };
+      const ids = rows.map(([msg]) => make(msg));
+      repo.git('reset', '--hard', base);
+      // A new parent, so a kept commit never gets the same sha as its original (same tree, message and second).
+      make('rewrite');
+      const keptIds = rows.filter(([, kept]) => kept).map(([msg]) => make(msg));
+      // The oracle reads the subjects as git reports them: git strips trailing whitespace and reads a blank message as empty.
+      const subjectOf = (sha) => gitOrThrow(['log', '-1', '--format=%s%x1e', sha], { cwd: repo.dir, env: isolatedEnv({ home: repo.dir }) }).split('\x1e')[0];
+      const keptSubjects = new Set(keptIds.map(subjectOf));
+      assert.equal(subjectsOccurOnHead(repo.dir, ids), ids.every((id) => keptSubjects.has(subjectOf(id))));
+    }), { seed: 5354, numRuns: 12 });
+  });
+});
+
 // ─── #6179: a root file named like a commit id must not make the scope unresolvable ───────────────────────────────
 //
 // `git rev-list <sha>` / `git log <sha>` without `--` exit 128 ("both revision and filename") when a root-level file
@@ -1726,7 +2038,7 @@ describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
 });
 
 describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
-  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', () => {
+  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', { skip: SKIP_WIN32_NEWLINE_NAME }, () => {
     const repo = makeRepo();
     const a = commit(repo, 'src/a.js', 'feat(03-01): a');
     summarize(repo, [a], '03-01-SUMMARY.md');

@@ -397,7 +397,7 @@ Create PR from completed phase work with auto-generated body.
 | `--draft` | No | Create as draft PR |
 
 **Prerequisites:** Phase verified (`/gsd-verify-work` passed), `gh` CLI installed and authenticated, `jq` installed, phase recorded complete in ROADMAP.md
-**Produces:** GitHub PR with rich body from planning artifacts, STATE.md updated
+**Produces:** GitHub PR with rich body from planning artifacts, STATE.md updated, and a `docs(<padded phase>)` commit that seals the TDD review evidence (`TDD-REVIEW-SEAL.json`). The seal commit needs TDD plans, a changed seal that is not gitignored, and `commit_docs` true for the phase (`phase_commit_docs.<phase-id>` wins).
 
 ```bash
 /gsd-ship 4                         # Ship phase 4

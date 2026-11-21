@@ -609,4 +609,5 @@ export = {
   summaryPairsWithAnyPlan,
   planRowPattern,
   tickAnchoredPlanRow,
+  summaryCandidates,
 };

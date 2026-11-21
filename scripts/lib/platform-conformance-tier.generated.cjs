@@ -118,6 +118,7 @@ module.exports = {
   "tests/fixture-builder.test.cjs",
   "tests/gate-contained-path-symlinked-planning.test.cjs",
   "tests/gate-decision-coverage-verify-stderr.test.cjs",
+  "tests/gate-evaluation-scope.test.cjs",
   "tests/gate-predicate.unit.test.cjs",
   "tests/gate-tdd-red-evidence-containment.test.cjs",
   "tests/gate-tdd-review-checkpoint-hardening.test.cjs",

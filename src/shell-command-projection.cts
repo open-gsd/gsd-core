@@ -688,7 +688,8 @@ function _spawnResult(result: { error?: NodeJS.ErrnoException | null; status?: n
 // #5548: owned by read-only-git-env.cts (its default base is scrubbed); re-exported for callers.
 export { GIT_LOCATION_ENV_VARS, scrubGitLocationEnv } from './read-only-git-env.cjs';
 
-export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number } = {}): SpawnResultOutput {
+/** `maxBuffer` overrides the 1 MiB stdout cap of `spawnSync` for a caller that lists a whole history (`Infinity` removes it). */
+export function execGit(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeout?: number; maxBuffer?: number } = {}): SpawnResultOutput {
   // Non-interactive defaults: a hung credential prompt or terminal-input
   // probe must surface as a timeout, not block the tool forever. Callers
   // can override via opts.env.
@@ -716,6 +717,8 @@ export function execGit(args: string[], opts: { cwd?: string; env?: Record<strin
     encoding: 'utf-8',
     stdio: 'pipe',
     timeout: opts.timeout ?? 10_000,
+    // Spread only a given value: an explicit `maxBuffer: undefined` lifts the default cap instead of keeping it.
+    ...(opts.maxBuffer === undefined ? {} : { maxBuffer: opts.maxBuffer }),
     windowsHide: true,
   });
   return _spawnResult(result, 'git');

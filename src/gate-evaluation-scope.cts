@@ -85,6 +85,9 @@ export interface ScopeOptions {
 
 export type GitRunner = (args: string[], opts?: { cwd?: string }) => SpawnResultOutput;
 
+/** The runner of `subjectsOccurOnHead`: a `GitRunner` that also honours `maxBuffer` (the shared `execGit` does). */
+export type HistoryGitRunner = (args: string[], opts?: { cwd?: string; maxBuffer?: number }) => SpawnResultOutput;
+
 export interface ScopeCommit {
   sha: string;
   subject: string;
@@ -447,8 +450,36 @@ export function isSafeDateArgument(candidate: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9 .,:+-]{0,63}$/.test(candidate);
 }
 
+/** True for a full 40-character lowercase hex object name. */
+export function isFullSha(v: unknown): v is string {
+  return typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+}
+
 function isAncestor(git: Git, sha: string, of: string): boolean {
   return gitOrNo(git, ['merge-base', '--is-ancestor', sha, of]) !== null;
+}
+
+/**
+ * The repos the commits of `projectDir` live in, in the order they are asked. A single-repo project is
+ * `projectDir` itself (the exact argv, no hardening). A `planning.sub_repos` workspace (#5867) is the
+ * workspace root, when it is a repo itself, then each sub-repo. A repo that does not hold a commit
+ * cannot answer (exit 128 -> unanswered); the first repo that holds the commits is authoritative (a
+ * clone's answer is the same). Throws `ScopeUnreadable` when the config or a sub-repo path is bad.
+ */
+function commitGits(projectDir: string, runner: GitRunner): Git[] {
+  const names = readSubRepoNames(projectDir);
+  if (names.length === 0) return [makeGit(projectDir, runner)];
+  let rootGit: Git | null = null;
+  try {
+    const rootTop = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING)(['rev-parse', '--show-toplevel']);
+    if (realDir(rootTop) === realDir(projectDir)) rootGit = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING);
+  } catch (error) {
+    if (!(error instanceof ScopeUnreadable && error.exitCode === 128)) throw error;
+  }
+  return [
+    ...(rootGit === null ? [] : [rootGit]),
+    ...names.map((name) => makeGit(containedSubRepoDir(projectDir, name), runner, SUB_REPO_GIT_HARDENING)),
+  ];
 }
 
 /**
@@ -460,24 +491,7 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
   if (!isSafeRefArgument(sha) || !isSafeRefArgument(of)) return null;
   const runner = execGit ?? execGitSeam;
   try {
-    const names = readSubRepoNames(projectDir);
-    if (names.length === 0) return isAncestor(makeGit(projectDir, runner), sha, of);
-    // #5867: the commits of a `planning.sub_repos` workspace live in the sub-repos (and the
-    // workspace root, when it is a repo itself). A repo that does not hold the commit cannot answer
-    // (exit 128 -> unanswered). The first repo that holds both commits is authoritative (a clone's
-    // answer is the same).
-    let rootGit: Git | null = null;
-    try {
-      const rootTop = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING)(['rev-parse', '--show-toplevel']);
-      if (realDir(rootTop) === realDir(projectDir)) rootGit = makeGit(projectDir, runner, SUB_REPO_GIT_HARDENING);
-    } catch (error) {
-      if (!(error instanceof ScopeUnreadable && error.exitCode === 128)) throw error;
-    }
-    const gits: Git[] = [
-      ...(rootGit === null ? [] : [rootGit]),
-      ...names.map((name) => makeGit(containedSubRepoDir(projectDir, name), runner, SUB_REPO_GIT_HARDENING)),
-    ];
-    for (const git of gits) {
+    for (const git of commitGits(projectDir, runner)) {
       try {
         return isAncestor(git, sha, of);
       } catch (error) {
@@ -491,6 +505,140 @@ export function commitIsAncestor(projectDir: string, sha: string, of: string, ex
     if (error instanceof ScopeUnreadable) return null;
     throw error;
   }
+}
+
+/**
+ * Whether every repo `commitIsAncestor` walks has its full history (#5354): a shallow repo cuts commits
+ * off, so no repo's "not found" says a commit was squashed away. Anything but a clear `false` answer
+ * from every repo (a timeout, no git, a bad `planning.sub_repos`) is "not complete".
+ */
+export function commitHistoryComplete(projectDir: string): boolean {
+  try {
+    return commitGits(projectDir, execGitSeam).every((git) => git(['rev-parse', '--is-shallow-repository']) === 'false');
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return false;
+    throw error;
+  }
+}
+
+/**
+ * Whether any repo `commitIsAncestor` walks holds commit `sha` (#5354). `false` only when every repo says
+ * it does not; `null` when git could not answer for one (a timeout, no git, an unsafe argument): not a "no".
+ */
+export function commitIsKnown(projectDir: string, sha: string): boolean | null {
+  if (!isSafeRefArgument(sha)) return null;
+  try {
+    let unanswered = false;
+    for (const git of commitGits(projectDir, execGitSeam)) {
+      try {
+        if (gitOrNo(git, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`]) !== null) return true;
+      } catch (error) {
+        if (!(error instanceof ScopeUnreadable)) throw error;
+        unanswered = true;
+      }
+    }
+    return unanswered ? null : false;
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return null;
+    throw error;
+  }
+}
+
+/**
+ * Whether the subject of each commit in `ids` still occurs on a commit reachable from HEAD but not from
+ * `ids` (#5354): a rebase or amend rewrote them rather than a squash dropping them. `null` means git could
+ * not answer (a timeout, no git, an unsafe or unknown id): not a "no".
+ */
+export function subjectsOccurOnHead(projectDir: string, ids: readonly string[], execGit?: HistoryGitRunner): boolean | null {
+  if (ids.length === 0 || !ids.every(isSafeRefArgument)) return null;
+  const runner: HistoryGitRunner = execGit ?? execGitSeam;
+  // The HEAD listing sets its own `maxBuffer`; the shared `makeGit` and `GitRunner` keep their form.
+  try {
+    // Each id is read in the first repo of the walk of `commitIsAncestor` that holds it; the two lists run the same repos in the same order.
+    const gits = commitGits(projectDir, runner);
+    const unboundedGits = commitGits(projectDir, (args, opts) => runner(args, { ...opts, maxBuffer: Infinity }));
+    const groups = new Map<number, string[]>();
+    for (const id of ids) {
+      const holder = gits.length === 1 ? 0 : gits.findIndex((g) => gitOrNo(g, ['rev-parse', '--verify', '--quiet', `${id}^{commit}`]) !== null);
+      if (holder < 0) return null;
+      groups.set(holder, [...(groups.get(holder) ?? []), id]);
+    }
+    // A subject gone in any repo is a squash; one repo that cannot answer leaves the answer open.
+    const answers = [...groups].map(([holder, held]) => subjectsOccurIn(gits[holder], unboundedGits[holder], held));
+    return answers.includes(false) ? false : answers.includes(null) ? null : true;
+  } catch (error) {
+    if (error instanceof ScopeUnreadable) return null;
+    throw error;
+  }
+}
+
+/** `subjectsOccurOnHead` for ids that one repo holds: `git` and `unboundedGit` run in that repo. */
+function subjectsOccurIn(git: Git, unboundedGit: Git, ids: readonly string[]): boolean | null {
+  // `--` ends each id list, so an id that names a working-tree file is still read as a revision.
+  const named = parseHeadLog(git(['log', '--no-walk=unsorted', NO_SHOW_SIGNATURE, HEAD_LOG_FORMAT, ...ids, '--']));
+  // The listing keeps commits whose committer time is not before the earliest author or committer time of the ids.
+  // `--since-as-filter` hides older commits without cutting the walk, so a kept commit under a too-old child is
+  // still listed.
+  const times = earliestTimes(git, ids);
+  // `named` holds one entry per distinct commit, however many spellings of it `ids` carries.
+  if (times.size < named.length) return null;
+  const since = Math.min(...times.values());
+  // A git before 2.37 has no `--since-as-filter`: it lists the whole history (only the 10 s timeout limits that read;
+  // test: the `[negative]` "a HEAD listing git cannot deliver" test, git 2.36.9) and the same window is applied here, on the committer time of each record.
+  const filtered = sinceAsFilterSupported(git(['--version']));
+  const listing = unboundedGit(['log', NO_SHOW_SIGNATURE, HEAD_LOG_FORMAT, ...(filtered ? [`--since-as-filter=@${since}`] : []), 'HEAD', '--not', ...ids, '--']);
+  const onHead = new Set(parseHeadLog(listing, filtered ? undefined : since).map((c) => c.subject));
+  return named.every((c) => onHead.has(c.subject));
+}
+
+/** First git release with `log --since-as-filter` (#5354). */
+const SINCE_AS_FILTER_MIN_GIT: readonly [number, number] = [2, 37];
+
+/** Whether `git --version` output names a git with `log --since-as-filter`; unparseable reads as no. */
+export function sinceAsFilterSupported(output: string): boolean {
+  const version = parseGitVersion(output);
+  if (version === null) return false;
+  return version.major > SINCE_AS_FILTER_MIN_GIT[0]
+    || (version.major === SINCE_AS_FILTER_MIN_GIT[0] && version.minor >= SINCE_AS_FILTER_MIN_GIT[1]);
+}
+
+/** One record per commit: sha, committer time, subject; `%x1e` frames the record so an empty or space-edged subject survives the runner's trim. */
+const HEAD_LOG_FORMAT = '--format=%H%x1f%ct%x1f%s%x1e';
+/** The single-repo path keeps the user's git config, so a `git log` whose records are parsed turns signature lines off. */
+const NO_SHOW_SIGNATURE = '--no-show-signature';
+
+/** The reader of a unix-seconds field (`%ct`, `%at`) of a `subjectsOccurOnHead` git log record; null when it is not all digits. */
+function unixSeconds(field: string | undefined): number | null {
+  return field !== undefined && /^[0-9]+$/.test(field.trim()) ? Number(field) : null;
+}
+
+/** The records of a `HEAD_LOG_FORMAT` log; with `since`, a record committed before it is skipped. A record without a numeric time is no answer. */
+function parseHeadLog(out: string, since?: number): { sha: string; subject: string }[] {
+  const commits: { sha: string; subject: string }[] = [];
+  for (const record of out.split('\x1e')) {
+    const trimmed = record.replace(/^\n+/, '');
+    if (!trimmed) continue;
+    const [sha, committed, ...subject] = trimmed.split('\x1f');
+    if (!isFullSha(sha)) continue;
+    const time = unixSeconds(committed);
+    if (time === null) throw new ScopeUnreadable('git-malformed:log');
+    if (since === undefined || time >= since) commits.push({ sha, subject: subject.join('\x1f') });
+  }
+  return commits;
+}
+
+/**
+ * The earlier of the committer and the author time per sha (a rewrite keeps the author time). A sha whose line
+ * lacks a numeric time is left out, so a gpg line from a user's `log.showSignature` is skipped.
+ */
+function earliestTimes(git: Git, shas: readonly string[]): Map<string, number> {
+  const times = new Map<string, number>();
+  for (const line of git(['log', '--no-walk=unsorted', '--format=%H%x1f%ct%x1f%at', ...shas, '--']).split('\n')) {
+    const [sha, committed, authored] = line.split('\x1f');
+    const [ct, at] = [unixSeconds(committed), unixSeconds(authored)];
+    if (sha && ct !== null && at !== null) times.set(sha, Math.min(ct, at));
+  }
+  return times;
 }
 
 // ─── The resolver ─────────────────────────────────────────────────────────────

@@ -17,10 +17,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
 
-const { createTempProject, cleanup } = require('./helpers.cjs');
+const { createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
 const {
   readTextEvidence,
   readDirEvidence,
+  isPlainObject,
+  lstatEvidence,
+  readBoundedTextEvidence,
   verdictFromEvidence,
   evidenceFound,
   evidenceNone,
@@ -252,5 +255,45 @@ describe('gate-evidence › unreadable arm cannot return pass', () => {
       [],
       'a real compile error in the module under test would otherwise hide behind the fixtures',
     );
+  });
+});
+
+describe('isPlainObject (#5354)', () => {
+  test('is an object that is neither null nor an array', () => {
+    assert.equal(isPlainObject({}), true);
+    for (const bad of [null, [], 'x', 1, undefined]) assert.equal(isPlainObject(bad), false, String(bad));
+  });
+});
+
+describe('gate-evidence — lstatEvidence and readBoundedTextEvidence (#5354)', () => {
+  const CAP = 16;
+  let dir;
+  beforeEach(() => { dir = createTempDir('gate-evidence-bounded-'); });
+  afterEach(() => cleanup(dir));
+
+  test('lstatEvidence: a file is found, an absent path and a path below a file are none', () => {
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
+    assert.equal(lstatEvidence(path.join(dir, 'a.txt')).kind, 'found');
+    assert.equal(lstatEvidence(path.join(dir, 'missing')).kind, 'none');
+    assert.equal(lstatEvidence(path.join(dir, 'a.txt', 'below')).kind, 'none');
+  });
+
+  for (const [label, size, kind] of [['limit-1', CAP - 1, 'found'], ['limit', CAP, 'found'], ['limit+1', CAP + 1, 'unreadable']]) {
+    test(`readBoundedTextEvidence at ${label} (${size} bytes) is ${kind}`, () => {
+      fs.writeFileSync(path.join(dir, 'f.txt'), 'x'.repeat(size));
+      assert.equal(readBoundedTextEvidence(path.join(dir, 'f.txt'), CAP).kind, kind);
+    });
+  }
+
+  test('readBoundedTextEvidence: an absent file is none, a directory is unreadable', () => {
+    assert.equal(readBoundedTextEvidence(path.join(dir, 'missing'), CAP).kind, 'none');
+    fs.mkdirSync(path.join(dir, 'sub'));
+    assert.equal(readBoundedTextEvidence(path.join(dir, 'sub'), CAP).kind, 'unreadable');
+  });
+
+  test('readBoundedTextEvidence: a close() failure is unreadable, not thrown', (t) => {
+    fs.writeFileSync(path.join(dir, 'f.txt'), 'x');
+    t.mock.method(fs, 'closeSync', () => { throw Object.assign(new Error('close failed'), { code: 'EIO' }); });
+    assert.equal(readBoundedTextEvidence(path.join(dir, 'f.txt'), CAP).kind, 'unreadable');
   });
 });
