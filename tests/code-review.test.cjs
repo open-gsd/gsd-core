@@ -722,6 +722,17 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
       `expected dispatch_reviewer_lanes to be exactly one continuous bash fence, found ${fences.length} — a split fence means any variable set in one and read in another is silently empty (this file's own documented execution model: fenced blocks do not share shell state)`);
   });
 
+  // The end-to-end test below hands the whole fence to `bash -c` as one argument. On Windows a command line is cut
+  // at ~8191 characters (each `"` costs two), so a fence that grows past the budget is truncated mid-quote and fails
+  // there with "unexpected EOF" (#6152 pushed it over once). 7500 leaves the driver text and a path room under 8191.
+  const DISPATCH_FENCE_ARGV_BUDGET = 7500;
+  test('dispatch_reviewer_lanes fence fits the Windows bash -c command-line budget', () => {
+    const [fence] = extractDispatchReviewerLanesFences();
+    const escaped = fence.length + (fence.match(/"/g) || []).length;
+    assert.ok(escaped <= DISPATCH_FENCE_ARGV_BUDGET,
+      `the fence is ${escaped} characters once quotes are escaped; keep it at or under ${DISPATCH_FENCE_ARGV_BUDGET} (trim comments) so the Windows end-to-end run is not truncated`);
+  });
+
   test('dispatch_reviewer_lanes computes CODE_REVIEW_POINT and dispatches in the SAME process, end to end (#4209 round 5)', () => {
     const [fence] = extractDispatchReviewerLanesFences();
     const tmpDir = createTempGitProject();

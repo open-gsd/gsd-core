@@ -139,12 +139,20 @@ const GSD_CODEX_HOOKS_OWNERSHIP_PREFIX = '# GSD codex_hooks ownership: ';
 // when every direct key is one of these (named agent roles live in the flattened
 // `[agents.<name>]` sub-tables, a separate `AgentRoleToml`). GSD writes only
 // `max_depth` (ADR-1239 upgrade 2 / #2088); the full set is enumerated so the
-// schema check accepts a user's other legitimate AgentsToml scalars too.
+// schema check accepts a user's other legitimate AgentsToml scalars too (#6165:
+// `enabled`, `max_concurrent_threads_per_session`, `default_subagent_model` and
+// `default_subagent_reasoning_effort` joined the struct). Values are integers,
+// booleans or single-line strings; a multiline-string value is never accepted.
+// The schema validator and the user-scalar extractor both read this one set.
 const CODEX_AGENTS_TOML_SCALAR_KEYS = new Set([
+  'enabled',
   'max_threads',
+  'max_concurrent_threads_per_session',
   'max_depth',
   'job_max_runtime_seconds',
   'interrupt_message',
+  'default_subagent_model',
+  'default_subagent_reasoning_effort',
 ]);
 // GSD's managed dispatch-depth value. Codex's implicit default is also 1 (root
 // sessions start at depth 0); writing it EXPLICITLY pins the negotiated
@@ -1007,6 +1015,20 @@ function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
   // CLAUDE.md neutralization via neutralizeAgentReferences(..., 'AGENTS.md').
   // #5715: the converter runs after the path above was emitted; shield it from the converter.
   return runtimeArtifactConversion._shieldEmittedPrefix(content, codexGsdPath, convertClaudeToCodexMarkdown);
+}
+
+/**
+ * #6158 — the Codex role sources in `agentsSrc`: every `gsd-*.md` EXCEPT the
+ * `*.compact.md` alternate renderings, sorted so the emit order never depends on
+ * the filesystem's directory order. A compact file is not a role: it shares its
+ * canonical sibling's frontmatter `name:`, so emitting it writes the same `.toml`
+ * twice. A compact file with no canonical sibling is therefore not emitted either
+ * (the same rule as tests/helpers/agent-roster.cjs).
+ */
+function codexAgentSourceFiles(agentsSrc) {
+  return fs.readdirSync(agentsSrc)
+    .filter(f => f.startsWith('gsd-') && f.endsWith('.md') && !f.endsWith('.compact.md'))
+    .sort();
 }
 
 function codexAgentTomlName(file, source) {
@@ -4761,6 +4783,7 @@ function extractCodexUserAgentsScalars(content) {
     const key = record.keySegments[0];
     if (key === 'max_depth') continue; // GSD-managed — GSD's value wins.
     if (!CODEX_AGENTS_TOML_SCALAR_KEYS.has(key)) continue;
+    if (tomlAssignmentStartsMultilineString(record.text)) continue; // only its first line would be kept
     preserved.push(trimmed);
   }
   return preserved;
@@ -6353,6 +6376,14 @@ function parseTomlToObject(content) {
  *   - `hooks.<Event>` MUST be an array of tables when present (Codex ≥0.124
  *     rejects bare `[hooks.<Event>]` single-bracket maps).
  */
+/** True when a TOML assignment line's value opens a multiline string (triple single or double quote). */
+function tomlAssignmentStartsMultilineString(recordText) {
+  const equalsIndex = findTomlAssignmentEquals(recordText);
+  if (equalsIndex === -1) return false;
+  const value = recordText.slice(equalsIndex + 1).trimStart();
+  return value.startsWith("'''") || value.startsWith('"""');
+}
+
 /**
  * True when a bare `[agents]` table body contains ONLY known AgentsToml scalar
  * keys (CODEX_AGENTS_TOML_SCALAR_KEYS) — i.e. it is a valid AgentsToml struct
@@ -6364,10 +6395,9 @@ function codexBareAgentsHasOnlyKnownScalars(body) {
   const lineRecords = getTomlLineRecords(body);
   for (const record of lineRecords) {
     // Conservative reject of anything not positively a single known-scalar
-    // assignment. A multiline-string value cannot be a valid AgentsToml scalar
-    // (max_threads/max_depth/job_max_runtime_seconds are integers,
-    // interrupt_message is a bool — none are strings), so codex would reject it
-    // too; rejecting here is correct, not a false negative.
+    // assignment. The scalars are integers, booleans or single-line strings
+    // (model, reasoning effort, interrupt message), never a multiline string,
+    // so a multiline-string value is rejected here as codex would reject it.
     if (record.startsInMultilineString) return false;
     if (record.tableHeader) return false;
     const trimmed = record.text.trim();
@@ -6376,6 +6406,7 @@ function codexBareAgentsHasOnlyKnownScalars(body) {
         !CODEX_AGENTS_TOML_SCALAR_KEYS.has(record.keySegments[0])) {
       return false;
     }
+    if (tomlAssignmentStartsMultilineString(record.text)) return false;
   }
   return true;
 }
@@ -6856,6 +6887,9 @@ function repairTrappedFeaturesKeys(content) {
     if (record.start < featuresSection.headerEnd) return false;
     if (record.end + record.eol.length > featuresSection.end) return false;
     if (!record.keySegments || record.keySegments.length === 0) return false;
+    // #6165: a dotted assignment (`multi_agent_v2.<key> = …`) is a nested feature setting that is legitimately a
+    // `[features]` entry whatever its value; only a plain single-segment key can be trapped there.
+    if (record.keySegments.length > 1) return false;
 
     // Check if the value is a boolean — if so, it belongs under [features]
     const equalsIndex = findTomlAssignmentEquals(record.text);
@@ -7482,12 +7516,36 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
   // rename / F1(b) sibling-clobber rows), asserted on the emitted `.toml`'s
   // `sandbox_mode`, not on the derivation's return value.
 
-  const agentEntries = fs.readdirSync(agentsSrc).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+  // #6158: one `.toml` per role, from the canonical source, in a fixed order. The
+  // roster is enumerated by `codexAgentSourceFiles` (no `*.compact.md` alternates,
+  // sorted), and every destination is resolved BEFORE any write so two sources that
+  // name the same role fail the install loudly instead of one silently overwriting
+  // the other.
+  const agentEntries = codexAgentSourceFiles(agentsSrc).map(file => {
+    const source = fs.readFileSync(path.join(agentsSrc, file), 'utf8');
+    const name = codexAgentTomlName(file, source);
+    // Confine the per-agent write to the agents/ dir itself: a crafted agent
+    // `name` containing path separators must not escape agents/ (which would let
+    // it clobber config.toml or write elsewhere under the configHome). Resolved
+    // here, before any write, so a bad name never leaves earlier roles half-written.
+    return { file, source, name, agentTomlPath: assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`) };
+  });
+  // Case-folded: roles differing only in case share one file on a case-insensitive volume.
+  const sourceByRole = new Map();
+  for (const { file, name } of agentEntries) {
+    const key = name.toLowerCase();
+    if (sourceByRole.has(key)) {
+      throw new Error(
+        `Codex agent role "${name}" is declared by both ${sourceByRole.get(key)} and ${file}; ` +
+        'each role needs exactly one source file, so one would overwrite the other. Rename or remove one.',
+      );
+    }
+    sourceByRole.set(key, file);
+  }
   const agents = [];
 
-  for (const file of agentEntries) {
+  for (const { file, source, name, agentTomlPath } of agentEntries) {
     const agentTomlSourcePath = path.join(agentsSrc, file);
-    const source = fs.readFileSync(agentTomlSourcePath, 'utf8');
     // #2995 (epic #1671 Phase 6.4): Codex embeds each agent's prompt into a
     // per-agent `.toml`, reading the source .md independently of the inline
     // agent loop — a separate emission path that must strip gsd:section
@@ -7510,7 +7568,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // for that call; see `deriveCodexSandboxMode`'s doc in
     // `codex-agent-toml.cts` for the resolution.
     const fileStem = file.replace(/\.md$/, '');
-    const name = codexAgentTomlName(file, source);
     const description = extractFrontmatterField(frontmatter, 'description') || '';
 
     agents.push({ name, description: toSingleLine(description) });
@@ -7536,10 +7593,6 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // and folds in the frontmatter `name:` for the sandbox decision (F1
     // above) — this call site does not need to pass `name` explicitly.
     const tomlContent = generateCodexAgentToml(fileStem, content, modelOverrides, runtimeResolver, effortCfg, sandboxTier);
-    // Confine the per-agent write to the agents/ dir itself: a crafted agent
-    // `name` containing path separators must not escape agents/ (which would let
-    // it clobber config.toml or write elsewhere under the configHome).
-    const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
     if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath, { allowOptInFollow: symlinkOptIn })) {
       throw new Error(
         installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath),
@@ -15509,6 +15562,9 @@ module.exports = {
     validateCodexConfigSchema,
     mergeCodexConfig,
     installCodexConfig,
+    ensureCodexHooksFeature,
+    repairTrappedFeaturesKeys,
+    codexAgentSourceFiles,
     install,
     installAllRuntimes,
     uninstall,

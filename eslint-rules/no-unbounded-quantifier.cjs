@@ -10,7 +10,7 @@
  *
  * This rule is NOT part of the ADR-1703 portability-rule family (see
  * `docs/contributing/cross-platform-portability-rules.md`) and is not listed
- * in `tests/portability-rule-disable-ban.test.cjs`'s `PROTECTED_RULES` — its
+ * in `scripts/static-checks/portability-rule-disable-ban.cjs`'s `PROTECTED_RULES` — its
  * `eslint-disable-next-line` suppressions, added after empirical
  * benign-verification of a specific site, are an intentional and permitted
  * part of this rule's design, unlike the ADR-1703 rules' zero-escape-hatch ban.
