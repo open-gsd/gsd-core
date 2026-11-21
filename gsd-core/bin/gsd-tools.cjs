@@ -127,7 +127,8 @@
  *                                      separate, requirement rows with mapped-phase
  *                                      traceability, plan/task rows with planned+changed
  *                                      file provenance, and independent accepted_phases /
- *                                      completed_plans fractions). Takes no arguments.
+ *                                      completed_plans / halted_plans fractions). Takes no
+ *                                      arguments.
  *
  * Progress:
  *   progress [json|table|bar]          Render progress in various formats

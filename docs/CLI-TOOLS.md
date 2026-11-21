@@ -1278,8 +1278,9 @@ When a task's planned and changed file sets both exist and disagree,
 
 #### Percentages are withheld rather than guessed
 
-`progress.accepted_phases` and `progress.completed_plans` are independent
-fractions, each `{completed, total, percent, scope}`. `percent` is `null`
+`progress.accepted_phases`, `progress.completed_plans` and
+`progress.halted_plans` are independent fractions, each
+`{completed, total, percent, scope}`. `percent` is `null`
 whenever `scope` is anything other than `complete` — the same rule the roadmap
 and progress surfaces follow, for the same reason. See
 [A non-`COMPLETE` scope withholds the percentage entirely](#a-non-complete-scope-withholds-the-percentage-entirely-3217).

@@ -84,8 +84,8 @@ if (phases.scope !== 'complete') {
 
 ## 4. Handle a withheld percentage
 
-`progress.accepted_phases` and `progress.completed_plans` each carry
-`{completed, total, percent, scope}`. **`percent` is `null` whenever `scope` is
+`progress.accepted_phases`, `progress.completed_plans` and
+`progress.halted_plans` each carry `{completed, total, percent, scope}`. **`percent` is `null` whenever `scope` is
 not `complete`.**
 
 That is deliberate. A percentage computed from a partial phase set is a
