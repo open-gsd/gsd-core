@@ -2561,10 +2561,14 @@ why the console reports the drop rather than pointing at a commit that may not e
 
 **Ids with a review-scoped prefix are refused loudly, never skipped (#5802).** The id grammar is
 `<CR|BL|WR|IN>-NN`. A review heading such as `### W6-CR-01: …` is not read as a finding; it is counted
-into the `unparsed:` shortfall and named on the console ("carry a prefix before the id"). A ledger row
-outside the grammar (`| R1-WR-01 | … |`, or a row with an invalid disposition) is named on the console and
-kept verbatim after the generated rows, not deleted by the whole-file rewrite; a regenerated row of the
-same id takes precedence, and the console says so. A frontmatter `- id:` entry outside the grammar ends
+into the `unparsed:` shortfall and named on the console ("carry a prefix before the id"). The same holds for a prefixed heading in a fix report (named, not reconciled) and for a multi-segment
+prefix (`W6-R2-CR-01`). A ledger row
+outside the grammar (`| R1-WR-01 | … |`, an indented row, or a row with an unknown disposition) is named on the console and
+kept verbatim after the generated rows, not deleted by the whole-file rewrite; it is not counted in
+`open:` or `total:`. When a regenerated row would take the id of such a row, the run does not rewrite the
+ledger at all and names the row, so a hand-set decision is never replaced silently. A disposition is
+read case-insensitively (`Deferred` is `deferred`). Two rows for one id are named (the last is used), and
+console names are masked for control characters and capped. A frontmatter `- id:` entry outside the grammar ends
 the previous entry, so its `title:` is never attributed to another finding.
 
 **Two residuals, since (ID, title) is not proof of identity.** A ledger written before titles were
