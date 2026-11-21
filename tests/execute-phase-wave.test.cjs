@@ -1442,7 +1442,7 @@ describe('execute-phase workflow: #5966 wave-boundary refresh', () => {
     assert.match(text, /case "\$\(git rev-parse --abbrev-ref HEAD 2>\/dev\/null\)" in agent-\*\|worktree-agent-\*\|worktree-wf_\*\) .*exit 1 ;; esac/,
       'the re-read must refuse inside an agent worktree, as the execute_waves guard does');
     assert.ok(!/ORCHESTRATOR_WT:-/.test(text), 'no fallback to the drifted cwd');
-    assert.match(text, /PLAN_INDEX=\$\(cd "\$ORCHESTRATOR_WT" && gsd_run query phase-plan-index "\$\{PHASE_NUMBER\}"\)/);
+    assert.match(text, /PLAN_INDEX=\$\(cd "\$ORCHESTRATOR_WT" && gsd_run query phase-plan-index \$\{GSD_WS:\+--ws=\$\{GSD_WS##\* \}\} "\$\{PHASE_NUMBER\}"\)/);
     const t = flat(text);
     assert.match(t, /Apply § Filtering from step 1 again, the #4628 readiness skip and the `blocked_by` skip included/,
       'readiness and the halted-plan skip still apply at every refresh');
@@ -1626,6 +1626,29 @@ describe('#5966: the wave-boundary re-read fence, run under bash', () => {
     assert.equal(r.exitCode, 1);
     assert.equal(r.stdout, '');
     assert.match(r.stderr, /FATAL: the phase-plan-index re-read is not a plan index/);
+  });
+
+  test('a run given --ws reads that workstream\'s index, not the flat one', (t) => {
+    const proj = refreshFixture(t);
+    const wsPhase = path.join(proj, '.planning', 'workstreams', 'other', 'phases', '01-alpha');
+    fs.mkdirSync(wsPhase, { recursive: true });
+    fs.writeFileSync(path.join(wsPhase, '01-02-PLAN.md'), '---\nphase: 01\nplan: 02\nwave: 1\n---\n# Plan 02\n');
+    const flatRun = runRefresh(proj);
+    assert.equal(flatRun.exitCode, 0, flatRun.stderr);
+    assert.deepEqual(JSON.parse(flatRun.stdout).plans.map((plan) => plan.id), ['01-01'], 'control: no --ws reads the flat index');
+    const wsRun = runRefresh(proj, { env: { GSD_WS: '--ws other' } });
+    assert.equal(wsRun.exitCode, 0, wsRun.stderr);
+    assert.deepEqual(JSON.parse(wsRun.stdout).plans.map((plan) => plan.id), ['01-02'], 'the refresh reads the workstream the run was given');
+  });
+
+  test('every phase-plan-index read of the run passes --ws as the host\'s other queries do', () => {
+    const ws = 'phase-plan-index ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}"';
+    const steps = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps');
+    for (const file of [WORKFLOW_PATH, path.join(steps, 'wave-refresh.md'), path.join(steps, 'partial-wave.md')]) {
+      const text = fs.readFileSync(file, 'utf8');
+      assert.ok(text.includes(ws), `${path.basename(file)} reads the index of the run's workstream`);
+      assert.ok(!text.includes('phase-plan-index "${PHASE_NUMBER}"'), `${path.basename(file)} has no read without --ws`);
+    }
   });
 
   test('inside an agent branch the block refuses before it reads the index', (t) => {

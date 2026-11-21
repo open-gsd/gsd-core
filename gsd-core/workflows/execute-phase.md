@@ -341,7 +341,7 @@ Report: "Found {plan_count} plans in {phase_dir} ({incomplete_count} incomplete)
 Load plan inventory with wave grouping in one call:
 
 ```bash
-PLAN_INDEX=$(gsd_run query phase-plan-index "${PHASE_NUMBER}")
+PLAN_INDEX=$(gsd_run query phase-plan-index ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}")
 ```
 
 Parse JSON for: `phase`, `plans[]`, `waves`, `incomplete`, `runnable`, `ready_plans`, `has_checkpoints` — full per-plan fields and the #4628 readiness rules: read and follow `execute-phase/steps/ready-wave-gate.md`.
