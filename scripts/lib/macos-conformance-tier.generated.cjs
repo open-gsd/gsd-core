@@ -165,6 +165,7 @@ module.exports = {
   "tests/lint-retired-runtime-name.test.cjs",
   "tests/lint-workflow-shellcheck-fetch.test.cjs",
   "tests/list-seeds.test.cjs",
+  "tests/lockfile-cve-audit.test.cjs",
   "tests/markdown-sectionizer.test.cjs",
   "tests/mcp-catalog.test.cjs",
   "tests/merge-commit-pr.test.cjs",
