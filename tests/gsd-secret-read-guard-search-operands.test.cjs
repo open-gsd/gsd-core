@@ -446,6 +446,9 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ["grep -rn x --exclude=.env . ; eval '$X'", '--exclude=.env'],
     ["grep -rn '$HOME' --exclude=.env . ; source x", '--exclude=.env'],
     ["grep -rn '$HOME' --exclude=.env . ; . x", '--exclude=.env'],
+    // #6408 Minor 1: a file source or `.` reads may set a parsing variable, `$` or not.
+    ['. ./x.sh; grep .env y', '.env'],
+    ['source ./x.sh; grep .env y', '.env'],
     ["diff <(grep -rn '$X' --exclude=.env .) y", '--exclude=.env'],
     ['grep .env { $X', '.env'],
     // The rest of the cost the narrowing does not lift: an expansion in the tool's own words, a brace or tilde.
@@ -489,6 +492,8 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     // A glob that cannot spell one of the variables, or one the command does not set a variable with.
     "env LC_ALL=C grep 'a*' --exclude=.env .",
     'export FOO*; grep -rn KEY --exclude=.env .',
+    // #6408 Minor 1: a sourced file withdraws only the exemption; a search naming no protected file is still allowed.
+    '. ./x.sh; grep foo y',
   ];
   for (const cmd of allows) {
     test(`allows ${JSON.stringify(cmd)}`, () => assertAllowed(cmd));
