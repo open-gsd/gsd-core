@@ -404,6 +404,8 @@ describe('gsd-secret-read-guard: a search tool keeps no carve-out when a word ma
     ['HOME=-eKEY; grep .env ~', '.env'],
     ['HOME=-eKEY; grep .env ~/a', '.env'],
     ['export HOM?=-eKEY; grep .env ~/a', '.env'],
+    // #6408 Major 3: ... or a brace group that may build the name.
+    ['export HO{M,}ME=-e; grep .env ~/x', '.env'],
     ["grep .env ''*", '.env'],
     ['grep .env ""{-e,KEY}', '.env'],
     // ... and one at or before an exempt word can add or remove words ahead of it.
