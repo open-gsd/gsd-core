@@ -1547,10 +1547,12 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   if (filePath.includes('\0')) { error('file path contains null bytes'); }
   rejectControlCharacterFieldName(field as string);
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
+  // One report for a missing file, made before the lock and again under it (the file can be
+  // removed while the command waits for the lock).
+  const reportMissing = (): void => { output({ error: 'File not found', path: filePath }, raw, undefined); };
+  if (!fs.existsSync(fullPath)) { reportMissing(); return; }
   underStateMdLock(fullPath, () => {
-    // Checked again under the lock: the file can be removed while the command waits for it.
-    if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
+    if (!fs.existsSync(fullPath)) { reportMissing(); return; }
     const content = fs.readFileSync(fullPath, 'utf-8');
     // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
     // per file rather than per content digest (#1882, ADR-1411 wiring clause).
@@ -1658,7 +1660,10 @@ function objectListFieldWouldLoseData(content: string, field: string, newValue: 
 function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undefined, raw: boolean): void {
   if (!filePath || !data) { error('file and data required'); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
-  if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
+  // One report for a missing file, made before the lock and again under it (the file can be
+  // removed while the command waits for the lock).
+  const reportMissing = (): void => { output({ error: 'File not found', path: filePath }, raw, undefined); };
+  if (!fs.existsSync(fullPath)) { reportMissing(); return; }
   // The --data checks need no file content, so they run before any lock is taken.
   let mergeData: Record<string, FrontmatterValue>;
   try { mergeData = JSON.parse(data as string) as Record<string, FrontmatterValue>; } catch { error('Invalid JSON for --data'); return; }
@@ -1671,8 +1676,7 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
   for (const key of Object.keys(mergeData)) rejectControlCharacterFieldName(key);
   const fields = mergeData;
   underStateMdLock(fullPath, () => {
-    // Checked again under the lock: the file can be removed while the command waits for it.
-    if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
+    if (!fs.existsSync(fullPath)) { reportMissing(); return; }
     const content = fs.readFileSync(fullPath, 'utf-8');
     // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
     // per file rather than per content digest (#1882, ADR-1411 wiring clause).
