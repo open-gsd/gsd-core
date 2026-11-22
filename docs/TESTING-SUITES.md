@@ -434,13 +434,14 @@ Every `run-tests.cjs` invocation also loads `scripts/raw-state-write-guard.cjs`
 into each chunk, and into every subprocess a test spawns that inherits
 `NODE_OPTIONS`, through a per-run preload shim in `NODE_OPTIONS --require`
 (the shim carries the ledger path, because `tests/helpers/isolated-env.cjs`
-strips every `GSD_*` variable). It records every write whose destination is a
-file named exactly `STATE.md` when the caller is product code (a `.cjs` file
-under a `gsd-core/bin/` directory: the compiled `gsd-core/bin/lib`,
-`gsd-tools.cjs`, or an installed copy). The caller is the nearest frame outside
-the STATE.md write seam's module (`shell-command-projection.cjs`), so a seam
-write is attributed to the code that called the seam, and a test that calls the
-seam on a STATE.md fixture is test code. A recorded write is one of three kinds:
+strips every `GSD_*` variable). It records a write whose destination is a file
+named `STATE.md` when the caller is product code (a `.cjs` file under a
+`gsd-core/bin/` directory: the compiled `gsd-core/bin/lib`, `gsd-tools.cjs`, or
+an installed copy), in the shapes listed under Limits below. The caller is the
+nearest frame outside the STATE.md write seam's module
+(`shell-command-projection.cjs`), so a seam write is attributed to the code that
+called the seam, and a test that calls the seam on a STATE.md fixture is test
+code. A recorded write is one of three kinds:
 
 - a **seam write**: `platformWriteSync`, or the byte-exact restore
   `platformRestoreFileSync`, is on the stack;
@@ -496,14 +497,20 @@ compared.
 Limits:
 
 - It sees only code paths the suite executes.
-- It records exactly: a call to one of the wrapped `fs` functions (write,
+- What it records: a call to one of the wrapped `fs` functions (write,
   append, rename, copy and cp in their sync and callback forms, and the promise
   forms of write, append, rename and copyFile), made in a process where the
   check installed, at the outermost wrapped call, whose destination argument is
-  a string, Buffer or file URL whose basename is exactly `STATE.md`. Anything
-  else is not seen. (`fs.promises.cp` is seen through the `fs.promises.copyFile`
-  it calls, except in the ES module case below.)
-- Examples of what is therefore not seen: a write through a descriptor
+  a string, a Buffer or a `URL` instance with the basename `STATE.md`, and
+  whose caller is product code. The caller is looked for on the stack V8
+  captures for the call, which holds an async caller only while that caller
+  awaits the call. So `fs.promises.cp` is seen, through the
+  `fs.promises.copyFile` it calls, when the product awaits it inside an async
+  function (not in the ES module case below), and not when the product chains
+  `.then` on it or returns it unawaited.
+- Examples of what is therefore not seen: a URL-like object that is not a
+  `URL` instance, an `fs.promises.cp` the product does not await (above), a
+  write through a descriptor
   (`fs.openSync` + `fs.writeSync`, `writeFileSync(fd)`), a file handle, a write
   stream, a native addon, truncation (`fs.truncateSync`, `fs.ftruncateSync`,
   `fs.truncate`), a rename or copy of a directory that holds a `STATE.md`

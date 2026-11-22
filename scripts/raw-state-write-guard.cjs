@@ -10,18 +10,19 @@
 // bypass, it is a lock bypass", the #500/#905/#1230 lost-update family. This module checks the
 // VALUE at run time instead: the destination's basename, whatever the variable is called.
 //
-// What it enforces. A write whose destination basename is exactly `STATE.md` is recorded when the
-// caller is product code (a `.cjs` file in a `gsd-core/bin/` directory: the compiled
-// `gsd-core/bin/lib/*.cjs`, `gsd-tools.cjs`, or an installed copy of either; the repo-root `bin/*.js`
-// launchers are not payload). The caller is the nearest frame outside node internals, this file and
-// the seam module `shell-command-projection.cjs`, so a seam write is attributed to the code that
-// called the seam. A recorded write is one of three kinds:
+// What it enforces. A write whose destination basename is `STATE.md` is recorded, in the shapes the
+// limits below list, when the caller is product code (a `.cjs` file in a `gsd-core/bin/` directory:
+// the compiled `gsd-core/bin/lib/*.cjs`, `gsd-tools.cjs`, or an installed copy of either; the
+// repo-root `bin/*.js` launchers are not payload). The caller is the nearest frame outside node
+// internals, this file and the seam module `shell-command-projection.cjs`, so a seam write is
+// attributed to the code that called the seam. A recorded write is one of three kinds:
 // - a seam write: `platformWriteSync` (it writes a tmp file and renames it, and falls back to a
 //   direct write) or `platformRestoreFileSync` (#5831, the byte-exact restore of a file's prior
 //   bytes, through the same tmp-and-rename path) is on the stack. The seam is the function on the
 //   stack, not the module: its other exports, such as `retryRenameSync`, can land raw bytes on
 //   STATE.md too. Both functions are the seam (maintainer ruling on #6111, 2026-11-14), and ADR-3408
-//   section 8.3's exact-content list (Amendment 4) names the two writes this PR put on them.
+//   section 8.3's list of seam writes that run no pipeline (Amendment 4) names the writes this PR
+//   put on them.
 // - a relocation: a rename or copy whose source is itself a file named `STATE.md` (a workstream
 //   migration, an archive). It authors no bytes.
 // - a raw write: anything else. It is a violation.
@@ -50,12 +51,15 @@
 //
 // Limits, stated plainly.
 // - It sees only code paths the suite executes.
-// - It records exactly: a call to one of the fs functions in WRAPPED or WRAPPED_PROMISES, made in
-//   a process where this file installed, at the outermost wrapped call, whose destination argument
-//   is a string, Buffer or file URL whose basename is exactly STATE.md. Anything else is not seen.
-//   (fs.promises.cp is seen through the fs.promises.copyFile it calls, except in the ES module
-//   case below.)
-// - Examples of what is therefore not seen: a write through a descriptor (fs.openSync +
+// - What it records: a call to one of the fs functions in WRAPPED or WRAPPED_PROMISES, made in a
+//   process where this file installed, at the outermost wrapped call, whose destination argument is
+//   a string, a Buffer or a `URL` instance with the basename STATE.md, and whose caller (above) is
+//   product code. The caller is looked for on the stack V8 captures for the call, which holds an
+//   async caller only while that caller awaits the call. So fs.promises.cp is seen, through the
+//   fs.promises.copyFile it calls, when the product awaits it inside an async function (not in the
+//   ES module case below), and not when the product chains .then on it or returns it unawaited.
+// - Examples of what is therefore not seen: a URL-like object that is not a `URL` instance, an
+//   fs.promises.cp the product does not await (above), a write through a descriptor (fs.openSync +
 //   fs.writeSync, writeFileSync(fd)), a FileHandle, a write stream, a native addon, truncation
 //   (fs.truncateSync, fs.ftruncateSync, fs.truncate), a rename or copy of a DIRECTORY that holds a
 //   STATE.md (its destination's basename is the directory's), a rename of STATE.md onto another
@@ -92,9 +96,9 @@
 // - A write the seam module makes on its own behalf from a frame of its own (a deferred callback
 //   with no caller outside the module on its stack) has no caller to attribute and is not recorded.
 // - Without a ledger path the module installs nothing.
-// - A ledger line that does not parse, or parses to anything but one of the two exact record
-//   shapes (a process killed while appending), fails the run, as an unreadable ledger does: it
-//   can be a violation record cut off.
+// - A ledger line that does not parse, or parses to anything but one of the two record shapes
+//   the guard writes (checked by keys and value types; a process killed while appending), fails
+//   the run, as an unreadable ledger does: it can be a violation record cut off.
 
 const fs = require('fs');
 const path = require('path');
@@ -219,7 +223,7 @@ function isWriteEntry(o) {
  * entries, the count of install sentinel lines (one per process that installed the wrappers), how
  * many of those came through the runner's preload shim, the distinct test files those preload
  * sentinels name (a test-file child and every subprocess that inherited its attribution), and the
- * count of lines that did not parse, or parsed to anything but one of the two exact record shapes (a line a killed process left torn), or
+ * count of lines that did not parse, or parsed to anything but one of the two record shapes, checked by keys and value types (a line a killed process left torn), or
  * `{ entries: null, installs: 0, preloadInstalls: 0, preloadTestFiles: [], tornLines: 0 }` when
  * the ledger cannot be read (unreadable evidence, #5170).
  */
@@ -244,7 +248,7 @@ function readStateWriteLedger(file) {
       tornLines++;
       continue;
     }
-    // A line is a record only in one of the two exact shapes this file appends (isInstallSentinel,
+    // A line is a record only in one of the two shapes this file appends (isInstallSentinel,
     // isWriteEntry): the same keys with the same value types, no more and no fewer. Any other
     // parsed line (an array, a scalar, a partial or extended object) is unreadable evidence, like
     // a torn line.

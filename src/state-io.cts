@@ -29,9 +29,9 @@
  * missing or is not a directory fails at once with ENOENT or ENOTDIR, and a
  * path ending in a separator with EISDIR, before any lock is attempted
  * (refuseUnwritableStateMdPath).
- * It is an exact-content write under the lock: it runs no sync or
- * preservation pipeline, and ADR-3408 section 8.3's closed list of
- * exact-content writes names it ("MCP `gsd_write_state` onto a `STATE.md`
+ * It writes the host's content as given, under the lock: it runs no sync or
+ * preservation pipeline, and ADR-3408 section 8.3's list of seam writes that
+ * run no pipeline names it ("MCP `gsd_write_state` onto a `STATE.md`
  * path", added by that ADR's Amendment 4). The first such write also loads state.cjs, which registers its process exit
  * handler for held locks. Every other destination is still written exactly
  * as given. `configHome` write-confinement (ADR-1239 Phase B / #1679)
@@ -68,7 +68,7 @@ export interface CreateStateIOOptions {
  * write seam, the lock-then-platformWriteSync shape of cmdStateMilestoneSwitch
  * (src/state.cts) without its transition: the host's content is written as
  * given, so no sync or preservation pipeline runs (ADR-3408 section 8.3's
- * exact-content writes, Amendment 4; see the module header). Loaded lazily: the
+ * list of seam writes that run no pipeline, Amendment 4; see the module header). Loaded lazily: the
  * lock lives in state.cts, which pulls in most of the engine, and this module
  * is also the SDK's `createStateIO` surface (host-integration-sdk.cts), whose
  * other callers never write STATE.md. The lock wait is acquireStateLock's: a

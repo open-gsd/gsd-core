@@ -266,9 +266,9 @@ C3+ (caller migration), so no residual caller migrates twice.
 STATE.md write outside the seam" was guarded only by `findRawStateWrites`, which reads authored source and
 matches names: a destination held in a `Map` key filled in another function is invisible to it (#5104 miss 3).
 The roster row added beside it (maintainer ruling on #6111, 2026-11-14) checks values instead: during
-`npm test`, a write from product code whose destination basename is `STATE.md` fails the run unless the write
-seam makes it or it is a rename or copy from a file named STATE.md, and unless the process holds the STATE.md lock (on both
-ends, for a relocation). The lint sees names in the authored source it scans (the scan surface above), whether
+`npm test`, a write it records (the shapes `docs/TESTING-SUITES.md` lists) from product code whose destination
+basename is `STATE.md` fails the run unless the write seam makes it or it is a rename or copy from a file named
+STATE.md, and unless the process holds the STATE.md lock (on both ends, for a relocation). The lint sees names in the authored source it scans (the scan surface above), whether
 or not that code runs; the run-time check sees values on the paths the suite executes. Neither replaces the other, and neither keeps an allowlist (Decision 5).
 
 ## Citation notes (symbol anchors, for the child issues)
