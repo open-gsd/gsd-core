@@ -1031,8 +1031,8 @@ const BODY_BOUNDARY_RE = /[{}]|=>/;
  *     is not (it is empty when the cut matches `FUNCTION_DECL_LINE_RE`,
  *     which then does not end the scan). `index` is the last line an
  *     assignment may sit on; each hop resumes on the line above the
- *     assignment it followed,
- *     so `p = p + '.tmp'` reaches the earlier assignment of `p`.
+ *     assignment it followed, so `p = p + '.tmp'` reaches the earlier
+ *     assignment of `p`.
  *   - `bindings` is the file's assignment cache, one object shared by every
  *     write in the file (`nearestPrecedingAssignment`'s `cache`). A line
  *     above the write's own is the same text for every write, so each line
@@ -1043,11 +1043,10 @@ const BODY_BOUNDARY_RE = /[{}]|=>/;
  *     reads no line range per write.
  *   - A name's verdict is memoized on `name`, `index` and `hopsLeft`.
  *     Below the write's line it depends on the write only through
- *     `boundaryAfterLine(write, index)`: the lines it reads are the same
- *     for every write,
- *     and each hop's boundary flag follows from that one and the lines
- *     between. So those verdicts are kept in `verdicts`, shared by every
- *     write in the file and keyed on that flag too. A verdict from the
+ *     `boundaryAfterLine(write, index)`: the lines it reads are the same for
+ *     every write, and each hop's boundary flag follows from that one and the
+ *     lines between. So those verdicts are kept in `verdicts`, shared by
+ *     every write in the file and keyed on that flag too. A verdict from the
  *     write's own line goes in `memo`, kept for this write only. Neither
  *     changes a verdict. Together they bound the lookups per write to names
  *     x lines x `MAX_TARGET_RESOLUTION_HOPS` x (assignments per name + 1),
@@ -1286,17 +1285,17 @@ function boundaryAfterLine(write, index) {
  * declaration or `for` header of the name; and each right-hand side read,
  * which `assignmentVerdict` keeps for later writes so a wide one is not
  * read once per write. A name longer than `MAX_RESOLVED_NAME_LENGTH` is
- * charged as the whole budget. A charge that
- * would pass the budget is not made and its read not done. The write that
- * ran out, unless already found to name the state path, is reported as
- * `RAW_STATE_WRITE_UNRESOLVED`; so is every later write in the file, even one
- * whose argument names `statePath` itself, since once the budget is spent no
- * argument is read. At most one unresolved report per line, so the budget
- * too can add reports but never drop one. Without it, many writes that
- * each name a different variable read back once per name (distinct
- * names x lines), a line that repeats a declaration scanned to its end once per repeat (quadratic in the line), each write
- * re-read a shared right-hand side, and each write walked every earlier
- * assignment of its name past a body boundary.
+ * charged as the whole budget. A charge that would pass the budget is not
+ * made and its read not done. The write that ran out, unless already found to
+ * name the state path, is reported as `RAW_STATE_WRITE_UNRESOLVED`; so is
+ * every later write in the file, even one whose argument names `statePath`
+ * itself, since once the budget is spent no argument is read. At most one
+ * unresolved report per line, so the budget too can add reports but never
+ * drop one. Without it, many writes that each name a different variable read
+ * back once per name (distinct names x lines), a line that repeats a
+ * declaration scanned to its end once per repeat (quadratic in the line),
+ * each write re-read a shared right-hand side, and each write walked every
+ * earlier assignment of its name past a body boundary.
  * With both caps, a file costs time linear in its length (finding the calls,
  * counting lines) plus work bounded by the budget.
  *
