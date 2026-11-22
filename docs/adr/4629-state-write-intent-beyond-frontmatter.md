@@ -262,15 +262,14 @@ because every `StateWriteIntent` already carries the caller's `snapshot` and `bo
 previously ignored by re-snapshotting under the lock. Phase 2b lands between C2 (the verifying executor) and
 C3+ (caller migration), so no residual caller migrates twice.
 
-**Amendment 2 (2026-11-20): a run-time guard pairs with the Axis-2 lint (#5120).** The roster row "No raw
-STATE.md write outside the seam" was guarded only by `findRawStateWrites`, which reads authored source and
+**Amendment 2 (2026-11-20): a run-time guard pairs with the Axis-2 lint (#5120).** The Axis-2 lint's roster row
+was guarded only by `findRawStateWrites`, which reads authored source and
 matches names: a destination held in a `Map` key filled in another function is invisible to it (#5104 miss 3).
 The roster row added beside it (maintainer ruling on #6111, 2026-11-14) checks values instead: during
 `npm test`, a write it records (the shapes `docs/TESTING-SUITES.md` lists) from product code whose destination
 basename is `STATE.md` fails the run unless the write seam makes it or it is a rename or copy from a file named
 STATE.md, and unless the process holds the STATE.md lock (on both ends, for a relocation). The lint sees names in the authored source it scans (the scan surface above), whether
-or not that code runs; the run-time check sees values on the paths the suite executes. Neither replaces the other, and neither keeps an allowlist of writers (Decision 5; the lint exempts only
-the two seam-owner functions, `writeStateMd` and `syncAndPreserveStateMd`).
+or not that code runs; the run-time check sees values on the paths the suite executes.
 
 ## Citation notes (symbol anchors, for the child issues)
 
