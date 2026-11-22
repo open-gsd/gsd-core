@@ -2937,7 +2937,7 @@ function rereadsText(heads, bases = DEFINING_BASES) {
     && (bases.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
       && bases.has(head.cmd.operands[0].text))))));
 }
-const SOURCING_BASES = new Set(['source', '.']);
+const SOURCING_BASES = new Set(['source', '.', 'eval']);
 
 // #6282: where in `command` the first word the guard does not see may come from, or -1 for nowhere: an expansion
 // outside single quotes, which keep a `$` literal (`grep '$HOME'`). 0, the whole command, unless the text is plain
@@ -3070,7 +3070,8 @@ function scanSegments(command, depth, reading, unseenAt, joined) {
   const heads = segmentHeads(bySeg, maxSeg);
   const rereads = rereadsText(heads);
   // A file that source or `.` runs is text the guard does not see, which may set a parsing variable with no `$` in
-  // the command (`. ./x.sh; grep .env y`, #6408 Minor 1).
+  // the command (`. ./x.sh; grep .env y`, #6408 Minor 1); so may one an eval's text sources, and the eval body's own
+  // scan cannot hand its withdrawal back to this one (`eval '. ./x.sh'; grep .env y`).
   if (unseenAt !== 0 && (rereadsText(heads, SOURCING_BASES) || setsParsingWords(heads, bySeg, maxSeg, rereads ? joined : null)
     || ((unseenAt > 0 || unseenAt === LITERAL_DOLLAR_ONLY) && runsWordsAgain(heads, tokens)))) {
     unseenAt = 0;
