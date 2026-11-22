@@ -46,7 +46,7 @@
  * POSIX-only TMPDIR override must be structured so the rule never sees it
  * (e.g. behind a `process.platform !== 'win32'` guard that also sets
  * TEMP/TMP for the Windows branch), not annotated around. A false positive
- * is a rule bug, fixed in the rule — see `tests/portability-rule-disable-ban.test.cjs`,
+ * is a rule bug, fixed in the rule — see `scripts/static-checks/portability-rule-disable-ban.cjs`,
  * which independently bans `eslint-disable` of this rule too.
  */
 

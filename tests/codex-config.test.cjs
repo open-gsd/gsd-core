@@ -1490,20 +1490,18 @@ describe('#3897 security review: F1 filename/name identity confusion, F3 confusa
     }
   });
 
-  test('F1(b) sibling-clobber case: a second, unheld source file whose frontmatter name: IS a held role must not widen the held role\'s emitted .toml', () => {
+  test('F1(b) sibling-clobber case: a second, unheld source file whose frontmatter name: IS a held role fails the install instead of replacing the held role\'s .toml (#6158)', () => {
     const src = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-f1b-src-'));
     const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-f1b-dest-'));
     try {
       const heldOriginal = fs.readFileSync(path.join(AGENTS_DIR, 'gsd-doc-writer.md'), 'utf8');
       fs.writeFileSync(path.join(src, 'gsd-doc-writer.md'), heldOriginal);
       // A sibling file — different filename stem, no hold entry for IT — but
-      // its frontmatter `name:` collides with the held role. Named to sort
-      // AFTER `gsd-doc-writer.md` (readdirSync/emit-loop order is
-      // alphabetical) so this sibling's write is the LAST one to the shared
-      // `gsd-doc-writer.toml` output path — the exact ordering the pre-fix
-      // defect needed to actually clobber the held role's own artifact
-      // (a sibling sorting BEFORE it gets silently overwritten again by the
-      // legitimate file's own correct read-only write, masking the bug).
+      // its frontmatter `name:` collides with the held role. Before #6158 its
+      // write silently replaced the held role's `.toml` (it sorts after the
+      // legitimate file); now two sources naming one role are a loud failure
+      // and nothing is written, so the held role's artifact can be neither
+      // replaced nor widened.
       const sibling = [
         '---',
         'name: gsd-doc-writer',
@@ -1515,15 +1513,14 @@ describe('#3897 security review: F1 filename/name identity confusion, F3 confusa
       ].join('\n');
       fs.writeFileSync(path.join(src, 'gsd-zzz-attacker-clone.md'), sibling);
 
-      installCodexConfig(dest, src);
-
-      const emittedPath = path.join(dest, 'agents', 'gsd-doc-writer.toml');
-      assert.ok(fs.existsSync(emittedPath), `expected an emitted .toml at ${emittedPath}`);
-      const toml = fs.readFileSync(emittedPath, 'utf8');
+      assert.throws(
+        () => installCodexConfig(dest, src),
+        (err) => /gsd-doc-writer\.md/.test(err.message) && /gsd-zzz-attacker-clone\.md/.test(err.message),
+      );
       assert.equal(
-        sandboxModeOfToml(toml),
-        'workspace-write',
-        'F1(b) post-#4770: the last-writer artifact carries ITS OWN content-derived sandbox (the sibling declared Write/Edit) — with no holds left, a name collision cannot escalate any role beyond what its own content derives',
+        fs.existsSync(path.join(dest, 'agents', 'gsd-doc-writer.toml')),
+        false,
+        'F1(b): a colliding sibling must not leave any emitted artifact for the role it collides on',
       );
     } finally {
       cleanup(src);

@@ -112,3 +112,19 @@ if (shortWriteMatch) {
   };
 }
 
+// `GSD_TEST_SPAWN_LOG`: record every `child_process.spawn` the hook makes by
+// appending its argv (one JSON line) to the given file, then spawn for real.
+// The hook destructures `spawn` at require time, after this preload has run,
+// so it picks up the wrapper. The #6360 rows assert a subagent input never
+// reaches the CRITICAL `state record-session` spawn directly, rather than
+// inferring it from the sentinel the same branch writes afterwards.
+const spawnLog = process.env.GSD_TEST_SPAWN_LOG || '';
+
+if (spawnLog) {
+  const cp = require('child_process');
+  const realSpawn = cp.spawn;
+  cp.spawn = function spawnRecorded(cmd, args) {
+    try { fs.appendFileSync(spawnLog, JSON.stringify([cmd, ...(args || [])]) + '\n'); } catch { /* the row fails loudly without the line */ }
+    return realSpawn.apply(cp, arguments);
+  };
+}

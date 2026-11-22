@@ -92,7 +92,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 WAVE_PARAM=""; if [[ "$GSD_ARGS" =~ (^|[[:space:]])--wave[[:space:]]+([^[:space:]-][^[:space:]]*) ]]; then WAVE_PARAM="--wave ${BASH_REMATCH[2]}"; fi
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" $WAVE_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
@@ -424,11 +424,16 @@ Report:
 
 **execute:pre (#5848):** read and execute `execute-phase/steps/pre-execute-gate-hooks.md`; a gate block HALTS here.
 
-**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** Every all-filtered arm above has already exited or jumped to `aggregate_results` / `update_roadmap`; reaching here means the post-filter list is non-empty. A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
+**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
 ```bash
+PHASE_NUMBER="{phase_number}"
+PHASE_NAME=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
+PLAN_COUNT=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick plan_count)
+[[ "$PLAN_COUNT" =~ ^[0-9]+$ ]] || { echo "phase ${PHASE_NUMBER} not found" >&2; exit 1; }
+[ -n "$PHASE_NAME" ] || PHASE_NAME=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
 gsd_run query state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
-This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
+This records the active phase and plan counts in STATE.md.
 </step>
 
 <step name="cross_ai_delegation">
@@ -819,7 +824,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **Configurable stall surveillance (#3212):** Every `${EXECUTOR_STALL_INTERVAL_MINUTES}`
    minutes while waiting, inspect `git log "${EXPECTED_BRANCH}" --since="${DISPATCH_TS}"`
    for activity. If no completion signal, no SUMMARY.md, and no expected-branch
-   commits appear for `${EXECUTOR_STALL_THRESHOLD_MINUTES}` minutes, pause and
+   commits (`harness-worktree` plan: plan commits on any branch, #6117) appear for `${EXECUTOR_STALL_THRESHOLD_MINUTES}` minutes, pause and
    ask for one recovery path: `continue waiting`, `kill and retry`, or
    `kill and switch to inline execution`.
 
@@ -943,7 +948,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
 5.7. **Post-wave shared artifact update (when at least one plan used worktrees, skip if tests failed):**
 
-   When **any** executor agent in this wave ran with `isolation="worktree"`, that agent skipped STATE.md and ROADMAP.md updates to avoid last-merge-wins overwrites. The orchestrator is the single writer for these files. After worktrees are merged back, update shared artifacts once for every completed plan in the wave (worktree-mode plans **and** sequential plans that ran on the main tree but deferred to the orchestrator for tracking writes).
+   When **any** executor in this wave ran with `isolation="worktree"`, it skipped STATE.md and ROADMAP.md updates (last-merge-wins). The orchestrator is the single writer: after the merge, update shared artifacts once for every completed plan in the wave (worktree plans **and** sequential plans that deferred tracking writes).
 
    **Only update tracking when tests passed (TEST_EXIT=0).**
    If tests failed or timed out, skip the tracking update — plans should
@@ -969,7 +974,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    fi
    ```
 
-   Where `WAVE_PLAN_IDS` is the space-separated list of plan IDs that completed in this wave.
+   Where `WAVE_PLAN_IDS` is the space-separated list of plan IDs that completed in this wave. Then read and execute `execute-phase/steps/post-wave-requirements.md` (shared requirement IDs, #6102).
 
    **If no plan in this wave used worktrees** (project-level `USE_WORKTREES=false` OR `WAVE_WORKTREE_PLANS` is empty): sequential agents already updated STATE.md and ROADMAP.md themselves — skip this step.
 
@@ -1115,15 +1120,16 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
    [Awaiting section from agent return]
    ```
 5. User responds: "approved"/"done" | issue description | decision selection
-6. **Spawn continuation agent (NOT resume)** with a prompt built from these placeholders (there is no separate template file; this list is the contract):
+6. **Spawn continuation agent (NOT resume, except `harness-worktree`)** with a prompt built from these placeholders (there is no separate template file; this list is the contract):
    - `{completed_tasks_table}`: From checkpoint return, wrapped in a `<completed_tasks>` tag (the executor's continuation handling keys on it)
    - `{resume_task_number}` + `{resume_task_name}`: Current task
    - `{user_response}`: What user provided
    - `{resume_instructions}`: Based on checkpoint type
+   - A `harness-worktree` plan's commits are on its unmerged agent branch, not in a fresh worktree: follow `execute-phase/steps/worktree-recovery-policy.md` § checkpoint continuation (#6118)
 7. Continuation agent verifies previous commits, continues from resume point
 8. Repeat until plan completes or user stops
 
-**Why fresh agent, not resume:** Resume relies on internal serialization that breaks with parallel tool calls. Fresh agents with explicit state are more reliable.
+**Why fresh agent, not resume (except `harness-worktree`, #6118):** Resume relies on internal serialization that breaks with parallel tool calls. Fresh agents with explicit state are more reliable.
 
 **Checkpoints in parallel waves:** Agent pauses and returns while other parallel agents may complete. Present checkpoint, spawn continuation, wait for all before next wave.
 </step>

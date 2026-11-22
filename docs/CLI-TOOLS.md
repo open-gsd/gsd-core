@@ -244,8 +244,9 @@ node gsd-tools.cjs phase-plan-index <phase>
 # List phases with filtering
 node gsd-tools.cjs phases list [--type planned|executed|all] [--phase N] [--include-archived]
 
-# Archive (or, with --force, permanently delete) every current phase directory —
-# used by /gsd-new-milestone before roadmapping the next cycle
+# Archive every current phase directory into milestones/<label>-phases/ (label: `--archive-version` when given, else the current milestone version, else `archived-<date>`; `new-milestone` passes the outgoing version) —
+# used by /gsd-new-milestone before roadmapping the next cycle.
+# --force skips the uncommitted-changes check only; nothing is deleted.
 node gsd-tools.cjs phases clear [--confirm] [--force] [--archive-version <version>]
 ```
 
@@ -326,12 +327,13 @@ sentinel and out-of-window directories.
 
 ### `phases clear` and sentinel directories
 
-`phases clear` moves (or, with `--force` and no prior archive, permanently
-deletes) every phase directory under `.planning/phases/` except sentinels. It
-now excludes both `999.*` (backlog) and `0-*` (pre-milestone) directories via
-the same canonical sentinel predicate `phases list` uses — previously its own
-regex excluded `999` but not `0`, so a `0-*` directory could be destroyed on
-this irreversible path.
+`phases clear` moves every phase directory under `.planning/phases/` except
+sentinels into `milestones/<label>-phases/` (`--archive-version` when given, else the current milestone version, else `archived-<date>`); it never deletes. `--force`
+skips only the uncommitted-changes check, and those edits are archived with the
+directory. It excludes both `999.*` (backlog) and `0-*` (pre-milestone)
+directories via the same canonical sentinel predicate `phases list` uses —
+previously its own regex excluded `999` but not `0`, so a `0-*` directory was
+archived with the rest.
 
 ### `find-phase` plan/summary counts (live vs physical)
 
@@ -638,7 +640,7 @@ rather than a number computed from a truncated, unscoped, or unreadable set:
 | `stats --raw` | `percent: null`, `plan_percent: null` |
 | `query progress --raw` | `percent: null` |
 | `state json --raw` | `progress.percent` is **omitted** from the `progress` object (not `0`, not present as `null`) |
-| `state update-progress --raw` | `false` — no write; `STATE.md`'s Progress field is left untouched, and a `[gsd-tools] WARNING:` line is written to stderr naming the scope |
+| `state update-progress --raw` | `false` — no write; `STATE.md`'s Progress field is left untouched, and a `[gsd-tools] WARNING:` line is written to stderr naming the scope; for an `unscoped` scope the line (and, without `--raw`, a `hint` field) also names the cause (STATE.md's milestone has no matching ROADMAP.md heading, STATE.md names none beside milestone headings, or a Phase title reads as a milestone heading) and its fix; `state sync` names the same cause where it skips Progress |
 
 `0` is a legitimate, real answer under a `complete` scope (e.g. a
 freshly-declared milestone with zero phases, or a phase with zero plan files)
