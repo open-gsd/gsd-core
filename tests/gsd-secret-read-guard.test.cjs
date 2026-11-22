@@ -3999,6 +3999,9 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['{ printf %s .e >/dev/./stdout; printf %s nv; } | xargs cat', '>'],
     ['{ printf %s .e >//dev/stdout; printf %s nv; } | xargs cat', '>'],
     ['{ exec 3>&1 >/dev/null; printf %s .e >&3; printf %s nv >&3; } | xargs cat', 'exec'],
+    // ... and a loop, which may write one stage's text several times over.
+    ["for i in 1 2; do printf 'nv\\n.e'; done | xargs cat", 'for'],
+    ["{ while read l; do printf 'nv\\n.e'; done < f; } | xargs cat", 'while'],
     ["printf '.env\\n' | sort | xargs cat", 'sort'],
     ["printf '.env' | xargs echo | xargs cat", 'xargs'],
     ['echo .env | tee >(xargs cat)', '>( )'],
