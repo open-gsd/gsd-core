@@ -740,9 +740,12 @@ describe('Config Value Resolution Module (#5096)', () => {
         writeLayer(cwd, 'root', { parallelization: flag });
         assert.equal(loadConfigResolved(cwd, { persist: false }).config.parallelization, flag);
       }
+      // `parallelization.enabled` is not an eligible resolver key, so it reads as not configured
+      // in every state, even when the object spelling is set. Eligibility is not widened here.
       writeLayer(cwd, 'root', { parallelization: { enabled: false } });
+      assert.equal(loadConfigResolved(cwd, { persist: false }).config.parallelization, false);
       assert.deepEqual(resolveConfigValue('parallelization.enabled', { cwd }), {
-        found: true, value: false, layer: 'root', reason: 'workstream_fallback',
+        found: false, value: undefined, layer: null, reason: 'not_configured',
       });
     });
   });
