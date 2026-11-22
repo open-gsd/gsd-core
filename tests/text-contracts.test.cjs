@@ -82,6 +82,45 @@ describe('doc.has and doc.lacks', () => {
   });
 });
 
+describe('doc.satisfies', () => {
+  test('a predicate returning true reports nothing and counts as an assertion', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\ntwo\n' }, { sat1: "ctx.doc('a.md').satisfies((text) => text.split('\\n').length === 3, 'two lines');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a predicate returning a string is one finding carrying the reason', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\n' }, { sat2: "ctx.doc('a.md').satisfies(() => '1 line, expected 2', 'needs two lines');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'a.md');
+    assert.match(findings[0].message, /^sat2: needs two lines \(1 line, expected 2\)$/);
+  });
+
+  test('a predicate returning false is one finding without a reason', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\n' }, { sat3: "ctx.doc('a.md').satisfies(() => false, 'never holds');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^sat3: never holds$/);
+  });
+
+  test('a predicate returning anything but true is a finding, so a truthy non-boolean cannot pass', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\n' }, { sat4: "ctx.doc('a.md').satisfies(() => 1, 'needs exactly true');" });
+    assert.equal(runTree(tree).length, 1);
+  });
+
+  test('on a missing file the predicate is not run and only the read failure is reported', (t) => {
+    const tree = makeTree(t, {}, { sat5: "ctx.doc('nope.md').satisfies(() => { throw new Error('ran'); }, 'unreached');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /cannot read the file: ENOENT/);
+  });
+
+  test('the predicate sees the LF text of the document', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\r\ntwo\r\n' }, { sat6: "ctx.doc('a.md').satisfies((text) => !text.includes('\\r'), 'LF only');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
 describe('doc.slice, doc.step and doc.before', () => {
   const workflow = 'intro\n<step name="one">\nuse A\n</step>\n<step name="two">\nuse B\n</step>\n';
 
@@ -423,6 +462,7 @@ const SHIPPED = [
   'chain-flag-plan-phase', 'discuss-checkpoint', 'agent-skills-awareness', 'scan-command', 'analyze-dependencies',
   'cline-support', 'inventory-headings-countfree', 'policy-release-no-npm-self-upgrade', 'phase6-capability-docs',
   'playwright-ui-verify',
+  'release-coverage-scope', 'gsd-researcher-flow-diagram', 'import-command', 'gates-taxonomy', 'ios-scaffold-safety',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -444,6 +484,9 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     ].map((name) => `agents/${name}.md`),
     '.clinerules', 'docs/INVENTORY.md', '.github/workflows/release.yml', 'docs/how-to/develop-a-capability.md', 'docs/README.md',
     'gsd-core/workflows/verify-work/steps/automated-ui-verification.md', 'gsd-core/workflows/ui-review.md', 'agents/gsd-ui-auditor.md',
+    'agents/gsd-phase-researcher.md', 'gsd-core/templates/research.md', 'commands/gsd/import.md', 'gsd-core/workflows/import.md',
+    'gsd-core/references/gates.md', 'gsd-core/workflows/execute-phase.md', 'agents/gsd-plan-checker.md', 'agents/gsd-verifier.md',
+    'gsd-core/references/ios-scaffold.md', 'agents/gsd-executor.md', 'gsd-core/references/universal-anti-patterns.md',
   ];
 
   function copyOfRepoFiles(t) {
@@ -665,6 +708,197 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       fs.writeFileSync(abs, after);
       const findings = runShipped(root, [contract]);
       assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The five batch-5 contracts.
+  const swap = (from, to) => (text) => text.split(from).join(to);
+  const dropFirst = (phrase) => (text) => text.replace(phrase, '');
+  const RAW_SHARD_STEP = '          npm run test:coverage:unit:raw -- --shard ${{ matrix.shard }}';
+  // The text between `<required_reading>` on its own line and its closing tag, edited and put back.
+  const inRequiredReading = (edit) => (text) => {
+    const open = '<required_reading>\n';
+    const at = text.indexOf(open) + open.length;
+    const close = text.indexOf('\n</required_reading>', at);
+    return text.slice(0, at) + edit(text.slice(at, close)) + text.slice(close);
+  };
+  // Sets the first job-cap line after the job's own line in release.yml.
+  const setJobCap = (job, minutes) => (text) => {
+    const cap = text.indexOf('    timeout-minutes: ', text.indexOf(`\n  ${job}:\n`));
+    return `${text.slice(0, cap)}    timeout-minutes: ${minutes}${text.slice(text.indexOf('\n', cap))}`;
+  };
+  for (const [title, rel, edit, contract, expected] of [
+    ['a bare full-suite coverage line added to release.yml (#4335)', '.github/workflows/release.yml',
+      append('      - run: npm run test:coverage'), 'release-coverage-scope', /1 bare 'npm run test:coverage' line\(s\), expected 0/],
+    ['an unsharded unit-coverage line added to release.yml (#4335)', '.github/workflows/release.yml',
+      append('        run: npm run test:coverage:unit'), 'release-coverage-scope', /1 unsharded 'npm run test:coverage:unit' line\(s\), expected 0/],
+    ['an unsharded unit-coverage line as a `- run:` list item added to release.yml (#4335)', '.github/workflows/release.yml',
+      append('      - run: npm run test:coverage:unit'), 'release-coverage-scope', /1 unsharded 'npm run test:coverage:unit' line\(s\), expected 0/],
+    ['one sharded raw-coverage step gone from release.yml (#4335)', '.github/workflows/release.yml',
+      dropFirst(`${RAW_SHARD_STEP}\n`), 'release-coverage-scope', /1 sharded raw-coverage line\(s\), expected 2/],
+    ['a third sharded raw-coverage line added to release.yml (#4335)', '.github/workflows/release.yml',
+      append(RAW_SHARD_STEP.trim()), 'release-coverage-scope', /3 sharded raw-coverage line\(s\), expected 2/],
+    ['one merged-coverage report step gone from release.yml (#4335)', '.github/workflows/release.yml',
+      dropFirst('        run: npm run test:coverage:report'), 'release-coverage-scope', /1 'npm run test:coverage:report' line\(s\), expected 2/],
+    ['one shard step stops pinning AUDIT_BASELINE_REF (#4196)', '.github/workflows/release.yml',
+      dropFirst('          AUDIT_BASELINE_REF: ${{ github.sha }}\n'), 'release-coverage-scope', /must pin AUDIT_BASELINE_REF to github\.sha/],
+    ['rc-test loses its job cap (#5421)', '.github/workflows/release.yml',
+      (text) => {
+        const cap = text.indexOf('    timeout-minutes: ', text.indexOf('\n  rc-test:\n'));
+        return `${text.slice(0, cap)}    # none${text.slice(text.indexOf('\n', cap))}`;
+      }, 'release-coverage-scope', /rc-test must set the job cap/],
+    ['the Component Responsibilities table redirect gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('Component Responsibilities table', 'table'), 'gsd-researcher-flow-diagram', /redirect file mapping to the Component Responsibilities table/],
+    ['the System Architecture Diagram section gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('### System Architecture Diagram', '### Diagram'), 'gsd-researcher-flow-diagram', /gsd-phase-researcher\.md must contain "### System Architecture Diagram"/],
+    ['"not file listings" gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('not file listings', 'listings'), 'gsd-researcher-flow-diagram', /must explicitly state "not file listings"/],
+    ['"data flow through conceptual components" gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('data flow through conceptual components', 'data flow'), 'gsd-researcher-flow-diagram', /must require "data flow through conceptual components"/],
+    ['"entry points" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/entry points/gi, 'inputs'), 'gsd-researcher-flow-diagram', /must mention "entry points"/],
+    ['"processing stages" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/processing stages/gi, 'steps'), 'gsd-researcher-flow-diagram', /must mention "processing stages"/],
+    ['"decision points" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/decision points/gi, 'branches'), 'gsd-researcher-flow-diagram', /must mention "decision points"/],
+    ['"external dependencies" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/external dependencies/gi, 'services'), 'gsd-researcher-flow-diagram', /must mention "external dependencies"/],
+    ['"data flow through conceptual components" gone from the research template (#2139)', 'gsd-core/templates/research.md',
+      swap('data flow through conceptual components', 'data flow'), 'gsd-researcher-flow-diagram', /research template must include the flow diagram directive/],
+    ['plan-phase gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('plan-phase', 'planning'), 'gates-taxonomy', /must reference plan-phase/],
+    ['execute-phase gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('execute-phase', 'execution'), 'gates-taxonomy', /must reference execute-phase/],
+    ['Package.swift no longer named by ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('Package.swift', 'the package file'), 'ios-scaffold-safety', /must name Package\.swift/],
+    ['executableTarget no longer named by ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('executableTarget', 'target kind'), 'ios-scaffold-safety', /must name \.executableTarget/],
+    ['"arrows" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/arrows/gi, 'lines'), 'gsd-researcher-flow-diagram', /must mention "arrows"/],
+    ['a Recommended Project Structure heading ahead of the diagram section (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => `### Recommended Project Structure\n${text}`, 'gsd-researcher-flow-diagram', /must come before Recommended Project Structure/],
+    ['the System Architecture Diagram section gone from the research template (#2139)', 'gsd-core/templates/research.md',
+      swap('### System Architecture Diagram', '### Diagram'), 'gsd-researcher-flow-diagram', /research template must contain "### System Architecture Diagram"/],
+    ['"not file listings" gone from the research template (#2139)', 'gsd-core/templates/research.md',
+      swap('not file listings', 'listings'), 'gsd-researcher-flow-diagram', /research template must prohibit file listings/],
+    ['the import command renamed', 'commands/gsd/import.md',
+      swap('name: gsd:import', 'name: gsd:other'), 'import-command', /should have a name field of gsd:import/],
+    ['the import command description emptied', 'commands/gsd/import.md',
+      (text) => text.replace(/^description:.*$/m, 'description:'), 'import-command', /should have a description field with a value/],
+    ['--from gone from the import argument-hint', 'commands/gsd/import.md',
+      (text) => text.replace(/^argument-hint:.*$/m, 'argument-hint: "<filepath>"'), 'import-command', /should have an argument-hint with --from/],
+    ['the import command no longer references its workflow', 'commands/gsd/import.md',
+      dropAll('@~/.claude/gsd-core/workflows/import.md'), 'import-command', /should reference the workflow via @~\/\.claude\/gsd-core\/workflows\/import\.md/],
+    ['--from gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('--from', '--source'), 'import-command', /should contain --from mode handling/],
+    ['--prd no longer mentioned by the import workflow', 'gsd-core/workflows/import.md',
+      swap('--prd', '--plan'), 'import-command', /should mention --prd exists/],
+    ['the --prd deferral wording gone from the import workflow', 'gsd-core/workflows/import.md',
+      (text) => text.replace(/not yet implemented|follow-up PR|future release/g, 'later'), 'import-command', /should defer --prd to a future release/],
+    ['a Path B implementation for --prd added to the import workflow', 'gsd-core/workflows/import.md',
+      append('## Path B: MODE=prd'), 'import-command', /should NOT have a Path B implementation for --prd/],
+    ['the traversal check gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('traversal', 'walk'), 'import-command', /should validate the --from file path against traversal/],
+    ['REQUIREMENTS.md gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('REQUIREMENTS.md', 'the requirements file'), 'import-command', /should load REQUIREMENTS\.md for conflict detection/],
+    ['[BLOCKER] gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('[BLOCKER]', 'blocker'), 'import-command', /should include BLOCKER severity/],
+    ['[WARNING] gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('[WARNING]', 'warning'), 'import-command', /should include WARNING severity/],
+    ['[INFO] gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('[INFO]', 'info'), 'import-command', /should include INFO severity/],
+    ['gsd-plan-checker gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('gsd-plan-checker', 'the checker'), 'import-command', /should delegate validation to gsd-plan-checker/],
+    ['the usage line gone from the import workflow', 'gsd-core/workflows/import.md',
+      (text) => text.replace(/Usage: \/gsd[:-]import/g, 'Help'), 'import-command', /should display usage when no arguments are provided/],
+    ['the Abort Gate heading gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('### Abort Gate', '### Abort'), 'gates-taxonomy', /must define "Abort Gate" as an h3 heading/],
+    ['the Revision Gate loses its Recovery field (#1715)', 'gsd-core/references/gates.md',
+      (text) => text.replace('**Recovery:**', '**Fix:**'), 'gates-taxonomy', /Gate "(Pre-flight|Revision) Gate" must include \*\*Recovery:\*\*/],
+    ['the Escalation Gate loses its Examples field (#1715)', 'gsd-core/references/gates.md',
+      (text) => {
+        const at = text.indexOf('### Escalation Gate');
+        return text.slice(0, at) + text.slice(at).replace('**Examples:**', '**Cases:**');
+      }, 'gates-taxonomy', /Gate "Escalation Gate" must include \*\*Examples:\*\*/],
+    ['the Gate Matrix section gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('## Gate Matrix', '## Matrix'), 'gates-taxonomy', /must include a "Gate Matrix" section/],
+    ['the Workflow column gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('| Workflow |', '| Flow |'), 'gates-taxonomy', /table with a Workflow column/],
+    ['verify-work gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('verify-work', 'verification'), 'gates-taxonomy', /must reference verify-work/],
+    ['the next row gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('| next |', '| other |'), 'gates-taxonomy', /must reference the next workflow/],
+    ['stall detection gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('stall detection', 'looping'), 'gates-taxonomy', /must mention stall detection/],
+    ['plan-phase no longer references gates.md (#1715)', 'gsd-core/workflows/plan-phase.md',
+      dropAll('references/gates.md'), 'gates-taxonomy', /plan-phase\.md must reference gates\.md/],
+    ['execute-phase no longer references gates.md (#1715)', 'gsd-core/workflows/execute-phase.md',
+      dropAll('references/gates.md'), 'gates-taxonomy', /execute-phase\.md must reference gates\.md/],
+    ['gsd-verifier loses gates.md from its required_reading block (#1715)', 'agents/gsd-verifier.md',
+      inRequiredReading(dropAll('references/gates.md')), 'gates-taxonomy', /gsd-verifier\.md must reference gates\.md inside <required_reading>/],
+    ['gsd-plan-checker loses gates.md from its required_reading block (#1715)', 'agents/gsd-plan-checker.md',
+      inRequiredReading(dropAll('references/gates.md')), 'gates-taxonomy', /gsd-plan-checker\.md must reference gates\.md inside <required_reading>/],
+    ['gsd-plan-checker names gates.md only outside its required_reading block (#1715)', 'agents/gsd-plan-checker.md',
+      (text) => `${inRequiredReading(dropAll('references/gates.md'))(text)}\nSee references/gates.md\n`, 'gates-taxonomy', /gsd-plan-checker\.md must reference gates\.md inside <required_reading>/],
+    ['the Package.swift prohibition gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('NEVER use `Package.swift`', 'Use `Package.swift`'), 'ios-scaffold-safety', /must explicitly prohibit Package\.swift as the primary build system/],
+    ['the .executableTarget prohibition gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('NEVER', 'Always'), 'ios-scaffold-safety', /must explicitly prohibit \.executableTarget for iOS app targets/],
+    ['project.yml gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('project.yml', 'the project file'), 'ios-scaffold-safety', /must require project\.yml as the XcodeGen spec file/],
+    ['xcodegen generate gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('xcodegen generate', 'xcodegen run'), 'ios-scaffold-safety', /must require the xcodegen generate command/],
+    ['SwiftUI API availability gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('SwiftUI API availability', 'SwiftUI notes'), 'ios-scaffold-safety', /must document SwiftUI API availability/],
+    ['IPHONEOS_DEPLOYMENT_TARGET gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('IPHONEOS_DEPLOYMENT_TARGET', 'the target'), 'ios-scaffold-safety', /must document iOS deployment target compatibility/],
+    ['the executor no longer references ios-scaffold.md (#2023)', 'agents/gsd-executor.md',
+      dropAll('ios-scaffold.md'), 'ios-scaffold-safety', /gsd-executor\.md must reference ios-scaffold\.md/],
+    ['the Package.swift anti-pattern gone from universal-anti-patterns.md (#2023)', 'gsd-core/references/universal-anti-patterns.md',
+      swap('`Package.swift` + `.executableTarget`', 'a build file'), 'ios-scaffold-safety', /must document the Package\.swift misuse anti-pattern/],
+    ['the iOS scope gone from the universal anti-pattern (#2023)', 'gsd-core/references/universal-anti-patterns.md',
+      swap('primary build system for iOS apps', 'primary build system'), 'ios-scaffold-safety', /must say the misuse is for iOS apps/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The job-cap floor of rc-test and finalize-test is inclusive: 29 fails, 30 and 31 pass.
+  for (const job of ['rc-test', 'finalize-test']) {
+    for (const [minutes, fails] of [[29, true], [30, false], [31, false]]) {
+      test(`${job} with a job cap of ${minutes} minutes ${fails ? 'fails' : 'satisfies'} release-coverage-scope`, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, '.github', 'workflows', 'release.yml');
+        fs.writeFileSync(abs, setJobCap(job, minutes)(fs.readFileSync(abs, 'utf8')));
+        const findings = runShipped(root, ['release-coverage-scope']);
+        assert.equal(findings.length, fails ? 1 : 0, JSON.stringify(findings));
+        if (fails) assert.match(findings[0].message, new RegExp(`${job} job cap must be at least 30 \\(was 29\\)`));
+      });
+    }
+  }
+
+  // A file one of the batch-5 contracts reads that is gone from the tree is one finding for that file.
+  for (const [rel, contract] of [
+    ['.github/workflows/release.yml', 'release-coverage-scope'],
+    ['agents/gsd-phase-researcher.md', 'gsd-researcher-flow-diagram'],
+    ['gsd-core/workflows/import.md', 'import-command'],
+    ['commands/gsd/import.md', 'import-command'],
+    ['gsd-core/references/gates.md', 'gates-taxonomy'],
+    ['gsd-core/references/ios-scaffold.md', 'ios-scaffold-safety'],
+  ]) {
+    test(`${rel} removed from the tree is a finding for ${contract} (batch 5)`, (t) => {
+      const root = copyOfRepoFiles(t);
+      fs.unlinkSync(path.join(root, ...rel.split('/')));
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => f.file === rel && /cannot read the file/.test(f.message)), JSON.stringify(findings));
     });
   }
 
