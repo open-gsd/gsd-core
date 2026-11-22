@@ -1523,6 +1523,24 @@ function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: strin
   }
 }
 
+/**
+ * #5120 (pre-push review R3-m5): a target whose basename is `STATE.md` is read, spliced and written
+ * inside one STATE.md lock scope, so the write cannot land between a locked writer's read and its
+ * publish (readModifyWriteStateMd), the #500/#905/#1230 lost update. The write runs no sync or
+ * preservation pipeline: ADR-3408 section 8.3's list of seam writes that run no pipeline names it
+ * (Amendment 4). The lock wait is acquireStateLock's: a live holder makes the command wait, a dead
+ * holder's lock is taken over, and a lock that cannot be taken throws before anything is read. Any
+ * other target runs `fn` with no lock, as before. The basename match is case-sensitive, as the
+ * #5120 guard's and the stateIO adapter's are. state.cjs is loaded lazily because it imports this
+ * module.
+ */
+function underStateMdLock(fullPath: string, fn: () => void): void {
+  if (path.basename(fullPath) !== 'STATE.md') { fn(); return; }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: state.cjs imports this module, so it is loaded here, on first use
+  const { withStateLock } = require('./state.cjs') as { withStateLock: <T>(statePath: string, fn: () => T) => T };
+  withStateLock(fullPath, fn);
+}
+
 function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefined, value: string | undefined, raw: boolean): void {
   if (!filePath || !field || value === undefined) { error('file, field, and value required'); }
   // Path traversal guard: reject null bytes
@@ -1530,35 +1548,39 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   rejectControlCharacterFieldName(field as string);
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
   if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
-  const content = fs.readFileSync(fullPath, 'utf-8');
-  // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
-  // per file rather than per content digest (#1882, ADR-1411 wiring clause).
-  const fm = extractFrontmatter(content, fullPath);
-  let parsedValue: unknown;
-  try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
-  // #1660 (broadened): a lossy object-list field being genuinely CHANGED must fail closed
-  // before it is regenerated, not just when the regenerated result happens to be byte-identical
-  // to the original (see objectListFieldWouldLoseData's docblock).
-  const lossyErr = objectListFieldWouldLoseData(content, field as string, parsedValue);
-  if (lossyErr) {
-    output({ error: lossyErr, field }, raw, undefined);
-    return;
-  }
-  setOwnField(fm, field as string, parsedValue as FrontmatterValue);
-  const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
-  if (newContent === null) return;
-  // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
-  // frontmatter parser made the new value's projection equal the original's — the change
-  // did not apply (bites object-list fields like must_haves). Detection lives in the pure
-  // exported helper noOpObjectListSetError so the mutation gate (property/unit set) covers
-  // it — the cmd path itself is not in that set.
-  const noOpErr = noOpObjectListSetError(content, newContent, parsedValue);
-  if (noOpErr) {
-    output({ error: noOpErr, field }, raw, undefined);
-    return;
-  }
-  platformWriteSync(fullPath, newContent);
-  output({ updated: true, field, value: parsedValue }, raw, 'true');
+  underStateMdLock(fullPath, () => {
+    // Checked again under the lock: the file can be removed while the command waits for it.
+    if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
+    const content = fs.readFileSync(fullPath, 'utf-8');
+    // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
+    // per file rather than per content digest (#1882, ADR-1411 wiring clause).
+    const fm = extractFrontmatter(content, fullPath);
+    let parsedValue: unknown;
+    try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
+    // #1660 (broadened): a lossy object-list field being genuinely CHANGED must fail closed
+    // before it is regenerated, not just when the regenerated result happens to be byte-identical
+    // to the original (see objectListFieldWouldLoseData's docblock).
+    const lossyErr = objectListFieldWouldLoseData(content, field as string, parsedValue);
+    if (lossyErr) {
+      output({ error: lossyErr, field }, raw, undefined);
+      return;
+    }
+    setOwnField(fm, field as string, parsedValue as FrontmatterValue);
+    const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
+    if (newContent === null) return;
+    // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
+    // frontmatter parser made the new value's projection equal the original's — the change
+    // did not apply (bites object-list fields like must_haves). Detection lives in the pure
+    // exported helper noOpObjectListSetError so the mutation gate (property/unit set) covers
+    // it — the cmd path itself is not in that set.
+    const noOpErr = noOpObjectListSetError(content, newContent, parsedValue);
+    if (noOpErr) {
+      output({ error: noOpErr, field }, raw, undefined);
+      return;
+    }
+    platformWriteSync(fullPath, newContent);
+    output({ updated: true, field, value: parsedValue }, raw, 'true');
+  });
 }
 
 /**
@@ -1637,10 +1659,7 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
   if (!filePath || !data) { error('file and data required'); }
   const fullPath = path.isAbsolute(filePath) ? filePath : path.join(cwd, filePath);
   if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
-  const content = fs.readFileSync(fullPath, 'utf-8');
-  // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
-  // per file rather than per content digest (#1882, ADR-1411 wiring clause).
-  const fm = extractFrontmatter(content, fullPath);
+  // The --data checks need no file content, so they run before any lock is taken.
   let mergeData: Record<string, FrontmatterValue>;
   try { mergeData = JSON.parse(data as string) as Record<string, FrontmatterValue>; } catch { error('Invalid JSON for --data'); return; }
   // Only a JSON object names fields: an array or a string would spread into index-named
@@ -1650,21 +1669,30 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
     return;
   }
   for (const key of Object.keys(mergeData)) rejectControlCharacterFieldName(key);
-  // #1660 parity with `cmdFrontmatterSet`: a merged key that would flatten a lossy object-list
-  // field is refused before anything is written, reported in set's `{ error, field }` shape
-  // (found while implementing #5105).
-  for (const [key, value] of Object.entries(mergeData)) {
-    const lossyErr = objectListFieldWouldLoseData(content, key, value);
-    if (lossyErr) {
-      output({ error: lossyErr, field: key }, raw, undefined);
-      return;
+  const fields = mergeData;
+  underStateMdLock(fullPath, () => {
+    // Checked again under the lock: the file can be removed while the command waits for it.
+    if (!fs.existsSync(fullPath)) { output({ error: 'File not found', path: filePath }, raw, undefined); return; }
+    const content = fs.readFileSync(fullPath, 'utf-8');
+    // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
+    // per file rather than per content digest (#1882, ADR-1411 wiring clause).
+    const fm = extractFrontmatter(content, fullPath);
+    // #1660 parity with `cmdFrontmatterSet`: a merged key that would flatten a lossy object-list
+    // field is refused before anything is written, reported in set's `{ error, field }` shape
+    // (found while implementing #5105).
+    for (const [key, value] of Object.entries(fields)) {
+      const lossyErr = objectListFieldWouldLoseData(content, key, value);
+      if (lossyErr) {
+        output({ error: lossyErr, field: key }, raw, undefined);
+        return;
+      }
     }
-  }
-  for (const [key, value] of Object.entries(mergeData)) setOwnField(fm, key, value);
-  const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
-  if (newContent === null) return;
-  platformWriteSync(fullPath, newContent);
-  output({ merged: true, fields: Object.keys(mergeData) }, raw, 'true');
+    for (const [key, value] of Object.entries(fields)) setOwnField(fm, key, value);
+    const newContent = spliceOrReportRefusal(content, fm, filePath, raw);
+    if (newContent === null) return;
+    platformWriteSync(fullPath, newContent);
+    output({ merged: true, fields: Object.keys(fields) }, raw, 'true');
+  });
 }
 
 function cmdFrontmatterValidate(cwd: string, filePath: string, schemaName: string | undefined, raw: boolean): void {

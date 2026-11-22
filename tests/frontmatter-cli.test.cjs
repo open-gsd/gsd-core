@@ -1176,3 +1176,125 @@ describe('frontmatter set/merge — write refusal', () => {
     });
   }
 });
+
+// ─── #5120: frontmatter set/merge on STATE.md hold the STATE.md lock ────────
+//
+// Pre-push review R3-m5: `frontmatter set` and `frontmatter merge` wrote a target named STATE.md
+// through the seam without the STATE.md lock, so a write could land between a locked writer's read
+// and its publish (readModifyWriteStateMd), the #500/#905/#1230 lost update. Under `npm test` the
+// #5120 guard records each STATE.md write these rows make and fails the run on one made without the
+// lock. The rows run in-process, so the CLI shares this file's state.cjs and its lock seams.
+describe('#5120: frontmatter set/merge on a STATE.md target take the STATE.md lock', () => {
+  const stateMod = require('../gsd-core/bin/lib/state.cjs');
+  const LIVE_PID = 424242;
+  const DEAD_PID = 434343;
+  const DOC = '---\nstatus: planning\nmilestone: v1.0\n---\n\n# Project State\n';
+  const commands = {
+    set: (file) => ['frontmatter', 'set', file, '--field', 'status', '--value', 'executing'],
+    merge: (file) => ['frontmatter', 'merge', file, '--data', '{"status":"executing"}'],
+  };
+
+  function planningWith(t, files) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fm-state-lock-'));
+    t.after(() => cleanup(dir));
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), content, 'utf-8');
+    return dir;
+  }
+
+  // Counts every pass of acquireStateLock's loop (the first pass is every acquisition's start) and
+  // every steal; isPidAlive answers for the two fake holders only, so no real pid decides a steal.
+  function watchLocks(t, onIteration = () => {}) {
+    const seen = { iterations: 0, steals: [] };
+    stateMod._setLockProbes({ isPidAlive: (pid) => pid === LIVE_PID });
+    stateMod._setStateLockTestHooks({
+      onLoopIteration: (ctx) => { seen.iterations++; onIteration(ctx); },
+      beforeSteal: ({ lockPath }) => { seen.steals.push(path.basename(lockPath)); },
+    });
+    t.after(() => { stateMod._resetStateLockTestHooks(); stateMod._resetLockProbes(); });
+    return seen;
+  }
+
+  for (const [cmd, argsFor] of Object.entries(commands)) {
+    test(`${cmd} writes STATE.md while this process holds STATE.md.lock, and releases it`, (t) => {
+      const dir = planningWith(t, { 'STATE.md': DOC });
+      const state = path.join(dir, 'STATE.md');
+      const lock = `${state}.lock`;
+      const writes = [];
+      const record = (destination) => {
+        if (path.resolve(String(destination)) === state) {
+          writes.push({ lockHeld: fs.existsSync(lock) && fs.readFileSync(lock, 'utf-8') === String(process.pid) });
+        }
+      };
+      const realWrite = fs.writeFileSync;
+      const realRename = fs.renameSync;
+      t.mock.method(fs, 'writeFileSync', function (file, ...rest) { record(file); return realWrite.call(this, file, ...rest); });
+      t.mock.method(fs, 'renameSync', function (from, to, ...rest) { record(to); return realRename.call(this, from, to, ...rest); });
+
+      const result = runGsdTools(argsFor(state), dir);
+      t.mock.restoreAll();
+
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.ok(!JSON.parse(result.output).error, result.output);
+      assert.ok(writes.length >= 1, 'precondition: the command wrote STATE.md');
+      assert.deepStrictEqual(writes.filter((w) => !w.lockHeld), [], 'every write onto STATE.md holds the STATE.md lock');
+      assert.match(fs.readFileSync(state, 'utf-8'), /^status: executing$/m);
+      assert.strictEqual(fs.existsSync(lock), false, 'the lock is released after the write');
+    });
+
+    test(`${cmd} waits for a live holder of STATE.md.lock and writes after it releases`, (t) => {
+      const dir = planningWith(t, { 'STATE.md': DOC, 'STATE.md.lock': String(LIVE_PID) });
+      const state = path.join(dir, 'STATE.md');
+      const duringWait = [];
+      const seen = watchLocks(t, ({ iteration }) => {
+        duringWait.push(fs.readFileSync(state, 'utf-8'));
+        if (iteration >= 1) { try { fs.unlinkSync(`${state}.lock`); } catch { /* already gone */ } }
+      });
+
+      const result = runGsdTools(argsFor(state), dir);
+
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.ok(seen.iterations >= 2, 'the command waited on the held lock');
+      assert.deepStrictEqual([...new Set(duringWait)], [DOC], 'STATE.md was not written while another process held the lock');
+      assert.deepStrictEqual(seen.steals, [], 'a live holder\'s lock is not taken over');
+      assert.match(fs.readFileSync(state, 'utf-8'), /^status: executing$/m);
+    });
+
+    test(`${cmd} takes over a STATE.md.lock left by a dead process`, (t) => {
+      const dir = planningWith(t, { 'STATE.md': DOC, 'STATE.md.lock': String(DEAD_PID) });
+      const state = path.join(dir, 'STATE.md');
+      const seen = watchLocks(t);
+
+      const result = runGsdTools(argsFor(state), dir);
+
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.deepStrictEqual(seen.steals, ['STATE.md.lock'], 'the dead holder\'s lock is taken over');
+      assert.match(fs.readFileSync(state, 'utf-8'), /^status: executing$/m);
+      assert.strictEqual(fs.existsSync(`${state}.lock`), false, 'no lock is left behind');
+    });
+
+    test(`${cmd} on a file not named STATE.md takes no lock, even beside a held STATE.md.lock`, (t) => {
+      const dir = planningWith(t, { 'PLAN.md': DOC, 'STATE.md.lock': String(LIVE_PID), 'PLAN.md.lock': String(LIVE_PID) });
+      const plan = path.join(dir, 'PLAN.md');
+      const seen = watchLocks(t);
+
+      const result = runGsdTools(argsFor(plan), dir);
+
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.deepStrictEqual(seen, { iterations: 0, steals: [] }, 'no STATE.md lock was attempted');
+      assert.match(fs.readFileSync(plan, 'utf-8'), /^status: executing$/m);
+    });
+
+    test(`${cmd} on a missing STATE.md reports File not found without waiting on a held lock`, (t) => {
+      const dir = planningWith(t, { 'STATE.md.lock': String(LIVE_PID) });
+      const state = path.join(dir, 'STATE.md');
+      const seen = watchLocks(t);
+
+      const result = runGsdTools(argsFor(state), dir);
+
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).error, 'File not found');
+      assert.deepStrictEqual(seen, { iterations: 0, steals: [] }, 'no STATE.md lock was attempted');
+      assert.strictEqual(fs.existsSync(state), false);
+    });
+  }
+});
