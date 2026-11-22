@@ -1036,6 +1036,7 @@ describe('#5491 a comment opener inside code hides no task (#6286 round 5 Minor 
     'an unclosed <!-- in a fence': ['```html', '<!-- never closed', '```', TAIL],
     'a bare unclosed <!-- in prose': ['<!-- never closed', TAIL],
   };
+  cases['a fence opener inside a comment'] = ['<!--', '```', '-->', TAIL];
   for (const [name, lines] of Object.entries(cases)) {
     test(`${name} keeps the tasks after it`, () => {
       assert.equal(planFacts('12.6-01-PLAN.md', [PLAN_A, ...lines].join('\n')).tasks, 4);
