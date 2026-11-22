@@ -514,6 +514,15 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     );
   });
 
+  test('an exclusion spelled with ./, nested and root entries mixed, and an entry matching a name only in another case throw', () => {
+    planted({ files: ['scripts', '!./scripts/x.cjs'] }, ['scripts/x.cjs'], (tmp) => assert.throws(() => listPackedFiles(tmp), /spelled with \.\//));
+    planted({ files: ['a/c', 'b'] }, ['a/c/f.js', 'b/g.js', 'a/b'], (tmp) => assert.throws(() => listPackedFiles(tmp), /mixes nested and root entries/));
+    planted({ files: ['gemini.md'] }, ['GEMINI.md'], (tmp) => {
+      // A case-sensitive disk reaches the sibling check; a case-insensitive one finds the file and reaches the spelling check.
+      assert.throws(() => listPackedFiles(tmp), /another case|spells a name differently/);
+    });
+  });
+
   test('a root COPYING file ships without a files entry', () => {
     planted({ files: ['hooks'] }, ['COPYING', 'COPYING.txt', 'copying-notes'], (tmp) => {
       assert.deepEqual(sorted(listPackedFiles(tmp)), ['COPYING', 'COPYING.txt', 'package.json']);

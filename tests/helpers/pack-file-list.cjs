@@ -93,6 +93,9 @@ function listPackedFiles(root) {
     if (f.startsWith('!') && !normalise(bare).includes('/')) {
       throw new Error(`${root}: files entry "${f}" is a slash-less exclusion, which npm applies at any depth; this list needs a path`);
     }
+    if (f.startsWith('!') && bare.startsWith('./')) {
+      throw new Error(`${root}: files entry "${f}" is an exclusion spelled with ./, which npm does not strip; this list needs the plain path`);
+    }
     assertPlainPath(bare, `files entry "${f}"`);
   }
   // npm normalises `bin` first (a string needs the package name, an array keeps one target per base name, keys
@@ -131,6 +134,11 @@ function listPackedFiles(root) {
     }
   };
   const positive = manifest.files.filter((f) => !f.startsWith('!')).map(normalise);
+  // A slash-less entry also matches by base name at depth, which can re-include a same-named file under a directory
+  // a nested entry walks; this list models either kind of entry, not both together.
+  if (positive.some((p) => p.includes('/')) && positive.some((p) => !p.includes('/'))) {
+    throw new Error(`${root}: package.json files mixes nested and root entries; npm matches a root entry by base name at depth and this list does not model that`);
+  }
   const negative = manifest.files.filter((f) => f.startsWith('!')).map((f) => normalise(f.slice(1)));
   // npm matches a root file entry by base name, so an exclusion of a nested file with that base name can be undone.
   const baseName = (entry) => entry.split('/').pop().toLowerCase();
@@ -201,7 +209,17 @@ function listPackedFiles(root) {
     assertPlainAncestors(entry);
     let stat;
     try { stat = fs.lstatSync(path.join(root, entry)); } catch (err) {
-      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') continue; // npm skips an entry that matches nothing
+      if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+        // On a case-sensitive disk npm treats the unmatched entry as a case-insensitive base-name pattern, which can
+        // still pack a differently spelled file; this list throws when the spelling differs from a sibling's.
+        const parent = path.join(root, path.dirname(entry));
+        let siblings = [];
+        try { siblings = fs.readdirSync(parent); } catch { /* the parent is missing too: nothing can match */ }
+        if (siblings.some((n) => n.toLowerCase() === path.basename(entry).toLowerCase())) {
+          throw new Error(`${path.join(root, entry)}: "${entry}" matches a name on disk only in another case; this list needs the exact spelling`);
+        }
+        continue; // npm skips an entry that matches nothing
+      }
       throw err;
     }
     if (stat.isSymbolicLink()) throw new Error(`${path.join(root, entry)}: a symlinked files entry; the walk does not follow links`);
