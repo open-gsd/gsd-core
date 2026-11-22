@@ -17,82 +17,19 @@ import path from 'node:path';
 import { ensureToolOwnedGsdDir } from './gsd-tool-dir.cjs';
 import { execGit as execGitSeam, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { getGlobalConfigDir } from './runtime-homes.cjs';
-
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/**
- * Strip JSONC comments (line and block forms) from a string to produce valid JSON.
- * Handles comments inside strings correctly (does not strip them).
- * Mirrors the same logic in bin/install.js:stripJsonComments.
- */
-function stripJsonComments(text: string): string {
-  let result = '';
-  let i = 0;
-  let inString = false;
-  let stringChar = '';
-  while (i < text.length) {
-    // Handle string literals — don't strip comments inside strings
-    if (inString) {
-      if (text[i] === '\\') {
-        result += text[i] + (text[i + 1] || '');
-        i += 2;
-        continue;
-      }
-      if (text[i] === stringChar) {
-        inString = false;
-      }
-      result += text[i];
-      i++;
-      continue;
-    }
-    // Start of string
-    if (text[i] === '"' || text[i] === "'") {
-      inString = true;
-      stringChar = text[i];
-      result += text[i];
-      i++;
-      continue;
-    }
-    // Line comment
-    if (text[i] === '/' && text[i + 1] === '/') {
-      // Skip to end of line
-      while (i < text.length && text[i] !== '\n') i++;
-      continue;
-    }
-    // Block comment
-    if (text[i] === '/' && text[i + 1] === '*') {
-      i += 2;
-      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
-      i += 2; // skip closing */
-      continue;
-    }
-    result += text[i];
-    i++;
-  }
-  // Remove trailing commas before } or ] (common in JSONC)
-  return result.replace(/,\s*([}\]])/g, '$1');
-}
-
-/**
- * Parse a string as JSONC (JSON with comments). Returns the parsed value or
- * throws a SyntaxError if the content is genuinely malformed.
- */
-function parseJsonc(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return JSON.parse(stripJsonComments(text));
-  }
-}
+import { parseJsonc } from './settings-jsonc.cjs';
+import { BASE_CHECK_ISOLATION_MODES, isBaseCheckIsolationMode } from './dispatch-isolation.cjs';
+import type { BaseCheckIsolationMode } from './dispatch-isolation.cjs';
 
 // ─── Internal types ───────────────────────────────────────────────────────────
 
 type ExecGitFn = typeof execGitSeam;
 
-// Who creates the isolated worktree — the two worktree-creating members of
-// host-integration.cts's DispatchIsolation vocabulary ('none' creates none and
-// never reaches this check).
-type BaseCheckIsolationMode = 'harness-worktree' | 'orchestrator-worktree';
+// Who creates the isolated worktree — the worktree-creating members of the
+// DispatchIsolation vocabulary ('none' creates none and never reaches this
+// check). `BaseCheckIsolationMode` is imported from src/dispatch-isolation.cts
+// (#4561), where it is derived from the one vocabulary tuple by excluding
+// 'none' — not restated here.
 
 /**
  * A settings layer that defeats the `worktree.baseRef:"head"` trust (#4588): either it
@@ -364,6 +301,51 @@ export function findWorktreeCreateHook(
 }
 
 /**
+ * The base-check evaluation for a project directory: exactly what
+ * `cmdWorktreeBaseCheck` computes, minus the stdout emit and the `--mode` /
+ * `--observed-fork-base` argv parse (#4222). Resolves the effective baseRef from
+ * `<cwd>/.claude` settings (project local, project shared, user/global), runs the
+ * `WorktreeCreate`-hook interlock where it applies (#4588/#4881) and evaluates the
+ * #683 divergence against both. The interlock lives here, not in the CLI wrapper,
+ * so on the same inputs the CLI and the resolver (`routeDispatchIsolation` in
+ * gsd-tools.cjs, which re-derives this degrade before recording a decision) cannot
+ * disagree about the fork base. `observedForkBase`, a measurement taken inside a created worktree, is
+ * the one input the resolver cannot supply; it passes none, as the CLI does without
+ * the flag. deps.userClaudeDir overrides the user/global config directory
+ * (default: getGlobalConfigDir('claude'), which honours CLAUDE_CONFIG_DIR).
+ */
+export function evaluateWorktreeBaseDegradeForCwd(
+  cwd: string,
+  isolationMode: BaseCheckIsolationMode = 'harness-worktree',
+  deps?: { execGit?: ExecGitFn; readFile?: (p: string) => string | null; userClaudeDir?: string | null; observedForkBase?: string | null }
+): ReturnType<typeof evaluateWorktreeBaseDegrade> {
+  const observedForkBase = deps?.observedForkBase ?? null;
+  const claudeDir = path.join(cwd, '.claude');
+  const userClaudeDir = Object.prototype.hasOwnProperty.call(deps ?? {}, 'userClaudeDir')
+    ? (deps as { userClaudeDir?: string | null }).userClaudeDir
+    : getGlobalConfigDir('claude');
+  const effectiveBaseRef = resolveEffectiveBaseRef(
+    claudeDir,
+    deps?.readFile ? { readFile: deps.readFile } : undefined,
+    userClaudeDir
+  );
+  // The WorktreeCreate-hook interlock (#4588) only matters where the evaluation would
+  // otherwise trust "head" without comparing: harness-created worktrees and no
+  // observation. Skip the settings reads everywhere else.
+  const worktreeCreateHook = effectiveBaseRef === 'head' && isolationMode === 'harness-worktree' && observedForkBase === null
+    ? findWorktreeCreateHook(claudeDir, deps?.readFile ? { readFile: deps.readFile } : undefined, userClaudeDir)
+    : null;
+  return evaluateWorktreeBaseDegrade({
+    cwd,
+    effectiveBaseRef,
+    execGit: deps?.execGit,
+    isolationMode,
+    observedForkBase,
+    worktreeCreateHook,
+  });
+}
+
+/**
  * CLI command: check current worktree base-ref degradation status.
  *
  * Reads effective baseRef from <cwd>/.claude settings (3-layer cascade:
@@ -386,8 +368,8 @@ export function cmdWorktreeBaseCheck(
   const modeIdx = args.indexOf('--mode');
   if (modeIdx !== -1) {
     const value = args[modeIdx + 1];
-    if (value !== 'harness-worktree' && value !== 'orchestrator-worktree') {
-      throw new Error(`worktree base-check: --mode must be harness-worktree or orchestrator-worktree, got ${JSON.stringify(value ?? null)}`);
+    if (!isBaseCheckIsolationMode(value)) {
+      throw new Error(`worktree base-check: --mode must be ${BASE_CHECK_ISOLATION_MODES.join(' or ')}, got ${JSON.stringify(value ?? null)}`);
     }
     isolationMode = value;
   }
@@ -405,29 +387,7 @@ export function cmdWorktreeBaseCheck(
     }
     observedForkBase = value.trim().toLowerCase();
   }
-  const claudeDir = path.join(cwd, '.claude');
-  const userClaudeDir = Object.prototype.hasOwnProperty.call(deps ?? {}, 'userClaudeDir')
-    ? (deps as { userClaudeDir?: string | null }).userClaudeDir
-    : getGlobalConfigDir('claude');
-  const effectiveBaseRef = resolveEffectiveBaseRef(
-    claudeDir,
-    deps?.readFile ? { readFile: deps.readFile } : undefined,
-    userClaudeDir
-  );
-  // The WorktreeCreate-hook interlock (#4588) only matters where the evaluation would
-  // otherwise trust "head" without comparing: harness-created worktrees and no
-  // observation. Skip the settings reads everywhere else.
-  const worktreeCreateHook = effectiveBaseRef === 'head' && isolationMode === 'harness-worktree' && observedForkBase === null
-    ? findWorktreeCreateHook(claudeDir, deps?.readFile ? { readFile: deps.readFile } : undefined, userClaudeDir)
-    : null;
-  const result = evaluateWorktreeBaseDegrade({
-    cwd,
-    effectiveBaseRef,
-    execGit: deps?.execGit,
-    isolationMode,
-    observedForkBase,
-    worktreeCreateHook,
-  });
+  const result = evaluateWorktreeBaseDegradeForCwd(cwd, isolationMode, { ...(deps ?? {}), observedForkBase });
   // Default emit goes through fs.writeSync(1, …), NOT process.stdout.write:
   // the CLI's --pick capture intercepts writeSync, and command substitution
   // is a pipe — via process.stdout.write a `$(gsd-tools … --pick x)` capture

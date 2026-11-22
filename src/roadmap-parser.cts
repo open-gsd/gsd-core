@@ -778,6 +778,70 @@ function hasRecognizedVersionedMilestoneHeading(content: string): boolean {
     && listMilestoneHeadings(`${'#'.repeat(heading.level)} ${heading.text}`).length > 0);
 }
 
+const STATE_MILESTONE_ECHO_LIMIT = 80;
+
+/**
+ * #5726: STATE.md's `milestone:` value is untrusted text. Cap it at
+ * `STATE_MILESTONE_ECHO_LIMIT` characters (ellipsis past the cap), then quote it
+ * with `JSON.stringify` (the `phase.cts` precedent for echoed user text), which
+ * escapes ESC/BEL/newlines; the characters JSON leaves raw but a terminal acts on
+ * are escaped too: DEL and C1 controls, zero-width and direction marks
+ * (U+200B-U+200F), line/paragraph separators and bidi embeddings/overrides
+ * (U+2028-U+202E), the invisible-format block (U+2060-U+206F, incl. bidi
+ * isolates), soft hyphen (U+00AD), Arabic letter mark (U+061C), Mongolian
+ * vowel separator (U+180E), interlinear annotations (U+FFF9-U+FFFB) and the
+ * BOM (U+FEFF).
+ */
+function echoStateMilestone(value: string): string {
+  const chars = Array.from(value);
+  const capped = chars.length > STATE_MILESTONE_ECHO_LIMIT
+    ? `${chars.slice(0, STATE_MILESTONE_ECHO_LIMIT).join('')}…`
+    : value;
+  return JSON.stringify(capped).replace(
+    /[\u007f-\u009f\u{ad}\u{61c}\u{180e}\u{200b}-\u{200f}\u{2028}-\u{202e}\u{2060}-\u{206f}\u{feff}\u{fff9}-\u{fffb}]/gu,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
+/**
+ * #6271: the cause and the fix for an UNSCOPED milestone scope (ADR-3180 rows 4 and 5 of `classifyMilestoneWindow`),
+ * for a verb that declines on it; one owner, so every decline site says the same true thing. Read-only: it
+ * re-reads ROADMAP.md and STATE.md, it never decides the scope. The causes differ and so do the fixes:
+ *  - STATE names a version, the ROADMAP has milestone headings but none for it (row 5): add its heading above its
+ *    phases (below them the window is empty, TRUNCATED), or correct STATE;
+ *  - STATE names a version, the ROADMAP has no milestone heading (row 5): `milestone: null`, or add a heading;
+ *  - STATE names none, the ROADMAP has milestone headings (row 4): name one in STATE;
+ *  - STATE names none and only a Phase title carries a version (row 4: `hasVersionedMilestones` counts it,
+ *    `hasRecognizedVersionedMilestoneHeading` does not): reword the title; `milestone: null` changes nothing.
+ * Returns '' when a file is unreadable. The version is STATE.md text, so it goes through the #5726 sanitizer.
+ */
+function describeUnscopedMilestone(cwd: string, ws?: string | null): string {
+  let content: string | null = null;
+  let stateRaw: string | null = null;
+  try {
+    content = platformReadSync(path.join(planningDir(cwd, ws), 'ROADMAP.md'));
+    stateRaw = platformReadSync(path.join(planningDir(cwd, ws), 'STATE.md'));
+  } catch {
+    return '';
+  }
+  if (content === null) return '';
+  const scalar = stateRaw === null ? null : readStateMilestoneScalar(stateRaw);
+  const version = scalar === null ? null : classifyMilestoneScalar(scalar).version;
+  const recognized = hasRecognizedVersionedMilestoneHeading(content);
+  if (version !== null) {
+    const v = echoStateMilestone(version);
+    return recognized
+      ? `Cause: STATE.md names milestone ${v}, but ROADMAP.md has no milestone heading for it. Fix: add a heading for ${v} above its phases in ROADMAP.md, or correct the milestone field in STATE.md.`
+      : `Cause: STATE.md names milestone ${v}, but ROADMAP.md has no milestone headings at all. Fix: set the milestone field in STATE.md to null (a ROADMAP with no milestone headings is one milestone), or add a heading for ${v} above its phases in ROADMAP.md.`;
+  }
+  if (hasVersionedMilestones(content)) {
+    return recognized
+      ? 'Cause: STATE.md names no milestone, but ROADMAP.md has milestone headings. Fix: set the milestone field in STATE.md to one of them.'
+      : 'Cause: ROADMAP.md has no milestone heading, but a Phase title contains a version (vX.Y), which reads as one. Fix: reword that Phase title.';
+  }
+  return 'Cause: the current milestone window could not be resolved. Fix: make the milestone field in STATE.md match a milestone heading in ROADMAP.md, or set it to null for a ROADMAP with no milestone headings.';
+}
+
 // This file's milestone-heading vocabulary: a version token (`v1.2`-style),
 // a ✅/🚧/📋 status marker, or the word "Milestone". Tested against a
 // non-Phase heading's own text by `hasMilestoneSectioning` below — this
@@ -3344,6 +3408,9 @@ export = {
   isRecognizedMilestoneHeading,
   selectMilestoneHeading,
   classifyMilestoneWindow,
+  // #6271: the sanitizer for echoed STATE.md milestone text and the one cause/fix describer for an UNSCOPED decline.
+  echoStateMilestone,
+  describeUnscopedMilestone,
   // #3184: the sole "give me this version's window" composition — see its
   // own doc comment. milestone.cts's destructive-consumer guard consumes
   // this instead of composing locate+select+section-end itself.

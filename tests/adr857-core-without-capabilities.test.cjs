@@ -199,21 +199,22 @@ describe('B1 — real registry, all-caps-off config: every canonical point resol
     );
   });
 
-  test('CANONICAL_POINTS exports exactly 12 points', () => {
+  test('CANONICAL_POINTS exports exactly 13 points', () => {
     assert.strictEqual(
       ALL_12_POINTS.length,
-      12,
-      `CANONICAL_POINTS must have 12 entries (ADR-857 §"Loop Extension Points (the 12)"), got ${ALL_12_POINTS.length}`,
+      13,
+      `CANONICAL_POINTS must have 13 entries (ADR-857's twelve plus review:pre, #3997), got ${ALL_12_POINTS.length}`,
     );
   });
 
-  test('each of the 12 known point names is present in CANONICAL_POINTS', () => {
+  test('each of the 13 known point names is present in CANONICAL_POINTS', () => {
     const expected = [
       'discuss:pre', 'discuss:post',
       'plan:pre', 'plan:post',
       'execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post',
       'verify:pre', 'verify:post',
       'ship:pre', 'ship:post',
+      'review:pre',
     ];
     for (const p of expected) {
       assert.ok(
