@@ -3956,6 +3956,9 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['ls | xargs -I@ cat .se@rets', '.se@rets'],
     // #6408 Nit 1: ... also in the `-c` script of a shell xargs runs.
     ["ls -A | xargs -I{} sh -c 'cat {}nv'", 'cat {}nv'],
+    // ... and when the stdin holds text the guard shows beside a stage it cannot know (second security review).
+    ["{ printf 'x\\n'; ls -A; } | xargs -I{} sh -c 'cat {}nv'", 'cat {}nv'],
+    ['{ echo x; ls -A; } | xargs -I{} cat {}nv', '{}nv'],
     // The `-c` script is the first word after the shell's options, `--` included.
     ['xargs sh -c -- \'cat "$1"\' _ < names', 'names'],
     ['xargs sh -c -e \'cat "$1"\' _ < names', 'names'],
