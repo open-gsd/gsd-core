@@ -476,8 +476,8 @@ module.exports = async (target) => {
   }
 
   test('known limit, pinned as it stands: an ES module import of fs/promises is not a reach that wraps the promise API (#5120 review Minor 1, Minor 2)', (t) => {
-    // The guard's header states this limit. If a change makes either child below record, update
-    // that header, the limits paragraph in TESTING-SUITES.md and this row together. Each child
+    // TESTING-SUITES.md states this limit. If a change makes either child below record, update its
+    // limits list and this row together. Each child
     // asserts the bytes landed, so an empty ledger is an unseen real write, not a dead child.
     const dir = createTempDir('rswg-esm-');
     t.after(() => cleanup(dir));
