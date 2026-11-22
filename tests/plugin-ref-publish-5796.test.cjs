@@ -419,11 +419,13 @@ describe('#5796 plugin ref publisher', () => {
       fs.copyFileSync(path.join(ROOT, rel), to);
     }
     git(repo, ['init', '-q', '-b', 'main']);
-    git(repo, ['add', '-A']);
+    // -f: only tracked files were copied, so forcing cannot add an untracked ignored file, and a
+    // tracked file that .gitignore also names is kept rather than silently dropped.
+    git(repo, ['add', '-f', '-A']);
     git(repo, ['commit', '-q', '-m', 'tracked tree of the checkout under test']);
     assert.deepEqual(
       git(repo, ['ls-files', '-z']).split('\0').filter(Boolean).sort(), tracked.slice().sort(),
-      'the fixture repository tracks exactly the files the checkout tracks',
+      'the fixture repository tracks the same paths as the checkout',
     );
     fs.cpSync(
       path.join(ROOT, 'gsd-core', 'bin', 'lib'), path.join(repo, 'gsd-core', 'bin', 'lib'),
