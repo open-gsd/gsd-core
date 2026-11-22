@@ -8,8 +8,8 @@
  * markdown must round-trip through the owner. Parser drift: a `hooks/**` regex
  * parsing dispatch text is compared with `DISPATCH_PARSE_SOURCES`; sanction is
  * a dedicated `// dispatch-identity-owner: <reason>` line directly above.
- * Membership: every `--force-isolation` producer is in
- * `scripts/lib/dispatch-isolation-producer-sites.cjs`, and every entry has one;
+ * Membership: every `--force-isolation` producer is in `PRODUCER_SITES` below,
+ * and every entry there has one;
  * sanction a doc example with `<!-- dispatch-isolation-site: <reason> -->`.
  * A scan root that is missing is a finding, never a silent pass.
  * Usage: node scripts/lint-dispatch-identity-drift.cjs [--root <dir>]
@@ -19,12 +19,29 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const owner = require('../hooks/lib/dispatch-identity.js');
-const { PRODUCER_SITES } = require('./lib/dispatch-isolation-producer-sites.cjs');
+
+// The canonical membership list for dispatch isolation: every markdown file
+// that records a decision with `query dispatch-isolation … --force-isolation`.
+// Declared here, once, and asserted against the scan both ways; never
+// generate it from the scan, which would pass a hand-written site by
+// construction. It lives in the lint, not `scripts/lib/`, which ships.
+const PRODUCER_SITES = Object.freeze([
+  'gsd-core/references/dispatch-isolation-gate.md',
+  'gsd-core/workflows/diagnose-issues.md',
+  'gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md',
+  'gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md',
+  'gsd-core/workflows/execute-plan.md',
+  'gsd-core/workflows/quick-batch/steps/worktree-dispatch.md',
+  'gsd-core/workflows/quick.md',
+]);
 
 const MARKDOWN_ROOTS = ['gsd-core/workflows', 'gsd-core/references'];
 const HOOK_ROOT = 'hooks';
 const HOOK_EXTENSIONS = ['.js', '.cjs', '.mjs'];
 const OWNER_FILE = 'hooks/lib/dispatch-identity.js';
+// `hooks/dist/` is the build output of the hooks (a copy of the owner among
+// them), present after `npm run build:hooks`; it is not source.
+const HOOK_BUILD_OUTPUT = 'hooks/dist/';
 
 const HOOK_SANCTION_RE = /^\s*\/\/\s*dispatch-identity-owner:\s*\S/;
 const SITE_SANCTION_RE = /^\s*<!--\s*dispatch-isolation-site:\s*\S(?:(?!-->).)*-->\s*$/;
@@ -224,7 +241,7 @@ function scanDispatchIdentityDrift({ root, membership = PRODUCER_SITES } = {}) {
     }
     for (const abs of hookFiles) {
       const file = rel(root, abs);
-      if (file === OWNER_FILE) continue;
+      if (file === OWNER_FILE || file.startsWith(HOOK_BUILD_OUTPUT)) continue;
       const text = readOrNull(abs);
       if (text === null) continue;
       for (const f of findParserDrift(text, owner.DISPATCH_PARSE_SOURCES)) findings.push({ ...f, file });
@@ -247,7 +264,7 @@ function main() {
     const where = f.line ? `${f.file}:${f.line}` : f.file;
     process.stderr.write(`  [${f.kind}${f.variant ? `:${f.variant}` : ''}] ${where}  ${f.found}\n`);
   }
-  process.stderr.write('Fix: render the marker with hooks/lib/dispatch-identity.js, parse with parseDispatchIdentity, or list the producer in scripts/lib/dispatch-isolation-producer-sites.cjs.\n');
+  process.stderr.write('Fix: render the marker with hooks/lib/dispatch-identity.js, parse with parseDispatchIdentity, or list the producer in PRODUCER_SITES in scripts/lint-dispatch-identity-drift.cjs.\n');
   process.stderr.write('A deliberate exception is a dedicated line above the site: `// dispatch-identity-owner: <reason>` (hooks) or `<!-- dispatch-isolation-site: <reason> -->` (markdown).\n');
   process.exitCode = 1;
 }

@@ -10,9 +10,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
 const fc = require('fast-check');
-const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
 
 const {
   findTemplateDrift,
@@ -172,6 +171,12 @@ test('scan: a missing scan root is a finding, not a silent pass, and never throw
   );
 });
 
+test('scan: a build copy of the hooks under hooks/dist is not a second parser', () => {
+  const copy = 'const R = new RegExp("\\\\[gsd:dispatch", "g");\n';
+  const root = fixture({ 'hooks/dist/lib/dispatch-identity.js': copy, 'hooks/dist/g.js': copy });
+  assert.deepEqual(scanDispatchIdentityDrift({ root, membership: [] }), []);
+});
+
 test('scan: a hooks tree without the owner file is a finding', () => {
   const root = fixture({ 'hooks/g.js': 'const x = 1;\n' }, { bare: true });
   for (const dir of ['gsd-core/workflows', 'gsd-core/references']) {
@@ -246,14 +251,14 @@ test('property: any marker the owner renders is canonical to the lint (render, t
 });
 
 test('the real tree is clean: the lint exits 0 with no args (the shape lint:ci uses)', () => {
-  const r = spawnSync(process.execPath, [LINT], { cwd: REPO, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+  const r = runNode([LINT], { cwd: REPO });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /ok dispatch-identity-drift/);
 });
 
 test('the CLI exits 1 and names each finding on a drifted root', () => {
   const root = fixture({ 'gsd-core/workflows/a.md': `${PRODUCER}\n[gsd-dispatch phase="1"]\n` });
-  const r = spawnSync(process.execPath, [LINT, '--root', root], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
+  const r = runNode([LINT, '--root', root]);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /template-drift/);
   assert.match(r.stderr, /unlisted-producer-site/);
