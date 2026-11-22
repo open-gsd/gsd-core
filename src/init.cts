@@ -680,6 +680,8 @@ function detectHasPriorPhases(cwd: string, phaseInfo: Record<string, unknown> | 
  * default-ON key read here silently inverts its unset value (#4977).
  */
 function readConfigJsonBoolean(cwd: string, keyPath: readonly string[]): boolean {
+  // #6030: the value comes from the resolver, which reports a declared default as found, so a
+  // default-ON key now reads its default here instead of inverting it (#4977).
   return readConfigJsonValue(cwd, keyPath) === true;
 }
 

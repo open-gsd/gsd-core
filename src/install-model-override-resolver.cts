@@ -243,15 +243,27 @@ function readGsdRuntimeProfileResolver(targetDir: string | null = null): Runtime
     if (candidate) projectConfig = _readGsdConfigFile(candidate, '.planning/config.json');
   }
 
-  // One merge owner (#6030): the project layer over the home layer through the loader's deep merge,
-  // then each key read from that view with its own absent default. #3705: model_policy follows the
-  // same project-wins-over-home precedence as every other key here.
-  const view = _deepMergeConfig(homeDefaults || {}, projectConfig || {}) ?? {};
+  // Each key is a whole value, not a field-by-field merge: the project's truthy value replaces
+  // the home value outright. A model policy or tier-override table assembled from both files
+  // would name a provider from one and budgets from the other, so these four stay a replace
+  // (#3705: model_policy follows the same project-wins-over-home precedence as the others).
   const merged: RuntimeProfileMergedConfig = {
-    runtime: (view['runtime'] as string | undefined) || null,
-    model_profile: (view['model_profile'] as string | undefined) || 'balanced',
-    model_profile_overrides: view['model_profile_overrides'] || null,
-    model_policy: view['model_policy'] || null,
+    runtime:
+      (projectConfig && (projectConfig.runtime as string | undefined)) ||
+      (homeDefaults && (homeDefaults.runtime as string | undefined)) ||
+      null,
+    model_profile:
+      (projectConfig && (projectConfig.model_profile as string | undefined)) ||
+      (homeDefaults && (homeDefaults.model_profile as string | undefined)) ||
+      'balanced',
+    model_profile_overrides:
+      (projectConfig && projectConfig.model_profile_overrides) ||
+      (homeDefaults && homeDefaults.model_profile_overrides) ||
+      null,
+    model_policy:
+      (projectConfig && projectConfig.model_policy) ||
+      (homeDefaults && homeDefaults.model_policy) ||
+      null,
   };
 
   if (!merged.runtime) return null;

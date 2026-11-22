@@ -553,7 +553,7 @@ import invocationScopeMod = require('./invocation-scope.cjs');
 invocationScopeMod.registerInvocationReset('config-loader.warnings', _resetRuntimeWarningCacheForTests);
 invocationScopeMod.registerInvocationReset('config-loader.gitIgnoredCache', () => { _gitIgnoredCache.clear(); });
 
-// ─── #3532 (10b): shadowed global-defaults diagnostic ────────────────────────
+// ─── #4071: the global defaults layer (the #3532 shadow warning it replaced is gone) ─────
 
 // The keys ~/.gsd/defaults.json contributes to resolution: Branch D's `_globalBaseCfg`
 // projects them when no project config exists, and under a project config (Branch A)
@@ -583,14 +583,17 @@ const _NESTED_ONLY_GLOBAL_KEYS: Readonly<Record<string, { section: string; field
 function _globalDefaultsLayer(globalDefaults: Record<string, unknown>): Record<string, unknown> {
   let layer: Record<string, unknown> = {};
   for (const key of GLOBAL_DEFAULTS_RESOLUTION_KEYS) {
-    if (key === 'runtime') continue;
+    // `planning` is a section, and only its `commit_docs` field (an alias below) is a global key:
+    // `sub_repos`, `pr_strict` and `search_gitignored` were never read from the global file.
+    if (key === 'runtime' || key === 'planning') continue;
     const alias = CONFIG_KEY_ALIASES.find((entry) => entry.key === key) ?? _NESTED_ONLY_GLOBAL_KEYS[key];
     if (!alias) {
       if (Object.hasOwn(globalDefaults, key)) layer = _deepMergeConfig(layer, { [key]: globalDefaults[key] }) as Record<string, unknown>;
       continue;
     }
     const value = _getConfigValue(globalDefaults, key, { section: alias.section, field: alias.field });
-    if (value === undefined) continue;
+    // A null alias value is "not set", as Branch D's `??` reads it.
+    if (value === undefined || value === null) continue;
     // `parallelization` is a boolean or an object holding `enabled`; the object is already nested.
     const nested = key === 'parallelization' && isConfigSection(value)
       ? { [alias.section]: value }
@@ -618,7 +621,10 @@ function globalDefaultsPath(home: string = resolveGsdHome()): string {
  */
 function honorsGlobalDefaults(dottedKey: string): boolean {
   const top = dottedKey.split('.')[0];
-  if ((GLOBAL_DEFAULTS_RESOLUTION_KEYS as readonly string[]).includes(top)) return true;
+  // `runtime` in the shared file is the installer's identity stamp, never an operator preference.
+  if (top === 'runtime') return false;
+  // `planning` is a section: only its aliased `commit_docs` field is a global key (below).
+  if (top !== 'planning' && (GLOBAL_DEFAULTS_RESOLUTION_KEYS as readonly string[]).includes(top)) return true;
   const spelledAs = (entry: { key: string; section: string; field: string }): boolean =>
     `${entry.section}.${entry.field}` === dottedKey && (GLOBAL_DEFAULTS_RESOLUTION_KEYS as readonly string[]).includes(entry.key);
   return CONFIG_KEY_ALIASES.some(spelledAs) || Object.entries(_NESTED_ONLY_GLOBAL_KEYS)
@@ -1150,10 +1156,12 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     const _baseConfig: Record<string, unknown> = {
       model_profile: get('model_profile') ?? defaults.model_profile,
       commit_docs: (() => {
-        const explicit = getAliased('commit_docs');
-        if (explicit !== undefined) return explicit;
+        // A value the PROJECT sets wins; a gitignored `.planning/` outranks one that only the
+        // global defaults supply, which would otherwise commit docs the user keeps out of git (#4071).
+        const projectExplicit = _getConfigValue(projectParsed, 'commit_docs', { section: 'planning', field: 'commit_docs' });
+        if (projectExplicit !== undefined) return projectExplicit;
         if (isGitIgnored(cwd, '.planning/')) return false;
-        return defaults.commit_docs;
+        return getAliased('commit_docs') ?? defaults.commit_docs;
       })(),
       search_gitignored: getAliased('search_gitignored') ?? defaults.search_gitignored,
       branching_strategy: getAliased('branching_strategy') ?? defaults.branching_strategy,

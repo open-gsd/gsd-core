@@ -5,6 +5,11 @@
  * activation uses one precedence chain and one prototype-pollution guard.
  */
 
+import path from 'node:path';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import planningWorkspaceMod = require('./planning-workspace.cjs');
+const { planningDir, planningRoot } = planningWorkspaceMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
 import configValueResolver = require('./config-value-resolver.cjs');
 const { resolveConfigValue } = configValueResolver;
@@ -118,6 +123,19 @@ function resolveConfigKey(
     });
     if (resolved.found && (resolved.layer === 'workstream' || resolved.layer === 'root' || resolved.layer === 'global-defaults')) {
       return { found: true, value: resolved.value };
+    }
+    // A gate key the resolver does not declare (not central, not a well-formed registry slice) is
+    // still read from the project's own files, as it always was; only declared keys gain the
+    // resolver's layers. Nothing is resolved for such a key beyond the workstream and root files.
+    if (!resolved.found && resolved.reason === configLoader.CONFIG_REASON.NOT_CONFIGURED) {
+      const wsConfigPath = path.join(planningDir(cwd), 'config.json');
+      const rootConfigPath = path.join(planningRoot(cwd), 'config.json');
+      const fromWs = _readRawConfigKey(wsConfigPath, dotKey, quiet);
+      if (fromWs.found) return { found: true, value: fromWs.value };
+      if (wsConfigPath !== rootConfigPath) {
+        const fromRoot = _readRawConfigKey(rootConfigPath, dotKey, quiet);
+        if (fromRoot.found) return { found: true, value: fromRoot.value };
+      }
     }
   }
 

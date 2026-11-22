@@ -89,9 +89,9 @@ function defaultBudget(): number {
  */
 export function readSmartZoneBudget(cwd: string): number {
   try {
-    // #6030: the resolver owns the layers (workstream, root, global defaults), so a budget set
-    // in the root config or the global defaults file is honored like any other key. A quiet
-    // read: an unusable layer is simply "not set" here, as before.
+    // #6030: the resolver owns the layers, so a budget set in the root config is honored under a
+    // workstream like any other key (the global file supplies only the loader's own key set). A
+    // quiet read: an unusable layer is simply "not set" here, as before.
     const resolved = resolveConfigValue('workflow.smart_zone_tokens', {
       cwd, family: 'A', quiet: true, honorGlobal: configLoader.honorsGlobalDefaults,
     });

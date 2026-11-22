@@ -8240,8 +8240,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   // when it cannot write the archive, and that must reach the user.
   let autoPruneError: string | null = null;
   try {
-    // #6030: the resolver owns the layers (workstream, root, global defaults), so the switch is
-    // honored wherever it is set. An unusable layer reads as "not enabled", quietly, as before.
+    // #6030: the resolver owns the layers, so the switch is honored from the workstream and the
+    // root config (the global file supplies only the loader's own key set). An unusable layer
+    // reads as "not enabled", quietly, as before.
     const autoPruneEnabled = configValueResolver.resolveConfigValue(
       'workflow.auto_prune_state', { cwd, family: 'A', quiet: true, honorGlobal: configLoaderMod.honorsGlobalDefaults },
     ).value === true;

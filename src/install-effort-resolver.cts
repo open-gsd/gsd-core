@@ -235,11 +235,13 @@ function readGsdEffectiveEffortConfig(targetDir: string | null = null): EffortCo
   // otherwise replace the whole block, the same defect class as the
   // manifest-replacement this change fixes).
   // One merge owner (#6030): the loader's deep merge, with both blocks normalized first so a
-  // non-object `agent_overrides` or `routing_tier_defaults` stays a harmless absence here.
+  // non-object `agent_overrides` or `routing_tier_defaults` is treated as absent here.
+  const block = (value: unknown): Record<string, unknown> =>
+    value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const asBlocks = (effort: EffortConfig | null): Record<string, unknown> => ({
     ...(effort || {}),
-    agent_overrides: (effort && effort.agent_overrides) || {},
-    routing_tier_defaults: (effort && effort.routing_tier_defaults) || {},
+    agent_overrides: block(effort && effort.agent_overrides),
+    routing_tier_defaults: block(effort && effort.routing_tier_defaults),
   });
   return _deepMergeConfig(asBlocks(homeEffort), asBlocks(projectEffort)) as EffortConfig;
 }
