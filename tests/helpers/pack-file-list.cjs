@@ -13,9 +13,10 @@
 // - excluded at the root only: node_modules and the lock files (package-lock.json, yarn.lock,
 //   pnpm-lock.yaml, bun.lockb), which npm packs when nested.
 // It fails closed where npm's behaviour is not reproduced: a package.json that is not JSON or has no
-// `files` array, a glob or a path leaving the root in an entry, a slash-less `!` entry, an unreadable
-// directory, a symlink, a nested ignore file and a nested node_modules directory in a packed
-// directory all throw.
+// `files` array, a glob, a backslash, the root or a path leaving it in an entry, a slash-less `!` entry,
+// a path both included and excluded, browser/bundleDependencies/workspaces, an unreadable directory,
+// a symlink, a nested ignore file and a nested node_modules directory in a packed directory all throw.
+// A file or directory name containing `*` is dropped, as npm drops it.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -29,7 +30,7 @@ const ROOT_EXCLUDED_FILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-loc
 const isExcludedName = (rawName, rawRel) => {
   const name = rawName.toLowerCase();
   const rel = rawRel.toLowerCase();
-  return EXCLUDED_NAMES.has(name) || rel.endsWith('build/config.gypi')
+  return EXCLUDED_NAMES.has(name) || rel === 'build/config.gypi' || rel.endsWith('/build/config.gypi')
     || name.startsWith('._') || name.startsWith('.wafpickle-') || name.endsWith('.orig') || /^\.[^/]{0,255}\.swp$/.test(name);
 };
 const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel.toLowerCase());
@@ -48,8 +49,18 @@ function listPackedFiles(root) {
   if (!Array.isArray(manifest.files) || !manifest.files.every((f) => typeof f === 'string')) {
     throw new Error(`${root}: package.json has no files array of strings; this list needs one`);
   }
+  for (const key of ['browser', 'bundleDependencies', 'bundledDependencies', 'workspaces']) {
+    if (manifest[key] !== undefined) throw new Error(`${root}: package.json sets "${key}", which this list does not model`);
+  }
+  const seen = new Set();
   for (const f of manifest.files) {
     const bare = f.startsWith('!') ? f.slice(1) : f;
+    if (bare.includes('\\')) throw new Error(`${root}: files entry "${f}" has a backslash, which npm reads differently on each platform`);
+    const key = `${f.startsWith('!')}:${normalise(bare).toLowerCase()}`;
+    if (seen.has(`${!f.startsWith('!')}:${normalise(bare).toLowerCase()}`)) {
+      throw new Error(`${root}: files entry "${normalise(bare)}" is both included and excluded; npm resolves that by position and this list does not`);
+    }
+    seen.add(key);
     if (path.isAbsolute(bare) || normalise(bare).split('/').includes('..')) {
       throw new Error(`${root}: files entry "${f}" leaves the package root; this list reads paths below it only`);
     }
@@ -70,19 +81,20 @@ function listPackedFiles(root) {
     const r = rel.toLowerCase();
     return r === e || r.startsWith(`${e}/`);
   };
-  // A file named by a files entry is packed despite a default or a `!` rule, but not from under a
-  // directory npm prunes (node_modules at the root, an excluded directory name), and never .npmrc.
-  const requiredAllowed = (rel) => {
+  // An entry under a directory npm prunes (node_modules at the root, an excluded directory name) is not packed.
+  const underPrunedDirectory = (rel) => {
     const parts = rel.split('/');
-    if (parts[parts.length - 1].toLowerCase() === '.npmrc') return false;
-    return !parts.slice(0, -1).some((dir, i) => (i === 0 && dir.toLowerCase() === 'node_modules')
+    return parts.slice(0, -1).some((dir, i) => (i === 0 && dir.toLowerCase() === 'node_modules')
       || isExcludedName(dir, parts.slice(0, i + 1).join('/')));
   };
+  // A file named by a files entry is packed despite a default or a `!` rule, but never .npmrc.
+  const requiredAllowed = (rel) => rel.split('/').pop().toLowerCase() !== '.npmrc' && !underPrunedDirectory(rel);
 
   const packed = new Set();
   // `required` is a files entry that names this file itself.
   const visit = (rel, isDirectory, required = false) => {
     const name = rel.split('/').pop();
+    if (name.includes('*')) return; // npm drops a file or directory whose name contains `*`
     if (isDirectory) {
       if (rel === 'node_modules' || isExcludedName(name, rel) || negative.some((n) => covers(n, rel))) return;
       for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
@@ -108,6 +120,7 @@ function listPackedFiles(root) {
       throw err;
     }
     if (stat.isSymbolicLink()) throw new Error(`${path.join(root, entry)}: a symlinked files entry; the walk does not follow links`);
+    if (underPrunedDirectory(entry)) continue;
     if (stat.isDirectory() || stat.isFile()) visit(entry, stat.isDirectory(), stat.isFile());
   }
   for (const rel of fs.readdirSync(root)) {

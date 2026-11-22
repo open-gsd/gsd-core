@@ -378,6 +378,38 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
+  test('a name containing * is dropped, and build/config.gypi is excluded only under a directory named exactly build', () => {
+    planted(
+      { files: ['hooks'] },
+      // `*` is not a legal file name character on Windows, so the star names are planted elsewhere only.
+      [...(process.platform === 'win32' ? [] : ['hooks/a*b.js', 'hooks/d*e/x.js']), 'hooks/ok.js',
+        'hooks/xbuild/config.gypi', 'hooks/rebuild/config.gypi', 'hooks/build/config.gypi'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)),
+          ['hooks/ok.js', 'hooks/rebuild/config.gypi', 'hooks/xbuild/config.gypi', 'package.json']);
+      },
+    );
+  });
+
+  test('a directory entry under node_modules or an excluded directory does not pack', () => {
+    planted(
+      { files: ['node_modules/x', '.git/sub', 'hooks/._d/sub', 'ok/dir'] },
+      ['node_modules/x/a.js', '.git/sub/b.js', 'hooks/._d/sub/c.js', 'ok/dir/d.js'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['ok/dir/d.js', 'package.json']);
+      },
+    );
+  });
+
+  test('a path both included and excluded, a backslash, and a manifest key the list does not model throw', () => {
+    planted({ files: ['!a/x.js', 'a/x.js'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /both included and excluded/));
+    planted({ files: ['a/x.js', '!a/X.js'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /both included and excluded/));
+    planted({ files: ['a\\b'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /backslash/));
+    for (const extra of [{ browser: 'b.js' }, { bundleDependencies: ['x'] }, { bundledDependencies: true }, { workspaces: ['p'] }]) {
+      planted({ files: ['hooks'], ...extra }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /does not model/));
+    }
+  });
+
   test('a files entry naming the package root throws', () => {
     for (const files of [['.'], ['./'], ['!.']]) {
       planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /names the package root/));
