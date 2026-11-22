@@ -28,6 +28,8 @@ default branch via the single resolver (#1146).
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
 CURRENT_BRANCH=$(git branch --show-current)
 TARGET=${1:-$(gsd_run query git.base-branch)}
+# #5972: `gh --base` takes the bare branch name; git operations keep the full ref in $TARGET.
+PR_BASE=$(git remote 2>/dev/null | T="$TARGET" awk 'index(ENVIRON["T"], $0 "/") == 1 && length($0) > best { best = length($0) } END { t = ENVIRON["T"]; b = (best && length(t) > best + 1) ? substr(t, best + 2) : t; if (substr(b, 1, 1) == "-") b = t; print b }')
 ```
 
 Check preconditions:
@@ -203,13 +205,13 @@ if [ -n "$REMOTE_SLUG" ]; then
 
   if [ -z "$SUB_REPO_DIR" ]; then
     echo "Refusing unsafe sub-repo path: $REPO_REL" >&2
-    SUB_TARGET="$TARGET"
+    SUB_TARGET="$PR_BASE"
   else
-    # Resolve base branch: use $TARGET if it exists in sub-repo, else fall back to
+    # Resolve base branch: use $PR_BASE if it exists in sub-repo, else fall back to
     # the sub-repo's own default branch
-    if git -C "$SUB_REPO_DIR" ls-remote --exit-code --heads origin "$TARGET" \
+    if git -C "$SUB_REPO_DIR" ls-remote --exit-code --heads origin "$PR_BASE" \
          > /dev/null 2>&1; then
-      SUB_TARGET="$TARGET"
+      SUB_TARGET="$PR_BASE"
     else
       SUB_TARGET=$(git -C "$SUB_REPO_DIR" remote show origin 2>/dev/null \
         | awk '/HEAD branch/ {print $NF}')
@@ -545,7 +547,7 @@ Planning deletions: {PLANNING_DELETIONS} (must be 0 — #3679)
 
 Next steps:
   git push origin {PR_BRANCH}
-  gh pr create --base {TARGET} --head {PR_BRANCH}
+  gh pr create --base '{PR_BASE}' --head '{PR_BRANCH}'
 
 Or use /gsd:ship to create the PR automatically.
 ```

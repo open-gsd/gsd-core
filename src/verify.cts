@@ -2357,6 +2357,8 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
     {
       agents_dir: agentStatus.agents_dir,
       agents_found: agentStatus.agents_installed,
+      // #5236: `agents_found` is null when the check could not run (an unresolvable runtime id); the reason says why.
+      ...(agentStatus.agents_check_reason === undefined ? {} : { agents_check_reason: agentStatus.agents_check_reason }),
       installed: agentStatus.installed_agents,
       missing: agentStatus.missing_agents,
       incomplete: agentStatus.incomplete_agents,

@@ -591,7 +591,7 @@ function computeMilestoneSectionEnd(
     if (h.level > level) continue;
     // Mirrors old stopPattern: level-bounded, not a Phase heading, milestone marker
     if (/^Phase\s+\S/i.test(h.text)) continue;
-    if (/v\d+\.\d+|✅|📋|🚧/i.test(h.text)) return h.offset;
+    if (MILESTONE_LEADING_VERSION_RE.test(h.text) || /✅|📋|🚧/.test(h.text)) return h.offset;
     if (additionalBoundary?.(h)) return h.offset;
   }
   return content.length;
@@ -642,6 +642,8 @@ function listMilestoneHeadings(content: string): Array<{ heading: string; versio
     // — the two owners agree on WHICH milestone headings are selected, not on
     // raw heading text.
     const heading = m[0].replace(/^#{1,3}\s+/, '').trim();
+    // #6149: a heading that only MENTIONS a version is not a milestone heading.
+    if (!MILESTONE_LEADING_VERSION_RE.test(heading)) continue;
     const extracted = extractMilestoneHeadingName(heading);
     if (extracted === null) continue; // no version token on this heading — not a milestone heading
     out.push({
@@ -660,6 +662,18 @@ function listMilestoneHeadings(content: string): Array<{ heading: string; versio
 // rather than typing `^#{1,3}\s+(?!Phase\s+\S)` a second time — the exact
 // duplication class ADR-3180 §7.2's widened guard exists to catch.
 const MILESTONE_HEADING_LINE_SOURCE = '^#{1,3}\\s+(?!Phase\\s+\\S)[^\\n]*';
+
+// #6149: the ONE rule for "this heading is a milestone's heading": its version token LEADS the heading text. Before the
+// token only a status emoji (✅ 📋 🚧), bold markers, the word `Roadmap` (`## Roadmap v2.0: Name`), a Milestone label (`Milestone
+// v1.0`, `Current Milestone: v3.0`, `Milestone 1: First Milestone v1.0`) and an ADR-612 bracket id (`[GSD.02] v2.0: …`)
+// may stand, so `## Carried forward to v0.5.0 (inputs, not phases)` mentions a version without being that milestone's
+// heading. Selection (`locateMilestoneHeadings`), enumeration (`listMilestoneHeadings`), section detection
+// (`MILESTONE_HEADING_SIGNAL_PATTERN`, `milestoneSections`), the section end (`computeMilestoneSectionEnd`) and the window
+// classifiers (`hasVersionedMilestones`, the preamble and earliest-milestone cutoffs) all read it, so they cannot disagree.
+const MILESTONE_LEADING_FILLER = '(?:[\\s✅📋🚧*]|Roadmap\\b|\\[[^\\]\\n]{0,64}\\])*';
+// At most ONE bounded Milestone label (never a repeated group: a repeated label would be ambiguous and backtrack badly).
+const MILESTONE_LEADING_PREFIX = `${MILESTONE_LEADING_FILLER}(?:[\\w :'-]{0,60}?Milestone\\b(?:\\s+\\d+)?:?${MILESTONE_LEADING_FILLER})?`;
+const MILESTONE_LEADING_VERSION_RE = new RegExp(`^${MILESTONE_LEADING_PREFIX}v\\d+\\.\\d+`, 'i');
 
 /**
  * #4304: classify one level-1..3 heading through the same milestone grammar
@@ -706,12 +720,13 @@ function locateMilestoneHeadings(content: string, version: string): RegExpExecAr
   // `\b` alone is what preserves the #730 sub-milestone selection this
   // function owns: `v2.0` still matches inside `v2.0.1`, `v8.0` still
   // matches `## v8.0-B …`.
-  const boundary = new RegExp(`${escapedVersion}\\b`, 'i');
+  // #6149: and the version token must LEAD the heading text (MILESTONE_LEADING_PREFIX), not merely appear in it.
+  const boundary = new RegExp(`^${MILESTONE_LEADING_PREFIX}v?${escapedVersion}\\b`, 'i');
   const pattern = new RegExp(`(${MILESTONE_HEADING_LINE_SOURCE})`, 'gmi');
   const matches: RegExpExecArray[] = [];
   let m: RegExpExecArray | null;
   while ((m = pattern.exec(content)) !== null) {
-    if (boundary.test(m[1])) matches.push(m);
+    if (boundary.test(m[1].replace(/^#{1,3}\s+/, ''))) matches.push(m);
   }
   return matches;
 }
@@ -737,7 +752,9 @@ function isMilestoneBoundedInRoadmap(content: string, version: string): boolean 
  * copies by construction, so this was found by review instead.
  */
 function hasVersionedMilestones(content: string): boolean {
-  return /^#{1,3}\s+.*v\d+\.\d+/mi.test(content);
+  // A Phase title mentioning a version still counts here (this predicate's pinned behaviour); any other heading must lead
+  // with its version (#6149).
+  return new RegExp(`^#{1,3}\\s+(?:(?=Phase\\s+\\S).*v\\d+\\.\\d+|${MILESTONE_LEADING_PREFIX}v\\d+\\.\\d+)`, 'mi').test(content);
 }
 
 /**
@@ -761,11 +778,78 @@ function hasRecognizedVersionedMilestoneHeading(content: string): boolean {
     && listMilestoneHeadings(`${'#'.repeat(heading.level)} ${heading.text}`).length > 0);
 }
 
+const STATE_MILESTONE_ECHO_LIMIT = 80;
+
+/**
+ * #5726: STATE.md's `milestone:` value is untrusted text. Cap it at
+ * `STATE_MILESTONE_ECHO_LIMIT` characters (ellipsis past the cap), then quote it
+ * with `JSON.stringify` (the `phase.cts` precedent for echoed user text), which
+ * escapes ESC/BEL/newlines; the characters JSON leaves raw but a terminal acts on
+ * are escaped too: DEL and C1 controls, zero-width and direction marks
+ * (U+200B-U+200F), line/paragraph separators and bidi embeddings/overrides
+ * (U+2028-U+202E), the invisible-format block (U+2060-U+206F, incl. bidi
+ * isolates), soft hyphen (U+00AD), Arabic letter mark (U+061C), Mongolian
+ * vowel separator (U+180E), interlinear annotations (U+FFF9-U+FFFB) and the
+ * BOM (U+FEFF).
+ */
+function echoStateMilestone(value: string): string {
+  const chars = Array.from(value);
+  const capped = chars.length > STATE_MILESTONE_ECHO_LIMIT
+    ? `${chars.slice(0, STATE_MILESTONE_ECHO_LIMIT).join('')}…`
+    : value;
+  return JSON.stringify(capped).replace(
+    /[\u007f-\u009f\u{ad}\u{61c}\u{180e}\u{200b}-\u{200f}\u{2028}-\u{202e}\u{2060}-\u{206f}\u{feff}\u{fff9}-\u{fffb}]/gu,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+  );
+}
+
+/**
+ * #6271: the cause and the fix for an UNSCOPED milestone scope (ADR-3180 rows 4 and 5 of `classifyMilestoneWindow`),
+ * for a verb that declines on it; one owner, so every decline site says the same true thing. Read-only: it
+ * re-reads ROADMAP.md and STATE.md, it never decides the scope. The causes differ and so do the fixes:
+ *  - STATE names a version, the ROADMAP has milestone headings but none for it (row 5): add its heading above its
+ *    phases (below them the window is empty, TRUNCATED), or correct STATE;
+ *  - STATE names a version, the ROADMAP has no milestone heading (row 5): `milestone: null`, or add a heading;
+ *  - STATE names none, the ROADMAP has milestone headings (row 4): name one in STATE;
+ *  - STATE names none and only a Phase title carries a version (row 4: `hasVersionedMilestones` counts it,
+ *    `hasRecognizedVersionedMilestoneHeading` does not): reword the title; `milestone: null` changes nothing.
+ * Returns '' when a file is unreadable. The version is STATE.md text, so it goes through the #5726 sanitizer.
+ */
+function describeUnscopedMilestone(cwd: string, ws?: string | null): string {
+  let content: string | null = null;
+  let stateRaw: string | null = null;
+  try {
+    content = platformReadSync(path.join(planningDir(cwd, ws), 'ROADMAP.md'));
+    stateRaw = platformReadSync(path.join(planningDir(cwd, ws), 'STATE.md'));
+  } catch {
+    return '';
+  }
+  if (content === null) return '';
+  const scalar = stateRaw === null ? null : readStateMilestoneScalar(stateRaw);
+  const version = scalar === null ? null : classifyMilestoneScalar(scalar).version;
+  const recognized = hasRecognizedVersionedMilestoneHeading(content);
+  if (version !== null) {
+    const v = echoStateMilestone(version);
+    return recognized
+      ? `Cause: STATE.md names milestone ${v}, but ROADMAP.md has no milestone heading for it. Fix: add a heading for ${v} above its phases in ROADMAP.md, or correct the milestone field in STATE.md.`
+      : `Cause: STATE.md names milestone ${v}, but ROADMAP.md has no milestone headings at all. Fix: set the milestone field in STATE.md to null (a ROADMAP with no milestone headings is one milestone), or add a heading for ${v} above its phases in ROADMAP.md.`;
+  }
+  if (hasVersionedMilestones(content)) {
+    return recognized
+      ? 'Cause: STATE.md names no milestone, but ROADMAP.md has milestone headings. Fix: set the milestone field in STATE.md to one of them.'
+      : 'Cause: ROADMAP.md has no milestone heading, but a Phase title contains a version (vX.Y), which reads as one. Fix: reword that Phase title.';
+  }
+  return 'Cause: the current milestone window could not be resolved. Fix: make the milestone field in STATE.md match a milestone heading in ROADMAP.md, or set it to null for a ROADMAP with no milestone headings.';
+}
+
 // This file's milestone-heading vocabulary: a version token (`v1.2`-style),
 // a ✅/🚧/📋 status marker, or the word "Milestone". Tested against a
 // non-Phase heading's own text by `hasMilestoneSectioning` below — this
 // module's sole owner of "is this heading a milestone heading".
-const MILESTONE_HEADING_SIGNAL_PATTERN = /v\d+\.\d+|✅|📋|🚧|\bMilestone\b/i;
+const MILESTONE_HEADING_SIGNAL_PATTERN = {
+  // The version signal is the LEADING token (#6149); a status marker or the word `Milestone` anywhere still signals.
+  test: (text: string): boolean => MILESTONE_LEADING_VERSION_RE.test(text) || /✅|📋|🚧|\bMilestone\b/i.test(text),
+};
 
 /**
  * #3184/#3204/#2828/#1761/#3185: could a WHOLE-DOCUMENT phase count conflate
@@ -950,7 +1034,7 @@ function milestoneSections(content: string): MilestoneSection[] {
     if (/^Phase\s+\S/i.test(heading.text)) continue;
     if (!MILESTONE_HEADING_SIGNAL_PATTERN.test(heading.text)) continue;
 
-    const extracted = extractMilestoneHeadingName(heading.text);
+    const extracted = MILESTONE_LEADING_VERSION_RE.test(heading.text) ? extractMilestoneHeadingName(heading.text) : null;
     const version = extracted?.version ?? null;
     const versionMajor = version?.match(/^v(\d+)/i);
     const milestoneInt = versionMajor ? parseInt(versionMajor[1], 10) : null;
@@ -969,7 +1053,7 @@ function milestoneSections(content: string): MilestoneSection[] {
   while ((detailsMatch = detailsPattern.exec(content)) !== null) {
     const summary = detailsMatch[0].match(/<summary[^>]*>([^<]*)<\/summary>/i)?.[1]?.trim() ?? '';
     if (!MILESTONE_HEADING_SIGNAL_PATTERN.test(summary)) continue;
-    const extracted = extractMilestoneHeadingName(summary);
+    const extracted = MILESTONE_LEADING_VERSION_RE.test(summary) ? extractMilestoneHeadingName(summary) : null;
     const version = extracted?.version ?? null;
     const versionMajor = version?.match(/^v(\d+)/i);
     const milestoneInt = versionMajor ? parseInt(versionMajor[1], 10) : null;
@@ -1649,7 +1733,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
         const detailsEnd = closingMatch
           ? detailsOpenIdx + (closingMatch.index ?? 0) + '</details>'.length
           : content.length;
-        const anyMilestoneOrDetails = /^#{1,3}\s+(?!Phase\s+\S)(?:.*v\d+\.\d+|✅|📋|🚧|🔄)|<details/im;
+        const anyMilestoneOrDetails = new RegExp(`^#{1,3}\\s+(?!Phase\\s+\\S)(?:${MILESTONE_LEADING_PREFIX}v\\d+\\.\\d+|✅|📋|🚧|🔄)|<details`, 'im');
         const firstMilestoneMatch = content.match(anyMilestoneOrDetails);
         const preambleCutoff = firstMilestoneMatch ? firstMilestoneMatch.index! : detailsOpenIdx;
         const preamble = stripTaggedBlocks(content.slice(0, preambleCutoff), 'details')
@@ -1720,7 +1804,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
     currentMilestoneHeadings,
   );
 
-  const anyMilestonePattern = /^#{1,3}\s+(?!Phase\s+\S)(?:.*v\d+\.\d+|✅|📋|🚧)/im;
+  const anyMilestonePattern = new RegExp(`^#{1,3}\\s+(?!Phase\\s+\\S)(?:${MILESTONE_LEADING_PREFIX}v\\d+\\.\\d+|✅|📋|🚧)`, 'im');
   let earliestMilestoneIndex: number | null;
   if (!bracketBoundaryActive) {
     // #2761 B3: the LEGACY (non-bracket-shaped) path stays a raw
@@ -1763,7 +1847,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
     for (const h of currentMilestoneHeadings) {
       if (h.level > 3) continue;
       if (/^Phase\s+\S/i.test(h.text)) continue;
-      if (/v\d+\.\d+|✅|📋|🚧/i.test(h.text)) { earliestMilestoneIndex = h.offset; break; }
+      if (MILESTONE_LEADING_VERSION_RE.test(h.text) || /✅|📋|🚧/.test(h.text)) { earliestMilestoneIndex = h.offset; break; }
     }
   }
   if (bracketBoundaryActive) {
@@ -3324,6 +3408,9 @@ export = {
   isRecognizedMilestoneHeading,
   selectMilestoneHeading,
   classifyMilestoneWindow,
+  // #6271: the sanitizer for echoed STATE.md milestone text and the one cause/fix describer for an UNSCOPED decline.
+  echoStateMilestone,
+  describeUnscopedMilestone,
   // #3184: the sole "give me this version's window" composition — see its
   // own doc comment. milestone.cts's destructive-consumer guard consumes
   // this instead of composing locate+select+section-end itself.

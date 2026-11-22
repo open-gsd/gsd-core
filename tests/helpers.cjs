@@ -309,20 +309,34 @@ function helperFailure(err) {
  */
 function runGsdTools(args, cwd = process.cwd(), env = {}) {
   if (process.env.GSD_TEST_CLI_MODE === 'process') return runGsdToolsProcess(args, cwd, env);
-  refuseWhatNeedsAProcess('runGsdTools', cwd, env);
+  try {
+    const { argv, result } = runCliSyncChecked('runGsdTools', args, cwd, env);
+    return helperResult(result, argv);
+  } catch (err) {
+    return helperFailure(err);
+  }
+}
 
+/**
+ * The synchronous in-process call both `runGsdTools` and `runGsdToolsCaptured`
+ * make: refuse what only a process can honour, run the command, and turn the
+ * in-process "this command is asynchronous" refusal into an error that names
+ * the helper to use. Returns the raw `runCliSync` result with the argv it ran.
+ */
+function runCliSyncChecked(helper, args, cwd, env) {
+  refuseWhatNeedsAProcess(helper, cwd, env);
   const argv = gsdToolsArgv(args);
   try {
-    return helperResult(require(TOOLS_PATH).runCliSync(inProcessOptions(argv, cwd, env)), argv);
+    return { argv, result: require(TOOLS_PATH).runCliSync(inProcessOptions(argv, cwd, env)) };
   } catch (err) {
     if (err && err.code === 'in_process_async_command') {
       throw new Error(
-        `runGsdTools: "${String(err.command)}" finishes asynchronously, so a synchronous call cannot serve it. `
+        `${helper}: "${String(err.command)}" finishes asynchronously, so a synchronous call cannot serve it. `
         + 'Nothing was run. Use `await runGsdToolsAsync(...)`: same arguments, same result, same process.',
         { cause: err },
       );
     }
-    return helperFailure(err);
+    throw err;
   }
 }
 
@@ -345,6 +359,40 @@ async function runGsdToolsAsync(args, cwd = process.cwd(), env = {}) {
   } catch (err) {
     return helperFailure(err);
   }
+}
+
+/**
+ * Run a gsd-tools command in this process and return what a process leaves
+ * behind (#6334, ADR-6315 item 16): `{ exitCode, stdout, stderr }`, each as the
+ * command wrote it. `runGsdTools` keeps stderr only for a failed command and
+ * trims stdout; a test that asserts on a warning a successful command writes to
+ * stderr, or on stdout's exact bytes, calls this instead of spawning the binary.
+ *
+ * Like `runGsdTools` it never spawns, refuses what only a process can honour
+ * (a start-time Node variable, a working directory that is not there), and does
+ * not serve a command that finishes asynchronously. A test whose subject is the
+ * process boundary calls `runGsdToolsProcess` from a `*.process.test.cjs` file.
+ * `GSD_TEST_CLI_MODE=process` runs the call through the spawned CLI instead, as
+ * for `runGsdTools`. Output over the buffer limit throws (`in_process_output_overflow`)
+ * where `runGsdTools` turns it into a failed result: a test that captures output
+ * wants all of it, so a truncated capture is an error, not a result.
+ *
+ * @param {string|string[]} args
+ * @param {string} cwd
+ * @param {object} [env]
+ * @returns {{ exitCode: number, stdout: string, stderr: string }}
+ */
+function runGsdToolsCaptured(args, cwd = process.cwd(), env = {}) {
+  if (process.env.GSD_TEST_CLI_MODE === 'process') {
+    const spawned = processSeam.runNode([TOOLS_PATH, ...gsdToolsArgv(args)], {
+      cwd,
+      env: { ...process.env, ...testEnvBase(), ...env },
+      timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
+    });
+    return { exitCode: spawned.exitCode, stdout: spawned.stdout, stderr: spawned.stderr };
+  }
+  const { exitCode, stdout, stderr } = runCliSyncChecked('runGsdToolsCaptured', args, cwd, env).result;
+  return { exitCode, stdout, stderr };
 }
 
 /** What a command that wrote more than the buffer limit returns, spawned or in-process. */
@@ -1607,7 +1655,7 @@ function seedCustomPhaseDirectory(cwd, id, title, projectCode = null) {
   return directory;
 }
 
-module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, runGsdToolsAsync, runGsdToolsProcess, SPAWNED_MAX_BUFFER_BYTES, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, isolateGitConfigEnv, isolateConfigReadEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
+module.exports = { createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase, seedCustomPhaseDirectory, runGsdTools, runGsdToolsAsync, runGsdToolsCaptured, runGsdToolsProcess, SPAWNED_MAX_BUFFER_BYTES, homeSandboxEnv, seedConfigSection, createTempDir, createTempProject, createTempGitProject, cleanup, tmpRootCandidates, readFileNormalized, readWorkflowCombined, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, absPlanningPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, SESSION_ENV_KEYS, saveSessionEnv, restoreSessionEnv, clearSessionEnv, isolateWorkstreamEnv, restoreWorkstreamEnv, isolateGitConfigEnv, isolateConfigReadEnv, TOOLS_PATH, SESSION_IDENTITY_ENV_KEYS, scrubConfigLocationEnv, installSpawnEnv, installSpawnHome, sandboxHome, writePackageSourceMarkerFixture, writeAmbientCapabilityGate, withAmbientCapabilityHome, TEST_HOME_SANDBOX_MARKER, mockPartialWriteThenThrow, captureFdSync, suppressFdAsync };
 
 // Lazy, for the reason builtLib() is lazy: reading either of these is what
 // forces the built-lib require, so a test file that needs neither can still

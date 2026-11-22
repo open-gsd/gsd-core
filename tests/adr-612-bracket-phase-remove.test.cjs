@@ -3216,7 +3216,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
 
   // #4304: a non-closed heading
   // carrying the ACTIVE version token sits BEFORE the real milestone
-  // heading ("## Goals for v2.0"). The read side selects THAT heading as
+  // heading ("## v2.0 Goals"). The read side selects THAT heading as
   // the active one (`selectMilestoneHeading` picks the first non-closed
   // match for the version), so the located window is just the Goals
   // paragraph — ending exactly where the real milestone heading begins —
@@ -3228,7 +3228,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       [
         '# Roadmap',
         '',
-        '## Goals for v2.0',
+        '## v2.0 Goals',
         '',
         'Ship the thing.',
         '',
@@ -3269,7 +3269,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
 
     assert.equal(result.success, false, result.output);
     assert.match(result.error, /lies outside/i);
-    assert.match(result.error, /Goals for v2\.0/);
+    assert.match(result.error, /v2\.0 Goals/);
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
@@ -3870,7 +3870,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       [
         '# Roadmap',
         '',
-        '## Goals for v2.0',
+        '## v2.0 Goals',
         '',
         'Ship.',
         '',
@@ -4039,6 +4039,10 @@ describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite'
         '| [CK.02] 01 | 0/1 | Planned |',
         '| [CK.02] 02 | 0/1 | Planned |',
         '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        // #6149: `## Progress (v2.0)` only mentions the version, so it no longer ends the milestone window; the next
+        // milestone's own heading does, which keeps the shared table below it outside the window.
+        '## [CK.03] v3.0 — Next 🚧',
         '',
         '## Progress',
         '',
