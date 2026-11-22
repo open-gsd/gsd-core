@@ -564,9 +564,11 @@ describe('Config Value Resolution Module (#5096)', () => {
       );
       // Discover producer dependencies BEFORE consulting the policy or blocked
       // output. The two loaders expose different projections; use their union.
+      // A key present on one side only reads as `undefined` on the other by design.
+      const at = (object, key) => (Object.hasOwn(object, key) ? object[key] : undefined);
       const dependentKeys = new Set(samples.flatMap(({ empty, configured }) =>
         [...new Set([...Object.keys(empty), ...Object.keys(configured)])]
-          .filter((key) => !isDeepStrictEqual(empty[key], configured[key]))));
+          .filter((key) => !isDeepStrictEqual(at(empty, key), at(configured, key)))));
       assert.ok(dependentKeys.size > 0, `${section} sentinels must reach a loader`);
       for (const { source, empty, configured, blocked } of samples) {
         for (const key of dependentKeys) {
@@ -626,7 +628,9 @@ describe('Config Value Resolution Module (#5096)', () => {
     });
   });
 
-  test('declared projection removals retain their empty/object controls on both loader paths', () => {
+  test('declared projection table shape: empty/object controls on both loader paths', () => {
+    // A table-shape check only: `expected` below derives from BLOCKED_SECTION_PROJECTIONS, so this
+    // is circular by construction. The sentinel test above is the independent oracle.
     for (const source of ['root', 'global-defaults']) {
       for (const [section, keys] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
         withLayers((cwd) => {
@@ -690,6 +694,71 @@ describe('Config Value Resolution Module (#5096)', () => {
         assert.deepEqual(resolution, inherited
           ? { found: true, value: false, layer: 'root', reason: 'resolved' }
           : { found: false, value: undefined, layer: null, reason: 'not_configured' });
+      });
+    }
+  });
+
+  test('an object workstream parent overrides a lower non-object root parent as the loader merge does', () => {
+    // `_deepMergeConfig` replaces a null/scalar/array base parent with the overlay's
+    // object, so the assembled loader sees an object parent here. The resolver must agree.
+    for (const parent of [null, 'text', [], 7]) {
+      withLayers((cwd) => {
+        writeLayer(cwd, 'root', { workflow: parent });
+        writeLayer(cwd, 'workstream', { workflow: {} });
+        let assembled;
+        let resolution;
+        captureConfigDiagnostics(() => {
+          assembled = loadConfigResolved(cwd, { persist: false }).config.research;
+          resolution = resolveConfigValue('workflow.research', { cwd });
+        });
+        assert.equal(resolution.found, true, `root workflow=${JSON.stringify(parent)}`);
+        assert.equal(resolution.value, assembled);
+        assert.ok(['schema-default', 'builtin-default'].includes(resolution.layer), String(resolution.layer));
+        const opposite = !assembled;
+        writeLayer(cwd, 'workstream', { workflow: { research: opposite } });
+        captureConfigDiagnostics(() => {
+          assembled = loadConfigResolved(cwd, { persist: false }).config.research;
+          resolution = resolveConfigValue('workflow.research', { cwd });
+        });
+        assert.equal(assembled, opposite);
+        assert.deepEqual(resolution, { found: true, value: opposite, layer: 'workstream', reason: 'resolved' });
+      });
+    }
+  });
+
+  test('parallelization stays outside the barrier: loader default, resolver found:false', () => {
+    withLayers((cwd) => {
+      writeLayer(cwd, 'root', {});
+      const fallback = loadConfigResolved(cwd, { persist: false }).config.parallelization;
+      writeLayer(cwd, 'root', { parallelization: null });
+      assert.equal(loadConfigResolved(cwd, { persist: false }).config.parallelization, fallback);
+      assert.deepEqual(resolveConfigValue('parallelization.enabled', { cwd }), {
+        found: false, value: undefined, layer: null, reason: 'not_configured',
+      });
+      // A boolean is the legitimate flat spelling, which is why the key cannot be a barrier section.
+      for (const flag of [true, false]) {
+        writeLayer(cwd, 'root', { parallelization: flag });
+        assert.equal(loadConfigResolved(cwd, { persist: false }).config.parallelization, flag);
+      }
+      writeLayer(cwd, 'root', { parallelization: { enabled: false } });
+      assert.deepEqual(resolveConfigValue('parallelization.enabled', { cwd }), {
+        found: true, value: false, layer: 'root', reason: 'workstream_fallback',
+      });
+    });
+  });
+
+  test('a stray flat key without an alias entry does not survive a blocked section', () => {
+    // `repo_tagging` and `tdd_mode` are read from their nested spelling only, so a top-level
+    // key of the same name is not an explicit flat value and must not keep the projection.
+    for (const [section, key, value] of [['git', 'repo_tagging', 'per_repo'], ['workflow', 'tdd_mode', true]]) {
+      assert.equal(CONFIG_KEY_ALIASES.some((alias) => alias.key === key), false, `${key} must stay nested-only`);
+      withLayers((cwd) => {
+        writeLayer(cwd, 'root', { [section]: null, [key]: value });
+        let assembled;
+        captureConfigDiagnostics(() => {
+          assembled = loadConfigResolved(cwd, { persist: false }).config;
+        });
+        assert.equal(Object.hasOwn(assembled, key), false, `${section}: ${key}`);
       });
     }
   });
