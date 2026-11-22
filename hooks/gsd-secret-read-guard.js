@@ -4304,7 +4304,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // Every upstream operand is a candidate file name — the NON_READING
   // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
   // isSecretBasename still holds.
-  const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
+  const prevCmd = upstreamCommand(prevSeg, bySeg);
   if (!prevCmd) return null;
   if (subIsShell) {
     // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
@@ -4313,6 +4313,18 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     if (hit) return hit;
   }
   return xargsPipedReadsSecret(operands, prevCmd, curl);
+}
+
+// The command of segment `prevSeg`, resolved once per segment: `find` runs
+// many xargs in one segment, and each reads the same piped words, so the
+// readings of those words (pipedWordsReadSecret, certOptionPiped) are kept by
+// the word list this returns.
+const upstreamCommandBySegMap = new WeakMap();
+function upstreamCommand(prevSeg, bySeg) {
+  let found = upstreamCommandBySegMap.get(bySeg);
+  if (!found) upstreamCommandBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(prevSeg)) found.set(prevSeg, resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word')));
+  return found.get(prevSeg);
 }
 
 // The curl that `xargs` runs, as { runs, subCmd } (the index of the command
@@ -4352,9 +4364,9 @@ function xargsPipedReadsSecret(operands, prev, curl) {
   }
   // And where a piped word is such an option put in by the replace string, the
   // sub-command word after that string is its value
-  // (`printf -E | xargs -I{} curl {} f:pw`).
+  // (`printf -E | xargs -I{} curl {} f:pw`), quoted or not (`echo '"-E"'`).
   const printed = printedWords(prev, operands, toCurl ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
-  if (toCurl && rep !== null && (piped.some((w) => curlTakesCertValue(w.text)) || printed.some((w) => curlTakesCertValue(w.text)))) {
+  if (toCurl && rep !== null && (certOptionPiped(piped) || certOptionPiped(printed))) {
     for (let k = subCmd + 1; k + 1 < operands.length; k++) {
       if (operands[k].text.includes(rep) && curlCertNamesSecret(operands[k + 1].text)) return secretRead(curlOpened);
     }
@@ -4362,9 +4374,28 @@ function xargsPipedReadsSecret(operands, prev, curl) {
   return pipedWordsReadSecret(piped, toCurl, certPiped) || pipedWordsReadSecret(printed, toCurl, certPiped);
 }
 
+// Whether one of `words` is a cert option, as written or as xargs hands it
+// on, kept per word list.
+const certOptionPipedByWords = new WeakMap();
+function certOptionPiped(words) {
+  if (!certOptionPipedByWords.has(words)) {
+    certOptionPipedByWords.set(words, words.some((w) => curlTakesCertValue(w.text) || curlTakesCertValue(xargsUnquoted(w.text))));
+  }
+  return certOptionPipedByWords.get(words);
+}
+
 // The block for one of `words`, piped into xargs, that names a secret its
-// sub-command reads (curl's when `toCurl`), or null.
+// sub-command reads (curl's when `toCurl`), or null; kept per word list and
+// flags, since each xargs that `find` runs reads the same words.
+const pipedWordsVerdicts = new WeakMap();
 function pipedWordsReadSecret(words, toCurl, certPiped) {
+  let found = pipedWordsVerdicts.get(words);
+  if (!found) pipedWordsVerdicts.set(words, (found = new Map()));
+  const key = (toCurl ? 2 : 0) + (certPiped ? 1 : 0);
+  if (!found.has(key)) found.set(key, findPipedWordSecret(words, toCurl, certPiped));
+  return found.get(key);
+}
+function findPipedWordSecret(words, toCurl, certPiped) {
   for (let j = 0; j < words.length; j++) {
     const w = words[j];
     if (operandNamesSecret(w.text)) return secretRead(w.text);
@@ -4374,9 +4405,24 @@ function pipedWordsReadSecret(words, toCurl, certPiped) {
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
     if (!toCurl) continue;
     if (curlValueNamesSecret(w.text) || curlCertOpensSecret(words, j)) return secretRead(curlOpened);
+    // curl reads the quote-removed word's value too (`-d@".env"`, `--cert ".env":pw`).
+    if (received !== w.text && (curlValueNamesSecret(received) || (certPiped && curlCertNamesSecret(received)))) return secretRead(curlOpened);
+    if (curlCertOpensSecretUnquoted(words, j)) return secretRead(curlOpened);
     if (certPiped && curlCertNamesSecret(w.text)) return secretRead(curlOpened);
   }
   return null;
+}
+
+// curlCertOpensSecret over the words as xargs hands them on, quotes and
+// backslashes removed (`--cert ".env":pw`, `-E .env\:pw`); false where neither
+// word had any to remove, which curlCertOpensSecret has already judged.
+function curlCertOpensSecretUnquoted(words, k) {
+  const t = xargsUnquoted(words[k].text);
+  const prev = k > 0 ? xargsUnquoted(words[k - 1].text) : null;
+  if (t === words[k].text && (prev === null || prev === words[k - 1].text)) return false;
+  let v = curlAttachedCertValue(t);
+  if (v === null && prev !== null && curlTakesCertValue(prev)) v = t;
+  return v !== null && curlCertNamesSecret(v);
 }
 
 // The text an xargs in segment `s` reads on stdin from a here-string or a
