@@ -708,6 +708,36 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     return { realRead, inject, isArmed: () => armed };
   }
 
+  // #5120 pre-push review R4-m2: the rollback reads STATE.md under its lock through the non-blocking
+  // seam, so a FIFO swapped in at STATE.md fails at once instead of blocking with the lock held.
+  test('the rollback opens STATE.md non-blocking while it holds the STATE.md lock', (t) => {
+    const dir = setup('m13-state-nonblocking-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+    const original = fs.readFileSync(state, 'utf8');
+
+    const opens = [];
+    // Opens after the failing step is armed: the arming helper's own reads of STATE.md come before it.
+    const { isArmed } = armAfterStateWrite(dir, original, () => {});
+    const armedOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, flags, ...rest) {
+      if (isArmed() && String(file) === state) {
+        opens.push({ lockHeld: fs.existsSync(`${state}.lock`), nonBlocking: typeof flags === 'number' && (flags & (fs.constants.O_NONBLOCK ?? 0)) !== 0 });
+      }
+      return armedOpen.call(this, file, flags, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), /^Error: Migration failed and rolled back: config\.json cannot be updated/);
+    mock.restoreAll();
+    const underLock = opens.filter((o) => o.lockHeld);
+    assert.ok(underLock.length >= 1, 'precondition: the rollback opened STATE.md under its lock');
+    assert.deepEqual(underLock.filter((o) => !o.nonBlocking), [], 'every open of STATE.md under the lock is non-blocking');
+  });
+
   test('a STATE.md the rollback cannot read is left as found and named (#5120 pre-push review Mi3)', (t) => {
     const dir = setup('m13-state-unreadable-', ROADMAP);
     t.after(() => cleanup(dir));
@@ -720,16 +750,17 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     let readsToFail = 0;
     let failedReads = 0;
-    const { realRead, inject } = armAfterStateWrite(dir, original, () => { readsToFail = 1; });
-    mock.method(fs, 'readFileSync', function (file, ...rest) {
-      inject(file);
-      // The first read of STATE.md after config.json failed is the rollback's own.
+    armAfterStateWrite(dir, original, () => { readsToFail = 1; });
+    // The first open of STATE.md after config.json failed is the rollback's own read, made under the
+    // lock through the non-blocking seam (pre-push review R4-m2).
+    const armedOpen = fs.openSync;
+    mock.method(fs, 'openSync', function (file, ...rest) {
       if (readsToFail > 0 && String(file) === state) {
         readsToFail--;
         failedReads++;
-        throw Object.assign(new Error('EIO: i/o error, read'), { code: 'EIO' });
+        throw Object.assign(new Error('EIO: i/o error, open'), { code: 'EIO' });
       }
-      return realRead.call(this, file, ...rest);
+      return armedOpen.call(this, file, ...rest);
     });
     t.after(() => mock.restoreAll());
 

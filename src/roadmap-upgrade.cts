@@ -9,7 +9,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit, retryRenameSync, platformRestoreFileSync, toPosixPath } from './shell-command-projection.cjs';
+import { execGit, retryRenameSync, platformReadBytesSync, platformRestoreFileSync, toPosixPath } from './shell-command-projection.cjs';
 import { phaseEntryPrefixSrc, stripInsertedMarker } from './phase-entry-grammar.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
@@ -2587,8 +2587,14 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // #5120 review Minor 7: a restore that was due but did not leave the file holding its prior bytes (the restore
     // threw, or STATE.md's lock could not be taken) is named, never reported as rolled back (#1542).
     const restoreFailed: string[] = [];
+    // STATE.md is read under its lock through the non-blocking seam (pre-push review R4-m2), so a FIFO
+    // swapped in there fails with ENXIO instead of blocking while the lock is held.
     const readNow = (filePath: string): { current: Buffer | null; readFailure: string | null } => {
       try {
+        if (filePath === stateMdPath) {
+          const bytes = platformReadBytesSync(filePath);
+          return bytes === null ? { current: null, readFailure: 'removed' } : { current: bytes, readFailure: null };
+        }
         return { current: fs.readFileSync(filePath), readFailure: null };
       } catch (readErr) {
         const code = (readErr as NodeJS.ErrnoException).code;
