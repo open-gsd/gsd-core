@@ -1163,24 +1163,21 @@ let heredocBraceTags = true;
 let braceTagRead = false;
 let inHeredocPass = false;
 
-// #5523: the flags below, each for constructs the plain reading takes differently from a
-// shell that runs the command, set alone and together by the readings in SHELL_READINGS.
-// Those run after the plain reading and #5513's passes, each under
-// its own catch, so like those it can add a denial and never remove one. The plain reading is
-// unchanged by them: every flag below is at its default there.
-//  - crIsWhitespace: false is the shells' reading, where a CR is an ordinary word
-//    character (`<CR>#;cat x` is a command named CR-`#`, not a comment).
-//  - heredocLinesJoined: true is the shells' reading of an unquoted heredoc body, where a
-//    line ending in an odd number of backslashes is joined to the next one before the
-//    terminator is looked for.
-//  - zshGrouping: true is zsh's reading of a `#` straight after `(` (no comment starts) and
-//    of a brace group: at command position (zshAtCommandPosition) `{` opens one with no
-//    blank after it (`{cat x}`), and a `}` ending a word closes it.
-//  - shellSpans (with dollarDollarIsAWord): true scans the spans bash and dash run that the
-//    plain reading misses — the `$( )` and backtick spans inside `$((…))`, where `#` starts
-//    no comment; the spans of an
-//    unquoted heredoc body found with `\`` read as a literal backtick — and reads `$$` (the
-//    shell's PID) as one unit, so a `{` after it opens no `${` (`$${x; cat y` runs `cat y`).
+// #5523: the flags below are set, alone and together, by the readings in SHELL_READINGS for
+// constructs the plain reading takes differently from a shell. The readings run after the plain
+// reading and #5513's passes, each under its own catch, so they can add a denial and never remove
+// one; every flag is at its default in the plain reading.
+//  - crIsWhitespace false: a CR is a word character, as in the shells (`<CR>#;cat x` runs a
+//    command named CR-`#`, not a comment).
+//  - heredocLinesJoined true: an unquoted heredoc body line ending in an odd number of
+//    backslashes is joined to the next one before the terminator is looked for.
+//  - zshGrouping true: zsh's `#` straight after `(` (no comment starts) and its brace group: at
+//    command position (zshAtCommandPosition) `{` opens one with no blank after it (`{cat x}`),
+//    and a `}` ending a word closes it.
+//  - shellSpans (with dollarDollarIsAWord) true: scans the `$( )` and backtick spans bash and
+//    dash run inside `$((…))`, where `#` starts no comment, and an unquoted heredoc body's spans
+//    with `\`` read as a literal backtick; reads `$$` (the PID) as one unit, so a `{` after it
+//    opens no `${` (`$${x; cat y` runs `cat y`).
 const ZSH_GROUP_AFTER = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', 'time', 'coproc', 'always']);
 // zsh command position for the token about to start: the start of the input, after a
 // separator other than a group's own `}`, or after a run of unquoted reserved words,
