@@ -17,6 +17,8 @@ const path = require('node:path');
 const { cleanup } = require('./helpers.cjs');
 const textContracts = require('../scripts/static-checks/text-contracts.cjs');
 const PROJECT_SKILLS = require('../scripts/static-checks/text-contracts/lib/project-skills-discovery.cjs');
+const { REVIEWER_LANES } = require('../gsd-core/bin/lib/review-lane-descriptor.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
@@ -539,7 +541,7 @@ const SHIPPED = [
   'verifier-harvest-recorded-verdict', 'workflow-step-tag-balance', 'dependency-advisory-floors', 'extraction-discipline-consistency',
   'ci-durations-upload-nonfatal', 'reachability-check', 'review-timeout-guidance', 'quick-planner-scope-guard',
   'roadmapper-contract-guard', 'untrusted-input-isolation', 'verifier-spotcheck-test-discipline',
-  'advisor-prefilter',
+  'advisor-prefilter', 'reviewer-lane-docs',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -581,6 +583,9 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'capabilities/advisor-prefilter/fragments/advisor-prefilter.md', 'gsd-core/workflows/verify-work.md', 'gsd-core/workflows/ship.md',
     // the spawn-prompt files whose project-skills lines must state the same scoped read (#5248).
     ...PROJECT_SKILLS.SPAWN_PROMPT_FILES,
+    'docs/CONFIGURATION.md', 'docs/how-to/fix-a-refused-reviewer-lane.md', 'docs/how-to/list-your-reviewer-lane.md',
+    'docs/how-to/set-up-cross-ai-review.md', 'docs/how-to/ship-a-reviewer-lane.md', 'docs/reference/capability-manifest.md',
+    'docs/registries/README.md',
   ];
 
   function copyOfRepoFiles(t) {
@@ -816,6 +821,85 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /ui-review\.md should reference Playwright-MCP/],
     ['Playwright gone from the ui-auditor agent', 'agents/gsd-ui-auditor.md',
       (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /gsd-ui-auditor\.md should mention/],
+    // #6482: each mutation puts back one claim the reviewer-lane docs made, or removes one they now pin.
+    ['the worked example runs the lane with /gsd-review again', 'docs/how-to/ship-a-reviewer-lane.md',
+      (text) => text.replace('/gsd-code-review 3 --acme', '/gsd-review --phase 3 --acme'), 'reviewer-lane-docs', /worked example runs the lane with \/gsd-code-review/],
+    ['an installed lane is said to be selected by /gsd-review', 'docs/how-to/ship-a-reviewer-lane.md',
+      append('An installed reviewer lane is selected by `/gsd-review`.'), 'reviewer-lane-docs', /an installed lane is not selected by \/gsd-review/],
+    ['the docs index says /gsd-review discovers an installed lane', 'docs/README.md',
+      append('declare a `reviewer` body so `/gsd-review` discovers, invokes, and renders your lane'), 'reviewer-lane-docs', /an installed lane is not selected by \/gsd-review/],
+    ['the cross-AI guide says /gsd-review can run your external review CLI', 'docs/how-to/set-up-cross-ai-review.md',
+      append('That list is open, so `/gsd-review` can run your external review CLI.'), 'reviewer-lane-docs', /an installed lane is not selected by \/gsd-review/],
+    ['gemini is called a shipped reviewer lane', 'docs/how-to/ship-a-reviewer-lane.md',
+      append('Gemini is a shipped reviewer lane.'), 'reviewer-lane-docs', /gemini is not a shipped reviewer lane/],
+    ['the lane how-to loses its where-it-runs section', 'docs/how-to/ship-a-reviewer-lane.md',
+      dropAll('## Where an installed lane runs'), 'reviewer-lane-docs', /says where an installed lane runs/],
+    ['the lane how-to stops saying what an installed lane receives', 'docs/how-to/ship-a-reviewer-lane.md',
+      dropAll('It sends a source-review request'), 'reviewer-lane-docs', /receives a source-review request/],
+    ['the lane how-to stops saying /gsd-code-review refuses none', 'docs/how-to/ship-a-reviewer-lane.md',
+      dropAll('`/gsd-code-review` refuses `none`'), 'reviewer-lane-docs', /refuses promptChannel none/],
+    ['the host check is described as unconditional', 'docs/how-to/ship-a-reviewer-lane.md',
+      (text) => text.replace('only if it finds the host recorded at consent', 'whenever the host changes'), 'reviewer-lane-docs', /host check is conditional/],
+    ['the engines floor goes back to 1.9.0', 'docs/how-to/ship-a-reviewer-lane.md',
+      (text) => text.replace('"gsd": ">=1.14.0"', '"gsd": ">=1.9.0"'), 'reviewer-lane-docs', /reviewer example's GSD floor is below 1\.14\.0/],
+    ['the cross-AI guide says reviewers run in parallel', 'docs/how-to/set-up-cross-ai-review.md',
+      dropAll('Reviewers still run one at a time unless'), 'reviewer-lane-docs', /reviewers run one at a time by default/],
+    ['the cross-AI guide lists cursor as a lane with no model key', 'docs/how-to/set-up-cross-ai-review.md',
+      (text) => text.replace('(`qwen`, `coderabbit`)', '(`cursor`, `qwen`, `coderabbit`)'), 'reviewer-lane-docs', /lanes that declare no model key are/],
+    ['the refused-lane guide passes --json to review-lane plan', 'docs/how-to/fix-a-refused-reviewer-lane.md',
+      append('gsd-tools review-lane plan --selected claude --json'), 'reviewer-lane-docs', /review-lane plan takes no --json flag/],
+    ['a continued review-lane plan command passes --json on the next line', 'docs/how-to/fix-a-refused-reviewer-lane.md',
+      append('gsd-tools review-lane plan --selected claude \\\n  --json'), 'reviewer-lane-docs', /review-lane plan takes no --json flag/],
+    ['the model example sets a key no shipped capability declares', 'docs/CONFIGURATION.md',
+      (text) => text.replace('"codex": "gpt-5"', '"qwen": "qwen-max"'), 'reviewer-lane-docs', /sets review\.models\.qwen, which no shipped capability declares/],
+    ['a config-set example sets an undeclared key', 'docs/how-to/set-up-cross-ai-review.md',
+      append('gsd config-set review.models.qwen qwen-max'), 'reviewer-lane-docs', /sets review\.models\.qwen, which no shipped capability declares/],
+    ['a model key row shows a default the schema does not declare', 'docs/CONFIGURATION.md',
+      (text) => text.replace('| `review.models.claude` | string | `""` |', '| `review.models.claude` | string | (session model) |'), 'reviewer-lane-docs', /review\.models\.claude default is \(session model\)/],
+    ['the configuration reference names gemini as a lane', 'docs/CONFIGURATION.md',
+      append('gsd config-set review.models.gemini gemini-2.5-pro'), 'reviewer-lane-docs', /gemini is not a shipped reviewer lane/],
+    ['the manifest reference miscounts the lanes', 'docs/reference/capability-manifest.md',
+      (text) => text.replace(/All \d+ shipped lane declarations/, `All ${REVIEWER_LANES.length + 1} shipped lane declarations`), 'reviewer-lane-docs', /lane and field counts match REVIEWER_LANES/],
+    ['the manifest reference miscounts the reviewer role', 'docs/reference/capability-manifest.md',
+      (text) => text.replace(/\x60reviewer\x60 \d+/, (m) => `${m}0`), 'reviewer-lane-docs', /role counts match the registry/],
+    ['the manifest reference miscounts the flags', 'docs/reference/capability-manifest.md',
+      (text) => text.replace(/ lanes declare \d+ flags/, (m) => m.replace(' flags', '0 flags')), 'reviewer-lane-docs', /flag count matches REVIEWER_LANES/],
+    ['the manifest field table loses effortConfigKey', 'docs/reference/capability-manifest.md',
+      (text) => text.split('\n').filter((line) => !line.startsWith('| `effortConfigKey` |')).join('\n'), 'reviewer-lane-docs', /field table rows differ from REVIEWER_LANES \(missing: effortConfigKey;/],
+    ['the registry reviewer example drops its engines floor to 1.8.0', 'docs/registries/README.md',
+      (text) => text.replace('"enginesGsd": ">=1.14.0"', '"enginesGsd": ">=1.8.0"'), 'reviewer-lane-docs', /reviewer example's GSD floor is below 1\.14\.0/],
+    ['the source-review request is said to carry plan text', 'docs/how-to/ship-a-reviewer-lane.md',
+      (text) => text.replace('not plan text', 'and the plan text'), 'reviewer-lane-docs', /receives a source-review request \(/],
+    ['the migration promises existing review.default_reviewers entries keep working', 'docs/how-to/ship-a-reviewer-lane.md',
+      (text) => text.replace('so the `--<slug>` flag your users already type keeps its name', 'so existing `review.default_reviewers` entries and `--<slug>` flags keep working'), 'reviewer-lane-docs', /not a review\.default_reviewers entry/],
+    ['setting a model key is said to record pinned', 'docs/how-to/set-up-cross-ai-review.md',
+      (text) => text.replace('set that key and rerun', 'set that key so the next review is recorded as `pinned`'), 'reviewer-lane-docs', /does not promise a pinned provenance/],
+    ['the effort suffix is said to come from effort.* config', 'docs/how-to/set-up-cross-ai-review.md',
+      (text) => text.replace('is the reasoning effort GSD rendered onto that lane', 'reflects a reasoning effort driven by your `effort.*` config'), 'reviewer-lane-docs', /reviewer effort keys are review\.effort/],
+    ['a bare modelConfigKey line does not license an undeclared example key', 'docs/how-to/set-up-cross-ai-review.md',
+      append('"modelConfigKey": "review.models.qwen"\n\ngsd config-set review.models.qwen qwen-max'), 'reviewer-lane-docs', /sets review\.models\.qwen, which no shipped capability declares/],
+    ['a model table gains a stale qwen row', 'docs/CONFIGURATION.md',
+      (text) => text.replace('| `review.models.claude` | string | `""` |', '| `review.models.qwen` | string | `""` | stale |\n| `review.models.claude` | string | `""` |'), 'reviewer-lane-docs', /table differs from configSchema \(missing: none; extra: review\.models\.qwen\)/],
+    ['the manifest field table gains an extra_field row', 'docs/reference/capability-manifest.md',
+      (text) => text.replace('| `slug` |', '| `extra_field` | string | stale |\n| `slug` |'), 'reviewer-lane-docs', /field table rows differ from REVIEWER_LANES \(missing: none; extra: extra_field\)/],
+    ['the shipped model-key prose omits kimi-code', 'docs/CONFIGURATION.md',
+      (text) => text.replace(', `kimi-code`', ''), 'reviewer-lane-docs', /shipped model-key list differs from configSchema .*kimi-code/],
+    ['the first-party lane count regresses to twelve', 'docs/how-to/list-your-reviewer-lane.md',
+      (text) => text.replace('None of the eleven first-party lanes', 'None of the twelve first-party lanes'), 'reviewer-lane-docs', /first-party lane count matches REVIEWER_LANES/],
+    ['the capability guide reviewer link regresses to GSD 1.9.0', 'docs/how-to/develop-a-capability.md',
+      (text) => text.replace('(GSD 1.14.0+)', '(GSD 1.9.0+)'), 'reviewer-lane-docs', /reviewer example's GSD floor is below 1\.14\.0/],
+    ['the install disclosure restores the fixed plan-text payload', 'docs/how-to/ship-a-reviewer-lane.md',
+      append('        sends: plan text, requirements, research findings, CONTEXT.md decisions'), 'reviewer-lane-docs', /install disclosure does not claim a fixed plan-text payload/],
+    ['a model table duplicates a codex row', 'docs/CONFIGURATION.md',
+      (text) => { const row = text.split('\n').find((line) => line.startsWith('| `review.models.codex` |')); return text.replace(row, row + '\n' + row); }, 'reviewer-lane-docs', /review.models table contains a duplicate key row/],
+    ['an unrecognised reviewer-example engines range gets its own diagnostic', 'docs/registries/README.md',
+      (text) => text.replace('"enginesGsd": ">=1.14.0"', '"enginesGsd": "not-a-semver-range"'), 'reviewer-lane-docs', /reviewer example has an unrecognised engines range/],
+    ['a wrapped source-review request still rejects a plan-text claim', 'docs/how-to/ship-a-reviewer-lane.md',
+      (text) => text.replace('the base SHA, not plan text.', 'the base SHA,\n  and the plan text.'), 'reviewer-lane-docs', /receives a source-review request \(/],
+    ['gemini reordered into the shipped lane examples is rejected', 'docs/how-to/ship-a-reviewer-lane.md',
+      (text) => text.replace('like `coderabbit` and `ollama`', 'like `coderabbit`, `gemini`, and `ollama`'), 'reviewer-lane-docs', /gemini is not a shipped reviewer lane/],
+    ['a second reviewer field table gets a table-count diagnostic', 'docs/reference/capability-manifest.md',
+      (text) => { const start = text.indexOf('| Field | Type | Notes |', text.indexOf('## Reviewer body')); const end = text.indexOf('\n\n**`handler` is a closed enum', start); const table = text.slice(start, end).trimEnd(); return text.slice(0, end) + '\n\n' + table + text.slice(end); }, 'reviewer-lane-docs', /found 2 reviewer field tables, want 1/],
   ]) {
     test(`mutation: ${title} fails ${contract}`, (t) => {
       const root = copyOfRepoFiles(t);
@@ -1583,6 +1667,98 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     });
   }
 
+  for (const [rel, sentence] of [
+    ['docs/how-to/set-up-cross-ai-review.md', '/gsd-review renders each shipped lane under its section heading.'],
+    ['docs/CONFIGURATION.md', '/gsd-review offers `--all` to run every detected reviewer.'],
+    ['docs/how-to/ship-a-reviewer-lane.md', '/gsd-review selects shipped lanes and never an installed one.'],
+  ]) {
+    test(`accurate shipped-lane wording stays GREEN: ${sentence}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${sentence}\n`);
+      assert.deepEqual(runShipped(root, ['reviewer-lane-docs']), []);
+    });
+  }
+
+  test('a semver range above the installed-lane floor stays GREEN', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'docs', 'registries', 'README.md');
+    fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').replace('"enginesGsd": ">=1.14.0"', '"enginesGsd": ">=1.15.0 <3.0.0"'));
+    assert.deepEqual(runShipped(root, ['reviewer-lane-docs']), []);
+  });
+
+  test('a line-wrapped source-review request stays GREEN', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'docs', 'how-to', 'ship-a-reviewer-lane.md');
+    fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').replace("the phase's file paths, the review depth", "the phase's file paths,\n  the review depth"));
+    assert.deepEqual(runShipped(root, ['reviewer-lane-docs']), []);
+  });
+
+  test('a newly declared capability role must be represented in the role counts', (t) => {
+    const root = copyOfRepoFiles(t);
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const key = '__p1b_future_role_test__';
+    assert.equal(Object.prototype.hasOwnProperty.call(registry.capabilities, key), false);
+    registry.capabilities[key] = { id: key, role: 'future-role' };
+    t.after(() => { delete registry.capabilities[key]; });
+    const findings = runShipped(root, ['reviewer-lane-docs']);
+    assert.ok(findings.some((f) => /role counts do not cover every capability/.test(f.message)), JSON.stringify(findings));
+  });
+
+  test('restoring the old setup paragraph and claiming installed lanes are probed fails I1', (t) => {
+    const root = copyOfRepoFiles(t);
+    const rel = 'docs/how-to/set-up-cross-ai-review.md';
+    const abs = path.join(root, ...rel.split('/'));
+    const before = fs.readFileSync(abs, 'utf8');
+    const current = 'Each of those is a reviewer lane that ships with GSD, and `/gsd-review` selects from them. A lane installed from a capability runs through `/gsd-code-review <phase> --<flag>` instead — see [Ship a reviewer lane in your capability](ship-a-reviewer-lane.md). To see which lanes your installation has loaded, run `gsd-tools review-lane sections`.';
+    const old = 'That list is not fixed. Each of those is a declared reviewer lane, and a capability can ship its own — see [Ship a reviewer lane in your capability](ship-a-reviewer-lane.md). To see exactly which lanes your installation has, run `gsd-tools review-lane sections`.';
+    const after = before.replace(current, old) + '\n/gsd-review probes reviewer lanes installed from capabilities.\n';
+    assert.notEqual(after, before, 'the mutation changed the setup introduction');
+    fs.writeFileSync(abs, after);
+    const findings = runShipped(root, ['reviewer-lane-docs']);
+    assert.ok(findings.some((f) => /guide distinguishes shipped lanes from installed lanes/.test(f.message)), JSON.stringify(findings));
+    assert.ok(findings.some((f) => /an installed lane is not selected by \/gsd-review/.test(f.message)), JSON.stringify(findings));
+  });
+
+  test('a built-in Codex capability selection sentence stays GREEN', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'docs', 'how-to', 'set-up-cross-ai-review.md');
+    fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n/gsd-review runs the Codex reviewer lane from the built-in Codex capability.\n`);
+    assert.deepEqual(runShipped(root, ['reviewer-lane-docs']), []);
+  });
+
+  test('a Codex runtime example and Gemini in the shipped roster fail M4', (t) => {
+    const root = copyOfRepoFiles(t);
+    const shipAbs = path.join(root, 'docs', 'how-to', 'ship-a-reviewer-lane.md');
+    const setupAbs = path.join(root, 'docs', 'how-to', 'set-up-cross-ai-review.md');
+    fs.writeFileSync(shipAbs, fs.readFileSync(shipAbs, 'utf8').replace('like `coderabbit` and `ollama`', 'like `coderabbit` and `codex`'));
+    fs.writeFileSync(setupAbs, fs.readFileSync(setupAbs, 'utf8').replace('any combination of: Claude', 'any combination of: Gemini, Claude'));
+    const findings = runShipped(root, ['reviewer-lane-docs']);
+    assert.ok(findings.some((f) => /reviewer-role examples are not in the reviewer capability registry/.test(f.message)), JSON.stringify(findings));
+    assert.ok(findings.some((f) => /cross-AI guide shipped roster differs from REVIEWER_LANES/.test(f.message)), JSON.stringify(findings));
+  });
+
+  test('a duplicated field row and required runtime rule fail the reviewer field contract', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'docs', 'reference', 'capability-manifest.md');
+    const before = fs.readFileSync(abs, 'utf8');
+    const row = splitLines(before).find((line) => line.startsWith('| `effortConfigKey` |'));
+    const after = before.replace(row, row + '\n' + row).replace('**optional** on `role: "runtime"`', '**required** on `role: "runtime"`');
+    assert.notEqual(after, before, 'the mutation changed the reviewer field contract');
+    fs.writeFileSync(abs, after);
+    const findings = runShipped(root, ['reviewer-lane-docs']);
+    assert.ok(findings.some((f) => /reviewer field table duplicates rows: effortConfigKey/.test(f.message)), JSON.stringify(findings));
+    assert.ok(findings.some((f) => /a reviewer body is optional on role runtime/.test(f.message)), JSON.stringify(findings));
+  });
+
+  test('a reviewer-example OR arm below the floor fails M2', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'docs', 'registries', 'README.md');
+    fs.writeFileSync(abs, fs.readFileSync(abs, 'utf8').replace('"enginesGsd": ">=1.14.0"', '"enginesGsd": ">=1.14.0 || >=1.8.0"'));
+    const findings = runShipped(root, ['reviewer-lane-docs']);
+    assert.ok(findings.some((f) => /reviewer example's GSD floor is below 1\.14\.0/.test(f.message)), JSON.stringify(findings));
+  });
+
   test('a count on a heading whose title is 300 characters is past the stated 300-character bound of the pattern', (t) => {
     const root = copyOfRepoFiles(t);
     const abs = path.join(root, 'docs', 'INVENTORY.md');
@@ -1597,6 +1773,7 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     ['docs/INVENTORY.md', 'inventory-headings-countfree'],
     ['.github/workflows/release.yml', 'policy-release-no-npm-self-upgrade'],
     ['agents/gsd-ui-auditor.md', 'playwright-ui-verify'],
+    ['docs/reference/capability-manifest.md', 'reviewer-lane-docs'],
   ]) {
     test(`${rel} removed from the tree is a finding for ${contract}`, (t) => {
       const root = copyOfRepoFiles(t);

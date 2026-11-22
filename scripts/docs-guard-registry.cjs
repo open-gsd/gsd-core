@@ -169,6 +169,14 @@ const DOCS_GUARD_TESTS = {
     'docs/INVENTORY.md',
     'docs/how-to/develop-a-capability.md',
     'docs/README.md',
+    // #6482: the reviewer-lane-docs contract.
+    'docs/CONFIGURATION.md',
+    'docs/how-to/fix-a-refused-reviewer-lane.md',
+    'docs/how-to/list-your-reviewer-lane.md',
+    'docs/how-to/set-up-cross-ai-review.md',
+    'docs/how-to/ship-a-reviewer-lane.md',
+    'docs/reference/capability-manifest.md',
+    'docs/registries/README.md',
   ],
   // #6566: the same, for the batch 8 contracts (tests/text-contracts.batch8.test.cjs copies these docs).
   'tests/text-contracts.batch8.test.cjs': [
