@@ -1,5 +1,13 @@
 @~/.claude/gsd-core/references/response-language-directive.md
 
+<!-- gsd:loop-host
+step: review
+points: review:pre
+agent-roles: reviewer
+produces:
+consumes: PLAN.md
+-->
+
 <purpose>
 Cross-AI peer review — invoke external AI CLIs to independently review phase plans.
 Each CLI gets the same prompt (PROJECT.md context, phase plans, requirements) and
@@ -152,7 +160,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 PHASE_ARG=$(echo "$GSD_ARGS" | sed -nE 's/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\1/p')
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.review ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
@@ -171,11 +179,11 @@ re-run `mktemp -d` later — every block must resolve to this same directory, or
 
 Then read:
 1. `.planning/PROJECT.md` (first 80 lines — project context)
-2. Phase section from `.planning/ROADMAP.md`
+2. Phase section from `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`)
 3. All `*-PLAN.md` files in the phase directory
 4. `*-CONTEXT.md` if present (user decisions)
 5. `*-RESEARCH.md` if present (domain research)
-6. `.planning/REQUIREMENTS.md` (requirements this phase addresses)
+6. `{planning_root}/REQUIREMENTS.md` (requirements this phase addresses)
 </step>
 
 <step name="build_prompt">
@@ -293,6 +301,25 @@ done
 # #3301: append the manifest to the one prompt file every lane reads.
 cat "${RUN_DIR}/.plans-manifest.md" >> "${RUN_DIR}/gsd-review-prompt.md"
 ```
+
+Append the capability review rules addressed to external reviewers (#3997). The `review:pre` loop point
+publishes one role, `reviewer`. The block is appended to the one prompt file every lane reads, so each prompt-bearing lane receives it exactly once and
+a lane declaring `promptChannel: none` is unaffected. The fragments count toward every lane's cap in
+`invoke_reviewers`: an over-cap lane is refused, never shortened. With no matching contribution nothing is appended
+and the prompt is byte-identical. This is advisory by construction: any failure leaves the prompt without the block and
+never blocks the review.
+```bash
+RUN_DIR="{run_dir}"   # from gather_context
+REVIEW_HOOKS_JSON=$(gsd_run loop render-hooks review:pre --raw 2>/dev/null) || REVIEW_HOOKS_JSON=""
+if [[ "$REVIEW_HOOKS_JSON" == @file:* ]]; then REVIEW_HOOKS_JSON=$(cat "${REVIEW_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
+# A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
+REVIEWER_RULES=$(printf '%s' "$REVIEW_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.replace(/<(\s{0,20}\/\s{0,20}capability_reviewer_rules)/gi,(m,g)=>"<"+String.fromCharCode(92)+g));if(h.length)process.stdout.write("<capability_reviewer_rules>\n"+h.join("\n\n")+"\n</capability_reviewer_rules>")}catch(e){}})' 2>/dev/null || true)
+if [ -n "$REVIEWER_RULES" ]; then
+  printf '\n\n%s\n' "$REVIEWER_RULES" >> "${RUN_DIR}/gsd-review-prompt.md" || true
+fi
+```
+
+Dispatch each `kind == "contribution"` hook that `review:pre` returns per @gsd-core/references/loop-hook-dispatch.md. Only an entry whose `into == "reviewer"` is inserted by the block above; every other target is ignored here, and so are `step` and `gate` hooks (the point is wired for contributions only).
 
 Note: `PHASE_DIR` comes from prompt assembly; `RUN_DIR` is the run-scoped dir from `gather_context` (#2358) re-assigned from `{run_dir}` above. Every lane receives `gsd-review-prompt.md` whole — it is never trimmed per lane (#4559). A lane whose prompt exceeds its cap is refused in `invoke_reviewers`, not shortened.
 </step>
@@ -465,7 +492,7 @@ A lane that will not run reports a typed reason rather than an empty file — `m
 `egress_host_changed`, `unknown_handler`, `prompt_exceeds_context` (the prompt is over
 the lane's cap — refused, never trimmed; its review file carries a `review did not run: prompt exceeds` stub).
 **`egress_host_changed` means the lane
-was consented to send plans to one destination and `.planning/config.json` now names another; it is
+was consented to send plans to one destination and `{planning_root}/config.json` now names another; it is
 blocked, not silently redirected** (ADR-2782 D5).
 
 Display progress:

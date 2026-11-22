@@ -20,6 +20,8 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 
 const { runNode } = require('./process-seam.cjs');
+const { runStoreDir, fixtureKey, createSharedFixtureStore, copyInstalledTree } = require('./shared-install-fixture.cjs');
+const { ensureHooksDist } = require('./hooks-dist.cjs');
 
 const {
   resolveRuntimeArtifactLayout,
@@ -485,8 +487,8 @@ function collectNormalizedEmittedFiles(configDir, root, opts, callerName) {
         .split(realRoot).join('<HOME>')
         .split(root).join('<HOME>'),
       pkgVersion,
-    ).replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
-    unsorted[rel] = normalized;
+    );
+    unsorted[rel] = foldInstallNonce(normalized);
   }
 
   // Reconstruct with sorted keys for stable JSON serialisation
@@ -495,6 +497,15 @@ function collectNormalizedEmittedFiles(configDir, root, opts, callerName) {
     sorted[key] = unsorted[key];
   }
   return sorted;
+}
+
+/**
+ * Fold the random typed-text heredoc terminator an install stamps into its
+ * files (#5637, `GSD_ARGS_END_<32 hex>` and its quick-batch form) back to the
+ * bare token, so two installs of one tree read the same.
+ */
+function foldInstallNonce(text) {
+  return text.replace(/\b(GSD_(?:QUICK_BATCH_)?ARGS_END)_[0-9a-f]{32}\b/g, '$1');
 }
 
 function buildParityManifest(configDir, root, opts = {}) {
@@ -702,6 +713,172 @@ function runMinimalInstall({ runtime, scope, extraArgs = [], installScript = INS
   }
 }
 
+/**
+ * Recursively freeze plain objects and arrays in place; returns `value`.
+ * @param {*} value
+ */
+function deepFreeze(value) {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Object.keys(value)) deepFreeze(value[key]);
+  }
+  return value;
+}
+
+/**
+ * Memoizing installer fixture (#4688). `get({ runtime, scope, extraArgs?, extraEnv? })`
+ * installs once per distinct key and returns the same deep-frozen result on repeat
+ * calls. `release()` removes every cached root (removal failures are swallowed) and
+ * empties the cache. A caller-supplied `root` is rejected: a shared fixture owns its root.
+ *
+ * @param {object} [deps]
+ * @param {(opts: object) => object} [deps.install]
+ * @param {(root: string) => void} [deps.remove]
+ */
+function createRuntimeFixtureCache({
+  install = runMinimalInstall,
+  remove = (root) => fs.rmSync(root, { recursive: true, force: true }),
+} = {}) {
+  const entries = new Map();
+  return {
+    get(opts) {
+      if (opts === undefined || opts === null || typeof opts !== 'object') {
+        throw new TypeError('installRuntimeFixture: options object is required');
+      }
+      const { runtime, scope } = opts;
+      if (typeof runtime !== 'string' || runtime === '') {
+        throw new TypeError('installRuntimeFixture: runtime must be a non-empty string');
+      }
+      if (typeof scope !== 'string' || scope === '') {
+        throw new TypeError('installRuntimeFixture: scope must be a non-empty string');
+      }
+      if ('root' in opts && opts.root !== undefined) {
+        throw new TypeError(
+          'installRuntimeFixture: a shared fixture owns its root; use runMinimalInstall for a caller-owned root',
+        );
+      }
+      const extraArgs = opts.extraArgs ?? [];
+      const extraEnv = opts.extraEnv ?? {};
+      const key = fixtureKey({ runtime, scope, extraArgs, extraEnv });
+      if (!entries.has(key)) {
+        const result = install({ runtime, scope, extraArgs, extraEnv });
+        entries.set(key, deepFreeze(result));
+      }
+      return entries.get(key);
+    },
+    release() {
+      for (const entry of entries.values()) {
+        try {
+          remove(entry.root);
+        } catch { /* best-effort teardown */ }
+      }
+      entries.clear();
+    },
+    size() {
+      return entries.size;
+    },
+  };
+}
+
+/**
+ * The install behind every fixture: a real `runMinimalInstall`, with the hooks
+ * build complete first (`ensureHooksDist`, the one owner of that check).
+ *
+ * The installer copies hooks from `hooks/dist` and installs none, or only some,
+ * when that gitignored build output is absent or partial. A shared tree is
+ * read by every test file, so what it holds must not depend on whether the
+ * file that happened to build it had run the hooks build.
+ */
+function installFixtureTree(opts, { ensureHooks = ensureHooksDist, install = runMinimalInstall } = {}) {
+  ensureHooks();
+  return install(opts);
+}
+
+// Inside a run started by scripts/run-tests.cjs the trees live under the run's
+// temp root and every test file of the run shares them (#6335). The runner
+// removes them with the root, so this process removes nothing. Anywhere else
+// the trees belong to this process and go when it exits.
+const runFixtureStore = (() => {
+  const dir = runStoreDir(os.tmpdir());
+  return dir === null ? null : createSharedFixtureStore({ dir, install: (opts) => installFixtureTree(opts), source: INSTALL_SCRIPT });
+})();
+const defaultRuntimeFixtureCache = runFixtureStore === null
+  ? createRuntimeFixtureCache({ install: (opts) => installFixtureTree(opts) })
+  : createRuntimeFixtureCache({ install: (opts) => runFixtureStore.get(opts), remove: () => {} });
+let exitHookRegistered = false;
+
+/**
+ * At exit: drop this process's own trees, and fail the process if a run-shared
+ * tree it used is no longer as it was built. Each tree was intact when this
+ * process first read it (the store checks), so the change happened while this
+ * process ran: by this test file, or by one running beside it on the same
+ * tree. A file that starts later finds the tree changed and fails at once
+ * with `SharedFixtureModifiedError`, which says so.
+ */
+function settleRuntimeFixtures({ store = runFixtureStore, cache = defaultRuntimeFixtureCache, proc = process } = {}) {
+  cache.release();
+  const changed = store === null ? [] : store.changed();
+  if (changed.length > 0) {
+    proc.stderr.write(
+      `installRuntimeFixture: a shared installed tree was modified while ${proc.argv[1]} ran, ` +
+      `by this file or by one running beside it: ${changed.join(', ')}\n` +
+      'A tree from installRuntimeFixture is shared by every test file of the run and is read-only. ' +
+      'A test that writes into its tree takes a private one from copyRuntimeFixture.\n',
+    );
+    proc.exitCode = 1;
+  }
+  return changed;
+}
+
+/**
+ * Install `{ runtime, scope }` once and share the result (#4688, #6335).
+ *
+ * Inside a test run (scripts/run-tests.cjs) there is one install per key for
+ * the WHOLE RUN: every test file that asks for the key reads the same tree.
+ * Outside a run there is one per test file. The result is deep-frozen and
+ * shared, so only read-only consumers may use it: a test that writes into the
+ * tree, reinstalls or uninstalls takes a private tree from `copyRuntimeFixture`,
+ * and a test that pre-seeds files before installing keeps `runMinimalInstall`.
+ * Do not register `t.after(cleanup(root))` on a shared fixture. A process that
+ * leaves a shared tree changed fails at exit.
+ *
+ * @param {{ runtime: string, scope: string, extraArgs?: string[], extraEnv?: object }} opts
+ */
+function installRuntimeFixture(opts) {
+  const result = defaultRuntimeFixtureCache.get(opts);
+  if (!exitHookRegistered) {
+    exitHookRegistered = true;
+    process.once('exit', () => settleRuntimeFixtures());
+  }
+  return result;
+}
+
+/**
+ * A private, writable tree that stands in for a fresh install of
+ * `{ runtime, scope }` into its root, made by copying the shared fixture
+ * (#6335). A copy takes about a quarter of an install's time.
+ *
+ * It has the files a fresh install writes, with the same content once each
+ * tree's own root name is masked, apart from what every install draws at
+ * random (the heredoc terminator, timestamps). Its manifest hashes are
+ * recomputed here for the rewritten files, so they match the files. tests/shared-install-fixture.test.cjs holds that
+ * against a real install for every runtime family.
+ *
+ * The caller owns the returned root and removes it (`cleanup(root)`).
+ *
+ * @param {{ runtime: string, scope: string, extraArgs?: string[], extraEnv?: object }} opts
+ * @returns {{ manifest: object|null, configDir: string, root: string, stdout: string, stderr: string }}
+ */
+function copyRuntimeFixture(opts) {
+  const shared = installRuntimeFixture(opts);
+  const root = path.join(path.dirname(shared.root), `gsd-fxc-${crypto.randomBytes(6).toString('hex')}`);
+  const rewrite = copyInstalledTree(shared.root, root, { manifestName: MANIFEST_NAME });
+  const configDir = rewrite(shared.configDir);
+  const manifestPath = path.join(configDir, MANIFEST_NAME);
+  const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : null;
+  return { manifest, configDir, root, stdout: rewrite(shared.stdout), stderr: rewrite(shared.stderr) };
+}
+
 function manifestSkillSet(manifest) {
   if (!manifest || !manifest.files) return new Set();
   const out = new Set();
@@ -816,6 +993,12 @@ module.exports = {
   simulateHookCopy,
   installerEnv,
   runMinimalInstall,
+  createRuntimeFixtureCache,
+  installRuntimeFixture,
+  copyRuntimeFixture,
+  settleRuntimeFixtures,
+  installFixtureTree,
+  foldInstallNonce,
   manifestSkillSet,
   manifestAgentCount,
   collectSkillBasenamesOnDisk,

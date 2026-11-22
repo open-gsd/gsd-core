@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
-const { output, error, captureStdoutSyncWrites, resolveAtFileOutput } = io;
+const { output, error, captureStdoutMaybeSync, resolveAtFileOutput } = io;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { collectSection, withSection, tokenizeHeadings, stripFencedCode, scanFencedBlocks } = markdownSectionizer;
@@ -170,6 +170,13 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
 
   const results: UatFileResult[] = [];
   let acknowledgedFiles = 0;
+  // #6231: every UAT / VERIFICATION / deferred-items document the scan actually
+  // READ, whether or not it yielded an item. `results` only holds files with
+  // something to report, so `total_files` is 0 both for a tree of clean files
+  // and for a tree the scan never reached; this counter tells them apart.
+  // A file that is read and then skipped as acknowledged still counts (it was
+  // examined); a file refused by the containment check is neither read nor counted.
+  let filesScanned = 0;
 
   // Active dirs are milestone-filtered; archived dirs deliberately are NOT.
   // listMilestonePhaseDirs derives the CURRENT milestone's phase directories
@@ -214,6 +221,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
       // `### N. <name>` and `expected:` text it points at never reaches the
       // audit output.
       if (!isReportContained(phaseDir, uatFilePath)) continue;
+      filesScanned++;
       const content = readNormalizedDocument(uatFilePath);
       const { items, headingsSeen } = parseUatItemsWithStats(content);
       const uatFm = extractFrontmatter(content, uatFilePath) as Record<string, unknown>;
@@ -287,6 +295,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
       // #5118 security review (S1): containment BEFORE the read — an escaping
       // report reads `missing` and never reaches `reportStatusOf`'s message.
       if (!isReportContained(phaseDir, verificationFilePath)) continue;
+      filesScanned++;
       const content = readNormalizedDocument(verificationFilePath);
       const verFm = extractFrontmatter(content, verificationFilePath) as Record<string, unknown>;
       // #5118: the owner's report reader judges `status` (exact match, no case
@@ -326,6 +335,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     // required.
     const deferredFile = 'deferred-items.md';
     if (files.includes(deferredFile)) {
+      filesScanned++;
       const content = readNormalizedDocument(path.join(phaseDir, deferredFile));
       const items = parseDeferredItems(content);
       if (items.length > 0) {
@@ -348,6 +358,7 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     total_files: number;
     total_items: number;
     parse_gap_files: number;
+    files_scanned: number;
     by_category: Record<string, number>;
     by_phase: Record<string, number>;
     current_milestone: { files: number; items: number };
@@ -373,6 +384,11 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
     // to the identical row when it happened to parse — the exact bug class
     // this issue exists to fix.
     parse_gap_files: results.filter((r) => r.parse_gap).length,
+    // #6231: additive. `0` means the scan read no UAT / VERIFICATION /
+    // deferred-items file at all, so an empty `results` is "nothing examined",
+    // not "nothing wrong"; a positive count with no items is a genuinely clean
+    // scan. Consumers (audit-uat.md, audit-fix.md) gate their all-clear on it.
+    files_scanned: filesScanned,
     by_category: {},
     by_phase: {},
     // #3783: additive segmentation so a consumer reads one field instead of
@@ -748,7 +764,7 @@ function readBaselineAtHead(absPath: string): string | null {
  * committed baseline ONLY in the frontmatter `updated:` value is one such
  * no-op and is never written. On a material change, writes the file and
  * commits through the existing `cmdCommit` internals (honoring `commit_docs`),
- * reading `cmdCommit`'s own result back via the shared `captureStdoutSyncWrites`
+ * reading `cmdCommit`'s own result back via the shared `captureStdoutMaybeSync`
  * helper (#5105 review S9 — the ONE such helper, also used by gsd-tools.cjs)
  * instead of a hand-rolled `fs.writeSync` monkeypatch, so this command can
  * report the real `committed`/`reason` outcome rather than assuming success.
@@ -756,12 +772,12 @@ function readBaselineAtHead(absPath: string): string | null {
  * byte-exact restore to the committed baseline — but never commits: this is
  * still a no-op from git's perspective (see `completeUatSession`'s own doc).
  */
-async function cmdUatCompleteSession(
+function cmdUatCompleteSession(
   cwd: string,
   uatPathArg: string | undefined,
   options: { message?: string } = {},
   raw: boolean,
-): Promise<void> {
+): void {
   if (!uatPathArg) {
     error('UAT file required: use uat.complete-session <uatPath>');
     return;
@@ -806,11 +822,13 @@ async function cmdUatCompleteSession(
   // STRING (its own `output(result, raw, hash || 'committed')` rawValue arm),
   // not the structured `{ committed, reason }` object this command needs to
   // read back; the full JSON envelope is captured here and never reaches the
-  // real stdout (captureStdoutSyncWrites), so suppressing it via `raw` would
-  // only destroy the information this command needs.
-  const captured = await captureStdoutSyncWrites(() => {
+  // real stdout (captureStdoutMaybeSync), so suppressing it via `raw` would
+  // only destroy the information this command needs. cmdCommit is synchronous,
+  // so the capture returns its text and this command finishes before it
+  // returns (#6333): a synchronous in-process call can serve it.
+  const captured = captureStdoutMaybeSync(() => {
     commandsMod.cmdCommit(cwd, message, [relPath], false, false, false);
-  });
+  }) as string;
 
   let committed = false;
   let reason: string | undefined;
@@ -3066,9 +3084,9 @@ interface FenceScan {
   unterminatedFrom: number;
 }
 
-function scanFencesFrom(lines: string[], from: number): FenceScan {
+function scanFencesFrom(lines: string[], from: number, to: number = lines.length): FenceScan {
   const scan: FenceScan = { fenced: new Set<number>(), openers: new Set<number>(), unterminatedFrom: -1 };
-  for (const block of scanFencedBlocks(deindentedForFences(lines.slice(from)))) {
+  for (const block of scanFencedBlocks(deindentedForFences(lines.slice(from, to)))) {
     const open = block.openLineIdx + from;
     scan.openers.add(open);
     if (block.closeLineIdx === -1) {
@@ -3209,8 +3227,9 @@ function matchListOpener(line: string, markers: BulletMarkers, inList: boolean):
  * one-bullet-per-item files byte-for-byte on the pre-#3457 path.
  *
  * A heading is a CONTAINER (group/provenance/title label, contributes no
- * entry) iff the NEXT heading is deeper — a deeper heading lives inside its
- * span. Otherwise it is a LEAF: an entry boundary. This handles all three
+ * entry) iff a deeper heading follows it that is not a closure record (below)
+ * — a deeper heading lives inside its span. Otherwise it is a LEAF: an entry
+ * boundary. This handles all three
  * corpus shapes without hardcoding a depth: flat `#` title + `##` entries
  * (title's next heading is deeper → container; each `##` followed by a
  * same-or-shallower heading → leaf), a `##` container with `###` entries
@@ -3219,6 +3238,10 @@ function matchListOpener(line: string, markers: BulletMarkers, inList: boolean):
  * childless heading is a leaf at whatever depth it is written. The shallower
  * rules the issue reports as already tried (split on every heading; shallowest
  * level; deepest level) each mis-count one of these shapes.
+ *
+ * A heading whose deeper headings are ALL closure records (`### Resolution`, `Resolved`, `Closure`) is
+ * a LEAF too: those headings and their bodies join its entry, so a closed item stays one closed
+ * entry (#6239).
  *
  * A leaf entry is [heading text, ...body lines up to the next heading] and is
  * kept only when its body (minus table lines) contains at least one list item
@@ -3268,6 +3291,22 @@ function lineOffsets(lines: string[]): { lineStarts: number[]; lineEnds: number[
   return { lineStarts, lineEnds };
 }
 
+/** A heading that only records its parent's closure (`### Resolution`, `Resolved`, `Closure`), #6239. */
+const CLOSURE_HEADING = /^(?:resolution|resolved|closure)(?:\s*[:–—-])?(?:\s*\(?v?\d[\d.\-/]*\)?)?$/i;
+
+/**
+ * Whether a heading's text only records a closure: the word (`Resolution`, `Resolved`, `Closure`), optionally
+ * followed by a colon or dash and a version or date reference, with emphasis or code marks around it. Free text
+ * after the word makes it a real child entry, so a heading like `Resolved — 2 blockers still open` is not one.
+ */
+function isClosureHeading(text: string): boolean {
+  let from = 0;
+  let to = text.length;
+  while (from < to && '*_`'.includes(text.charAt(from))) from++;
+  while (to > from && '*_`'.includes(text.charAt(to - 1))) to--;
+  return CLOSURE_HEADING.test(text.slice(from, to));
+}
+
 /**
  * The heading-delimited split, carrying the per-line opener flags the deferred
  * field-extraction path needs (#3702 round 2, round review): the heading path
@@ -3285,13 +3324,37 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
 
   const lines = sectionBody.split('\n');
   const { lineStarts, lineEnds } = lineOffsets(lines);
-  const headingByLine = new Map<number, { text: string; isContainer: boolean }>();
+  const headingByLine = new Map<number, { text: string; isContainer: boolean; absorbed: boolean; end: number }>();
+  // #6239: a heading whose deeper headings ALL only record its closure (`### Resolution`) is the entry itself, not
+  // a container of entries: its body bullets are its own fields, and the closure heading and its body belong to
+  // it, so a closed item is one closed entry and not one open entry per bullet. The headings under it are
+  // `absorbed` into the entry instead of opening one.
+  let absorbingLevel: number | null = null;
   for (let i = 0; i < headings.length; i++) {
-    // Container iff the next heading is deeper (see doc comment). An empty
-    // heading text (`##` alone) does not itself mean container — the flag is
-    // carried explicitly so a bare LEAF heading still opens an entry.
-    const isContainer = i + 1 < headings.length && headings[i + 1].level > headings[i].level;
-    headingByLine.set(headings[i].line, { text: headings[i].text, isContainer });
+    const level = headings[i].level;
+    // The entry this heading opens (or joins) ends at the next heading, or at the end of the body, and the fence
+    // scans below read only the lines up to it (#6239: a scan to the end of the body per heading was quadratic).
+    // The heading tokenizer tolerates at most three spaces of fence indent while the scan strips all of it, so
+    // a fence indented deeper that is left open now ends at the heading instead of pairing with a later fence:
+    // the entry's list items count, which only ever reports more items, never fewer.
+    const entryEnd = i + 1 < headings.length ? headings[i + 1].line - 1 : lines.length;
+    if (absorbingLevel !== null && level > absorbingLevel) {
+      headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: false, absorbed: true, end: entryEnd });
+      continue;
+    }
+    absorbingLevel = null;
+    let end = i + 1;
+    while (end < headings.length && headings[end].level > level) end++;
+    const deeper = headings.slice(i + 1, end);
+    // Closure-only is decided from the DIRECT children (the shallowest level below this heading): whatever sits
+    // below a closure heading is part of that closure record.
+    const childLevel = deeper.reduce((least, h) => Math.min(least, h.level), Infinity);
+    const closureOnly = deeper.length > 0 && deeper.every((h) => h.level !== childLevel || isClosureHeading(h.text));
+    if (closureOnly) absorbingLevel = level;
+    // Container iff a deeper heading follows that is not only a closure record (see doc comment). An empty
+    // heading text (`##` alone) does not itself mean container — the flag is carried explicitly so a bare
+    // LEAF heading still opens an entry.
+    headingByLine.set(headings[i].line, { text: headings[i].text, isContainer: deeper.length > 0 && !closureOnly, absorbed: false, end: entryEnd });
   }
 
   const entries: DeferredHeadingEntry[] = [];
@@ -3323,7 +3386,10 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
     const ind = indentOf(line);
     return bodyBase !== null && ind <= bodyBase ? bodyBase : ind;
   };
-  let scan = scanFencesFrom(lines, 0);
+  // The preamble runs to the first heading; each entry's fence scan then runs to the next one (#6239: one
+  // scan to the end of the body per heading was quadratic in the heading count).
+  let entryEnd = headings[0].line - 1;
+  let scan = scanFencesFrom(lines, 0, entryEnd);
 
   const flushCurrent = (): void => {
     // Keep the leaf entry only when its body carries a list item; the heading
@@ -3385,6 +3451,19 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
     const heading = headingByLine.get(lineNo);
+    if (heading !== undefined && heading.absorbed) {
+      // A closure heading inside its parent's entry: the entry continues (no flush) and its line stays in the entry,
+      // so the raw span and `lines` remain one-to-one. In this walk it ends the list/indent state and restarts the
+      // fence scan; the field reader scans the merged entry as one run, so a fence left open above it still hides
+      // the closure's fields there (the item then reads open, the fail-safe direction).
+      runs.clear();
+      blankSeen = false;
+      bodyBase = null;
+      entryEnd = heading.end;
+      scan = scanFencesFrom(lines, i + 1, entryEnd);
+      push(lines[i].replace(/\r$/, ''), i, false);
+      continue;
+    }
     if (heading !== undefined) {
       flushCurrent();
       // Headless-shaped region (preamble / container-direct bullets) ends at
@@ -3395,7 +3474,8 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
       blankSeen = false;
       bodyBase = null;
       // A heading ends the entry, and with it any unterminated fence (B1).
-      scan = scanFencesFrom(lines, i + 1);
+      entryEnd = heading.end;
+      scan = scanFencesFrom(lines, i + 1, entryEnd);
       if (!heading.isContainer) {
         // Leaf heading: open an entry with the heading text as line 0.
         current = { lines: [heading.text], opener: [false], startLine: i, endLine: i };
@@ -3416,7 +3496,7 @@ function splitDeferredHeadingEntriesDetailed(sectionBody: string): DeferredHeadi
     // shaped like a top-level item ends it — rescan from there, so a later
     // delimiter is read on its own terms (see `scanFencesFrom`).
     if (scan.unterminatedFrom !== -1 && i > scan.unterminatedFrom && topLevelItemShape(line, DEFERRED_BULLET_MARKERS, bodyBase)) {
-      scan = scanFencesFrom(lines, i);
+      scan = scanFencesFrom(lines, i, entryEnd);
     }
     if (scan.fenced.has(i) || (scan.unterminatedFrom !== -1 && i >= scan.unterminatedFrom)) {
       // Fence content is body text, never list-item evidence (M2) — and

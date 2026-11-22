@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup, TOOLS_PATH, TEST_ENV_BASE } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook, OUTCOME, assertSeamExit } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 /**
@@ -1804,7 +1804,9 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     // Invoke from a descendant subdirectory
     const deepDir = path.join(tmpDir, 'src', 'feature');
     fs.mkdirSync(deepDir, { recursive: true });
-    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir);
+    // HOME stays at the project root: the helper's default (HOME = the cwd)
+    // would put the project above $HOME, which the walk never reads (#5624).
+    const r = runAgentSkillsJson(['agent-skills', 'gsd-executor'], deepDir, { HOME: tmpDir, USERPROFILE: tmpDir });
     assert.ok(r.success, `Command failed: ${r.error}`);
     assert.strictEqual(r.ir.configured, true);
     assert.strictEqual(r.ir.reason, 'resolved');
@@ -2036,8 +2038,11 @@ describe('regressions: workflows forward the started workstream to agent-skills 
   // one checkout cannot cross-read each other's workstream. (new-milestone.md
   // predates this and keeps its own persisted GSD_WS_ARG file; its calls are
   // held to the same forwarding rule through the `viaFile` branch below.)
-  const CANONICAL_PARSE =
-    'GSD_WS=$(echo " $GSD_ARGS" | sed -nE \'s/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \\1/p\' | head -n 1)';
+  // #6218: the name may follow one double or single quote. The closing quote needs no match of its own: the
+  // trailing `.*` consumes it, as it consumes anything after a bare name. (A backreference to the opening
+  // quote is not an option: the macOS sed mishandles one against an optional empty group.)
+  const WS_NAME = '[A-Za-z0-9][A-Za-z0-9._-]*';
+  const CANONICAL_PARSE = String.raw`GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?(${WS_NAME}).*/--ws \1/p' | head -1)`;
   // The single-token call-site expansion: `--ws=<name>` or nothing. One token
   // is what makes it safe under zsh, which does not word-split `$GSD_WS`.
   const FLAG_EXPANSION = '${GSD_WS:+--ws=${GSD_WS##* }}';
@@ -2109,6 +2114,18 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     assert.deepStrictEqual(failures, []);
   });
 
+  test('[regression #6218] no workflow expands the persisted $GSD_WS_ARG unquoted: zsh does not word-split it', () => {
+    const bare = [];
+    for (const file of corpus) {
+      for (const fence of fences(fs.readFileSync(file, 'utf-8'))) {
+        for (const l of fence.lines) {
+          if (/(?<![\w{])\$GSD_WS_ARG\b/.test(l.text)) bare.push(`${path.relative(REPO_ROOT, file)}:${l.no} ${l.text.trim()}`);
+        }
+      }
+    }
+    assert.deepStrictEqual(bare, []);
+  });
+
   test('the root-scoped exemptions are not stale: each still has a fenced call', () => {
     for (const name of ROOT_SCOPED) {
       const text = fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf-8');
@@ -2145,8 +2162,16 @@ describe('regressions: workflows forward the started workstream to agent-skills 
 
   // Linux/Windows benches may have no zsh, and a Windows `bash` can resolve to a
   // WSL shim without node: probe for the exact capabilities the scripts need.
-  const shellUsable = (sh) => process.platform !== 'win32' &&
-    spawnSync(sh, ['-c', 'command -v sed >/dev/null && command -v node >/dev/null'], { timeout: PROBE_TIMEOUT_MS }).status === 0;
+  // `sh -c <script>` through the process seam; runHook takes the `-c` flag as its target.
+  const runShellScript = (sh, script, opts = {}) => runHook('-c', [script], {
+    interpreter: sh, timeoutMs: PROBE_TIMEOUT_MS, ...opts,
+  });
+  // Availability probe: a missing shell (SPAWN_FAILED) means "unavailable", not a failure.
+  const shellUsable = (sh) => {
+    if (process.platform === 'win32') return false;
+    const probe = runShellScript(sh, 'command -v sed >/dev/null && command -v node >/dev/null');
+    return probe.outcome === OUTCOME.EXITED && probe.exitCode === 0;
+  };
   const shells = ['bash', 'zsh'].filter(shellUsable);
   test('bash is available to execute the flag-parse tests (zsh runs additionally where installed)', (t) => {
     if (!shells.includes('bash')) t.skip('no usable bash on this platform');
@@ -2157,16 +2182,18 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     const { validateWorkstreamName } = require('../gsd-core/bin/lib/workstream-name-policy.cjs');
     for (const name of ['a', 'ws-a', 'backend_api', 'v1.2', 'A9']) {
       assert.ok(validateWorkstreamName(name), `${name} is valid under the policy`);
-      const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+      const r = runShellScript('bash', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`, {
+        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` },
       });
+      assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, `--ws ${name}`);
     }
     for (const name of ['-x', '.x', '_x']) {
       assert.ok(!validateWorkstreamName(name), `${name} is invalid under the policy`);
-      const r = spawnSync('bash', ['-c', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`], {
-        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` }, encoding: 'utf-8', timeout: PROBE_TIMEOUT_MS,
+      const r = runShellScript('bash', `${CANONICAL_PARSE}\nprintf '%s' "$GSD_WS"`, {
+        env: { ...process.env, GSD_ARGS: `1 --ws ${name}` },
       });
+      assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, '', `${name} must not be captured`);
     }
   });
@@ -2178,12 +2205,10 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     describe(`flag parse and expansion under ${sh}`, () => {
       function expand(argumentsValue) {
         const script = `${CANONICAL_PARSE}\nset -- ${FLAG_EXPANSION}\nprintf '%s|%s' "$#" "$*"`;
-        const r = spawnSync(sh, ['-c', script], {
+        const r = runShellScript(sh, script, {
           env: { ...process.env, GSD_ARGS: argumentsValue },
-          encoding: 'utf-8',
-          timeout: PROBE_TIMEOUT_MS,
         });
-        assert.strictEqual(r.status, 0, r.stderr);
+        assertSeamExit(assert, r, 0, r.stderr);
         return r.stdout;
       }
 
@@ -2191,6 +2216,52 @@ describe('regressions: workflows forward the started workstream to agent-skills 
         assert.strictEqual(expand('2 --ws backend-api'), '1|--ws=backend-api');
         assert.strictEqual(expand('--ws  ws_a.1   --auto 3'), '1|--ws=ws_a.1');
         assert.strictEqual(expand('2 --skip-research --ws ws-a'), '1|--ws=ws-a');
+      });
+
+      test('[regression #6218] a quoted --ws value selects the same workstream as the unquoted one', () => {
+        for (const value of ['feature', 'ws_a.1', 'none']) {
+          const bare = expand(`15.2 --ws ${value} x`);
+          assert.strictEqual(bare, `1|--ws=${value}`);
+          assert.strictEqual(expand(`15.2 --ws "${value}" x`), bare);
+          assert.strictEqual(expand(`15.2 --ws '${value}' x`), bare);
+          assert.strictEqual(expand(`--ws "${value}"`), bare);
+        }
+      });
+
+      test('[boundary #6218] a quote with no name behind it selects nothing; a stray quote after the name is read past', () => {
+        for (const args of ['--ws ""', '--ws "-x"', '--ws "', '--ws \'']) {
+          assert.strictEqual(expand(args), '0|', args);
+        }
+        // the name ends at its first character outside the name set, exactly as for the bare form
+        for (const args of ['--ws "feature', '--ws \'feature"', '--ws "feature x"', '--ws feature"x']) {
+          assert.strictEqual(expand(args), '1|--ws=feature', args);
+        }
+      });
+
+      test('[regression #6218] every arg-stripping line in the workflows removes a quoted --ws value too', () => {
+        const stripLines = [];
+        for (const file of corpus) {
+          for (const line of splitLines(fs.readFileSync(file, 'utf-8'))) {
+            if (/^[A-Z_]+=\$\(echo "\$GSD_ARGS" \| sed -E 's\/--ws\[\[:space:\]\]/.test(line)) stripLines.push(line);
+          }
+        }
+        assert.ok(stripLines.length > 0, 'the corpus has arg-stripping lines');
+        for (const line of stripLines) {
+          const name = line.slice(0, line.indexOf('='));
+          // [args, the workstream the parse selects, what the strip leaves]: a quoted value is removed whole.
+          for (const [input, selected, left] of [
+            ['12 --ws feature --auto', '--ws feature', '12 --auto'],
+            ['12 --ws "feature" --auto', '--ws feature', '12 --auto'],
+            ['12 --ws \'feature\' --auto', '--ws feature', '12 --auto'],
+            ['12 --ws "my team"', '--ws my', '12'],
+            ['12 --ws -x', '', '12'],
+            ['12', '', '12'],
+          ]) {
+            const r = runShellScript(sh, `${CANONICAL_PARSE}\n${line}\nprintf '%s|%s' "$GSD_WS" "$${name}"`, { env: { ...process.env, GSD_ARGS: input } });
+            assertSeamExit(assert, r, 0, r.stderr);
+            assert.strictEqual(r.stdout, `${selected}|${left}`, `${line} on ${input}`);
+          }
+        }
       });
 
       test('no --ws (or a malformed one) expands to zero tokens, never a stray empty argument', () => {
@@ -2234,13 +2305,12 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     }
 
     function exec(sh, { script, argumentsValue }, printVars) {
-      const r = spawnSync(sh, ['-c', `${script}\n${printVars}`], {
+      const r = runShellScript(sh, `${script}\n${printVars}`, {
         cwd: proj,
         env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
-        encoding: 'utf-8',
-        timeout: PROBE_TIMEOUT_MS * 4,
+        timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
-      assert.strictEqual(r.status, 0, `${sh} failed: ${r.stderr}`);
+      assertSeamExit(assert, r, 0, `${sh} failed: ${r.stderr}`);
       return r.stdout;
     }
 
@@ -2275,12 +2345,12 @@ describe('regressions: workflows forward the started workstream to agent-skills 
     test('--ws none is forwarded and fails loudly (reserved name), never resolving workstreams/none', (t) => {
       if (!shells.includes('bash')) return t.skip('no usable bash on this platform');
       const fence = buildFenceScript('plan-phase.md', /^AGENT_SKILLS_PLANNER=/, '1 --ws none');
-      const r = spawnSync('bash', ['-c', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`], {
+      const r = runShellScript('bash', `${fence.script}\nprintf "%s" "$AGENT_SKILLS_PLANNER"`, {
         cwd: proj,
         env: { ...process.env, ...TEST_ENV_BASE, GSD_WORKSTREAM: '', GSD_ARGS: fence.argumentsValue, HOME: proj, USERPROFILE: proj, GSD_HOME: proj },
-        encoding: 'utf-8',
-        timeout: PROBE_TIMEOUT_MS * 4,
+        timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
+      assert.strictEqual(r.outcome, OUTCOME.EXITED, r.summary);
       assert.strictEqual(r.stdout, '');
       assert.match(r.stderr, /Workstream name 'none' is reserved/);
       assert.strictEqual(fs.existsSync(path.join(proj, '.planning', 'workstreams', 'none')), false);

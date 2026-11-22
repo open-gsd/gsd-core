@@ -322,11 +322,42 @@ function runHook(hookFile, payload, opts = {}) {
 function contextWarningsDisabled(cwd) {
   try {
     const configPath = path.join(cwd, '.planning', 'config.json');
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const config = JSON.parse(readConfigBounded(configPath, { required: true }));
     return config.hooks?.context_warnings === false;
   } catch {
     // Missing or unparseable config → proceed with defaults (context warnings enabled).
     return false;
+  }
+}
+
+/**
+ * UTF-8 text of a project config.json, read as a bounded regular file (#5759): a FIFO or device
+ * planted at the path would block a plain readFileSync, and this runs inside the editor process.
+ * Throws for an absent, non-regular or oversized (> 1 MiB) file. Mirrors hooks/lib/config-read.js;
+ * inlined because the plugin is copied on its own and cannot rely on hooks/lib being beside it.
+ */
+function readConfigBounded(file, options) {
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOCTTY || 0));
+  } catch (err) {
+    if (err && err.code === "ENOENT" && !(options && options.required)) return null;
+    throw err;
+  }
+  try {
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw Object.assign(new Error(file + " is not a regular file"), { code: st.isDirectory() ? "EISDIR" : "ENXIO" });
+    if (st.size > 1024 * 1024) throw Object.assign(new Error(file + " exceeds 1048576 bytes"), { code: "EFBIG" });
+    const buf = Buffer.alloc(st.size);
+    let off = 0;
+    while (off < st.size) {
+      const n = fs.readSync(fd, buf, off, st.size - off, off);
+      if (n <= 0) break;
+      off += n;
+    }
+    return buf.toString("utf8", 0, off);
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
   }
 }
 
@@ -393,7 +424,7 @@ function handleHookResult(hookResult, output) {
 // re-checked here in-process so a project that has not opted in never pays a bash spawn per tool call.
 function readProjectConfig(cwd) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(cwd, ".planning", "config.json"), "utf8"));
+    return JSON.parse(readConfigBounded(path.join(cwd, ".planning", "config.json"), { required: true }));
   } catch {
     return null;
   }

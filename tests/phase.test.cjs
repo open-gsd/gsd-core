@@ -16,24 +16,12 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('node:os');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
-const { toLegacyResult, gitOrThrow } = require('./helpers/git-fixture.cjs');
-const {
-  GIT_TIMEOUT_MS,
-  LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-  PROBE_TIMEOUT_MS,
-} = require('./helpers/timeouts.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 
-// `phase complete` against a real STATE.md rewrite; matches the 60000ms bound
-// already used for the same CLI call elsewhere in this file (runPhaseComplete
-// above, and `run()` below at 15000ms for a lighter query-only call).
-const PHASE_COMPLETE_TIMEOUT_MS = 60000;
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsCaptured, createTempProject, cleanup } = require('./helpers.cjs');
 const { splitTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('fast-check');
-
-const GSD_TOOLS_BIN = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
 function normalizePhaseToken(token) {
   return String(token).replace(/\d+/g, (digits) => String(Number(digits)));
@@ -42,6 +30,28 @@ function normalizePhaseToken(token) {
 function phaseTokenFromDirName(name) {
   const match = name.match(/^(?:[A-Z][A-Z0-9]*-)?(\d+[A-Z]?(?:\.\d+)*)/i);
   return match ? match[1] : null;
+}
+
+/**
+ * platformWriteSync writes through open descriptors (#5759): the exclusive temp file and the
+ * direct-write fallback both reach `fs.writeFileSync(fd, ...)`, never a path. A mock that fails
+ * a write by PATH therefore resolves the descriptor back to the path it was opened for.
+ * Returns `pathOf(target)` for a writeFileSync target (a path or a descriptor).
+ */
+function installFdPathResolver(t) {
+  const fdPaths = new Map();
+  const realOpen = fs.openSync;
+  t.mock.method(fs, 'openSync', function (p, ...rest) {
+    const fd = realOpen.call(this, p, ...rest);
+    fdPaths.set(fd, String(p));
+    return fd;
+  });
+  return (target) => (typeof target === 'number' ? (fdPaths.get(target) ?? '') : String(target));
+}
+
+/** True when `candidate` is `base` itself or one of its platformWriteSync temp siblings. */
+function isWriteTargetOrTemp(candidate, base) {
+  return candidate === base || candidate.startsWith(`${base}.tmp.`);
 }
 
 function writePassedVerificationForPhase(tmpDir, phase) {
@@ -2620,487 +2630,6 @@ describe('find-phase scalar counts (#3218)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// phase number allocation across sibling git worktrees (#3849)
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('phase add allocation vs sibling git worktrees (#3849)', () => {
-  const activeWorktrees = [];
-  const activeDirs = [];
-
-  function git(args, cwd) {
-    return gitOrThrow(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
-  }
-
-  function initRepo(repoDir) {
-    fs.mkdirSync(path.join(repoDir, '.planning', 'phases'), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoDir, '.planning', 'ROADMAP.md'),
-      ['# Roadmap v1.0', '', '### Phase 440: existing thing', '**Goal:** Setup', '', '---', ''].join('\n')
-    );
-    fs.mkdirSync(path.join(repoDir, '.planning', 'phases', '440-existing-thing'));
-    git(['init', '-b', 'main'], repoDir);
-    git(['config', 'user.email', 'test@example.com'], repoDir);
-    git(['config', 'user.name', 'Test'], repoDir);
-    git(['add', '-A'], repoDir);
-    git(['commit', '-m', 'init'], repoDir);
-  }
-
-  function initBracketRepo(repoDir) {
-    fs.mkdirSync(path.join(repoDir, '.planning', 'phases'), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoDir, '.planning', 'config.json'),
-      JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }, null, 2) + '\n',
-    );
-    fs.writeFileSync(path.join(repoDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
-    fs.writeFileSync(
-      path.join(repoDir, '.planning', 'ROADMAP.md'),
-      '# Roadmap\n\n## [CK.02] v2.0 — Foundation\n',
-    );
-    git(['init', '-b', 'main'], repoDir);
-    git(['config', 'user.email', 'test@example.com'], repoDir);
-    git(['config', 'user.name', 'Test'], repoDir);
-    git(['add', '-A'], repoDir);
-    git(['commit', '-m', 'init'], repoDir);
-  }
-
-  /** Materialize the issue's repro: a sibling worktree branch holding Phase 441. */
-  function addSiblingHolding441(repoDir) {
-    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
-    const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-sib-'));
-    git(['worktree', 'add', '--detach', worktreeDir, sha], repoDir);
-    activeWorktrees.push({ repoDir, worktreeDir });
-    fs.mkdirSync(path.join(worktreeDir, '.planning', 'phases', '441-conversation-surface'), { recursive: true });
-    fs.writeFileSync(
-      path.join(worktreeDir, '.planning', 'ROADMAP.md'),
-      ['# Roadmap v1.0', '', '### Phase 440: existing thing', '**Goal:** Setup', '', '### Phase 441: conversation surface', '**Goal:** Talk', '', '---', ''].join('\n')
-    );
-    return worktreeDir;
-  }
-
-  /** A sibling worktree whose checkout has no .planning at all (fail-open case). */
-  function addBareSibling(repoDir) {
-    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
-    const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bare-'));
-    git(['worktree', 'add', '--detach', worktreeDir, sha], repoDir);
-    activeWorktrees.push({ repoDir, worktreeDir });
-    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- fixture SETUP, not teardown: strips the tracked .planning/ so this worktree has none; cleanup() owns the dir's removal with the Windows retry budget
-    fs.rmSync(path.join(worktreeDir, '.planning'), { recursive: true, force: true });
-    return worktreeDir;
-  }
-
-  function teardown() {
-    while (activeWorktrees.length) {
-      const { repoDir, worktreeDir } = activeWorktrees.pop();
-      try {
-        git(['worktree', 'remove', '--force', worktreeDir], repoDir);
-      } catch (_) { /* best-effort; cleanup() below still removes the directory */ }
-      cleanup(worktreeDir);
-    }
-    while (activeDirs.length) cleanup(activeDirs.pop());
-  }
-
-  afterEach(teardown);
-
-  test('phase add skips a number held only by a sibling worktree (dir + roadmap header)', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-main-'));
-    activeDirs.push(repoDir);
-    initRepo(repoDir);
-    addSiblingHolding441(repoDir);
-
-    const result = runGsdTools('phase add anything', repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      442,
-      '#3849: sibling worktree holds Phase 441 — allocation must skip to 442, not collide'
-    );
-    assert.ok(
-      fs.existsSync(path.join(repoDir, '.planning', 'phases', '442-anything')),
-      'directory for the non-colliding 442 should be created'
-    );
-  });
-
-  test('phase add-batch skips a number held only by a sibling worktree', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-batch-'));
-    activeDirs.push(repoDir);
-    initRepo(repoDir);
-    addSiblingHolding441(repoDir);
-
-    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["New Thing"]'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phases[0].phase_number,
-      442,
-      '#3849: the batch allocator must widen its horizon the same way the single-add allocator does'
-    );
-  });
-
-  test('bracket allocation reserves reader-resolvable legacy directory and ROADMAP numbers in a sibling', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-'));
-    activeDirs.push(repoDir);
-    initBracketRepo(repoDir);
-    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
-    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-sib-'));
-    git(['worktree', 'add', '--detach', sibling, sha], repoDir);
-    activeWorktrees.push({ repoDir, worktreeDir: sibling });
-    fs.mkdirSync(path.join(sibling, '.planning', 'phases', 'CK-01-legacy'), { recursive: true });
-    fs.appendFileSync(
-      path.join(sibling, '.planning', 'ROADMAP.md'),
-      '\n### Phase 02: sibling roadmap reservation\n\n**Goal:** taken\n',
-    );
-
-    const result = runGsdTools(['phase', 'add', 'After Sibling'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.phase_number, 3);
-    assert.strictEqual(output.directory, '.planning/phases/CK.02-03-after-sibling');
-  });
-
-  // #4304: a sibling whose bracket write context cannot resolve (no
-  // project_code) contributes nothing, and resolving it must not print an
-  // error to stderr while the local phase add succeeds.
-  test('bracket allocation skips a sibling without a resolvable bracket context, with clean stderr', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-noctx-'));
-    activeDirs.push(repoDir);
-    initBracketRepo(repoDir);
-    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
-    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-noctx-sib-'));
-    git(['worktree', 'add', '--detach', sibling, sha], repoDir);
-    activeWorktrees.push({ repoDir, worktreeDir: sibling });
-    fs.writeFileSync(
-      path.join(sibling, '.planning', 'config.json'),
-      JSON.stringify({ phase_id_convention: 'bracket' }, null, 2) + '\n',
-    );
-    fs.appendFileSync(
-      path.join(sibling, '.planning', 'ROADMAP.md'),
-      '\n### [CK.02] 05: sibling without a project code\n\n**Goal:** ignored\n',
-    );
-
-    const result = runNode([GSD_TOOLS_BIN, 'phase', 'add', 'Local'], { cwd: repoDir, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
-
-    assert.strictEqual(result.exitCode, 0, result.stderr);
-    assert.doesNotMatch(result.stderr || '', /Error:|project_code|phase_id_convention/);
-    const output = JSON.parse(result.stdout);
-    assert.strictEqual(output.phase_number, 1);
-    assert.strictEqual(output.directory, '.planning/phases/CK.02-01-local');
-  });
-
-  test('a sibling worktree without .planning/ changes nothing (fail open)', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-failopen-'));
-    activeDirs.push(repoDir);
-    initRepo(repoDir);
-    addBareSibling(repoDir);
-
-    const result = runGsdTools('phase add next thing', repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.phase_number, 441, 'no sibling numbers visible — max+1 from the local 440');
-  });
-
-  test('allocation FROM a linked worktree counts the main checkout too (the incident topology)', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-linked-'));
-    activeDirs.push(repoDir);
-    initRepo(repoDir);
-    // The real incident ran the other direction: cwd is a linked worktree and
-    // the MAIN checkout (scanned as a sibling here) holds the higher number.
-    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
-    const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-linked-wt-'));
-    git(['worktree', 'add', '--detach', worktreeDir, sha], repoDir);
-    activeWorktrees.push({ repoDir, worktreeDir });
-    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- fixture SETUP, not teardown: strips the tracked .planning/ so this worktree has none; cleanup() owns the dir's removal with the Windows retry budget
-    fs.rmSync(path.join(worktreeDir, '.planning'), { recursive: true, force: true });
-    fs.mkdirSync(path.join(worktreeDir, '.planning', 'phases'), { recursive: true });
-    fs.writeFileSync(
-      path.join(worktreeDir, '.planning', 'ROADMAP.md'),
-      ['# Roadmap v1.0', '', '### Phase 440: base', '**Goal:** Setup', '', '---', ''].join('\n')
-    );
-
-    const result = runGsdTools('phase add from linked', worktreeDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      441,
-      '#3849: the main checkout (440) must be visible when allocating from a linked worktree'
-    );
-  });
-
-  // Phase 6 (#5007): collectSiblingWorktreePhaseNums migrated its hand-rolled
-  // header regex onto buildPhaseHeadingScanRegex with the LABEL_ONLY baseline
-  // and no convention argument — a deliberate non-widening, since this is a
-  // "counter" site (phase-id.cts's own LABEL_ONLY docstring guidance). A
-  // bracket-tagged sibling heading must stay unrecognized before AND after
-  // the migration — proving the swap did not (accidentally) start admitting
-  // the ANY_BRACKET grammar the real-heading readers use.
-  test('#5007: a bracket-tagged sibling heading does not corrupt (or widen) the numeric allocation horizon', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5007-bracket-'));
-    activeDirs.push(repoDir);
-    initRepo(repoDir);
-    const sha = gitOrThrow(['rev-parse', 'HEAD'], { cwd: repoDir, timeoutMs: GIT_TIMEOUT_MS }).trim();
-    const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5007-bracket-sib-'));
-    gitOrThrow(['worktree', 'add', '--detach', worktreeDir, sha], { cwd: repoDir, timeoutMs: GIT_TIMEOUT_MS });
-    activeWorktrees.push({ repoDir, worktreeDir });
-    fs.mkdirSync(path.join(worktreeDir, '.planning', 'phases'), { recursive: true });
-    fs.writeFileSync(
-      path.join(worktreeDir, '.planning', 'ROADMAP.md'),
-      ['# Roadmap v1.0', '', '### [GSD.01] Phase 441: bracket-tagged sibling phase', '**Goal:** Talk', '', '---', ''].join('\n')
-    );
-
-    const result = runGsdTools('phase add anything', repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      441,
-      '#5007: the bracket-tagged sibling heading is not counted (LABEL_ONLY baseline, no convention widening) — next is 441, not 442'
-    );
-  });
-
-  test('phase add-batch counts bullet-only Phase N rows (#1229 reached the batch path)', () => {
-    const tmp = createTempProject();
-    try {
-      fs.writeFileSync(
-        path.join(tmp, '.planning', 'ROADMAP.md'),
-        ['# Roadmap v1.0', '', '- [ ] **Phase 11: bullet-only phase**', '', '---', ''].join('\n')
-      );
-      const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["After Bullet"]'], tmp);
-      assert.ok(result.success, `Command failed: ${result.error}`);
-      const output = JSON.parse(result.output);
-      assert.strictEqual(
-        output.phases[0].phase_number,
-        12,
-        '#3849 secondary: a bullet-only Phase 11 must not be re-allocated by add-batch'
-      );
-    } finally {
-      cleanup(tmp);
-    }
-  });
-
-  // #5113 claim 3: `Depends on` was `newId - 1`, but newId is max+1 over sibling-worktree phases too,
-  // so N-1 could be a phase that exists only on another branch.
-  test('#5113: phase add depends on a phase this roadmap has, not a number only a sibling holds', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5113-main-'));
-    activeDirs.push(repoDir);
-    initRepo(repoDir);
-    addSiblingHolding441(repoDir);
-
-    const result = runGsdTools('phase add anything', repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-    assert.strictEqual(JSON.parse(result.output).phase_number, 442);
-
-    const roadmap = fs.readFileSync(path.join(repoDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    assert.match(roadmap, /### Phase 442: anything[\s\S]*?\*\*Depends on:\*\* Phase 440\b/);
-    assert.doesNotMatch(roadmap, /Depends on:\*\* Phase 441/, 'Phase 441 exists only on another branch');
-  });
-
-  test('#5113: phase add-batch chains each phase to one that exists, the first to the real predecessor', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5113-batch-'));
-    activeDirs.push(repoDir);
-    initRepo(repoDir);
-    addSiblingHolding441(repoDir);
-
-    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["First New","Second New"]'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const roadmap = fs.readFileSync(path.join(repoDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    assert.match(roadmap, /### Phase 442: First New[\s\S]*?\*\*Depends on:\*\* Phase 440\b/);
-    assert.match(roadmap, /### Phase 443: Second New[\s\S]*?\*\*Depends on:\*\* Phase 442\b/);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// phase add / add-batch under phase_id_convention: bracket (#5528)
-//
-// The allocation scans counted only plain `Phase N` lines, so a roadmap whose only phase is
-// `[GSD.02] 01` yielded a second phase numbered 1. Under the bracket convention every
-// representation (heading, checklist bullet, directory) of an existing phase must block reuse.
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('phase add / add-batch allocation: non-bracket repos are unchanged, bracket repos never reuse a number (#5528)', () => {
-  let tmp;
-  beforeEach(() => { tmp = createTempProject('gsd-5528-'); });
-  afterEach(() => { cleanup(tmp); });
-
-  function setup(roadmapLines, { convention = 'bracket', dirs = [], milestone = 'v2.0' } = {}) {
-    cleanup(tmp); // a fresh project per call: earlier `phase add` runs left phase directories behind
-    tmp = createTempProject('gsd-5528-');
-    const planning = path.join(tmp, '.planning');
-    fs.mkdirSync(path.join(planning, 'phases'), { recursive: true });
-    fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify(convention ? { phase_id_convention: convention } : {}));
-    fs.writeFileSync(path.join(planning, 'STATE.md'), `---\n${milestone ? `milestone: ${milestone}\n` : ''}---\n# State\n`);
-    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmapLines.join('\n'));
-    for (const d of dirs) fs.mkdirSync(path.join(planning, 'phases', d));
-    return planning;
-  }
-  // Typed read-back through the CLI (roadmap get-phase), not a pattern match on ROADMAP.md.
-  const roadmapPhase = (num) => JSON.parse(runGsdTools(['roadmap', 'get-phase', String(num)], tmp).output);
-  const dependsOn = (num) => roadmapPhase(num).section.match(/\*\*Depends on:\*\* ([^\n]+)/)?.[1];
-  // The command's job is to WRITE the phase, not only to echo a number: its directory and heading.
-  function assertWritten(num, slug = 'new-thing', title = 'New thing') {
-    const nn = String(num).padStart(2, '0');
-    assert.ok(fs.existsSync(path.join(tmp, '.planning', 'phases', `${nn}-${slug}`)), `phases/${nn}-${slug} created`);
-    const found = roadmapPhase(num);
-    assert.ok(found.found && found.phase_name === title, `ROADMAP.md gains "### Phase ${num}: ${title}"`);
-  }
-  // A git repo at tmp plus one detached sibling worktree of it (removed with the test).
-  function addSiblingWorktree(t, prefix) {
-    const git = (args, cwd) => gitOrThrow(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
-    git(['init', '-b', 'main'], tmp);
-    git(['config', 'user.email', 'test@example.com'], tmp);
-    git(['config', 'user.name', 'Test'], tmp);
-    git(['add', '-A'], tmp);
-    git(['commit', '-m', 'init', '--allow-empty'], tmp);
-    const sibling = createTempProject(prefix);
-    cleanup(sibling); // `git worktree add` needs a path that does not exist yet
-    t.after(() => cleanup(sibling)); // the worktree's git metadata lives in tmp, which afterEach removes
-    git(['worktree', 'add', '--detach', sibling, 'HEAD'], tmp);
-    return sibling;
-  }
-  test('legacy (non-bracket) roadmaps step past the 999 sentinel too', () => {
-    setup(['# Roadmap', '', '## Milestone v2.0', '', '### Phase 998: Near the sentinel', ''], { convention: null });
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '1000');
-    setup(['# Roadmap', '', '## Milestone v2.0', '', '### Phase 997: Near the sentinel', ''], { convention: null });
-    const batch = runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
-    assert.deepStrictEqual(JSON.parse(batch.output).phases.map((p) => p.phase_number), [998, 1000]);
-  });
-
-  test('a milestone-prefixed repo does not count a bracket-looking heading or bullet (gsd-core-ddu6)', () => {
-    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 05: Existing**', '', '### [GSD.02] 05: Existing', '', '**Goal:** x', ''], { convention: 'milestone-prefixed' });
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
-    assertWritten(1);
-  });
-
-  test('non-bracket repo: a bracket-looking heading is still not counted (byte-identical to before)', () => {
-    setup(['# Roadmap', '', '## Milestone v2.0', '', '- [ ] **[GSD.02] 01: Existing**', '', '### [GSD.02] 01: Existing', '', '**Goal:** x', ''], { convention: null });
-    const result = runGsdTools('phase add "New thing" --raw', tmp);
-    assert.ok(result.success, result.error);
-    assert.strictEqual(result.output.trim(), '01');
-    assertWritten(1);
-  });
-
-  // #5528 acceptance criterion 4: a non-bracket repo's `Depends on` still reads the whole roadmap,
-  // archived milestones included, exactly as before the bracket scoping existed.
-  for (const convention of [null, 'sequential', 'milestone-prefixed']) {
-    test(`non-bracket (${convention}): Depends on still names a phase from a shipped milestone block`, () => {
-      const rm = ['# Roadmap', '', '## Milestone v1.0 (shipped)', '', '### Phase 4: Old', '', '## Milestone v2.0', ''];
-      setup(rm, { convention, dirs: ['05-held'] });
-      assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '06');
-      assert.strictEqual(dependsOn(6), 'Phase 4');
-      setup(rm, { convention, dirs: ['05-held'] });
-      runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
-      assert.deepStrictEqual([dependsOn(6), dependsOn(7)], ['Phase 4', 'Phase 6']);
-    });
-  }
-
-  // Bracket repos write through the bracket writer (#4304): the project code is required, headings are
-  // `[GSD.02] NN`, directories `GSD.02-NN-slug`. Allocation must count every representation of an
-  // existing phase of the active milestone (heading, checklist bullet, directory, sibling worktree).
-  const bracketSetup = (roadmapLines, { dirs = [] } = {}) => {
-    const planning = setup(roadmapLines, { dirs });
-    fs.writeFileSync(path.join(planning, 'config.json'), JSON.stringify({ phase_id_convention: 'bracket', project_code: 'GSD' }));
-    return planning;
-  };
-  const bracketDir = (n, slug = 'new-thing') => path.join(tmp, '.planning', 'phases', `GSD.02-${String(n).padStart(2, '0')}-${slug}`);
-  const nn = (n) => String(n).padStart(2, '0');
-  const BRACKET_ROADMAP = ['# Roadmap', '', '## [GSD.02] v2.0 - Current', ''];
-
-  test('bracket issue repro: a bracket heading blocks reuse of its number and the new phase depends on it', () => {
-    bracketSetup([...BRACKET_ROADMAP, '### [GSD.02] 01: Existing', '', '**Goal:** x', '']);
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '02');
-    assert.ok(fs.existsSync(bracketDir(2)), 'phases/GSD.02-02-new-thing created');
-    const analyzed = JSON.parse(runGsdTools(['roadmap', 'analyze'], tmp).output);
-    assert.deepStrictEqual(analyzed.phases.map((p) => p.number).sort(), ['01', '02']);
-  });
-
-  for (const [label, lines, dirs, expected] of [
-    ['a checklist bullet', ['- [ ] **[GSD.02] 05: Existing**'], [], 6],
-    ['a no-checkbox bracket bullet', ['- [GSD.02] 05: Existing'], [], 6],
-    ['an on-disk directory with no heading', [], ['GSD.02-04-held'], 5],
-    ['a letter-suffixed bullet', ['- [ ] [GSD.02] 12A: Lettered'], [], 13],
-  ]) {
-    test(`bracket: ${label} blocks reuse of its number`, () => {
-      bracketSetup([...BRACKET_ROADMAP, ...lines, ''], { dirs });
-      assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), nn(expected));
-      assert.ok(fs.existsSync(bracketDir(expected)), `GSD.02-${nn(expected)}-new-thing created`);
-    });
-  }
-
-  test('bracket: a directory of another milestone does not feed the active milestone numbering', () => {
-    bracketSetup(BRACKET_ROADMAP, { dirs: ['GSD.01-12-old'] });
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
-  });
-
-  test('bracket: a bracket sentinel (icebox) phase reserves nothing', () => {
-    bracketSetup([...BRACKET_ROADMAP, '- [ ] **[GSD.999] 07: Icebox**', ''], { dirs: ['GSD.999-07-icebox'] });
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
-  });
-
-  test('bracket: a prose bullet "- [GSD.02] 2026 release notes" is not phase 2026', () => {
-    bracketSetup([...BRACKET_ROADMAP, '- [GSD.02] 2026 release notes', ''], {});
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
-  });
-
-  test('bracket: a legacy "- [ ] Phase 5:" bullet in a bracket roadmap reserves its number and does not crash', () => {
-    bracketSetup([...BRACKET_ROADMAP, '- [ ] Phase 5: legacy bullet', '']);
-    const result = runGsdTools('phase add "New thing" --raw', tmp);
-    assert.ok(result.success, result.error);
-    assert.strictEqual(result.output.trim(), '06');
-  });
-
-  test('bracket: a "## [GSD.02] 2 - Foundation" milestone heading reserves no phase number', () => {
-    bracketSetup(['# Roadmap', '', '## [GSD.02] 2 - Foundation', '']);
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '01');
-  });
-
-  test('bracket: add-batch allocates consecutive numbers after a directory-only phase', () => {
-    bracketSetup(BRACKET_ROADMAP, { dirs: ['GSD.02-04-orphan'] });
-    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["A","B"]'], tmp);
-    assert.ok(result.success, result.error);
-    assert.deepStrictEqual(JSON.parse(result.output).phases.map((p) => p.phase_number), [5, 6]);
-  });
-
-  test('bracket: a directory held only by a sibling worktree blocks reuse of its number', (t) => {
-    bracketSetup(BRACKET_ROADMAP);
-    const sibling = addSiblingWorktree(t, 'gsd-5528-sibd-');
-    fs.mkdirSync(path.join(sibling, '.planning', 'phases', 'GSD.02-50-elsewhere'), { recursive: true });
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '51');
-  });
-
-  test('bracket: a checklist bullet held only by a sibling worktree ROADMAP blocks reuse of its number', (t) => {
-    bracketSetup(BRACKET_ROADMAP);
-    const sibling = addSiblingWorktree(t, 'gsd-5528-sibb-');
-    fs.writeFileSync(path.join(sibling, '.planning', 'ROADMAP.md'), [...BRACKET_ROADMAP, '- [ ] **[GSD.02] 50: Elsewhere**', ''].join('\n'));
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '51');
-  });
-
-  test('bracket: allocation steps past the 999 backlog sentinel', () => {
-    bracketSetup([...BRACKET_ROADMAP, '### [GSD.02] 998: Near the sentinel', '']);
-    assert.strictEqual(runGsdTools('phase add "New thing" --raw', tmp).output.trim(), '1000');
-  });
-
-  test('bracket property: whatever mix of heading, bullet and directory phases exists, the next number is max+1', () => {
-    const fc = require('fast-check');
-    fc.assert(
-      fc.property(fc.uniqueArray(fc.integer({ min: 1, max: 60 }), { minLength: 1, maxLength: 5 }), fc.constantFrom('heading', 'bullet', 'directory'), (nums, form) => {
-        const lines = form === 'directory' ? [] : nums.map((n) => (form === 'bullet' ? `- [ ] **[GSD.02] ${nn(n)}: P${n}**` : `### [GSD.02] ${nn(n)}: P${n}`));
-        const dirs = form === 'directory' ? nums.map((n) => `GSD.02-${nn(n)}-held`) : [];
-        bracketSetup([...BRACKET_ROADMAP, ...lines, ''], { dirs });
-        return runGsdTools('phase add "New thing" --raw', tmp).output.trim() === nn(Math.max(...nums) + 1);
-      }),
-      { numRuns: 20, seed: 5528 },
-    );
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
 // phase add touches only the block it inserts (#5113)
 //
 // `platformWriteSync` re-normalizes the WHOLE Markdown document on every write. For phase.add
@@ -3200,301 +2729,6 @@ describe('phase add / add-batch leave the rest of ROADMAP.md byte-identical (#51
     assert.strictEqual(JSON.parse(result.output).phase_number, 3);
     const after = fs.readFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), 'utf-8');
     assert.match(after, /### Phase 3: Next[\s\S]*?\*\*Depends on:\*\* Phase 1\b/, 'Phase 2 has a directory but no roadmap section');
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// workstream-scoped phase allocation vs sibling git worktrees (#4225)
-//
-// The #3849 widening horizon (collectSiblingWorktreePhaseNums) scans each
-// sibling's ROOT .planning/. A --ws allocation must instead scan the sibling's
-// copy of the SAME workstream: workstream numbering is independent of the root
-// roadmap (Workstream Namespacing REQ-WS-01 — workstream state is isolated in
-// .planning/workstreams/{name}/), so a sibling's root-roadmap numbers must not
-// leak into a workstream allocation.
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('phase add --ws workstream-scoped allocation vs sibling git worktrees (#4225)', () => {
-  const activeWorktrees = [];
-  const activeDirs = [];
-
-  function git(args, cwd) {
-    return gitOrThrow(args, { cwd, timeoutMs: GIT_TIMEOUT_MS });
-  }
-
-  /**
-   * The #4225 topology: a committed ROOT roadmap with phases 1..rootMax (every
-   * linked worktree carries it), plus workstream `wsName` whose own roadmap and
-   * phases/ hold 1..wsMax.
-   */
-  function initWsRepo(repoDir, rootMax, wsName, wsMax) {
-    const rootLines = ['# Roadmap', '', '## Milestone v1.0', ''];
-    for (let i = 1; i <= rootMax; i++) {
-      rootLines.push(`### Phase ${i}: root phase ${i}`, '', '**Goal:** root goal', '');
-    }
-    fs.mkdirSync(path.join(repoDir, '.planning', 'phases'), { recursive: true });
-    fs.writeFileSync(path.join(repoDir, '.planning', 'ROADMAP.md'), rootLines.join('\n') + '\n');
-
-    const wsBase = path.join(repoDir, '.planning', 'workstreams', wsName);
-    const wsLines = ['# Workstream Roadmap', '', '## Milestone v1.0', ''];
-    for (let i = 1; i <= wsMax; i++) {
-      wsLines.push(`### Phase ${i}: ws phase ${i}`, '', '**Goal:** ws goal', '');
-    }
-    fs.mkdirSync(path.join(wsBase, 'phases'), { recursive: true });
-    if (wsMax > 0) {
-      fs.mkdirSync(path.join(wsBase, 'phases', String(wsMax).padStart(2, '0') + '-ws-phase-' + wsMax));
-    }
-    fs.writeFileSync(path.join(wsBase, 'ROADMAP.md'), wsLines.join('\n') + '\n');
-
-    git(['init', '-b', 'main'], repoDir);
-    git(['config', 'user.email', 'test@example.com'], repoDir);
-    git(['config', 'user.name', 'Test'], repoDir);
-    git(['add', '-A'], repoDir);
-    git(['commit', '-m', 'init'], repoDir);
-    return wsBase;
-  }
-
-  /** A sibling linked worktree checked out at HEAD (carries the committed root roadmap). */
-  function addSiblingAtHead(repoDir) {
-    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
-    const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-sib-'));
-    git(['worktree', 'add', '--detach', worktreeDir, sha], repoDir);
-    activeWorktrees.push({ repoDir, worktreeDir });
-    return worktreeDir;
-  }
-
-  function teardown() {
-    while (activeWorktrees.length) {
-      const { repoDir, worktreeDir } = activeWorktrees.pop();
-      try {
-        git(['worktree', 'remove', '--force', worktreeDir], repoDir);
-      } catch (_) { /* best-effort; cleanup() below still removes the directory */ }
-      cleanup(worktreeDir);
-    }
-    while (activeDirs.length) cleanup(activeDirs.pop());
-  }
-
-  afterEach(teardown);
-
-  test('phase add --ws numbers from the workstream, not the sibling root roadmaps (issue verbatim)', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-main-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 39, 'ws-alpha', 2);
-    addSiblingAtHead(repoDir);
-
-    const result = runGsdTools(['query', 'phase.add', 'New workstream feature', '--ws', 'ws-alpha'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      3,
-      '#4225: the workstream\'s own next number (max 2 + 1), not the root roadmap\'s 39 + 1'
-    );
-    assert.strictEqual(output.padded, '03');
-    assert.strictEqual(
-      output.directory,
-      '.planning/workstreams/ws-alpha/phases/03-new-workstream-feature',
-      'directory must land inside the workstream with the workstream-scoped number'
-    );
-
-    const wsRoadmap = fs.readFileSync(
-      path.join(repoDir, '.planning', 'workstreams', 'ws-alpha', 'ROADMAP.md'),
-      'utf-8'
-    );
-    assert.ok(wsRoadmap.includes('### Phase 3: New workstream feature'), 'ws roadmap entry must be Phase 3');
-    assert.ok(wsRoadmap.includes('**Depends on:** Phase 2'), 'dependency must reference the in-workstream predecessor');
-
-    // The root roadmap and root phases/ are a different numbering universe — untouched.
-    const rootRoadmap = fs.readFileSync(path.join(repoDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    assert.ok(!rootRoadmap.includes('New workstream feature'), 'root roadmap must not gain the workstream phase');
-    assert.ok(
-      !fs.readdirSync(path.join(repoDir, '.planning', 'phases')).some((e) => e.startsWith('40-')),
-      'root phases/ must not gain a 40- directory'
-    );
-  });
-
-  test('phase add --ws still skips a number held by the SAME workstream in a sibling', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-same-ws-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 39, 'ws-alpha', 2);
-    const sibling = addSiblingAtHead(repoDir);
-
-    // The sibling's ws-alpha copy holds Phase 3 (a branch that already minted it).
-    const sibWsPhases = path.join(sibling, '.planning', 'workstreams', 'ws-alpha', 'phases');
-    fs.mkdirSync(path.join(sibWsPhases, '03-sibling-only'), { recursive: true });
-    const sibWsRoadmap = path.join(sibling, '.planning', 'workstreams', 'ws-alpha', 'ROADMAP.md');
-    fs.appendFileSync(sibWsRoadmap, '\n### Phase 3: sibling-only phase\n\n**Goal:** taken\n');
-
-    const result = runGsdTools(['query', 'phase.add', 'Contended', '--ws', 'ws-alpha'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      4,
-      '#4225 keeps the #3849 widening: a number taken by the same workstream on another branch is still taken — but the sibling root roadmap\'s 39 must not decide it'
-    );
-  });
-
-  test('phase add --ws numbers the FIRST phase of an empty workstream as 1', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-empty-ws-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 39, 'ws-empty', 0);
-    addSiblingAtHead(repoDir);
-
-    const result = runGsdTools(['query', 'phase.add', 'First steps', '--ws', 'ws-empty'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.phase_number, 1, 'an empty workstream starts at 1, not root-max+1 (40)');
-    assert.strictEqual(output.padded, '01');
-    assert.ok(
-      fs.existsSync(path.join(repoDir, '.planning', 'workstreams', 'ws-empty', 'phases', '01-first-steps')),
-      'directory should be 01-first-steps inside the workstream'
-    );
-  });
-
-  test('phase add --ws at the root maximum is coincidentally equal, with an in-workstream dependency', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-ws39-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 39, 'ws-alpha', 39);
-    addSiblingAtHead(repoDir);
-
-    const result = runGsdTools(['query', 'phase.add', 'Fortieth in workstream', '--ws', 'ws-alpha'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.phase_number, 40, 'the workstream\'s own 39+1 — correct for its own reason');
-    const wsRoadmap = fs.readFileSync(
-      path.join(repoDir, '.planning', 'workstreams', 'ws-alpha', 'ROADMAP.md'),
-      'utf-8'
-    );
-    assert.ok(
-      wsRoadmap.includes('**Depends on:** Phase 39'),
-      'Phase 39 dependency is legitimate here: it exists in THIS workstream'
-    );
-  });
-
-  test('a sibling holding only ANOTHER workstream\'s numbers does not affect --ws allocation', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-beta-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 39, 'ws-alpha', 2);
-    const sibling = addSiblingAtHead(repoDir);
-
-    // The sibling's ws-beta (a different, independent numbering universe) is at 50.
-    const betaPhases = path.join(sibling, '.planning', 'workstreams', 'ws-beta', 'phases');
-    fs.mkdirSync(path.join(betaPhases, '50-beta-heavy'), { recursive: true });
-    const betaRoadmap = path.join(sibling, '.planning', 'workstreams', 'ws-beta', 'ROADMAP.md');
-    fs.mkdirSync(path.dirname(betaRoadmap), { recursive: true });
-    fs.writeFileSync(betaRoadmap, ['# Workstream Roadmap', '', '### Phase 50: beta heavy', '', '**Goal:** beta', ''].join('\n') + '\n');
-
-    const result = runGsdTools(['query', 'phase.add', 'Alpha next', '--ws', 'ws-alpha'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      3,
-      'cross-workstream numbers (root 39 in the sibling root roadmap, ws-beta 50) are different universes — ws-alpha numbers from its own 2+1'
-    );
-  });
-
-  test('a sibling without the workstream directory contributes nothing (fail open)', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-no-ws-sib-'));
-    activeDirs.push(repoDir);
-    const wsBase = initWsRepo(repoDir, 39, 'ws-alpha', 2);
-    const sibling = addSiblingAtHead(repoDir);
-
-    // The sibling predates the workstream: its checkout has no ws-alpha at all.
-    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- fixture SETUP, not teardown: strips the sibling's workstreams/ so it lacks the active scope; teardown() owns the dir's removal
-    fs.rmSync(path.join(sibling, '.planning', 'workstreams'), { recursive: true, force: true });
-
-    const result = runGsdTools(['query', 'phase.add', 'Local only', '--ws', 'ws-alpha'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      3,
-      'a missing workstream scope in a sibling contributes nothing — local ws sources decide'
-    );
-    assert.ok(fs.existsSync(path.join(wsBase, 'phases', '03-local-only')));
-  });
-
-  test('phase add-batch --ws numbers sequentially from the workstream, not the root roadmap', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-batch-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 39, 'ws-alpha', 2);
-    addSiblingAtHead(repoDir);
-
-    const result = runGsdTools(
-      ['query', 'phase.add-batch', '--descriptions', '["Batch A","Batch B"]', '--ws', 'ws-alpha'],
-      repoDir
-    );
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.phases[0].phase_number, 3, '#4225: the batch allocator shares the scoped horizon');
-    assert.strictEqual(output.phases[1].phase_number, 4);
-  });
-
-  test('without --ws, allocation keeps the #3849 global sibling horizon byte-for-byte', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-flat-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 440, 'ws-alpha', 2);
-    const sibling = addSiblingAtHead(repoDir);
-
-    // The sibling's ROOT roadmap holds Phase 441 (#3849's shape).
-    fs.appendFileSync(
-      path.join(sibling, '.planning', 'ROADMAP.md'),
-      '\n### Phase 441: sibling root phase\n\n**Goal:** taken\n'
-    );
-
-    const result = runGsdTools(['query', 'phase.add', 'Flat allocation'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(
-      output.phase_number,
-      442,
-      'no --ws: the sibling ROOT roadmap still widens the horizon exactly as #3849 shipped'
-    );
-  });
-
-  test('whitespace-only GSD_WORKSTREAM uses the root sibling horizon (#4462)', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4462-blank-ws-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 2, 'ws-alpha', 39);
-    addSiblingAtHead(repoDir);
-
-    const result = runGsdTools(
-      ['query', 'phase.add', 'Root next'],
-      repoDir,
-      { GSD_WORKSTREAM: '  ' },
-    );
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.phase_number, 3);
-    assert.strictEqual(output.directory, '.planning/phases/03-root-next');
-    assert.ok(
-      !fs.existsSync(path.join(repoDir, '.planning', 'workstreams', '  ')),
-      'an effectively-empty env value must not mint a whitespace-named workstream',
-    );
-  });
-
-  test('phase next-decimal --ws is unaffected (planningDir-scoped already)', () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-4225-dec-'));
-    activeDirs.push(repoDir);
-    initWsRepo(repoDir, 39, 'ws-alpha', 2);
-    addSiblingAtHead(repoDir);
-
-    const result = runGsdTools(['query', 'phase.next-decimal', '2', '--ws', 'ws-alpha'], repoDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
-
-    const output = JSON.parse(result.output);
-    assert.strictEqual(output.next, '02.1', 'next-decimal was never sibling-widened; the fix must not change it');
   });
 });
 
@@ -7584,55 +6818,32 @@ describe('bug #1962: normalizePhaseName preserves letter suffix case', () => {
  * Run `gsd-tools phase complete <phase>` for the phase-complete regression
  * suites and return its stdout.
  *
- * `phase complete` writes ROADMAP.md as its LAST step, after a read-heavy
- * parse/lock sequence (ROADMAP read, two extractCurrentMilestone STATE.md
- * parses, REQUIREMENTS read, phase-dir scan, STATE read — all before the single
- * writePlanningFileSet flush). Under the high-concurrency docker run (~672 test
- * files in parallel), a tight 10s timeout could fire mid-parse and SIGTERM the
- * subprocess BEFORE that write landed, leaving ROADMAP.md untouched. Call sites
- * that used a bare `catch {}` then silently proceeded to assert on the pristine
- * file — an intermittent "checkbox not checked" failure (bug #1998 flake).
- *
- * Two-part fix, no retry loop:
- *  1. A generous timeout so the test's own timer never kills the subprocess
- *     under load (10s cold-node startup × 672-way CPU/IO contention was the
- *     real culprit — all I/O is scoped to tmpDir, so there is no cross-process
- *     race to blame).
- *  2. Never silently swallow a signal/timeout kill: it means the process was
- *     terminated before completing its writes, so we surface it loudly with
- *     context instead of letting it masquerade as an assertion failure. A
- *     *clean* non-zero exit is still tolerated when `tolerateExit` is set,
- *     because the ROADMAP write has already landed before any post-write step
- *     that may exit non-zero in these minimal fixtures.
+ * It runs in this process (#6334). While every call was its own child, a tight
+ * timeout could SIGTERM the child before `phase complete` wrote ROADMAP.md, and
+ * a call site that swallowed the kill then asserted on the pristine file (bug
+ * #1998, an intermittent "checkbox not checked"). There is no child to kill
+ * now, so the timeout and the kill handling are gone and the failure shows as
+ * what it is. A *clean* non-zero exit is still tolerated when `tolerateExit`
+ * is set, because the ROADMAP write has already landed before any post-write
+ * step that may exit non-zero in these minimal fixtures.
  */
 function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
   writePassedVerificationForPhase(tmpDir, phase);
-  const r = runNode([GSD_TOOLS_BIN, 'phase', 'complete', phase], {
-    cwd: tmpDir,
-    timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS,
-  });
-  // A signal/timeout kill terminated the process before it finished writing —
-  // never tolerate it; surface it with whatever output was captured.
-  if (r.killed) {
-    throw new Error(
-      `gsd-tools phase complete ${phase} was killed before completion ` +
-        `(signal=${r.signal}, code=${r.code}). ` +
-        `stdout=${r.stdout || ''} stderr=${r.stderr || ''}`
-    );
-  }
-  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+  // In this process (#6334): there is no child to be killed, so the timeout and
+  // signal handling this helper once carried (#1998) has nothing left to guard.
+  const r = runGsdToolsCaptured(['phase', 'complete', phase], tmpDir);
+  if (r.exitCode === 0) {
     return r.stdout;
   }
   if (tolerateExit) {
     return `${r.stdout || ''}${r.stderr || ''}`;
   }
   const err = new Error(
-    `gsd-tools phase complete ${phase} failed — outcome=${r.outcome} exitCode=${r.exitCode} stderr=${r.stderr.trim()}`
+    `gsd-tools phase complete ${phase} failed — exitCode=${r.exitCode} stderr=${r.stderr.trim()}`
   );
   err.status = r.exitCode;
   err.stdout = r.stdout;
   err.stderr = r.stderr;
-  err.signal = r.signal;
   throw err;
 }
 
@@ -8732,13 +7943,9 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       const { planningDir } = setupPhase1316Project(tmpDir);
       writePassedVerificationForPhase(tmpDir, '32');
 
-      const result = toLegacyResult(runNode([GSD_TOOLS_BIN, 'phase', 'complete', '32'], {
-        cwd: tmpDir,
-        env: process.env,
-        timeoutMs: PHASE_COMPLETE_TIMEOUT_MS,
-      }));
+      const result = runGsdToolsCaptured(['phase', 'complete', '32'], tmpDir);
 
-      assert.strictEqual(result.status, 0, `phase complete failed: ${result.stderr || result.stdout}`);
+      assert.strictEqual(result.exitCode, 0, `phase complete failed: ${result.stderr || result.stdout}`);
       assert.ok(
         !result.stderr.includes('Current Phase Name'),
         `phase.complete must not warn about missing Current Phase Name on prose-block STATE.md; stderr:\n${result.stderr}`,
@@ -9094,9 +8301,10 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
       writePassedVerificationForPhase(tmpDir, '5');
       const phaseModule = require('../gsd-core/bin/lib/phase.cjs');
       const originalWriteFileSync = fs.writeFileSync;
+      const pathOf = installFdPathResolver(t);
       t.mock.method(fs, 'writeFileSync', function injectedRoadmapWriteFailure(target, ...args) {
-        const targetPath = String(target);
-        if (targetPath === roadmapPath || targetPath === `${roadmapPath}.tmp.${process.pid}`) {
+        const targetPath = pathOf(target);
+        if (isWriteTargetOrTemp(targetPath, roadmapPath)) {
           const err = new Error('injected ROADMAP.md write failure');
           err.code = 'EIO';
           throw err;
@@ -9476,6 +8684,8 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
   }
 
   describe('phase complete auto-prune (#2087)', () => {
+    const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
+    const { realClock } = require('../gsd-core/bin/lib/clock.cjs');
     let tmpDir;
 
     beforeEach(() => {
@@ -9519,12 +8729,77 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, true, 'the prune moved entries');
+      assert.strictEqual('auto_prune_error' in out, false, '#5831: no error field when auto-prune succeeds');
 
       const newState = readStateMdForAutoPrune(tmpDir);
       assert.doesNotMatch(newState, /\[Phase 1\]: Old decision/);
       assert.doesNotMatch(newState, /\[Phase 2\]: Old decision/);
       assert.match(newState, /\[Phase 5\]: Recent decision/);
       assert.match(newState, /\[Phase 6\]: Current decision/);
+    });
+
+    test('#5831: a failed auto-prune reports auto_pruned false and keeps every entry in STATE.md', () => {
+      writeConfigForAutoPrune(tmpDir, { workflow: { auto_prune_state: true } });
+      const oldDecisions = ['- [Phase 1]: Old decision from phase 1', '- [Phase 2]: Old decision from phase 2'];
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', ...oldDecisions, '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'STATE-ARCHIVE.md')); // the archive is unusable
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `phase complete must not fail on a best-effort auto-prune: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false);
+      assert.strictEqual(typeof out.auto_prune_error, 'string', 'the failure is reported, not swallowed');
+      assert.ok(out.auto_prune_error.length > 0);
+      assert.strictEqual(out.has_warnings, true);
+      assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 1,
+        'one advisory warning names the failed auto-prune');
+
+      const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+      const prunable = transitionCore(state, { kind: 'prune', cutoff: 2 }, { clock: realClock }).data.archivedSections;
+      assert.deepStrictEqual(prunable.map(s => ({ section: s.section, lines: s.lines })),
+        [{ section: 'Decisions', lines: oldDecisions }], 'the old decisions are still in STATE.md');
+    });
+
+    test('#5831: an auto-prune that archives nothing reports auto_pruned false and no error', () => {
+      writeConfigForAutoPrune(tmpDir, { workflow: { auto_prune_state: true } });
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false, 'a no-op prune is not reported as pruned');
+      assert.strictEqual('auto_prune_error' in out, false);
+      assert.match(readStateMdForAutoPrune(tmpDir), /\[Phase 6\]: Current decision/);
+    });
+
+    test('#5831: an invalid config.json is not an auto-prune failure: no auto_prune_error and no warning', () => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{ not json');
+      writeStateMdForAutoPrune(tmpDir, [
+        '# Session State', '', '**Current Phase:** 6', '**Status:** Executing', '',
+        '## Decisions', '', '- [Phase 1]: Old decision from phase 1', '- [Phase 6]: Current decision', '',
+      ].join('\n'));
+      writeRoadmapForAutoPrune(tmpDir, ['# Roadmap', '', '## Phase 6: Test Phase', '', '**Plans:** 0/2', ''].join('\n'));
+      setupPhaseForAutoPrune(tmpDir, 6, 2);
+
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.auto_pruned, false);
+      assert.strictEqual('auto_prune_error' in out, false, 'a config read/parse failure is not reported as an auto-prune failure');
+      assert.strictEqual(out.warnings.filter(w => w.startsWith('auto-prune of STATE.md failed')).length, 0, 'no auto-prune warning');
+      assert.match(readStateMdForAutoPrune(tmpDir), /\[Phase 1\]: Old decision/, 'nothing was pruned');
     });
 
     test('does NOT prune when auto_prune_state is false (default)', () => {
@@ -10436,15 +9711,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 
-const { cleanup } = require('./helpers.cjs');
-
-const gsdTools = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+const { cleanup, runGsdToolsCaptured } = require('./helpers.cjs');
 
 function run(args, cwd) {
-  const r = runNode([gsdTools, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
-  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+  const r = runGsdToolsCaptured(args, cwd);
+  if (r.exitCode === 0) {
     return { stdout: r.stdout, ok: true };
   }
   return {
@@ -10800,14 +10072,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
-const { cleanup } = require('./helpers.cjs');
-
-const gsdTools2853 = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+const { cleanup, runGsdToolsCaptured } = require('./helpers.cjs');
 
 function run2853(args, cwd) {
-  const r = runNode([gsdTools2853, ...args], { cwd, timeoutMs: PROBE_TIMEOUT_MS });
-  if (r.outcome === OUTCOME.EXITED && r.exitCode === 0) {
+  const r = runGsdToolsCaptured(args, cwd);
+  if (r.exitCode === 0) {
     return { stdout: r.stdout, ok: true };
   }
   return {
@@ -11696,9 +10965,10 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalState = fs.readFileSync(statePath, 'utf8');
     const originalWriteFileSync = fs.writeFileSync;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedStateWriteFailure(target, ...args) {
-      const targetPath = String(target);
-      const isStatePublish = targetPath === statePath || targetPath === `${statePath}.tmp.${process.pid}`;
+      const targetPath = pathOf(target);
+      const isStatePublish = isWriteTargetOrTemp(targetPath, statePath);
       if (isStatePublish) {
         const err = new Error('injected STATE.md write failure');
         err.code = 'EIO';
@@ -11739,9 +11009,10 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalReq = fs.readFileSync(reqPath, 'utf8');
     const originalWriteFileSync = fs.writeFileSync;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedRequirementsWriteFailure(target, ...args) {
-      const targetPath = String(target);
-      if (targetPath === reqPath || targetPath === `${reqPath}.tmp.${process.pid}`) {
+      const targetPath = pathOf(target);
+      if (isWriteTargetOrTemp(targetPath, reqPath)) {
         const err = new Error('injected REQUIREMENTS.md write failure');
         err.code = 'EIO';
         throw err;
@@ -11771,15 +11042,16 @@ describe('issue #4 (CJS): cmdPhaseComplete — idempotency (blind-increment bug)
     const originalWriteFileSync = fs.writeFileSync;
     let requirementsWriteFailed = false;
 
+    const pathOf = installFdPathResolver(t);
     t.mock.method(fs, 'writeFileSync', function injectedRollbackFailure(target, ...args) {
-      const targetPath = String(target);
-      if (targetPath === reqPath || targetPath === `${reqPath}.tmp.${process.pid}`) {
+      const targetPath = pathOf(target);
+      if (isWriteTargetOrTemp(targetPath, reqPath)) {
         requirementsWriteFailed = true;
         const err = new Error('injected REQUIREMENTS.md write failure');
         err.code = 'EIO';
         throw err;
       }
-      if (requirementsWriteFailed && (targetPath === roadmapPath || targetPath === `${roadmapPath}.tmp.${process.pid}`)) {
+      if (requirementsWriteFailed && isWriteTargetOrTemp(targetPath, roadmapPath)) {
         const err = new Error('injected ROADMAP.md rollback failure');
         err.code = 'EIO';
         throw err;
@@ -17883,8 +17155,6 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
 // #5165: milestone-grouped roadmaps — scoped progress, phase.complete re-runs, write-scoped
 // Markdown normalization at the ROADMAP/STATE seam, and ship tracking.
 {
-  const TIMEOUT_MS = PHASE_COMPLETE_TIMEOUT_MS;
-
   const ROADMAP_HEAD = `# Roadmap: Demo
 
   ## Milestones
@@ -17987,11 +17257,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
   }
 
   function gsd(cwd, ...args) {
-    const r = runNode([GSD_TOOLS_BIN, 'query', ...args], {
-      cwd,
-      env: { ...process.env, HOME: cwd },
-      timeoutMs: TIMEOUT_MS,
-    });
+    const r = runGsdToolsCaptured(['query', ...args], cwd, { HOME: cwd });
     assert.equal(r.exitCode, 0, `gsd ${args.join(' ')} failed: ${r.stderr}`);
     return r.stdout;
   }
@@ -18929,4 +18195,663 @@ describe('#5676: find-phase directory token under milestone-prefixed', () => {
       cleanup(tmp);
     }
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #5844: the ghost REQ-ID check must read registration the way the project
+// wrote it: any checkbox mark (`[~]`, `[-]`, …) and a Traceability table that
+// has no Status column both count as "registered".
+// ─────────────────────────────────────────────────────────────────────────────
+describe('issue #5844: ghost REQ-ID check accepts any checkbox mark and Status-less Traceability tables', () => {
+  const STATUS_TABLE = ['| Requirement | Phase | Status |', '|-------------|-------|--------|', '| KNOWN-01 | Phase 01 | Pending |'];
+  const NO_STATUS_TABLE = ['| Requirement | Phase |', '|-------------|-------|', '| KNOWN-01 | Phase 01 |'];
+
+  function build5844Fixture({ reqBody, tableLines, roadmapRequirementsLine = '[KNOWN-01]', eol = '\n' }) {
+    const tmpDir = build2334GhostSurfaceFixture({ reqBody: [], roadmapRequirementsLine });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      ['# Requirements', '', ...reqBody, '', '## Traceability', '', ...tableLines, ''].join(eol),
+    );
+    return tmpDir;
+  }
+  function completePhase1(tmpDir) {
+    const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+    return JSON.parse(output).warnings || [];
+  }
+  const ghostWarningFor = (warnings, id) => warnings.some((w) => /not registered anywhere/i.test(w) && w.includes(id));
+
+  test('#5844-1: a [~] body line with a Status-less Traceability table gives no ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [~] **KNOWN-01**: partially done'], tableLines: NO_STATUS_TABLE });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!ghostWarningFor(warnings, 'KNOWN-01'), `KNOWN-01 is registered (line + row), got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-1b: a [~] body line with a Status table gives no ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [~] **KNOWN-01**: partially done'], tableLines: ['| Requirement | Phase | Status |', '|---|---|---|'] });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!ghostWarningFor(warnings, 'KNOWN-01'), `[~] body line registers the ID, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-2: an ID with neither a body line nor a row still warns', () => {
+    const tmpDir = build5844Fixture({
+      reqBody: ['## Active', '', '- [~] **OTHER-01**: something else'],
+      tableLines: NO_STATUS_TABLE.map((l) => l.replace('KNOWN-01', 'OTHER-01')),
+    });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(ghostWarningFor(warnings, 'KNOWN-01'), `KNOWN-01 is registered nowhere, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-3: the TBD placeholder is exempt from the ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [ ] **KNOWN-01**: a thing'], tableLines: NO_STATUS_TABLE, roadmapRequirementsLine: 'TBD' });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!warnings.some((w) => /\bTBD\b/.test(w)), `TBD must not be warned about, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-4: a row found in a table with no Status column is reported as a missing Status column, not a missing row', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [ ] **KNOWN-01**: a thing'], tableLines: NO_STATUS_TABLE });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(
+        warnings.some((w) => /Traceability row write skipped/.test(w) && /row found but the table has no Status column to write/.test(w) && w.includes('KNOWN-01')),
+        `expected the no-Status-column message, got: ${JSON.stringify(warnings)}`,
+      );
+      assert.ok(!warnings.some((w) => /no matching row found/.test(w)), `the row exists; got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-5: a Status table is unchanged: the row flips to Complete and nothing warns', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [ ] **KNOWN-01**: a thing'], tableLines: STATUS_TABLE });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!warnings.some((w) => w.includes('KNOWN-01')), `no KNOWN-01 warning expected, got: ${JSON.stringify(warnings)}`);
+      const after = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+      assert.match(after, /\| KNOWN-01 \| Phase 01 \| Complete \|/);
+      assert.match(after, /- \[x\] \*\*KNOWN-01\*\*/);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('#5844-6: CRLF REQUIREMENTS.md with a [~] line and a Status-less table gives no ghost warning', () => {
+    const tmpDir = build5844Fixture({ reqBody: ['## Active', '', '- [~] **KNOWN-01**: partially done'], tableLines: NO_STATUS_TABLE, eol: '\r\n' });
+    try {
+      const warnings = completePhase1(tmpDir);
+      assert.ok(!ghostWarningFor(warnings, 'KNOWN-01'), `CRLF must not change the answer, got: ${JSON.stringify(warnings)}`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+});
+
+
+/**
+ * #5726 — `phase add`, `phase add-batch` and `phase insert` must not widen the
+ * milestone window to the whole unshipped roadmap when STATE.md names a
+ * milestone that has no heading in ROADMAP.md.
+ *
+ * Behavioral CLI tests: each case builds a fixture project, runs the real
+ * gsd-tools CLI, and asserts on exit status, stderr and the bytes left on disk.
+ */
+const TWO_MILESTONES = [
+  '# Roadmap',
+  '',
+  '## v2.0 Alpha',
+  '',
+  '### Phase 1: One',
+  '**Goal:** a',
+  '',
+  '### Phase 2: Two',
+  '**Goal:** b',
+  '**Depends on:** Phase 1',
+  '',
+  '## v3.0 Beta',
+  '',
+  '### Phase 3: Three',
+  '**Goal:** c',
+  '',
+].join('\n');
+
+const FREE_FORM = [
+  '# Roadmap',
+  '',
+  '### Phase 1: Alpha',
+  '**Goal:** a',
+  '',
+  '### Phase 2: Beta',
+  '**Goal:** b',
+  '',
+].join('\n');
+
+describe('#5726 phase write verbs on an unresolved STATE milestone', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{}');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function setup({ roadmap, milestone }) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    const state = milestone === undefined
+      ? '# State\n'
+      : `---\nmilestone: ${milestone}\n---\n\n# State\n`;
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), state);
+  }
+
+  const roadmapBytes = () => fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'));
+  const phaseDirs = () => {
+    const dir = path.join(tmpDir, '.planning', 'phases');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [];
+  };
+
+  const VERBS = [
+    ['phase add', (cwd) => runGsdTools(['phase', 'add', 'New thing'], cwd)],
+    ['phase add-batch', (cwd) => runGsdTools(['phase', 'add-batch', '--descriptions', '["New one","New two"]'], cwd)],
+    ['phase insert', (cwd) => runGsdTools(['phase', 'insert', '3', 'Urgent fix'], cwd)],
+  ];
+
+  for (const stateMilestone of ['v9.9', 'v3.1']) {
+    for (const [verb, run] of VERBS) {
+      test(`${verb} refuses STATE milestone ${stateMilestone} with no heading, names it, writes nothing`, () => {
+        setup({ roadmap: TWO_MILESTONES, milestone: stateMilestone });
+        const beforeRoadmap = roadmapBytes();
+        const beforeDirs = phaseDirs();
+
+        const result = run(tmpDir);
+
+        assert.equal(result.success, false, `${verb} must refuse: ${result.output}`);
+        assert.notEqual(result.exitCode, 0);
+        assert.ok(result.error.includes(stateMilestone), `error must name ${stateMilestone}: ${result.error}`);
+        assert.ok(result.error.includes(verb), `error must name the verb ${verb}: ${result.error}`);
+        assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+        assert.deepEqual(phaseDirs(), beforeDirs, 'no phase directory may be created');
+      });
+    }
+  }
+
+  test('phase add with STATE naming a real heading (v3.0) allocates 4 and depends on 3', () => {
+    setup({ roadmap: TWO_MILESTONES, milestone: 'v3.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 4);
+    const roadmap = roadmapBytes().toString('utf-8');
+    assert.match(roadmap, /### Phase 4: New thing[\s\S]*\*\*Depends on:\*\* Phase 3/);
+    assert.deepEqual(phaseDirs(), ['04-new-thing']);
+  });
+
+  test('phase add-batch with STATE naming a real heading (v3.0) allocates 4 and 5', () => {
+    setup({ roadmap: TWO_MILESTONES, milestone: 'v3.0' });
+    const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["New one","New two"]'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.deepEqual(JSON.parse(result.output).phases.map((p) => p.phase_number), [4, 5]);
+  });
+
+  test('phase insert with STATE naming a real heading (v3.0) inserts 3.1', () => {
+    setup({ roadmap: TWO_MILESTONES, milestone: 'v3.0' });
+    const result = runGsdTools(['phase', 'insert', '3', 'Urgent fix'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, '03.1');
+  });
+
+  test('STATE milestone v3 (prefix of the v3.0 heading) resolves to that heading: unchanged', () => {
+    setup({ roadmap: TWO_MILESTONES, milestone: 'v3' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 4);
+  });
+
+  for (const [label, milestone] of [
+    ['no milestone field', undefined],
+    ['an explicit null milestone', 'null'],
+  ]) {
+    test(`versioned roadmap with ${label}: phase add is unchanged`, () => {
+      setup({ roadmap: TWO_MILESTONES, milestone });
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, true, result.error);
+      assert.equal(JSON.parse(result.output).phase_number, 4);
+    });
+  }
+
+  test('free-form legacy roadmap with no milestone field: phase add is unchanged', () => {
+    setup({ roadmap: FREE_FORM, milestone: undefined });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 3);
+  });
+
+  test('free-form legacy roadmap with STATE milestone v1.0 (no milestone headings anywhere): phase add is unchanged', () => {
+    setup({ roadmap: FREE_FORM, milestone: 'v1.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 3);
+  });
+
+  test('free-form legacy roadmap with STATE milestone v1.0: phase add-batch and insert are unchanged', () => {
+    setup({ roadmap: FREE_FORM, milestone: 'v1.0' });
+    const batch = runGsdTools(['phase', 'add-batch', '--descriptions', '["New one"]'], tmpDir);
+    assert.equal(batch.success, true, batch.error);
+    const insert = runGsdTools(['phase', 'insert', '2', 'Urgent fix'], tmpDir);
+    assert.equal(insert.success, true, insert.error);
+  });
+
+  // A version token in a Phase heading, a fence or an HTML comment is not a
+  // milestone heading, so it must not make a free-form roadmap "versioned".
+  const PHASE_HEADING_VERSION = [
+    '# Roadmap',
+    '',
+    '### Phase 1: Migrate to v2.0 API',
+    '**Goal:** a',
+    '',
+    '### Phase 2: Two',
+    '**Goal:** b',
+    '',
+  ].join('\n');
+
+  const FENCED_AND_COMMENTED_VERSION = [
+    '# Roadmap',
+    '',
+    '### Phase 1: One',
+    '**Goal:** a',
+    '',
+    '```',
+    '## v3.0 Example',
+    '```',
+    '',
+    '<!--',
+    '## v4.0 Hidden',
+    '-->',
+    '',
+  ].join('\n');
+
+  test('Phase heading naming a version, STATE milestone v1.0: phase add is unchanged', () => {
+    setup({ roadmap: PHASE_HEADING_VERSION, milestone: 'v1.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 3);
+  });
+
+  test('Phase heading naming a version, STATE milestone v1.0: phase add-batch and insert are unchanged', () => {
+    setup({ roadmap: PHASE_HEADING_VERSION, milestone: 'v1.0' });
+    const batch = runGsdTools(['phase', 'add-batch', '--descriptions', '["New one"]'], tmpDir);
+    assert.equal(batch.success, true, batch.error);
+    const insert = runGsdTools(['phase', 'insert', '2', 'Urgent fix'], tmpDir);
+    assert.equal(insert.success, true, insert.error);
+  });
+
+  test('versioned headings only inside a fence and an HTML comment, STATE milestone v1.0: phase add is unchanged', () => {
+    setup({ roadmap: FENCED_AND_COMMENTED_VERSION, milestone: 'v1.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 2);
+  });
+
+  // A versioned heading counts only when it is visible: a closed or UNCLOSED
+  // HTML comment hides it (an unclosed `<!--` hides everything to EOF), while a
+  // heading after a closed comment is still a real milestone heading.
+  const roadmapWithTail = (...tail) => ['# Roadmap', '', '### Phase 1: One', '**Goal:** a', '', ...tail].join('\n');
+  const HEADING_AFTER_UNCLOSED_COMMENT = roadmapWithTail('<!--', '## v2.0 Next', '');
+  const HEADING_AFTER_FENCED_UNCLOSED_COMMENT = roadmapWithTail('```', '<!--', '```', '## v2.0 Next', '');
+  const HEADING_AFTER_MID_LINE_UNCLOSED_COMMENT = roadmapWithTail('prose with a stray <!-- opener', '## v2.0 Next', '');
+  const HEADING_IN_FENCE_AFTER_TILDE_LINE = roadmapWithTail('```', '~~~', '## v2.0 Next', '```', '');
+  const HEADING_INSIDE_CLOSED_COMMENT = roadmapWithTail('<!--', '## v2.0 Next', '-->', '');
+  const HEADING_AFTER_CLOSED_COMMENT = roadmapWithTail('<!-- note -->', '## v2.0 Next', '');
+  const HEADING_AFTER_REFORMING_COMMENT = roadmapWithTail('<!-<!-- c -->-', '## v2.0 Next', ' -->', '');
+  // A fence line inside a CLOSED comment is part of the comment; the comment
+  // starts first, so the `-->` after it closes it and the heading is visible.
+  const HEADING_AFTER_COMMENT_HOLDING_FENCE = roadmapWithTail('<!-- example:', '```', '-->', '## v2.0 Next', '');
+  // `<!-->` and `<!--->` are complete comments (CommonMark 0.31).
+  const HEADING_AFTER_EMPTY_COMMENT = roadmapWithTail('<!-->', '## v2.0 Next', '');
+  const HEADING_AFTER_DASHED_EMPTY_COMMENT = roadmapWithTail('<!--->', '## v2.0 Next', '');
+  // A line-opening unclosed `<!--` (0-3 spaces of indent) hides to EOF; 4 spaces is code, not a comment.
+  const HEADING_ON_UNCLOSED_COMMENT_LINE = roadmapWithTail('<!-- ## v2.0 Next', '');
+  const HEADING_AFTER_UNCLOSED_COMMENT_INDENT_2 = roadmapWithTail('  <!--', '## v2.0 Next', '');
+  const HEADING_AFTER_UNCLOSED_COMMENT_INDENT_3 = roadmapWithTail('   <!--', '## v2.0 Next', '');
+  const HEADING_AFTER_UNCLOSED_COMMENT_INDENT_4 = roadmapWithTail('    <!--', '## v2.0 Next', '');
+
+  for (const [shape, roadmap] of [
+    ['a versioned heading after an unclosed HTML comment', HEADING_AFTER_UNCLOSED_COMMENT],
+    ['a versioned heading on the line of an unclosed HTML comment opener', HEADING_ON_UNCLOSED_COMMENT_LINE],
+    ['a versioned heading after an unclosed HTML comment indented 2 spaces', HEADING_AFTER_UNCLOSED_COMMENT_INDENT_2],
+    ['a versioned heading after an unclosed HTML comment indented 3 spaces', HEADING_AFTER_UNCLOSED_COMMENT_INDENT_3],
+    ['a versioned heading inside a closed HTML comment', HEADING_INSIDE_CLOSED_COMMENT],
+    ['a versioned heading inside a ``` fence that holds a ~~~ line', HEADING_IN_FENCE_AFTER_TILDE_LINE],
+  ]) {
+    test(`${shape}, STATE milestone v1.0: behaves as a roadmap with no recognized milestone heading`, () => {
+      setup({ roadmap, milestone: 'v1.0' });
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, true, result.error);
+      assert.equal(JSON.parse(result.output).phase_number, 2);
+      const written = roadmapBytes().toString('utf-8').split('\n');
+      assert.equal(written.filter((line) => /^### Phase 2: New thing$/.test(line)).length, 1, 'ROADMAP.md must carry the written phase heading');
+    });
+  }
+
+  for (const [shape, roadmap] of [
+    ['a versioned heading after a closed HTML comment', HEADING_AFTER_CLOSED_COMMENT],
+    ['a versioned heading after a closed comment that holds a ``` line', HEADING_AFTER_COMMENT_HOLDING_FENCE],
+    ['a versioned heading after a `<!-->` comment', HEADING_AFTER_EMPTY_COMMENT],
+    ['a versioned heading after a `<!--->` comment', HEADING_AFTER_DASHED_EMPTY_COMMENT],
+    ['a versioned heading after a 4-space-indented `<!--` (code, not a comment)', HEADING_AFTER_UNCLOSED_COMMENT_INDENT_4],
+    // Pins existing blanking behaviour: `<!-- c -->` is blanked in one pass, so
+    // `<!-<!-- c -->-` never re-forms an opener and the heading below it stays visible.
+    ['a versioned heading after a re-forming `<!-<!-- c -->-` sequence', HEADING_AFTER_REFORMING_COMMENT],
+    ['a versioned heading after a ``` fence that holds an unclosed <!--', HEADING_AFTER_FENCED_UNCLOSED_COMMENT],
+    ['a versioned heading after a prose line with a mid-line unclosed <!--', HEADING_AFTER_MID_LINE_UNCLOSED_COMMENT],
+  ]) {
+    test(`${shape}, STATE milestone v1.0: the heading is recognized, so the unresolved milestone refuses`, () => {
+      setup({ roadmap, milestone: 'v1.0' });
+      const beforeRoadmap = roadmapBytes();
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, false, result.output);
+      assert.ok(/no milestone heading/.test(result.error), result.error);
+      assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+    });
+  }
+
+  // STATE names a milestone the ROADMAP marks shipped: the window is the closed
+  // milestone, so allocation would collide with its phases.
+  const SHIPPED_IN_DETAILS = [
+    '# Roadmap',
+    '',
+    '## v2.0 Current',
+    '',
+    '### Phase 4: Four',
+    '**Goal:** d',
+    '',
+    '<details>',
+    '<summary>✅ v1.0 Shipped (Phases 1-3)</summary>',
+    '',
+    '### Phase 1: One',
+    '**Goal:** a',
+    '',
+    '### Phase 3: Three',
+    '**Goal:** c',
+    '',
+    '</details>',
+    '',
+  ].join('\n');
+
+  const SHIPPED_HEADING = [
+    '# Roadmap',
+    '',
+    '## ✅ v1.0 Done (shipped)',
+    '',
+    '### Phase 1: One',
+    '**Goal:** a',
+    '',
+    '## v2.0 Cur',
+    '',
+    '### Phase 2: Two',
+    '**Goal:** b',
+    '',
+  ].join('\n');
+
+  for (const [shape, roadmap] of [['a <details> block', SHIPPED_IN_DETAILS], ['a ✅ heading', SHIPPED_HEADING]]) {
+    for (const [verb, run] of VERBS) {
+      test(`${verb} refuses a STATE milestone v1.0 shipped as ${shape}, names it, writes nothing`, () => {
+        setup({ roadmap, milestone: 'v1.0' });
+        const beforeRoadmap = roadmapBytes();
+        const beforeDirs = phaseDirs();
+
+        const result = run(tmpDir);
+
+        assert.equal(result.success, false, `${verb} must refuse: ${result.output}`);
+        assert.ok(result.error.includes('v1.0'), `error must name v1.0: ${result.error}`);
+        assert.ok(/already shipped/.test(result.error), `error must say the milestone is already shipped: ${result.error}`);
+        assert.ok(result.error.includes(verb), `error must name the verb ${verb}: ${result.error}`);
+        assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+        assert.deepEqual(phaseDirs(), beforeDirs, 'no phase directory may be created');
+      });
+    }
+  }
+
+  // One owner predicate: every spelling of "closed" that the window selection
+  // treats as closed is also refused as a shipped STATE milestone.
+  const closedShapes = [
+    ['a trailing title-case Shipped', '## v1.0 MVP Shipped'],
+    ['a lowercase status after a dash with a date', '## v1.0 MVP - shipped 2026-01-01'],
+    ['a lowercase status in a parenthetical beside another version', '## v1.0 MVP (shipped, replaces v0.9)'],
+    ['a leading check mark', '## ✅ v1.0'],
+    ['a trailing check mark and capitals', '## v1.0 Core ✅ SHIPPED'],
+  ];
+  for (const [shape, heading] of closedShapes) {
+    for (const [verb, run] of VERBS) {
+      test(`${verb} refuses a STATE milestone v1.0 whose heading is ${shape}`, () => {
+        const roadmap = `# Roadmap\n\n${heading}\n\n### Phase 1: One\n**Goal:** a\n\n## v2.0 Cur\n\n### Phase 2: Two\n**Goal:** b\n\n`;
+        setup({ roadmap, milestone: 'v1.0' });
+        const beforeRoadmap = roadmapBytes();
+
+        const result = run(tmpDir);
+
+        assert.equal(result.success, false, `${verb} must refuse: ${result.output}`);
+        assert.ok(/already shipped/.test(result.error), `must say already shipped: ${result.error}`);
+        assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+      });
+    }
+  }
+
+  for (const summary of ['v1.0 MVP - shipped 2026-01-01', '✅ v1.0 MVP', 'v1.0 MVP Shipped']) {
+    test(`phase add refuses a STATE milestone v1.0 whose <details> summary is "${summary}"`, () => {
+      const roadmap = `# Roadmap\n\n## v2.0 Current\n\n### Phase 4: Four\n**Goal:** d\n\n<details>\n<summary>${summary}</summary>\n\n### Phase 1: One\n**Goal:** a\n\n</details>\n`;
+      setup({ roadmap, milestone: 'v1.0' });
+      const beforeRoadmap = roadmapBytes();
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, false, result.output);
+      assert.ok(/already shipped/.test(result.error), result.error);
+      assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+    });
+  }
+
+  test('STATE milestone v2.0 (not shipped) beside a shipped v1.0 heading still allocates normally', () => {
+    setup({ roadmap: SHIPPED_HEADING, milestone: 'v2.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 3);
+  });
+
+  test('STATE milestone v2.0 (not shipped) beside a shipped <details> v1.0 block still allocates normally', () => {
+    setup({ roadmap: SHIPPED_IN_DETAILS, milestone: 'v2.0' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 5);
+  });
+
+  // "Shipped" is read off the heading the window actually selects, never off any
+  // line that merely mentions the version: these shapes are NOT shipped milestones.
+  const phaseBlock = (n, name) => `### Phase ${n}: ${name}\n**Goal:** x\n\n`;
+  const FENCED_SHIPPED_EXAMPLE = `# Roadmap\n\n\`\`\`\n## v1.0 Example ✅\n\`\`\`\n\n## v1.0 Real\n\n${phaseBlock(1, 'One')}`;
+  const OPEN_HEADING_CHECK_IN_PAREN = `# Roadmap\n\n## v2.1 Next (after v2.0 prep ✅)\n\n${phaseBlock(1, 'One')}`;
+  const OPEN_FAILED_TITLE = `# Roadmap\n\n## v1.0 Failed Payment Recovery (in progress)\n\n${phaseBlock(1, 'One')}`;
+  const FAILED_TITLE_NO_MARKER = `# Roadmap\n\n## v1.0 Failed Payment Recovery\n\n${phaseBlock(1, 'One')}`;
+  const REOPENED = `# Roadmap\n\n## v1.0 Core ✅ SHIPPED\n\n${phaseBlock(1, 'One')}## v1.0 Core Reopened (in progress)\n\n${phaseBlock(2, 'Two')}`;
+  const COMMENTED_SHIPPED = `# Roadmap\n\n<!-- ## v1.0 Old ✅ -->\n\n## v1.0 Real\n\n${phaseBlock(1, 'One')}`;
+  const SHIPPED_V1_CURRENT_V101 = `# Roadmap\n\n## v1.0 Core ✅ SHIPPED\n\n${phaseBlock(1, 'One')}## v1.0.1 Patch\n\n${phaseBlock(2, 'Two')}`;
+  const OPEN_V1_SHIPPED_V101 = `# Roadmap\n\n## v1.0 Core\n\n${phaseBlock(1, 'One')}## v1.0.1 Patch ✅ SHIPPED\n\n${phaseBlock(2, 'Two')}`;
+
+  for (const [shape, roadmap, milestone, phaseNumber] of [
+    ['a fenced shipped example above the real heading', FENCED_SHIPPED_EXAMPLE, 'v1.0', 2],
+    ['an open heading with a check mark in a parenthetical about another version', OPEN_HEADING_CHECK_IN_PAREN, 'v2.1', 2],
+    ['a milestone whose title contains "Failed" and carries an active marker', OPEN_FAILED_TITLE, 'v1.0', 2],
+    ['a shipped heading followed by a reopened in-progress heading', REOPENED, 'v1.0', 3],
+    ['a shipped heading inside an HTML comment', COMMENTED_SHIPPED, 'v1.0', 2],
+    ['STATE v1.0.1 current beside a shipped v1.0 (prefix boundary)', SHIPPED_V1_CURRENT_V101, 'v1.0.1', 3],
+    ['STATE v1.0 open beside a shipped v1.0.1 (prefix boundary)', OPEN_V1_SHIPPED_V101, 'v1.0', 2],
+  ]) {
+    test(`phase add allocates ${phaseNumber} for ${shape}`, () => {
+      setup({ roadmap, milestone });
+      const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+      assert.equal(result.success, true, result.error);
+      assert.equal(JSON.parse(result.output).phase_number, phaseNumber);
+    });
+  }
+
+  for (const [verb, run] of VERBS) {
+    test(`${verb} refuses a milestone whose title merely contains "Failed" and names the remedy`, () => {
+      setup({ roadmap: FAILED_TITLE_NO_MARKER, milestone: 'v1.0' });
+      const beforeRoadmap = roadmapBytes();
+      const result = run(tmpDir);
+      assert.equal(result.success, false, `${verb} must refuse: ${result.output}`);
+      assert.ok(/already shipped/.test(result.error), result.error);
+      assert.ok(/rename/i.test(result.error), `message must name renaming: ${result.error}`);
+      assert.ok(result.error.includes('\u{1f6a7}') && result.error.includes('(in progress)'), `message must name an active marker: ${result.error}`);
+      assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+    });
+  }
+
+  test('a <details> summary heading with an unresolved STATE milestone (v9.9) refuses as unresolved, not shipped', () => {
+    const roadmap = `# Roadmap\n\n## v2.0 Current\n\n${phaseBlock(4, 'Four')}<details>\n<summary>v1.0 Core</summary>\n\n${phaseBlock(1, 'One')}</details>\n`;
+    setup({ roadmap, milestone: 'v9.9' });
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, false, result.output);
+    assert.ok(result.error.includes('v9.9'), result.error);
+    assert.ok(/no milestone heading/.test(result.error), result.error);
+    assert.ok(!/already shipped/.test(result.error), result.error);
+  });
+
+  describe('the STATE milestone echoed in the refusal', () => {
+    const refusalFor = (milestone) => {
+      setup({ roadmap: TWO_MILESTONES, milestone });
+      return runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    };
+
+    test('control characters are escaped, not written to the terminal', () => {
+      const result = refusalFor('v9.9\u001b]0;pwned\u0007\u001b[31m\u009b');
+      assert.equal(result.success, false);
+      // eslint-disable-next-line no-control-regex
+      assert.ok(!/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(result.error), `raw control bytes leaked: ${JSON.stringify(result.error)}`);
+      assert.ok(result.error.includes('\\u001b'), `ESC must be shown escaped: ${result.error}`);
+    });
+
+    // Bidi controls, zero-width and format characters, and line separators are
+    // invisible or reorder the terminal line: each must be shown as \uXXXX.
+    // U+2028/U+2029 end the STATE line, so they are placed after a printable tail.
+    for (const codePoint of [0x7f, 0x85, 0x9f, 0xad, 0x61c, 0x180e, 0x200b, 0x200f, 0x202a, 0x202e, 0x2060, 0x2064, 0x2066, 0x2069, 0x206f, 0xfeff, 0xfff9, 0xfffa, 0xfffb, 0x2028, 0x2029]) {
+      const hex = codePoint.toString(16).padStart(4, '0');
+      test(`U+${hex.toUpperCase()} in the echoed milestone is escaped, never raw`, () => {
+        const result = refusalFor(`v9.9${String.fromCharCode(codePoint)}tail`);
+        assert.equal(result.success, false);
+        assert.ok(!result.error.includes(String.fromCharCode(codePoint)), `raw U+${hex} leaked: ${JSON.stringify(result.error)}`);
+        if (codePoint !== 0x2028 && codePoint !== 0x2029) {
+          assert.ok(result.error.includes(`\\u${hex}`), `U+${hex} must be shown escaped: ${JSON.stringify(result.error)}`);
+        }
+      });
+    }
+
+    for (const [label, length] of [['limit-1', 79], ['limit', 80], ['limit+1', 81]]) {
+      test(`a ${length}-char milestone (${label}) is ${length > 80 ? 'truncated with an ellipsis' : 'echoed whole'}`, () => {
+        const milestone = `v${'9'.repeat(length - 1)}`;
+        const result = refusalFor(milestone);
+        assert.equal(result.success, false);
+        if (length <= 80) {
+          assert.ok(result.error.includes(JSON.stringify(milestone)), result.error);
+        } else {
+          assert.ok(!result.error.includes(milestone), 'the full over-limit value must not be echoed');
+          assert.ok(result.error.includes(`${milestone.slice(0, 80)}…`), result.error);
+        }
+      });
+    }
+  });
+
+  // An empty `milestone:` value is "no milestone field": the YAML delimiter that
+  // follows it must never be read as the milestone.
+  for (const [label, line] of [['empty', 'milestone:'], ['trailing space', 'milestone: ']]) {
+    for (const [verb, run] of VERBS) {
+      test(`${verb} with an ${label} STATE milestone value behaves as with no milestone field`, () => {
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+        fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), `---\n${line}\nstatus: active\n---\n\n# State\n`);
+        const emptyValueRun = run(tmpDir);
+        assert.equal(emptyValueRun.success, true, emptyValueRun.error);
+        assert.ok(!String(emptyValueRun.error ?? '').includes('---'), `error output must not contain ---: ${emptyValueRun.error}`);
+
+        const controlDir = createTempProject();
+        try {
+          fs.writeFileSync(path.join(controlDir, '.planning', 'config.json'), '{}');
+          fs.writeFileSync(path.join(controlDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+          fs.writeFileSync(path.join(controlDir, '.planning', 'STATE.md'), '---\nstatus: active\n---\n\n# State\n');
+          const controlRun = run(controlDir);
+          assert.equal(controlRun.success, true, controlRun.error);
+          assert.deepEqual(JSON.parse(emptyValueRun.output), JSON.parse(controlRun.output));
+        } finally {
+          cleanup(controlDir);
+        }
+      });
+    }
+  }
+
+  test('a literal `milestone: ---` STATE value is an unresolved milestone: phase add refuses and writes nothing', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: ---\nstatus: active\n---\n\n# State\n');
+    const beforeRoadmap = roadmapBytes();
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, false, result.output);
+    assert.ok(/no milestone heading/.test(result.error), result.error);
+    assert.ok(roadmapBytes().equals(beforeRoadmap), 'ROADMAP.md must be byte-identical');
+    assert.deepEqual(phaseDirs(), []);
+  });
+
+  test('an empty STATE milestone value directly before the closing --- allocates normally and never echoes ---', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), TWO_MILESTONES);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone:\n---\n\n# State\n');
+    const result = runGsdTools(['phase', 'add', 'New thing'], tmpDir);
+    assert.equal(result.success, true, result.error);
+    assert.equal(JSON.parse(result.output).phase_number, 4);
+    assert.ok(!String(result.error ?? '').includes('---'), `error output must not contain ---: ${result.error}`);
+  });
+});
+
+describe('#5726 STATE milestone scalar fallback read', () => {
+  const { readStateMilestoneScalar, classifyMilestoneScalar } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+
+  test('a no-frontmatter `milestone: v1.0 # current` line classifies to the bare version', () => {
+    const raw = readStateMilestoneScalar('milestone: v1.0 # current\n# State\n');
+    assert.deepEqual(classifyMilestoneScalar(raw), { explicitNull: false, version: 'v1.0' });
+  });
+
+  test('a quoted no-frontmatter value is unquoted', () => {
+    const raw = readStateMilestoneScalar('milestone: "v1.0"\n# State\n');
+    assert.deepEqual(classifyMilestoneScalar(raw), { explicitNull: false, version: 'v1.0' });
+  });
+});
+
+describe('#5726 closed-marker vocabulary is one source', () => {
+  const { isClosedMilestoneHeading } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+  const WORDS = ['CLOSED', 'ARCHIVED', 'ABANDONED', 'SHIPPED', 'FAILED'];
+  const MARKS = ['\u{2705}', '\u{1f5c4}'];
+
+  for (const word of WORDS) {
+    for (const spelling of [word, word.toLowerCase(), word[0] + word.slice(1).toLowerCase()]) {
+      test(`status word ${spelling} closes a heading`, () => {
+        assert.equal(isClosedMilestoneHeading(`v1.0 MVP ${spelling}`), true);
+        assert.equal(isClosedMilestoneHeading(`v1.0 MVP ${spelling}x`), false);
+      });
+    }
+  }
+
+  for (const mark of MARKS) {
+    test(`status mark U+${mark.codePointAt(0).toString(16)} closes a heading`, () => {
+      assert.equal(isClosedMilestoneHeading(`${mark} v1.0 MVP`), true);
+    });
+  }
 });

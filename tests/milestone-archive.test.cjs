@@ -1023,6 +1023,38 @@ describe('#2142 escalation: milestone.archive-quick — narrow archival entry po
     assert.ok(table, 'Quick Tasks table header must survive the reset');
     assert.strictEqual(table.rows.length, 0, 'all quick task rows must be cleared');
   });
+
+  // #5882 review: W031's remedy (src/health-diagnostic-rules/state-consistency.cts)
+  // says the reset is triggered by directories on disk, not by rows. Pin
+  // that behavior here so the remedy text and the code cannot drift apart.
+  test('quickArchiveResetDependsOnDirectoriesNotRows', () => {
+    // Only directory-less rows (the shape /gsd-fast logs), plus one leftover
+    // directory that no row links to: the rows are still deleted.
+    writeQuickTaskDir(tmpDir, '2026-09-05-unlinked-leftover');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), quickTasksStateWithRows(3));
+
+    const result = runSdkQuery(['milestone.archive-quick', 'v1.0'], tmpDir);
+    assert.ok(result.success, `milestone.archive-quick failed: ${result.error}`);
+    assert.strictEqual(result.data.archived, 1);
+    assert.strictEqual(result.data.state_updated, true);
+    const table = findTableBySchema(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'), 'QuickTasks');
+    assert.ok(table, 'Quick Tasks table header must survive the reset');
+    assert.strictEqual(table.rows.length, 0, 'an unlinked directory still triggers the reset, deleting directory-less rows');
+  });
+
+  test('quickArchiveLeavesTableAloneWhenQuickDirHoldsNoDirectory', () => {
+    // .planning/quick/ exists but holds only a file: nothing to move, so the
+    // directory-less rows stay exactly as they were.
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'quick'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'quick', 'notes.md'), 'not a task dir\n');
+    const state = quickTasksStateWithRows(3);
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), state);
+
+    const result = runSdkQuery(['milestone.archive-quick', 'v1.0'], tmpDir);
+    assert.ok(result.success, `milestone.archive-quick failed: ${result.error}`);
+    assert.strictEqual(result.data.archived, 0);
+    assert.strictEqual(fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'), state, 'STATE.md must be byte-identical');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1359,4 +1391,32 @@ describe('#3597: milestone complete refuses to archive on a non-COMPLETE window 
     assert.ok(!fs.existsSync(path.join(phasesDir, '01-parser')), '01-parser must no longer be on disk at its original location');
     assert.ok(!fs.existsSync(path.join(phasesDir, '02-printable-output')), '02-printable-output must no longer be on disk at its original location');
   });
+});
+
+describe('#5726 milestone complete on an empty STATE.md milestone value', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  // An empty `milestone:` is "no milestone field": the YAML `---` that follows
+  // it must never be read as the STATE milestone and echoed in a mismatch warning.
+  for (const [label, stateBody] of [
+    ['empty value followed by another key', '---\nmilestone:\nstatus: active\n---\n\n# State\n'],
+    ['empty value directly before the closing ---', '---\nmilestone:\n---\n\n# State\n'],
+    ['trailing-space value directly before the closing ---', '---\nmilestone: \n---\n\n# State\n'],
+  ]) {
+    test(`${label}: no mismatch warning, no --- echoed`, () => {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), '{}');
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateBody);
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+
+      const result = runGsdTools(['milestone', 'complete', 'v1.0', '--confirm'], tmpDir);
+      assert.equal(result.success, true, result.error);
+      const stderr = String(result.error ?? '');
+      assert.ok(!stderr.includes('---'), `stderr must not mention ---: ${stderr}`);
+      assert.ok(!stderr.includes('STATE.md milestone'), `no mismatch warning expected: ${stderr}`);
+    });
+  }
 });

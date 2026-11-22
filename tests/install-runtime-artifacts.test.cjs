@@ -69,7 +69,8 @@ const {
   MANIFEST_NAME,
   installerEnv,
   stripAnsi,
-  runMinimalInstall,
+  runMinimalInstall, copyRuntimeFixture,
+  installRuntimeFixture,
   walk,
 } = require('./helpers/install-shared.cjs');
 
@@ -481,9 +482,8 @@ describe('installRuntimeArtifacts — durable Runtime Surface corpus (#4132)', (
   });
 
   for (const runtime of ['codex', 'claude']) {
-    test(`full global ${runtime} manifest covers every installed corpus file with its hash`, (t) => {
-      const installed = runMinimalInstall({ runtime, scope: 'global' });
-      t.after(() => cleanup(installed.root));
+    test(`full global ${runtime} manifest covers every installed corpus file with its hash`, () => {
+      const installed = installRuntimeFixture({ runtime, scope: 'global' });
       const corpusRoots = [
         ['gsd-core/commands/gsd/', path.join(installed.configDir, 'gsd-core', 'commands', 'gsd')],
         ['gsd-core/agents/', path.join(installed.configDir, 'gsd-core', 'agents')],
@@ -8368,7 +8368,8 @@ describe('installRuntimeArtifacts — G3: adapter calling-convention regression 
 //
 // C7 (anti-inertness): recovery must be reachable from a REAL `bin/install.js`
 // run, not merely callable — the #1879-F15 failure mode this whole phase
-// exists to avoid. This spawns the real installer twice against the SAME
+// exists to avoid. The first install is a copy of a real one (copyRuntimeFixture);
+// the second spawns the real installer against the SAME
 // sandbox HOME, with an orphaned staged artifact manually planted between the
 // two runs (simulating a prior run that died between the wipe and its own
 // restore/discard), and asserts the SECOND real installer invocation recovers
@@ -8378,7 +8379,7 @@ describe('installRuntimeArtifacts — G3: adapter calling-convention regression 
 
 describe('#2875: user-artifact-staging — call-site integration (C7 anti-inertness)', () => {
   test('an orphaned USER-PROFILE.md staged under the real gsd-core destDir is recovered by a subsequent real install() run', (t) => {
-    const first = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+    const first = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
     t.after(() => cleanup(first.root));
 
     const gsdCoreDir = path.join(first.configDir, 'gsd-core');
@@ -8426,8 +8427,8 @@ describe('#2875: user-artifact-staging — call-site integration (C7 anti-inertn
 // silently loads nothing (planner guidance, the untrusted-input boundary,
 // the agent-skills bootstrap, the mandatory initial read).
 //
-// Uses the real spawned installer (runMinimalInstall, `bin/install.js`
-// subprocess) so a green run here proves the fix reaches the actual emit
+// Uses a tree the real spawned installer wrote (a copyRuntimeFixture copy of a
+// `bin/install.js` subprocess's output) so a green run here proves the fix reaches the actual emit
 // path, not just the pure function tested in tests/path-replacement.test.cjs.
 // ---------------------------------------------------------------------------
 describe('#3719: real global Claude install — agents/*.md @-refs must resolve on tilde', () => {
@@ -8435,12 +8436,11 @@ describe('#3719: real global Claude install — agents/*.md @-refs must resolve 
   let projectLocal;
 
   before(() => {
-    claudeGlobal = runMinimalInstall({ runtime: 'claude', scope: 'global' });
-    projectLocal = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+    claudeGlobal = installRuntimeFixture({ runtime: 'claude', scope: 'global' });
+    projectLocal = copyRuntimeFixture({ runtime: 'claude', scope: 'local' });
   });
 
   after(() => {
-    cleanup(claudeGlobal.root);
     cleanup(projectLocal.root);
   });
 

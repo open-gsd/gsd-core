@@ -22,11 +22,14 @@ import modelProfilesMod = require('./model-profiles.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- core-utils.cjs is an export= CommonJS module
 import coreUtilsMod = require('./core-utils.cjs');
 const { findOrphanSummaries, findUnsummarizedPlans } = coreUtilsMod;
-import { execGit, platformReadSync as safeReadFile } from './shell-command-projection.cjs';
+import { execGit, execArgvQuarantined, platformReadSync as safeReadFile } from './shell-command-projection.cjs';
+import { readOnlyGitEnv } from './read-only-git-env.cjs';
 import { tryWithinRoot } from './security.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles } from './schema-detect.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
+import { scanBaselineNotation, parseCriteriaAllowMarkers } from './criterion-baseline.cjs';
+import { replayBaselineCriteria, REPLAY_LIMITS, type ReplayReport } from './criterion-replay.cjs';
 import { compileUserPattern, MAX_USER_PATTERN_LEN } from './pattern.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import type { GateExitMode } from './gate-exit.cjs';
@@ -118,7 +121,8 @@ function verifySummaryCore(
   checkFileCount?: number,
   opts?: { checkCommits?: boolean },
 ): SummaryVerification {
-  const fullPath = path.join(cwd, summaryPath);
+  // #5859: init emits absolute paths (#2376); resolve keeps a relative path cwd-anchored.
+  const fullPath = path.resolve(cwd, summaryPath);
   const checkCount = checkFileCount || 2;
   const checkCommits = opts?.checkCommits !== false;
 
@@ -852,10 +856,9 @@ function scanQuantitativeCriteria(content: string): { errors: string[]; warnings
 
   // Allow markers may sit anywhere in the plan (same as the sibling scanners).
   // The reason must be non-empty: `R1 - -->` is not an auditable exit.
-  const allow = new Set<string>();
-  const allowRe = /<!--\s*plan-criteria-allow:\s*(R[1-6])\s+-\s+([^>]*\S)\s*-->/g;
-  let am: RegExpExecArray | null;
-  while ((am = allowRe.exec(content || '')) !== null) allow.add(am[1]);
+  // #4309: the marker parser is shared with the baseline-notation scanner
+  // (it also honors B1/B2; this scanner only ever asks about R ids).
+  const allow = parseCriteriaAllowMarkers(content || '');
 
   const record = (bucket: string[], rule: string, message: string, seen: Set<string>): void => {
     if (allow.has(rule) || seen.has(message)) return;
@@ -1327,7 +1330,7 @@ function scanPlanTruncation(content: string): string[] {
   return errors;
 }
 
-function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
+function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean, opts: { replay?: boolean } = {}): void {
   if (!filePath) {
     error('file path required');
   }
@@ -1394,6 +1397,28 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
     errors.push('Has checkpoint tasks but autonomous is not false');
   }
 
+  // #6302 (ADR-3711 D1/D4): a plan naming a foreign executor must be one that executor can run to the
+  // end. A spawned process cannot raise a checkpoint back to the host, and `agent_hint` names a host
+  // subagent where `executor_runtime` names a foreign process, so the two never share a plan.
+  // Independent of `workflow.cross_runtime_execution`: the refusal is about the plan, not the gate.
+  const declaredExecutorRuntime = typeof fm['executor_runtime'] === 'string' ? fm['executor_runtime'].trim() : '';
+  if (declaredExecutorRuntime !== '') {
+    // The value later becomes a registry lookup key and part of a spawned command's identity (ADR-3711 D2),
+    // so it is held to a bare id: the segment rule of `execute.models.<runtime>`, and never a leading dash
+    // (a flag-shaped value is the hazard resolveOrchestratorExec's own leading-dash guards exist for).
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(declaredExecutorRuntime)) {
+      errors.push('executor_runtime must be a runtime id (letters, digits, underscore and dash only, not starting with a dash)');
+    }
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue comparison
+    if (hasCheckpoints || String(fm['autonomous']) === 'false') {
+      errors.push('executor_runtime cannot be set on a plan with checkpoint tasks or autonomous: false — a foreign executor cannot raise a checkpoint back to the host');
+    }
+    const declaredAgentHint = typeof fm['agent_hint'] === 'string' ? fm['agent_hint'].trim() : '';
+    if (declaredAgentHint !== '') {
+      errors.push('executor_runtime and agent_hint cannot both be set — agent_hint names a host subagent, executor_runtime names a foreign process');
+    }
+  }
+
   // #1951: a decision rated one-way is supposed to be confirmed before it is
   // walked through. Warn (never error — <reversibility> stays additive) when a
   // one-way rating has no checkpoint:decision anywhere ahead of it in the plan,
@@ -1428,6 +1453,38 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   errors.push(...quantScan.errors);
   warnings.push(...quantScan.warnings);
 
+  // #4309: criterion baseline notation (B1 non-discriminating, B2 legacy
+  // comment). Parse failures are statuses only and never change validity.
+  const baselineScan = scanBaselineNotation(content);
+  errors.push(...baselineScan.errors);
+  warnings.push(...baselineScan.warnings);
+
+  // #4310: opt-in replay (ADR-4310). Advisory: mismatches are warnings, statuses never change validity.
+  let replayReport: ReplayReport | null = null;
+  if (opts.replay === true) {
+    const projectDir = path.resolve(cwd);
+    const head = execGit(['rev-parse', 'HEAD'], { cwd: projectDir, timeout: 5000 });
+    const headSha = head.exitCode === 0 && /^[0-9a-f]{40}$/.test(head.stdout) ? head.stdout : null;
+    const replayEnv = { ...process.env, ...readOnlyGitEnv(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_PAGER: 'cat', PAGER: 'cat' };
+    // Fail closed: an operand that exists but cannot be shown to resolve inside the project is refused.
+    const isInsideRoot = (candidate: string): boolean => {
+      const st = statEvidence(path.resolve(projectDir, candidate));
+      return st.kind === 'none' || (st.kind === 'found' && tryWithinRoot(candidate, projectDir) !== null);
+    };
+    replayReport = replayBaselineCriteria(content, {
+      isInsideRoot,
+      run: (argv, { timeoutMs }) => execArgvQuarantined(argv[0], argv.slice(1), {
+        cwd: projectDir,
+        env: replayEnv,
+        timeout: timeoutMs,
+        maxBuffer: REPLAY_LIMITS.OUTPUT_CAP_BYTES,
+      }),
+      now: () => Date.now(),
+      headSha,
+    });
+    warnings.push(...replayReport.warnings);
+  }
+
   emitVerbVerdict(
     validityVerdict(errors.length === 0, {
       valid: errors.length === 0,
@@ -1436,6 +1493,18 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
       task_count: tasks.length,
       tasks,
       frontmatter_fields: Object.keys(fm),
+      // #4309: appended keys (additive payload).
+      baseline_notation_count: baselineScan.notationCount,
+      baseline_findings: baselineScan.findings,
+      baseline_statuses: baselineScan.statuses,
+      ...(replayReport === null ? {} : {
+        replay: {
+          head_sha: replayReport.head_sha,
+          results: replayReport.results,
+          mismatch_count: replayReport.mismatch_count,
+          statuses: replayReport.statuses,
+        },
+      }),
     }),
     'status',
     raw,
@@ -2288,6 +2357,8 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
     {
       agents_dir: agentStatus.agents_dir,
       agents_found: agentStatus.agents_installed,
+      // #5236: `agents_found` is null when the check could not run (an unresolvable runtime id); the reason says why.
+      ...(agentStatus.agents_check_reason === undefined ? {} : { agents_check_reason: agentStatus.agents_check_reason }),
       installed: agentStatus.installed_agents,
       missing: agentStatus.missing_agents,
       incomplete: agentStatus.incomplete_agents,

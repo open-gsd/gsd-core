@@ -100,13 +100,15 @@ claude plugin update gsd-core
 
 The plugin wires gsd-core's always-on guard and update hooks automatically via `hooks/hooks.json`. No manual hook registration is required.
 
+The plugin does **not** provide context warnings: it registers the context monitor hook but not the statusline that feeds it, so the 35% and 25% remaining-context warnings need the npm install (`npx @opengsd/gsd-core@latest --global`, with `--force-statusline` to replace a statusLine that is already set), which registers `gsd-statusline`. The opt-in hooks (`hooks.workflow_guard`, `hooks.community`, `graphify.auto_update`) are likewise registered only by the npm installer, so their config switches do nothing on a plugin-only install. `/gsd-health` reports this as `W032` when the plugin is enabled and no statusline is wired.
+
 **Prerequisites**
 
 The `gsd-tools` binary (installed as part of the `@opengsd/gsd-core` npm package) must be available on your `PATH` for gsd commands to execute their backing logic. The plugin delivers the command, agent, and hook surface; the npm package delivers the runtime CLI.
 
 Node.js (`node`) must also be available on your `PATH`. The plugin's always-on guard hooks (wired in `hooks/hooks.json`) are invoked as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<script>"`. Some Claude Code distributions ship as a standalone binary and do not expose a `node` executable on `PATH`; in those environments the plugin's hooks will not run. Verify with `node --version` before relying on the plugin hooks.
 
-**Runtime build (self-healing).** The runtime CLI's compiled modules under `gsd-core/bin/lib/*.cjs` are build artifacts (ADR-457): they are compiled from `src/*.cts` by `npm run build:lib` and shipped prebuilt in the npm tarball. A plugin-marketplace or git-clone install materializes the repository tree directly and never runs that build step, so those files are initially absent. The CLI heals this automatically: the first `gsd-tools` invocation detects the missing output and compiles it once (using the bundled `typescript` devDependency), then proceeds normally. You may see a one-time `gsd: runtime library not built — compiling once…` notice on stderr; subsequent commands are unaffected. If auto-build cannot run (for example `node_modules` was pruned to production-only and `typescript` is unavailable), the CLI prints an actionable message telling you to run `npm install && npm run build:lib` in the plugin directory.
+**Runtime build (self-healing).** The runtime CLI's compiled modules under `gsd-core/bin/lib/*.cjs` are build artifacts (ADR-457): they are compiled from `src/*.cts` by `npm run build:lib` and shipped prebuilt in the npm tarball. The plugin marketplace entry points at a prebuilt `plugin` branch that the stable release workflow (`release.yml` `finalize`) force-updates with the repository tree plus the compiled `gsd-core/bin/lib/**/*.cjs`, so `claude plugin install` and `claude plugin update` materialize a tree whose runtime library is already built and no build step is needed. A plugin cache populated before this change keeps its unbuilt tree until the next release changes the plugin version, because `claude plugin update` replaces the cache only when the version changes; until then the self-heal below covers it. A raw git-clone of `next` or a release tag still materializes the repository tree directly and never runs that build step, so those files are initially absent there. The CLI heals this automatically: the first `gsd-tools` invocation detects the missing output and compiles it once (using the bundled `typescript` devDependency), then proceeds normally. You may see a one-time `gsd: runtime library not built — compiling once…` notice on stderr; subsequent commands are unaffected. If auto-build cannot run (for example `node_modules` was pruned to production-only and `typescript` is unavailable), the CLI prints an actionable message telling you to run `npm install && npm run build:lib` in the plugin directory.
 
 #### Claude plugin marketplace discovery (ZCODE and compatible runtimes)
 
@@ -115,7 +117,7 @@ GSD Core also ships a `.claude-plugin/marketplace.json` marketplace manifest (si
 1. In your runtime's plugin UI, add a custom marketplace source pointing at `open-gsd/gsd-core` (GitHub `owner/repo` form).
 2. GSD Core appears in the catalog and can be installed directly from the UI.
 
-This path is **additive** and changes nothing about the Claude Code plugin install above (`.claude-plugin/plugin.json` is unchanged). The marketplace entry's `source` is `./`, so it reuses `plugin.json`'s `commands` / `skills` / `hooks` mapping. The catalog version tracks `package.json` (it lives at `plugins[0].version` and is stamped by the release version-sync), so the version you see in the marketplace matches the npm release.
+This path is **additive** and uses the same `.claude-plugin/marketplace.json` entry as the Claude Code plugin install above (`.claude-plugin/plugin.json` is unchanged). The marketplace entry's `source` is `{ "source": "github", "repo": "open-gsd/gsd-core", "ref": "plugin" }` (the prebuilt `plugin` branch, whose tree carries the same `.claude-plugin/plugin.json`), so it reuses `plugin.json`'s `commands` / `skills` / `hooks` mapping. The catalog version tracks `package.json` (it lives at `plugins[0].version` and is stamped by the release version-sync), so the version you see in the marketplace matches the npm release.
 
 ---
 
@@ -555,6 +557,16 @@ fallback chain. The install-time path is always tried first, so GUI launches wit
 minimal `PATH` keep working, and a bare `node` lookup is never depended on. Re-running
 install or update from any of the environments converges stale runner paths — no mixed
 state where some hooks work in one environment and the rest in another.
+
+On Windows, Claude's managed JavaScript hooks are always PowerShell commands (carrying an
+explicit `shell: "powershell"`), portable installs included, so they work with or without Git
+Bash (#5850). The command tries the install-time node path first, then `node` on `PATH`, and
+portable installs spell the script path `$HOME`-relative. The statusline is written as
+`powershell -NoProfile -Command "…"`, which Git Bash and PowerShell both run, because a statusline
+has no `shell` key. The bash resolver is used on POSIX hosts and for non-Claude runtimes. A config
+root shared between Windows and WSL holds the form of whichever environment ran the last install:
+re-running install or update on Linux rewrites the PowerShell entries (and drops their `shell` key)
+back to the bash form.
 
 To pin down which node a given environment picks, run the resolver directly with
 `GSD_NODE_RUNNER_NO_FALLBACKS=1` (first-argument-only resolution) — it prints a stderr

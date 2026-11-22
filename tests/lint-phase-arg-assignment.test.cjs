@@ -152,15 +152,11 @@ const NO_BASH = (() => {
 })();
 
 describe('#4777 review Minor — canonical forms against a quoted value', { skip: NO_BASH }, () => {
-  // Both frozen forms assume an unquoted argument-hint (every argument-hint
-  // in the repo documents that as primary). Neither strips a surrounding
-  // quote, so a quoted value reproduces the exact pre-fix defect
-  // (PHASE_ARG wrong or empty) for this input shape. Documented as a known
-  // limitation in CANONICAL_FORMS rather than silently "improved" — the
-  // positional form is copied verbatim from verify-work.md's pre-existing
-  // shipped implementation, and CANONICAL_FORMS does exact-text matching
-  // against 7 shipped workflow files, so changing the regex here would mean
-  // changing production bash in all of them.
+  // The `positional` form strips one quoted `--ws` token (#6218), matching the workstream parse every workflow
+  // carries. The `phaseFlag` form still assumes an unquoted value (every argument-hint in the repo documents
+  // that as primary), so a quoted `--phase` value reproduces the #4777 defect for that input shape; that is a
+  // known limitation in CANONICAL_FORMS, and CANONICAL_FORMS does exact-text matching against the shipped
+  // workflow files.
   const { execFileSync } = require('node:child_process');
 
   function runForm(form, argumentsValue) {
@@ -168,10 +164,16 @@ describe('#4777 review Minor — canonical forms against a quoted value', { skip
     return execFileSync('bash', ['-c', script], { encoding: 'utf8', timeout: QUICK_SPAWN_TIMEOUT_MS });
   }
 
-  test('positional: a quoted --ws value leaves --ws tokens in PHASE_ARG instead of stripping them', () => {
-    const result = runForm(CANONICAL_FORMS.positional, '4 --ws "my team"');
-    assert.notEqual(result, '4', 'documents the current (wrong) output, not the intended one');
-    assert.match(result, /--ws/, 'the --ws flag survives when its value is quoted');
+  test('positional: a double- or single-quoted --ws value is stripped like the bare one (#6218)', () => {
+    for (const value of ['feature', '"feature"', "'feature'"]) {
+      assert.equal(runForm(CANONICAL_FORMS.positional, `4 --ws ${value}`), '4', value);
+      assert.equal(runForm(CANONICAL_FORMS.positional, `--ws ${value} 4 --auto`), '4 --auto', value);
+    }
+  });
+
+  test('positional: a quoted --ws value holding a space is removed whole', () => {
+    assert.equal(runForm(CANONICAL_FORMS.positional, '4 --ws "my team"'), '4');
+    assert.equal(runForm(CANONICAL_FORMS.positional, "4 --ws 'my team' --auto"), '4 --auto');
   });
 
   test('phaseFlag: a quoted --phase value yields an empty PHASE_ARG, reproducing #4777 for this shape', () => {

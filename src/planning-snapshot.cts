@@ -36,6 +36,9 @@ type VerificationStatus = verificationMod.VerificationStatus;
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
+import configFileReadMod = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileReadMod;
 // #612: `resolvePhaseIdConvention` is the federated (workstream -> root)
 // `phase_id_convention` reader, from the same §7 owner module `planningPaths`
 // comes from. Resolved once in `buildPlanningSnapshot` — see the
@@ -43,7 +46,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 // #4257: `resolveEnvWorkstream` is that same module's ONE owner of the env
 // workstream discriminator `planningDir` applies — the name W002's scope
 // clause prints comes from the same resolution point that scoped the reads.
-const { planningPaths, planningRoot, resolvePhaseIdConvention, resolveEnvWorkstream } = planningWorkspace;
+const { planningPaths, planningRoot, planningDir, resolvePhaseIdConvention, resolveEnvWorkstream } = planningWorkspace;
 // #4257: canonical CommonMark code strippers (markdown-sectionizer is the
 // repo's T0 structural seam, adopted per the #2365 composition order — fenced
 // blocks first, then inline spans) so the `statePhaseTokens` harvest sees
@@ -187,6 +190,10 @@ interface PlanningSnapshot {
   projectSections: { value: string[] | null; scope: Scope; exists: boolean };
   statePhaseTokens: { value: string[]; scope: Scope };
   stateStatus: { value: string | null; scope: Scope };
+  // #5830: STATE.md's whole-file line count (frontmatter included; a final
+  // line terminator does not open an extra line). `null` when STATE.md is
+  // absent or unreadable. Backs W031 (size far over the documented target).
+  stateLineCount: { value: number | null; scope: Scope };
   roadmapDeclaredPhases: { value: { phaseId: string; milestone: string | null }[]; scope: Scope };
   roadmapPhaseCheckboxes: { value: Record<string, boolean>; scope: Scope };
   researchValidationStatus: {
@@ -346,6 +353,18 @@ interface StateFields {
   currentPhaseLabel: { value: string | null; scope: Scope };
   statePhaseTokens: { value: string[]; scope: Scope };
   stateStatus: { value: string | null; scope: Scope };
+  stateLineCount: { value: number | null; scope: Scope };
+}
+
+/**
+ * Line count as an editor shows it: a trailing terminator does not open a new
+ * line. LF and CRLF both terminate a line; `''` is 0 lines. Exported for its
+ * property test (#5830).
+ */
+function countLines(content: string): number {
+  if (content === '') return 0;
+  const parts = content.split(/\r?\n/);
+  return parts[parts.length - 1] === '' ? parts.length - 1 : parts.length;
 }
 
 /**
@@ -402,6 +421,7 @@ function buildStateFields(statePath: string): StateFields {
       currentPhaseLabel: { value: null, scope: SCOPE.UNREADABLE },
       statePhaseTokens: { value: [], scope: SCOPE.UNREADABLE },
       stateStatus: { value: null, scope: SCOPE.UNREADABLE },
+      stateLineCount: { value: null, scope: SCOPE.UNREADABLE },
     };
   }
   if (content === null) {
@@ -409,6 +429,7 @@ function buildStateFields(statePath: string): StateFields {
       currentPhaseLabel: { value: null, scope: SCOPE.UNREADABLE },
       statePhaseTokens: { value: [], scope: SCOPE.UNREADABLE },
       stateStatus: { value: null, scope: SCOPE.UNREADABLE },
+      stateLineCount: { value: null, scope: SCOPE.UNREADABLE },
     };
   }
 
@@ -482,7 +503,9 @@ function buildStateFields(statePath: string): StateFields {
     scope: SCOPE.COMPLETE,
   };
 
-  return { currentPhaseLabel, statePhaseTokens, stateStatus };
+  const stateLineCount = { value: countLines(content), scope: SCOPE.COMPLETE };
+
+  return { currentPhaseLabel, statePhaseTokens, stateStatus, stateLineCount };
 }
 
 /**
@@ -504,11 +527,11 @@ function buildStateFields(statePath: string): StateFields {
  */
 function buildConfigField(cwd: string): { value: Record<string, unknown> | null; scope: Scope; exists: boolean } {
   const configPath = path.join(planningRoot(cwd), 'config.json');
-  if (!fs.existsSync(configPath)) {
-    return { value: null, scope: SCOPE.UNREADABLE, exists: false };
-  }
   try {
-    const raw = fs.readFileSync(configPath, 'utf-8');
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws and is
+    // reported as present-but-unreadable below.
+    const raw = readConfigFileBounded(configPath);
+    if (raw === null) return { value: null, scope: SCOPE.UNREADABLE, exists: false };
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return { value: parsed, scope: SCOPE.COMPLETE, exists: true };
   } catch {
@@ -971,15 +994,16 @@ function buildResearchValidationStatusField(
  * DIRECTORIES, a different target than this field's `milestones/*-ROADMAP.md`
  * FILES — reusing it here would silently answer the wrong question.
  *
- * Root-scoped (`planningRoot(cwd)`), matching `verify.cts`'s own
- * `rootBase`-based `milestonesPath`/`milestonesArchiveDir`.
+ * Scoped by `planningDir(cwd)` (#5881): the project base under GSD_PROJECT and the workstream
+ * directory under a workstream, the same pair `milestone complete` writes and `init.complete-milestone`
+ * reports (`milestones_path`, `archive_dir`), and the pair `repairPaths` (health-diagnostic.cts) backfills.
  */
 function buildMilestoneArchiveStatusField(
   cwd: string,
 ): { value: { archivedVersions: string[]; documentedVersions: string[] }; scope: Scope } {
-  const rootBase = planningRoot(cwd);
-  const milestonesArchiveDir = path.join(rootBase, 'milestones');
-  const milestonesPath = path.join(rootBase, 'MILESTONES.md');
+  const scopeBase = planningDir(cwd);
+  const milestonesArchiveDir = path.join(scopeBase, 'milestones');
+  const milestonesPath = path.join(scopeBase, 'MILESTONES.md');
 
   let archivedVersions: string[] = [];
   let scope: Scope = SCOPE.COMPLETE;
@@ -1349,6 +1373,7 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
     projectSections: buildProjectSectionsField(cwd),
     statePhaseTokens: stateFields.statePhaseTokens,
     stateStatus: stateFields.stateStatus,
+    stateLineCount: stateFields.stateLineCount,
     roadmapDeclaredPhases: roadmapDeclared.declared,
     roadmapPhaseCheckboxes: buildRoadmapPhaseCheckboxesField(paths.roadmap, phaseIdConvention, directoryContext),
     researchValidationStatus: buildResearchValidationStatusField(paths.phases, phaseDirs.value, phaseDirs.scope, phaseIdConvention),
@@ -1371,4 +1396,5 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
 export = {
   buildPlanningSnapshot,
   worstScope,
+  countLines,
 };

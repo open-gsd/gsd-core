@@ -1397,7 +1397,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, cleanup } = require('./helpers.cjs');
 
 const { resolveCapabilityRuntimeState } = require('../gsd-core/bin/lib/capability-state.cjs');
 const { setCapabilityState } = require('../gsd-core/bin/lib/capability-writer.cjs');
@@ -1583,7 +1583,7 @@ describe('issue #2045 AC3 — enable/set accepts an installed third-party cap [D
 // ─── AC4 [D3]: capability list reflects surface state (list/state agree) ─────
 
 describe('issue #2045 AC4 — capability list reflects surface state [D3]', () => {
-  test('an installed skills cap: list `surfaced` agrees with `capability state`', () => {
+  test('an installed skills cap: list `surfaced` agrees with `capability state`', async () => {
     const home = tmpDir('issue2045-home-');
     const cwd = makeCwd();
 
@@ -1598,11 +1598,11 @@ describe('issue #2045 AC4 — capability list reflects surface state [D3]', () =
       fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `---\ndescription: ${stem}\n---\n# ${stem}\n`, 'utf8');
     }
 
-    const installRes = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    const installRes = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
     assert.equal(installRes.success, true, `install failed: ${installRes.error || installRes.output}`);
 
     // capability list --json must include a `surfaced` field for the overlay row.
-    const listRes = runGsdTools(['capability', 'list', '--json'], cwd, scopeEnv(home));
+    const listRes = await runGsdToolsAsync(['capability', 'list', '--json'], cwd, scopeEnv(home));
     assert.equal(listRes.success, true, `list failed: ${listRes.error || listRes.output}`);
     const listRows = JSON.parse(listRes.output);
     const listRow = listRows.find((r) => r.id === CAP_ID);
@@ -1614,7 +1614,7 @@ describe('issue #2045 AC4 — capability list reflects surface state [D3]', () =
     assert.equal(listRow.surfaced, true, 'AC4: list surfaced === true (skills resolved via registry union)');
 
     // capability state <id> --json must agree.
-    const stateRes = runGsdTools(['capability', 'state', CAP_ID, '--json'], cwd, scopeEnv(home));
+    const stateRes = await runGsdToolsAsync(['capability', 'state', CAP_ID, '--json'], cwd, scopeEnv(home));
     assert.equal(stateRes.success, true, `state failed: ${stateRes.error || stateRes.output}`);
     const stateObj = JSON.parse(stateRes.output);
     const stateCap = (stateObj.capabilities || []).find((c) => c.id === CAP_ID);

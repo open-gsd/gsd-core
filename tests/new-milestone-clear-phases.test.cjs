@@ -1,11 +1,11 @@
 /**
  * GSD Tools Tests - New Milestone Clear Phases (#1588, #1447)
  *
- * Verifies that `phases clear` removes all phase subdirectories from
+ * Verifies that `phases clear` archives all phase subdirectories out of
  * .planning/phases/, leaving the directory itself intact.
  *
  * Also covers the #1447 uncommitted-changes guard: phases clear must refuse
- * to delete phase directories that contain uncommitted work.
+ * to archive phase directories that contain uncommitted work.
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
@@ -189,7 +189,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
       result.error.includes('uncommitted') || result.error.includes('aborted'),
       `expected error about uncommitted changes, got: ${result.error}`
     );
-    // Phase directory must still exist (was not deleted)
+    // Phase directory must still exist (was not moved)
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
@@ -210,7 +210,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(fs.existsSync(phase1), 'phase directory must survive when guard fires');
   });
 
-  test('--force bypasses the uncommitted-changes guard and deletes anyway', () => {
+  test('--force bypasses the uncommitted-changes guard and archives anyway', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     const phase1 = path.join(phasesDir, '01-foundation');
     fs.mkdirSync(phase1, { recursive: true });
@@ -221,7 +221,62 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(result.success, `--force should bypass guard and succeed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.cleared, 1, 'should clear 1 phase directory');
-    assert.ok(!fs.existsSync(phase1), 'phase directory must be removed when --force is passed');
+    assert.ok(!fs.existsSync(phase1), 'phase directory must be moved out of phases/ when --force is passed');
+  });
+
+  // #5270: the gate and guard messages told the operator the directories are deleted; the command only ever archives.
+  test('[regression #5270] the --confirm gate says phase directories are archived, never deleted', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+    const result = runGsdTools('phases clear', tmpDir);
+    assert.ok(!result.success);
+    assert.match(result.error, /would archive 1 phase directory/);
+    assert.match(result.error, /milestones\/<label>-phases\//);
+    assert.doesNotMatch(result.error, /delet|permanent/i);
+    assert.match(result.error, /--confirm/);
+  });
+
+  test('[regression #5270] the uncommitted-changes guard says --force archives the edits, never deletes them', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (uncommitted)');
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(!result.success);
+    assert.match(result.error, /--force/);
+    assert.match(result.error, /archive the phase directories with their uncommitted changes/);
+    assert.doesNotMatch(result.error, /delet|permanent/i);
+    assert.ok(fs.existsSync(phase1), 'a refused clear must not move anything');
+  });
+
+  test('[regression #5270] --force archives a committed file that has an uncommitted modification', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (committed)');
+    gitOrThrow(['add', '.planning/phases/'], { cwd: tmpDir });
+    gitOrThrow(['commit', '-m', 'add phase'], { cwd: tmpDir });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (modified after commit)');
+    const refused = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(!refused.success);
+    const result = runGsdTools('phases clear --confirm --force', tmpDir);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(
+      fs.readFileSync(path.join(findPhasesArchive(tmpDir), '01-foundation', 'PLAN.md'), 'utf8'),
+      '# Plan (modified after commit)',
+    );
+  });
+
+  test('[regression #5270] --force archives an uncommitted edit: the content survives in milestones/*-phases/', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, 'PLAN.md'), '# Plan (uncommitted edit)');
+    const result = runGsdTools('phases clear --confirm --force', tmpDir);
+    assert.ok(result.success, result.error);
+    assert.strictEqual(JSON.parse(result.output).cleared, 1);
+    const archive = findPhasesArchive(tmpDir);
+    assert.ok(archive, 'a milestones/*-phases/ archive must exist');
+    assert.strictEqual(
+      fs.readFileSync(path.join(archive, '01-foundation', 'PLAN.md'), 'utf8'),
+      '# Plan (uncommitted edit)',
+    );
   });
 
   test('succeeds without --force when all phase files are committed', () => {
@@ -243,7 +298,7 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(archive, 'a milestones/*-phases/ archive should be created for committed phase dirs');
     assert.ok(
       fs.existsSync(path.join(archive, '01-foundation', 'PLAN.md')),
-      'committed phase content must be preserved in the archive, not hard-deleted',
+      'committed phase content must be preserved in the archive',
     );
   });
 
@@ -784,10 +839,10 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
 
       test('ws mode: forwards --ws to both state.get and state.milestone-switch', () => {
         const out = runStep5('--ws search');
-        assert.match(out, /gsd_run_call:query state\.get milestone --raw --ws search/,
-          `expected state.get to forward --ws search, got: ${out}`);
-        assert.match(out, /gsd_run_call:query state\.milestone-switch --milestone v\[X\.Y\] --name \[Name\] --ws search/,
-          `expected state.milestone-switch to forward --ws search, got: ${out}`);
+        assert.match(out, /gsd_run_call:query state\.get milestone --raw --ws=search/,
+          `expected state.get to forward --ws=search, got: ${out}`);
+        assert.match(out, /gsd_run_call:query state\.milestone-switch --milestone v\[X\.Y\] --name \[Name\] --ws=search/,
+          `expected state.milestone-switch to forward --ws=search, got: ${out}`);
       });
 
       test('flat mode: no stray --ws tokens on either call', () => {
@@ -814,14 +869,14 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
 
       test('ws mode, no outgoing milestone: forwards --ws to the plain phases.clear branch', () => {
         const out = runPhasesClearFence('--ws search');
-        assert.match(out, /gsd_run_call:query phases\.clear --confirm --ws search\s*$/m,
-          `expected phases.clear to forward --ws search, got: ${out}`);
+        assert.match(out, /gsd_run_call:query phases\.clear --confirm --ws=search\s*$/m,
+          `expected phases.clear to forward --ws=search, got: ${out}`);
       });
 
       test('ws mode, with outgoing milestone: forwards --ws alongside --archive-version', () => {
         fs.writeFileSync(path.join(tmpDir, '.planning', '.gsd-outgoing-milestone'), 'v1.0');
         const out = runPhasesClearFence('--ws search');
-        assert.match(out, /gsd_run_call:query phases\.clear --confirm --archive-version v1\.0 --ws search\s*$/m,
+        assert.match(out, /gsd_run_call:query phases\.clear --confirm --archive-version v1\.0 --ws=search\s*$/m,
           `expected phases.clear to forward both --archive-version and --ws, got: ${out}`);
       });
 
@@ -1081,5 +1136,121 @@ describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
     assert.ok(!partABody.includes('## Evolution'), 'Evolution repair must NOT be nested inside the guarded Part A');
     assert.ok(partBBody.includes('## Evolution'), 'Part B must contain the Evolution section template');
     assert.match(partBBody, /always runs/i, 'Part B must state it always runs regardless of GSD_WS');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// new-milestone --reset-phase-numbers (step 7.5, reset-phase-safety.md):
+// under a named project (GSD_PROJECT) or a workstream the fence must archive
+// the SCOPED phases dir (init `phases_dir`) and must never touch the root
+// project's .planning/phases. The fence is EXECUTED with the real
+// init.new-milestone output, as the workflow does. The archive destination is
+// read from init's `phase_archive_path`, which is scoped the same way as `phases_dir`.
+// ────────────────────────────────────────────────────────────────────────
+describe('new-milestone reset-phase-safety: archives the scoped phases dir, never root .planning/phases (#5860)', () => {
+  const stepPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone', 'steps', 'reset-phase-safety.md');
+  const resetFence = extractBashBlocks(readFileNormalized(stepPath))[0];
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(createTempProject());
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const scopes = [
+    { label: 'workstream (--ws search)', rel: ['workstreams', 'search'], args: ['--ws', 'search'], env: { GSD_WORKSTREAM: '', GSD_PROJECT: '' } },
+    { label: 'named project (GSD_PROJECT=beta)', rel: ['beta'], args: [], env: { GSD_WORKSTREAM: '', GSD_PROJECT: 'beta' } },
+  ];
+
+  for (const scope of scopes) {
+    test(`${scope.label}: archives only its own phase dirs, never root .planning/phases`, () => {
+      const rootPlanning = path.join(tmpDir, '.planning');
+      const scoped = path.join(rootPlanning, ...scope.rel);
+      // Root project: shipped v1.0 (so phase_archive_path is non-null on every
+      // version of init), phase 01-root-live is its in-flight work.
+      fs.writeFileSync(path.join(rootPlanning, 'MILESTONES.md'), '# Milestones\n\n## v1.0 Root Ship (Shipped: 2026-01-01)\n');
+      fs.mkdirSync(path.join(rootPlanning, 'phases', '01-root-live'), { recursive: true });
+      // Scoped project/workstream: shipped v2.0 (where `milestone complete`
+      // writes it), leftover phase dir 01-scoped-old.
+      fs.mkdirSync(path.join(scoped, 'phases', '01-scoped-old'), { recursive: true });
+      fs.writeFileSync(path.join(scoped, 'MILESTONES.md'), '# Milestones\n\n## v2.0 Scoped Ship (Shipped: 2026-02-01)\n');
+
+      const result = runGsdTools(['init', 'new-milestone', '--reset-phase-numbers', ...scope.args], tmpDir, scope.env);
+      assert.ok(result.success, `init new-milestone failed: ${result.error}`);
+      const init = JSON.parse(result.output);
+      assert.strictEqual(init.phase_dir_count, 1);
+      assert.ok(init.phase_archive_path, 'a scope that shipped v2.0 reports a phase_archive_path');
+
+      const run = runHookSeam('-c', [resetFence], {
+        interpreter: 'bash',
+        cwd: tmpDir,
+        env: { ...process.env, phases_dir: init.phases_dir, phase_archive_path: init.phase_archive_path },
+      });
+      throwIfFailed(run, 'bash <reset-phase-safety fence>');
+
+      assert.ok(fs.existsSync(path.join(rootPlanning, 'phases', '01-root-live')),
+        'the root project\'s .planning/phases/01-root-live must not be moved by a scoped reset');
+      assert.ok(!fs.existsSync(path.join(scoped, 'phases', '01-scoped-old')),
+        `the scoped phase dir must be archived out of ${init.phases_dir}`);
+      assert.ok(fs.existsSync(path.join(init.phase_archive_path, '01-scoped-old')),
+        `the scoped phase dir must land in phase_archive_path (${init.phase_archive_path})`);
+    });
+  }
+
+  test('named project with several phase dirs (limit+1): every scoped phase dir is archived and the root\'s stay', () => {
+    const rootPlanning = path.join(tmpDir, '.planning');
+    const scoped = path.join(rootPlanning, 'beta');
+    fs.writeFileSync(path.join(rootPlanning, 'MILESTONES.md'), '# Milestones\n\n## v1.0 Root Ship (Shipped: 2026-01-01)\n');
+    fs.mkdirSync(path.join(rootPlanning, 'phases', '01-root-live'), { recursive: true });
+    fs.mkdirSync(path.join(rootPlanning, 'phases', '02-root-live'), { recursive: true });
+    for (const name of ['01-scoped-a', '02-scoped-b']) fs.mkdirSync(path.join(scoped, 'phases', name), { recursive: true });
+    fs.writeFileSync(path.join(scoped, 'MILESTONES.md'), '# Milestones\n\n## v2.0 Scoped Ship (Shipped: 2026-02-01)\n');
+
+    const result = runGsdTools(['init', 'new-milestone', '--reset-phase-numbers'], tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: 'beta' });
+    assert.ok(result.success, `init new-milestone failed: ${result.error}`);
+    const init = JSON.parse(result.output);
+    assert.strictEqual(init.phase_dir_count, 2);
+
+    const run = runHookSeam('-c', [resetFence], {
+      interpreter: 'bash',
+      cwd: tmpDir,
+      env: { ...process.env, phases_dir: init.phases_dir, phase_archive_path: init.phase_archive_path },
+    });
+    throwIfFailed(run, 'bash <reset-phase-safety fence>');
+
+    for (const name of ['01-scoped-a', '02-scoped-b']) {
+      assert.ok(!fs.existsSync(path.join(scoped, 'phases', name)), `${name} must leave the scoped phases dir`);
+      assert.ok(fs.existsSync(path.join(init.phase_archive_path, name)), `${name} must land in phase_archive_path`);
+    }
+    for (const name of ['01-root-live', '02-root-live']) {
+      assert.ok(fs.existsSync(path.join(rootPlanning, 'phases', name)), `the root's ${name} must not move`);
+    }
+  });
+
+  test('flat project (no scope): archives root .planning/phases into the root milestone archive, as before', () => {
+    const rootPlanning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(rootPlanning, 'MILESTONES.md'), '# Milestones\n\n## v1.0 Root Ship (Shipped: 2026-01-01)\n');
+    fs.mkdirSync(path.join(rootPlanning, 'phases', '01-root-old'), { recursive: true });
+
+    const result = runGsdTools(['init', 'new-milestone', '--reset-phase-numbers'], tmpDir, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    assert.ok(result.success, `init new-milestone failed: ${result.error}`);
+    const init = JSON.parse(result.output);
+    assert.strictEqual(init.phase_dir_count, 1);
+    assert.strictEqual(fs.realpathSync(init.phases_dir), path.join(rootPlanning, 'phases'));
+    assert.strictEqual(init.phase_archive_path, path.join(rootPlanning, 'milestones', 'v1.0-phases').split(path.sep).join('/'));
+
+    const run = runHookSeam('-c', [resetFence], {
+      interpreter: 'bash',
+      cwd: tmpDir,
+      env: { ...process.env, phases_dir: init.phases_dir, phase_archive_path: init.phase_archive_path },
+    });
+    throwIfFailed(run, 'bash <reset-phase-safety fence>');
+
+    assert.ok(!fs.existsSync(path.join(rootPlanning, 'phases', '01-root-old')), 'the root phase dir must leave .planning/phases');
+    assert.ok(fs.existsSync(path.join(rootPlanning, 'milestones', 'v1.0-phases', '01-root-old')),
+      'the root phase dir must land in .planning/milestones/v1.0-phases');
   });
 });

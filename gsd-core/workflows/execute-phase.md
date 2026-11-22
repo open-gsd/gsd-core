@@ -74,7 +74,7 @@ Parse `$ARGUMENTS` before loading any context:
 
 - First positional token → `PHASE_ARG`
 - Optional `--wave N` → `WAVE_FILTER`
-- Optional `--gaps-only` keeps its current meaning
+- Optional `--gaps-only` → `GAPS_ONLY=true`
 - Optional `--cross-ai` → `CROSS_AI_FORCE=true` (force all plans through cross-AI execution)
 - Optional `--no-cross-ai` → `CROSS_AI_DISABLED=true` (disable cross-AI for this run, overrides config and frontmatter)
 
@@ -92,7 +92,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 WAVE_PARAM=""; if [[ "$GSD_ARGS" =~ (^|[[:space:]])--wave[[:space:]]+([^[:space:]-][^[:space:]]*) ]]; then WAVE_PARAM="--wave ${BASH_REMATCH[2]}"; fi
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" $WAVE_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
@@ -335,12 +335,6 @@ All subsequent commits go to this branch. User handles merging.
 From init JSON: `phase_dir`, `plan_count`, `incomplete_count`.
 
 Report: "Found {plan_count} plans in {phase_dir} ({incomplete_count} incomplete)"
-
-**Update STATE.md for phase start:**
-```bash
-gsd_run query state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
-```
-This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
 </step>
 
 <step name="discover_and_group_plans">
@@ -365,36 +359,32 @@ plans were filtered because they are **blocked** (non-empty `blocked_by`, #2830)
 are done. Blocked-and-incomplete must never be reported as finished.
 
 ```bash
-# #5118: the owner's answer — `status` and the bare command it routes to. A non-zero exit
-# (an out-of-set report status) is a hard error: surface it, never read it as "no status".
-VERIFY_STATUS=$(gsd_run query verification status "${PHASE_DIR}" --pick status) || { echo "verification status failed — see the error above" >&2; exit 1; }
-VERIFY_ROUTE=$(gsd_run query verification status "${PHASE_DIR}" --pick route) || { echo "verification status failed — see the error above" >&2; exit 1; }
-# #3684: checkbox = marked-complete; report fields can claim a no-op write (#3685).
+# #6096: code computes the branch, never prose. --filter-active: a filter (--gaps-only, --wave). The blocked and
+# not-ready skips come from the plan index; PHASE_MARKED is the roadmap checkbox (#3684, #3685). Non-zero = error.
 ANALYZE=$(gsd_run query roadmap.analyze)
 if [[ "$ANALYZE" == @file:* ]]; then ANALYZE=$(cat "${ANALYZE#@file:}"); fi
 PHASE_MARKED=$(echo "$ANALYZE"|jq -r --arg p "$PHASE_NUMBER" 'def n:sub("^0+(?=[0-9])";"");.phases[]|select(((.number//.phase_number|tostring|n))==($p|n))|.roadmap_complete'|head -1)
+ALL_SUMMARIZED=$(gsd_run query verification all-summarized "${PHASE_DIR}" ${GAPS_ONLY:+--filter-active} ${WAVE_FILTER:+--filter-active} --plan-index "$PLAN_INDEX" --phase-marked "${PHASE_MARKED:-false}") || { echo "verification all-summarized failed — see the error above" >&2; exit 1; }
+DECISION=$(echo "$ALL_SUMMARIZED"|jq -r .decision)
+VERIFY_STATUS=$(echo "$ALL_SUMMARIZED"|jq -r '.status // empty')
 ```
 
-Evaluate in this exact order — the first matching condition decides the outcome; do not evaluate
-later conditions once one matches:
+Branch on `$DECISION` — it already applies the order (filter, blocked, not-ready, then the owner's route):
 
-1. **A filter is active** (`--gaps-only`, or `WAVE_FILTER` set): report "No matching incomplete
-   plans" → exit, unchanged. A filtered run finding nothing left in ITS slice says nothing about
-   whether the phase as a whole is done, and must never jump to verification.
-2. **No filter is active, and at least one filtered plan was skipped because of a non-empty
-   `blocked_by`** (irrespective of `VERIFY_STATUS`): the phase is NOT finished — it is **stuck on a
-   halt**. A plan with no SUMMARY and no dispatched work must never be treated as done merely
-   because nothing was left to filter. Report:
-   `"Phase stuck: {blocked plan ids} blocked by halted {their blocked_by ids} — resolve the halt, do not resume verification."`
-   → exit. Do not fall through to condition 3; this is not a completion state.
-2b. **No filter is active, no blocked-plan skip occurred, and at least one filtered plan was skipped because `ready: false` (#4628)** — the phase is WAITING on incomplete predecessors, not finished: report it by name and exit before any completion state (`execute-phase/steps/ready-wave-gate.md`).
-3. **No filter is active, and every filtered plan was filtered by `has_summary` alone** (no
-   blocked-plan skip occurred) — branch on the owner's answer, never on a status word (#5118):
-   - **`VERIFY_ROUTE == execute-phase`** — the owner routes here when the verify step never ran
-     (`VERIFY_STATUS == missing`, #2868) and when covered source changed after the verifier ran
-     (#4682); on both sides of `PHASE_MARKED`. Report `$VERIFY_STATUS` with:
-     `"All {plan_count} plans are summarized but no VERIFICATION.md exists — resuming at the phase gates (#2868)."`
-     (or, for a stale report, "…verification is stale — resuming at the phase gates to re-run the verifier (#4682).")
+- **`exit-filtered`** (`--gaps-only`, or `WAVE_FILTER` set): report "No matching incomplete plans" → exit,
+  unchanged. A filtered run finding nothing left in ITS slice says nothing about whether the phase as a
+  whole is done, and must never jump to verification.
+- **`exit-blocked`** (a filtered plan was skipped because of a non-empty `blocked_by`): the phase is NOT
+  finished — it is **stuck on a halt**. Report:
+  `"Phase stuck: {blocked plan ids} blocked by halted {their blocked_by ids} — resolve the halt, do not resume verification."`
+  → exit. This is not a completion state.
+- **`exit-not-ready`** (a filtered plan was skipped because `ready: false`, #4628): the phase is
+  WAITING on incomplete predecessors, not finished — report it by name and exit (`execute-phase/steps/ready-wave-gate.md`).
+- **`resume-at-gates`** — the owner routes to execute-phase when the verify step never ran
+  (`VERIFY_STATUS == missing`, #2868) and when covered source changed after the verifier ran (#4682), on both
+  sides of `PHASE_MARKED`. Report `$VERIFY_STATUS` with:
+  `"All {plan_count} plans are summarized but no VERIFICATION.md exists — resuming at the phase gates (#2868)."`
+  (or, for a stale report, "…verification is stale — resuming at the phase gates to re-run the verifier (#4682).")
      SKIP `cross_ai_delegation`, `execute_waves` and `checkpoint_handling` — there is no wave work
      to do — and continue directly at `aggregate_results`, NOT `code_review_gate`. `aggregate_results`
      reads exclusively from on-disk `${PHASE_DIR}` artifacts (`*-SUMMARY.md`) and independent
@@ -407,17 +397,16 @@ later conditions once one matches:
      `update_roadmap`. Never skip `aggregate_results`, `code_review_gate` or `regression_gate` on
      this path — the manual workaround this replaces skipped all three, and that gap is the reason
      this route exists rather than telling users to spawn the verifier by hand.
-   - **`VERIFY_STATUS == passed` + `PHASE_MARKED` is `true`**: genuinely finished.
-     Report "No matching incomplete plans" → exit, unchanged.
-   - **`VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`** — the run died between
-     `verify_phase_goal` and `update_roadmap` (#3684): verification EXISTS — do not redo
-     it or the gates already run. Report `"Phase {X} is verified but never marked
-     complete — resuming at update_roadmap (#3684)."` and continue directly at
-     `update_roadmap`; the tail steps then run in their normal order. This is the ONLY arm that
-     reaches `update_roadmap`.
-   - **Anything else** (`gaps_found`, `human_needed`, `unparseable`, `phase_dir_not_found`):
-     present the owner's `next_action` and `next_command` (`gsd_run query verification status
-     "${PHASE_DIR}" --pick next_action` / `--pick next_command`) → exit. Never `update_roadmap`.
+- **`update-roadmap`** — the report is fresh and `passed`, but the phase is not marked complete: the run died
+  between `verify_phase_goal` and `update_roadmap` (#3684). Verification EXISTS — do not redo it or the gates
+  already run. Report `"Phase {X} is verified but never marked complete — resuming at update_roadmap (#3684)."`
+  and continue directly at `update_roadmap`; the tail steps then run in their normal order. This is the ONLY
+  arm that reaches `update_roadmap`.
+- **`exit-unchanged`** — verified and marked complete: genuinely finished. Report "No matching incomplete
+  plans" → exit, unchanged.
+- **`present-route`** (`gaps_found`, `human_needed`, `unparseable`, `phase_dir_not_found`): present the
+  owner's `next_action` and `next_command` (`echo "$ALL_SUMMARIZED"|jq -r .next_action` / `.next_command`) →
+  exit. Never `update_roadmap`.
 
 Report:
 ```
@@ -432,6 +421,19 @@ Report:
 | 1 | 01-01, 01-02 | {from plan objectives, 3-8 words} |
 | 2 | 01-03 | ... |
 ```
+
+**execute:pre (#5848):** read and execute `execute-phase/steps/pre-execute-gate-hooks.md`; a gate block HALTS here.
+
+**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
+```bash
+PHASE_NUMBER="{phase_number}"
+PHASE_NAME=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
+PLAN_COUNT=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick plan_count)
+[[ "$PLAN_COUNT" =~ ^[0-9]+$ ]] || { echo "phase ${PHASE_NUMBER} not found" >&2; exit 1; }
+[ -n "$PHASE_NAME" ] || PHASE_NAME=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
+gsd_run query state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
+```
+This records the active phase and plan counts in STATE.md.
 </step>
 
 <step name="cross_ai_delegation">
@@ -636,7 +638,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Record this plan's isolation immediately before its dispatch (#5516).** Restore the dispatched plan's **stored decision** from step 2.5 (`plan_id` := this plan's `id`, `USE_WORKTREES_FOR_PLAN` := the value stored for that plan, and `PLAN_FILES` / `PLAN_DELETIONS` re-extracted from this plan's JSON, since the later plans' decisions overwrote them) and run **Part 2** of `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`, so the single-slot sentinel names the plan being dispatched. Do not run it for any other plan, and do not batch it ahead of the dispatches.
 
-   **Executor routing (#1689/#3370).** Per plan, run `gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md` to set `EXECUTOR_TYPE` for `subagent_type="{EXECUTOR_TYPE}"` below.
+   **Executor routing (#1689/#3370).** Per plan, run `gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md` to set `EXECUTOR_TYPE`, `EXECUTOR_MODEL` for `subagent_type="{EXECUTOR_TYPE}"`.
 
    **TDD-applicability resolution (#4266/#4272).** Run `gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md`.
 
@@ -731,9 +733,9 @@ increases monotonically across waves. `{status}` is `complete` (success),
        First resolve repo root so every path is anchored:
        \`PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)\`
        - ${PROJECT_ROOT}/{phase_dir}/{plan_file} (Plan)
-       - ${PROJECT_ROOT}/.planning/PROJECT.md (Project context — core value, requirements, evolution rules)
-       - ${PROJECT_ROOT}/.planning/STATE.md (State)
-       - ${PROJECT_ROOT}/.planning/config.json (Config, if exists)
+       - ${PROJECT_ROOT}/{project_rel} (Project context — core value, requirements, evolution rules)
+       - ${PROJECT_ROOT}/{state_rel} (State)
+       - ${PROJECT_ROOT}/{config_rel} (Config, if exists)
        ${CONTEXT_WINDOW >= 500000 ? `
        - ${PROJECT_ROOT}/${phase_dir}/*-CONTEXT.md (User decisions from discuss-phase — honors locked choices)
        - ${PROJECT_ROOT}/${phase_dir}/*-RESEARCH.md (Technical research — pitfalls and patterns to follow)
@@ -822,7 +824,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **Configurable stall surveillance (#3212):** Every `${EXECUTOR_STALL_INTERVAL_MINUTES}`
    minutes while waiting, inspect `git log "${EXPECTED_BRANCH}" --since="${DISPATCH_TS}"`
    for activity. If no completion signal, no SUMMARY.md, and no expected-branch
-   commits appear for `${EXECUTOR_STALL_THRESHOLD_MINUTES}` minutes, pause and
+   commits (`harness-worktree` plan: plan commits on any branch, #6117) appear for `${EXECUTOR_STALL_THRESHOLD_MINUTES}` minutes, pause and
    ask for one recovery path: `continue waiting`, `kill and retry`, or
    `kill and switch to inline execution`.
 
@@ -946,7 +948,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
 5.7. **Post-wave shared artifact update (when at least one plan used worktrees, skip if tests failed):**
 
-   When **any** executor agent in this wave ran with `isolation="worktree"`, that agent skipped STATE.md and ROADMAP.md updates to avoid last-merge-wins overwrites. The orchestrator is the single writer for these files. After worktrees are merged back, update shared artifacts once for every completed plan in the wave (worktree-mode plans **and** sequential plans that ran on the main tree but deferred to the orchestrator for tracking writes).
+   When **any** executor in this wave ran with `isolation="worktree"`, it skipped STATE.md and ROADMAP.md updates (last-merge-wins). The orchestrator is the single writer: after the merge, update shared artifacts once for every completed plan in the wave (worktree plans **and** sequential plans that deferred tracking writes).
 
    **Only update tracking when tests passed (TEST_EXIT=0).**
    If tests failed or timed out, skip the tracking update — plans should
@@ -958,12 +960,12 @@ increases monotonically across waves. `{status}` is `complete` (success),
    if [ "${TEST_EXIT}" -eq 0 ]; then
      # Update ROADMAP plan progress for each completed plan in this wave
      for plan_id in {completed_plan_ids}; do
-       PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}" "${plan_id}" "complete") && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
+       PROGRESS=$(gsd_run query roadmap.update-plan-progress "${PHASE_NUMBER}" "${plan_id}" "complete" ${GSD_WS:+--ws=${GSD_WS##* }}) && REASON=$(jq -er '.reason//""' <<<"$PROGRESS") && [ "$REASON" != missing_phase_details ] || { echo "ERROR: ROADMAP update-plan-progress did not complete for ${PHASE_NUMBER}-${plan_id} (missing_phase_details decline, failed query, or jq not installed). STOP: skip this plan's completion steps." >&2; exit 1; }
      done
 
      # Only commit tracking files if they actually changed
-     if ! git diff --quiet .planning/ROADMAP.md .planning/STATE.md 2>/dev/null; then
-       gsd_run query commit "docs(phase-${PHASE_NUMBER}): update tracking after wave ${N}" --files .planning/ROADMAP.md .planning/STATE.md
+     if ! git diff --quiet {roadmap_path} {state_path} 2>/dev/null; then
+       gsd_run query commit "docs(phase-${PHASE_NUMBER}): update tracking after wave ${N}" --files "{roadmap_path}" "{state_path}"
      fi
    elif [ "${TEST_EXIT}" -eq 124 ]; then
      echo "⚠ Skipping tracking update — test suite timed out. Plans remain in-progress. Run tests manually to confirm."
@@ -972,7 +974,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    fi
    ```
 
-   Where `WAVE_PLAN_IDS` is the space-separated list of plan IDs that completed in this wave.
+   Where `WAVE_PLAN_IDS` is the space-separated list of plan IDs that completed in this wave. Then read and execute `execute-phase/steps/post-wave-requirements.md` (shared requirement IDs, #6102).
 
    **If no plan in this wave used worktrees** (project-level `USE_WORKTREES=false` OR `WAVE_WORKTREE_PLANS` is empty): sequential agents already updated STATE.md and ROADMAP.md themselves — skip this step.
 
@@ -1118,15 +1120,16 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
    [Awaiting section from agent return]
    ```
 5. User responds: "approved"/"done" | issue description | decision selection
-6. **Spawn continuation agent (NOT resume)** with a prompt built from these placeholders (there is no separate template file; this list is the contract):
+6. **Spawn continuation agent (NOT resume, except `harness-worktree`)** with a prompt built from these placeholders (there is no separate template file; this list is the contract):
    - `{completed_tasks_table}`: From checkpoint return, wrapped in a `<completed_tasks>` tag (the executor's continuation handling keys on it)
    - `{resume_task_number}` + `{resume_task_name}`: Current task
    - `{user_response}`: What user provided
    - `{resume_instructions}`: Based on checkpoint type
+   - A `harness-worktree` plan's commits are on its unmerged agent branch, not in a fresh worktree: follow `execute-phase/steps/worktree-recovery-policy.md` § checkpoint continuation (#6118)
 7. Continuation agent verifies previous commits, continues from resume point
 8. Repeat until plan completes or user stops
 
-**Why fresh agent, not resume:** Resume relies on internal serialization that breaks with parallel tool calls. Fresh agents with explicit state are more reliable.
+**Why fresh agent, not resume (except `harness-worktree`, #6118):** Resume relies on internal serialization that breaks with parallel tool calls. Fresh agents with explicit state are more reliable.
 
 **Checkpoints in parallel waves:** Agent pauses and returns while other parallel agents may complete. Present checkpoint, spawn continuation, wait for all before next wave.
 </step>
@@ -1184,7 +1187,21 @@ Route on `$STATUS`: if `passed`, proceed to update_roadmap. Otherwise keep the p
 
 **Step A: Persist human verification items as UAT file.**
 
-Create `{phase_dir}/{phase_num}-UAT.md` using UAT template format:
+Merge or skip — never blindly create (#5845). A `{phase_num}-UAT.md` may already hold a human's recorded results (from `/gsd:verify-work`, or from an earlier run before gap-closure) that cannot be re-derived. Check first:
+
+```bash
+UAT_FILE="{phase_dir}/{phase_num}-UAT.md"
+if test -f "$UAT_FILE"; then echo "UAT_EXISTS"; else echo "UAT_ABSENT"; fi
+```
+
+**If `UAT_EXISTS`:** read the file and merge in place. Never reset, overwrite, or replace it, and do not rename it aside (`phase uat-passed` reads `{phase_num}-UAT.round1.md` in the phase directory as a live blocker).
+- Keep every recorded result exactly as written, including `result:` values other than `[pending]`, `source:`/`coverage_id:` lines, `## Gaps`, and `## Deferred Follow-Ups`. Keep `status` and `started` unchanged (`/gsd:verify-work` resume recomputes the status from the rows).
+- For each `human_verification` item in VERIFICATION.md, compare its description to the existing `### N. {description}` test entries. Items not already present (matched by description, case-insensitive with whitespace collapsed) are appended under `## Tests` as the next numbered entry with `expected:` from VERIFICATION.md and `result: [pending]`. Items already present are left untouched.
+- Recompute the `## Summary` counts (`total`, `passed`, `issues`, `pending`, `skipped`, `blocked`) from the merged test list; set `updated` to now.
+- If nothing to append (every item already present), do not write the file and do not commit; continue to Step B.
+- Otherwise commit the merged file with the command below.
+
+**If `UAT_ABSENT`:** create `{phase_dir}/{phase_num}-UAT.md` using UAT template format:
 
 ```markdown
 ---
@@ -1315,7 +1332,7 @@ These items are tracked and will appear in `/gsd:progress` and `/gsd:audit-uat`.
 ```
 
 ```bash
-gsd_run query commit "docs(phase-{X}): complete phase execution" --files .planning/ROADMAP.md .planning/STATE.md .planning/REQUIREMENTS.md {phase_dir}/*-VERIFICATION.md
+gsd_run query commit "docs(phase-{X}): complete phase execution" --files "{roadmap_path}" "{state_path}" "{requirements_path}" {phase_dir}/*-VERIFICATION.md
 ```
 </step>
 
@@ -1372,7 +1389,7 @@ done
 if [ ${#CLOSED[@]} -gt 0 ]; then
   ADDED=(); REMOVED=()
   for f in "${CLOSED[@]}"; do ADDED+=("$COMPLETED_DIR/$f"); REMOVED+=("$PENDING_DIR/$f"); done
-  gsd_run query commit "docs(phase-${PHASE_NUMBER}): close ${#CLOSED[@]} resolved todo(s)" --files "${ADDED[@]}" .planning/STATE.md --files-removed "${REMOVED[@]}" || true
+  gsd_run query commit "docs(phase-${PHASE_NUMBER}): close ${#CLOSED[@]} resolved todo(s)" --files "${ADDED[@]}" "{state_path}" --files-removed "${REMOVED[@]}" || true
   echo "◆ Closed ${#CLOSED[@]} todo(s) for Phase ${PHASE_NUMBER}:"; printf '  ✓ %s\n' "${CLOSED[@]}"
 fi
 ```

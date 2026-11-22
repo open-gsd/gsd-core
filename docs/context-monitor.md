@@ -16,7 +16,7 @@ The statusline shows context usage to the **user**, but the **agent** has no awa
 The hook is also registered for other lifecycle events on some hosts — including
 `PreCompact` (#772). Those events never emit a warning, because only the
 injection-capable events accept the `additionalContext` envelope. `PreCompact` is
-handled specially: it resets the per-session state described under
+handled specially: for a top-level input it resets the per-session state described under
 [Debounce](#debounce) and returns immediately, without running the debounce or
 breadcrumb bookkeeping.
 
@@ -30,7 +30,9 @@ breadcrumb bookkeeping.
 
 "Remaining" is measured to the point where Claude Code auto-compacts, not to the
 end of the model window — the same scale as the statusline's context bar (#4985).
-That point is the auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, else the
+That point is the auto-compact window (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, read the way
+Claude Code reads it: plain or grouped digits, or a case-insensitive `k` or `M` suffix on a number,
+so `500k` is 500,000 and `1.5M` is 1,500,000, clamped to 100k–1M (#6131); else the
 `autoCompactWindow` setting `/autocompact` saves, per model under `modelSettings` or
 top-level, else the model window) minus the 33k auto-compact buffer `/context` shows,
 lowered further when `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` sets an earlier point. With
@@ -118,7 +120,7 @@ To avoid spamming the agent with repeated warnings:
 - First warning always fires immediately
 - Subsequent warnings require 5 tool uses between them
 - Severity escalation (WARNING -> CRITICAL) bypasses debounce
-- A context compaction (`PreCompact`) resets this state, so the cycle after a
+- For a top-level input, a context compaction (`PreCompact`) resets this state, so the cycle after a
   compact behaves like a fresh session: its first warning fires immediately and
   its WARNING -> CRITICAL escalation bypasses debounce again. Without the reset
   both rules above would be dead for the rest of the session once a CRITICAL had
@@ -126,7 +128,7 @@ To avoid spamming the agent with repeated warnings:
 
 ### PreCompact reset
 
-The compaction reset does four things together:
+For a top-level input the compaction reset does four things together (a subagent's `PreCompact` touches none of them; see [Safety](#safety)):
 
 | what | why |
 |---|---|
@@ -203,7 +205,8 @@ As a brief reference: the statusline hook registers as `statusLine` in `settings
 - The hook wraps everything in try/catch and exits silently on error
 - It never blocks tool execution — a broken monitor should not break the agent's workflow
 - Stale metrics (older than 60s) are ignored
-- Missing bridge files are handled gracefully (subagents, fresh sessions)
+- Missing bridge files are handled gracefully (fresh sessions)
+- Subagents get no advisory (#6360): their hook input carries the parent's `session_id`, so the only reading the hook could find is the parent's. An input whose `agent_id` is a non-empty string exits before any bridge or sentinel read or write, on every event; a top-level `--agent` session (`agent_type` only) is monitored as before
 
 ### Supported hosts (#4840)
 
@@ -223,7 +226,7 @@ earlier install and leaves any hook you wrote yourself in place. The install log
 says so in one line. A host with its own statusline can gain support by wiring a
 bridge writer and dropping the declaration.
 
-The debounce counter (`callsSinceWarn`, written on `PreCompact`) is a
+The debounce counter (`callsSinceWarn`, written on a top-level `PreCompact`) is a
 read-modify-write that assumes one session's hooks run one at a time. That is
 verified for Claude Code, the only host the tool-event monitor is registered on; it is the
 reason the assumption does not need to hold for other hosts, and a host that

@@ -30,6 +30,7 @@ const {
   EXPECTED_POINTS_BY_STEP,
   ROLE_TO_AGENT,
   ROLE_FAMILY,
+  ROLES_WITHOUT_AGENT_FILE,
 } = require('../scripts/gen-loop-host-contract.cjs');
 
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
@@ -52,11 +53,17 @@ function makeTempWorkflowsDir(files) {
 
 // ─── Minimal valid workflow content templates ─────────────────────────────────
 
-function makeWorkflow(step, points, roles, produces, consumes, extraContent) {
+// `wiredPoints` defaults to every declared point: a real host both declares a
+// point in its header AND renders it in its body (#5848). A test that needs a
+// declared-but-undispatched point passes a shorter list.
+function makeWorkflow(step, points, roles, produces, consumes, extraContent, wiredPoints) {
   const pointsList = points.join(', ');
   const rolesList = roles.join(', ');
   const producesList = produces.join(', ');
   const consumesList = consumes.join(', ');
+  const sites = (wiredPoints || points)
+    .map((p) => 'HOOKS_JSON=$(gsd_run loop render-hooks ' + p + ' --raw)\n')
+    .join('');
   return (
     '<!-- gsd:loop-host\n' +
     'step: ' + step + '\n' +
@@ -65,6 +72,7 @@ function makeWorkflow(step, points, roles, produces, consumes, extraContent) {
     'produces: ' + producesList + '\n' +
     'consumes: ' + consumesList + '\n' +
     '-->\n' +
+    sites +
     (extraContent || '')
   );
 }
@@ -91,15 +99,30 @@ function makeValidWorkflowFiles() {
       ['SUMMARY.md'], ['PLAN.md'],
       'gsd-executor gsd-verifier',
     ),
+    // #5848: execute:pre's dispatch lives in its step file.
+    'execute-phase/steps/pre-execute-gate-hooks.md': [
+      'EXECUTE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)',
+      'For each active entry where `kind == "contribution"`: inject.',
+      'For each active entry where `kind == "step"`: dispatch.',
+      'For each active entry where `kind == "gate"`: evaluate.',
+      '',
+    ].join('\n'),
     // #5118: the shared verification step hosts execute:post step/gate dispatch.
     'execute-phase/steps/verify-phase-goal.md': [
       'EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)',
       'For each active entry where `kind == "step"`: dispatch.',
       'For each active entry where `kind == "gate"`: evaluate.',
+      // #5984: the verifier's landing site, asserted by the generator's contribution/verifier auxiliary entry.
+      'For each active entry where `kind == "contribution"` and `into == "verifier"`: inject.',
       '',
     ].join('\n'),
     'verify-work.md': makeWorkflow('verify', ['verify:pre', 'verify:post'], ['orchestrator'], ['UAT.md'], ['SUMMARY.md']),
     'ship.md': makeWorkflow('ship', ['ship:pre', 'ship:post'], ['orchestrator'], [], ['UAT.md']),
+    // #3997: the review host is its own landing site for `into: reviewer` contributions.
+    'review.md': makeWorkflow(
+      'review', ['review:pre'], ['reviewer'], [], ['PLAN.md'],
+      'For each active entry where `kind == "contribution"` and `into == "reviewer"`: insert.\n',
+    ),
   };
 }
 
@@ -318,12 +341,24 @@ describe('crossCheckRoleFamilies (#4740)', () => {
     // orchestrator which is family-only). Exact set equality both directions —
     // not a subset check — so adding a role to only one map is caught here.
     const familyKeys = new Set(Object.keys(ROLE_FAMILY));
-    const expectedKeys = new Set([...Object.keys(ROLE_TO_AGENT), 'orchestrator']);
+    // Roles with no gsd agent file (the host itself, the external review lanes) are family-only.
+    const expectedKeys = new Set([...Object.keys(ROLE_TO_AGENT), ...ROLES_WITHOUT_AGENT_FILE]);
     assert.deepEqual(
       [...familyKeys].sort(),
       [...expectedKeys].sort(),
-      'ROLE_FAMILY keys must equal ROLE_TO_AGENT keys plus "orchestrator", exactly',
+      'ROLE_FAMILY keys must equal ROLE_TO_AGENT keys plus ROLES_WITHOUT_AGENT_FILE, exactly',
     );
+    assert.deepEqual(
+      Object.keys(ROLE_TO_AGENT).filter((r) => ROLES_WITHOUT_AGENT_FILE.has(r)),
+      [],
+      'a role cannot be both agent-mapped and exempt from the agent-file check',
+    );
+  });
+
+  test('accepts reviewer at review and only there (#3997)', () => {
+    assert.deepEqual(crossCheckRoleFamilies('review', ['reviewer'], 'review.md'), []);
+    assert.strictEqual(crossCheckRoleFamilies('execute', ['reviewer'], 'execute-phase.md').length, 1);
+    assert.strictEqual(crossCheckRoleFamilies('review', ['orchestrator'], 'review.md').length, 1);
   });
 
   test('property: in-family subsets pass, any foreign role fails', () => {
@@ -370,13 +405,14 @@ describe('crossCheckRoleFamilies (#4740)', () => {
 // ─── 3. assertPointsCoverage ─────────────────────────────────────────────────
 
 describe('assertPointsCoverage', () => {
-  test('passes when all 12 canonical points are covered', () => {
+  test('passes when all 13 canonical points are covered', () => {
     const entries = [
       { step: 'discuss', points: ['discuss:pre', 'discuss:post'] },
       { step: 'plan', points: ['plan:pre', 'plan:post'] },
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.deepEqual(errors, []);
@@ -389,6 +425,7 @@ describe('assertPointsCoverage', () => {
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.ok(errors.some((e) => e.includes('discuss:post') && e.includes('not declared')));
@@ -401,6 +438,7 @@ describe('assertPointsCoverage', () => {
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.ok(errors.some((e) => e.includes('discuss:extra') && e.includes('not in the canonical')));
@@ -413,6 +451,7 @@ describe('assertPointsCoverage', () => {
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.ok(errors.some((e) => e.includes('discuss:pre') && e.includes('more than once')));
@@ -425,8 +464,8 @@ describe('buildContract from real workflows', () => {
   test('produces a contract matching the inline LOOP_HOST_CONTRACT shape', () => {
     const contract = buildContract(); // reads real gsd-core/workflows/
 
-    // Must be an array of 5 entries
-    assert.strictEqual(contract.length, 5, 'contract must have 5 step entries');
+    // Five lifecycle steps plus the review step (#3997)
+    assert.strictEqual(contract.length, 6, 'contract must have 6 step entries');
 
     // Each entry must have step, points, agentRoles, coreArtifacts
     for (const entry of contract) {
@@ -442,12 +481,12 @@ describe('buildContract from real workflows', () => {
     assert.deepEqual(contract, LOOP_HOST_CONTRACT, 'built contract must match committed LOOP_HOST_CONTRACT');
   });
 
-  test('covers exactly the 12 canonical points', () => {
+  test('covers exactly the 13 canonical points', () => {
     const contract = buildContract();
     const allPoints = contract.flatMap((e) => e.points);
-    assert.strictEqual(allPoints.length, 12, 'must cover exactly 12 points');
+    assert.strictEqual(allPoints.length, 13, 'must cover exactly 13 points');
     const pointSet = new Set(allPoints);
-    assert.strictEqual(pointSet.size, 12, 'all 12 points must be distinct');
+    assert.strictEqual(pointSet.size, 13, 'all 13 points must be distinct');
     for (const p of CANONICAL_POINTS) {
       assert.ok(pointSet.has(p), 'canonical point "' + p + '" must be declared');
     }
@@ -587,23 +626,24 @@ describe('normalizeLineEndings', () => {
 // ─── 7. STEP_WORKFLOWS and CANONICAL_POINTS exported constants ────────────────
 
 describe('module exports', () => {
-  test('STEP_WORKFLOWS has 5 entries in pipeline order', () => {
-    assert.strictEqual(STEP_WORKFLOWS.length, 5);
+  test('STEP_WORKFLOWS has 6 entries in pipeline order (the review step last, #3997)', () => {
+    assert.strictEqual(STEP_WORKFLOWS.length, 6);
     assert.strictEqual(STEP_WORKFLOWS[0].step, 'discuss');
     assert.strictEqual(STEP_WORKFLOWS[1].step, 'plan');
     assert.strictEqual(STEP_WORKFLOWS[2].step, 'execute');
     assert.strictEqual(STEP_WORKFLOWS[3].step, 'verify');
     assert.strictEqual(STEP_WORKFLOWS[4].step, 'ship');
+    assert.strictEqual(STEP_WORKFLOWS[5].step, 'review');
   });
 
-  test('CANONICAL_POINTS has exactly 12 entries', () => {
-    assert.strictEqual(CANONICAL_POINTS.length, 12);
+  test('CANONICAL_POINTS has exactly 13 entries', () => {
+    assert.strictEqual(CANONICAL_POINTS.length, 13);
   });
 
   test('ROLE_TO_AGENT covers all non-orchestrator roles', () => {
     // All non-orchestrator roles from the real contract
     const allRoles = new Set(
-      LOOP_HOST_CONTRACT.flatMap((e) => e.agentRoles).filter((r) => r !== 'orchestrator'),
+      LOOP_HOST_CONTRACT.flatMap((e) => e.agentRoles).filter((r) => !ROLES_WITHOUT_AGENT_FILE.has(r)),
     );
     for (const role of allRoles) {
       assert.ok(
@@ -613,9 +653,9 @@ describe('module exports', () => {
     }
   });
 
-  test('EXPECTED_POINTS_BY_STEP covers all 5 steps', () => {
+  test('EXPECTED_POINTS_BY_STEP covers all 6 steps', () => {
     assert.ok(EXPECTED_POINTS_BY_STEP, 'EXPECTED_POINTS_BY_STEP must be exported');
-    assert.strictEqual(Object.keys(EXPECTED_POINTS_BY_STEP).length, 5);
+    assert.strictEqual(Object.keys(EXPECTED_POINTS_BY_STEP).length, 6);
     assert.ok(Array.isArray(EXPECTED_POINTS_BY_STEP.execute));
     assert.strictEqual(EXPECTED_POINTS_BY_STEP.execute.length, 4);
   });
@@ -644,10 +684,10 @@ describe('Quick auxiliary loop-host contract (#3778)', () => {
     const tmpDir = makeTempWorkflowsDir(files);
     try {
       const contract = buildContract(tmpDir);
-      assert.strictEqual(contract.length, 5, 'auxiliary hosts must not create a sixth serialized step');
+      assert.strictEqual(contract.length, 6, 'auxiliary hosts must not create a seventh serialized step');
       assert.strictEqual(
         new Set(contract.flatMap((entry) => entry.points)).size,
-        12,
+        13,
         'auxiliary hosts must not create a duplicate lifecycle point',
       );
     } finally {
@@ -951,6 +991,139 @@ describe('--check full-content comparison (FIX 4)', () => {
 // ─── 12. Regression: FIX 5 — temp-dir cleanup in existing cross-check tests ──
 //  (cleanup is handled via try/finally in each test above that creates temp dirs;
 //   this suite documents and verifies the makeTempWorkflowsDir helper itself)
+
+// ─── #5848 — a declared point must be dispatched ─────────────────────────────
+
+const WORKFLOWS_ROOT = path.join(ROOT, 'gsd-core', 'workflows');
+const { resolveLoopHooks } = require('../gsd-core/bin/lib/loop-resolver.cjs');
+const { scanWiredPoints, scanWiredKinds, findUndispatchedPoints } = require('../scripts/gen-loop-host-contract.cjs');
+
+describe('declared loop points are dispatched (#5848)', () => {
+  // Acceptance criterion (#5848): every declared point of a workflow has a dispatch site. The
+  // enforcement lives in buildContract; its rejection is covered below ('buildContract rejects a host
+  // that declares a point with no call site'), and this runs it over the real workflows.
+  test('every declared point of every real workflow has a dispatch site (#5848 acceptance criterion)', () => {
+    assert.doesNotThrow(() => buildContract(WORKFLOWS_ROOT));
+  });
+
+  test('execute:pre is handed off before the first wave and before STATE.md records the phase start', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
+    const handoffIdx = text.indexOf('execute-phase/steps/pre-execute-gate-hooks.md');
+    const wavePreIdx = text.indexOf('WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre');
+    assert.ok(handoffIdx !== -1, 'execute:pre hand-off to its step file must exist');
+    assert.equal(text.split('execute-phase/steps/pre-execute-gate-hooks.md').length, 2, 'the hand-off is the only mention');
+    assert.ok(handoffIdx < wavePreIdx, 'execute:pre must be handed off before the first wave dispatch site');
+    const stateBeginIdx = text.indexOf('gsd_run query state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name');
+    assert.ok(handoffIdx < stateBeginIdx, 'a blocking execute:pre gate must run before STATE.md marks the phase started');
+  });
+
+  test('the execute:pre auxiliary host renders the point and dispatches contribution, step and gate', () => {
+    const aux = STEP_WORKFLOWS.find((w) => w.step === 'execute').auxiliaryHosts.find((h) => h.point === 'execute:pre');
+    assert.deepEqual(aux, { file: 'execute-phase/steps/pre-execute-gate-hooks.md', point: 'execute:pre', kinds: ['contribution', 'step', 'gate'] });
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, aux.file), 'utf8');
+    assert.ok(scanWiredPoints(text).has('execute:pre'), 'step file must render execute:pre');
+    const kinds = scanWiredKinds(text).get('execute:pre') || new Set();
+    assert.deepEqual([...kinds].sort(), ['contribution', 'gate', 'step']);
+  });
+
+  // The halt itself is an instruction an agent follows when it reads the step file, so there is no
+  // code seam to execute it; the blocking decision's code seams (resolveLoopHooks delivering the gate
+  // with blocking:true, the check/predicate evaluators' block verdict) are covered by their own tests.
+  // What the host owns, and what this asserts, is that its hand-off resolves to a real step file.
+  test('the execute:pre gate step file the host hands off to exists', () => {
+    const text = fs.readFileSync(path.join(WORKFLOWS_ROOT, 'execute-phase.md'), 'utf8');
+    const m = /execute-phase\/steps\/(pre-execute-gate-hooks\.md)/.exec(text);
+    assert.ok(m, 'execute-phase.md must hand execute:pre gate evaluation to its step file');
+    const stepPath = path.join(WORKFLOWS_ROOT, 'execute-phase', 'steps', m[1]);
+    assert.ok(fs.existsSync(stepPath), 'referenced step file must exist');
+  });
+
+  test('resolveLoopHooks delivers a blocking gate and a step registered at execute:pre', () => {
+    const registry = {
+      byLoopPoint: {
+        'execute:pre': {
+          steps: [{ capId: 'approval', ref: { skill: 'approve-plan' } }],
+          contributions: [],
+          gates: [{ capId: 'approval', blocking: true, onError: 'halt', check: { query: 'ui.plan-gate' } }],
+        },
+      },
+      configSchema: {},
+    };
+    const { activeHooks } = resolveLoopHooks({ point: 'execute:pre', registry, config: {} });
+    assert.deepEqual(activeHooks.map((h) => h.kind), ['step', 'gate']);
+    assert.equal(activeHooks[1].blocking, true);
+  });
+
+  test('buildContract rejects a host that declares a point with no call site', () => {
+    const files = makeValidWorkflowFiles();
+    files['execute-phase.md'] = makeWorkflow(
+      'execute', ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
+      ['executor', 'verifier'], ['SUMMARY.md'], ['PLAN.md'], 'gsd-executor gsd-verifier',
+      ['execute:wave:pre', 'execute:wave:post', 'execute:post'],
+    );
+    delete files['execute-phase/steps/pre-execute-gate-hooks.md'];
+    const tmpDir = makeTempWorkflowsDir(files);
+    try {
+      assert.throws(
+        () => buildContract(tmpDir),
+        /execute-phase\.md: declared point "execute:pre" has no `loop render-hooks execute:pre` call site/,
+      );
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('buildContract accepts a declared point wired only in an auxiliary host', () => {
+    const files = makeValidWorkflowFiles();
+    files['execute-phase.md'] = makeWorkflow(
+      'execute', ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
+      ['executor', 'verifier'], ['SUMMARY.md'], ['PLAN.md'], 'gsd-executor gsd-verifier',
+      ['execute:pre', 'execute:wave:pre', 'execute:wave:post'],
+    );
+    const tmpDir = makeTempWorkflowsDir(files);
+    try {
+      assert.doesNotThrow(() => buildContract(tmpDir));
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('findUndispatchedPoints boundary: 0, 1 and 2 declared points (limit-1, limit, limit+1)', () => {
+    const site = (p) => 'HOOKS_JSON=$(gsd_run loop render-hooks ' + p + ' --raw)\n';
+    assert.deepEqual(findUndispatchedPoints([], []), []);
+    assert.deepEqual(findUndispatchedPoints(['a:pre'], [site('a:pre')]), []);
+    assert.deepEqual(findUndispatchedPoints(['a:pre'], ['no call site here']), ['a:pre']);
+    assert.deepEqual(findUndispatchedPoints(['a:pre', 'a:post'], [site('a:post')]), ['a:pre']);
+    assert.deepEqual(findUndispatchedPoints(['a:pre', 'a:post'], []), ['a:pre', 'a:post']);
+  });
+
+  test('findUndispatchedPoints ignores a prose mention of a point', () => {
+    assert.deepEqual(
+      findUndispatchedPoints(['execute:pre'], ['The execute:pre point is declared but never rendered.']),
+      ['execute:pre'],
+    );
+  });
+
+  test('findUndispatchedPoints tolerates CRLF', () => {
+    const text = 'step one\r\nHOOKS_JSON=$(gsd_run loop render-hooks execute:pre --raw)\r\nstep two\r\n';
+    assert.deepEqual(findUndispatchedPoints(['execute:pre', 'execute:post'], [text]), ['execute:post']);
+  });
+
+  test('property: findUndispatchedPoints == declared minus the union of wired points', () => {
+    const point = fc.constantFrom(...CANONICAL_POINTS);
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(point),
+        fc.array(fc.array(point), { maxLength: 4 }),
+        (declared, wiredPerText) => {
+          const texts = wiredPerText.map((ps) => ps.map((p) => 'gsd_run loop render-hooks ' + p + ' --raw\n').join(''));
+          const wired = new Set(wiredPerText.flat());
+          assert.deepEqual(findUndispatchedPoints(declared, texts), declared.filter((p) => !wired.has(p)));
+        },
+      ),
+    );
+  });
+});
 
 describe('temp-dir lifecycle', () => {
   test('makeTempWorkflowsDir creates a directory that can be cleaned up', () => {

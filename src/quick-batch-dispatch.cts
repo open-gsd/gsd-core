@@ -289,7 +289,7 @@ interface FilterAlreadyExecutedResult {
 
 /**
  * Crash-window duplicate-dispatch guard
- * (`.gsd/phase/feat-3677-quick-batch-hardening-acceptance/40-design.md` §1).
+ * (the #3677 design, PR #4240, §1).
  * `quick-batch resume`'s `eligible` is purely status/dependency-derived —
  * it has no awareness that an item already finished executing (a real
  * commit, `SUMMARY.md` written) before a coordinator crash left

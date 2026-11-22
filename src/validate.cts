@@ -244,9 +244,14 @@ export function buildRoadmapPhaseVariants(roadmapContent: string, convention?: s
   // opted in. A non-bracket repo compiles the base source unchanged.
   const capturing = convention === 'bracket';
   const g = capturing ? 1 : 0;
-  const phasePattern = new RegExp(`#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention, capturing)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'gi');
-  let m: RegExpExecArray | null;
-  while ((m = phasePattern.exec(roadmapContent)) !== null) {
+  // #5880: the headings come from the one tokenizer (real ATX headings, levels 2-4,
+  // outside fences, at line start); a raw scan also read a heading quoted in a code
+  // span, a blockquote or a sentence as a ROADMAP phase.
+  const phasePattern = new RegExp(`^${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention, capturing)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'i');
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    const m = phasePattern.exec(heading.text);
+    if (!m) continue;
     const token = m[1 + g];
     const bracketId = g ? m[1] : undefined;
     if (bracketId && isSentinelPhaseId(`${bracketId}-${token}`, 'bracket')) sentinelOnly.add(token);

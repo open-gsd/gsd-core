@@ -22,7 +22,6 @@ const path = require('node:path');
 const childProcess = require('node:child_process');
 const fc = require('fast-check');
 const { createTempDir, cleanup } = require('./helpers.cjs');
-const { createFixture } = require('./fixtures/index.cjs');
 const { makeFaultyGit } = require('./helpers/faulty-deps.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
@@ -41,8 +40,6 @@ const CORE_PATH = path.join(
 );
 
 const {
-  resolveWorktreeContext,
-  resolveWorktreeLinkage,
   parseWorktreePorcelain,
   planWorktreePrune,
   executeWorktreePrunePlan,
@@ -59,6 +56,7 @@ const {
 } = require(WORKTREE_SAFETY_PATH);
 
 const isWindows = process.platform === 'win32';
+const { resolveProjectContext } = require('../gsd-core/bin/lib/project-context.cjs');
 
 // ─── Shared stubs ─────────────────────────────────────────────────────────────
 
@@ -103,196 +101,59 @@ function makeTimeoutStub() {
   };
 }
 
-// ─── resolveWorktreeContext ───────────────────────────────────────────────────
-
-describe('resolveWorktreeContext', () => {
-  test('prefers current directory when .planning exists', () => {
-    const context = resolveWorktreeContext('/repo/wt', {
-      existsSync: () => true,
-      execGit: () => ({ exitCode: 1, stdout: '', stderr: '' }),
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo/wt');
-    assert.strictEqual(context.reason, 'has_local_planning');
-    assert.strictEqual(context.mode, 'current_directory');
+// ─── execGitDefault real spawn seam (#3050, #6043) ───────────────────────────
+// Root resolution moved to the Project Context Module (ADR-4908); its contract
+// tests live in tests/project-context.test.cjs. What stays here is the half of
+// #3050 only a real spawn seam can prove: with deps.execGit omitted,
+// resolveProjectContext falls through to shell-command-projection's execGit and
+// the shared isSpawnTimeout predicate, driven by mocking the actual primitive
+// (node:child_process.spawnSync) to return the Windows and POSIX timeout shapes.
+describe('resolveProjectContext over the real spawn seam (#3050)', () => {
+  afterEach(() => {
+    mock.restoreAll();
   });
 
-  test('maps linked worktree to common-dir parent',
-    { skip: isWindows ? 'POSIX-rooted fixture paths cannot be expressed on Windows path.resolve' : false },
-    () => {
-    const context = resolveWorktreeContext('/repo/wt', {
-      existsSync: () => false,
-      execGit: (args) => {
-        if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git/worktrees/wt', stderr: '' };
-        if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '../.git', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: '' };
-      },
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo');
-    assert.strictEqual(context.reason, 'linked_worktree');
-    assert.strictEqual(context.mode, 'linked_worktree_root');
+  test('Windows-shaped timeout (no signal, error.code ETIMEDOUT) is detected as a real timeout', () => {
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: null,
+      stdout: '',
+      stderr: '',
+      signal: null,
+      error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+    }));
+
+    const ctx = resolveProjectContext('/repo');
+    assert.strictEqual(ctx.provenance.reason, 'git_timed_out');
+    assert.strictEqual(ctx.provenance.degraded, true);
+    assert.strictEqual(ctx.worktreeRoot, path.resolve('/repo'));
   });
 
-  test('falls back when git metadata is unavailable', () => {
-    const context = resolveWorktreeContext('/repo/wt', {
-      existsSync: () => false,
-      execGit: () => ({ exitCode: 1, stdout: '', stderr: '' }),
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo/wt');
-    assert.strictEqual(context.reason, 'not_git_repo');
+  test('POSIX-shaped timeout (SIGTERM + error.code ETIMEDOUT) is also detected as a real timeout', () => {
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: null,
+      stdout: '',
+      stderr: '',
+      signal: 'SIGTERM',
+      error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+    }));
+
+    assert.strictEqual(resolveProjectContext('/repo').provenance.reason, 'git_timed_out');
   });
 
-  test('keeps cwd for main worktree checkout', () => {
-    const context = resolveWorktreeContext('/repo/main', {
-      existsSync: () => false,
-      execGit: (args) => {
-        if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: '' };
-      },
-    });
-    assert.strictEqual(context.effectiveRoot, '/repo/main');
-    assert.strictEqual(context.reason, 'main_worktree');
-    assert.strictEqual(context.mode, 'current_directory');
-  });
+  test('externally-delivered SIGTERM with no ETIMEDOUT error is NOT reported as a timeout', () => {
+    // Boundary: the timeout carve-out must not swallow a plain non-zero exit
+    // that merely happens to carry a signal, absent an ETIMEDOUT error.
+    mock.method(childProcess, 'spawnSync', () => ({
+      status: null,
+      stdout: '',
+      stderr: 'fatal: not a git repository',
+      signal: 'SIGTERM',
+      error: null,
+    }));
 
-  // Counter-test: timeout returns the canonical degraded shape, not just an object (Contract 6)
-  test('returns effectiveRoot=cwd, mode=current_directory, reason=git_timed_out on timeout, not throw', () => {
-    let threw = false;
-    let result;
-    try {
-      result = resolveWorktreeContext('/tmp', { execGit: makeTimeoutStub() });
-    } catch {
-      threw = true;
-    }
-    assert.strictEqual(threw, false, 'must not throw on timeout');
-    assert.deepStrictEqual(result, {
-      effectiveRoot: '/tmp',
-      mode: 'current_directory',
-      reason: 'git_timed_out',
-    });
-  });
-
-  // ─── #3050 DEFECT 2: timeout must be distinguishable from not_git_repo ─────
-  test('git rev-parse --git-dir/--git-common-dir TIMES OUT → reason "git_timed_out" (#3050)', () => {
-    const execGit = (args) => {
-      if (args.includes('--git-dir')) return { ...makeTimeoutStub()(args), timedOut: true };
-      return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', timedOut: false };
-    };
-    const context = resolveWorktreeContext('/repo', { execGit, existsSync: () => false });
-    assert.strictEqual(context.reason, 'git_timed_out');
-    assert.notStrictEqual(context.reason, 'not_git_repo');
-    assert.strictEqual(context.effectiveRoot, '/repo');
-  });
-
-  // ─── #3050 item 7: drive the REAL spawn seam, not a hand-set execGit stub ──
-  // Every test above injects deps.execGit with a hand-set `timedOut`, so the
-  // production execGitDefault → shell-command-projection's execGit →
-  // isSpawnTimeout chain is never actually exercised, and a Windows-shaped
-  // timeout (spawnSync reports no `signal`, only `error.code === 'ETIMEDOUT'`)
-  // is unexercised on this half. This test omits deps.execGit entirely so
-  // resolveWorktreeContext falls through to the real execGitDefault, and
-  // mocks node:child_process.spawnSync — the actual primitive
-  // shell-command-projection.cjs's execGit wraps — to return that exact
-  // Windows shape.
-  describe('execGitDefault (real spawn seam)', () => {
-    afterEach(() => {
-      mock.restoreAll();
-    });
-
-    test('Windows-shaped timeout (no signal, error.code ETIMEDOUT) is detected as a real timeout (#3050)', () => {
-      mock.method(childProcess, 'spawnSync', () => ({
-        status: null,
-        stdout: '',
-        stderr: '',
-        signal: null,
-        error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
-      }));
-
-      const context = resolveWorktreeContext('/repo', { existsSync: () => false });
-      assert.strictEqual(context.reason, 'git_timed_out');
-      assert.strictEqual(context.effectiveRoot, '/repo');
-    });
-
-    test('POSIX-shaped timeout (SIGTERM + error.code ETIMEDOUT) is also detected as a real timeout', () => {
-      mock.method(childProcess, 'spawnSync', () => ({
-        status: null,
-        stdout: '',
-        stderr: '',
-        signal: 'SIGTERM',
-        error: Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' }),
-      }));
-
-      const context = resolveWorktreeContext('/repo', { existsSync: () => false });
-      assert.strictEqual(context.reason, 'git_timed_out');
-    });
-
-    test('externally-delivered SIGTERM with no ETIMEDOUT error is NOT reported as a timeout', () => {
-      // Boundary: the timeout carve-out must not swallow a plain non-zero exit
-      // that merely happens to carry a signal, absent an ETIMEDOUT error.
-      mock.method(childProcess, 'spawnSync', () => ({
-        status: null,
-        stdout: '',
-        stderr: 'fatal: not a git repository',
-        signal: 'SIGTERM',
-        error: null,
-      }));
-
-      const context = resolveWorktreeContext('/repo', { existsSync: () => false });
-      assert.notStrictEqual(context.reason, 'git_timed_out');
-    });
-  });
-});
-
-// ─── resolveWorktreeLinkage (#3045) ──────────────────────────────────────────
-// resolveWorktreeContext's `has_local_planning` shortcut answers "is there a
-// usable project root right here", not "is this a linked worktree" — a linked
-// worktree created to isolate an executor is a full checkout, so it normally
-// has its OWN checked-out .planning/ too. resolveWorktreeLinkage is the
-// shortcut-free primitive the isolation guard (hooks/gsd-cursor-subagent-start.js)
-// needs instead: it must report "linked_worktree_root" for such a worktree even
-// though .planning exists locally — exactly the case that would defeat the guard
-// if resolveWorktreeContext were reused as-is.
-describe('resolveWorktreeLinkage', () => {
-  test('reports linked_worktree_root even when .planning exists locally (the case resolveWorktreeContext would misclassify)',
-    { skip: isWindows ? 'POSIX-rooted fixture paths cannot be expressed on Windows path.resolve' : false },
-    () => {
-      // deliberately no `existsSync` dep at all — resolveWorktreeLinkage must
-      // never consult the filesystem for .planning; only git-dir comparison.
-      const linkage = resolveWorktreeLinkage('/repo/wt', {
-        execGit: (args) => {
-          if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git/worktrees/wt', stderr: '' };
-          if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '../.git', stderr: '' };
-          return { exitCode: 1, stdout: '', stderr: '' };
-        },
-      });
-      assert.strictEqual(linkage.mode, 'linked_worktree_root');
-      assert.strictEqual(linkage.reason, 'linked_worktree');
-      assert.strictEqual(linkage.effectiveRoot, '/repo');
-    });
-
-  test('reports main_worktree for the primary checkout', () => {
-    const linkage = resolveWorktreeLinkage('/repo/main', {
-      execGit: (args) => {
-        if (args[1] === '--git-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        if (args[1] === '--git-common-dir') return { exitCode: 0, stdout: '.git', stderr: '' };
-        return { exitCode: 1, stdout: '', stderr: '' };
-      },
-    });
-    assert.strictEqual(linkage.mode, 'current_directory');
-    assert.strictEqual(linkage.reason, 'main_worktree');
-  });
-
-  test('git timeout → git_timed_out, never throws', () => {
-    const linkage = resolveWorktreeLinkage('/repo', { execGit: makeTimeoutStub() });
-    assert.strictEqual(linkage.reason, 'git_timed_out');
-    assert.strictEqual(linkage.effectiveRoot, '/repo');
-  });
-
-  test('not a git repo → not_git_repo', () => {
-    const linkage = resolveWorktreeLinkage('/repo', {
-      execGit: () => ({ exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' }),
-    });
-    assert.strictEqual(linkage.reason, 'not_git_repo');
+    const ctx = resolveProjectContext('/repo');
+    assert.notStrictEqual(ctx.provenance.reason, 'git_timed_out');
+    assert.strictEqual(ctx.provenance.degraded, false);
   });
 });
 
@@ -305,8 +166,8 @@ describe('resolveWorktreeLinkage', () => {
 // with directly, so a future edit that reintroduces a local, diverging copy
 // of the timeout check in worktree-base-ref.cts will make this test fail
 // rather than silently drift. (worktree-safety.cjs's own half of this parity
-// — execGitDefault via resolveWorktreeContext — is covered separately above,
-// by "execGitDefault (real spawn seam)", which drives the real
+// — execGit via resolveProjectContext — is covered separately above,
+// by "resolveProjectContext over the real spawn seam", which drives the real
 // node:child_process.spawnSync primitive rather than a synthetic result.)
 describe('shared isSpawnTimeout predicate — parity for worktree-base-ref evaluateWorktreeBaseDegrade (#3050)', () => {
   const { isSpawnTimeout } = require(path.join(
@@ -4985,19 +4846,11 @@ describe('executeWorktreeWaveCleanupPlan', () => {
 
 });
 
-// ─── MOVE 2: resolveWorktreeRoot and pruneOrphanedWorktrees (#1268 T0) ────────
+// ─── MOVE 2: pruneOrphanedWorktrees (#1268 T0) ────────────────────────────────
 
-describe('worktree-safety: resolveWorktreeRoot and pruneOrphanedWorktrees relocation identity', () => {
+describe('worktree-safety: pruneOrphanedWorktrees relocation identity', () => {
   const worktreeSafety = require(WORKTREE_SAFETY_PATH);
   const core = require(CORE_PATH);
-
-  test('core.resolveWorktreeRoot === worktreeSafety.resolveWorktreeRoot (by reference)', () => {
-    assert.strictEqual(
-      core.resolveWorktreeRoot,
-      worktreeSafety.resolveWorktreeRoot,
-      'core.resolveWorktreeRoot must be the same function reference as worktreeSafety.resolveWorktreeRoot'
-    );
-  });
 
   test('core.pruneOrphanedWorktrees === worktreeSafety.pruneOrphanedWorktrees (by reference)', () => {
     assert.strictEqual(
@@ -5005,35 +4858,6 @@ describe('worktree-safety: resolveWorktreeRoot and pruneOrphanedWorktrees reloca
       worktreeSafety.pruneOrphanedWorktrees,
       'core.pruneOrphanedWorktrees must be the same function reference as worktreeSafety.pruneOrphanedWorktrees'
     );
-  });
-});
-
-describe('worktree-safety: resolveWorktreeRoot behaviour', () => {
-  const worktreeSafety = require(WORKTREE_SAFETY_PATH);
-
-  // NOTE: createTempGitProject() always seeds .planning/ (createFixture's
-  // planning:true default), which makes resolveWorktreeContext short-circuit
-  // on the has_local_planning branch (src/worktree-safety.cts:203-216) BEFORE
-  // ever calling git — so a fixture built with it can never reach the
-  // git-based main_worktree path this test's name is about. Use a git fixture
-  // WITHOUT .planning/ (and without the projectDoc PROJECT.md, which — since
-  // projectDoc defaults to `git` in createFixture — would otherwise silently
-  // recreate the .planning/ directory it's writing into) so resolveWorktreeRoot
-  // actually reaches resolveWorktreeLinkage's real git rev-parse comparison.
-  test('resolveWorktreeRoot(git repo with no local .planning) reaches the git-based main_worktree path, returns {root: dir, reason: main_worktree}', (t) => {
-    const dir = createFixture({ prefix: 'gsd-wt-root-', planning: false, git: true, projectDoc: false });
-    t.after(() => cleanup(dir));
-    const result = worktreeSafety.resolveWorktreeRoot(dir);
-    assert.deepStrictEqual(result, { root: dir, reason: 'main_worktree' });
-  });
-
-  test('resolveWorktreeRoot propagates git_timed_out via the injected execGit seam (#3050)', () => {
-    const result = worktreeSafety.resolveWorktreeRoot('/repo/wt', {
-      existsSync: () => false,
-      execGit: makeTimeoutStub(),
-    });
-    assert.strictEqual(result.reason, 'git_timed_out');
-    assert.strictEqual(result.root, '/repo/wt');
   });
 });
 
@@ -5949,6 +5773,60 @@ describe('git-cmd.js isGitSubcommand: should NOT match commit', () => {
   }
 });
 
+// ── #5821: --no-advice, --config-env, --attr-source before the subcommand ────
+// git accepts all three ahead of the subcommand; `--config-env` and
+// `--attr-source` take one argument, attached with `=` or as the next word.
+describe('git-cmd.js #5821 global options before the subcommand', () => {
+  const spellings = [
+    ['--no-advice'],
+    ['--config-env=k=V'],
+    ['--config-env', 'k=V'],
+    ['--attr-source=HEAD'],
+    ['--attr-source', 'HEAD'],
+  ];
+  for (const opt of spellings) {
+    test(`commit is recognised after ${opt.join(' ')}`, () => {
+      assert.equal(isGitSubcommand(['git', ...opt, 'commit', '-m', 'x'].join(' '), 'commit'), true);
+    });
+    test(`push is not commit after ${opt.join(' ')}`, () => {
+      assert.equal(isGitSubcommand(['git', ...opt, 'push'].join(' '), 'commit'), false);
+    });
+    test(`checkout -b yields the branch after ${opt.join(' ')}`, () => {
+      assert.equal(extractBranchArgument(['git', ...opt, 'checkout', '-b', 'feat'].join(' ')), 'feat');
+    });
+  }
+
+  test('the three options combine with each other and with existing options', () => {
+    assert.equal(
+      isGitSubcommand('git --no-pager --no-advice --config-env k=V --attr-source HEAD -C d commit -m x', 'commit'),
+      true,
+    );
+  });
+
+  test('an unknown global option still stops the walk (fail closed)', () => {
+    assert.equal(isGitSubcommand('git --no-such-option commit -m x', 'commit'), false);
+    assert.equal(isGitSubcommand('git --no-advice --no-such-option commit -m x', 'commit'), false);
+    assert.equal(extractBranchArgument('git --no-such-option checkout -b feat'), null);
+  });
+
+  test('an argument-taking option with no argument does not throw', () => {
+    assert.equal(isGitSubcommand('git --config-env', 'commit'), false);
+    assert.equal(isGitSubcommand('git --attr-source', 'commit'), false);
+    assert.equal(extractBranchArgument('git --attr-source'), null);
+  });
+
+  test('property: the options in any order, either spelling, still reach commit', () => {
+    const optionArb = fc.constantFrom(
+      ['--no-advice'], ['--no-pager'], ['--config-env=k=V'], ['--config-env', 'k=V'],
+      ['--attr-source=HEAD'], ['--attr-source', 'HEAD'], ['-C', 'd'],
+    );
+    fc.assert(fc.property(fc.array(optionArb, { maxLength: 6 }), (opts) => {
+      const cmd = ['git', ...opts.flat(), 'commit', '-m', 'x'].join(' ');
+      return isGitSubcommand(cmd, 'commit') === true;
+    }));
+  });
+});
+
 // ── gsd-validate-commit.sh source check ──────────────────────────────────────
 
 describe('gsd-validate-commit.sh delegates to git-cmd.js', () => {
@@ -6388,6 +6266,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { stripFencedCode } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+
 const repoRoot = path.resolve(__dirname, '..');
 const WORKTREE_BRANCH_CHECK_FRAGMENT = path.join(repoRoot, 'gsd-core', 'references', 'worktree-branch-check.md');
 
@@ -6427,6 +6307,148 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     // #48: verify-only — the destructive self-recovery is gone; the fragment fails closed instead.
     assert.ok(!fragmentSource.includes('git reset --hard {EXPECTED_BASE}'), 'canonical fragment must not self-recover via reset --hard — orchestrator owns recovery (#48)');
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');
+  });
+
+  // One line naming a hard reset: a word starting "hard" and a word starting "reset", in either order. That
+  // covers the flag after the word (`git reset -q --hard`, "`git reset` with `--hard`"), the flag first ("a
+  // `--hard` reset"), the two words apart (hard-reset, "a hard git reset"), joined with "hard" first (hardreset,
+  // hardReset), the word first ("reset hard to the last task") and inflections (hard-resets, hard-resetting).
+  // Any other line holding such a pair fails too, "a hardware reset" included; reword it. The first two
+  // alternatives also match "hard" and "reset" split across a line break, in either order ("hard\nreset",
+  // "git reset\n--hard"), when only non-word characters (`\W`: spaces, newlines, backticks, hyphens; not an
+  // underscore) sit between them and the word before the break is exactly "hard" or "reset". Only the
+  // git-integration.md check below runs the pattern over the whole file, so only it catches such a wrap. The
+  // executor check runs it one line at a time: a re-grant wrapped across two lines there is not caught.
+  const HARD_RESET_SPELLING = /\bhard\W*reset|\breset\W+hard|\bhard.*\breset|\breset.*\bhard/i;
+
+  // The pattern itself, pinned on both sides. The file checks below only try the pattern on today's files,
+  // so without these rows an edit to it could drop a spelling those files do not contain and the suite would
+  // stay green.
+  const HARD_RESET_SPELLING_CASES = [
+    ['hardreset', true],
+    ['Use hardReset() at startup', true],
+    ['reset\n--hard', true],
+    ['reset\nhard', true],
+    ['git reset -q --hard', true],
+    ['a `--hard` reset is allowed at startup', true],
+    // The line this PR removed from git-integration.md, hard-wrapped inside its code span.
+    ['- Can `git reset\n  --hard` to last successful task', true],
+    ['`git reset` with `--hard`', true],
+    ['a hard-reset', true],
+    ['a hard git reset is fine', true],
+    ['reset hard to the last task', true],
+    ['Hard-resetting the worktree is allowed', true],
+    ['the executor hard-resets the branch', true],
+    ['hard\nreset', true],
+    ['git reset\n--hard', true],
+    ['git reset\r\n--hard', true],
+    ['reset the counter\nhard cap', false],
+    ['git reset --soft HEAD~1', false],
+    ['the fix-attempt limit is a hard cap', false],
+  ];
+  for (const [text, matches] of HARD_RESET_SPELLING_CASES) {
+    test(`HARD_RESET_SPELLING ${matches ? 'matches' : 'does not match'} ${JSON.stringify(text)} (#5310)`, () => {
+      if (matches) assert.match(text, HARD_RESET_SPELLING);
+      else assert.doesNotMatch(text, HARD_RESET_SPELLING);
+    });
+  }
+
+  test('executor prohibits `git reset --hard` with no exception (#5310)', () => {
+    // The exemption named the startup <worktree_branch_check> step, which has been verify-only
+    // since #48: a hard reset in the executor's own prohibited list must not carry a carve-out.
+    const executorSource = read('agents/gsd-executor.md');
+    const lines = executorSource.split(/\r?\n/);
+    const heading = lines.indexOf('**Prohibited commands in worktree context:**');
+    assert.ok(heading >= 0, 'gsd-executor.md must keep its "Prohibited commands in worktree context" list');
+
+    // Group the list into top-level bullets, each with its indented continuation lines (spaces or tabs).
+    // An unindented line ends the list; directly under a bullet markdown can fold it in, so it stays
+    // with that bullet too, and the anchored check below rejects it.
+    const bullets = [];
+    let afterBlank = false;
+    for (const line of lines.slice(heading + 1)) {
+      const blank = line.trim() === '';
+      if (line.startsWith('- ')) {
+        bullets.push(line);
+      } else if (!blank && bullets.length > 0 && /^[ \t]/.test(line)) {
+        bullets[bullets.length - 1] += `\n${line}`;
+      } else if (!blank) {
+        if (bullets.length > 0 && !afterBlank) {
+          bullets[bullets.length - 1] += `\n${line}`;
+        }
+        break;
+      }
+      afterBlank = blank;
+    }
+
+    const resetBullets = bullets.filter((bullet) => bullet.includes('`git reset --hard`'));
+    assert.equal(resetBullets.length, 1, 'the prohibited list must name `git reset --hard` in exactly one bullet');
+    // Pinned rather than scanned for carve-out words: a word list both admits exemptions it does not
+    // name and rejects honest prohibitions ("not allowed, even during startup recovery"). The bullet is
+    // the bare command, optionally with its current note; any other wording is a deliberate edit to this
+    // test.
+    assert.match(
+      resetBullets[0],
+      /^- `git reset --hard`(?: \(no exception: `<worktree_branch_check>` is verify-only, #48\))?$/,
+      `the \`git reset --hard\` prohibition must be unconditional: ${resetBullets[0]}`
+    );
+    // The bullet must be list text, not a line of a sample someone fenced off.
+    assert.ok(
+      stripFencedCode(executorSource).text.split(/\r?\n/).includes(resetBullets[0]),
+      'the `git reset --hard` prohibition must not sit inside a fenced code block'
+    );
+    // A re-grant elsewhere in the file (a later bullet or paragraph, in any spelling on one line) would
+    // bypass the bullet itself. This filter tests one line at a time, so it does not see a re-grant wrapped
+    // across two lines.
+    assert.deepEqual(
+      lines.filter((line) => HARD_RESET_SPELLING.test(line)),
+      [resetBullets[0]],
+      'gsd-executor.md must name a hard reset only in its prohibition'
+    );
+  });
+
+  // Either word order on one line: the command (`git reset`, `git -C <dir> reset`) or prose ("reset the
+  // branch with git"). The `\s` before "reset" can itself be an LF, so a line ending in a git command
+  // followed by a line that starts with "reset" is caught too. That is all it crosses: an indented
+  // continuation ("  reset --hard" on the next line), a CRLF break, or "reset" later on the next line is
+  // not caught.
+  const GIT_RESET_ANY_FORM = /git\b.*\sreset|\breset\b.*\bgit\b/i;
+  const GIT_RESET_ANY_FORM_CASES = [
+    ['git reset --hard {EXPECTED_BASE}', true],
+    ['git -C "$WT" reset --soft HEAD', true],
+    ['reset the branch with git', true],
+    ['git -C "$WT"\nreset --hard', true],
+    ['git fetch origin\nthen reset the counter', false],
+    ['git status --porcelain', false],
+  ];
+  for (const [text, matches] of GIT_RESET_ANY_FORM_CASES) {
+    test(`GIT_RESET_ANY_FORM ${matches ? 'matches' : 'does not match'} ${JSON.stringify(text)} (#5310)`, () => {
+      if (matches) assert.match(text, GIT_RESET_ANY_FORM);
+      else assert.doesNotMatch(text, GIT_RESET_ANY_FORM);
+    });
+  }
+
+  test('the branch check the old exemption named stays verify-only, with no reset (#48, #5310)', () => {
+    // The step the old exemption pointed at must still give it nothing to apply to.
+    const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
+    assert.ok(fragmentSource.includes('VERIFY-ONLY'), 'canonical fragment must still declare itself VERIFY-ONLY (#48)');
+    assert.doesNotMatch(fragmentSource, GIT_RESET_ANY_FORM, 'canonical fragment must contain no `git reset` in any form (#48)');
+  });
+
+  test('git-integration.md, required reading for the executor, offers no hard reset as recovery (#48, #5310)', () => {
+    // execute-plan.md, which the orchestrator hands the executor, @-includes git-integration.md as required
+    // reading, so its failure-recovery notes reach the executor too.
+    const executePlan = read('gsd-core/workflows/execute-plan.md');
+    assert.ok(
+      executePlan.includes('@~/.claude/gsd-core/references/git-integration.md'),
+      'execute-plan.md must still include git-integration.md (else move this assertion to its new reading)'
+    );
+    const gitIntegration = read('gsd-core/references/git-integration.md');
+    assert.doesNotMatch(
+      gitIntegration,
+      HARD_RESET_SPELLING,
+      'git-integration.md is executor required reading and must not offer a hard reset as recovery (#48, #5310)'
+    );
   });
 
   test('remove-workspace fails closed when git worktree remove fails', () => {

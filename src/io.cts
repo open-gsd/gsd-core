@@ -25,11 +25,18 @@ const {
  * Dedicated GSD temp directory: path.join(os.tmpdir(), 'gsd').
  * Created on first use. Keeps GSD temp files isolated from the system
  * temp directory so reap scans only GSD files (#1975).
+ *
+ * Resolved on each use, never once at load (#6333): os.tmpdir() follows
+ * TMPDIR / TEMP / TMP, and a process that runs more than one command (the
+ * in-process CLI the test suite uses) would otherwise keep the first
+ * command's temp root for every later one.
  */
-const GSD_TEMP_DIR = path.join(os.tmpdir(), 'gsd');
+function gsdTempDir(): string {
+  return path.join(os.tmpdir(), 'gsd');
+}
 
 function ensureGsdTempDir(): void {
-  platformEnsureDir(GSD_TEMP_DIR);
+  platformEnsureDir(gsdTempDir());
 }
 
 interface ReapOptions {
@@ -49,10 +56,11 @@ function reapStaleTempFiles(prefix = 'gsd-', { maxAgeMs = 5 * 60 * 1000, dirsOnl
   try {
     ensureGsdTempDir();
     const now = Date.now();
-    const entries = fs.readdirSync(GSD_TEMP_DIR);
+    const tempDir = gsdTempDir();
+    const entries = fs.readdirSync(tempDir);
     for (const entry of entries) {
       if (!entry.startsWith(prefix)) continue;
-      const fullPath = path.join(GSD_TEMP_DIR, entry);
+      const fullPath = path.join(tempDir, entry);
       try {
         const stat = fs.statSync(fullPath);
         if (now - stat.mtimeMs > maxAgeMs) {
@@ -190,6 +198,62 @@ function captureStdoutSyncWrites(run: () => unknown): Promise<string> {
 }
 
 /**
+ * captureStdoutSyncWrites for a `run` that may finish synchronously (#6333).
+ * Returns the captured text when `run` returned a plain value, and a promise
+ * of it when `run` returned a promise. The capture, the restore and the
+ * flush-on-throw are the same in both arms, so the CLI's synchronous and
+ * asynchronous paths cannot drift apart here.
+ */
+function captureStdoutMaybeSync(run: () => unknown): string | Promise<string> {
+  const originalWriteSync = fs.writeSync;
+  let captured = '';
+
+  fs.writeSync = ((fd: number, data: unknown, ...rest: unknown[]): number => {
+    if (fd === 1) {
+      if (Buffer.isBuffer(data)) {
+        captured += data.toString('utf-8');
+        return data.length;
+      }
+      const text = String(data);
+      captured += text;
+      let encoding: BufferEncoding = 'utf-8';
+      if (typeof rest[1] === 'string') encoding = rest[1] as BufferEncoding;
+      return Buffer.byteLength(text, encoding);
+    }
+    return (originalWriteSync as (...a: unknown[]) => number).call(fs, fd, data, ...rest);
+  });
+
+  const restore = (): void => {
+    fs.writeSync = originalWriteSync;
+  };
+  const restoreAndFlush = (): void => {
+    restore();
+    if (captured) {
+      try { (originalWriteSync as (...a: unknown[]) => number).call(fs, 1, captured); } catch { /* best-effort flush */ }
+    }
+  };
+
+  let result: unknown;
+  try {
+    result = run();
+  } catch (err) {
+    restoreAndFlush();
+    throw err;
+  }
+  if (result !== null && typeof result === 'object' && typeof (result as { then?: unknown }).then === 'function') {
+    return Promise.resolve(result).then(() => {
+      restore();
+      return captured;
+    }, (err: unknown) => {
+      restoreAndFlush();
+      throw err;
+    });
+  }
+  restore();
+  return captured;
+}
+
+/**
  * Resolve `output()`'s `@file:<path>` redirection (emitted for a >50KB JSON
  * payload) back to the real content, or return `captured` unchanged when it
  * is not that shape.
@@ -278,7 +342,7 @@ function output(result: unknown, raw: boolean, rawValue?: unknown): void {
     if (json.length > 50000) {
       reapStaleTempFiles();
       ensureGsdTempDir();
-      const tmpPath = path.join(GSD_TEMP_DIR, `gsd-${Date.now()}.json`);
+      const tmpPath = path.join(gsdTempDir(), `gsd-${Date.now()}.json`);
       platformWriteSync(tmpPath, json);
       data = '@file:' + tmpPath;
     } else {
@@ -380,6 +444,10 @@ const ERROR_REASON = Object.freeze({
   COMMIT_DOCS_GUARD_NOT_A_REPO: 'commit_docs_guard_not_a_repo',
   COMMIT_DOCS_GUARD_FOREIGN_HOOK: 'commit_docs_guard_foreign_hook',
   COMMIT_DOCS_GUARD_HOOKS_PATH_SET: 'commit_docs_guard_hooks_path_set',
+  // commit verb (#6043, ADR-4908 §3): it commits in the worktree the process
+  // runs in, or refuses with one of these. Wire values are the typed `reason`.
+  COMMIT_NOT_GIT_REPO: 'not_git_repo',
+  COMMIT_OUTSIDE_WORKTREE: 'outside_worktree',
   // security-scan
   SECURITY_SCAN_FAILED: 'security_scan_failed',
   // --pick (#3365 / #3358, ADR-3473 §8.4): an absent field or non-JSON
@@ -531,6 +599,8 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   [ERROR_REASON.COMMIT_DOCS_GUARD_NOT_A_REPO]: 'UNAVAILABLE',
   [ERROR_REASON.COMMIT_DOCS_GUARD_FOREIGN_HOOK]: 'UNAVAILABLE',
   [ERROR_REASON.COMMIT_DOCS_GUARD_HOOKS_PATH_SET]: 'UNAVAILABLE',
+  [ERROR_REASON.COMMIT_NOT_GIT_REPO]: 'UNAVAILABLE',
+  [ERROR_REASON.COMMIT_OUTSIDE_WORKTREE]: 'FAIL',
   // Its own docstring: "an absent field or non-JSON command output is a
   // failure, never a demotion to an empty answer" — the field/output was
   // supposed to be there and was not; a prerequisite of the query failed.
@@ -581,7 +651,9 @@ function error(message: string, reason: ErrorReasonValue = ERROR_REASON.UNKNOWN,
 }
 
 export = {
-  GSD_TEMP_DIR,
+  gsdTempDir,
+  /** The directory as it resolves now. Kept for callers that read it as a value. */
+  get GSD_TEMP_DIR(): string { return gsdTempDir(); },
   ensureGsdTempDir,
   reapStaleTempFiles,
   output,
@@ -593,5 +665,6 @@ export = {
   error,
   formatDiagnosticToken,
   captureStdoutSyncWrites,
+  captureStdoutMaybeSync,
   resolveAtFileOutput,
 };

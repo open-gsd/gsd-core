@@ -80,8 +80,9 @@ import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // numeric canonicalization instead of re-deriving it here — see
 // bracketWriteContext/bracketPhaseId below.
 const { milestoneToken, phaseToken } = phaseIdDisplayMod;
-import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp } from './phase-entry-grammar.cjs';
+import { isBoxCharChecked, isPhaseEntryChecked, phaseEntryPrefixSrc, phaseEntryRegExp, phaseEntrySplitRegExp, stripInsertedMarker } from './phase-entry-grammar.cjs';
 import { escapeRegex } from './pattern.cjs';
+import { traceabilityRowExists } from './markdown-table.cjs';
 import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
@@ -97,7 +98,10 @@ const { SCOPE } = planningScopeMod;
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const {
   stripShippedMilestones,
+  // #6271: moved to roadmap-parser.cts so state.cts shares the one sanitizer for echoed STATE.md milestone text.
+  echoStateMilestone,
   extractCurrentMilestone,
+  extractCurrentMilestoneScoped,
   currentMilestoneRawRanges,
   withPhaseSection,
   editCurrentMilestone,
@@ -148,7 +152,7 @@ import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from 
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore, isStatePastPhase } from './state-transition.cjs';
-import { updateTableCell, updateTraceabilityCell, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
+import { updateTableCell, updateTraceabilityCell, leadingRequirementStatus, deleteTableRow, escapeCell, splitTableRow, insertTableRow } from './markdown-table.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
@@ -783,6 +787,8 @@ interface RawPlan {
   halted: boolean;
   /** #1689: optional per-plan specialist executor hint (frontmatter `agent_hint:`). null when unset. */
   agentHint: string | null;
+  /** #6302: optional foreign executor runtime id (frontmatter `executor_runtime:`). null when unset. */
+  executorRuntime: string | null;
   /** #4924: frontmatter `gap_closure: true` — the field execute-phase `--gaps-only` selects on. */
   gapClosure: boolean;
 }
@@ -942,18 +948,20 @@ function computeDependencyLevels(
   return { level, visited, order: queue, unresolved };
 }
 
-function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
-  if (!phase) {
-    error('phase required for phase-plan-index');
-  }
-
+/**
+ * The phase-directory resolution `phase-plan-index` performs, extracted so the read-only plan
+ * lookups that must agree with it (#6213 `resolvePlanAgentHint`) cannot drift from it.
+ */
+function locatePlanIndexPhaseDir(
+  cwd: string,
+  phase: string,
+): { phaseDir: string | null; normalized: string; ambiguousMatches: string[] | null } {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const directoryContext = phaseDirectoryOptions(cwd);
   const lookup = resolvePhaseDirectoryLookup(cwd, phase, undefined, directoryContext);
   const { normalized } = lookup;
 
   let phaseDir: string | null = null;
-  let phaseDirName: string | null = null;
   let ambiguousMatches: string[] | null = null;
   try {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
@@ -970,11 +978,151 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {
       phaseDir = path.join(phasesDir, matches[0]);
-      phaseDirName = matches[0];
     }
   } catch {
     // phases dir doesn't exist
   }
+  return { phaseDir, normalized, ambiguousMatches };
+}
+
+/**
+ * #6213: the `agent_hint` a plan declares, read with the SAME phase resolution, plan-file set and
+ * plan parser `phase-plan-index` uses. Null on any lookup failure (phase not found, ambiguous,
+ * unknown plan id, unreadable plan, no hint) — the caller then dispatches gsd-executor.
+ */
+function resolvePlanAgentHint(cwd: string, phase: string, planId: string): string | null {
+  try {
+    if (!phase || !planId) return null;
+    const { phaseDir, ambiguousMatches } = locatePlanIndexPhaseDir(cwd, phase);
+    if (!phaseDir || ambiguousMatches) return null;
+    const planFile = scanPhasePlans(phaseDir).planFiles
+      .filter(isCanonicalPlanFile)
+      .sort()
+      .find((f: string) => planIdFromFile(f) === planId);
+    if (!planFile) return null;
+    const planPath = path.join(phaseDir, planFile);
+    const hint = parsePlanDocument(fs.readFileSync(planPath, 'utf-8'), planPath).agentHint;
+    return typeof hint === 'string' && hint.length > 0 ? hint : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #6213: the `agent_hint` of every canonical plan in a phase (same phase resolution, plan-file set
+ * and parser as `resolvePlanAgentHint`), in plan-file order, hint-less plans omitted. Empty on any
+ * lookup failure. A plan that cannot be read or parsed contributes nothing; the others still do.
+ */
+function listPhaseAgentHints(cwd: string, phase: string): string[] {
+  try {
+    if (!phase) return [];
+    const { phaseDir, ambiguousMatches } = locatePlanIndexPhaseDir(cwd, phase);
+    if (!phaseDir || ambiguousMatches) return [];
+    return readPhaseDirAgentHints(phaseDir);
+  } catch {
+    return [];
+  }
+}
+
+/** The `agent_hint` of every canonical plan in one phase directory; an unreadable plan is skipped. */
+function readPhaseDirAgentHints(phaseDir: string): string[] {
+  const hints: string[] = [];
+  for (const planFile of scanPhasePlans(phaseDir).planFiles.filter(isCanonicalPlanFile).sort()) {
+    try {
+      const planPath = path.join(phaseDir, planFile);
+      const hint = parsePlanDocument(fs.readFileSync(planPath, 'utf-8'), planPath).agentHint;
+      if (typeof hint === 'string' && hint.length > 0) hints.push(hint);
+    } catch {
+      // an unreadable plan has no routable hint
+    }
+  }
+  return hints;
+}
+
+/**
+ * #6213: the `agent_hint` of every canonical plan across every milestone phase directory (the scan
+ * `resolvePlanAgentHintAcrossPhases` uses), for a record that names no phase. Empty on any failure.
+ */
+function listAllPhaseAgentHints(cwd: string): string[] {
+  try {
+    const phasesDir = path.join(planningDir(cwd), 'phases');
+    const hints: string[] = [];
+    for (const dirName of listMilestonePhaseDirs(phasesDir, { cwd }).value) {
+      hints.push(...readPhaseDirAgentHints(path.join(phasesDir, dirName)));
+    }
+    return hints;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * #6213: locate a plan id across every milestone phase directory (same plan-file set and `planIdFromFile` as
+ * `resolvePlanAgentHint`). `matches` counts the plan files carrying that plan id; `hint` is
+ * its `agent_hint` only when exactly one plan matches, otherwise null.
+ */
+function resolvePlanAgentHintAcrossPhases(cwd: string, planId: string): { matches: number; hint: string | null } {
+  try {
+    if (!planId) return { matches: 0, hint: null };
+    const phasesDir = path.join(planningDir(cwd), 'phases');
+    const found: string[] = [];
+    for (const dirName of listMilestonePhaseDirs(phasesDir, { cwd }).value) {
+      const phaseDir = path.join(phasesDir, dirName);
+      for (const planFile of scanPhasePlans(phaseDir).planFiles.filter(isCanonicalPlanFile)) {
+        if (planIdFromFile(planFile) === planId) found.push(path.join(phaseDir, planFile));
+      }
+    }
+    if (found.length !== 1) return { matches: found.length, hint: null };
+    const hint = parsePlanDocument(fs.readFileSync(found[0], 'utf-8'), found[0]).agentHint;
+    return { matches: 1, hint: typeof hint === 'string' && hint.length > 0 ? hint : null };
+  } catch {
+    return { matches: 0, hint: null };
+  }
+}
+
+/**
+ * #6303 (ADR-3711 D1): the `executor_runtime` of one canonical plan, located the way
+ * `resolvePlanAgentHint` locates it (the given phase, else a scan of every milestone phase
+ * directory that must find exactly one plan carrying the id). Null on any lookup failure.
+ */
+function resolvePlanExecutorRuntime(cwd: string, phase: string | null, planId: string): string | null {
+  try {
+    if (!planId) return null;
+    let planPath: string | null = null;
+    if (phase) {
+      const { phaseDir, ambiguousMatches } = locatePlanIndexPhaseDir(cwd, phase);
+      if (!phaseDir || ambiguousMatches) return null;
+      const planFile = scanPhasePlans(phaseDir).planFiles
+        .filter(isCanonicalPlanFile)
+        .sort()
+        .find((f: string) => planIdFromFile(f) === planId);
+      if (!planFile) return null;
+      planPath = path.join(phaseDir, planFile);
+    } else {
+      const phasesDir = path.join(planningDir(cwd), 'phases');
+      const found: string[] = [];
+      for (const dirName of listMilestonePhaseDirs(phasesDir, { cwd }).value) {
+        const phaseDir = path.join(phasesDir, dirName);
+        for (const planFile of scanPhasePlans(phaseDir).planFiles.filter(isCanonicalPlanFile)) {
+          if (planIdFromFile(planFile) === planId) found.push(path.join(phaseDir, planFile));
+        }
+      }
+      if (found.length !== 1) return null;
+      planPath = found[0];
+    }
+    const declared = parsePlanDocument(fs.readFileSync(planPath, 'utf-8'), planPath).executorRuntime;
+    return typeof declared === 'string' && declared.length > 0 ? declared : null;
+  } catch {
+    return null;
+  }
+}
+
+function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
+  if (!phase) {
+    error('phase required for phase-plan-index');
+  }
+
+  const { phaseDir, normalized, ambiguousMatches } = locatePlanIndexPhaseDir(cwd, phase);
 
   if (ambiguousMatches) {
     output(
@@ -996,7 +1144,6 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     );
     return;
   }
-  void phaseDirName; // used only to set phaseDir above
 
   // phaseFiles stays root-only readdirSync — it feeds only
   // describeNonCanonicalPlans's near-miss naming diagnostic below, which is
@@ -1094,6 +1241,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       filesModified: planDoc.filesModified,
       filesDeleted: planDoc.filesDeleted,
       agentHint: planDoc.agentHint,
+      executorRuntime: planDoc.executorRuntime,
       gapClosure: planDoc.gapClosure,
       taskCount: planDoc.taskCount,
       hasSummary,
@@ -1263,6 +1411,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
       files_modified: rawPlan.filesModified,
       files_deleted: rawPlan.filesDeleted,
       agent_hint: rawPlan.agentHint,
+      executor_runtime: rawPlan.executorRuntime,
       task_count: rawPlan.taskCount,
       has_summary: rawPlan.hasSummary,
       // #2830: additive fields — halted is this plan's OWN status; blocked_by
@@ -1903,6 +2052,39 @@ function assertBracketGeneratedIdentity(
 }
 
 /**
+ * #5726: the current-milestone window for a verb that WRITES to the ROADMAP.
+ * When STATE.md names a milestone that has no heading in a ROADMAP carrying
+ * versioned milestones, the window owner falls back to the whole unshipped
+ * roadmap (scope UNSCOPED, `unresolvedMilestone` set), and number allocation,
+ * the `Depends on` line and the insert target would run over every milestone.
+ * ADR-3180: that is a non-answer, refused where it is destructive. Refuses
+ * before any write, naming the milestone; every other scope (a real heading,
+ * a free-form legacy ROADMAP, no milestone field) returns the window unchanged.
+ * Read-only readers keep calling `extractCurrentMilestone` and keep degrading.
+ */
+function currentMilestoneWindowOrRefuse(rawContent: string, cwd: string, command: string): string {
+  const { value, unresolvedMilestone, shippedMilestone } = extractCurrentMilestoneScoped(rawContent, cwd);
+  if (shippedMilestone) {
+    error(
+      `${command}: STATE.md names milestone ${echoStateMilestone(shippedMilestone)}, which ROADMAP.md marks as already shipped, `
+        + 'so the current milestone window is a closed one. Refusing to number the phase or link its dependencies '
+        + 'against a shipped milestone. Start the next milestone (or correct the milestone field in STATE.md), then retry. '
+        + 'If the heading is not shipped and its title merely contains a status word (such as "Failed Payment Recovery"), '
+        + 'rename the milestone, or add an active marker to the heading, for example \u{1f6a7} or "(in progress)".',
+    );
+  }
+  if (unresolvedMilestone) {
+    error(
+      `${command}: STATE.md names milestone ${echoStateMilestone(unresolvedMilestone)}, but ROADMAP.md has no milestone heading for it, `
+        + 'so the current milestone window cannot be resolved. Refusing to use the whole roadmap, which would number '
+        + 'the phase and link its dependencies against other milestones. Add the milestone heading to ROADMAP.md '
+        + 'or correct the milestone field in STATE.md, then retry.',
+    );
+  }
+  return value;
+}
+
+/**
  * #4304: refuse a bracket `phase add` / `add-batch` whose located milestone
  * window is a decoy. A non-milestone heading carrying the active version
  * token ahead of the real milestone heading (`## Goals for v2.0` before
@@ -1984,8 +2166,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
   const { newPhaseId, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase add');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add');
-    const content = extractCurrentMilestone(rawContent, cwd);
 
     let _newPhaseId: number | string;
 
@@ -2102,8 +2284,8 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase add-batch');
     if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add-batch');
-    const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
     if (bracketContext) {
       const used = collectBracketPhaseNumbers(
@@ -2554,7 +2736,7 @@ function cmdPhaseInsert(
 
   const { decimalPhase, dirName, roadmapEntry } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
-    const content = extractCurrentMilestone(rawContent, cwd);
+    const content = currentMilestoneWindowOrRefuse(rawContent, cwd, 'phase insert');
 
     // #4304: canonicalize a bracket argument
     // through the SAME adapter `phase remove` uses
@@ -5708,7 +5890,7 @@ function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: st
   if (!matchedHeading) return null;
   const heading = matchedHeading.text.match(headingPattern);
   if (!heading) return null;
-  const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
+  const name = stripInsertedMarker(heading[1]);
   return name || null;
 }
 
@@ -7286,7 +7468,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               const reqUpdate = updateTraceabilityCell(reqContent, reqRowMatch, 'Status', (current) => {
                 // #2788: accept `Gaps Found` too so a phase stranded by revert-phase (the
                 // gaps_found response) can complete without hand-editing the table.
-                if (/^(?:pending|in progress|gaps found)$/i.test(current.trim())) {
+                // #6238: read the status word, so `Pending (note)` advances like `Pending`.
+                if (leadingRequirementStatus(current, ['pending', 'in progress', 'gaps found']) !== null) {
                   tableHit = true;
                   return ' Complete ';
                 }
@@ -7464,9 +7647,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // which section (deferred or not) it lives under.
           const reqIsRegisteredAnywhere = (id: string): boolean => {
             const reqEscaped = escapeRegex(id);
-            // Surface 1 — checkbox, EITHER state (`[ ]` or `[x]`), case-
-            // insensitive: existence check, not the write's space-only match.
-            if (new RegExp(`-\\s*\\[[ xX]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
+            // Surface 1 — checkbox, ANY single mark (`[ ]`, `[x]`, `[~]`, …; #5844),
+            // case-insensitive: existence check, not the write's space-only match.
+            if (new RegExp(`-\\s*\\[[^\\]\\r\\n]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
               return true;
             }
             // Surface 2 — Traceability row exists at all (any Status value),
@@ -7475,7 +7658,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // insensitive first-cell match, regardless of current Status.
             const rowProbeMatch = (row: Record<string, string>): boolean =>
               (Object.values(row)[0] ?? '').trim().toLowerCase() === id.toLowerCase();
-            return updateTraceabilityCell(reqContent, rowProbeMatch, 'Status', (current) => current).ok;
+            // #5844: a table with no Status column fails the probe above with
+            // `unknown column`, so row existence is also read directly.
+            return updateTraceabilityCell(reqContent, rowProbeMatch, 'Status', (current) => current).ok
+              || traceabilityRowExists(reqContent, id);
           };
           const ghostReqIds = citedReqIds.filter(
             (id) => !isPlaceholderReqId(id) && !reqIsRegisteredAnywhere(id),
@@ -7494,9 +7680,18 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const traceabilityWriteFailures = traceabilityWriteMisses.filter(
             (id) => !ghostReqIds.includes(id),
           );
-          if (traceabilityWriteFailures.length > 0) {
+          // #5844: a row that EXISTS but has no Status cell to write is not a
+          // missing row — name the real cause instead of blaming the row.
+          const noStatusCellIds = traceabilityWriteFailures.filter((id) => traceabilityRowExists(reqContent, id));
+          const noRowIds = traceabilityWriteFailures.filter((id) => !noStatusCellIds.includes(id));
+          if (noRowIds.length > 0) {
             warnings.push(
-              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${traceabilityWriteFailures.join(', ')}`,
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${noRowIds.join(', ')}`,
+            );
+          }
+          if (noStatusCellIds.length > 0) {
+            warnings.push(
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (row found but the table has no Status column to write): ${noStatusCellIds.join(', ')}`,
             );
           }
 
@@ -7693,9 +7888,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             if (comparePhaseNum(pmNum, phaseNum, directoryContext) > 0
               && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum, directoryContext) < 0)) {
               roadmapNextNum = pmNum;
-              roadmapNextName = pmName
-                .replace(/\(INSERTED\)/i, '')
-                .trim()
+              roadmapNextName = stripInsertedMarker(pmName)
                 .toLowerCase()
                 .replace(/\s+/g, '-');
             }
@@ -7780,7 +7973,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num, directoryContext) < 0) {
                 lowestOutstanding = {
                   num: cbm[2],
-                  name: cbm[3].replace(/\(INSERTED\)/i, '').trim().toLowerCase().replace(/\s+/g, '-'),
+                  name: stripInsertedMarker(cbm[3]).toLowerCase().replace(/\s+/g, '-'),
                 };
               }
             }
@@ -8040,21 +8233,37 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   }
 
   let autoPruned = false;
+  // #5831: a failed auto-prune stays non-fatal (exit code and completion are
+  // unchanged), but is reported instead of swallowed — prune now fails loudly
+  // when it cannot write the archive, and that must reach the user.
+  let autoPruneError: string | null = null;
   try {
     const configPath = path.join(planningDir(cwd), 'config.json');
-    if (fs.existsSync(configPath)) {
-      const rawConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized one throws to the
+    // best-effort catch below.
+    const rawConfigText = configLoaderMod.readConfigFileBounded(configPath);
+    if (rawConfigText !== null) {
+      const rawConfig = JSON.parse(rawConfigText) as Record<string, unknown>;
       const workflow = rawConfig['workflow'] as Record<string, unknown> | undefined;
       const autoPruneEnabled = workflow && workflow['auto_prune_state'] === true;
       if (autoPruneEnabled && fs.existsSync(statePath)) {
         // Non-hoisted: load-order matters (stateMod must be fully resolved first).
         const { cmdStatePrune } = stateMod;
-        cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
-        autoPruned = true;
+        try {
+          const pruneResult = cmdStatePrune(cwd, { keepRecent: '3', dryRun: false, silent: true }, true);
+          // Only a prune that moved entries counts: a no-op prune leaves auto_pruned false.
+          autoPruned = pruneResult.pruned === true;
+        } catch (err) {
+          // Best-effort: completion proceeds; STATE.md and STATE-ARCHIVE.md are as
+          // the failed prune left them (it never loses entries).
+          autoPruneError = err instanceof Error ? err.message : String(err);
+          warnings.push(`auto-prune of STATE.md failed (phase completion is unaffected; run \`state prune\` to retry): ${autoPruneError}`);
+        }
       }
     }
   } catch {
-    /* intentionally empty — auto-prune is best-effort */
+    // Best-effort: an unreadable or invalid config.json means auto-prune is not
+    // enabled; completion proceeds silently.
   }
 
   const result = {
@@ -8069,6 +8278,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     state_updated: stateUpdated,
     requirements_updated: requirementsUpdated,
     auto_pruned: autoPruned,
+    // #5831: ADDITIVE — present only when auto-prune threw.
+    ...(autoPruneError !== null ? { auto_prune_error: autoPruneError } : {}),
     warnings,
     has_warnings: warnings.length > 0,
     // ADDITIVE, never a change to `warnings[]`'s element shape — that array is
@@ -8152,6 +8363,11 @@ export = {
   cmdPhaseNextDecimal,
   cmdFindPhase,
   cmdPhasePlanIndex,
+  resolvePlanAgentHint,
+  listPhaseAgentHints,
+  listAllPhaseAgentHints,
+  resolvePlanAgentHintAcrossPhases,
+  resolvePlanExecutorRuntime,
   cmdPhaseAdd,
   cmdPhaseAddBatch,
   cmdPhaseMvpMode,

@@ -25,7 +25,7 @@ GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"; GSD_TOOLS="${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}"; _gsd_at() { for _p; do if [ -f "$_p" ]; then GSD_TOOLS="$_p"; return 0; fi; done; return 1; }; _gsd_id_ok() { case "$("$1" runtime-identity --raw 2>/dev/null || true)" in '{"packageName":"@opengsd/gsd-core"'*'}') return 0;; *) return 1;; esac; }; _gsd_homes() { set -- "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${ANTIGRAVITY_CONFIG_DIR:-$HOME/.gemini/antigravity}" "$HOME/.gemini/antigravity-ide" "$HOME/.gemini/antigravity-cli" "${AUGMENT_CONFIG_DIR:-$HOME/.augment}" "${CLINE_CONFIG_DIR:-$HOME/.cline}" "${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}" "${CODEX_HOME:-$HOME/.codex}" "${COPILOT_CONFIG_DIR:-${COPILOT_HOME:-$HOME/.copilot}}" "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" "${HERMES_HOME:-$HOME/.hermes}" "${KILO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/kilo}" "${KIMI_CONFIG_DIR:-$HOME/.config/agents}" "$HOME/.agents" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" "${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}" "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" "${QWEN_CONFIG_DIR:-$HOME/.qwen}" "${TRAE_CONFIG_DIR:-$HOME/.trae}" "${WINDSURF_CONFIG_DIR:-$HOME/.codeium/windsurf}" "${ZCODE_CONFIG_DIR:-$HOME/.zcode}" "${GROK_AGENTS_HOME:-$HOME/.agents}"; for _h; do _gsd_at "$_h/gsd-core/bin/${_GSD_SHIM_NAME}" && return 0; done; return 1; }; if _gsd_at "${_GSD_RUNTIME_ROOT}/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.claude/gsd-core/bin/${_GSD_SHIM_NAME}" "${_GSD_RUNTIME_ROOT}/.codex/gsd-core/bin/${_GSD_SHIM_NAME}"; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif _gsd_homes; then gsd_run() { node "$GSD_TOOLS" "$@"; }; elif unset -f gsd_run; _G="$(command -v gsd_run)"; [ -n "$_G" ] && _gsd_id_ok "$_G"; then GSD_TOOLS="$_G"; gsd_run() { "$GSD_TOOLS" "$@"; }; else echo "ERROR: gsd-tools.cjs not found at $GSD_TOOLS and no identity-proving gsd_run is on PATH. Run: npx -y @opengsd/gsd-core@latest --claude --local" >&2; exit 1; fi; GSD_IDENTITY_STATUS=unverified; _gsd_id_ok gsd_run && GSD_IDENTITY_STATUS=ok; export GSD_IDENTITY_STATUS; [ "$GSD_IDENTITY_STATUS" = ok ] || echo "WARNING: \"$GSD_TOOLS\" did not prove it is @opengsd/gsd-core - it is either a different package or an @opengsd/gsd-core older than the runtime-identity verb. See docs/how-to/diagnose-a-foreign-gsd-tools.md" >&2; if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -n "${GSD_TOOLS:-}" ]; then printf "export PATH='%s':\"\$PATH\"\n" "${GSD_TOOLS%/*}" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true; fi
 PHASE_ARG="${1}"
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS_FIXER=$(gsd_run query agent-skills gsd-code-fixer ${GSD_WS:+--ws=${GSD_WS##* }})
@@ -430,13 +430,14 @@ Key design decisions for --auto (addresses ALL review HIGH concerns):
 1. **Re-review scope**: Uses REVIEW_FILES_ARRAY from original REVIEW.md frontmatter, falling back to full phase scope. Scope is NOT lost between iterations. Uses portable while-read loop (bash 3.2+ compatible, handles spaces in paths).
 2. **Artifact semantics**: REVIEW.md is overwritten by each re-review (latest review state). REVIEW-FIX.md is overwritten by each fixer iteration (latest fix state with iteration count). There is ONE final version of each artifact, not per-iteration copies.
    Backup files (.iterN.md) preserve history for post-mortem analysis if iterations degrade. On successful convergence (#3190) the backups are spent scratch and removed; on degradation (hit MAX_ITERATIONS / fixer failure) they are retained for post-mortem. The removal happens in `cleanup_iteration_backups`, after `record_disposition` has read them — they are the only surviving record of what an earlier iteration fixed, since this artifact keeps one final version rather than per-iteration copies.
-3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration.
+3. **Commit timing**: Fix commits happen per-finding inside the agent. REVIEW-FIX.md is NOT committed until step 7 (after ALL iterations complete). Only ONE docs commit, not one per iteration. In --auto that single commit also stages the converged REVIEW.md alongside REVIEW-FIX.md (#3190), so the two committed artifacts agree — the initial code-review commit held iteration-1 REVIEW.md content, and the --auto re-review loop overwrote it each iteration. In --auto, REVIEW.md is also committed when the fix report is invalid or missing (#5527); the malformed report is never staged.
 </step>
 
 <step name="commit_fix_report">
 After ALL iterations complete (or single pass in non-auto mode), validate and commit REVIEW-FIX.md:
 
 ```bash
+HAS_STATUS=invalid
 if [ -f "${FIX_REPORT_PATH}" ]; then
   # Validate REVIEW-FIX.md has valid YAML frontmatter with status field
   # #3190: export FIX_REPORT_PATH (the var the body reads), not REVIEW_PATH.
@@ -449,30 +450,42 @@ if [ -f "${FIX_REPORT_PATH}" ]; then
   
   if [ "$HAS_STATUS" = "valid" ]; then
     echo "REVIEW-FIX.md created at ${FIX_REPORT_PATH}"
-    
-    if [ "$COMMIT_DOCS" = "true" ]; then
-      # #3190: --auto's re-review loop overwrote REVIEW.md each iteration
-      # (auto_iteration_loop), but the only prior REVIEW.md commit is the
-      # initial code-review pass (iteration-1 content). Stage the converged
-      # REVIEW.md alongside REVIEW-FIX.md in this single docs commit so the two
-      # committed artifacts agree. Non-auto single-pass runs never rewrite
-      # REVIEW.md, so it is left untouched (guarded on AUTO_MODE).
-      COMMIT_FILES=("${FIX_REPORT_PATH}")
-      if [ "$AUTO_MODE" = "true" ] && [ -f "${REVIEW_PATH}" ]; then
-        COMMIT_FILES+=("${REVIEW_PATH}")
-      fi
-      gsd_run query commit \
-        "docs(${PADDED_PHASE}): add code review fix report" \
-        --files "${COMMIT_FILES[@]}"
-    fi
   else
-    echo "Warning: REVIEW-FIX.md has invalid frontmatter (no status field). Not committing."
+    echo "Warning: REVIEW-FIX.md has invalid frontmatter (no status field). Not committing REVIEW-FIX.md."
     echo "Agent may have produced malformed output. Review manually: ${FIX_REPORT_PATH}"
+    # Only when git sees the report.
+    FIX_REPORT_DIRTY=$(git status --porcelain -- "${FIX_REPORT_PATH}" 2>/dev/null)
+    if [ -n "$FIX_REPORT_DIRTY" ]; then
+      echo "The working tree stays dirty: /gsd:ship will ask you to commit or stash until ${FIX_REPORT_PATH} is fixed and committed, or deleted."
+    fi
   fi
 else
   echo "Warning: REVIEW-FIX.md not found at ${FIX_REPORT_PATH}."
   echo "Agent may have failed before writing report."
   echo "Check git log for any fix(${PADDED_PHASE}) commits that were applied."
+fi
+
+if [ "$COMMIT_DOCS" = "true" ]; then
+  # #3190: --auto's re-review loop overwrote REVIEW.md each iteration
+  # (auto_iteration_loop), but the only prior REVIEW.md commit is the
+  # initial code-review pass (iteration-1 content). Stage the converged
+  # REVIEW.md alongside REVIEW-FIX.md in this single docs commit so the two
+  # committed artifacts agree. Non-auto single-pass runs never rewrite
+  # REVIEW.md, so it is left untouched (guarded on AUTO_MODE).
+  # #5527: stage REVIEW.md even when the fix report is invalid/missing, else the
+  # rewritten tracked REVIEW.md stays dirty. A malformed report is never staged.
+  COMMIT_FILES=()
+  COMMIT_MSG="docs(${PADDED_PHASE}): update code review report"
+  if [ "$HAS_STATUS" = "valid" ]; then
+    COMMIT_FILES+=("${FIX_REPORT_PATH}")
+    COMMIT_MSG="docs(${PADDED_PHASE}): add code review fix report"
+  fi
+  if [ "$AUTO_MODE" = "true" ] && [ -f "${REVIEW_PATH}" ]; then
+    COMMIT_FILES+=("${REVIEW_PATH}")
+  fi
+  if [ "${#COMMIT_FILES[@]}" -gt 0 ]; then
+    gsd_run query commit "$COMMIT_MSG" --files "${COMMIT_FILES[@]}"
+  fi
 fi
 ```
 

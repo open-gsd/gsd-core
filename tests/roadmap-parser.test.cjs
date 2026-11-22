@@ -1341,6 +1341,103 @@ describe('roadmap-parser: getMilestoneInfo #2135 — milestone_name clobber', ()
   });
 });
 
+// ─── #6149 — a heading that only MENTIONS the milestone's version is not its heading ──────────────────────────────
+// The version token must LEAD the heading text (only ✅ 📋 🚧, bold markers and the word `Milestone` may precede it); the
+// one rule is read by selection and by section detection, so the two cannot disagree.
+
+describe('roadmap-parser: #6149 — a mention heading is not the milestone heading', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const STATE = { gsd_state_version: '1.0', milestone: 'v0.5.0', milestone_name: 'Search Revamp' };
+
+  test('a "Carried forward to v0.5.0 (…)" heading selects nothing: the name resolves to none, never the heading tail', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Carried forward to v0.5.0 (inputs, not phases)', '', '### Phase 1: Something'].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.value.version, 'v0.5.0');
+    assert.strictEqual(info.value.name, null, 'the tail "(inputs, not phases)" is not a name');
+  });
+
+  test('"Deferred to v0.5.0 pending review" selects nothing either', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Deferred to v0.5.0 pending review', '', '### Phase 1: Something'].join('\n'));
+    assert.strictEqual(getMilestoneInfo(tmpDir).value.name, null);
+  });
+
+  test('a mention heading ABOVE the real heading does not win; the real heading names the milestone', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Carried forward to v0.5.0 (inputs, not phases)', '', '## v0.5.0 Search Revamp', '', '### Phase 1: Something'].join('\n'));
+    assert.strictEqual(getMilestoneInfo(tmpDir).value.name, 'Search Revamp');
+    const selected = roadmapParser.selectMilestoneHeading(fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf8'), 'v0.5.0');
+    assert.match(selected[1], /^## v0\.5\.0 Search Revamp$/);
+  });
+
+  test('the real heading before a mention heading, and a roadmap with no version at all, keep their names', () => {
+    writeState(tmpDir, STATE);
+    writeRoadmap(tmpDir, ['## v0.5.0 Search Revamp', '', '## Carried forward to v0.5.0 (inputs, not phases)'].join('\n'));
+    assert.strictEqual(getMilestoneInfo(tmpDir).value.name, 'Search Revamp');
+  });
+
+  test('the allowed leading shapes still select, and a sub-milestone still selects for its state version', () => {
+    for (const heading of ['## v0.5.0 Name', '## ✅ v0.5.0 Name', '### 🚧 v0.5.0 Name (In Progress)', '## **v0.5.0** Name', '## Milestone v0.5.0: Name']) {
+      assert.ok(roadmapParser.selectMilestoneHeading(`${heading}\n`, 'v0.5.0'), `selects ${heading}`);
+    }
+    assert.ok(roadmapParser.selectMilestoneHeading('## v8.0-B Part\n', 'v8.0'), 'v8.0 still selects its sub-milestone heading');
+    assert.strictEqual(roadmapParser.selectMilestoneHeading('## v0.4.0 Old notes about v0.5.0\n', 'v0.5.0'), null, 'another version leading the heading is not this milestone');
+  });
+
+  test('selection and section detection agree on the same heading table', () => {
+    const table = [
+      ['## v0.5.0 Name', true], ['## ✅ v0.5.0 Name', true], ['### 🚧 v0.5.0 Name (In Progress)', true], ['## **v0.5.0** Name', true],
+      ['## Milestone v0.5.0: Name', true], ['## Current Milestone: v0.5.0', true], ['## Milestone 1: First Milestone v0.5.0', true], ['## Roadmap v0.5.0: Name', true],
+      ['## [GSD.02] v0.5.0: Name', true], ['## Carried forward to v0.5.0 (inputs, not phases)', false],
+      ['## Deferred to v0.5.0 pending review', false], ['# Roadmap: Name (v0.5.0)', false],
+      // a status marker or the word Milestone elsewhere in a mention heading signals a section but carries no version
+      ['## Deferred to v0.5.0 🚧', false], ['## Carried forward to the next Milestone (v0.5.0)', false],
+    ];
+    for (const [heading, expected] of table) {
+      const content = `${heading}\n\nbody\n`;
+      const selected = roadmapParser.selectMilestoneHeading(content, 'v0.5.0') !== null;
+      const sectioned = roadmapParser.milestoneSections(content).some((section) => section.version === 'v0.5.0');
+      assert.strictEqual(selected, expected, `selection: ${heading}`);
+      assert.strictEqual(sectioned, expected, `section detection: ${heading}`);
+      const listed = roadmapParser.listMilestoneHeadings(content).some((entry) => entry.version === 'v0.5.0');
+      assert.strictEqual(listed, expected, `enumeration: ${heading}`);
+    }
+  });
+
+  test('the window classifiers read the same rule: a mention heading is neither a versioned roadmap nor a cutoff', () => {
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('## Carried forward to v0.5.0 (inputs)\n'), false);
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('## v0.5.0 Name\n'), true);
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('## [GSD.02] v2.0: Name\n'), true);
+    assert.strictEqual(roadmapParser.hasVersionedMilestones('### Phase 1: Migrate to v2.0 API\n'), true, 'a Phase title mentioning a version keeps this predicate\'s pinned behaviour');
+  });
+
+  test('a mention heading does not end the preceding milestone window', () => {
+    const content = ['## v0.4.0 Old', '', 'old body', '', '## Carried forward to v0.5.0 (inputs)', '', 'carried body', '', '## v0.5.0 New', ''].join('\n');
+    const sections = roadmapParser.milestoneSections(content);
+    const old = sections.find((section) => section.version === 'v0.4.0');
+    assert.ok(content.slice(old.start, old.end).includes('carried body'), 'the v0.4.0 window runs through the mention heading to the real v0.5.0 heading');
+    assert.ok(!content.slice(old.start, old.end).includes('## v0.5.0 New'));
+  });
+
+  test('CLI: quick-tasks-append keeps the curated milestone_name when only a mention heading exists', () => {
+    const { runGsdTools } = require('./helpers.cjs');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---', 'gsd_state_version: 1.0', 'milestone: v0.5.0', 'milestone_name: Search Revamp', '---', '',
+      '### Quick Tasks Completed', '', '| # | Description | Date | Commit | Directory |', '|---|-------------|------|--------|-----------|', '',
+    ].join('\n'));
+    writeRoadmap(tmpDir, ['# Roadmap', '', '## Carried forward to v0.5.0 (inputs, not phases)', '', '### Phase 1: Something'].join('\n'));
+    const r = runGsdTools(['quick-tasks-append', '--task', 'Fix thing'], tmpDir);
+    assert.ok(r.success, r.error);
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf8');
+    assert.match(state, /milestone_name: Search Revamp/, 'the curated name survives');
+    assert.doesNotMatch(state, /inputs, not phases/);
+  });
+});
+
 // ─── getMilestoneInfo — #4134 punctuation-fragment name refusal ───────────────
 // The §7.2 pinned rule takes everything AFTER the heading's own version token
 // as the name. For a name-then-version heading (`# Roadmap: Project — Name
@@ -4295,16 +4392,15 @@ describe('roadmap-parser: classifyMilestoneScalar (#5038)', () => {
   const NULL_SPELLINGS = ['null', 'Null', 'NULL', '~'];
   const pad = fc.string({ unit: fc.constantFrom(' ', '\t'), maxLength: 3 });
 
-  test('every null spelling, with optional quotes and a trailing comment, is an explicit null', () => {
+  // The classifier takes an already DECODED scalar (#5726); quotes and comments
+  // are decoded upstream by readStateMilestoneScalar and covered below.
+  test('every decoded null spelling, with surrounding whitespace, is an explicit null', () => {
     fc.assert(fc.property(
       fc.constantFrom(...NULL_SPELLINGS),
-      fc.constantFrom('', "'", '"'),
-      fc.option(fc.string({ unit: fc.constantFrom('a', 'b', ' ', '#', '1'), maxLength: 8 }), { nil: undefined }),
       pad,
       pad,
-      (spelling, quote, comment, lead, trail) => {
-        const raw = `${lead}${quote}${spelling}${quote}${comment === undefined ? '' : ` #${comment}`}${trail}`;
-        assert.deepStrictEqual(classifyMilestoneScalar(raw), { explicitNull: true, version: null });
+      (spelling, lead, trail) => {
+        assert.deepStrictEqual(classifyMilestoneScalar(`${lead}${spelling}${trail}`), { explicitNull: true, version: null });
       },
     ));
   });
@@ -4323,9 +4419,10 @@ describe('roadmap-parser: classifyMilestoneScalar (#5038)', () => {
     ));
   });
 
-  test('`#` boundary: `null#x` is a version, `null #x` is null', () => {
+  test('a decoded string that merely contains `#` or a quote is a literal version', () => {
     assert.deepStrictEqual(classifyMilestoneScalar('null#x'), { explicitNull: false, version: 'null#x' });
-    assert.deepStrictEqual(classifyMilestoneScalar('null #x'), { explicitNull: true, version: null });
+    assert.deepStrictEqual(classifyMilestoneScalar('null # x'), { explicitNull: false, version: 'null # x' });
+    assert.deepStrictEqual(classifyMilestoneScalar('"null"'), { explicitNull: false, version: '"null"' });
   });
 
   test('blank or non-string input is absent, not null', () => {
@@ -4412,6 +4509,43 @@ describe('#4998 regression: readStateMilestoneScalar', () => {
   test('a trailing YAML comment is not part of the value', () => {
     assert.strictEqual(readStateMilestoneScalar('---\nmilestone: v1.0 # note\n---\n'), 'v1.0');
     assert.strictEqual(readStateMilestoneScalar('---\nmilestone: "v1.0" # note\n---\n'), 'v1.0');
+  });
+
+  // #5726: raw on-disk spellings decode through the FAILSAFE loader on BOTH the
+  // frontmatter path and the no-frontmatter line read, then classify.
+  test('raw null spellings (quotes, comments) decode then classify, on both paths', () => {
+    const { classifyMilestoneScalar } = roadmapParser;
+    const cases = [
+      ['null', 'null', true],
+      ['Null', 'Null', true],
+      ['NULL', 'NULL', true],
+      ['~', '~', true],
+      ['"null"', 'null', true],
+      ["'~'", '~', true],
+      ["'Null'", 'Null', true],
+      ['"NULL"', 'NULL', true],
+      ['null # c', 'null', true],
+      ['~ # c', '~', true],
+      ['"null" # c', 'null', true],
+      ['null #x', 'null', true],
+      ['null#x', 'null#x', false],
+      ['"null#x"', 'null#x', false],
+      ['"null # x"', 'null # x', false],
+    ];
+    for (const [onDisk, decoded, isNull] of cases) {
+      for (const state of [`---\nmilestone: ${onDisk}\n---\n# S\n`, `# S\nmilestone: ${onDisk}\n`]) {
+        const scalar = readStateMilestoneScalar(state);
+        assert.strictEqual(scalar, decoded, `decoded ${onDisk}`);
+        assert.deepStrictEqual(
+          classifyMilestoneScalar(scalar),
+          isNull ? { explicitNull: true, version: null } : { explicitNull: false, version: decoded },
+          `classified ${onDisk}`,
+        );
+      }
+    }
+    for (const state of ['---\nmilestone: ""\n---\n', '# S\nmilestone: ""\n']) {
+      assert.deepStrictEqual(classifyMilestoneScalar(readStateMilestoneScalar(state)), { explicitNull: false, version: null });
+    }
   });
 
   // The writer's own escaper (escapeDoubleQuotedScalar) is the encoding the
@@ -4637,5 +4771,331 @@ describe('milestoneVersionAtOffset (#5679)', () => {
         assert.strictEqual(milestoneVersionAtOffset(doc, doc.indexOf(row)), version, `row ${row} in\n${doc}`);
       }
     }), { numRuns: 200, seed: 5679 });
+  });
+});
+
+describe('#5726: blankFencesAndComments properties', () => {
+  const { blankFencesAndComments } = roadmapParser;
+  const PIECES = ['<!--', '-->', '<!-->', '<!--->', '```', '~~~', '`', '~', '\n', '\r\n', ' ', '  ', '## v2.0 X', 'a', '<', '!', '-'];
+  const docs = fc.array(fc.constantFrom(...PIECES), { maxLength: 40 }).map((c) => c.join(''));
+
+  function assertShapeInvariants(input, out) {
+    assert.strictEqual(out.length, input.length);
+    for (let i = 0; i < input.length; i++) {
+      if (input[i] === '\n') assert.strictEqual(out[i], '\n', `newline moved at ${i}`);
+      else assert.notStrictEqual(out[i], '\n', `newline invented at ${i}`);
+      if (out.startsWith('<!--', i)) assert.ok(input.startsWith('<!--', i), `opener invented at ${i}`);
+    }
+  }
+
+  test('output is same-length, keeps every newline in place, and never invents a comment opener', () => {
+    fc.assert(fc.property(docs, (input) => {
+      assertShapeInvariants(input, blankFencesAndComments(input));
+    }), { numRuns: 500, seed: 5726 });
+  });
+
+  // Model-based oracle: documents are built from segments whose visibility is
+  // known by construction, so the expected set of visible versioned heading
+  // lines is computed from the model, not from the implementation.
+  //   inner tokens: P plain, H heading, F fence line, O a bare `<!--`
+  const INNER = fc.constantFrom('P', 'H', 'F', 'O');
+  const FENCE_BODY = fc.constantFrom('P', 'H', 'O', 'C'); // C: a bare `-->`
+  const VISIBLE_BODY = fc.constantFrom('P', 'H'); // lines no unclosed opener hides
+  const FENCE_CHAR = fc.constantFrom('```', '~~~', '````');
+  const LONG_FENCE = fc.constantFrom('````', '`````', '~~~~', '~~~~~');
+  const INFO = fc.constantFrom('', ' js', ' `x`');
+  // A backtick fence whose info string holds a backtick is not a fence (CommonMark §4.5).
+  const infoOf = (fence, info) => (fence[0] === '`' && info.includes('`') ? ' js' : info);
+  const segment = fc.oneof(
+    fc.record({ kind: fc.constant('plain') }),
+    fc.record({ kind: fc.constant('heading') }),
+    // A closer of the opener's length or LONGER (extra 1-2) closes the fence.
+    fc.record({
+      kind: fc.constant('fence'),
+      fence: FENCE_CHAR,
+      body: fc.array(FENCE_BODY, { maxLength: 4 }),
+      extra: fc.integer({ min: 0, max: 2 }),
+      info: INFO,
+    }),
+    // A same-char closer that is too SHORT, or carries trailing text, does not
+    // close: the lines after it (headings included) stay inside the fence.
+    fc.record({
+      kind: fc.constant('fenceBadCloser'),
+      fence: LONG_FENCE,
+      body: fc.array(FENCE_BODY, { maxLength: 3 }),
+      bad: fc.constantFrom('short', 'trailing'),
+      body2: fc.array(FENCE_BODY, { maxLength: 3 }),
+      extra: fc.integer({ min: 0, max: 1 }),
+    }),
+    // A backtick fence line with a backtick in its info string is plain content.
+    fc.record({ kind: fc.constant('badInfo') }),
+    fc.record({ kind: fc.constant('comment'), body: fc.array(INNER, { maxLength: 4 }), fence: FENCE_CHAR }),
+  );
+  const tail = fc.option(
+    fc.oneof(
+      // a line-opening unclosed comment hides to EOF
+      fc.record({
+        kind: fc.constant('comment'),
+        indent: fc.integer({ min: 0, max: 3 }),
+        body: fc.array(INNER, { maxLength: 4 }),
+        fence: FENCE_CHAR,
+      }),
+      // an unclosed fence blanks to EOF
+      fc.record({
+        kind: fc.constant('fence'),
+        fence: FENCE_CHAR,
+        info: INFO,
+        body: fc.array(FENCE_BODY, { maxLength: 4 }),
+      }),
+      // a mid-line unclosed `<!--` hides nothing
+      fc.record({ kind: fc.constant('midline'), body: fc.array(VISIBLE_BODY, { maxLength: 4 }) }),
+      // a 4-space-indented unclosed `<!--` is not a comment opener: hides nothing
+      fc.record({ kind: fc.constant('indented'), body: fc.array(VISIBLE_BODY, { maxLength: 4 }) }),
+    ),
+    { nil: undefined },
+  );
+
+  function render(segments, unclosed, eol) {
+    const lines = [];
+    const visible = [];
+    const emit = (text, isVisibleHeading) => {
+      if (isVisibleHeading) visible.push(text);
+      lines.push(text);
+    };
+    const heading = (n) => `## v${(n % 9) + 1}.${n % 7} H${lines.length}`;
+    const inner = (tok, fence) => {
+      if (tok === 'H') return heading(lines.length);
+      if (tok === 'F') return fence;
+      if (tok === 'O') return '<!--';
+      if (tok === 'C') return '-->';
+      return 'some text';
+    };
+    for (const seg of segments) {
+      if (seg.kind === 'plain') emit('some text', false);
+      else if (seg.kind === 'heading') { const h = heading(lines.length); emit(h, true); }
+      else if (seg.kind === 'fence') {
+        emit(seg.fence + infoOf(seg.fence, seg.info), false);
+        for (const tok of seg.body) emit(inner(tok, seg.fence[0] === '`' ? '~~~' : '```'), false);
+        emit(seg.fence + seg.fence[0].repeat(seg.extra), false);
+      } else if (seg.kind === 'fenceBadCloser') {
+        emit(seg.fence, false);
+        for (const tok of seg.body) emit(inner(tok, ''), false);
+        emit(seg.bad === 'short' ? seg.fence[0].repeat(3) : `${seg.fence} x`, false);
+        for (const tok of seg.body2) emit(inner(tok, ''), false);
+        emit(seg.fence + seg.fence[0].repeat(seg.extra), false);
+      } else if (seg.kind === 'badInfo') {
+        emit('```js `x`', false);
+      } else {
+        emit('<!-- note', false);
+        for (const tok of seg.body) emit(inner(tok, seg.fence), false);
+        emit('-->', false);
+      }
+    }
+    if (unclosed) {
+      const visibleBody = (body) => {
+        for (const tok of body) {
+          if (tok === 'H') emit(heading(lines.length), true);
+          else emit('some text', false);
+        }
+      };
+      if (unclosed.kind === 'comment') {
+        emit(`${' '.repeat(unclosed.indent)}<!--`, false);
+        for (const tok of unclosed.body) emit(inner(tok, unclosed.fence), false);
+      } else if (unclosed.kind === 'fence') {
+        emit(unclosed.fence + infoOf(unclosed.fence, unclosed.info), false);
+        for (const tok of unclosed.body) emit(inner(tok, ''), false);
+      } else if (unclosed.kind === 'midline') {
+        emit('text <!--', false);
+        visibleBody(unclosed.body);
+      } else {
+        emit('    <!--', false);
+        visibleBody(unclosed.body);
+      }
+    }
+    return { input: lines.join(eol) + eol, visible };
+  }
+
+  test('the visible versioned heading lines equal the segment model, and the shape invariants hold', () => {
+    fc.assert(fc.property(
+      fc.array(segment, { maxLength: 8 }),
+      tail,
+      fc.constantFrom('\n', '\r\n'),
+      (segments, unclosed, eol) => {
+        const { input, visible } = render(segments, unclosed, eol);
+        const out = blankFencesAndComments(input);
+        assertShapeInvariants(input, out);
+        const surviving = out.split('\n').map((l) => l.trim()).filter((l) => /^## v\d+\.\d+ H\d+$/.test(l));
+        assert.deepStrictEqual(surviving, visible, JSON.stringify(input));
+      },
+    ), { numRuns: 300, seed: 5726 });
+  });
+
+  test('a 200 KB run of mid-line unclosed `<!--` openers hides nothing', () => {
+    const input = 'x' + '<!--'.repeat(50000);
+    assert.strictEqual(blankFencesAndComments(input), input);
+  });
+});
+
+// ─── one fence-delimiter matcher (#5726) ─────────────────────────────────────
+
+describe('#5726: matchFenceDelimiter parity', () => {
+  const {
+    matchFenceDelimiter, scanFencedBlocks, stripFencedCode, tokenizeHeadings,
+  } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const { blankFencesAndComments } = roadmapParser;
+
+  const fenceLine = fc.record({
+    kind: fc.constant('fence'),
+    indent: fc.integer({ min: 0, max: 4 }),
+    char: fc.constantFrom('`', '~'),
+    run: fc.integer({ min: 2, max: 6 }),
+    info: fc.constantFrom('', ' ', '\t', ' \t', ' js', ' `x`', 'x', ' a b', ' x `y` z'),
+    cr: fc.boolean(),
+  });
+  const otherLine = fc.record({
+    kind: fc.constantFrom('text', 'heading'),
+    cr: fc.boolean(),
+  });
+  const lineSpec = fc.oneof(fenceLine, fenceLine, otherLine);
+
+  function textOf(spec, i) {
+    const body = spec.kind === 'fence'
+      ? ' '.repeat(spec.indent) + spec.char.repeat(spec.run) + spec.info
+      : spec.kind === 'heading' ? `# h${i}` : 'some text';
+    return body + (spec.cr ? '\r' : '');
+  }
+
+  // Independent grammar, spelled from the generator's components.
+  const isDelimiter = (s) => s.kind === 'fence' && s.indent <= 3 && s.run >= 3;
+  const canOpen = (s) => !(s.char === '`' && s.info.includes('`'));
+  const closesOpener = (s, o) => s.char === o.char && s.run >= o.run && s.info.trim() === '';
+
+  test('the matcher agrees with the grammar spelled from the line components', () => {
+    fc.assert(fc.property(fenceLine, fc.constantFrom('`', '~'), fc.integer({ min: 3, max: 6 }), (s, oc, ol) => {
+      const m = matchFenceDelimiter(textOf(s, 0));
+      if (!isDelimiter(s)) { assert.strictEqual(m, null, JSON.stringify(s)); return; }
+      assert.ok(m, JSON.stringify(s));
+      assert.strictEqual(m.char, s.char);
+      assert.strictEqual(m.len, s.run);
+      assert.strictEqual(m.trailing, s.info);
+      assert.strictEqual(m.canOpen, canOpen(s));
+      assert.strictEqual(m.closes({ char: oc, len: ol }), closesOpener(s, { char: oc, run: ol }), JSON.stringify([s, oc, ol]));
+    }), { numRuns: 500, seed: 5726 });
+  });
+
+  // Fenced line spans [open, close] (close = last line when unterminated),
+  // from a state machine over the generator's own components.
+  function spansOf(specs) {
+    const spans = [];
+    let open = null;
+    specs.forEach((s, i) => {
+      if (!isDelimiter(s)) return;
+      if (open === null) {
+        if (canOpen(s)) open = { idx: i, char: s.char, run: s.run };
+      } else if (closesOpener(s, open)) {
+        spans.push([open.idx, i]);
+        open = null;
+      }
+    });
+    if (open !== null) spans.push([open.idx, specs.length - 1]);
+    return spans;
+  }
+
+  test('scanFencedBlocks, stripFencedCode, tokenizeHeadings and blankFencesAndComments all partition a document as the matcher does', () => {
+    fc.assert(fc.property(fc.array(lineSpec, { maxLength: 24 }), (specs) => {
+      const lines = specs.map(textOf);
+      const doc = lines.join('\n');
+      const spans = spansOf(specs);
+      const inSpan = (i) => spans.some(([a, b]) => i >= a && i <= b);
+
+      const scanned = scanFencedBlocks(lines).map((b) => [b.openLineIdx, b.closeLineIdx === -1 ? lines.length - 1 : b.closeLineIdx]);
+      assert.deepStrictEqual(scanned, spans, JSON.stringify(doc));
+
+      const stripped = stripFencedCode(doc);
+      assert.strictEqual(stripped.text, lines.filter((_, i) => !inSpan(i)).join('\n'), JSON.stringify(doc));
+      // A span ends at the last line only when it is unterminated; spansOf marks that
+      // by a close index equal to the last line with no closing delimiter, so rebuild it
+      // from the state machine's own final state.
+      const endsUnterminated = (() => {
+        let open = null;
+        specs.forEach((s) => {
+          if (!isDelimiter(s)) return;
+          if (open === null) { if (canOpen(s)) open = { char: s.char, run: s.run }; }
+          else if (closesOpener(s, open)) open = null;
+        });
+        return open !== null;
+      })();
+      assert.strictEqual(stripped.unterminatedFence, endsUnterminated, JSON.stringify(doc));
+
+      const expectedHeadings = specs
+        .map((s, i) => (s.kind === 'heading' && !inSpan(i)
+          ? {
+            level: 1,
+            text: `h${i}`,
+            line: i + 1,
+            offset: lines.slice(0, i).join('\n').length + (i > 0 ? 1 : 0),
+          }
+          : null))
+        .filter(Boolean);
+      assert.deepStrictEqual(
+        tokenizeHeadings(doc).map((t) => ({ level: t.level, text: t.text, line: t.line, offset: t.offset })),
+        expectedHeadings,
+        JSON.stringify(doc),
+      );
+
+      const blanked = lines.map((l, i) => (inSpan(i) ? l.replace(/[^\n]/g, ' ') : l)).join('\n');
+      assert.strictEqual(blankFencesAndComments(doc), blanked, JSON.stringify(doc));
+    }), { numRuns: 500, seed: 5726 });
+  });
+});
+
+// ─── isClosedMilestoneHeading (#5726) ────────────────────────────────────────
+
+describe('#5726: isClosedMilestoneHeading', () => {
+  const { isClosedMilestoneHeading } = roadmapParser;
+
+  const ROWS = [
+    ['v1.0 MVP Shipped', true],
+    ['v1.0 MVP - shipped 2026-01-01', true],
+    ['v1.0 MVP shipped Jan 2026', true],
+    ['v1.0 (shipped, replaces v0.9)', true],
+    ['\u{2705} v1.0', true],
+    ['v1.0 Core \u{2705} SHIPPED', true],
+    ['v1.0 Failed Payment Recovery', true],
+    ['v1.1 Shipped Phases 1-4', true],
+    ['v2.0 (v2.0 \u{2705})', true],
+    ['v2 (v2 \u{2705})', true],
+    ['V2.0 (v2.0 \u{2705})', true],
+    ['v2.0.1 (v2.0 \u{2705})', true],
+    ['(v1.9 \u{2705}) v2.0', true],
+    ['Core (v1.9 \u{2705})', true],
+    ['v2.0 ((v1.9 \u{2705})', true],
+    ['v2.0 (a (v1.9 \u{2705}))', true],
+    ['v1.0 \u{1f5c4}\u{fe0f}', true],
+    ['v1.0 Failed Payment Recovery (in progress)', false],
+    ['v1.0 Core \u{1f6a7}', false],
+    ['v2.1 Next (after v2.0 prep \u{2705})', false],
+    ['v3.0 (after v2.4 \u{2705})', false],
+  ];
+
+  test('classifies each heading', () => {
+    for (const [heading, expected] of ROWS) {
+      assert.strictEqual(isClosedMilestoneHeading(heading), expected, JSON.stringify(heading));
+    }
+  });
+
+  test('a heading with no check mark or archive mark reads as the pre-#5726 marker pair', () => {
+    const CLOSED_MARKER = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|\u{2705}|\u{1f5c4}/iu;
+    const ACTIVE_MARKER = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|\u{1f6a7}|\u{1f504}/iu;
+    fc.assert(fc.property(
+      fc.string().filter((h) => !/[\u{2705}\u{1f5c4}]/u.test(h)),
+      (h) => {
+        assert.strictEqual(isClosedMilestoneHeading(h), CLOSED_MARKER.test(h) && !ACTIVE_MARKER.test(h));
+      },
+    ), { numRuns: 500, seed: 5726 });
+  });
+
+  test('a long run of open parentheses after a check mark is classified closed', () => {
+    assert.strictEqual(isClosedMilestoneHeading('\u{2705} ' + '('.repeat(60000)), true);
   });
 });

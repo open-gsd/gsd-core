@@ -35,6 +35,7 @@ const { getDirName, hostBehaviorsFor } = runtimeNamePolicy;
 import capabilityRegistry = require('./capability-registry.cjs');
 import hostIntegration = require('./host-integration.cjs');
 import { posixNormalize } from './shell-command-projection.cjs';
+import { capCodeUnits } from './code-unit-cap.cjs';
 import frontmatterModule = require('./frontmatter.cjs');
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
 import { escapeRegex as escapeRegExp } from './pattern.cjs';
@@ -929,18 +930,6 @@ const PI_INCLUDE_NOTE =
  */
 const PI_SKILL_DESCRIPTION_MAX = 1024;
 
-/**
- * Cut `text` to at most `max` UTF-16 code units without splitting a surrogate
- * pair: when the cut would leave a lone high surrogate (the first half of an
- * astral character such as an emoji), drop that half too.
- */
-function capAtCodeUnits(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const cut = text.slice(0, max);
-  const last = cut.charCodeAt(cut.length - 1);
-  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
-}
-
 // Pi and Kimi Code share the Agent Skills `/skill:<name>` format. These host-neutral
 // names read correctly at the Pi call sites; the Kimi-named originals stay because the
 // Kimi converter is mirrored in bin/install.js under a parity test (#2095).
@@ -978,7 +967,7 @@ function convertClaudeCommandToPiSkill(content, skillName, _runtime = null, cmdN
     convertGsdCommandReferencesToSkillInvocations(frontmatter ? body : content, names),
   );
 
-  const cappedDescription = capAtCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX);
+  const cappedDescription = capCodeUnits(toSingleLine(description), PI_SKILL_DESCRIPTION_MAX, 'head');
   const unsupportedReason = Object.prototype.hasOwnProperty.call(PI_UNSUPPORTED_SKILLS, piSkillName)
     ? PI_UNSUPPORTED_SKILLS[piSkillName]
     : null;
@@ -2964,10 +2953,11 @@ function convertClaudeAgentToCopilotAgent(content, isGlobal = false) {
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
   const color = extractFrontmatterField(frontmatter, 'color');
-  const toolsRaw = extractFrontmatterField(frontmatter, 'tools') || '';
 
-  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array
-  const claudeTools = toolsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  // CONV-04 + CONV-05: Map tools, deduplicate, format as JSON array.
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const claudeTools = parseFrontmatterTools(frontmatter);
   const mappedTools = claudeTools.map(t => convertCopilotToolName(t));
   const uniqueTools = [...new Set(mappedTools)];
   const toolsArray = uniqueTools.length > 0
@@ -3396,7 +3386,9 @@ function convertClaudeAgentToCodexAgent(content) {
 
   const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
   const description = extractFrontmatterField(frontmatter, 'description') || '';
-  const tools = extractFrontmatterField(frontmatter, 'tools') || '';
+  // parseFrontmatterTools reads both the inline comma list and the YAML block
+  // list (#5790).
+  const tools = parseFrontmatterTools(frontmatter).join(', ');
 
   const roleHeader = `<codex_agent_role>
 role: ${name}

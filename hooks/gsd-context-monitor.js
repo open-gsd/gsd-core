@@ -28,6 +28,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 
 // This hook only injects an advisory context-usage warning; it never blocks
 // the tool call it rides in on. A crash here (e.g. a malformed bridge file)
@@ -248,6 +249,14 @@ const handleStdinEnd = () => {
       allow(undefined);
     }
 
+    // #6360: a subagent's input carries the PARENT's session_id plus agent_id,
+    // and every path below is keyed on session_id alone, so exit before any of
+    // them is read or written, on every event. Only a non-empty string counts;
+    // the why and the agent_type-only case: docs/context-monitor.md, "Safety".
+    if (typeof data.agent_id === 'string' && data.agent_id !== '') {
+      allow(undefined);
+    }
+
     const tmpDir = os.tmpdir();
     const warnPath = path.join(tmpDir, `claude-ctx-${sessionId}-warned.json`);
     const metricsPath = path.join(tmpDir, `claude-ctx-${sessionId}.json`);
@@ -334,7 +343,7 @@ const handleStdinEnd = () => {
     let thresholds = { warning: WARNING_THRESHOLD, critical: CRITICAL_THRESHOLD };
     try {
       const configPath = path.join(cwd, '.planning', 'config.json');
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const config = JSON.parse(readConfigFileBounded(configPath, { required: true }));
       if (config.hooks?.context_warnings === false) {
         allow(undefined);
       }
@@ -348,7 +357,7 @@ const handleStdinEnd = () => {
       // enabled, thresholds at the constants above, which `thresholds` already holds)
     }
 
-    // If no metrics file, this is a subagent or fresh session -- exit silently.
+    // If no metrics file, this is a fresh session -- exit silently.
     // Collapsed existsSync+readFileSync: ENOENT → exit 0 (identical to old !existsSync branch),
     // other errors rethrow to the outer catch (swallowed → exit 0, as before).
     //

@@ -12,9 +12,10 @@
  * the time.
  *
  * The `scope: windows` lane then hit the identical cliff itself: it reached
- * exactly 15m05s and was CANCELLED on PR #3094, four shas in a row. Per #869's
- * stated durable follow-up, it is now sharded three ways too (#3057), leaving
- * `scope: targeted` as the only lane in this job with no shard.
+ * exactly 15m05s and was CANCELLED on PR #3094, four shas in a row, and was
+ * sharded three ways (#3057). #4641 later deleted that lane outright: windows
+ * coverage now runs only in the `test-conformance` job, whose windows and
+ * macos rows are each a complete shard set since #5029.
  *
  * Sharding introduces two failure modes that stay GREEN while being wrong, so
  * both are pinned here:
@@ -40,37 +41,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const yaml = require('js-yaml');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
+const {
+  parseShardSpec,
+  isCompleteShardSet,
+  declaredWindowsConformanceShards,
+  SHARD_SPEC_ERROR,
+} = require('./helpers/shard-spec.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', '.github', 'workflows');
 
 function loadWorkflow(name) {
   return yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8'));
-}
-
-/**
- * Parse an `i/n` shard spec into { index, total }, or null if malformed.
- * Mirrors the grammar scripts/run-tests.cjs accepts for --shard.
- */
-function parseShardSpec(spec) {
-  const m = /^(\d+)\/(\d+)$/.exec(String(spec));
-  if (!m) return null;
-  const index = Number(m[1]);
-  const total = Number(m[2]);
-  if (!Number.isInteger(index) || !Number.isInteger(total)) return null;
-  if (total < 1 || index < 1 || index > total) return null;
-  return { index, total };
-}
-
-/** True iff `specs` is exactly one complete shard set: same N, numerators 1..N. */
-function isCompleteShardSet(specs) {
-  if (specs.length === 0) return false;
-  const parsed = specs.map(parseShardSpec);
-  if (parsed.some((p) => p === null)) return false;
-  const total = parsed[0].total;
-  if (parsed.some((p) => p.total !== total)) return false;
-  if (parsed.length !== total) return false;
-  const seen = new Set(parsed.map((p) => p.index));
-  return seen.size === total && [...seen].every((i) => i >= 1 && i <= total);
 }
 
 test('the test job has no windows lane; test-conformance is the sole Windows selector (#4641)', () => {
@@ -89,7 +70,7 @@ test('the test job has no windows lane; test-conformance is the sole Windows sel
   const conformanceMacosEntries = conformanceInclude.filter((e) => e.os === 'macos-latest');
 
   // Derived, not pinned: windows-latest must be a non-empty, COMPLETE shard
-  // set (same denominator, numerators 1..N — see isCompleteShardSet above),
+  // set (same denominator, numerators 1..N — see isCompleteShardSet),
   // whatever N the workflow currently declares. A bare `.length === 3` here
   // would break the moment the workflow is rebalanced to a different shard
   // count without a wiring regression, exactly the shape of bug this sweep
@@ -105,23 +86,22 @@ test('the test job has no windows lane; test-conformance is the sole Windows sel
     + JSON.stringify(conformanceWindowsEntries),
   );
 
-  // macos-latest is, by design, a single UNSHARDED entry (see the workflow's
-  // "macos-latest stays unsharded; it has real headroom" comment above the
-  // `test-conformance` job) — unlike the windows/full shard counts, this "1"
-  // is not a fact about the live tree that grows with the suite, it is the
-  // structural claim the test exists to pin: more than one entry here would
-  // silently duplicate full macOS runs, and a `shard` key would mean the
-  // workflow started partitioning a lane the run-tests.cjs invocation below
-  // does not expect to be partitioned.
-  assert.equal(
-    conformanceMacosEntries.length, 1,
-    `expected a single unsharded macos-latest entry in test-conformance, got ${conformanceMacosEntries.length}: `
-    + JSON.stringify(conformanceMacosEntries),
+  // macos-latest was a single UNSHARDED entry until #5029, which sharded it
+  // after a slow runner took the whole tier to 39m43s against the
+  // job's 45m cap. Pinned the same way as windows above — a complete shard
+  // set, whatever N is declared — which also keeps the two failure modes the
+  // old single-entry check guarded against: an extra unsharded entry would
+  // silently duplicate a full macOS run, and a missing or duplicated shard
+  // would silently drop or double part of the tier. The run-tests.cjs
+  // invocation appends `--shard` for any row that declares one.
+  assert.ok(
+    conformanceMacosEntries.length > 0,
+    `test-conformance declares no macos-latest entries: ${JSON.stringify(conformanceInclude)}`,
   );
-  assert.equal(
-    conformanceMacosEntries[0] && conformanceMacosEntries[0].shard, undefined,
-    'the macos-latest entry in test-conformance declares a shard, contradicting the '
-    + `workflow's "macos-latest stays unsharded" design: ${JSON.stringify(conformanceMacosEntries)}`,
+  assert.ok(
+    isCompleteShardSet(conformanceMacosEntries.map((e) => e.shard)),
+    'the macos-latest entries in test-conformance are not a complete shard set: '
+    + JSON.stringify(conformanceMacosEntries),
   );
 });
 
@@ -431,4 +411,28 @@ test('shard-spec parsing is exact at its boundaries (#2952)', () => {
   assert.equal(isCompleteShardSet(['1/3', '2/3', '2/3']), false, 'duplicate numerator');
   assert.equal(isCompleteShardSet(['1/3', '2/3', '3/4']), false, 'mixed denominator');
   assert.equal(isCompleteShardSet([]), false, 'empty set');
+});
+
+// A missing shard key used to read as NaN, which isNearCap treats as clear, so
+// the budget projection passed on a layout it had not read (#5029).
+test('the declared windows shard total is read strictly (#5029)', () => {
+  const workflowWith = (include) => ({ jobs: { 'test-conformance': { strategy: { matrix: { include } } } } });
+  const windows = (shard) => ({ os: 'windows-latest', shard });
+  const macos = (shard) => ({ os: 'macos-latest', shard });
+
+  assert.equal(declaredWindowsConformanceShards(workflowWith([windows('1/2'), windows('2/2'), macos('1/3')])), 2);
+
+  const missing = { code: SHARD_SPEC_ERROR.MISSING };
+  assert.throws(() => declaredWindowsConformanceShards(workflowWith([windows(undefined)])), missing);
+  assert.throws(() => declaredWindowsConformanceShards(workflowWith([windows('6')])), missing);
+  assert.throws(() => declaredWindowsConformanceShards(workflowWith([macos('1/3')])), missing);
+  assert.throws(
+    () => declaredWindowsConformanceShards(workflowWith([windows('1/2'), windows('1/3')])),
+    { code: SHARD_SPEC_ERROR.DISAGREE },
+  );
+
+  // The codes are the contract: adding, renaming or re-valuing one changes
+  // this too.
+  assert.deepEqual({ ...SHARD_SPEC_ERROR }, { MISSING: 'SHARD_SPEC_MISSING', DISAGREE: 'SHARD_SPEC_DISAGREE' });
+  assert.equal(Object.isFrozen(SHARD_SPEC_ERROR), true);
 });

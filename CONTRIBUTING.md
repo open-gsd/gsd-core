@@ -460,7 +460,37 @@ const { createTempProject, createTempGitProject, createTempDir, cleanup, runGsdT
 | `createTempGitProject(prefix?)` | Same + git init + initial commit | Testing git-dependent features |
 | `createTempDir(prefix?)` | Bare temp directory | Testing features that don't need `.planning/` |
 | `cleanup(tmpDir)` | Removes directory recursively | Always use in `afterEach` |
-| `runGsdTools(args, cwd, env?)` | Executes gsd-tools.cjs | Testing CLI commands |
+| `runGsdTools(args, cwd, env?)` | Runs a gsd-tools command in the test process (no child process) | Testing CLI commands |
+| `await runGsdToolsAsync(args, cwd, env?)` | The same, for any command including the asynchronous ones | Testing `capability`, `review-lane`, `websearch` and the other commands `runGsdTools` refuses |
+| `runGsdToolsProcess(args, cwd, env?)` | Runs the same command in a spawned `node gsd-tools.cjs` | Testing the process boundary itself, from a `*.process.test.cjs` file |
+
+`runGsdTools` calls the CLI's own `main` through `runCliSync` (ADR-6315 item 15) and returns the
+same `{ success, output, error, exitCode }` a spawned call returns. `tests/cli-parity.process.test.cjs`
+proves command by command that both give the same exit code, stdout and stderr. What follows from that:
+
+- The command runs in your test's process, so `mock.method` on a module the command uses takes effect. To
+  inject a failure, mock the function; do not preload a patch into a child.
+- Neither in-process helper ever spawns. Each refuses what it cannot do and names the helper that can:
+  - a command that finishes asynchronously (`asyncHostCommandNames()` in `gsd-tools.cjs`, the capability
+    routers named in a module's `asyncRouters`, and `run-with-timeout`): `runGsdTools` throws before the
+    command runs; use `await runGsdToolsAsync(...)`;
+  - an `env` argument that sets a `NODE_*` variable, and a working directory that does not exist: both
+    are questions about a real process; use `runGsdToolsProcess`.
+- A router that returns a promise without being declared asynchronous fails a synchronous call with
+  `in_process_async_started`, because its work has already begun. Declare it: make the router an
+  `async function`, or list it in its module's `asyncRouters` (capability routers) or in
+  `MAYBE_ASYNC_HOST_COMMANDS` (`gsd-tools.cjs`).
+- Nothing bounds an in-process call. A command that never returns holds the whole test file until the lane's
+  cap ends it, where a spawned child was killed after its own timeout.
+- `GSD_TEST_CLI_MODE=process` makes both helpers spawn, to check a suspected in-process difference against
+  the real binary.
+
+### In-process CLI tests: the rules
+
+The rules that in-process CLI tests put on tests and on product code are in
+[`TESTING-STANDARDS.md` — "In-process CLI tests: the rules"](TESTING-STANDARDS.md#in-process-cli-tests-the-rules).
+The helper table above says which helper to call; that section says what a test and the code under
+test must and must not do, and what enforces each rule.
 
 ### Spawning a subprocess: use the process seam
 
@@ -511,8 +541,15 @@ local helper and delegate the spawn to the seam.
 of subprocess call takes (a CLI probe, git plumbing on a fixture repo, a hooks build, a full
 `bin/install.js` run), not a single suite's preference, so import them rather than re-declaring the
 same literal with the same comment in yet another file. Only write a local constant when a site
-genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...) — and give that
-local constant its own justifying comment explaining why it departs from the norm.
+genuinely differs from its class (a real `tsc` compile, a `regen:derived` run, ...). Give that
+local constant its own name, never a `timeouts.cjs` export name, and its own justifying comment
+explaining why it departs from the norm.
+
+Every timeout constant states its evidence: the worst observed duration, the platform it came from,
+and a margin of at least 2x over it. A constant exported from `timeouts.cjs` also needs a matching
+`TIMEOUT_EVIDENCE` entry, which `tests/timeout-evidence.test.cjs` checks. See TESTING-STANDARDS.md,
+"Every new or changed timeout constant states its evidence", for the shape and the exempt kinds
+(fixture data, test backstop, mirror).
 
 #### When you want git to *throw*: `gitOrThrow`
 
@@ -624,6 +661,68 @@ Windows, or `stdio` redirection to a real fd) and the `// allow-spawn-timeout-ce
 marker above for a bound over the 600000 ms ceiling. Never reach for `eslint-disable` on this rule
 — with the allowlist gone, that is the only remaining way to silence it, and a test asserts that no
 such comment exists anywhere under `tests/`.
+
+### Isolating a child's environment: `tests/helpers/isolated-env.cjs`
+
+A test that spawns a child must not let the developer's machine into it. That means
+controlling the child's home directory, its PATH, the config-location and `GSD_*` variables GSD
+reads, the test runner's own control variables, and the project config GSD discovers by walking
+up from a directory. Build the child's env with the isolation helper instead of hand-writing
+`{ ...process.env, HOME: x }` or filtering `process.env.PATH` yourself. Hand-written copies are
+how a suite ends up hermetic on its author's machine and red, or vacuously green, on everyone
+else's (#4635).
+
+```javascript
+const { isolatedEnv, isolatedPath, createHermeticRoot } = require('./helpers/isolated-env.cjs');
+const { runNode } = require('./helpers/process-seam.cjs');
+
+const home = createTempDir('my-home-');
+t.after(() => cleanup(home));
+
+const r = runNode([SCRIPT], { env: isolatedEnv({ home }) });
+```
+
+| Export | Returns | Guarantees |
+|---|---|---|
+| `isolatedEnv({ home, path?, claudeConfigDir?, override?, base? })` | a plain env object | `HOME` and `USERPROFILE` both set to `home` (required, absolute). Every config-location and session-identity variable is blanked, using the same registry-derived list as `testEnvBase()` in `tests/helpers.cjs`. Every ambient `GSD_*`, `RUN_TESTS_*`, `NODE_TEST_CONTEXT`, `BASH_ENV` and `CLAUDE_ENV_FILE` is removed. Each key the helper sets appears exactly once, whatever its casing (Windows reports PATH as `Path`). |
+| `isolatedPath({ without, basePath? })` | `{ path, nodeBinDir }` | No directory holding a tool named in `without` stays on PATH, and neither do relative or empty entries. `node` stays resolvable from a dedicated directory placed first. Clean up `nodeBinDir`. |
+| `linkExecutable(dir, name)` | `dir` | Puts an executable named `name` in `dir` that runs this Node interpreter. It uses a symlink on POSIX, and a hard link on Windows (falling back to a copy across volumes). Use it to plant a tool on a fixture PATH. |
+| `createHermeticRoot(prefix, { parent? })` | an absolute temp directory | Contains a neutral `.planning/config.json`. GSD's upward project-config search stops there, so it cannot reach an ancestor's real config. This matters when you run from a worktree nested inside another checkout. |
+
+To keep a variable the helper strips, pass it in `override`. For example,
+`override: { RUN_TESTS_SHARD_RESERVE: '2' }` for a test about that switch. `override` is applied
+last and is the only way to opt back in.
+
+This covers child processes. A test that calls the installer in-process still clears the parent's
+config-location variables with `scrubConfigLocationEnv()` from `tests/helpers.cjs`.
+
+#### In-process: `sandboxHome` and `scrubConfigLocationEnv` together
+
+A test that calls a resolver directly (`getGlobalConfigDir`, `readGsdEffectiveAgentTools`, the
+installer's staging functions) reads the parent process, so it needs both halves from
+`tests/helpers.cjs`:
+
+```javascript
+const { createTempDir, cleanup, sandboxHome, scrubConfigLocationEnv } = require('./helpers.cjs');
+
+test('claude default config dir', (t) => {
+  const home = createTempDir('my-home-');
+  t.after(() => cleanup(home));
+  sandboxHome(t, home);                 // HOME + USERPROFILE, restored after the test
+  t.after(scrubConfigLocationEnv());    // CLAUDE_CONFIG_DIR, GSD_HOME and the rest, restored after
+
+  assert.strictEqual(getGlobalConfigDir('claude'), path.join(home, '.claude'));
+});
+```
+
+Derive the expected value from the fixture home, never from `os.homedir()` read at module load. A
+fixture home also decides what a layout probe finds: an empty one gives the probe-miss default on
+every machine, and planting a directory in it (`.gemini/antigravity-cli`) tests the probe-hit case
+on purpose. Without the fixture, the result depends on which runtimes the developer has installed
+(#4312).
+
+If the code under test also searches upward for `.planning/config.json`, start it inside a
+`createHermeticRoot()` directory as well (#4613).
 
 ### Test Structure
 
@@ -817,6 +916,12 @@ Required cases where relevant:
 - Runtime `.cjs` and SDK `.ts` generated surfaces disagree
 
 Generator tests should run in temp fixtures and assert atomic output behavior. Do not mutate production generated files except in explicit freshness checks.
+
+### A parser or reader that must agree with an external tool
+
+Code that gives the answer another program gives, without running it, is tested against that
+program. The rules are in
+[`TESTING-STANDARDS.md` — "A parser or reader that must agree with an external tool"](TESTING-STANDARDS.md#a-parser-or-reader-that-must-agree-with-an-external-tool).
 
 ### Prohibited: Source-Grep Tests
 
@@ -1325,6 +1430,12 @@ whoever applied the label has write or admin permission. A PR author cannot
 self-apply it to bypass the gate. If other entries are queued ahead of the
 fix, the group is larger than one commit and the bypass is refused; dequeue
 the others first. Remove the label once the fix has merged.
+
+Adding or removing `fix-next` re-runs only `Base branch health` (and the
+dependent `Required tests`) through the `fix-next re-run` workflow, which reads
+the label from the API; no other label change starts a Tests run. If the PR's
+latest Tests run was cancelled or its head has moved, the workflow skips and the
+newer run reads the label itself.
 
 A push run that is still in flight, including a re-run of a failed run, never
 counts as healthy: a re-run whose previous attempt failed is red, otherwise the

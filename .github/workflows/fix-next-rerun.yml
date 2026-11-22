@@ -1,0 +1,62 @@
+# #6076: Tests no longer triggers on label events (a label change used to start a
+# full run and cancel the one in flight). When `fix-next` is added or removed,
+# this workflow re-runs ONLY the `Base branch health` job of the PR's latest
+# Tests run. GitHub re-runs its dependent `Required tests`; the other lanes keep
+# their results. The job reads the PR's current labels from the API, so the
+# re-run sees the label as it is now.
+#
+# A Tests run started before #6076 merged checked out the OLD next-health
+# script, which ignores PR_NUMBER and reads only the event's labels. Re-running
+# its job cannot see the label, so for such a run push a commit after applying
+# fix-next.
+#
+# The script re-checks the PR head sha right before the re-run; a seconds-wide
+# window between that last check and the re-run itself remains.
+#
+# pull_request_target is safe here: only the BASE sha's `scripts/` is checked
+# out (trusted code, never the PR's), no PR code runs, and the repository, PR
+# number and head sha reach the script through env only.
+name: fix-next re-run
+
+on:
+  pull_request_target:
+    types: [labeled, unlabeled]
+
+permissions: {}
+
+jobs:
+  rerun-base-health:
+    name: Re-run Base branch health
+    if: github.event.label.name == 'fix-next'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Job level, so a label event that skips this job (its `if` is false) cannot
+    # cancel a waiting fix-next run; only a later fix-next event replaces it.
+    concurrency:
+      group: fix-next-rerun-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      # base sha only — trusted code, never the PR's
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          sparse-checkout: scripts
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Re-run Base branch health on the latest Tests run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/ci-fix-next-rerun.cjs ]; then
+            echo "::warning::scripts/ci-fix-next-rerun.cjs is absent on the base branch (bootstrap); skipping."
+            exit 0
+          fi
+          node scripts/ci-fix-next-rerun.cjs

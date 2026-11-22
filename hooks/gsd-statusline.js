@@ -18,6 +18,7 @@ const os = require('os');
 // monkeypatching childProcess.execFileSync.
 const childProcess = require('child_process');
 const { HOOK_ON_CRASH, allow, crash } = require('./lib/hook-exit.js');
+const { readConfigFileBounded } = require('./lib/config-read.js');
 const { gitEnv } = require('./lib/git-probe.js');
 
 // This hook's build-seam outer catch (require.main guard just below) has
@@ -81,7 +82,7 @@ function readGsdConfig(dir) {
     const candidate = path.join(current, '.planning', 'config.json');
     if (fs.existsSync(candidate)) {
       try {
-        return JSON.parse(fs.readFileSync(candidate, 'utf8')) || {};
+        return JSON.parse(readConfigFileBounded(candidate, { required: true })) || {};
       } catch (e) {
         return {};
       }
@@ -254,7 +255,7 @@ const SETTINGS_FILE_MAX_BYTES = 1024 * 1024;
 function readSettingsFile(file) {
   let fd;
   try {
-    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0) | (fs.constants.O_NOCTTY || 0));
     const st = fs.fstatSync(fd);
     if (!st.isFile() || st.size > SETTINGS_FILE_MAX_BYTES) return null;
     // One byte past the checked size, so growth after the check shows as a longer read.
@@ -402,10 +403,25 @@ const AUTO_COMPACT_WINDOW_MAX = 1_000_000;
 const AUTO_COMPACT_OUTPUT_RESERVE = 20_000;
 const AUTO_COMPACT_SUMMARY_BUFFER = 13_000;
 
+// #6131: Claude Code reads a case-insensitive `k` (x1,000) or `M` (x1,000,000)
+// suffix on an integer or decimal (`500k`, `1.5M`); the meter must resolve the
+// window the same way or its 100% lands far too early (`500k` read as 500,
+// clamped to 100k, put 100% at 67,000 tokens).
+const AUTO_COMPACT_SUFFIX_RE = /^(\d+(?:\.\d+)?)([kKmM])$/;
+const AUTO_COMPACT_SUFFIX_MULTIPLIER = { k: 1_000, m: 1_000_000 };
+
+/** The window an env value spells, before the clamp: a suffixed number, grouped digits, or a numeric prefix. */
+function parseAutoCompactWindowNumber(s) {
+  const suffixed = AUTO_COMPACT_SUFFIX_RE.exec(s);
+  if (suffixed) {
+    return Math.round(parseFloat(suffixed[1]) * AUTO_COMPACT_SUFFIX_MULTIPLIER[suffixed[2].toLowerCase()]);
+  }
+  return /^\d[\d_,]*$/.test(s) ? parseInt(s.replace(/[_,]/g, ''), 10) : parseInt(s, 10);
+}
+
 function parseAutoCompactWindowEnv(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') return null;
-  const s = raw.trim();
-  const n = /^\d[\d_,]*$/.test(s) ? parseInt(s.replace(/[_,]/g, ''), 10) : parseInt(s, 10);
+  const n = parseAutoCompactWindowNumber(raw.trim());
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.max(AUTO_COMPACT_WINDOW_MIN, Math.min(AUTO_COMPACT_WINDOW_MAX, n));
 }

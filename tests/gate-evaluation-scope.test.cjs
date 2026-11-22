@@ -25,6 +25,8 @@ const {
   planSubjectPattern,
   qualifiedPlanSubjectPattern,
   isSafeRefArgument,
+  parseGitVersion,
+  remergeDiffSupported,
   SCOPE_EXCLUSION_PATHSPECS,
 } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
 
@@ -43,18 +45,21 @@ function write(dir, rel, content) {
   fs.writeFileSync(target, content, 'utf8');
 }
 
-function makeRepo() {
+function makeRepo({ deferScaffold = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-scope-'));
   dirs.push(dir);
   const git = (...args) => gitOrThrow(args, { cwd: dir, env: { ...process.env, ...IDENTITY } }).trim();
   git('init', '--initial-branch=main');
   git('config', 'user.email', 'test@test.io');
   git('config', 'user.name', 'Test');
-  write(dir, '.planning/config.json', '{}');
-  write(dir, `${PHASE_DIR}/03-CONTEXT.md`, 'context\n');
-  git('add', '.');
-  git('commit', '-m', 'docs(03): scaffold phase');
-  return { dir, git };
+  const scaffold = () => {
+    write(dir, '.planning/config.json', '{}');
+    write(dir, `${PHASE_DIR}/03-CONTEXT.md`, 'context\n');
+    git('add', '.');
+    git('commit', '-m', 'docs(03): scaffold phase');
+  };
+  if (!deferScaffold) scaffold();
+  return { dir, git, scaffold };
 }
 
 /** Commit one real file; returns the full sha. */
@@ -191,17 +196,19 @@ describe('resolveEvaluationScope — phase unit', () => {
     assert.deepEqual(scope.missingOnDisk, ['src/gone.js']);
   });
 
-  test('[boundary] a merge commit contributes its diff against the first parent', () => {
+  test('[boundary #5751] a phase branch merged into its base contributes only its task commits, not the clean merge', () => {
     const repo = makeRepo();
     repo.git('checkout', '-b', 'side');
-    commit(repo, 'src/merged.js', 'feat(03-01): on side');
+    const task = commit(repo, 'src/merged.js', 'feat(03-01): on side');
     repo.git('checkout', 'main');
     commit(repo, 'src/main-only.js', 'feat(03-01): on main');
     repo.git('merge', '--no-ff', 'side', '-m', 'feat(03-01): merge side');
     const merge = repo.git('rev-parse', 'HEAD');
-    summarize(repo, [merge]);
+    summarize(repo, [task, merge]);
     const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
     assert.deepEqual(scope.files, ['src/merged.js']);
+    assert.deepEqual(scope.commits[1].files, []);
   });
 
   test('[boundary] `since` drops that commit and its ancestors (wave scoping)', () => {
@@ -225,6 +232,596 @@ describe('resolveEvaluationScope — phase unit', () => {
     const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
     assert.deepEqual(scope.files, ['src/a.js']);
     assert.ok(SCOPE_EXCLUSION_PATHSPECS.includes(':!package-lock.json'));
+  });
+});
+
+// ─── #5751: a merge commit contributes only what the merge itself changed ─────
+
+/** A runner over real git that answers `git --version` with `version` and records remerge-diff use. */
+function gitReporting(version) {
+  const calls = { remerge: 0 };
+  const runner = (args, opts) => {
+    if (args[0] === '--version') return { exitCode: 0, stdout: `git version ${version}\n`, stderr: '', signal: null, error: null, timedOut: false };
+    if (args.includes('--remerge-diff')) calls.remerge += 1;
+    return realExecGit(args, opts);
+  };
+  return { runner, calls };
+}
+
+/**
+ * phase branch with one task commit, base with `src/base.js`; returns the repo and the task sha. The
+ * phase directory is scaffolded ON the phase branch, after the fork point, so `rangeBase` is the fork
+ * commit (not the empty tree) and a catch-up merge forks at the phase start (#5751).
+ */
+function divergedRepo() {
+  const repo = makeRepo({ deferScaffold: true });
+  commit(repo, 'src/shared.js', 'chore: shared', 'v0\n');
+  repo.git('checkout', '-b', 'phase');
+  repo.scaffold();
+  const task = commit(repo, 'src/phase.js', 'feat(03-01): phase work');
+  repo.git('checkout', 'main');
+  commit(repo, 'src/base.js', 'feat: base work');
+  repo.git('checkout', 'phase');
+  return { repo, task };
+}
+
+describe('resolveEvaluationScope — merge commits contribute only their own changes (#5751)', () => {
+  test('[regression] a clean catch-up merge (base merged INTO the phase) adds none of the base files', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const merge = repo.git('rev-parse', 'HEAD');
+    summarize(repo, [task, merge]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.changedFiles, ['src/phase.js']);
+    assert.deepEqual(scope.commits[1].files, []);
+  });
+
+  test('[regression] a catch-up merge that resolved a conflict contributes the resolved file only', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', 'main');
+    commit(repo, 'src/shared.js', 'feat: base edits shared', 'base\n');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/shared.js', 'feat(03-01): phase edits shared', 'phase\n');
+    assert.throws(() => repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up'));
+    write(repo.dir, 'src/shared.js', 'resolved\n');
+    repo.git('add', 'src/shared.js');
+    repo.git('commit', '-m', 'chore: catch up with main');
+    const merge = repo.git('rev-parse', 'HEAD');
+    summarize(repo, [task, merge]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.commits[1].files, ['src/shared.js']);
+    assert.deepEqual(scope.changedFiles, ['src/phase.js', 'src/shared.js']);
+    assert.ok(!scope.changedFiles.includes('src/base.js'));
+  });
+
+  test('[independence] both merge orientations of the same clean history give the same answer', () => {
+    const catchUp = divergedRepo();
+    catchUp.repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up');
+    summarize(catchUp.repo, [catchUp.task, catchUp.repo.git('rev-parse', 'HEAD')]);
+    const intoBase = divergedRepo();
+    intoBase.repo.git('checkout', 'main');
+    intoBase.repo.git('merge', '--no-ff', 'phase', '-m', 'chore: land phase');
+    summarize(intoBase.repo, [intoBase.task, intoBase.repo.git('rev-parse', 'HEAD')]);
+    const a = resolveEvaluationScope(catchUp.repo.dir, { kind: 'phase', phase: '3' });
+    const b = resolveEvaluationScope(intoBase.repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(a.changedFiles, ['src/phase.js']);
+    assert.deepEqual(b.changedFiles, a.changedFiles);
+  });
+
+  test('[independence] a plan-subject unit reads a merge the same way', () => {
+    const { repo } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'feat(03-01): merge main');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { includeFiles: true });
+    assert.deepEqual(scope.changedFiles, ['src/phase.js']);
+  });
+
+  test('[boundary] a clean octopus merge contributes nothing', () => {
+    const repo = makeRepo();
+    const tips = ['o1', 'o2'];
+    const tasks = [];
+    for (const name of tips) {
+      repo.git('checkout', '-b', name, 'main');
+      tasks.push(commit(repo, `src/${name}.js`, `feat(03-01): ${name}`));
+    }
+    repo.git('checkout', 'main');
+    commit(repo, 'src/main-only.js', 'feat: main');
+    repo.git('merge', '--no-ff', 'o1', 'o2', '-m', 'chore: octopus');
+    const merge = repo.git('rev-parse', 'HEAD');
+    assert.equal(repo.git('rev-list', '--parents', '-n', '1', merge).split(' ').length, 4);
+    summarize(repo, [tasks[0], merge]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.commits[1].files, []);
+    assert.deepEqual(scope.changedFiles, ['src/o1.js']);
+  });
+
+  test('[independence] non-merge commits and path exclusions behave as before', () => {
+    const { repo, task } = divergedRepo();
+    write(repo.dir, 'package-lock.json', '{}\n');
+    repo.git('add', 'package-lock.json');
+    write(repo.dir, 'src/second.js', 's\n');
+    repo.git('add', 'src/second.js');
+    repo.git('commit', '-m', 'feat(03-01): second and lockfile');
+    const second = repo.git('rev-parse', 'HEAD');
+    summarize(repo, [task, second]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.changedFiles, ['src/phase.js', 'src/second.js']);
+  });
+
+  test('[independence] exclusions apply to a conflict resolution in a merge', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', 'main');
+    commit(repo, 'package-lock.json', 'chore: base lock', '{"a":1}\n');
+    repo.git('checkout', 'phase');
+    commit(repo, 'package-lock.json', 'chore: phase lock', '{"b":2}\n');
+    assert.throws(() => repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up'));
+    write(repo.dir, 'package-lock.json', '{}\n');
+    repo.git('add', 'package-lock.json');
+    repo.git('commit', '-m', 'chore: catch up');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.changedFiles, ['src/phase.js']);
+  });
+
+  test('[fallback] on a git without --remerge-diff a merge contributes nothing, even with a resolution', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', 'main');
+    commit(repo, 'src/shared.js', 'feat: base edits shared', 'base\n');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/shared.js', 'feat(03-01): phase edits shared', 'phase\n');
+    assert.throws(() => repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up'));
+    write(repo.dir, 'src/shared.js', 'resolved\n');
+    repo.git('add', 'src/shared.js');
+    repo.git('commit', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const { runner, calls } = gitReporting('2.35.1');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.changedFiles, ['src/phase.js']);
+    assert.ok(!scope.changedFiles.includes('src/base.js'));
+    assert.equal(calls.remerge, 0);
+  });
+
+  test('[boundary] remerge-diff is used from git 2.36.0 and not at 2.35.9 (limit-1, limit, limit+1)', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', 'main');
+    commit(repo, 'src/shared.js', 'feat: base edits shared', 'base\n');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/shared.js', 'feat(03-01): phase edits shared', 'phase\n');
+    assert.throws(() => repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up'));
+    write(repo.dir, 'src/shared.js', 'resolved\n');
+    repo.git('add', 'src/shared.js');
+    repo.git('commit', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const used = (version) => {
+      const { runner, calls } = gitReporting(version);
+      resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+      return calls.remerge > 0;
+    };
+    assert.equal(used('2.35.9'), false);
+    assert.equal(used('2.36.0'), true);
+    assert.equal(used('2.36.1'), true);
+    assert.equal(used('3.0.0'), true);
+    assert.equal(used('2.54.0 (Apple Git-157)'), true);
+    assert.equal(used('garbled'), false);
+  });
+});
+
+/** A catch-up merge of `main` into `phase` that resolved a conflict on src/shared.js; returns the merge sha. */
+function resolvedCatchUp(repo) {
+  repo.git('checkout', 'main');
+  commit(repo, 'src/shared.js', 'feat: base edits shared', 'base\n');
+  repo.git('checkout', 'phase');
+  commit(repo, 'src/shared.js', 'feat(03-01): phase edits shared', 'phase\n');
+  assert.throws(() => repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up'));
+  write(repo.dir, 'src/shared.js', 'resolved\n');
+  repo.git('add', 'src/shared.js');
+  repo.git('commit', '-m', 'chore: catch up with main');
+  return repo.git('rev-parse', 'HEAD');
+}
+
+describe('resolveEvaluationScope — outsideUnion and merge-only scopes (#5751)', () => {
+  test('[regression] a listed clean catch-up merge does not put the base delta in outsideUnion', () => {
+    const { repo, task } = divergedRepo();
+    commit(repo, 'src/unlisted.js', 'feat: phase work no SUMMARY lists');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.changedFiles, ['src/phase.js']);
+    assert.ok(!scope.outsideUnion.includes('src/base.js'));
+    assert.deepEqual(scope.outsideUnion, ['src/unlisted.js']);
+  });
+
+  test('[regression] a listed resolved catch-up merge does not put the base delta in outsideUnion', () => {
+    const { repo, task } = divergedRepo();
+    summarize(repo, [task, resolvedCatchUp(repo)]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.changedFiles, ['src/phase.js', 'src/shared.js']);
+    assert.deepEqual(scope.outsideUnion, []);
+  });
+
+  test('[independence] a phase branch merged into its base still names the base work no SUMMARY lists', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', 'main');
+    repo.git('merge', '--no-ff', 'phase', '-m', 'chore: land phase');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.outsideUnion, ['src/base.js']);
+  });
+
+  test('[boundary] a SUMMARY listing only a clean phase-into-base merge degrades to the phase range', () => {
+    const { repo } = divergedRepo();
+    repo.git('checkout', 'main');
+    repo.git('merge', '--no-ff', 'phase', '-m', 'chore: land phase');
+    summarize(repo, [repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'degraded');
+    assert.equal(scope.reason, 'merge-only-task-commits');
+    assert.equal(scope.source, 'phase-range');
+    assert.ok(scope.files.includes('src/phase.js'));
+  });
+
+  test('[boundary] a SUMMARY listing only a conflict-resolving merge degrades, not resolved to the resolution alone', () => {
+    const { repo } = divergedRepo();
+    summarize(repo, [resolvedCatchUp(repo)]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'degraded');
+    assert.equal(scope.reason, 'merge-only-task-commits');
+    assert.ok(scope.files.includes('src/phase.js'));
+  });
+
+  test('[negative] the verb reports a merge-only SUMMARY as advisory, never pass', () => {
+    const { repo } = divergedRepo();
+    repo.git('checkout', 'main');
+    repo.git('merge', '--no-ff', 'phase', '-m', 'chore: land phase');
+    summarize(repo, [repo.git('rev-parse', 'HEAD')]);
+    const result = evaluateEvaluationScope({ projectDir: repo.dir, args: ['--phase', '3'] });
+    assert.equal(result.outcome, 'advisory');
+    assert.equal(result.payload.reason, 'merge-only-task-commits');
+    assert.equal(result.payload.status, 'degraded');
+  });
+
+  test('[boundary] a lockfile-only task commit beside a clean merge is not merge-only', () => {
+    const { repo } = divergedRepo();
+    const lock = commit(repo, 'package-lock.json', 'feat(03-01): lockfile', '{"a":1}\n');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [lock, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'degraded');
+    assert.equal(scope.reason, 'empty-after-exclusions');
+  });
+
+  test('[boundary] a lockfile-only task commit beside a conflict-resolving merge resolves to the resolution', () => {
+    const { repo } = divergedRepo();
+    const lock = commit(repo, 'package-lock.json', 'feat(03-01): lockfile', '{"a":1}\n');
+    const merge = resolvedCatchUp(repo);
+    summarize(repo, [lock, merge]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.equal(scope.source, 'task-commits');
+    assert.deepEqual(scope.changedFiles, ['src/shared.js']);
+  });
+
+  test('[regression] unlisted phase work on a sub-branch merged into the phase stays in outsideUnion', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', '-b', 'sub');
+    commit(repo, 'src/sub.js', 'feat(03-01): sub-branch work no SUMMARY lists');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/phase-two.js', 'feat(03-01): second phase commit');
+    repo.git('merge', '--no-ff', 'sub', '-m', 'chore: merge sub-branch');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/sub.js'));
+    assert.ok(scope.outsideUnion.includes('src/phase-two.js'));
+  });
+
+  test('[regression] a sub-branch forked from an UNLISTED phase commit is never subtracted (fork-point rule)', () => {
+    const { repo, task } = divergedRepo();
+    commit(repo, 'src/unlisted.js', 'feat(03-01): unlisted phase commit');
+    repo.git('checkout', '-b', 'sub');
+    commit(repo, 'src/sub.js', 'feat(03-01): sub-branch work no SUMMARY lists');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/phase-two.js', 'feat(03-01): second phase commit');
+    repo.git('merge', '--no-ff', 'sub', '-m', 'chore: merge sub-branch');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/sub.js'), 'the fork point is phase work, so the side is phase work');
+    assert.ok(scope.outsideUnion.includes('src/unlisted.js'));
+  });
+
+  test('[boundary] the first catch-up forks at the phase start and is subtracted; a second catch-up is reported (accepted cost)', () => {
+    const { repo, task } = divergedRepo();
+    const first = (() => { repo.git('merge', '--no-ff', 'main', '-m', 'chore: first catch up'); return repo.git('rev-parse', 'HEAD'); })();
+    repo.git('checkout', 'main');
+    commit(repo, 'src/base-two.js', 'feat: more base work');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: second catch up');
+    summarize(repo, [task, first, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'), 'the first catch-up forks at the phase start');
+    // The second catch-up forks at the first catch-up\'s main commit, after the phase start: the
+    // resolver cannot tell it from a sub-branch, so it errs toward reporting (advisory false positive).
+    assert.ok(scope.outsideUnion.includes('src/base-two.js'));
+  });
+
+  test('[boundary] a merge with no merge-base subtracts nothing', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', '--orphan', 'unrelated');
+    repo.git('rm', '-rf', '.');
+    commit(repo, 'src/orphan.js', 'feat: unrelated history');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', '--allow-unrelated-histories', 'unrelated', '-m', 'chore: merge unrelated');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/orphan.js'));
+  });
+
+  test('[boundary] a phase directory that arrived with the root commit (empty-tree rangeBase) subtracts nothing', () => {
+    const repo = makeRepo();
+    repo.git('checkout', '-b', 'phase');
+    const task = commit(repo, 'src/phase.js', 'feat(03-01): phase work');
+    repo.git('checkout', 'main');
+    commit(repo, 'src/base.js', 'feat: base work');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/base.js'));
+  });
+
+  test('[boundary] a merge-base check that times out subtracts nothing', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const runner = (args, opts) => (args[0] === 'merge-base' && args[1] !== '--is-ancestor'
+      ? { exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true }
+      : realExecGit(args, opts));
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/base.js'));
+  });
+
+  test('[regression] an unlisted phase edit to a file the base also touched stays in outsideUnion after a catch-up merge', () => {
+    const { repo, task } = divergedRepo();
+    const body = 'a\n1\n2\n3\n4\n5\n6\n7\nz\n';
+    repo.git('checkout', 'main');
+    commit(repo, 'src/many.js', 'feat: base adds many', body);
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: first catch up');
+    repo.git('checkout', 'main');
+    commit(repo, 'src/many.js', 'feat: base appends to many', `${body}base-tail\n`);
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/many.js', 'feat: unlisted phase edit of many', body.replace('a\n', 'phase-head\n'));
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: second catch up');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/many.js'));
+  });
+
+  test('[regression] an unlisted phase edit made AFTER the catch-up merge stays in outsideUnion', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', 'main');
+    commit(repo, 'src/shared.js', 'feat: base edits shared', 'base\n');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const catchUp = repo.git('rev-parse', 'HEAD');
+    commit(repo, 'src/shared.js', 'feat: unlisted edit of shared after the catch-up', 'phase-edit\n');
+    const later = commit(repo, 'src/phase2.js', 'feat(03-01): phase work 2');
+    summarize(repo, [task, catchUp, later]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/shared.js'), 'the unlisted post-merge edit is named');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'), 'a base file no phase commit touched is still subtracted');
+  });
+
+  test('[independence] a catch-up with a later unlisted edit to a non-base file still subtracts the base delta', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const catchUp = repo.git('rev-parse', 'HEAD');
+    commit(repo, 'src/unlisted.js', 'feat: unlisted phase edit of a non-base file');
+    const later = commit(repo, 'src/phase2.js', 'feat(03-01): phase work 2');
+    summarize(repo, [task, catchUp, later]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'), 'the base delta is still subtracted');
+    assert.ok(scope.outsideUnion.includes('src/unlisted.js'), 'the unlisted phase edit is named');
+  });
+
+  test('[independence] a plan unit whose only matches are merges says merge-only', () => {
+    const repo = makeRepo();
+    commit(repo, 'src/shared.js', 'chore: shared', 'v0\n');
+    repo.git('checkout', '-b', 'phase');
+    commit(repo, 'src/phase.js', 'chore: phase work');
+    repo.git('checkout', 'main');
+    commit(repo, 'src/base.js', 'feat: base work');
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'feat(03-01): merge main');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { includeFiles: true });
+    assert.equal(scope.status, 'resolved');
+    assert.equal(scope.commits.length, 1);
+    assert.deepEqual(scope.changedFiles, []);
+    assert.equal(scope.reason, 'merge-only');
+  });
+
+  test('[independence] a plan unit whose commits are not merges keeps empty-after-exclusions', () => {
+    const repo = makeRepo();
+    write(repo.dir, 'package-lock.json', '{}\n');
+    repo.git('add', 'package-lock.json');
+    repo.git('commit', '-m', 'feat(03-01): lockfile only');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }, { includeFiles: true });
+    assert.equal(scope.reason, 'empty-after-exclusions');
+  });
+
+  test('[boundary] a merge failing under remerge-diff names its subcommand, not the -c option', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const runner = (args, opts) => (args.includes('--remerge-diff')
+      ? { exitCode: 128, stdout: '', stderr: 'fatal: bad object', signal: null, error: null, timedOut: false }
+      : realExecGit(args, opts));
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    assert.equal(scope.status, 'unresolvable');
+    assert.equal(scope.reason, 'git-failed:show');
+  });
+
+  test('[boundary] reading each commit spawns no per-commit rev-list --parents', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    let parentLookups = 0;
+    const runner = (args, opts) => {
+      if (args[0] === 'rev-list' && args.includes('--parents')) parentLookups += 1;
+      return realExecGit(args, opts);
+    };
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.changedFiles, ['src/phase.js']);
+    assert.equal(parentLookups, 0);
+  });
+});
+
+/** A file body whose first and last lines can change independently (so two edits merge cleanly). */
+function spreadBody(top, bottom) {
+  return `${top}\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n${bottom}\n`;
+}
+
+const FAILED_GIT = { exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: null, timedOut: true };
+
+describe('resolveEvaluationScope — phase-side merges and per-merge failure isolation (#5751)', () => {
+  test('[regression] an unlisted phase-side merge\'s own edit to a file the base later touches stays in outsideUnion', () => {
+    const repo = makeRepo({ deferScaffold: true });
+    commit(repo, 'src/shared.js', 'chore: shared', 'v0\n');
+    commit(repo, 'src/G.js', 'chore: G', spreadBody('t0', 'b0'));
+    repo.git('checkout', '-b', 'phase');
+    repo.scaffold();
+    const task = commit(repo, 'src/p.js', 'feat(03-01): p');
+    repo.git('checkout', '-b', 'sub');
+    commit(repo, 'src/other.js', 'feat: sub other');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/q.js', 'feat: phase q');
+    repo.git('merge', '--no-ff', '--no-commit', 'sub');
+    write(repo.dir, 'src/G.js', spreadBody('t0', 'b-evil'));
+    repo.git('add', 'src/G.js');
+    repo.git('commit', '-m', 'chore: merge sub (with an edit of G)');
+    repo.git('checkout', 'main');
+    commit(repo, 'src/G.js', 'feat: base edits G', spreadBody('t-base', 'b0'));
+    repo.git('checkout', 'phase');
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/G.js'), 'the unlisted merge edited G on the phase side');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'), 'a base-only file is still subtracted');
+  });
+
+  /** A listed clean catch-up merge; with no failure injected `src/base.js` is not in outsideUnion. */
+  function catchUpRepo() {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    summarize(repo, [task, repo.git('rev-parse', 'HEAD')]);
+    return repo;
+  }
+
+  test('[independence] with no failure injected the catch-up delta is subtracted', () => {
+    const repo = catchUpRepo();
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.ok(!scope.outsideUnion.includes('src/base.js'));
+  });
+
+  // `rev-list <p2> ^<base> --`: the revision list ends with the `--` terminator (#6179).
+  const isRevListNeg = (args) => args[0] === 'rev-list' && args.length === 4 && args[2].startsWith('^') && args[3] === '--';
+  const failing = [
+    ['the second-side rev-list', () => { let n = 0; return (args) => isRevListNeg(args) && (n += 1) === 1; }],
+    ['the second-parent ancestry rev-list', () => { let n = 0; return (args) => isRevListNeg(args) && (n += 1) === 2; }],
+    ['the merge-base --all', () => (args) => args[0] === 'merge-base' && args[1] === '--all'],
+    ['the phase-side log', () => (args) => args.includes('log') && args.includes('--name-only')],
+    ['the merge-vs-first-parent diff', () => (args) => args.includes('diff') && args.some((a) => /^[0-9a-f]{40}\^1\.\.[0-9a-f]{40}$/.test(a))],
+  ];
+  for (const [label, makeMatcher] of failing) {
+    test(`[boundary] a timeout in ${label} subtracts nothing for that merge and does not fail the scope`, () => {
+      const repo = catchUpRepo();
+      const matches = makeMatcher();
+      let hit = 0;
+      const runner = (args, opts) => {
+        if (matches(args)) { hit += 1; return FAILED_GIT; }
+        return realExecGit(args, opts);
+      };
+      const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+      assert.ok(hit > 0, 'the injected call was reached');
+      assert.equal(scope.status, 'resolved');
+      assert.ok(scope.outsideUnion.includes('src/base.js'));
+    });
+  }
+
+  test('[boundary] listed phase commits cost no per-commit merge-base --is-ancestor against the second parent', () => {
+    const { repo } = divergedRepo();
+    const tasks = [];
+    for (let i = 0; i < 5; i += 1) tasks.push(commit(repo, `src/t${i}.js`, `feat(03-01): task ${i}`));
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const merge = repo.git('rev-parse', 'HEAD');
+    summarize(repo, [...tasks, merge]);
+    const mainTip = repo.git('rev-parse', 'main');
+    let against = 0;
+    const runner = (args, opts) => {
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor' && args[3] === mainTip) against += 1;
+      return realExecGit(args, opts);
+    };
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { execGit: runner });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(!scope.outsideUnion.includes('src/base.js'));
+    assert.equal(against, 0);
+  });
+
+  test('[regression] a listed non-merge commit that is an ancestor of the second parent still blocks subtraction', () => {
+    const { repo, task } = divergedRepo();
+    repo.git('checkout', '-b', 'sub');
+    const subTask = commit(repo, 'src/sub.js', 'feat(03-01): sub work');
+    repo.git('checkout', 'phase');
+    commit(repo, 'src/phase-two.js', 'feat(03-01): second phase commit');
+    repo.git('merge', '--no-ff', 'sub', '-m', 'chore: merge sub');
+    summarize(repo, [task, subTask, repo.git('rev-parse', 'HEAD')]);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.ok(scope.outsideUnion.includes('src/phase-two.js'));
+  });
+});
+
+describe('parseGitVersion / remergeDiffSupported (#5751)', () => {
+  test('[boundary] pins real `git --version` shapes and garbage', () => {
+    assert.deepEqual(parseGitVersion('git version 2.45.1.windows.1\n'), { major: 2, minor: 45 });
+    assert.deepEqual(parseGitVersion('git version 2.36.0-rc0'), { major: 2, minor: 36 });
+    assert.deepEqual(parseGitVersion('git version 2.54.0 (Apple Git-157)'), { major: 2, minor: 54 });
+    for (const garbage of ['', 'garbled', 'git version', 'git version 2', 'version x.y']) {
+      assert.equal(parseGitVersion(garbage), null);
+      assert.equal(remergeDiffSupported(garbage), false);
+    }
+    assert.equal(remergeDiffSupported('git version 2.35.9'), false);
+    assert.equal(remergeDiffSupported('git version 2.36.0-rc0'), true);
+    assert.equal(remergeDiffSupported('git version 2.45.1.windows.1'), true);
+    assert.equal(remergeDiffSupported('git version 3.0.0'), true);
+    assert.equal(remergeDiffSupported('git version 1.99.9'), false);
+  });
+
+  test('[property] for any a.b.c and suffix, support is exactly a > 2 or (a = 2 and b >= 36)', () => {
+    const suffix = fc.constantFrom('', '-rc0', '.windows.1', ' (Apple Git-157)', '.vfs.0.1');
+    fc.assert(fc.property(
+      fc.integer({ min: 0, max: 999 }), fc.integer({ min: 0, max: 999 }), fc.integer({ min: 0, max: 999 }), suffix,
+      (a, b, c, tail) => {
+        const text = `git version ${a}.${b}.${c}${tail}\n`;
+        assert.deepEqual(parseGitVersion(text), { major: a, minor: b });
+        assert.equal(remergeDiffSupported(text), a > 2 || (a === 2 && b >= 36));
+      },
+    ));
   });
 });
 
@@ -628,7 +1225,7 @@ describe('evaluateEvaluationScope — the check verb', () => {
     const resolved = evaluateEvaluationScope({ projectDir: repo.dir, args: ['--phase', '3'] });
     assert.deepEqual(Object.keys(resolved.payload), [
       'unit', 'status', 'source', 'reason', 'commits', 'changedFiles', 'files',
-      'missingOnDisk', 'outsideUnion', 'unreachable', 'rangeBase',
+      'missingOnDisk', 'outsideUnion', 'unreachable', 'unparsedSummaries', 'rangeBase',
     ]);
     assert.equal(resolved.outcome, 'pass');
     assert.equal(resolved.block, false);
@@ -949,5 +1546,252 @@ describe('qualifiedPlanSubjectPattern — one builder for every plan-id spelling
     commit(repo, 'src/a.js', 'feat(wsXb-01-01): another workstream');
     const out = repo.git('log', '--extended-regexp', `--grep=${qualifiedPlanSubjectPattern('0*1-0*1', 'ws.b')}`, '--format=%s');
     assert.deepEqual(out.split('\n').filter(Boolean).sort(), ['feat(01-01): bare spelling', 'feat(ws.b-01-01): qualified spelling']);
+  });
+});
+
+// ─── #6179: a root file named like a commit id must not make the scope unresolvable ───────────────────────────────
+//
+// `git rev-list <sha>` / `git log <sha>` without `--` exit 128 ("both revision and filename") when a root-level file
+// is named exactly like the sha; the resolver then raised ScopeUnreadable and every gate sharing it saw `unresolvable`.
+
+describe('resolveEvaluationScope — sha-named root files (#6179)', () => {
+  /** Root-level untracked files named exactly like each sha (a path a bare revision argument would also match). */
+  function plantShaNamedFiles(repo, shas) {
+    for (const sha of shas) write(repo.dir, sha, 'not a revision\n');
+  }
+
+  /** Three task commits (one non-phase commit between them) listed by a SUMMARY. */
+  function taskCommitRepo() {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    commit(repo, 'other/noise.js', 'fix: noise');
+    const b = commit(repo, 'src/b.js', 'feat(03-01): b');
+    const c = commit(repo, 'src/c.js', 'feat(03-01): c');
+    summarize(repo, [a, b, c]);
+    return { repo, shas: [a, b, c] };
+  }
+
+  /** A phase branch that merged the base into itself, the merge listed in the SUMMARY (the baseSideMergeFiles path). */
+  function catchUpMergeRepo() {
+    const { repo, task } = divergedRepo();
+    repo.git('merge', '--no-ff', 'main', '-m', 'chore: catch up with main');
+    const merge = repo.git('rev-parse', 'HEAD');
+    const parents = [repo.git('rev-parse', `${merge}^1`), repo.git('rev-parse', `${merge}^2`)];
+    summarize(repo, [task, merge]);
+    return { repo, shas: [task, merge, ...parents] };
+  }
+
+  const view = (scope) => ({
+    status: scope.status, reason: scope.reason, source: scope.source, files: scope.files, outsideUnion: scope.outsideUnion, changedFiles: scope.changedFiles,
+  });
+
+  for (const shaChunk of [2, 3, 4]) {
+    test(`[regression] task commits resolve to the control's files with shaChunk ${shaChunk} (limit-1, limit, limit+1 over 3 commits)`, () => {
+      const control = taskCommitRepo();
+      const planted = taskCommitRepo();
+      plantShaNamedFiles(planted.repo, planted.shas);
+      const expected = resolveEvaluationScope(control.repo.dir, { kind: 'phase', phase: '3' }, { shaChunk });
+      assert.equal(expected.status, 'resolved');
+      const scope = resolveEvaluationScope(planted.repo.dir, { kind: 'phase', phase: '3' }, { shaChunk });
+      assert.equal(scope.status, 'resolved', `reason: ${scope.reason}`);
+      assert.equal(scope.source, 'task-commits');
+      assert.deepEqual(view(scope), view(expected));
+      assert.deepEqual(scope.files, ['src/a.js', 'src/b.js', 'src/c.js']);
+    });
+  }
+
+  test('[regression] a listed catch-up merge resolves when root files are named like the merge and both its parents', () => {
+    const control = catchUpMergeRepo();
+    const planted = catchUpMergeRepo();
+    plantShaNamedFiles(planted.repo, planted.shas);
+    const expected = resolveEvaluationScope(control.repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(expected.status, 'resolved');
+    const scope = resolveEvaluationScope(planted.repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved', `reason: ${scope.reason}`);
+    assert.deepEqual(view(scope), view(expected));
+    assert.ok(!scope.changedFiles.includes('src/base.js'), 'the base delta stays out of the scope');
+  });
+
+  // Any positional operand of a log or rev-list call is a revision (a sha, `^sha`, a range or a ref), so every such
+  // call must end its revisions with `--`. Flags and the value of `-n` are not operands.
+  const walkOf = (args) => args.findIndex((arg) => arg === 'log' || arg === 'rev-list');
+  const operandsOf = (args) => {
+    const operands = [];
+    for (let i = walkOf(args) + 1; i < args.length; i++) {
+      if (args[i] === '--') break;
+      if (args[i] === '-n') { i += 1; continue; }
+      if (!args[i].startsWith('-')) operands.push(args[i]);
+    }
+    return operands;
+  };
+  const passesRevision = (args) => operandsOf(args).length > 0;
+  const isRevisionWalk = (args) => walkOf(args) !== -1;
+
+  for (const [label, build, options] of [
+    ['task commits, chunked', taskCommitRepo, { shaChunk: 2 }],
+    ['task commits, one chunk', taskCommitRepo, {}],
+    ['a listed merge', catchUpMergeRepo, {}],
+  ]) {
+    test(`[parity] ${label}: every log or rev-list call that names a commit id carries --`, () => {
+      const { repo } = build();
+      const git = spyGit();
+      const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' }, { ...options, execGit: git });
+      assert.equal(scope.status, 'resolved', `reason: ${scope.reason}`);
+      const revisionCalls = git.calls.filter((args) => isRevisionWalk(args) && passesRevision(args));
+      assert.ok(revisionCalls.length > 0, 'the scenario reaches calls that pass revisions');
+      if (label === 'a listed merge') {
+        assert.ok(revisionCalls.some((args) => args[0] === 'rev-list' && args.some((arg) => arg.startsWith('^'))), 'the merge scenario reaches the base-side rev-list walk');
+      }
+      for (const args of revisionCalls) assert.ok(args.includes('--'), `unterminated: git ${args.join(' ')}`);
+    });
+  }
+});
+
+// ─── #6215: the task rows gsd-executor writes for TDD tasks are read, or their SUMMARY is named ─────────────────────
+
+describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
+  const section = (...rows) => `# Summary\n\n## Task Commits\n\n${rows.join('\n')}\n\n## Next\n`;
+
+  test('[regression] a qualifier between the task number and the colon is read', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1 (tracer): b** - `aaaaaaa`')), ['aaaaaaa']);
+    assert.deepEqual(extractTaskCommitRefs(section('- **Task 2 RED:** `bbbbbbb`')), ['bbbbbbb']);
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 3 GREEN: c** - `ccccccc`')), ['ccccccc']);
+  });
+
+  test('[regression] sub-bullets nested under a task row belong to the row', () => {
+    const doc = section(
+      '1. **Task 1: b**',
+      '   - RED `1111111` test(01-02): failing test',
+      '   - GREEN `2222222` feat(01-02): implementation',
+      '2. **Task 2: c** - `3333333`',
+    );
+    assert.deepEqual(extractTaskCommitRefs(doc), ['1111111', '2222222', '3333333']);
+  });
+
+  test('[boundary] a sub-bullet is read only directly under a task row and only when nested deeper than it', () => {
+    // a list item at the row's own depth is a sibling, not a continuation
+    assert.deepEqual(extractTaskCommitRefs(section('- **Task 1: b**', '- RED `1111111`')), []);
+    // a blank line ends the row's continuation
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '', '   - RED `1111111`')), []);
+    // a nested item under a line that is not a task row is prose, not a commit
+    assert.deepEqual(extractTaskCommitRefs(section('Notes', '   - RED `1111111`')), []);
+    // prose on the row itself before the closing bold, and the plan-metadata line, stay unread
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: see `9999999`**', '**Plan metadata:** `8888888`')), []);
+  });
+
+  test('[property] any mix of row shapes yields exactly the generated ids, in document order', () => {
+    const sha = fc.stringMatching(/^[0-9a-f]{7,12}$/);
+    const rowShape = fc.record({
+      marker: fc.constantFrom('1. ', '- ', '* ', ''),
+      qualifier: fc.constantFrom('', ' (tracer)', ' RED', ' GREEN'),
+      inline: fc.option(sha, { nil: null }),
+      nested: fc.array(sha, { maxLength: 3 }),
+    });
+    fc.assert(fc.property(fc.array(rowShape, { minLength: 1, maxLength: 5 }), (rows) => {
+      const expected = [];
+      const lines = rows.map((row, i) => {
+        const out = [`${row.marker}**Task ${i + 1}${row.qualifier}: work**${row.inline ? ` - \`${row.inline}\`` : ''}`];
+        if (row.inline) expected.push(row.inline);
+        for (const nested of row.nested) { out.push(`    - RED \`${nested}\` test`); expected.push(nested); }
+        return out.join('\n');
+      });
+      assert.deepEqual(extractTaskCommitRefs(section(...lines)), expected);
+    }), { numRuns: 100 });
+  });
+
+  test('[regression] a wrapped description line between a task row and its sub-bullets keeps the row open', () => {
+    const doc = section('1. **Task 1: b**', '   wrapped description line', '   - RED `1111111`', '   - GREEN `2222222`');
+    assert.deepEqual(extractTaskCommitRefs(doc), ['1111111', '2222222']);
+  });
+
+  test('[boundary] only the first nested level is read; metadata and deeper items are not task commits', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '   - RED `1111111`', '     - reverted by `deadbee`')), ['1111111']);
+    assert.deepEqual(extractTaskCommitRefs(section('1. **Task 1: b**', '   - RED `1111111`', '   - **Plan metadata:** `8888888`')), ['1111111']);
+  });
+
+  test('[boundary] indentation compares in columns: a tab-indented sub-bullet under a 4-space row is nested', () => {
+    assert.deepEqual(extractTaskCommitRefs(section('  - **Task 1: b**', '\t- RED `1111111`')), ['1111111']);
+    assert.deepEqual(extractTaskCommitRefs(section('\t- **Task 1: b**', '    - RED `1111111`')), []);
+  });
+
+  test('[property] noise between a row and its sub-bullets never adds an id and never hides one', () => {
+    const sha = fc.stringMatching(/^[0-9a-f]{7,12}$/);
+    const noise = fc.constantFrom('   wrapped prose', '   more prose with no id', '     deeper prose');
+    fc.assert(fc.property(fc.array(fc.record({ id: sha, before: fc.array(noise, { maxLength: 2 }) }), { minLength: 1, maxLength: 4 }), (items) => {
+      const lines = ['1. **Task 1: b**'];
+      for (const item of items) lines.push(...item.before, `   - RED \`${item.id}\``);
+      assert.deepEqual(extractTaskCommitRefs(section(...lines)), items.map((item) => item.id));
+    }), { numRuns: 100 });
+  });
+});
+
+describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
+  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    summarize(repo, [a], '03-01-SUMMARY.md');
+    commit(repo, `${PHASE_DIR}/03-02\nforged line-SUMMARY.md`, 'docs(03-02): summary', '# Summary\n\n## Task Commits\n\n- **Task 1:** none\n');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.ok(scope.unparsedSummaries.length > 0);
+    for (const name of scope.unparsedSummaries) assert.doesNotMatch(name, /\p{Cc}/u);
+  });
+
+  test('[boundary] long digit and whitespace runs in a Task Commits section are rows of no id, not a hang or a read', () => {
+    for (const noise of ['**Task 1' + '1'.repeat(50000), ' '.repeat(50000) + 'x']) {
+      assert.deepEqual(extractTaskCommitRefs(`## Task Commits\n\n${noise}\n`), []);
+    }
+  });
+
+  test('[regression] a SUMMARY with one readable row and one unreadable row is named, not partly dropped', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    const b = commit(repo, 'src/b.js', 'feat(03-01): b');
+    commit(repo, `${PHASE_DIR}/03-01-SUMMARY.md`, 'docs(03-01): summary', `# Summary\n\n## Task Commits\n\n1. **Task 1: a** - \`${a}\`\n2. **Task 2 - tracer**\n   - GREEN \`${b}\`\n\n## Next\n`);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.unparsedSummaries, ['03-01-SUMMARY.md']);
+  });
+
+  /** A phase with plan 01 in the canonical shape and plan 02 written with `body` as its Task Commits section. */
+  function twoPlanPhase(secondSection) {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    const red = commit(repo, 'src/b.test.js', 'test(03-02): red b');
+    const green = commit(repo, 'src/b.js', 'feat(03-02): green b');
+    summarize(repo, [a], '03-01-SUMMARY.md');
+    commit(repo, `${PHASE_DIR}/03-02-SUMMARY.md`, 'docs(03-02): summary', `# Summary\n\n## Task Commits\n\n${secondSection({ red, green })}\n\n## Next\n`);
+    return repo;
+  }
+
+  test('[regression] a TDD plan written with sub-bullets contributes its files and is not reported', () => {
+    const repo = twoPlanPhase(({ red, green }) => `1. **Task 1 (tracer): b**\n   - RED \`${red}\` test\n   - GREEN \`${green}\` feat`);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.equal(scope.source, 'task-commits');
+    assert.deepEqual(scope.files, ['src/a.js', 'src/b.js', 'src/b.test.js']);
+    assert.deepEqual(scope.unparsedSummaries, []);
+  });
+
+  test('[regression] a SUMMARY whose Task Commits section yields no id is named, never silently dropped', () => {
+    const repo = twoPlanPhase(({ red, green }) => `- Task one: \`${red}\` and \`${green}\``);
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.equal(scope.status, 'resolved');
+    assert.deepEqual(scope.files, ['src/a.js']);
+    assert.deepEqual(scope.unparsedSummaries, ['03-02-SUMMARY.md']);
+  });
+
+  test('[boundary] a SUMMARY with no Task Commits section is not reported; canonical rows are not reported', () => {
+    const repo = makeRepo();
+    const a = commit(repo, 'src/a.js', 'feat(03-01): a');
+    summarize(repo, [a], '03-01-SUMMARY.md');
+    commit(repo, `${PHASE_DIR}/03-02-SUMMARY.md`, 'docs(03-02): summary', '# Summary\n\nNo commits for this plan.\n');
+    const scope = resolveEvaluationScope(repo.dir, { kind: 'phase', phase: '3' });
+    assert.deepEqual(scope.unparsedSummaries, []);
+    assert.deepEqual(scope.files, ['src/a.js']);
+  });
+
+  test('[independence] plan and quick units carry an empty unparsedSummaries', () => {
+    const repo = makeRepo();
+    commit(repo, 'src/a.js', 'feat(03-01): a');
+    assert.deepEqual(resolveEvaluationScope(repo.dir, { kind: 'plan', planId: '03-01' }).unparsedSummaries, []);
   });
 });

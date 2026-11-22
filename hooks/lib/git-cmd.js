@@ -49,6 +49,8 @@ const ARGUMENT_TAKING_FLAGS = new Set([
   '--man-path',
   '--info-path',
   '--list-cmds',
+  '--config-env',      // config from an env var: `--config-env=k=V` or `--config-env k=V` (#5821)
+  '--attr-source',     // tree-ish for attributes: `--attr-source=T` or `--attr-source T` (#5821)
 ]);
 
 /**
@@ -59,7 +61,7 @@ const BOOLEAN_FLAGS = new Set([
   '--no-replace-objects', '--bare',
   '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
   '--icase-pathspecs', '--no-optional-locks',
-  '-P', '--no-lazy-fetch',
+  '-P', '--no-lazy-fetch', '--no-advice',
   '--version', '--help',
 ]);
 

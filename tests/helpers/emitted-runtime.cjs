@@ -41,6 +41,7 @@ const {
   MANIFEST_FAMILIES,
   MINIMUM_MANIFEST_FAMILIES,
   runMinimalInstall,
+  installRuntimeFixture,
   buildParityManifest,
   extraEmitRootsFor,
   PKG_VERSION,
@@ -231,8 +232,18 @@ function reconcileFamilies({
 
 /** Bounded git invocation. CLAUDE.md → KNOWN DEFECTS: every git subprocess needs a
  *  timeout (5-30s); an unbounded execFileSync is an indefinite hang, and it is how
- *  macOS CI silently stops reporting. */
-const GIT_TIMEOUT_MS = 30_000;
+ *  macOS CI silently stops reporting.
+ *
+ *  Bounds `git()` and the `ackTrailerGit` / `readAckTrailers` default (11 argv
+ *  shapes: diff, rev-parse, rev-parse --verify, merge-base, ls-tree, show,
+ *  log, interpret-trailers) against the REAL repository root, not a fixture. It
+ *  is its own constant rather than a tests/helpers/timeouts.cjs class because
+ *  it bounds whole-repository history reads whose cost scales with the repo.
+ *  Evidence: worst observed 184.05ms on darwin (p50 53.59ms, p99 97.93ms), margin 162.99x;
+ *  harness, 11 call sites x 50 runs (550 spawns) per platform on darwin (node v26.13.0)
+ *  and linux (node:24 in docker), 2026-11-08; win32 not measured.
+ *  Reproduction caveat: the harness base ref was HEAD~100 (origin/next absent). */
+const EMITTED_RUNTIME_GIT_TIMEOUT_MS = 30_000;
 
 /**
  * Prepend `-c safe.directory=<dir>` to a git argv.
@@ -263,7 +274,7 @@ function git(args, { cwd = REPO_ROOT } = {}) {
   return execFileSync('git', [...safeDirArgs(cwd), ...args], {
     cwd,
     encoding: 'utf8',
-    timeout: GIT_TIMEOUT_MS,
+    timeout: EMITTED_RUNTIME_GIT_TIMEOUT_MS,
     maxBuffer: 64 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -342,6 +353,128 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
 }
 
 /**
+ * The newest commit on the base branch's FIRST-PARENT chain that HEAD contains, when it
+ * descends from `floorSha` (a commit HEAD already contains); otherwise `floorSha` unchanged.
+ *
+ * Active only when `env.GITHUB_BASE_REF` is set (Actions sets it on pull_request
+ * events) and `refs/remotes/origin/<GITHUB_BASE_REF>` resolves. Local runs, release
+ * lanes, `merge_group` and the gsd-test container (no `origin/*` refs) keep the pin's
+ * merge-base exactly as before.
+ *
+ * Why the first-parent chain and not `git merge-base origin/<base> HEAD`: with criss-cross
+ * history that command returns ONE of several best common ancestors, and which one it
+ * picks depends on commit-date order, so it need not be the commit we want. A stacked PR whose lower PR landed on the base branch as a merge
+ * commit after the merge ref was built has two (the lower PR's tip and the base commit the
+ * merge ref was built on); measuring from the lower PR's tip sweeps the base-only commits
+ * between the pin and the merge ref back into range (PR #5871 review, Major 2). The
+ * first-parent chain is the sequence of trees the base branch actually had, so the newest
+ * of them HEAD contains is unique, and a baseline built there agrees with the
+ * `<base>..HEAD` range the trailers and changed paths are read from (#5008).
+ *
+ * Bounded work: `git merge-base` first confirms the two histories are related (its sha is
+ * discarded, not used for selection), so an unrelated base ref costs one history walk and
+ * keeps the floor with a line naming that failed command, instead of a rev-list plus about
+ * log2(n) `--is-ancestor` walks that never say the histories are unrelated.
+ * `rev-list --first-parent <tip> ^<floor>` then lists, newest first, only the chain
+ * commits the floor does not already contain. Containment in HEAD
+ * is monotonic along a first-parent chain (a contained commit's first parent is
+ * contained too), so a binary search finds the newest contained one in
+ * ceil(log2(n + 1)) `merge-base --is-ancestor` calls. When none of them is contained,
+ * the newest contained chain commit is the first parent of the oldest listed one (or the
+ * tip itself when nothing is listed); in a complete clone the floor contains it. In a
+ * shallow clone that parent can be missing or outside HEAD, and the check at the advance's
+ * return keeps the floor instead of returning it. When the oldest listed one
+ * is a root (the chain is rooted outside the floor's history), no chain commit is in HEAD
+ * and the floor is kept with a line saying exactly that.
+ *
+ * Stable while the base branch advances mid-run: a commit that lands after the merge ref
+ * was built is not in HEAD, so it cannot be chosen. The result never moves BELOW the
+ * floor (a chain commit that does not descend from it keeps the floor), and any git
+ * failure keeps the floor rather than guessing; when a base branch was named, every floor
+ * kept by a guard (unresolved ref, failed lookup, rooted chain, a chosen commit HEAD does
+ * not contain, or a result below the floor) tells `diagnostic` why. A walk that simply
+ * finds nothing newer than the floor keeps it silently.
+ *
+ * @param {string} floorSha `merge-base(pin, HEAD)`, a 40-hex sha.
+ * @param {object} env base-ref environment.
+ * @param {{cwd: string, diagnostic?: function}} options repository to resolve against; an
+ *   optional `diagnostic` hears why the floor was kept when the base branch was named.
+ * @returns {string} a 40-hex sha HEAD contains.
+ */
+function advanceToMergedBase(floorSha, env, { cwd, diagnostic }) {
+  const branch = env.GITHUB_BASE_REF;
+  if (!branch) return floorSha;
+  const keep = (why) => {
+    if (diagnostic) diagnostic(`emitted-attribution: keeping the pin's merge-base ${floorSha}: ${why}`);
+    return floorSha;
+  };
+  let tip;
+  try {
+    tip = git(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`], { cwd }).trim();
+  } catch {
+    return keep(`GITHUB_BASE_REF=${branch} is set but refs/remotes/origin/${branch} does not resolve`);
+  }
+  // `merge-base --is-ancestor` exits 0 (yes) or 1 (no); any other exit is a git failure.
+  const isAncestor = (ancestor, descendant) => {
+    try {
+      git(['merge-base', '--is-ancestor', ancestor, descendant], { cwd });
+      return true;
+    } catch (err) {
+      if (err && err.status === 1) return false;
+      throw err;
+    }
+  };
+  let newest;
+  try {
+    git(['merge-base', tip, 'HEAD'], { cwd });
+    const chain = git(['rev-list', '--first-parent', tip, `^${floorSha}`], { cwd })
+      .split('\n').map((l) => l.trim()).filter(Boolean);
+    let lo = 0;
+    let hi = chain.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (isAncestor(chain[mid], 'HEAD')) hi = mid;
+      else lo = mid + 1;
+    }
+    if (lo < chain.length) newest = chain[lo];
+    else if (chain.length === 0) newest = tip;
+    else {
+      // The first parent comes from the raw commit object. git reads parents only as the
+      // `parent <sha>` lines directly after the leading `tree` line (commit.c,
+      // parse_commit_buffer), so the read is anchored there: a `parent` line anywhere else (a
+      // stray header after `committer`, or the message) is not a parent and is not read.
+      // `rev-list --parents` would honour a shallow clone's grafts and call the shallow
+      // boundary a root; the raw object names the real parent. If that parent is absent or
+      // not in HEAD, the checks below keep the floor and say so.
+      const oldest = chain[chain.length - 1];
+      const raw = git(['cat-file', 'commit', oldest], { cwd });
+      const parentLine = /^tree [0-9a-f]{40}\nparent ([0-9a-f]{40})\n/.exec(raw);
+      const firstParent = parentLine && parentLine[1];
+      if (!firstParent) {
+        // The chain is rooted outside the floor's history and HEAD contains none of it: no git
+        // command failed, so say what happened.
+        return keep(`no origin/${branch} first-parent commit is in HEAD (the chain ends at the root ${oldest})`);
+      }
+      newest = firstParent;
+    }
+    if (!/^[0-9a-f]{40}$/.test(newest)) throw new Error(`not a 40-hex sha: ${JSON.stringify(newest)}`);
+    if (newest === floorSha) return floorSha;
+    // The one place an advance is returned, so its invariant is checked here for every way
+    // `newest` was derived: the advanced base must be a commit HEAD contains. A shallow clone
+    // can break that, since the walk reads past a graft to a real parent that may not be
+    // in HEAD.
+    if (!isAncestor(newest, 'HEAD')) {
+      return keep(`the chosen origin/${branch} commit ${newest} is not in HEAD ` +
+        '(a shallow clone boundary can cause this)');
+    }
+    if (isAncestor(floorSha, newest)) return newest;
+  } catch (err) {
+    return keep(`finding the newest origin/${branch} first-parent commit HEAD contains failed: ${err.message}`);
+  }
+  return keep(`the newest origin/${branch} first-parent commit HEAD contains, ${newest}, does not descend from it`);
+}
+
+/**
  * True iff the running pull request is a release-merge PR (`release/X.Y.0` or
  * `hotfix/X.Y.Z` -> `main`, same repository), classified by `releasePipelinePrKind` from
  * the Actions environment (#5902).
@@ -399,13 +532,29 @@ function resolveNextRef({ cwd = REPO_ROOT } = {}) {
  * merged onto `next`), `next` gained #4937 between `create` and `finalize`, and a
  * baseline built at the `next` TIP attributed that merge to the release branch.
  *
- * Ordinary PR lanes merge the tree onto `pull_request.base.sha` first, so there the
- * merge-base IS the base tip and the cache key (`emitted-baseline-<base.sha>`) still hits.
+ * PR lanes are NOT always merged onto `pull_request.base.sha`, the job's
+ * `GSD_EMITTED_BASE` pin. `actions/checkout` checks out GitHub's merge ref
+ * (`refs/pull/N/merge`), built on the base tip GitHub last saw, and `base.sha` can be
+ * older: on PR #5119 it was 34 `next` commits behind the merge ref's first parent. The
+ * "Rebase check" merge of the pin is then a no-op, `merge-base(pin, HEAD)` is the old
+ * sha, and the measured range sweeps in base-branch commits the PR never authored, with
+ * their ack trailers. So on a lane that names its base branch (`GITHUB_BASE_REF`) the
+ * merge-base is advanced to `advanceToMergedBase`'s result: the invariant is that the
+ * attribution base is always a commit HEAD contains, the pin bounds it from below and
+ * the tree bounds it from above. The baseline cache key stays the pin
+ * (`emitted-baseline-<base.sha>`, `.github/workflows/test.yml`), so the restore hits
+ * whenever the push lane cached the pin's sha, stale pin or not. When the pin is the
+ * merged base (the usual case) the restored artifact is built at the attribution base and
+ * is used. When the pin is stale the artifact was built at the pin, not at the advanced
+ * sha, so `validateBaseline` refuses it as stale and `resolveBaseline` falls through to
+ * the in-job build at the advanced sha (ADR-2719 §5, as amended for #5797).
+ *
  * A release-merge PR (`release/X.Y.0` or `hotfix/X.Y.Z` -> `main`, #5902) is the exception:
  * its base is the fork point on `next` (`origin/next`, `upstream/next`, `next`; first that
- * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, and that sha is not
- * `base.sha`, so the `emitted-baseline-<base.sha>` cache key misses and the baseline is
- * built in-job.
+ * resolves), `GSD_EMITTED_BASE`/`GITHUB_BASE_REF` are ignored, so that fork point is never
+ * advanced, and that sha is normally not `base.sha`: the `emitted-baseline-<base.sha>`
+ * restore then normally misses, or returns a baseline not built at the fork point, which
+ * `validateBaseline` refuses, and the baseline is built in-job.
  *
  * Null when no base ref resolves (the caller's explicit-skip path, same as
  * `resolveBase`). A merge-base failure once a base DOES resolve THROWS: the three-dot
@@ -451,6 +600,17 @@ function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic
   }
   if (!/^[0-9a-f]{40}$/.test(sha)) {
     throw new Error(`emitted-attribution: merge-base of "${resolved.ref}" and HEAD is not a 40-hex sha: ${JSON.stringify(sha)}`);
+  }
+  // #5902: a release-merge PR's GITHUB_BASE_REF is `main`, which this base deliberately ignores.
+  const merged = releaseMerge ? sha : advanceToMergedBase(sha, env, { cwd, diagnostic });
+  if (merged !== sha) {
+    if (diagnostic) {
+      diagnostic(
+        `emitted-attribution: HEAD already contains origin/${env.GITHUB_BASE_REF} up to ${merged}, newer than ` +
+        `merge-base(${resolved.ref}, HEAD)@${sha}; measuring from ${merged} so base-only commits stay out of range`,
+      );
+    }
+    sha = merged;
   }
   return { ref: resolved.ref, tipSha: resolved.sha, sha };
 }
@@ -590,7 +750,19 @@ const BUILD_LIB_TIMEOUT_MS = 180_000;
 // the remote runner so the in-job build returns to being the rare fallback
 // ADR-2719 §5 describes; that is a gsd-test-runner change, not one this repo can
 // make.
-const BUILD_TIMEOUT_MS = 360_000;
+//
+// Bounds the one `scripts/gen-emitted-baseline.cjs` spawn in `buildBaselineAtRef`
+// (1 call site); the worktree add/remove and build:lib steps have their own
+// constants. It is its own constant rather than a tests/helpers/timeouts.cjs class
+// because its bound is derived from `CHUNK_TIMEOUT_CEILING_MS` (see above).
+// Evidence: worst observed 12749.57ms on darwin (p50 12282.91ms, p99 12749.57ms), margin 28.23x;
+// harness, 1 call site x 5 runs (5 spawns) per platform on darwin (node v26.13.0)
+// and linux (node:24 in docker), 2026-11-08; win32 not measured.
+// Reproduction caveat: the harness ran the generator with --dir at the repo root
+// (deps and lib built), not in a throwaway git worktree, so it excludes
+// worktree-checkout and cold-install cost; the CI history above is the loaded-machine
+// evidence.
+const EMITTED_RUNTIME_BUILD_TIMEOUT_MS = 360_000;
 // Mirrors `scripts/run-tests.cjs:973`'s default. Duplicated deliberately and
 // narrowly: the bounds here must be checkable against it, and the alternative is
 // reading that script's source, which `local/no-source-grep` bans. The lock test
@@ -624,7 +796,7 @@ function buildBaselineAtRef(ref, { cwd = REPO_ROOT } = {}) {
       ].filter(Boolean).join('\n  ');
       err.message =
         `${step} failed after ${elapsed}s (bounds: worktree ${WORKTREE_TIMEOUT_MS}ms, ` +
-        `build:lib ${BUILD_LIB_TIMEOUT_MS}ms, generator ${BUILD_TIMEOUT_MS}ms). ` +
+        `build:lib ${BUILD_LIB_TIMEOUT_MS}ms, generator ${EMITTED_RUNTIME_BUILD_TIMEOUT_MS}ms). ` +
         `Step timings: ${timings.join(' ')}. ${err.message}` +
         (partial ? `\n  ${partial}` : '');
       throw err;
@@ -653,7 +825,7 @@ function buildBaselineAtRef(ref, { cwd = REPO_ROOT } = {}) {
       execFileSync(
         process.execPath,
         [path.join(cwd, 'scripts', 'gen-emitted-baseline.cjs'), '--dir', worktreeDir, '--out', outFile],
-        { cwd, encoding: 'utf8', timeout: BUILD_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] },
+        { cwd, encoding: 'utf8', timeout: EMITTED_RUNTIME_BUILD_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] },
       ));
 
     return timed('read-artifact', () => JSON.parse(fs.readFileSync(outFile, 'utf8')));
@@ -796,7 +968,12 @@ function currentManifests({ repoRoot } = {}) {
   const pkgVersion = measuredPackageVersion(repoRoot);
   const manifests = {};
   for (const { name, runtime, scope } of MANIFEST_FAMILIES) {
-    const { configDir, root } = runMinimalInstall({ runtime, scope, installScript });
+    // This checkout's own install is only read here, so it is the shared fixture
+    // (#6335). Another checkout's installer makes a tree of its own, removed below.
+    const own = installScript === undefined;
+    const { configDir, root } = own
+      ? installRuntimeFixture({ runtime, scope })
+      : runMinimalInstall({ runtime, scope, installScript });
     try {
       manifests[name] = buildParityManifest(configDir, root, {
         pkgVersion,
@@ -805,7 +982,7 @@ function currentManifests({ repoRoot } = {}) {
         extraEmitRoots: extraEmitRootsFor(runtime, scope, root),
       });
     } finally {
-      cleanup(root);
+      if (!own) cleanup(root);
     }
   }
   return manifests;
@@ -837,11 +1014,11 @@ function currentSizes({ repoRoot = REPO_ROOT } = {}) {
  * Bounded git invocation for the #3942 commit-trailer ack reader, built on the
  * never-throws process seam (`runGit`) rather than `git()` above: `readAckTrailers` must
  * honor a PER-CALL `timeoutMs` (row 24's hostile-timeout row), and `git()` pins
- * `GIT_TIMEOUT_MS` at import time with no per-call override. Throws on anything but a
+ * `EMITTED_RUNTIME_GIT_TIMEOUT_MS` at import time with no per-call override. Throws on anything but a
  * clean exit — same "a git failure is a hard error, never an empty result" law as
  * `resolveChangedPaths` above.
  */
-function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS, input } = {}) {
+function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS, input } = {}) {
   const spawnOpts = { cwd, timeoutMs };
   if (input !== undefined) spawnOpts.input = input;
   const result = runGit([...safeDirArgs(cwd), ...args], spawnOpts);
@@ -898,6 +1075,19 @@ function ackTrailerGit(args, { cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS, inpu
 // breaks the `rawBody.slice(0, match.index)` usage pattern this function needs).
 const GITHUB_SQUASH_SUFFIX_RE = /\n\n-{9,}\n\n/g;
 const SQUASH_BULLET_SPLIT_RE = /\n\n(?=\* )/;
+// #5993: GitHub writes the `---------` suffix only when at least one squashed commit has a
+// `Co-authored-by:` trailer. A squash with none is `<title> (#<pr>)`, a blank line, then the
+// squashed commits as `* <subject>` bullet chunks separated by blank lines. An ordinary commit
+// cannot produce that whole shape: the subject ends in an exact ` (#<digits>)` AND at least two
+// bullet chunks follow it (preamble + two or more chunks), so a commit whose body merely uses
+// markdown bullets does not match.
+// Accepted trade-off: a human-written commit whose subject ends ` (#<digits>)` and whose body is
+// two or more blank-separated `* ` paragraphs has exactly this shape, so a trailer-shaped terminal
+// paragraph in one of them is read as a declaration. That is no new capability (a PR author can
+// already write the trailer as the commit's final paragraph) and the shape cannot be told apart
+// from a real no-co-author squash. Chunk count is bounded by GitHub's 250-commit PR limit for a
+// real squash; one `interpret-trailers` spawn per chunk is the same cost the suffix path pays.
+const NO_COAUTHOR_SQUASH_HEAD_RE = /^[^\n]+ \(#\d+\)\n\n\* /;
 
 /** Index of the START of the LAST GitHub-squash-suffix occurrence in `text`, or -1. */
 function findLastGithubSquashSuffixIndex(text) {
@@ -923,15 +1113,26 @@ const ACK_TRAILER_LINE_RE = new RegExp(
  * merge both into the same value lists before the final `parseAckTrailers` call, so
  * this never needs its own dedup or its own result-shape handling.
  *
- * A commit whose body does not contain GitHub's squash suffix signal is not a squash
- * commit by this heuristic and is returned untouched (empty arrays) — this is the sole
- * gate against widening false-positive risk to ordinary commits.
+ * A commit whose body carries neither GitHub's squash suffix signal nor the no-co-author
+ * squash shape (#5993) is not a squash commit by this heuristic and is returned untouched
+ * (empty arrays) — this is the sole gate against widening false-positive risk to ordinary
+ * commits.
  */
 function extractSquashBuriedTrailers(rawBody, { cwd, timeoutMs }) {
   const suffixIndex = findLastGithubSquashSuffixIndex(rawBody);
-  if (suffixIndex === -1) return { hash: [], growth: [] };
-  const beforeSuffix = rawBody.slice(0, suffixIndex);
-  const chunks = beforeSuffix.split(SQUASH_BULLET_SPLIT_RE);
+  let chunks;
+  if (suffixIndex !== -1) {
+    chunks = rawBody.slice(0, suffixIndex).split(SQUASH_BULLET_SPLIT_RE);
+  } else if (NO_COAUTHOR_SQUASH_HEAD_RE.test(rawBody)) {
+    // #5993: a squash with no co-author has no suffix. Its LAST chunk's terminal trailer block
+    // is already the whole message's final paragraph, which the `%(trailers:...)` pass in
+    // `readAckTrailers` reads, so only the chunks before it are recovered here.
+    const all = rawBody.split(SQUASH_BULLET_SPLIT_RE);
+    if (all.length < 3) return { hash: [], growth: [] };
+    chunks = all.slice(0, -1);
+  } else {
+    return { hash: [], growth: [] };
+  }
   const hash = [];
   const growth = [];
   for (const chunk of chunks) {
@@ -1016,7 +1217,7 @@ const ACK_TRAILER_VALUE_SEP = '\x1d'; // between multiple values of the SAME tra
  * @param {{baseRef: string, headRef?: string, cwd?: string, timeoutMs?: number}} opts
  * @returns {{hash: Map<string, {reason: string}>, growth: Map<string, {reason: string}>, errors: string[]}}
  */
-function readAckTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = GIT_TIMEOUT_MS } = {}) {
+function readAckTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, timeoutMs = EMITTED_RUNTIME_GIT_TIMEOUT_MS } = {}) {
   let mergeBaseOut;
   try {
     mergeBaseOut = ackTrailerGit(['merge-base', baseRef, headRef], { cwd, timeoutMs });
@@ -1157,7 +1358,7 @@ module.exports = {
   FAMILY_REASON,
   touchesRuntimeRegistry,
   reconcileFamilies,
-  GIT_TIMEOUT_MS,
+  EMITTED_RUNTIME_GIT_TIMEOUT_MS,
   safeDirArgs,
   git,
   resolveChangedPaths,
@@ -1178,6 +1379,6 @@ module.exports = {
   readAckTrailers,
   WORKTREE_TIMEOUT_MS,
   BUILD_LIB_TIMEOUT_MS,
-  BUILD_TIMEOUT_MS,
+  EMITTED_RUNTIME_BUILD_TIMEOUT_MS,
   CHUNK_TIMEOUT_CEILING_MS,
 };

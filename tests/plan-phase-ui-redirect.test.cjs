@@ -124,12 +124,12 @@ describe('plan-phase §5.6 UI Design Contract Gate', () => {
     );
   });
 
-  test('Branch 2: no frontend indicators → skip silently to step 6 (§5.7 removed)', () => {
+  test('Branch 2: no frontend indicators → skip silently to step 5.65 (the drift pre-check still runs, #5982)', () => {
     const section = extractSection56(workflowPath);
     assert.ok(section.includes('frontend'), '§5.6 Branch 2 must reference frontend');
     assert.ok(
-      /Branch 2[\s\S]*?step 6/.test(section),
-      '§5.6 Branch 2 must skip to step 6 (§5.7 schema-gate section was removed; schema-gate is now a capability)'
+      /Branch 2[^\n]*step 5\.65/.test(section),
+      '§5.6 Branch 2 must skip to step 5.65, not past the §5.65 drift gate to step 6'
     );
   });
 

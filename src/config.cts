@@ -120,6 +120,8 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   // #1689: per-plan agent_hint executor routing — default-on. A no-op for plans
   // without an agent_hint field, so existing dispatch is byte-identical.
   'workflow.agent_hint_routing': true,
+  // #6302 (ADR-3711 D1): the opt-in gate for dispatching a plan to a foreign executor; off unless set.
+  'workflow.cross_runtime_execution': false,
   // #4401: Compact Content mode gate — derived from the defaults manifest via
   // CONFIG_DEFAULTS (added in config-loader.cts) so the manifest stays the
   // single source of truth, matching workflow.smart_zone_tokens /
@@ -198,22 +200,62 @@ function resolveSchemaDefault(cwd: string, kp: string): { found: boolean; value:
 }
 
 /**
- * Emit a schema-resolved default (#2256), applying the same secret-masking
- * invariant the found-key path applies. getCapabilityConfigSchema is a
- * federated, third-party-extensible surface (ADR-1244) — a future key-name
- * collision with a secret key must not leak a declared default in plaintext.
- * Centralizing emission here means masking can't be missed at a call site.
+ * A decimal number literal as a person types it: optional sign, digits with an optional
+ * fraction (`5`, `5.`, `.5`, `5.0`, `007`), optional exponent. No surrounding whitespace and
+ * no `0x`/`0b`/`0o` prefix, so `' '`, `' 5'` and `'0x10'` stay strings (#6029, owner ruling
+ * 2026-11-08). `Number()` alone accepted all three.
  */
-function emitResolvedDefault(kp: string, value: unknown, raw: boolean): void {
-  const resolvedValue = kp === 'planner.stall_detection_enabled'
+const DECIMAL_LITERAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * #6029 (ADR-1411 Decision 3): the single argv value parser at the config CLI
+ * boundary, shared by `config-set` and `config-get --default`. Type-directed
+ * only: per-key setter policy (project_code verbatim, validators) and the
+ * setter's `null` = unset action (#2046) stay in cmdConfigSet. The numeric
+ * branch is the DECIMAL_LITERAL rule above (the one deliberate change from the
+ * pre-#6029 setter parser).
+ */
+function parseConfigArgValue(val: string): unknown {
+  if (val === 'true') return true;
+  if (val === 'false') return false;
+  if (val === 'null') return null;
+  // #1581: Number.isFinite (not !isNaN) so 'Infinity' and an overflowing literal such as
+  // '1e400' are NOT coerced to non-finite numbers that JSON.stringify later renders as
+  // `null` (disk=null while the CLI echoed 'Infinity'). They stay strings, and in
+  // config-set the per-key validators then reject them with a non-zero exit.
+  if (DECIMAL_LITERAL.test(val) && Number.isFinite(Number(val))) return Number(val);
+  if (val.startsWith('[') || val.startsWith('{')) {
+    try { return JSON.parse(val); } catch { /* keep as string */ }
+  }
+  return val;
+}
+
+/**
+ * #6029 (ADR-1411 Decisions 3-4): the single emission projection for every
+ * `cmdConfigGet` arm. Order: the #4570 planner-watchdog resolver, then secret
+ * masking (the encoder never sees plaintext; getCapabilityConfigSchema is a
+ * federated, third-party-extensible surface (ADR-1244), so centralizing the
+ * masking here means it cannot be missed at a call site), then encoding.
+ * `json` is what JSON mode emits; `text` is what `--raw` emits. Raw is frozen:
+ * it is `sourceText` (the verbatim argv of `--default`) when the value reached
+ * here untransformed, else `String(value)`.
+ */
+function encodeConfigValue(kp: string, value: unknown, sourceText?: string): { json: unknown; text: string } {
+  const resolved = kp === 'planner.stall_detection_enabled'
     ? resolvePlannerStallDetectionEnabled(value)
     : value;
   if (isSecretKey(kp)) {
-    const masked = maskSecret(resolvedValue as Parameters<typeof maskSecret>[0]);
-    output(masked, raw, masked);
-    return;
+    const masked = maskSecret(resolved as Parameters<typeof maskSecret>[0]);
+    return { json: masked, text: masked };
   }
-  output(resolvedValue, raw, String(resolvedValue));
+  const transformed = resolved !== value;
+  const text = sourceText !== undefined && !transformed ? sourceText : String(resolved);
+  return { json: resolved, text };
+}
+
+function emitConfigValue(kp: string, value: unknown, raw: boolean, sourceText?: string): void {
+  const { json, text } = encodeConfigValue(kp, value, sourceText);
+  output(json, raw, text);
 }
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
@@ -435,6 +477,7 @@ function planNewProjectConfig(userChoices: Record<string, unknown>): NewProjectC
       context_guard_mode: 'warn',
       text_mode: false,
       compact_content: false,
+      agent_hint_routing: true, // #6211: parity with the defaults manifest is tested
       research_before_questions: false,
       discuss_mode: 'discuss',
       skip_discuss: false,
@@ -901,8 +944,10 @@ function loadConfigJson(cwd: string): Record<string, unknown> {
   const configPath = path.join(planningDir(cwd), 'config.json');
   let config: Record<string, unknown> = {};
   try {
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws.
+    const raw = configLoader.readConfigFileBounded(configPath);
+    if (raw !== null) {
+      config = JSON.parse(raw) as Record<string, unknown>;
     }
   } catch (err) {
     error('Failed to read config.json: ' + (err as Error).message, ERROR_REASON.CONFIG_PARSE_FAILED);
@@ -929,6 +974,25 @@ function unsetConfigValue(cwd: string, keyPath: string): UnsetConfigValueResult 
 }
 
 /**
+ * Runtime-state flags whose absence already reads as `false` (config-loader.cts, init.cts). Clearing one of them
+ * when the key is absent changes nothing a reader can see, so it must not touch the committed config (#6124):
+ * the workflows clear `workflow._auto_chain_active` on every plan-phase, execute-phase and transition run, and the
+ * write left `.planning/config.json` modified in every project created without `--auto`.
+ */
+const ABSENT_MEANS_FALSE_FLAGS: ReadonlySet<string> = new Set(['workflow._auto_chain_active']);
+
+function isNoopFlagClear(config: Record<string, unknown>, keyPath: string, parsedValue: unknown): boolean {
+  if (parsedValue !== false || !ABSENT_MEANS_FALSE_FLAGS.has(keyPath)) return false;
+  let current: unknown = config;
+  for (const key of keyPath.split('.')) {
+    if (current === null || typeof current !== 'object' || Array.isArray(current)) return false;
+    if (!Object.prototype.hasOwnProperty.call(current, key)) return true;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current === undefined;
+}
+
+/**
  * Sets a value in the config file, allowing nested values via dot notation (e.g.,
  * "workflow.research").
  *
@@ -940,6 +1004,10 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
 
   return withPlanningLock(cwd, () => {
     const config = loadConfigJson(cwd);
+
+    if (isNoopFlagClear(config, keyPath, parsedValue)) {
+      return { updated: false, key: keyPath, value: parsedValue, previousValue: undefined };
+    }
 
     const previousValue = _setNestedValue(config, keyPath, parsedValue);
 
@@ -962,10 +1030,14 @@ function setConfigValue(cwd: string, keyPath: string, parsedValue: unknown): Set
  * compute, rather than a second, hand-maintained traversal that could drift
  * from the real one.
  */
-function previewConfigValue(cwd: string, keyPath: string, parsedValue: unknown): { key: string; value: unknown; previousValue: unknown } {
+function previewConfigValue(cwd: string, keyPath: string, parsedValue: unknown): { key: string; value: unknown; previousValue: unknown; wouldWrite: boolean } {
   const config = loadConfigJson(cwd);
+  // The preview states exactly what the write would do (#4444), so it asks the write's own predicate.
+  if (isNoopFlagClear(config, keyPath, parsedValue)) {
+    return { key: keyPath, value: parsedValue, previousValue: undefined, wouldWrite: false };
+  }
   const previousValue = _setNestedValue(config, keyPath, parsedValue);
-  return { key: keyPath, value: parsedValue, previousValue };
+  return { key: keyPath, value: parsedValue, previousValue, wouldWrite: true };
 }
 
 /**
@@ -1068,20 +1140,8 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 
   assertKnownConfigKey(cwd, kp);
 
-  // Parse value (handle booleans, numbers, and JSON arrays/objects)
-  let parsedValue: unknown = val;
-  if (val === 'true') parsedValue = true;
-  else if (val === 'false') parsedValue = false;
-  else if (val === 'null') parsedValue = null;
-  // #1581: Number.isFinite (not !isNaN) so 'Infinity'/'-Infinity' are NOT
-  // coerced to non-finite numbers that JSON.stringify later renders as `null`
-  // (disk=null while the CLI echoed 'Infinity'). They fall through to the
-  // JSON branch (which rejects them) and stay strings, then per-key validators
-  // reject them with a non-zero exit.
-  else if (Number.isFinite(Number(val)) && val !== '') parsedValue = Number(val);
-  else if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
-    try { parsedValue = JSON.parse(val); } catch { /* keep as string */ }
-  }
+  // Parse value (handle booleans, numbers, and JSON arrays/objects) — #6029: shared with config-get --default.
+  let parsedValue: unknown = parseConfigArgValue(val);
 
   // #2046: a bare `null` unsets (deletes) the key — the documented "Clear" action.
   // Short-circuits before every typed per-key validator so clearing a typed key
@@ -1132,7 +1192,7 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
       output({ dry_run: true, would_update: true, key: kp, value: masked, previousValue: maskedPrev, masked: true }, raw, `${kp}=${masked} (dry run)`);
       return;
     }
-    output({ dry_run: true, would_update: true, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
+    output({ dry_run: true, would_update: preview.wouldWrite, key: kp, value: parsedValue, previousValue: preview.previousValue }, raw, `${kp}=${String(parsedValue)} (dry run)`);
     return;
   }
 
@@ -1158,6 +1218,27 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   }
 
   output(setConfigValueResult, raw, `${kp}=${String(parsedValue)}`);
+}
+
+/**
+ * #4432: one `hooks.secret_read_exempt` entry as a POSIX repo-relative file
+ * path, or null when it is not one. The secret-read guard
+ * (hooks/lib/secret-read-exemptions.js `normalizeExemptEntry`) applies the SAME
+ * rules when it reads the list, and is standalone because an installed hook
+ * cannot require `src/`. The duplication is deliberate and pinned: a parity test
+ * (tests/secret-read-exemptions.test.cjs) drives one corpus and a seeded
+ * property through both, so a value accepted here is a value the hook honors.
+ */
+function normalizeSecretReadExemptEntry(entry: unknown): string | null {
+  if (typeof entry !== 'string') return null;
+  let s = entry.replace(/\\/g, '/');
+  while (s.startsWith('./')) s = s.slice(2);
+  if (s === '' || s === '.') return null;
+  if (s.startsWith('/') || s.endsWith('/')) return null;
+  if (/^[A-Za-z]:/.test(s)) return null;
+  if (s.includes('\0')) return null;
+  if (s.split('/').includes('..')) return null;
+  return s;
 }
 
 /**
@@ -1355,6 +1436,16 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
     }
   }
 
+  // #4432: files the secret-read guard may let agents read. Every entry must be
+  // a repo-relative file path; the guard drops anything else when it reads the
+  // list, so storing it would be accept-then-discard.
+  if (kp === 'hooks.secret_read_exempt') {
+    if (!Array.isArray(parsedValue) || parsedValue.some((entry) => normalizeSecretReadExemptEntry(entry) === null)) {
+      error(`Invalid hooks.secret_read_exempt '${val}'. Must be an array of repo-relative file paths `
+        + `(no leading '/', drive prefix, '..' segment or trailing '/'), e.g. [".env.production"].`);
+    }
+  }
+
   // Fallow scope + profile enum validation (#3424)
   const VALID_FALLOW_SCOPES = ['phase', 'repo'];
   if (kp === 'code_quality.fallow.scope') assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');
@@ -1447,9 +1538,8 @@ function validateConfigValue(cwd: string, kp: string, parsedValue: unknown, val:
   return parsedValue;
 }
 
-function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: unknown): void {
+function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, defaultValue: string | undefined): void {
   const configPath = path.join(planningDir(cwd), 'config.json');
-  const hasDefault = defaultValue !== undefined;
 
   if (!keyPath) {
     error('Usage: config-get <key.path> [--default <value>]');
@@ -1457,23 +1547,69 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
 
   // After the error() guard, keyPath is narrowed to string.
   const kp = keyPath!;
+  /**
+   * #2702 / #1893 / #2256: an absent key resolves root config first (a present root key wins
+   * over --default), then --default (parsed by the config-set parser, raw bytes kept), then the
+   * schema default. With none of them, fail with the caller's reason.
+   */
+  const emitAbsentKey = (message: string, reason: Parameters<typeof error>[1]): void => {
+    const rootVal = resolveFromRootConfig(cwd, kp);
+    if (rootVal.found) { emitConfigValue(kp, rootVal.value, raw); return; }
+    if (defaultValue !== undefined) { emitConfigValue(kp, parseConfigArgValue(defaultValue), raw, defaultValue); return; }
+    const sd = resolveSchemaDefault(cwd, kp);
+    if (sd.found) { emitConfigValue(kp, sd.value, raw); return; }
+    error(message, reason);
+  };
+
+  // #5470: `commit_docs` and `search_gitignored` answer, under either
+  // spelling, with the value the runtime resolves, not a literal path walk
+  // (their CONFIG_KEY_ALIASES entries say `configGet: 'loader'`). Shipped
+  // workflows read both through the flat key while the docs write the nested
+  // one, so after `config-set planning.commit_docs false` (the
+  // keep-planning-docs-private how-to) a `config-get commit_docs` read was
+  // "Key not found", and every workflow gate's `|| echo "true"` fallback
+  // committed `.planning/`. The loader also derives values the walk cannot
+  // (a gitignored `.planning/` resolves `commit_docs` to false). Same
+  // invariant as #2256: config-get must not disagree with the runtime. A value
+  // the loader resolves, null included, is printed and `--default` does not
+  // apply. The other loader aliases stay on the walk below, which ADR-5057
+  // makes the authority for gate config. `persist: false` because a read must
+  // not rewrite config.json (#3648).
+  // A config file the loader reports unusable (CONFIG_UNPARSEABLE /
+  // CONFIG_UNREADABLE) is not reported as a value: the loader discards it and
+  // resolves defaults, so `true` would read as the user's setting. config-get
+  // fails with CONFIG_PARSE_FAILED instead (ADR-1411: corrupt is not absent).
+  // The file can be, for example, the scoped config.json, the root config.json
+  // a workstream inherits from, or ~/.gsd/defaults.json when there is no
+  // .planning/; the loader has already named it on stderr. The loader's
+  // workstream fallback (GSD_PROJECT and GSD_WORKSTREAM both set, a usable
+  // root) reports no fault in what it falls back to (the GSD_PROJECT
+  // config.json, or ~/.gsd/defaults.json when that project has no directory),
+  // so there config-get prints the defaults the runtime resolves.
+  const loaderAlias = configLoader.configKeyAliasFor(kp);
+  if (loaderAlias?.configGet === 'loader') {
+    const resolution = configLoader.loadConfigResolved(cwd, { persist: false });
+    if (resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNPARSEABLE
+      || resolution.reason === configLoader.CONFIG_REASON.CONFIG_UNREADABLE) {
+      error(`Failed to read config: ${resolution.reason} (the file named in the warning above)`, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const resolved = configLoader.readResolvedAlias(resolution.config, loaderAlias);
+    if (resolved !== undefined) {
+      emitConfigValue(kp, resolved, raw);
+      return;
+    }
+  }
 
   let config: Record<string, unknown> = {};
   try {
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent file; a FIFO/device/oversized file throws and
+    // is reported as an unreadable config below, never waited on.
+    const rawConfig = configLoader.readConfigFileBounded(configPath);
+    if (rawConfig !== null) {
+      config = JSON.parse(rawConfig) as Record<string, unknown>;
     } else {
-      // #2702: when a workstream is active and has no config.json of its own, fall
-      // back to the project ROOT config first — a key the user configured at root is
-      // a real, present value and must inherit (per #1893: a present key wins over
-      // --default). Only when root also misses do --default / schema default apply.
-      // (When no workstream is active, resolveFromRootConfig is a no-op: same file.)
-      const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
-      if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
-      const sd = resolveSchemaDefault(cwd, kp);
-      if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
-      error('No config.json found at ' + configPath, ERROR_REASON.CONFIG_NO_FILE);
+      emitAbsentKey('No config.json found at ' + configPath, ERROR_REASON.CONFIG_NO_FILE);
+      return;
     }
   } catch (err) {
     // ADR-3889: error() now throws ExitError (carries no message) instead of
@@ -1494,13 +1630,8 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   let current: unknown = config;
   for (const key of keys) {
     if (current === undefined || current === null || typeof current !== 'object') {
-      // #2702: root-config inheritance before --default / schema default (see above).
-      const rootVal = resolveFromRootConfig(cwd, kp);
-      if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
-      if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
-      const sd = resolveSchemaDefault(cwd, kp);
-      if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
-      error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+      emitAbsentKey(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
+      return;
     }
     // Own-property gate: bracket access on a plain object walks the
     // prototype chain, so an unqualified `current[key]` would resolve
@@ -1517,28 +1648,13 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   }
 
   if (current === undefined) {
-    // #2702: root-config inheritance before --default / schema default (see above).
-    const rootVal = resolveFromRootConfig(cwd, kp);
-    if (rootVal.found) { emitResolvedDefault(kp, rootVal.value, raw); return; }
-    if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
-    const sd = resolveSchemaDefault(cwd, kp);
-    if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
-    error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
-  }
-
-  if (kp === 'planner.stall_detection_enabled') {
-    current = resolvePlannerStallDetectionEnabled(current);
-  }
-
-  // Never echo plaintext for sensitive keys via config-get. Plaintext lives
-  // in config.json on disk; the CLI surface always shows the masked form.
-  if (isSecretKey(kp)) {
-    const masked = maskSecret(current as Parameters<typeof maskSecret>[0]);
-    output(masked, raw, masked);
+    emitAbsentKey(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
     return;
   }
 
-  output(current, raw, String(current));
+  // #6029: the present-key arm uses the same projection as every other arm
+  // (planner resolver and secret masking included).
+  emitConfigValue(kp, current, raw);
 }
 
 /**
@@ -1566,8 +1682,10 @@ function resolveFromRootConfig(cwd: string, kp: string): { found: boolean; value
   const rootConfigPath = path.join(root, 'config.json');
   let rootConfig: Record<string, unknown>;
   try {
-    if (!fs.existsSync(rootConfigPath)) return { found: false, value: undefined };
-    rootConfig = JSON.parse(fs.readFileSync(rootConfigPath, 'utf-8')) as Record<string, unknown>;
+    // Bounded read (#5759): null is an absent root config; a FIFO/device/oversized one throws.
+    const rawRoot = configLoader.readConfigFileBounded(rootConfigPath);
+    if (rawRoot === null) return { found: false, value: undefined };
+    rootConfig = JSON.parse(rawRoot) as Record<string, unknown>;
   } catch {
     // Unparseable root config → don't inherit (do not let a corrupt root file
     // change config-get's verdict). Fall through to schema default / error.
@@ -1734,6 +1852,8 @@ export = {
   cmdConfigEnsureSection,
   cmdConfigSet,
   cmdConfigGet,
+  parseConfigArgValue,
+  encodeConfigValue,
   cmdConfigSetModelProfile,
   cmdConfigNewProject,
   cmdConfigPath,
@@ -1742,4 +1862,5 @@ export = {
   setConfigValue,
   setConfigValues,
   isValidProtectedBranches,
+  normalizeSecretReadExemptEntry,
 };

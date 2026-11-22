@@ -54,10 +54,21 @@ function normalizeWindowsBasename(name) {
 }
 
 // Last `/`- or `\`-separated segment, ignoring trailing separators. A string
-// with no separator IS its own last segment.
-function lastSegment(tok) {
-  const s = tok.replace(/[\\/]+$/, '');
-  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+// with no separator IS its own last segment. The trailing separators are cut
+// by a loop, as in normalizeWindowsBasename: `/[\\/]+$/` retries from every
+// separator in a run that does not end the string, so it is quadratic in the
+// run, and the secret-read guard calls this on every operand of every scan.
+//
+// `backslashSeparates` (default true) says whether `\` is a separator. The
+// secret-read guard passes false for a Bash operand that is not Windows-shaped:
+// a POSIX shell hands a quoted backslash to the program literally, so the `\`
+// of a regex escape (`'x|\.env'`) is not a path separator (#5883).
+function lastSegment(tok, backslashSeparates = true) {
+  const isSep = (c) => c === '/' || (backslashSeparates && c === '\\');
+  let end = tok.length;
+  while (end > 0 && isSep(tok[end - 1])) end--;
+  const s = tok.slice(0, end);
+  const i = backslashSeparates ? Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\')) : s.lastIndexOf('/');
   return i === -1 ? s : s.slice(i + 1);
 }
 

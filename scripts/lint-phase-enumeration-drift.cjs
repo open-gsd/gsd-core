@@ -125,9 +125,9 @@
  *     preview, and the real archive-move loop) all genuinely asked "which
  *     phases belong to the current milestone" and are routed through the
  *     owner with the resolved `version` as `versionOverride`.
- *   - `src/milestone.cts` `cmdPhasesClear`: a destructive CLEAR that must
- *     remove every live phase directory except sentinels, regardless of
- *     milestone window — `new-milestone` runs this to wipe the ENTIRE
+ *   - `src/milestone.cts` `cmdPhasesClear`: a CLEAR that must archive
+ *     every live phase directory except sentinels, regardless of
+ *     milestone window — `new-milestone` runs this to archive the ENTIRE
  *     phases tree before starting fresh, not just the outgoing milestone's
  *     slice. Scoping it to one milestone's window would silently leave
  *     out-of-window directories behind instead of clearing/archiving them.
@@ -195,7 +195,8 @@
  *     run over the cwd's phases dir (cmdPhaseAdd/cmdPhaseAddBatch) and a sibling worktree's
  *     (collectSiblingWorktreePhaseNums). It builds the set of USED phase numbers across
  *     checkouts, not a milestone-scoped list, so listMilestonePhaseDirs cannot serve it.
- *   - `src/phase.cts` `cmdPhasePlanIndex`: resolves ONE caller-supplied
+ *   - `src/phase.cts` `locatePlanIndexPhaseDir` (shared by `cmdPhasePlanIndex` and #6213
+ *     `resolvePlanAgentHint`): resolves ONE caller-supplied
  *     `phase` id to its directory — a single-phase LOCATION lookup, not an
  *     enumeration of the current milestone's phase set.
  *   - `src/phase.cts` `cmdPhaseInsert`: the same next-free-decimal-id scan as
@@ -323,7 +324,7 @@ const FUNCTION_SCOPED_EXEMPTIONS = new Map([
   // #3849/#5528: collectPhaseDirNums is the allocators' one on-disk scan (the cwd's phases dir for
   // cmdPhaseAdd/cmdPhaseAddBatch, a sibling worktree's for collectSiblingWorktreePhaseNums). It is a
   // used-NUMBER roster across checkouts, not the milestone-scoped list listMilestonePhaseDirs serves.
-  [path.join('src', 'phase.cts'), new Set(['cmdPhasesList', 'cmdPhaseNextDecimal', 'cmdPhasePlanIndex', 'cmdPhaseInsert', 'renameDecimalPhases', 'renameIntegerPhases', 'collectPhaseDirNums'])],
+  [path.join('src', 'phase.cts'), new Set(['cmdPhasesList', 'cmdPhaseNextDecimal', 'locatePlanIndexPhaseDir', 'cmdPhaseInsert', 'renameDecimalPhases', 'renameIntegerPhases', 'collectPhaseDirNums'])],
   [path.join('src', 'audit.cts'), new Set(['listAuditPhaseTargets'])],
   [path.join('src', 'commands.cts'), new Set(['cmdHistoryDigest'])],
   [path.join('src', 'state.cts'), new Set(['cmdStateValidate', 'cmdStateSync', 'cmdStateRebuild', 'countRoadmapPhaseHeadings'])],

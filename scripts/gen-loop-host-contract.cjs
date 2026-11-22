@@ -43,15 +43,28 @@ const STEP_WORKFLOWS = [
     // #5118: execute:post's step AND gate dispatch (code_review_gate with
     // its TDD escalation) lives in the ONE shared verification step that
     // execute-phase includes (and verify-work includes too) — no per-caller copy.
+    // #5848: execute:pre's whole dispatch lives in its step file (host byte ceiling, #1168).
     auxiliaryHosts: [
+      { file: 'execute-phase/steps/pre-execute-gate-hooks.md', point: 'execute:pre', kinds: ['contribution', 'step', 'gate'] },
       { file: 'execute-phase/steps/verify-phase-goal.md', point: 'execute:post', kinds: ['step', 'gate'] },
+      // #5984: the verifier's landing site — `verifier_dispatch` hands `into: verifier` contributions to gsd-verifier.
+      { file: 'execute-phase/steps/verify-phase-goal.md', point: 'execute:post', kinds: ['contribution'], into: 'verifier' },
     ],
   },
   { file: 'verify-work.md',   step: 'verify' },
   { file: 'ship.md',          step: 'ship' },
+  // #3997: the cross-AI review step. Its one point publishes the `reviewer` role; the landing
+  // site is the shared prompt every external lane reads. `requiredDispatch` makes the generator
+  // prove the call site delivers `contribution` hooks targeted `into: reviewer` (the host is its
+  // own landing site, so there is no auxiliary file to name).
+  {
+    file: 'review.md',
+    step: 'review',
+    requiredDispatch: [{ point: 'review:pre', kinds: ['contribution'], into: 'reviewer' }],
+  },
 ];
 
-// Canonical 12 loop points in pipeline order
+// Canonical 13 loop points in pipeline order (#3997 added review:pre; additive-only vocabulary)
 const CANONICAL_POINTS = [
   'discuss:pre',
   'discuss:post',
@@ -65,6 +78,7 @@ const CANONICAL_POINTS = [
   'verify:post',
   'ship:pre',
   'ship:post',
+  'review:pre',
 ];
 
 // FIX 1: Per-step canonical point ownership. Each step must declare exactly these points.
@@ -74,7 +88,14 @@ const EXPECTED_POINTS_BY_STEP = {
   execute: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'],
   verify:  ['verify:pre', 'verify:post'],
   ship:    ['ship:pre', 'ship:post'],
+  review:  ['review:pre'],
 };
+
+// #3997 — roles with no gsd agent file to find in the workflow. `orchestrator` is the host itself;
+// `reviewer` is the set of EXTERNAL review lanes (ADR-2782), which are declared data, not agents.
+// A named set rather than a skip for unknown roles: every other role must still map to an agent
+// in ROLE_TO_AGENT, so an unmapped role fails closed.
+const ROLES_WITHOUT_AGENT_FILE = new Set(['orchestrator', 'reviewer']);
 
 // Role → agent-name mapping used for cross-check.
 // Each non-orchestrator role must correspond to an actual agent reference in
@@ -98,6 +119,9 @@ const ROLE_FAMILY = {
   orchestrator: 'orchestration',
   researcher: 'planning', planner: 'planning', checker: 'planning',
   executor: 'execution', verifier: 'execution', 'code-reviewer': 'execution',
+  // #3997 — external review lanes: a family of their own, so only the `review` step publishes
+  // `reviewer` and the other steps' partitions stay exactly as they were.
+  reviewer: 'review',
 };
 const EXPECTED_FAMILY_BY_STEP = {
   discuss: 'orchestration',
@@ -105,6 +129,7 @@ const EXPECTED_FAMILY_BY_STEP = {
   execute: 'execution',
   verify: 'orchestration',
   ship: 'orchestration',
+  review: 'review',
 };
 
 // ─── Parser ───────────────────────────────────────────────────────────────────
@@ -231,7 +256,7 @@ function parseLoopHostBlock(content, fileName) {
 function crossCheckRoles(content, agentRoles, fileName) {
   const errors = [];
   for (const role of agentRoles) {
-    if (role === 'orchestrator') continue; // orchestrator = host itself; no agent file needed
+    if (ROLES_WITHOUT_AGENT_FILE.has(role)) continue; // host itself / external lanes: no agent file
     const agentName = ROLE_TO_AGENT[role];
     if (!agentName) {
       errors.push(
@@ -351,7 +376,7 @@ function assertPointsCoverage(entries) {
   const canonical = new Set(CANONICAL_POINTS);
   for (const p of allPoints) {
     if (!canonical.has(p)) {
-      errors.push('declared point "' + p + '" is not in the canonical 12-point set');
+      errors.push('declared point "' + p + '" is not in the canonical 13-point set');
     }
   }
   for (const p of canonical) {
@@ -376,7 +401,7 @@ function buildContract(workflowsDir) {
   const contract = [];
   const allErrors = [];
 
-  for (const { file, step, auxiliaryHosts = [] } of STEP_WORKFLOWS) {
+  for (const { file, step, auxiliaryHosts = [], requiredDispatch = [] } of STEP_WORKFLOWS) {
     const filePath = path.join(resolvedDir, file);
     let content;
     try {
@@ -410,6 +435,20 @@ function buildContract(workflowsDir) {
     const roleFamilyErrors = crossCheckRoleFamilies(entry.step, entry.agentRoles, file);
     allErrors.push(...roleFamilyErrors);
 
+    // A host that is its own landing site proves its dispatch here (#3997).
+    for (const required of requiredDispatch) {
+      const covered = scanWiredKinds(content, required.into).get(required.point) || new Set();
+      for (const kind of required.kinds) {
+        if (!covered.has(kind)) {
+          allErrors.push(
+            file + ': host point "' + required.point + '" does not dispatch `kind == "' + kind +
+            '"` hooks targeted `into == "' + required.into + '"`',
+          );
+        }
+      }
+    }
+
+    const dispatchTexts = [content];
     for (const auxiliary of auxiliaryHosts) {
       let auxiliaryContent;
       try {
@@ -418,6 +457,7 @@ function buildContract(workflowsDir) {
         allErrors.push('Could not read auxiliary host ' + auxiliary.file + ': ' + String(err.message));
         continue;
       }
+      dispatchTexts.push(auxiliaryContent);
 
       const wiredPoints = scanWiredPoints(auxiliaryContent);
       if (!wiredPoints.has(auxiliary.point)) {
@@ -436,6 +476,13 @@ function buildContract(workflowsDir) {
           );
         }
       }
+    }
+
+    // A point the header promises must be rendered somewhere (#5848)
+    for (const point of findUndispatchedPoints(entry.points, dispatchTexts)) {
+      allErrors.push(
+        file + ': declared point "' + point + '" has no `loop render-hooks ' + point + '` call site',
+      );
     }
 
     contract.push(entry);
@@ -471,8 +518,8 @@ function serializeContract(contract) {
   lines.push(' * loop-host-contract.cjs — generated by scripts/gen-loop-host-contract.cjs');
   lines.push(' * DO NOT EDIT BY HAND. Run: node scripts/gen-loop-host-contract.cjs --write');
   lines.push(' * ADR-894 §3 — Loop Host Contract, generated from workflow markers.');
-  lines.push(' * 12 points: discuss:pre/post, plan:pre/post, execute:pre/wave:pre/wave:post/post,');
-  lines.push(' * verify:pre/post, ship:pre/post. Per-step agentRoles and coreArtifacts.');
+  lines.push(' * 13 points: discuss:pre/post, plan:pre/post, execute:pre/wave:pre/wave:post/post,');
+  lines.push(' * verify:pre/post, ship:pre/post, review:pre. Per-step agentRoles and coreArtifacts.');
   lines.push(' */');
   lines.push('');
   lines.push('const LOOP_HOST_CONTRACT = ' + JSON.stringify(contract, null, 2) + ';');
@@ -554,6 +601,23 @@ const HOST_LOOP_FILES = STEP_WORKFLOWS.flatMap(({ file, auxiliaryHosts = [] }) =
   'gsd-core/workflows/' + file,
   ...auxiliaryHosts.map((host) => 'gsd-core/workflows/' + host.file),
 ]);
+
+/**
+ * The declared points that no text renders (#5848): a `gsd:loop-host` header
+ * promises a point, the workflow body must deliver it. A hook registered at an
+ * undispatched point installs and then never runs, silently.
+ *
+ * @param {string[]} declaredPoints  Points the host's header declares.
+ * @param {string[]} texts  The host file plus its auxiliary hosts.
+ * @returns {string[]}  The unwired points, in declared order.
+ */
+function findUndispatchedPoints(declaredPoints, texts) {
+  const wired = new Set();
+  for (const text of texts) {
+    for (const point of scanWiredPoints(text)) wired.add(point);
+  }
+  return declaredPoints.filter((point) => !wired.has(point));
+}
 
 /**
  * Pure function: scan a text string for `loop render-hooks <point>` call sites.
@@ -757,7 +821,9 @@ module.exports = {
   EXPECTED_POINTS_BY_STEP,
   ROLE_TO_AGENT,
   ROLE_FAMILY,
+  ROLES_WITHOUT_AGENT_FILE,
   scanWiredPoints,
+  findUndispatchedPoints,
   getWiredLoopPoints,
   coveredKindsInRegion,
   scanWiredKinds,

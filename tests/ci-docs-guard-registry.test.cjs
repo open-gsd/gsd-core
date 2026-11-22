@@ -165,9 +165,10 @@ describe('docs-guard selector (scripts/select-docs-guards.cjs)', () => {
     assert.ok(selected.includes('tests/cursor-reviewer.test.cjs'), `got: ${JSON.stringify(selected)}`);
   });
 
-  test('changing docs/INVENTORY.md selects tests/inventory-headings-countfree.test.cjs', () => {
+  // #6481: was tests/inventory-headings-countfree.test.cjs, now a text contract that runs in lint:ci.
+  test('changing docs/INVENTORY.md selects tests/inventory-manifest-sync.test.cjs', () => {
     const selected = selectDocsGuards(['docs/INVENTORY.md'], DOCS_GUARD_TESTS);
-    assert.ok(selected.includes('tests/inventory-headings-countfree.test.cjs'), `got: ${JSON.stringify(selected)}`);
+    assert.ok(selected.includes('tests/inventory-manifest-sync.test.cjs'), `got: ${JSON.stringify(selected)}`);
   });
 
   test('changing docs/reference/agents.md selects tests/install.test.cjs', () => {

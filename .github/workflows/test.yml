@@ -8,6 +8,7 @@ on:
       - 'release/**'
       - 'hotfix/**'
   pull_request:
+    # Default types (opened, synchronize, reopened). Label changes do not start a run (#6076): fix-next-rerun.yml re-runs only "Base branch health" when fix-next is added or removed.
     branches:
       - next
       - main
@@ -24,7 +25,12 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+  # Only a new commit supersedes a PR run. `gh pr create --label` fires `opened`
+  # and `labeled` in the same second for the same head; with an unconditional
+  # cancel, one cancels the other and its cancelled jobs stay on the head commit
+  # as a red check the merge gate refuses (#6092). A label event now queues
+  # behind the running run instead of killing it; pushes still cancel as before.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' || github.event.action == 'synchronize' }}
 
 permissions:
   contents: read
@@ -100,6 +106,8 @@ jobs:
           # inside a `run:` block.
           GITHUB_TOKEN: ${{ github.token }}
           PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # When set, the script reads the PR's current labels from the API (#6076).
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
           MERGE_GROUP_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
@@ -189,6 +197,15 @@ jobs:
         with:
           persist-credentials: true
           token: ${{ github.token }}
+          # #3677: lint:ci runs scripts/lint-removed-but-needed.cjs, which diffs
+          # `origin/<base>...HEAD` (<base> = GITHUB_BASE_REF, default `next`). It
+          # hard-fails under CI when that ref is unresolvable, and a depth-1
+          # checkout has neither origin/<base> nor a merge base. fetch-depth: 0
+          # (the same form the other jobs here use) fetches every branch and the
+          # full history. The live tip of origin/<base> is safe for this lint: the
+          # merge-base of that tip and the PR merge commit is the PR's base.sha
+          # even if <base> advanced mid-run, so the diff is the PR's own changes.
+          fetch-depth: 0
       - name: Set up Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
         with:
@@ -283,19 +300,27 @@ jobs:
       # ~190 test sites sandbox HOME alone) now lives solely on jobs.test-conformance
       # — promote it there once that sweep lands (see live-config-guard.cjs SEVERITY).
       GSD_STRICT_LIVE_CONFIG_GUARD: '1'
-      # #2854: pin the emitted gate's baseline to the SAME commit the tree was merged
-      # with. "Rebase check" merges `pull_request.base.sha` (pinned by #2472 so all 12
-      # matrix jobs agree on one tree), but `resolveBase()` otherwise falls through to
-      # `origin/next`, which `fetch-depth: 0` leaves at the LIVE tip. Whenever `next`
-      # advanced mid-flight the gate compared a tree built on base.sha against a
-      # baseline at a newer commit — so the correctly-keyed cache was rejected as
-      # "stale" and the run hard-failed on diffs that touched nothing related.
+      # #2854: pin the emitted gate's baseline floor to `pull_request.base.sha`.
+      # "Rebase check" merges that sha (pinned by #2472 so all 12 matrix jobs agree
+      # on one tree), but `resolveBase()` otherwise falls through to `origin/next`,
+      # which `fetch-depth: 0` leaves at the LIVE tip. Whenever `next` advanced
+      # mid-flight the gate compared a tree against a baseline at a newer commit — so
+      # the correctly-keyed cache was rejected as "stale" and the run hard-failed on
+      # diffs that touched nothing related.
+      # #5797: the pin is a FLOOR, not proof of what the tree contains. `actions/checkout`
+      # tests GitHub's merge ref, built on the newest `next` GitHub saw, which can be
+      # newer than `base.sha`; the attribution base then advances to the newest
+      # `origin/<base>` first-parent commit HEAD contains (advanceToMergedBase,
+      # emitted-runtime.cjs).
       # This must stay equal to CI_REBASE_BASE_SHA; a test asserts that parity.
       GSD_EMITTED_BASE: ${{ github.event.pull_request.base.sha }}
       # #4196: pin the npm-audit baseline the SAME way GSD_EMITTED_BASE pins
       # its own baseline (see the comment above) -- origin/next is live under
       # fetch-depth: 0 and can advance mid-run; base.sha is fixed for the life
-      # of the run. For a push event, github.event.before is git's own record
+      # of the run. base.sha is only a FLOOR, not the tree's base (#5897): the
+      # merge ref can contain newer `next` commits, so resolveBaselineRef()
+      # advances a pull_request pin to merge-base(origin/<GITHUB_BASE_REF>,
+      # HEAD) when that descends from the pin. For a push event, github.event.before is git's own record
       # of the ref's state immediately before this push landed -- correct
       # even when a rebase-merged PR lands as multiple discrete commits in
       # one push (HEAD~1 would be wrong there: it could already contain an
@@ -413,8 +438,11 @@ jobs:
 
       # #2724 (ADR-2719 §5): the differential attribution check's baseline is cached,
       # not committed. This restores what the push-to-next job published, keyed on
-      # the PR's base sha — the "next sha the PR was merged with" the ADR requires,
-      # and the same commit `ci-rebase-check` merged into this tree.
+      # the PR's base sha — the pin, which is the floor for the base the gate measures
+      # from. #5797: the tree can contain a newer `next` than the pin, so the gate
+      # advances to the newest `origin/<base>` first-parent commit HEAD contains and
+      # rejects this cache entry (keyed on the pin) in favour of an in-job build when
+      # that differs.
       #
       # #2854: the restore lands on resolveBaseline()'s DEFAULT_CACHE_PATH, so it is
       # found without being announced. There used to be a step that published this
@@ -477,8 +505,22 @@ jobs:
           RUN_TESTS_TIMING_EVENTS_FILE: ${{ runner.temp }}/test-timings-ubuntu-unit-job${{ strategy.job-index }}.jsonl
         run: npm run test:coverage:unit:raw -- --shard ${{ matrix.shard }}
 
+      # Filter + merge this shard's raw V8 dumps down to the files the gate can
+      # report on (the union of both c8 --include globs), in parallel with the
+      # other shards, so coverage-gate downloads and re-merges a few MB instead
+      # of ~1.7 GB. Same normalize + mergeProcessCovs steps c8 itself runs, so
+      # the gate's c8 report output is unchanged. See scripts/ci-compact-v8-coverage.cjs.
+      - name: Compact raw coverage for merge
+        if: matrix.scope == 'full'
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: node scripts/ci-compact-v8-coverage.cjs --temp-directory coverage/tmp --out coverage/compact/shard-${{ strategy.job-index }}.json
+
+      # #6144: the durations artifact is diagnostic scheduling/timeout-evidence
+      # data, not a test result — an upload failure must not fail the job.
       - name: Upload per-file unit test durations
         if: always() && matrix.scope == 'full'
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-timings-ubuntu-unit-job${{ strategy.job-index }}
@@ -486,15 +528,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      # Raw V8 dumps, not rendered reports — coverage-gate merges these. They
-      # compress hard in the artifact zip, but they are still bulk: keep the
-      # retention at one day so they cannot accumulate against the org quota.
-      - name: Upload raw coverage for merge
+      # One filtered, merged V8 dump per shard (not the raw per-process dumps,
+      # not a rendered report) — coverage-gate drops these into coverage/tmp and
+      # runs its unchanged c8 report commands over them. Keep the retention at
+      # one day so they cannot accumulate against the org quota.
+      - name: Upload compacted coverage for merge
         if: matrix.scope == 'full'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: coverage-tmp-shard-${{ strategy.job-index }}
-          path: coverage/tmp
+          path: coverage/compact
           if-no-files-found: error
           retention-days: 1
 
@@ -539,12 +582,16 @@ jobs:
       GSD_STRICT_LIVE_CONFIG_GUARD: '1'
       # #2854: same pin as the other rebase-merged lanes. This lane runs a targeted
       # list that can include the emitted gate, and the invariant is easier to keep
-      # with no exceptions: if a job merges a pinned base, the gate uses that base.
+      # with no exceptions: if a job merges a pinned base, the gate uses that base
+      # as its floor (#5797 may advance it to the merge ref's own base).
       GSD_EMITTED_BASE: ${{ github.event.pull_request.base.sha }}
       # #4196: pin the npm-audit baseline the SAME way GSD_EMITTED_BASE pins
       # its own baseline (see the comment above) -- origin/next is live under
       # fetch-depth: 0 and can advance mid-run; base.sha is fixed for the life
-      # of the run. For a push event, github.event.before is git's own record
+      # of the run. base.sha is only a FLOOR, not the tree's base (#5897): the
+      # merge ref can contain newer `next` commits, so resolveBaselineRef()
+      # advances a pull_request pin to merge-base(origin/<GITHUB_BASE_REF>,
+      # HEAD) when that descends from the pin. For a push event, github.event.before is git's own record
       # of the ref's state immediately before this push landed -- correct
       # even when a rebase-merged PR lands as multiple discrete commits in
       # one push (HEAD~1 would be wrong there: it could already contain an
@@ -602,15 +649,16 @@ jobs:
   # Windows/macOS — the OS-agnostic bulk of the suite already ran once on
   # ubuntu-latest in the `test` job above. Gated on product code changed AND
   # full_matrix (#4591); this is the sole gating signal for windows/macos
-  # coverage (#4603 retired the parallel legacy full-matrix job). Windows is
-  # sharded 3 ways, for the same reason a prior full-suite windows lane
-  # needed 3-way sharding (#3057, since retired — #4603), after the first
-  # real CI run measured it: unsharded, windows-latest hit its 45-minute
-  # timeout and was CANCELLED (started 03:41:19Z, cancelled 04:26:25Z, run
-  # 34434252144) while macos-latest finished the identical file set in
-  # 26m58s — this conformance tier is dominated by subprocess-spawning tests
-  # (343/565 files). macos-latest stays unsharded; it has real headroom (27m
-  # against the 45m cap).
+  # coverage (#4603 retired the parallel legacy full-matrix job). Both are
+  # sharded since #5029, as the matrix below declares (the measurements
+  # that sized both are recorded once, in the test-conformance LANE_COSTS
+  # entry of tests/ci-test-job-timeout-budget.test.cjs), for the same reason
+  # a prior full-suite windows lane needed sharding at all (#3057, since
+  # retired — #4603), after the first real CI run measured it: unsharded,
+  # windows-latest hit its 45-minute timeout and was CANCELLED (started
+  # 03:41:19Z, cancelled 04:26:25Z, run 34434252144) while macos-latest
+  # finished the identical file set in 26m58s — this conformance tier is
+  # dominated by subprocess-spawning tests (343/565 files).
   test-conformance:
     name: conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})
     needs: [changes, preflight]
@@ -633,11 +681,19 @@ jobs:
     defaults:
       run:
         shell: ${{ matrix.shell }}
-    # No LANE_COSTS entry exists yet for this brand-new job — see
-    # tests/ci-test-job-timeout-budget.test.cjs's own header: "no unit test
-    # can prove a lane fits its budget — only a real CI run measures that."
-    # Generous until a real measurement exists; the smaller file count
-    # should comfortably undercut this ceiling.
+    # This cap is deliberately NOT raised. #5029: the Windows lane was
+    # cancelled at the cap with zero failing tests, and the remedy for a lane
+    # that outgrew its budget is a finer split, not a bigger ceiling — raising
+    # it would only move the same cliff further out (ADR-4641 records 45m as
+    # the cliff #869 and #3057 were both filed about).
+    #
+    # This cap is now GUARDED: #5029 gave the lane its first LANE_COSTS entry
+    # in tests/ci-test-job-timeout-budget.test.cjs, measured on whichever row
+    # (windows or macos shard) is slowest; the entry states the figure and the
+    # floor it puts under this cap. The same file projects the windows rows'
+    # worst shard, at the shard count declared below, on a slow runner. The
+    # lane had been uncovered since #4591, which is how it drifted to a 34m
+    # long pole here in the first place.
     timeout-minutes: 45
     env:
       GSD_PLUGIN_ROOT: .ci-gsd-plugin-root-disabled
@@ -648,21 +704,82 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # #5029: the lane outgrew a 3-way split. The budget gate
+          # (tests/ci-test-job-timeout-budget.test.cjs) rounds the long pole
+          # UP and requires ceil(m * 1.5) <= the cap, so a 45m cap admits
+          # m <= 30 EXACTLY, which is why the cap itself is not the lever. The
+          # measured long pole per layout, and why this count, are recorded
+          # once in that file's test-conformance LANE_COSTS entry.
+          #
+          # Windows cost is now modelled properly: #5071 -> #5097 added
+          # tests/test-timings.win32.json and the platformTimings arm of
+          # makeFileWeigher, so the packer prices win32 files by win32
+          # measurements instead of Linux ones. Measured effect on this tier —
+          # imbalance 1.18-1.32 -> 1.01-1.02, and observed shard spread 1.73x
+          # -> 1.36x across the two 6-shard runs whose heads bracket #5097.
+          # Before it, selectShard scored these shards as perfectly balanced in
+          # its own weight units while they ran 0.75x / 1.21x / 1.04x of an
+          # equal split; that gap is closed, so **do not re-derive the shard
+          # count from the old Linux-weight imbalance** (and note the packer's
+          # own units always report perfect balance — score a partition against
+          # a measured table instead).
+          #
+          # Sharding is not free per shard. The #5029 projection in the same
+          # test file fits each run's long pole as a fixed cost per shard plus
+          # the shard's share of the tier. Steps outside the test step are 50
+          # to 151 seconds of that cost (median 97s, over the 72
+          # Windows jobs of the twelve fork runs SHARD_BALANCE's baselines were
+          # measured on, listed in docs/how-to/read-ci-timeout-signals.md); the rest
+          # sits inside the test step and is unattributed. So each added shard
+          # buys less while costing a 2x-billed Windows runner permanently.
+          #
+          # Halving the files per shard also relaxes the per-chunk 600s cap and
+          # maxUnmeasuredPerChunk, both of which have drawn red builds here
+          # before (#4936, #4733).
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 1/3
+            shard: 1/6
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 2/3
+            shard: 2/6
           - os: windows-latest
             node-version: 24
             shell: pwsh
-            shard: 3/3
+            shard: 3/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 4/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 5/6
+          - os: windows-latest
+            node-version: 24
+            shell: pwsh
+            shard: 6/6
+          # #5029: macos-latest shares this job's single 45m cap, and a slow
+          # runner took it, unsharded, past what the budget gate admits; three
+          # shards, not two, for margin as the tier grows. The measurements are
+          # in the same LANE_COSTS entry as windows'. No darwin timing table
+          # exists yet, so the packer weighs macOS files with the Linux table
+          # (expect the pre-#5097 Windows imbalance, ~1.2-1.3); a
+          # tests/test-timings.darwin.json built from the uploaded
+          # test-timings-macos-latest-job* artifacts would tighten it.
           - os: macos-latest
             node-version: 24
             shell: 'zsh {0}'
+            shard: 1/3
+          - os: macos-latest
+            node-version: 24
+            shell: 'zsh {0}'
+            shard: 2/3
+          - os: macos-latest
+            node-version: 24
+            shell: 'zsh {0}'
+            shard: 3/3
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5.0.1 (Windows)
@@ -738,8 +855,8 @@ jobs:
       # uploaded below, so the win32 table the packer prefers on Windows
       # (tests/test-timings.win32.json) can be regenerated from real Windows
       # measurements: `node scripts/gen-test-timings.cjs --platform win32
-      # <downloaded shard files>` — see docs/TESTING-SUITES.md. The macOS job
-      # exports too; no darwin table is committed yet.
+      # <downloaded shard files>` — see docs/TESTING-SUITES.md. The macOS jobs
+      # export too; no darwin table is committed yet.
       # #5473 (TEMPORARY): a job-long watcher beside the test step on every
       # Windows shard, recording UTC-stamped moments when the VM stops making
       # progress, to line up against the bounded-child ETIMEDOUT reds. Delete
@@ -762,8 +879,12 @@ jobs:
 
       # #5071: `always()` — a red or killed shard's completed files are still
       # real measurements, and a red run is exactly when fresh durations help.
+      # #6144: `continue-on-error` — the artifact is diagnostic scheduling/
+      # timeout-evidence data, not a test result; an upload failure must not
+      # fail the job.
       - name: Upload per-file test durations
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: test-timings-${{ matrix.os }}-job${{ strategy.job-index }}
@@ -775,13 +896,19 @@ jobs:
         if: always()
         continue-on-error: true
         env:
-          CI_JOB_LABEL: "conformance test (${{ matrix.os }}, ${{ matrix.node-version }})"
+          # #5029: the shard suffix matters now that Windows is split across
+          # shards — without it a near-cap warning and its job summary cannot
+          # say WHICH shard is drifting, which is the one thing
+          # docs/how-to/read-ci-timeout-signals.md sends a maintainer here to
+          # find. Same expression as the job `name:` above and the parallel
+          # `test` lane's label, so the three agree on one spelling.
+          CI_JOB_LABEL: "conformance test (${{ matrix.os }}, ${{ matrix.node-version }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})"
           CI_JOB_TIMEOUT_MINUTES: '45'
         run: node scripts/ci-check-job-near-cap.cjs
 
   # #2952: the coverage gate that the `test` lane used to run inline. Sharding
   # the unit suite means no single runner sees the whole picture, so the gate
-  # moves here, downloads every shard's raw V8 dumps into one coverage/tmp, and
+  # moves here, downloads every shard's compacted V8 dump into one coverage/tmp, and
   # runs the SAME commands as before against the merged data. Splitting the
   # gate out is what makes sharding safe: nothing about the thresholds or the
   # include/exclude globs changes, only where they are evaluated.
@@ -809,7 +936,7 @@ jobs:
       # merge-multiple flattens every shard's dumps into ONE coverage/tmp, which
       # is exactly the layout c8 expects from a single run. The dumps are
       # per-process files with distinct names, so there is nothing to collide.
-      - name: Download every shard's raw coverage
+      - name: Download every shard's compacted coverage
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           pattern: coverage-tmp-shard-*
@@ -819,11 +946,10 @@ jobs:
       # c8's default --temp-directory is ./coverage/tmp, which is exactly where
       # the download above landed every shard's dumps — so these run unmodified
       # against merged data and the thresholds stay defined in package.json.
-      # The three merged shard dumps run ~358MB combined; c8 has to parse and
-      # hold all of their per-file position maps in memory at once to render a
-      # report, which blows past the default ~4GB V8 heap (observed: FATAL
-      # ERROR: Ineffective mark-compacts near heap limit). 8192 doubles that
-      # with headroom to spare on the 16GB ubuntu-latest runner. This is a
+      # The raw shard dumps ran ~358MB combined (1.68GB on the wire) and blew
+      # past the default ~4GB V8 heap (observed: FATAL ERROR: Ineffective
+      # mark-compacts near heap limit); the shards now filter + merge them
+      # first, but the larger heap is kept as headroom. This is a
       # memory bound only — it does not change what is measured or the
       # thresholds below.
       - name: Report merged coverage + gate gsd-core/bin/lib (≥70% lines, ≥60% branches)
@@ -1037,8 +1163,9 @@ jobs:
   # #2724 (ADR-2719 §5): publishes the differential attribution check's baseline
   # artifact after `next` advances, keyed on the merge sha. PR lanes restore it
   # (see the `test` and `test-conformance` jobs' "Restore emitted-baseline cache" steps),
-  # keyed on `pull_request.base.sha` — "the next sha the PR was merged with", the
-  # ADR's own phrasing. Not required by `required-tests`: a miss here degrades PR
+  # keyed on `pull_request.base.sha`, the pin and floor of the base the gate measures
+  # from (#5797: a merge ref newer than the pin makes the gate build in-job instead).
+  # Not required by `required-tests`: a miss here degrades PR
   # lanes to an in-job build (resolveBaseline()'s documented precedence) rather
   # than failing them, so this job's own failure must not block `next`.
   publish-emitted-baseline:

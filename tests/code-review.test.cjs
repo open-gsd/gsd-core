@@ -40,7 +40,7 @@ function extractBashBlocks(content) {
 }
 const os = require('os');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
-const { runNode } = require('./helpers/process-seam.cjs');
+const { runNode, runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { escapeRegex } = require('../gsd-core/bin/lib/pattern.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -548,7 +548,7 @@ describe('CR-WORKFLOW: code review workflow structure', () => {
         block.includes('gsd_run check evaluation-scope') && block.includes('DIFF_BASE=$(scope_field rangeBase)'));
       assert.ok(tier3Block, 'code-review.md Tier 3 resolver block not found');
 
-      assert.ok(tier3Block.includes('${LAST_REVIEW_COMMIT:+--since "$LAST_REVIEW_COMMIT"}'),
+      assert.ok(tier3Block.includes('${LAST_REVIEW_COMMIT:+--since} ${LAST_REVIEW_COMMIT:+"$LAST_REVIEW_COMMIT"}'),
         'Tier 3 must hand LAST_REVIEW_COMMIT to the resolver as --since, so a prior review narrows the scope and the base (#3661)');
       assert.ok(!tier3Block.includes('PHASE_START'), 'Tier 3 must not derive a phase-start anchor of its own');
     });
@@ -722,6 +722,17 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
       `expected dispatch_reviewer_lanes to be exactly one continuous bash fence, found ${fences.length} — a split fence means any variable set in one and read in another is silently empty (this file's own documented execution model: fenced blocks do not share shell state)`);
   });
 
+  // The end-to-end test below hands the whole fence to `bash -c` as one argument. On Windows a command line is cut
+  // at ~8191 characters (each `"` costs two), so a fence that grows past the budget is truncated mid-quote and fails
+  // there with "unexpected EOF" (#6152 pushed it over once). 7500 leaves the driver text and a path room under 8191.
+  const DISPATCH_FENCE_ARGV_BUDGET = 7500;
+  test('dispatch_reviewer_lanes fence fits the Windows bash -c command-line budget', () => {
+    const [fence] = extractDispatchReviewerLanesFences();
+    const escaped = fence.length + (fence.match(/"/g) || []).length;
+    assert.ok(escaped <= DISPATCH_FENCE_ARGV_BUDGET,
+      `the fence is ${escaped} characters once quotes are escaped; keep it at or under ${DISPATCH_FENCE_ARGV_BUDGET} (trim comments) so the Windows end-to-end run is not truncated`);
+  });
+
   test('dispatch_reviewer_lanes computes CODE_REVIEW_POINT and dispatches in the SAME process, end to end (#4209 round 5)', () => {
     const [fence] = extractDispatchReviewerLanesFences();
     const tmpDir = createTempGitProject();
@@ -757,8 +768,8 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
         'echo "CODE_REVIEW_POINT=[$CODE_REVIEW_POINT]"',
         'echo "EXPLICIT_JOINED=[$EXPLICIT_JOINED]"',
       ].join('\n');
-      const result = require('node:child_process').spawnSync('bash', ['-c', driver], { cwd: tmpDir, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-      assert.equal(result.status, 0, `driver failed: stdout=${result.stdout} stderr=${result.stderr}`);
+      const result = runHook('-c', [driver], { interpreter: 'bash', cwd: tmpDir, timeoutMs: PROBE_TIMEOUT_MS });
+      assertSeamExit(assert, result, 0, `driver failed: stdout=${result.stdout}`);
       assert.match(result.stdout, /CODE_REVIEW_POINT=\[execute:post\]/,
         `CODE_REVIEW_POINT must be computed and survive within the SAME fence that later uses it for --point, got: ${result.stdout}`);
       assert.match(result.stdout, /EXPLICIT_JOINED=\[codex\]/,
@@ -1030,8 +1041,11 @@ describe('CR-REVIEWER-LANES: optional external source-reviewer dispatch (#4209)'
 
   function runReducer(dispatchJson) {
     const script = `DISPATCH_JSON=${JSON.stringify(dispatchJson)}\n${extractEvidenceReducer()}\necho "$EVIDENCE_LIST"`;
-    const result = require('node:child_process').spawnSync('bash', ['-c', script], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
-    return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+    const result = runHook('-c', [script], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+    // A timeout must not pass as an empty-output run: fail with the outcome named.
+    assert.notEqual(result.outcome, OUTCOME.TIMED_OUT, `reducer timed out: ${result.summary}`);
+    assert.notEqual(result.outcome, OUTCOME.SPAWN_FAILED, `reducer failed to spawn: ${result.summary}`);
+    return { stdout: result.stdout, stderr: result.stderr, status: result.exitCode };
   }
 
   test('EVIDENCE_LIST reducer warns on a whole-dispatch rejection (B1), not just per-lane failures', () => {
