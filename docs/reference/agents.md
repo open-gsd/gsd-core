@@ -224,6 +224,7 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 
 **Key behaviors:**
 - Fresh 200K context window per plan
+- Loads only the STATE.md sections it uses (Current Position, Decisions, Blockers) through `state.get`, never the whole file, so the Quick Tasks table stays out of its context; it reads the whole STATE.md only when a task names it or a section other than those three (#6388). Spawn prompts no longer list STATE.md as required reading — see [STATE.md schema reference](state-md.md#accumulated-context)
 - Follows XML task instructions precisely
 - Atomic git commit per completed task
 - Handles task types: auto, tracer, checkpoint (human-verify, decision, human-action)
