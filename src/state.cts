@@ -133,7 +133,7 @@ import { findProjectRoot } from './project-root.cjs';
 // it introduces no cycle on this path.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import milestoneLockMod = require('./milestone-lock.cjs');
-const { transitionCore, applyStatePreservation, sliceCurrentPositionSection, stateReplaceProgressPercent, formatProgressMachineSegment } = stateTransitionMod;
+const { transitionCore, StatePlansNoLineError, applyStatePreservation, sliceCurrentPositionSection, stateReplaceProgressPercent, formatProgressMachineSegment } = stateTransitionMod;
 
 function replaceStateBodyField(
   content: string,
@@ -6185,6 +6185,14 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
     sourcePath: statePath,
   };
 
+  // #6399: `--plans N` with nowhere in STATE.md to record the count refuses before any write, with the typed reason
+  // `plans_no_line`. The core runs first inside the lock, ahead of the milestone claim, so a refusal leaves no claim
+  // file behind and the file is only ever read under the lock, through the same bounded reader as every other write.
+  const refusePlansNoLine = (err: unknown): never => {
+    if (err instanceof StatePlansNoLineError) error(err.message, ERROR_REASON.STATE_PLANS_NO_LINE);
+    throw err;
+  };
+
   // #2736: the transition holds the exact display name; without this the
   // post-transform sync re-derives current_phase_name from the freshly
   // written `Phase: N (Name) — EXECUTING` line, which truncates any name
@@ -6208,11 +6216,16 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
   // calls cannot both read "no claim" and both write.
   let milestoneConflict: milestoneLockMod.MilestoneConflict | null = null;
   const wrote = readModifyWriteStateMd(statePath, (content) => {
+    let result: ReturnType<typeof transitionCore>;
+    try {
+      result = transitionCore(content, intent, deps);
+    } catch (err) {
+      return refusePlansNoLine(err);
+    }
     milestoneConflict = milestoneLockMod.claimMilestonePhase(cwd, String(phaseNumber));
     if (milestoneConflict) {
       milestoneLockMod.warnMilestoneConflict(milestoneConflict, `state.begin-phase ${phaseNumber}`);
     }
-    const result = transitionCore(content, intent, deps);
     precomputedUpdated = result.updated;
     // #3127 resume: the core preserved the mid-flight Current Phase Name, so
     // the intent-first override must not fire — it would drift frontmatter
