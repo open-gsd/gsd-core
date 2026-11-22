@@ -522,6 +522,15 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
+  test('a main, bin or nested entry spelled in another case than the disk throws, whichever the disk is sensitive to', () => {
+    // A case-sensitive disk fails the lookup and reaches the sibling check; a case-insensitive one finds the file under
+    // another spelling and reaches the spelling check. Both throw with one of these two messages.
+    const message = /another case|spells a name differently/;
+    planted({ files: ['hooks'], main: 'Main.js' }, ['main.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), message));
+    planted({ files: ['hooks'], bin: { t: 'Bin/t.js' } }, ['bin/t.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), message));
+    planted({ files: ['Hooks/a.js'] }, ['hooks/a.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), message));
+  });
+
   test('a main or bin under a directory no root entry covers, a non-string main, and a sibling differing only in case throw', (t) => {
     planted({ files: ['hooks', 'GEMINI.md'], main: 'lib/main.js' }, ['lib/main.js'], (tmp) => {
       assert.throws(() => listPackedFiles(tmp), /no files entry covers/);

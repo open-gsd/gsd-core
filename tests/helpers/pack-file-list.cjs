@@ -124,7 +124,15 @@ function listPackedFiles(root) {
       const dir = path.join(root, ...parts.slice(0, i + 1));
       let stat;
       try { stat = fs.lstatSync(dir); } catch (err) {
-        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return;
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
+          // On a case-sensitive disk npm still packs a name spelled in another case (its rules ignore case).
+          let siblings = [];
+          try { siblings = fs.readdirSync(path.dirname(dir)); } catch { /* the parent is missing too */ }
+          if (spelled && siblings.some((n) => lower(n) === lower(parts[i]))) {
+            throw new Error(`${dir}: "${rel}" matches a name on disk only in another case; this list needs the exact spelling`);
+          }
+          return;
+        }
         throw err;
       }
       // npm lists names as the directory spells them; on a case-insensitive disk an entry may spell one differently.
