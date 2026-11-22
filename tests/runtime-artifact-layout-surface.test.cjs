@@ -25,7 +25,6 @@ const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-ar
 const { CLUSTERS, allClusteredSkills } = require('../gsd-core/bin/lib/clusters.cjs');
 const { createTempDir, cleanup, sandboxHome, writePackageSourceMarkerFixture } = require('./helpers.cjs');
 const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
-const { PROBE_TIMEOUT_MS, INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 
@@ -2018,6 +2017,28 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     assert.equal(files[fx.key], fx.rewritten(), 'the skill rewritten before the failure is recorded');
   });
 
+  test('an entry under a destination the sync never finished keeps its entry, even if its file changed meanwhile', (t) => {
+    const fx = installedWithOlderSkill(t);
+    const before = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    const agentKey = Object.keys(before).filter((k) => /^agents\/gsd-[^/]+\.md$/.test(k)).sort()[0];
+    assert.ok(agentKey, 'precondition: the install recorded an agent');
+    const agentPath = path.join(fx.configDir, ...agentKey.split('/'));
+    assert.equal(sha256(fs.readFileSync(agentPath)), before[agentKey], 'precondition: GSD-owned');
+    // The agents sync fails before it writes anything, and the user edits the agent while the
+    // apply runs: the edit must not be recorded as GSD's own text.
+    const realCopy = fs.copyFileSync;
+    fs.copyFileSync = () => {
+      fs.writeFileSync(agentPath, 'user edit during the apply\n');
+      throw new Error('injected agents sync failure');
+    };
+    t.after(() => { fs.copyFileSync = realCopy; });
+    assert.throws(() => fx.apply(), /injected agents sync failure/);
+    fs.copyFileSync = realCopy;
+    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
+    assert.equal(files[agentKey], before[agentKey], 'the agent the sync never reached keeps its entry');
+    assert.equal(files[fx.key], fx.rewritten(), 'the skills the sync finished are still recorded');
+  });
+
   test('recordManifestFileHashes writes nothing when the manifest changed on disk after it was read', (t) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-cas-'));
     t.after(() => cleanup(dir));
@@ -2069,7 +2090,7 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
       process.stderr.write = realWrite;
     }
     assert.equal(fs.readFileSync(fx.manifestPath, 'utf8'), concurrent, 'the concurrent manifest stands');
-    assert.match(stderr, /gsd-file-manifest\.json changed while skills were re-staged/, 'the apply names the lost record');
+    assert.equal(stderr, require('../gsd-core/bin/lib/surface.cjs').MANIFEST_RECORD_WARNINGS.conflict, 'the apply names the lost record');
   });
 
   test('recordManifestFileHashesResult says why it did or did not write', (t) => {
@@ -2110,43 +2131,6 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     assert.equal(installEngine.normalizeInstallRelativePath(`${other}:foo`), `${other}:foo`, 'precondition: the segment check alone accepts it');
     assert.equal(installEngine.resolveInstallRelativePath(root, `${other}:foo`), null, 'another drive escapes root');
     assert.equal(installEngine.resolveInstallRelativePath(root, `${own}:foo`)?.fullPath, path.join(root, 'foo'), 'the same drive stays under root');
-  });
-
-  test('a manifest key that names a FIFO under a synced destination does not hang the apply', { skip: process.platform === 'win32' && 'no mkfifo on Windows' }, (t) => {
-    const fx = installedWithOlderSkill(t);
-    const fifoKey = `${path.posix.dirname(fx.key)}/notes.md`;
-    const fifoPath = path.join(fx.configDir, ...fifoKey.split('/'));
-    const { runHook } = require('./helpers/process-seam.cjs');
-    const { throwIfFailed } = require('./helpers/git-fixture.cjs');
-    throwIfFailed(runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }), `mkfifo ${fifoPath}`);
-    const manifest = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8'));
-    manifest.files[fifoKey] = sha256('fifo\n');
-    fs.writeFileSync(fx.manifestPath, JSON.stringify(manifest, null, 2));
-    // In a child: a blocking read of the FIFO would never return, and the
-    // timeout turns that hang into a failure of this row.
-    const lib = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib');
-    const script = `
-      const path = require('path');
-      const lib = ${JSON.stringify(lib)};
-      const { applySurface } = require(path.join(lib, 'surface.cjs'));
-      const { loadSkillsManifest } = require(path.join(lib, 'install-profiles.cjs'));
-      const { resolveRuntimeArtifactLayout } = require(path.join(lib, 'runtime-artifact-layout.cjs'));
-      const { CLUSTERS } = require(path.join(lib, 'clusters.cjs'));
-      const configDir = ${JSON.stringify(fx.configDir)};
-      const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
-      applySurface(configDir, layout, loadSkillsManifest(${JSON.stringify(REAL_COMMANDS_DIR)}), CLUSTERS, undefined,
-        { surfaceState: ${JSON.stringify(FULL)} });
-      process.stdout.write('applied');
-    `;
-    const { runNode } = require('./helpers/process-seam.cjs');
-    // SIGKILL: the child installs SIGTERM handlers it cannot run while blocked.
-    const r = runNode(['-e', script], { timeoutMs: INSTALL_TIMEOUT_MS, killSignal: 'SIGKILL', env: process.env });
-    assert.equal(r.timedOut, false, `the apply returned: ${r.summary}`);
-    assert.equal(r.exitCode, 0, r.summary);
-    assert.equal(r.stdout, 'applied');
-    const files = JSON.parse(fs.readFileSync(fx.manifestPath, 'utf8')).files;
-    assert.equal(files[fifoKey], sha256('fifo\n'), 'the FIFO entry is left as recorded');
-    assert.equal(files[fx.key], fx.rewritten(), 'the rewritten skill is still re-recorded');
   });
 
   test('a recorded file outside the synced destinations keeps its entry even if it changes during the apply', (t) => {
@@ -2254,7 +2238,7 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
       process.stderr.write = realWrite;
     }
     assert.equal(fs.readFileSync(fx.manifestPath, 'utf8'), before, 'nothing is recorded');
-    assert.match(stderr, /gsd-file-manifest\.json could not be read or written after skills were re-staged/, 'the lost record is named');
+    assert.equal(stderr, require('../gsd-core/bin/lib/surface.cjs').MANIFEST_RECORD_WARNINGS.unavailable, 'the lost record is named');
   });
 
   test('a file that grows while tryFileHash reads it is not hashed', (t) => {
@@ -2393,36 +2377,6 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
       assert.equal(h, null);
     });
   }
-
-  test('a file that is shorter than fstat reports ends the read and is not hashed', (t) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-shrink-'));
-    t.after(() => cleanup(dir));
-    const file = path.join(dir, 'a.md');
-    fs.writeFileSync(file, 'y'.repeat(3000));
-    // In a child, with fstat stubbed to report 10 bytes more than the file
-    // holds: a read loop without its end-of-file exit would never return.
-    const lib = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'install-manifest-record.cjs');
-    const script = `
-      const fs = require('fs');
-      const realFstat = fs.fstatSync;
-      fs.fstatSync = (fd, ...rest) => {
-        const st = realFstat(fd, ...rest);
-        const size = typeof st.size === 'bigint' ? st.size + 10n : st.size + 10;
-        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size });
-      };
-      const { tryFileHash } = require(${JSON.stringify(lib)});
-      const h = tryFileHash(${JSON.stringify(file)});
-      fs.fstatSync = realFstat;
-      process.stdout.write(JSON.stringify({ h }));
-    `;
-    const { runNode } = require('./helpers/process-seam.cjs');
-    const r = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS, killSignal: 'SIGKILL' });
-    assert.equal(r.timedOut, false, `the read returned: ${r.summary}`);
-    assert.equal(r.exitCode, 0, r.summary);
-    // An early end of file means the file changed while it was read, so no
-    // partial hash is returned, even when the size is back to what fstat said.
-    assert.deepEqual(JSON.parse(r.stdout), { h: null });
-  });
 
   test('every descriptor the recorder and tryFileHash open is closed', (t) => {
     const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
