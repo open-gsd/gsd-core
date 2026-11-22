@@ -1160,6 +1160,32 @@ let heredocTagsAsWords = true;
 let heredocBraceTags = true;
 let braceTagRead = false;
 let inHeredocPass = false;
+// #5515: heredocs opened inside a `$( )` / `<( )` that closed before any newline are still waiting for their bodies,
+// which bash reads at the next newline of the enclosing input (`echo $(cat <<EOF) x`, then the body lines). The span
+// reader hands them over here and tokenize takes them into its own pending list, so that newline consumes them.
+// One queue for the whole parse, in textual order, as bash keeps one: a newline inside any span consumes all of it.
+// Only the first reading uses it (orphanBodies); every other reading keeps the span-local list the guard had before #5515,
+// and one more pass runs under that earlier reading, so nothing it denied is allowed now (the queue only adds denials).
+let orphanHeredocs = [];
+let orphanBodies = true;
+// Set when tokenize took a heredoc a span left waiting (a real orphan), so the no-queue reading runs for exactly the commands
+// whose verdict the queue can change, whether or not they hold a literal `<<` (a nested body can spell it `<''<`:
+// `eval '$(cat <''<B)` then `cat .env'`). A heredoc consumed inside its own span (`$(cat <<EOF` … `EOF` … `)`) is no orphan,
+// so a commit message heredoc costs one scan, as before.
+let orphanQueued = false;
+
+// findParenClose for a `$( )` inside a heredoc delimiter word: the word is taken literally (and under the earlier reading the
+// span is no one's orphan either), so a heredoc opened inside it waits for nothing and must not join the queue
+// (`cat <<A$(:<<B)` then `A` ends the one heredoc; B's body is not read).
+function findTagSpanClose(str, i, reading) {
+  const queue = orphanHeredocs;
+  orphanHeredocs = [];
+  try {
+    return findParenClose(str, i, reading);
+  } finally {
+    orphanHeredocs = queue;
+  }
+}
 
 // Index of the `)` closing a `$(` / `<(` / `>(` opened just before `i`, or
 // str.length when unterminated. Quote- and heredoc-aware so a `)` inside a
@@ -1170,7 +1196,8 @@ function findParenClose(str, i, reading) {
     if (math !== -1) return math;
   }
   let depth = 1;
-  let heredocTags = [];
+  let localTags = [];
+  let ownPending = 0; // this span's own tags in the queue
   let read = i;
   while (i < str.length) {
     if (reading) {
@@ -1214,13 +1241,22 @@ function findParenClose(str, i, reading) {
     }
     if (heredocBodiesSkippedInSpans && ch === '<' && str[i + 1] === '<' && str[i + 2] !== '<') {
       const tag = readHeredocTag(str, i + 2, reading);
-      heredocTags.push(tag);
+      if (orphanBodies) ownPending++;
+      (orphanBodies ? orphanHeredocs : localTags).push(tag);
       i = tag.end;
       continue;
     }
-    if (ch === '\n' && heredocTags.length) {
-      i = consumeHeredocBodies(str, i + 1, heredocTags).end;
-      heredocTags = [];
+    if (ch === '\n' && orphanBodies && orphanHeredocs.length) {
+      // Entries beyond this span's own are an earlier span's orphans, which base's span-local list dropped: the verdict can
+      // differ from the earlier reading here, so the no-queue pass must run.
+      if (orphanHeredocs.length > ownPending) orphanQueued = true;
+      ownPending = 0;
+      i = consumeHeredocBodies(str, i + 1, orphanHeredocs.splice(0)).end;
+      continue;
+    }
+    if (ch === '\n' && localTags.length) {
+      i = consumeHeredocBodies(str, i + 1, localTags).end;
+      localTags = [];
       continue;
     }
     if (ch === '(') {
@@ -1414,7 +1450,7 @@ function readHeredocTag(str, i, reading) {
     while (i < str.length && !(heredocTagsAsWords ? /[ \t\n;&|<>()]/ : /[\s;&|<>()]/).test(str[i])) {
       if (!heredocTagsAsWords) { tag += str[i++]; continue; }
       if (str[i] === '$' && str[i + 1] === '(') {
-        const e = findParenClose(str, i + 2, reading);
+        const e = findTagSpanClose(str, i + 2, reading);
         tag += str.slice(i, e + 1);
         i = e + 1;
         continue;
@@ -1509,8 +1545,10 @@ function tokenize(str, reading) {
   let hasWord = false;
   let seg = 0;
   let heredocs = [];
+  let orphanQueue = [];
   let expectTag = null;
   let unreadable = null;
+  orphanHeredocs = [];
 
   const flush = () => {
     if (!hasWord) return;
@@ -1571,6 +1609,18 @@ function tokenize(str, reading) {
     // zsh also takes a `{` body after a condition (`if true { … }`) or after a compound head's own words.
     return headWord === null || headCondition || (headWord.quoted === 'none' && COMPOUND_BODY_HEADS.has(headWord.text));
   };
+  // Emit a heredoc token per consumed body (quoted included): the body is the stdin script only a shell interpreter
+  // runs, kept out of `words`. Returns the index just past the last terminator line.
+  const emitHeredocBodies = (r) => {
+    for (const b of r.bodies) {
+      tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
+      if (!b.quoted) {
+        collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
+        orphanHeredocs = [];
+      }
+    }
+    return r.end;
+  };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
   const sep = (text) => {
@@ -1584,6 +1634,16 @@ function tokenize(str, reading) {
 
   let i = 0;
   while (i < str.length) {
+    // #5515: heredocs a span just closed on this line wait for the next newline, ahead of any opened later.
+    if (orphanHeredocs.length) {
+      orphanQueued = true;
+      for (const tag of orphanHeredocs) {
+        const entry = { tag: tag.tag, quoted: tag.quoted, stripTabs: tag.stripTabs, seg, done: false };
+        heredocs.push(entry);
+        orphanQueue.push(entry);
+      }
+      orphanHeredocs = [];
+    }
     const ch = str[i];
 
     // A run of `$` under any reading but the plain one: dollar-quoting (none
@@ -1680,7 +1740,19 @@ function tokenize(str, reading) {
     }
 
     if (ch === '\\') {
-      if (str[i + 1] === '\n') { i += 2; continue; } // line continuation
+      if (str[i + 1] === '\n') {
+        i += 2; // line continuation
+        // #5515: bash reads the body of a heredoc a closed `$( )` left waiting from the next input line, even when the
+        // newline before it is a continuation (`echo $(cat <<A) x; cat <<B\`, `A`, `C`, `body`, `BC`): the word goes on
+        // after the body.
+        if (orphanQueue.length) {
+          const orphans = orphanQueue;
+          orphanQueue = [];
+          for (const h of orphans) h.done = true;
+          i = emitHeredocBodies(consumeHeredocBodies(str, i, orphans));
+        }
+        continue;
+      }
       hasWord = true;
       if (i + 1 < str.length) buf += str[i + 1];
       i += 2;
@@ -1689,7 +1761,7 @@ function tokenize(str, reading) {
 
     if (ch === '$' && str[i + 1] === '(') {
       hasWord = true;
-      const e = findParenClose(str, i + 2, reading);
+      const e = expectTag ? findTagSpanClose(str, i + 2, reading) : findParenClose(str, i + 2, reading);
       nested.push(str.slice(i + 2, e));
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
@@ -1743,15 +1815,10 @@ function tokenize(str, reading) {
       sep('\n');
       i++;
       if (heredocs.length) {
-        const r = consumeHeredocBodies(str, i, heredocs);
-        for (const b of r.bodies) {
-          // Emit a heredoc token per body (quoted included) — the body is the
-          // stdin script only a shell interpreter runs. Kept out of `words`.
-          tokens.push({ kind: 'heredoc', text: b.body, quoted: b.quoted, seg: b.seg });
-          if (!b.quoted) collectSubstitutions(b.body, nested, reading); // bash expands $( ) here
-        }
+        const pending = heredocs.filter((h) => !h.done);
         heredocs = [];
-        i = r.end;
+        orphanQueue = [];
+        i = emitHeredocBodies(consumeHeredocBodies(str, i, pending));
       }
       continue;
     }
@@ -2478,6 +2545,7 @@ function findSecretReadUnderOtherReadings(command) {
     heredocBodiesSkippedInSpans = bodiesSkipped;
     heredocTagsAsWords = tagsAsWords;
     heredocBraceTags = braceTags;
+    orphanBodies = false;
     inHeredocPass = true;
     try {
       return findSecretRead(command, 0);
@@ -2485,23 +2553,38 @@ function findSecretReadUnderOtherReadings(command) {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
       heredocBraceTags = true;
+      orphanBodies = true;
       inHeredocPass = false;
     }
   };
-  const hit = command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true) : null;
-  if (hit || !braceTagRead) return hit;
-  return scanUnder(true, true, false) || scanUnder(false, true, false);
+  // The first reading with no queue is the guard as it was before #5515 (a queued orphan can take lines another shell runs);
+  // it differs from the queue reading only when an orphan was queued.
+  // Its nesting-too-deep result is kept for last, as scanBashCommand keeps the first reading's: a read an other reading finds
+  // outranks it (#6136).
+  const compat = orphanQueued ? scanUnder(true, true, true) : null;
+  const hit = (compat !== null && compat.code !== 'nesting-too-deep' ? compat : null) ||
+    (command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true) : null);
+  if (hit) return hit;
+  if (!braceTagRead) return compat;
+  return scanUnder(true, true, false) || scanUnder(false, true, false) || compat;
 }
 
 // The debugger-spawn scan, under the earlier reading of a brace tag as well.
+// It reads spans as it did before #5515 (no heredoc queue): a queued orphan takes lines a real shell runs
+// (`echo $(cat <<EOF) x` then `claude --agent gsd-debugger` spawns it).
 function findDebuggerCliSpawnEitherWay(command) {
-  const spawn = findDebuggerCliSpawn(command, 0);
-  if (spawn !== null || !braceTagRead) return spawn;
-  heredocBraceTags = false;
+  orphanBodies = false;
   try {
-    return findDebuggerCliSpawn(command, 0);
+    const spawn = findDebuggerCliSpawn(command, 0);
+    if (spawn !== null || !braceTagRead) return spawn;
+    heredocBraceTags = false;
+    try {
+      return findDebuggerCliSpawn(command, 0);
+    } finally {
+      heredocBraceTags = true;
+    }
   } finally {
-    heredocBraceTags = true;
+    orphanBodies = true;
   }
 }
 
@@ -2519,7 +2602,10 @@ function findDebuggerCliSpawnEitherWay(command) {
 // `$${` or `$$(`, so a substring test finds it in linear time.
 function findSecretRead(command, depth) {
   if (depth > 0) return readEachWay(command, depth);
-  if (!inHeredocPass) braceTagRead = false;
+  if (!inHeredocPass) {
+    braceTagRead = false;
+    orphanQueued = false;
+  }
   heldNested = null;
   scanUnfinished = false;
   readingsRan = false;

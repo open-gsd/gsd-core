@@ -1210,6 +1210,115 @@ describe('gsd-secret-read-guard: a lone brace among arguments is an ordinary wor
   });
 });
 
+// #5515: a heredoc opened inside a `$( )` / `<( )` that closes before any newline still takes its body from the next
+// input line, so the body is data and a lone quote in it opens nothing. The guard handed the waiting heredoc to nobody and
+// read the body as shell, where the lone quote swallowed the read after it.
+describe('gsd-secret-read-guard: a heredoc left waiting by a substitution closed on its line (#5515)', () => {
+  const BS = '\\';
+  const ORPHAN_BLOCKS = [
+    ['a lone quote in the orphan body', ['echo $(cat <<EOF) x', "it's", 'EOF', 'cat .env']],
+    ['a lone double quote in the orphan body', ['echo $(cat <<EOF) x', 'body "', 'EOF', 'cat .env']],
+    ['an orphan in a process substitution', ['cat <(cat <<EOF) x', "it's", 'EOF', 'cat .env']],
+    ['an orphan in a double-quoted substitution', ['echo "$(cat <<EOF)" x', "it's", 'EOF', 'cat .env']],
+    ['a top-level tag continued across the orphan body', [`echo $(cat <<A) x; cat <<B${BS}`, 'A', 'C', 'body', 'BC', 'cat .env']],
+    ['a plain orphan body', ['echo $(cat <<EOF) x', 'plain', 'EOF', 'cat .env']],
+    ['a dash tag with tabs', ['echo $(cat <<-EOF) x', "\tit's", '\tEOF', 'cat .env']],
+    ['a quoted tag', ['echo $(cat <<\'EOF\') x', "it's", 'EOF', 'cat .env']],
+    ['two orphans in a row', ['echo $(cat <<A) $(cat <<B) x', "it's", 'A', 'say "', 'B', 'cat .env']],
+    ['an orphan then a top-level heredoc', ['echo $(cat <<A) x; cat <<B', "it's", 'A', 'more "', 'B', 'cat .env']],
+    ['a top-level heredoc then an orphan', ['cat <<B; echo $(cat <<A) x', 'first "', 'B', "it's", 'A', 'cat .env']],
+    ['two orphans in one double-quoted word, the newline inside the second span', ['echo "$(cat <<A) $(cat <<B', 'A', 'B', ')" x', 'cat .env']],
+    ['a heredoc inside a delimiter word substitution leaves no orphan', ['cat <<A$(:<<B)', 'A', 'cat .env']],
+    ['a quoted delimiter word with a heredoc substitution', ["cat <<'A'$(:<<B)", 'A', 'cat .env']],
+    ['two heredoc substitutions in a delimiter word', ['cat <<A$(:<<B)$(:<<C)', 'A', 'cat .env']],
+    ['a heredoc substitution in the second delimiter word', ['cat <<A <<C$(:<<B)', 'A', 'C', 'cat .env']],
+    ['a compound heredoc substitution in a delimiter word', ['cat <<A$(:;:<<B)', 'A', 'cat .env']],
+    ['a dash delimiter word with a heredoc substitution', ['cat <<-A$(:<<B)', '\tA', 'cat .env']],
+    ['an orphan ahead of a delimiter word with an empty span', ['sh<<S', '$(:<<B)<<A$()', 'A', 'cat .env']],
+    ['an orphan ahead of a delimiter word with a span', ['sh<<S', '$(:<<B)<<A$(:)', 'A', 'cat .env']],
+    ['an orphan ahead of a quoted delimiter word with a span', ['sh<<S', '$(:<<B)<<"A"$()', 'A', 'cat .env']],
+    ['an orphan ahead of a dash delimiter word with a span', ['sh<<S', '$(:<<B)<<-A$()', 'A', 'cat .env']],
+    ['an orphan ahead of a delimiter word with a heredoc span', ['sh<<S', '$(:<<B)<<A$(<<C)', 'A', 'cat .env']],
+    ['an orphan ahead of a delimiter word with a backtick span', ['sh<<S', '$(:<<B)<<A`:`', 'A', 'cat .env']],
+    ['an empty-tag heredoc in a span, piped to bash', ['<<A$()|bash', 'A', '<(<<)', 'cat .env']],
+    ['an empty-tag heredoc in a substitution, piped to bash', ['<<A$()|bash', 'A', '$(<<)', 'cat .env']],
+    ['an orphan in an eval body that spells the opener with quotes', ["eval '$(cat <''<B)", "cat .env'"]],
+    ['an orphan in a bash -c body that spells the opener with quotes', ["bash -c '$(cat <''<B)", "cat .env'"]],
+    ['two orphans in an eval body that spell the opener with quotes', ["eval '$(cat <''<A) $(cat <''<B)", 'A', "cat .env'"]],
+    ['a read on the orphan body line, denied by the earlier reading', ['echo $(cat <<EOF) x', 'cat .env', 'EOF']],
+    ['a read on the orphan body line of a process substitution', ['cat <(cat <<EOF) x', 'cat .env', 'EOF']],
+    ['an orphan then a span with a newline in one double-quoted word, opener spelled with quotes', ["eval '\"$(cat <''<A) $(echo", ')"', "cat .env'"]],
+    ['the same with a literal opener', ['"$(cat <<A) $(echo', ')"', 'cat .env']],
+    ['nested spans too deep for the compat reading still name the read', ['$($($($(<<)', ') .env']],
+    ['an orphan in a nested substitution', ['echo $(echo $(cat <<EOF)) x', "it's", 'EOF', 'cat .env']],
+    ['a read in the substitution after the body', ['echo $(cat <<EOF) x', "it's", 'EOF', 'echo $(cat .env)']],
+    ['an orphan nested in an orphan span, in textual order', ['echo $(cat <<A "$(cat <<B)") x', "it's", 'A', 'B', 'cat .env']],
+  ];
+
+  for (const [label, lines] of ORPHAN_BLOCKS) {
+    test(`blocks: ${label}`, () => {
+      assertBlocked(runHook(bash(lines.join('\n'))), label, { code: 'secret-read', tool: 'Bash' });
+    });
+  }
+
+  const ORPHAN_ALLOWS = [
+    ['a lone quote in the orphan body, harmless command after', ['echo $(cat <<EOF) x', "it's", 'EOF', 'echo ok']],
+    ['an orphan in a process substitution, harmless command after', ['cat <(cat <<EOF) x', "it's", 'EOF', 'echo ok']],
+    ['an orphan in a double-quoted substitution, harmless command after', ['echo "$(cat <<EOF)" x', "it's", 'EOF', 'echo ok']],
+    ['a continued tag, harmless command after', [`echo $(cat <<A) x; cat <<B${BS}`, 'A', 'C', 'body', 'BC', 'echo ok']],
+    ['a top-level heredoc with the read as data', ['cat <<EOF', 'cat .env', 'EOF']],
+    ['nested orphans closed in reverse order swallow the read (bash reads A first)', ['echo $(cat <<A "$(cat <<B)") x', "it's", 'B', 'A', 'cat .env']],
+    ['nested orphans, harmless command after', ['echo $(cat <<A "$(cat <<B)") x', "it's", 'A', 'B', 'echo ok']],
+  ];
+
+  for (const [label, lines] of ORPHAN_ALLOWS) {
+    test(`allows: ${label}`, () => {
+      assertAllowed(runHook(bash(lines.join('\n'))), label);
+    });
+  }
+
+  test('a debugger spawn after an orphan heredoc line is still denied', () => {
+    for (const lines of [
+      ['echo $(cat <<EOF) x', 'claude --agent gsd-debugger', 'EOF', ''],
+      ['cat <(cat <<EOF) x', 'claude --agent gsd-debugger', 'EOF', ''],
+      ['echo $(cat <<EOF) x', 'claude --agent gsd-debugger'],
+    ]) {
+      assertBlocked(runHook(bash(lines.join('\n'))), lines.join('\\n'), { code: 'debugger-cli-spawn', tool: 'Bash' });
+    }
+  });
+
+  test('a heredoc inside a substitution that spans lines is read as before', () => {
+    assertBlocked(runHook(bash('echo $(cat <<EOF\nit\'s\nEOF\n) x\ncat .env')), 'a body inside the span, then a read', { code: 'secret-read', tool: 'Bash' });
+  });
+
+  test('an orphan body with any quote characters hides nothing after its terminator', () => {
+    const bodyLine = fc.array(fc.constantFrom("'", '"', '{', '}', 'a', ' ', ';'), { maxLength: 12 }).map((chars) => chars.join(''));
+    const opener = fc.constantFrom('echo $(cat <<EOF) x', 'cat <(cat <<EOF) x', 'echo "$(cat <<EOF)" x');
+    fc.assert(
+      fc.property(opener, fc.array(bodyLine, { maxLength: 4 }), (head, body) => {
+        const lines = [head, ...body, 'EOF', 'cat .env'];
+        assertBlocked(runHook(bash(lines.join('\n'))), lines.join('\\n'), { code: 'secret-read', tool: 'Bash' });
+        const harmless = [head, ...body, 'EOF', 'echo ok'];
+        assertAllowed(runHook(bash(harmless.join('\n'))), harmless.join('\\n'));
+      }),
+      { numRuns: 100 },
+    );
+  });
+
+  test('many line continuations after many pending tags are judged in linear time', () => {
+    const command = 'cat ' + '<<A '.repeat(20000) + `${BS}\n`.repeat(100000) + 'x';
+    assertAllowed(runHook(bash(command)), 'many tags, many continuations');
+    const orphans = 'echo ' + `$(cat <<A) ${BS}\n`.repeat(5000) + 'x';
+    assertAllowed(runHook(bash(orphans)), 'many orphans, each followed by a continuation');
+  });
+
+  test('many orphans in one command are judged in linear time', () => {
+    const opens = '$(cat <<EOF) '.repeat(500);
+    const lines = [`echo ${opens}x`, ...Array(500).fill('EOF'), 'cat .env'];
+    assertBlocked(runHook(bash(lines.join('\n'))), 'many empty orphans, each terminated, then a read', { code: 'secret-read', tool: 'Bash' });
+  });
+});
+
 // #5214: the debug session manager is told to spawn gsd-debugger with
 // Agent(run_in_background=false), but on a real 1.15.0 run it routed around that
 // literal and shelled out to `claude --agent gsd-debugger` through Bash with
