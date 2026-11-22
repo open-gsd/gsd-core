@@ -62,8 +62,8 @@ function listPackedFiles(root) {
       throw new Error(`${root}: files entry "${f}" has a repeated "!", surrounding whitespace, a newline or a leading "#"; this list reads plain paths only`);
     }
     const here = normalise(bare).toLowerCase();
-    if (!f.startsWith('!') && exclusionsSoFar.some((n) => n === here || n.startsWith(`${here}/`))) {
-      throw new Error(`${root}: files entry "${f}" follows an exclusion inside it; npm applies entries by position and this list needs the inclusion first`);
+    if (!f.startsWith('!') && exclusionsSoFar.some((n) => n === here || n.startsWith(`${here}/`) || here.startsWith(`${n}/`))) {
+      throw new Error(`${root}: files entry "${f}" follows an exclusion inside it or around it; npm applies entries by position and this list needs the inclusion first`);
     }
     if (f.startsWith('!')) exclusionsSoFar.push(here);
     if (bare.includes('\\')) throw new Error(`${root}: files entry "${f}" has a backslash, which npm reads differently on each platform`);
@@ -94,6 +94,11 @@ function listPackedFiles(root) {
   // npm builds its rule for `main` from the text as written, so a "./main.js" spelling is not packed by it.
   const mainFile = typeof manifest.main === 'string' && !manifest.main.startsWith('./') ? [manifest.main] : [];
   const forced = new Set([...mainFile, ...bins].filter((f) => typeof f === 'string').map(normalise));
+  for (const rel of [...mainFile, ...bins]) {
+    if (typeof rel === 'string' && (path.isAbsolute(rel) || normalise(rel).split('/').includes('..'))) {
+      throw new Error(`${root}: main or bin target "${rel}" leaves the package root; this list reads paths below it only`);
+    }
+  }
   for (const rel of forced) {
     if (rel.includes('/') && isExcludedName(rel.split('/').pop(), rel)) {
       throw new Error(`${root}: main or bin target "${rel}" is nested and matches a default exclusion; this list does not model that`);
@@ -144,6 +149,11 @@ function listPackedFiles(root) {
     }
     if (stat.isSymbolicLink()) throw new Error(`${path.join(root, entry)}: a symlinked files entry; the walk does not follow links`);
     if (underPrunedDirectory(entry)) continue;
+    // npm's package.json rules come after the root defaults, so a root directory entry whose name a default matches is
+    // packed whole (nested ones are not); this list does not model that.
+    if (stat.isDirectory() && !entry.includes('/') && (isExcludedName(entry, entry) || entry.toLowerCase() === 'build')) {
+      throw new Error(`${path.join(root, entry)}: a root directory entry whose name a default exclusion matches; this list does not model that`);
+    }
     if (stat.isDirectory() || stat.isFile()) visit(entry, stat.isDirectory(), stat.isFile());
   }
   for (const rel of fs.readdirSync(root)) {

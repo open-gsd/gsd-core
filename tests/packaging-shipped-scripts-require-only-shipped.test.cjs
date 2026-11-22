@@ -421,6 +421,19 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     planted({ files: ['hooks'], main: 'lib/a.orig' }, ['lib/a.orig'], (tmp) => assert.throws(() => listPackedFiles(tmp), /nested and matches a default exclusion/));
   });
 
+  test('a root directory entry with an excluded name, an inclusion inside an earlier exclusion, and a main or bin leaving the root throw', () => {
+    for (const dir of ['x.orig', 'build', '.svn', 'CVS', 'archived-packages']) {
+      planted({ files: [dir] }, [`${dir}/y.js`], (tmp) => assert.throws(() => listPackedFiles(tmp), /does not model that/));
+    }
+    planted({ files: ['a', '!a/b', 'a/b/c'] }, ['a/x.js', 'a/b/c/f'], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /follows an exclusion inside it or around it/);
+    });
+    planted({ files: ['hooks'], main: '../sibling.js' }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /leaves the package root/));
+    planted({ files: ['hooks'], bin: { t: path.resolve(os.tmpdir(), 't.js') } }, [], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /leaves the package root/);
+    });
+  });
+
   test('a files entry naming the package root throws', () => {
     for (const files of [['.'], ['./'], ['!.']]) {
       planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /names the package root/));
