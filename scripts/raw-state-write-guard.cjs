@@ -35,8 +35,8 @@ const WRAPPED = Object.freeze({
   cp: 1,
 });
 // fs.promises.cp is not wrapped: it copies through fs.promises.copyFile, which is, so a cp onto
-// STATE.md is recorded once, as promises.copyFile (not after a cp through an ES module import of
-// fs/promises ran first; see the header's limits).
+// STATE.md that the product awaits is recorded once, as promises.copyFile (TESTING-SUITES Limits
+// state when it is not).
 const WRAPPED_PROMISES = Object.freeze({ writeFile: 0, appendFile: 0, rename: 1, copyFile: 1 });
 
 const toPosix = (p) => String(p).replace(/\\/g, '/');

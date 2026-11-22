@@ -188,8 +188,8 @@ the file ends in one newline; the seam's other spacing rules (a blank line
 after a heading, a list or a closing fence that text follows; blank-line runs
 collapsed) apply only where the write changed the document relative to the
 file it replaces, and to the whole document when the file is new; the
-frontmatter block is kept exactly. The write is the host's content as given:
-no sync or preservation pipeline runs. A STATE.md held by another live writer
+frontmatter block is kept exactly. No sync or preservation pipeline runs on
+the host's content. A STATE.md held by another live writer
 makes the write wait for the lock (up to 30 seconds), and the server answers
 no other request while it waits, since each tool call is handled
 synchronously; a lock that cannot be taken returns a tool error and writes

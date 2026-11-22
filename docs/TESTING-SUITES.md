@@ -515,9 +515,9 @@ Limits:
   write through a descriptor
   (`fs.openSync` + `fs.writeSync`, `writeFileSync(fd)`), a file handle, a write
   stream, a native addon, truncation (`fs.truncateSync`, `fs.ftruncateSync`,
-  `fs.truncate`), a rename or copy of a directory that holds a `STATE.md`
-  (including a directory `cpSync` over one; the destination's basename is the
-  directory's), a rename of `STATE.md` onto another name, a link onto
+  `fs.truncate`), a rename or a `cpSync` of a directory that holds a `STATE.md`
+  (the destination's basename is the directory's; an awaited `fs.promises.cp`
+  of such a directory is recorded, through the `copyFile` it calls), a rename of `STATE.md` onto another name, a link onto
   `STATE.md` (`fs.linkSync`, `fs.symlinkSync`), a write made inside a
   `cp`/`cpSync` filter callback, a write through another name for the same file
   (a hard link or a case-insensitive alias), and a write by a non-node
