@@ -84,6 +84,7 @@ Once `cleanup-wave` reports success and unlinks the manifest, re-run `/gsd-execu
   gsd_run query worktree.cleanup-wave --manifest "<manifest-path>" --allow-empty
   ```
 - **`invalid_manifest_json`:** An interruption during creation can leave a zero-byte or partial file. Save a copy, inspect and reconcile the wave worktrees and branches, then move the invalid manifest out of the phase directory before retrying dispatch.
+- **`branch_mismatch`:** Inspect the registered worktree and branch identity. If the directory and registration are gone but the branch remains, reconcile that branch by hand before retrying.
 - **`manifest_symlink_refused`:**
   Wave manifests must be regular files, not symbolic links. Remove or replace the symlink with a regular file.
 - **`manifest_check_failed`:**
