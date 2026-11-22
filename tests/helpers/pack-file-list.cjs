@@ -93,22 +93,35 @@ function listPackedFiles(root) {
     }
     assertPlainPath(bare, `files entry "${f}"`);
   }
-  for (const target of [manifest.main, ...(typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin || {}))]) {
+  // npm normalises `bin` first (a string needs the package name, an array keeps one target per base name, keys
+  // become base names); this list reads only the object form with plain keys.
+  if (manifest.bin !== undefined) {
+    const plainKey = (k) => /^[\w.-]{1,255}$/.test(k) && k !== '.' && k !== '..';
+    if (typeof manifest.bin !== 'object' || manifest.bin === null || Array.isArray(manifest.bin) || !Object.keys(manifest.bin).every(plainKey)) {
+      throw new Error(`${root}: package.json "bin" is not an object with plain keys; this list does not model npm's normalisation of it`);
+    }
+  }
+  for (const target of [manifest.main,...(typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin || {}))]) {
     if (typeof target === 'string' && !path.isAbsolute(target) && !normalise(target).split('/').includes('..')) {
       assertPlainPath(target, `main or bin target "${target}"`);
     }
   }
   // npm lstats each component: a symlinked directory drops what is under it, and an ignore file in an
   // ancestor directory (below the root, where npm ignores them) can exclude a nested entry. Both throw.
-  const assertPlainAncestors = (rel) => {
+  const assertPlainAncestors = (rel, spelled = true) => {
     const parts = normalise(rel).split('/');
-    for (let i = 0; i < parts.length - 1; i += 1) {
+    for (let i = 0; i < parts.length; i += 1) {
       const dir = path.join(root, ...parts.slice(0, i + 1));
       let stat;
       try { stat = fs.lstatSync(dir); } catch (err) {
         if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return;
         throw err;
       }
+      // npm lists names as the directory spells them; on a case-insensitive disk an entry may spell one differently.
+      if (spelled && !fs.readdirSync(path.dirname(dir)).includes(parts[i])) {
+        throw new Error(`${dir}: "${rel}" spells a name differently from the directory (a case-insensitive match); this list needs the exact spelling`);
+      }
+      if (i === parts.length - 1) return;
       if (stat.isSymbolicLink()) throw new Error(`${dir}: a symlinked directory on the path of "${rel}"; the walk does not follow links`);
       for (const ignoreFile of ['.npmignore', '.gitignore']) {
         if (fs.existsSync(path.join(dir, ignoreFile))) throw new Error(`${path.join(dir, ignoreFile)}: an ignore file above "${rel}"; this list does not apply them`);
@@ -133,8 +146,13 @@ function listPackedFiles(root) {
       throw new Error(`${root}: main or bin target "${rel}" leaves the package root; this list reads paths below it only`);
     }
   }
-  for (const rel of [...forced, ...negative]) assertPlainAncestors(rel);
+  for (const rel of forced) assertPlainAncestors(rel);
+  for (const rel of negative) assertPlainAncestors(rel, false); // an exclusion names nothing in the output
   for (const rel of forced) {
+    const dirs = rel.split('/').slice(0, -1);
+    if (dirs.some((d, i) => isExcludedName(d, dirs.slice(0, i + 1).join('/')) || d.toLowerCase() === 'node_modules')) {
+      throw new Error(`${root}: main or bin target "${rel}" is under a directory a default exclusion matches; this list does not model that`);
+    }
     if (rel.includes('/') && isExcludedName(rel.split('/').pop(), rel)) {
       throw new Error(`${root}: main or bin target "${rel}" is nested and matches a default exclusion; this list does not model that`);
     }
@@ -184,16 +202,21 @@ function listPackedFiles(root) {
       throw err;
     }
     if (stat.isSymbolicLink()) throw new Error(`${path.join(root, entry)}: a symlinked files entry; the walk does not follow links`);
-    if (underPrunedDirectory(entry)) continue;
+    if (!stat.isFile() && underPrunedDirectory(entry)) continue;
     // npm's package.json rules come after the root defaults, so a root directory entry whose name a default matches is
     // packed whole (nested ones are not); this list does not model that.
     if (stat.isDirectory() && !entry.includes('/') && (isExcludedName(entry, entry) || entry.toLowerCase() === 'build')) {
       throw new Error(`${path.join(root, entry)}: a root directory entry whose name a default exclusion matches; this list does not model that`);
     }
+    // npm hands a named file only to its parent directory's walker as a re-include, so a file below the root is
+    // packed or not by rules (a first-level excluded name, build/config.gypi) this list does not model.
+    if (stat.isFile() && entry.includes('/')) {
+      throw new Error(`${path.join(root, entry)}: a files entry naming a file below the root; this list reads root file entries and directories only`);
+    }
     if (stat.isDirectory() || stat.isFile()) visit(entry, stat.isDirectory(), stat.isFile());
   }
   for (const rel of fs.readdirSync(root)) {
-    if (isAlwaysIncludedFile(rel) && fs.lstatSync(path.join(root, rel)).isFile()) packed.add(rel);
+    if (isAlwaysIncludedFile(rel) && !rel.includes('*') && fs.lstatSync(path.join(root, rel)).isFile()) packed.add(rel);
   }
   for (const rel of forced) {
     if (fs.existsSync(path.join(root, rel)) && fs.lstatSync(path.join(root, rel)).isFile()) packed.add(rel);

@@ -320,10 +320,10 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
 
   test('a files entry that names a file packs it despite a default or a "!" directory rule', () => {
     planted(
-      { files: ['hooks', 'hooks/sub/keep.js', 'foo.orig', '.DS_Store', '!hooks/sub'] },
-      ['hooks/a.js', 'hooks/sub/keep.js', 'hooks/sub/other.js', 'foo.orig', '.DS_Store'],
+      { files: ['hooks', 'foo.orig', '.DS_Store', '!hooks/sub'] },
+      ['hooks/a.js', 'hooks/sub/other.js', 'foo.orig', '.DS_Store'],
       (tmp) => {
-        assert.deepEqual(sorted(listPackedFiles(tmp)), ['.DS_Store', 'foo.orig', 'hooks/a.js', 'hooks/sub/keep.js', 'package.json']);
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['.DS_Store', 'foo.orig', 'hooks/a.js', 'package.json']);
       },
     );
   });
@@ -362,14 +362,39 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
-  test('a named file under node_modules or an excluded directory, and a named .npmrc, do not pack; other named files do', () => {
-    planted(
-      { files: ['node_modules/x/y.js', '.git/c', 'hooks/._d/x.js', 'Node_Modules/x/y.js', '.npmrc', 'ok/z.js'] },
-      ['node_modules/x/y.js', '.git/c', 'hooks/._d/x.js', '.npmrc', 'ok/z.js'],
-      (tmp) => {
-        assert.deepEqual(sorted(listPackedFiles(tmp)), ['ok/z.js', 'package.json']);
-      },
-    );
+  test('a named .npmrc does not pack, and a named root file does', () => {
+    planted({ files: ['.npmrc', 'keep.js'] }, ['.npmrc', 'keep.js'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['keep.js', 'package.json']);
+    });
+  });
+
+  test('a files entry naming a file below the root throws, because npm packs it by rules this list does not model', () => {
+    for (const entry of ['ok/z.js', '._d/x.js', 'a/build/config.gypi', 'node_modules/x/y.js']) {
+      planted({ files: [entry] }, [entry], (tmp) => assert.throws(() => listPackedFiles(tmp), /naming a file below the root|leaves|does not model/));
+    }
+  });
+
+  test('a main or bin target under a directory a default matches, and an unsupported bin shape, throw', () => {
+    for (const main of ['lib/._x/b.js', 'lib/x.orig/b.js', 'lib/.DS_Store/b.js', 'node_modules/p/i.js']) {
+      planted({ files: ['hooks'], main }, [main], (tmp) => assert.throws(() => listPackedFiles(tmp), /under a directory a default exclusion matches/));
+    }
+    for (const bin of ['cli.js', ['a/cli.js', 'b/cli.js'], { 'sub/x': 'p.js' }, { '': 'x.js' }, { '..': 'x.js' }]) {
+      planted({ files: ['hooks'], bin }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /bin" is not an object with plain keys/));
+    }
+  });
+
+  test('a root file name containing * does not pack as README or LICENSE, and an entry spelled in another case throws', () => {
+    if (process.platform !== 'win32') {
+      planted({ files: ['hooks'] }, ['README.*', 'LICENSE.a*', 'README'], (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['README', 'package.json']);
+      });
+    }
+    planted({ files: ['Hooks'] }, ['hooks/a.js'], (tmp) => {
+      // On a case-sensitive disk `Hooks` matches nothing and packs nothing; on a case-insensitive one it matches
+      // `hooks` under another spelling, which throws.
+      const outcome = (() => { try { return [...listPackedFiles(tmp)].sort(); } catch (err) { return err.message; } })();
+      assert.ok(Array.isArray(outcome) ? outcome.join() === 'package.json' : /spells a name differently/.test(outcome), String(outcome));
+    });
   });
 
   test('a main file spelled with ./ is not packed by npm, a bin file spelled with ./ is', () => {
