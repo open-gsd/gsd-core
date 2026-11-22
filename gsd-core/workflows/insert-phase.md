@@ -94,28 +94,44 @@ blocks direct STATE.md writes):
 1. Update STATE.md's next-phase pointer(s) to the newly inserted phase
    `{decimal_phase}`:
 
-   ```bash
-   gsd_run query state.patch ${GSD_WS:+--ws=${GSD_WS##* }} '{"Current Phase":"{decimal_phase}","Next recommended run":"/gsd:plan-phase {decimal_phase}"}'
-   ```
+```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
+gsd_run query state.patch ${GSD_WS:+--ws=${GSD_WS##* }} '{"Current Phase":"{decimal_phase}","Next recommended run":"/gsd:plan-phase {decimal_phase}"}'
+```
 
-   (Adjust field names to whatever pointers STATE.md exposes — the handler
-   reports which fields it matched.)
+(Adjust field names to whatever pointers STATE.md exposes — the handler
+reports which fields it matched.)
 
 2. Append a Roadmap Evolution entry via the dedicated handler. It creates the
    `### Roadmap Evolution` subsection under `## Accumulated Context` if missing
    and dedupes identical entries:
 
-   ```bash
-   gsd_run query state.add-roadmap-evolution ${GSD_WS:+--ws=${GSD_WS##* }} \
-     --phase {decimal_phase} \
-     --action inserted \
-     --after {after_phase} \
-     --note "{description}" \
-     --urgent
-   ```
+```bash
+IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
+$ARGUMENTS
+GSD_ARGS_END
+GSD_ARGS=${GSD_ARGS%$'\n'}
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
+# #6195: the typed description reaches --note as a variable, never as model-filled text inside double quotes.
+GSD_REST=$(printf '%s\n' "$GSD_ARGS" | sed -E 's/(^|[[:space:]])--ws[[:space:]]+["'\'']?[A-Za-z0-9][A-Za-z0-9._-]*["'\'']?([[:space:]]|$)/ /g' | tr -s '[:space:]' ' ')
+IFS=' ' read -r -a GSD_TOK <<< "$GSD_REST"; set -- "${GSD_TOK[@]}"
+while [ $# -gt 0 ]; do case "$1" in -*) shift;; *) break;; esac; done
+GSD_AFTER=$(printf '%s' "${1-}" | tr -d "\"'"); [ $# -gt 0 ] && shift
+GSD_DESC="$*"
+gsd_run query state.add-roadmap-evolution ${GSD_WS:+--ws=${GSD_WS##* }} \
+  --phase "{decimal_phase}" \
+  --action inserted \
+  --after "$GSD_AFTER" \
+  --note "$GSD_DESC" \
+  --urgent
+```
 
-   Expected response shape: `{ added: true, entry: "- Phase ... (URGENT)" }`
-   (or `{ added: false, reason: "duplicate", entry: ... }` on replay).
+Expected response shape: `{ added: true, entry: "- Phase ... (URGENT)" }`
+(or `{ added: false, reason: "duplicate", entry: ... }` on replay).
 </step>
 
 <step name="completion">
