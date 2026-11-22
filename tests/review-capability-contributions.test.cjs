@@ -481,6 +481,11 @@ function spyDeps(files) {
     written,
     spawn: (binary, argv, opts) => {
       spawns.push({ binary, argv, opts });
+      // A capability probe (`<bin> --help`) must advertise the flags the lane needs, or the lane
+      // is refused as "a different tool sharing the name" and never reaches its prompt.
+      if (argv.length === 1 && argv[0] === '--help') {
+        return { status: 0, stdout: '--output-format --print --model --effort --prompt', stderr: '' };
+      }
       return { status: 0, stdout: 'a review body long enough to clear the empty-output guard.', stderr: '' };
     },
     httpJson: async (url, opts) => {
