@@ -883,6 +883,24 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
     assertBlocked(runOverflowAfterScans({}), 'overflow after the scans, unset', { code: 'command-too-complex', tool: 'Bash', path: '' });
   });
 
+  // Only a RangeError, which the hook reads as a limit such as a stack
+  // overflow, is kept as command-too-complex: any other error on a Bash
+  // command takes the host's crash policy. This fixture's failed reading has
+  // a `message` that throws a plain Error when main() reads it, after both
+  // scans, so the diagnostic line is never written.
+  const THROWING_MESSAGE = path.join(__dirname, 'fixtures', 'secret-read-guard-throwing-reading-message.cjs');
+  const runErrorAfterScans = (extraEnv) => runHook(bash(String.raw`echo $'\x41UNREADABLE'; ls`),
+    { env: { NODE_OPTIONS: `--require ${THROWING_MESSAGE}`, ...extraEnv } });
+
+  test('opted in: an error after the scans that is not an overflow blocks as guard-error, cause hook-error', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assertGuardError(runErrorAfterScans(DENY_ENV), 'error after the scans, opted in', GUARD_ERROR_CAUSE.HOOK_ERROR);
+  });
+
+  test('unset: the same error after the scans is allowed, with nothing on stdout or stderr', () => {
+    assertFailOpen(runErrorAfterScans({}), 'error after the scans, unset');
+  });
+
   test('opted in: verdicts on a parsed payload are unchanged', () => {
     assertAllowed(runHook(bash('ls -la'), { env: DENY_ENV }), 'allow');
     assertBlocked(runHook(read('/p/.env'), { env: DENY_ENV }), 'Read', { code: 'secret-read', tool: 'Read', path: '/p/.env' });
