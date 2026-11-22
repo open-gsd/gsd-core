@@ -565,7 +565,7 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
-  test('a main or bin target a rule could drop, a symlink or directory target, an uncovered nested target, a non-string bin value, a README directory and case-variant children throw', (t) => {
+  test('a main or bin target a rule could drop, a directory target, an uncovered nested target, a non-string bin value and a README directory throw', () => {
     for (const main of ['.npmrc', 'yarn.lock', 'package-lock.json', '.DS_Store', 'x.orig', '.x.swp']) {
       planted({ files: ['hooks'], main }, [main], (tmp) => assert.throws(() => listPackedFiles(tmp), /could drop/));
     }
@@ -579,6 +579,9 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     planted({ files: ['hooks'], main: 'lib' }, ['lib/a.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /no files entry covers|symlink or a directory/));
     planted({ files: ['hooks', 'lib'], main: 'lib' }, ['lib/a.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /symlink or a directory/));
     planted({ files: ['hooks'] }, ['README.d/x.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /root directory named like a file/));
+  });
+
+  test('a symlinked main target throws', (t) => {
     planted({ files: ['hooks'], main: 'main.js' }, ['real.js'], (tmp) => {
       try { fs.symlinkSync(path.join(tmp, 'real.js'), path.join(tmp, 'main.js')); } catch (err) {
         t.skip(`symlinks are not available here (${err.code})`);
@@ -586,6 +589,9 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
       }
       assert.throws(() => listPackedFiles(tmp), /symlink or a directory/);
     });
+  });
+
+  test('case-variant children of a walked directory throw', (t) => {
     planted({ files: ['hooks'] }, ['hooks/a.js', 'hooks/Dup.js', 'hooks/dup.js'], (tmp) => {
       // Two names that differ only in case coexist only on a case-sensitive disk.
       if (fs.readdirSync(path.join(tmp, 'hooks')).length < 3) {
@@ -597,7 +603,7 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
   });
 
   test('a nested entry under a root directory a default matches, and a directories key, throw', () => {
-    for (const entry of ['.hg/foo', 'x.orig/sub', 'archived-packages/x', 'CVS/y', '._d/sub', 'npm-debug.log/x']) {
+    for (const entry of ['.hg/foo', 'x.orig/sub', 'archived-packages/x', 'CVS/y', '._d/sub', 'npm-debug.log/x', 'yarn.lock/x', 'package-lock.json/x', 'pnpm-lock.yaml/x', 'bun.lockb/x', 'Yarn.Lock/x']) {
       planted({ files: [entry] }, [`${entry}/a.js`], (tmp) => assert.throws(() => listPackedFiles(tmp), /under a root directory a default exclusion matches/));
     }
     planted({ files: ['hooks'], directories: { bin: 'tools' } }, ['tools/t.js'], (tmp) => {

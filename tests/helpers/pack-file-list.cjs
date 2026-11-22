@@ -253,7 +253,7 @@ function listPackedFiles(root) {
     // npm's package.json rules come after the root defaults, so a nested entry under a root directory a default matches
     // is packed; only /.git and /node_modules are strict rules that still prune it.
     const firstSegment = entry.split('/')[0];
-    if (entry.includes('/') && lower(firstSegment) !== '.git' && isExcludedName(firstSegment, firstSegment)) {
+    if (entry.includes('/') && lower(firstSegment) !== '.git' && (isExcludedName(firstSegment, firstSegment) || ROOT_EXCLUDED_FILES.has(lower(firstSegment)))) {
       throw new Error(`${path.join(root, entry)}: an entry under a root directory a default exclusion matches; this list does not model that`);
     }
     assertPlainAncestors(entry);
