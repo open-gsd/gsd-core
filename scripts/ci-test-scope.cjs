@@ -48,7 +48,8 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/merge-commit-pr.test.cjs',
   'tests/mutation-tap-runner-wiring.test.cjs',
   'tests/mutation-workflow-base-ref.test.cjs',
-  'tests/policy-release-no-npm-self-upgrade.test.cjs',
+  // #6481: policy-release-no-npm-self-upgrade is now a text contract; its release.yml mutation cases live here.
+  'tests/text-contracts.test.cjs',
   'tests/policy-shell-pinning.test.cjs',
   'tests/registry-docs-approved-issue-parity.test.cjs',
   'tests/release-backmerge-invariants.test.cjs',
