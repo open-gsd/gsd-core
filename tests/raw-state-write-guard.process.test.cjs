@@ -525,7 +525,7 @@ module.exports = async (early, late) => {
     assert.equal(fs.readFileSync(early, 'utf8'), 'named', 'the unseen named-binding write landed');
   });
 
-  test('known limits, pinned as they stand: each example shape lands its bytes on STATE.md and is not recorded (#5120 pre-push review R2-n3)', async (t) => {
+  test('known limits, pinned as they stand: these example shapes land their bytes on STATE.md and are not recorded (#5120 pre-push review R2-n3, R3-n2)', async (t) => {
     // The guard's header states these limits. If a change makes a shape below record, update that
     // header, the limits list in TESTING-SUITES.md, the limits predicate in CONTEXT.md and this row
     // together. Each child asserts the bytes landed, so an empty ledger is an unseen real write, not
@@ -597,6 +597,31 @@ module.exports = async (root) => {
   try { await handle.writeFile('by handle'); } finally { await handle.close(); }
 };`,
       },
+      {
+        // Pre-push review R3-m6: the internal copyFile runs after cp's own awaits, when no product
+        // frame is on the stack, because nothing awaits the cp call itself.
+        name: 'fs.promises.cp onto STATE.md chained with .then, not awaited',
+        file: '.planning/STATE.md', bytes: 'by promises.cp',
+        body: `const fs = require('node:fs'); const path = require('node:path');
+module.exports = (root) => new Promise((resolve, reject) => {
+  const target = path.join(root, '.planning', 'STATE.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src.md'), 'by promises.cp');
+  fs.promises.cp(path.join(root, 'src.md'), target).then(resolve, reject);
+});`,
+      },
+      {
+        // Pre-push review R3-n3: node writes through a URL-like object; the guard reads only a URL instance.
+        name: 'writeFileSync with a URL-like object that is not a URL instance',
+        file: '.planning/STATE.md', bytes: 'by url-like',
+        body: `const fs = require('node:fs'); const path = require('node:path'); const { pathToFileURL } = require('node:url');
+module.exports = async (root) => {
+  const target = path.join(root, '.planning', 'STATE.md');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const url = pathToFileURL(target);
+  fs.writeFileSync({ href: url.href, protocol: url.protocol, pathname: url.pathname, hostname: url.hostname, origin: url.origin }, 'by url-like');
+};`,
+      },
     ];
     for (const shape of shapes) {
       await t.test(shape.name, (st) => {
@@ -609,9 +634,9 @@ const root = ${JSON.stringify(dir)};
 ${shape.seed || ''}
 require(${JSON.stringify(mod)})(root).catch((e) => { console.error(e); process.exitCode = 1; });`);
         const entries = runGuarded(dir, main);
+        // A link fixture that cannot be built fails the row, as the mkfifo row does (pre-push review R3-n2).
         if (shape.linkSupportMarker && fs.existsSync(path.join(dir, shape.linkSupportMarker))) {
-          st.skip(`hard links are not supported here: ${fs.readFileSync(path.join(dir, shape.linkSupportMarker), 'utf8')}`);
-          return;
+          throw new Error(`the hard-link fixture could not be built: ${fs.readFileSync(path.join(dir, shape.linkSupportMarker), 'utf8')}`);
         }
         assert.deepEqual(entries, [], `${shape.name} is unseen: ${JSON.stringify(entries)}`);
         assert.equal(fs.readFileSync(path.join(dir, shape.file), 'utf8'), shape.bytes, `${shape.name}: the unseen write landed`);
