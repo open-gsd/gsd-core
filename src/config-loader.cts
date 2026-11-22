@@ -187,8 +187,10 @@ function _removeBlockedSectionDefaults(
     for (const projection of projections) {
       if (BARRIER_FAIL_SAFE_PROJECTIONS.has(projection)) continue;
       // A flat value in the effective (root plus workstream) config outranks the
-      // blocked nested alias.
-      if (projection !== section && Object.hasOwn(parsed, projection)) continue;
+      // blocked nested alias. Only a CONFIG_KEY_ALIASES key is read flat; every other
+      // projection comes from its nested spelling alone, so a stray top-level key of
+      // the same name is not an explicit value and does not keep the projection.
+      if (projection !== section && _ALIAS_KEYS.has(projection) && Object.hasOwn(parsed, projection)) continue;
       // The container itself is not a flat alias, but the loader may publish a
       // flat key inside it (`max_prompt_tokens` → `review.max_prompt_tokens`,
       // CONFIG_KEY_ALIASES `resolvedAt`). Keep only those explicit fields.
@@ -252,6 +254,9 @@ const CONFIG_KEY_ALIASES = Object.freeze([
 
 type ConfigKeyAlias = typeof CONFIG_KEY_ALIASES[number];
 type AliasedConfigKey = ConfigKeyAlias['key'];
+
+/** The flat spellings the loader reads; the blocked-section barrier keeps only these. */
+const _ALIAS_KEYS: ReadonlySet<string> = new Set(CONFIG_KEY_ALIASES.map((alias) => alias.key));
 
 /**
  * The alias entry a `config-get` key path names — by its flat key or by its

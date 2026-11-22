@@ -1074,6 +1074,16 @@ function findDuplicateThreatIds(cwd: string, phaseDirRel: string | null | undefi
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/**
+ * A resolved-config flag for an init payload. A section the config marks as a present
+ * non-object removes its projections (#5096), so an absent flag reads as `false` here
+ * rather than surfacing as a dropped JSON key.
+ */
+function flagOrFalse<T extends object>(config: T, key: keyof T): T[keyof T] | false {
+  const value = config[key];
+  return value === undefined ? false : value;
+}
+
 function cmdInitExecutePhase(
   cwd: string,
   phase: string,
@@ -1145,14 +1155,14 @@ function cmdInitExecutePhase(
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
 
     tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     sub_repos: config.sub_repos,
     parallelization: config.parallelization,
     context_window: config.context_window,
     branching_strategy: config.branching_strategy,
     phase_branch_template: config.phase_branch_template,
     milestone_branch_template: config.milestone_branch_template,
-    verifier_enabled: (config.verifier === undefined ? false : config.verifier),
+    verifier_enabled: flagOrFalse(config, 'verifier'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute (anchored on cwd/project_root), not orchestrator-cwd-relative —
@@ -1360,11 +1370,11 @@ function cmdInitPlanPhase(
 
     tdd_mode: options['tdd'] || Boolean(config.tdd_mode) || false,
     granularity,
-    research_enabled: (config.research === undefined ? false : config.research),
-    plan_checker_enabled: (config.plan_checker === undefined ? false : config.plan_checker),
-    nyquist_validation_enabled: (config.nyquist_validation === undefined ? false : config.nyquist_validation),
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
-    text_mode: (config.text_mode === undefined ? false : config.text_mode),
+    research_enabled: flagOrFalse(config, 'research'),
+    plan_checker_enabled: flagOrFalse(config, 'plan_checker'),
+    nyquist_validation_enabled: flagOrFalse(config, 'nyquist_validation'),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
+    text_mode: flagOrFalse(config, 'text_mode'),
     auto_advance: !!(config.auto_advance),
     auto_chain_active: !!(config._auto_chain_active),
     mode: config.mode || 'interactive',
@@ -1631,7 +1641,7 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
     synthesizer_model: resolveModelInternal(cwd, 'gsd-research-synthesizer'),
     roadmapper_model: resolveModelInternal(cwd, 'gsd-roadmapper'),
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #4040: partial-init discriminator (see buildInitCompletenessFields).
     // Spread BEFORE this literal's own planning_exists so the existing
@@ -1717,8 +1727,8 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
     synthesizer_model: resolveModelInternal(cwd, 'gsd-research-synthesizer'),
     roadmapper_model: resolveModelInternal(cwd, 'gsd-roadmapper'),
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
-    research_enabled: (config.research === undefined ? false : config.research),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
+    research_enabled: flagOrFalse(config, 'research'),
 
     // #3216 review Finding 2: `?? null` so an unresolved milestone still emits
     // the key with an explicit `null` rather than letting JSON.stringify drop
@@ -1849,7 +1859,7 @@ function cmdInitQuick(
     // so model_overrides / models.verification apply (was reusing executor_model).
     reviewer_model: resolveModelInternal(cwd, 'gsd-code-reviewer'),
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     branch_name: quickBranchName,
 
     quick_id: quickId,
@@ -1921,7 +1931,7 @@ function cmdInitQuickBatch(
     researcher_model: resolveModelInternal(cwd, 'gsd-phase-researcher'),
     reviewer_model: resolveModelInternal(cwd, 'gsd-code-reviewer'),
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase; a
     // per-item task_dir is re-derived by the workflow itself (quick_id +
@@ -1961,7 +1971,7 @@ function cmdInitIngestDocs(cwd: string, raw: boolean): void {
     state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
     intel_dir: toPosixPath(path.join(planningDir(cwd), 'intel')),
     conflicts_path: toPosixPath(path.join(planningDir(cwd), 'INGEST-CONFLICTS.md')),
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
   };
   output(withProjectRoot(cwd, result), raw);
 }
@@ -2017,7 +2027,7 @@ function cmdInitResume(cwd: string, raw: boolean): void {
     has_interrupted_agent: !!interruptedAgentId,
     interrupted_agent_id: interruptedAgentId,
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
   };
 
   output(withProjectRoot(cwd, result), raw);
@@ -2084,7 +2094,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase. phaseDir
@@ -2180,7 +2190,7 @@ function cmdInitCodeReview(
   const fallow = detectFallowConfig(cwd);
 
   const result: Record<string, unknown> = {
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
@@ -2340,7 +2350,7 @@ function cmdInitDiscussPhaseAssumptions(
     readConfigJsonBoolean(cwd, ['workflow', 'auto_advance']);
 
   const result: Record<string, unknown> = {
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     phase_found: !!phaseInfo,
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
@@ -2468,7 +2478,7 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const requirementsPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
 
   const result: Record<string, unknown> = {
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     brave_search:
       typeof config.brave_search === 'string'
         ? maskIfSecret('brave_search', config.brave_search)
@@ -2808,7 +2818,7 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
   }
 
   const result: Record<string, unknown> = {
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     date: realClock.localToday(),
     timestamp: realClock.nowIso(),
@@ -2944,7 +2954,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
   }
 
   const result: Record<string, unknown> = {
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #3216 review Finding 2: `?? null` so an unresolved milestone still emits
     // the key with an explicit `null` rather than letting JSON.stringify drop
@@ -2993,8 +3003,8 @@ function cmdInitMapCodebase(cwd: string, raw: boolean): void {
   const result: Record<string, unknown> = {
     mapper_model: resolveModelInternal(cwd, 'gsd-codebase-mapper'),
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
-    search_gitignored: (config.search_gitignored === undefined ? false : config.search_gitignored),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
+    search_gitignored: flagOrFalse(config, 'search_gitignored'),
     parallelization: config.parallelization,
     subagent_timeout: config.subagent_timeout === undefined ? configLoader.CONFIG_DEFAULTS.subagent_timeout : config.subagent_timeout,
 
@@ -3900,7 +3910,7 @@ function cmdInitDebug(cwd: string, raw: boolean, options: Record<string, unknown
   const config = loadConfig(cwd);
 
   const result: Record<string, unknown> = {
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
     // #2376: absolute — debug.md builds `debug_file_path` as
     // `{debug_dir}/{slug}.md` for its gsd-debug-session-manager spawns, whose
     // own cwd may differ from the orchestrator's.
@@ -4195,7 +4205,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
     planner_model: resolveModelInternal(cwd, 'gsd-planner'),
 
-    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
+    commit_docs: flagOrFalse(config, 'commit_docs'),
 
     // #3216 review Finding 2: `?? null` so an unresolved milestone still emits
     // the key with an explicit `null` rather than letting JSON.stringify drop

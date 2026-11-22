@@ -3,7 +3,9 @@
  * Existing call sites stay on the assembled-object loader; adoption belongs to C3/C4.
  *
  * An unusable layer degrades a key only when that layer could have produced it.
- * A present non-object parent stops every lower layer, including declared defaults.
+ * A present non-object parent stops every lower layer, including declared defaults. The one
+ * exception mirrors the loader's workstream-over-root merge: an object parent in the workstream
+ * layer replaces a non-object root parent at the same prefix, so it does not block.
  */
 
 import path from 'node:path';
@@ -95,19 +97,29 @@ function readConfigLayer(file: string, family: ConfigFamily): LayerRead {
   return { kind: 'ok', data: parsed };
 }
 
-function ownValue(obj: unknown, key: string): { found: boolean; value: unknown; blocked: boolean } {
+/**
+ * Own-property walk of a dotted key through one layer. `blockedAt` is the length of the
+ * dotted prefix whose present value is not an object (0 when nothing blocks the walk), and
+ * `objectPrefixes` is how many leading prefixes this layer holds as objects.
+ */
+type OwnValue = { found: boolean; value: unknown; blockedAt: number; objectPrefixes: number };
+
+function ownValue(obj: unknown, key: string): OwnValue {
   let current: unknown = obj;
-  for (const [index, segment] of key.split('.').entries()) {
-    if (UNSAFE_SEGMENTS.has(segment)) return { found: false, value: undefined, blocked: false };
+  let objectPrefixes = 0;
+  const segments = key.split('.');
+  for (const [index, segment] of segments.entries()) {
+    if (UNSAFE_SEGMENTS.has(segment)) return { found: false, value: undefined, blockedAt: 0, objectPrefixes };
     if (!isConfigSection(current)) {
-      return { found: false, value: undefined, blocked: index > 0 };
+      return { found: false, value: undefined, blockedAt: index, objectPrefixes };
     }
     if (!Object.prototype.hasOwnProperty.call(current, segment)) {
-      return { found: false, value: undefined, blocked: false };
+      return { found: false, value: undefined, blockedAt: 0, objectPrefixes };
     }
     current = current[segment];
+    if (index + 1 < segments.length && isConfigSection(current)) objectPrefixes = index + 1;
   }
-  return { found: true, value: current, blocked: false };
+  return { found: true, value: current, blockedAt: 0, objectPrefixes };
 }
 
 function mergeValues(
@@ -206,6 +218,7 @@ function resolveConfigValue(
   let emptyFile = false;
   let workstreamMissing = false;
   let blockedByParent = false;
+  let workstreamObjectPrefixes = 0;
   const typeMismatchRanks: number[] = [];
   let detected: string[] | undefined;
   const layers = fileLayers(opts.cwd, family);
@@ -246,7 +259,14 @@ function resolveConfigValue(
         typeMismatchRanks.push(rank);
       }
     }
-    if (resolved.blocked) {
+    // The loader merges workstream over root with `_deepMergeConfig`, which replaces a
+    // non-object root parent by an object workstream parent. An object parent held by the
+    // workstream therefore outranks a root non-object at the same prefix; no other layer
+    // pair is merged by the loader, so no other pair gets this rule.
+    let blocked = resolved.blockedAt > 0;
+    if (blocked && layer === 'root' && resolved.blockedAt <= workstreamObjectPrefixes) blocked = false;
+    if (layer === 'workstream') workstreamObjectPrefixes = resolved.objectPrefixes;
+    if (blocked) {
       blockedByParent = true;
       break;
     }
