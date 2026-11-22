@@ -64,11 +64,18 @@ type LayerRead = { kind: 'ok'; data: Record<string, unknown> }
   | { kind: 'absent' }
   | { kind: 'fault'; fault: ConfigFault };
 
+/**
+ * Family-B file access for callers that hold the settings text already or must name the user
+ * directory (#6031): `readFile` returns the text, or null for an absent file; `userDir` set to
+ * null drops the user layer. Family A never takes it.
+ */
+type RuntimeIo = { readFile?: (file: string) => string | null; userDir?: string | null };
+
 /** Read one layer without changing the assembled Config Loader Module. */
-function readConfigLayer(file: string, family: ConfigFamily): LayerRead {
+function readConfigLayer(file: string, family: ConfigFamily, readFile?: (file: string) => string | null): LayerRead {
   let raw: string | null;
   try {
-    raw = platformReadSync(file);
+    raw = (readFile ?? platformReadSync)(file);
   } catch (err) {
     return { kind: 'fault', fault: {
       reason: CONFIG_REASON.CONFIG_UNREADABLE,
@@ -173,7 +180,7 @@ function keyFamily(key: string, capabilitySchema: () => Record<string, unknown>)
 /**
  * The files of one ladder, highest first.
  */
-function fileLayers(cwd: string, family: ConfigFamily): Array<{ layer: ConfigLayer; file: string }> {
+function fileLayers(cwd: string, family: ConfigFamily, io?: RuntimeIo): Array<{ layer: ConfigLayer; file: string }> {
   if (family === 'A') {
     const result: Array<{ layer: ConfigLayer; file: string }> = [];
     const ws = resolveEnvWorkstream();
@@ -183,12 +190,12 @@ function fileLayers(cwd: string, family: ConfigFamily): Array<{ layer: ConfigLay
     return result;
   }
   const projectDir = path.join(cwd, '.claude');
-  const userDir = getGlobalConfigDir('claude');
+  const userDir = io && Object.hasOwn(io, 'userDir') ? io.userDir : getGlobalConfigDir('claude');
   const result: Array<{ layer: ConfigLayer; file: string }> = [
     { layer: 'runtime-local', file: path.join(projectDir, 'settings.local.json') },
     { layer: 'runtime-shared', file: path.join(projectDir, 'settings.json') },
   ];
-  if (path.resolve(userDir) !== path.resolve(projectDir)) {
+  if (userDir && path.resolve(userDir) !== path.resolve(projectDir)) {
     result.push({ layer: 'runtime-user', file: path.join(userDir, 'settings.json') });
   }
   return result;
@@ -197,7 +204,13 @@ function fileLayers(cwd: string, family: ConfigFamily): Array<{ layer: ConfigLay
 /** Resolve one eligible key without ever rewriting a configuration layer. */
 function resolveConfigValue(
   key: string,
-  opts: { cwd: string; family?: ConfigFamily },
+  opts: {
+    cwd: string;
+    family?: ConfigFamily;
+    /** Family B only: a layer whose value is not of this type is skipped as a type mismatch (#6031). */
+    valueType?: 'string';
+    io?: RuntimeIo;
+  },
 ): ConfigValueResolution {
   let cachedSchema: Record<string, unknown> | undefined;
   const capabilitySchema = (): Record<string, unknown> =>
@@ -218,9 +231,10 @@ function resolveConfigValue(
   let workstreamObjectPrefixes = 0;
   const typeMismatchRanks: number[] = [];
   let detected: string[] | undefined;
-  const layers = fileLayers(opts.cwd, family);
+  const runtimeIo = family === 'B' ? opts.io : undefined;
+  const layers = fileLayers(opts.cwd, family, runtimeIo);
   for (const [rank, { layer, file }] of layers.entries()) {
-    const read = readConfigLayer(file, family);
+    const read = readConfigLayer(file, family, runtimeIo?.readFile);
     if (read.kind === 'fault') {
       faults.push({ rank, fault: read.fault });
       if (layer === 'workstream') workstreamMissing = true;
@@ -249,8 +263,9 @@ function resolveConfigValue(
     }
     const resolved = ownValue(data?.parsed ?? read.data, key);
     if (resolved.found) {
-      if (!federatedSlice || (isWellFormedSlice(federatedSlice)
-          && typeMatchesSlice(resolved.value, federatedSlice))) {
+      const typed = opts.valueType === undefined || family !== 'B' || typeof resolved.value === opts.valueType;
+      if (typed && (!federatedSlice || (isWellFormedSlice(federatedSlice)
+          && typeMatchesSlice(resolved.value, federatedSlice)))) {
         entries.push({ layer, value: resolved.value, rank });
       } else {
         typeMismatchRanks.push(rank);
@@ -261,6 +276,9 @@ function resolveConfigValue(
     // workstream therefore outranks a root non-object at the same prefix; no other layer
     // pair is merged by the loader, so no other pair gets this rule.
     let blocked = resolved.blockedAt > 0;
+    // A typed family-B read (#6031) keeps the bare-string cascade it replaces: a layer whose
+    // `worktree` parent is not an object is skipped, not a barrier to the layers below.
+    if (blocked && family === 'B' && opts.valueType !== undefined) blocked = false;
     if (blocked && layer === 'root' && resolved.blockedAt <= workstreamObjectPrefixes) blocked = false;
     if (layer === 'workstream') workstreamObjectPrefixes = resolved.objectPrefixes;
     if (blocked) {

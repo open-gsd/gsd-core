@@ -2260,9 +2260,6 @@
   "tests/gates-confirmation-toggle-config.test.cjs": {
     "block": 1
   },
-  "tests/gates-taxonomy.test.cjs": {
-    "directive": 3
-  },
   "tests/gemini-runtime-removed.test.cjs": {
     "block": 4
   },
@@ -2326,9 +2323,6 @@
   },
   "tests/gsd-researcher-app-aware.test.cjs": {
     "directive": 2
-  },
-  "tests/gsd-researcher-flow-diagram.test.cjs": {
-    "directive": 1
   },
   "tests/gsd-secret-read-guard.test.cjs": {
     "block": 1
@@ -2490,6 +2484,9 @@
   "tests/helpers/overlay-repo.cjs": {
     "block": 3
   },
+  "tests/helpers/pack-file-list.cjs": {
+    "block": 1
+  },
   "tests/helpers/planning-add-guard.cjs": {
     "block": 2
   },
@@ -2538,9 +2535,6 @@
   "tests/host-integration.test.cjs": {
     "block": 4,
     "directive": 2
-  },
-  "tests/import-command.test.cjs": {
-    "directive": 1
   },
   "tests/in-tier-msys-fork-stress.test.cjs": {
     "block": 1
@@ -2654,9 +2648,6 @@
   },
   "tests/inventory-manifest-sync.test.cjs": {
     "block": 1
-  },
-  "tests/ios-scaffold-safety.test.cjs": {
-    "directive": 1
   },
   "tests/isolation-sentinel.test.cjs": {
     "block": 1
@@ -3198,9 +3189,6 @@
   },
   "tests/registry-reviewer-parity.test.cjs": {
     "block": 1
-  },
-  "tests/release-coverage-scope.test.cjs": {
-    "directive": 1
   },
   "tests/release-shard-lane-sharding.test.cjs": {
     "block": 1
