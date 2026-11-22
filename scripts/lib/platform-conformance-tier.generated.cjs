@@ -159,6 +159,7 @@ module.exports = {
   "tests/in-tier-sh-pipeline-timing.test.cjs",
   "tests/init-manager.test.cjs",
   "tests/insert-phase-init-context.test.cjs",
+  "tests/insert-phase-note-literal.test.cjs",
   "tests/install-minimal-hooks.test.cjs",
   "tests/install-nested-layout.test.cjs",
   "tests/install-path-detection.test.cjs",
