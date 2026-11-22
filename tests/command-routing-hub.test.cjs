@@ -965,7 +965,7 @@ describe('CommandRoutingHub — exitReason? field on InvalidArgs (#1644 / amendm
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempProject, cleanup } = require('./helpers.cjs');
 
 // #4342: this ran gsd-tools with runGsdTools's default cwd — the checkout's own
 // working directory — and an inherited HOME, so the child read the developer's
@@ -978,7 +978,7 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 // The routing invariant is about `query <cmd>` and `<cmd>` agreeing, which is
 // independent of project state — so the fixture only has to be a project whose
 // state is known and unaffected by the developer's.
-test('bug #167: query meta-command prefixes direct gsd-tools calls', (t) => {
+test('bug #167: query meta-command prefixes direct gsd-tools calls', async (t) => {
   const fixture = createTempProject('gsd-4342-routing-');
   t.after(() => cleanup(fixture));
   // HOME/USERPROFILE point at the fixture so ~/.gsd/defaults.json resolves
@@ -986,10 +986,10 @@ test('bug #167: query meta-command prefixes direct gsd-tools calls', (t) => {
   // runGsdTools's own doc comment prescribes for exactly this.
   const sandbox = { HOME: fixture, USERPROFILE: fixture };
 
-  const direct = runGsdTools(['init.progress'], fixture, sandbox);
+  const direct = await runGsdToolsAsync(['init.progress'], fixture, sandbox);
   assert.equal(direct.success, true, `init.progress failed: ${direct.error || direct.output}`);
 
-  const meta = runGsdTools(['query', 'init.progress'], fixture, sandbox);
+  const meta = await runGsdToolsAsync(['query', 'init.progress'], fixture, sandbox);
   assert.equal(meta.success, true, `query init.progress failed: ${meta.error || meta.output}`);
 
   const directPayload = JSON.parse(direct.output);
@@ -1047,7 +1047,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { runGsdTools, createTempProject, cleanup, isUsageOutput } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempProject, cleanup, isUsageOutput } = require('./helpers.cjs');
 
 describe('unknown flag guard (bug #1818, updated for #3019)', () => {
   let tmpDir;
@@ -1062,13 +1062,13 @@ describe('unknown flag guard (bug #1818, updated for #3019)', () => {
 
   // ── --help renders usage and does NOT run the destructive command ────────
 
-  test('phases clear --help renders usage and does NOT clear phase dirs', () => {
+  test('phases clear --help renders usage and does NOT clear phase dirs', async () => {
     // Create a sentinel phase dir so we can assert it survives.
     const phaseDir = path.join(tmpDir, '.planning', 'phases', 'phase-99');
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, 'PLAN.md'), 'sentinel');
 
-    const result = runGsdTools(['phases', 'clear', '--help'], tmpDir);
+    const result = await runGsdToolsAsync(['phases', 'clear', '--help'], tmpDir);
     assert.strictEqual(result.success, true, 'help renders, no error exit');
     assert.ok(isUsageOutput(result.output), `expected top-level usage, got: ${result.output}`);
     // Anti-hallucination invariant: the destructive command did NOT run.
@@ -1076,21 +1076,21 @@ describe('unknown flag guard (bug #1818, updated for #3019)', () => {
     assert.ok(fs.existsSync(path.join(phaseDir, 'PLAN.md')));
   });
 
-  test('generate-slug hello --help renders usage and does NOT emit a slug', () => {
-    const ok = runGsdTools(['generate-slug', 'hello'], tmpDir);
+  test('generate-slug hello --help renders usage and does NOT emit a slug', async () => {
+    const ok = await runGsdToolsAsync(['generate-slug', 'hello'], tmpDir);
     assert.strictEqual(ok.success, true, 'control: generate-slug works without --help');
     // The control output is just the slug; the help output is the usage.
     const slugOut = ok.output;
     assert.ok(slugOut && !isUsageOutput(slugOut), `control should not be usage: ${slugOut}`);
 
-    const result = runGsdTools(['generate-slug', 'hello', '--help'], tmpDir);
+    const result = await runGsdToolsAsync(['generate-slug', 'hello', '--help'], tmpDir);
     assert.strictEqual(result.success, true);
     assert.ok(isUsageOutput(result.output), 'help renders top-level usage');
     assert.notEqual(result.output, slugOut, 'help output must differ from the slug — generate-slug must not have run');
   });
 
-  test('phase complete --help renders usage and does NOT mark a phase complete', () => {
-    const result = runGsdTools(['phase', 'complete', '--help'], tmpDir);
+  test('phase complete --help renders usage and does NOT mark a phase complete', async () => {
+    const result = await runGsdToolsAsync(['phase', 'complete', '--help'], tmpDir);
     assert.strictEqual(result.success, true);
     assert.ok(isUsageOutput(result.output));
     // success:true + isUsageOutput is sufficient: if the destructive path
@@ -1098,41 +1098,41 @@ describe('unknown flag guard (bug #1818, updated for #3019)', () => {
     // (success:false), not the usage to stdout (success:true).
   });
 
-  test('state load --help renders usage', () => {
-    const result = runGsdTools(['state', 'load', '--help'], tmpDir);
+  test('state load --help renders usage', async () => {
+    const result = await runGsdToolsAsync(['state', 'load', '--help'], tmpDir);
     assert.strictEqual(result.success, true);
     assert.ok(isUsageOutput(result.output));
   });
 
   // ── -h shorthand: same shape ─────────────────────────────────────────────
 
-  test('phases clear -h renders usage and does NOT clear phase dirs', () => {
+  test('phases clear -h renders usage and does NOT clear phase dirs', async () => {
     const phaseDir = path.join(tmpDir, '.planning', 'phases', 'phase-42');
     fs.mkdirSync(phaseDir, { recursive: true });
-    const result = runGsdTools(['phases', 'clear', '-h'], tmpDir);
+    const result = await runGsdToolsAsync(['phases', 'clear', '-h'], tmpDir);
     assert.strictEqual(result.success, true);
     assert.ok(isUsageOutput(result.output));
     assert.ok(fs.existsSync(phaseDir), 'phase dir must survive');
   });
 
-  test('generate-slug hello -h renders usage', () => {
-    const result = runGsdTools(['generate-slug', 'hello', '-h'], tmpDir);
+  test('generate-slug hello -h renders usage', async () => {
+    const result = await runGsdToolsAsync(['generate-slug', 'hello', '-h'], tmpDir);
     assert.strictEqual(result.success, true);
     assert.ok(isUsageOutput(result.output));
   });
 
   // ── --version is still rejected — no discovery use-case ──────────────────
 
-  test('generate-slug hello --version is rejected', () => {
-    const result = runGsdTools(['generate-slug', 'hello', '--version'], tmpDir);
+  test('generate-slug hello --version is rejected', async () => {
+    const result = await runGsdToolsAsync(['generate-slug', 'hello', '--version'], tmpDir);
     assert.strictEqual(result.success, false);
     assert.match(result.error, /--version/);
   });
 
   // ── current-timestamp --help: same as the others ─────────────────────────
 
-  test('current-timestamp --help renders usage', () => {
-    const result = runGsdTools(['current-timestamp', '--help'], tmpDir);
+  test('current-timestamp --help renders usage', async () => {
+    const result = await runGsdToolsAsync(['current-timestamp', '--help'], tmpDir);
     assert.strictEqual(result.success, true);
     assert.ok(isUsageOutput(result.output));
   });
@@ -1176,13 +1176,13 @@ describe('unknown flag guard (bug #1818, updated for #3019)', () => {
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempProject, cleanup } = require('./helpers.cjs');
 
 // Helper: run gsd-tools with --json-errors and parse the structured stderr.
 // Returns the parsed object, or throws if stderr is not valid JSON.
-function runJsonErrors(args, tmpDir, env = {}) {
+async function runJsonErrors(args, tmpDir, env = {}) {
   const allArgs = ['--json-errors', ...args];
-  const result = runGsdTools(allArgs, tmpDir, env);
+  const result = await runGsdToolsAsync(allArgs, tmpDir, env);
   // Must have failed
   assert.strictEqual(result.success, false,
     `Expected failure with --json-errors for args: ${args.join(' ')}\nstdout: ${result.output}\nstderr: ${result.error}`);
@@ -1213,8 +1213,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 1. Unknown top-level command ─────────────────────────────────────────
 
-  test('unknown top-level command emits { ok: false, reason: "sdk_unknown_command" }', () => {
-    const parsed = runJsonErrors(['totally-unknown-command-xyzzy'], tmpDir);
+  test('unknown top-level command emits { ok: false, reason: "sdk_unknown_command" }', async () => {
+    const parsed = await runJsonErrors(['totally-unknown-command-xyzzy'], tmpDir);
 
     assert.strictEqual(parsed.ok, false,
       'error object must have ok: false');
@@ -1226,8 +1226,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 2. Unknown dotted command ────────────────────────────────────────────
 
-  test('unknown dotted command (foo.bar) emits { ok: false, reason: "sdk_unknown_command" }', () => {
-    const parsed = runJsonErrors(['foo.bar'], tmpDir);
+  test('unknown dotted command (foo.bar) emits { ok: false, reason: "sdk_unknown_command" }', async () => {
+    const parsed = await runJsonErrors(['foo.bar'], tmpDir);
 
     assert.strictEqual(parsed.ok, false,
       'error object must have ok: false');
@@ -1239,8 +1239,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 3. Missing --pick value ───────────────────────────────────────────────
 
-  test('--pick without value emits { ok: false, reason: "usage" }', () => {
-    const parsed = runJsonErrors(['generate-slug', 'test-text', '--pick'], tmpDir);
+  test('--pick without value emits { ok: false, reason: "usage" }', async () => {
+    const parsed = await runJsonErrors(['generate-slug', 'test-text', '--pick'], tmpDir);
 
     assert.strictEqual(parsed.ok, false,
       'error object must have ok: false');
@@ -1252,12 +1252,12 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 4. Config key not found ───────────────────────────────────────────────
 
-  test('config-get for absent key emits { ok: false, reason: "config_key_not_found" }', () => {
+  test('config-get for absent key emits { ok: false, reason: "config_key_not_found" }', async () => {
     // Initialise config.json first so we reach the "key not found" branch
     // rather than the "no config.json" branch.
-    runGsdTools(['config-ensure-section'], tmpDir);
+    await runGsdToolsAsync(['config-ensure-section'], tmpDir);
 
-    const parsed = runJsonErrors(['config-get', 'nonexistent_config_key_xyzzy'], tmpDir);
+    const parsed = await runJsonErrors(['config-get', 'nonexistent_config_key_xyzzy'], tmpDir);
 
     assert.strictEqual(parsed.ok, false,
       'error object must have ok: false');
@@ -1269,8 +1269,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 5. Unknown subcommand within a domain ────────────────────────────────
 
-  test('unknown intel subcommand emits { ok: false, reason: "sdk_unknown_command" }', () => {
-    const parsed = runJsonErrors(['intel', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown intel subcommand emits { ok: false, reason: "sdk_unknown_command" }', async () => {
+    const parsed = await runJsonErrors(['intel', 'bogus-subcommand-xyzzy'], tmpDir);
 
     assert.strictEqual(parsed.ok, false,
       'error object must have ok: false');
@@ -1282,9 +1282,9 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 6. GSD_JSON_ERRORS=1 env var activates structured mode ───────────────
 
-  test('GSD_JSON_ERRORS=1 env var produces same structured error as --json-errors flag', () => {
+  test('GSD_JSON_ERRORS=1 env var produces same structured error as --json-errors flag', async () => {
     // Run with env var instead of --json-errors flag
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['totally-unknown-command-xyzzy'],
       tmpDir,
       { GSD_JSON_ERRORS: '1' }
@@ -1309,8 +1309,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 7. Successful commands are unaffected by --json-errors ───────────────
 
-  test('successful command with --json-errors flag still succeeds normally', () => {
-    const result = runGsdTools(
+  test('successful command with --json-errors flag still succeeds normally', async () => {
+    const result = await runGsdToolsAsync(
       ['--json-errors', 'generate-slug', 'hello-world'],
       tmpDir
     );
@@ -1322,8 +1322,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 8. Error object shape is stable (no extra top-level keys) ────────────
 
-  test('error object contains exactly {ok, reason, message} — no extra keys', () => {
-    const parsed = runJsonErrors(['totally-unknown-command-xyzzy'], tmpDir);
+  test('error object contains exactly {ok, reason, message} — no extra keys', async () => {
+    const parsed = await runJsonErrors(['totally-unknown-command-xyzzy'], tmpDir);
 
     const keys = Object.keys(parsed).sort();
     assert.deepStrictEqual(keys, ['message', 'ok', 'reason'],
@@ -1332,8 +1332,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 9. Multiple errors in one session: only the first error is emitted ───
 
-  test('only one error JSON line is emitted per invocation (process exits on first error)', () => {
-    const result = runGsdTools(
+  test('only one error JSON line is emitted per invocation (process exits on first error)', async () => {
+    const result = await runGsdToolsAsync(
       ['--json-errors', 'totally-unknown-command-xyzzy'],
       tmpDir
     );
@@ -1348,8 +1348,8 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
   // ── 10. Unknown flag emits { ok: false, reason: "usage" } ────────────────
 
-  test('unknown version flag emits { ok: false, reason: "usage" }', () => {
-    const parsed = runJsonErrors(['--version', 'generate-slug', 'x'], tmpDir);
+  test('unknown version flag emits { ok: false, reason: "usage" }', async () => {
+    const parsed = await runJsonErrors(['--version', 'generate-slug', 'x'], tmpDir);
 
     assert.strictEqual(parsed.ok, false, 'error object must have ok: false');
     assert.strictEqual(parsed.reason, 'usage',
@@ -1385,13 +1385,13 @@ describe('feat #3255: --json-errors mode emits structured error objects', () => 
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempProject, cleanup } = require('./helpers.cjs');
 
 // Run gsd-tools with GSD_JSON_ERRORS=1 (env-var activation, exercises the
 // path #3304 added alongside the --json-errors flag) and parse the
 // structured stderr. Returns the parsed object; throws if stderr is not JSON.
-function runJsonErrors(args, tmpDir, env = {}) {
-  const result = runGsdTools(args, tmpDir, { ...env, GSD_JSON_ERRORS: '1' });
+async function runJsonErrors(args, tmpDir, env = {}) {
+  const result = await runGsdToolsAsync(args, tmpDir, { ...env, GSD_JSON_ERRORS: '1' });
   assert.strictEqual(result.success, false,
     `Expected failure with GSD_JSON_ERRORS=1 for args: ${args.join(' ')}\n` +
     `stdout: ${result.output}\nstderr: ${result.error}`);
@@ -1432,54 +1432,54 @@ describe('feat #3310: typed ERROR_REASON codes on remaining error paths', () => 
   // ── Unknown <subsystem> subcommand → SDK_UNKNOWN_COMMAND ────────────────
   // Each of these used to fall through to reason: "unknown" before #3310.
 
-  test('unknown template subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['template', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown template subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['template', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'template');
   });
 
-  test('unknown frontmatter subcommand → sdk_unknown_command', () => {
+  test('unknown frontmatter subcommand → sdk_unknown_command', async () => {
     // frontmatter expects subcommand at args[1] and file at args[2]; pass a
     // bogus subcommand with a placeholder file so we definitely reach the
     // unknown-subcommand branch, not an earlier validation.
-    const parsed = runJsonErrors(
+    const parsed = await runJsonErrors(
       ['frontmatter', 'bogus-subcommand-xyzzy', 'placeholder.md'],
       tmpDir
     );
     assertTypedError(parsed, 'sdk_unknown_command', 'frontmatter');
   });
 
-  test('unknown requirements subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['requirements', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown requirements subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['requirements', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'requirements');
   });
 
-  test('unknown milestone subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['milestone', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown milestone subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['milestone', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'milestone');
   });
 
-  test('unknown uat subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['uat', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown uat subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['uat', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'uat');
   });
 
-  test('unknown todo subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['todo', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown todo subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['todo', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'todo');
   });
 
-  test('unknown workstream subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['workstream', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown workstream subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['workstream', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'workstream');
   });
 
-  test('unknown graphify subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['graphify', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown graphify subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['graphify', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'graphify');
   });
 
-  test('unknown learnings subcommand → sdk_unknown_command', () => {
-    const parsed = runJsonErrors(['learnings', 'bogus-subcommand-xyzzy'], tmpDir);
+  test('unknown learnings subcommand → sdk_unknown_command', async () => {
+    const parsed = await runJsonErrors(['learnings', 'bogus-subcommand-xyzzy'], tmpDir);
     assertTypedError(parsed, 'sdk_unknown_command', 'learnings');
   });
 
@@ -1487,75 +1487,75 @@ describe('feat #3310: typed ERROR_REASON codes on remaining error paths', () => 
   // These previously emitted reason: "unknown" because the second argument
   // to error() was absent.
 
-  test('missing --cwd value → usage', () => {
+  test('missing --cwd value → usage', async () => {
     // The --cwd flag is consumed before the command dispatcher; passing it
     // bare with no following value triggers the usage error at L253/L258.
-    const parsed = runJsonErrors(['--cwd'], tmpDir);
+    const parsed = await runJsonErrors(['--cwd'], tmpDir);
     assertTypedError(parsed, 'usage', '--cwd missing value');
   });
 
-  test('invalid --cwd directory → usage', () => {
+  test('invalid --cwd directory → usage', async () => {
     // --cwd <nonexistent-path> hits the existsSync / isDirectory check at L264.
-    const parsed = runJsonErrors(
+    const parsed = await runJsonErrors(
       ['--cwd', '/this/path/should/not/exist/anywhere/xyzzy', 'state', 'load'],
       tmpDir
     );
     assertTypedError(parsed, 'usage', 'invalid --cwd directory');
   });
 
-  test('intel query missing term → usage', () => {
-    const parsed = runJsonErrors(['intel', 'query'], tmpDir);
+  test('intel query missing term → usage', async () => {
+    const parsed = await runJsonErrors(['intel', 'query'], tmpDir);
     assertTypedError(parsed, 'usage', 'intel query missing term');
   });
 
-  test('intel patch-meta missing file path → usage', () => {
-    const parsed = runJsonErrors(['intel', 'patch-meta'], tmpDir);
+  test('intel patch-meta missing file path → usage', async () => {
+    const parsed = await runJsonErrors(['intel', 'patch-meta'], tmpDir);
     assertTypedError(parsed, 'usage', 'intel patch-meta missing file');
   });
 
-  test('intel extract-exports missing file path → usage', () => {
-    const parsed = runJsonErrors(['intel', 'extract-exports'], tmpDir);
+  test('intel extract-exports missing file path → usage', async () => {
+    const parsed = await runJsonErrors(['intel', 'extract-exports'], tmpDir);
     assertTypedError(parsed, 'usage', 'intel extract-exports missing file');
   });
 
-  test('graphify query missing term → usage', () => {
-    const parsed = runJsonErrors(['graphify', 'query'], tmpDir);
+  test('graphify query missing term → usage', async () => {
+    const parsed = await runJsonErrors(['graphify', 'query'], tmpDir);
     assertTypedError(parsed, 'usage', 'graphify query missing term');
   });
 
-  test('learnings query missing --tag → usage', () => {
-    const parsed = runJsonErrors(['learnings', 'query'], tmpDir);
+  test('learnings query missing --tag → usage', async () => {
+    const parsed = await runJsonErrors(['learnings', 'query'], tmpDir);
     assertTypedError(parsed, 'usage', 'learnings query missing --tag');
   });
 
-  test('learnings prune missing --older-than → usage', () => {
-    const parsed = runJsonErrors(['learnings', 'prune'], tmpDir);
+  test('learnings prune missing --older-than → usage', async () => {
+    const parsed = await runJsonErrors(['learnings', 'prune'], tmpDir);
     assertTypedError(parsed, 'usage', 'learnings prune missing --older-than');
   });
 
-  test('learnings delete missing id → usage', () => {
-    const parsed = runJsonErrors(['learnings', 'delete'], tmpDir);
+  test('learnings delete missing id → usage', async () => {
+    const parsed = await runJsonErrors(['learnings', 'delete'], tmpDir);
     assertTypedError(parsed, 'usage', 'learnings delete missing id');
   });
 
-  test('extract-messages missing project arg → usage', () => {
+  test('extract-messages missing project arg → usage', async () => {
     // L877 — args[1] is undefined or starts with '--'.
-    const parsed = runJsonErrors(['extract-messages'], tmpDir);
+    const parsed = await runJsonErrors(['extract-messages'], tmpDir);
     assertTypedError(parsed, 'usage', 'extract-messages missing project');
   });
 
-  test('write-profile missing --input → usage', () => {
-    const parsed = runJsonErrors(['write-profile'], tmpDir);
+  test('write-profile missing --input → usage', async () => {
+    const parsed = await runJsonErrors(['write-profile'], tmpDir);
     assertTypedError(parsed, 'usage', 'write-profile missing --input');
   });
 
-  test('detect-custom-files missing --config-dir → usage', () => {
-    const parsed = runJsonErrors(['detect-custom-files'], tmpDir);
+  test('detect-custom-files missing --config-dir → usage', async () => {
+    const parsed = await runJsonErrors(['detect-custom-files'], tmpDir);
     assertTypedError(parsed, 'usage', 'detect-custom-files missing --config-dir');
   });
 
-  test('detect-custom-files invalid --config-dir → usage', () => {
-    const parsed = runJsonErrors(
+  test('detect-custom-files invalid --config-dir → usage', async () => {
+    const parsed = await runJsonErrors(
       ['detect-custom-files', '--config-dir', '/nonexistent/path/xyzzy'],
       tmpDir
     );
@@ -1565,7 +1565,7 @@ describe('feat #3310: typed ERROR_REASON codes on remaining error paths', () => 
   // ── Shape regression guard: every newly-typed path emits the canonical
   //    {ok, reason, message} object — no leakage of reason: "unknown". ────
 
-  test('every remaining typed path emits the canonical {ok, reason, message} shape', () => {
+  test('every remaining typed path emits the canonical {ok, reason, message} shape', async () => {
     const probes = [
       ['template', 'bogus'],
       ['frontmatter', 'bogus', 'placeholder.md'],
@@ -1582,7 +1582,7 @@ describe('feat #3310: typed ERROR_REASON codes on remaining error paths', () => 
       ['detect-custom-files'],
     ];
     for (const args of probes) {
-      const parsed = runJsonErrors(args, tmpDir);
+      const parsed = await runJsonErrors(args, tmpDir);
       const keys = Object.keys(parsed).sort();
       assert.deepStrictEqual(keys, ['message', 'ok', 'reason'],
         `args ${args.join(' ')}: keys must be exactly {ok,reason,message}, got ${keys.join(',')}`);
@@ -1621,7 +1621,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempProject, cleanup: cleanupDir, runGsdTools } = require('./helpers.cjs');
+const { createTempProject, cleanup: cleanupDir, runGsdToolsAsync } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
 // allow-test-rule: source-text-is-the-product (see #1708)
@@ -1736,10 +1736,10 @@ describe('dispatch-should-flatten query — behavioral', () => {
   //   cursor:  background=true, backgroundDispatch=true, maxDepth:2      → shouldFlatten=false (may background — the one shipped host with a sufficient depth budget)
   //   unknown: no entry → fail-closed                                   → shouldFlatten=true  (must inline)
 
-  test('runtime=codex → shouldFlatten=true (#2939: maxDepth:1 cannot host a bg orchestrator + leaf)', () => {
+  test('runtime=codex → shouldFlatten=true (#2939: maxDepth:1 cannot host a bg orchestrator + leaf)', async () => {
     const tmpDir = createTempProject();
     try {
-      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+      const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
         GSD_RUNTIME: 'codex',
       });
       assert.ok(result.success, `Expected success, got error: ${result.error}`);
@@ -1749,10 +1749,10 @@ describe('dispatch-should-flatten query — behavioral', () => {
     }
   });
 
-  test('runtime=claude → shouldFlatten=true (must inline)', () => {
+  test('runtime=claude → shouldFlatten=true (must inline)', async () => {
     const tmpDir = createTempProject();
     try {
-      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+      const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
         GSD_RUNTIME: 'claude',
       });
       assert.ok(result.success, `Expected success, got error: ${result.error}`);
@@ -1762,10 +1762,40 @@ describe('dispatch-should-flatten query — behavioral', () => {
     }
   });
 
-  test('runtime=cursor → shouldFlatten=false (background dispatch safe)', () => {
+  // #6119: under `claude -p`, background work is killed 10 minutes after the last turn
+  // (CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS) and the process still exits 0, so a backgrounded
+  // plan agent loses its work silently. Claude Code documents no signal a hook or gsd-tools
+  // child can read to tell `-p` from an interactive session (the #6119 spike record, dated
+  // 2026-11-19, under the research docs). The verdict therefore stays
+  // fail-closed `true` for every session shape. The variables below are the host's
+  // UNDOCUMENTED markers, with the values measured for each shape: if one of them ever moves the
+  // verdict, an env-var heuristic was added without a documented host signal.
+  for (const [shape, markers] of [
+    ['interactive (cli, attended)', { CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SESSION_ATTENDED: '1' }],
+    ['one-shot -p (sdk-cli, unattended)', { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', CLAUDE_CODE_SESSION_ATTENDED: '0' }],
+  ]) {
+    test(`runtime=claude, ${shape} session → shouldFlatten=true (#6119: fail-closed, no documented survivability signal)`, async () => {
+      const tmpDir = createTempProject();
+      try {
+        const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--json'], tmpDir, {
+          GSD_RUNTIME: 'claude',
+          ...markers,
+        });
+        assert.ok(result.success, `Expected success, got error: ${result.error}`);
+        const parsed = JSON.parse(result.output);
+        assert.strictEqual(parsed.runtime, 'claude');
+        assert.strictEqual(parsed.shouldFlatten, true,
+          `#6119: claude must stay flattened whatever the session shape, got: ${parsed.shouldFlatten}`);
+      } finally {
+        cleanupDir(tmpDir);
+      }
+    });
+  }
+
+  test('runtime=cursor → shouldFlatten=false (background dispatch safe)', async () => {
     const tmpDir = createTempProject();
     try {
-      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+      const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
         GSD_RUNTIME: 'cursor',
       });
       assert.ok(result.success, `Expected success, got error: ${result.error}`);
@@ -1775,11 +1805,11 @@ describe('dispatch-should-flatten query — behavioral', () => {
     }
   });
 
-  test('unknown runtime → shouldFlatten=true (fail-closed → must inline)', () => {
+  test('unknown runtime → shouldFlatten=true (fail-closed → must inline)', async () => {
     // An unknown runtime has no registry entry → dispatch is null → fail-closed to true.
     const tmpDir = createTempProject();
     try {
-      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+      const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
         GSD_RUNTIME: 'unknown-runtime-xyz',
       });
       // The query must succeed (exit 0) even for unknown runtimes — fail-closed not crash-closed.
@@ -1790,10 +1820,10 @@ describe('dispatch-should-flatten query — behavioral', () => {
     }
   });
 
-  test('--json flag returns structured { runtime, shouldFlatten, dispatch }', () => {
+  test('--json flag returns structured { runtime, shouldFlatten, dispatch }', async () => {
     const tmpDir = createTempProject();
     try {
-      const result = runGsdTools(['query', 'dispatch-should-flatten', '--json'], tmpDir, {
+      const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--json'], tmpDir, {
         GSD_RUNTIME: 'codex',
       });
       assert.ok(result.success, `Expected success, got error: ${result.error}`);
@@ -1815,7 +1845,7 @@ describe('dispatch-should-flatten query — behavioral', () => {
     }
   });
 
-  test('config.runtime takes precedence when GSD_RUNTIME not set', () => {
+  test('config.runtime takes precedence when GSD_RUNTIME not set', async () => {
     // GSD_RUNTIME > config.runtime > 'claude'
     // Write config.json with runtime=codex; no GSD_RUNTIME override.
     const tmpDir = createTempProject();
@@ -1831,7 +1861,7 @@ describe('dispatch-should-flatten query — behavioral', () => {
       // This is the only way to suppress an ambient GSD_RUNTIME since runGsdTools
       // merges { ...process.env, ...TEST_ENV_BASE, ...env } — passing '' as the
       // override overwrites the ambient value at the correct merge position.
-      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+      const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
         GSD_RUNTIME: '',
       });
       // #2939: config.runtime=codex with GSD_RUNTIME cleared → codex maxDepth:1 → shouldFlatten=true (must inline)

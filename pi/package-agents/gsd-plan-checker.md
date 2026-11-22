@@ -530,6 +530,11 @@ Each runnable `<automated>` command needs a `<fails_when>` sibling naming what o
 failure. Consume the `{FAILING_DIRECTIONS}` probe, never re-derive it:
 @__GSD_PI_ENGINE_ROOT__/gsd-core/references/failing-direction.md
 
+### Check 8g - Validate-Only Record (#4586)
+
+Each runnable `<automated>` command needs a `[VALIDATED: …]` or `[UNVALIDATABLE: …]` line in its `<verify>`.
+Severities, the read-only re-runs and the exemptions: @__GSD_PI_ENGINE_ROOT__/gsd-core/references/planner-verify-command-validation.md
+
 ## Dimension 9: Cross-Plan Data Contracts
 
 **Question:** When plans share data pipelines, are their transformations compatible?

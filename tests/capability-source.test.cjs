@@ -434,6 +434,71 @@ describe('#5297 git adapter — exact pinned target', {
     assertScratchClonesRemoved('checkout failure');
   });
 
+  // #6441: the scratch clone was removed once, in a `finally`, and a failure of that removal was
+  // swallowed. The test above went red on `next` at a commit that passed elsewhere. The likely cause
+  // is a detached `git gc --auto` or an external scanner still writing under the directory when the
+  // single attempt ran (ENOTEMPTY, EBUSY); that is a hypothesis, not a captured error. Three pins
+  // follow: git is told not to detach maintenance, the removal asks the filesystem to retry (the
+  // retry happens inside the real rmSync, so this pins the options and cannot inject the race), and a
+  // removal that still fails is reported instead of swallowed.
+  test('#6441: git is told not to start automatic maintenance in the throwaway clone', async () => {
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#v0.3.0`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: (args, opts) => (args.includes('checkout')
+        ? { exitCode: 1, stdout: '', stderr: 'checkout refused', signal: null, error: null }
+        : localGit(args, opts)) },
+    }), /git checkout .* failed/);
+    const clone = calls.find(({ args }) => args.includes('clone'));
+    assert.ok(clone.args.includes('gc.auto=0'), 'gc --auto would detach a writer into the scratch directory');
+    assert.ok(clone.args.includes('maintenance.auto=false'), 'maintenance run --auto would too');
+  });
+
+  test('#6441: a scratch clone that still cannot be removed is reported, not swallowed', async (t) => {
+    const warnings = [];
+    const messages = [];
+    t.mock.method(process, 'emitWarning', (message, options) => { messages.push(message); warnings.push(options && options.code); });
+    const realRmSync = fs.rmSync;
+    let leftBehind = null;
+    t.mock.method(fs, 'rmSync', (target, options) => {
+      if (leftBehind === null && cloneDirs.length > 0 && target === path.dirname(cloneDirs[0])) {
+        leftBehind = target;
+        // The message carries an entry name from the (untrusted) clone, as a real fs error does.
+        throw Object.assign(new Error(`EACCES: permission denied, rmdir '${target}/repo/evil\n\u001b[31mforged line'`), { code: 'EACCES' });
+      }
+      // eslint-disable-next-line local/no-raw-rmsync-in-tests -- #6441 forwards every other removal (the afterEach cleanup) to the real one
+      return realRmSync(target, options);
+    });
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#v0.3.0`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: (args, opts) => (args.includes('checkout')
+        ? { exitCode: 1, stdout: '', stderr: 'checkout refused', signal: null, error: null }
+        : localGit(args, opts)) },
+    }), /git checkout .* failed/);
+    assert.deepEqual(warnings, ['GSD_SCRATCH_CLONE_LEFT']);
+    assert.equal(messages[0], `Could not remove the scratch clone ${leftBehind} (EACCES).`, 'the code and the scratch path, never the error message');
+    assert.ok(!messages[0].includes('forged line') && !messages[0].includes('\u001b'), 'an entry name from the clone never reaches the warning');
+    assert.ok(leftBehind !== null && fs.existsSync(leftBehind), 'the fixture really left the directory behind');
+    t.after(() => cleanup(leftBehind));
+  });
+
+  test('#6441: the scratch clone removal is retried by the filesystem, not attempted once and dropped', async (t) => {
+    const realRmSync = fs.rmSync;
+    const scratchRemovals = [];
+    t.mock.method(fs, 'rmSync', (target, options) => {
+      if (cloneDirs.length > 0 && target === path.dirname(cloneDirs[0])) scratchRemovals.push(options);
+      // eslint-disable-next-line local/no-raw-rmsync-in-tests -- #6441 the wrapper forwards production's own call after recording its options
+      return realRmSync(target, options);
+    });
+    const checkoutFailGit = (args, opts) => (args.includes('checkout')
+      ? { exitCode: 1, stdout: '', stderr: 'checkout refused', signal: null, error: null }
+      : localGit(args, opts));
+    await assert.rejects(() => resolveCapabilitySource(`${sourceUrl}#v0.3.0`, {
+      gsdHome, hostVersion: '1.5.0', execOverrides: { git: checkoutFailGit },
+    }), /git checkout .* failed/);
+    assert.equal(scratchRemovals.length, 1, 'the scratch directory is removed once, as a whole');
+    assert.ok(scratchRemovals[0].maxRetries > 0, 'a transient ENOTEMPTY or EBUSY is retried');
+    assert.ok(scratchRemovals[0].retryDelay > 0, 'the retries are spaced');
+    assertScratchClonesRemoved('scratch removal retried');
+  });
+
   test('missing cloned manifest cleans the scratch clone', async () => {
     const missingManifestGit = (args, opts) => {
       const result = localGit(args, opts);

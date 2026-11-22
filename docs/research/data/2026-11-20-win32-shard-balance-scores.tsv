@@ -1,0 +1,677 @@
+study	table	packer	run_id	s1	s2	s3	s4	s5	s6	gap_s	long_pole_s
+A	committed at the run commit	current	44424086346	511.8	823.4	809.0	627.2	595.9	681.2	311.6	823.4
+A	committed at the run commit	current	44425942676	716.7	791.0	943.6	667.9	586.8	752.0	356.8	943.6
+A	committed at the run commit	current	44429954389	698.7	727.0	695.9	977.3	561.9	874.4	415.3	977.3
+A	committed at the run commit	current	44432256080	498.3	930.8	854.4	777.0	580.2	837.8	432.5	930.8
+A	committed at the run commit	current	44435397790	505.0	971.7	663.1	684.4	377.9	728.7	593.8	971.7
+A	committed at the run commit	current	44436254198	488.4	916.6	958.6	746.9	529.3	895.4	470.2	958.6
+A	committed at the run commit	current	44439460626	611.2	954.9	657.7	619.8	520.0	901.2	434.9	954.9
+A	committed at the run commit	current	44443322305	468.6	901.2	971.1	507.0	630.1	676.4	502.4	971.1
+A	committed at the run commit	current	44446853097	541.8	832.7	879.7	640.5	577.1	810.3	337.9	879.7
+A	committed at the run commit	current	44453445997	716.5	550.1	800.7	777.9	506.9	662.3	293.8	800.7
+A	committed at the run commit	current	44455921389	716.3	937.5	841.0	636.5	540.1	501.8	435.8	937.5
+A	committed at the run commit	current	44456591249	784.3	796.1	794.8	774.6	571.5	632.2	224.6	796.1
+A	committed at the run commit	current	44456644233	729.0	883.0	931.6	822.5	534.9	807.2	396.7	931.6
+A	committed at the run commit	current	44456673804	712.1	782.8	872.8	624.5	569.2	892.7	323.5	892.7
+A	committed at the run commit	current	44456693502	790.0	801.0	756.4	717.8	566.1	962.4	396.2	962.4
+A	committed at the run commit	current	44456777253	728.0	870.6	757.7	629.6	526.7	845.5	343.8	870.6
+A	committed at the run commit	current	44456810325	756.7	904.7	729.8	785.2	603.2	934.4	331.2	934.4
+A	committed at the run commit	current	44462018993	737.2	815.3	733.2	841.0	627.4	923.8	296.4	923.8
+A	committed at the run commit	current	44470893686	772.6	982.7	675.2	674.0	524.8	596.7	457.9	982.7
+A	committed at the run commit	current	44473369620	486.7	1115.3	776.7	433.5	629.1	792.5	681.8	1115.3
+A	committed at the run commit	current	44479626402	709.5	970.8	798.2	436.3	585.7	542.8	534.5	970.8
+A	committed at the run commit	current	44483394854	723.0	1144.2	793.3	745.0	579.5	836.7	564.7	1144.2
+A	committed at the run commit	current	44529310644	694.1	869.2	582.1	541.7	579.9	682.7	327.5	869.2
+A	committed at the run commit	current	44538888934	672.2	816.3	819.6	706.5	801.1	677.8	147.4	819.6
+A	committed at the run commit	current	44544297961	546.5	736.9	757.6	657.2	784.8	648.2	238.3	784.8
+A	committed at the run commit	current	44548272199	559.3	877.6	684.8	550.3	593.5	860.2	327.3	877.6
+A	committed at the run commit	current	44552501419	536.7	814.1	535.7	766.6	374.8	729.3	439.4	814.1
+A	committed at the run commit	current	44554969276	563.8	861.6	687.7	940.5	545.8	1025.6	479.8	1025.6
+A	committed at the run commit	current	44556262345	490.6	706.0	624.9	741.2	601.7	952.5	461.8	952.5
+A	committed at the run commit	isolated x concurrency	44424086346	526.3	591.8	800.7	720.2	883.2	671.5	357.0	883.2
+A	committed at the run commit	isolated x concurrency	44425942676	677.6	582.8	908.8	775.6	982.1	724.6	399.3	982.1
+A	committed at the run commit	isolated x concurrency	44429954389	680.3	568.5	784.3	1088.1	794.7	780.1	519.6	1088.1
+A	committed at the run commit	isolated x concurrency	44432256080	551.0	632.7	815.0	840.9	976.6	787.6	425.6	976.6
+A	committed at the run commit	isolated x concurrency	44435397790	527.3	599.2	721.2	750.9	696.5	656.6	223.6	750.9
+A	committed at the run commit	isolated x concurrency	44436254198	533.5	687.0	922.1	781.2	939.7	782.5	406.2	939.7
+A	committed at the run commit	isolated x concurrency	44439460626	597.2	665.6	772.2	723.4	779.8	800.4	203.1	800.4
+A	committed at the run commit	isolated x concurrency	44443322305	525.8	590.8	821.3	645.6	1027.6	683.5	501.7	1027.6
+A	committed at the run commit	isolated x concurrency	44446853097	567.8	589.6	819.3	745.7	908.5	756.5	340.6	908.5
+A	committed at the run commit	isolated x concurrency	44453445997	649.7	535.9	761.0	847.5	789.5	668.5	311.6	847.5
+A	committed at the run commit	isolated x concurrency	44455921389	648.2	718.7	782.2	705.6	874.2	586.4	287.8	874.2
+A	committed at the run commit	isolated x concurrency	44456591249	572.4	678.7	929.2	839.9	867.6	629.5	356.7	929.2
+A	committed at the run commit	isolated x concurrency	44456644233	711.6	691.5	875.9	927.6	910.3	783.1	236.1	927.6
+A	committed at the run commit	isolated x concurrency	44456673804	703.0	607.4	896.3	731.1	871.7	809.2	288.9	896.3
+A	committed at the run commit	isolated x concurrency	44456693502	571.2	690.6	936.6	829.7	894.4	800.7	365.5	936.6
+A	committed at the run commit	isolated x concurrency	44456777253	668.5	666.0	820.5	786.6	814.1	768.3	154.6	820.5
+A	committed at the run commit	isolated x concurrency	44456810325	543.4	682.4	957.5	850.8	976.2	795.0	432.8	976.2
+A	committed at the run commit	isolated x concurrency	44462018993	527.6	705.1	1000.5	910.4	852.1	811.2	472.9	1000.5
+A	committed at the run commit	isolated x concurrency	44470893686	570.7	619.3	1068.7	852.5	783.7	649.5	498.1	1068.7
+A	committed at the run commit	isolated x concurrency	44473369620	401.4	691.0	1127.2	693.4	883.9	779.5	725.9	1127.2
+A	committed at the run commit	isolated x concurrency	44479626402	557.7	603.0	1103.9	664.4	868.4	624.9	546.2	1103.9
+A	committed at the run commit	isolated x concurrency	44483394854	564.3	715.4	1250.0	996.9	917.4	839.2	685.6	1250.0
+A	committed at the run commit	isolated x concurrency	44529310644	735.3	582.4	742.7	657.0	716.8	677.3	160.3	742.7
+A	committed at the run commit	isolated x concurrency	44538888934	786.3	591.9	880.8	837.5	885.3	742.0	293.5	885.3
+A	committed at the run commit	isolated x concurrency	44544297961	766.8	535.8	803.0	739.7	789.6	723.3	267.2	803.0
+A	committed at the run commit	isolated x concurrency	44548272199	437.8	596.1	894.3	743.8	984.2	819.9	546.4	984.2
+A	committed at the run commit	isolated x concurrency	44552501419	478.0	504.8	747.0	871.5	799.3	733.2	393.6	871.5
+A	committed at the run commit	isolated x concurrency	44554969276	531.0	611.7	966.9	1117.6	1041.9	959.3	586.6	1117.6
+A	committed at the run commit	isolated x concurrency	44556262345	439.3	468.2	882.8	870.3	991.0	870.2	551.7	991.0
+A	committed at the run commit	isolated x 1.2	44424086346	518.6	893.3	725.9	615.1	645.1	686.4	374.7	893.3
+A	committed at the run commit	isolated x 1.2	44425942676	599.9	916.1	820.1	632.5	752.4	769.9	316.2	916.1
+A	committed at the run commit	isolated x 1.2	44429954389	590.9	777.3	692.0	923.3	637.1	844.4	332.3	923.3
+A	committed at the run commit	isolated x 1.2	44432256080	523.3	979.8	750.6	746.6	686.2	813.9	456.4	979.8
+A	committed at the run commit	isolated x 1.2	44435397790	483.8	849.3	658.0	655.0	590.8	688.2	365.5	849.3
+A	committed at the run commit	isolated x 1.2	44436254198	528.5	1036.0	834.6	699.6	632.9	782.1	507.5	1036.0
+A	committed at the run commit	isolated x 1.2	44439460626	551.6	824.5	665.0	595.0	681.2	832.8	281.2	832.8
+A	committed at the run commit	isolated x 1.2	44443322305	513.0	975.5	753.9	574.5	697.9	698.4	462.5	975.5
+A	committed at the run commit	isolated x 1.2	44446853097	538.2	888.4	747.8	637.3	667.2	758.1	350.2	888.4
+A	committed at the run commit	isolated x 1.2	44453445997	537.3	759.2	710.1	696.6	605.7	749.5	221.9	759.2
+A	committed at the run commit	isolated x 1.2	44455921389	611.1	964.7	684.2	590.6	672.9	654.2	374.1	964.7
+A	committed at the run commit	isolated x 1.2	44456591249	613.6	729.2	855.5	868.1	771.2	660.0	254.5	868.1
+A	committed at the run commit	isolated x 1.2	44456644233	613.0	1006.2	799.6	794.1	677.3	813.4	393.2	1006.2
+A	committed at the run commit	isolated x 1.2	44456673804	613.4	878.6	805.8	617.9	695.6	848.9	265.2	878.6
+A	committed at the run commit	isolated x 1.2	44456693502	597.3	806.9	850.1	951.8	735.6	798.0	354.5	951.8
+A	committed at the run commit	isolated x 1.2	44456777253	589.3	861.2	738.5	629.2	686.3	812.3	271.9	861.2
+A	committed at the run commit	isolated x 1.2	44456810325	564.4	790.7	881.9	912.2	889.6	776.5	347.9	912.2
+A	committed at the run commit	isolated x 1.2	44462018993	563.9	780.5	907.8	966.8	730.8	808.0	402.9	966.8
+A	committed at the run commit	isolated x 1.2	44470893686	597.7	870.8	781.2	675.6	802.8	646.1	273.1	870.8
+A	committed at the run commit	isolated x 1.2	44473369620	519.7	962.8	820.2	552.1	896.3	725.0	443.1	962.8
+A	committed at the run commit	isolated x 1.2	44479626402	582.9	885.8	794.3	542.0	846.5	623.2	343.9	885.8
+A	committed at the run commit	isolated x 1.2	44483394854	616.6	1041.2	870.0	815.5	921.2	811.7	424.6	1041.2
+A	committed at the run commit	isolated x 1.2	44529310644	478.2	893.9	694.2	625.6	702.9	640.7	415.7	893.9
+A	committed at the run commit	isolated x 1.2	44538888934	525.5	1001.1	891.0	782.3	799.2	656.9	475.6	1001.1
+A	committed at the run commit	isolated x 1.2	44544297961	459.3	1003.6	780.9	731.0	687.5	642.0	544.2	1003.6
+A	committed at the run commit	isolated x 1.2	44548272199	530.2	705.1	777.6	615.0	675.4	987.5	457.3	987.5
+A	committed at the run commit	isolated x 1.2	44552501419	463.8	675.0	644.5	757.8	596.1	899.7	435.9	899.7
+A	committed at the run commit	isolated x 1.2	44554969276	536.0	754.9	820.1	1009.5	716.6	1189.6	653.6	1189.6
+A	committed at the run commit	isolated x 1.2	44556262345	497.7	671.3	746.7	763.2	623.3	1084.5	586.8	1084.5
+A	committed at the run commit	isolated x 1.4	44424086346	536.0	763.0	687.9	738.5	652.2	684.1	227.0	763.0
+A	committed at the run commit	isolated x 1.4	44425942676	628.4	773.3	804.6	804.6	780.5	733.0	176.1	804.6
+A	committed at the run commit	isolated x 1.4	44429954389	597.5	660.7	691.8	1090.8	694.2	827.7	493.3	1090.8
+A	committed at the run commit	isolated x 1.4	44432256080	584.2	823.0	729.1	845.0	702.2	797.9	260.8	845.0
+A	committed at the run commit	isolated x 1.4	44435397790	517.4	748.9	621.8	744.7	584.6	706.0	231.5	748.9
+A	committed at the run commit	isolated x 1.4	44436254198	579.0	838.5	815.4	776.0	660.0	851.9	273.0	851.9
+A	committed at the run commit	isolated x 1.4	44439460626	572.6	745.8	649.6	738.6	743.4	805.2	232.7	805.2
+A	committed at the run commit	isolated x 1.4	44443322305	592.3	800.8	736.9	657.3	676.1	690.3	208.6	800.8
+A	committed at the run commit	isolated x 1.4	44446853097	601.9	711.0	748.7	757.9	676.7	761.4	159.5	761.4
+A	committed at the run commit	isolated x 1.4	44453445997	576.3	614.8	684.9	842.9	704.2	676.6	266.6	842.9
+A	committed at the run commit	isolated x 1.4	44455921389	645.3	869.7	658.1	745.8	691.0	630.3	239.4	869.7
+A	committed at the run commit	isolated x 1.4	44456591249	641.5	751.3	934.5	839.3	803.6	648.7	293.1	934.5
+A	committed at the run commit	isolated x 1.4	44456644233	645.0	828.8	782.2	943.1	728.6	829.3	298.2	943.1
+A	committed at the run commit	isolated x 1.4	44456673804	657.8	716.0	776.6	763.9	761.9	800.6	142.8	800.6
+A	committed at the run commit	isolated x 1.4	44456693502	657.1	737.1	1030.5	775.0	786.5	794.9	373.4	1030.5
+A	committed at the run commit	isolated x 1.4	44456777253	625.3	737.5	717.8	780.2	761.0	793.9	168.6	793.9
+A	committed at the run commit	isolated x 1.4	44456810325	625.8	771.2	1051.0	760.8	931.6	794.0	425.3	1051.0
+A	committed at the run commit	isolated x 1.4	44462018993	616.1	734.0	1056.4	871.8	789.9	790.7	440.3	1056.4
+A	committed at the run commit	isolated x 1.4	44470893686	554.1	683.6	751.8	772.4	974.0	612.3	419.9	974.0
+A	committed at the run commit	isolated x 1.4	44473369620	512.6	743.7	800.8	647.9	1015.3	680.1	502.7	1015.3
+A	committed at the run commit	isolated x 1.4	44479626402	567.2	641.4	763.9	639.8	1020.4	587.9	453.2	1020.4
+A	committed at the run commit	isolated x 1.4	44483394854	598.4	777.0	837.5	853.5	1133.5	769.9	535.1	1133.5
+A	committed at the run commit	isolated x 1.4	44529310644	542.3	921.8	610.0	719.6	683.9	625.6	379.5	921.8
+A	committed at the run commit	isolated x 1.4	44538888934	628.1	981.1	766.8	853.7	780.6	663.6	353.0	981.1
+A	committed at the run commit	isolated x 1.4	44544297961	547.7	992.4	700.9	767.3	647.2	655.2	444.7	992.4
+A	committed at the run commit	isolated x 1.4	44548272199	686.1	668.1	916.9	675.4	652.8	785.8	264.1	916.9
+A	committed at the run commit	isolated x 1.4	44552501419	616.6	578.4	809.8	756.3	567.0	747.8	242.8	809.8
+A	committed at the run commit	isolated x 1.4	44554969276	825.3	636.5	977.2	1022.0	703.8	959.0	385.5	1022.0
+A	committed at the run commit	isolated x 1.4	44556262345	690.1	540.3	863.6	804.4	598.9	882.3	342.0	882.3
+A	committed at the run commit	isolated x 1.6	44424086346	581.3	550.8	681.5	672.0	785.6	843.4	292.7	843.4
+A	committed at the run commit	isolated x 1.6	44425942676	672.5	523.3	792.0	712.2	907.7	947.9	424.6	947.9
+A	committed at the run commit	isolated x 1.6	44429954389	671.4	560.6	651.3	1010.4	793.0	915.4	449.8	1010.4
+A	committed at the run commit	isolated x 1.6	44432256080	621.9	579.2	685.8	817.5	858.1	970.6	391.4	970.6
+A	committed at the run commit	isolated x 1.6	44435397790	545.7	565.7	568.5	748.3	764.7	781.4	235.7	781.4
+A	committed at the run commit	isolated x 1.6	44436254198	638.9	605.6	745.3	763.8	836.8	1039.3	433.7	1039.3
+A	committed at the run commit	isolated x 1.6	44439460626	638.3	598.1	607.3	699.1	828.7	929.3	331.2	929.3
+A	committed at the run commit	isolated x 1.6	44443322305	595.6	554.3	734.6	629.6	832.2	881.0	326.7	881.0
+A	committed at the run commit	isolated x 1.6	44446853097	621.8	543.9	716.3	688.4	832.0	917.1	373.2	917.1
+A	committed at the run commit	isolated x 1.6	44453445997	614.4	404.4	664.4	738.6	747.5	919.1	514.7	919.1
+A	committed at the run commit	isolated x 1.6	44455921389	606.6	587.7	694.0	686.6	824.0	871.5	283.8	871.5
+A	committed at the run commit	isolated x 1.6	44456591249	561.4	722.5	854.2	689.5	953.5	675.8	392.2	953.5
+A	committed at the run commit	isolated x 1.6	44456644233	691.4	595.4	764.1	860.3	882.2	1032.1	436.7	1032.1
+A	committed at the run commit	isolated x 1.6	44456673804	698.8	523.3	768.8	673.7	861.3	998.5	475.2	998.5
+A	committed at the run commit	isolated x 1.6	44456693502	633.5	920.9	773.5	658.9	897.0	857.6	287.4	920.9
+A	committed at the run commit	isolated x 1.6	44456777253	668.4	563.9	684.3	718.4	846.7	971.3	407.3	971.3
+A	committed at the run commit	isolated x 1.6	44456810325	625.6	880.5	763.1	668.9	1048.3	838.8	422.6	1048.3
+A	committed at the run commit	isolated x 1.6	44462018993	598.2	874.5	812.0	752.8	931.7	845.7	333.5	931.7
+A	committed at the run commit	isolated x 1.6	44470893686	590.5	568.4	703.5	776.6	1124.4	654.2	556.0	1124.4
+A	committed at the run commit	isolated x 1.6	44473369620	515.1	644.9	763.5	660.3	1062.7	727.4	547.6	1062.7
+A	committed at the run commit	isolated x 1.6	44479626402	549.1	571.7	785.9	599.6	1142.2	599.9	593.1	1142.2
+A	committed at the run commit	isolated x 1.6	44483394854	607.8	644.9	796.9	903.3	1246.9	820.9	639.1	1246.9
+A	committed at the run commit	isolated x 1.6	44529310644	564.2	682.3	642.6	629.2	815.5	822.4	258.2	822.4
+A	committed at the run commit	isolated x 1.6	44538888934	576.0	687.6	869.1	728.4	951.2	910.8	375.1	951.2
+A	committed at the run commit	isolated x 1.6	44544297961	550.6	654.3	743.3	668.4	879.3	931.7	381.1	931.7
+A	committed at the run commit	isolated x 1.6	44548272199	620.5	610.6	814.5	614.4	934.3	738.5	323.6	934.3
+A	committed at the run commit	isolated x 1.6	44552501419	611.2	527.6	617.7	725.3	832.8	689.5	305.3	832.8
+A	committed at the run commit	isolated x 1.6	44554969276	677.9	666.1	804.1	974.1	1036.8	822.5	370.7	1036.8
+A	committed at the run commit	isolated x 1.6	44556262345	628.1	503.3	760.6	740.4	954.2	778.1	450.9	954.2
+A	regenerated from the 3 previous runs	current	44432256080	689.9	862.3	776.9	757.1	860.0	697.6	172.4	862.3
+A	regenerated from the 3 previous runs	current	44435397790	570.0	727.0	653.4	799.3	733.3	630.2	229.4	799.3
+A	regenerated from the 3 previous runs	current	44436254198	680.9	796.8	957.9	781.9	793.5	707.4	277.0	957.9
+A	regenerated from the 3 previous runs	current	44439460626	897.7	654.4	810.9	673.2	615.2	721.9	282.5	897.7
+A	regenerated from the 3 previous runs	current	44443322305	689.7	776.9	800.1	695.4	644.1	696.5	156.0	800.1
+A	regenerated from the 3 previous runs	current	44446853097	778.8	798.5	731.7	747.3	720.1	698.4	100.1	798.5
+A	regenerated from the 3 previous runs	current	44453445997	791.3	698.8	633.1	698.6	876.7	623.7	253.0	876.7
+A	regenerated from the 3 previous runs	current	44455921389	613.5	812.5	717.5	823.8	753.5	692.2	210.3	823.8
+A	regenerated from the 3 previous runs	current	44456591249	830.7	728.0	739.9	724.1	775.2	852.1	128.1	852.1
+A	regenerated from the 3 previous runs	current	44456644233	791.5	876.7	829.0	892.0	744.0	835.0	148.0	892.0
+A	regenerated from the 3 previous runs	current	44456673804	667.9	863.1	798.9	784.8	732.9	824.4	195.3	863.1
+A	regenerated from the 3 previous runs	current	44456693502	849.7	776.7	805.8	894.4	727.9	843.9	166.5	894.4
+A	regenerated from the 3 previous runs	current	44456777253	822.2	675.1	712.0	812.4	685.2	782.1	147.1	822.2
+A	regenerated from the 3 previous runs	current	44456810325	842.2	831.7	883.9	769.6	778.4	881.9	114.3	883.9
+A	regenerated from the 3 previous runs	current	44462018993	866.6	865.9	885.6	738.3	817.0	818.5	147.3	885.6
+A	regenerated from the 3 previous runs	current	44470893686	718.5	700.5	696.8	866.1	743.9	811.4	169.3	866.1
+A	regenerated from the 3 previous runs	current	44473369620	869.3	789.4	811.2	688.6	699.0	751.2	180.7	869.3
+A	regenerated from the 3 previous runs	current	44479626402	710.9	748.7	769.4	701.9	628.6	900.5	271.9	900.5
+A	regenerated from the 3 previous runs	current	44483394854	899.4	964.5	871.8	860.2	853.8	839.6	124.9	964.5
+A	regenerated from the 3 previous runs	current	44529310644	642.7	709.5	808.2	781.6	647.4	721.6	165.6	808.2
+A	regenerated from the 3 previous runs	current	44538888934	785.9	772.5	778.4	860.2	820.3	821.0	87.6	860.2
+A	regenerated from the 3 previous runs	current	44544297961	825.4	696.0	767.1	740.7	760.3	722.8	129.4	825.4
+A	regenerated from the 3 previous runs	current	44548272199	769.7	625.5	834.3	719.4	772.2	718.3	208.8	834.3
+A	regenerated from the 3 previous runs	current	44552501419	765.6	583.1	809.3	702.6	617.3	655.3	226.2	809.3
+A	regenerated from the 3 previous runs	current	44554969276	903.4	706.9	819.5	1069.0	832.3	860.2	362.1	1069.0
+A	regenerated from the 3 previous runs	current	44556262345	649.5	763.7	694.3	812.3	801.6	786.5	162.9	812.3
+A	regenerated from the 3 previous runs	isolated x concurrency	44432256080	584.9	696.6	693.9	815.5	883.5	776.4	298.6	883.5
+A	regenerated from the 3 previous runs	isolated x concurrency	44435397790	510.5	606.9	553.5	759.9	800.4	721.9	289.9	800.4
+A	regenerated from the 3 previous runs	isolated x concurrency	44436254198	542.1	767.4	804.1	823.4	922.4	842.1	380.3	922.4
+A	regenerated from the 3 previous runs	isolated x concurrency	44439460626	755.4	553.9	696.5	614.2	734.6	865.5	311.6	865.5
+A	regenerated from the 3 previous runs	isolated x concurrency	44443322305	555.1	687.6	629.0	765.6	757.0	803.8	248.7	803.8
+A	regenerated from the 3 previous runs	isolated x concurrency	44446853097	624.4	626.6	646.5	850.7	789.6	765.0	226.3	850.7
+A	regenerated from the 3 previous runs	isolated x concurrency	44453445997	563.8	554.7	589.7	831.6	916.6	685.9	361.9	916.6
+A	regenerated from the 3 previous runs	isolated x concurrency	44455921389	599.9	656.6	573.9	795.0	932.0	780.4	358.1	932.0
+A	regenerated from the 3 previous runs	isolated x concurrency	44456591249	693.1	627.9	599.5	570.5	923.2	1054.5	484.0	1054.5
+A	regenerated from the 3 previous runs	isolated x concurrency	44456644233	686.4	758.4	701.1	1019.6	901.7	843.3	333.2	1019.6
+A	regenerated from the 3 previous runs	isolated x concurrency	44456673804	654.8	798.1	661.7	739.1	824.6	860.7	205.9	860.7
+A	regenerated from the 3 previous runs	isolated x concurrency	44456693502	709.3	614.1	713.9	895.7	907.2	888.9	293.1	907.2
+A	regenerated from the 3 previous runs	isolated x concurrency	44456777253	715.6	599.6	668.2	703.2	796.3	897.7	298.1	897.7
+A	regenerated from the 3 previous runs	isolated x concurrency	44456810325	654.3	708.0	694.6	852.0	927.1	1020.7	366.4	1020.7
+A	regenerated from the 3 previous runs	isolated x concurrency	44462018993	748.2	760.3	767.3	721.6	990.1	952.8	268.6	990.1
+A	regenerated from the 3 previous runs	isolated x concurrency	44470893686	563.4	644.0	641.8	895.4	802.2	910.4	347.0	910.4
+A	regenerated from the 3 previous runs	isolated x concurrency	44473369620	706.7	696.9	764.5	669.3	746.3	900.4	231.2	900.4
+A	regenerated from the 3 previous runs	isolated x concurrency	44479626402	555.3	602.9	627.3	858.2	646.7	863.9	308.6	863.9
+A	regenerated from the 3 previous runs	isolated x concurrency	44483394854	788.6	790.1	748.9	1015.0	962.4	905.4	266.1	1015.0
+A	regenerated from the 3 previous runs	isolated x concurrency	44529310644	567.6	592.4	664.5	761.0	754.5	745.8	193.4	761.0
+A	regenerated from the 3 previous runs	isolated x concurrency	44538888934	664.9	639.9	670.3	886.2	882.4	925.6	285.7	925.6
+A	regenerated from the 3 previous runs	isolated x concurrency	44544297961	653.3	593.2	669.2	783.6	887.1	748.1	293.8	887.1
+A	regenerated from the 3 previous runs	isolated x concurrency	44548272199	606.4	616.4	916.9	696.4	760.8	782.1	310.4	916.9
+A	regenerated from the 3 previous runs	isolated x concurrency	44552501419	622.4	553.5	594.8	799.4	697.2	732.4	245.9	799.4
+A	regenerated from the 3 previous runs	isolated x concurrency	44554969276	817.0	665.9	677.5	1065.4	906.9	856.6	399.6	1065.4
+A	regenerated from the 3 previous runs	isolated x concurrency	44556262345	533.4	740.5	791.0	721.8	731.8	1003.8	470.4	1003.8
+A	regenerated from the 3 previous runs	isolated x 1.2	44432256080	629.0	791.2	786.7	834.8	851.8	723.8	222.8	851.8
+A	regenerated from the 3 previous runs	isolated x 1.2	44435397790	563.8	705.3	626.0	761.7	734.6	633.0	197.9	761.7
+A	regenerated from the 3 previous runs	isolated x 1.2	44436254198	623.6	820.6	911.0	752.8	824.2	704.6	287.3	911.0
+A	regenerated from the 3 previous runs	isolated x 1.2	44439460626	784.7	650.1	808.6	689.4	702.3	725.6	158.5	808.6
+A	regenerated from the 3 previous runs	isolated x 1.2	44443322305	659.8	790.9	814.3	705.6	714.8	655.4	158.8	814.3
+A	regenerated from the 3 previous runs	isolated x 1.2	44446853097	698.1	750.3	716.0	776.7	775.4	678.7	97.9	776.7
+A	regenerated from the 3 previous runs	isolated x 1.2	44453445997	706.9	667.2	631.5	779.9	817.0	639.5	185.6	817.0
+A	regenerated from the 3 previous runs	isolated x 1.2	44455921389	634.1	794.6	684.1	818.3	741.9	708.7	184.2	818.3
+A	regenerated from the 3 previous runs	isolated x 1.2	44456591249	743.8	696.5	795.9	672.0	821.1	876.1	204.0	876.1
+A	regenerated from the 3 previous runs	isolated x 1.2	44456644233	786.4	874.0	800.8	928.8	796.4	787.0	142.4	928.8
+A	regenerated from the 3 previous runs	isolated x 1.2	44456673804	703.8	840.3	750.9	806.9	712.3	824.5	136.6	840.3
+A	regenerated from the 3 previous runs	isolated x 1.2	44456693502	777.7	727.1	821.2	892.2	832.3	769.8	165.1	892.2
+A	regenerated from the 3 previous runs	isolated x 1.2	44456777253	745.2	721.1	740.6	779.1	748.5	834.0	112.9	834.0
+A	regenerated from the 3 previous runs	isolated x 1.2	44456810325	780.9	811.5	874.4	766.5	885.6	876.9	119.1	885.6
+A	regenerated from the 3 previous runs	isolated x 1.2	44462018993	825.1	829.4	878.7	763.8	804.5	852.5	115.0	878.7
+A	regenerated from the 3 previous runs	isolated x 1.2	44470893686	717.1	751.9	705.3	876.4	736.8	819.4	171.1	876.4
+A	regenerated from the 3 previous runs	isolated x 1.2	44473369620	824.0	833.2	798.4	688.0	713.3	739.0	145.2	833.2
+A	regenerated from the 3 previous runs	isolated x 1.2	44479626402	663.9	783.1	731.5	736.5	648.9	896.8	247.9	896.8
+A	regenerated from the 3 previous runs	isolated x 1.2	44483394854	840.0	942.1	894.6	859.5	867.1	862.2	102.0	942.1
+A	regenerated from the 3 previous runs	isolated x 1.2	44529310644	593.0	658.3	737.6	800.5	681.2	746.5	207.5	800.5
+A	regenerated from the 3 previous runs	isolated x 1.2	44538888934	735.3	751.4	767.8	886.3	857.3	842.1	151.0	886.3
+A	regenerated from the 3 previous runs	isolated x 1.2	44544297961	794.8	686.0	778.2	725.3	723.1	743.7	108.7	794.8
+A	regenerated from the 3 previous runs	isolated x 1.2	44548272199	778.4	655.4	837.5	712.5	781.9	741.2	182.2	837.5
+A	regenerated from the 3 previous runs	isolated x 1.2	44552501419	745.0	594.6	776.9	762.3	612.5	677.8	182.3	776.9
+A	regenerated from the 3 previous runs	isolated x 1.2	44554969276	827.6	701.9	795.3	1135.7	863.2	797.1	433.8	1135.7
+A	regenerated from the 3 previous runs	isolated x 1.2	44556262345	701.0	809.7	711.8	810.1	764.8	752.7	109.1	810.1
+A	regenerated from the 3 previous runs	isolated x 1.4	44432256080	675.4	790.3	755.9	840.4	766.6	724.2	165.0	840.4
+A	regenerated from the 3 previous runs	isolated x 1.4	44435397790	563.7	714.7	667.5	778.5	720.1	593.4	214.8	778.5
+A	regenerated from the 3 previous runs	isolated x 1.4	44436254198	636.9	797.3	767.6	713.5	813.1	855.6	218.7	855.6
+A	regenerated from the 3 previous runs	isolated x 1.4	44439460626	773.4	627.4	766.8	675.1	700.4	799.3	172.0	799.3
+A	regenerated from the 3 previous runs	isolated x 1.4	44443322305	615.9	682.5	735.1	718.5	767.9	772.1	156.1	772.1
+A	regenerated from the 3 previous runs	isolated x 1.4	44446853097	705.0	670.1	703.1	821.7	812.1	778.2	151.6	821.7
+A	regenerated from the 3 previous runs	isolated x 1.4	44453445997	683.4	637.7	595.8	771.8	941.5	654.5	345.8	941.5
+A	regenerated from the 3 previous runs	isolated x 1.4	44455921389	616.1	737.8	653.0	788.9	790.5	705.1	174.4	790.5
+A	regenerated from the 3 previous runs	isolated x 1.4	44456591249	696.1	602.6	785.9	670.3	891.8	944.4	341.7	944.4
+A	regenerated from the 3 previous runs	isolated x 1.4	44456644233	691.8	899.6	832.5	935.9	772.7	817.0	244.1	935.9
+A	regenerated from the 3 previous runs	isolated x 1.4	44456673804	609.8	831.8	770.4	780.9	815.1	866.7	256.9	866.7
+A	regenerated from the 3 previous runs	isolated x 1.4	44456693502	760.5	620.4	832.3	912.5	812.0	903.2	292.1	912.5
+A	regenerated from the 3 previous runs	isolated x 1.4	44456777253	741.8	649.3	750.6	755.1	746.0	870.2	220.9	870.2
+A	regenerated from the 3 previous runs	isolated x 1.4	44456810325	738.8	767.6	787.5	842.4	893.4	953.7	214.9	953.7
+A	regenerated from the 3 previous runs	isolated x 1.4	44462018993	825.0	823.9	774.4	760.2	900.8	881.2	140.5	900.8
+A	regenerated from the 3 previous runs	isolated x 1.4	44470893686	682.9	690.5	667.7	883.5	790.8	816.1	215.8	883.5
+A	regenerated from the 3 previous runs	isolated x 1.4	44473369620	773.8	773.2	806.9	684.6	719.5	811.2	126.6	811.2
+A	regenerated from the 3 previous runs	isolated x 1.4	44479626402	650.9	659.9	810.6	781.7	675.0	828.6	177.6	828.6
+A	regenerated from the 3 previous runs	isolated x 1.4	44483394854	811.1	909.5	821.5	946.0	849.3	867.6	134.8	946.0
+A	regenerated from the 3 previous runs	isolated x 1.4	44529310644	598.4	598.2	764.5	760.5	754.7	760.7	166.3	764.5
+A	regenerated from the 3 previous runs	isolated x 1.4	44538888934	756.3	692.6	844.1	763.6	868.9	899.6	207.0	899.6
+A	regenerated from the 3 previous runs	isolated x 1.4	44544297961	716.8	670.2	753.8	741.3	829.3	684.0	159.0	829.3
+A	regenerated from the 3 previous runs	isolated x 1.4	44548272199	739.4	636.8	870.9	631.6	735.5	752.1	239.3	870.9
+A	regenerated from the 3 previous runs	isolated x 1.4	44552501419	620.1	641.6	704.1	687.0	644.2	817.3	197.2	817.3
+A	regenerated from the 3 previous runs	isolated x 1.4	44554969276	892.6	810.1	730.0	1029.8	858.5	851.8	299.8	1029.8
+A	regenerated from the 3 previous runs	isolated x 1.4	44556262345	607.0	793.0	638.4	838.2	744.2	893.3	286.3	893.3
+A	regenerated from the 3 previous runs	isolated x 1.6	44432256080	596.1	746.2	738.1	931.1	788.6	741.2	335.0	931.1
+A	regenerated from the 3 previous runs	isolated x 1.6	44435397790	505.7	598.8	566.8	835.5	774.6	667.9	329.8	835.5
+A	regenerated from the 3 previous runs	isolated x 1.6	44436254198	542.5	761.1	774.7	758.0	879.6	846.6	337.1	879.6
+A	regenerated from the 3 previous runs	isolated x 1.6	44439460626	746.6	575.1	809.4	667.6	664.2	833.8	258.7	833.8
+A	regenerated from the 3 previous runs	isolated x 1.6	44443322305	590.7	709.4	633.2	784.4	801.3	745.7	210.6	801.3
+A	regenerated from the 3 previous runs	isolated x 1.6	44446853097	691.6	639.9	624.0	810.0	759.8	785.0	186.0	810.0
+A	regenerated from the 3 previous runs	isolated x 1.6	44453445997	640.9	604.1	585.0	774.7	897.9	705.7	312.9	897.9
+A	regenerated from the 3 previous runs	isolated x 1.6	44455921389	538.0	714.8	653.2	796.5	838.7	740.3	300.7	838.7
+A	regenerated from the 3 previous runs	isolated x 1.6	44456591249	660.5	624.0	724.4	697.3	859.6	973.0	348.9	973.0
+A	regenerated from the 3 previous runs	isolated x 1.6	44456644233	709.1	783.1	732.7	943.5	890.1	868.3	234.4	943.5
+A	regenerated from the 3 previous runs	isolated x 1.6	44456673804	630.6	776.4	635.2	778.2	878.4	900.7	270.1	900.7
+A	regenerated from the 3 previous runs	isolated x 1.6	44456693502	742.4	653.1	837.6	937.9	842.0	900.3	284.8	937.9
+A	regenerated from the 3 previous runs	isolated x 1.6	44456777253	751.3	608.6	734.5	751.8	778.4	901.4	292.7	901.4
+A	regenerated from the 3 previous runs	isolated x 1.6	44456810325	733.9	742.4	709.1	808.6	924.3	998.8	289.6	998.8
+A	regenerated from the 3 previous runs	isolated x 1.6	44462018993	817.1	788.6	794.1	705.7	941.5	888.5	235.7	941.5
+A	regenerated from the 3 previous runs	isolated x 1.6	44470893686	676.5	690.4	682.0	872.1	785.0	853.7	195.7	872.1
+A	regenerated from the 3 previous runs	isolated x 1.6	44473369620	712.2	808.6	798.5	691.4	704.5	796.3	117.1	808.6
+A	regenerated from the 3 previous runs	isolated x 1.6	44479626402	669.0	635.6	712.5	788.0	664.5	890.7	255.1	890.7
+A	regenerated from the 3 previous runs	isolated x 1.6	44483394854	792.3	869.1	789.9	924.2	914.0	906.3	134.3	924.2
+A	regenerated from the 3 previous runs	isolated x 1.6	44529310644	564.4	606.1	793.5	721.3	734.9	746.6	229.0	793.5
+A	regenerated from the 3 previous runs	isolated x 1.6	44538888934	751.6	662.5	756.1	855.8	895.8	854.8	233.3	895.8
+A	regenerated from the 3 previous runs	isolated x 1.6	44544297961	679.1	632.9	672.5	806.9	832.5	738.9	199.7	832.5
+A	regenerated from the 3 previous runs	isolated x 1.6	44548272199	672.4	651.0	932.3	677.6	784.0	685.7	281.3	932.3
+A	regenerated from the 3 previous runs	isolated x 1.6	44552501419	635.9	570.8	666.4	718.2	677.8	810.2	239.4	810.2
+A	regenerated from the 3 previous runs	isolated x 1.6	44554969276	815.8	818.1	686.3	1094.3	849.3	808.5	407.9	1094.3
+A	regenerated from the 3 previous runs	isolated x 1.6	44556262345	607.2	767.8	673.5	803.3	789.6	884.1	276.9	884.1
+A	regenerated from the previous run	current	44432256080	669.9	753.9	668.4	790.2	854.1	856.3	187.9	856.3
+A	regenerated from the previous run	current	44435397790	698.5	590.3	655.4	742.4	666.2	651.6	152.1	742.4
+A	regenerated from the previous run	current	44436254198	744.0	817.2	837.2	726.1	810.3	761.1	111.1	837.2
+A	regenerated from the previous run	current	44439460626	764.4	691.0	797.6	646.1	666.0	772.7	151.5	797.6
+A	regenerated from the previous run	current	44443322305	636.8	766.0	685.4	629.7	856.1	741.5	226.4	856.1
+A	regenerated from the previous run	current	44446853097	642.9	702.7	789.9	766.9	779.9	704.7	147.0	789.9
+A	regenerated from the previous run	current	44453445997	641.1	727.5	651.2	789.8	654.6	762.4	148.7	789.8
+A	regenerated from the previous run	current	44455921389	639.1	666.1	793.8	757.4	842.4	726.3	203.3	842.4
+A	regenerated from the previous run	current	44456591249	740.1	573.4	774.1	869.7	781.1	834.7	296.3	869.7
+A	regenerated from the previous run	current	44456644233	761.9	726.2	767.6	1038.2	867.0	830.2	312.0	1038.2
+A	regenerated from the previous run	current	44456673804	706.0	812.7	769.9	760.3	733.7	880.7	174.7	880.7
+A	regenerated from the previous run	current	44456693502	767.9	919.5	760.3	734.6	727.2	866.8	192.3	919.5
+A	regenerated from the previous run	current	44456777253	823.1	773.9	758.0	729.0	763.1	766.3	94.1	823.1
+A	regenerated from the previous run	current	44456810325	790.9	871.7	806.3	815.8	860.5	890.8	99.9	890.8
+A	regenerated from the previous run	current	44462018993	874.3	810.1	774.2	826.0	839.1	861.6	100.1	874.3
+A	regenerated from the previous run	current	44470893686	744.1	695.7	756.4	838.6	727.3	809.1	142.9	838.6
+A	regenerated from the previous run	current	44473369620	699.3	930.1	766.2	673.1	819.8	714.6	257.0	930.1
+A	regenerated from the previous run	current	44479626402	632.0	719.2	777.8	816.2	815.0	662.7	184.2	816.2
+A	regenerated from the previous run	current	44483394854	988.7	835.5	841.2	994.9	940.7	744.2	250.7	994.9
+A	regenerated from the previous run	current	44529310644	675.1	681.5	720.9	773.4	730.0	645.3	128.1	773.4
+A	regenerated from the previous run	current	44538888934	797.5	784.6	872.2	793.1	752.1	938.3	186.2	938.3
+A	regenerated from the previous run	current	44544297961	795.9	770.4	737.1	748.7	675.9	693.1	120.0	795.9
+A	regenerated from the previous run	current	44548272199	738.4	852.6	798.6	619.7	725.6	776.7	232.9	852.6
+A	regenerated from the previous run	current	44552501419	746.7	809.4	665.4	626.1	732.1	675.5	183.3	809.4
+A	regenerated from the previous run	current	44554969276	954.5	919.0	843.8	846.4	894.8	768.6	185.9	954.5
+A	regenerated from the previous run	current	44556262345	629.6	726.3	800.0	813.2	760.4	797.8	183.6	813.2
+A	regenerated from the previous run	isolated x concurrency	44432256080	484.1	616.3	749.3	822.8	887.3	923.8	439.6	923.8
+A	regenerated from the previous run	isolated x concurrency	44435397790	592.0	600.7	563.6	743.0	723.3	792.7	229.1	792.7
+A	regenerated from the previous run	isolated x concurrency	44436254198	672.9	691.9	726.8	647.2	1003.1	869.3	355.9	1003.1
+A	regenerated from the previous run	isolated x concurrency	44439460626	718.0	592.2	678.7	701.8	799.1	835.9	243.7	835.9
+A	regenerated from the previous run	isolated x concurrency	44443322305	501.3	598.6	674.1	754.8	972.8	784.4	471.5	972.8
+A	regenerated from the previous run	isolated x concurrency	44446853097	620.8	675.2	750.1	618.4	878.1	817.1	259.8	878.1
+A	regenerated from the previous run	isolated x concurrency	44453445997	592.2	574.3	715.9	810.2	724.5	763.2	235.9	810.2
+A	regenerated from the previous run	isolated x concurrency	44455921389	534.0	538.9	617.2	756.8	917.7	829.2	383.7	917.7
+A	regenerated from the previous run	isolated x concurrency	44456591249	581.2	484.7	891.1	872.9	824.1	908.7	424.0	908.7
+A	regenerated from the previous run	isolated x concurrency	44456644233	661.3	635.9	747.8	1119.6	985.9	760.7	483.7	1119.6
+A	regenerated from the previous run	isolated x concurrency	44456673804	598.0	759.0	653.9	715.5	796.6	954.1	356.1	954.1
+A	regenerated from the previous run	isolated x concurrency	44456693502	634.2	715.1	652.3	874.0	872.4	950.3	316.1	950.3
+A	regenerated from the previous run	isolated x concurrency	44456777253	700.6	652.8	621.1	765.8	842.1	849.8	228.7	849.8
+A	regenerated from the previous run	isolated x concurrency	44456810325	654.0	753.5	713.3	842.5	931.3	934.4	280.4	934.4
+A	regenerated from the previous run	isolated x concurrency	44462018993	731.0	772.8	702.3	780.2	922.0	935.3	233.0	935.3
+A	regenerated from the previous run	isolated x concurrency	44470893686	571.4	617.4	904.3	871.4	762.7	822.3	333.0	904.3
+A	regenerated from the previous run	isolated x concurrency	44473369620	647.1	786.2	793.4	671.9	835.4	800.2	188.4	835.4
+A	regenerated from the previous run	isolated x concurrency	44479626402	577.4	581.4	661.1	743.2	927.8	885.5	350.4	927.8
+A	regenerated from the previous run	isolated x concurrency	44483394854	761.7	799.5	811.0	856.3	1137.1	855.4	375.4	1137.1
+A	regenerated from the previous run	isolated x concurrency	44529310644	547.7	596.0	709.9	805.1	772.0	702.6	257.4	805.1
+A	regenerated from the previous run	isolated x concurrency	44538888934	577.2	642.3	741.4	852.4	859.8	965.4	388.2	965.4
+A	regenerated from the previous run	isolated x concurrency	44544297961	674.8	652.5	590.0	834.0	791.2	773.9	243.9	834.0
+A	regenerated from the previous run	isolated x concurrency	44548272199	584.2	666.2	709.6	784.0	735.5	818.5	234.3	818.5
+A	regenerated from the previous run	isolated x concurrency	44552501419	561.5	554.2	580.0	741.5	800.7	813.8	259.6	813.8
+A	regenerated from the previous run	isolated x concurrency	44554969276	764.4	1004.9	800.3	792.5	834.5	1026.3	261.8	1026.3
+A	regenerated from the previous run	isolated x concurrency	44556262345	628.9	726.2	799.2	670.9	762.5	914.4	285.5	914.4
+A	regenerated from the previous run	isolated x 1.2	44432256080	587.4	705.0	707.1	747.2	862.2	895.0	307.6	895.0
+A	regenerated from the previous run	isolated x 1.2	44435397790	653.2	624.0	652.0	729.5	654.9	726.7	105.4	729.5
+A	regenerated from the previous run	isolated x 1.2	44436254198	716.4	792.5	843.5	652.5	838.4	802.3	191.0	843.5
+A	regenerated from the previous run	isolated x 1.2	44439460626	798.7	554.3	832.4	670.5	738.6	763.9	278.1	832.4
+A	regenerated from the previous run	isolated x 1.2	44443322305	627.0	656.8	652.8	743.0	925.4	731.7	298.4	925.4
+A	regenerated from the previous run	isolated x 1.2	44446853097	704.0	640.1	800.9	751.7	834.1	699.0	194.0	834.1
+A	regenerated from the previous run	isolated x 1.2	44453445997	615.7	727.4	702.5	804.0	646.9	756.2	188.4	804.0
+A	regenerated from the previous run	isolated x 1.2	44455921389	619.3	635.0	755.8	711.3	874.2	742.7	254.9	874.2
+A	regenerated from the previous run	isolated x 1.2	44456591249	685.9	587.4	781.1	808.4	850.3	873.1	285.6	873.1
+A	regenerated from the previous run	isolated x 1.2	44456644233	830.9	689.0	718.5	1047.3	893.3	844.8	358.2	1047.3
+A	regenerated from the previous run	isolated x 1.2	44456673804	633.8	889.2	757.3	726.3	803.9	850.5	255.4	889.2
+A	regenerated from the previous run	isolated x 1.2	44456693502	732.7	886.3	712.2	806.5	791.8	903.9	191.7	903.9
+A	regenerated from the previous run	isolated x 1.2	44456777253	752.2	779.3	731.0	730.0	815.2	711.8	103.5	815.2
+A	regenerated from the previous run	isolated x 1.2	44456810325	735.1	833.4	845.2	792.0	846.5	927.1	192.0	927.1
+A	regenerated from the previous run	isolated x 1.2	44462018993	808.1	772.9	766.2	895.1	899.7	823.6	133.5	899.7
+A	regenerated from the previous run	isolated x 1.2	44470893686	656.6	697.9	755.2	808.9	753.2	794.2	152.4	808.9
+A	regenerated from the previous run	isolated x 1.2	44473369620	688.5	856.8	732.3	687.2	810.6	839.1	169.6	856.8
+A	regenerated from the previous run	isolated x 1.2	44479626402	559.1	642.0	750.8	808.0	829.4	754.0	270.4	829.4
+A	regenerated from the previous run	isolated x 1.2	44483394854	887.9	848.7	848.2	933.6	1018.2	765.8	252.4	1018.2
+A	regenerated from the previous run	isolated x 1.2	44529310644	685.7	648.1	734.3	769.0	759.3	641.2	127.8	769.0
+A	regenerated from the previous run	isolated x 1.2	44538888934	665.4	734.4	828.4	876.9	851.4	931.8	266.3	931.8
+A	regenerated from the previous run	isolated x 1.2	44544297961	790.8	742.9	772.3	746.7	735.0	667.2	123.6	790.8
+A	regenerated from the previous run	isolated x 1.2	44548272199	682.4	893.0	802.8	572.7	728.7	789.1	320.3	893.0
+A	regenerated from the previous run	isolated x 1.2	44552501419	627.4	619.5	654.6	754.5	694.2	781.4	161.9	781.4
+A	regenerated from the previous run	isolated x 1.2	44554969276	959.1	980.2	794.1	733.2	883.9	877.1	247.0	980.2
+A	regenerated from the previous run	isolated x 1.2	44556262345	626.9	796.1	806.3	774.2	814.6	760.5	187.7	814.6
+A	regenerated from the previous run	isolated x 1.4	44432256080	608.6	663.2	674.1	789.1	881.2	970.2	361.6	970.2
+A	regenerated from the previous run	isolated x 1.4	44435397790	624.9	573.7	651.7	695.6	672.5	713.3	139.7	713.3
+A	regenerated from the previous run	isolated x 1.4	44436254198	695.0	745.2	830.3	787.8	864.9	765.9	169.9	864.9
+A	regenerated from the previous run	isolated x 1.4	44439460626	767.3	573.7	774.5	727.5	696.7	779.8	206.0	779.8
+A	regenerated from the previous run	isolated x 1.4	44443322305	561.8	638.7	621.3	717.5	910.2	765.5	348.4	910.2
+A	regenerated from the previous run	isolated x 1.4	44446853097	668.5	647.0	754.8	744.2	855.6	729.7	208.7	855.6
+A	regenerated from the previous run	isolated x 1.4	44453445997	608.4	650.3	611.7	806.0	725.3	759.9	197.6	806.0
+A	regenerated from the previous run	isolated x 1.4	44455921389	609.7	631.3	672.9	733.0	922.1	733.8	312.5	922.1
+A	regenerated from the previous run	isolated x 1.4	44456591249	598.7	581.7	844.0	816.4	787.7	888.0	306.3	888.0
+A	regenerated from the previous run	isolated x 1.4	44456644233	711.3	727.6	740.8	1074.9	913.3	811.8	363.6	1074.9
+A	regenerated from the previous run	isolated x 1.4	44456673804	603.1	831.0	747.9	737.3	771.3	935.0	331.9	935.0
+A	regenerated from the previous run	isolated x 1.4	44456693502	722.2	811.6	744.8	835.0	835.3	921.2	199.1	921.2
+A	regenerated from the previous run	isolated x 1.4	44456777253	755.1	694.6	652.2	741.3	827.1	823.4	174.9	827.1
+A	regenerated from the previous run	isolated x 1.4	44456810325	739.5	825.9	834.8	837.5	858.3	891.6	152.1	891.6
+A	regenerated from the previous run	isolated x 1.4	44462018993	792.6	823.9	745.5	853.8	871.1	845.8	125.6	871.1
+A	regenerated from the previous run	isolated x 1.4	44470893686	578.6	690.4	847.2	817.7	784.0	760.4	268.6	847.2
+A	regenerated from the previous run	isolated x 1.4	44473369620	760.4	807.3	711.2	587.4	906.0	793.8	318.6	906.0
+A	regenerated from the previous run	isolated x 1.4	44479626402	628.0	600.7	719.5	815.5	848.4	752.8	247.7	848.4
+A	regenerated from the previous run	isolated x 1.4	44483394854	837.7	835.1	761.4	909.9	1054.7	832.6	293.3	1054.7
+A	regenerated from the previous run	isolated x 1.4	44529310644	588.8	629.3	747.6	725.7	856.8	649.7	268.0	856.8
+A	regenerated from the previous run	isolated x 1.4	44538888934	698.3	698.9	792.0	761.0	839.3	954.3	256.1	954.3
+A	regenerated from the previous run	isolated x 1.4	44544297961	719.7	763.3	724.1	773.9	708.9	773.1	65.0	773.9
+A	regenerated from the previous run	isolated x 1.4	44548272199	598.4	790.4	795.5	602.0	838.6	797.8	240.2	838.6
+A	regenerated from the previous run	isolated x 1.4	44552501419	583.9	636.3	670.5	781.2	674.3	777.0	197.2	781.2
+A	regenerated from the previous run	isolated x 1.4	44554969276	956.3	886.5	796.5	752.7	896.0	963.2	210.5	963.2
+A	regenerated from the previous run	isolated x 1.4	44556262345	603.3	790.6	707.2	805.9	792.6	850.1	246.9	850.1
+A	regenerated from the previous run	isolated x 1.6	44432256080	580.8	689.4	725.9	779.7	907.1	931.9	351.2	931.9
+A	regenerated from the previous run	isolated x 1.6	44435397790	653.5	581.7	615.8	691.8	734.4	668.9	152.7	734.4
+A	regenerated from the previous run	isolated x 1.6	44436254198	668.4	759.6	753.5	634.7	926.1	894.0	291.4	926.1
+A	regenerated from the previous run	isolated x 1.6	44439460626	749.1	607.9	761.0	648.8	746.3	737.0	153.1	761.0
+A	regenerated from the previous run	isolated x 1.6	44443322305	555.1	623.4	673.0	727.1	944.3	737.5	389.2	944.3
+A	regenerated from the previous run	isolated x 1.6	44446853097	711.4	644.6	738.3	693.2	825.4	745.0	180.8	825.4
+A	regenerated from the previous run	isolated x 1.6	44453445997	603.4	578.6	676.7	785.8	688.6	742.8	207.2	785.8
+A	regenerated from the previous run	isolated x 1.6	44455921389	581.6	602.9	689.3	701.4	968.6	779.1	387.0	968.6
+A	regenerated from the previous run	isolated x 1.6	44456591249	714.9	501.8	809.9	849.3	857.9	840.9	356.1	857.9
+A	regenerated from the previous run	isolated x 1.6	44456644233	720.4	589.8	772.1	1117.7	931.1	792.2	528.0	1117.7
+A	regenerated from the previous run	isolated x 1.6	44456673804	606.1	749.3	721.9	703.8	859.0	919.0	312.9	919.0
+A	regenerated from the previous run	isolated x 1.6	44456693502	761.2	805.4	721.3	869.1	831.8	923.5	202.2	923.5
+A	regenerated from the previous run	isolated x 1.6	44456777253	740.1	632.9	638.4	811.5	841.2	836.3	208.2	841.2
+A	regenerated from the previous run	isolated x 1.6	44456810325	686.2	798.5	773.9	824.1	945.1	900.8	258.9	945.1
+A	regenerated from the previous run	isolated x 1.6	44462018993	788.3	791.4	733.8	819.2	930.1	935.0	201.2	935.0
+A	regenerated from the previous run	isolated x 1.6	44470893686	620.2	694.9	856.6	826.4	752.4	729.3	236.4	856.6
+A	regenerated from the previous run	isolated x 1.6	44473369620	738.7	835.2	711.6	601.2	872.2	793.8	271.0	872.2
+A	regenerated from the previous run	isolated x 1.6	44479626402	610.1	632.4	638.0	754.9	816.9	857.2	247.0	857.2
+A	regenerated from the previous run	isolated x 1.6	44483394854	789.0	797.7	834.7	824.6	1198.3	834.0	409.2	1198.3
+A	regenerated from the previous run	isolated x 1.6	44529310644	555.1	597.2	793.8	691.0	821.2	715.0	266.2	821.2
+A	regenerated from the previous run	isolated x 1.6	44538888934	618.2	793.2	769.1	795.7	874.8	903.2	285.0	903.2
+A	regenerated from the previous run	isolated x 1.6	44544297961	727.3	685.7	729.8	814.1	685.1	779.5	129.0	814.1
+A	regenerated from the previous run	isolated x 1.6	44548272199	683.4	790.3	852.6	709.0	732.3	722.0	169.2	852.6
+A	regenerated from the previous run	isolated x 1.6	44552501419	580.9	606.5	552.6	730.8	743.4	836.3	283.7	836.3
+A	regenerated from the previous run	isolated x 1.6	44554969276	882.3	1004.8	783.3	771.6	861.6	872.9	233.2	1004.8
+A	regenerated from the previous run	isolated x 1.6	44556262345	592.5	723.7	711.6	698.5	794.9	941.9	349.4	941.9
+A	the run own times	current	44424086346	726.2	735.5	737.4	674.7	700.5	668.0	69.4	737.4
+A	the run own times	current	44425942676	801.2	822.7	752.8	754.4	756.5	818.7	69.9	822.7
+A	the run own times	current	44429954389	816.9	796.8	766.3	767.0	789.3	759.5	57.4	816.9
+A	the run own times	current	44432256080	808.2	753.7	803.9	788.1	728.1	737.5	80.1	808.2
+A	the run own times	current	44435397790	679.3	646.0	686.7	683.8	669.2	704.0	58.0	704.0
+A	the run own times	current	44436254198	795.7	795.5	773.8	765.3	758.2	816.3	58.1	816.3
+A	the run own times	current	44439460626	749.4	778.0	730.7	720.6	682.5	708.6	95.5	778.0
+A	the run own times	current	44443322305	706.6	733.6	740.7	748.2	715.3	717.2	41.6	748.2
+A	the run own times	current	44446853097	762.9	753.3	708.4	748.7	720.3	699.2	63.8	762.9
+A	the run own times	current	44453445997	750.5	751.8	758.1	703.6	659.2	703.0	98.9	758.1
+A	the run own times	current	44455921389	751.5	723.1	711.0	717.5	697.4	746.4	54.1	751.5
+A	the run own times	current	44456591249	743.3	767.9	794.6	750.4	785.6	814.8	71.5	814.8
+A	the run own times	current	44456644233	844.8	819.0	853.8	843.4	787.6	823.3	66.2	853.8
+A	the run own times	current	44456673804	770.8	796.9	771.2	756.2	730.2	806.8	76.6	806.8
+A	the run own times	current	44456693502	867.5	836.5	805.6	774.6	794.7	820.7	93.0	867.5
+A	the run own times	current	44456777253	761.4	781.3	747.2	747.6	749.8	743.9	37.3	781.3
+A	the run own times	current	44456810325	848.9	800.1	851.4	805.8	853.8	855.1	55.0	855.1
+A	the run own times	current	44462018993	856.3	801.6	832.7	822.5	780.7	811.6	75.6	856.3
+A	the run own times	current	44470893686	763.8	746.6	787.1	781.6	772.1	774.1	40.5	787.1
+A	the run own times	current	44473369620	807.8	817.4	798.9	760.0	747.9	713.4	104.0	817.4
+A	the run own times	current	44479626402	751.4	764.1	792.5	742.0	719.3	709.4	83.2	792.5
+A	the run own times	current	44483394854	940.9	887.6	835.0	892.9	846.4	881.6	105.9	940.9
+A	the run own times	current	44529310644	732.9	705.4	752.5	673.4	702.2	735.1	79.1	752.5
+A	the run own times	current	44538888934	793.0	779.7	820.1	791.1	792.4	794.6	40.4	820.1
+A	the run own times	current	44544297961	719.7	753.1	760.4	744.4	692.6	734.9	67.8	760.4
+A	the run own times	current	44548272199	830.6	787.0	698.3	727.4	784.0	742.4	132.3	830.6
+A	the run own times	current	44552501419	705.8	664.3	707.3	730.8	702.1	699.4	66.5	730.8
+A	the run own times	current	44554969276	850.1	852.5	866.8	893.0	867.8	882.3	42.9	893.0
+A	the run own times	current	44556262345	757.4	755.8	754.5	749.5	779.6	792.8	43.3	792.8
+A	the run own times	isolated x concurrency	44424086346	608.6	595.9	599.8	750.9	770.3	787.7	191.8	787.7
+A	the run own times	isolated x concurrency	44425942676	644.6	694.1	773.5	792.4	893.3	846.3	248.7	893.3
+A	the run own times	isolated x concurrency	44429954389	649.1	650.0	808.7	816.5	820.4	820.6	171.4	820.6
+A	the run own times	isolated x concurrency	44432256080	681.4	700.0	692.6	751.1	844.5	902.2	220.9	902.2
+A	the run own times	isolated x concurrency	44435397790	610.4	594.9	607.2	624.1	783.6	746.0	188.7	783.6
+A	the run own times	isolated x concurrency	44436254198	688.0	696.6	704.7	754.3	886.8	898.2	210.2	898.2
+A	the run own times	isolated x concurrency	44439460626	622.4	631.9	791.3	751.6	747.0	777.5	168.8	791.3
+A	the run own times	isolated x concurrency	44443322305	663.0	665.8	665.7	644.2	827.2	857.6	213.4	857.6
+A	the run own times	isolated x concurrency	44446853097	630.7	603.1	767.4	798.0	792.8	791.4	194.9	798.0
+A	the run own times	isolated x concurrency	44453445997	639.8	656.5	601.2	756.3	719.3	782.0	180.8	782.0
+A	the run own times	isolated x concurrency	44455921389	598.1	626.2	764.9	774.0	757.5	796.5	198.4	796.5
+A	the run own times	isolated x concurrency	44456591249	624.5	678.1	785.0	836.7	833.9	817.6	212.1	836.7
+A	the run own times	isolated x concurrency	44456644233	754.6	737.2	730.5	769.8	861.1	899.8	169.3	899.8
+A	the run own times	isolated x concurrency	44456673804	648.4	665.6	703.4	820.9	821.4	859.0	210.7	859.0
+A	the run own times	isolated x concurrency	44456693502	702.1	712.4	697.4	850.5	870.5	885.2	187.8	885.2
+A	the run own times	isolated x concurrency	44456777253	665.6	644.2	683.4	808.1	832.7	790.5	188.6	832.7
+A	the run own times	isolated x concurrency	44456810325	723.9	738.3	787.9	755.5	918.1	950.9	227.1	950.9
+A	the run own times	isolated x concurrency	44462018993	686.5	703.9	879.1	892.7	876.2	868.1	206.2	892.7
+A	the run own times	isolated x concurrency	44470893686	652.3	684.3	708.6	841.7	818.8	851.4	199.1	851.4
+A	the run own times	isolated x concurrency	44473369620	698.7	683.6	662.5	705.9	912.5	829.8	250.0	912.5
+A	the run own times	isolated x concurrency	44479626402	641.0	708.9	659.7	734.4	818.0	830.9	189.9	830.9
+A	the run own times	isolated x concurrency	44483394854	748.3	725.4	753.0	931.2	974.0	977.8	252.4	977.8
+A	the run own times	isolated x concurrency	44529310644	615.0	607.9	586.4	765.1	753.3	786.2	199.8	786.2
+A	the run own times	isolated x concurrency	44538888934	681.5	694.7	673.1	842.6	862.6	916.6	243.5	916.6
+A	the run own times	isolated x concurrency	44544297961	648.3	659.6	656.7	716.4	807.9	819.8	171.5	819.8
+A	the run own times	isolated x concurrency	44548272199	632.1	654.1	651.8	793.4	834.3	802.7	202.2	834.3
+A	the run own times	isolated x concurrency	44552501419	635.8	685.8	671.9	644.8	663.5	899.3	263.5	899.3
+A	the run own times	isolated x concurrency	44554969276	795.9	762.0	855.0	866.1	816.3	1033.3	271.3	1033.3
+A	the run own times	isolated x concurrency	44556262345	649.0	679.4	660.3	866.9	790.4	815.9	217.9	866.9
+A	the run own times	isolated x 1.2	44424086346	694.4	725.0	739.9	690.7	705.1	685.2	54.8	739.9
+A	the run own times	isolated x 1.2	44425942676	726.5	776.7	785.0	742.0	765.7	818.1	91.5	818.1
+A	the run own times	isolated x 1.2	44429954389	825.3	739.9	757.3	753.9	747.2	785.0	85.4	825.3
+A	the run own times	isolated x 1.2	44432256080	755.1	768.0	767.1	779.2	747.6	821.0	73.4	821.0
+A	the run own times	isolated x 1.2	44435397790	668.9	661.6	690.0	648.2	672.2	677.9	41.8	690.0
+A	the run own times	isolated x 1.2	44436254198	758.7	753.0	778.1	775.3	828.4	793.0	75.4	828.4
+A	the run own times	isolated x 1.2	44439460626	720.3	674.5	762.3	733.4	724.8	712.4	87.8	762.3
+A	the run own times	isolated x 1.2	44443322305	695.3	721.7	732.1	725.1	762.3	721.6	67.0	762.3
+A	the run own times	isolated x 1.2	44446853097	698.8	716.5	745.7	772.5	717.4	772.3	73.7	772.5
+A	the run own times	isolated x 1.2	44453445997	687.6	710.8	744.4	718.0	690.0	664.4	80.0	744.4
+A	the run own times	isolated x 1.2	44455921389	703.8	673.9	770.3	731.3	782.9	760.5	109.0	782.9
+A	the run own times	isolated x 1.2	44456591249	779.5	760.0	811.2	772.6	781.1	847.7	87.7	847.7
+A	the run own times	isolated x 1.2	44456644233	815.4	846.4	845.4	831.4	830.9	797.7	48.8	846.4
+A	the run own times	isolated x 1.2	44456673804	766.0	774.6	736.5	804.7	755.0	806.9	70.5	806.9
+A	the run own times	isolated x 1.2	44456693502	764.7	801.4	787.1	774.3	856.1	811.1	91.3	856.1
+A	the run own times	isolated x 1.2	44456777253	719.8	785.2	735.1	739.0	755.0	786.4	66.7	786.4
+A	the run own times	isolated x 1.2	44456810325	816.8	805.3	834.8	830.3	871.4	862.5	66.1	871.4
+A	the run own times	isolated x 1.2	44462018993	780.1	782.0	839.0	795.8	849.1	849.2	69.1	849.2
+A	the run own times	isolated x 1.2	44470893686	720.8	763.1	715.2	768.9	793.8	863.2	148.0	863.2
+A	the run own times	isolated x 1.2	44473369620	731.9	715.8	733.6	738.9	853.8	752.1	138.0	853.8
+A	the run own times	isolated x 1.2	44479626402	737.3	754.2	751.0	722.4	748.6	732.2	31.8	754.2
+A	the run own times	isolated x 1.2	44483394854	859.5	889.1	858.2	872.5	912.7	876.7	54.5	912.7
+A	the run own times	isolated x 1.2	44529310644	702.9	673.4	693.4	727.4	767.2	697.5	93.8	767.2
+A	the run own times	isolated x 1.2	44538888934	799.2	785.2	819.3	780.6	825.4	794.5	44.8	825.4
+A	the run own times	isolated x 1.2	44544297961	729.0	768.8	738.0	737.4	740.6	707.9	61.0	768.8
+A	the run own times	isolated x 1.2	44548272199	706.3	726.5	711.3	735.9	770.6	778.2	71.9	778.2
+A	the run own times	isolated x 1.2	44552501419	710.5	681.6	681.3	694.3	708.0	759.3	78.1	759.3
+A	the run own times	isolated x 1.2	44554969276	858.3	894.3	853.4	864.5	880.7	856.7	40.9	894.3
+A	the run own times	isolated x 1.2	44556262345	761.4	755.3	749.4	734.8	794.6	817.1	82.4	817.1
+A	the run own times	isolated x 1.4	44424086346	650.3	667.8	667.1	723.8	744.7	751.3	101.0	751.3
+A	the run own times	isolated x 1.4	44425942676	738.1	699.3	782.2	763.5	818.2	807.4	118.9	818.2
+A	the run own times	isolated x 1.4	44429954389	754.3	754.1	757.3	751.0	761.0	808.4	57.4	808.4
+A	the run own times	isolated x 1.4	44432256080	726.6	749.8	783.9	726.7	788.2	818.1	91.5	818.1
+A	the run own times	isolated x 1.4	44435397790	649.2	641.7	700.2	716.3	685.5	686.5	74.6	716.3
+A	the run own times	isolated x 1.4	44436254198	733.9	747.5	775.4	737.7	785.8	842.8	108.9	842.8
+A	the run own times	isolated x 1.4	44439460626	709.9	672.9	715.8	730.8	748.1	723.1	75.2	748.1
+A	the run own times	isolated x 1.4	44443322305	700.6	658.7	649.8	759.6	791.3	733.9	141.5	791.3
+A	the run own times	isolated x 1.4	44446853097	679.6	670.8	739.0	801.6	750.0	789.7	130.8	801.6
+A	the run own times	isolated x 1.4	44453445997	679.2	660.8	635.3	731.7	786.6	743.3	151.2	786.6
+A	the run own times	isolated x 1.4	44455921389	675.4	671.0	759.1	747.6	703.8	765.9	94.9	765.9
+A	the run own times	isolated x 1.4	44456591249	699.2	739.7	767.6	791.5	804.8	831.9	132.6	831.9
+A	the run own times	isolated x 1.4	44456644233	765.7	798.5	787.6	850.9	830.3	910.9	145.1	910.9
+A	the run own times	isolated x 1.4	44456673804	717.7	702.6	739.2	802.7	817.3	834.1	131.5	834.1
+A	the run own times	isolated x 1.4	44456693502	756.1	772.6	786.2	808.2	850.7	843.1	94.5	850.7
+A	the run own times	isolated x 1.4	44456777253	704.0	737.4	733.0	827.5	785.5	750.8	123.6	827.5
+A	the run own times	isolated x 1.4	44456810325	790.8	822.7	827.4	820.3	896.3	878.2	105.5	896.3
+A	the run own times	isolated x 1.4	44462018993	751.0	753.9	852.0	846.2	868.2	829.0	117.2	868.2
+A	the run own times	isolated x 1.4	44470893686	747.4	743.7	706.3	765.9	818.6	856.1	149.8	856.1
+A	the run own times	isolated x 1.4	44473369620	716.6	712.5	756.4	730.1	839.4	788.7	126.9	839.4
+A	the run own times	isolated x 1.4	44479626402	725.2	729.7	719.5	710.7	764.8	749.1	54.1	764.8
+A	the run own times	isolated x 1.4	44483394854	806.1	793.3	853.0	907.2	936.2	917.9	143.0	936.2
+A	the run own times	isolated x 1.4	44529310644	653.9	624.3	706.8	689.0	778.2	728.7	153.9	778.2
+A	the run own times	isolated x 1.4	44538888934	760.2	797.6	816.1	812.0	840.9	854.3	94.1	854.3
+A	the run own times	isolated x 1.4	44544297961	686.1	734.9	708.7	755.4	805.1	737.4	119.0	805.1
+A	the run own times	isolated x 1.4	44548272199	692.9	684.6	705.7	757.2	776.0	810.9	126.4	810.9
+A	the run own times	isolated x 1.4	44552501419	728.6	682.9	676.4	678.9	721.2	761.6	85.2	761.6
+A	the run own times	isolated x 1.4	44554969276	833.2	857.5	842.7	828.6	910.4	935.6	107.0	935.6
+A	the run own times	isolated x 1.4	44556262345	703.4	743.8	744.8	786.9	797.3	768.2	93.9	797.3
+A	the run own times	isolated x 1.6	44424086346	646.0	640.6	631.6	741.9	723.7	759.2	127.6	759.2
+A	the run own times	isolated x 1.6	44425942676	723.9	697.4	752.5	822.2	819.4	830.6	133.2	830.6
+A	the run own times	isolated x 1.6	44429954389	712.1	701.9	804.0	791.8	798.4	803.9	102.1	804.0
+A	the run own times	isolated x 1.6	44432256080	706.2	726.4	737.4	717.6	824.9	787.1	118.7	824.9
+A	the run own times	isolated x 1.6	44435397790	636.1	624.9	627.9	618.6	743.5	755.8	137.2	755.8
+A	the run own times	isolated x 1.6	44436254198	730.0	715.8	768.8	735.9	781.8	827.4	111.6	827.4
+A	the run own times	isolated x 1.6	44439460626	674.2	669.0	761.3	732.9	738.0	744.5	92.3	761.3
+A	the run own times	isolated x 1.6	44443322305	706.1	665.7	659.7	730.0	800.8	766.5	141.1	800.8
+A	the run own times	isolated x 1.6	44446853097	645.8	634.4	748.8	764.9	778.7	751.6	144.3	778.7
+A	the run own times	isolated x 1.6	44453445997	669.5	655.1	649.2	692.7	783.5	772.3	134.3	783.5
+A	the run own times	isolated x 1.6	44455921389	716.5	637.4	736.4	767.3	708.1	747.8	129.8	767.3
+A	the run own times	isolated x 1.6	44456591249	712.3	665.3	800.9	827.8	783.8	827.0	162.5	827.8
+A	the run own times	isolated x 1.6	44456644233	770.5	750.2	765.8	789.7	898.5	892.7	148.3	898.5
+A	the run own times	isolated x 1.6	44456673804	698.4	752.5	713.6	848.9	800.5	822.3	150.5	848.9
+A	the run own times	isolated x 1.6	44456693502	759.9	726.7	734.0	825.9	854.4	882.2	155.5	882.2
+A	the run own times	isolated x 1.6	44456777253	709.9	731.4	719.0	773.3	793.5	771.6	83.6	793.5
+A	the run own times	isolated x 1.6	44456810325	781.7	824.4	815.1	780.1	893.1	948.9	168.7	948.9
+A	the run own times	isolated x 1.6	44462018993	741.0	751.2	875.7	865.1	865.2	840.4	134.6	875.7
+A	the run own times	isolated x 1.6	44470893686	736.9	706.4	701.4	761.8	810.4	846.8	145.5	846.8
+A	the run own times	isolated x 1.6	44473369620	702.4	691.1	715.3	731.4	799.3	870.7	179.6	870.7
+A	the run own times	isolated x 1.6	44479626402	665.7	693.9	702.0	704.7	889.0	812.5	223.3	889.0
+A	the run own times	isolated x 1.6	44483394854	802.2	785.8	811.7	888.3	952.7	960.2	174.3	960.2
+A	the run own times	isolated x 1.6	44529310644	643.7	651.2	626.6	746.5	760.0	740.4	133.4	760.0
+A	the run own times	isolated x 1.6	44538888934	717.2	756.4	768.1	842.2	839.3	862.4	145.2	862.4
+A	the run own times	isolated x 1.6	44544297961	685.1	734.0	713.9	735.0	770.5	793.2	108.2	793.2
+A	the run own times	isolated x 1.6	44548272199	677.7	694.0	667.5	742.6	804.6	768.6	137.1	804.6
+A	the run own times	isolated x 1.6	44552501419	688.9	718.9	681.0	678.7	690.5	732.4	53.7	732.4
+A	the run own times	isolated x 1.6	44554969276	851.5	802.6	806.5	852.4	878.5	955.4	152.8	955.4
+A	the run own times	isolated x 1.6	44556262345	681.6	686.2	701.3	834.0	826.5	816.4	152.4	834.0
+B	committed on next at 263c6c45f	current	44570216221	531.2	686.0	724.5	789.3	639.8	931.9	400.8	931.9
+B	committed on next at 263c6c45f	current	44576015578	580.3	922.1	713.6	743.5	456.9	640.7	465.2	922.1
+B	committed on next at 263c6c45f	current	44577330058	491.9	843.1	534.2	565.4	423.3	729.6	419.8	843.1
+B	committed on next at 263c6c45f	current	44585233648	475.1	810.6	736.0	861.1	537.2	904.4	429.3	904.4
+B	committed on next at 263c6c45f	current	44587719137	602.8	770.5	603.0	628.6	570.1	851.1	280.9	851.1
+B	committed on next at 263c6c45f	current	44589537646	602.0	863.0	825.5	683.6	488.7	732.9	374.2	863.0
+B	committed on next at 263c6c45f	current	44593722321	609.4	726.5	1010.6	758.8	598.9	653.6	411.7	1010.6
+B	committed on next at 263c6c45f	current	44597102039	686.4	753.6	690.5	651.0	485.6	926.0	440.4	926.0
+B	committed on next at 263c6c45f	current	44602630371	520.0	814.3	690.8	523.7	587.5	835.9	315.9	835.9
+B	committed on next at 263c6c45f	current	44607229250	396.3	822.2	726.5	694.7	371.1	775.3	451.1	822.2
+B	committed on next at 263c6c45f	current	44607891590	322.3	726.1	685.9	694.0	779.6	515.5	457.3	779.6
+B	committed on next at 263c6c45f	current	44618918385	527.6	811.8	683.9	688.7	525.1	831.1	306.0	831.1
+B	committed on next at 263c6c45f	current	44620632252	533.2	628.4	722.0	695.3	871.1	863.1	338.0	871.1
+B	committed on next at 263c6c45f	current	44622016524	435.1	833.0	658.6	724.0	457.0	613.0	398.0	833.0
+B	committed on next at 263c6c45f	current	44625030182	504.8	909.4	684.4	575.7	608.0	727.2	404.6	909.4
+B	committed on next at 263c6c45f	current	44631636058	465.7	792.2	714.3	657.0	775.4	937.7	472.0	937.7
+B	committed on next at 263c6c45f	current	44631727332	476.5	884.3	703.3	597.7	729.7	614.8	407.8	884.3
+B	committed on next at 263c6c45f	current	44638132917	434.0	878.4	712.8	447.7	636.8	455.7	444.4	878.4
+B	committed on next at 263c6c45f	current	44639095012	483.2	482.3	773.6	645.4	501.7	550.6	291.3	773.6
+B	committed on next at 263c6c45f	current	44641098288	406.7	864.8	783.4	543.0	581.1	570.3	458.0	864.8
+B	committed on next at 263c6c45f	current	44649788611	370.4	607.4	773.7	585.0	711.8	747.9	403.2	773.7
+B	committed on next at 263c6c45f	isolated x concurrency	44570216221	454.9	512.1	955.7	909.2	978.9	949.2	524.0	978.9
+B	committed on next at 263c6c45f	isolated x concurrency	44576015578	499.4	576.9	860.4	870.6	845.6	775.0	371.2	870.6
+B	committed on next at 263c6c45f	isolated x concurrency	44577330058	408.5	556.0	734.7	701.4	773.6	724.0	365.1	773.6
+B	committed on next at 263c6c45f	isolated x concurrency	44585233648	462.9	707.8	813.4	854.0	726.0	694.2	391.0	854.0
+B	committed on next at 263c6c45f	isolated x concurrency	44587719137	477.6	556.5	727.3	707.4	829.7	771.8	352.1	829.7
+B	committed on next at 263c6c45f	isolated x concurrency	44589537646	492.3	631.7	814.8	748.1	946.7	689.0	454.4	946.7
+B	committed on next at 263c6c45f	isolated x concurrency	44593722321	495.3	597.6	923.7	814.1	1006.5	637.3	511.3	1006.5
+B	committed on next at 263c6c45f	isolated x concurrency	44597102039	536.2	535.6	868.6	691.9	880.9	840.4	345.3	880.9
+B	committed on next at 263c6c45f	isolated x concurrency	44602630371	403.1	569.5	963.6	695.6	723.6	737.7	560.5	963.6
+B	committed on next at 263c6c45f	isolated x concurrency	44607229250	315.3	558.9	966.7	787.6	580.1	647.2	651.4	966.7
+B	committed on next at 263c6c45f	isolated x concurrency	44607891590	472.4	478.4	756.5	704.8	825.5	607.7	353.1	825.5
+B	committed on next at 263c6c45f	isolated x concurrency	44618918385	556.2	589.3	809.1	787.5	666.9	752.4	252.9	809.1
+B	committed on next at 263c6c45f	isolated x concurrency	44620632252	682.1	500.9	845.1	846.5	777.7	852.0	351.1	852.0
+B	committed on next at 263c6c45f	isolated x concurrency	44622016524	506.3	603.3	805.1	814.5	551.1	615.8	308.3	814.5
+B	committed on next at 263c6c45f	isolated x concurrency	44625030182	612.4	639.8	811.3	701.4	716.0	737.2	198.9	811.3
+B	committed on next at 263c6c45f	isolated x concurrency	44631636058	637.1	591.5	841.0	808.7	737.7	917.9	326.4	917.9
+B	committed on next at 263c6c45f	isolated x concurrency	44631727332	607.6	604.7	846.6	685.5	720.4	695.3	241.9	846.6
+B	committed on next at 263c6c45f	isolated x concurrency	44638132917	576.0	540.7	744.5	580.7	667.2	577.1	203.9	744.5
+B	committed on next at 263c6c45f	isolated x concurrency	44639095012	559.7	399.2	767.8	715.8	510.9	609.0	368.6	767.8
+B	committed on next at 263c6c45f	isolated x concurrency	44641098288	566.4	552.6	826.9	667.4	678.3	597.4	274.4	826.9
+B	committed on next at 263c6c45f	isolated x concurrency	44649788611	589.6	478.0	776.0	713.5	649.8	784.7	306.7	784.7
+B	regenerated from run 44559069895	current	44570216221	682.4	853.5	834.4	890.9	720.3	825.4	208.5	890.9
+B	regenerated from run 44559069895	current	44576015578	819.3	720.1	757.7	797.1	678.0	669.2	150.1	819.3
+B	regenerated from run 44559069895	current	44577330058	728.2	690.1	636.1	689.7	571.8	657.4	156.4	728.2
+B	regenerated from run 44559069895	current	44585233648	679.2	833.3	753.9	821.7	683.3	743.6	154.1	833.3
+B	regenerated from run 44559069895	current	44587719137	630.4	840.8	668.0	672.3	612.5	678.0	228.3	840.8
+B	regenerated from run 44559069895	current	44589537646	710.4	741.5	747.2	779.9	662.9	745.2	117.0	779.9
+B	regenerated from run 44559069895	current	44593722321	633.7	699.3	793.2	838.9	749.1	819.0	205.2	838.9
+B	regenerated from run 44559069895	current	44597102039	631.4	852.2	768.9	675.3	653.5	776.6	220.8	852.2
+B	regenerated from run 44559069895	current	44602630371	581.8	827.4	659.4	674.4	705.7	765.8	245.6	827.4
+B	regenerated from run 44559069895	current	44607229250	574.5	727.4	641.7	737.7	699.2	615.1	163.3	737.7
+B	regenerated from run 44559069895	current	44607891590	619.9	537.1	730.6	652.2	683.0	707.6	193.6	730.6
+B	regenerated from run 44559069895	current	44618918385	706.2	840.6	725.9	792.7	674.8	619.2	221.4	840.6
+B	regenerated from run 44559069895	current	44620632252	591.1	910.5	709.1	793.8	828.1	818.1	319.4	910.5
+B	regenerated from run 44559069895	current	44622016524	706.1	644.7	691.8	753.1	665.1	569.5	183.6	753.1
+B	regenerated from run 44559069895	current	44625030182	766.4	759.0	764.2	691.3	656.1	661.8	110.4	766.4
+B	regenerated from run 44559069895	current	44631636058	656.7	900.4	760.4	775.9	723.0	804.4	243.7	900.4
+B	regenerated from run 44559069895	current	44631727332	730.9	724.8	728.0	689.6	721.8	710.2	41.3	730.9
+B	regenerated from run 44559069895	current	44638132917	687.2	647.2	713.5	491.0	678.5	629.1	222.4	713.5
+B	regenerated from run 44559069895	current	44639095012	543.2	690.4	573.2	656.9	642.1	600.7	147.2	690.4
+B	regenerated from run 44559069895	current	44641098288	686.4	690.4	710.1	577.8	736.5	629.9	158.7	736.5
+B	regenerated from run 44559069895	current	44649788611	604.6	783.9	645.1	639.4	695.5	688.4	179.3	783.9
+B	regenerated from run 44559069895	isolated x concurrency	44570216221	648.4	823.8	626.3	825.8	904.1	1005.0	378.8	1005.0
+B	regenerated from run 44559069895	isolated x concurrency	44576015578	729.9	611.1	674.6	814.4	855.8	884.3	273.2	884.3
+B	regenerated from run 44559069895	isolated x concurrency	44577330058	715.2	631.3	537.1	625.2	715.2	822.9	285.7	822.9
+B	regenerated from run 44559069895	isolated x concurrency	44585233648	666.8	732.5	598.0	817.0	857.2	929.0	331.0	929.0
+B	regenerated from run 44559069895	isolated x concurrency	44587719137	622.8	770.7	536.7	658.0	717.2	840.4	303.7	840.4
+B	regenerated from run 44559069895	isolated x concurrency	44589537646	686.1	679.8	625.8	660.5	807.5	929.7	303.9	929.7
+B	regenerated from run 44559069895	isolated x concurrency	44593722321	634.1	635.2	561.6	755.1	882.5	1049.1	487.5	1049.1
+B	regenerated from run 44559069895	isolated x concurrency	44597102039	689.6	697.1	600.1	699.1	804.9	886.0	285.8	886.0
+B	regenerated from run 44559069895	isolated x concurrency	44602630371	574.2	693.8	534.4	644.9	859.2	936.5	402.1	936.5
+B	regenerated from run 44559069895	isolated x concurrency	44607229250	574.1	610.8	523.9	660.6	801.6	858.8	334.9	858.8
+B	regenerated from run 44559069895	isolated x concurrency	44607891590	573.2	494.4	547.5	652.1	811.1	846.6	352.2	846.6
+B	regenerated from run 44559069895	isolated x concurrency	44618918385	614.8	726.8	591.2	724.5	839.0	816.8	247.8	839.0
+B	regenerated from run 44559069895	isolated x concurrency	44620632252	529.6	783.1	561.5	777.9	993.1	1001.7	472.1	1001.7
+B	regenerated from run 44559069895	isolated x concurrency	44622016524	654.8	562.4	528.7	711.3	783.0	724.3	254.3	783.0
+B	regenerated from run 44559069895	isolated x concurrency	44625030182	702.1	686.6	609.6	680.4	827.4	778.9	217.8	827.4
+B	regenerated from run 44559069895	isolated x concurrency	44631636058	621.6	850.5	611.3	690.4	892.6	968.5	357.2	968.5
+B	regenerated from run 44559069895	isolated x concurrency	44631727332	684.6	604.8	579.8	678.9	878.2	848.6	298.3	878.2
+B	regenerated from run 44559069895	isolated x concurrency	44638132917	629.2	487.8	571.3	606.5	816.2	727.1	328.4	816.2
+B	regenerated from run 44559069895	isolated x concurrency	44639095012	466.2	539.1	438.6	684.6	831.9	731.2	393.2	831.9
+B	regenerated from run 44559069895	isolated x concurrency	44641098288	666.2	533.2	591.7	606.5	843.2	765.3	310.0	843.2
+B	regenerated from run 44559069895	isolated x concurrency	44649788611	540.6	691.1	503.1	611.8	864.2	856.1	361.1	864.2
+B	regenerated from run 44652354632	current	44570216221	827.7	708.4	782.1	867.2	720.7	902.4	194.1	902.4
+B	regenerated from run 44652354632	current	44576015578	626.9	804.8	749.7	789.3	689.0	834.9	208.0	834.9
+B	regenerated from run 44652354632	current	44577330058	607.7	743.4	618.4	611.6	644.4	801.7	194.0	801.7
+B	regenerated from run 44652354632	current	44585233648	717.2	758.1	726.3	782.1	731.5	838.9	121.7	838.9
+B	regenerated from run 44652354632	current	44587719137	778.3	693.6	625.1	653.6	648.5	721.9	153.2	778.3
+B	regenerated from run 44652354632	current	44589537646	661.2	787.7	643.3	774.4	714.4	821.4	178.0	821.4
+B	regenerated from run 44652354632	current	44593722321	636.7	722.3	704.8	832.9	698.5	918.7	282.1	918.7
+B	regenerated from run 44652354632	current	44597102039	735.4	699.9	687.7	774.6	659.5	821.6	162.1	821.6
+B	regenerated from run 44652354632	current	44602630371	676.5	661.3	682.3	755.5	688.5	729.2	94.3	755.5
+B	regenerated from run 44652354632	current	44607229250	591.0	655.9	692.9	719.8	567.4	743.2	175.8	743.2
+B	regenerated from run 44652354632	current	44607891590	531.9	736.7	589.1	654.9	672.5	690.7	204.8	736.7
+B	regenerated from run 44652354632	current	44618918385	687.7	743.0	725.1	785.1	669.6	730.4	115.5	785.1
+B	regenerated from run 44652354632	current	44620632252	825.8	712.1	768.3	786.2	725.6	806.9	113.7	825.8
+B	regenerated from run 44652354632	current	44622016524	544.3	727.0	703.2	749.9	592.7	656.2	205.7	749.9
+B	regenerated from run 44652354632	current	44625030182	641.3	815.5	677.0	759.3	712.1	700.8	174.2	815.5
+B	regenerated from run 44652354632	current	44631636058	821.1	765.9	695.1	791.5	760.9	783.1	126.0	821.1
+B	regenerated from run 44652354632	current	44631727332	593.7	793.0	641.7	765.0	704.7	767.3	199.3	793.0
+B	regenerated from run 44652354632	current	44638132917	554.3	710.1	567.3	707.5	650.6	619.2	155.9	710.1
+B	regenerated from run 44652354632	current	44639095012	569.1	551.8	698.3	738.1	530.7	613.8	207.4	738.1
+B	regenerated from run 44652354632	current	44641098288	578.6	721.1	584.3	739.5	684.2	676.6	160.8	739.5
+B	regenerated from run 44652354632	current	44649788611	738.3	684.0	608.8	709.7	609.4	687.2	129.5	738.3
+B	regenerated from run 44652354632	isolated x concurrency	44570216221	869.8	622.8	856.0	638.1	669.3	1061.4	438.6	1061.4
+B	regenerated from run 44652354632	isolated x concurrency	44576015578	688.1	690.5	705.2	716.6	743.1	930.9	242.8	930.9
+B	regenerated from run 44652354632	isolated x concurrency	44577330058	684.7	668.9	584.4	560.3	628.1	824.5	264.2	824.5
+B	regenerated from run 44652354632	isolated x concurrency	44585233648	751.0	691.7	695.2	684.4	696.4	987.5	303.0	987.5
+B	regenerated from run 44652354632	isolated x concurrency	44587719137	779.0	604.1	630.0	574.0	648.1	834.3	260.3	834.3
+B	regenerated from run 44652354632	isolated x concurrency	44589537646	699.5	635.0	660.6	648.3	745.9	914.7	279.7	914.7
+B	regenerated from run 44652354632	isolated x concurrency	44593722321	629.7	605.0	722.4	683.9	725.9	1086.8	481.8	1086.8
+B	regenerated from run 44652354632	isolated x concurrency	44597102039	703.0	645.8	647.8	713.6	704.6	899.3	253.5	899.3
+B	regenerated from run 44652354632	isolated x concurrency	44602630371	671.0	613.2	602.9	680.2	663.0	906.0	303.1	906.0
+B	regenerated from run 44652354632	isolated x concurrency	44607229250	651.9	571.3	629.1	615.3	664.0	809.6	238.3	809.6
+B	regenerated from run 44652354632	isolated x concurrency	44607891590	495.6	630.3	597.5	581.0	644.2	911.5	415.9	911.5
+B	regenerated from run 44652354632	isolated x concurrency	44618918385	735.5	653.0	655.4	711.7	713.6	829.2	176.3	829.2
+B	regenerated from run 44652354632	isolated x concurrency	44620632252	791.1	581.0	688.6	745.4	649.1	1082.1	501.1	1082.1
+B	regenerated from run 44652354632	isolated x concurrency	44622016524	608.1	650.6	673.6	653.4	620.7	769.7	161.6	769.7
+B	regenerated from run 44652354632	isolated x concurrency	44625030182	685.6	707.7	628.3	685.5	724.2	839.6	211.3	839.6
+B	regenerated from run 44652354632	isolated x concurrency	44631636058	847.6	648.9	686.2	693.1	712.1	1015.1	366.2	1015.1
+B	regenerated from run 44652354632	isolated x concurrency	44631727332	631.7	724.4	599.1	704.3	662.8	913.5	314.4	913.5
+B	regenerated from run 44652354632	isolated x concurrency	44638132917	539.2	659.1	535.1	653.5	647.9	799.3	264.2	799.3
+B	regenerated from run 44652354632	isolated x concurrency	44639095012	617.5	488.7	584.8	650.7	563.5	790.8	302.1	790.8
+B	regenerated from run 44652354632	isolated x concurrency	44641098288	605.7	665.5	562.2	698.3	677.8	832.1	269.9	832.1
+B	regenerated from run 44652354632	isolated x concurrency	44649788611	739.5	579.1	563.3	629.9	601.2	902.5	339.2	902.5

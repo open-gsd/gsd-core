@@ -27,7 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, cleanup } = require('./helpers.cjs');
 const { runHook, assertSeamExit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { skipUnless } = require('./helpers/bash-probe.cjs');
 const { span } = require('./helpers/doc-bash-span.cjs');
@@ -77,12 +77,12 @@ function makeConsumer(config = { runtime: 'codex', workflow: { code_review: true
   return cwd;
 }
 
-function install(src, cwd, home) {
-  return runGsdTools(['capability', 'install', src, '--scope', 'project', '--yes', '--raw'], cwd, { GSD_HOME: home, GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+async function install(src, cwd, home) {
+  return await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--yes', '--raw'], cwd, { GSD_HOME: home, GSD_WORKSTREAM: '', GSD_PROJECT: '' });
 }
 
-function renderHooks(point, cwd, home, extraArgs = []) {
-  const r = runGsdTools(['loop', 'render-hooks', point, '--raw', ...extraArgs], cwd, { GSD_HOME: home, GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+async function renderHooks(point, cwd, home, extraArgs = []) {
+  const r = await runGsdToolsAsync(['loop', 'render-hooks', point, '--raw', ...extraArgs], cwd, { GSD_HOME: home, GSD_WORKSTREAM: '', GSD_PROJECT: '' });
   assert.equal(r.success, true, `render-hooks ${point} failed: ${r.error}`);
   return JSON.parse(r.output);
 }
@@ -111,45 +111,45 @@ describe('the host contract admits the reviewer role (#4790)', () => {
 // ─── 2 + 3. install and render ──────────────────────────────────────────────
 
 describe('install and render of a reviewer-targeted contribution (#4790)', () => {
-  test('the reproduction from the issue installs and renders at execute:post', () => {
+  test('the reproduction from the issue installs and renders at execute:post', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('rev-contrib-home-');
-    const r = install(writeCap('direct-reviewer-probe', { point: 'execute:post', into: 'code-reviewer', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('direct-reviewer-probe', { point: 'execute:post', into: 'code-reviewer', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
     assert.equal(JSON.parse(r.output).status, 'installed');
-    assert.deepEqual(reviewerFragments(renderHooks('execute:post', cwd, home)), [FRAGMENT]);
+    assert.deepEqual(reviewerFragments(await renderHooks('execute:post', cwd, home)), [FRAGMENT]);
   });
 
-  test('control: a planner contribution at plan:pre still installs', () => {
+  test('control: a planner contribution at plan:pre still installs', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('rev-contrib-home-');
-    const r = install(writeCap('planner-control', { point: 'plan:pre', into: 'planner', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('planner-control', { point: 'plan:pre', into: 'planner', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
   });
 
-  test('a reviewer contribution at a plan point is still rejected', () => {
+  test('a reviewer contribution at a plan point is still rejected', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('rev-contrib-home-');
-    const r = install(writeCap('reviewer-at-plan', { point: 'plan:pre', into: 'code-reviewer', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('reviewer-at-plan', { point: 'plan:pre', into: 'code-reviewer', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /agentRoles/);
   });
 
-  test('an orchestrator contribution at execute:post is still rejected (family boundary)', () => {
+  test('an orchestrator contribution at execute:post is still rejected (family boundary)', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('rev-contrib-home-');
-    const r = install(writeCap('orchestrator-at-execute', { point: 'execute:post', into: 'orchestrator', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('orchestrator-at-execute', { point: 'execute:post', into: 'orchestrator', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, false);
   });
 
-  test('an unknown reviewer-like role is still rejected', () => {
+  test('an unknown reviewer-like role is still rejected', async () => {
     const cwd = makeConsumer();
     const home = tmpDir('rev-contrib-home-');
-    const r = install(writeCap('wrong-target', { point: 'execute:post', into: 'reviewer', fragment: { inline: FRAGMENT } }), cwd, home);
+    const r = await install(writeCap('wrong-target', { point: 'execute:post', into: 'reviewer', fragment: { inline: FRAGMENT } }), cwd, home);
     assert.equal(r.success, false);
   });
 
-  test('a contribution whose activation key is off contributes nothing, and appears once it is on', () => {
+  test('a contribution whose activation key is off contributes nothing, and appears once it is on', async () => {
     const KEY = 'workflow.reviewer_probe';
     const home = tmpDir('rev-contrib-home-');
     const cwd = makeConsumer();
@@ -158,12 +158,12 @@ describe('install and render of a reviewer-targeted contribution (#4790)', () =>
       { point: 'execute:post', into: 'code-reviewer', when: KEY, fragment: { inline: FRAGMENT } },
       { [KEY]: { type: 'boolean', default: false, description: 'Gate for the reviewer contribution probe.' } },
     );
-    const r = install(src, cwd, home);
+    const r = await install(src, cwd, home);
     assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
-    assert.deepEqual(reviewerFragments(renderHooks('execute:post', cwd, home)), [], 'off by default');
+    assert.deepEqual(reviewerFragments(await renderHooks('execute:post', cwd, home)), [], 'off by default');
 
     fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ runtime: 'codex', workflow: { code_review: true, reviewer_probe: true } }));
-    assert.deepEqual(reviewerFragments(renderHooks('execute:post', cwd, home)), [FRAGMENT], 'on when its key is on');
+    assert.deepEqual(reviewerFragments(await renderHooks('execute:post', cwd, home)), [FRAGMENT], 'on when its key is on');
   });
 });
 

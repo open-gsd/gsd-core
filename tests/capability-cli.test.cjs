@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, cleanup } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
@@ -105,10 +105,10 @@ function parse(out) { return JSON.parse(out); }
 // ─── install ────────────────────────────────────────────────────────────────
 
 describe('capability install', () => {
-  test('declarative local capability installs to the global scope and records the ledger', () => {
+  test('declarative local capability installs to the global scope and records the ledger', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('declcap');
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
     const o = parse(r.output);
     assert.equal(o.status, 'installed');
@@ -118,52 +118,52 @@ describe('capability install', () => {
     assert.ok(fs.existsSync(path.join(capDir(home, 'declcap'), 'capability.json')), 'bundle extracted');
   });
 
-  test('executable capability WITHOUT --yes aborts for consent and writes nothing', () => {
+  test('executable capability WITHOUT --yes aborts for consent and writes nothing', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('execcap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'unconsented executable install must fail');
     assert.match(`${r.error}\n${r.output}`, /consent/i);
     assert.equal(readLedgerEntry(home, 'execcap'), null, 'no ledger entry');
     assert.ok(!fs.existsSync(capDir(home, 'execcap')), 'no install dir');
   });
 
-  test('executable capability WITH --yes installs', () => {
+  test('executable capability WITH --yes installs', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('execyes', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `install failed: ${r.error || r.output}`);
     assert.equal(parse(r.output).status, 'installed');
     assert.ok(readLedgerEntry(home, 'execyes'), 'ledger entry recorded');
   });
 
-  test('a reserved-namespace id is blocked', () => {
+  test('a reserved-namespace id is blocked', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('gsd-evil');
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /blocked|reserved/i);
     assert.ok(!fs.existsSync(capDir(home, 'gsd-evil')));
   });
 
-  test('an engines-incompatible capability is blocked', () => {
+  test('an engines-incompatible capability is blocked', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('engcap', { engines: { gsd: '>=99.0.0' } });
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /blocked/i);
     assert.equal(readLedgerEntry(home, 'engcap'), null);
   });
 
-  test('missing <spec> is a usage error', () => {
-    const r = runGsdTools(['capability', 'install'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('missing <spec> is a usage error', async () => {
+    const r = await runGsdToolsAsync(['capability', 'install'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /Missing <spec>/i);
   });
 
-  test('an invalid --scope is rejected', () => {
+  test('an invalid --scope is rejected', async () => {
     const src = writeCapSource('scopecap');
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /Invalid --scope/i);
   });
@@ -172,8 +172,8 @@ describe('capability install', () => {
 // ─── list ─────────────────────────────────────────────────────────────────
 
 describe('capability list', () => {
-  test('--json emits an array including first-party capabilities', () => {
-    const r = runGsdTools(['capability', 'list', '--json'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('--json emits an array including first-party capabilities', async () => {
+    const r = await runGsdToolsAsync(['capability', 'list', '--json'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, true, `list failed: ${r.error || r.output}`);
     const rows = parse(r.output);
     assert.ok(Array.isArray(rows), 'list is an array');
@@ -182,11 +182,11 @@ describe('capability list', () => {
     assert.ok(fp.every((x) => typeof x.id === 'string' && x.scope === 'first-party'));
   });
 
-  test('an installed overlay capability appears with its scope', () => {
+  test('an installed overlay capability appears with its scope', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('listcap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
-    const r = runGsdTools(['capability', 'list', '--json'], makeCwd(), scopeEnv(home));
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home))).success, true);
+    const r = await runGsdToolsAsync(['capability', 'list', '--json'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `list failed: ${r.error || r.output}`);
     const row = parse(r.output).find((x) => x.id === 'listcap');
     assert.ok(row, 'installed capability listed');
@@ -199,33 +199,33 @@ describe('capability list', () => {
 // ─── update ─────────────────────────────────────────────────────────────────
 
 describe('capability update', () => {
-  test('a not-installed id errors', () => {
-    const r = runGsdTools(['capability', 'update', 'nope', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('a not-installed id errors', async () => {
+    const r = await runGsdToolsAsync(['capability', 'update', 'nope', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /not installed/i);
   });
 
-  test('requires <id> or --all', () => {
-    const r = runGsdTools(['capability', 'update', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('requires <id> or --all', async () => {
+    const r = await runGsdToolsAsync(['capability', 'update', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /requires <id> or --all/i);
   });
 
-  test('<id> and --all are mutually exclusive', () => {
-    const r = runGsdTools(['capability', 'update', 'foo', '--all', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('<id> and --all are mutually exclusive', async () => {
+    const r = await runGsdToolsAsync(['capability', 'update', 'foo', '--all', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /not both/i);
   });
 
-  test('an installed capability upgrades to a newer version from its recorded source', () => {
+  test('an installed capability upgrades to a newer version from its recorded source', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('upcap', { version: '1.0.0' });
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home))).success, true);
     // Bump the recorded source to a newer version, then update by id.
     const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
     cap.version = '2.0.0';
     fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
-    const r = runGsdTools(['capability', 'update', 'upcap', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', 'upcap', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `update failed: ${r.error || r.output}`);
     const o = parse(r.output);
     assert.equal(o.status, 'upgraded');
@@ -244,7 +244,7 @@ describe('capability update', () => {
   // Revert-fails: move the count check back below capRunReconcile (or drop it) → the corrupt-ledger
   // reconcile runs first and emits "capability reconcile:" on stderr, so the "prefix absent"
   // assertion fails (and/or the count error is missing).
-  test('finding-4: an OVER-CAP --shared-file update is rejected BEFORE the pre-op reconcile runs', () => {
+  test('finding-4: an OVER-CAP --shared-file update is rejected BEFORE the pre-op reconcile runs', async () => {
     const home = tmpDir('cap-cli-home-f4-');
     fs.mkdirSync(home, { recursive: true });
     // A corrupt ledger: if the pre-op reconcile RAN, it would emit a "capability reconcile:" warning.
@@ -252,7 +252,7 @@ describe('capability update', () => {
 
     const sharedArgs = [];
     for (let i = 0; i < 300; i++) { sharedArgs.push('--shared-file', `f${i}.json`); } // over the 256 cap
-    const r = runGsdTools(
+    const r = await runGsdToolsAsync(
       ['capability', 'update', '--all', '--scope', 'global', ...sharedArgs, '--raw'],
       makeCwd(), scopeEnv(home),
     );
@@ -268,34 +268,34 @@ describe('capability update', () => {
 // ─── remove ─────────────────────────────────────────────────────────────────
 
 describe('capability remove', () => {
-  test('an installed overlay capability is removed (ledger + bundle gone)', () => {
+  test('an installed overlay capability is removed (ledger + bundle gone)', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('rmcap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
-    const r = runGsdTools(['capability', 'remove', 'rmcap', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home))).success, true);
+    const r = await runGsdToolsAsync(['capability', 'remove', 'rmcap', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `remove failed: ${r.error || r.output}`);
     assert.equal(parse(r.output).status, 'removed');
     assert.equal(readLedgerEntry(home, 'rmcap'), null, 'ledger entry gone');
     assert.ok(!fs.existsSync(capDir(home, 'rmcap')), 'bundle gone');
   });
 
-  test('a not-installed id errors', () => {
-    const r = runGsdTools(['capability', 'remove', 'nope', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('a not-installed id errors', async () => {
+    const r = await runGsdToolsAsync(['capability', 'remove', 'nope', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /not installed/i);
   });
 
-  test('a first-party capability cannot be removed here', () => {
+  test('a first-party capability cannot be removed here', async () => {
     // Pick a real first-party id from the registry.
     const reg = require('../gsd-core/bin/lib/capability-registry.cjs');
     const firstParty = Object.keys(reg.capabilities)[0];
-    const r = runGsdTools(['capability', 'remove', firstParty, '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    const r = await runGsdToolsAsync(['capability', 'remove', firstParty, '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /first-party/i);
   });
 
-  test('missing <id> is a usage error', () => {
-    const r = runGsdTools(['capability', 'remove'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('missing <id> is a usage error', async () => {
+    const r = await runGsdToolsAsync(['capability', 'remove'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /Missing <id>/i);
   });
@@ -304,20 +304,20 @@ describe('capability remove', () => {
 // ─── disable / enable ─────────────────────────────────────────────────────────
 
 describe('capability disable / enable', () => {
-  test('disable then enable a first-party capability toggles its activation state', () => {
+  test('disable then enable a first-party capability toggles its activation state', async () => {
     const cwd = makeCwd();
     const rcd = tmpDir('cap-cli-rcd-');
-    const off = runGsdTools(['capability', 'disable', 'ui', '--config-dir', rcd, '--raw'], cwd);
+    const off = await runGsdToolsAsync(['capability', 'disable', 'ui', '--config-dir', rcd, '--raw'], cwd);
     assert.equal(off.success, true, `disable failed: ${off.error || off.output}`);
     const ui = parse(off.output).capabilities.find((c) => c.id === 'ui');
     assert.equal(ui.enabled, false, 'ui disabled');
-    const on = runGsdTools(['capability', 'enable', 'ui', '--config-dir', rcd, '--raw'], cwd);
+    const on = await runGsdToolsAsync(['capability', 'enable', 'ui', '--config-dir', rcd, '--raw'], cwd);
     assert.equal(on.success, true, `enable failed: ${on.error || on.output}`);
     assert.equal(parse(on.output).capabilities.find((c) => c.id === 'ui').enabled, true, 'ui re-enabled');
   });
 
-  test('disable without <id> is a usage error', () => {
-    const r = runGsdTools(['capability', 'disable'], makeCwd());
+  test('disable without <id> is a usage error', async () => {
+    const r = await runGsdToolsAsync(['capability', 'disable'], makeCwd());
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /Missing <id>/i);
   });
@@ -326,8 +326,8 @@ describe('capability disable / enable', () => {
 // ─── unknown subcommand ───────────────────────────────────────────────────────
 
 describe('capability (unknown)', () => {
-  test('an unknown subcommand lists the full available set (incl. outdated)', () => {
-    const r = runGsdTools(['capability', 'bogus'], makeCwd());
+  test('an unknown subcommand lists the full available set (incl. outdated)', async () => {
+    const r = await runGsdToolsAsync(['capability', 'bogus'], makeCwd());
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /install, update, remove, list, outdated, trust, disable, enable, state, set/);
   });
@@ -336,26 +336,26 @@ describe('capability (unknown)', () => {
 // ─── outdated (#1463) ───────────────────────────────────────────────────────
 
 describe('capability outdated', () => {
-  test('empty ledger → --json empty array; default table shows the empty marker', () => {
+  test('empty ledger → --json empty array; default table shows the empty marker', async () => {
     const home = tmpDir('cap-cli-home-');
-    const json = runGsdTools(['capability', 'outdated', '--scope', 'global', '--json'], makeCwd(), scopeEnv(home));
+    const json = await runGsdToolsAsync(['capability', 'outdated', '--scope', 'global', '--json'], makeCwd(), scopeEnv(home));
     assert.equal(json.success, true, `outdated --json failed: ${json.error || json.output}`);
     assert.deepEqual(parse(json.output), []);
-    const table = runGsdTools(['capability', 'outdated', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const table = await runGsdToolsAsync(['capability', 'outdated', '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(table.success, true, `outdated table failed: ${table.error || table.output}`);
     assert.match(table.output, /no installed overlay capabilities/i);
   });
 
-  test('local source whose path now declares a newer version → status outdated (records shape)', () => {
+  test('local source whose path now declares a newer version → status outdated (records shape)', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('outcap', { version: '1.0.0' });
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home))).success, true);
     // Bump the recorded LOCAL source to a newer version — the peek re-reads it.
     const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
     cap.version = '2.0.0';
     fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
 
-    const r = runGsdTools(['capability', 'outdated', '--scope', 'global', '--json'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'outdated', '--scope', 'global', '--json'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `outdated failed: ${r.error || r.output}`);
     const rows = parse(r.output);
     const row = rows.find((x) => x.id === 'outcap');
@@ -368,18 +368,18 @@ describe('capability outdated', () => {
     assert.equal(row.scope, 'global');
   });
 
-  test('local source at the same version → status current; default emits a table with the row', () => {
+  test('local source at the same version → status current; default emits a table with the row', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('samecap', { version: '1.0.0' });
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
-    const r = runGsdTools(['capability', 'outdated', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home))).success, true);
+    const r = await runGsdToolsAsync(['capability', 'outdated', '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `outdated failed: ${r.error || r.output}`);
     // Table form: header columns + the capability row with status current.
     assert.match(r.output, /ID\s+Source\s+Current\s+Latest\s+Status/);
     assert.match(r.output, /samecap\s+local\s+1\.0\.0\s+1\.0\.0\s+current/);
   });
 
-  test('tarball source → status manual (not auto-detectable)', () => {
+  test('tarball source → status manual (not auto-detectable)', async () => {
     // Plant a project-scope ledger entry with a tarball source directly (install would need network).
     const cwd = makeCwd();
     const ledgerMod = require('../gsd-core/bin/lib/capability-ledger.cjs');
@@ -387,7 +387,7 @@ describe('capability outdated', () => {
       id: 'tarcap', version: '1.0.0', source: 'https://host/path/cap-1.0.0.tgz',
       integrity: '', files: ['.gsd/capabilities/tarcap'], sharedEdits: [],
     });
-    const r = runGsdTools(['capability', 'outdated', '--scope', 'project', '--json'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    const r = await runGsdToolsAsync(['capability', 'outdated', '--scope', 'project', '--json'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
     assert.equal(r.success, true, `outdated failed: ${r.error || r.output}`);
     const row = parse(r.output).find((x) => x.id === 'tarcap');
     assert.ok(row, 'tarball capability reported');
@@ -395,8 +395,8 @@ describe('capability outdated', () => {
     assert.equal(row.latest, null);
   });
 
-  test('invalid --scope is rejected', () => {
-    const r = runGsdTools(['capability', 'outdated', '--scope', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('invalid --scope is rejected', async () => {
+    const r = await runGsdToolsAsync(['capability', 'outdated', '--scope', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /Invalid --scope/i);
   });
@@ -405,45 +405,45 @@ describe('capability outdated', () => {
 // ─── review-hardening (adversarial-review fixes) ────────────────────────────
 
 describe('capability install (trust hardening)', () => {
-  test('an overlay reusing a first-party capability id is blocked', () => {
+  test('an overlay reusing a first-party capability id is blocked', async () => {
     // Pick a real first-party id and try to install an overlay that shadows it.
     const reg = require('../gsd-core/bin/lib/capability-registry.cjs');
     const firstParty = Object.keys(reg.capabilities)[0];
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource(firstParty);
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /first-party capability id/i);
     assert.equal(readLedgerEntry(home, firstParty), null);
   });
 
-  test('a malformed strict_known_registries value fails closed (does not downgrade to permissive)', () => {
+  test('a malformed strict_known_registries value fails closed (does not downgrade to permissive)', async () => {
     // A hand-edited string instead of an array must BLOCK an external source, not be ignored.
     const cwd = makeCwdWithStrict('github.com');
-    const r = runGsdTools(['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    const r = await runGsdToolsAsync(['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /must be an array|blocked/i);
   });
 
-  test('strict_known_registries: [] (lockdown) blocks an external source', () => {
+  test('strict_known_registries: [] (lockdown) blocks an external source', async () => {
     const cwd = makeCwdWithStrict([]);
-    const r = runGsdTools(['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    const r = await runGsdToolsAsync(['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /external capability installs are disabled|blocked/i);
   });
 });
 
 describe('capability update (id-pinning + reporting)', () => {
-  test('update refuses when the recorded source now resolves to a different id', () => {
+  test('update refuses when the recorded source now resolves to a different id', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('orig');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home))).success, true);
     // Retarget the source to a different manifest id.
     const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
     cap.id = 'switched';
     cap.version = '2.0.0';
     fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
-    const r = runGsdTools(['capability', 'update', 'orig', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', 'orig', '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /different capability id|refusing/i);
     // The original is untouched; nothing named 'switched' got installed.
@@ -451,31 +451,31 @@ describe('capability update (id-pinning + reporting)', () => {
     assert.equal(readLedgerEntry(home, 'switched'), null);
   });
 
-  test('update --all exits non-zero when any entry fails to upgrade', () => {
+  test('update --all exits non-zero when any entry fails to upgrade', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('exupd', { hooks: [{ event: 'PostToolUse', script: 'hooks/a.js' }] });
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home))).success, true);
     // Change the executable surface (new hook script) so the update needs re-consent.
     const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
     cap.version = '2.0.0';
     cap.hooks = [{ event: 'PostToolUse', script: 'hooks/b.js' }];
     fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
     fs.writeFileSync(path.join(src, 'hooks', 'b.js'), '// artifact');
-    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', '--all', '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'partial --all failure must be non-zero');
     assert.match(`${r.error}\n${r.output}`, /did not upgrade/i);
     // The aborted update left the old version intact.
     assert.equal(readLedgerEntry(home, 'exupd').version, '1.0.0');
   });
 
-  test('a successful executable update reports the consented disclosure', () => {
+  test('a successful executable update reports the consented disclosure', async () => {
     const home = tmpDir('cap-cli-home-');
     const src = writeCapSource('discl', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home))).success, true);
     const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
     cap.version = '2.0.0'; // same hook script => same exec set, no re-consent needed
     fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
-    const r = runGsdTools(['capability', 'update', 'discl', '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', 'discl', '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `update failed: ${r.error || r.output}`);
     const o = parse(r.output);
     assert.equal(o.status, 'upgraded');
@@ -484,9 +484,9 @@ describe('capability update (id-pinning + reporting)', () => {
 });
 
 describe('capability disable (overlay boundary)', () => {
-  test('disabling an unknown id (non-raw) reports the error on stderr and exits non-zero', () => {
+  test('disabling an unknown id (non-raw) reports the error on stderr and exits non-zero', async () => {
     const rcd = tmpDir('cap-cli-rcd-');
-    const r = runGsdTools(['capability', 'disable', 'totally-unknown-xyz', '--config-dir', rcd], makeCwd());
+    const r = await runGsdToolsAsync(['capability', 'disable', 'totally-unknown-xyz', '--config-dir', rcd], makeCwd());
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /unknown capability/i);
   });
@@ -496,9 +496,9 @@ describe('capability disable (overlay boundary)', () => {
   // buffered fd-1 output and discarded it on the throw path, and cmdCapabilitySet exited via
   // process.exit() (bypassing the wrapper). On the old code stdout was 0 bytes; now the JSON
   // error envelope is flushed to stdout AND the exit code stays non-zero.
-  test('disabling an unknown id in --raw mode emits the JSON error envelope on stdout (not silent)', () => {
+  test('disabling an unknown id in --raw mode emits the JSON error envelope on stdout (not silent)', async () => {
     const rcd = tmpDir('cap-cli-rcd-');
-    const r = runGsdTools(['capability', 'disable', 'totally-unknown-xyz', '--config-dir', rcd, '--raw'], makeCwd());
+    const r = await runGsdToolsAsync(['capability', 'disable', 'totally-unknown-xyz', '--config-dir', rcd, '--raw'], makeCwd());
     assert.equal(r.success, false, 'must exit non-zero');
     assert.ok(r.output && r.output.length > 0, 'stdout must NOT be empty in raw error mode');
     const out = JSON.parse(r.output);
@@ -510,14 +510,14 @@ describe('capability disable (overlay boundary)', () => {
 // ─── --shared-file safety + config fail-closed (adversarial-review R2) ──────
 
 describe('capability install (--shared-file confinement)', () => {
-  test('a --shared-file whose parent is a symlink escaping the scope writes NOTHING outside it', () => {
+  test('a --shared-file whose parent is a symlink escaping the scope writes NOTHING outside it', async () => {
     const home = tmpDir('cap-cli-home-');
     fs.mkdirSync(home, { recursive: true });
     const outside = tmpDir('cap-cli-outside-');
     // Plant a symlink inside the scope root pointing outside it.
     fs.symlinkSync(outside, path.join(home, 'evil'));
     const src = writeCapSource('symcap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
-    const r = runGsdTools(
+    const r = await runGsdToolsAsync(
       ['capability', 'install', src, '--scope', 'global', '--yes', '--shared-file', 'evil/settings.json', '--raw'],
       makeCwd(), scopeEnv(home),
     );
@@ -532,14 +532,14 @@ describe('capability install (--shared-file confinement)', () => {
   // Revert-fails: remove the early count check in installCapability/gsd-tools → the install proceeds
   // to staging (a .gsd/capabilities/.staging dir is created) before any cap is enforced, so the
   // "no staging created" assertion fails (and there is no clear count error).
-  test('finding-5b: an install with OVER-CAP --shared-file count is rejected BEFORE any staging dir is created', () => {
+  test('finding-5b: an install with OVER-CAP --shared-file count is rejected BEFORE any staging dir is created', async () => {
     const home = tmpDir('cap-cli-home-');
     fs.mkdirSync(home, { recursive: true });
     const src = writeCapSource('overcap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
     // Build 300 --shared-file args (over the 256 generous cap).
     const sharedArgs = [];
     for (let i = 0; i < 300; i++) { sharedArgs.push('--shared-file', `f${i}.json`); }
-    const r = runGsdTools(
+    const r = await runGsdToolsAsync(
       ['capability', 'install', src, '--scope', 'global', '--yes', ...sharedArgs, '--raw'],
       makeCwd(), scopeEnv(home),
     );
@@ -556,13 +556,13 @@ describe('capability install (--shared-file confinement)', () => {
     assert.equal(fs.existsSync(path.join(home, 'f0.json')), false, 'no shared-config file may be written');
   });
 
-  test('install does not clobber a user mcpServers entry whose name collides with the capability', () => {
+  test('install does not clobber a user mcpServers entry whose name collides with the capability', async () => {
     const home = tmpDir('cap-cli-home-');
     fs.mkdirSync(home, { recursive: true });
     // Pre-existing user settings with an mcpServers entry the capability will also declare.
     fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ mcpServers: { shared: { command: 'user-server' } } }));
     const src = writeCapSource('mcpcap', { mcp: { shared: { command: 'cap-server' } } });
-    const r = runGsdTools(
+    const r = await runGsdToolsAsync(
       ['capability', 'install', src, '--scope', 'global', '--yes', '--shared-file', 'settings.json', '--raw'],
       makeCwd(), scopeEnv(home),
     );
@@ -573,11 +573,11 @@ describe('capability install (--shared-file confinement)', () => {
 });
 
 describe('capability install (config policy fail-closed)', () => {
-  test('an unparseable project config fails CLOSED — an external source is blocked, not silently permitted', () => {
+  test('an unparseable project config fails CLOSED — an external source is blocked, not silently permitted', async () => {
     const cwd = tmpDir('cap-cli-cwd-');
     fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), '{ this is not valid json');
-    const r = runGsdTools(
+    const r = await runGsdToolsAsync(
       ['capability', 'install', 'https://github.com/x/y.git', '--scope', 'project'],
       cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' },
     );
@@ -589,17 +589,17 @@ describe('capability install (config policy fail-closed)', () => {
 // ─── code-review coverage gaps ──────────────────────────────────────────────
 
 describe('capability (argument + empty-state handling)', () => {
-  test('update --all over an empty ledger succeeds with an empty result set', () => {
-    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('update --all over an empty ledger succeeds with an empty result set', async () => {
+    const r = await runGsdToolsAsync(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, true, `update --all failed: ${r.error || r.output}`);
     const o = parse(r.output);
     assert.deepEqual(o.updated, [], 'no installed capabilities → empty updated list');
   });
 
-  test('a flag value that looks like another flag is rejected (no value swallowing)', () => {
+  test('a flag value that looks like another flag is rejected (no value swallowing)', async () => {
     const src = writeCapSource('flagcap');
     // `--integrity --scope` — the value after --integrity is itself a flag, which must error, not be consumed.
-    const r = runGsdTools(['capability', 'install', src, '--integrity', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--integrity', '--scope', 'global'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /Missing value for --integrity/i);
   });
@@ -608,12 +608,12 @@ describe('capability (argument + empty-state handling)', () => {
 // ─── corrupt-ledger fail-closed — list + remove (sites A and C) ─────────────
 
 describe('capability list (corrupt ledger fail-closed — site A)', () => {
-  test('capability list on a corrupt ledger exits non-zero with a blocked/corrupt error (finding-19)', () => {
+  test('capability list on a corrupt ledger exits non-zero with a blocked/corrupt error (finding-19)', async () => {
     const home = tmpDir('cap-cli-home-list-corrupt-');
     fs.mkdirSync(home, { recursive: true });
     // Write a corrupt (unparseable) ledger file in the global scope location.
     fs.writeFileSync(ledgerPath(home), '{ broken json ---');
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'global'], makeCwd(), scopeEnv(home));
     // Must exit non-zero (fail-closed — finding 19). A silent exit-0 is not acceptable.
     assert.equal(r.success, false, 'capability list must exit non-zero when the ledger is corrupt (fail-closed)');
     const combined = `${r.error}\n${r.output}`;
@@ -621,7 +621,7 @@ describe('capability list (corrupt ledger fail-closed — site A)', () => {
       'must mention corruption or blocked, not silently fail');
   });
 
-  test('capability list --scope global: healthy global + corrupt project → exits zero (finding-8)', () => {
+  test('capability list --scope global: healthy global + corrupt project → exits zero (finding-8)', async () => {
     // When --scope global is given, only the global ledger is read.
     // A corrupt project ledger must not block a global-only list.
     // Project scope runtimeDir = cwd (where .gsd-capabilities.json would live).
@@ -630,7 +630,7 @@ describe('capability list (corrupt ledger fail-closed — site A)', () => {
     const cwd = makeCwd();
     // Write a corrupt ledger at the project scope location (cwd/.gsd-capabilities.json).
     fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project ledger ---');
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'global'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'global'], cwd, scopeEnv(home));
     // Global scope is healthy (no ledger = null = fine). Only the global scope is read.
     assert.equal(r.success, true, `list --scope global must succeed when only the project ledger is corrupt; got: ${r.error || r.output}`);
     const rows = parse(r.output);
@@ -639,25 +639,25 @@ describe('capability list (corrupt ledger fail-closed — site A)', () => {
     assert.ok(rows.some((x) => x.source === 'first-party'), 'first-party entries must appear');
   });
 
-  test('capability list --scope project: corrupt project ledger exits non-zero (finding-8)', () => {
+  test('capability list --scope project: corrupt project ledger exits non-zero (finding-8)', async () => {
     const home = tmpDir('cap-cli-home-list-proj-corrupt-');
     fs.mkdirSync(home, { recursive: true });
     const cwd = makeCwd();
     // Project scope runtimeDir = cwd, so corrupt ledger goes at cwd/.gsd-capabilities.json.
     fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project ledger ---');
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, false, 'list --scope project must fail when the project ledger is corrupt');
     assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i, 'must mention corruption');
   });
 });
 
 describe('capability remove (corrupt ledger fail-closed — site C)', () => {
-  test('capability remove on a corrupt global ledger exits non-zero with a blocked/corrupt error, NOT not_installed or silent success', () => {
+  test('capability remove on a corrupt global ledger exits non-zero with a blocked/corrupt error, NOT not_installed or silent success', async () => {
     const home = tmpDir('cap-cli-home-remove-corrupt-');
     fs.mkdirSync(home, { recursive: true });
     // Write a corrupt (unparseable) ledger file so the scope has one.
     fs.writeFileSync(ledgerPath(home), '{ broken json ---');
-    const r = runGsdTools(['capability', 'remove', 'some-cap', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'remove', 'some-cap', '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'must exit non-zero on corrupt ledger');
     // Must NOT silently report "not installed" — that would hide the corruption.
     assert.doesNotMatch(`${r.error}\n${r.output}`, /not installed/i,
@@ -666,7 +666,7 @@ describe('capability remove (corrupt ledger fail-closed — site C)', () => {
       'must mention corruption or blocked');
   });
 
-  test('capability remove first-party id on corrupt ledger surfaces corruption, not first-party error (finding-7)', () => {
+  test('capability remove first-party id on corrupt ledger surfaces corruption, not first-party error (finding-7)', async () => {
     // Finding 7: with readLedger (old), a corrupt ledger + first-party id reports "first-party cannot be removed"
     // (hiding the corruption). With readLedgerStrict, corruption is surfaced first.
     const reg = require('../gsd-core/bin/lib/capability-registry.cjs');
@@ -675,7 +675,7 @@ describe('capability remove (corrupt ledger fail-closed — site C)', () => {
     fs.mkdirSync(home, { recursive: true });
     // Corrupt the ledger.
     fs.writeFileSync(ledgerPath(home), '{ broken json ---');
-    const r = runGsdTools(['capability', 'remove', firstParty, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'remove', firstParty, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'must exit non-zero on corrupt ledger');
     // Must NOT report "first-party" (which would hide the corruption).
     assert.doesNotMatch(`${r.error}\n${r.output}`, /first-party/i,
@@ -684,13 +684,13 @@ describe('capability remove (corrupt ledger fail-closed — site C)', () => {
       'must mention corruption or blocked');
   });
 
-  test('capability remove on a corrupt project-scope ledger exits non-zero (finding-20)', () => {
+  test('capability remove on a corrupt project-scope ledger exits non-zero (finding-20)', async () => {
     const home = tmpDir('cap-cli-home-remove-proj-corrupt-');
     fs.mkdirSync(home, { recursive: true });
     const cwd = makeCwd();
     // Project scope runtimeDir = cwd, so corrupt ledger goes at cwd/.gsd-capabilities.json.
     fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project json ---');
-    const r = runGsdTools(['capability', 'remove', 'some-cap', '--scope', 'project'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'remove', 'some-cap', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, false, 'must exit non-zero on corrupt project ledger');
     assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i, 'must mention corruption or blocked');
   });
@@ -699,12 +699,12 @@ describe('capability remove (corrupt ledger fail-closed — site C)', () => {
 // ─── corrupt-ledger fail-closed (Codex pass 3 — medium #2) ──────────────────
 
 describe('capability update (corrupt ledger fail-closed)', () => {
-  test('capability update <id> on a corrupt ledger exits non-zero with a blocked/corrupt error, NOT not_installed', () => {
+  test('capability update <id> on a corrupt ledger exits non-zero with a blocked/corrupt error, NOT not_installed', async () => {
     const home = tmpDir('cap-cli-home-corrupt-');
     fs.mkdirSync(home, { recursive: true });
     // Write a corrupt (unparseable) ledger file.
     fs.writeFileSync(ledgerPath(home), '{ broken json ---');
-    const r = runGsdTools(['capability', 'update', 'some-cap', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', 'some-cap', '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'must exit non-zero on corrupt ledger');
     // Must NOT report "not installed" — that would hide the corruption silently.
     assert.doesNotMatch(`${r.error}\n${r.output}`, /not installed/i,
@@ -713,12 +713,12 @@ describe('capability update (corrupt ledger fail-closed)', () => {
       'must mention corruption or blocked');
   });
 
-  test('capability update --all on a corrupt ledger exits non-zero, does NOT silently succeed with an empty list', () => {
+  test('capability update --all on a corrupt ledger exits non-zero, does NOT silently succeed with an empty list', async () => {
     const home = tmpDir('cap-cli-home-corrupt-all-');
     fs.mkdirSync(home, { recursive: true });
     // Write a corrupt (unparseable) ledger file.
     fs.writeFileSync(ledgerPath(home), '{ broken json ---');
-    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', '--all', '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'must exit non-zero on corrupt ledger for --all');
     assert.match(`${r.error}\n${r.output}`, /corrupt|blocked/i,
       'must mention corruption or blocked; not silently succeed');
@@ -728,19 +728,19 @@ describe('capability update (corrupt ledger fail-closed)', () => {
 // ─── orthogonal adversarial review (#1462): UX / observability ──────────────
 
 describe('capability update --all (UX-1: structured stdout on partial failure)', () => {
-  test('UX-1: a partial --all failure emits {scope, updated:[...]} JSON on STDOUT and exits non-zero', () => {
+  test('UX-1: a partial --all failure emits {scope, updated:[...]} JSON on STDOUT and exits non-zero', async () => {
     const home = tmpDir('cap-cli-home-ux1-');
     // Install an executable capability, then change its exec surface so the update needs re-consent
     // and (without --yes) ABORTS — a partial-failure --all run.
     const src = writeCapSource('ux1cap', { hooks: [{ event: 'PostToolUse', script: 'hooks/a.js' }] });
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--yes', '--raw'], makeCwd(), scopeEnv(home))).success, true);
     const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
     cap.version = '2.0.0';
     cap.hooks = [{ event: 'PostToolUse', script: 'hooks/b.js' }];
     fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
     fs.writeFileSync(path.join(src, 'hooks', 'b.js'), '// artifact');
 
-    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     // Non-zero exit (partial failure).
     assert.equal(r.success, false, 'a partial --all failure must exit non-zero');
     // STRUCTURED data on STDOUT (not embedded in the error string) — UX-1.
@@ -754,12 +754,12 @@ describe('capability update --all (UX-1: structured stdout on partial failure)',
 });
 
 describe('capability list (UX-3: corrupt-scope error names the scope)', () => {
-  test('UX-3: a corrupt project-scope ledger error names the scope', () => {
+  test('UX-3: a corrupt project-scope ledger error names the scope', async () => {
     const home = tmpDir('cap-cli-home-ux3-');
     fs.mkdirSync(home, { recursive: true });
     const cwd = makeCwd();
     fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), '{ broken project ledger ---');
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, false, 'list --scope project must fail when the project ledger is corrupt');
     assert.match(`${r.error}\n${r.output}`, /\bproject\b/,
       `the corrupt-scope error must name the scope ("project"); got: ${r.error}\n${r.output}`);
@@ -767,10 +767,10 @@ describe('capability list (UX-3: corrupt-scope error names the scope)', () => {
 });
 
 describe('capability install (UX-5: structured aborted/requiresConsent on stdout)', () => {
-  test('UX-5: an executable install WITHOUT --yes in --raw mode emits a structured aborted envelope on stdout', () => {
+  test('UX-5: an executable install WITHOUT --yes in --raw mode emits a structured aborted envelope on stdout', async () => {
     const home = tmpDir('cap-cli-home-ux5-');
     const src = writeCapSource('ux5cap', { hooks: [{ event: 'PostToolUse', script: 'hooks/run.js' }] });
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'an executable install without --yes must exit non-zero');
     assert.ok(r.output && r.output.length > 0, 'stdout must NOT be empty in raw aborted mode (UX-5)');
     const out = JSON.parse(r.output);
@@ -781,7 +781,7 @@ describe('capability install (UX-5: structured aborted/requiresConsent on stdout
 });
 
 describe('capability update (UX-6: normalized per-entry fields)', () => {
-  test('UX-6: a not_installed entry in --all output has explicit null fields (not undefined)', () => {
+  test('UX-6: a not_installed entry in --all output has explicit null fields (not undefined)', async () => {
     // Seed a ledger with an entry whose recorded source resolves to a DIFFERENT id, so upgradeOne
     // reports a non-upgraded status with no fromVersion/toVersion — those must serialize as null.
     const home = tmpDir('cap-cli-home-ux6-');
@@ -794,7 +794,7 @@ describe('capability update (UX-6: normalized per-entry fields)', () => {
       },
     };
     fs.writeFileSync(ledgerPath(home), JSON.stringify(ledger, null, 2));
-    const r = runGsdTools(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'update', '--all', '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     // Partial failure (the blocked entry) → non-zero, structured stdout.
     assert.equal(r.success, false, 'a blocked --all entry must exit non-zero');
     const parsed = JSON.parse(r.output);
@@ -814,12 +814,12 @@ describe('capability install (UX-2: reconcile warnings surfaced on stderr)', () 
   // "capability reconcile:" warning prefix is never emitted to stderr, so this assertion fails. (The
   // install block reason references "corrupt" but NOT the reconcile-warning prefix, so the prefix
   // assertion is non-vacuous.)
-  test('UX-2: a corrupt ledger detected by the pre-op reconcile is surfaced on stderr (not swallowed)', () => {
+  test('UX-2: a corrupt ledger detected by the pre-op reconcile is surfaced on stderr (not swallowed)', async () => {
     const home = tmpDir('cap-cli-home-ux2-');
     fs.mkdirSync(home, { recursive: true });
     fs.writeFileSync(ledgerPath(home), '{ broken json ---');
     const src = writeCapSource('ux2cap');
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'install on a corrupt ledger must exit non-zero');
     // The reconcile report's warning must be surfaced with its distinctive prefix on stderr — proving
     // the report was captured and emitted, not discarded in a bare try/catch.
@@ -841,11 +841,11 @@ describe('capability consent store (#1459)', () => {
     return cwd;
   }
 
-  test('project install lands the consent record under GSD_HOME, NOT under the project cwd', () => {
+  test('project install lands the consent record under GSD_HOME, NOT under the project cwd', async () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     const src = writeCapSource('proj-consent-cap');
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `${r.error}\n${r.output}`);
     // Consent store is under the GSD_HOME-sandboxed home, not in the project repo.
     assert.ok(fs.existsSync(consentMod.consentStorePath(home)), 'consent store under GSD_HOME');
@@ -854,19 +854,19 @@ describe('capability consent store (#1459)', () => {
     assert.equal(Object.keys(store.records).length, 1, 'one consent record written');
   });
 
-  test('a consented project overlay shows status:active in `capability list`', () => {
+  test('a consented project overlay shows status:active in `capability list`', async () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     const src = writeCapSource('proj-active-cap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home))).success, true);
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `${r.error}\n${r.output}`);
     const row = parse(r.output).find((x) => x.id === 'proj-active-cap');
     assert.ok(row, 'consented project cap is listed');
     assert.equal(row.status, 'active', 'consented project overlay is active');
   });
 
-  test('a planted project ledger with NO consent shows status:inactive in `capability list`', () => {
+  test('a planted project ledger with NO consent shows status:inactive in `capability list`', async () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     // Plant a committed-looking project ledger + bundle WITHOUT going through install (no consent).
@@ -882,7 +882,7 @@ describe('capability consent store (#1459)', () => {
       version: '1', updatedAt: '2026-01-01T00:00:00Z',
       entries: { [capId]: { id: capId, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
     }));
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `${r.error}\n${r.output}`);
     const row = parse(r.output).find((x) => x.id === capId);
     assert.ok(row, 'planted cap is still LISTED (discovered)');
@@ -890,7 +890,7 @@ describe('capability consent store (#1459)', () => {
     assert.match(String(row.reason || ''), /consent/i, 'the inactive reason mentions consent');
   });
 
-  test('IC-02: `capability list` marks inactive via the STRUCTURAL kind discriminant (not the reason prose)', () => {
+  test('IC-02: `capability list` marks inactive via the STRUCTURAL kind discriminant (not the reason prose)', async () => {
     // revert-fails: if gsd-tools `list` filtered on /consent/i.test(reason) (the old prose match) AND
     // the loader's inactive warning omitted `kind`, this still passes by accident. To make it
     // anti-vacuous we (a) assert the loader emits the STRUCTURAL kind:'unconsented' (the discriminant
@@ -926,20 +926,20 @@ describe('capability consent store (#1459)', () => {
     assert.ok(warn, 'loader records a discovered-but-inactive warning for the unconsented cap');
     assert.equal(warn.kind, 'unconsented', 'the warning carries the structural kind discriminant');
     // (b) The CLI list marks the row inactive (via the kind-keyed filter).
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `${r.error}\n${r.output}`);
     const row = parse(r.output).find((x) => x.id === capId);
     assert.ok(row && row.status === 'inactive', 'list marks the unconsented cap inactive via kind');
   });
 
-  test('IC-09: `capability trust list` exposes disclosureSignature + contentHash so operators can diff', () => {
+  test('IC-09: `capability trust list` exposes disclosureSignature + contentHash so operators can diff', async () => {
     // revert-fails: drop disclosureSignature/contentHash from the trust-list row projection and these
     // field assertions fail. Operators need the stored binding to diff against the current bundle.
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     const src = writeCapSource('trust-fields-cap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
-    const r = runGsdTools(['capability', 'trust', 'list', '--json'], cwd, scopeEnv(home));
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home))).success, true);
+    const r = await runGsdToolsAsync(['capability', 'trust', 'list', '--json'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `${r.error}\n${r.output}`);
     const row = parse(r.output).find((x) => x.id === 'trust-fields-cap');
     assert.ok(row, 'consent record listed');
@@ -947,33 +947,33 @@ describe('capability consent store (#1459)', () => {
     assert.ok(typeof row.contentHash === 'string' && /^sha512-/.test(row.contentHash), 'contentHash exposed (the security binding)');
   });
 
-  test('capability trust list shows the consent record after a project install', () => {
+  test('capability trust list shows the consent record after a project install', async () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     const src = writeCapSource('trust-list-cap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
-    const r = runGsdTools(['capability', 'trust', 'list', '--json'], cwd, scopeEnv(home));
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home))).success, true);
+    const r = await runGsdToolsAsync(['capability', 'trust', 'list', '--json'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `${r.error}\n${r.output}`);
     const rows = parse(r.output);
     assert.ok(Array.isArray(rows) && rows.some((x) => x.id === 'trust-list-cap' && x.scope === 'project'), 'consent record listed');
   });
 
-  test('capability trust revoke <id> removes the consent record (cap then lists inactive)', () => {
+  test('capability trust revoke <id> removes the consent record (cap then lists inactive)', async () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     const src = writeCapSource('trust-revoke-cap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home))).success, true);
     // Revoke.
-    const rev = runGsdTools(['capability', 'trust', 'revoke', 'trust-revoke-cap', '--raw'], cwd, scopeEnv(home));
+    const rev = await runGsdToolsAsync(['capability', 'trust', 'revoke', 'trust-revoke-cap', '--raw'], cwd, scopeEnv(home));
     assert.equal(rev.success, true, `${rev.error}\n${rev.output}`);
     assert.equal(consentMod.readConsentStore(home).records && Object.keys(consentMod.readConsentStore(home).records).length, 0, 'record removed');
     // The cap (bundle + ledger still present) now lists inactive.
-    const list = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const list = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     const row = parse(list.output).find((x) => x.id === 'trust-revoke-cap');
     assert.ok(row && row.status === 'inactive', 'after revoke the cap is inactive');
   });
 
-  test('finding 3: `trust revoke` with the consent-store lock HELD exits non-zero with a CLEAN message (not a raw stack)', () => {
+  test('finding 3: `trust revoke` with the consent-store lock HELD exits non-zero with a CLEAN message (not a raw stack)', async () => {
     // revert-fails: without the CLI try/catch around revokeProjectConsent, the round-3 throw-on-no-lock
     // propagates to runMain, which prints a generic SDK/stack failure. The two assertions below — exit
     // non-zero AND a clean, actionable consent-lock message (no "at <fn> (<file>:<line>)" stack frame) —
@@ -981,7 +981,7 @@ describe('capability consent store (#1459)', () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     const src = writeCapSource('trust-locked-cap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true, 'install (records consent)');
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home))).success, true, 'install (records consent)');
     // Plant a FRESH, well-formed consent-store lock owned by THIS test process. A fresh lock (ts ≈ now,
     // age <= LOCK_STALE_MS) is NEVER stolen by the shared lock primitive, so the subprocess's bounded
     // waitForFresh budget exhausts and acquireConsentLock returns null → revokeProjectConsent throws.
@@ -990,7 +990,7 @@ describe('capability consent store (#1459)', () => {
     const os = require('node:os');
     fs.writeFileSync(lockPath, JSON.stringify({ token: 'test-holder', pid: process.pid, hostname: os.hostname(), startTime: null, ts: Date.now() }), { flag: 'wx' });
     try {
-      const rev = runGsdTools(['capability', 'trust', 'revoke', 'trust-locked-cap', '--raw'], cwd, scopeEnv(home));
+      const rev = await runGsdToolsAsync(['capability', 'trust', 'revoke', 'trust-locked-cap', '--raw'], cwd, scopeEnv(home));
       assert.equal(rev.success, false, 'a lock-held revoke exits non-zero');
       const combined = `${rev.error}\n${rev.output}`;
       assert.match(combined, /consent-store lock|consent store lock|another capability operation/i, 'clean, actionable lock message');
@@ -1000,7 +1000,7 @@ describe('capability consent store (#1459)', () => {
     }
   });
 
-  test('convergence-2: `capability list` with a FIFO project capability.json does not hang; the entry is omitted, exit clean', { skip: process.platform === 'win32' }, () => {
+  test('convergence-2: `capability list` with a FIFO project capability.json does not hang; the entry is omitted, exit clean', { skip: process.platform === 'win32' }, async () => {
     // revert-fails: with the raw fs.readFileSync(path,'utf8') in the gsd-tools `list` metadata read,
     // reading the FIFO capability.json BLOCKS forever (no writer) → `capability list` hangs and the test
     // times out (runGsdTools never returns). The bounded reader (readSmallRegularFile) fstat-rejects the
@@ -1022,7 +1022,7 @@ describe('capability consent store (#1459)', () => {
       version: '1', updatedAt: '2026-01-01T00:00:00Z',
       entries: { [capId]: { id: capId, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
     }));
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `list must exit cleanly (not hang) on a FIFO manifest: ${r.error}\n${r.output}`);
     const rows = parse(r.output);
     // The entry is LISTED (the ledger knows it) but with no metadata (null role/tier/title) since the
@@ -1034,7 +1034,7 @@ describe('capability consent store (#1459)', () => {
     }
   });
 
-  test('convergence-2b: `capability list` with an OVERSIZED project capability.json does not OOM; entry omitted, exit clean', () => {
+  test('convergence-2b: `capability list` with an OVERSIZED project capability.json does not OOM; entry omitted, exit clean', async () => {
     // revert-fails: a raw readFileSync reads the whole oversized manifest into memory; the bounded reader
     // refuses a file past the cap so the metadata is dropped. The CONTROL (small valid manifest) proves
     // the same shape lists with metadata, so the dropped metadata is attributable to SIZE alone.
@@ -1055,7 +1055,7 @@ describe('capability consent store (#1459)', () => {
     fs.mkdirSync(ctrlDir, { recursive: true });
     fs.writeFileSync(path.join(ctrlDir, 'capability.json'), mkManifest('small-list-cap'));
     fs.writeFileSync(path.join(ctrlCwd, '.gsd-capabilities.json'), ledgerFor('small-list-cap'));
-    const ctrl = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], ctrlCwd, scopeEnv(tmpDir('cap-cli-home-')));
+    const ctrl = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], ctrlCwd, scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(ctrl.success, true, `${ctrl.error}\n${ctrl.output}`);
     const ctrlRow = parse(ctrl.output).find((x) => x.id === 'small-list-cap');
     assert.ok(ctrlRow && ctrlRow.role === 'feature' && ctrlRow.title === 'small-list-cap', 'CONTROL: a small manifest lists with metadata');
@@ -1065,7 +1065,7 @@ describe('capability consent store (#1459)', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'capability.json'), mkManifest(capId, { description: 'x'.repeat(9 * 1024 * 1024) }));
     fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), ledgerFor(capId));
-    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `list must exit cleanly (not OOM) on an oversized manifest: ${r.error}\n${r.output}`);
     const row = parse(r.output).find((x) => x.id === capId);
     if (row) {
@@ -1074,19 +1074,19 @@ describe('capability consent store (#1459)', () => {
     }
   });
 
-  test('capability remove (project scope) revokes the consent record', () => {
+  test('capability remove (project scope) revokes the consent record', async () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = projectCwd();
     const src = writeCapSource('proj-remove-cap');
-    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
+    assert.equal((await runGsdToolsAsync(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home))).success, true);
     assert.equal(Object.keys(consentMod.readConsentStore(home).records).length, 1, 'consent present after install');
-    const r = runGsdTools(['capability', 'remove', 'proj-remove-cap', '--scope', 'project', '--raw'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'remove', 'proj-remove-cap', '--scope', 'project', '--raw'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `${r.error}\n${r.output}`);
     assert.equal(Object.keys(consentMod.readConsentStore(home).records).length, 0, 'remove revokes the consent record');
   });
 
-  test('an unknown trust subcommand errors with guidance', () => {
-    const r = runGsdTools(['capability', 'trust', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+  test('an unknown trust subcommand errors with guidance', async () => {
+    const r = await runGsdToolsAsync(['capability', 'trust', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
     assert.equal(r.success, false);
     assert.match(`${r.error}\n${r.output}`, /trust/i);
   });
@@ -1127,7 +1127,7 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
     return src;
   }
 
-  test('reproduces #2322: capability state reports surfaced:true but the skill is not written to <config-dir>/skills/', () => {
+  test('reproduces #2322: capability state reports surfaced:true but the skill is not written to <config-dir>/skills/', async () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = makeCwd();
     // #2322 MEDIUM-4: a fixture with NO rewrite-triggering content would pass
@@ -1139,7 +1139,7 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
     const src = writeCapSourceWithSkill('my-thing', 'my-thing', AUTHORED);
 
     // Step 2 of the issue repro: capability install ./capabilities/my-thing --yes
-    const install = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    const install = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
     assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
     assert.equal(parse(install.output).status, 'installed');
     assert.ok(fs.existsSync(path.join(capDir(home, 'my-thing'), 'skills', 'my-thing', 'SKILL.md')), 'sanity: install copies the skill verbatim into the capabilities root');
@@ -1150,7 +1150,7 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
     // This fixture exercises the supported legacy compatibility-marker path;
     // source-less global trees now fail closed and must be upgraded first.
     fs.writeFileSync(path.join(rcd, '.gsd-source'), path.join(__dirname, '..', 'commands', 'gsd') + '\n');
-    const setResult = runGsdTools(
+    const setResult = await runGsdToolsAsync(
       ['capability', 'set', 'my-thing', '--runtime', 'claude', '--scope', 'global', '--config-dir', rcd, '--raw'],
       cwd,
       scopeEnv(home),
@@ -1185,44 +1185,44 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
 // ─── #3929 — install-time cross-capability validation sees the merged registry ──
 
 describe('#3929: install-time validation is seeded with first-party + installed overlays + candidate', () => {
-  test('requires on a first-party capability resolves at install time', () => {
+  test('requires on a first-party capability resolves at install time', async () => {
     const home = tmpDir('cap-cli-3929-fp-');
     // tier: 'full' — the issue's own repro manifest; tdd is a full-tier
     // capability and the (now-live) tier-monotone check forbids standard
     // requiring full, so the candidate must be full to require it at all.
     const src = writeCapSource('needs-fp', { requires: ['tdd'], tier: 'full' });
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `install must succeed: tdd is first-party — got: ${r.error || r.output}`);
     const o = parse(r.output);
     assert.equal(o.status, 'installed');
     assert.ok(readLedgerEntry(home, 'needs-fp'), 'ledger entry recorded');
   });
 
-  test('requires on a genuinely missing capability still refuses', () => {
+  test('requires on a genuinely missing capability still refuses', async () => {
     const home = tmpDir('cap-cli-3929-missing-');
     const src = writeCapSource('needs-missing', { requires: ['no-such-capability-xyz'] });
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'a genuinely missing requires id must still be refused');
     assert.match(`${r.error}\n${r.output}`, /no-such-capability-xyz/);
     assert.equal(readLedgerEntry(home, 'needs-missing'), null, 'no ledger entry');
   });
 
-  test('requires on an installed overlay capability resolves at install time', () => {
+  test('requires on an installed overlay capability resolves at install time', async () => {
     const home = tmpDir('cap-cli-3929-overlay-');
     const srcA = writeCapSource('overlay-a');
-    const first = runGsdTools(['capability', 'install', srcA, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const first = await runGsdToolsAsync(['capability', 'install', srcA, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(first.success, true, `seed install failed: ${first.error || first.output}`);
 
     const srcB = writeCapSource('overlay-b', { requires: ['overlay-a'] });
-    const r = runGsdTools(['capability', 'install', srcB, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', srcB, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, true, `install must succeed: overlay-a is a committed installed overlay — got: ${r.error || r.output}`);
     assert.ok(readLedgerEntry(home, 'overlay-b'), 'ledger entry recorded');
   });
 
-  test('a pending (uncommitted) overlay does not satisfy requires', () => {
+  test('a pending (uncommitted) overlay does not satisfy requires', async () => {
     const home = tmpDir('cap-cli-3929-pending-');
     const srcA = writeCapSource('pending-a');
-    const first = runGsdTools(['capability', 'install', srcA, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
+    const first = await runGsdToolsAsync(['capability', 'install', srcA, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home));
     assert.equal(first.success, true, `seed install failed: ${first.error || first.output}`);
 
     // Flip cap-a's committed ledger entry to an in-flight _pending intent —
@@ -1237,19 +1237,19 @@ describe('#3929: install-time validation is seeded with first-party + installed 
     fs.writeFileSync(lp, JSON.stringify(ledger, null, 2));
 
     const srcB = writeCapSource('pending-b', { requires: ['pending-a'] });
-    const r = runGsdTools(['capability', 'install', srcB, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', srcB, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'a pending overlay must not satisfy requires (committed-only rule)');
     assert.match(`${r.error}\n${r.output}`, /pending-a/);
   });
 
-  test('install-time config-key exclusivity against the central schema actually runs', () => {
+  test('install-time config-key exclusivity against the central schema actually runs', async () => {
     const home = tmpDir('cap-cli-3929-central-');
     // `mode` is a real central-schema validKey; declaring it federated must be
     // refused at install once centralKeys is seeded (empty Set pre-fix).
     const src = writeCapSource('claims-central', {
       config: { mode: { type: 'string', default: 'standard', description: 'collides with the central schema' } },
     });
-    const r = runGsdTools(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', src, '--scope', 'global'], makeCwd(), scopeEnv(home));
     assert.equal(r.success, false, 'declaring a central config key must refuse at install');
     assert.match(`${r.error}\n${r.output}`, /central config-schema/);
   });
@@ -1283,14 +1283,14 @@ describe('#3929: a throwing (duplicate-producer) overlay is skipped, never attri
     fs.writeFileSync(lp, JSON.stringify(ledger, null, 2));
   }
 
-  test('pre-existing duplicate-producer overlays do not fail a later install', () => {
+  test('pre-existing duplicate-producer overlays do not fail a later install', async () => {
     const home = tmpDir('cap-cli-3929-poison-');
     const cwd = makeCwd();
 
     // poison-a must be seeded (and accepted) BEFORE poison-b trips the
     // duplicate-producer throw during the seed's own suite run.
     const srcA = writeCapSource('poison-a');
-    const first = runGsdTools(['capability', 'install', srcA, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    const first = await runGsdToolsAsync(['capability', 'install', srcA, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
     assert.equal(first.success, true, `seed install failed: ${first.error || first.output}`);
 
     const poisonedStep = {
@@ -1321,7 +1321,7 @@ describe('#3929: a throwing (duplicate-producer) overlay is skipped, never attri
     // the seed — if it were retained, the whole-map suite would throw during
     // the candidate's own validation and this install would fail.
     const srcC = writeCapSource('poison-c', { requires: ['poison-a'] });
-    const r = runGsdTools(['capability', 'install', srcC, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    const r = await runGsdToolsAsync(['capability', 'install', srcC, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
     assert.equal(r.success, true, `install must succeed despite the poisoned overlay: ${r.error || r.output}`);
     assert.ok(readLedgerEntry(home, 'poison-c'), 'candidate ledger entry recorded');
   });

@@ -10,7 +10,8 @@
  * real subprocess exit codes and a real timeout kill.
  *
  * Commands run are instant (`true` / `false` / `exit 3`) or tightly bounded
- * (a 100ms timeout killing `sleep 1`), so there is no orphan/leak risk.
+ * (a tiny timeout killing an `exec`'d `sleep 1.0865`, so the killed process IS the stall and nothing
+ * outlives the test, #6086).
  */
 
 const { describe, test, beforeEach, afterEach } = require('node:test');
@@ -28,6 +29,7 @@ const { runHook } = require('./helpers/process-seam.cjs');
 const NO_SH = process.platform === 'win32' || runHook('-c', ['exit 0'], {
   interpreter: 'sh', timeoutMs: PROBE_TIMEOUT_MS,
 }).exitCode !== 0;
+const { assertNoLeftoverStall } = require('./helpers/stall-leftovers.cjs');
 
 /**
  * A real, bounded `sh -c` subprocess spawned via the production
@@ -42,11 +44,14 @@ const BOUNDED_SHELL_PROBE_TIMEOUT_MS = PROBE_TIMEOUT_MS;
 
 /**
  * The same runBoundedShell call as BOUNDED_SHELL_PROBE_TIMEOUT_MS, but
- * deliberately tiny (not generous headroom) to force a `sleep 1` command
+ * deliberately tiny (not generous headroom) to force a `sleep 1.0865` command
  * past the bound within this test's own lifetime, proving "timeout kills
  * the subprocess (SIGTERM => timedOut:true)."
  */
 const BOUNDED_SHELL_FORCED_TIMEOUT_MS = 100;
+
+/** The forced stall; a duration no other fixture uses, so a leftover is attributable (#6086). */
+const FORCED_STALL_COMMAND = 'sleep 1.0865';
 
 // ─── buildPredicateDeps: real subprocess exit mapping ─────────────────────────
 
@@ -78,9 +83,11 @@ describe('buildPredicateDeps — real bounded sh -c subprocess', () => {
   });
 
   test('timeout kills the subprocess (SIGTERM => timedOut:true)', () => {
-    const r = deps.runBoundedShell({ command: 'sleep 1', cwd, timeoutMs: BOUNDED_SHELL_FORCED_TIMEOUT_MS, env: {} });
+    // `exec` so SIGTERM reaches the sleep, not the `sh -c` above it (#6086).
+    const r = deps.runBoundedShell({ command: `exec ${FORCED_STALL_COMMAND}`, cwd, timeoutMs: BOUNDED_SHELL_FORCED_TIMEOUT_MS, env: {} });
     assert.equal(r.timedOut, true);
     assert.equal(r.signal, 'SIGTERM');
+    assertNoLeftoverStall(assert, FORCED_STALL_COMMAND, 'runBoundedShell forced-timeout stall');
   });
 });
 
