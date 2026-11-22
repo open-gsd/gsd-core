@@ -264,6 +264,7 @@ describe('no-adhoc-env-isolation: every documented recognised form is flagged', 
       { code: 'x.split(path.delimiter, 3).filter(f);', filename: FILE, errors: [pathFilter] },
       { code: 'x.split(path.delimiter)?.filter(f);', filename: FILE, errors: [pathFilter] },
       { code: 'x.split(path.delimiter).filter?.(f);', filename: FILE, errors: [pathFilter] },
+      { code: 'x?.split(path.delimiter).filter(f);', filename: FILE, errors: [pathFilter] },
     ]);
   });
 

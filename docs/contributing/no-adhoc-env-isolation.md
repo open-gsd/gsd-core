@@ -17,7 +17,8 @@ a string key (`x['split'](…)`) or an expression-free template key (``x[`split`
 
 ### Arm 1: an inline PATH split or filter (`inlinePathFilter`)
 
-- A `.split(...)` call, with any argument, whose receiver is a process PATH read. A process PATH
+- A `.split(...)` call, with any argument, whose receiver is a process PATH read. The call may be
+  optional (`process.env.PATH?.split(…)`). A process PATH
   read is `process.env.PATH` or `process.env.Path` (the key Windows enumerates), where `process` is
   the bare identifier and `env` and `PATH` are identifiers or string keys
   (`process['env']['PATH']`); an optional chain over it (`process.env?.PATH`, `process?.env.PATH`);
@@ -31,7 +32,8 @@ a string key (`x['split'](…)`) or an expression-free template key (``x[`split`
 - `X.split(<delimiter>).filter(...)`, whatever `X` is, where `<delimiter>` is a member named
   `delimiter` (`path.delimiter`, `path.win32.delimiter`) or the bare identifier `delimiter`, and the
   split's result is called with `.filter` directly (`.filter(…)`, `?.filter(…)` or `.filter?.(…)`).
-  Only the split's first argument is read: `x.split(path.delimiter, 3).filter(…)` is flagged. This
+  The split may itself be an optional call (`x?.split(path.delimiter).filter(…)`). Only the
+  split's first argument is read: `x.split(path.delimiter, 3).filter(…)` is flagged. This
   is the filter copy #4348 counted: its
   receiver was a parameter defaulting to `process.env.PATH`
   (`(basePath ?? '').split(path.delimiter).filter(...)`), so a rule keyed on reading
@@ -86,9 +88,10 @@ a change that moves the boundary fails a row.
   `scrubConfigLocationEnv()` in `tests/helpers.cjs` (CONTRIBUTING.md).
 - Other variables that locate a home or config: `GSD_HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`,
   and Windows' `HOMEDRIVE` / `HOMEPATH`. The rule looks only at `HOME`, `USERPROFILE` and PATH.
-  `isolatedEnv()` strips every `GSD_*` variable (so `GSD_HOME`) and blanks `CLAUDE_CONFIG_DIR`
-  unless `claudeConfigDir` sets it; it does not set or blank `HOMEDRIVE` / `HOMEPATH`, so a
-  fixture that reads them still inherits them on Windows.
+  `isolatedEnv()` drops every ambient `GSD_*` value (the child sees `GSD_HOME` as an empty string,
+  not an absent key) and blanks `CLAUDE_CONFIG_DIR` unless `claudeConfigDir` sets it; it does not
+  set or blank `HOMEDRIVE` / `HOMEPATH`, so a fixture that reads them still inherits them on
+  Windows.
 - Key names that differ in case: `Home` or `userprofile` keys, and a `process.env.path` read
   (Windows env names are case-insensitive; only `PATH` and `Path` are read).
 - A PATH read that is not a process PATH read: `const { PATH } = process.env`,
