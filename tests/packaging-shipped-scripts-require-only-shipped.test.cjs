@@ -434,6 +434,30 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
+  test('a trailing slash, a "." or empty segment and other spellings that are not a plain path throw, in files, main and bin', () => {
+    for (const files of [['a.js/'], ['hooks/'], ['hooks/./sub'], ['hooks//sub'], ['hooks/.'], ['ho ks'], ['hooks/sub/', '!hooks/x.js']]) {
+      planted({ files }, ['a.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /not a plain path|names the package root/));
+    }
+    planted({ files: ['hooks'], main: 'lib/./m.js' }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /not a plain path/));
+    planted({ files: ['hooks'], bin: { t: 'bin//t.js' } }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /not a plain path/));
+    planted({ files: ['./hooks'] }, ['hooks/a.js'], (tmp) => assert.deepEqual(sorted(listPackedFiles(tmp)), ['hooks/a.js', 'package.json']));
+  });
+
+  test('an ignore file in a directory above a nested entry throws, and so does a symlinked directory on its path', (t) => {
+    for (const name of ['.gitignore', '.npmignore']) {
+      planted({ files: ['a/sub'] }, [`a/${name}`, 'a/sub/x.js'], (tmp) => {
+        assert.throws(() => listPackedFiles(tmp), /an ignore file above/);
+      });
+    }
+    planted({ files: ['link/x.js', 'plain/x.js'] }, ['real/x.js', 'plain/x.js'], (tmp) => {
+      try { fs.symlinkSync(path.join(tmp, 'real'), path.join(tmp, 'link')); } catch (err) {
+        t.skip(`symlinks are not available here (${err.code})`);
+        return;
+      }
+      assert.throws(() => listPackedFiles(tmp), /symlinked directory on the path/);
+    });
+  });
+
   test('a files entry naming the package root throws', () => {
     for (const files of [['.'], ['./'], ['!.']]) {
       planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /names the package root/));

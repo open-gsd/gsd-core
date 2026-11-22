@@ -41,6 +41,17 @@ const isAlwaysIncludedFile = (rel) => rel === 'package.json' || /^(README|LICEN[
 const GLOB_CHARACTERS = /[*?[\]{}()]/;
 const normalise = (entry) => entry.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
 
+// The only spelling of a path this list reads: names of word characters, dots and dashes, joined by single
+// slashes, with at most one leading "./". Anything else (a trailing slash, a "." or empty segment, a space)
+// is read differently by npm and fs, so it throws.
+const PLAIN_PATH = /^(?:\.\/)?[\w.-]{1,255}(?:\/[\w.-]{1,255}){0,40}$/;
+function assertPlainPath(raw, what) {
+  const segments = raw.replace(/^\.\//, '').split('/');
+  if (!PLAIN_PATH.test(raw) || segments.some((s) => s === '.' || s === '..')) {
+    throw new Error(`${what} is not a plain path (names of letters, digits, "_", "." and "-" joined by single slashes); this list reads those only`);
+  }
+}
+
 function listPackedFiles(root) {
   let manifest;
   try { manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')); } catch (err) {
@@ -80,7 +91,30 @@ function listPackedFiles(root) {
     if (f.startsWith('!') && !normalise(bare).includes('/')) {
       throw new Error(`${root}: files entry "${f}" is a slash-less exclusion, which npm applies at any depth; this list needs a path`);
     }
+    assertPlainPath(bare, `files entry "${f}"`);
   }
+  for (const target of [manifest.main, ...(typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin || {}))]) {
+    if (typeof target === 'string' && !path.isAbsolute(target) && !normalise(target).split('/').includes('..')) {
+      assertPlainPath(target, `main or bin target "${target}"`);
+    }
+  }
+  // npm lstats each component: a symlinked directory drops what is under it, and an ignore file in an
+  // ancestor directory (below the root, where npm ignores them) can exclude a nested entry. Both throw.
+  const assertPlainAncestors = (rel) => {
+    const parts = normalise(rel).split('/');
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const dir = path.join(root, ...parts.slice(0, i + 1));
+      let stat;
+      try { stat = fs.lstatSync(dir); } catch (err) {
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return;
+        throw err;
+      }
+      if (stat.isSymbolicLink()) throw new Error(`${dir}: a symlinked directory on the path of "${rel}"; the walk does not follow links`);
+      for (const ignoreFile of ['.npmignore', '.gitignore']) {
+        if (fs.existsSync(path.join(dir, ignoreFile))) throw new Error(`${path.join(dir, ignoreFile)}: an ignore file above "${rel}"; this list does not apply them`);
+      }
+    }
+  };
   const positive = manifest.files.filter((f) => !f.startsWith('!')).map(normalise);
   const negative = manifest.files.filter((f) => f.startsWith('!')).map((f) => normalise(f.slice(1)));
   // npm matches a root file entry by base name, so an exclusion of a nested file with that base name can be undone.
@@ -99,6 +133,7 @@ function listPackedFiles(root) {
       throw new Error(`${root}: main or bin target "${rel}" leaves the package root; this list reads paths below it only`);
     }
   }
+  for (const rel of [...forced, ...negative]) assertPlainAncestors(rel);
   for (const rel of forced) {
     if (rel.includes('/') && isExcludedName(rel.split('/').pop(), rel)) {
       throw new Error(`${root}: main or bin target "${rel}" is nested and matches a default exclusion; this list does not model that`);
@@ -142,6 +177,7 @@ function listPackedFiles(root) {
   };
 
   for (const entry of positive) {
+    assertPlainAncestors(entry);
     let stat;
     try { stat = fs.lstatSync(path.join(root, entry)); } catch (err) {
       if (err.code === 'ENOENT' || err.code === 'ENOTDIR') continue; // npm skips an entry that matches nothing
