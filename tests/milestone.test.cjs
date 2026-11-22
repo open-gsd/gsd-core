@@ -2465,7 +2465,8 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
   for (const shell of ['bash', 'zsh']) {
     test(`executor ready-ids forwards the active workstream to both calls under ${shell}`, (t) => {
-      const skipReason = skipUnless(shell, 'jq'); if (skipReason) return t.skip(skipReason);
+      const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+      if (shell === 'zsh' && skipIfNoZsh(t)) return;
       const dir = makePhaseDir(tmpDir);
       const planPath = path.join(dir, '05-01-PLAN.md');
       fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
@@ -2484,7 +2485,8 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     });
 
     test(`a failed ready-ids query preserves an errexit caller under ${shell}`, (t) => {
-      const skipReason = skipUnless(shell, 'jq'); if (skipReason) return t.skip(skipReason);
+      const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+      if (shell === 'zsh' && skipIfNoZsh(t)) return;
       const dir = makePhaseDir(tmpDir);
       const planPath = path.join(dir, '05-01-PLAN.md');
       fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
