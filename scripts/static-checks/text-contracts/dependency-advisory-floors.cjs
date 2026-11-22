@@ -20,6 +20,7 @@ function compareSemver(a, b) {
 }
 
 module.exports = {
+  compareSemver, // exported for the property test in tests/text-contracts.test.cjs
   id: 'dependency-advisory-floors',
   issue: '#5840',
   check(ctx) {

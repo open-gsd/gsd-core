@@ -1256,6 +1256,56 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     });
   }
 
+  // The other gap of rev-list ... --count ... DEFAULT_BRANCH, and both gaps of the ahead ... origin ... DEFAULT_BRANCH alternative
+  // (with its `unpushed` alternative removed, so only the ahead pattern can satisfy the warning assertion).
+  gapCases('--count and DEFAULT_BRANCH', 'gsd-core/workflows/execute-phase.md', 'execute-phase-branch-base-ahead-warning',
+    (text, gap) => `${text.replace(/rev-list[^\n]{0,500}--count[^\n]{0,500}DEFAULT_BRANCH/gi, '')}\nrev-list x--count${'y'.repeat(gap)}DEFAULT_BRANCH\n`, 500, /must check if local \$DEFAULT_BRANCH is ahead/);
+  const withoutUnpushed = (text) => text.replace(/unpushed/gi, 'unp').replace(/ahead[^\n]{0,500}origin[^\n]{0,500}DEFAULT_BRANCH/gi, '');
+  gapCases('ahead and origin', 'gsd-core/workflows/execute-phase.md', 'execute-phase-branch-base-ahead-warning',
+    (text, gap) => `${withoutUnpushed(text)}\nrev-list x--count y DEFAULT_BRANCH\nahead${'x'.repeat(gap)}origin y DEFAULT_BRANCH\n`, 500, /must warn that local commits are ahead\/unpushed/);
+  gapCases('origin and DEFAULT_BRANCH (ahead pattern)', 'gsd-core/workflows/execute-phase.md', 'execute-phase-branch-base-ahead-warning',
+    (text, gap) => `${withoutUnpushed(text)}\nrev-list x--count y DEFAULT_BRANCH\nahead x origin${'y'.repeat(gap)}DEFAULT_BRANCH\n`, 500, /must warn that local commits are ahead\/unpushed/);
+
+  // Each of the four whitespace gaps of "not a standalone accuracy guarantee" is bounded at 20.
+  for (const slot of [1, 2, 3, 4]) {
+    gapCases(`whitespace gap ${slot + 1} of "not a standalone accuracy guarantee"`, UI_CHECKER, 'ui-checker-adversarial-stance',
+      (text, gap) => text.replace(/not\s+a\s+standalone\s+accuracy\s+guarantee/gi, ['not', 'a', 'standalone', 'accuracy', 'guarantee']
+        .reduce((joined, word, i) => (i === 0 ? word : `${joined}${' '.repeat(i === slot ? gap : 1)}${word}`), '')), 20, /missing limitation on persona efficacy claim/);
+  }
+
+  // The arrow form of an exemplar (`Input -> ...`) tolerates 20 whitespace characters; no real agent uses it, so the file is rewritten to it.
+  for (const name of ['gsd-doc-classifier', 'gsd-doc-synthesizer']) {
+    for (const [gap, ok] of [[19, true], [20, true], [21, false]]) {
+      test(`${name} with arrow exemplars ${gap} whitespace characters after Input ${ok ? 'satisfies' : 'is past the bound of'} extraction-discipline-consistency`, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, 'agents', `${name}.md`);
+        const text = fs.readFileSync(abs, 'utf8').replace(/\bInput:/gi, 'Case:');
+        fs.writeFileSync(abs, `${text}\nInput${' '.repeat(gap)}-> first\nInput${' '.repeat(gap)}-> second\n`);
+        const findings = runShipped(root, ['extraction-discipline-consistency']);
+        if (ok) assert.deepEqual(findings, []);
+        else assert.ok(findings.some((f) => /missing few-shot Input->Output exemplars/.test(f.message)), JSON.stringify(findings));
+      });
+    }
+  }
+
+  // The semver comparison parses each component as a number: multi-digit components order numerically, a prerelease tag fails closed.
+  passes('re2js locked at a multi-digit patch above its floor (2.8.10) satisfies dependency-advisory-floors', 'package-lock.json',
+    withLockVersion('node_modules/re2js', '2.8.10'), 'dependency-advisory-floors');
+  passes('re2js locked at a multi-digit minor above its floor (2.10.0) satisfies dependency-advisory-floors', 'package-lock.json',
+    withLockVersion('node_modules/re2js', '2.10.0'), 'dependency-advisory-floors');
+  findsOne('re2js locked at a prerelease of its floor (2.8.7-rc.1) fails closed in dependency-advisory-floors', 'package-lock.json',
+    withLockVersion('node_modules/re2js', '2.8.7-rc.1'), 'dependency-advisory-floors', /locked at 2\.8\.7-rc\.1, below the patched 2\.8\.7/);
+
+  test('compareSemver orders any two numeric versions as a tuple comparison (property)', () => {
+    const fc = require('fast-check');
+    const { compareSemver } = require('../scripts/static-checks/text-contracts/dependency-advisory-floors.cjs');
+    const version = fc.tuple(fc.nat(1000), fc.nat(1000), fc.nat(1000));
+    fc.assert(fc.property(version, version, (a, b) => {
+      const expected = Math.sign(a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+      return Math.sign(compareSemver(a.join('.'), b.join('.'))) === expected && Math.sign(compareSemver(b.join('.'), a.join('.'))) === -expected;
+    }), { numRuns: 200 });
+  });
+
   test('gsd-core/references/verify-mvp-mode.md removed from the tree is a finding for verifier-mvp-section', (t) => {
     const root = copyOfRepoFiles(t);
     fs.unlinkSync(path.join(root, 'gsd-core', 'references', 'verify-mvp-mode.md'));
