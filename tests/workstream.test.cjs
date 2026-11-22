@@ -1172,6 +1172,92 @@ describe('workstream migrate and complete keep their promises (#5120 pre-push re
     }
   });
 
+  // Makes the first unlink of `lock` throw EPERM, the transient Windows class the lock code retries elsewhere.
+  function failFirstUnlinkOf(t, lock) {
+    const realUnlink = fs.unlinkSync;
+    const state = { failed: false };
+    t.mock.method(fs, 'unlinkSync', (p, ...rest) => {
+      if (!state.failed && String(p) === lock) {
+        state.failed = true;
+        throw Object.assign(new Error('EPERM: operation not permitted, unlink'), { code: 'EPERM' });
+      }
+      return realUnlink.call(fs, p, ...rest);
+    });
+    return state;
+  }
+
+  test('a failed migrate names the directory it leaves when the release of its own lock fails (#5120 pre-push review R4-m3)', (t) => {
+    const tmpDir = createFixture();
+    try {
+      const planning = path.join(tmpDir, '.planning');
+      seedFlat(planning);
+      const realRename = fs.renameSync;
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        if (String(from) === path.join(planning, 'phases')) throw eio('injected forward EIO');
+        return realRename.call(fs, from, to, ...rest);
+      });
+      const unlink = failFirstUnlinkOf(t, path.join(planning, 'workstreams', 'main', 'STATE.md.lock'));
+      assert.throws(() => migrateToWorkstreams(tmpDir, 'main'), (err) =>
+        err.message === 'injected forward EIO; directory left behind: .planning/workstreams/main');
+      t.mock.restoreAll();
+      assert.equal(unlink.failed, true, 'precondition: the release of the workstream lock failed');
+      assert.deepEqual(fs.readdirSync(path.join(planning, 'workstreams', 'main')), ['STATE.md.lock']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('a failed complete names the archive directory it leaves when the release of its own lock fails (#5120 pre-push review R4-m3)', (t) => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedAlpha(tmpDir, { 'STATE.md': '# State\nworkstream\n' });
+      fs.mkdirSync(path.join(wsDir, 'phases'));
+      const realRename = fs.renameSync;
+      let archiveLock = null;
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        if (String(from) === path.join(wsDir, 'phases')) {
+          archiveLock = path.join(path.dirname(String(to)), 'STATE.md.lock');
+          throw eio('injected forward EIO');
+        }
+        return realRename.call(fs, from, to, ...rest);
+      });
+      const realUnlink = fs.unlinkSync;
+      let failed = false;
+      t.mock.method(fs, 'unlinkSync', (p, ...rest) => {
+        if (!failed && archiveLock !== null && String(p) === archiveLock) {
+          failed = true;
+          throw Object.assign(new Error('EPERM: operation not permitted, unlink'), { code: 'EPERM' });
+        }
+        return realUnlink.call(fs, p, ...rest);
+      });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      t.mock.restoreAll();
+      assert.equal(failed, true, 'precondition: the release of the archive lock failed');
+      assert.equal(out.error, 'archive_failed');
+      assert.match(out.message, /^injected forward EIO; directory left behind: \.planning\/milestones\/ws-alpha-[^ ]+$/);
+      assert.deepEqual(fs.readdirSync(path.join(tmpDir, out.message.slice(out.message.indexOf('.planning/')))), ['STATE.md.lock']);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('a completed archive whose workstream directory is gone has no workstream_dir_left in its output (#5120 pre-push review R4-n5)', () => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedAlpha(tmpDir, { 'STATE.md': '# State\nworkstream\n' });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      assert.equal(out.completed, true);
+      assert.equal(fs.existsSync(wsDir), false);
+      assert.equal('workstream_dir_left' in out, false);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
   test('complete names a workstream directory it could not remove because the release of its own lock failed (#5120 pre-push review R3-m2)', (t) => {
     const tmpDir = createFixture();
     const pointerDir = getSessionPointerDir(tmpDir);
