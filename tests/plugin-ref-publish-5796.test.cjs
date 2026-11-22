@@ -409,12 +409,22 @@ describe('#5796 plugin ref publisher', () => {
     );
     const src = tmp('plugin-ref-src-');
     const repo = path.join(src, 'repo');
-    // The clone's local transport spawns `git upload-pack` in ROOT with GIT_CONFIG_PARAMETERS
-    // cleared, so -c alone does not reach it; pass safe.directory to upload-pack too.
-    git(src, [
-      '-c', 'safe.directory=*', 'clone', '-q', '--no-local',
-      '--upload-pack=git -c safe.directory=* upload-pack', ROOT, repo,
-    ]);
+    // A fresh repository holding one commit of ROOT's tracked tree. Cloning ROOT would copy its whole
+    // history (gigabytes), and how long that takes depends on the runner, not on the publisher (#6517).
+    const tracked = git(ROOT, ['-c', 'safe.directory=*', 'ls-files', '-z']).split('\0').filter(Boolean);
+    fs.mkdirSync(repo, { recursive: true });
+    for (const rel of tracked) {
+      const to = path.join(repo, rel);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, rel), to);
+    }
+    git(repo, ['init', '-q', '-b', 'main']);
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-q', '-m', 'tracked tree of the checkout under test']);
+    assert.deepEqual(
+      git(repo, ['ls-files', '-z']).split('\0').filter(Boolean).sort(), tracked.slice().sort(),
+      'the fixture repository tracks exactly the files the checkout tracks',
+    );
     fs.cpSync(
       path.join(ROOT, 'gsd-core', 'bin', 'lib'), path.join(repo, 'gsd-core', 'bin', 'lib'),
       { recursive: true },
