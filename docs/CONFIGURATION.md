@@ -176,7 +176,7 @@ An explicit `planning: null` removes planning defaults, including `commit_docs`,
 
 A workstream section that is an object replaces a non-object section in the root file, the way the loader merges the two files. With root `"workflow": null` and workstream `"workflow": {}`, `workflow.*` defaults apply. The reverse (root object, workstream `"workflow": null`) still blocks them.
 
-`parallelization` is outside this barrier. Its flat spelling is a legitimate boolean (`"parallelization": true`), so `"parallelization": null` falls back to the default for the assembled config, while the per-key resolver reports `parallelization.enabled` as not configured.
+`parallelization` is outside this barrier. Its flat spelling is a legitimate boolean (`"parallelization": true`), so `"parallelization": null` falls back to the default for the assembled config, while the per-key resolver reports `parallelization.enabled` as not configured in every state, because it is not an eligible resolver key.
 
 The same applies to the global `$GSD_HOME/.gsd/defaults.json`. If the project config is also unusable, the
 project one is reported, since that is the file you are most likely able to fix.
