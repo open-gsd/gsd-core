@@ -25,7 +25,7 @@ const { toPosixPath, generateSlugInternal } = coreUtils;
 import roadmapParser = require('./roadmap-parser.cjs');
 const { getMilestoneInfo } = roadmapParser;
 import { platformWriteSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: an export= CommonJS module (withStateLock)
 import stateMod = require('./state.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -72,6 +72,10 @@ const { withStateLock } = stateMod;
  * whether or not a STATE.md exists, so a dead holder's lock is always stolen and removed here. They
  * are taken in one fixed order (by path), so two moves between the same pair of directories cannot
  * each hold the lock the other waits for. withStateLock is not re-entrant: fn must not take either.
+ * Not covered (pre-push review R3-m1): a writer waiting on the old path's STATE.md lock takes it when
+ * the scope releases it, and readModifyWriteStateMd reads the moved-away file as empty; a transform
+ * that makes content from that empty input writes a new STATE.md at the old path, and the moved
+ * STATE.md does not get that writer's update.
  */
 function withBothStateLocks<T>(dirA: string, dirB: string, fn: () => T): T {
   const [first, second] = [path.join(dirA, 'STATE.md'), path.join(dirB, 'STATE.md')].sort();
@@ -403,6 +407,10 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
   }
 
   try { fs.rmdirSync(wsDir); } catch { /* ignore */ }
+  // #5120 pre-push review R3-m2: a workstream directory still there after the move (for example the
+  // release of this process's own lock failed, so its lock file is left in it) is named, so
+  // `completed: true` is not read as "the directory is gone". It is still counted below.
+  const dirLeft = fs.existsSync(wsDir) ? toPosixPath(path.relative(cwd, wsDir)) : null;
 
   let remainingWs = 0;
   try {
@@ -416,6 +424,7 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
     archived_to: toPosixPath(path.relative(cwd, archivePath)),
     remaining_workstreams: remainingWs,
     reverted_to_flat: remainingWs === 0,
+    ...(dirLeft !== null ? { workstream_dir_left: dirLeft } : {}),
   }, raw, undefined);
 }
 

@@ -998,6 +998,208 @@ describe('workstream migrate and complete fault sweep (#5120)', () => {
   });
 });
 
+// #5120 pre-push review R3-M1: the fault sweep above checks that files are conserved; these rows pin
+// what migrate and complete promise beyond that, each in one fixture: the error names an entry the
+// rollback could not return, a dead holder's lock with no STATE.md is removed, this process's own
+// lock stays in the workstream directory for the whole move, the active pointer comes back when the
+// archive fails, a stale lock another process removes mid-move is tolerated, and a failed migrate
+// leaves no workstreams directory behind.
+describe('workstream migrate and complete keep their promises (#5120 pre-push review R3-M1)', () => {
+  const planningWorkspace = require('../gsd-core/bin/lib/planning-workspace.cjs');
+  const eio = (message) => Object.assign(new Error(message), { code: 'EIO' });
+
+  function seedFlat(planning) {
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(planning, 'STATE.md'), '# State\noriginal\n');
+    fs.mkdirSync(path.join(planning, 'phases', '01-a'), { recursive: true });
+  }
+
+  function seedAlpha(tmpDir, files) {
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(wsDir, { recursive: true });
+    for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(wsDir, name), content);
+    return wsDir;
+  }
+
+  // Makes the forward rename whose source is `failFrom` throw, and the reverse rename of STATE.md
+  // (back onto `stateHome`) throw too, so the rollback cannot return STATE.md.
+  function failForwardAndStateReturn(t, failFrom, stateHome) {
+    const realRename = fs.renameSync;
+    t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+      if (String(from) === failFrom) throw eio('injected forward EIO');
+      if (String(to) === path.join(stateHome, 'STATE.md')) throw eio('injected return EIO');
+      return realRename.call(fs, from, to, ...rest);
+    });
+  }
+
+  test('a failed migrate names the entry its rollback could not return and keeps the directory that holds it', (t) => {
+    const tmpDir = createFixture();
+    try {
+      const planning = path.join(tmpDir, '.planning');
+      seedFlat(planning);
+      failForwardAndStateReturn(t, path.join(planning, 'phases'), planning);
+      assert.throws(() => migrateToWorkstreams(tmpDir, 'main'), (err) =>
+        err.message === 'injected forward EIO; NOT rolled back: STATE.md left in .planning/workstreams/main'
+        && err.cause && err.cause.message === 'injected forward EIO');
+      t.mock.restoreAll();
+      assert.equal(fs.readFileSync(path.join(planning, 'workstreams', 'main', 'STATE.md'), 'utf-8'), '# State\noriginal\n');
+      assert.equal(fs.existsSync(path.join(planning, 'ROADMAP.md')), true, 'every other entry is back');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('a failed migrate that returned every entry leaves no .planning/workstreams directory behind', (t) => {
+    const tmpDir = createFixture();
+    try {
+      const planning = path.join(tmpDir, '.planning');
+      seedFlat(planning);
+      const realRename = fs.renameSync;
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        if (String(from) === path.join(planning, 'phases')) throw eio('injected forward EIO');
+        return realRename.call(fs, from, to, ...rest);
+      });
+      assert.throws(() => migrateToWorkstreams(tmpDir, 'main'), (err) => err.message === 'injected forward EIO');
+      t.mock.restoreAll();
+      // An empty workstreams/<name>/ would switch the project into workstream mode.
+      assert.equal(fs.existsSync(path.join(planning, 'workstreams')), false);
+      assert.equal(fs.readFileSync(path.join(planning, 'STATE.md'), 'utf-8'), '# State\noriginal\n');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('a failed complete names the entry its rollback could not return and restores the active pointer', (t) => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedAlpha(tmpDir, { 'STATE.md': '# State\nworkstream\n', 'ROADMAP.md': '# Roadmap\n' });
+      fs.mkdirSync(path.join(wsDir, 'phases'));
+      planningWorkspace.setActiveWorkstream(tmpDir, 'alpha');
+      assert.equal(planningWorkspace.getActiveWorkstream(tmpDir), 'alpha', 'precondition: alpha is active');
+      const realReaddir = fs.readdirSync;
+      t.mock.method(fs, 'readdirSync', (p, ...rest) => {
+        const result = realReaddir.call(fs, p, ...rest);
+        if (String(p) !== wsDir || !rest[0] || !rest[0].withFileTypes) return result;
+        // STATE.md is moved first and the phases directory last, whatever the filesystem lists.
+        return [...result].sort((a, b) => Number(b.name === 'STATE.md') - Number(a.name === 'STATE.md') || Number(a.name === 'phases') - Number(b.name === 'phases'));
+      });
+      failForwardAndStateReturn(t, path.join(wsDir, 'phases'), wsDir);
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      t.mock.restoreAll();
+      assert.equal(out.completed, false);
+      assert.equal(out.error, 'archive_failed');
+      assert.match(out.message, /^injected forward EIO; NOT rolled back: STATE\.md left in \.planning\/milestones\/ws-alpha-[^,]+$/);
+      const archive = path.join(tmpDir, out.message.slice(out.message.indexOf('.planning/')));
+      assert.equal(fs.readFileSync(path.join(archive, 'STATE.md'), 'utf-8'), '# State\nworkstream\n');
+      assert.equal(planningWorkspace.getActiveWorkstream(tmpDir), 'alpha', 'the active pointer is restored');
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('complete removes a workstream that holds a dead holder\'s STATE.md.lock and no STATE.md (#5120 pre-push review R2-M1)', () => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      // A pid far above any real pid limit: not running, so the lock is taken over, not waited for.
+      const wsDir = seedAlpha(tmpDir, { 'ROADMAP.md': '# Roadmap\n', 'STATE.md.lock': '2147483646' });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      assert.equal(out.completed, true);
+      assert.equal(out.reverted_to_flat, true);
+      assert.equal(fs.existsSync(wsDir), false, 'the workstream directory is removed');
+      const archive = path.join(tmpDir, out.archived_to);
+      assert.deepEqual(fs.readdirSync(archive), ['ROADMAP.md']);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('complete keeps this process\'s own STATE.md.lock in the workstream directory while it moves every entry', (t) => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedAlpha(tmpDir, { 'STATE.md': '# State\nworkstream\n', 'ROADMAP.md': '# Roadmap\n' });
+      const lock = path.join(wsDir, 'STATE.md.lock');
+      const realReaddir = fs.readdirSync;
+      t.mock.method(fs, 'readdirSync', (p, ...rest) => {
+        const result = realReaddir.call(fs, p, ...rest);
+        if (String(p) !== wsDir || !rest[0] || !rest[0].withFileTypes) return result;
+        // The lock is listed first, so a move of it would come before every other entry's move.
+        return [...result].sort((a, b) => Number(b.name === 'STATE.md.lock') - Number(a.name === 'STATE.md.lock'));
+      });
+      const realRename = fs.renameSync;
+      const seen = [];
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        if (path.dirname(String(from)) === wsDir) {
+          seen.push({ entry: path.basename(String(from)), ownLockHeld: fs.existsSync(lock) && fs.readFileSync(lock, 'utf-8') === String(process.pid) });
+        }
+        return realRename.call(fs, from, to, ...rest);
+      });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      t.mock.restoreAll();
+      assert.equal(out.completed, true);
+      assert.deepEqual(seen.map(s => s.entry).sort(), ['ROADMAP.md', 'STATE.md'], 'the lock itself is never moved');
+      assert.deepEqual(seen.filter(s => !s.ownLockHeld), [], 'the lock is held at every move');
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('complete tolerates a STATE.md.lock.stale-* leftover that another process removes before it is moved', (t) => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedAlpha(tmpDir, { 'STATE.md': '# State\nworkstream\n', 'STATE.md.lock.stale-1-2-3': '2147483646' });
+      const leftover = path.join(wsDir, 'STATE.md.lock.stale-1-2-3');
+      const realRename = fs.renameSync;
+      t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
+        // The other process's cleanup lands between the listing and this move.
+        if (String(from) === leftover) fs.unlinkSync(leftover);
+        return realRename.call(fs, from, to, ...rest);
+      });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      t.mock.restoreAll();
+      assert.equal(out.completed, true);
+      assert.equal(fs.existsSync(wsDir), false);
+      assert.deepEqual(fs.readdirSync(path.join(tmpDir, out.archived_to)), ['STATE.md']);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('complete names a workstream directory it could not remove because the release of its own lock failed (#5120 pre-push review R3-m2)', (t) => {
+    const tmpDir = createFixture();
+    const pointerDir = getSessionPointerDir(tmpDir);
+    try {
+      const wsDir = seedAlpha(tmpDir, { 'STATE.md': '# State\nworkstream\n' });
+      const lock = path.join(wsDir, 'STATE.md.lock');
+      const realUnlink = fs.unlinkSync;
+      let failed = false;
+      t.mock.method(fs, 'unlinkSync', (p, ...rest) => {
+        if (!failed && String(p) === lock) {
+          failed = true;
+          throw Object.assign(new Error('EPERM: operation not permitted, unlink'), { code: 'EPERM' });
+        }
+        return realUnlink.call(fs, p, ...rest);
+      });
+      const out = JSON.parse(captureFdSync(1, () => cmdWorkstreamComplete(tmpDir, 'alpha', {}, false)));
+      t.mock.restoreAll();
+      assert.equal(failed, true, 'precondition: the release of the workstream\'s lock failed');
+      assert.equal(out.completed, true);
+      assert.equal(out.workstream_dir_left, '.planning/workstreams/alpha');
+      assert.deepEqual(fs.readdirSync(wsDir), ['STATE.md.lock']);
+    } finally {
+      cleanup(pointerDir);
+      cleanup(tmpDir);
+    }
+  });
+});
+
 describe('workstream list', () => {
   let tmpDir;
 
