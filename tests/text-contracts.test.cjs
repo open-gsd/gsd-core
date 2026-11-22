@@ -533,6 +533,10 @@ const SHIPPED = [
   'release-coverage-scope', 'gsd-researcher-flow-diagram', 'import-command', 'gates-taxonomy', 'ios-scaffold-safety',
   'audit-milestone-filename-guard', 'branch-no-track-guard', 'execute-plan-interrupted-agent-guard', 'handoff-next-step',
   'transition-verification-gate',
+  'ui-checker-adversarial-stance', 'context7-plugin-grant-parity', 'execute-phase-branch-base-ahead-warning', 'verifier-mvp-section',
+  'verifier-harvest-recorded-verdict', 'workflow-step-tag-balance', 'dependency-advisory-floors', 'extraction-discipline-consistency',
+  'ci-durations-upload-nonfatal', 'reachability-check', 'review-timeout-guidance', 'quick-planner-scope-guard',
+  'roadmapper-contract-guard', 'untrusted-input-isolation', 'verifier-spotcheck-test-discipline',
 ];
 
 describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
@@ -560,6 +564,14 @@ describe('the shipped contracts hold on the real files, and fail when a contract
     'gsd-core/workflows/audit-milestone.md', 'gsd-core/workflows/execute-plan.md', 'gsd-core/workflows/transition.md',
     'commands/gsd/new-project.md', 'skills/gsd-new-project/SKILL.md', 'pi/package-skills/gsd-new-project/SKILL.md',
     'commands/gsd/new-milestone.md', 'skills/gsd-new-milestone/SKILL.md', 'pi/package-skills/gsd-new-milestone/SKILL.md',
+    // Batch 7.
+    'agents/gsd-ui-checker.md', 'agents/gsd-advisor-researcher.md', 'agents/gsd-planner.md', 'agents/gsd-doc-classifier.md',
+    'agents/gsd-doc-synthesizer.md', 'agents/gsd-project-researcher.md', 'agents/gsd-domain-researcher.md',
+    'agents/gsd-ai-researcher.md', 'agents/gsd-research-synthesizer.md', 'agents/gsd-ui-researcher.md',
+    'agents/gsd-assumptions-analyzer.md', 'agents/gsd-roadmapper.md',
+    'gsd-core/references/verify-mvp-mode.md', 'gsd-core/references/planner-human-verify-mode.md', 'gsd-core/references/checkpoints.md',
+    'gsd-core/workflows/settings-advanced.md', 'gsd-core/workflows/review.md', 'gsd-core/workflows/quick.md',
+    'gsd-core/references/untrusted-input-boundary.md', 'package-lock.json', '.github/workflows/test.yml',
   ];
 
   function copyOfRepoFiles(t) {
@@ -956,6 +968,322 @@ describe('the shipped contracts hold on the real files, and fail when a contract
         if (fails) assert.match(findings[0].message, new RegExp(`${job} job cap must be at least 30 \\(was 29\\)`));
       });
     }
+  }
+
+  // The fifteen batch-7 contracts.
+  const yaml = require('js-yaml');
+  const erase = (pattern) => (text) => text.replace(pattern, '');
+  const eraseAll = (phrase) => (text) => text.split(phrase).join('');
+  const within = (from, to, edit) => (text) => {
+    const at = text.indexOf(from);
+    const end = text.indexOf(to, at + from.length);
+    return text.slice(0, at) + edit(text.slice(at, end)) + text.slice(end);
+  };
+  const inStepOf = (name, edit) => within(`<step name="${name}">`, '</step>', edit);
+  const yamlEdit = (edit) => (text) => {
+    const workflow = yaml.load(text);
+    edit(workflow);
+    return yaml.dump(workflow, { lineWidth: -1 });
+  };
+  const stepsOf = (workflow, prefix) => Object.values(workflow.jobs).flatMap((job) => job.steps || [])
+    .filter((step) => typeof step.uses === 'string' && step.uses.startsWith('actions/upload-artifact') && step.with && String(step.with.name).startsWith(prefix));
+  const INGEST = [
+    'gsd-phase-researcher', 'gsd-project-researcher', 'gsd-domain-researcher', 'gsd-ai-researcher', 'gsd-advisor-researcher',
+    'gsd-research-synthesizer', 'gsd-doc-classifier', 'gsd-doc-synthesizer', 'gsd-ui-researcher', 'gsd-assumptions-analyzer',
+  ];
+  const VERIFIER = 'agents/gsd-verifier.md';
+  const UI_CHECKER = 'agents/gsd-ui-checker.md';
+  const BOUNDARY = 'gsd-core/references/untrusted-input-boundary.md';
+  // The planner's <constraints> block of quick.md (the last block opening before the planner dispatch), edited and put back.
+  const inPlannerConstraints = (edit) => (text) => {
+    const start = text.lastIndexOf('<constraints>', text.indexOf('subagent_type="gsd-planner"'));
+    const end = text.indexOf('</constraints>', start);
+    return text.slice(0, start) + edit(text.slice(start, end)) + text.slice(end);
+  };
+  const keepInputs = (keep) => (text) => {
+    let seen = 0;
+    return text.replace(/\bInput:/gi, (match) => { seen += 1; return seen <= keep ? match : 'Case:'; });
+  };
+  const withLockVersion = (pkg, version) => (text) => {
+    const lock = JSON.parse(text);
+    lock.packages[pkg].version = version;
+    return JSON.stringify(lock, null, 2);
+  };
+  for (const [title, rel, edit, contract, expected] of [
+    // ui-checker-adversarial-stance
+    ...[
+      [/<adversarial_stance>/g, /missing <adversarial_stance>/], [/FORCE stance/g, /missing FORCE stance line/],
+      [/go soft/gi, /missing go-soft failure list/], [/BLOCK\b/g, /missing BLOCK tier/], [/FLAG\b/g, /missing FLAG tier/],
+      [/The Auditor/gi, /missing named third-person reviewer/], [/The Auditor['’]s verdict/gi, /missing third-person verdict phrasing/],
+      [/independent/gi, /missing independent\/objective framing/],
+      [/not\s+a\s+standalone\s+accuracy\s+guarantee/gi, /missing limitation on persona efficacy claim/],
+      [/anti.?capitulat/gi, /missing anti-capitulation rule/], [/concrete fix/gi, /missing "concrete fix" requirement/],
+      [/Self-correction is allowed/gi, /missing carve-out for evidence-backed self-correction/],
+      [/prior dimension application was mistaken/gi, /missing mistaken-prior-application carve-out/],
+    ].map(([pattern, why]) => [`${pattern} gone from the UI checker`, UI_CHECKER, erase(pattern), 'ui-checker-adversarial-stance', why]),
+    // context7-plugin-grant-parity
+    ['the plugin grant dropped from an agent that grants standalone context7', 'agents/gsd-advisor-researcher.md',
+      (text) => text.split('\n').map((line) => (/^tools:/.test(line) ? line.split('mcp__plugin_context7_context7__*').join('') : line)).join('\n'),
+      'context7-plugin-grant-parity', /grants mcp__context7__\* but not mcp__plugin_context7_context7__\*/],
+    // execute-phase-branch-base-ahead-warning
+    ['the rev-list --count check gone from execute-phase (#2639)', 'gsd-core/workflows/execute-phase.md',
+      erase(/rev-list[^\n]{0,500}--count[^\n]{0,500}DEFAULT_BRANCH/gi), 'execute-phase-branch-base-ahead-warning', /must check if local \$DEFAULT_BRANCH is ahead of origin/],
+    ['the ahead/unpushed warning gone from execute-phase (#2639)', 'gsd-core/workflows/execute-phase.md',
+      erase(/ahead[^\n]{0,500}origin[^\n]{0,500}DEFAULT_BRANCH|unpushed/gi), 'execute-phase-branch-base-ahead-warning', /must warn that local commits are ahead\/unpushed/],
+    // verifier-mvp-section
+    ['the MVP Mode Verification section gone from the verifier', VERIFIER, erase(/mvp[ -]mode verification/gi), 'verifier-mvp-section', /must define an MVP Mode Verification section/],
+    ['verify-mvp-mode.md no longer referenced by the verifier', VERIFIER, erase(/verify-mvp-mode\.md/gi), 'verifier-mvp-section', /must reference verify-mvp-mode\.md/],
+    ['goal-backward gone from the verifier', VERIFIER, erase(/goal-backward/gi), 'verifier-mvp-section', /must preserve goal-backward terminology/],
+    // verifier-harvest-recorded-verdict
+    ['the Step 8 heading renamed in the verifier (#5741)', VERIFIER, eraseAll('## Step 8: Identify Human Verification Needs'), 'verifier-harvest-recorded-verdict', /marker .*Step 8.* not found/],
+    ['the Step 9 heading renamed, so Step 8 has no end (#5741)', VERIFIER, (text) => text.split('\n## Step 9').join('\n## Stage 9'), 'verifier-harvest-recorded-verdict', /closing marker .* not found/],
+    ['"is not a reason to omit" gone from Step 8 (#5741)', VERIFIER, erase(/recorded verdict[^\n]{0,500}is not a reason to omit/gi), 'verifier-harvest-recorded-verdict', /must not be a reason to omit the check/],
+    ['the deduplication limit gone from Step 8 (#5741)', VERIFIER, erase(/[Dd]eduplicate only against your own analysis/g), 'verifier-harvest-recorded-verdict', /deduplication must be limited/],
+    ['"unmodified" gone from Step 8 (#5741)', VERIFIER, erase(/<expected>[^\n]{0,500}unmodified/g), 'verifier-harvest-recorded-verdict', /must be carried through unmodified/],
+    ['the planner-side harvest sentence gone (#5741)', 'gsd-core/references/planner-human-verify-mode.md',
+      eraseAll('verifier (Step 8) harvests every `<verify><human-check>` block at end-of-phase, even when its `<expected>` already records a verdict'), 'verifier-harvest-recorded-verdict', /planner-side reference must agree/],
+    ['the checkpoints.md harvest sentence gone (#5741)', 'gsd-core/references/checkpoints.md',
+      eraseAll('verifier harvests every `<verify><human-check>` at end-of-phase (Step 8), even when its `<expected>` already records a verdict'), 'verifier-harvest-recorded-verdict', /checkpoints\.md must agree/],
+    // workflow-step-tag-balance
+    ['an extra </step> in a top-level workflow (#1864)', 'gsd-core/workflows/plan-phase.md', (text) => `${text}\n</step>\n`, 'workflow-step-tag-balance', /\d+ opens \/ \d+ closes/],
+    ['an extra <step> in a top-level workflow (#1864)', 'gsd-core/workflows/execute-plan.md', (text) => `${text}\n<step name="orphan">\n`, 'workflow-step-tag-balance', /\d+ opens \/ \d+ closes/],
+    ['the model_policy step renamed in settings-advanced (#1864)', 'gsd-core/workflows/settings-advanced.md',
+      eraseAll('<step name="model_policy">'), 'workflow-step-tag-balance', /expected <step name="model_policy">/],
+    ['the Model Policy section heading gone from settings-advanced (#1864)', 'gsd-core/workflows/settings-advanced.md',
+      eraseAll('### Section 8 — Model Policy'), 'workflow-step-tag-balance', /Section 8 .* Model Policy/],
+    // extraction-discipline-consistency
+    ...['gsd-doc-classifier', 'gsd-doc-synthesizer'].flatMap((name) => [
+      [/<extraction_discipline>/g, new RegExp(`${name} missing <extraction_discipline>`)],
+      [/rule-application, not generation/gi, new RegExp(`${name} missing rule-application framing`)],
+      [/do not (infer|embellish)/gi, new RegExp(`${name} missing no-infer/embellish rule`)],
+      [/mark.{0,30}absent/gi, new RegExp(`${name} missing "mark absent"`)],
+      [/terminal.{0,60}schema|schema.{0,60}restatement|output.{0,40}contract.{0,40}reminder|final.{0,40}output.{0,40}schema/gi, new RegExp(`${name} missing terminal schema restatement`)],
+      [/\bInput:/gi, new RegExp(`${name} missing few-shot Input->Output exemplars`)],
+    ].map(([pattern, why]) => [`${pattern} gone from ${name}`, `agents/${name}.md`, erase(pattern), 'extraction-discipline-consistency', why])),
+    ...['gsd-doc-classifier', 'gsd-doc-synthesizer'].flatMap((name) => [
+      ['the anti-JSON-reasoning overclaim back in', 'do not reason your way to an answer', new RegExp(`${name} still contains the anti-JSON-reasoning overclaim`)],
+      ['the anti-reasoning overclaim back in', 'extended deliberation always breaks structure', new RegExp(`${name} still contains the anti-reasoning overclaim`)],
+    ].map(([title, line, why]) => [`${title} ${name}`, `agents/${name}.md`, (text) => `${text}\n${line}\n`, 'extraction-discipline-consistency', why])),
+    // reachability-check
+    ['the reachability_check step tag gone from the planner', 'agents/gsd-planner.md', eraseAll('<step name="reachability_check">'), 'reachability-check', /missing the reachability_check step/],
+    ['reachability_check ahead of derive_must_haves in the planner', 'agents/gsd-planner.md', (text) => `reachability_check\n${text}`, 'reachability-check', /must come after derive_must_haves/],
+    ['estimate_scope ahead of reachability_check in the planner', 'agents/gsd-planner.md', (text) => `estimate_scope\n${text}`, 'reachability-check', /must come before estimate_scope/],
+    ['creation path gone from the planner', 'agents/gsd-planner.md', eraseAll('creation path'), 'reachability-check', /missing creation path verification logic/],
+    ['UNREACHABLE gone from the planner', 'agents/gsd-planner.md', eraseAll('UNREACHABLE'), 'reachability-check', /missing the UNREACHABLE marker/],
+    // review-timeout-guidance
+    ['the invoke_reviewers step renamed', 'gsd-core/workflows/review.md', eraseAll('<step name="invoke_reviewers">'), 'review-timeout-guidance', /marker .*invoke_reviewers.* not found/],
+    ['the sequential wording gone from invoke_reviewers (#2194)', 'gsd-core/workflows/review.md', inStepOf('invoke_reviewers', erase(/sequential|in sequence|not in parallel/gi)), 'review-timeout-guidance', /must state that lanes run sequentially/],
+    ['the timeout guidance gone from invoke_reviewers (#2194)', 'gsd-core/workflows/review.md', inStepOf('invoke_reviewers', erase(/timeout/gi)), 'review-timeout-guidance', /must carry Bash timeout guidance/],
+    ['the high millisecond value gone from invoke_reviewers (#2194)', 'gsd-core/workflows/review.md', inStepOf('invoke_reviewers', erase(/900000|1200000/g)), 'review-timeout-guidance', /recommend a high ms value/],
+    ['the timeout-not-crash framing gone from invoke_reviewers (#2194)', 'gsd-core/workflows/review.md',
+      inStepOf('invoke_reviewers', erase(/timeout[^\n]{1,500}not[^\n]{1,500}crash|not a crash/gi)), 'review-timeout-guidance', /distinguish a timeout kill from a crash/],
+    // quick-planner-scope-guard
+    ['the planner dispatch gone from quick.md (#3786)', 'gsd-core/workflows/quick.md', eraseAll('subagent_type="gsd-planner"'), 'quick-planner-scope-guard', /must dispatch the gsd-planner agent/],
+    ['live observation gone from the planner constraints (#3786)', 'gsd-core/workflows/quick.md',
+      inPlannerConstraints(erase(/live observation/gi)), 'quick-planner-scope-guard', /must be live-observed or kept conditional/],
+    ['conditional gone from the planner constraints (#3786)', 'gsd-core/workflows/quick.md',
+      inPlannerConstraints(erase(/conditional/gi)), 'quick-planner-scope-guard', /must be live-observed or kept conditional/],
+    ['"may guide investigation only" gone from the planner constraints (#3786)', 'gsd-core/workflows/quick.md',
+      inPlannerConstraints(erase(/may guide investigation only/gi)), 'quick-planner-scope-guard', /labeled investigation-only/],
+    ['the fresh-merge-index command gone from the planner constraints (#3786)', 'gsd-core/workflows/quick.md',
+      inPlannerConstraints(eraseAll('git diff --name-only --diff-filter=U')), 'quick-planner-scope-guard', /fresh-merge-index command/],
+    ['the planner constraints block closed before its dispatch is missing (#3786)', 'gsd-core/workflows/quick.md',
+      (text) => text.split('<constraints>').join('<limits>'), 'quick-planner-scope-guard', /must contain the planner <constraints> block/],
+    // roadmapper-contract-guard
+    ['approve-first phrasing back in the roadmapper (#3797)', 'agents/gsd-roadmapper.md', append('Return structured draft for user approval'), 'roadmapper-contract-guard', /approve-first phrasing must not return/],
+    ['the Awaiting / Approve footer back in the roadmapper (#3797)', 'agents/gsd-roadmapper.md', append('Awaiting / Approve roadmap'), 'roadmapper-contract-guard', /Awaiting \/ Approve output footer/],
+    ['a ROADMAP DRAFT header back in the roadmapper (#3797)', 'agents/gsd-roadmapper.md', append('## ROADMAP DRAFT'), 'roadmapper-contract-guard', /DRAFT header matches no orchestrator branch/],
+    ['the write-first checklist line gone from the roadmapper (#3797)', 'agents/gsd-roadmapper.md', eraseAll('Files written immediately'), 'roadmapper-contract-guard', /must pin the write-first ordering/],
+    ['the Step 7 heading changed in the roadmapper (#3797)', 'agents/gsd-roadmapper.md', eraseAll('## Step 7: Write Files Immediately'), 'roadmapper-contract-guard', /write-first execution flow is the intended contract/],
+    ['"(after approval)" back in the roadmapper (#3797)', 'agents/gsd-roadmapper.md', append('Files written (after approval)'), 'roadmapper-contract-guard', /must not claim files are written after an approval/],
+    ['the Step 9 revision heading gone from the roadmapper (#3797)', 'agents/gsd-roadmapper.md', eraseAll('## Step 9: Handle Revision (if needed)'), 'roadmapper-contract-guard', /reactive revision \(Step 9\) stays/],
+    // untrusted-input-isolation
+    ...[
+      [/<security_context>/g, /must carry the <security_context> block/], [/treated as data/gi, /treated as data/],
+      [/never as instructions/gi, /never treated as instructions|never as instructions|never treated/], [/random|fresh|unique|nonce/gi, /fresh\/random delimiter/],
+      [/DATA_/g, /DATA_ marker pattern/],
+      [/inspect|scan.{0,30}before|act as.{0,30}guard|self.{0,10}guard|self.{0,10}scan/gi, /self-inspect content/],
+      [/only.{0,40}(?:your|the).{0,20}(?:task|assignment)|assigned task|not tied to/gi, /act only on their assigned task/],
+    ].map(([pattern, why]) => [`${pattern} gone from the untrusted-input boundary`, BOUNDARY, erase(pattern), 'untrusted-input-isolation', why]),
+    ...INGEST.map((name) => [`${name} no longer @-includes the untrusted-input boundary`, `agents/${name}.md`,
+      eraseAll('references/untrusted-input-boundary.md'), 'untrusted-input-isolation', new RegExp(`${name} must @-include the untrusted-input-boundary reference`)]),
+    // verifier-spotcheck-test-discipline
+    ['the Step 7c heading renamed, so Step 7b has no end (#25)', VERIFIER, eraseAll('## Step 7c'), 'verifier-spotcheck-test-discipline', /closing marker .* not found/],
+    ['the Step 7b heading renamed (#25)', VERIFIER, eraseAll('## Step 7b'), 'verifier-spotcheck-test-discipline', /marker .*Step 7b.* not found/],
+    ['the full-suite grep example back in Step 7b (#25)', VERIFIER,
+      (text) => text.replace('## Step 7c', 'npm test -- --grep "$PHASE_TEST_PATTERN" 2>&1 | grep -q "passing"\n## Step 7c'), 'verifier-spotcheck-test-discipline', /example must stay removed/],
+    ...[
+      [/cargo test -- --list/g, /cargo test -- --list/], [/pytest --collect-only/g, /pytest enumeration/], [/vitest list/g, /vitest enumeration/],
+      [/go test -list/g, /go enumeration/], [/-- --exact/g, /cargo single-named-test form/], [/pytest -k/g, /pytest single-named-test form/],
+      [/vitest run -t/g, /vitest single-named-test form/], [/at most once per verification/gi, /more than once per verification/],
+      [/grep/gi, /full-suite grep anti-pattern/], [/per must-have|per truth/gi, /per must-have/],
+    ].map(([pattern, why]) => [`${pattern} gone from Step 7b`, VERIFIER, within('## Step 7b', '## Step 7c', erase(pattern)), 'verifier-spotcheck-test-discipline', why]),
+    // ci-durations-upload-nonfatal
+    ['a test-timings upload made fatal (#6144)', '.github/workflows/test.yml',
+      yamlEdit((wf) => { stepsOf(wf, 'test-timings-')[0]['continue-on-error'] = false; }), 'ci-durations-upload-nonfatal', /every test-timings upload step must be continue-on-error: true/],
+    ['a third test-timings upload added (#6144)', '.github/workflows/test.yml',
+      yamlEdit((wf) => {
+        const [first] = stepsOf(wf, 'test-timings-');
+        const job = Object.values(wf.jobs).find((candidate) => (candidate.steps || []).includes(first));
+        job.steps.push({ ...first, with: { ...first.with, name: 'test-timings-extra' } });
+      }), 'ci-durations-upload-nonfatal', /exactly two test-timings upload steps must exist/],
+    ['a test-timings upload gone (#6144)', '.github/workflows/test.yml',
+      yamlEdit((wf) => {
+        const [first] = stepsOf(wf, 'test-timings-');
+        const job = Object.values(wf.jobs).find((candidate) => (candidate.steps || []).includes(first));
+        job.steps.splice(job.steps.indexOf(first), 1);
+      }), 'ci-durations-upload-nonfatal', /exactly two test-timings upload steps must exist/],
+    ['the coverage upload made lenient (#6144)', '.github/workflows/test.yml',
+      yamlEdit((wf) => { stepsOf(wf, 'coverage-tmp-shard-')[0]['continue-on-error'] = true; }), 'ci-durations-upload-nonfatal', /compacted-coverage upload must stay fatal/],
+    ['the coverage upload gone (#6144)', '.github/workflows/test.yml',
+      yamlEdit((wf) => {
+        for (const job of Object.values(wf.jobs)) job.steps = (job.steps || []).filter((step) => !(step.with && String(step.with.name).startsWith('coverage-tmp-shard-')));
+      }), 'ci-durations-upload-nonfatal', /no coverage upload step found/],
+    // dependency-advisory-floors
+    ['re2js locked one patch below its floor (#5840)', 'package-lock.json', withLockVersion('node_modules/re2js', '2.8.6'), 'dependency-advisory-floors', /node_modules\/re2js is locked at 2\.8\.6, below the patched 2\.8\.7/],
+    ['@hono/node-server locked one patch below its floor (#5840)', 'package-lock.json', withLockVersion('node_modules/@hono/node-server', '2.1.2'), 'dependency-advisory-floors', /node_modules\/@hono\/node-server is locked at 2\.1\.2, below the patched 2\.1\.3/],
+    ['the re2js entry gone from the lockfile (#5840)', 'package-lock.json',
+      (text) => { const lock = JSON.parse(text); delete lock.packages['node_modules/re2js']; return JSON.stringify(lock, null, 2); }, 'dependency-advisory-floors', /package-lock\.json has no entry for node_modules\/re2js/],
+    ['the lockfile no longer valid JSON (#5840)', 'package-lock.json', (text) => `${text}}`, 'dependency-advisory-floors', /package-lock\.json is not valid JSON/],
+    // context7: an agent with neither grant is untouched (control below)
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // Controls and boundaries of the batch-7 contracts.
+  const passes = (title, rel, edit, contract) => test(title, (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, ...rel.split('/'));
+    fs.writeFileSync(abs, edit(fs.readFileSync(abs, 'utf8')));
+    assert.deepEqual(runShipped(root, [contract]), []);
+  });
+  const findsOne = (title, rel, edit, contract, expected) => test(title, (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, ...rel.split('/'));
+    fs.writeFileSync(abs, edit(fs.readFileSync(abs, 'utf8')));
+    const findings = runShipped(root, [contract]);
+    assert.equal(findings.length, 1, JSON.stringify(findings));
+    assert.match(findings[0].message, expected);
+  });
+
+  passes('an agent granting neither context7 form satisfies context7-plugin-grant-parity', 'agents/gsd-advisor-researcher.md',
+    (text) => text.split('\n').map((line) => (/^tools:/.test(line) ? line.split('mcp__plugin_context7_context7__*').join('').split('mcp__context7__*').join('') : line)).join('\n'),
+    'context7-plugin-grant-parity');
+  passes('an agent granting only the plugin form satisfies context7-plugin-grant-parity', 'agents/gsd-advisor-researcher.md',
+    (text) => text.split('\n').map((line) => (/^tools:/.test(line) ? line.split('mcp__context7__*').join('') : line)).join('\n'),
+    'context7-plugin-grant-parity');
+  passes('an unbalanced <step> inside a code fence does not count for workflow-step-tag-balance', 'gsd-core/workflows/plan-phase.md',
+    (text) => `${text}\n\`\`\`\n</step>\n\`\`\`\n`, 'workflow-step-tag-balance');
+  passes('an unbalanced </step> in a nested workflow file is outside workflow-step-tag-balance (top-level only)', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+    (text) => `${text}\n</step>\n`, 'workflow-step-tag-balance');
+  passes('a second <constraints> block after the planner dispatch is not the planner block for quick-planner-scope-guard', 'gsd-core/workflows/quick.md',
+    (text) => `${text}\n<constraints>\nnothing\n</constraints>\n`, 'quick-planner-scope-guard');
+
+  // The Input: exemplar floor is two: one fails, two passes.
+  for (const name of ['gsd-doc-classifier', 'gsd-doc-synthesizer']) {
+    findsOne(`${name} with one Input: exemplar fails extraction-discipline-consistency`, `agents/${name}.md`, keepInputs(1), 'extraction-discipline-consistency', /needs at least 2 exemplars .*found 1/);
+    passes(`${name} with two Input: exemplars satisfies extraction-discipline-consistency`, `agents/${name}.md`, keepInputs(2), 'extraction-discipline-consistency');
+  }
+
+  // The lockfile floors are inclusive: floor - 1 fails, the floor and above pass.
+  for (const [pkg, floor, below, above] of [['node_modules/re2js', '2.8.7', '2.8.6', '2.8.8'], ['node_modules/@hono/node-server', '2.1.3', '2.1.2', '2.2.0']]) {
+    passes(`${pkg} locked at its floor ${floor} satisfies dependency-advisory-floors`, 'package-lock.json', withLockVersion(pkg, floor), 'dependency-advisory-floors');
+    passes(`${pkg} locked above its floor (${above}) satisfies dependency-advisory-floors`, 'package-lock.json', withLockVersion(pkg, above), 'dependency-advisory-floors');
+    findsOne(`${pkg} locked below its floor (${below}) fails dependency-advisory-floors`, 'package-lock.json', withLockVersion(pkg, below), 'dependency-advisory-floors', new RegExp(`${below}, below the patched ${floor.replace(/\./g, '\\.')}`));
+  }
+
+  // The planner stays under 50000 characters: 49999 passes, 50000 and 50001 fail.
+  for (const [length, ok] of [[49999, true], [50000, false], [50001, false]]) {
+    test(`the planner at ${length} characters ${ok ? 'satisfies' : 'fails'} reachability-check`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'agents', 'gsd-planner.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      assert.ok(!text.includes('\r') && text.length < 49999, 'the real planner leaves room to pad to the boundary');
+      fs.writeFileSync(abs, text + 'x'.repeat(length - text.length));
+      const findings = runShipped(root, ['reachability-check']);
+      assert.equal(findings.length, ok ? 0 : 1, JSON.stringify(findings));
+    });
+  }
+
+  // The bounds of the batch-7 patterns: limit - 1 and limit are matched, limit + 1 is the stated edge.
+  const gapCases = (label, rel, contract, build, limit, whyMatch) => {
+    for (const [gap, ok] of [[limit - 1, true], [limit, true], [limit + 1, false]]) {
+      test(`${label} with a gap of ${gap} characters ${ok ? 'satisfies' : 'is past the bound of'} ${contract}`, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, ...rel.split('/'));
+        const text = fs.readFileSync(abs, 'utf8');
+        const after = build(text, gap);
+        assert.notEqual(after, text);
+        fs.writeFileSync(abs, after);
+        const findings = runShipped(root, [contract]);
+        if (ok) assert.deepEqual(findings, []);
+        else assert.ok(findings.some((f) => whyMatch.test(f.message)), JSON.stringify(findings));
+      });
+    }
+  };
+  gapCases('rev-list and --count', 'gsd-core/workflows/execute-phase.md', 'execute-phase-branch-base-ahead-warning',
+    (text, gap) => `${text.replace(/rev-list[^\n]{0,500}--count[^\n]{0,500}DEFAULT_BRANCH/gi, '')}\nrev-list${'x'.repeat(gap)}--count DEFAULT_BRANCH\n`, 500, /must check if local \$DEFAULT_BRANCH is ahead/);
+  gapCases('"recorded verdict" and "is not a reason to omit"', VERIFIER, 'verifier-harvest-recorded-verdict',
+    (text, gap) => text.replace(/recorded verdict[^\n]{0,500}is not a reason to omit/gi, `recorded verdict${'x'.repeat(gap)}is not a reason to omit`), 500, /must not be a reason to omit the check/);
+  gapCases('<expected> and "unmodified"', VERIFIER, 'verifier-harvest-recorded-verdict',
+    // Step 8 names <expected> twice on one line; the first is neutralised so the gap is measured from the one before "unmodified".
+    (text, gap) => within('## Step 8: Identify Human Verification Needs', '\n## Step 9', (section) => {
+      const unmodified = section.indexOf('unmodified');
+      const start = section.lastIndexOf('<expected>', unmodified);
+      return `${section.slice(0, start).split('<expected>').join('<exp>')}<expected>${'x'.repeat(gap)}${section.slice(unmodified)}`;
+    })(text), 500, /must be carried through unmodified/);
+  gapCases('whitespace inside "not a standalone accuracy guarantee"', UI_CHECKER, 'ui-checker-adversarial-stance',
+    (text, gap) => text.replace(/not\s+a\s+standalone\s+accuracy\s+guarantee/gi, `not${' '.repeat(gap)}a standalone accuracy guarantee`), 20, /missing limitation on persona efficacy claim/);
+  for (const [first, second, ok] of [[500, 500, true], [499, 499, true], [501, 500, false], [500, 501, false]]) {
+    test(`a timeout-not-crash line with gaps of ${first} and ${second} characters ${ok ? 'satisfies' : 'is past the bound of'} review-timeout-guidance`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'review.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      const edited = inStepOf('invoke_reviewers', (step) => `${step.replace(/timeout[^\n]{1,500}not[^\n]{1,500}crash|not a crash/gi, '')}\ntimeout${'x'.repeat(first)}not${'y'.repeat(second)}crash\n`)(text);
+      fs.writeFileSync(abs, edited);
+      const findings = runShipped(root, ['review-timeout-guidance']);
+      if (ok) assert.deepEqual(findings, []);
+      else assert.ok(findings.some((f) => /distinguish a timeout kill from a crash/.test(f.message)), JSON.stringify(findings));
+    });
+  }
+
+  test('gsd-core/references/verify-mvp-mode.md removed from the tree is a finding for verifier-mvp-section', (t) => {
+    const root = copyOfRepoFiles(t);
+    fs.unlinkSync(path.join(root, 'gsd-core', 'references', 'verify-mvp-mode.md'));
+    assert.ok(runShipped(root, ['verifier-mvp-section']).some((f) => /verify-mvp-mode\.md must exist/.test(f.message)));
+  });
+
+  test(`${BOUNDARY} removed from the tree is a finding for untrusted-input-isolation`, (t) => {
+    const root = copyOfRepoFiles(t);
+    fs.unlinkSync(path.join(root, ...BOUNDARY.split('/')));
+    assert.ok(runShipped(root, ['untrusted-input-isolation']).some((f) => /untrusted-input-boundary\.md must exist/.test(f.message)));
+  });
+
+  // A file one of the batch-7 contracts reads that is gone from the tree is one finding for that file.
+  for (const [rel, contract] of [
+    [UI_CHECKER, 'ui-checker-adversarial-stance'], ['gsd-core/workflows/execute-phase.md', 'execute-phase-branch-base-ahead-warning'],
+    [VERIFIER, 'verifier-harvest-recorded-verdict'], ['gsd-core/references/checkpoints.md', 'verifier-harvest-recorded-verdict'],
+    ['gsd-core/workflows/settings-advanced.md', 'workflow-step-tag-balance'], ['package-lock.json', 'dependency-advisory-floors'],
+    ['agents/gsd-doc-classifier.md', 'extraction-discipline-consistency'], ['.github/workflows/test.yml', 'ci-durations-upload-nonfatal'],
+    ['agents/gsd-planner.md', 'reachability-check'], ['gsd-core/workflows/review.md', 'review-timeout-guidance'],
+    ['gsd-core/workflows/quick.md', 'quick-planner-scope-guard'], ['agents/gsd-roadmapper.md', 'roadmapper-contract-guard'],
+    ['agents/gsd-assumptions-analyzer.md', 'untrusted-input-isolation'],
+  ]) {
+    test(`${rel} removed from the tree is a finding for ${contract} (batch 7)`, (t) => {
+      const root = copyOfRepoFiles(t);
+      fs.unlinkSync(path.join(root, ...rel.split('/')));
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => f.file === rel && /cannot read the file/.test(f.message)), JSON.stringify(findings));
+    });
   }
 
   // The five batch-6 contracts.

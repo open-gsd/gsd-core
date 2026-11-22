@@ -684,7 +684,7 @@
     "directive": 2
   },
   "src/capability-activation.cts": {
-    "directive": 3,
+    "directive": 2,
     "block": 2
   },
   "src/capability-consent.cts": {
@@ -1165,7 +1165,7 @@
   },
   "src/model-resolver.cts": {
     "block": 7,
-    "directive": 6
+    "directive": 5
   },
   "src/normalize-test-command.cts": {
     "block": 1
@@ -1384,7 +1384,7 @@
   },
   "src/runtime-slash.cts": {
     "block": 2,
-    "directive": 2
+    "directive": 1
   },
   "src/section-manifest.cts": {
     "block": 2,
@@ -3244,9 +3244,6 @@
     "block": 2
   },
   "tests/review-plan-coverage-manifest.test.cjs": {
-    "block": 1
-  },
-  "tests/review-timeout-guidance.test.cjs": {
     "block": 1
   },
   "tests/reviewer-config-federation.test.cjs": {
