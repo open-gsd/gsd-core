@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 0
+---
+**The Bash secret-read guard finds the command after `watch -q N`, reads `\"` in a backtick inside double quotes, and reads what a here-string or heredoc feeds `xargs`** — `watch -x -q 2 sh -c 'cat .env'` was allowed because the guard took only `-n` for an option with a separate value, so `-q`/`--equexit` shifted where it believed the watched command started (`watch` now takes its value-taking options from a table, resolves getopt's unambiguous abbreviations such as `--int` and `--equ`, and stops at `-d`, whose optional value is attached); ``echo "`cat \".env\"`"`` was allowed because a backtick inside double quotes kept the backslash before `"` that the shell removes, so the scanned text was not the text the shell runs (a backtick in a heredoc body, in `$(( ))` inside double quotes, or seen outside quotes is scanned both ways, since dash and zsh unescape and bash does not, so ``echo `cat \".env\"` `` for a file literally named with quotes is now denied too); and `xargs cat <<< .env` or `xargs cat <<EOF` with `.env` in the body was allowed because only a pipe was read as the names `xargs` receives. (#6433)

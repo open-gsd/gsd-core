@@ -834,9 +834,11 @@ function backtickEnd(str, from) {
   return -1;
 }
 
-// The body a backtick span holds as the shell runs it: `\\`, `\`` and `\$` lose their backslash.
-function backtickBody(text) {
-  return text.indexOf('\\') === -1 ? text : text.replace(/\\([\\`$])/g, '$1');
+// The body a backtick span holds as the shell runs it: `\\`, `\`` and `\$` lose their backslash, and so does `\"` when the
+// span is inside a double-quoted string (#6433: ``echo "`cat \".env\"`"`` runs `cat ".env"`, which reads `.env`).
+function backtickBody(text, inDq) {
+  if (text.indexOf('\\') === -1) return text;
+  return inDq ? text.replace(/\\([\\`$"])/g, '$1') : text.replace(/\\([\\`$])/g, '$1');
 }
 
 function ansiCBraceClose(str, i, shell, nested, inDq) {
@@ -855,7 +857,7 @@ function ansiCBraceClose(str, i, shell, nested, inDq) {
     } else if (ch === '`') {
       const j = backtickEnd(str, i + 1);
       if (j === -1) return unclosed(str, read);
-      if (nested) nested.push(backtickBody(str.slice(i + 1, j)));
+      if (nested) nested.push(backtickBody(str.slice(i + 1, j), inDq));
       i = j + 1;
     } else if (ch === "'" && quotes) {
       const j = str.indexOf(ch, i + 1);
@@ -1341,13 +1343,18 @@ function dqElement(str, i, reading, inTag, nested, keepOnClose) {
   }
   if (str[i] === '$' && str[i + 1] === '(') {
     const e = findParenClose(str, i + 2, reading);
-    if (nested) nested.push(str.slice(i + 2, e));
+    if (nested) {
+      const inner = str.slice(i + 2, e);
+      nested.push(inner);
+      // `"$(( `cat \".env\"` ))"`: dash and zsh read the backtick as inside the double quotes, so `\"` loses its backslash (#6433)
+      if (inner.startsWith('(') && inner.includes('`') && inner.includes('\\"')) nested.push(inner.replace(/\\"/g, '"'));
+    }
     return { next: e + 1, text };
   }
   if (str[i] === '`') {
     const j = backtickEnd(str, i + 1);
     const e = j === -1 ? str.length : j;
-    if (nested) nested.push(backtickBody(str.slice(i + 1, e)));
+    if (nested) nested.push(backtickBody(str.slice(i + 1, e), true));
     return { next: e + 1, text };
   }
   return { next: i + 1, text: text + str[i] };
@@ -1524,7 +1531,12 @@ function collectSubstitutions(body, nested, reading) {
     if (body[i] === '`') {
       const j = backtickEnd(body, i + 1);
       const e = j === -1 ? body.length : j;
-      nested.push(backtickBody(body.slice(i + 1, e)));
+      const plain = backtickBody(body.slice(i + 1, e));
+      nested.push(plain);
+      // dash reads the span as inside double quotes (`\"` loses its backslash), bash and zsh do not: both texts are scanned,
+      // so a read hidden behind `\"` is seen under any shell (#6433)
+      const quoted = backtickBody(body.slice(i + 1, e), true);
+      if (quoted !== plain) nested.push(quoted);
       i = e + 1;
       continue;
     }
@@ -1792,7 +1804,12 @@ function tokenize(str, reading) {
       hasWord = true;
       const j = backtickEnd(str, i + 1);
       const e = j === -1 ? str.length : j;
-      nested.push(backtickBody(str.slice(i + 1, e)));
+      const plain = backtickBody(str.slice(i + 1, e));
+      nested.push(plain);
+      // The plain reading ends a double-quoted word at a quote nested in a `${…}`, so a backtick the shell reads inside
+      // double quotes lands here: its `\"` loses the backslash there, so both texts are scanned (#6433).
+      const quoted = backtickBody(str.slice(i + 1, e), true);
+      if (quoted !== plain) nested.push(quoted);
       if (expectTag && heredocTagsAsWords) buf += str.slice(i, e + 1); // #5513: the tag is taken literally
       i = e + 1;
       continue;
@@ -3324,29 +3341,46 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
   if (NON_READING_COMMANDS.has(writtenBase)) return null;
 
+  // The words xargs reads on stdin: every one is a candidate file name — the NON_READING exemption is bypassed for it,
+  // but the `.env.example|…` suffix exemption in isSecretBasename still holds.
+  const judgeStdinWords = (words) => {
+    if (subIsShell) {
+      // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
+      // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
+      const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), words, depth);
+      if (hit) return hit;
+    }
+    for (const w of words) {
+      if (operandNamesSecret(w.text)) return secretRead(w.text);
+      // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
+      // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
+      const received = xargsUnquoted(w.text);
+      if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
+    }
+    return null;
+  };
+
+  // A here-string feeds xargs its text as stdin (`xargs cat <<< .env`, #6433): each word of it is a candidate.
+  const hereWords = hereStringTargets(bySeg.get(s) || []).flatMap((text) => text.split(/\s+/).filter(Boolean)).map((text) => ({ text }));
+  if (hereWords.length) {
+    const hit = judgeStdinWords(hereWords);
+    if (hit) return hit;
+  }
+  // A heredoc is stdin the same way: its body's words are the names xargs reads.
+  const bodyWords = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || [])
+    .flatMap((h) => h.text.split(/\s+/).filter(Boolean)).map((text) => ({ text }));
+  if (bodyWords.length) {
+    const hit = judgeStdinWords(bodyWords);
+    if (hit) return hit;
+  }
+
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
   if (prevSeg < 0) return null;
 
-  // Every upstream operand is a candidate file name — the NON_READING
-  // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
-  // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
   if (!prevCmd) return null;
-  if (subIsShell) {
-    // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
-    // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
-    const hit = scanXargsShellScripts(subOperands, xargsReplaceStr(operands, subIdx), prevCmd.operands, depth);
-    if (hit) return hit;
-  }
-  for (const w of prevCmd.operands) {
-    if (operandNamesSecret(w.text)) return secretRead(w.text);
-    // xargs removes quotes and backslashes from the words it reads on stdin, so `@".env"` reaches the
-    // sub-command as `@.env` (#6114): the word is judged the way the sub-command receives it too.
-    const received = xargsUnquoted(w.text);
-    if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
-  }
-  return null;
+  return judgeStdinWords(prevCmd.operands);
 }
 
 // A stdin word as xargs hands it to the sub-command: quotes and backslashes removed.
@@ -3421,7 +3455,19 @@ function scanLaunchedCommand(words, s, bySeg, sepAfter, depth, reading) {
 // `sh -c`, so the joined string is a shell script (quotes inside an operand are removed a second time:
 // `watch cat '".env"'` runs `cat .env`, and `watch 'cat .env'` is a whole script). With -x/--exec the command
 // runs without a shell and its operands are plain words, which the ordinary check judges as before.
-const WATCH_INTERVAL_SHORT = 'n';
+// The options that take a value in a separate word (procps `watch`): -n/--interval <secs>, -q/--equexit <cycles> (#6433).
+// Every other option is a flag, or carries its value in the same word (`--differences=permanent`).
+const WATCH_VALUE_SHORT = 'nq';
+// procps-ng watch's long options; getopt_long takes any unambiguous prefix (`--int 1`, `--equ 2`, `--ex`).
+const WATCH_LONG_OPTIONS = ['beep', 'color', 'no-color', 'differences', 'errexit', 'chgexit', 'equexit', 'exec', 'help', 'interval',
+  'no-linewrap', 'precise', 'no-rerun', 'no-title', 'version'];
+function watchLongOption(text) {
+  const name = text.slice(2).split('=')[0];
+  if (name === '') return null;
+  if (WATCH_LONG_OPTIONS.includes(name)) return name;
+  const matches = WATCH_LONG_OPTIONS.filter((option) => option.startsWith(name));
+  return matches.length === 1 ? matches[0] : null; // none or ambiguous: getopt rejects it, nothing to locate
+}
 function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, reading) {
   let exec = false;
   let k = 0;
@@ -3429,12 +3475,16 @@ function scanWatch(operands, heredocs, hereStrings, s, bySeg, sepAfter, depth, r
     const text = operands[k].text;
     if (text === '--') { k++; break; }
     if (!text.startsWith('-') || text === '-') break;
-    if (text === '--exec') { exec = true; continue; }
-    if (text === '--interval') { k++; continue; }
-    if (text.startsWith('--')) continue;
+    if (text.startsWith('--')) {
+      const option = watchLongOption(text);
+      if (option === 'exec') exec = true;
+      else if ((option === 'interval' || option === 'equexit') && !text.includes('=')) k++;
+      continue;
+    }
     for (let c = 1; c < text.length; c++) {
+      if (text[c] === 'd') break; // `-d[VALUE]`: an optional value is attached, so the rest of the word is not options
       if (text[c] === 'x') exec = true;
-      if (text[c] === WATCH_INTERVAL_SHORT) {
+      if (WATCH_VALUE_SHORT.includes(text[c])) {
         if (c === text.length - 1) k++; // `-n 5`: the value is the next word; `-n5` carries it
         break;
       }
