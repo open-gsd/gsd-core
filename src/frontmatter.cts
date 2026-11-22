@@ -1525,14 +1525,9 @@ function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: strin
 
 /**
  * #5120 (pre-push review R3-m5): a target whose basename is `STATE.md` is read, spliced and written
- * inside one STATE.md lock scope, so the write cannot land between a locked writer's read and its
- * publish (readModifyWriteStateMd), the #500/#905/#1230 lost update. The write runs no sync or
- * preservation pipeline: ADR-3408 section 8.3's list of seam writes that run no pipeline names it
- * (Amendment 4). The lock wait is acquireStateLock's: a live holder makes the command wait (until
- * its lock is 60 s old), a dead holder's lock is taken over, and a lock that cannot be taken throws
- * before anything is read. Any other target runs `fn` with no lock, as before. The basename match is
- * case-sensitive, as the #5120 guard's and the stateIO adapter's are. state.cjs is loaded lazily
- * because it imports this module.
+ * inside one STATE.md lock scope (ADR-3408 Amendment 4). The lock wait is acquireStateLock's. The
+ * basename match is case-sensitive, as the #5120 guard's and the stateIO adapter's are. state.cjs is
+ * loaded lazily because it imports this module.
  */
 function underStateMdLock(fullPath: string, fn: () => void): void {
   if (path.basename(fullPath) !== 'STATE.md') { fn(); return; }
@@ -1543,9 +1538,7 @@ function underStateMdLock(fullPath: string, fn: () => void): void {
 
 /**
  * The target's content for set and merge, or null when it is gone. A STATE.md target is read under
- * its lock (pre-push review R4-m2): lstat first, so a STATE.md that is not a regular file (a FIFO, a
- * device, a socket, a directory or a symlink) is refused before it is opened, then the non-blocking
- * read readModifyWriteStateMd uses, so the lock is never held across a read that blocks.
+ * its lock (pre-push review R4-m2): lstat first, then the non-blocking read readModifyWriteStateMd uses.
  */
 function readTarget(fullPath: string): string | null {
   if (path.basename(fullPath) !== 'STATE.md') return fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : null;
@@ -1682,7 +1675,6 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
   // removed while the command waits for the lock).
   const reportMissing = (): void => { output({ error: 'File not found', path: filePath }, raw, undefined); };
   if (!fs.existsSync(fullPath)) { reportMissing(); return; }
-  // The --data checks need no file content, so they run before any lock is taken.
   let mergeData: Record<string, FrontmatterValue>;
   try { mergeData = JSON.parse(data as string) as Record<string, FrontmatterValue>; } catch { error('Invalid JSON for --data'); return; }
   // Only a JSON object names fields: an array or a string would spread into index-named

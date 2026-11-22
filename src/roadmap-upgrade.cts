@@ -2466,9 +2466,6 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     if (stateEdits.length > 0 && fs.existsSync(stateMdPath)) {
       const original = fs.readFileSync(stateMdPath, 'utf8');
       if (substituteCrossRefs(original, 'STATE.md', stateEdits) !== original) {
-        // STATE.md is not tracked in migrationWrote or writeInFlight: what this migration wrote is
-        // read back under the lock (stateMdWrittenBytes), and an atomic write that fails leaves the
-        // prior bytes, so there is no torn STATE.md of the migration's own.
         let stateWritten = false;
         try {
           stateWritten = readModifyWriteStateMd(
@@ -2482,11 +2479,8 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
               return substituteCrossRefs(current, 'STATE.md', stateEdits);
             },
             cwd,
-            // #5120 review: the seam's atomic mode (temp file + rename, no
-            // truncating direct-write fallback; the prune precedent, #5831), so a
-            // write that fails leaves STATE.md's previous bytes in place. The
-            // read-back runs before the lock is released, so it is this
-            // migration's write and no other writer's.
+            // #5120 review: the seam's atomic mode (temp file + rename; the prune
+            // precedent, #5831).
             { resync: false, atomicWrite: true, onWritten: (written) => { stateMdWrittenBytes = written; } },
           );
         } finally {
@@ -2498,8 +2492,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
           // snapshot over another writer's content.
           if (!stateWritten) fileBackups.delete(stateMdPath);
         }
-        // #5120 review: listed only when this migration wrote it; a transform that
-        // was a no-op under the lock wrote nothing.
+        // #5120 review: listed only when this migration wrote it.
         if (stateWritten) editedFiles.push('STATE.md');
       }
     }
@@ -2557,10 +2550,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // What is named comes from the state each step leaves, checked right after the step, not from which calls
     // threw (#5120 pre-push review). Names are relative to .planning/ (#5120 review Nit 4).
     const planningName = (filePath: string): string => toPosixPath(path.relative(pDir, filePath));
-    // A rename counts as reversed only when its old path exists and its new path does not. An entry left behind is
-    // named where it is once every reverse has run: a file rename inside a renamed phase directory is reversed
-    // first, so when it fails and its directory's reverse succeeds, the file is under the directory's old path
-    // (#5120 pre-push review R3-m4). An entry gone from both paths is named at its old path, marked missing.
+    // An entry gone from both paths is named at its old path, marked missing (#5120 pre-push review R3-m4).
     const reversed: Array<{ oldPath: string; newPath: string }> = [];
     const leftBehind: Array<{ at: string; missing: boolean; oldPath: string; newPath: string }> = [];
     for (let i = performedRenames.length - 1; i >= 0; i--) {
@@ -2581,11 +2571,10 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // #6351: a file is restored only while it still holds what the migration wrote, was torn by the migration's own
     // failed write, or is already back at its snapshot (which needs no write). Anything else was changed by another
     // writer after the migration touched it: overwriting it with the snapshot would silently destroy that edit, so it
-    // is left as found and named below. A writer that saved bytes identical to what the migration wrote cannot be
-    // told apart from the migration, so that file is restored over (#5120 pre-push review R3-n4).
+    // is left as found and named below. A file another writer saved with bytes identical to what the migration
+    // wrote is restored over (#5120 pre-push review R3-n4).
     const notRestored: string[] = [];
-    // #5120 review Minor 7: a restore that was due but did not leave the file holding its prior bytes (the restore
-    // threw, or STATE.md's lock could not be taken) is named with its reason, never reported as rolled back (#1542).
+    // #5120 review Minor 7: a restore that was due and failed is named with its reason (#1542).
     const restoreFailed: string[] = [];
     // Pre-push review R4-m5, R5-m2, R5-m3: a snapshotted file that a rename left behind is named where it is, not
     // reported as removed by another writer. Snapshot keys are pre-migration paths, so a file rename's old path is
@@ -2605,8 +2594,6 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       }
       return null;
     };
-    // STATE.md is read under its lock through the non-blocking seam (pre-push review R4-m2), so a FIFO
-    // swapped in there fails with ENXIO instead of blocking while the lock is held.
     const readNow = (filePath: string): { current: Buffer | null; readFailure: string | null } => {
       try {
         if (filePath === stateMdPath) {
@@ -2626,12 +2613,9 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     for (const [filePath, backup] of fileBackups) {
       if (backup.existed && filePath === stateMdPath) {
         // #5120: STATE.md is checked and restored under the STATE.md lock through the seam's byte-exact restore
-        // primitive (platformRestoreFileSync, #5831), so the backup comes back as the bytes it had (ADR-4629 guard
-        // roster: no raw or unlocked STATE.md write). It runs no sync or preservation pipeline: ADR-3408 section
-        // 8.3's list of seam writes that run no pipeline names it (Amendment 4). It is restored only while it holds
-        // the bytes this migration wrote, read back under the lock when it wrote them (onWritten); the outcome is
-        // decided inside the lock, so a writer that takes the lock after this restore cannot turn a restore that
-        // happened into one reported as not done (#5120 pre-push review R3-m3).
+        // primitive (platformRestoreFileSync, #5831; ADR-3408 Amendment 4). It is restored only while it holds the
+        // bytes this migration wrote, read back under the lock when it wrote them (onWritten); the outcome is decided
+        // inside the lock (#5120 pre-push review R3-m3).
         let outcome: 'restored' | 'asFound' | 'failed' = 'failed';
         try {
           withStateLock(stateMdPath, () => {
