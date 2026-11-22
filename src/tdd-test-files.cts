@@ -7,8 +7,10 @@
  * listing only `placement_test.go` was classified behavior-adding — the gate then asked for a RED
  * commit for the task that IS the RED commit.
  *
- * `TEST_FILE_PATHSPECS` is the list in git-pathspec spelling, which is what the workflow passes to
- * `evaluation-scope --pathspec`; `isTestFilePath` evaluates the same list for a task's `<files>`.
+ * `TEST_FILE_PATHSPECS` is the list in git-pathspec spelling; `isTestFilePath` evaluates it for a task's `<files>`,
+ * ignoring letter case (`Tests/foo.rs` and `Foo.TEST.js` are test files). `TEST_FILE_GIT_PATHSPECS` is what the
+ * workflow passes to `evaluation-scope --pathspec`: the same list behind git's `:(icase)` magic, because a plain git
+ * pathspec is case-sensitive and the gate would otherwise miss a RED commit made only of such files (#5766).
  * A test pins the workflow's pathspec flags to this array, so the two cannot drift apart again.
  */
 
@@ -17,6 +19,17 @@ export const TEST_FILE_PATHSPECS = [
   '*.test.*', '*.spec.*', 'tests/', '__tests__/',
   '*_test.go', 'test_*.py', '*_test.py', '*_test.exs', '*_spec.rb', '*_test.rb',
 ] as const;
+
+/**
+ * A pathspec behind git's magic, spelled in one place: `:(icase)tests/`, or `:(icase,glob)**\/tests/**` when a caller
+ * needs more than one magic word (a second `:(...)` prefix is not an error to git, it silently matches nothing).
+ */
+export function gitPathspec(spec: string, magic: readonly string[] = ['icase']): string {
+  return `:(${magic.join(',')})${spec}`;
+}
+
+/** The list as the gate hands it to git: case-insensitive, matching what `isTestFilePath` already decides. */
+export const TEST_FILE_GIT_PATHSPECS: readonly string[] = TEST_FILE_PATHSPECS.map((spec) => gitPathspec(spec));
 
 /** Directory names a `<files>` entry may sit under. `test/` is the singular spelling many projects use. */
 const TEST_DIRECTORY_NAMES: ReadonlySet<string> = new Set([
