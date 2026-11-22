@@ -3822,6 +3822,13 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "xargs cat <<< '.e\\nv'",
     "xargs cat <<'EOF'\n.e\"n\"v\nEOF",
     "printf '.e%sn%sv' '\"' '\"' | xargs cat",
+    // #6408 Major 2: the shell removes `\<newline>` from an unquoted heredoc body before xargs reads it, as it does
+    // from a here-string word, an echo or printf operand and a shell's heredoc script (blocked at the parent too).
+    'xargs cat <<EOF\n.e\\\nnv\nEOF',
+    'xargs cat <<< .e\\\nnv',
+    'echo .e\\\nnv | xargs cat',
+    "printf '%s' .e\\\nnv | xargs cat",
+    'bash <<EOF\ncat .e\\\nnv\nEOF',
     // The stdin a group, a subshell, a shell or a function is given reaches the xargs inside it.
     '{ xargs cat; } <<< .env',
     '( xargs cat ) <<< .env',
@@ -4017,6 +4024,8 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "xargs xargs xargs xargs xargs xargs xargs xargs echo '(('",
     // A quoted heredoc delimiter keeps the body literal; a command that reads nothing reads no expansion either.
     "xargs cat <<'EOF'\n$(cat list)\nEOF",
+    // #6408 Major 2: a quoted heredoc keeps its `\<newline>`, so the name stays split.
+    "xargs cat <<'EOF'\n.e\\\nnv\nEOF",
     'xargs echo <<< "$(cat list)"',
     // A delimiter it cannot decode, with nothing it could split: the piped names are not knowable either way.
     "find . | xargs -d '\\e' cat",
