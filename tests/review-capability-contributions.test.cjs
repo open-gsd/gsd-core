@@ -24,6 +24,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { cleanup } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const generator = require('../scripts/gen-loop-host-contract.cjs');
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
@@ -287,9 +288,19 @@ describe('#3997 install disclosure of reviewer contributions', () => {
  * return value and not the step's text.
  */
 function reviewPreStep() {
-  const text = fs.readFileSync(REVIEW_MD, 'utf8').replace(/\r\n/g, '\n');
-  const blocks = [...text.matchAll(/```bash\n([\s\S]*?)\n```/g)].map((m) => m[1]);
-  const hits = blocks.filter((b) => /loop render-hooks review:pre/.test(b));
+  const blocks = [];
+  let open = null;
+  for (const line of splitLines(fs.readFileSync(REVIEW_MD, 'utf8'))) {
+    if (open === null) {
+      if (line.trim() === '```bash') open = [];
+    } else if (line.trim() === '```') {
+      blocks.push(open.join('\n'));
+      open = null;
+    } else {
+      open.push(line);
+    }
+  }
+  const hits = blocks.filter((b) => b.includes('loop render-hooks review:pre'));
   assert.equal(hits.length, 1, `exactly one bash step renders review:pre in review.md, found ${hits.length}`);
   return hits[0];
 }

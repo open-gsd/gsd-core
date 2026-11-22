@@ -38,6 +38,7 @@ const LOOP_POINTS = [
   'execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post',
   'verify:pre', 'verify:post',
   'ship:pre', 'ship:post',
+  'review:pre',
 ];
 const POINT_ORDER = new Map(LOOP_POINTS.map((p, i) => [p, i]));
 

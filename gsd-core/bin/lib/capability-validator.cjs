@@ -76,6 +76,21 @@ for (const entry of LOOP_HOST_CONTRACT) {
   }
 }
 
+// #3997 — the release that introduced a loop point added after the original twelve. A capability
+// that declares a hook at such a point installs on an older core that rejects the point, so its
+// `engines.gsd` must EXCLUDE every older core (checked in validateAgainstContract). Additive-only:
+// a point never leaves this table, and a point from the original twelve never enters it.
+const POINT_MIN_ENGINE = Object.freeze({ 'review:pre': '1.23.0' });
+
+// Every released core line below the lowest introducing release, probed against `engines.gsd`.
+// A finite probe set, not a range-intersection proof (documented known limit, ADR-3997).
+function olderCoreProbes(minVersion) {
+  const [major, minor] = minVersion.split('.').map(Number);
+  const probes = ['0.0.0'];
+  for (let m = 0; m < minor; m += 1) probes.push(major + '.' + m + '.0', major + '.' + m + '.99');
+  return probes;
+}
+
 // ─── Config-slice validation ──────────────────────────────────────────────────
 
 const VALID_CONFIG_SLICE_TYPES = new Set(['boolean', 'string', 'number', 'enum']);
@@ -3206,7 +3221,38 @@ function validateAgainstContract(cap, capId) {
     }
   }
 
+  errors.push(...validateEngineForNewerPoints(cap, prefix));
+
   return errors;
+}
+
+/**
+ * #3997: a capability with a hook at a point introduced after the original twelve must declare an
+ * `engines.gsd` range that no older core satisfies, otherwise it installs on a core that rejects
+ * the point. Scoped: a capability with no such hook is never asked for a range.
+ *
+ * @param {object} cap
+ * @param {string} prefix  Error prefix (`capability "<id>"`).
+ * @returns {string[]}
+ */
+function validateEngineForNewerPoints(cap, prefix) {
+  const hooks = [].concat(cap.steps || [], cap.contributions || [], cap.gates || []);
+  const gated = [...new Set(hooks.map((h) => h && h.point).filter((p) => typeof p === 'string' && p in POINT_MIN_ENGINE))];
+  if (gated.length === 0) return [];
+  const minVersion = gated.map((p) => POINT_MIN_ENGINE[p]).sort((a, b) => {
+    const [a1, a2] = a.split('.').map(Number);
+    const [b1, b2] = b.split('.').map(Number);
+    return a1 - b1 || a2 - b2;
+  }).pop();
+  const range = cap.engines && cap.engines.gsd;
+  const need = prefix + ' declares a hook at ' + gated.join(', ') + ' (introduced in GSD ' + minVersion + ') so engines.gsd must exclude older cores, e.g. ">=' + minVersion + '"';
+  if (typeof range !== 'string' || range.trim() === '') return [need + '; engines.gsd is absent'];
+  const { semverSatisfies } = require('./semver-compare.cjs');
+  const admitted = olderCoreProbes(minVersion).find((v) => semverSatisfies(v, range));
+  if (admitted !== undefined) {
+    return [need + '; engines.gsd ' + JSON.stringify(range) + ' still admits ' + admitted];
+  }
+  return [];
 }
 
 /**
@@ -3965,6 +4011,7 @@ module.exports = {
   POINT_ORDER,
   HOST_ARTIFACT_EARLIEST_POINT_IDX,
   VALID_LOOP_POINTS,
+  POINT_MIN_ENGINE,
   POINT_TO_CONTRACT,
   VALID_CONFIG_SLICE_TYPES,
   KEBAB_RE,

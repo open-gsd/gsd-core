@@ -387,7 +387,7 @@ describe('crossCheckRoleFamilies (#4740)', () => {
 // ─── 3. assertPointsCoverage ─────────────────────────────────────────────────
 
 describe('assertPointsCoverage', () => {
-  test('passes when all 12 canonical points are covered', () => {
+  test('passes when all 13 canonical points are covered', () => {
     const entries = [
       { step: 'discuss', points: ['discuss:pre', 'discuss:post'] },
       { step: 'plan', points: ['plan:pre', 'plan:post'] },
@@ -459,12 +459,12 @@ describe('buildContract from real workflows', () => {
     assert.deepEqual(contract, LOOP_HOST_CONTRACT, 'built contract must match committed LOOP_HOST_CONTRACT');
   });
 
-  test('covers exactly the 12 canonical points', () => {
+  test('covers exactly the 13 canonical points', () => {
     const contract = buildContract();
     const allPoints = contract.flatMap((e) => e.points);
-    assert.strictEqual(allPoints.length, 12, 'must cover exactly 12 points');
+    assert.strictEqual(allPoints.length, 13, 'must cover exactly 13 points');
     const pointSet = new Set(allPoints);
-    assert.strictEqual(pointSet.size, 12, 'all 12 points must be distinct');
+    assert.strictEqual(pointSet.size, 13, 'all 13 points must be distinct');
     for (const p of CANONICAL_POINTS) {
       assert.ok(pointSet.has(p), 'canonical point "' + p + '" must be declared');
     }
@@ -613,8 +613,8 @@ describe('module exports', () => {
     assert.strictEqual(STEP_WORKFLOWS[4].step, 'ship');
   });
 
-  test('CANONICAL_POINTS has exactly 12 entries', () => {
-    assert.strictEqual(CANONICAL_POINTS.length, 12);
+  test('CANONICAL_POINTS has exactly 13 entries', () => {
+    assert.strictEqual(CANONICAL_POINTS.length, 13);
   });
 
   test('ROLE_TO_AGENT covers all non-orchestrator roles', () => {

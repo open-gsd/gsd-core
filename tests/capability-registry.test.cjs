@@ -1189,13 +1189,13 @@ describe('#3778 — plan:pre contribution set feeding the quick.md planner dispa
     );
 
     const contract = buildContract();
-    assert.strictEqual(STEP_WORKFLOWS.length, 5, 'canonical step rows must stay at five');
-    assert.strictEqual(contract.length, 5, 'serialized contract must stay at five entries');
-    assert.deepEqual(contract, LOOP_HOST_CONTRACT, 'auxiliary metadata must not be serialized');
+    assert.strictEqual(STEP_WORKFLOWS.length, 6, 'canonical step rows are the five lifecycle steps plus review (#3997)');
+    assert.strictEqual(contract.length, 6, 'serialized contract has six entries');
+    assert.deepEqual(contract, LOOP_HOST_CONTRACT, 'auxiliary and required-dispatch metadata must not be serialized');
 
     const points = contract.flatMap((entry) => entry.points);
-    assert.strictEqual(points.length, 12, 'serialized contract must stay at 12 points');
-    assert.strictEqual(new Set(points).size, 12, 'serialized lifecycle points must remain unique');
+    assert.strictEqual(points.length, 13, 'serialized contract is 13 points');
+    assert.strictEqual(new Set(points).size, 13, 'serialized lifecycle points must remain unique');
   });
 });
 

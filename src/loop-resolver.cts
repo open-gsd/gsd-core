@@ -86,6 +86,7 @@ const CANONICAL_POINTS: ReadonlyArray<string> = (() => {
     'verify:post',
     'ship:pre',
     'ship:post',
+    'review:pre',
   ];
 })();
 

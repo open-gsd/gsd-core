@@ -1,5 +1,13 @@
 @~/.claude/gsd-core/references/response-language-directive.md
 
+<!-- gsd:loop-host
+step: review
+points: review:pre
+agent-roles: reviewer
+produces: REVIEWS.md
+consumes: PLAN.md
+-->
+
 <purpose>
 Cross-AI peer review — invoke external AI CLIs to independently review phase plans.
 Each CLI gets the same prompt (PROJECT.md context, phase plans, requirements) and
@@ -293,6 +301,25 @@ done
 # #3301: append the manifest to the one prompt file every lane reads.
 cat "${RUN_DIR}/.plans-manifest.md" >> "${RUN_DIR}/gsd-review-prompt.md"
 ```
+
+Append the capability review rules addressed to external reviewers (#3997). The `review:pre` loop point
+publishes one role, `reviewer`. The block is appended to the one prompt file every lane reads, so each prompt-bearing lane receives it exactly once and
+a lane declaring `promptChannel: none` is unaffected. The fragments count toward every lane's cap in
+`invoke_reviewers`: an over-cap lane is refused, never shortened. With no matching contribution nothing is appended
+and the prompt is byte-identical. This is advisory by construction: any failure leaves the prompt without the block and
+never blocks the review.
+```bash
+RUN_DIR="{run_dir}"   # from gather_context
+REVIEW_HOOKS_JSON=$(gsd_run loop render-hooks review:pre --raw 2>/dev/null) || REVIEW_HOOKS_JSON=""
+if [[ "$REVIEW_HOOKS_JSON" == @file:* ]]; then REVIEW_HOOKS_JSON=$(cat "${REVIEW_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
+# A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
+REVIEWER_RULES=$(printf '%s' "$REVIEW_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_reviewer_rules>").join("<"+String.fromCharCode(92)+"/capability_reviewer_rules>"));if(h.length)process.stdout.write("<capability_reviewer_rules>\n"+h.join("\n\n")+"\n</capability_reviewer_rules>")}catch(e){}})' 2>/dev/null || true)
+if [ -n "$REVIEWER_RULES" ]; then
+  printf '\n\n%s\n' "$REVIEWER_RULES" >> "${RUN_DIR}/gsd-review-prompt.md"
+fi
+```
+
+Dispatch each `kind == "contribution"` hook that `review:pre` returns per @gsd-core/references/loop-hook-dispatch.md. Only an entry whose `into == "reviewer"` is inserted by the block above; every other target is ignored here, and so are `step` and `gate` hooks (the point is wired for contributions only).
 
 Note: `PHASE_DIR` comes from prompt assembly; `RUN_DIR` is the run-scoped dir from `gather_context` (#2358) re-assigned from `{run_dir}` above. Every lane receives `gsd-review-prompt.md` whole — it is never trimmed per lane (#4559). A lane whose prompt exceeds its cap is refused in `invoke_reviewers`, not shortened.
 </step>
