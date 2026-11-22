@@ -20,15 +20,19 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const EXCLUDED_NAMES = new Set(['.git', '.svn', '.hg', 'CVS', 'archived-packages', '.npmrc', '.DS_Store', '.lock-wscript', 'npm-debug.log']);
+const EXCLUDED_NAMES = new Set(['.git', '.svn', '.hg', 'cvs', 'archived-packages', '.npmrc', '.ds_store', '.lock-wscript', 'npm-debug.log']);
 const ROOT_EXCLUDED_FILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb']);
 
 // Name-based defaults, applied to a file or a directory name at any depth (a directory so named is
 // pruned with its contents); the lock files are excluded at the root only.
-const isExcludedName = (name, rel) =>
-  EXCLUDED_NAMES.has(name) || rel.endsWith('build/config.gypi')
-  || name.startsWith('._') || name.startsWith('.wafpickle-') || name.endsWith('.orig') || /^\.[^/]{1,255}\.swp$/.test(name);
-const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel);
+// npm matches every name rule case-insensitively (ignore-walk sets nocase), so each is compared lower-cased.
+const isExcludedName = (rawName, rawRel) => {
+  const name = rawName.toLowerCase();
+  const rel = rawRel.toLowerCase();
+  return EXCLUDED_NAMES.has(name) || rel.endsWith('build/config.gypi')
+    || name.startsWith('._') || name.startsWith('.wafpickle-') || name.endsWith('.orig') || /^\.[^/]{0,255}\.swp$/.test(name);
+};
+const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel.toLowerCase());
 
 // npm's '!/readme{,.*[^~$]}': the stem alone, or a dot, then at least one more character, the last not ~ or $.
 const isAlwaysIncludedFile = (rel) => rel === 'package.json' || /^(README|LICEN[CS]E|COPYING)(\.[^/]{0,255}[^~$/])?$/i.test(rel);
@@ -49,6 +53,7 @@ function listPackedFiles(root) {
     if (path.isAbsolute(bare) || normalise(bare).split('/').includes('..')) {
       throw new Error(`${root}: files entry "${f}" leaves the package root; this list reads paths below it only`);
     }
+    if (['', '.'].includes(normalise(bare))) throw new Error(`${root}: files entry "${f}" names the package root; this list needs a path below it`);
     if (GLOB_CHARACTERS.test(bare)) throw new Error(`${root}: files entry "${f}" is a glob; this list reads plain paths only`);
     if (f.startsWith('!') && !normalise(bare).includes('/')) {
       throw new Error(`${root}: files entry "${f}" is a slash-less exclusion, which npm applies at any depth; this list needs a path`);
@@ -57,8 +62,22 @@ function listPackedFiles(root) {
   const positive = manifest.files.filter((f) => !f.startsWith('!')).map(normalise);
   const negative = manifest.files.filter((f) => f.startsWith('!')).map((f) => normalise(f.slice(1)));
   const bins = typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin || {});
-  const forced = new Set([manifest.main, ...bins].filter((f) => typeof f === 'string').map(normalise));
-  const covers = (entry, rel) => rel === entry || rel.startsWith(`${entry}/`);
+  // npm builds its rule for `main` from the text as written, so a "./main.js" spelling is not packed by it.
+  const mainFile = typeof manifest.main === 'string' && !manifest.main.startsWith('./') ? [manifest.main] : [];
+  const forced = new Set([...mainFile, ...bins].filter((f) => typeof f === 'string').map(normalise));
+  const covers = (entry, rel) => {
+    const e = entry.toLowerCase();
+    const r = rel.toLowerCase();
+    return r === e || r.startsWith(`${e}/`);
+  };
+  // A file named by a files entry is packed despite a default or a `!` rule, but not from under a
+  // directory npm prunes (node_modules at the root, an excluded directory name), and never .npmrc.
+  const requiredAllowed = (rel) => {
+    const parts = rel.split('/');
+    if (parts[parts.length - 1].toLowerCase() === '.npmrc') return false;
+    return !parts.slice(0, -1).some((dir, i) => (i === 0 && dir.toLowerCase() === 'node_modules')
+      || isExcludedName(dir, parts.slice(0, i + 1).join('/')));
+  };
 
   const packed = new Set();
   // `required` is a files entry that names this file itself.
@@ -77,7 +96,7 @@ function listPackedFiles(root) {
       }
     } else if (isRootExcluded(rel)) {
       // npm's strict rules beat even a files entry that names the file
-    } else if (required || (!isExcludedName(name, rel) && !negative.some((n) => covers(n, rel)))) {
+    } else if ((required && requiredAllowed(rel)) || (!required && !isExcludedName(name, rel) && !negative.some((n) => covers(n, rel)))) {
       packed.add(rel);
     }
   };

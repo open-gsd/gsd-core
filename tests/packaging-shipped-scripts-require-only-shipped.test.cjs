@@ -345,6 +345,45 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
+  test('every name rule and "!" entry matches case-insensitively, as npm does', () => {
+    planted(
+      { files: ['hooks', 'scripts', '!scripts/Foo.cjs'] },
+      ['hooks/a.js', 'hooks/NPM-DEBUG.LOG', 'hooks/Cvs/x.js', 'hooks/x.ORIG', 'hooks/.DS_STORE', 'hooks/Archived-Packages/x.js',
+        'hooks/.A.SWP', 'hooks/Build/Config.gypi', 'scripts/foo.cjs', 'scripts/ok.cjs'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['hooks/a.js', 'package.json', 'scripts/ok.cjs']);
+      },
+    );
+  });
+
+  test('an editor swap file with an empty name between the dots is excluded, one without a leading dot is not', () => {
+    planted({ files: ['hooks'] }, ['hooks/..swp', 'hooks/.a.swp', 'hooks/a.swp', 'hooks/a'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['hooks/a', 'hooks/a.swp', 'package.json']);
+    });
+  });
+
+  test('a named file under node_modules or an excluded directory, and a named .npmrc, do not pack; other named files do', () => {
+    planted(
+      { files: ['node_modules/x/y.js', '.git/c', 'hooks/._d/x.js', 'Node_Modules/x/y.js', '.npmrc', 'ok/z.js'] },
+      ['node_modules/x/y.js', '.git/c', 'hooks/._d/x.js', '.npmrc', 'ok/z.js'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['ok/z.js', 'package.json']);
+      },
+    );
+  });
+
+  test('a main file spelled with ./ is not packed by npm, a bin file spelled with ./ is', () => {
+    planted({ files: ['hooks'], main: './lib/m.js', bin: { t: './bin/t.js' } }, ['lib/m.js', 'bin/t.js'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['bin/t.js', 'package.json']);
+    });
+  });
+
+  test('a files entry naming the package root throws', () => {
+    for (const files of [['.'], ['./'], ['!.']]) {
+      planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /names the package root/));
+    }
+  });
+
   test('a files entry that leaves the package root throws', () => {
     for (const files of [['../x'], ['hooks/../../x'], ['!../x'], [path.resolve(os.tmpdir(), 'x')]]) {
       planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /leaves the package root/));
