@@ -1862,6 +1862,82 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecretOperand(v.slice(end + 1));
 }
 
+// #5825: request tools that open a file named after an `@` in a field or request item and send its contents.
+//   gh api -F/--field key=@path   (`-f`/`--raw-field` never reads a file; `@-` is stdin)
+//   http / https (httpie) items   key=@path  key:=@path  key==@path  Header:@path  key@path[;type=…]
+// An httpie item splits at its first separator, so only an `@` form that comes first reads a file, and a key may
+// escape a separator with a backslash. Linear in the word: the key run stops at the first separator character.
+const HTTPIE_FILE_ITEM_RE = /^(?:[^=:@\\]|\\.)*(?:==@|:=@|=@|:@|@)([\s\S]+)$/;
+// gh api short options that take a value: in a cluster the rest of the word is that option's value, not more flags.
+const GH_VALUE_SHORT_FLAGS = 'HXqtpf';
+const SHELL_KEYWORDS = new Set(['do', 'then', 'else', 'elif', '!', 'while', 'until', 'if']);
+
+// `do gh api …`, `then http …`, `! gh api …`: the command word follows the shell keyword, so it is resolved again.
+function skipShellKeywords(cmd) {
+  let current = cmd;
+  while (SHELL_KEYWORDS.has(current.base) && current.operands.length > 0) {
+    const next = resolveCommand(current.operands);
+    if (!next) break;
+    current = next;
+  }
+  return current;
+}
+
+// How `-F` reaches a gh word: `{ value }` attached (`-Fk=v`, `-F=k=v`, a cluster `-iFk=v`), `{ value: null }` when the
+// value is the next word (`-F`, `-iF`), or null when the word carries no `-F`. A manual scan, not a regex: the first
+// `F` of a letter run decides, whatever follows it (a lazy pattern backtracked quadratically on a long run).
+function ghFieldOption(text) {
+  if (!text.startsWith('-') || text.startsWith('--')) return null;
+  for (let i = 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === 'F') {
+      const rest = text.slice(i + 1);
+      if (rest === '') return { value: null };
+      return { value: rest.startsWith('=') ? rest.slice(1) : rest };
+    }
+    if (!CLUSTER_FLAG_CHAR_RE.test(ch) || GH_VALUE_SHORT_FLAGS.includes(ch)) return null;
+  }
+  return null;
+}
+
+// The text of the operand whose `@path` names a secret for `gh api` / httpie, or null. `base` is the resolved command word.
+function requestItemSecretRead(base, operands) {
+  const command = base.replace(/\.exe$/i, '');
+  if (command === 'gh' && operands.length > 0 && operands[0].text === 'api') {
+    for (let k = 1; k < operands.length; k++) {
+      const text = operands[k].text;
+      let field = null;
+      if (text === '--field') field = operands[k + 1] ? operands[k + 1].text : null;
+      else if (text.startsWith('--field=')) field = text.slice('--field='.length);
+      else {
+        const option = ghFieldOption(text);
+        if (option) field = option.value !== null ? option.value : (operands[k + 1] ? operands[k + 1].text : null);
+      }
+      if (field === null) continue;
+      const eq = field.indexOf('=');
+      if (eq === -1) continue;
+      const value = field.slice(eq + 1);
+      if (value.startsWith('@') && value !== '@-' && namesSecretOperand(value.slice(1))) return text;
+    }
+    return null;
+  }
+  if (command === 'http' || command === 'https') {
+    // `http [METHOD] URL [ITEM…]`: the URL is not an item (`http example.com/a@.env` reads nothing).
+    const positionals = operands.filter((operand) => !operand.text.startsWith('-'));
+    const urlIndex = positionals.length > 0 && /^[A-Za-z]+$/.test(positionals[0].text) ? 1 : 0;
+    positionals.forEach((operand, index) => {
+      if (index === urlIndex) operand.isUrl = true;
+    });
+    for (const operand of positionals) {
+      if (operand.isUrl) continue;
+      const item = HTTPIE_FILE_ITEM_RE.exec(operand.text);
+      // `file@path;type=mime` and `;filename=` follow the path after a `;`: both readings are judged.
+      if (item && (namesSecretOperand(item[1]) || namesSecretOperand(item[1].split(';')[0]))) return operand.text;
+    }
+  }
+  return null;
+}
+
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
@@ -2840,6 +2916,11 @@ function scanCommand(command, depth, reading) {
       const hit = scanGitConfig(operands, depth);
       if (hit) return hit;
     }
+
+    // `gh api -F key=@.env` and httpie request items read the file named after `@` (#5825).
+    const requestCommand = skipShellKeywords({ base, operands });
+    const requestItem = requestItemSecretRead(requestCommand.base, requestCommand.operands);
+    if (requestItem !== null) return secretRead(requestItem);
 
     if (NON_READING_COMMANDS.has(base)) continue;
 
