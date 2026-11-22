@@ -1202,7 +1202,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W(outer, "  if (x) { const p = 'ROADMAP.md'; use(p); }", '  fs.writeFileSync(p, c);')), [4]);
     assert.deepStrictEqual(lines(W(outer, '  const g = () => {', inner, '    return p;', '  };', '  fs.writeFileSync(p, c);')), [7]);
     // Reported though `p` is 'x' at the write: the boundary rule only adds reports.
-    assert.deepStrictEqual(lines(W("  let p = path.join(dir, 'STATE.md');", "  p = 'x';", '  if (d) { fs.writeFileSync(p, c); }')), [4]);
+    assert.deepStrictEqual(lines(W("  let p = path.join(dir, 'STATE.md');", "  p = 'x';", '  if (dir) { fs.writeFileSync(p, c); }')), [4]);
   });
 
   test('boundary control: with no boundary between them, the nearest assignment decides', () => {
@@ -1371,7 +1371,7 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [],
     },
     {
-      // Missed: the scan stops at the writer's multi-line function header, above the constant.
+      // Missed: the scan stops at the writer's function header, above the constant.
       shape: 'module-level STATE.md file-name constant used inside a function',
       text: ["const STATE_FILENAME = 'STATE.md';", 'function f(d, c) {', '  fs.writeFileSync(path.join(d, STATE_FILENAME), c);', '}'].join('\n'),
       expected: [3],

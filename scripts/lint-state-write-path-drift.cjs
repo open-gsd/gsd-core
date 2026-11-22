@@ -1176,9 +1176,9 @@ function boundaryAfterLine(write, index) {
  * Decision 5). Verified misses, each with a test row (a known gap beside its
  * correct verdict, or the hop-bound row); the syntax-tree follow-up is #5279:
  *   - A name assigned above the nearest line matching `FUNCTION_DECL_LINE_RE`
- *     (the writer's header over several lines, or a nested declaration): the
- *     scan stops at that line. A name returned by a function declaration, or a
- *     `Map` built in one, is not resolved.
+ *     that is not the write's own (the writer's header, or a nested
+ *     declaration): the scan stops at that line. A name returned by a
+ *     function declaration, or a `Map` built in one, is not resolved.
  *   - A one-line function that assigns and writes, its line matching
  *     `FUNCTION_DECL_LINE_RE`: that line is dropped from the scan.
  *   - Two assignments of a chain on one line (`const d = …; const p = d;`):
