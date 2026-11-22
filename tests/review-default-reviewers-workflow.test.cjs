@@ -222,6 +222,7 @@ describe('bug #687 → #2073: agy print mode is bounded, and its fallback chain 
       readFile: (x) => { if (!(x in files)) throw new Error('ENOENT'); return files[x]; },
       writeFile: (x, c) => { files[x] = c; },
       exists: (x) => x in files,
+      readPlanBounded: (x, max) => (x in files && files[x].length <= max ? files[x] : null),
       hasBinary: () => true,
       configGet: () => undefined,
       homeDir: '/home/u',

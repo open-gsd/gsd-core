@@ -371,6 +371,7 @@ const DOCS_GUARD_TESTS = {
   ],
   'tests/plan-phase-stall-detection.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/plan-review-convergence.test.cjs': [
+    'docs/COMMANDS.md',
     'docs/CONFIGURATION.md',
     'docs/USER-GUIDE.md',
     'docs/ARCHITECTURE.md',
