@@ -25,9 +25,9 @@
  *   6. Fail-open crash policy: malformed / non-object payloads exit 0.
  *   7. Host opt-in (#5784): with GSD_SECRET_READ_GUARD_ON_CRASH=deny, a crash
  *      or a reading that fails on a command no scan blocked blocks as
- *      guard-error, while an overflow stays command-too-complex and a body
- *      nested past MAX_NESTING_DEPTH stays nesting-too-deep; any other value
- *      allows. The stdin-not-closing
+ *      guard-error, while a Bash command's overflow stays command-too-complex
+ *      and a body nested past MAX_NESTING_DEPTH stays nesting-too-deep; any
+ *      other value allows. The stdin-not-closing
  *      cells hold the hook's stdin pipe open and live in
  *      tests/gsd-secret-read-guard-stdin-timer.test.cjs.
  *
@@ -899,6 +899,22 @@ describe('gsd-secret-read-guard: host opt-in to deny on its own failure (#5784)'
 
   test('unset: the same error after the scans is allowed, with nothing on stdout or stderr', () => {
     assertFailOpen(runErrorAfterScans({}), 'error after the scans, unset');
+  });
+
+  // command-too-complex is a verdict on a Bash command, so an overflow on any
+  // other tool is a hook error like the rest. This fixture makes a Read
+  // payload's `tool_input` overflow the stack when main() reads it.
+  const OVERFLOWING_INPUT = path.join(__dirname, 'fixtures', 'secret-read-guard-overflowing-tool-input.cjs');
+  const runOverflowOnRead = (extraEnv) => runHook(read('/p/OVERFLOWING_INPUT.txt'),
+    { env: { NODE_OPTIONS: `--require ${OVERFLOWING_INPUT}`, ...extraEnv } });
+
+  test('opted in: a stack overflow on a Read blocks as guard-error, cause hook-error, not command-too-complex', () => {
+    const { GUARD_ERROR_CAUSE } = require(HOOK_PATH);
+    assertGuardError(runOverflowOnRead(DENY_ENV), 'overflow on a Read, opted in', GUARD_ERROR_CAUSE.HOOK_ERROR);
+  });
+
+  test('unset: the same overflow on a Read is allowed, with nothing on stdout or stderr', () => {
+    assertFailOpen(runOverflowOnRead({}), 'overflow on a Read, unset');
   });
 
   test('opted in: verdicts on a parsed payload are unchanged', () => {
