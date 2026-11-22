@@ -443,3 +443,23 @@ from the macOS tier (their code does not exercise the behavior), and a test pins
 - `tests/ensure-runtime-build.test.cjs:320-321`: released. The code passes the real tsc path explicitly to avoid creating a directory symlink.
 
 No `MACOS_ALWAYS_REAL_OS` map was added and no kept entries result. macOS tier size went from 270 to 263 (the shrink above), with no map entries added.
+
+## Amendment, 2026-11-22: the tier is bounded by its size, not by a ratio (#6551)
+
+The proportional ceilings of section 3 (Windows 33%, macOS 25% of eligible unit-suite files) measured the tier
+against a live denominator, which section "Alternatives" already disclosed as a weakness in one direction: adding
+OS-agnostic tests loosens the ratio. [ADR-6315](6315-ci-redesign.md) item 19 moves the other way. It converts
+OS-agnostic test files to static checks and deletes them, so the denominator shrinks and the ratio of a tier that did
+not grow rises. Batch 7 of that item took the macOS tier from 301/1207 (24.9%) to 301/1192 (25.3%) without adding a
+file to it, and the ceiling test failed.
+
+What the ceiling protects is unchanged: the Windows and macOS lanes (the merge queue's critical path) run a small,
+explicit set of files, and a detector change or a run of new tests cannot quietly pull the suite back onto them, as
+happened in epic #4589 (546 files, 59% of the suite). That protection does not need a denominator. The two ceilings
+are replaced by size ratchets in `tests/platform-conformance-tier.test.cjs`: `WINDOWS_TIER_SIZE_BASELINE` (366 files)
+and `MACOS_TIER_SIZE_BASELINE` (301 files), taken from the same committed lists the ratios were measured on. The tier
+may not grow past its baseline (a file joining it is a deliberate edit of the constant, with the reason in review) and
+may not sit below it (a tier that shrank lowers the constant in the same change, so the bound only tightens), the same
+exact-match convention as the comment-ratchet baseline. The 33% and 25% figures remain the evidence the first
+baselines were taken from. Item 20 of ADR-6315, which chooses the tiers by filename, restates this bound for the new
+tiers.

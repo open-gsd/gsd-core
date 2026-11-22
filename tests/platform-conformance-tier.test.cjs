@@ -60,8 +60,33 @@ const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformanc
 // slash-literal) would slip back under the ceiling undetected. If the
 // measured ratio moves, update the ratio in this comment and re-justify the
 // ceiling — do not just raise the number to make a red test green.
-const WINDOWS_TIER_RATIO_CEILING = 0.33;
-const MACOS_TIER_RATIO_CEILING = 0.25;
+
+// #6551 (ADR-4641 amendment, 2026-11-22): the ceilings above were ratios against
+// the live count of unit-suite files. ADR-6315 item 19 deletes OS-agnostic files
+// (they become static checks), which shrinks that denominator and raises the ratio
+// of a tier that did not grow. The tier is therefore bounded by its own size
+// instead: a ratchet. It may not grow past the baseline (a file joining the tier
+// is a deliberate edit of the baseline, with its reason in review) and it may not
+// sit below it (a tier that shrank lowers the baseline in the same PR, so the
+// bound only ever tightens). The 33% and 25% ceilings stay as the evidence the
+// first baselines were taken from: 366/1192 and 301/1192 at the amendment.
+const WINDOWS_TIER_SIZE_BASELINE = 366;
+const MACOS_TIER_SIZE_BASELINE = 301;
+
+// A tier of `count` files against its committed baseline: nonzero, not above, not below.
+function assertTierAtBaseline(count, baseline, label, constantName) {
+  assert.ok(count > 0, `expected a nonzero ${label} conformance tier`);
+  assert.ok(
+    count <= baseline,
+    `the ${label} conformance tier grew to ${count} files, above its baseline of ${baseline} (ADR-4641 amended by #6551). ` +
+      `A file joining the tier is a deliberate change: raise ${constantName} to ${count} in this PR and say why.`,
+  );
+  assert.ok(
+    count >= baseline,
+    `the ${label} conformance tier shrank to ${count} files, below its baseline of ${baseline}. ` +
+      `Lower ${constantName} to ${count} in this PR so the bound keeps tightening.`,
+  );
+}
 
 // ─── Rows 1-15: classifyContent, pure fixtures ────────────────────────────────
 
@@ -336,20 +361,10 @@ describe('gen-platform-conformance-tier.cjs — real repo tree (regression)', ()
       fresh = classifyTree(realTestsDir);
     }, 'a full sweep of the real tests/ tree must complete without throwing');
 
-    // Post-#4641 the tier is a ratio-bounded MINORITY of eligible unit-suite
-    // files (WINDOWS_TIER_RATIO_CEILING, same policy ceiling the #4641 block
-    // below enforces), not a brittle absolute-count range against a literal
-    // that goes stale every time the category set or the suite's file count
-    // changes (a hardcoded exact-count sanity range already broke once in
-    // this PR). Derived from the live tree, not a hardcoded number.
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
-    const eligibleCount = walkTestFiles(realTestsDir).filter((absPath) => suiteOf(absPath) === null).length;
-    const ratio = fresh.files.length / eligibleCount;
-    assert.ok(
-      ratio > 0 && ratio <= WINDOWS_TIER_RATIO_CEILING,
-      `expected a nonzero conformance tier within the #4641 ratio ceiling (<=${WINDOWS_TIER_RATIO_CEILING * 100}%), ` +
-        `got ${fresh.files.length}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+    // The tier is bounded by its own size (WINDOWS_TIER_SIZE_BASELINE, the same
+    // ratchet the #4641 block below enforces), not by a ratio against the live
+    // count of unit-suite files, which moves whenever tests are added or removed.
+    assertTierAtBaseline(fresh.files.length, WINDOWS_TIER_SIZE_BASELINE, 'Windows', 'WINDOWS_TIER_SIZE_BASELINE');
 
     delete require.cache[require.resolve(GENERATED_PATH)];
     const committed = require(GENERATED_PATH);
@@ -581,20 +596,8 @@ describe('gen-platform-conformance-tier.cjs — real repo tree, macOS target (re
       fresh = classifyMacosTree(realTestsDir);
     }, 'a full sweep of the real tests/ tree must complete without throwing');
 
-    // Post-#4641 the tier is a ratio-bounded MINORITY of eligible unit-suite
-    // files (MACOS_TIER_RATIO_CEILING, same policy ceiling the #4641 block
-    // below enforces), not a brittle absolute-count range against a literal
-    // that goes stale every time the category set or the suite's file count
-    // changes (a hardcoded exact-count sanity range already broke once in
-    // this PR). Derived from the live tree, not a hardcoded number.
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
-    const eligibleCount = walkTestFiles(realTestsDir).filter((absPath) => suiteOf(absPath) === null).length;
-    const ratio = fresh.files.length / eligibleCount;
-    assert.ok(
-      ratio > 0 && ratio <= MACOS_TIER_RATIO_CEILING,
-      `expected a nonzero macOS conformance tier within the #4641 ratio ceiling (<=${MACOS_TIER_RATIO_CEILING * 100}%), ` +
-        `got ${fresh.files.length}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+    // Bounded by its own size (MACOS_TIER_SIZE_BASELINE), as the Windows tier is above.
+    assertTierAtBaseline(fresh.files.length, MACOS_TIER_SIZE_BASELINE, 'macOS', 'MACOS_TIER_SIZE_BASELINE');
 
     delete require.cache[require.resolve(MACOS_GENERATED_PATH)];
     const committed = require(MACOS_GENERATED_PATH);
@@ -630,55 +633,37 @@ describe('gen-platform-conformance-tier.cjs — real repo tree, macOS target (re
 // ─── #4641: narrow the Windows conformance tier away from house-idiom noise ───
 
 describe('conformance tier narrowing (#4641)', () => {
-  // WINDOWS_TIER_RATIO_CEILING / MACOS_TIER_RATIO_CEILING are hoisted to
+  // WINDOWS_TIER_SIZE_BASELINE / MACOS_TIER_SIZE_BASELINE are hoisted to
   // module scope above (shared with the real-repo-tree regression case
-  // further down, which needs the same ceiling rather than a second
+  // further down, which needs the same baseline rather than a second
   // independently-drifting copy of it).
 
+  // The tier is what a fresh sweep of the live tree puts in the list (the classifier plus the always-real-OS map and
+  // the platform siblings), the same count the committed generated files carry.
   test('conformance tier stays a tier, not the suite (#4641)', () => {
-    const realTestsDir = path.join(ROOT, 'tests');
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
-
-    const absoluteFiles = walkTestFiles(realTestsDir);
-    const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    const eligibleCount = eligibleFiles.length;
-
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      const content = fs.readFileSync(absPath, 'utf8');
-      const { needsRealOs } = classifyContent(content);
-      if (needsRealOs) tierCount++;
-    }
-
-    const ratio = tierCount / eligibleCount;
-    assert.ok(
-      ratio <= WINDOWS_TIER_RATIO_CEILING,
-      `expected the conformance tier to be at most ${WINDOWS_TIER_RATIO_CEILING * 100}% of eligible unit-suite files, ` +
-        `got ${tierCount}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+    const fresh = classifyTree(path.join(ROOT, 'tests'));
+    assertTierAtBaseline(fresh.files.length, WINDOWS_TIER_SIZE_BASELINE, 'Windows', 'WINDOWS_TIER_SIZE_BASELINE');
   });
 
-  test('macos conformance tier stays within its evidence-backed ceiling (#4641)', () => {
-    const realTestsDir = path.join(ROOT, 'tests');
-    const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
+  test('macos conformance tier stays within its size baseline (#4641)', () => {
+    const fresh = classifyMacosTree(path.join(ROOT, 'tests'));
+    assertTierAtBaseline(fresh.files.length, MACOS_TIER_SIZE_BASELINE, 'macOS', 'MACOS_TIER_SIZE_BASELINE');
+  });
 
-    const absoluteFiles = walkTestFiles(realTestsDir);
-    const eligibleFiles = absoluteFiles.filter((absPath) => suiteOf(absPath) === null);
-    const eligibleCount = eligibleFiles.length;
-
-    let tierCount = 0;
-    for (const absPath of eligibleFiles) {
-      const content = fs.readFileSync(absPath, 'utf8');
-      const { needsRealOs } = classifyMacosContent(content);
-      if (needsRealOs) tierCount++;
-    }
-
-    const ratio = tierCount / eligibleCount;
-    assert.ok(
-      ratio <= MACOS_TIER_RATIO_CEILING,
-      `expected the macOS conformance tier to be at most ${MACOS_TIER_RATIO_CEILING * 100}% of eligible unit-suite files, ` +
-        `got ${tierCount}/${eligibleCount} (${(ratio * 100).toFixed(1)}%)`,
-    );
+  // The ratchet itself: a tier above its baseline, below it, or empty fails, and the message names the constant to edit.
+  describe('assertTierAtBaseline', () => {
+    test('a tier at its baseline passes', () => {
+      assert.doesNotThrow(() => assertTierAtBaseline(301, 301, 'macOS', 'X'));
+    });
+    test('a tier one file above its baseline fails and says to raise the baseline', () => {
+      assert.throws(() => assertTierAtBaseline(302, 301, 'macOS', 'MACOS_TIER_SIZE_BASELINE'), /grew to 302 files, above its baseline of 301[\s\S]*raise MACOS_TIER_SIZE_BASELINE to 302/);
+    });
+    test('a tier one file below its baseline fails and says to lower the baseline', () => {
+      assert.throws(() => assertTierAtBaseline(300, 301, 'macOS', 'MACOS_TIER_SIZE_BASELINE'), /shrank to 300 files, below its baseline of 301[\s\S]*Lower MACOS_TIER_SIZE_BASELINE to 300/);
+    });
+    test('an empty tier fails', () => {
+      assert.throws(() => assertTierAtBaseline(0, 0, 'macOS', 'X'), /nonzero macOS conformance tier/);
+    });
   });
 
   test('seam-helper calls are not a platform signal (#4641)', () => {
