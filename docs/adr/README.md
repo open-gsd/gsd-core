@@ -269,6 +269,7 @@ These govern the system as it stands. Cite these.
 | [ADR-3660](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Accepted | [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) |
 | [ADR-3711](3711-cross-runtime-plan-execution.md) | Cross-runtime plan execution — a per-plan `executor_runtime` on the `orchestrator-worktree` backend | Accepted | — |
 | [ADR-3806](3806-review-dispositions-ledger.md) | Review Dispositions Ledger canonizes where and how reviews-mode records incorporate/defer decisions in PLAN.md | Accepted | — |
+| [ADR-3997](3997-review-prompt-capability-contributions.md) | Review-prompt capability contributions — `review:pre` and the `reviewer` role | Accepted | — |
 | [ADR-4139](4139-compact-content-seam.md) | The compact-content seam — shrink the eager window, never the guarantee | Accepted | — |
 | [ADR-4309](4309-criterion-baseline-notation.md) | Criterion baseline notation for quantitative acceptance criteria | Accepted | — |
 | [ADR-4310](4310-criterion-replay.md) | Opt-in replay of recorded criterion baselines | Accepted | — |

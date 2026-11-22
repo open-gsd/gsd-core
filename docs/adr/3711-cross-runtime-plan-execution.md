@@ -146,7 +146,9 @@ poisoning this prevents). A target with no entry omits the flag, which the resol
 ### D8 — Each dispatch writes its own decision and its own worker record
 
 A cross-runtime dispatch writes an isolation decision to its own per-dispatch record, naming its
-producer, and never re-derives it (ADR-4630 Decision 2). The worker gets a lifecycle record with the
+producer, and never re-derives it (ADR-4630 Decision 2). A query that holds a caller's `none` writes no
+record (ADR-4630); the per-plan gate re-records the plan before the launch, so the launch's exec read
+writes it. The worker gets a lifecycle record with the
 target runtime recorded, and completion comes from reconciling that record (SUMMARY, plan-scoped
 commits, branch state), never from the process exiting (#4624). A foreign process that exits 0 without
 a SUMMARY or plan commits is not complete.
