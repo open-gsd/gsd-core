@@ -1063,12 +1063,12 @@ const BODY_BOUNDARY_RE = /[{}]|=>/;
  * header or a destructuring declaration, or a chain longer than the bound.
  *
  * Boundary rule: past a `{`, `}` or `=>` (`BODY_BOUNDARY_RE`) the nearest
- * assignment of a name may be a closed sibling block's. So when an
- * assignment that does not reach the state path has a boundary in its
- * right-hand side, or sits on a line above the write and
- * `boundaryAfterLine` finds one after it, the walk looks further back for
- * an earlier assignment of that name. This can only add
- * reports: an assignment that reaches the state path reports at once.
+ * assignment of a name may be a closed sibling block's. So when an assignment
+ * that does not reach the state path has a boundary in its right-hand side,
+ * or sits on a line above the write and `boundaryAfterLine` finds one after
+ * it, the walk looks further back for an earlier assignment of that name.
+ * This can only add reports: an assignment that reaches the state path
+ * reports at once.
  */
 function resolvesToStatePath(write, index, expr, hopsLeft) {
   if (targetsStatePath(expr)) return true;
@@ -1175,9 +1175,10 @@ function boundaryAfterLine(write, index) {
  * This axis's zero is not proof that no raw writer exists (ADR-3408
  * Decision 5). Verified misses, each with a test row (a known gap beside its
  * correct verdict, or the hop-bound row); the syntax-tree follow-up is #5279:
- *   - A file name set above the writer's function (a `Map` value, a
- *     module-level constant, a return value): for a function declaration that
- *     `FUNCTION_DECL_LINE_RE` matches, resolution stops at its header.
+ *   - A name assigned above the nearest line matching `FUNCTION_DECL_LINE_RE`
+ *     (the writer's header over several lines, or a nested declaration): the
+ *     scan stops at that line. A name returned by a function declaration, or a
+ *     `Map` built in one, is not resolved.
  *   - A one-line function that assigns and writes, its line matching
  *     `FUNCTION_DECL_LINE_RE`: that line is dropped from the scan.
  *   - Two assignments of a chain on one line (`const d = …; const p = d;`):
@@ -1222,12 +1223,12 @@ function boundaryAfterLine(write, index) {
  *     `p = 'x';` on the line below a `case` or `default` label, with the
  *     write under a later clause), and an assignment inside an expression
  *     (`c && (p = 'x');`, `c ? (p = 'x') : null;`). The known-gap rows pin
- *     representative forms. These reassignment shapes are
- *     reported, as pinned by tests: `if (c) { p = 'x'; }` and the other
- *     braced forms the controls list, `if (c) p = 'x'; else { q(); }`,
- *     `if (c) p = p + '.tmp';` and the other right-hand sides naming `p`
- *     that the reassignment test lists, and a run of
- *     `MAX_TARGET_RESOLUTION_HOPS - 1` lines `if (c) p = p + '<k>';`.
+ *     representative forms. These reassignment shapes are reported, as pinned
+ *     by tests: `if (c) { p = 'x'; }` and the other braced forms the controls
+ *     list, `if (c) p = 'x'; else { q(); }`, `if (c) p = p + '.tmp';` and the
+ *     other right-hand sides naming `p` that the reassignment test lists, and
+ *     a run of `MAX_TARGET_RESOLUTION_HOPS - 1` lines
+ *     `if (c) p = p + '<k>';`.
  *   - A regex literal in the first argument holding a `)`
  *     (`x.replace(/\)/g, '') + statePath`): `captureFirstArg` tracks quotes
  *     and brackets, not regex literals. The `)` in the literal pops the depth
@@ -1295,9 +1296,9 @@ function boundaryAfterLine(write, index) {
  * back once per name (distinct names x lines), a line that repeats a
  * declaration scanned to its end once per repeat (quadratic in the line),
  * each write re-read a shared right-hand side, and each write walked every
- * earlier assignment of its name past a body boundary.
- * With both caps, a file costs time linear in its length (finding the calls,
- * counting lines) plus work bounded by the budget.
+ * earlier assignment of its name past a body boundary. With both caps, a file
+ * costs time linear in its length (finding the calls, counting lines) plus
+ * work bounded by the budget.
  *
  * `stats`, optional, receives eight counts over every write in `text`:
  * `assignmentLookups`, the `nearestPrecedingAssignment` calls, `linesRead`,
