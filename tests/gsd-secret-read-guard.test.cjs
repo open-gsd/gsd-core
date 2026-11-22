@@ -540,7 +540,6 @@ describe('gsd-secret-read-guard: Bash allows', () => {
     'su root',
     'echo .env | xargs rm',
     'echo .env | xargs',
-    'echo .env | xargs -a names cat', // -a: stdin replaced by a file
     "find . -name '*.ts' | xargs cat",
     'echo .env.example | xargs cat', // template suffix exemption still applies
     'git ls-files | xargs grep -l KEY',
@@ -3759,6 +3758,408 @@ describe('gsd-secret-read-guard: strings re-interpreted by find, xargs and watch
       }),
       PROPERTY_RUNS,
     );
+  });
+});
+
+// ─── #6282: xargs's options and its launcher sub-commands, parsed the way GNU and BSD xargs do ──────────────────
+//
+// A misread xargs option hides the sub-command: `-i` and `-l` take only an attached value, a long option may be
+// abbreviated, and BSD's `-J`, `-R` and `-S` take one, so reading them otherwise took the shell for a value and let
+// its plain `cat .env` through. The replace string is found in a cluster (`-tI{}`), an abbreviation (`--rep`) and
+// BSD `-J` too, and the last one given wins. A sub-command that is itself a launcher (`watch`, `find`, `git -c`, a
+// nested xargs) is read as it is at the top level. Every block row exits 0 on `next` except `-I {}` and the
+// rows with no value after `-I`/`-J`, which pin the walk against a regression.
+describe('gsd-secret-read-guard: xargs options and launcher sub-commands (#6282)', () => {
+  const OPTIONS = [
+    "echo x | xargs -i sh -c 'cat .env'",
+    "echo x | xargs -l sh -c 'cat .env'",
+    "echo x | xargs -I {} sh -c 'cat .env'",
+    "echo x | xargs --max-args 1 sh -c 'cat .env'",
+    "echo x | xargs --delimiter x sh -c 'cat .env'",
+    // An ambiguous abbreviation (`--max`: four options) takes no value, so the shell after it is the sub-command.
+    "echo x | xargs --max sh -c 'cat .env'",
+    "echo x | xargs -J % sh -c 'cat .env'",
+    "echo x | xargs -R 1 sh -c 'cat .env'",
+    "echo x | xargs -S 9 sh -c 'cat .env'",
+    // `-i` takes only an attached value: `a` and `n` are replace strings, not options.
+    'echo .env | xargs -ia cat',
+    "echo x | xargs -in sh -c 'cat .env'",
+  ];
+  // The piped word is the script, through a replace string found in each form xargs accepts.
+  const REPLACE_SCRIPT = [
+    "echo 'cat .env' | xargs -tI{} sh -c {}",
+    "echo 'cat .env' | xargs --rep sh -c {}",
+    "echo 'cat .env' | xargs -J % sh -c %",
+    "echo 'cat .env' | xargs -I{} -I@@ sh -c @@",
+  ];
+  // `-I` or `-J` with no word after it must not crash the scan (a crash allows): the read after it is still found.
+  const VALUE_MISSING = [
+    'echo x | xargs -I; cat .env',
+    'echo x | xargs -tI; cat .env',
+    'echo x | xargs -J; cat .env',
+  ];
+  const LAUNCHERS = [
+    "echo x | xargs watch 'cat .env'",
+    "echo x | xargs sudo watch 'cat .env'",
+    "echo x | xargs find . -exec sh -c 'cat .env' \\;",
+    "echo x | xargs xargs sh -c 'cat .env'",
+    "echo x | xargs git -c alias.x='!cat .env' x",
+    // Rescanned at xargs's own depth, so a launcher two shells deep is still read.
+    'sh -c "sh -c \\"echo x | xargs watch \'cat .env\'\\""',
+    // xargs launched by find or `watch -x` is read as the same xargs at the top level.
+    "find . -exec xargs sh -c 'cat .env' \\;",
+    "watch -x xargs sh -c 'cat .env'",
+    "find . -exec xargs watch 'cat .env' \\;",
+  ];
+  const ALLOWED = [
+    "echo x | xargs -i sh -c 'cat notes.txt'",
+    "echo x | xargs -J % sh -c 'cat notes.txt'",
+    "echo 'cat notes.txt' | xargs -tI{} sh -c {}",
+    "echo x | xargs watch 'cat notes.txt'",
+    "echo x | xargs find . -exec sh -c 'cat notes.txt' \\;",
+    'echo x | xargs -I',
+  ];
+
+  for (const cmd of [...OPTIONS, ...REPLACE_SCRIPT, ...VALUE_MISSING, ...LAUNCHERS]) {
+    test(`blocks: ${cmd}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const cmd of ALLOWED) {
+    test(`allows: ${cmd}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
+// ─── #6282: the words xargs reads from a here-string, a heredoc, a printf, or a source the guard cannot read ─────
+//
+// xargs's words come from its stdin or an arg file as well as a pipe. A here-string or heredoc given to it is read
+// as those words, and so is what an echo or printf piped in prints, with `%s` filled and `\n` read as a newline.
+// A source the guard cannot read (`< list`, `<&3`, `-a list`, `-a <( )`, a printf escape or conversion it does not
+// render) is denied as `xargs-input-unseen` unless the sub-command reads nothing (`echo`) or is a shell whose `-c`
+// script is literal and takes no word. Every block row exits 0 on `next`.
+describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an unseen source (#6282)', () => {
+  const READS = [
+    "printf '.env\\n' | xargs cat",
+    "printf '.e%sv\\n' n | xargs cat",
+    'xargs cat <<< .env',
+    "xargs cat <<'EOF'\nREADME.md .env\nEOF",
+    'xargs -d, cat <<< a,.env',
+    "xargs -I{} sh -c 'cat {}' <<< .env",
+    // A launched xargs reads its launcher's stdin; an xargs it runs gets the words as its own operands.
+    'find . -exec xargs cat \\; <<< .env',
+    'xargs sudo xargs cat <<< .env',
+    // Split at the delimiter `-d` or `-0` names, decoded as xargs decodes it.
+    "printf '.envxb' | xargs -d x cat",
+    'xargs --delimiter=x cat <<< .envxb',
+    "xargs -d '\\x78' cat <<< .envxb",
+    "printf 'a\\0.env\\0' | xargs -0 cat",
+    // Without -d or -0, xargs removes the quotes and backslashes in what it reads.
+    "xargs cat <<< '.e\"n\"v'",
+    "xargs cat <<< '.e\\nv'",
+    "xargs cat <<'EOF'\n.e\"n\"v\nEOF",
+    "printf '.e%sn%sv' '\"' '\"' | xargs cat",
+    // #6408 Major 2: the shell removes `\<newline>` from an unquoted heredoc body before xargs reads it, as it does
+    // from a here-string word, an echo or printf operand and a shell's heredoc script (blocked at the parent too).
+    'xargs cat <<EOF\n.e\\\nnv\nEOF',
+    // ... before it looks for the terminator, so a line `EOF` after `x\` is body (second security review).
+    'xargs cat <<EOF\nx\\\nEOF\n.env\nEOF',
+    'cat <<EOF | xargs cat\nx\\\nEOF\n.env\nEOF',
+    'xargs cat <<< .e\\\nnv',
+    'echo .e\\\nnv | xargs cat',
+    "printf '%s' .e\\\nnv | xargs cat",
+    'bash <<EOF\ncat .e\\\nnv\nEOF',
+    // The stdin a group, a subshell, a shell or a function is given reaches the xargs inside it.
+    '{ xargs cat; } <<< .env',
+    '( xargs cat ) <<< .env',
+    "sh -c 'xargs cat' <<< .env",
+    "sh -c 'xargs cat' <<EOF\n.env\nEOF",
+    "printf '.env' | sh -c 'xargs cat'",
+    "echo .env | bash -c 'xargs cat'",
+    'f() { xargs cat; }; f <<< .env',
+    'f() { xargs cat; }; f <<< a; f <<< .env',
+    // A case pattern's `)` closes no group.
+    '{ case x in a) xargs cat;; esac; } <<< .env',
+    '{ case x in (a) xargs cat;; esac; } <<< .env',
+    // echo reads escapes in zsh, dash and bash's xpg_echo, so both of its readings are judged.
+    "echo '.e\\0156v' | xargs cat",
+    "echo '.e\\x6ev' | xargs cat",
+    "echo -E '.e\\0156v' | xargs cat",
+    "echo -e '\\x2eenv' | xargs cat",
+    // xargs behind a reserved word (`then`, `do`, `else`, `!`) is the same xargs.
+    'if true; then xargs cat; fi <<< .env',
+    'for i in 1; do xargs cat; done <<< .env',
+    'for i in 1; do xargs cat <<< .env; done',
+    'if false; then :; else xargs cat <<< .env; fi',
+    '! xargs cat <<< .env',
+    "if true; then xargs sh -c 'cat .env'; fi",
+    // A replace string inside an operand is filled with each word xargs reads.
+    'xargs -I{} cat .{} <<< env',
+    'xargs -I{} cat {}nv <<< .e',
+    'xargs -iX cat .X <<< env',
+    "printf '%s\\n' .e | xargs -I@ cat @nv",
+    'echo env | xargs -I{} cat .{}',
+    // A pipe into a group, subshell, function call, loop or conditional reaches every command inside it.
+    "printf '.env\\n' | { true; xargs cat; }",
+    "printf '.env\\n' | ( true; xargs cat )",
+    "f() { xargs cat; }; printf '.env\\n' | f",
+    "printf '.env\\n' | while true; do xargs cat; break; done",
+    "printf '.env\\n' | if true; then xargs cat; fi",
+    // A group's or loop's output piped in is every command's in it.
+    '{ echo .env; echo a; } | xargs cat',
+    'for i in 1; do echo .env; done | xargs cat',
+    // #6408 Major 1: their outputs are joined in order too, each echo ending its line, so a name split across them is
+    // read, past a stage whose output goes elsewhere and through a `cat` one pipes into.
+    '{ printf %s .e; printf %s nv; } | xargs cat',
+    '{ echo -n .e; echo -n nv; } | xargs cat',
+    '{ printf %s .e; echo nv; echo x; } | xargs cat',
+    '{ printf %s .e; printf %s x >/dev/null; printf %s nv; } | xargs cat',
+    '{ printf %s .e; printf %s x >log; printf %s nv; } | xargs cat',
+    '{ printf %s .e | cat; printf %s nv; } | xargs cat',
+    // ... and a name one output holds is still read where the join is not built (blocked at the parent too).
+    `{ echo .env; ${"echo '\\t'; ".repeat(7)}} | xargs sh -c 'echo hi'`,
+    // echo or printf is read as it prints, through a `cat` or `tee` that passes its stdin on, and behind `builtin`.
+    "echo -e '\\x2eenv' | cat | xargs cat",
+    "printf '.env\\n' | tee | xargs cat",
+    "builtin echo -e '\\x2eenv' | xargs cat",
+    // #6408 Minor 2: a generator's literal operands are judged as files where it stands, behind a filter too
+    // (blocked at e74c2d2e8).
+    'yes .env | head -n1 | xargs cat',
+    'jot -b .env 1 | head -n1 | xargs cat',
+    'seq -f .env 1 | head -n1 | xargs cat',
+    // Own adversarial pass: `cat /dev/stdin`, a group's output behind its redirect, a substitution run in a piped
+    // command, and a group's here-string read through a `cat` in it.
+    "printf '.env' | cat /dev/stdin | xargs cat",
+    "{ printf '.env'; } 2>/dev/null | xargs cat",
+    'echo .env | echo "$(xargs cat)"',
+    '{ cat | xargs cat; } <<< .env',
+    'coproc xargs cat <<< .env',
+    // `exec` behind `builtin`, `command`, a reserved word or an assignment still redirects what follows it.
+    'builtin exec <<< .env; xargs cat',
+    'command exec <<< .env; xargs cat',
+    'if true; then exec <<< .env; fi; xargs cat',
+    '! exec <<< .env; xargs cat',
+    'X=1 exec <<< .env; xargs cat',
+    // A pipe followed by a newline or a comment still pipes.
+    'echo .env |\nxargs cat',
+    'echo .env |\n\nxargs cat',
+    'echo .env |  # c\nxargs cat',
+    "printf '.env' |\nsh -c 'xargs cat'",
+  ];
+  const UNSEEN = [
+    ['xargs cat < names', 'names'],
+    ['xargs cat 0< names', 'names'],
+    ['xargs cat <&3', '<&3'],
+    ['xargs -a <(echo .env) cat', '<(echo .env)'],
+    ['echo .env > n; xargs -a n cat', 'n'],
+    ['xargs -a n cat', 'n'],
+    ['xargs -anames cat', 'names'],
+    ['xargs --arg-file=names cat', 'names'],
+    ['xargs -a n wc', 'n'],
+    ['echo .env | xargs -a names cat', 'names'], // -a: the words come from the file, not the pipe
+    ['xargs -a n sh -c \'cat "$@"\' _', 'n'],
+    ['xargs -a n sh', 'n'],
+    // fd 0 opened read-write, and a redirect xargs inherits from a group, a subshell, `exec` or the shell running it.
+    ['xargs cat <> names', 'names'],
+    ['{ xargs cat; } < names', 'names'],
+    ['(xargs cat) < names', 'names'],
+    ['exec < names; xargs cat', 'names'],
+    ["sh -c 'xargs cat' < names", 'names'],
+    ['f() { xargs cat; }; f < names', 'names'],
+    ['builtin exec < names; xargs cat', 'names'],
+    // A `-c` script that re-reads text (source, `.`, eval, exec, /dev/stdin) or holds an escape takes the words too.
+    ['xargs -a names bash -c \'printf "cat \\x241" | source /dev/stdin\' _', 'names'],
+    ["xargs -a names bash -c 'source /dev/stdin' _ <<< 'cat \"$1\"'", 'names'],
+    // An `exec` that eval or source runs may redirect every later xargs.
+    ["eval 'exec <<< .env'; xargs cat", 'exec'],
+    ["source <(echo 'exec <<< .env'); xargs cat", 'exec'],
+    // ... also spelled with quotes or a backslash inside the word.
+    ["eval 'ex\"\"ec <<< .env'; xargs cat", 'exec'],
+    ["eval 'e\\xec <<< .env'; xargs cat", 'exec'],
+    // A re-reading word in the `-c` script, spelled with quotes inside it, still takes the words.
+    ["xargs -a names bash -c 'so\"\"urce /dev/st\"\"din' _", 'names'],
+    ["xargs -a names bash -c 'ev\"\"al x' _", 'names'],
+    // A stage reading a process substitution writes what the guard does not render.
+    ['cat <(echo .env) | xargs cat', '<( )'],
+    ['cat < <(echo .env) | xargs cat', '<( )'],
+    ['paste <(echo .env) | xargs cat', '<( )'],
+    // A replace string after a protected name or a prefix of one, with stdin the guard cannot know.
+    ['ls -A | xargs -I{} cat .env{}', '.env{}'],
+    ['xargs -I@ cat config/.e@', 'config/.e@'],
+    // ... or after it, or around it, when some fill drawn from a protected name completes one.
+    ['ls | xargs -I{} cat {}nv', '{}nv'],
+    ['ls | xargs -I{} cat {}.env', '{}.env'],
+    ['ls | xargs -I{} cat x/{}env', 'x/{}env'],
+    ['ls | xargs -I@ cat .se@rets', '.se@rets'],
+    // #6408 Nit 1: ... also in the `-c` script of a shell xargs runs.
+    ["ls -A | xargs -I{} sh -c 'cat {}nv'", 'cat {}nv'],
+    // ... and when the stdin holds text the guard shows beside a stage it cannot know (second security review).
+    ["{ printf 'x\\n'; ls -A; } | xargs -I{} sh -c 'cat {}nv'", 'cat {}nv'],
+    ['{ echo x; ls -A; } | xargs -I{} cat {}nv', '{}nv'],
+    // The `-c` script is the first word after the shell's options, `--` included.
+    ['xargs sh -c -- \'cat "$1"\' _ < names', 'names'],
+    ['xargs sh -c -e \'cat "$1"\' _ < names', 'names'],
+    ['xargs -a names sh -c -- \'cat "$1"\' _', 'names'],
+    // Every call's stdin counts, and one the guard cannot read outranks one it can.
+    ['f() { xargs cat; }; f <<< a; f < names', 'names'],
+    ['f() { xargs cat; } <<< a; f < names', 'names'],
+    ['{ case x in a) xargs cat;; esac; } < names', 'names'],
+    ['( case x in a) :;; esac; xargs cat ) < names', 'names'],
+    // Redirects whose reach overlaps: the one the guard cannot read wins, whichever is inner or spread first.
+    ['{ { xargs cat; } < names; } <<< a', 'names'],
+    ['{ exec < names; xargs cat; } <<< a', 'names'],
+    ['while read l; do :; { xargs cat; } < names; done <<< a', 'names'],
+    ['while true; do xargs cat; done < names', 'names'],
+    ['if true; then xargs cat < names; fi', 'names'],
+    ['if true; then xargs -a names cat; fi', 'names'],
+    ['xargs -I{} cat .{} < names', 'names'],
+    // An expansion the guard does not perform in the text xargs reads makes that text unseen.
+    ['xargs cat <<< "$(<list)"', '$( )'],
+    ['xargs cat <<< "$(cat list)"', '$( )'],
+    ['xargs cat <<EOF\n$(cat list)\nEOF', '$(cat list)\n'],
+    ['echo "$(cat list)" | xargs cat', '$( )'],
+    ['cat <<< "$X" | xargs cat', '$X'],
+    // What a script, a function or a filter writes is not rendered: unseen when it may come from text the command
+    // holds or feeds it, as a `>( )` body's stdin is.
+    ["eval 'echo .env' | xargs cat", 'eval'],
+    ["bash -c 'echo .env' | xargs cat", 'bash'],
+    ['f() { echo .env; }; f | xargs cat', 'f'],
+    // #6408 Major 1: a join a skipped stage may break, or one with more outputs than it is built for, is unseen.
+    ['{ printf %s .e; false && printf %s x; printf %s nv; } | xargs cat', '&&'],
+    ['{ printf %s .e; if false; then printf %s x; fi; printf %s nv; } | xargs cat', 'if'],
+    [`{ ${"echo '\\t'; ".repeat(7)}} | xargs cat`, 'echo'],
+    // ... also a skip before the first output, a `&`, which leaves the order unknown, and a redirect that may still
+    // be stdout.
+    ['{ false && printf %s x; printf %s .e; printf %s nv; } | xargs cat', '&&'],
+    ['{ printf %s nv & printf %s .e; } | xargs cat', '&'],
+    ['{ printf %s .e >/dev/stdout; printf %s nv; } | xargs cat', '>'],
+    ['{ printf %s .e >&1; printf %s nv; } | xargs cat', '>'],
+    ['{ printf %s .e >"$OUT"; printf %s nv; } | xargs cat', '>'],
+    // ... and one to a descriptor or a device that a group's own redirect, `|&` or an `exec` may send back to the pipe.
+    ['{ printf %s .e >&2; printf %s nv; } 2>&1 | xargs cat', '>'],
+    ['{ printf %s .e; printf %s x >&2; printf %s nv; } | xargs cat', '>'],
+    ['{ printf %s .e >/dev/stderr; printf %s nv; } |& xargs cat', '>'],
+    ['{ printf %s .e >/dev/./stdout; printf %s nv; } | xargs cat', '>'],
+    ['{ printf %s .e >//dev/stdout; printf %s nv; } | xargs cat', '>'],
+    ['{ exec 3>&1 >/dev/null; printf %s .e >&3; printf %s nv >&3; } | xargs cat', 'exec'],
+    // ... and a loop, which may write one stage's text several times over.
+    ["for i in 1 2; do printf 'nv\\n.e'; done | xargs cat", 'for'],
+    ["{ while read l; do printf 'nv\\n.e'; done; } | xargs cat", 'while'],
+    ["printf '.env\\n' | sort | xargs cat", 'sort'],
+    ["printf '.env' | xargs echo | xargs cat", 'xargs'],
+    ['echo .env | tee >(xargs cat)', '>( )'],
+    // A brace the shell expands in an echo operand is not rendered either.
+    ['echo .en{v,} | xargs cat', '.en{v,}'],
+    // eval or source may define the function a later call runs.
+    ["eval 'f() { xargs cat; }'; f < names", 'names'],
+  ];
+  // The same denial for what a printf it does not render writes, and for a `-d` value it cannot decode,
+  // each under a code of its own, since the block names no file.
+  const UNRENDERED = [
+    ["printf '\\x2eenv\\n' | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv\\n'],
+    ["printf '%b' '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '%b \\x2eenv'],
+    ['xargs -d ab cat <<< x', 'xargs-delimiter-undecodable', 'ab'],
+    ["printf '\\x2eenv' | cat | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv'],
+    ["printf '\\x2eenv' | tee | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv'],
+    ["builtin printf '\\x2eenv' | xargs cat", 'xargs-stdin-unrendered', '\\x2eenv'],
+  ];
+  const ALLOWED = [
+    "xargs echo <<< 'cat .env'",
+    "xargs -a list bash -c 'echo hi' <<< 'cat .env'",
+    "printf 'a\\n' | xargs cat",
+    "printf '%s\\n' a b | xargs cat",
+    'xargs cat <<< README.md',
+    'xargs cat 3< names',
+    'xargs -a names echo',
+    '{ xargs echo; } < names',
+    "bash -c 'echo a | xargs cat' < names",
+    'sort < a.txt; ls | xargs cat',
+    'xargs -d x cat <<< a.envxb',
+    // A redirect on a group or an `exec` reaches only the commands inside the group, or after the `exec`.
+    'xargs cat; exec < list',
+    'xargs -r cat; { head -1; } < list',
+    // echo without -e prints an escape it does not know as it is.
+    "echo 'src\\build.log' | xargs cat",
+    'echo notes | xargs -I{} cat {}.txt',
+    // #6408 Major 1: lines that join to no protected name, and an unbuilt join under a command that takes no word.
+    '{ echo .e; echo nv; } | xargs cat',
+    `{ ${"echo '\\t'; ".repeat(7)}} | xargs sh -c 'echo hi'`,
+    '{ printf %s .e; false && printf %s x; printf %s nv; } | xargs echo',
+    // `()` or `case` in an operand defines no function and opens no case.
+    "echo '()'; xargs cat; exec < list",
+    'grep case notes.txt; xargs cat; exec < list',
+    // Nested xargs rescans its words once, not under every reading at each level.
+    "xargs xargs xargs xargs xargs xargs xargs xargs echo '(('",
+    // A quoted heredoc delimiter keeps the body literal; a command that reads nothing reads no expansion either.
+    "xargs cat <<'EOF'\n$(cat list)\nEOF",
+    // #6408 Major 2: a quoted heredoc keeps its `\<newline>`, so the name stays split.
+    "xargs cat <<'EOF'\n.e\\\nnv\nEOF",
+    'xargs echo <<< "$(cat list)"',
+    // A delimiter it cannot decode, with nothing it could split: the piped names are not knowable either way.
+    "find . | xargs -d '\\e' cat",
+    // A filter given nothing the command shows, and a glob (the documented `cat .e*` gap), stay as they were.
+    'ls | sort | xargs cat',
+    'ls | xargs -I{} cat {}.ts',
+    "ls | xargs -I{} sh -c 'cat {}.ts'",
+    'ls | xargs -I{} mv {} {}.bak',
+    // Not covered, as `cat list | xargs cat` is: a program that prints names from its own code.
+    "awk 'BEGIN{print \".env\"}' | xargs cat",
+    "python3 -c 'print(\".env\")' | xargs cat",
+    "printf '%s\\n' *.md | xargs wc -l",
+    // Not covered: a stage the guard cannot read piped in (`cat`, `find`), so `find … | xargs cat` stays allowed.
+    'cat names | xargs cat',
+  ];
+
+  for (const cmd of READS) {
+    test(`blocks: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const [cmd, source] of UNSEEN) {
+    test(`blocks as unseen: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { code: 'xargs-input-unseen', tool: 'Bash', path: source });
+    });
+  }
+  for (const [cmd, code, source] of UNRENDERED) {
+    test(`blocks as ${code}: ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { code, tool: 'Bash', path: source });
+    });
+  }
+  for (const cmd of ALLOWED) {
+    test(`allows: ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+});
+
+// ─── #6282: filling xargs's replace string is charged to the scan budget ──────────────────────────────────────────
+//
+// Each operand holding the replace string is filled with each word xargs reads, so the work grows as their product;
+// it is charged before the loop, so a large product is command-too-complex rather than a scan that runs on.
+describe('gsd-secret-read-guard: filling xargs replace strings is charged to the scan budget (#6282)', () => {
+  const { scanBashCommand, workSpent } = require(HOOK_PATH);
+  const TOO_COMPLEX = { code: 'command-too-complex', text: '' };
+  const BIG = 2 ** 40;
+  const fill = (holders, words) => `xargs -I{} cat ${Array(holders).fill('x{}').join(' ')} <<< '${Array(words).fill('w').join(' ')}'`;
+
+  test('the fill is charged at least holders x words x 16', () => {
+    scanBashCommand(fill(40, 40), BIG, BIG);
+    assert.ok(workSpent().scan >= 40 * 40 * 16, `scan ${workSpent().scan}`);
+  });
+
+  test('a budget one short of the work is command-too-complex; the exact work and one more scan clean', () => {
+    const cmd = fill(30, 30);
+    scanBashCommand(cmd, BIG, BIG);
+    const limit = workSpent().scan;
+    assert.deepEqual(scanBashCommand(cmd, limit - 1, BIG), TOO_COMPLEX);
+    assert.equal(scanBashCommand(cmd, limit, BIG), null);
+    assert.equal(scanBashCommand(cmd, limit + 1, BIG), null);
+  });
+
+  test('600 holders filled with 600 words spends the default budget and is command-too-complex', () => {
+    assert.deepEqual(scanBashCommand(fill(600, 600)), TOO_COMPLEX);
+    assert.ok(workSpent().exhausted);
   });
 });
 
