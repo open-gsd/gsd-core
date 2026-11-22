@@ -542,7 +542,6 @@ function _resetRuntimeWarningCacheForTests(): void {
   _warnedConfigKeys.clear();
   _warnedUnknownConfigKeys.clear();
   _warnedUnusableConfig.clear();
-  _warnedShadowedGlobalKeys.clear();
 }
 
 // #6332: both the warning dedup sets and the git-ignore cache are per
@@ -556,16 +555,11 @@ invocationScopeMod.registerInvocationReset('config-loader.gitIgnoredCache', () =
 
 // ─── #3532 (10b): shadowed global-defaults diagnostic ────────────────────────
 
-// The keys Branch D's `_globalBaseCfg` demonstrably honors from
-// ~/.gsd/defaults.json when no project config exists. Under a project
-// .planning/config.json (Branch A — every real project) the global file is
-// never opened, so each of these set globally is silently inert for resolution.
-// `effort` is in Branch D's honored set but is EXCLUDED from the shadow warning:
-// the install-time effort sync (readGsdEffectiveEffortConfig) DOES merge the
-// global file, so warning on it would be false for the channel users actually
-// control via `effort sync`. Keep this list in lockstep with `_globalBaseCfg`
-// below — the per-key canary in tests/config-loader.test.cjs fails first on
-// drift in either direction.
+// The keys ~/.gsd/defaults.json contributes to resolution: Branch D's `_globalBaseCfg`
+// projects them when no project config exists, and under a project config (Branch A)
+// `_underGlobalDefaults` merges them per key beneath the project's own (#4071).
+// Keep this list in lockstep with `_globalBaseCfg` below: the per-key canary in
+// tests/config-loader.test.cjs fails first on drift in either direction.
 const GLOBAL_DEFAULTS_RESOLUTION_KEYS = [
   'model_profile', 'commit_docs', 'research', 'plan_checker', 'verifier',
   'nyquist_validation', 'post_planning_gaps', 'research_before_questions', 'parallelization', 'text_mode',
@@ -575,39 +569,46 @@ const GLOBAL_DEFAULTS_RESOLUTION_KEYS = [
   'model_profile_overrides', 'model_policy',
 ];
 
-// Module-level dedup keyed on the SORTED shadowed-key set: a later call with
-// the same shadowed set stays quiet, while a config that grows a new shadowed
-// key re-arms the warning. Stronger than _warnedUnknownConfigKeys (which keys
-// on insertion order) — same discipline, order-independent key.
-const _warnedShadowedGlobalKeys = new Set<string>();
+// Nested spelling the loader also reads for a global key that has no CONFIG_KEY_ALIASES entry.
+const _NESTED_ONLY_GLOBAL_KEYS: Readonly<Record<string, { section: string; field: string }>> = Object.freeze({
+  research_before_questions: { section: 'workflow', field: 'research_before_questions' },
+});
 
-function _warnShadowedGlobalDefaults(globalDefaults: Record<string, unknown>, globalPath: string): void {
-  const shadowed = GLOBAL_DEFAULTS_RESOLUTION_KEYS.filter(k =>
-    k !== 'effort' && Object.prototype.hasOwnProperty.call(globalDefaults, k));
-  // Branch D also honors the nested alias workflow.post_planning_gaps (the
-  // `?? globalDefaults['workflow']?.['post_planning_gaps']` fallback in
-  // _globalBaseCfg) — a global file using only the nested form is equally
-  // shadowed, so it reports under its dotted name.
-  // #3894: research_before_questions gets the same nested-alias reporting.
-  const nestedAliasKeys = ['post_planning_gaps', 'research_before_questions'];
-  const wf = globalDefaults['workflow'];
-  if (wf && typeof wf === 'object' && !Array.isArray(wf)) {
-    for (const k of nestedAliasKeys) {
-      if (!shadowed.includes(k) && Object.prototype.hasOwnProperty.call(wf, k)) {
-        shadowed.push(`workflow.${k}`);
-      }
+/**
+ * #4071: the part of ~/.gsd/defaults.json that sits under a project config, restated in the
+ * canonical nested spelling so a flat global key can never outrank a nested project key.
+ * `runtime` is left out: the installer stamps it with whichever runtime installed first, which
+ * is an install identity and not an operator preference (#2840, #4717), so it never fills in.
+ */
+function _globalDefaultsLayer(globalDefaults: Record<string, unknown>): Record<string, unknown> {
+  let layer: Record<string, unknown> = {};
+  for (const key of GLOBAL_DEFAULTS_RESOLUTION_KEYS) {
+    if (key === 'runtime') continue;
+    const alias = CONFIG_KEY_ALIASES.find((entry) => entry.key === key) ?? _NESTED_ONLY_GLOBAL_KEYS[key];
+    if (!alias) {
+      if (Object.hasOwn(globalDefaults, key)) layer = _deepMergeConfig(layer, { [key]: globalDefaults[key] }) as Record<string, unknown>;
+      continue;
     }
+    const value = _getConfigValue(globalDefaults, key, { section: alias.section, field: alias.field });
+    if (value === undefined) continue;
+    // `parallelization` is a boolean or an object holding `enabled`; the object is already nested.
+    const nested = key === 'parallelization' && isConfigSection(value)
+      ? { [alias.section]: value }
+      : { [alias.section]: { [alias.field]: value } };
+    layer = _deepMergeConfig(layer, nested) as Record<string, unknown>;
   }
-  if (shadowed.length === 0) return;
-  const dedupKey = shadowed.slice().sort().join(',');
-  if (_warnedShadowedGlobalKeys.has(dedupKey)) return;
-  _warnedShadowedGlobalKeys.add(dedupKey);
+  return layer;
+}
+
+/** Project config over the global defaults layer, per key. A faulty or absent global file adds nothing. */
+function _underGlobalDefaults(projectParsed: ParsedConfig): ParsedConfig {
   try {
-    process.stderr.write(
-      `gsd-tools: warning: ${globalPath} sets ${shadowed.join(', ')} but a project config ` +
-      `takes precedence here — those global keys are ignored for model resolution. (#3532)\n`,
-    );
-  } catch { /* stderr might be closed in some test harnesses */ }
+    const read = _readConfigFile(path.join(resolveGsdHome(), '.gsd', 'defaults.json'));
+    if (read.kind !== 'ok') return projectParsed;
+    return (_deepMergeConfig(_globalDefaultsLayer(read.data), projectParsed) as ParsedConfig | null) ?? projectParsed;
+  } catch {
+    return projectParsed;
+  }
 }
 
 // ─── FIX 2: Federated overlay helpers ────────────────────────────────────────
@@ -1041,9 +1042,13 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       try { platformWriteSync(configPath, JSON.stringify(fileData, null, 2)); } catch { /* ignore */ }
     }
 
-    const parsed: ParsedConfig = rootParsed
+    const projectParsed: ParsedConfig = rootParsed
       ? (_deepMergeConfig(rootParsed, fileData) as ParsedConfig ?? fileData)
       : fileData;
+    // #4071 (C3 of #4633): ~/.gsd/defaults.json is the lowest file layer, merged per key under
+    // the project's own keys, never dropped wholesale because a project config exists. The
+    // project layer stays `projectParsed` for diagnostics and federated slices.
+    const parsed: ParsedConfig = _underGlobalDefaults(projectParsed);
 
     const KNOWN_TOP_LEVEL = new Set([
       ...[...VALID_CONFIG_KEYS].map((k: string) => k.split('.')[0]),
@@ -1059,7 +1064,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
         const _earlyOverlay = mergeFederatedConfig({
           configSchema: _fedRegistrySchemaEarly,
           isCentralKey: (key: string) => _isCentralConfigKeyFn(key),
-          userConfig: parsed,
+          userConfig: projectParsed,
         });
         _preWarningFedValidKeys = _earlyOverlay.validKeys;
         for (const dottedKey of _preWarningFedValidKeys) {
@@ -1073,7 +1078,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // Defensive
     }
 
-    const unknownKeys = Object.keys(parsed).filter(k => !KNOWN_TOP_LEVEL.has(k));
+    const unknownKeys = Object.keys(projectParsed).filter(k => !KNOWN_TOP_LEVEL.has(k));
     if (unknownKeys.length > 0) {
       const warnKey = unknownKeys.join(',');
       if (!_warnedUnknownConfigKeys.has(warnKey)) {
@@ -1084,7 +1089,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       }
     }
 
-    _warnUnknownProfileOverrides(parsed, '.planning/config.json');
+    _warnUnknownProfileOverrides(projectParsed, '.planning/config.json');
 
     // One spelling only: a key read from a second spelling goes through
     // `getAliased` and CONFIG_KEY_ALIASES, so config-get can answer it (#5470).
@@ -1202,7 +1207,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
           const _fedOverlay = mergeFederatedConfig({
             configSchema: _fedRegistrySchema,
             isCentralKey: (key: string) => _isCentralConfigKeyFn(key),
-            userConfig: parsed,
+            userConfig: projectParsed,
           });
           _applyFederatedValues(_baseConfig, _fedOverlay.values, _fedOverlay.validKeys);
         }
@@ -1216,22 +1221,6 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     // A1 vs A2: disambiguate by whether a real workstream was requested.
     // Fix 4: empty-string ws ('') resolves the root path → source:'root'.
     const source: ConfigSource = wsRequested ? 'workstream' : 'root';
-
-    // #3532 (10b): a parsed project config means Branch D never runs, so every
-    // key ~/.gsd/defaults.json sets that Branch D would honor is silently inert
-    // here. Observation only — one deduped stderr warning; precedence is
-    // untouched. Faults in the global file stay silent in this branch (the
-    // project config governs; the nearer file is the actionable one).
-    try {
-      const shadowHome = resolveGsdHome();
-      const shadowPath = path.join(shadowHome, '.gsd', 'defaults.json');
-      const shadowRead = _readConfigFile(shadowPath);
-      if (shadowRead.kind === 'ok') {
-        _warnShadowedGlobalDefaults(shadowRead.data, shadowPath);
-      }
-    } catch {
-      // Observation only — never let the diagnostic perturb resolution.
-    }
 
     // This config parsed — but a DIFFERENT file on the resolution path may not
     // have. A workstream config that loads cleanly while the root config it
@@ -1436,7 +1425,6 @@ export = {
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   _warnedUnknownConfigKeys,
-  _warnedShadowedGlobalKeys,
   GLOBAL_DEFAULTS_RESOLUTION_KEYS,
   _warnUnknownProfileOverrides,
   _resetRuntimeWarningCacheForTests,
