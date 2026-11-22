@@ -1005,3 +1005,24 @@ describe('#5491 a prompt that names no plan reports no compaction (#6286 round 5
     assert.equal(runReadCheck('review', d.PROMPT, '/repo', d, { compacted: 'unknown' }).compacted, 'unknown');
   });
 });
+
+describe('#5491 a fence left open in one plan hides no later plan (#6286 round 5 Minor 2)', () => {
+  const LINE_A = 'READ-CHECK a-01: requirements=[REQ-01, REQ-02]; wave=1; depends_on=[]; tasks=2';
+  const LINE_B = 'READ-CHECK b-01: requirements=[REQ-03]; wave=2; depends_on=[12.6-01]; tasks=1';
+
+  test('an unclosed fence in plan A paired with plan B\'s first bare fence leaves B a plan to check', () => {
+    const planA = `${PLAN_A}\n\`\`\`bash\necho never closed\n`;
+    const planB = `${PLAN_B}\n\`\`\`\nan example\n\`\`\`\n`;
+    const d = memDeps(`#### p/a-01-PLAN.md\n${planA}\n#### p/b-01-PLAN.md\n${planB}`, {
+      '/repo/p/a-01-PLAN.md': planA,
+      '/repo/p/b-01-PLAN.md': planB,
+    });
+    assert.deepEqual(runReadCheck(LINE_A, d.PROMPT, '/repo', d).missing, ['b-01']);
+    assert.equal(runReadCheck(`${LINE_A}\n${LINE_B}`, d.PROMPT, '/repo', d).complete, true);
+  });
+
+  test('a fenced header with no plan header outside a fence names no plan', () => {
+    const d = memDeps('Review this diff.\n```\n#### p/b-01-PLAN.md\n```\n', { '/repo/p/b-01-PLAN.md': PLAN_B });
+    assert.equal(runReadCheck('Looks fine.', d.PROMPT, '/repo', d), undefined);
+  });
+});
