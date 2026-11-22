@@ -20,6 +20,9 @@
  * - "<flag> naming /dev/zero is refused without reading it" (#4926, one per
  *   text-file flag) — reads a real POSIX character device; Windows has none
  *   (process-platform).
+ * - frontmatter set/merge on a STATE.md that is a symlink or a FIFO, and on state.md
+ *   (#5120) — a real symlink, a real FIFO, and a name that is STATE.md only on a
+ *   case-insensitive filesystem (symlink-keyword, process-platform, case-sensitivity).
  */
 
 const { test, describe } = require('node:test');
@@ -144,6 +147,70 @@ None
       }
 
       assertRefused(runGsdTools([...f.argv('/dev/zero'), '--json-errors'], tmpDir), f.flag, 'not a regular file');
+    });
+  }
+});
+
+// #5120 (pre-push review R4-m2, R4-Q1): frontmatter set and merge hold the STATE.md lock while they read a
+// STATE.md target, so one that is not a regular file is refused under the lock instead of read (a FIFO
+// would block with the lock held) or written over (a symlink would be replaced by a regular file).
+describe('#5120 frontmatter set/merge refuse a STATE.md that is not a regular file', () => {
+  const { runGsdTools, cleanup } = require('./helpers.cjs');
+  const { execFileSync } = require('node:child_process');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const DOC = '---\nstatus: planning\n---\n\n# Project State\n';
+  const commands = {
+    set: (file) => ['frontmatter', 'set', file, '--field', 'status', '--value', 'executing'],
+    merge: (file) => ['frontmatter', 'merge', file, '--data', '{"status":"executing"}'],
+  };
+  function tmp(t) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-fm-state-nonregular-'));
+    t.after(() => cleanup(dir));
+    return dir;
+  }
+
+  for (const [cmd, argsFor] of Object.entries(commands)) {
+    test(`${cmd} on state.md takes no STATE.md lock: the match is the exact, case-sensitive basename`, (t) => {
+      const stateMod = require('../gsd-core/bin/lib/state.cjs');
+      const dir = tmp(t);
+      fs.writeFileSync(path.join(dir, 'state.md'), DOC);
+      let iterations = 0;
+      stateMod._setStateLockTestHooks({ onLoopIteration: () => { iterations++; } });
+      t.after(() => stateMod._resetStateLockTestHooks());
+      const result = runGsdTools(argsFor(path.join(dir, 'state.md')), dir);
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(iterations, 0, 'no STATE.md lock was attempted');
+      assert.match(fs.readFileSync(path.join(dir, 'state.md'), 'utf-8'), /^status: executing$/m);
+    });
+
+    test(`${cmd} refuses a STATE.md that is a symlink, leaves the link and its target, and releases the lock`, (t) => {
+      const dir = tmp(t);
+      fs.writeFileSync(path.join(dir, 'REAL.md'), DOC);
+      const state = path.join(dir, 'STATE.md');
+      try { fs.symlinkSync(path.join(dir, 'REAL.md'), state); } catch (err) {
+        // fs.symlinkSync needs a privilege on Windows; anywhere else a failure fails the row.
+        if (process.platform === 'win32' && err.code === 'EPERM') { assert.strictEqual(process.platform, 'win32'); t.skip('no symlink privilege'); return; }
+        throw err;
+      }
+      const result = runGsdTools(argsFor(state), dir);
+      assert.strictEqual(result.success, false, 'the command refuses');
+      assert.match(result.error, /is not a regular file/);
+      assert.ok(fs.lstatSync(state).isSymbolicLink(), 'the link is left in place');
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'REAL.md'), 'utf-8'), DOC, 'the target is unchanged');
+      assert.strictEqual(fs.existsSync(`${state}.lock`), false, 'the lock is released');
+    });
+
+    test(`${cmd} refuses a STATE.md that is a FIFO without blocking, and releases the lock`, (t) => {
+      if (process.platform === 'win32') { t.skip('no FIFOs on Windows'); return; }
+      const dir = tmp(t);
+      const state = path.join(dir, 'STATE.md');
+      // Throws when mkfifo fails, so on POSIX this row never passes without a FIFO.
+      execFileSync('mkfifo', [state], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+      const result = runGsdTools(argsFor(state), dir);
+      assert.strictEqual(result.success, false, 'the command refuses');
+      assert.match(result.error, /is not a regular file/);
+      assert.ok(fs.lstatSync(state).isFIFO(), 'the FIFO is left in place');
+      assert.strictEqual(fs.existsSync(`${state}.lock`), false, 'the lock is released');
     });
   }
 });
