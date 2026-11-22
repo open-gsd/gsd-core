@@ -12,8 +12,8 @@ fails, is in CONTRIBUTING.md, "The lint rule that enforces child-env isolation".
 
 The rule is a syntactic check on the forms below, not a check that a test isolates its env. It flags
 these forms and no others; every other spelling is out of scope, whatever env it builds. A member
-named below (`split`, `filter`, `delimiter`, `env`, `PATH`, `HOME`) may be written as an identifier
-or a string key (`x['split'](…)`).
+named below (`split`, `filter`, `delimiter`, `env`, `PATH`, `HOME`) may be written as an identifier,
+a string key (`x['split'](…)`) or an expression-free template key (``x[`split`](…)``).
 
 ### Arm 1: an inline PATH split or filter (`inlinePathFilter`)
 
@@ -23,12 +23,16 @@ or a string key (`x['split'](…)`).
   (`process['env']['PATH']`); an optional chain over it (`process.env?.PATH`, `process?.env.PATH`);
   either operand of `||`, `??` or `&&` around one; either branch of `?:` around one; `String(...)`
   with exactly one argument around one; or an identifier declared once with `const` and initialised
-  to one of these (one hop: a second hop, or a `let` or `var` alias, is not followed). This is
+  to one of these, including an identifier a destructuring pattern in that declaration binds
+  (`const [p] = process.env.PATH`; one hop: a second hop, or a `let` or `var` alias, is not
+  followed). This is
   #4411's `makeIsolatedPath`, which split the full system PATH, prepended a directory and re-joined
   it, isolating nothing, without ever calling `.filter`.
 - `X.split(<delimiter>).filter(...)`, whatever `X` is, where `<delimiter>` is a member named
   `delimiter` (`path.delimiter`, `path.win32.delimiter`) or the bare identifier `delimiter`, and the
-  split's result is called with `.filter` directly. This is the filter copy #4348 counted: its
+  split's result is called with `.filter` directly (`.filter(…)`, `?.filter(…)` or `.filter?.(…)`).
+  Only the split's first argument is read: `x.split(path.delimiter, 3).filter(…)` is flagged. This
+  is the filter copy #4348 counted: its
   receiver was a parameter defaulting to `process.env.PATH`
   (`(basePath ?? '').split(path.delimiter).filter(...)`), so a rule keyed on reading
   `process.env.PATH` alone would miss it.
@@ -39,7 +43,8 @@ or a string key (`x['split'](…)`).
   `{ HOME }` included), a string, or a computed string or expression-free template (`['HOME']`, ``
   [`HOME`] ``), reported once per object.
 - An assignment, with any assignment operator (`=`, `+=`, `||=`, `??=`), to a member named `HOME` or
-  `USERPROFILE` (`X.HOME`, `X['HOME']`) where `X` is not spelled `process.env` or `process['env']`.
+  `USERPROFILE` (`X.HOME`, `X['HOME']`, ``X[`HOME`]``) where `X` is not spelled `process.env`,
+  `process['env']` or ``process[`env`]``.
   So `globalThis.process.env.HOME = x` and `const env = process.env; env.HOME = x` are flagged.
 
 Both arms flag a form whatever it is for: a split of a process PATH read that only counts its
@@ -80,8 +85,10 @@ a change that moves the boundary fails a row.
   the env a test hands to a child process, and in-process isolation is `sandboxHome()` /
   `scrubConfigLocationEnv()` in `tests/helpers.cjs` (CONTRIBUTING.md).
 - Other variables that locate a home or config: `GSD_HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`,
-  and Windows' `HOMEDRIVE` / `HOMEPATH`. `isolatedEnv()` blanks them; the rule looks only at `HOME`,
-  `USERPROFILE` and PATH.
+  and Windows' `HOMEDRIVE` / `HOMEPATH`. The rule looks only at `HOME`, `USERPROFILE` and PATH.
+  `isolatedEnv()` strips every `GSD_*` variable (so `GSD_HOME`) and blanks `CLAUDE_CONFIG_DIR`
+  unless `claudeConfigDir` sets it; it does not set or blank `HOMEDRIVE` / `HOMEPATH`, so a
+  fixture that reads them still inherits them on Windows.
 - Key names that differ in case: `Home` or `userprofile` keys, and a `process.env.path` read
   (Windows env names are case-insensitive; only `PATH` and `Path` are read).
 - A PATH read that is not a process PATH read: `const { PATH } = process.env`,
@@ -94,13 +101,16 @@ a change that moves the boundary fails a row.
   `String.prototype.split.call(process.env.PATH, …)`,
   `Reflect.apply(String.prototype.split, process.env.PATH, …)`, `process.env.PATH.split.call(…)`, or
   `process.env.PATH.match(…)` / `matchAll(…)`.
-- A delimiter split that `.filter(...)` does not consume directly: a loop over it, a split held in a
-  variable, a spread, `.map(...)` or `.slice(...)` before the filter, `Array.from(...)`,
-  `.reduce(...)`, or a parenthesised optional chain (`(x?.split(path.delimiter)).filter(…)`).
-- A filtered split whose delimiter is not a `delimiter` member or identifier: a string literal
-  (`basePath.split(':').filter(…)`), a variable
+- On a receiver that is not a process PATH read, a delimiter split that `.filter(...)` does not
+  consume directly: a loop over it, a split held in a variable, a spread, `.map(...)` or
+  `.slice(...)` before the filter, `Array.from(...)`, `.reduce(...)`, or a parenthesised optional
+  chain (`(x?.split(path.delimiter)).filter(…)`). Over a process PATH read every split is flagged
+  by the first form of Arm 1, these shapes included (`process.env.PATH.split(path.delimiter).map(…)`).
+- On a receiver that is not a process PATH read, a filtered split whose delimiter is not a
+  `delimiter` member or identifier: a string literal (`basePath.split(':').filter(…)`), a variable
   (`const SEP = isWin ? ';' : ':'; parts.split(SEP).filter(…)`), a regular expression, or an
-  optional member (`path?.delimiter`).
+  optional member (`path?.delimiter`). Over a process PATH read every split is flagged, these
+  included (`process.env.PATH.split(':').filter(…)`).
 - A PATH set or assembled without a split: a `PATH` key (`{ ...process.env, PATH: dir }`), an
   assignment to `env.PATH`, or a prepend by concatenation, template literal or
   `[...].join(delimiter)` around a `process.env.PATH` read.

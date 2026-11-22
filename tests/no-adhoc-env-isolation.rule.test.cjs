@@ -78,7 +78,7 @@ describe('no-adhoc-env-isolation: arm 1 fires on a PATH split or filter', () => 
     ]);
   });
 
-  test('every spelling of a direct process.env PATH read is a split of PATH', () => {
+  test('six spellings of a direct process.env PATH read are a split of PATH', () => {
     run([], [
       { code: 'process.env.PATH.split(path.delimiter);', filename: FILE, errors: [pathFilter] },
       { code: "process.env['PATH'].split(':');", filename: FILE, errors: [pathFilter] },
@@ -235,6 +235,43 @@ describe('no-adhoc-env-isolation: every documented recognised form is flagged', 
       { code: "env['USERPROFILE'] ||= x;", filename: FILE, errors: [home] },
       { code: "process.env.PATH['split'](':');", filename: FILE, errors: [pathFilter] },
       { code: "x['split'](path['delimiter'])['filter'](f);", filename: FILE, errors: [pathFilter] },
+    ]);
+  });
+
+  test('an expression-free template key is read as a string key, and a destructured const alias is followed', () => {
+    run([], [
+      { code: 'process[`env`].PATH.split(":");', filename: FILE, errors: [pathFilter] },
+      { code: 'x[`split`](path.delimiter)[`filter`](f);', filename: FILE, errors: [pathFilter] },
+      { code: 'env[`HOME`] = x;', filename: FILE, errors: [home] },
+      { code: 'const [p] = process.env.PATH; p.split(":");', filename: FILE, errors: [pathFilter] },
+      { code: 'const { a: p } = process.env.PATH; p.split(":");', filename: FILE, errors: [pathFilter] },
+    ]);
+  });
+
+  test('process[`env`].HOME and process.env[\'HOME\'] are in-process assignments and are not flagged', () => {
+    run([
+      { code: 'process[`env`].HOME = x;', filename: FILE },
+      { code: "process.env['HOME'] = x;", filename: FILE },
+    ], []);
+  });
+
+  test('a flagged assignment in the X[\'HOME\'] spelling', () => {
+    run([], [{ code: "env['HOME'] = x;", filename: FILE, errors: [home] }]);
+  });
+
+  test('a delimiter split is flagged with a second argument, and through ?.filter or .filter?.()', () => {
+    run([], [
+      { code: 'x.split(path.delimiter, 3).filter(f);', filename: FILE, errors: [pathFilter] },
+      { code: 'x.split(path.delimiter)?.filter(f);', filename: FILE, errors: [pathFilter] },
+      { code: 'x.split(path.delimiter).filter?.(f);', filename: FILE, errors: [pathFilter] },
+    ]);
+  });
+
+  test('over a process PATH read every split is flagged, whatever follows it and whatever its delimiter', () => {
+    run([], [
+      { code: "process.env.PATH.split(':').filter(keep);", filename: FILE, errors: [pathFilter] },
+      { code: 'process.env.PATH.split(path.delimiter).map(norm);', filename: FILE, errors: [pathFilter] },
+      { code: 'process.env.PATH.split(/[;:]/);', filename: FILE, errors: [pathFilter] },
     ]);
   });
 

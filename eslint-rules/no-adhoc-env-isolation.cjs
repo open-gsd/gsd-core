@@ -111,7 +111,7 @@ const rule = {
 
     /**
      * True when `node` evaluates to the process env's PATH: directly, through
-     * `||` / `??` / `?:`, `String(...)`, an optional chain, or ONE `const`
+     * `||` / `??` / `&&` / `?:`, `String(...)`, an optional chain, or ONE `const`
      * alias hop (`const p = process.env.PATH; p.split(...)`).
      */
     function readsEnvPath(node, aliasHops = 0) {
