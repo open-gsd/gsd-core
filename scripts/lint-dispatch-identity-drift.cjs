@@ -104,13 +104,8 @@ function literalRegexes(window) {
   while ((m = lit.exec(window)) !== null) found.push({ source: m[1], flags: m[2] });
   const str = /RegExp\(\s*(['"`])((?:\\.|(?!\1).)*)\1(?:\s*,\s*(['"`])([a-z]*)\3)?/g;
   while ((m = str.exec(window)) !== null) {
-    let source = m[2];
-    try {
-      source = JSON.parse(`"${m[2].replace(/\\\\/g, '\\\\').replace(/"/g, '\\"')}"`);
-    } catch {
-      /* keep the raw text */
-    }
-    found.push({ source, flags: m[4] || '' });
+    // Read the JS string literal one escape level down (`\\s` is the regex `\s`).
+    found.push({ source: m[2].replace(/\\(.)/g, '$1'), flags: m[4] || '' });
   }
   return found;
 }
