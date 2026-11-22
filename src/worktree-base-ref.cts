@@ -17,75 +17,9 @@ import path from 'node:path';
 import { ensureToolOwnedGsdDir } from './gsd-tool-dir.cjs';
 import { execGit as execGitSeam, isSpawnTimeout, retryRenameSync } from './shell-command-projection.cjs';
 import { getGlobalConfigDir } from './runtime-homes.cjs';
+import { parseJsonc } from './settings-jsonc.cjs';
 import { BASE_CHECK_ISOLATION_MODES, isBaseCheckIsolationMode } from './dispatch-isolation.cjs';
 import type { BaseCheckIsolationMode } from './dispatch-isolation.cjs';
-
-// ─── Internal helpers ─────────────────────────────────────────────────────────
-
-/**
- * Strip JSONC comments (line and block forms) from a string to produce valid JSON.
- * Handles comments inside strings correctly (does not strip them).
- * Mirrors the same logic in bin/install.js:stripJsonComments.
- */
-function stripJsonComments(text: string): string {
-  let result = '';
-  let i = 0;
-  let inString = false;
-  let stringChar = '';
-  while (i < text.length) {
-    // Handle string literals — don't strip comments inside strings
-    if (inString) {
-      if (text[i] === '\\') {
-        result += text[i] + (text[i + 1] || '');
-        i += 2;
-        continue;
-      }
-      if (text[i] === stringChar) {
-        inString = false;
-      }
-      result += text[i];
-      i++;
-      continue;
-    }
-    // Start of string
-    if (text[i] === '"' || text[i] === "'") {
-      inString = true;
-      stringChar = text[i];
-      result += text[i];
-      i++;
-      continue;
-    }
-    // Line comment
-    if (text[i] === '/' && text[i + 1] === '/') {
-      // Skip to end of line
-      while (i < text.length && text[i] !== '\n') i++;
-      continue;
-    }
-    // Block comment
-    if (text[i] === '/' && text[i + 1] === '*') {
-      i += 2;
-      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
-      i += 2; // skip closing */
-      continue;
-    }
-    result += text[i];
-    i++;
-  }
-  // Remove trailing commas before } or ] (common in JSONC)
-  return result.replace(/,\s*([}\]])/g, '$1');
-}
-
-/**
- * Parse a string as JSONC (JSON with comments). Returns the parsed value or
- * throws a SyntaxError if the content is genuinely malformed.
- */
-function parseJsonc(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return JSON.parse(stripJsonComments(text));
-  }
-}
 
 // ─── Internal types ───────────────────────────────────────────────────────────
 

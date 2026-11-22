@@ -327,7 +327,8 @@ found by path-construction search over `src/`, `bin/`, `hooks/`, `scripts/` at `
 | Site | What it re-implements |
 |---|---|
 | `src/capability-activation.cts` `resolveConfigKey` | A full four-level walk (loadConfig result → workstream file → root file → schema default) returning `{found, value}` with **no layer**. The closest thing to the epic's owner that already exists, and the reason the owner must absorb these rather than become another walk beside them |
-| `src/config.cts` `resolveFromRootConfig` + `resolveSchemaDefault` | `cmdConfigGet`'s own workstream→root→schema cascade (#2702, #2256) |
+| `src/config.cts` `resolveFromRootConfig` | `cmdConfigGet`'s own workstream→root inheritance rung (#2702, #2256) |
+| `src/config-schema-defaults.cts` `resolveSchemaDefault` | `cmdConfigGet`'s schema-default fallback, extracted from `src/config.cts` by C1 (#5096) and shared with the resolver |
 | `src/config-loader.cts` `_globalBaseCfg` (Branch D) | The 26-key `??` / `\|\|` projection of `~/.gsd/defaults.json` — #4071's site |
 | `src/config.cts` `buildNewProjectConfig` | A project-creation merge of `~/.gsd/defaults.json` |
 | `src/install-model-override-resolver.cts` | Install-time global+project merges (`model_overrides`, `agent_tools`, runtime/profile) |
@@ -427,3 +428,17 @@ not read them as drift:
   pinned by tests.
 
 The child issues now exist: C1 #5096, C2 #6029, C3 #6030, C4 #6031, C5 #6032.
+
+## Amendment — 2026-11-19: C1 (#5096) keys are canonical spellings
+
+The Config Value Resolution Module resolves a declared key exactly as written. It does not apply
+the Config Loader's flat-then-nested alias reading, which `CONFIG_KEY_ALIASES` (#5470) declares
+for twenty-one settings. The two owners can therefore disagree for a flat spelling: with a flat
+`research: false`, `loadConfig` resolves `false`, while `resolveConfigValue('workflow.research')`
+reports the schema default and the flat `research` is not configured. C1 leaves that difference in
+place because it migrates no caller. C3 must close it for each loader reader it migrates, either by
+resolving the alias in the owner or by keeping that reader on the loader, and must not inherit the
+difference silently.
+
+The non-object section barrier (C1) reads the effective project configuration, the root file merged
+with the active workstream file, so a flat key in either file outranks the blocked nested alias.

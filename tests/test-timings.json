@@ -658,7 +658,7 @@
     "live-dom-uat.test.cjs": 1573,
     "load-bearing-contract-gate.test.cjs": 16,
     "localized-inventory-agent-counts.test.cjs": 38,
-    "lockfile-cve-audit.test.cjs": 1293,
+    "lockfile-cve-audit.test.cjs": 77,
     "locking-bugs-1909-1916-1925-1927.test.cjs": 2561,
     "logger.test.cjs": 269,
     "loop-hook-firing-spike.test.cjs": 13,

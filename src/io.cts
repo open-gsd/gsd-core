@@ -465,6 +465,9 @@ const ERROR_REASON = Object.freeze({
   // human_needed`) — verification.cts's VerificationStatusError, translated
   // once, centrally, by gsd-tools.cjs. Never read as "no result" at exit 0.
   VERIFICATION_STATUS_INVALID: 'verification_status_invalid',
+  // state begin-phase --plans (#6399): STATE.md carries no `Total Plans in Phase` field and no `Plan:` line to hold the
+  // count, so the command refuses before any write instead of exiting 0 without recording it.
+  STATE_PLANS_NO_LINE: 'plans_no_line',
   // generic
   USAGE: 'usage',
   UNKNOWN: 'unknown',
@@ -621,6 +624,8 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
 
   // No clearly better fit — the honest default, per design.
   [ERROR_REASON.HOOKS_OPT_OUT]: 'FAIL',
+  // #6399: STATE.md has nowhere to record the plan count — a state-shape refusal with no better fit than FAIL.
+  [ERROR_REASON.STATE_PLANS_NO_LINE]: 'FAIL',
   [ERROR_REASON.UNKNOWN]: 'FAIL',
 });
 
