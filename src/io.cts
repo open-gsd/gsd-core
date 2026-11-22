@@ -468,6 +468,10 @@ const ERROR_REASON = Object.freeze({
   // state begin-phase --plans (#6399): STATE.md carries no `Total Plans in Phase` field and no `Plan:` line to hold the
   // count, so the command refuses before any write instead of exiting 0 without recording it.
   STATE_PLANS_NO_LINE: 'plans_no_line',
+  // state prune --keep-recent-quick (#6389): a quick-task batch still has an item that is not complete, or the
+  // Quick Tasks table is not one the command can address. Both refuse before anything is written.
+  STATE_PRUNE_QUICK_BATCH_UNFINISHED: 'quick_batch_unfinished',
+  STATE_PRUNE_QUICK_TABLE_UNRECOGNIZED: 'quick_table_unrecognized',
   // generic
   USAGE: 'usage',
   UNKNOWN: 'unknown',
@@ -626,6 +630,9 @@ const REASON_TO_OUTCOME: Readonly<Record<string, string>> = Object.freeze({
   [ERROR_REASON.HOOKS_OPT_OUT]: 'FAIL',
   // #6399: STATE.md has nowhere to record the plan count — a state-shape refusal with no better fit than FAIL.
   [ERROR_REASON.STATE_PLANS_NO_LINE]: 'FAIL',
+  // #6389: state-shape refusals of state prune --keep-recent-quick, the same kind as STATE_PLANS_NO_LINE.
+  [ERROR_REASON.STATE_PRUNE_QUICK_BATCH_UNFINISHED]: 'FAIL',
+  [ERROR_REASON.STATE_PRUNE_QUICK_TABLE_UNRECOGNIZED]: 'FAIL',
   [ERROR_REASON.UNKNOWN]: 'FAIL',
 });
 

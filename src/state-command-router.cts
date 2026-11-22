@@ -19,6 +19,9 @@ import { STATE_SUBCOMMANDS } from './command-aliases.cjs';
 import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
 const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 import { parseNamedArgsOrExit } from './command-arg-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6389 io.cjs is a CommonJS module
+import ioMod = require('./io.cjs');
+const { ERROR_REASON, formatDiagnosticToken } = ioMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,7 +52,7 @@ interface StateModule {
   cmdStatePlannedPhase(cwd: string, phase: string | null | undefined, name: string | null | undefined, plans: number | null, raw: boolean): void;
   cmdStateValidate(cwd: string, raw: boolean, opts?: { strict?: boolean }): void;
   cmdStateSync(cwd: string, opts: { verify: string | boolean | null | undefined }, raw: boolean): void;
-  cmdStatePrune(cwd: string, opts: { keepRecent: string; dryRun: boolean }, raw: boolean): void;
+  cmdStatePrune(cwd: string, opts: { keepRecent: string | undefined; keepRecentQuick?: number; dryRun: boolean }, raw: boolean): void;
   cmdStateRebuild(cwd: string, opts: { dryRun: boolean; verbose: boolean }, raw: boolean): void;
   cmdStateCompletePhase(cwd: string, raw: boolean, phase: string | null | undefined): void;
   cmdStateMilestoneSwitch(cwd: string, milestone: string | null | undefined, name: string | null | undefined, raw: boolean): void;
@@ -60,7 +63,7 @@ interface RouteStateCommandOptions {
   args: string[];
   cwd: string;
   raw: boolean;
-  error: (message: string) => void;
+  error: (message: string, reason?: string) => void;
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
@@ -209,8 +212,36 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
         state.cmdStateSync(cwd, { verify: a['verify'] }, raw);
       },
       prune: () => {
-        const a = parseNamedArgsOrExit(args, { valueFlags: ['keep-recent'], booleanFlags: ['dry-run'], positionals: 2 }, error);
-        state.cmdStatePrune(cwd, { keepRecent: strArg(a, 'keep-recent') || '3', dryRun: a['dry-run'] === true }, raw);
+        const a = parseNamedArgsOrExit(
+          args,
+          { valueFlags: ['keep-recent', 'keep-recent-quick'], nonEmptyFlags: ['keep-recent-quick'], booleanFlags: ['dry-run'], positionals: 2 },
+          error,
+        );
+        const quickRaw = strArg(a, 'keep-recent-quick');
+        if (quickRaw === null || quickRaw === undefined) {
+          // Without --keep-recent-quick: exactly the phase prune it always was.
+          state.cmdStatePrune(cwd, { keepRecent: strArg(a, 'keep-recent') || '3', dryRun: a['dry-run'] === true }, raw);
+          return;
+        }
+        // #6389: --keep-recent-quick N keeps the last N Quick Tasks rows. N is a whole number >= 0 written in
+        // ASCII digits (0 archives every row); a repeated flag is refused rather than resolved by position.
+        if (args.slice(2).filter((t) => t === '--keep-recent-quick').length > 1) {
+          error('state prune: --keep-recent-quick was given more than once', ERROR_REASON.USAGE);
+          return;
+        }
+        if (!/^[0-9]+$/.test(quickRaw) || !Number.isSafeInteger(Number(quickRaw))) {
+          error(
+            `state prune: --keep-recent-quick must be a whole number >= 0 (got ${formatDiagnosticToken(quickRaw)})`,
+            ERROR_REASON.USAGE,
+          );
+          return;
+        }
+        // With --keep-recent-quick the phase part runs only when --keep-recent is given.
+        state.cmdStatePrune(cwd, {
+          keepRecent: strArg(a, 'keep-recent') || undefined,
+          keepRecentQuick: Number(quickRaw),
+          dryRun: a['dry-run'] === true,
+        }, raw);
       },
       rebuild: () => {
         const a = parseNamedArgsOrExit(args, { booleanFlags: ['dry-run', 'verbose'], positionals: 2 }, error);

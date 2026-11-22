@@ -817,6 +817,26 @@ export interface QuickTaskFields {
 export const QUICK_TASK_DESCRIPTION_MAX_CHARS = STATE_MD_ENTRY_MAX_CHARS;
 
 /**
+ * #6389: the `#` for a row appended without a quick id (`/gsd-fast`). One more than the larger of the row count
+ * and the highest numeric `#` in the table, so a table whose older rows were moved to STATE-ARCHIVE.md by
+ * `state prune --keep-recent-quick` never gets a number it already holds (rows 11-30 kept: the next is 31, not 21).
+ * A `#` is numeric only when it is ASCII digits and nothing else (quick ids such as `260101-abc` only count toward
+ * the row count). BigInt keeps the result exact past Number.MAX_SAFE_INTEGER. For a table that never lost a row
+ * this is `rows.length + 1`, as before.
+ */
+function nextQuickTaskOrdinal(rows: Record<string, string>[]): string {
+  let highest = BigInt(rows.length);
+  for (const row of rows) {
+    const cell = (row['#'] ?? '').trim();
+    if (/^[0-9]+$/.test(cell)) {
+      const n = BigInt(cell);
+      if (n > highest) highest = n;
+    }
+  }
+  return String(highest + 1n);
+}
+
+/**
  * Append one row to STATE.md's "Quick Tasks Completed" table.
  *
  * A description longer than `QUICK_TASK_DESCRIPTION_MAX_CHARS` (measured on
@@ -864,10 +884,10 @@ export function appendQuickTaskRow(
   const variant = TABLE_SCHEMAS.QuickTasks.find((v) => v.label === match.label);
   const columns = variant ? variant.columns : parsed.value.columns;
 
-  const rowNumber = parsed.value.rows.length + 1;
+  const rowNumber = nextQuickTaskOrdinal(parsed.value.rows);
   const cellFor = (col: string): string => {
     switch (col) {
-      case '#': return escapeCell(fields.quickId ?? String(rowNumber));
+      case '#': return escapeCell(fields.quickId ?? rowNumber);
       case 'Description': return escapeCell(fields.description);
       case 'Date': return escapeCell(fields.date);
       case 'Commit': return escapeCell(fields.commit);
@@ -1126,6 +1146,91 @@ export function resetQuickTaskRows(
   const content = replaceSection(stateContent, section, newBody);
 
   return { ok: true, value: { content, cleared, variant: match.label } };
+}
+
+// ─── pruneQuickTaskRows (#6389) ────────────────────────────────────────────
+
+/**
+ * #6389 (`state prune --keep-recent-quick N`): keep the last `keepRecent` data rows of the Quick Tasks table (table
+ * order = append order) and remove the older ones; `resetQuickTaskRows` keeps its clear-all contract. The table is
+ * `appendQuickTaskRow`'s (`selectQuickTasksSection`), with its fail-loud posture and nothing modified on failure:
+ * no section -> `QUICK_TASKS_SECTION_ABSENT`; not a table or a ragged row -> `quick-tasks table: ...`; an unknown
+ * header -> `unrecognized Quick Tasks schema (...)`; also an empty document or a `keepRecent` that is not a whole
+ * number >= 0. Only the removed row lines leave the document: a row is its text plus its own `\r` (CRLF), and its
+ * `\n` goes with it, except that an unterminated last line of the document goes alone so the line before keeps its
+ * terminator. Header, delimiter, kept rows, EOLs and prose are untouched. Returns the new content (the same string
+ * when nothing moves), the moved rows (`archived`), the header and delimiter lines (all split on `\n` only, `\r`
+ * kept), the variant label and the number of rows kept.
+ */
+export function pruneQuickTaskRows(
+  stateContent: string,
+  keepRecent: number,
+): Result<{ content: string; archived: string[]; header: string; delimiter: string; variant: string; kept: number }> {
+  if (typeof stateContent !== 'string' || stateContent.trim() === '') {
+    return { ok: false, reason: 'empty or non-string input' };
+  }
+  if (typeof keepRecent !== 'number' || !Number.isSafeInteger(keepRecent) || keepRecent < 0) {
+    return { ok: false, reason: `the number of rows to keep must be a whole number >= 0 (got ${String(keepRecent)})` };
+  }
+
+  const section = selectQuickTasksSection(stateContent);
+  if (!section) {
+    return { ok: false, reason: QUICK_TASKS_SECTION_ABSENT };
+  }
+  const parsed = parseMarkdownTable(section.body);
+  if (!parsed.ok) {
+    return { ok: false, reason: `quick-tasks table: ${parsed.reason}` };
+  }
+  const match = matchTableSchema(parsed.value.columns);
+  if (!match || match.id !== 'QuickTasks') {
+    return {
+      ok: false,
+      reason: `unrecognized Quick Tasks schema (columns: ${parsed.value.columns.join(' | ')})`,
+    };
+  }
+
+  // Walk the document's own lines from the section body on (offsets into `stateContent`, so the splice below is
+  // byte-exact and knows whether a line really has a terminator; `section.body` is trimEnd()-ed).
+  interface Line { text: string; start: number; end: number; next: number; terminated: boolean }
+  const lineAt = (start: number): Line => {
+    const nl = stateContent.indexOf('\n', start);
+    return nl === -1
+      ? { text: stateContent.slice(start), start, end: stateContent.length, next: stateContent.length, terminated: false }
+      : { text: stateContent.slice(start, nl), start, end: nl, next: nl + 1, terminated: true };
+  };
+  let line = lineAt(section.bodyStart);
+  while (!line.text.trim().startsWith('|')) {
+    // parseMarkdownTable found a header in this body, so the scan meets it before running out.
+    line = lineAt(line.next);
+  }
+  const header = line;
+  const delimiter = lineAt(header.next);
+  const rows: Line[] = [];
+  let cursor = delimiter.terminated ? lineAt(delimiter.next) : null;
+  while (cursor !== null && cursor.text.trim().startsWith('|')) {
+    rows.push(cursor);
+    cursor = cursor.terminated && cursor.next < stateContent.length ? lineAt(cursor.next) : null;
+  }
+
+  const moveCount = Math.max(0, rows.length - keepRecent);
+  const kept = rows.length - moveCount;
+  if (moveCount === 0) {
+    return { ok: true, value: { content: stateContent, archived: [], header: header.text, delimiter: delimiter.text, variant: match.label, kept } };
+  }
+  const lastMoved = rows[moveCount - 1];
+  const spanStart = rows[0].start;
+  const spanEnd = lastMoved.terminated ? lastMoved.next : lastMoved.end;
+  return {
+    ok: true,
+    value: {
+      content: stateContent.slice(0, spanStart) + stateContent.slice(spanEnd),
+      archived: rows.slice(0, moveCount).map((r) => r.text),
+      header: header.text,
+      delimiter: delimiter.text,
+      variant: match.label,
+      kept,
+    },
+  };
 }
 
 // The status words a requirement traceability Status cell can lead with. A word

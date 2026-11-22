@@ -408,7 +408,8 @@ const RULE_W026: Rule = {
  * and several workflows read the whole file into context. Advisory only:
  * the fix is a judgement about which history to archive, so `--repair` never
  * acts. The remedy names what each tool really covers: `state prune` archives
- * Decisions/Recently Completed but never the Quick Tasks table, and
+ * Decisions/Recently Completed, and the Quick Tasks rows only when given
+ * `--keep-recent-quick N` (#6389), and
  * `milestone archive-quick <version>` (#2142, the command `/gsd-cleanup`
  * calls, opt-in) resets that table whenever it moves at least one directory
  * from `.planning/quick/`. The trigger is the directories on disk, not the
@@ -416,12 +417,54 @@ const RULE_W026: Rule = {
  * directory. That reset (`resetQuickTaskRows`) drops every data row without
  * reading the Directory cell, so it also deletes the rows with no directory
  * (`/gsd-fast`), whose text is archived nowhere, even when no row links to
- * any of the moved directories; the remedy says to copy them out (or trim
- * them) BEFORE running `archive-quick`.
+ * any of the moved directories; the remedy says to archive them with
+ * `state prune --keep-recent-quick 0` (or copy them out) BEFORE running
+ * `archive-quick`.
  * Fires only when the file is MORE than 3x the target, so a file modestly
  * over the target stays quiet.
  */
 const STATE_MD_OVERSIZE_FACTOR = 3;
+
+/**
+ * #6389: what W031's remedy says each tool does, as typed facts; `renderW031Remedy` turns them into the advisory
+ * text, so the claims are asserted on these fields rather than on prose. `state prune` archives old phase-tagged
+ * entries and, given `--keep-recent-quick N`, moves all but the newest N Quick Tasks rows (directory-less ones
+ * included) into STATE-ARCHIVE.md unchanged. `milestone archive-quick` resets the table whenever any directory exists
+ * under .planning/quick/ (the trigger is directories on disk, not rows) and deletes every row; running
+ * `state prune --keep-recent-quick 0` first keeps them all in the archive. With no directory it leaves the table.
+ */
+const W031_REMEDY = Object.freeze({
+  prune: Object.freeze({
+    command: 'gsd-tools state prune',
+    phaseSections: Object.freeze(['Decisions', 'Recently Completed']),
+    quickOption: '--keep-recent-quick N',
+    quickArchive: 'STATE-ARCHIVE.md',
+    quickRowsWithoutDirectory: 'archived' as const,
+  }),
+  archiveQuick: Object.freeze({
+    command: 'gsd-tools milestone archive-quick <version>',
+    moves: '.planning/quick/*',
+    resetTrigger: 'any_quick_directory' as const,
+    resetScope: 'all_rows' as const,
+    runFirst: 'gsd-tools state prune --keep-recent-quick 0',
+    withoutDirectories: 'table_untouched' as const,
+  }),
+});
+
+/** #6389: the W031 remedy text, rendered from its IR. */
+function renderW031Remedy(ir: typeof W031_REMEDY): string {
+  const { prune, archiveQuick } = ir;
+  return (
+    `Run \`${prune.command}\` to archive old ${prune.phaseSections.join('/')} entries, and add \`${prune.quickOption}\` ` +
+    `to move all but the newest N Quick Tasks rows into ${prune.quickArchive}, unchanged (rows without a task directory included). ` +
+    `\`${archiveQuick.command}\` instead moves every directory under ${archiveQuick.moves.replace(/\*$/, '')} into milestones/<version>-quick/ ` +
+    'and then resets the table. ' +
+    'The reset runs whenever at least one directory exists under .planning/quick/, whether or not a row links to it, ' +
+    'and it deletes every row, including rows without a task directory (logged by /gsd-fast), ' +
+    `so run \`${archiveQuick.runFirst}\` (or copy the rows out) before running archive-quick. ` +
+    'When .planning/quick/ holds no directory, archive-quick leaves the table alone'
+  );
+}
 
 const RULE_W031: Rule = {
   code: 'W031',
@@ -438,15 +481,7 @@ const RULE_W031: Rule = {
         message:
           `STATE.md is ${lines} lines, more than ${STATE_MD_OVERSIZE_FACTOR}x its ` +
           `${STATE_MD_LINE_TARGET}-line target — it is a digest, not an archive`,
-        remedy: adviseRemedy(
-          'Run `gsd-tools state prune` to archive old Decisions/Recently Completed entries (it does not touch the Quick Tasks table). ' +
-          'For the Quick Tasks table, `gsd-tools milestone archive-quick <version>` moves every directory under .planning/quick/ into ' +
-          'milestones/<version>-quick/ and then resets the table. ' +
-          'The reset runs whenever at least one directory exists under .planning/quick/, whether or not a row links to it, ' +
-          'and it deletes every row, including rows without a task directory (logged by /gsd-fast), ' +
-          'so copy them out (or trim them) before running archive-quick. ' +
-          'When .planning/quick/ holds no directory, archive-quick leaves the table alone, so trim it by hand',
-        ),
+        remedy: adviseRemedy(renderW031Remedy(W031_REMEDY)),
       },
     ];
   },
@@ -456,4 +491,4 @@ const RULE_W031: Rule = {
 
 const RULES: Rule[] = [RULE_W024, RULE_W002, RULE_W011, RULE_W021, RULE_W026, RULE_W031];
 
-export = { RULES };
+export = { RULES, W031_REMEDY, renderW031Remedy };
