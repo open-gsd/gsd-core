@@ -269,6 +269,7 @@
       "execute-phase-response-language.md",
       "execute-phase-wave-guard.md",
       "executor-examples.md",
+      "executor-state-sections.md",
       "failing-direction.md",
       "gate-prompts.md",
       "gates.md",
