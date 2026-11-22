@@ -29,10 +29,7 @@
  * missing or is not a directory fails at once with ENOENT or ENOTDIR, and a
  * path ending in a separator with EISDIR, before any lock is attempted
  * (refuseUnwritableStateMdPath).
- * It writes the host's content under the lock with no sync or preservation
- * pipeline (the seam's normalization still applies, see above), and ADR-3408
- * section 8.3's list of seam writes that run no pipeline names it ("MCP
- * `gsd_write_state` onto a `STATE.md` path", added by that ADR's Amendment 4).
+ * ADR-3408 Amendment 4 places this write in section 8.3.
  * The first such write also loads state.cjs, which registers its process exit
  * handler for held locks. Every other destination is still written exactly
  * as given. `configHome` write-confinement (ADR-1239 Phase B / #1679)
@@ -67,14 +64,8 @@ export interface CreateStateIOOptions {
 /**
  * #5120: a STATE.md destination is written under the STATE.md lock, through the
  * write seam, the lock-then-platformWriteSync shape of cmdStateMilestoneSwitch
- * (src/state.cts) without its transition: no sync or preservation pipeline
- * runs on the host's content, only the seam's normalization (ADR-3408 section
- * 8.3's list of seam writes that run no pipeline, Amendment 4; see the module
- * header). Loaded lazily: the lock lives in state.cts, which pulls in most of the engine, and this module
- * is also the SDK's `createStateIO` surface (host-integration-sdk.cts), whose
- * other callers never write STATE.md. The lock wait is acquireStateLock's: a
- * STATE.md held by another live writer makes this write wait, and a lock that
- * cannot be taken throws, so the write never lands.
+ * (src/state.cts) without its transition (ADR-3408 Amendment 4; see the module
+ * header). The lock wait is acquireStateLock's.
  */
 function writeStateMdThroughSeam(filePath: string, content: string): void {
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: loaded on first STATE.md write (see above)

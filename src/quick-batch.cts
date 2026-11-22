@@ -801,8 +801,6 @@ function completeQuickItem(
       let appended = false;
       let warnings: string[] = [];
       let refused: { ok: false; reason: string } | null = null;
-      // A refusal is returned from the transform as the unchanged content (no write) and carried
-      // out beside it; the result's own reason is passed through as it is.
       readModifyWriteStateMd(statePath, (stateContent: string): string => {
         if (hasQuickTaskRow(stateContent, quickId)) return stateContent;
         const appendResult = appendQuickTaskRow(stateContent, {

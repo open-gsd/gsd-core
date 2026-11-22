@@ -347,9 +347,7 @@ interface ReadModifyWriteOptions {
   /**
    * #5120 review Minor 1: called after a successful write, while the STATE.md lock is still held,
    * with the bytes STATE.md holds then (read back, so they are the seam's bytes, not the string
-   * handed to it), or `null` when that read fails. A caller that must later tell its own write
-   * from another writer's (the roadmap-upgrade rollback) captures it here: read after the lock is
-   * released, another writer's bytes could be taken for this one's. Not called for a no-op
+   * handed to it), or `null` when that read fails. Not called for a no-op
    * transform (#948) or a write that threw.
    */
   onWritten?: (written: Buffer | null) => void;
@@ -5081,8 +5079,7 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
       if (options?.onWriteFailure) options.onWriteFailure(err);
       throw err;
     }
-    // #5120 review Minor 1: outside the try above, so a failed read-back is never taken for a
-    // failed write (onWriteFailure would roll back a write that landed); still under the lock.
+    // #5120 review Minor 1: outside the try above; still under the lock.
     if (options?.onWritten) {
       let written: Buffer | null = null;
       try { written = platformReadBytesSync(statePath); } catch { written = null; }

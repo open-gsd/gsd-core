@@ -520,9 +520,7 @@ function buildPreview(gsd2Data: Gsd2Data, artifacts: Map<string, string>, projec
 
 /**
  * Write all artifacts to the .planning/ directory. STATE.md is written under the STATE.md lock
- * (#5120 review Major 1: ADR-4629 guard roster, no raw or unlocked STATE.md write), so a
- * `--force` import cannot land between another writer's read and its publish. Its directory is
- * made first, because the lock file sits beside it.
+ * (#5120 review Major 1). Its directory is made first, because the lock file sits beside it.
  */
 function writePlanningDir(artifacts: Map<string, string>, planningRoot: string): void {
   for (const [rel, content] of artifacts) {
