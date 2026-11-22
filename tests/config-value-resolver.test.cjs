@@ -763,6 +763,22 @@ describe('Config Value Resolution Module (#5096)', () => {
     }
   });
 
+  test('the global-defaults branch keeps the flat key it reads under a blocked section', () => {
+    // With no project config the loader reads `research_before_questions` flat from
+    // ~/.gsd/defaults.json (#3894). It has no alias entry, but it is an explicit flat value there.
+    withLayers((cwd) => {
+      writeLayer(cwd, 'global-defaults', { workflow: null, research_before_questions: true });
+      let assembled;
+      captureConfigDiagnostics(() => {
+        assembled = loadConfigResolved(cwd, { persist: false });
+      });
+      assert.equal(assembled.source, 'global-defaults');
+      assert.equal(assembled.config.research_before_questions, true);
+      // A non-explicit sibling projection under the same null section is still removed.
+      assert.equal(Object.hasOwn(assembled.config, 'research'), false);
+    });
+  });
+
   test('family B null parents block values from lower runtime layers', () => {
     for (const [higher, lower] of [
       ['runtime-local', 'runtime-shared'],

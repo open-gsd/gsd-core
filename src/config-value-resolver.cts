@@ -108,14 +108,11 @@ function ownValue(obj: unknown, key: string): OwnValue {
   let current: unknown = obj;
   let objectPrefixes = 0;
   const segments = key.split('.');
+  const miss = (blockedAt: number): OwnValue => ({ found: false, value: undefined, blockedAt, objectPrefixes });
   for (const [index, segment] of segments.entries()) {
-    if (UNSAFE_SEGMENTS.has(segment)) return { found: false, value: undefined, blockedAt: 0, objectPrefixes };
-    if (!isConfigSection(current)) {
-      return { found: false, value: undefined, blockedAt: index, objectPrefixes };
-    }
-    if (!Object.prototype.hasOwnProperty.call(current, segment)) {
-      return { found: false, value: undefined, blockedAt: 0, objectPrefixes };
-    }
+    if (UNSAFE_SEGMENTS.has(segment)) return miss(0);
+    if (!isConfigSection(current)) return miss(index);
+    if (!Object.prototype.hasOwnProperty.call(current, segment)) return miss(0);
     current = current[segment];
     if (index + 1 < segments.length && isConfigSection(current)) objectPrefixes = index + 1;
   }

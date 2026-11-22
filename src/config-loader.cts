@@ -181,16 +181,17 @@ function _explicitFlatFieldsInContainer(
 function _removeBlockedSectionDefaults(
   parsed: Record<string, unknown>,
   assembled: Record<string, unknown>,
+  flatReadKeys: ReadonlySet<string> = _ALIAS_KEYS,
 ): void {
   for (const [section, projections] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
     if (!Object.prototype.hasOwnProperty.call(parsed, section) || isConfigSection(parsed[section])) continue;
     for (const projection of projections) {
       if (BARRIER_FAIL_SAFE_PROJECTIONS.has(projection)) continue;
       // A flat value in the effective (root plus workstream) config outranks the
-      // blocked nested alias. Only a CONFIG_KEY_ALIASES key is read flat; every other
-      // projection comes from its nested spelling alone, so a stray top-level key of
-      // the same name is not an explicit value and does not keep the projection.
-      if (projection !== section && _ALIAS_KEYS.has(projection) && Object.hasOwn(parsed, projection)) continue;
+      // blocked nested alias. Only a key the calling branch reads flat (`flatReadKeys`)
+      // counts; every other projection comes from its nested spelling alone, so a stray
+      // top-level key of the same name is not an explicit value and does not keep it.
+      if (projection !== section && flatReadKeys.has(projection) && Object.hasOwn(parsed, projection)) continue;
       // The container itself is not a flat alias, but the loader may publish a
       // flat key inside it (`max_prompt_tokens` → `review.max_prompt_tokens`,
       // CONFIG_KEY_ALIASES `resolvedAt`). Keep only those explicit fields.
@@ -257,6 +258,12 @@ type AliasedConfigKey = ConfigKeyAlias['key'];
 
 /** The flat spellings the loader reads; the blocked-section barrier keeps only these. */
 const _ALIAS_KEYS: ReadonlySet<string> = new Set(CONFIG_KEY_ALIASES.map((alias) => alias.key));
+
+/**
+ * The global-defaults branch (no project config) also reads `research_before_questions` flat
+ * (#3894), which has no alias entry because the project branch reads it nested only.
+ */
+const _GLOBAL_DEFAULTS_FLAT_KEYS: ReadonlySet<string> = new Set([..._ALIAS_KEYS, 'research_before_questions']);
 
 /**
  * The alias entry a `config-get` key path names — by its flat key or by its
@@ -1342,7 +1349,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       } catch {
         globalConfig = _globalBaseCfg;
       }
-      _removeBlockedSectionDefaults(globalDefaults, globalConfig);
+      _removeBlockedSectionDefaults(globalDefaults, globalConfig, _GLOBAL_DEFAULTS_FLAT_KEYS);
       return fallback({ config: globalConfig, source: 'global-defaults', degraded: false });
     } catch {
       // Branch E: no global defaults
