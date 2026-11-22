@@ -3861,6 +3861,15 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     // A group's or loop's output piped in is every command's in it.
     '{ echo .env; echo a; } | xargs cat',
     'for i in 1; do echo .env; done | xargs cat',
+    // #6408 Major 1: their outputs are joined in order too, each echo ending its line, so a name split across them is
+    // read, past a stage whose output goes elsewhere and through a `cat` one pipes into.
+    '{ printf %s .e; printf %s nv; } | xargs cat',
+    '{ echo -n .e; echo -n nv; } | xargs cat',
+    '{ printf %s .e; echo nv; echo x; } | xargs cat',
+    '{ printf %s .e; printf %s x >/dev/null; printf %s nv; } | xargs cat',
+    '{ printf %s .e | cat; printf %s nv; } | xargs cat',
+    // ... and a name one output holds is still read where the join is not built (blocked at the parent too).
+    `{ echo .env; ${"echo '\\t'; ".repeat(7)}} | xargs sh -c 'echo hi'`,
     // echo or printf is read as it prints, through a `cat` or `tee` that passes its stdin on, and behind `builtin`.
     "echo -e '\\x2eenv' | cat | xargs cat",
     "printf '.env\\n' | tee | xargs cat",
@@ -3957,6 +3966,10 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ["eval 'echo .env' | xargs cat", 'eval'],
     ["bash -c 'echo .env' | xargs cat", 'bash'],
     ['f() { echo .env; }; f | xargs cat', 'f'],
+    // #6408 Major 1: a join a skipped stage may break, or one with more outputs than it is built for, is unseen.
+    ['{ printf %s .e; false && printf %s x; printf %s nv; } | xargs cat', '&&'],
+    ['{ printf %s .e; if false; then printf %s x; fi; printf %s nv; } | xargs cat', 'if'],
+    [`{ ${"echo '\\t'; ".repeat(7)}} | xargs cat`, 'echo'],
     ["printf '.env\\n' | sort | xargs cat", 'sort'],
     ["printf '.env' | xargs echo | xargs cat", 'xargs'],
     ['echo .env | tee >(xargs cat)', '>( )'],
@@ -3993,6 +4006,10 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     // echo without -e prints an escape it does not know as it is.
     "echo 'src\\build.log' | xargs cat",
     'echo notes | xargs -I{} cat {}.txt',
+    // #6408 Major 1: lines that join to no protected name, and an unbuilt join under a command that takes no word.
+    '{ echo .e; echo nv; } | xargs cat',
+    `{ ${"echo '\\t'; ".repeat(7)}} | xargs sh -c 'echo hi'`,
+    '{ printf %s .e; false && printf %s x; printf %s nv; } | xargs echo',
     // `()` or `case` in an operand defines no function and opens no case.
     "echo '()'; xargs cat; exec < list",
     'grep case notes.txt; xargs cat; exec < list',
