@@ -16,6 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { cleanup } = require('./helpers.cjs');
+const { GIT_TIMEOUT_MS, PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 const lib = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
@@ -29,7 +30,7 @@ function withProject(layers, run) {
   fs.mkdirSync(userDir, { recursive: true });
   const env = { ...process.env, HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: userDir };
   for (const key of ['GSD_HOME', 'GSD_WORKSTREAM', 'GSD_PROJECT']) delete env[key];
-  const git = (...args) => execFileSync('git', args, { cwd, env, stdio: 'ignore' });
+  const git = (...args) => execFileSync('git', args, { cwd, env, stdio: 'ignore', timeout: GIT_TIMEOUT_MS });
   git('init', '-q');
   git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
   const files = {
@@ -50,7 +51,7 @@ function withProject(layers, run) {
 
 function baseCheck({ cwd, env }, ...extra) {
   const stdout = execFileSync(process.execPath, [GSD_TOOLS, 'worktree', 'base-check', '--mode', 'harness-worktree', ...extra], {
-    cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: PROBE_TIMEOUT_MS,
   });
   return JSON.parse(stdout);
 }
