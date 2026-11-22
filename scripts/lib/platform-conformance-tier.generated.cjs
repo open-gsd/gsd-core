@@ -186,7 +186,6 @@ module.exports = {
   "tests/launcher-homes-derivation.test.cjs",
   "tests/lint-phase-arg-assignment.test.cjs",
   "tests/lint-workflow-shellcheck-fetch.test.cjs",
-  "tests/lockfile-cve-audit.test.cjs",
   "tests/locking-bugs-1909-1916-1925-1927.test.cjs",
   "tests/mcp-catalog.test.cjs",
   "tests/mempalace-capture-headless-invocation.test.cjs",
