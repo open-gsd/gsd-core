@@ -3945,6 +3945,8 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['ls | xargs -I{} cat {}.env', '{}.env'],
     ['ls | xargs -I{} cat x/{}env', 'x/{}env'],
     ['ls | xargs -I@ cat .se@rets', '.se@rets'],
+    // #6408 Nit 1: ... also in the `-c` script of a shell xargs runs.
+    ["ls -A | xargs -I{} sh -c 'cat {}nv'", 'cat {}nv'],
     // The `-c` script is the first word after the shell's options, `--` included.
     ['xargs sh -c -- \'cat "$1"\' _ < names', 'names'],
     ['xargs sh -c -e \'cat "$1"\' _ < names', 'names'],
@@ -4032,6 +4034,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     // A filter given nothing the command shows, and a glob (the documented `cat .e*` gap), stay as they were.
     'ls | sort | xargs cat',
     'ls | xargs -I{} cat {}.ts',
+    "ls | xargs -I{} sh -c 'cat {}.ts'",
     'ls | xargs -I{} mv {} {}.bak',
     // Not covered, as `cat list | xargs cat` is: a program that prints names from its own code.
     "awk 'BEGIN{print \".env\"}' | xargs cat",
