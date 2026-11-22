@@ -51,7 +51,7 @@ import type { Clock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { withPlanningLock, planningDir, planningRoot, planningPaths, quickDirFrom } = planningWorkspace;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: an export= CommonJS module (readModifyWriteStateMd)
 import stateMod = require('./state.cjs');
 const { readModifyWriteStateMd } = stateMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -772,17 +772,9 @@ interface CompleteQuickItemFields {
  * Completed" row (idempotency key = `quickId`, checked via `hasQuickTaskRow`
  * BEFORE calling `appendQuickTaskRow` — that function itself has no
  * idempotency of its own), then marks the item `complete` in `BATCH.json`.
- * Both steps run inside ONE `withPlanningLock` transaction. A repeat call for
- * an already-complete item is a no-op (no re-append, no re-write).
- *
- * The STATE.md row is read, checked and appended inside `readModifyWriteStateMd`, under the
- * STATE.md lock (#5120 review Major 1: ADR-4629 guard roster, no raw or unlocked STATE.md write),
- * the same route and `{ resync: false }` as `gsd-tools.cjs`'s `quick-tasks-append`: the planning
- * lock alone does not keep out a STATE.md writer that holds only the STATE.md lock. The planning
- * lock is taken first and the STATE.md lock inside it, the order `cmdPhaseComplete` uses. While
- * this waits for a STATE.md lock another writer holds (up to acquireStateLock's 30 s), it keeps
- * the planning lock, so another planning-lock waiter can reach its own shorter wait budget and
- * fail first; `cmdPhaseComplete` has the same shape.
+ * Both steps run inside ONE `withPlanningLock` transaction; the row is read, checked and appended
+ * in `readModifyWriteStateMd` under the STATE.md lock inside it (#5120; `quick-tasks-append`'s
+ * route). A repeat call for an already-complete item is a no-op (no re-append, no re-write).
  *
  * `warnings` passes through `appendQuickTaskRow`'s advisory warnings (#5830:
  * a description over `QUICK_TASK_DESCRIPTION_MAX_CHARS` is written in full

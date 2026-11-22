@@ -76,9 +76,9 @@ export interface CreateStateIOOptions {
  * cannot be taken throws, so the write never lands.
  */
 function writeStateMdThroughSeam(filePath: string, content: string): void {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: loaded on first STATE.md write (see above)
   const { withStateLock } = require('./state.cjs') as { withStateLock: <T>(statePath: string, fn: () => T) => T };
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: loaded on first STATE.md write (see above)
   const { platformWriteSync } = require('./shell-command-projection.cjs') as { platformWriteSync: (filePath: string, content: string) => void };
   refuseUnwritableStateMdPath(filePath);
   withStateLock(filePath, () => {

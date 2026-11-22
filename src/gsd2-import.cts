@@ -22,7 +22,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: an export= CommonJS module (withStateLock)
 import stateMod = require('./state.cjs');
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
