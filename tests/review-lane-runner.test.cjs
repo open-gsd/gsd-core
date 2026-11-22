@@ -896,7 +896,7 @@ describe('#5491 — antigravity proves it read each plan', () => {
     const d = deps({ files: { ...laneFiles(), ...SESSION }, spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }) });
     const r = await runLane(p, d, { repoRoot: ROOT });
     assert.ok(d.files[p.reviewPath].startsWith('> [incomplete-read]'));
-    assert.deepEqual(r.readCheck, { complete: false, truncated: false, compacted: false, missing: ['12.6-01'], mismatched: {}, unchecked: [] });
+    assert.deepEqual(r.readCheck, { complete: false, truncated: false, compacted: false, missing: ['12.6-01'], mismatched: {}, unchecked: [], uncheckedTotal: 0 });
   });
 
   test('a blind review that fails the check keeps [reviewed-without-repo-access] as the leading marker (#6286 Major 1)', async () => {

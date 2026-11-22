@@ -158,7 +158,7 @@ describe('#5491 planPathsFromPrompt / planFacts', () => {
 
 describe('#5491 checkRead', () => {
   test('a correct restatement of every plan is complete (set order and decoration ignored)', () => {
-    assert.deepEqual(checkRead(GOOD, [A, B]), { complete: true, truncated: false, compacted: false, missing: [], mismatched: {}, unchecked: [] });
+    assert.deepEqual(checkRead(GOOD, [A, B]), { complete: true, truncated: false, compacted: false, missing: [], mismatched: {}, unchecked: [], uncheckedTotal: 0 });
   });
 
   test('a plan with no READ-CHECK line is missing', () => {
@@ -435,7 +435,8 @@ describe('#5491 runReadCheck', () => {
   test('nothing to check (no plan headers, no marker) returns undefined', () => {
     assert.equal(runReadCheck('review', '/missing.md', '/repo', deps({})), undefined);
     assert.equal(runReadCheck('<truncated 9 bytes>', '/missing.md', '/repo', deps({})).truncated, true);
-    assert.equal(runReadCheck('review', '/missing.md', '/repo', deps({}), { compacted: true }).compacted, true);
+    // A compaction with no plan named is not reported: no restatement was asked for (#6286 round 5 Minor 1).
+    assert.equal(runReadCheck('review', '/missing.md', '/repo', deps({}), { compacted: true }), undefined);
   });
 
   test('a seam without readPlanBounded throws instead of leaving every plan unchecked (#6286 Minor 1, Minor 3)', () => {
