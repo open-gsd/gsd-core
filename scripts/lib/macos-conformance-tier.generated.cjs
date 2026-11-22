@@ -191,6 +191,7 @@ module.exports = {
   "tests/opencode-plugin-adapter.test.cjs",
   "tests/opencode-statusline-plugin.test.cjs",
   "tests/opencode-uninstall-roundtrip.test.cjs",
+  "tests/packaging-shipped-scripts-require-only-shipped.test.cjs",
   "tests/path-replacement.test.cjs",
   "tests/pause-work-improvements.test.cjs",
   "tests/perf-317-context-monitor-fs.test.cjs",

@@ -2490,6 +2490,9 @@
   "tests/helpers/overlay-repo.cjs": {
     "block": 3
   },
+  "tests/helpers/pack-file-list.cjs": {
+    "block": 1
+  },
   "tests/helpers/planning-add-guard.cjs": {
     "block": 2
   },
