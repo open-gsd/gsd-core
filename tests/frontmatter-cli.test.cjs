@@ -1266,6 +1266,29 @@ describe('#5120: frontmatter set/merge on a STATE.md target take the STATE.md lo
       assert.match(after, /^milestone: v1\.1$/m, 'the holder\'s change is kept');
     });
 
+    test(`${cmd} reads STATE.md non-blocking and without following a link while it holds the lock (pre-push review R5-m6)`, (t) => {
+      const dir = planningWith(t, { 'STATE.md': DOC });
+      const state = path.join(dir, 'STATE.md');
+      const lock = `${state}.lock`;
+      const opens = [];
+      const realOpen = fs.openSync;
+      t.mock.method(fs, 'openSync', function (file, flags, ...rest) {
+        if (String(file) === state && fs.existsSync(lock) && fs.readFileSync(lock, 'utf-8') === String(process.pid)) {
+          const n = typeof flags === 'number' ? flags : 0;
+          opens.push({ nonBlocking: (n & (fs.constants.O_NONBLOCK ?? 0)) !== 0, noFollow: (n & (fs.constants.O_NOFOLLOW ?? 0)) !== 0 });
+        }
+        return realOpen.call(this, file, flags, ...rest);
+      });
+
+      const result = runGsdTools(argsFor(state), dir);
+      t.mock.restoreAll();
+
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.ok(opens.length >= 1, 'precondition: STATE.md was opened under the lock');
+      // The first open under the lock is the command's own read; a later one is the write seam's.
+      assert.deepStrictEqual(opens[0], { nonBlocking: true, noFollow: true }, 'the read under the lock is non-blocking and does not follow a link');
+    });
+
     test(`${cmd} reports File not found when STATE.md is removed while it waits for the lock`, (t) => {
       const dir = planningWith(t, { 'STATE.md': DOC, 'STATE.md.lock': String(LIVE_PID) });
       const state = path.join(dir, 'STATE.md');
