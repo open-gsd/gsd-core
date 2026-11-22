@@ -13,6 +13,7 @@
  *   doc.frontmatter()         the closed YAML frontmatter block (a finding if there is none)
  *   doc.before(a, b, why)     the first a precedes the first b; doc.followedBy(a, b, why): b after a
  *   doc.shorterThan(n, why)   the text is under n characters
+ *   doc.satisfies(fn, why)    fn(text) returns true, or a string naming the violation (a count, a loop)
  *   ctx.fail(rel, why)        a finding of its own
  * A failed assertion is one finding naming the file and the contract. A contract that throws is
  * a finding too, and a directory with no contracts fails the run, so nothing passes by absence.
@@ -24,7 +25,7 @@ const path = require('node:path');
 const CONTRACT_DIR = path.join(__dirname, 'text-contracts');
 // The number of shipped contracts. A test pins it to the directory's count, so deleting a contract
 // file (or adding one without raising this) fails instead of passing by absence.
-const MIN_CONTRACTS = 16;
+const MIN_CONTRACTS = 21;
 
 const lf = (text) => text.replace(/\r\n/g, '\n');
 const describePattern = (pattern) => (pattern instanceof RegExp ? String(pattern) : JSON.stringify(pattern));
@@ -90,6 +91,15 @@ function makeContext(root, id, findings) {
       shorterThan(limit, why) {
         assertions += 1;
         if (!dead && !(text.length < limit)) report(rel, `${why} (${text.length} characters, expected fewer than ${limit})`);
+        return doc;
+      },
+      // A computed assertion for what no pattern states (a count, a per-section loop, a number read
+      // out of a block). `predicate(text)` returns true to pass, a string naming the violation, or false.
+      satisfies(predicate, why) {
+        assertions += 1;
+        if (dead) return doc;
+        const verdict = predicate(text);
+        if (verdict !== true) report(rel, typeof verdict === 'string' ? `${why} (${verdict})` : why);
         return doc;
       },
       step(name) {
