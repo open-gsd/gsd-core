@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   findTemplateDrift,
@@ -40,9 +41,11 @@ test('owner exports the parse sources the lint compares against, and they rebuil
   assert.ok(Object.isFrozen(s), 'frozen');
   assert.equal(typeof s.marker, 'string');
   assert.equal(typeof s.prose, 'string');
+  // allow-adhoc-regex-escape: the sources are the owner's own regex sources, already regex syntax
   const marker = new RegExp(s.marker, s.markerFlags);
   assert.deepEqual(owner.parseDispatchIdentity('[gsd:dispatch phase="01" plan="01-02"]'), { phase: '01', plan: '01-02', source: 'marker' });
   assert.match('[gsd:dispatch phase="01"]', marker);
+  // allow-adhoc-regex-escape: the sources are the owner's own regex sources, already regex syntax
   const prose = new RegExp(s.prose, s.proseFlags);
   assert.match('Execute plan 02 of phase 01-auth.', prose);
 });
@@ -153,14 +156,14 @@ test('scan: a missing scan root degrades to no findings without throwing', () =>
 });
 
 test('the real tree is clean: the lint exits 0 with no args (the shape lint:ci uses)', () => {
-  const r = spawnSync(process.execPath, [LINT], { cwd: REPO, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [LINT], { cwd: REPO, encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /ok dispatch-identity-drift/);
 });
 
 test('the CLI exits 1 and names each finding on a drifted root', () => {
   const root = fixture({ 'gsd-core/workflows/a.md': `${PRODUCER}\n[gsd-dispatch phase="1"]\n` });
-  const r = spawnSync(process.execPath, [LINT, '--root', root], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [LINT, '--root', root], { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /template-drift/);
   assert.match(r.stderr, /unlisted-producer-site/);

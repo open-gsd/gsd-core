@@ -436,3 +436,5 @@ when a degrade should occur.
 | 3 | `scripts/lint-dispatch-identity-drift.cjs`, demonstrated red then green | 4 |
 
 Each deliverable is claimed by exactly one phase. The epic stays open until Phase 3 lands.
+
+Phase 3 ([#6027](https://github.com/open-gsd/gsd-core/issues/6027)) landed as `scripts/lint-dispatch-identity-drift.cjs`, run by `npm run lint:ci` (also `npm run check:dispatch-identity-drift`). It checks three things: every `[gsd:dispatch …]` marker in `gsd-core/workflows/**` and `gsd-core/references/**` round-trips through the owner; no `hooks/**` regex parses dispatch text outside the owner without a dedicated `// dispatch-identity-owner: <reason>` line above it; and the markdown files holding a `--force-isolation` producer equal the list in `scripts/lib/dispatch-isolation-producer-sites.cjs`, in both directions. Adding a producer means adding it to that list on purpose.
