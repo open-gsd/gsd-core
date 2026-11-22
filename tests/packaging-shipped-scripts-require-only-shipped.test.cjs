@@ -284,15 +284,54 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     );
   });
 
-  test('the always-excluded names never pack, even inside a packed directory', () => {
+  test('the names npm excludes at any depth never pack, even inside a packed directory', () => {
     planted(
       { files: ['hooks'] },
-      ['hooks/keep.js', 'hooks/.DS_Store', 'hooks/._keep.js', 'hooks/a.orig', 'hooks/a.swp', 'hooks/package-lock.json',
-        'hooks/yarn.lock', 'hooks/.npmrc', 'hooks/node_modules/dep/index.js', 'hooks/.git/config'],
+      ['hooks/keep.js', 'hooks/.DS_Store', 'hooks/._keep.js', 'hooks/a.orig', 'hooks/.a.swp', 'hooks/.npmrc',
+        'hooks/.lock-wscript', 'hooks/.wafpickle-1', 'hooks/npm-debug.log', 'hooks/.git/config', 'hooks/CVS/Entries'],
       (tmp) => {
         assert.deepEqual(sorted(listPackedFiles(tmp)), ['hooks/keep.js', 'package.json']);
       },
     );
+  });
+
+  test('a nested lock file, a *.swp file without the leading dot and a config.gypi do pack, as npm packs them', () => {
+    planted(
+      { files: ['hooks'] },
+      ['hooks/package-lock.json', 'hooks/yarn.lock', 'hooks/pnpm-lock.yaml', 'hooks/bun.lockb', 'hooks/foo.swp', 'hooks/config.gypi'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), [
+          'hooks/bun.lockb', 'hooks/config.gypi', 'hooks/foo.swp', 'hooks/package-lock.json', 'hooks/pnpm-lock.yaml',
+          'hooks/yarn.lock', 'package.json',
+        ]);
+      },
+    );
+  });
+
+  test('a root lock file or node_modules named in files does not pack', () => {
+    planted(
+      { files: ['package-lock.json', 'yarn.lock', 'node_modules', 'keep.js'] },
+      ['package-lock.json', 'yarn.lock', 'node_modules/dep/index.js', 'keep.js'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['keep.js', 'package.json']);
+      },
+    );
+  });
+
+  test('a root COPYING file ships without a files entry', () => {
+    planted({ files: ['hooks'] }, ['COPYING', 'COPYING.txt', 'copying-notes'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['COPYING', 'COPYING.txt', 'package.json']);
+    });
+  });
+
+  test('a glob entry, a slash-less exclusion and a nested node_modules throw instead of changing the list', () => {
+    for (const files of [['scripts/*.cjs'], ['hooks', '!hooks/*.js'], ['**/x'], ['dist/{a,b}']]) {
+      planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /is a glob/));
+    }
+    planted({ files: ['hooks', '!name.cjs'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /slash-less exclusion/));
+    planted({ files: ['hooks'] }, ['hooks/node_modules/dep/index.js'], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /nested node_modules/);
+    });
   });
 
   test('a package.json that is not JSON, or has no files array, throws', () => {
@@ -321,6 +360,12 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
       fs.symlinkSync(path.join(tmp, 'target'), path.join(tmp, 'linked'));
       assert.throws(() => listPackedFiles(tmp), /symlinked files entry/);
     });
+  });
+
+  test('every positive files entry of this package.json names a path that exists, so none shrinks the list silently', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+    const missing = manifest.files.filter((f) => !f.startsWith('!')).filter((f) => !fs.existsSync(path.join(REPO_ROOT, f)));
+    assert.deepEqual(missing, [], 'a files entry that matches nothing contributes no file to the tarball');
   });
 
   test('on this repository the list keeps the instrumentation chain out and the shipped scripts in', () => {
