@@ -1822,13 +1822,20 @@ describe('gsd-secret-read-guard: bundled short-flag clusters (#5046)', () => {
     ['grep -if.en? pat f', 'grep .en? f'],
     ['grep -if.env~ pat f', 'grep .env~ f'],
     ['grep -if$(echo .env) pat f', 'grep $(echo .env) f'],
-    ['grep -if{.env,x} pat f', 'grep {.env,x} f'],
   ]) {
     test(`expansion form matches its unbundled form: ${clustered}`, () => {
       assertAllowed(runHook(bash(clustered)), clustered);
       assertAllowed(runHook(bash(plain)), plain);
     });
   }
+
+  // A brace group is expanded before grep runs (#6142): `-if{.env,x}` is `-if.env -ifx`, a read of `.env` as a
+  // pattern file, bundled or not; `grep {.env,x} f` is `grep .env x f`, whose `.env` is the pattern.
+  test('a brace group in a cluster is read as its alternatives (#6142)', () => {
+    assertBlocked(runHook(bash('grep -if{.env,x} pat f')), 'clustered', { tool: 'Bash', path: '-if.env' });
+    assertBlocked(runHook(bash('grep -i -f{.env,x} pat f')), 'unbundled', { tool: 'Bash', path: '-f.env' });
+    assertAllowed(runHook(bash('grep {.env,x} f')), 'the pattern slot');
+  });
 
   // Length rows: a secret after a long non-dot prefix is still found; a long
   // word with no `.` stays allowed.

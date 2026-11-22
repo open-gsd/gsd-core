@@ -111,6 +111,24 @@
 // and so is a glob with so many brace groups that expanding them overflows
 // the stack.
 //
+// A Bash word's unquoted brace groups are expanded as bash 5.2 expands them
+// (#6142, braceExpand), so `cat {.env,x}`, `cat .e{n,x}v`, `cat {,.env}` and
+// `cat .en{v..v}` read `.env`. A command holding such a word is scanned a
+// second time with each one replaced by the words it makes, which take its
+// place (`grep .env{,}` names `.env` as a file). The first scan, of the words
+// as written, is unchanged, so nothing it denied is allowed, and it is how
+// dash, which has no brace expansion, reads them. A word that makes more than
+// 64 words is judged as written when none of them can name a secret, an
+// option or a command (braceCannotNameSecret: `for i in {1..120}`) and it is
+// an operand of a command with no positional carve-out (braceWordInPlace), and
+// is otherwise denied as `glob-too-complex`. zsh also reads `{c1..c2}` of any
+// two characters, quotes removed, as the characters between (zshSequence:
+// `cat {-..9}env` reads `.env`), and a bare `-` in a numeric range as 0
+// (`{-..10}`), so a command with such a group is scanned a third time, as zsh
+// reads it. A group left open where a CR, `<( )` or `>( )` runs into the word
+// (`cat {<(true),.env}`), and a brace word that runs into a `(` (an extglob or
+// zsh glob, `cat {.env,x}?(y)`), are denied as `brace-word-unreadable`.
+//
 // Documented gaps (none are statically resolvable by a hook, and Claude
 // Code's own 2.1.259 Bash-side enforcement does not resolve them either):
 //   `$VAR` indirection (`bash -c "$TEST_CMD"`, `cat "$F"`), shell globs
@@ -184,7 +202,7 @@
 //
 // Triggers on: Read, Grep, Bash tool calls (Kimi: ReadFile, Grep, Shell)
 // Action: BLOCK (decision: 'block', exit 2) — codes secret-read |
-//         glob-too-complex | command-too-large | command-too-complex | nesting-too-deep |
+//         glob-too-complex | brace-word-unreadable | command-too-large | command-too-complex | nesting-too-deep |
 //         ansi-c-unterminated | ansi-c-undecodable | debugger-cli-spawn
 // No-op: other tools, non-secret targets, hook errors (fail open — a parser
 //        bug in a hook that runs on EVERY Bash call must never brick a
@@ -235,7 +253,7 @@ const MAX_NESTING_DEPTH = 3;
 // MAX_COMMAND_LENGTH, are UTF-16 code units (`String.length`).
 const MAX_SCAN_CHARACTERS = 8 * MAX_COMMAND_LENGTH;
 
-// Brace-alternative budget for a Grep glob before it is denied as too complex.
+// Brace-alternative budget for a Grep glob, or a Bash word (#6142), before it is denied as too complex.
 const MAX_GLOB_ALTERNATIVES = 64;
 
 // #4432: project exemptions (`hooks.secret_read_exempt` in the ROOT project's
@@ -275,9 +293,23 @@ function readOnlyOptionsOnly(base, operands) {
 function lineIsReadOnly(command) {
   try {
     const readings = readsEachWay(command) ? [false, ...READINGS] : [false];
-    return readings.every((reading) => lineIsReadOnlyUnder(command, reading));
+    if (!readings.every((reading) => lineIsReadOnlyUnder(command, reading))) return false;
+    // #6142: and with its brace groups made into words as bash and zsh make them (`sort {-o,out} f` writes),
+    // under each reading too (`{$'-o',out}` is `-o` to bash and zsh only).
+    if (!command.includes('{')) return true;
+    return ['bash', 'zsh'].every((shell) => readings.every((reading) => lineIsReadOnlySpliced(command, shell, reading)));
   } catch {
     return false;
+  }
+}
+
+function lineIsReadOnlySpliced(command, shell, reading) {
+  const spliced = bracesSpliced;
+  bracesSpliced = shell;
+  try {
+    return lineIsReadOnlyUnder(command, reading);
+  } finally {
+    bracesSpliced = spliced;
   }
 }
 
@@ -1496,6 +1528,402 @@ function collectSubstitutions(body, nested, reading) {
   }
 }
 
+// #6142: set when a tokenize met a word with an unquoted brace group that may expand (scanBashCommand), and
+// while a later scan of such a command runs, in which every tokenize puts a word's brace alternatives in
+// its place (braceWords) as the shell it names reads them: 'bash', or 'zsh' for its character ranges.
+let braceWordSeen = false;
+let bracesSpliced = false;
+// Set when a group is one zsh reads as a character range and bash does not (`{-..9}`), so the zsh scan runs.
+let braceZshSeen = false;
+
+// The text of the word at `str[start, end)` as bash's brace expansion reads it, as bash's parser leaves it:
+// `edits` holds [from, to) and a replacement for each `$'…'` span (the single-quoted value it decodes to) and
+// each line continuation (nothing).
+function braceRawWord(str, start, end, edits) {
+  let out = '';
+  let at = start;
+  for (let k = 0; k < edits.length; k += 3) {
+    out += str.slice(at, edits[k]) + edits[k + 2];
+    at = edits[k + 1];
+  }
+  return out + str.slice(at, end);
+}
+
+// Whether `raw` holds an unquoted `{` that no `}` closes as a group (braceGobble), such as `{.env,`. The word goes
+// on past `raw`, so a lone `{` (which braceGobble passes over as a word of its own) is open too.
+function braceGroupOpen(raw, reading) {
+  if (raw === '{') return true;
+  for (let i = 0; ;) {
+    const c = braceGobble(raw, i, '{', reading);
+    if (c === -1) return false;
+    if (braceGobble(raw, c + 1, '}', reading) === -1) return true;
+    i = c + 1;
+  }
+}
+
+// The words bash makes of the word `raw` (braceRawWord) by brace expansion (#6142), as { text, quoted } after
+// quote removal; undefined when it makes the word itself; BRACE_PAST_BUDGET when it makes more than
+// MAX_GLOB_ALTERNATIVES words that are harmless where they stand (braceCannotNameSecret), so the word is judged
+// as written if the scan finds it in a place they cannot shift a verdict from (braceWordInPlace); null when it
+// makes more than that otherwise; BRACE_UNREADABLE when an alternative does not read back as one word. Each alternative is read back by
+// tokenize, behind a letter so a leading `#` or a lone brace stays word text; an empty one is no word, as in bash.
+function braceWords(raw, reading) {
+  const shell = bracesSpliced;
+  // A quoted or escaped dot is the one place zsh finds a group bash does not (braceGobble), so only then is
+  // the word walked as zsh reads it; braceExpand marks the other groups the two read apart (braceZshSeen).
+  if (shell === 'bash' && !braceZshSeen && /['"\\]/.test(raw) && raw.includes('.')) braceExpand(raw, reading, BRACE_SHAPE, 'zsh');
+  const alts = braceExpand(raw, reading, BRACE_WORDS, shell);
+  if (alts === null) return braceCannotNameSecret(raw, reading, shell) ? BRACE_PAST_BUDGET : null;
+  if (alts.length === 1 && alts[0] === raw) return undefined;
+  const words = [];
+  const spliced = bracesSpliced;
+  bracesSpliced = false;
+  try {
+    for (const alt of alts) {
+      if (alt === '') continue;
+      const { tokens } = tokenize(`x${alt}`, reading);
+      if (tokens.length !== 1 || tokens[0].kind !== 'word') return BRACE_UNREADABLE;
+      words.push({ text: tokens[0].text.slice(1), quoted: tokens[0].quoted });
+    }
+  } finally {
+    bracesSpliced = spliced;
+  }
+  return words;
+}
+
+// bash 5.2's brace_expand (braces.c), on raw word text: the first unquoted `{` that a `}` closes (braceGobble)
+// splits the word into preamble, amble and postamble. An amble with an unescaped comma anywhere is split at its
+// unquoted top-level commas and each part expanded (expandAmble); else it is a sequence expression or literal.
+// `alg` builds the result from literal text (`lit`), sequences (`seq`), concatenation (`join`) and the parts of an
+// amble (`any`): BRACE_WORDS makes the words, BRACE_SUMMARY sums up what they can hold.
+// `shell` 'zsh' reads the same text with zsh's own ranges (zshSequence) where it has no unquoted comma.
+function braceExpand(text, reading, alg, shell = 'bash') {
+  let i = 0;
+  let open = -1;
+  let close = -1;
+  while (open === -1) {
+    const c = braceGobble(text, i, '{', reading);
+    if (c === -1) return alg.lit(text);
+    close = braceGobble(text, c + 1, '}', reading, shell);
+    if (close === -1) i = c + 1;
+    else open = c;
+  }
+  const amble = text.slice(open + 1, close);
+  const range = shell === 'zsh' && braceGobble(amble, 0, ',', reading) === -1 ? zshSequence(amble, reading) : undefined;
+  let tack;
+  let j = 0;
+  while (j < amble.length && amble[j] !== ',') j += amble[j] === '\\' ? 2 : 1;
+  if (range !== undefined) {
+    if (braceSequence(amble) === undefined) braceZshSeen = true;
+    tack = range === ZSH_UNBRACED ? alg.lit(amble) : alg.seq(range);
+  } else if (j >= amble.length) {
+    const seq = braceSequence(amble);
+    if (shell === 'bash' && zshReadsApart(zshSequence(amble, reading), seq)) braceZshSeen = true;
+    if (seq !== undefined) tack = alg.seq(seq);
+    else if (close + 1 === text.length) return alg.lit(text);
+    else tack = alg.lit(text.slice(open, close + 1));
+  } else {
+    tack = expandAmble(amble, reading, alg, shell);
+  }
+  let result = alg.join(alg.lit(text.slice(0, open)), tack);
+  if (close + 1 < text.length) result = alg.join(result, braceExpand(text.slice(close + 1), reading, alg, shell));
+  return result;
+}
+
+// bash's expand_amble: the amble split at each comma braceGobble finds, each part brace-expanded in turn.
+function expandAmble(text, reading, alg, shell) {
+  const parts = [];
+  let start = 0;
+  for (;;) {
+    const c = braceGobble(text, start, ',', reading);
+    parts.push(braceExpand(text.slice(start, c === -1 ? text.length : c), reading, alg, shell));
+    if (c === -1) return alg.any(parts);
+    start = c + 1;
+  }
+}
+
+// The words themselves, in bash's order; null past MAX_GLOB_ALTERNATIVES. Each word made is charged to the scan's
+// budget.
+const BRACE_WORDS = {
+  lit: (text) => [text],
+  seq: (seq) => braceSequenceValues(seq),
+  join: braceConcat,
+  any: (parts) => {
+    let n = 0;
+    for (const p of parts) {
+      if (p === null) return null;
+      n += p.length;
+    }
+    return n > MAX_GLOB_ALTERNATIVES ? null : parts.flat();
+  },
+};
+
+// bash's array_concat: every word of `a` joined to every word of `b`, in order; null past the budget.
+function braceConcat(a, b) {
+  if (a === null || b === null || a.length * b.length > MAX_GLOB_ALTERNATIVES) return null;
+  const out = [];
+  for (const x of a) {
+    for (const y of b) {
+      chargeScan(x.length + y.length);
+      out.push(x + y);
+    }
+  }
+  return out;
+}
+
+const BRACE_PAST_BUDGET = Symbol('past the brace budget');
+// An assignment word, `NAME=`, `NAME+=` or `NAME[sub]=` and its value (#6142).
+const BRACE_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
+// A word whose brace groups cannot be read word by word (braceWords, tokenize): `brace-word-unreadable`.
+const BRACE_UNREADABLE = Symbol('brace groups not readable');
+
+// Nothing made: braceWords walks a word as zsh reads it only to mark the groups zsh reads apart (braceZshSeen).
+const BRACE_SHAPE = { lit: () => 0, seq: () => 0, join: () => 0, any: () => 0 };
+
+// Past the budget a word's words are not made: they are summed up instead, without the cross product, as
+// { chars, first, empty, digit, ends }: every character any of them can hold; every one any of them can start
+// with, and whether one can be empty; whether each holds a digit; and, for each state
+// of a matcher for `.env` and `.secrets` (case folded) that a word starts in, the states it can end in (a
+// bitmask). BRACE_SECRET_STATES are the prefixes of those two names, and the last state is a match.
+const BRACE_SECRET_NAMES = ['.env', '.secrets'];
+const BRACE_SECRET_STATES = ['', '.', '.e', '.en', '.s', '.se', '.sec', '.secr', '.secre', '.secret'];
+const BRACE_MATCH = BRACE_SECRET_STATES.length;
+function braceStep(state, ch) {
+  if (state === BRACE_MATCH) return BRACE_MATCH;
+  const t = BRACE_SECRET_STATES[state] + ch.toLowerCase();
+  if (BRACE_SECRET_NAMES.includes(t)) return BRACE_MATCH;
+  for (let k = 0; k < t.length; k++) {
+    const at = BRACE_SECRET_STATES.indexOf(t.slice(k));
+    if (at !== -1) return at;
+  }
+  return 0;
+}
+const BRACE_SUMMARY = {
+  lit: (text) => {
+    chargeScan(text.length + 1);
+    const ends = [];
+    for (let q = 0; q <= BRACE_MATCH; q++) {
+      let state = q;
+      for (const ch of text) state = braceStep(state, ch);
+      ends.push(1 << state);
+    }
+    return { chars: new Set(text), first: new Set(text.slice(0, 1)), empty: text === '', digit: /[0-9]/.test(text), ends };
+  },
+  // A number is digits and a sign, which no secret name holds: the summary of any one of them. A zsh range of
+  // more than MAX_GLOB_ALTERNATIVES characters holds one braceCannotNameSecret refuses, so it can hold anything.
+  seq: (seq) => {
+    if (seq.letters && seq.count > BigInt(MAX_GLOB_ALTERNATIVES)) {
+      const all = (1 << (BRACE_MATCH + 1)) - 1;
+      return { chars: new Set(['\0']), first: new Set(['\0']), empty: false, digit: false, ends: Array(BRACE_MATCH + 1).fill(all) };
+    }
+    if (seq.letters) return BRACE_SUMMARY.any(braceSequenceValues(seq).map(BRACE_SUMMARY.lit));
+    const s = BRACE_SUMMARY.lit('0');
+    const sign = seq.from < 0n || seq.to < 0n ? '-' : '';
+    s.chars = new Set(`0123456789${sign}`);
+    s.first = new Set(`0123456789${sign}`);
+    return s;
+  },
+  join: (a, b) => ({
+    chars: new Set([...a.chars, ...b.chars]),
+    first: a.empty ? new Set([...a.first, ...b.first]) : a.first,
+    empty: a.empty && b.empty,
+    digit: a.digit || b.digit,
+    ends: a.ends.map((m) => b.ends.reduce((out, e, t) => ((m >> t) & 1 ? out | e : out), 0)),
+  }),
+  any: (parts) => ({
+    chars: new Set(parts.flatMap((p) => [...p.chars])),
+    first: new Set(parts.flatMap((p) => [...p.first])),
+    empty: parts.some((p) => p.empty),
+    digit: parts.every((p) => p.digit),
+    ends: parts[0].ends.map((_, q) => parts.reduce((out, p) => out | p.ends[q], 0)),
+  }),
+};
+
+// Whether the words the word `raw` makes are harmless where they stand, read off its summary (BRACE_SUMMARY). They
+// hold only letters, digits and `._/:=@%+-`, so the shell reads each back as itself (no quote, expansion, glob or
+// space); none holds `.env` or `.secrets`, which every secret name, and every part of a word the guard judges as
+// one (after a `/`, `\`, `:`, `=`, `@` or an option's letters), holds; none starts with `-` or `+`, so none is an
+// option; and each holds a digit, so none is a command a word after it could feed (`{xargs,cat,…}` reads a piped
+// `.env`). So `{1..120}`, `d{1..100}` and `f{a..z}{0..9}` qualify, and `{.env,x}{1..100}`, `{-e,K}{1..70}` and
+// `{a..z}{a..z}` do not.
+function braceCannotNameSecret(raw, reading, shell) {
+  const s = braceExpand(raw, reading, BRACE_SUMMARY, shell);
+  if (!s.digit || (s.ends[0] & (1 << BRACE_MATCH)) !== 0) return false;
+  if (s.first.has('-') || s.first.has('+')) return false;
+  for (const ch of s.chars) if (!/[A-Za-z0-9._/:=@%+-]/.test(ch)) return false;
+  return true;
+}
+
+// Whether a word past the budget (BRACE_PAST_BUDGET) may be judged as written in its segment's command `cmd`
+// (resolveCommand): only as an operand, not the command or a wrapper's operand, of a command whose operands are
+// all judged by name, so the number and order of the words it makes cannot change a verdict. A positional
+// carve-out (search tools, git pathspecs, cp/mv destinations, container `--env-file`), or a command that reads its
+// operands by position (xargs, find, watch, a shell), could: `grep -m {1..100} .env` makes `.env` a file.
+function braceWordInPlace(word, cmd) {
+  if (cmd === null || !cmd.operands.includes(word)) return false;
+  const { base } = cmd;
+  if (SEARCH_TOOLS.has(base) || CONTAINER_RUNTIMES.has(base) || SHELL_INTERPRETERS.has(base)) return false;
+  // echo and printf print their operands for whatever reads their output, a shell among them (reconstructedScript).
+  return !['xargs', 'find', 'find.exe', 'watch', 'git', 'git.exe', 'cp', 'mv', 'echo', 'printf'].includes(base);
+}
+
+// bash 5.2's brace_gobbler: the index in `text`, from `i`, of the unquoted `satisfy` at brace level 0, or -1. A
+// backslash escapes the next character; quotes, `$( )` and `<( )` are passed over, and `${` raises the level
+// without opening a group. A `{` that starts the text and is followed by `}` (or nothing) is passed over. Looking
+// for `}`, one closes only after an unquoted `,` or `..` (not `..}`) at level 0, so `3{},Z}` is `3}` and `3Z`.
+// Each character looked at is charged to the scan's budget: bash looks for a `}` again from each `{`.
+// `shell` 'zsh' also closes on a `..` that a quoted or escaped dot makes, as zsh reads it after quote removal.
+function braceGobble(text, i, satisfy, reading, shell = 'bash') {
+  const start = i;
+  let level = 0;
+  let quoted = '';
+  let commas = satisfy === '}' ? 0 : 1;
+  let found = -1;
+  // The last character left by quote removal: 'q' a quoted or escaped dot, 'u' an unquoted one, else ''.
+  let dot = '';
+  const zshDot = (now) => {
+    if (shell === 'zsh' && satisfy === '}' && level === 0 && now !== '' && dot !== '' && (now === 'q' || dot === 'q')) commas++;
+    dot = now;
+  };
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '\\' && quoted !== "'") {
+      zshDot(text[i + 1] === '.' ? 'q' : '');
+      i += 2;
+    } else if (c === '$' && text[i + 1] === '{' && quoted !== "'") {
+      if (quoted === '') level++;
+      i += 2;
+    } else if (quoted !== '') {
+      if (c === quoted) quoted = '';
+      else zshDot(c === '.' ? 'q' : '');
+      if (quoted === '"' && c === '$' && text[i + 1] === '(') i = findParenClose(text, i + 2, reading) + 1;
+      else i++;
+    } else if (c === '"' || c === "'" || c === '`') {
+      quoted = c;
+      i++;
+    } else if ((c === '$' || c === '<' || c === '>') && text[i + 1] === '(') {
+      i = findParenClose(text, i + 2, reading) + 1;
+    } else if (c === satisfy && level === 0 && commas > 0) {
+      if (c === '{' && i === 0 && (text[1] === undefined || text[1] === '}')) {
+        i++;
+      } else {
+        found = i;
+        break;
+      }
+    } else {
+      if (c === '{') level++;
+      else if (c === '}' && level > 0) level--;
+      else if (satisfy === '}' && level === 0 && (c === ',' || (text.startsWith('..', i) && text[i + 2] !== '}'))) commas++;
+      zshDot(c === '.' ? 'u' : '');
+      i++;
+    }
+  }
+  chargeScan(Math.min(i, text.length) - start + 1);
+  return found;
+}
+
+// bash 5.2's expand_seqterm: `{x..y[..step]}` of two integers or two letters, as { letters, from, to, by,
+// width, count }, or undefined when `amble` is not one (the group is then literal). An integer end with a
+// leading zero pads every value to the wider end (`{01..100}` is 001 … 100).
+function braceSequence(amble) {
+  const m = /^(?:([+-]?\d+)\.\.([+-]?\d+)|([A-Za-z])\.\.([A-Za-z]))(?:\.\.([+-]?\d+))?$/.exec(amble);
+  if (m === null) return undefined;
+  const INTMAX = (1n << 63n) - 1n;
+  const int = (t) => {
+    const v = BigInt(t);
+    return v > INTMAX || v < -INTMAX - 1n ? undefined : v;
+  };
+  const step = m[5] === undefined ? 1n : int(m[5]);
+  const from = m[1] !== undefined ? int(m[1]) : BigInt(m[3].charCodeAt(0));
+  const to = m[1] !== undefined ? int(m[2]) : BigInt(m[4].charCodeAt(0));
+  if (step === undefined || from === undefined || to === undefined) return undefined;
+  const by = step === 0n ? 1n : (step < 0n ? -step : step);
+  let width = 0;
+  if (m[1] !== undefined) {
+    const zeroLed = (t) => (t.length > 1 && t[0] === '0') || (t.length > 2 && t[0] === '-' && t[1] === '0');
+    if (zeroLed(m[1]) || zeroLed(m[2])) width = Math.max(m[1].length, m[2].length);
+  }
+  return { letters: m[1] === undefined, from, to, by, width, count: (to > from ? to - from : from - to) / by + 1n };
+}
+
+// zsh 5.9's bracechardots and numeric ranges (glob.c), on an amble once its quotes are removed: two characters
+// around `..` (`-..9`, `'%'..9`, `a...`) are the characters between them by code point (braceSequence's shape,
+// with `quote`); else `[-]digits..[-]digits[..[-]digits]` with a digit first or last is a numeric range in which a
+// bare `-` is 0 (`{-..10}`), or ZSH_UNBRACED when an end is missing or the step is 0 (`{..5}` is `..5`); else
+// undefined.
+const ZSH_UNBRACED = Symbol('zsh drops the braces');
+function zshSequence(amble, reading) {
+  const spliced = bracesSpliced;
+  bracesSpliced = false;
+  let tokens;
+  try {
+    ({ tokens } = tokenize(`x${amble}`, reading));
+  } finally {
+    bracesSpliced = spliced;
+  }
+  if (tokens.length !== 1 || tokens[0].kind !== 'word') return undefined;
+  const text = tokens[0].text.slice(1);
+  const chars = [...text];
+  // Two digits make the same words either way; read as numbers, they compare equal to bash's (zshReadsApart).
+  if (chars.length === 4 && chars[1] === '.' && chars[2] === '.' && !/^\d\.\.\d$/.test(text)) {
+    const from = BigInt(chars[0].codePointAt(0));
+    const to = BigInt(chars[3].codePointAt(0));
+    return { letters: true, quote: true, from, to, by: 1n, width: 0, count: (to > from ? to - from : from - to) + 1n };
+  }
+  const m = /^(-?\d*)\.\.(-?\d*)(?:\.\.(-?\d*))?$/.exec(text);
+  if (m === null || !/^\d|\d$/.test(text)) return undefined;
+  if (m[1] === '' || m[2] === '' || m[3] === '' || /^-?0*$/.test(m[3] || '1')) return ZSH_UNBRACED;
+  return zshNumbers(m[1], m[2], m[3]);
+}
+
+// Whether zsh's reading `z` of an amble (zshSequence) makes other words than bash's sequence `seq`, undefined
+// when bash leaves the group as written. Where both read numbers they read the same ends and step, so only the
+// order can differ, and it starts the words elsewhere (`{0..-5..-3}` is `0 -3` to bash, `-3 0` to zsh); a reading
+// zsh drops the braces of (ZSH_UNBRACED) has no `from`. Zero padding changes no word into a file name or option.
+function zshReadsApart(z, seq) {
+  return z !== undefined && (seq === undefined || z.from !== seq.from);
+}
+
+// zsh's numeric range of the texts `a`, `b` and the step `c` (zstrtol reads a bare `-` as 0): the values step
+// down from the higher end, which a step past 1 first moves to land on the lower when `a` is lower; the step's
+// sign and a higher `a` each reverse the order. zsh's zero padding is left out (zshReadsApart).
+function zshNumbers(a, b, c) {
+  const num = (t) => (t === '-' ? 0n : BigInt(t));
+  let lo = num(a);
+  let hi = num(b);
+  let by = c === undefined ? 1n : num(c);
+  let rev = by < 0n;
+  if (rev) by = -by;
+  if (lo > hi) {
+    [lo, hi] = [hi, lo];
+    rev = !rev;
+  } else {
+    hi -= (hi - lo) % by;
+  }
+  lo = hi - ((hi - lo) / by) * by; // the values step down from `hi`
+  return { letters: false, from: rev ? hi : lo, to: rev ? lo : hi, by, width: 0, count: (hi - lo) / by + 1n };
+}
+
+// bash's mkseq: the values of a sequence (braceSequence), or null past MAX_GLOB_ALTERNATIVES. zsh's characters
+// (`quote`) are each a word of their own, so one the shell would read as more than text is single-quoted.
+function braceSequenceValues({ letters, quote, from, to, by, width, count }) {
+  if (count > BigInt(MAX_GLOB_ALTERNATIVES)) return null;
+  chargeScan(Number(count) * (width + 1)); // before the padding is made
+  const format = (v) => {
+    if (letters && quote) {
+      const ch = String.fromCodePoint(Number(v));
+      if (/[A-Za-z0-9._/:=@%+-]/.test(ch)) return ch;
+      return ch === "'" ? `"'"` : `'${ch}'`;
+    }
+    if (letters) return String.fromCharCode(Number(v));
+    const digits = (v < 0n ? -v : v).toString();
+    return v < 0n ? `-${digits.padStart(width - 1, '0')}` : digits.padStart(width, '0');
+  };
+  const values = [];
+  for (let v = from; to >= from ? v <= to : v >= to; v += to >= from ? by : -by) values.push(format(v));
+  return values;
+}
+
 // Tokens: { kind: 'word'|'op'|'sep', text, quoted: 'none'|'single'|'double', seg }.
 // `op` tokens carry `read` (an input redirect) and `dup` (`>&N`, consumes no
 // target). Nested command strings are collected separately. `unreadable` is
@@ -1511,6 +1939,19 @@ function tokenize(str, reading) {
   let heredocs = [];
   let expectTag = null;
   let unreadable = null;
+  // #6142: where the word being read starts and ends in `str`; whether an unquoted `{` was in it, and then an
+  // unquoted `,` or `.`, without which bash expands no group in it; and its `$'…'` spans and line
+  // continuations, which bash has resolved before it expands braces (braceRawWord).
+  let wordStart = 0;
+  let wordEnd = 0;
+  let braceOpen = false;
+  let braceSplit = false;
+  let braceDepth = 0; // unquoted `{` the word has not closed with a `}`, as zsh pairs them
+  const rawEdits = [];
+  // Whether every word so far in the segment is an assignment, and whether the words are an array's elements
+  // (`arr=(…)`): bash and zsh make no words of an assignment's braces, and an array's are values (#6142).
+  let assignsOnly = true;
+  let inArray = false;
 
   const flush = () => {
     if (!hasWord) return;
@@ -1523,11 +1964,52 @@ function tokenize(str, reading) {
       // zsh keeps a `\0` escape's NUL in the word and hands a command the
       // word cut there: `$'.env\0'x` is `.env` to zsh, `.envx` to bash.
       const nul = reading === 'zsh' ? buf.indexOf('\0') : -1;
-      tokens.push({ kind: 'word', text: nul === -1 ? buf : buf.slice(0, nul), quoted, seg });
+      const text = nul === -1 ? buf : buf.slice(0, nul);
+      const raw = braceOpen ? braceRawWord(str, wordStart, wordEnd, rawEdits) : '';
+      // zsh reads `..` after quote removal, so a quoted dot can make a group too (`{-'..'0}`).
+      const split = braceSplit || raw.includes('.');
+      if (split) braceWordSeen = true;
+      // bash goes on with the word past a CR, a `<(…)` or `>(…)` (`{<(true),.env}` is the substitution and
+      // `.env`), and an extglob or zsh glob `(…)` takes it on as a pattern (`{.env,x}?(y)` matches `.env`), so a
+      // word the split here leaves a group open in, or whose group runs into a `(`, is not read, in any scan. A
+      // lone `{` before a `(…)` that a blank or an operator ends is a group keyword (`{(echo hi); }`), else zsh's
+      // group (`{(x),.env}`); a brace word with no group in it (`{type}(…)`) stays one word.
+      const after = str[wordEnd];
+      let paren = false;
+      if (after === '(' && raw === '{') {
+        const close = findParenClose(str, wordEnd + 1, reading);
+        paren = close >= str.length || /^[^ \t\n;&|)]/.test(str.slice(close + 1, close + 2));
+      } else if (after === '(') {
+        paren = split || braceDepth > 0;
+      }
+      const cut = braceOpen && (paren || ((after === '\r' || /^[<>]\(/.test(str.slice(wordEnd, wordEnd + 2)))
+        && braceGroupOpen(raw, reading)));
+      assignsOnly = assignsOnly && BRACE_ASSIGNMENT_RE.test(str.slice(wordStart, wordEnd));
+      let words = cut ? BRACE_UNREADABLE : split && bracesSpliced ? braceWords(raw, reading) : undefined;
+      // An assignment's or array element's words are values, never run or read: past the budget they stand as written.
+      if ((assignsOnly || inArray) && (words === null || words === BRACE_PAST_BUDGET)) words = undefined;
+      const prev = tokens[tokens.length - 1];
+      if (words === undefined) {
+        tokens.push({ kind: 'word', text, quoted, seg });
+      } else if (words === BRACE_PAST_BUDGET) {
+        tokens.push({ kind: 'word', text, quoted, seg, braceOverBudget: true });
+      } else if (words === null || words === BRACE_UNREADABLE) {
+        if (unreadable === null) unreadable = { code: words === null ? 'glob-too-complex' : 'brace-word-unreadable', text };
+        tokens.push({ kind: 'word', text, quoted, seg });
+      } else if (prev !== undefined && prev.kind === 'op' && !prev.dup) {
+        // A redirect's target stays one word; the scan judges its alternatives where it judges the target.
+        tokens.push({ kind: 'word', text, quoted, seg, braceAlts: words.map((w) => w.text) });
+      } else {
+        for (const w of words) tokens.push({ kind: 'word', text: w.text, quoted: w.quoted, seg });
+      }
     }
     buf = '';
     quoted = 'none';
     hasWord = false;
+    braceOpen = false;
+    braceSplit = false;
+    braceDepth = 0;
+    rawEdits.length = 0;
   };
   // #6438: `{` and `}` are reserved words, which open or close a group only where a command may start. Anywhere else they
   // are ordinary words (`printf '%s|' cat { x }` prints `cat|{|x|}|`; `cat { .env` runs cat on `{` and `.env`), so the word
@@ -1575,6 +2057,10 @@ function tokenize(str, reading) {
   // (pipe inference) from `a || bash` and to skip grouping seps.
   const sep = (text) => {
     flush();
+    const last = tokens[tokens.length - 1];
+    if (text === '(') inArray = last !== undefined && last.kind === 'word' && BRACE_ASSIGNMENT_RE.test(last.text);
+    else if (text === ')') inArray = false;
+    assignsOnly = true;
     tokens.push({ kind: 'sep', text, quoted: 'none', seg });
     seg++;
   };
@@ -1585,6 +2071,8 @@ function tokenize(str, reading) {
   let i = 0;
   while (i < str.length) {
     const ch = str[i];
+    if (hasWord) wordEnd = i;
+    else wordStart = i;
 
     // A run of `$` under any reading but the plain one: dollar-quoting (none
     // under dash's), tested before the plain quote branches (see the
@@ -1622,6 +2110,7 @@ function tokenize(str, reading) {
             noValue('ansi-c-undecodable');
           } else {
             buf += decoded;
+            rawEdits.push(i, end + 1, (literal ? `'${literal}'` : '') + `'${decoded.replace(/'/g, "'\\''")}'`);
           }
           i = end + 1;
           continue;
@@ -1680,7 +2169,11 @@ function tokenize(str, reading) {
     }
 
     if (ch === '\\') {
-      if (str[i + 1] === '\n') { i += 2; continue; } // line continuation
+      if (str[i + 1] === '\n') { // line continuation
+        if (hasWord) rawEdits.push(i, i + 2, '');
+        i += 2;
+        continue;
+      }
       hasWord = true;
       if (i + 1 < str.length) buf += str[i + 1];
       i += 2;
@@ -1782,6 +2275,7 @@ function tokenize(str, reading) {
         fd = buf;
         buf = '';
         hasWord = false;
+        rawEdits.length = 0; // a digit-only word holds no brace, but may hold a line continuation
       } else {
         flush();
       }
@@ -1852,8 +2346,10 @@ function tokenize(str, reading) {
     }
     // A brace where a heredoc tag is due is the tag (`<<}; cat .env` is tag `}`,
     // then the read), never a group: every shell takes a `{` there, and bash
-    // and dash a `}`.
-    if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
+    // and dash a `}`. A `{` is a group only before a blank, a newline or an operator, as bash reads it: before a
+    // CR or a form feed it starts a word (`{\r,.env}` is a CR and `.env`, #6142).
+    const groupEnd = ch === '{' ? /[ \t\n;&|)]/ : /[\s;&|)]/;
+    if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || groupEnd.test(str[i + 1]))) {
       if (expectTag && heredocTagsAsWords && heredocBraceTags) {
         braceTagRead = true;
       } else if (expectTag || (ch === '}' && groupDepth > 0) || braceStartsGroup()) {
@@ -1867,10 +2363,19 @@ function tokenize(str, reading) {
       // else: a brace among a command's arguments is an ordinary word (#6438), read below like any other.
     }
 
+    if (ch === '{') {
+      braceOpen = true;
+      braceDepth++;
+    } else if (ch === '}' && braceDepth > 0) {
+      braceDepth--;
+    } else if (braceOpen && (ch === ',' || ch === '.')) {
+      braceSplit = true;
+    }
     hasWord = true;
     buf += ch;
     i++;
   }
+  wordEnd = str.length;
   flush();
   return { tokens, nested, unreadable };
 }
@@ -2580,16 +3085,38 @@ function scanBashCommand(command, budget = MAX_SCAN_CHARACTERS, separatorBudget 
   readerSpent = false;
   scanSpent = false;
   budgetHeld = true;
+  braceWordSeen = false;
+  braceZshSeen = false;
   try {
-    const first = findSecretRead(command, 0);
-    if (first !== null && first.code !== 'nesting-too-deep') return first;
-    // A body held for being nested too deep leaves the other readings their say: a read or an unfinished scan they
-    // report outranks it (#6136), and it stands when they find nothing more.
-    const second = findSecretReadUnderOtherReadings(command);
-    return second !== null && second.code !== 'nesting-too-deep' ? second : (first || second);
+    const verdict = scanEveryHeredocWay(command);
+    if (verdict !== null || !braceWordSeen) return verdict;
+    // #6142: a word with an unquoted brace group is many words to bash and zsh, so the command is scanned again
+    // with each such word replaced by them, and they take its place (`grep .env{,}` names `.env` as a file). The
+    // scan of the words as written stands first, so nothing it denies is allowed; dash, which has no brace
+    // expansion, reads them that way. A command with a group zsh reads apart (braceZshSeen) is scanned a third
+    // time as zsh reads it, so `cat {-..9}env` is a read of `.env`.
+    bracesSpliced = 'bash';
+    try {
+      const bash = scanEveryHeredocWay(command);
+      if (bash !== null || !braceZshSeen) return bash;
+      bracesSpliced = 'zsh';
+      return scanEveryHeredocWay(command);
+    } finally {
+      bracesSpliced = false;
+    }
   } finally {
     budgetHeld = false;
   }
+}
+
+// findSecretRead, then #5513's heredoc passes when it finds nothing.
+function scanEveryHeredocWay(command) {
+  const first = findSecretRead(command, 0);
+  if (first !== null && first.code !== 'nesting-too-deep') return first;
+  // A body held for being nested too deep leaves the other readings their say: a read or an unfinished scan they
+  // report outranks it (#6136), and it stands when they find nothing more.
+  const second = findSecretReadUnderOtherReadings(command);
+  return second !== null && second.code !== 'nesting-too-deep' ? second : (first || second);
 }
 
 // The debugger-spawn check of `command` (findDebuggerCliSpawnEitherWay), on
@@ -2864,6 +3391,7 @@ function secretRead(text) {
 // (bash's, zsh's) uses that shell's `$'…'` values.
 function scanCommand(command, depth, reading) {
   const { tokens, nested, unreadable } = tokenizeCharged(command, reading, true);
+  let budgetHit = null;
 
   for (const sub of nested) {
     const hit = findSecretRead(sub, depth + 1);
@@ -2908,6 +3436,10 @@ function scanCommand(command, depth, reading) {
           if (t.text.endsWith('<<<')) hereStrings.push(target.text); // stdin data for a shell
           // Input redirects are reads regardless of the command's exemption.
           else if (t.read && namesSecretOperand(target.text)) return secretRead(target.text);
+          else if (t.read && target.braceAlts !== undefined) {
+            const alt = target.braceAlts.find(namesSecretOperand);
+            if (alt !== undefined) return secretRead(alt);
+          }
         }
         continue;
       }
@@ -2916,6 +3448,10 @@ function scanCommand(command, depth, reading) {
     if (!words.length) continue;
 
     const cmd = resolveCommand(words);
+    if (budgetHit === null) {
+      const over = words.find((w) => w.braceOverBudget && !braceWordInPlace(w, cmd));
+      if (over !== undefined) budgetHit = { code: 'glob-too-complex', text: over.text };
+    }
     if (!cmd) continue;
     const { base, operands } = cmd;
     const heredocs = heredocsBySeg.get(s) || [];
@@ -2986,8 +3522,9 @@ function scanCommand(command, depth, reading) {
       if (operandNamesSecret(operands[k].text)) return secretRead(operands[k].text);
     }
   }
-  // No secret read found; a `$'…'` word with no value to check still denies.
-  return unreadable;
+  // No secret read found; a `$'…'` word with no value to check, or a word past the brace budget that is not
+  // in place (braceWordInPlace), still denies.
+  return unreadable || budgetHit;
 }
 
 // ---------------------------------------------------------------------------
@@ -3380,6 +3917,17 @@ function reasonFor(code, tool, target) {
     return 'Secret read guard: this Bash command is nested deep enough to overflow the parser, or ' +
       'needs more work than the scan allows, so it cannot be checked for secret-file reads. ' +
       'Split it into smaller commands.';
+  }
+  if (code === 'glob-too-complex' && tool === 'Bash') {
+    return `Secret read guard: the Bash word '${target}' brace-expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
+      'words, and some of them could name a secret file, an option or a command, or move another word out of ' +
+      'a slot the guard skips, so they cannot be checked for secret-file reads. Use fewer alternatives.';
+  }
+  if (code === 'brace-word-unreadable') {
+    return `Secret read guard: the Bash word '${target}' has a brace group that cannot be read word by word: a ` +
+      'CR, `<( )` or `>( )` runs into it before it closes, a `(` an extglob or zsh glob takes on follows it, or one ' +
+      'of its words does not read back as one, so it cannot be checked for secret-file reads. Quote the braces, or ' +
+      'put a space before the substitution.';
   }
   if (code === 'glob-too-complex') {
     return `Secret read guard: the Grep glob '${target}' expands to more than ${MAX_GLOB_ALTERNATIVES} ` +
