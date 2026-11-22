@@ -60,7 +60,8 @@ Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir
 
 If `.planning/` missing: error.
 
-Then, in this shell (for `GSD_WS`): @~/.claude/gsd-core/references/executor-state-sections.md
+Then, in this shell (for `GSD_WS`):
+@~/.claude/gsd-core/references/executor-state-sections.md
 </step>
 
 <step name="identify_plan">

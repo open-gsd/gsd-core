@@ -5,8 +5,8 @@ step and inline execution through `execute-plan.md`'s `init_context` both run th
 only the STATE.md sections execution uses — Current Position, Decisions and Blockers — never the
 whole file, whose Quick Tasks table can be most of it.
 
-Run it in the same shell that set `GSD_WS` (in `execute-plan.md`, the `init_context` block), so
-the reads use that workstream. Where `GSD_WS` is unset the flag drops out, and the reads resolve
+Run it after the `gsd_run` resolver (`gsd-run-resolver.md`), in the same shell that set `GSD_WS`
+(in `execute-plan.md`, the `init_context` block), so the reads use that workstream. Where `GSD_WS` is unset the flag drops out, and the reads resolve
 the project and workstream exactly as `state.load` does. An executor whose load step already ran
 this block does not run it again.
 
@@ -25,7 +25,7 @@ STATE_EXISTS=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }} --raw 2>/d
 if [ "$STATE_EXISTS" = "false" ]; then
   STATE_STATUS=missing
 else
-  STATE_STATUS=read
+  if [ "$STATE_EXISTS" = "true" ]; then STATE_STATUS=read; else STATE_STATUS=unchecked; fi
   STATE_POSITION=$(_state_section "Current Position")
   STATE_DECISIONS=$(_state_section "Decisions" "Decisions Made")
   STATE_BLOCKERS=$(_state_section "Blockers/Concerns" "Blockers" "Concerns")
@@ -36,7 +36,8 @@ printf 'STATE_STATUS=%s\n\n## Current Position\n%s\n\n## Decisions\n%s\n\n## Blo
 
 Then:
 
-- `STATE_STATUS=missing`: STATE.md does not exist. If `.planning/` exists, offer to reconstruct STATE.md or continue without it; if `.planning/` is missing, stop with an error: the project is not initialized.
+- `STATE_STATUS=missing`: STATE.md is missing or empty. If `.planning/` exists, offer to reconstruct STATE.md or continue without it; if `.planning/` is missing, stop with an error: the project is not initialized.
+- `STATE_STATUS=unchecked`: the existence check failed, so use the sections that came back. If all three are `(empty)`, run `gsd_run query state.load --raw` without `2>/dev/null` and report its error.
 - Blockers `(empty)`: none are recorded.
 - Decisions `(empty)`: STATE.md may keep its decisions under another heading the state writers accept (such as `### Accumulated Decisions`), which `state.get` cannot name. Read STATE.md and use only its decisions section.
 - Read the whole STATE.md only when a task's `<read_first>` or action names it, or names a STATE.md section other than these three.

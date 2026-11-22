@@ -85,7 +85,8 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `plans`, `incomplete_plans`.
 
-Also load planning state, only the STATE.md sections execution uses (#6388): @~/.claude/gsd-core/references/executor-state-sections.md
+Also load planning state, only the STATE.md sections execution uses (#6388):
+@~/.claude/gsd-core/references/executor-state-sections.md
 </step>
 
 <step name="load_plan">
