@@ -54,7 +54,8 @@ function checkAgentInstall(snapshot: PlanningSnapshot): Diagnostic[] {
   // UNREADABLE only in that same case (buildAgentInstallField's own catch).
   if (scope === SCOPE.UNREADABLE) return [];
 
-  if (status.agents_installed) return [];
+  // #5236: `null` means the check could not run (an unresolvable runtime id), which is not a missing install.
+  if (status.agents_installed !== false) return [];
 
   // verify.cts:1995 — zero agents installed at all.
   if (status.installed_agents.length === 0) {

@@ -158,6 +158,26 @@ replaced your entire configuration with built-in defaults, and nothing said so (
 
 The warning is printed once per file per run, so a repeated command will not spam it.
 
+A section that is present but is not an object (for example, `"git": null`) is an explicit
+inheritance barrier. GSD does not silently recreate that section's flattened values from lower
+files or built-in defaults. This applies to project and global-defaults loading. The planner
+watchdog is the fail-safe exception: `"planner": null` still leaves
+`planner_stall_detection_enabled` enabled, while the raw per-key resolver reports
+`planner.stall_detection_enabled` as not configured.
+
+An explicit `workflow: null` removes every `workflow.*` default, including research,
+plan-checker, verifier, Nyquist validation, TDD, subagent timeout and the security settings
+`security_enforcement`, `security_asvs_level` and `security_block_on`. Init payloads report
+absent gate flags as `false`. An explicit `review: null`
+removes the prompt-budget default, so reviewer lanes run without default prompt trimming.
+Use an object with explicit settings when those safeguards should remain enabled.
+
+An explicit `planning: null` removes planning defaults, including `commit_docs`, so planning commits are skipped unless a flat `commit_docs: true` in the effective config (the root file merged with the active workstream file) explicitly enables them. An explicit `git: null` removes inherited/default branching strategy, base branch and branch templates. Explicit flat keys in that effective config retain precedence over their blocked nested aliases, including a flat `max_prompt_tokens` under `review: null`. Only a flat key the loader actually reads keeps its value: a top-level `repo_tagging` or `tdd_mode` is not read, so it does not keep the projection that `git: null` or `workflow: null` removes.
+
+A workstream section that is an object replaces a non-object section in the root file, the way the loader merges the two files. With root `"workflow": null` and workstream `"workflow": {}`, `workflow.*` defaults apply. The reverse (root object, workstream `"workflow": null`) still blocks them.
+
+`parallelization` is outside this barrier. Its flat spelling is a legitimate boolean (`"parallelization": true`), so `"parallelization": null` falls back to the default for the assembled config, while the per-key resolver reports `parallelization.enabled` as not configured in every state, because it is not an eligible resolver key.
+
 The same applies to the global `$GSD_HOME/.gsd/defaults.json`. If the project config is also unusable, the
 project one is reported, since that is the file you are most likely able to fix.
 
@@ -631,6 +651,8 @@ gsd-tools query inspect-dispatch-isolation --json
 ```
 
 (`inspect-dispatch-isolation` is the read-only form. The `dispatch-isolation` query is the executor-dispatch resolver: it records its decision to the isolation sentinel as a deliberate side effect, so it is not an inspection command.)
+
+A dispatch step that degrades to sequential execution records `none` with `--force-isolation none`. For ten minutes after that, a plain `dispatch-isolation` query holds the recorded decision and answers `none`, not your runtime's capability, when each non-empty `--phase` or `--plan` it passes equals the one the record carries; an empty value, which the workflows pass when no phase is set, counts as not passed. A query that passes neither holds the record whatever scope it carries; a query that passes a phase or plan the record does not carry, including against a record that carries none, is not held. Its `--json` form marks that answer `held: true` with `decidedAt`, the epoch ms the held decision was made, and gives `held: false` and `decidedAt: null` whenever it is not holding. `inspect-dispatch-isolation` is never held, so read it, not `dispatch-isolation`, when a script needs the runtime's own capability. The ten minutes run from when the degrade was decided: a dispatch step that re-records a held `none` passes that answer's `decidedAt` back as `--renew-held <decidedAt>`, which the record keeps as its `decided_at` field, so following a hold does not extend it. A step that decides a sequential degrade itself (an `execute-plan` Pattern B segment run, the gate's orchestrator-worktree fallback) records a new `none` with its own ten minutes, so such steps run less than ten minutes apart keep a query that names no phase or plan answering `none`. With parallel orchestrators, a query that passes a phase reads that phase's own records under `.gsd/dispatch-isolation/`, so another orchestrator's later write does not end its hold. A query that passes neither reads only the last-written record, so it can hold another orchestrator's `none` and run sequentially for the rest of that record's ten minutes. The isolation guard has a longer window of its own: it keeps honouring a recorded `none` for its own phase for up to 24 hours.
 
 ## Code Quality Settings
 

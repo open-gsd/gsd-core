@@ -14,14 +14,17 @@ When the plan's answer is `orchestrator-worktree` and the phase-level `ISOLATION
 plan through the `orchestrator-worktree` block of `executor-isolation-dispatch.md` (create the worktree,
 call `dispatch-isolation --phase --plan --cwd-target --prompt` for the exec, spawn, record, reconcile).
 Other plans in the wave keep the phase-level dispatch. When `fallback` is non-null the route has printed
-one advisory line and returned the host's own dispatch: follow it unchanged. A caller that forced the
+one advisory line and the plan takes the host's own dispatch: follow the phase-level dispatch unchanged.
+Read only `executorRuntime` and `fallback` from the plan's answer; its `isolation` can be a held `none`
+(#4904) that the per-plan gate has already replaced in the plan's record. A caller that forced the
 plan's isolation (`--force-isolation`, the submodule gate, the base-check degrade) always wins: the
 route reports `fallback: forced_isolation`.
 
 ## Contract
 
 - **One decision, one producer.** The route's sentinel write is the plan's record and names
-  `producer: "dispatch-isolation"` and `executor_runtime`. Never call `record-dispatch-isolation` for
+  `producer: "dispatch-isolation"` and `executor_runtime`. A query that holds a caller's `none` (#4904)
+  writes nothing; the per-plan gate re-records that plan before the launch, so the exec read is the write. Never call `record-dispatch-isolation` for
   this plan and never re-derive isolation or exec in shell.
 - **Same prompt, one source.** `EXECUTOR_PROMPT` is the prompt `executor-isolation-dispatch.md` builds for
   the process-spawn backend: same executor identity, `<execution_context>`, required reading, atomic-commit

@@ -34,6 +34,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve baseline-notation findings](how-to/resolve-baseline-notation-findings.md) — fix plan criteria that `verify plan-structure` flags as already true at HEAD (B1), legacy `# baseline at HEAD:` comments (B2), and unreadable notations
 - [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
+- [Guide external reviewers with a capability](how-to/guide-external-reviewers-with-a-capability.md) — add `review:pre` reviewer guidance so `/gsd-review` and convergence cycles judge plans under your capability's constraints
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
 - [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md) — act on what `/gsd-code-review` reports for workflow files, Dockerfiles and deploy scripts, and tell a real finding from a false one
 - [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
@@ -42,6 +43,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Change the STATE.md schema](how-to/change-the-state-md-schema.md) — add, change or remove a STATE.md frontmatter key and keep the template and all five reference documents in step
 - [Resolve verify-command path findings](how-to/resolve-verify-command-path-findings.md) — fix an `<automated>` verify command whose target directory does not resolve from the executor's cwd
 - [State a failing direction](how-to/state-a-failing-direction.md) — say what output constitutes failure for an `<automated>` verify command, and migrate a phase planned before the rule
+- [Validate an automated command](how-to/validate-an-automated-command.md) — run a validate-only mode against an `<automated>` verify command at plan time, record the result, and read check 8g's verdicts
 - [Resolve a contract-drift finding](how-to/resolve-contract-drift-findings.md) — bring an agent's completion contract, read-tag gate, or deleted-file test reference back into agreement with the registry
 - [Resolve unreachable-guard findings](how-to/resolve-unreachable-guard-findings.md) — fix shell guards whose fallback arm cannot run, and tell "nothing to report" apart from "could not look"
 - [Declare a hook's crash policy](how-to/declare-a-hook-crash-policy.md) — terminate a GSD hook with `allow`/`deny`/`crash`, declare its `ON_CRASH` policy, and tell a hook's own crash apart from a check that could not run at all
@@ -76,6 +78,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Route a plan to a specialist executor](how-to/route-a-plan-to-a-specialist-executor.md) — send one plan to your own executor agent with `agent_hint:`, pick its model, and read the routing output
 - [Control which host runtime GSD reports](how-to/control-the-reported-host-runtime.md) — read the `agent_runtime` ladder, understand what host detection looks at, and pin the runtime when detection is not what you want
 - [Set up cross-AI review](how-to/set-up-cross-ai-review.md) — configure a second AI to review code produced by the primary agent
+- [Run plan-review convergence unattended](how-to/run-plan-review-convergence-unattended.md) — end a non-converged loop with a status instead of a question, and read the CYCLE_SUMMARY counters from `/gsd-review`
 - [Scope code review depth by path](how-to/scope-code-review-depth-by-path.md) — escalate `/gsd-code-review` to `deep` for sensitive directories while the rest of the repo stays at the default depth
 - [Work in parallel with workstreams](how-to/work-in-parallel-with-workstreams.md) — run independent lines of work simultaneously using workstreams
 - [Isolate work with workspaces](how-to/isolate-work-with-workspaces.md) — use workspaces to sandbox experimental or risky changes
