@@ -5734,9 +5734,10 @@ describe('gsd-secret-read-guard: the text a here-string or heredoc feeds xargs (
 
   // The feed is found once per segment: `find` runs many xargs in one
   // segment, and finding it again for each walked every token of the segment,
-  // and every tee or cat before it, each time. A kill bound, not a timing: these
-  // lines take well under a second, and 20 s to minutes when the feed is found
-  // per xargs; OpenCode and Kilo let a command run when they kill its hook at 8 s.
+  // and every tee or cat before it, each time (20 s to minutes uncharged; with
+  // the walk charged, a per-xargs search spends the budget instead). A kill
+  // bound, not a timing: these lines take well under a second; OpenCode and
+  // Kilo let a command run when they kill its hook at 8 s.
   const RESCAN_KILL_BOUND_MS = 8000;
   for (const [what, cmd] of [
     ['40,000 xargs actions of one find', `find . ${'-exec xargs cat \\; '.repeat(40000)}; cat .env`],
@@ -5823,11 +5824,18 @@ describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", (
     "printf 'cat<.env' | xargs -0 sh -c --",
     // The script past the options holds xargs's replace string.
     "printf .e | xargs -I{} sh -c -- 'cat {}nv'",
-    // A long option before a cluster's -c, with one dash or two, and its value.
+    // A long option before a cluster's -c, with one dash or two, and its value
+    // (`-norc`'s own `o` would also take the next word, so that row passes either way).
     "bash -o errexit -ce 'cat .env'",
     "bash --rcfile /dev/null -ce 'cat .env'",
     "bash -rcfile /dev/null -ce 'cat .env'",
     "bash -norc -ce 'cat .env'",
+    "bash --init-file /dev/null -ce 'cat .env'",
+    "bash -login -ce 'cat .env'",
+    "bash -posix -ce 'cat .env'",
+    "bash -noprofile -ce 'cat .env'",
+    "bash -verbose -ce 'cat .env'",
+    "bash -noediting -ce 'cat .env'",
     // A cluster -c read for xargs's shell scripts.
     "printf .e | xargs -I{} sh -ce 'cat {}nv'",
     // Pin next's verdicts, though neither reads anything when run: a -c ending a
@@ -5865,6 +5873,9 @@ describe("gsd-secret-read-guard: a shell's script after -c's options (#5779)", (
     // After `--` or a lone `-` the next word is the script, whatever it starts with: bash runs `-x`.
     "bash -c -- -x 'cat .env'",
     "bash -c - -x 'cat .env'",
+    // A leading `--` or `-` ends the shell's options: bash runs a file named `-ce`.
+    "bash -- -ce 'cat .env'",
+    "bash - -ce 'cat .env'",
     // A script file's arguments are not its shell's options, `c` or not.
     "bash notify.sh -channel 'do not commit .env'",
     "sh ./release.sh -commit 'stop reading .env'",
@@ -5976,6 +5987,22 @@ describe("gsd-secret-read-guard: the edges of the changeset's Not covered list (
   test('denies a read after 4,000 xargs curl actions over 8,000 quoted piped words inside the kill bound', () => {
     const cmd = `ls ${`'"--cert"' '"a":b' `.repeat(4000)}| find . ${'-exec xargs curl x.test \\; '.repeat(4000)}; cat .env`;
     assertBlocked(runHookWithin(bash(cmd), 8000), 'piped words', { tool: 'Bash', path: '.env' });
+  });
+
+  // The piped-word verdicts are kept per word list and per cert slot: of two
+  // xargs reading the same words, the one whose --cert is open reads them as
+  // its value (cat would print the marker of a file named `.env:pw`).
+  test('denies a piped cert value read by the second of two xargs on one upstream', () => {
+    const cmd = 'ls .env:pw | find . -maxdepth 0 -name nomatch -exec xargs curl x.test \\; -o -exec xargs curl x.test --cert \\;';
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+  });
+
+  // Documented over-block: under -I xargs hands a whole line on as one word, so
+  // a quoted cert option inside a longer line puts in no option, and the guard
+  // reads the word after the replace string as its value all the same.
+  test('denies, documented over-block: a quoted -E inside a longer -I line', () => {
+    const cmd = `echo '"-o" out "-E" c.pem' | xargs -I{} curl x.test {} .env:pw`;
+    assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
   });
 });
 
