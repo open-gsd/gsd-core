@@ -5,6 +5,8 @@
  * each (ADR-6315 item 19, #6337). A contract is a module in scripts/static-checks/text-contracts/
  * exporting { id, issue?, check(ctx) }; `check` states, through the context:
  *   ctx.doc(rel)              a document (LF-normalised text) or a finding if the file is missing
+ *   ctx.docs([rel…])          one document that is the union of several files (each must load)
+ *   ctx.exists/absent(rel, why)  the file is / is not in the tree
  *   doc.has/lacks(pattern, why)  pattern (RegExp or string) must / must not appear
  *   doc.slice(from, to)       the document between two markers; `to` may list several, earliest wins
  *   doc.step(name)            the `<step name="…">` … `</step>` body of a workflow
@@ -22,7 +24,7 @@ const path = require('node:path');
 const CONTRACT_DIR = path.join(__dirname, 'text-contracts');
 // The number of shipped contracts. A test pins it to the directory's count, so deleting a contract
 // file (or adding one without raising this) fails instead of passing by absence.
-const MIN_CONTRACTS = 6;
+const MIN_CONTRACTS = 16;
 
 const lf = (text) => text.replace(/\r\n/g, '\n');
 const describePattern = (pattern) => (pattern instanceof RegExp ? String(pattern) : JSON.stringify(pattern));
@@ -117,6 +119,54 @@ function makeContext(root, id, findings) {
     return doc;
   }
 
+  // A repo-relative path inside the repository, or the reason it is not one.
+  function locate(rel) {
+    const abs = path.resolve(root, ...String(rel).split('/'));
+    const inside = path.relative(path.resolve(root), abs);
+    if (typeof rel !== 'string' || rel === '' || path.isAbsolute(rel) || inside.startsWith('..') || path.isAbsolute(inside)) {
+      return { ok: false, message: 'the path is not a repo-relative path inside the repository' };
+    }
+    // lstat on the last component does not stop a symlinked directory earlier in the path from
+    // redirecting the read out of the tree, so the parent directory is resolved and re-checked.
+    // The realpath-resolved containment check has one owner (src/security.cts).
+    const parent = path.posix.dirname(String(rel).split(path.sep).join('/'));
+    if (parent !== '.') {
+      const { tryWithinRoot } = require('../../gsd-core/bin/lib/security.cjs');
+      if (tryWithinRoot(parent, root) === null) {
+        return { ok: false, message: 'the path resolves outside the repository through a symlinked directory' };
+      }
+    }
+    return { ok: true, abs };
+  }
+
+  // The LF text of one file, or `dead` with the finding already reported.
+  function load(rel) {
+    const at = locate(rel);
+    if (!at.ok) {
+      report(String(rel), at.message);
+      return { rel: String(rel), dead: true };
+    }
+    let text;
+    try {
+      // A contract reads a regular file the repository owns: a symlink (which could point anywhere)
+      // and a directory are refused, and an empty file is a finding (nothing could fail on it).
+      const stat = fs.lstatSync(at.abs);
+      if (!stat.isFile()) {
+        report(rel, `not a regular file (${stat.isSymbolicLink() ? 'a symlink' : 'not a file'})`);
+        return { rel, dead: true };
+      }
+      text = lf(fs.readFileSync(at.abs, 'utf8'));
+    } catch (err) {
+      report(rel, `cannot read the file: ${err.code || err.message}`);
+      return { rel, dead: true };
+    }
+    if (text.trim() === '') {
+      report(rel, 'the file is empty');
+      return { rel, dead: true };
+    }
+    return { rel, text, dead: false };
+  }
+
   return {
     fail(file, message) {
       assertions += 1;
@@ -124,31 +174,38 @@ function makeContext(root, id, findings) {
     },
     assertionCount: () => assertions,
     doc(rel) {
-      const abs = path.resolve(root, ...String(rel).split('/'));
-      const inside = path.relative(path.resolve(root), abs);
-      let text = '';
-      if (typeof rel !== 'string' || rel === '' || path.isAbsolute(rel) || inside.startsWith('..') || path.isAbsolute(inside)) {
-        report(String(rel), 'the path is not a repo-relative path inside the repository');
-        return documentOf(String(rel), '', true);
+      const loaded = load(rel);
+      return loaded.dead ? documentOf(loaded.rel, '', true) : documentOf(loaded.rel, loaded.text);
+    },
+    // One document that is the union of several files (a workflow split across a main file and
+    // its step files): every file must load, and an assertion sees their LF text joined by `\n`.
+    docs(rels) {
+      const list = [].concat(rels);
+      if (list.length === 0) {
+        report('(no files)', 'docs() needs at least one repo-relative path');
+        return documentOf('(no files)', '', true);
       }
-      try {
-        // A contract reads a regular file the repository owns: a symlink (which could point anywhere)
-        // and a directory are refused, and an empty file is a finding (nothing could fail on it).
-        const stat = fs.lstatSync(abs);
-        if (!stat.isFile()) {
-          report(rel, `not a regular file (${stat.isSymbolicLink() ? 'a symlink' : 'not a file'})`);
-          return documentOf(rel, '', true);
-        }
-        text = lf(fs.readFileSync(abs, 'utf8'));
-      } catch (err) {
-        report(rel, `cannot read the file: ${err.code || err.message}`);
-        return documentOf(rel, '', true);
-      }
-      if (text.trim() === '') {
-        report(rel, 'the file is empty');
-        return documentOf(rel, '', true);
-      }
-      return documentOf(rel, text);
+      const loaded = list.map(load);
+      const label = loaded.map((entry) => entry.rel).join(' + ');
+      if (loaded.some((entry) => entry.dead)) return documentOf(label, '', true);
+      return documentOf(label, loaded.map((entry) => entry.text).join('\n'));
+    },
+    // The file is present as a regular file / is absent from the tree.
+    exists(rel, why) {
+      assertions += 1;
+      const at = locate(rel);
+      if (!at.ok) return report(String(rel), at.message);
+      let stat = null;
+      try { stat = fs.lstatSync(at.abs); } catch { /* absent */ }
+      if (!stat || !stat.isFile()) report(rel, `${why} (expected a regular file at ${rel})`);
+    },
+    absent(rel, why) {
+      assertions += 1;
+      const at = locate(rel);
+      if (!at.ok) return report(String(rel), at.message);
+      let present = true;
+      try { fs.lstatSync(at.abs); } catch (err) { present = err.code !== 'ENOENT'; }
+      if (present) report(rel, `${why} (expected no file at ${rel})`);
     },
   };
 }

@@ -793,7 +793,7 @@ ${prior_verify_commands.length > 0 ? `
 are the `<automated>` commands from the nearest prior phase that had any. They resolved from
 the executor's cwd in a real run, so a path here is grounded evidence, not a guess. When this
 phase's build/test story is the same, **copy the command verbatim**; do not re-derive a
-directory. Surfaced at every context window — not part of the 1M enrichment above.
+directory.
 
 {For each entry in \`prior_verify_commands\`: \`- Phase {phase} · {task}: \\\`{command}\\\`\`}
 </proven_verify_commands>
@@ -855,6 +855,7 @@ it has no failure mode to state. Ask yourself: if this command were silently
 doing nothing, what in its output would tell me? If you cannot answer, fix the
 command — do not invent a statement for it.
 Rules + worked examples: @gsd-core/references/planner-failing-direction.md
+Validate before shipping (#4586): @gsd-core/references/planner-verify-command-validation.md
 </failing_direction_contract>
 <!-- gsd:protected:end -->
 

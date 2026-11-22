@@ -619,6 +619,9 @@
   "scripts/static-checks/portability-rule-disable-ban.cjs": {
     "block": 1
   },
+  "scripts/static-checks/text-contracts.cjs": {
+    "block": 1
+  },
   "scripts/strip-prose-atrefs.cjs": {
     "block": 1
   },
@@ -1629,9 +1632,6 @@
   "tests/agent-size-budget.test.cjs": {
     "block": 2
   },
-  "tests/agent-skills-awareness.test.cjs": {
-    "directive": 1
-  },
   "tests/agent-skills-compact-variant.test.cjs": {
     "block": 1
   },
@@ -1639,9 +1639,6 @@
     "block": 1
   },
   "tests/ai-evals.test.cjs": {
-    "directive": 1
-  },
-  "tests/analyze-dependencies.test.cjs": {
     "directive": 1
   },
   "tests/anti-pattern-enforcement.test.cjs": {
@@ -1711,9 +1708,6 @@
   },
   "tests/capability-state.test.cjs": {
     "block": 1
-  },
-  "tests/chain-flag-plan-phase.test.cjs": {
-    "directive": 1
   },
   "tests/changeset-cli.test.cjs": {
     "directive": 3
@@ -1806,9 +1800,6 @@
   },
   "tests/cline-model-override-upgrade.test.cjs": {
     "block": 1
-  },
-  "tests/cline-support.test.cjs": {
-    "directive": 1
   },
   "tests/clock-seam.test.cjs": {
     "block": 2
@@ -2031,9 +2022,6 @@
   },
   "tests/derive-progress.property.test.cjs": {
     "block": 1
-  },
-  "tests/discuss-checkpoint.test.cjs": {
-    "directive": 2
   },
   "tests/discuss-mode.test.cjs": {
     "directive": 1
@@ -2664,9 +2652,6 @@
     "directive": 2,
     "block": 4
   },
-  "tests/inventory-headings-countfree.test.cjs": {
-    "directive": 1
-  },
   "tests/inventory-manifest-sync.test.cjs": {
     "block": 1
   },
@@ -2991,9 +2976,6 @@
     "directive": 9,
     "block": 12
   },
-  "tests/phase6-capability-docs.test.cjs": {
-    "directive": 1
-  },
   "tests/phase6-capstone-conformance.test.cjs": {
     "block": 1
   },
@@ -3087,17 +3069,11 @@
   "tests/platform-conformance-tier.test.cjs": {
     "block": 1
   },
-  "tests/playwright-ui-verify.test.cjs": {
-    "directive": 1
-  },
   "tests/plugin-manifest.test.cjs": {
     "block": 5,
     "directive": 3
   },
   "tests/policy-160-route0-resume.test.cjs": {
-    "directive": 1
-  },
-  "tests/policy-release-no-npm-self-upgrade.test.cjs": {
     "directive": 1
   },
   "tests/post-planning-gaps-2493.test.cjs": {
@@ -3381,9 +3357,6 @@
   },
   "tests/safe-resume-gate-anchoring.test.cjs": {
     "block": 1
-  },
-  "tests/scan-command.test.cjs": {
-    "directive": 1
   },
   "tests/secret-scan-lint.security.test.cjs": {
     "block": 1,

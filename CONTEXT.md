@@ -1151,7 +1151,7 @@ Full detail in `~/.claude/skills/gsd-pr-fix-discipline/SKILL.md`. AI agents MUST
 
 ### INVENTORY / manifest drift
 
-- **Symptom:** `tests/inventory-manifest-sync.test.cjs` fails — `"New surfaces not in manifest"` (the MANIFEST half) or `"Shipped surfaces in docs/INVENTORY-MANIFEST.json with NO row in docs/INVENTORY.md"` (the ROSTER half, #3762); or `tests/inventory-headings-countfree.test.cjs` fails if a `(N shipped)` count was re-added to a heading
+- **Symptom:** `tests/inventory-manifest-sync.test.cjs` fails — `"New surfaces not in manifest"` (the MANIFEST half) or `"Shipped surfaces in docs/INVENTORY-MANIFEST.json with NO row in docs/INVENTORY.md"` (the ROSTER half, #3762); or the `inventory-headings-countfree` text contract (`scripts/static-checks/text-contracts/inventory-headings-countfree.cjs`, run by `npm run lint:ci`) fails if a `(N shipped)` count was re-added to a heading
 - **Affected this session:** #154, #156, #143, #155, #169
 - **Fix:** Add row to `docs/INVENTORY.md` + `node scripts/gen-inventory-manifest.cjs --write`. The two halves have DIFFERENT remedies and the roster half cannot be regenerated — a role sentence is hand-written by design, so re-running the generator never clears it.
 
