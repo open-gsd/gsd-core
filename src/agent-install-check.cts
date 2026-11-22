@@ -15,7 +15,7 @@ import path from 'node:path';
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES } = modelProfiles;
 import { getGlobalConfigDir } from './runtime-homes.cjs';
-import { getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL } from './runtime-name-policy.cjs';
+import { assertKnownRuntime, getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL, UnknownRuntimeError } from './runtime-name-policy.cjs';
 // #3242 — model-catalog is a genuine leaf (only node:path + its own JSON), which is
 // exactly why Phase 1 (#3241) moved isAnthropicFlavoredModel there: this module can
 // consume it without dragging model-resolver's config-loader chain into a
@@ -42,13 +42,37 @@ import { isAnthropicFlavoredModel } from './model-catalog.cjs';
 // added.
 import { stripBOM, scanTomlLines, deriveCodexSandboxMode, extractToolsValue } from './codex-agent-toml.cjs';
 
+/**
+ * Frozen reason enum for an agents check that could not run (#5236): callers and tests assert on these wire values,
+ * never on prose. Adding a member is a deliberate coordinated change (enum, emitting site, the enum-lock test).
+ */
+const AGENTS_CHECK_REASON = Object.freeze({
+  /** The runtime id is not one GSD resolves (an out-of-tree host plugin, or any unregistered id): there is no agents directory to look in. */
+  UNKNOWN_RUNTIME: 'unknown_runtime',
+} as const);
+
 interface AgentsInstalledResult {
-  agents_installed: boolean;
+  /** `null` when the check could not run (see `agents_check_reason`): not "installed", and not "missing" either. */
+  agents_installed: boolean | null;
   missing_agents: string[];
   installed_agents: string[];
   incomplete_agents: string[];
-  agents_dir: string;
+  /** `null` when the runtime id resolves to no agents directory. */
+  agents_dir: string | null;
   agent_runtime: string;
+  /** Why `agents_installed` is `null`; absent when the check ran. */
+  agents_check_reason?: typeof AGENTS_CHECK_REASON[keyof typeof AGENTS_CHECK_REASON];
+}
+
+/** Whether `runtime` is an id GSD cannot resolve. A retired spelling still throws: that refusal is not this case. */
+function isUnresolvableRuntime(runtime: string): boolean {
+  try {
+    assertKnownRuntime(runtime);
+    return false;
+  } catch (err) {
+    if (err instanceof UnknownRuntimeError) return true;
+    throw err;
+  }
 }
 
 /**
@@ -135,7 +159,9 @@ function truncatePostureValue(value: string): string {
  *      <projectRoot>/<localConfigDir>/agents (or <projectRoot>/agents when
  *      the runtime's local install targets the project root). Requiring the
  *      GSD manifest prevents runtime-native project agents from shadowing a
- *      working global GSD install. Symlinked local agent directories are ignored.
+ *      working global GSD install. A local agents directory or manifest that is a
+ *      symlink (a junction on Windows) is followed (#5911); a dangling link falls
+ *      through to the global directory.
  *   4. For non-claude runtimes: getGlobalConfigDir(runtime)/agents
  *
  * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'
@@ -176,11 +202,16 @@ function getAgentsDir(runtime?: string, projectRoot?: string): string {
     const localAgentsDir = path.join(localConfigDir, 'agents');
     const manifestPath = path.join(localConfigDir, 'gsd-file-manifest.json');
     try {
-      if (fs.lstatSync(localAgentsDir).isDirectory() && fs.lstatSync(manifestPath).isFile()) {
+      // #5911: stat, not lstat. A project that links one shared install into its config dir (a
+      // symlink, or a directory junction on Windows) must resolve to the linked agents dir the way
+      // the runtime itself loads it; lstat describes the link, so it reported neither a directory
+      // nor a file. The manifest requirement (#2602) still decides whether the local dir counts.
+      if (fs.statSync(localAgentsDir).isDirectory() && fs.statSync(manifestPath).isFile()) {
         return localAgentsDir;
       }
     } catch {
-      // Local discovery is best-effort; any probe failure preserves global fallback.
+      // Local discovery is best-effort; any probe failure (a dangling link included) preserves
+      // the global fallback.
     }
   }
   return path.join(getGlobalConfigDir(resolved), 'agents');
@@ -194,6 +225,20 @@ function getAgentsDir(runtime?: string, projectRoot?: string): string {
  */
 function checkAgentsInstalled(runtime?: string, projectRoot?: string): AgentsInstalledResult {
   const resolvedRuntime = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
+  // #5236: this is a reporting path (every `init` bundle carries its result). For an id GSD cannot resolve there is
+  // no agents directory to read, and throwing would stop GSD on any out-of-tree host; say it could not be checked.
+  // The installers keep refusing an unknown id through the accessors themselves.
+  if (isUnresolvableRuntime(resolvedRuntime)) {
+    return {
+      agents_installed: null,
+      missing_agents: [],
+      installed_agents: [],
+      incomplete_agents: [],
+      agents_dir: null,
+      agent_runtime: resolvedRuntime,
+      agents_check_reason: AGENTS_CHECK_REASON.UNKNOWN_RUNTIME,
+    };
+  }
   const agentsDir = getAgentsDir(resolvedRuntime, projectRoot);
   const expectedAgents = Object.keys(MODEL_PROFILES);
   const installed: string[] = [];
@@ -630,6 +675,7 @@ function resolveAgentHint(name: string, runtime?: string, projectRoot?: string):
 export = {
   getAgentsDir,
   checkAgentsInstalled,
+  AGENTS_CHECK_REASON,
   checkCodexModelPosture,
   checkCodexSandboxPosture,
   canonicalAgentSourceDir,

@@ -20,6 +20,7 @@ Scan all phases for pending, skipped, blocked, and human_needed UAT items. Cross
 Core planning files are loaded in-workflow via CLI.
 
 **Scope:**
-Glob: .planning/phases/*/*-UAT.md
-Glob: .planning/phases/*/*-VERIFICATION.md
+Glob: {planning_root}/phases/*/*-UAT.md (`{planning_root}`: the active scope's root, from `planning.inspect`)
+Glob: {planning_root}/phases/*/*-VERIFICATION.md
+Archive (also scanned, same two patterns inside each phase directory): `{planning_root}/milestones/v*-phases/*/` and `{planning_root}/milestones/ws-*/phases/*/`, and the same two shapes (`.planning/workstreams/<name>/milestones/v*-phases/*/`, `.planning/workstreams/<name>/milestones/ws-*/phases/*/`) for every workstream
 </context>

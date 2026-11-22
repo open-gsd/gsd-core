@@ -9,7 +9,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempDir, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempDir, createTempProject, cleanup } = require('./helpers.cjs');
 
 // ─── scan-sessions ────────────────────────────────────────────────────────────
 
@@ -24,17 +24,17 @@ describe('scan-sessions command', () => {
     cleanup(tmpDir);
   });
 
-  test('returns empty array for empty sessions directory', () => {
+  test('returns empty array for empty sessions directory', async () => {
     const sessionsDir = path.join(tmpDir, 'projects');
     fs.mkdirSync(sessionsDir, { recursive: true });
-    const result = runGsdTools(['scan-sessions', '--path', sessionsDir, '--raw'], tmpDir);
+    const result = await runGsdToolsAsync(['scan-sessions', '--path', sessionsDir, '--raw'], tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     assert.ok(Array.isArray(out), 'should return an array');
     assert.strictEqual(out.length, 0, 'should be empty');
   });
 
-  test('scans synthetic project directory', () => {
+  test('scans synthetic project directory', async () => {
     const sessionsDir = path.join(tmpDir, 'projects');
     const projectDir = path.join(sessionsDir, 'test-project-abc123');
     fs.mkdirSync(projectDir, { recursive: true });
@@ -46,7 +46,7 @@ describe('scan-sessions command', () => {
     ].join('\n');
     fs.writeFileSync(path.join(projectDir, 'session-001.jsonl'), sessionData);
 
-    const result = runGsdTools(['scan-sessions', '--path', sessionsDir, '--raw'], tmpDir);
+    const result = await runGsdToolsAsync(['scan-sessions', '--path', sessionsDir, '--raw'], tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     assert.ok(Array.isArray(out), 'should return array');
@@ -54,7 +54,7 @@ describe('scan-sessions command', () => {
     assert.strictEqual(out[0].sessionCount, 1, 'should have 1 session');
   });
 
-  test('reports multiple sessions and sizes', () => {
+  test('reports multiple sessions and sizes', async () => {
     const sessionsDir = path.join(tmpDir, 'projects');
     const projectDir = path.join(sessionsDir, 'multi-session-project');
     fs.mkdirSync(projectDir, { recursive: true });
@@ -64,11 +64,67 @@ describe('scan-sessions command', () => {
       fs.writeFileSync(path.join(projectDir, `session-${i}.jsonl`), data + '\n');
     }
 
-    const result = runGsdTools(['scan-sessions', '--path', sessionsDir, '--raw'], tmpDir);
+    const result = await runGsdToolsAsync(['scan-sessions', '--path', sessionsDir, '--raw'], tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     assert.strictEqual(out[0].sessionCount, 3);
     assert.ok(out[0].totalSize > 0, 'should have non-zero size');
+  });
+});
+
+// ─── #6332: the session readers go through main's output handling ────────────
+//
+// extract-messages and profile-sample used to drop their router's promise, so
+// main() finished before they wrote anything and their output bypassed what
+// main does to every other command's output: `--pick` saw nothing ("command
+// output was not JSON", exit 1) and a result over 50 KB was printed as a bare
+// `@file:<path>` instead of the JSON it names.
+describe('#6332: extract-messages and profile-sample output goes through main', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-profile-test-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function sessionsWith(projectNames) {
+    const sessionsDir = path.join(tmpDir, 'projects');
+    for (const name of projectNames) {
+      fs.mkdirSync(path.join(sessionsDir, name), { recursive: true });
+      fs.writeFileSync(
+        path.join(sessionsDir, name, 'session-001.jsonl'),
+        `${JSON.stringify({ type: 'user', userType: 'external', message: { content: `hello from ${name}` }, timestamp: Date.now() })}\n`,
+      );
+    }
+    return sessionsDir;
+  }
+  const env = () => ({ GSD_TEMP_DIR: path.join(tmpDir, 'gsd-tmp') });
+
+  test('--pick returns the named field of extract-messages', async () => {
+    const sessionsDir = sessionsWith(['my-project']);
+    const result = await runGsdToolsAsync(['extract-messages', 'my-project', '--path', sessionsDir, '--pick', 'messages_extracted'], tmpDir, env());
+    assert.deepStrictEqual(result, { success: true, output: '1', exitCode: 0 });
+  });
+
+  test('--pick returns the named field of profile-sample', async () => {
+    const sessionsDir = sessionsWith(['my-project']);
+    const result = await runGsdToolsAsync(['profile-sample', '--path', sessionsDir, '--pick', 'messages_sampled'], tmpDir, env());
+    assert.deepStrictEqual(result, { success: true, output: '1', exitCode: 0 });
+  });
+
+  test('a profile-sample result over 50 KB is printed as JSON, not as an @file: reference', async () => {
+    // 700 projects with long names make the per-project breakdown exceed 50 KB.
+    const names = Array.from({ length: 700 }, (_, i) => `project-${String(i).padStart(4, '0')}-${'x'.repeat(60)}`);
+    const sessionsDir = sessionsWith(names);
+    const result = await runGsdToolsAsync(['profile-sample', '--path', sessionsDir, '--limit', '700'], tmpDir, env());
+    assert.ok(result.success, `Failed: ${result.error}`);
+    assert.ok(Buffer.byteLength(result.output) > 50 * 1024, `the fixture must exceed the 50 KB threshold, got ${Buffer.byteLength(result.output)}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.projects_sampled, 700);
+    assert.strictEqual(out.project_breakdown.length, 700);
   });
 });
 
@@ -85,7 +141,7 @@ describe('extract-messages command', () => {
     cleanup(tmpDir);
   });
 
-  test('extracts user messages from synthetic session', () => {
+  test('extracts user messages from synthetic session', async () => {
     const sessionsDir = path.join(tmpDir, 'projects');
     const projectDir = path.join(sessionsDir, 'my-project');
     fs.mkdirSync(projectDir, { recursive: true });
@@ -101,7 +157,7 @@ describe('extract-messages command', () => {
       messages.map(m => JSON.stringify(m)).join('\n')
     );
 
-    const result = runGsdTools(['extract-messages', 'my-project', '--path', sessionsDir, '--raw'], tmpDir);
+    const result = await runGsdToolsAsync(['extract-messages', 'my-project', '--path', sessionsDir, '--raw'], tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     assert.strictEqual(out.messages_extracted, 2, 'should extract 2 genuine user messages');
@@ -109,7 +165,7 @@ describe('extract-messages command', () => {
     assert.ok(out.output_file, 'should have output file path');
   });
 
-  test('filters out meta and internal messages', () => {
+  test('filters out meta and internal messages', async () => {
     const sessionsDir = path.join(tmpDir, 'projects');
     const projectDir = path.join(sessionsDir, 'filter-test');
     fs.mkdirSync(projectDir, { recursive: true });
@@ -127,7 +183,7 @@ describe('extract-messages command', () => {
       messages.map(m => JSON.stringify(m)).join('\n')
     );
 
-    const result = runGsdTools(['extract-messages', 'filter-test', '--path', sessionsDir, '--raw'], tmpDir);
+    const result = await runGsdToolsAsync(['extract-messages', 'filter-test', '--path', sessionsDir, '--raw'], tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     assert.strictEqual(out.messages_extracted, 2, 'should only extract 2 genuine external messages');
@@ -147,8 +203,8 @@ describe('profile-questionnaire command', () => {
     cleanup(tmpDir);
   });
 
-  test('returns questionnaire structure', () => {
-    const result = runGsdTools('profile-questionnaire --raw', tmpDir);
+  test('returns questionnaire structure', async () => {
+    const result = await runGsdToolsAsync('profile-questionnaire --raw', tmpDir);
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
     assert.ok(out.questions, 'should have questions array');
@@ -187,7 +243,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempDir, cleanup } = require('./helpers.cjs');
+const { runGsdToolsAsync, createTempDir, cleanup } = require('./helpers.cjs');
 
 describe('bug-866: profile-pipeline temp dirs under GSD_TEMP_DIR', () => {
   let tmpDir;
@@ -221,13 +277,13 @@ describe('bug-866: profile-pipeline temp dirs under GSD_TEMP_DIR', () => {
     return sessionsDir;
   }
 
-  test('extract-messages output_file is under GSD_TEMP_DIR, not os.tmpdir() root', () => {
+  test('extract-messages output_file is under GSD_TEMP_DIR, not os.tmpdir() root', async () => {
     const sessionsDir = createSessions(tmpDir);
 
     // Pass the isolated tmp root so the child's os.tmpdir() = isolatedSysTmp.
     // Belt-and-suspenders: set all three env vars Node checks (TMPDIR=POSIX,
     // TEMP+TMP=Windows).
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['extract-messages', 'test-project-866', '--path', sessionsDir, '--raw'],
       tmpDir,
       { TMPDIR: isolatedSysTmp, TEMP: isolatedSysTmp, TMP: isolatedSysTmp }
@@ -268,10 +324,10 @@ describe('bug-866: profile-pipeline temp dirs under GSD_TEMP_DIR', () => {
     );
   });
 
-  test('profile-sample output_file is under GSD_TEMP_DIR, not os.tmpdir() root', () => {
+  test('profile-sample output_file is under GSD_TEMP_DIR, not os.tmpdir() root', async () => {
     const sessionsDir = createSessions(tmpDir);
 
-    const result = runGsdTools(
+    const result = await runGsdToolsAsync(
       ['profile-sample', '--path', sessionsDir, '--raw'],
       tmpDir,
       { TMPDIR: isolatedSysTmp, TEMP: isolatedSysTmp, TMP: isolatedSysTmp }

@@ -146,6 +146,7 @@ build/
 /gsd-core/bin/lib/pristine-baseline.cjs
 /gsd-core/bin/lib/code-review-flags.cjs
 /gsd-core/bin/lib/code-review-depth.cjs
+/gsd-core/bin/lib/code-unit-cap.cjs
 /gsd-core/bin/lib/context-utilization.cjs
 /gsd-core/bin/lib/artifacts.cjs
 /gsd-core/bin/lib/command-arg-projection.cjs
@@ -160,6 +161,9 @@ build/
 /gsd-core/bin/lib/opencode-version.cjs
 /gsd-core/bin/lib/jsonc-edit.cjs
 /gsd-core/bin/lib/review-lane-runner.cjs
+/gsd-core/bin/lib/http-body-cap.cjs
+/gsd-core/bin/lib/in-process-cli.cjs
+/gsd-core/bin/lib/invocation-scope.cjs
 /gsd-core/bin/lib/reviewer-step-dispatch.cjs
 /gsd-core/bin/lib/clusters.cjs
 /gsd-core/bin/lib/installer-migrations/001-legacy-orphan-files.cjs
@@ -249,6 +253,7 @@ build/
 /gsd-core/bin/lib/health-diagnostic-rules/milestone-archive-hygiene.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/consistency.cjs
 /gsd-core/bin/lib/health-diagnostic-rules/install-surface-shadowing.cjs
+/gsd-core/bin/lib/health-diagnostic-rules/context-bridge.cjs
 /gsd-core/bin/lib/command-roster.cjs
 /gsd-core/bin/lib/runtime-artifact-conversion.cjs
 /gsd-core/bin/lib/runtime-artifact-layout.cjs

@@ -518,6 +518,152 @@ describe('roadmap upgrade --convention bracket', () => {
     );
   });
 
+  // ── #6351 — rollback must not overwrite a file another writer changed after the migration wrote it ──
+  //
+  // The migration's last write (config.json) is made to fail, and at that moment a concurrent writer saves its own
+  // content over the named files, which is the window the rollback used to ignore: it put every snapshot back, silently
+  // destroying the edit. config.json is the migration's own final write, so a failure there is never blamed on another
+  // writer: it is restored even when the failed write tore the file. Fault injection is a JS-level replacement of
+  // fs.writeFileSync, uid-independent like the test above.
+  describe('#6351: rollback leaves a file another writer changed', () => {
+    // `onFail(realWrite)` runs when the guarded write is attempted, then the write throws. `guarded` names the file whose
+    // write fails (config.json by default).
+    function failWrite(t, cwd, plan, { guarded = 'config.json', onFail = () => {} } = {}) {
+      const guardedPath = path.join(cwd, '.planning', guarded);
+      const realWrite = fs.writeFileSync;
+      let failed = false; // only the migration's own write fails: the rollback's restore must be able to write
+      const writeMock = mock.method(fs, 'writeFileSync', (target, data, opts) => {
+        if (!failed && path.resolve(String(target)) === guardedPath) {
+          failed = true;
+          onFail((file, text) => realWrite.call(fs, file, text, 'utf8'));
+          throw Object.assign(new Error(`ENOSPC: no space left on device, write '${guardedPath}'`), { code: 'ENOSPC' });
+        }
+        return realWrite.call(fs, target, data, opts);
+      });
+      t.after(() => writeMock.mock.restore());
+      let caught;
+      try {
+        applyMigration(cwd, plan, { dryRun: false });
+      } catch (err) {
+        caught = err;
+      }
+      writeMock.mock.restore();
+      assert.ok(caught, 'the injected write failure must throw');
+      assert.match(caught.message, /Migration failed and rolled back/);
+      return caught;
+    }
+
+    const concurrentWriter = (writes) => (write) => { for (const [file, text] of writes) write(file, text); };
+    const asBytes = (text) => Buffer.from(text).toString('base64');
+    const withBytes = (tree, relPath, text) => tree.map((entry) => (entry.path === relPath ? { ...entry, bytes: asBytes(text) } : entry));
+
+    // STATE.md and PROJECT.md carry cross-references only on the legacy (milestone-prefixed) path.
+    const SEEDED = {
+      'STATE.md': ['---', 'gsd_state_version: "1.0"', 'status: executing', '---', '', '# Project State', '', '## Current Position', '',
+        'Phase: 1 (Alpha) — EXECUTING', 'Plan: 1 of 1', 'Status: Executing', '', 'See Phase 1: Alpha for the plan.', ''].join('\n'),
+      'PROJECT.md': ['# Project', '', '## Context', '', 'Phase 1: Alpha is first.', ''].join('\n'),
+    };
+    function legacyFixtureWithStateAndProject() {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      for (const [name, text] of Object.entries(SEEDED)) fs.writeFileSync(path.join(cwd, '.planning', name), text, 'utf8');
+      const plan = computeMigrationPlan(cwd, {});
+      assert.deepEqual([...new Set(plan.crossRefEdits.map((e) => e.file))].sort(), ['PROJECT.md', 'STATE.md'], 'precondition: both files are rewritten');
+      return { cwd, plan };
+    }
+
+    test('an external edit to ROADMAP.md survives, is named, and every other file is restored', (t) => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const planningPath = path.join(cwd, '.planning');
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      const before = snapshotTree(planningPath);
+      const external = '# Roadmap rewritten by another writer\n';
+
+      const caught = failWrite(t, cwd, plan, { onFail: concurrentWriter([[path.join(planningPath, 'ROADMAP.md'), external]]) });
+
+      assert.match(caught.message, /NOT restored \(changed by another writer after the migration wrote them, left as found\): ROADMAP\.md \(modified\)/);
+      assert.deepEqual(snapshotTree(planningPath), withBytes(before, 'ROADMAP.md', external),
+        'ROADMAP.md keeps the external edit; renames are reversed and config.json is back to its snapshot');
+    });
+
+    for (const name of ['STATE.md', 'PROJECT.md']) {
+      test(`an external edit to ${name} survives and is named; the other file is restored`, (t) => {
+        const { cwd, plan } = legacyFixtureWithStateAndProject();
+        const planningPath = path.join(cwd, '.planning');
+        const before = snapshotTree(planningPath);
+        const external = `${SEEDED[name]}\nAn edit saved by another writer.\n`;
+
+        const caught = failWrite(t, cwd, plan, { onFail: concurrentWriter([[path.join(planningPath, name), external]]) });
+
+        assert.ok(caught.message.includes(`${name} (modified)`), `the message names ${name}: ${caught.message}`);
+        assert.deepEqual(snapshotTree(planningPath), withBytes(before, name, external));
+      });
+    }
+
+    test('with no concurrent writer the rollback is byte-identical and reports nothing as not restored, STATE.md and PROJECT.md included', (t) => {
+      const { cwd, plan } = legacyFixtureWithStateAndProject();
+      const planningPath = path.join(cwd, '.planning');
+      const before = snapshotTree(planningPath);
+
+      const caught = failWrite(t, cwd, plan);
+
+      assert.doesNotMatch(caught.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(planningPath), before);
+    });
+
+    test('an external edit to a file the migration rewrote under a renamed phase directory survives at its original path', (t) => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const planningPath = path.join(cwd, '.planning');
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      const entry = plan.phases.find((phase) => (phase.dependsOnRewrites ?? []).length > 0);
+      assert.ok(entry, 'fixture must provide a depends_on rewrite');
+      const rewrite = entry.dependsOnRewrites[0];
+      const renamedPath = path.join(planningPath, 'phases', entry.newDir, rewrite.finalName);
+      const originalRel = path.posix.join('phases', entry.oldDir, rewrite.oldName);
+      const external = '---\nphase: edited elsewhere\n---\n# edited\n';
+
+      const caught = failWrite(t, cwd, plan, { onFail: concurrentWriter([[renamedPath, external]]) });
+
+      assert.ok(caught.message.includes(`${originalRel} (modified)`), `the message names the file at its restored path: ${caught.message}`);
+      assert.equal(fs.readFileSync(path.join(planningPath, originalRel), 'utf8'), external);
+    });
+
+    test('a write that fails partway tears the file but is the migration\'s own: ROADMAP.md is restored, not blamed on another writer', (t) => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const planningPath = path.join(cwd, '.planning');
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      const before = snapshotTree(planningPath);
+
+      const caught = failWrite(t, cwd, plan, {
+        guarded: 'ROADMAP.md',
+        onFail: concurrentWriter([[path.join(planningPath, 'ROADMAP.md'), '# half a roadm']]),
+      });
+
+      assert.doesNotMatch(caught.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(planningPath), before);
+    });
+
+    test('a config.json write that fails partway is restored to its snapshot, and a config.json the migration was creating is removed', (t) => {
+      const existing = materializeFixture('legacy-multi-milestone');
+      const existingPlanning = path.join(existing, '.planning');
+      const existingPlan = computeMigrationPlan(existing, { convention: 'bracket' });
+      const existingBefore = snapshotTree(existingPlanning);
+      const torn = failWrite(t, existing, existingPlan, { onFail: concurrentWriter([[path.join(existingPlanning, 'config.json'), '{"proj']]) });
+      assert.doesNotMatch(torn.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(existingPlanning), existingBefore, 'the torn config.json is back to its snapshot');
+
+      const created = materializeFixture('legacy-multi-milestone');
+      const createdPlanning = path.join(created, '.planning');
+      // the plan needs project_code from config.json, so it is computed first; the file then goes missing, so the
+      // migration creates it
+      const createdPlan = computeMigrationPlan(created, { convention: 'bracket' });
+      fs.unlinkSync(path.join(createdPlanning, 'config.json'));
+      const createdBefore = snapshotTree(createdPlanning);
+      const tornCreate = failWrite(t, created, createdPlan, { onFail: concurrentWriter([[path.join(createdPlanning, 'config.json'), '{"proj']]) });
+      assert.doesNotMatch(tornCreate.message, /NOT restored/);
+      assert.deepEqual(snapshotTree(createdPlanning), createdBefore, 'the partial config.json the failed write created is removed');
+    });
+  });
+
   test('an applied migration is idempotent on re-run', () => {
     const cwd = materializeFixture('mnn-multi-milestone');
     const first = runBracketUpgrade(cwd, ['--apply']);

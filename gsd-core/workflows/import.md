@@ -72,17 +72,19 @@ File not found: {FILEPATH}
 
 Load project context for conflict detection:
 
-1. Read `.planning/ROADMAP.md` — extract phase structure, phase numbers, dependencies
+1. Read `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`) — extract phase structure, phase numbers, dependencies
 2. Read `.planning/PROJECT.md` — extract project constraints, tech stack, scope boundaries.
    **If PROJECT.md does not exist:** skip constraint checks that rely on it and display:
    ```
    GSD > Note: No PROJECT.md found. Conflict checks against project constraints will be skipped.
    ```
-3. Read `.planning/REQUIREMENTS.md` — extract existing requirements for overlap and contradiction checks.
+3. Read `{planning_root}/REQUIREMENTS.md` — extract existing requirements for overlap and contradiction checks.
    **If REQUIREMENTS.md does not exist:** skip requirement conflict checks and continue.
 4. Glob for all CONTEXT.md files across phase directories:
    ```bash
-   find .planning/phases/ -name "*-CONTEXT.md" -o -name "CONTEXT.md" 2>/dev/null
+   PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+   : "${PLANNING_ROOT:?}"
+   find "${PLANNING_ROOT}/phases/" -name "*-CONTEXT.md" -o -name "CONTEXT.md" 2>/dev/null
    ```
    Read each CONTEXT.md found — extract locked decisions (any decision in a `<decisions>` block)
 
@@ -175,14 +177,14 @@ Apply GSD naming convention for the output filename:
 - NEVER use `PLAN-01.md`, `plan-01.md`, or any other format
 - NN = phase number (zero-padded), MM = plan number within the phase (zero-padded)
 
-Determine the target directory by querying `init.phase-op` for the phase number extracted in `plan_read_input`. This ensures the `project_code` prefix from `.planning/config.json` is applied:
+Determine the target directory by querying `init.phase-op` for the phase number extracted in `plan_read_input`. This ensures the `project_code` prefix from `{planning_root}/config.json` is applied:
 
 ```bash
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.phase-op ${GSD_WS:+--ws=${GSD_WS##* }} "{NN}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 expected_phase_dir=$(echo "$INIT" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).expected_phase_dir)")
@@ -239,15 +241,17 @@ If the checker returns clean:
 
 <step name="plan_finalize">
 
-Update `.planning/ROADMAP.md` to reflect the new plan:
+Update `{planning_root}/ROADMAP.md` to reflect the new plan:
 - Add the plan to the Plans list under the correct phase section
 - Include the plan name and description
 
-Update `.planning/STATE.md` if appropriate (e.g., increment total plan count).
+Update `{planning_root}/STATE.md` if appropriate (e.g., increment total plan count).
 
 Commit the imported plan and updated files:
 ```bash
-gsd_run query commit "docs({phase}): import plan from {basename FILEPATH}" --files .planning/phases/{phase}/{plan}-PLAN.md .planning/ROADMAP.md
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs({phase}): import plan from {basename FILEPATH}" --files "${PLANNING_ROOT}/phases/{phase}/{plan}-PLAN.md" "${PLANNING_ROOT}/ROADMAP.md"
 ```
 
 Display completion:

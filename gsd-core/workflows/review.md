@@ -152,7 +152,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 PHASE_ARG=$(echo "$GSD_ARGS" | sed -nE 's/.*--phase[[:space:]]+([A-Za-z0-9._-]+).*/\1/p')
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.review ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
@@ -171,11 +171,11 @@ re-run `mktemp -d` later — every block must resolve to this same directory, or
 
 Then read:
 1. `.planning/PROJECT.md` (first 80 lines — project context)
-2. Phase section from `.planning/ROADMAP.md`
+2. Phase section from `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`)
 3. All `*-PLAN.md` files in the phase directory
 4. `*-CONTEXT.md` if present (user decisions)
 5. `*-RESEARCH.md` if present (domain research)
-6. `.planning/REQUIREMENTS.md` (requirements this phase addresses)
+6. `{planning_root}/REQUIREMENTS.md` (requirements this phase addresses)
 </step>
 
 <step name="build_prompt">
@@ -465,7 +465,7 @@ A lane that will not run reports a typed reason rather than an empty file — `m
 `egress_host_changed`, `unknown_handler`, `prompt_exceeds_context` (the prompt is over
 the lane's cap — refused, never trimmed; its review file carries a `review did not run: prompt exceeds` stub).
 **`egress_host_changed` means the lane
-was consented to send plans to one destination and `.planning/config.json` now names another; it is
+was consented to send plans to one destination and `{planning_root}/config.json` now names another; it is
 blocked, not silently redirected** (ADR-2782 D5).
 
 Display progress:

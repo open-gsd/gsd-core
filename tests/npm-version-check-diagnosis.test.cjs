@@ -19,9 +19,8 @@
  * (gsd-core/bin/lib/*.cjs) does not exist yet when check-env.cjs runs as
  * its own standalone pre-`npm ci` CI step (an earlier version of this fix
  * imported it directly and crashed every real CI job with
- * MODULE_NOT_FOUND). Kept in scripts/lib/ (not scripts/check-env.cjs
- * itself, which runs its CLI unconditionally on require) so it can be
- * required directly here without triggering a real environment check.
+ * MODULE_NOT_FOUND). Kept in scripts/lib/ so the wording is tested here
+ * without a project directory; tests/check-env.test.cjs covers the checks.
  */
 
 const { describe, test } = require('node:test');

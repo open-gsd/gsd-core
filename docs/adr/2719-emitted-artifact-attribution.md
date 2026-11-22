@@ -91,6 +91,8 @@ Bucketing the sizes was rejected: rounding to the nearest 2KB lets a PR add 1.9K
 
 The push-to-`next` run publishes the manifest and size maps; the PR lane restores them from cache, keyed on **the `next` sha the PR was merged with**. That key discipline is load-bearing — a stale baseline mis-attributes silently. Cache miss falls back to an in-job build at `origin/next`.
 
+> **Amendment (#5797):** the measuring point and the fallback build point in the paragraph above are corrected in the "Amendment (2026-11-09)" section at the end of this file. On a `pull_request` lane the tested tree is GitHub's merge ref, which can contain a newer `next` than `pull_request.base.sha` names; the pin is the floor of the base the gate measures from, not that base itself, and the fallback builds at the attribution base, not at `origin/next`.
+
 Bot-committing the baseline to `next` post-merge was considered and rejected. It is close to ADR-2264 Phase 3 (#2268), and notably that ADR's objection does not apply here: the Amendment deferred CI-owned regen because it "needs a write-token workflow running on PR code (an injection surface)," whereas committing post-merge runs already-reviewed code. It was rejected on a different cost — `next` carries `strict: true`, so a bot commit after every emitted-byte-changing merge doubles the rate `next` advances and taxes all ~30 open PRs. Its one unique benefit is an absolute anchor, which §1 establishes is not required.
 
 ### 6. It is a test, not a CI job
@@ -137,3 +139,19 @@ A baseline-unavailable path must never be a bare `return`. In `node:test` that i
 - `scripts/ci-rebase-check.cjs:108` — merges base into HEAD before tests, which is why the baseline is `next` HEAD rather than the merge-base
 - `scripts/lib/allowlist-ratchet.cjs:157-230` — `assertFileBaseline`, the size ratchet being replaced
 - ADR-1239 (Phase-B safety net), ADR-2264 (superseded by this ADR), ADR-3660 / ADR-1508 (Runtime Artifact family)
+
+## Amendment (2026-11-09): the attribution base is the commit the tested tree contains, and the pin is its floor (#5797)
+
+Recorded here rather than by rewriting section 5, since accepted ADRs are append-only (`docs/contributor-standards.md`, "Amending an accepted ADR").
+
+Section 5 says the PR lane's cache is keyed on "the `next` sha the PR was merged with" and that a cache miss "falls back to an in-job build at `origin/next`". Both statements rest on a premise that does not always hold. On a `pull_request` lane `actions/checkout` tests GitHub's merge ref, which is built on the newest `next` GitHub had when it refreshed the ref; `pull_request.base.sha` (the `GSD_EMITTED_BASE` pin, #2854) can be older than that. The "Rebase check" merge of the pin into HEAD is then a no-op, so `merge-base(pin, HEAD)` is the old sha and the ack-trailer and changed-path ranges sweep in `next` commits the PR never authored. PR #5119 went red on four "declared twice" trailer keys from 34 such commits (#5797).
+
+What holds now (PR #5871, `resolveAttributionBase` and `advanceToMergedBase` in `tests/helpers/emitted-runtime.cjs`):
+
+- **The pin is a floor, not the key.** On a lane where `GITHUB_BASE_REF` is set and `refs/remotes/origin/<base>` resolves, the attribution base advances from `merge-base(pin, HEAD)` to the newest commit on `origin/<base>`'s first-parent chain that HEAD contains, when that commit descends from `merge-base(pin, HEAD)`. The base is therefore always a commit HEAD contains: the pin's merge-base bounds it from below and the tested tree from above. It never moves below `merge-base(pin, HEAD)` and never lands on a commit HEAD lacks.
+- **The cache key stays the pin; the artifact is validated against the attribution base.** The restore is still keyed `emitted-baseline-<pull_request.base.sha>` (`.github/workflows/test.yml`), so on a stale pin it hits. The restored artifact records the sha it was built at, and `validateBaseline` (`tests/helpers/emitted-baseline.cjs`) refuses it when that sha is not the attribution base, so a stale pin degrades to the in-job build as the stale-baseline rule in section 5 requires. When the pin equals the merge ref's base (the usual case) nothing changes.
+- **The fallback builds at the attribution base**, not at `origin/next`: the in-job build runs at the sha the measurement is relative to, so a tree that lags `origin/next` is still compared against the commit it actually contains.
+- **The previous behaviour is kept on any git failure.** An unset `GITHUB_BASE_REF` (push, `merge_group`, the gsd-test container), an unresolvable `origin/<base>`, a failed `merge-base`, an `origin/<base>` first-parent chain none of whose commits HEAD contains, a chosen commit HEAD does not contain (possible in a shallow clone), or a result that does not descend from the pin all keep `merge-base(pin, HEAD)`; when a base branch was named, a diagnostic says why the floor was kept, and on an advance it names both shas.
+- **A release-merge PR keeps its fork point.** For a same-repository `release/X.Y.0` or `hotfix/X.Y.Z` PR into `main` (#5902, PR #5907) the base is the PR's fork point on `next`; its `GITHUB_BASE_REF` is `main` and `origin/main` can descend from that fork point, so the advance is skipped there.
+
+The range the trailers are read from is unchanged: `git log $(git merge-base <base> HEAD)..HEAD`, "the PR's own commits and no others" ([ADR-3942](3942-emitted-drift-ack-commit-trailer.md) section 1). This amendment restores that property on lanes where the pin had drifted; a genuine trailer conflict inside the PR's own commits still fails. The sibling pin `AUDIT_BASELINE_REF` reads the same `pull_request.base.sha` and is tracked separately as #5897.

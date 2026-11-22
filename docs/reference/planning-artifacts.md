@@ -121,7 +121,7 @@ See [CONFIGURATION](../CONFIGURATION.md) for the complete schema.
 |---|---|
 | **Purpose** | Machine-readable pause state written when work is interrupted. Contains the resume point, in-progress context, and continuation instructions. Consumed exactly once — on resume. |
 | **Produced by** | `/gsd-pause-work`. |
-| **Consumed by** | `/gsd-resume-work`. |
+| **Consumed by** | `/gsd-resume-work` (its `consume_handoff` step deletes it, with the `.continue-here.md` checkpoints, and commits the removal); `/gsd-next` and `progress --next` (Gate 0) and the smart-entry classifier read its presence as the recorded pause and route to resume while it exists. |
 
 ---
 

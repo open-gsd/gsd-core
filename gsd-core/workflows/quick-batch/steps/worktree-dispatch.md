@@ -135,13 +135,33 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
    process-spawns the executor via `dispatch-isolation --json --cwd-target
    --prompt`, exactly as `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`'s
    "orchestrator-worktree" section
-   describes — reuse that mechanism verbatim, substituting this item's
-   `${quick_id}`/`${ITEM_DIR}`/`${quick_id}-PLAN.md` for its
-   `{plan_number}`/`{phase_dir}`/`{plan_file}` placeholders.
+   describes — reuse that mechanism verbatim, substituting this item's values
+   for the placeholders that fragment's compose step lists (#5934). A quick
+   item has no phase and no phase-plan-index `id`, so each one has a value below
+   or is not applicable, and no literal `{...}` placeholder may reach the
+   executor prompt or the worker-record summary path:
+   - `{plan_number}` = `${quick_id}`; `{phase_dir}` = `${ITEM_DIR}`;
+     `{plan_file}` = `${quick_id}-PLAN.md`.
+   - `{plan_padded}` = `${quick_id}`, so the worker-record summary path is
+     `${ITEM_DIR}/${quick_id}-SUMMARY.md`.
+   - `{project_rel}` = `${SCOPE_REL}/PROJECT.md`; `{state_rel}` = `${SCOPE_REL}/STATE.md`;
+     `{config_rel}` = `${SCOPE_REL}/config.json`. `SCOPE_REL="${PLANNING_ROOT#"${PROJECT_ROOT}"/}"`, with
+     `PLANNING_ROOT` from `gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root`.
+   - `{phase_number}`, `{phase_name}` and `{plan_id}` are not applicable. The
+     prompt header line reads `Execute quick item ${quick_id}.` in place of
+     `Execute plan {plan_number} of phase {phase_number}-{phase_name}.` Omit the `[gsd:dispatch phase="…" plan="…"]`
+     marker line: its phase token is numeric (`hooks/lib/dispatch-identity.js`) and a quick item has none, and
+     the guard that reads it gates harness-worktree Agent dispatches, not this
+     process spawn.
 
    **`isolation == "none"`:** no worktree. Dispatch the executor inline on the
    primary checkout (same prompt, minus the worktree-only framing), one item
    at a time — `EXEC_CONCURRENCY` is already forced to 1 in this mode.
+   **Record the HEAD the executor left behind (#6203):** the executor's commits
+   move the primary checkout's HEAD, which is the batch's own movement, not a
+   divergence. After each inline executor returns, run
+   `gsd_run quick-batch update --batch "$BATCH_ID" --head-revision "$(git rev-parse HEAD)"`
+   so `/gsd:quick-batch --resume` expects that HEAD.
 
    **Durable worktree-recovery persistence (#3677 — `harness-worktree`/
    `orchestrator-worktree` only, skip for `none`):** immediately after
