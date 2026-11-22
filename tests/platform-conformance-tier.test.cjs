@@ -635,6 +635,29 @@ describe('conformance tier narrowing (#4641)', () => {
   // further down, which needs the same ceiling rather than a second
   // independently-drifting copy of it).
 
+  test('a test file that vanishes between the walk and its read is not counted and does not throw (#6544)', (t) => {
+    // tests/run-tests-temp-root.test.cjs writes tests/helpers-4020-probe.test.cjs
+    // into the real tests tree and unlinks it afterwards. A sibling that walked
+    // the tree in between lists a file whose read then fails with ENOENT.
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    const present = path.join(dir, 'present.test.cjs');
+    const vanished = path.join(dir, 'vanished.test.cjs');
+    fs.writeFileSync(present, "const os = require('node:os');\nos.platform();\n");
+
+    const { tierCount, readCount } = countTierFiles([present, vanished], classifyContent);
+
+    assert.equal(readCount, 1, 'only the file that exists is counted');
+    assert.equal(tierCount, 1, 'the surviving file is classified');
+  });
+
+  test('a read failure other than ENOENT still throws (#6544)', (t) => {
+    const dir = createTempDir('gsd-6544-');
+    t.after(() => cleanup(dir));
+    // A directory path reads as EISDIR: a real fault, not a vanished file.
+    assert.throws(() => countTierFiles([dir], classifyContent), { code: 'EISDIR' });
+  });
+
   test('conformance tier stays a tier, not the suite (#4641)', () => {
     const realTestsDir = path.join(ROOT, 'tests');
     const { suiteOf } = require('../scripts/lib/suite-detection.cjs');
