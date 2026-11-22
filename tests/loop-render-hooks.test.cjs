@@ -106,7 +106,7 @@ after(() => {
 // ─── 1. Canonical-point validation ───────────────────────────────────────────
 
 describe('canonical point validation', () => {
-  test('all 12 canonical points are accepted by resolveLoopHooks with empty registry', () => {
+  test('all 13 canonical points are accepted by resolveLoopHooks with empty registry', () => {
     const emptyRegistry = makeRegistry();
     const config = {};
     for (const p of CANONICAL_POINTS_FALLBACK) {
@@ -116,8 +116,8 @@ describe('canonical point validation', () => {
     }
   });
 
-  test('12 canonical points total', () => {
-    assert.strictEqual(CANONICAL_POINTS_FALLBACK.length, 12);
+  test('13 canonical points total', () => {
+    assert.strictEqual(CANONICAL_POINTS_FALLBACK.length, 13);
   });
 
   test('invalid point throws with a clear message', () => {
@@ -167,7 +167,7 @@ describe('canonical point validation', () => {
   });
 
   // FIX 2: all 12 canonical points are listed in the error message
-  test('invalid point error lists the canonical 12', () => {
+  test('invalid point error lists the canonical 13', () => {
     const emptyRegistry = makeRegistry();
     assert.throws(
       () => resolveLoopHooks({ point: 'not:real', registry: emptyRegistry, config: {} }),
@@ -182,9 +182,9 @@ describe('canonical point validation', () => {
   });
 
   // CANONICAL_POINTS is derived from LOOP_HOST_CONTRACT, not from registry keys
-  test('CANONICAL_POINTS and CANONICAL_POINTS_FALLBACK are the same 12 points', () => {
+  test('CANONICAL_POINTS and CANONICAL_POINTS_FALLBACK are the same 13 points', () => {
     assert.deepEqual(CANONICAL_POINTS, CANONICAL_POINTS_FALLBACK);
-    assert.strictEqual(CANONICAL_POINTS.length, 12);
+    assert.strictEqual(CANONICAL_POINTS.length, 13);
   });
 });
 

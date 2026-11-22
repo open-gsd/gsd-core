@@ -1085,7 +1085,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
         [
           '# Roadmap',
           '',
-          '## Goals for v2.0',
+          '## v2.0 Goals',
           '',
           'Ship the thing.',
           '',
@@ -1119,7 +1119,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
         const result = runGsdTools(args, dir);
 
         assert.equal(result.success, false, result.output);
-        assert.match(result.error, /Goals for v2\.0/);
+        assert.match(result.error, /v2\.0 Goals/);
         assert.match(result.error, /\[CK\.02\] v2\.0/);
         assert.deepEqual(snapshotTree(planning(dir)), before);
       });
@@ -1133,7 +1133,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       const result = runGsdTools(['phase', 'add', 'First'], dir);
 
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /Goals for v2\.0/);
+      assert.match(result.error, /v2\.0 Goals/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
     });
   });

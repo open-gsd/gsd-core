@@ -1056,6 +1056,20 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['inside $( )', 'out=$(claude --agent gsd-debugger -p hi); echo "$out"'],
     ['inside bash -c', "bash -c 'claude --agent gsd-debugger -p hi'"],
     ['inside eval', 'eval "claude --agent gsd-debugger -p hi"'],
+    ['brace alternatives in the value (#6439)', 'claude --agent {gsd-debugger,x} -p x'],
+    ['brace alternative after a prefix (#6439)', 'claude --agent gsd-{debugger,x} -p x'],
+    ['brace alternatives in the --agent= form (#6439)', 'claude -p x --agent={x,gsd-debugger}'],
+    ['plugin-namespaced brace alternative (#6439)', 'claude --agent {gsd:gsd-debugger,x} -p x'],
+    ['nested brace alternatives (#6439)', 'claude --agent {x,{y,gsd-debugger}} -p x'],
+    ['a brace that spans the flag and its value (#6439)', 'claude {--agent,gsd-debugger} -p x'],
+    ['a brace that builds an equals-form flag word (#6439)', 'claude --{agent,x}=gsd-debugger -p x'],
+    ['a brace that appends the equals form (#6439)', 'claude --agent{,=gsd-debugger} -p x'],
+    ['double-quoted alternatives inside the braces (#6439)', 'claude --agent {"gsd-debugger",x} -p x'],
+    ['single-quoted alternatives inside the braces (#6439)', "claude --agent {'gsd-debugger',x} -p x"],
+    ['a quoted prefix before a brace group (#6439)', 'claude --agent "gsd-"{debugger,x} -p x'],
+    ['a letter range that includes the missing letter (#6439)', 'claude --agent gsd-debugge{a..z} -p x'],
+    ['a degenerate letter range (#6439)', 'claude --agent gsd-debugge{r..r} -p x'],
+    ['65 alternatives, past the expansion limit (#6439)', `claude --agent {${Array.from({ length: 65 }, (_, i) => `a${i}`).join(',')}} -p x`],
     ['piped', 'echo go | claude --agent gsd-debugger -p'],
   ];
 
@@ -1076,6 +1090,11 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['reading the agent file', 'cat agents/gsd-debugger.md'],
     ['the name in a heredoc body', "cat <<'EOF'\nclaude --agent gsd-debugger\nEOF"],
     ['a different binary that ends in claude', 'myclaude --agent gsd-debugger -p hi'],
+    ['brace alternatives that name other agents (#6439)', 'claude --agent {gsd-planner,gsd-executor} -p x'],
+    ['a brace word that only starts with the name (#6439)', 'claude --agent gsd-debugger{-extra,-more} -p x'],
+    ['a letter range that cannot reach the name (#6439)', 'claude --agent gsd-debugge{a..q} -p x'],
+    ['64 alternatives, at the expansion limit (#6439)', `claude --agent {${Array.from({ length: 64 }, (_, i) => `a${i}`).join(',')}} -p x`],
+    ['63 alternatives, under the expansion limit (#6439)', `claude --agent {${Array.from({ length: 63 }, (_, i) => `a${i}`).join(',')}} -p x`],
     ['the gsd-tools model lookup the manager really runs', 'gsd_run query resolve-model gsd-debugger'],
   ];
 
@@ -1084,6 +1103,25 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
       assertAllowed(runHook(bash(command)), label);
     });
   }
+
+  test('property: a brace list after --agent is denied exactly when an alternative is the debugger agent (#6439)', () => {
+    const fc = require('fast-check');
+    const NAMES = ['gsd-debugger', 'gsd:gsd-debugger', 'gsd-planner', 'gsd-executor', 'x', 'gsd-debugger-extra'];
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom(...NAMES), { minLength: 2, maxLength: 4 }),
+      fc.boolean(),
+      (alts, equalsForm) => {
+        const list = `{${alts.join(',')}}`;
+        const command = equalsForm ? `claude -p x --agent=${list}` : `claude --agent ${list} -p x`;
+        const r = runHook(bash(command));
+        if (alts.some((a) => a === 'gsd-debugger' || a === 'gsd:gsd-debugger')) {
+          assertBlocked(r, command, { code: 'debugger-cli-spawn', tool: 'Bash' });
+        } else {
+          assertAllowed(r, command);
+        }
+      },
+    ), { numRuns: 20 });
+  });
 
   test('the Kimi Shell vocabulary is covered too', () => {
     assertBlocked(
@@ -3717,6 +3755,85 @@ describe('gsd-secret-read-guard: strings re-interpreted by find, xargs and watch
         assertBlocked(runHook(bash(`find . -exec sh -c 'cat ${name}' \\;`)), name, { tool: 'Bash' });
         assertBlocked(runHook(bash(`echo x | xargs sudo sh -c 'cat ${name}'`)), name, { tool: 'Bash' });
         assertBlocked(runHook(bash(`watch 'cat ${name}'`)), name, { tool: 'Bash' });
+        return true;
+      }),
+      PROPERTY_RUNS,
+    );
+  });
+});
+
+describe('gsd-secret-read-guard: a heredoc or here-string that cat prints into a shell (#6182)', () => {
+  // Oracle: #6182 requires the text `cat` prints from a heredoc or here-string to get the verdict a heredoc given to the
+  // shell directly gets (`bash <<'EOF'`). The bodies a command that does not run them receives (`wc -l`, bare `cat`) stay data.
+  const BLOCKS = [
+    "cat <<'EOF' | bash\ncat .env\nEOF",
+    'cat <<EOF | bash\ncat .env\nEOF',
+    "cat <<< 'cat .env' | bash",
+    "cat <<<'cat .env' | sh",
+    "bash <(cat <<EOF\ncat .env\nEOF\n)",
+    "source <(cat <<< 'cat .env')",
+    ". <(cat <<'EOF'\ncat .env\nEOF\n)",
+    "cat - <<EOF | sh\ncat .env\nEOF", // `-` is stdin
+    "cat -n <<EOF | bash\ncat .env\nEOF", // an option does not change the stdin
+    "cat <<EOF | sudo bash\ncat .env\nEOF",
+    "cat <<EOF | bash -o pipefail\ncat .env\nEOF",
+    "cat <<'EOF' 2>/dev/null | bash\ncat .env\nEOF",
+    "cat -A <<EOF | bash\ncat .env\nEOF",
+    "cat -- - <<EOF | bash\ncat .env\nEOF",
+    "cat <<-EOF | bash\n\tcat .env\n\tEOF",
+    "cat <<EOF | env bash\ncat .env\nEOF",
+    // A pass-through between the source and the shell (`tee`, a bare `cat`) still delivers the source's text.
+    "cat <<EOF | tee x | bash\ncat .env\nEOF",
+    "cat <<EOF | cat | bash\ncat .env\nEOF",
+    "tee <<EOF | bash\ncat .env\nEOF",
+    "echo cat .env | tee x | bash",
+    // `-s` keeps stdin as the script; the operands after it are positional parameters, not a script file.
+    "cat <<EOF | sh -s -- a\ncat .env\nEOF",
+    "echo cat .env | bash -s",
+  ];
+  const ALLOWS = [
+    'cat <<EOF | wc -l\ncat .env\nEOF',
+    "cat <<'EOF' | grep cat\ncat .env\nEOF",
+    "cat <<'EOF'\ncat .env\nEOF",
+    "cat <<< 'cat .env' | wc -l",
+    "cat <<< 'cat .env'",
+    "cat file.sh <<EOF | bash\ncat .env\nEOF", // a file operand: stdin is never read
+    'cat script.sh | bash',
+    "bash <(cat <<EOF\necho hello\nEOF\n)",
+    "cat <<'EOF' | bash\necho hello\nEOF",
+    "cat <<< 'echo hello' | bash",
+    "cat <<EOF | tee x | bash\necho hello\nEOF",
+    'echo hello | tee x | bash',
+    'cat script.sh | tee x | bash', // a file operand: the text is not knowable
+    "cat <<EOF | bash script.sh\ncat .env\nEOF", // a script file operand: stdin is data
+  ];
+
+  for (const cmd of BLOCKS) {
+    test(`blocks ${JSON.stringify(cmd)}`, () => {
+      assertBlocked(runHook(bash(cmd)), cmd, { tool: 'Bash', path: '.env' });
+    });
+  }
+  for (const cmd of ALLOWS) {
+    test(`allows ${JSON.stringify(cmd)}`, () => {
+      assertAllowed(runHook(bash(cmd)), cmd);
+    });
+  }
+
+  test('a heredoc to cat is judged like the same heredoc to the shell: the verdicts agree', () => {
+    for (const body of ['cat .env', 'echo hello', 'ls -a']) {
+      const direct = runHook(bash(`bash <<'EOF'\n${body}\nEOF`)).status;
+      const viaCat = runHook(bash(`cat <<'EOF' | bash\n${body}\nEOF`)).status;
+      assert.equal(viaCat, direct, `body ${JSON.stringify(body)}`);
+    }
+  });
+
+  test('property: any secret name read through a cat-fed shell is blocked, in all four forms', () => {
+    fc.assert(
+      fc.property(SECRET, (name) => {
+        assertBlocked(runHook(bash(`cat <<'EOF' | bash\ncat ${name}\nEOF`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`cat <<< 'cat ${name}' | bash`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`bash <(cat <<EOF\ncat ${name}\nEOF\n)`)), name, { tool: 'Bash' });
+        assertBlocked(runHook(bash(`source <(cat <<< 'cat ${name}')`)), name, { tool: 'Bash' });
         return true;
       }),
       PROPERTY_RUNS,

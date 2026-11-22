@@ -1,3 +1,6 @@
+// The workflow prose is the product (source-text-is-the-product): these tests deliberately
+// pin the prose of the complete-milestone.md security_audit_reminder step by substring because
+// the prose is exactly what the executing agent reads at runtime.
 /**
  * Security-audit milestone-close reminder (#6222, slice 1)
  *

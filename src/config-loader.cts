@@ -6,6 +6,8 @@
  * merges built-in defaults (`CONFIG_DEFAULTS`/`CANONICAL_CONFIG_DEFAULTS`),
  * normalizes legacy keys, applies the active-workstream overlay, validates
  * against the config schema, and warns on unknown keys/profile overrides.
+ * A present non-object section blocks inherited projections from that section;
+ * fail-safe projections such as the planner watchdog remain default-on.
  * Behaviour is preserved byte-for-behaviour from the prior location; only
  * the module boundary moved. The core.cjs re-export spine was retired in
  * epic #1267; callers import loadConfig from config-loader.cjs directly.
@@ -133,6 +135,79 @@ function _getConfigNested(parsed: Record<string, unknown>, section: string, fiel
 }
 
 /**
+ * A present non-object section is an explicit inheritance barrier. Remove every
+ * projection the assembled loader would otherwise repopulate from defaults so
+ * its effective object agrees with per-key resolution (#5096 Major 2).
+ */
+const BLOCKED_SECTION_PROJECTIONS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  workflow: [
+    'workflow', 'research', 'plan_checker', 'verifier', 'nyquist_validation',
+    'ai_integration_phase', 'api_coverage_gate', 'post_planning_gaps',
+    'research_before_questions', 'mvp_mode', 'tdd_mode', 'text_mode',
+    'compact_content', 'auto_advance', '_auto_chain_active', 'subagent_timeout',
+    'security_enforcement', 'security_asvs_level', 'security_block_on',
+    'smart_zone_tokens', 'inline_plan_threshold',
+  ],
+  git: [
+    'git', 'branching_strategy', 'base_branch', 'protected_branches',
+    'allow_default_branch_commits', 'repo_tagging', 'phase_branch_template',
+    'milestone_branch_template', 'quick_branch_template',
+  ],
+  planning: ['planning', 'commit_docs', 'search_gitignored', 'sub_repos', 'pr_strict'],
+  // #4570 fail-safe exception: a malformed planner section must not disable
+  // the watchdog merely because consumers read an absent projection as falsy.
+  planner: ['planner', 'planner_stall_detection_enabled'],
+  review: ['review', 'max_prompt_tokens'],
+});
+
+const BARRIER_FAIL_SAFE_PROJECTIONS: ReadonlySet<string> = new Set(['planner_stall_detection_enabled']);
+
+function _explicitFlatFieldsInContainer(
+  parsed: Record<string, unknown>,
+  section: string,
+  container: unknown,
+): Record<string, unknown> | null {
+  if (!isConfigSection(container)) return null;
+  const prefix = `${section}.`;
+  const kept: Record<string, unknown> = {};
+  for (const alias of CONFIG_KEY_ALIASES) {
+    if (alias.section !== section || !alias.resolvedAt.startsWith(prefix) || !Object.hasOwn(parsed, alias.key)) continue;
+    const field = alias.resolvedAt.slice(prefix.length);
+    if (Object.hasOwn(container, field)) kept[field] = container[field];
+  }
+  return Object.keys(kept).length > 0 ? kept : null;
+}
+
+function _removeBlockedSectionDefaults(
+  parsed: Record<string, unknown>,
+  assembled: Record<string, unknown>,
+  flatReadKeys: ReadonlySet<string> = _ALIAS_KEYS,
+): void {
+  for (const [section, projections] of Object.entries(BLOCKED_SECTION_PROJECTIONS)) {
+    if (!Object.prototype.hasOwnProperty.call(parsed, section) || isConfigSection(parsed[section])) continue;
+    for (const projection of projections) {
+      if (BARRIER_FAIL_SAFE_PROJECTIONS.has(projection)) continue;
+      // A flat value in the effective (root plus workstream) config outranks the
+      // blocked nested alias. Only a key the calling branch reads flat (`flatReadKeys`)
+      // counts; every other projection comes from its nested spelling alone, so a stray
+      // top-level key of the same name is not an explicit value and does not keep it.
+      if (projection !== section && flatReadKeys.has(projection) && Object.hasOwn(parsed, projection)) continue;
+      // The container itself is not a flat alias, but the loader may publish a
+      // flat key inside it (`max_prompt_tokens` → `review.max_prompt_tokens`,
+      // CONFIG_KEY_ALIASES `resolvedAt`). Keep only those explicit fields.
+      if (projection === section) {
+        const kept = _explicitFlatFieldsInContainer(parsed, section, assembled[section]);
+        if (kept) {
+          assembled[section] = kept;
+          continue;
+        }
+      }
+      delete assembled[projection];
+    }
+  }
+}
+
+/**
  * #5470: every key the project-config branch of the loader reads from two
  * spellings — the flat top-level key and its nested `<section>.<field>` alias.
  * (With no `.planning/`, the global-defaults branch below projects its own
@@ -180,6 +255,15 @@ const CONFIG_KEY_ALIASES = Object.freeze([
 
 type ConfigKeyAlias = typeof CONFIG_KEY_ALIASES[number];
 type AliasedConfigKey = ConfigKeyAlias['key'];
+
+/** The flat spellings the loader reads; the blocked-section barrier keeps only these. */
+const _ALIAS_KEYS: ReadonlySet<string> = new Set(CONFIG_KEY_ALIASES.map((alias) => alias.key));
+
+/**
+ * The global-defaults branch (no project config) also reads `research_before_questions` flat
+ * (#3894), which has no alias entry because the project branch reads it nested only.
+ */
+const _GLOBAL_DEFAULTS_FLAT_KEYS: ReadonlySet<string> = new Set([..._ALIAS_KEYS, 'research_before_questions']);
 
 /**
  * The alias entry a `config-get` key path names — by its flat key or by its
@@ -663,6 +747,8 @@ const CONFIG_REASON = Object.freeze({
   CONFIG_UNPARSEABLE: 'config_unparseable',
   /** The file exists but could not be read (EACCES/EIO/…) — NOT applied. */
   CONFIG_UNREADABLE: 'config_unreadable',
+  /** A configured federated value has the wrong declared type or enum member. */
+  CONFIG_TYPE_MISMATCH: 'config_type_mismatch',
 } as const);
 
 type ConfigReason = (typeof CONFIG_REASON)[keyof typeof CONFIG_REASON];
@@ -1126,6 +1212,8 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
       // Defensive: keep no-throw contract
     }
 
+    _removeBlockedSectionDefaults(parsed, _baseConfig);
+
     // A1 vs A2: disambiguate by whether a real workstream was requested.
     // Fix 4: empty-string ws ('') resolves the root path → source:'root'.
     const source: ConfigSource = wsRequested ? 'workstream' : 'root';
@@ -1256,11 +1344,14 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
         model_policy: (globalDefaults['model_policy']) || null,
       };
       // Branch D: global-defaults
+      let globalConfig: Record<string, unknown>;
       try {
-        return fallback({ config: _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd), source: 'global-defaults', degraded: false });
+        globalConfig = _applyFederatedOverlay(_globalBaseCfg, globalDefaults, cwd);
       } catch {
-        return fallback({ config: _globalBaseCfg, source: 'global-defaults', degraded: false });
+        globalConfig = _globalBaseCfg;
       }
+      _removeBlockedSectionDefaults(globalDefaults, globalConfig, _GLOBAL_DEFAULTS_FLAT_KEYS);
+      return fallback({ config: globalConfig, source: 'global-defaults', degraded: false });
     } catch {
       // Branch E: no global defaults
       try {
@@ -1326,6 +1417,8 @@ function loadConfig(cwd: string, options: Record<string, unknown> = {}): Record<
 }
 
 export = {
+  BLOCKED_SECTION_PROJECTIONS,
+  BARRIER_FAIL_SAFE_PROJECTIONS,
   loadConfig,
   loadConfigResolved,
   CONFIG_REASON,

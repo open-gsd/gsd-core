@@ -125,9 +125,9 @@
  *     preview, and the real archive-move loop) all genuinely asked "which
  *     phases belong to the current milestone" and are routed through the
  *     owner with the resolved `version` as `versionOverride`.
- *   - `src/milestone.cts` `cmdPhasesClear`: a destructive CLEAR that must
- *     remove every live phase directory except sentinels, regardless of
- *     milestone window — `new-milestone` runs this to wipe the ENTIRE
+ *   - `src/milestone.cts` `cmdPhasesClear`: a CLEAR that must archive
+ *     every live phase directory except sentinels, regardless of
+ *     milestone window — `new-milestone` runs this to archive the ENTIRE
  *     phases tree before starting fresh, not just the outgoing milestone's
  *     slice. Scoping it to one milestone's window would silently leave
  *     out-of-window directories behind instead of clearing/archiving them.

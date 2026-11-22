@@ -44,9 +44,10 @@
  * generator chain) and still exercises genuine negative controls (rows
  * 7-12) that `--check` alone cannot fake past.
  *
- * Every row builds and tears down its own overlay + install target inline
- * (test-matrix "Independence" — no shared `before()` install cache).
- * Cleanup is via `t.after()` (never `try/finally` in the test body).
+ * Rows 1-3 and 18 install the same edit into every runtime and only read the
+ * result, so they share one lazily-built install (`sentinelEmissions`, #6335).
+ * Every other row builds and tears down its own overlay + install target
+ * inline, with cleanup via `t.after()` (never `try/finally` in the test body).
  */
 
 const { test, describe } = require('node:test');
@@ -199,6 +200,7 @@ const ORIGINAL_STEP_CONTENT = readFileNormalized(PILOT_STEP_PATH);
 const ORIGINAL_WORKFLOW_CONTENT = readFileNormalized(PILOT_WORKFLOW_PATH);
 
 const FRAGMENT_SENTINEL = 'GSD-2933-FRAGMENT-EDIT-SENTINEL-4c1a9f';
+const UNICODE_SENTINEL = `GSD-2933-UNICODE-日本語-🎉🔥Ω→∞-${'x'.repeat(4000)}`;
 
 /**
  * Bounds `runOverlayCheck`/`runOverlayGenerate` — a single overlay
@@ -408,18 +410,58 @@ function diffOverlayFromRepoRoot(overlayRoot) {
   return differing.sort();
 }
 
+/**
+ * One overlay holding the single-fragment sentinel edit plus the unicode
+ * sentinel, installed once per runtime and shared by the rows that only READ
+ * the emitted tree (rows 1-3 and 18). Those four rows used to build an
+ * overlay each and run 18 installs each (#6335); they now read one install.
+ * Each runtime's tree is read into memory (the emitted step and workflow, or
+ * null when absent) and removed at once, so at most one tree is on disk. Built
+ * on first use, so a filtered run that selects none of them installs nothing.
+ * An install that fails is remembered and rethrown to every row, never served
+ * as a partial result. A row that changes its edit or its flags still builds
+ * its own overlay and install.
+ */
+let sentinelEmissionCache = null;
+function sentinelEmissions() {
+  if (sentinelEmissionCache) {
+    if (sentinelEmissionCache.error) throw sentinelEmissionCache.error;
+    return sentinelEmissionCache.emissions;
+  }
+  const overlay = buildOverlayRepo({
+    [PILOT_STEP_REL_POSIX]: ORIGINAL_STEP_CONTENT + FRAGMENT_SENTINEL + '\n' + UNICODE_SENTINEL + '\n',
+  });
+  const emissions = new Map();
+  try {
+    for (const runtime of RUNTIMES) {
+      const install = installOverlay(overlay, runtime);
+      try {
+        const read = (rel) => {
+          const file = path.join(install.configDir, rel);
+          return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+        };
+        emissions.set(runtime, { step: read(PILOT_STEP_REL), workflow: read(PILOT_WORKFLOW_REL) });
+      } finally {
+        cleanup(install.root);
+      }
+    }
+  } catch (error) {
+    sentinelEmissionCache = { error };
+    throw error;
+  } finally {
+    cleanup(overlay);
+  }
+  sentinelEmissionCache = { emissions };
+  return emissions;
+}
+
 // ─── Row 1 ──────────────────────────────────────────────────────────────────
 
-test('propagatesSingleFragmentEditToAllRuntimeArtifacts', (t) => {
-  const editedStep = ORIGINAL_STEP_CONTENT + FRAGMENT_SENTINEL + '\n';
-  const overlay = buildOverlayRepo({ [PILOT_STEP_REL_POSIX]: editedStep });
-  t.after(() => cleanup(overlay));
-
+test('propagatesSingleFragmentEditToAllRuntimeArtifacts', () => {
+  const emissions = sentinelEmissions();
   for (const runtime of RUNTIMES) {
-    const install = installOverlay(overlay, runtime);
-    t.after(() => cleanup(install.root));
-    const emittedPath = path.join(install.configDir, PILOT_STEP_REL);
-    assert.ok(fs.existsSync(emittedPath), `${runtime}: emitted steps/partial-wave.md is missing`);
+    const emittedStep = emissions.get(runtime).step;
+    assert.ok(emittedStep !== null, `${runtime}: emitted steps/partial-wave.md is missing`);
     // Presence, not whole-file identity: partial-wave.md's runtime-launcher
     // snippet embeds `.claude`-prefixed path tokens (e.g.
     // `${_GSD_RUNTIME_ROOT}/.claude/...`) that the installer's generic
@@ -431,63 +473,38 @@ test('propagatesSingleFragmentEditToAllRuntimeArtifacts', (t) => {
     // would fail on every runtime for a reason that has nothing to do with
     // fragment propagation.
     assert.ok(
-      fs.readFileSync(emittedPath, 'utf8').includes(FRAGMENT_SENTINEL),
+      emittedStep.includes(FRAGMENT_SENTINEL),
       `${runtime}: emitted steps/partial-wave.md must carry the single edited fragment's sentinel`,
     );
-    // Belt-and-braces cleanup: t.after() is the failure-path safety net (a
-    // thrown assertion still tears every registered temp dir down when the
-    // test returns), but t.after() alone defers ALL registered cleanups
-    // across every runtime in this loop until the whole test finishes, so up
-    // to ~18 full install trees would coexist on disk at once. This eager
-    // cleanup() call bounds peak disk to one runtime's tree on the success
-    // path; t.after() still fires afterward as a no-op (cleanup is
-    // idempotent on an already-removed path — see helpers.cjs).
-    cleanup(install.root);
   }
 });
 
 // ─── Row 2 ──────────────────────────────────────────────────────────────────
 
-test('emitsNoSectionMarkerBytesInAnyRuntimeArtifact', (t) => {
-  const editedStep = ORIGINAL_STEP_CONTENT + FRAGMENT_SENTINEL + '\n';
-  const overlay = buildOverlayRepo({ [PILOT_STEP_REL_POSIX]: editedStep });
-  t.after(() => cleanup(overlay));
-
+test('emitsNoSectionMarkerBytesInAnyRuntimeArtifact', () => {
+  const emissions = sentinelEmissions();
   for (const runtime of RUNTIMES) {
-    const install = installOverlay(overlay, runtime);
-    t.after(() => cleanup(install.root));
-    const workflowPath = path.join(install.configDir, PILOT_WORKFLOW_REL);
-    assert.ok(fs.existsSync(workflowPath), `${runtime}: emitted execute-phase.md is missing`);
-    const emittedWorkflow = fs.readFileSync(workflowPath, 'utf8');
+    const emittedWorkflow = emissions.get(runtime).workflow;
+    assert.ok(emittedWorkflow !== null, `${runtime}: emitted execute-phase.md is missing`);
     assert.equal(
       emittedWorkflow.includes('gsd:section'),
       false,
       `${runtime}: emitted execute-phase.md still contains a gsd:section marker token (composition did not run)`,
     );
-    cleanup(install.root);
   }
 });
 
 // ─── Row 3 ──────────────────────────────────────────────────────────────────
 
-test('assertsEveryRuntimeEmittedTheFragmentArtifact', (t) => {
-  const editedStep = ORIGINAL_STEP_CONTENT + FRAGMENT_SENTINEL + '\n';
-  const overlay = buildOverlayRepo({ [PILOT_STEP_REL_POSIX]: editedStep });
-  t.after(() => cleanup(overlay));
-
+test('assertsEveryRuntimeEmittedTheFragmentArtifact', () => {
+  const emissions = sentinelEmissions();
   const expected = new Set(RUNTIMES);
   const actual = new Set();
   for (const runtime of RUNTIMES) {
-    // installOverlay itself asserts install success (throws loudly on a
-    // nonzero exit) — a runtime that fails to install fails THIS test
-    // immediately rather than being silently excluded from `actual` below.
-    const install = installOverlay(overlay, runtime);
-    t.after(() => cleanup(install.root));
-    const emittedPath = path.join(install.configDir, PILOT_STEP_REL);
-    // Read existence BEFORE the eager cleanup below — cleaning up first would
-    // make every runtime falsely report as missing.
-    if (fs.existsSync(emittedPath)) actual.add(runtime);
-    cleanup(install.root);
+    // installOverlay (run by sentinelEmissions) asserts install success and
+    // throws on a nonzero exit: a runtime that fails to install fails this
+    // test rather than being silently excluded from `actual` below.
+    if (emissions.get(runtime).step !== null) actual.add(runtime);
   }
   assert.deepEqual(
     Array.from(actual).sort(),
@@ -1033,25 +1050,19 @@ test('doesNotInterpolateShellMetacharactersFromFragmentContent', (t) => {
 
 // ─── Row 18 (hostile: unicode + long, every runtime) ────────────────────────
 
-test('preservesUnicodeAndLongFragmentContent', (t) => {
-  const unicodeSentinel = `GSD-2933-UNICODE-日本語-🎉🔥Ω→∞-${'x'.repeat(4000)}`;
-  const editedStep = ORIGINAL_STEP_CONTENT + unicodeSentinel + '\n';
-  const overlay = buildOverlayRepo({ [PILOT_STEP_REL_POSIX]: editedStep });
-  t.after(() => cleanup(overlay));
-
+test('preservesUnicodeAndLongFragmentContent', () => {
+  const emissions = sentinelEmissions();
   for (const runtime of RUNTIMES) {
-    const install = installOverlay(overlay, runtime);
-    t.after(() => cleanup(install.root));
-    const emittedPath = path.join(install.configDir, PILOT_STEP_REL);
+    const emittedStep = emissions.get(runtime).step;
+    assert.ok(emittedStep !== null, `${runtime}: emitted steps/partial-wave.md is missing`);
     // Presence, not whole-file identity — see row 1's comment. The unicode
     // sentinel itself is the property under test: it must be byte-preserved
     // through emission on every runtime, independent of the installer's
     // unrelated per-runtime path-prefix rewrite elsewhere in this fragment.
     assert.ok(
-      fs.readFileSync(emittedPath, 'utf8').includes(unicodeSentinel),
+      emittedStep.includes(UNICODE_SENTINEL),
       `${runtime}: unicode + long fragment sentinel must be byte-preserved through emission`,
     );
-    cleanup(install.root);
   }
 });
 

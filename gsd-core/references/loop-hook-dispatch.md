@@ -37,6 +37,8 @@ only where a landing site reads it:
 |---|---|---|---|
 | `code-reviewer` | the review step's loop point (`execute:post`, or `execute:wave:post` per `workflow.code_review_point`) | `code-review.md`, appended to the `gsd-code-reviewer` prompt | `execute:pre`, `execute:wave:pre` |
 | `verifier` | `execute:post` | `execute-phase/steps/verify-phase-goal.md` `verifier_dispatch`, appended to the `gsd-verifier` prompt after `${VERIFIER_SKILLS}` inside `<capability_verifier_rules>` | `execute:pre`, `execute:wave:pre`, `execute:wave:post` |
+| `reviewer` | `review:pre` | `review.md` `build_prompt`, appended once to the shared prompt file every external reviewer lane reads, inside `<capability_reviewer_rules>` (#3997) | (the point is wired for contributions only; a `step` or `gate` there fails the registry build) |
+
 
 A `verifier` contribution declared at a point not listed as delivered installs and renders in
 `activeHooks` but is never inlined into a prompt; declare it at `execute:post`. Delivery is advisory: a failure

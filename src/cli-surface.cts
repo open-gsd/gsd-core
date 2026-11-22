@@ -166,9 +166,12 @@ export const CLI_SURFACE: Readonly<Record<string, VerbSpec>> = deepFreeze({
 
   // ─── dispatch ──────────────────────────────────────────────────────────────
   'dispatch-should-flatten': { positionals: 1, booleanFlags: JSON_FLAG },
+  // `--renew-held <ms>` carries a held answer's `decidedAt` (#4904). `plan` reads '' when bare,
+  // because the #4222 base check treats any `--plan`, empty or not, as a plan-scoped write.
   'dispatch-isolation': {
     positionals: 1,
-    valueFlags: ['cwd-target', 'force-isolation', 'phase', 'plan', 'prompt'],
+    valueFlags: ['cwd-target', 'force-isolation', 'phase', 'plan', 'prompt', 'renew-held'],
+    bareEmptyFlags: ['plan'],
     booleanFlags: JSON_FLAG,
   },
   'dispatch-capacity': { positionals: 1, booleanFlags: JSON_FLAG },

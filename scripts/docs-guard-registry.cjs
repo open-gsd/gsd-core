@@ -159,9 +159,14 @@ function assertNoSuiteCollision(tests) {
 const DOCS_GUARD_TESTS = {
   'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
   'tests/pi-parity-matrix.test.cjs': ['docs/reference/pi-parity-matrix.md'],
-  'tests/adr-15-progress-converge.test.cjs': [
+  // #6337: copies the docs the shipped text contracts read into a temporary root to show a
+  // contract fails when a contracted phrase is removed; a reword of any of them can break it.
+  'tests/text-contracts.test.cjs': [
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',
+    'docs/INVENTORY.md',
+    'docs/how-to/develop-a-capability.md',
+    'docs/README.md',
   ],
   'tests/adr-612-bracket-new-project-config.test.cjs': ['docs/CONFIGURATION.md'],
   // Walks docs/adr/ as a directory (builds/reads docs/adr/README.md and
@@ -179,13 +184,10 @@ const DOCS_GUARD_TESTS = {
   // #5706: pins the release map statuses / tag states in docs/CONFIGURATION.md
   // against the milestone-release-map module's exported enums.
   'tests/milestone-release-map.test.cjs': ['docs/CONFIGURATION.md'],
-  'tests/analyze-dependencies.test.cjs': ['docs/COMMANDS.md'],
+  // #6205: walks the shipped reference, workflow and docs pages for a link to a closed-not-planned upstream tracker.
+  'tests/reference-closed-upstream-trackers-6205.test.cjs': ['docs/explanation/', 'docs/guides/', 'docs/how-to/', 'docs/reference/'],
   'tests/smart-discuss-classification.test.cjs': ['docs/COMMANDS.md'],
   'tests/auto-select-attribute.test.cjs': ['docs/reference/plan-md.md'],
-  'tests/autonomous-converge.test.cjs': [
-    'docs/COMMANDS.md',
-    'docs/how-to/run-phases-autonomously.md',
-  ],
   'tests/capability-matrix-sync.test.cjs': ['docs/reference/capability-matrix.md'],
   'tests/capability-registry.test.cjs': [
     'docs/tutorials/build-your-first-capability.md',
@@ -329,7 +331,6 @@ const DOCS_GUARD_TESTS = {
   // SOURCE_DIRS includes 'docs' and walks it recursively for every .md file
   // (intel.test.cjs:1223-1228) — a generic tree walk.
   'tests/intel.test.cjs': ['*'],
-  'tests/inventory-headings-countfree.test.cjs': ['docs/INVENTORY.md'],
   'tests/inventory-manifest-sync.test.cjs': ['docs/INVENTORY.md', 'docs/INVENTORY-MANIFEST.json'],
   'tests/kilo-upgrades.test.cjs': ['docs/how-to/connect-gsd-mcp-server.md'],
   'tests/live-config-guard.test.cjs': ['docs/TESTING-SUITES.md'],
@@ -358,7 +359,6 @@ const DOCS_GUARD_TESTS = {
   // cannot be resolved to a fixed docs/ path set.
   'tests/no-pending-3212-markers.test.cjs': ['*'],
   'tests/pause-work-improvements.test.cjs': ['docs/zh-CN/references/git-integration.md'],
-  'tests/phase6-capability-docs.test.cjs': ['docs/how-to/develop-a-capability.md', 'docs/README.md'],
   'tests/phase6-review-capabilities.test.cjs': [
     'docs/reference/review-verification-capabilities.md',
     'docs/how-to/develop-a-capability.md',
@@ -366,6 +366,7 @@ const DOCS_GUARD_TESTS = {
   ],
   'tests/plan-authoring-verification-gaps.test.cjs': ['docs/reference/plan-md.md'],
   'tests/plan-checker-coupling.test.cjs': ['docs/reference/agents.md'],
+  'tests/planner-verify-command-validation.test.cjs': ['docs/how-to/validate-an-automated-command.md'],
   'tests/plan-phase-drift-guard.test.cjs': [
     'docs/CONFIGURATION.md',
     'docs/COMMANDS.md',
@@ -393,6 +394,7 @@ const DOCS_GUARD_TESTS = {
   'tests/registry-docs-approved-issue-parity.test.cjs': [
     'docs/registries/README.md',
     'docs/how-to/list-your-reviewer-lane.md',
+    'docs/how-to/ship-a-reviewer-lane.md',
     'docs/how-to/take-over-a-capability-or-eos.md',
   ],
   'tests/repo-layout.test.cjs': ['docs/contributing/bootstrap.md'],
