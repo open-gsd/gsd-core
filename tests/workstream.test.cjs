@@ -1198,7 +1198,7 @@ describe('workstream migrate and complete keep their promises (#5120 pre-push re
       });
       const unlink = failFirstUnlinkOf(t, path.join(planning, 'workstreams', 'main', 'STATE.md.lock'));
       assert.throws(() => migrateToWorkstreams(tmpDir, 'main'), (err) =>
-        err.message === 'injected forward EIO; directory left behind: .planning/workstreams/main');
+        err.message === 'injected forward EIO; left behind: .planning/workstreams/main, .planning/workstreams');
       t.mock.restoreAll();
       assert.equal(unlink.failed, true, 'precondition: the release of the workstream lock failed');
       assert.deepEqual(fs.readdirSync(path.join(planning, 'workstreams', 'main')), ['STATE.md.lock']);
@@ -1235,7 +1235,7 @@ describe('workstream migrate and complete keep their promises (#5120 pre-push re
       t.mock.restoreAll();
       assert.equal(failed, true, 'precondition: the release of the archive lock failed');
       assert.equal(out.error, 'archive_failed');
-      assert.match(out.message, /^injected forward EIO; directory left behind: \.planning\/milestones\/ws-alpha-[^ ]+$/);
+      assert.match(out.message, /^injected forward EIO; left behind: \.planning\/milestones\/ws-alpha-[^ ,]+$/);
       assert.deepEqual(fs.readdirSync(path.join(tmpDir, out.message.slice(out.message.indexOf('.planning/')))), ['STATE.md.lock']);
     } finally {
       cleanup(pointerDir);

@@ -85,11 +85,12 @@ function withBothStateLocks<T>(dirA: string, dirB: string, fn: () => T): T {
 /**
  * The error a failed move reports: the cause, and any entry the rollback could not return. A
  * destination directory still there with every entry returned (for example the release of this
- * process's own lock failed, so the lock file is left in it; pre-push review R4-m3) is named too.
+ * process's own lock failed, so the lock file is left in it; pre-push review R4-m3) is named, with
+ * any parent the command created that it keeps.
  */
-function moveFailure(cause: unknown, notReturned: string[], leftIn: string, dirLeft: boolean): Error {
+function moveFailure(cause: unknown, notReturned: string[], leftIn: string, dirsLeft: string[]): Error {
   const message = cause instanceof Error ? cause.message : String(cause);
-  if (notReturned.length === 0 && dirLeft) return new Error(`${message}; directory left behind: ${leftIn}`, { cause });
+  if (notReturned.length === 0 && dirsLeft.length > 0) return new Error(`${message}; left behind: ${dirsLeft.join(', ')}`, { cause });
   if (notReturned.length === 0) return cause instanceof Error ? cause : new Error(message);
   return new Error(`${message}; NOT rolled back: ${notReturned.join(', ')} left in ${leftIn}`, { cause });
 }
@@ -157,7 +158,9 @@ function migrateToWorkstreams(cwd: string, workstreamName: string): MigrateResul
     // empty directory: one that still holds an entry the rollback could not return is kept.
     try { fs.rmdirSync(wsDir); } catch { /* not empty, or already gone */ }
     try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch { /* not empty, or already gone */ }
-    throw moveFailure(failure, notReturned, toPosixPath(path.relative(cwd, wsDir)), fs.existsSync(wsDir));
+    // Pre-push review R5-m1: .planning/workstreams is named too, since its presence refuses a retry.
+    const dirsLeft = [wsDir, path.join(baseDir, 'workstreams')].filter((d) => fs.existsSync(d)).map((d) => toPosixPath(path.relative(cwd, d)));
+    throw moveFailure(failure, notReturned, toPosixPath(path.relative(cwd, wsDir)), dirsLeft);
   }
 
   return { migrated: true, workstream: workstreamName, files_moved: filesMoved };
@@ -406,7 +409,7 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
     // rollback could not return.
     try { fs.rmdirSync(archivePath); } catch { /* not empty, or already gone */ }
     if (active === name) setActiveWorkstream(cwd, name!);
-    const err = moveFailure(failure, notReturned, toPosixPath(path.relative(cwd, archivePath)), fs.existsSync(archivePath));
+    const err = moveFailure(failure, notReturned, toPosixPath(path.relative(cwd, archivePath)), fs.existsSync(archivePath) ? [toPosixPath(path.relative(cwd, archivePath))] : []);
     output({ completed: false, error: 'archive_failed', message: err.message, workstream: name }, raw, undefined);
     return;
   }
