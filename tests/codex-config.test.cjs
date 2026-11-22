@@ -2375,15 +2375,22 @@ describe('stripGsdFromCodexConfig', () => {
     assert.equal(cleaned, user + userTable, 'literal marker and multiline bytes survive exactly');
   });
 
-  test('#5199: markerless cleanup keeps the legacy path outside the two approved safety fixes', () => {
+  test('#5199: markerless cleanup removes injected keys only inside [features]', () => {
     const input = ['multi_agent = true', '[features]', 'multi_agent = true',
       'default_mode_request_user_input = true', '[user]', 'multi_agent = true',
       'default_mode_request_user_input = true', ''].join('\n');
-    const output = stripGsdFromCodexConfig(input);
-    assert.deepEqual(parseTomlToObject(output), {
-      features: { multi_agent: true },
-      user: { multi_agent: true, default_mode_request_user_input: true },
-    });
+    assert.equal(stripGsdFromCodexConfig(input),
+      ['multi_agent = true', '[user]', 'multi_agent = true', 'default_mode_request_user_input = true', ''].join('\n'));
+  });
+
+  test('#5199: markerless cleanup keeps a [features] key that follows a blank line', () => {
+    const input = '[features]\n\nfoo = true\n';
+    assert.equal(stripGsdFromCodexConfig(input), input);
+  });
+
+  test('#5199: markerless cleanup keeps a same-named key in another table', () => {
+    const input = '[profiles.x]\nmulti_agent = true\n\n[features]\nmulti_agent = true\n';
+    assert.equal(stripGsdFromCodexConfig(input), '[profiles.x]\nmulti_agent = true\n');
   });
 
   test('#5199: markerless cleanup preserves a trailing user comment before the next table', () => {

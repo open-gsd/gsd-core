@@ -4905,6 +4905,32 @@ function parseCodexHooksOwnership(record) {
   return /^# GSD codex_hooks ownership: (section|root_dotted)[ \t]*$/.exec(record.text)?.[1] || null;
 }
 
+// Legacy injected feature keys belong only to [features]. Identically named
+// keys in user tables and text inside multiline values must survive cleanup.
+function stripInjectedCodexFeatureKeys(content) {
+  const injectedFeatureRecords = getTomlLineRecords(content).filter((record) => {
+    if (record.startsInMultilineString || record.tableHeader || record.tablePath !== 'features') return false;
+    if (record.keySegments?.length !== 1 ||
+        !['multi_agent', 'default_mode_request_user_input'].includes(record.keySegments[0])) return false;
+    const equalsIndex = findTomlAssignmentEquals(record.text);
+    const commentStart = findTomlCommentStart(record.text);
+    return record.text.slice(equalsIndex + 1, commentStart === -1 ? record.text.length : commentStart).trim() === 'true';
+  });
+  return removeContentRanges(content, injectedFeatureRecords.map((record) => ({
+    start: record.start, end: findTomlAssignmentBlockEnd(content, record),
+  })));
+}
+
+// Remove a managed [features]/[agents] table only when its body is empty, never
+// a header with user keys after a blank line, nor look-alike headers in strings.
+function stripEmptyManagedCodexTables(content) {
+  const emptySections = getTomlTableSections(content).filter((section) =>
+    !section.array && ['features', 'agents'].includes(section.path) &&
+    content.slice(section.headerEnd, section.end).trim() === ''
+  );
+  return removeContentRanges(content, emptySections.map(({ start, end }) => ({ start, end })));
+}
+
 function stripGsdFromCodexConfig(content) {
   const eol = detectLineEnding(content);
   const lineRecords = getTomlLineRecords(content);
@@ -4916,16 +4942,15 @@ function stripGsdFromCodexConfig(content) {
 
   if (!markerRecord) {
     // Acceptance criterion 5 keeps the legacy markerless cleanup path except
-    // for two approved safety fixes: trailing user comments survive managed
-    // section removal, and marker text inside a multiline string is not a
-    // managed marker (#5199 maintainer ruling).
+    // for the approved safety fixes (#5199 maintainer rulings): trailing user
+    // comments survive managed section removal, marker text inside a multiline
+    // string is not a managed marker, injected keys are removed only inside
+    // [features], and only a table with an empty body loses its header.
     let cleaned = stripCodexHooksFeatureAssignments(content, codexHooksOwnership);
-    cleaned = cleaned.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
-    cleaned = cleaned.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
+    cleaned = stripInjectedCodexFeatureKeys(cleaned);
     const preservedScalars = extractCodexUserAgentsScalars(cleaned);
     cleaned = stripCodexGsdAgentSections(cleaned);
-    cleaned = cleaned.replace(/^\[features\]\s*\n(?=\[|$)/m, '');
-    cleaned = cleaned.replace(/^\[agents\]\s*\n(?=\[|$)/m, '');
+    cleaned = stripEmptyManagedCodexTables(cleaned);
     cleaned = cleaned.replace(/^(?:\r?\n)+/, '').trimEnd();
     if (preservedScalars.length > 0) {
       cleaned = (cleaned ? cleaned + eol + eol : '') + '[agents]' + eol + preservedScalars.join(eol);
@@ -4954,17 +4979,7 @@ function stripGsdFromCodexConfig(content) {
   cleaned = stripStaleGsdHookBlocks(cleaned, true);
   // These legacy injected keys belong only to [features]. Identically named
   // user-table keys and text inside multiline values must survive cleanup.
-  const injectedFeatureRecords = getTomlLineRecords(cleaned).filter((record) => {
-    if (record.startsInMultilineString || record.tableHeader || record.tablePath !== 'features') return false;
-    if (record.keySegments?.length !== 1 ||
-        !['multi_agent', 'default_mode_request_user_input'].includes(record.keySegments[0])) return false;
-    const equalsIndex = findTomlAssignmentEquals(record.text);
-    const commentStart = findTomlCommentStart(record.text);
-    return record.text.slice(equalsIndex + 1, commentStart === -1 ? record.text.length : commentStart).trim() === 'true';
-  });
-  cleaned = removeContentRanges(cleaned, injectedFeatureRecords.map((record) => ({
-    start: record.start, end: findTomlAssignmentBlockEnd(cleaned, record),
-  })));
+  cleaned = stripInjectedCodexFeatureKeys(cleaned);
   // Remove the injected feature keys first. That lets the structural hooks
   // owner recognize a now-comment-only [features] table and remove its header
   // in the same pass instead of requiring a second cleanup (#5199 F4).
@@ -4994,11 +5009,7 @@ function stripGsdFromCodexConfig(content) {
   cleaned = stripCodexGsdAgentSections(cleaned);
 
   // Remove truly empty managed tables, never look-alike headers in user strings.
-  const emptySections = getTomlTableSections(cleaned).filter((section) =>
-    !section.array && ['features', 'agents'].includes(section.path) &&
-    cleaned.slice(section.headerEnd, section.end).trim() === ''
-  );
-  cleaned = removeContentRanges(cleaned, emptySections.map(({ start, end }) => ({ start, end })));
+  cleaned = stripEmptyManagedCodexTables(cleaned);
 
   cleaned = cleaned.replace(/^(?:\r?\n)+/, '').trimEnd();
 
