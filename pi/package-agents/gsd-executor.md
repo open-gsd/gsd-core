@@ -80,18 +80,42 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `plans`, `incomplete_plans`.
 
-Also load planning state (position, decisions, blockers) via the SDK — **use `node` to invoke the CLI** (not `npx`):
+Also load planning state — only the STATE.md sections execution uses, not the whole file (its Quick Tasks table can be most of it):
 ```bash
-gsd_run query state.load 2>/dev/null
+# #6388: load only the STATE.md sections execution uses (Current Position, Decisions, Blockers), never the whole file.
+# Each section takes the first heading name that returns text; the names are the ones the state writers accept.
+_state_section() {
+  for _name in "$@"; do
+    _body=$(gsd_run query state.get "$_name" ${GSD_WS:+--ws=${GSD_WS##* }} --raw 2>/dev/null) || _body=""
+    if [ -n "$_body" ]; then printf '%s' "$_body"; return 0; fi
+  done
+}
+STATE_POSITION="" STATE_DECISIONS="" STATE_BLOCKERS=""
+# state.load --raw prints config flags and state_exists only, never the file; same scope resolution as the reads.
+STATE_EXISTS=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }} --raw 2>/dev/null | sed -n 's/^state_exists=//p') || STATE_EXISTS=""
+if [ "$STATE_EXISTS" = "false" ]; then
+  STATE_STATUS=missing
+else
+  STATE_STATUS=read
+  STATE_POSITION=$(_state_section "Current Position")
+  STATE_DECISIONS=$(_state_section "Decisions" "Decisions Made")
+  STATE_BLOCKERS=$(_state_section "Blockers/Concerns" "Blockers" "Concerns")
+fi
+printf 'STATE_STATUS=%s\n\n## Current Position\n%s\n\n## Decisions\n%s\n\n## Blockers\n%s\n' \
+  "$STATE_STATUS" "${STATE_POSITION:-(empty)}" "${STATE_DECISIONS:-(empty)}" "${STATE_BLOCKERS:-(empty)}"
 ```
-If STATE.md missing but .planning/ exists: offer to reconstruct or continue without.
-If .planning/ missing: Error — project not initialized.
+- `STATE_STATUS=missing`: STATE.md does not exist. If `.planning/` exists, offer to reconstruct STATE.md or continue without it; if `.planning/` is missing, stop with an error: the project is not initialized.
+- Blockers `(empty)`: none are recorded.
+- Decisions `(empty)`: STATE.md may keep its decisions under another heading the state writers accept (such as `### Accumulated Decisions`), which `state.get` cannot name. Read STATE.md and use only its decisions section.
+- Read the whole STATE.md only when a task's `<read_first>` or action names it, or names a STATE.md section other than these three.
 </step>
 
 <step name="load_plan">
 Read the plan file provided in your prompt context.
 
 Parse: frontmatter (phase, plan, type, autonomous, wave, depends_on), objective, context (@-references), tasks with types, verification/success criteria, output spec.
+
+A plan's `@`-reference to STATE.md (`@.planning/STATE.md`, `@{state_path}`, a workstream's STATE.md) is covered by the #6388 section reads: do not read the whole file for it.
 
 **If plan references CONTEXT.md:** Honor user's vision throughout execution.
 </step>

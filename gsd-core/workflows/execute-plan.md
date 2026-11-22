@@ -3,7 +3,7 @@ Execute a phase prompt (PLAN.md) and create the outcome summary (SUMMARY.md).
 </purpose>
 
 <required_reading>
-Read STATE.md before any operation to load project context.
+Before any operation, load project state with the STATE.md section reads in `init_context` (Current Position, Decisions, Blockers), not the whole file. An executor whose own load step already ran the same reads does not repeat them.
 Read config.json for planning behavior settings.
 
 @~/.claude/gsd-core/references/git-integration.md
@@ -52,9 +52,36 @@ GSD_ARGS=${GSD_ARGS%$'\n'}
 GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+# #6388: load only the STATE.md sections execution uses (Current Position, Decisions, Blockers), never the whole file.
+# Each section takes the first heading name that returns text; the names are the ones the state writers accept.
+_state_section() {
+  for _name in "$@"; do
+    _body=$(gsd_run query state.get "$_name" ${GSD_WS:+--ws=${GSD_WS##* }} --raw 2>/dev/null) || _body=""
+    if [ -n "$_body" ]; then printf '%s' "$_body"; return 0; fi
+  done
+}
+STATE_POSITION="" STATE_DECISIONS="" STATE_BLOCKERS=""
+# state.load --raw prints config flags and state_exists only, never the file; same scope resolution as the reads.
+STATE_EXISTS=$(gsd_run query state.load ${GSD_WS:+--ws=${GSD_WS##* }} --raw 2>/dev/null | sed -n 's/^state_exists=//p') || STATE_EXISTS=""
+if [ "$STATE_EXISTS" = "false" ]; then
+  STATE_STATUS=missing
+else
+  STATE_STATUS=read
+  STATE_POSITION=$(_state_section "Current Position")
+  STATE_DECISIONS=$(_state_section "Decisions" "Decisions Made")
+  STATE_BLOCKERS=$(_state_section "Blockers/Concerns" "Blockers" "Concerns")
+fi
+printf 'STATE_STATUS=%s\n\n## Current Position\n%s\n\n## Decisions\n%s\n\n## Blockers\n%s\n' \
+  "$STATE_STATUS" "${STATE_POSITION:-(empty)}" "${STATE_DECISIONS:-(empty)}" "${STATE_BLOCKERS:-(empty)}"
 ```
 
 Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `phase_number`, `plans`, `summaries`, `incomplete_plans`, `state_path`, `roadmap_path`, `requirements_path`, `config_path`, `response_language`.
+
+From the STATE.md section reads:
+- `STATE_STATUS=missing`: STATE.md does not exist. If `.planning/` exists, offer to reconstruct STATE.md or continue without it; if `.planning/` is missing, stop with an error: the project is not initialized.
+- Blockers `(empty)`: none are recorded.
+- Decisions `(empty)`: STATE.md may keep its decisions under another heading the state writers accept (such as `### Accumulated Decisions`), which `state.get` cannot name. Read STATE.md and use only its decisions section.
+- Read the whole STATE.md only when a task's `<read_first>` or action names it, or names a STATE.md section other than these three.
 
 **If `response_language` is set:** All user-facing output of this workflow — narration between tool calls, status updates, progress notes, findings, questions, prompts, and explanations — MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
@@ -230,7 +257,7 @@ If previous SUMMARY has unresolved "Issues Encountered" or "Next Phase Readiness
 <step name="execute">
 Deviations are normal — handle via rules below.
 
-1. Read @context files from prompt
+1. Read @context files from prompt. A plan's `@`-reference to STATE.md (`@.planning/STATE.md`, `@{state_path}`, a workstream's STATE.md) is covered by the #6388 section reads: do not read the whole file for it.
 2. **MCP tools:** If CLAUDE.md or project instructions reference MCP tools (e.g. jCodeMunch for code navigation), prefer them over Grep/Glob when available. Fall back to Grep/Glob if MCP tools are not accessible.
 3. Per task:
    - **Task-content resolution:** If this task is NOT `type="checkpoint:*"` AND it carries a `tracker-id` attribute, run `gsd_run task resolve-content --plan "<plan path>" --task-id "<tracker-id>" --raw` BEFORE anything else for this task — before the read_first gate below, since read_first is itself a field this call can resolve. A `type="checkpoint:*"` task NEVER enters this resolution, regardless of whether it carries a `tracker-id` attribute — its interactive structure always stays sourced from PLAN.md (ADR-3646 Decision 1); see the `type="checkpoint:*"` bullet below. A **non-zero exit is a HARD HALT**: surface the tracker-id, the tracker prefix, and the command's stderr, and STOP — do NOT proceed to read this task's inline PLAN.md content as a fallback (that defeats the point of the seam: see ADR-3646). On exit 0 with `resolved: true`, the returned `content` object SUPERSEDES this task's `<read_first>`/`<action>`/`<verify>`/`<acceptance_criteria>`/`<done>` for every remaining bullet in this step — every gate below reads from the resolved content instead of PLAN.md. On exit 0 with `resolved: false` (for any `reason`), proceed exactly as today and read the task's inline PLAN.md content. A task with no `tracker-id` attribute, or a checkpoint task, is unaffected — this step is unconditional but resolves to a no-op instantly for the common case.
