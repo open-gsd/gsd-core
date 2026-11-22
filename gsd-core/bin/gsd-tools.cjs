@@ -5741,7 +5741,7 @@ function main() {
   // Closed mutation verbs do not consume output selectors or config-get defaults.
   // Refuse them before global value extraction can hide an unsupported flag.
   const closedConfigMutations = Object.keys(CLI_SURFACE).filter((verb) => CLI_SURFACE[verb].rejectedGlobalFlags);
-  // eslint-disable-next-line local/named-args-spec-from-registry -- main preserves global flags declared by GLOBAL_FLAGS before extraction; rejection policy comes from CLI_SURFACE
+  // eslint-disable-next-line local/named-args-spec-from-registry -- main preserves global flags declared by GLOBAL_FLAGS before extraction; rejection policy comes from CLI_SURFACE (#5286)
   const originalGlobalValueFlags = GLOBAL_FLAGS.valueFlags.filter((flag) => args.includes(`--${flag}`));
   function rejectConfigMutationValueFlags(verb) {
     const rejected = CLI_SURFACE[verb]?.rejectedGlobalFlags ?? [];
@@ -5811,7 +5811,7 @@ function main() {
   if (closedConfigMutations.includes(command)) {
     // Idempotent global --raw is consumed before the declared migrate-config
     // router, just as it is for the other two config routers (#5286).
-    // eslint-disable-next-line local/named-args-spec-from-registry -- global raw is declared in GLOBAL_FLAGS and normalized in main, not a verb-local flag
+    // eslint-disable-next-line local/named-args-spec-from-registry -- global raw is declared in GLOBAL_FLAGS and normalized in main, not a verb-local flag (#5286)
     args = args.filter((arg) => arg !== '--raw');
   }
 
