@@ -1,11 +1,10 @@
 'use strict';
 
 /**
- * #5120 (epic #4629, ADR-4629 guard roster "No raw STATE.md write outside the
- * seam"): the in-process rows of the test-time value check that scripts/run-tests.cjs
- * installs for the whole suite: the classification rule, the NODE_OPTIONS string, and
- * the report and ledger readers. Nothing here spawns a process; the rows that drive the
- * real preload and the runner live in raw-state-write-guard.process.test.cjs.
+ * #5120 (epic #4629, ADR-4629 guard roster): the in-process rows of the test-time value
+ * check that scripts/run-tests.cjs installs for the suite: the classification rule, the
+ * NODE_OPTIONS string, and the report and ledger readers. The rows that drive the real
+ * preload and the runner live in raw-state-write-guard.process.test.cjs.
  */
 
 const { test, describe } = require('node:test');
@@ -23,7 +22,7 @@ const {
   formatStateWriteReport,
 } = require(GUARD_PATH);
 
-/** A write entry exactly as the guard's `observe` appends it (a seam write under the lock), with `overrides`. */
+/** A write entry in the shape the guard's `observe` appends (a seam write under the lock), with `overrides`. */
 function entry(overrides = {}) {
   return {
     fn: 'renameSync', destination: '/p/STATE.md', source: null, callerFile: '/r/gsd-core/bin/lib/state.cjs', callerLine: 7,
@@ -31,7 +30,7 @@ function entry(overrides = {}) {
     testFile: null, pid: 1, ...overrides,
   };
 }
-/** An install sentinel exactly as the guard's `install` appends it, with `overrides`. */
+/** An install sentinel in the shape the guard's `install` appends, with `overrides`. */
 function sentinel(overrides = {}) {
   return { installed: true, preload: true, pid: 1, testFile: null, ...overrides };
 }
@@ -70,7 +69,6 @@ describe('classifyStateWrite: the approved rule, with the lock (#5120, review Ma
         `lockHeld ${lockHeld}, sourceLockHeld ${sourceLockHeld}`,
       );
     }
-    // A relocation through a seam function is a seam write: only the destination lock is asked for.
     const viaSeam = classifyStateWrite({ ...base, viaSeam: true, lockHeld: true, sourceLockHeld: false });
     assert.deepEqual(viaSeam, { recorded: true, violation: false, seam: true, relocation: false, reason: null });
   });
@@ -246,7 +244,6 @@ describe('formatStateWriteReport (ADR-3408 Decision 5: the zero is never reporte
       sentinel({ pid: 4, testFile: '/r/tests/a.test.cjs' }),
       sentinel({ pid: 5, testFile: '/r/tests/a.test.cjs' }),
     ));
-    // A direct-require sentinel names no test file the runner can count: only preload ones do.
     assert.deepEqual(readStateWriteLedger(file), {
       entries: [entry()], installs: 5, preloadInstalls: 4,
       preloadTestFiles: ['/r/tests/a.test.cjs', '/r/tests/b.test.cjs'], tornLines: 0,

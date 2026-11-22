@@ -151,9 +151,7 @@ None
   }
 });
 
-// #5120 (pre-push review R4-m2, R4-Q1): frontmatter set and merge hold the STATE.md lock while they read a
-// STATE.md target, so one that is not a regular file is refused under the lock instead of read (a FIFO
-// would block with the lock held) or written over (a symlink would be replaced by a regular file).
+// #5120 (pre-push review R4-m2, R4-Q1).
 describe('#5120 frontmatter set/merge refuse a STATE.md that is not a regular file', () => {
   const { runGsdTools, cleanup } = require('./helpers.cjs');
   const { execFileSync } = require('node:child_process');
@@ -204,7 +202,6 @@ describe('#5120 frontmatter set/merge refuse a STATE.md that is not a regular fi
       if (process.platform === 'win32') { t.skip('no FIFOs on Windows'); return; }
       const dir = tmp(t);
       const state = path.join(dir, 'STATE.md');
-      // Throws when mkfifo fails, so on POSIX this row never passes without a FIFO.
       execFileSync('mkfifo', [state], { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
       const result = runGsdTools(argsFor(state), dir);
       assert.strictEqual(result.success, false, 'the command refuses');

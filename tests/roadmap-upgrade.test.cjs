@@ -93,8 +93,6 @@ describe('roadmap upgrade rollback (#1542)', () => {
     assert.ok(plan.phases.length >= 1, 'precondition: the migration renames a phase directory');
     fs.mkdirSync(path.join(planning, 'config.json'));
 
-    // The reverse rename of the first phase directory (back onto its old path) fails with a code
-    // retryRenameSync does not retry; the forward rename and every other rename go through.
     const renamedPhase = plan.phases[0];
     const oldPath = path.join(planning, 'phases', renamedPhase.oldDir);
     const newPath = path.join(planning, 'phases', renamedPhase.newDir);
@@ -127,9 +125,6 @@ describe('roadmap upgrade rollback (#1542)', () => {
     assert.ok(plan.phases.length >= 1, 'precondition: the migration renames a phase directory');
     fs.mkdirSync(path.join(planning, 'config.json'));
 
-    // Something else removes the renamed directory after the forward rename and before the
-    // rollback: armed on the step that fails (the config.json write), the renamed directory is
-    // moved out of .planning, so neither its old nor its new path exists for the rollback.
     const renamedPhase = plan.phases[0];
     const oldPath = path.join(planning, 'phases', renamedPhase.oldDir);
     const newPath = path.join(planning, 'phases', renamedPhase.newDir);
@@ -571,8 +566,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
   });
 
   // #5120 pre-push review R3-m3: whether STATE.md was restored is decided under the lock that
-  // restored it. A writer queued on that lock lands as soon as it is released; its write must not
-  // turn a restore that happened into one reported as not done.
+  // restored it.
   test('a STATE.md the rollback restored is not reported as NOT restored when a queued writer lands after the lock is released', (t) => {
     const dir = setup('m13-state-restored-then-writer-', ROADMAP);
     t.after(() => cleanup(dir));
@@ -654,8 +648,6 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
   });
 
   // #5120 review Minor 1: the bytes the migration wrote are read back under the STATE.md lock.
-  // A writer that lands right after the forward write releases the lock, before any read-back
-  // made outside the lock, must not be taken for this migration's write and restored over.
   test('a writer landing as the forward STATE.md write releases its lock keeps its content through the rollback (#5120 review Minor 1)', (t) => {
     const dir = setup('m13-state-gap-writer-', ROADMAP);
     t.after(() => cleanup(dir));
@@ -671,7 +663,6 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     const realWrite = fs.writeFileSync;
     mock.method(fs, 'unlinkSync', function (file, ...rest) {
       const out = realUnlink.call(this, file, ...rest);
-      // The first release of STATE.md.lock is the forward write's; the writer lands in that gap.
       if (String(file) === `${state}.lock` && ++releases === 1) realWrite.call(fs, state, otherWriter);
       return out;
     });
@@ -686,8 +677,6 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.equal(fs.readFileSync(state, 'utf8'), otherWriter, 'the gap writer\'s STATE.md is not overwritten by the rollback');
   });
 
-  // #5120 review Minor 1 (second half): a read-back that fails proves nothing about ownership,
-  // so the rollback leaves STATE.md as found and names it, never restores unchecked.
   test('a failed read-back of the forward STATE.md write leaves STATE.md as found and named (#5120 review Minor 1)', (t) => {
     const dir = setup('m13-state-readback-fail-', ROADMAP);
     t.after(() => cleanup(dir));
@@ -696,7 +685,6 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     const plan = computeMigrationPlan(dir);
     fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
 
-    // The read-back is the first open of STATE.md after the rename that published the write.
     let published = false;
     let failedReads = 0;
     const realRename = fs.renameSync;
@@ -724,7 +712,6 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.ok(fs.readFileSync(state, 'utf8').includes('Phase 1-02: Bar'), 'STATE.md keeps the migrated text, as the error says');
   });
 
-  // #5120 review Minor 7: every file whose restore fails is named, not only STATE.md.
   test('a failed restore of a file other than STATE.md is named as NOT restored (#5120 review Minor 7)', (t) => {
     const dir = setup('m13-roadmap-restore-fail-', ROADMAP);
     t.after(() => cleanup(dir));
@@ -752,9 +739,6 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.equal(refused, 1, 'precondition: the ROADMAP.md restore was attempted and failed');
   });
 
-  // #5120 pre-push review Mi3: a file is named only when it does not end the rollback holding its
-  // prior bytes. A forward write that failed left ROADMAP.md as it was, so the rollback has nothing
-  // to put back there (#6351: a file already at its snapshot needs no write) and names nothing.
   test('a file whose forward write failed and that still holds its prior bytes is not restored and not named (#5120 pre-push review Mi3)', (t) => {
     const dir = setup('m13-roadmap-unchanged-', ROADMAP);
     t.after(() => cleanup(dir));
@@ -763,8 +747,6 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     const plan = computeMigrationPlan(dir);
     assert.ok(plan.roadmapEdits.length > 0, 'precondition: the migration rewrites ROADMAP.md');
 
-    // Every write onto ROADMAP.md fails: the forward string write (so the file stays unchanged and
-    // the migration fails at that step) and any Buffer restore the rollback would attempt.
     const failed = { forward: 0, restore: 0 };
     const realWrite = fs.writeFileSync;
     mock.method(fs, 'writeFileSync', function (file, data, ...rest) {
@@ -781,14 +763,12 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
       (err) => err.message === 'Migration failed and rolled back: EIO: i/o error, write',
     );
     mock.restoreAll();
-    // #6351 (merged from next): a file already back at its snapshot needs no write, so no restore is attempted.
     assert.deepEqual(failed, { forward: 1, restore: 0 }, 'precondition: the forward write failed and no restore was attempted');
     assert.ok(fs.readFileSync(roadmap).equals(before), 'ROADMAP.md still holds its prior bytes');
   });
 
-  // Arms `onConfigAccess` once, at the first config.json access made after STATE.md no longer
-  // holds its original content (config.json is also consulted before step 3, which must not trigger
-  // it): that access is the failing step 4, after the forward STATE.md write and its read-back.
+  // Arms `onConfigAccess` once, at the first config.json access made after STATE.md changed: that
+  // access is the failing step 4, after the forward STATE.md write and its read-back.
   function armAfterStateWrite(dir, original, onConfigAccess) {
     const state = path.join(dir, '.planning', 'STATE.md');
     const configPath = path.join(dir, '.planning', 'config.json');
@@ -807,10 +787,8 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     return { realRead, inject, isArmed: () => armed };
   }
 
-  // #5120 pre-push review R4-m2: the rollback reads STATE.md under its lock through the non-blocking
-  // seam, so a FIFO swapped in at STATE.md fails at once instead of blocking with the lock held.
+  // #5120 pre-push review R4-m2.
   test('the rollback opens STATE.md non-blocking while it holds the STATE.md lock', (t) => {
-    // Where the platform has no O_NONBLOCK (win32), the seam opens without it; nothing to pin there.
     if (fs.constants.O_NONBLOCK === undefined) { assert.equal(fs.constants.O_NONBLOCK, undefined); t.skip('no O_NONBLOCK on this platform'); return; }
     const dir = setup('m13-state-nonblocking-', ROADMAP);
     t.after(() => cleanup(dir));

@@ -670,10 +670,8 @@ describe('workstream STATE.md moves and writes hold the STATE.md lock (#5120)', 
     return Object.assign(new Error(message), { code: 'EIO' });
   }
 
-  // Mocks fs.renameSync and fs.openSync. Every rename whose source or destination basename is
-  // STATE.md is logged with whether `${from}.lock` and `${to}.lock` both existed at that moment,
-  // and every open of a STATE.md lock path is logged in order. `failWhen(from, to)` makes a rename
-  // throw EIO instead of running. All calls otherwise go to the real functions.
+  // Mocks fs.renameSync and fs.openSync to log STATE.md renames (with whether `${from}.lock` and
+  // `${to}.lock` existed) and STATE.md lock opens; `failWhen(from, to)` makes a rename throw EIO.
   function instrument(t, { failWhen } = {}) {
     const realRename = fs.renameSync;
     const realOpen = fs.openSync;
@@ -762,8 +760,7 @@ describe('workstream STATE.md moves and writes hold the STATE.md lock (#5120)', 
       assert.equal(rollback.e.bothLocked, true);
 
       // One lock scope for the whole move, rollback included: the two locks are opened once, in
-      // ascending path order (a fixed order, so two moves between the same directories cannot
-      // each hold the lock the other waits for), before the first rename of any entry.
+      // ascending path order, before the first rename of any entry.
       const opens = events.filter(e => e.type === 'open').map(e => e.path);
       assert.deepEqual(opens, [forwardFrom + '.lock', wsState + '.lock']);
       assert.deepEqual(opens, [...opens].sort());
@@ -833,8 +830,6 @@ describe('workstream STATE.md moves and writes hold the STATE.md lock (#5120)', 
       assert.equal(out.completed, true);
       const archive = path.join(tmpDir, out.archived_to);
       assert.equal(fs.existsSync(path.join(archive, 'STATE.md')), true);
-      // A lock a steal renamed aside is a leftover, not the live lock: it is archived as before,
-      // so the workstream directory empties and is removed.
       assert.deepEqual(lockFilesIn(archive), ['STATE.md.lock.stale-1-2-3']);
       assert.equal(fs.existsSync(wsDir), false);
     } finally {
@@ -998,12 +993,7 @@ describe('workstream migrate and complete fault sweep (#5120)', () => {
   });
 });
 
-// #5120 pre-push review R3-M1: the fault sweep above checks that files are conserved; these rows pin
-// what migrate and complete promise beyond that, each in one fixture: the error names an entry the
-// rollback could not return, a dead holder's lock with no STATE.md is removed, this process's own
-// lock stays in the workstream directory for the whole move, the active pointer comes back when the
-// archive fails, a stale lock another process removes mid-move is tolerated, and a failed migrate
-// leaves no workstreams directory behind.
+// #5120 pre-push review R3-M1.
 describe('workstream migrate and complete keep their promises (#5120 pre-push review R3-M1)', () => {
   const planningWorkspace = require('../gsd-core/bin/lib/planning-workspace.cjs');
   const eio = (message) => Object.assign(new Error(message), { code: 'EIO' });
@@ -1022,7 +1012,7 @@ describe('workstream migrate and complete keep their promises (#5120 pre-push re
   }
 
   // Makes the forward rename whose source is `failFrom` throw, and the reverse rename of STATE.md
-  // (back onto `stateHome`) throw too, so the rollback cannot return STATE.md.
+  // (back onto `stateHome`) throw too.
   function failForwardAndStateReturn(t, failFrom, stateHome) {
     const realRename = fs.renameSync;
     t.mock.method(fs, 'renameSync', (from, to, ...rest) => {
@@ -1127,7 +1117,6 @@ describe('workstream migrate and complete keep their promises (#5120 pre-push re
       t.mock.method(fs, 'readdirSync', (p, ...rest) => {
         const result = realReaddir.call(fs, p, ...rest);
         if (String(p) !== wsDir || !rest[0] || !rest[0].withFileTypes) return result;
-        // The lock is listed first, so a move of it would come before every other entry's move.
         return [...result].sort((a, b) => Number(b.name === 'STATE.md.lock') - Number(a.name === 'STATE.md.lock'));
       });
       const realRename = fs.renameSync;

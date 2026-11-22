@@ -2,8 +2,8 @@
 
 /**
  * Property-based tests for classifyStateWrite, the raw STATE.md write check's rule (#5120;
- * scripts/raw-state-write-guard.cjs). The rule is a classification surface (TESTING-STANDARDS
- * "Property-based testing tier"); tests/raw-state-write-guard.test.cjs pins named cases, and the
+ * scripts/raw-state-write-guard.cjs; TESTING-STANDARDS "Property-based testing tier").
+ * tests/raw-state-write-guard.test.cjs pins named cases, and the
  * properties below state the contract over generated paths, POSIX and Windows separators mixed:
  *   (a) a destination whose last segment is not exactly STATE.md is not recorded;
  *   (b) a STATE.md destination from a caller that is not product code is not recorded;

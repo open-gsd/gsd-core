@@ -3,16 +3,13 @@
  * Platform-sensitive tests split out of tests/state-io.test.cjs (#5120), so that
  * scripts/gen-platform-conformance-tier.cjs selects this whole file for the Windows/macOS tier.
  *
- * #5120 review (M1): the filesystem stateIO adapter refuses an existing STATE.md that is not a
- * regular file (a symlink, a FIFO, a device), under the STATE.md lock, and writes nothing; the
- * seam alone would replace it by rename while a link's real target kept its old bytes.
+ * #5120 review (M1).
  *
  * Why each row lives here:
  * - symlink rows: fs.symlinkSync needs privileges on Windows; without them the row skips and
  *   asserts the platform is win32.
  * - case row: whether state.md is a different file from STATE.md depends on the filesystem.
- * - FIFO row: no FIFO on Windows; mkfifo is a child process. On win32 it skips with a counted
- *   assertion that the platform is win32, so it can never pass on POSIX with zero assertions.
+ * - FIFO row: mkfifo is a child process, and Windows has no mkfifo.
  */
 
 const { test } = require('node:test');

@@ -1024,8 +1024,7 @@ describe('quick-batch: manifest tracks identity, options, base revision, stage s
       });
       assert.equal(result.ok, true);
       const after = readState(dir);
-      // The locked read-modify-write route also syncs the frontmatter, so a STATE.md that had
-      // none now starts with one. The disclosed behaviour change of moving this write under the lock.
+      // The disclosed behaviour change of moving this write under the lock.
       assert.equal(after.startsWith('---\n'), true);
       assert.ok(after.indexOf('\n---\n', 3) > 0, 'the frontmatter block is closed by a second fence');
       assert.equal(hasQuickTaskRow(after, item.quick_id), true);
@@ -1037,7 +1036,6 @@ describe('quick-batch: manifest tracks identity, options, base revision, stage s
   test('completeQuickItem keeps curated progress counters through the frontmatter sync and appends its row once (#5120 pre-push review m6)', () => {
     const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
     const dir = mkTmpProject();
-    // Curated frontmatter as a user leaves it; { resync: false } keeps every progress.* key.
     writeState(dir, ['---', 'status: paused', 'progress:', '  total_phases: 42', '  percent: 77', '---', '', stateWithQuickTasksSection()].join('\n'));
     try {
       const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
