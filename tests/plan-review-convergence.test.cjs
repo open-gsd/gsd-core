@@ -715,26 +715,39 @@ describe('plan-review-convergence workflow: convergence loop (#2306)', () => {
 
 // ─── Workflow: CYCLE_SUMMARY contract definition ──────────────────────────
 
-describe('plan-review-convergence workflow: CYCLE_SUMMARY contract definition (#2306-v2)', () => {
+describe('plan-review-convergence workflow: CYCLE_SUMMARY contract definition (#2306-v2, owned by gsd-review since #4617)', () => {
+  // #4617: the counting rules moved out of the wrapper's spawn prompt into gsd-review's
+  // `cycle_summary` step, so the contract is read from review.md. The wrapper keeps only the
+  // return shape it parses.
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  const reviewWorkflow = fs.readFileSync(WORKFLOW_REVIEW_PATH, 'utf8');
 
-  test('review agent prompt defines CYCLE_SUMMARY current_high/current_actionable format', () => {
+  test('review agent prompt states the CYCLE_SUMMARY current_high/current_actionable format', () => {
     assert.ok(
       workflow.includes('CYCLE_SUMMARY: current_high=<N> current_actionable=<M>'),
-      'review agent spawn prompt must define the CYCLE_SUMMARY current_high/current_actionable output format (#724)'
+      'review agent spawn prompt must state the CYCLE_SUMMARY current_high/current_actionable return shape it parses (#724)'
     );
+  });
+
+  test('gsd-review owns the CYCLE_SUMMARY line and both concern sections', () => {
+    assert.ok(
+      reviewWorkflow.includes('CYCLE_SUMMARY: current_high=<N> current_actionable=<M>'),
+      'review.md must define the CYCLE_SUMMARY line (#4617)'
+    );
+    assert.ok(reviewWorkflow.includes('## Current HIGH Concerns'));
+    assert.ok(reviewWorkflow.includes('## Current Actionable Non-HIGH Concerns'));
   });
 
   test('CYCLE_SUMMARY contract defines PARTIALLY RESOLVED (acknowledged, mitigation incomplete)', () => {
     assert.ok(
-      workflow.includes('PARTIALLY RESOLVED'),
+      reviewWorkflow.includes('PARTIALLY RESOLVED'),
       'CYCLE_SUMMARY INCLUDE list must define PARTIALLY RESOLVED — prevents under-counting of in-progress issues (#2306-v2)'
     );
   });
 
   test('CYCLE_SUMMARY contract defines FULLY RESOLVED (verified/closed)', () => {
     assert.ok(
-      workflow.includes('FULLY RESOLVED'),
+      reviewWorkflow.includes('FULLY RESOLVED'),
       'CYCLE_SUMMARY EXCLUDE list must define FULLY RESOLVED — prevents over-counting of closed issues (#2306-v2)'
     );
   });
@@ -742,14 +755,14 @@ describe('plan-review-convergence workflow: CYCLE_SUMMARY contract definition (#
   test('CYCLE_SUMMARY contract requires ## Current HIGH Concerns section in review return', () => {
     assert.ok(
       workflow.includes('## Current HIGH Concerns'),
-      'review agent must provide ## Current HIGH Concerns section so escalation gate can show specific issues (#2306-v2)'
+      'the wrapper must name the ## Current HIGH Concerns section so the escalation gate can show specific issues (#2306-v2)'
     );
   });
 
   test('CYCLE_SUMMARY contract defines ACTIONABLE non-HIGH findings and requires their section', () => {
     assert.ok(
-      workflow.includes('ACTIONABLE') && workflow.includes('Current Actionable Non-HIGH Concerns'),
-      'review agent must define actionable non-HIGH findings and list current unresolved actionable items (#724)'
+      reviewWorkflow.includes('ACTIONABLE') && reviewWorkflow.includes('Current Actionable Non-HIGH Concerns'),
+      'gsd-review must define actionable non-HIGH findings and list current unresolved actionable items (#724)'
     );
   });
 });
@@ -2122,7 +2135,11 @@ describe('plan-review-convergence: cross-artifact fact-drift pass (#1956)', () =
 //
 // See https://github.com/open-gsd/gsd-core/issues/2398
 
-const WORKFLOW_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
+// #4617: the counting contract (and the consensus gate inside it) moved from the wrapper's step 5a
+// spawn prompt into gsd-review's `cycle_summary` step, so these tests read review.md. The wrapper
+// is still read for the return-shape parity check.
+const WORKFLOW_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
+const WRAPPER_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
 const REVIEWER_INSTANCES_2398 = path.join(__dirname, '..', 'gsd-core', 'references', 'reviewer-instances.md');
 const runner2398 = require('../gsd-core/bin/lib/review-lane-runner.cjs');
 
@@ -2132,14 +2149,13 @@ function read2398(p) {
   return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
 }
 
-/** The `### 5a` step body, bounded by the next `### ` heading. */
+/** The `cycle_summary` step body in review.md, from its opening tag to its closing `</step>`. */
 function step5a2398(text) {
-  const lines = lf2398(text).split('\n');
-  const start = lines.findIndex((l) => /^###\s+5a[.\s]/.test(l));
+  const body = lf2398(text);
+  const start = body.indexOf('<step name="cycle_summary">');
   if (start === -1) return '';
-  let end = start + 1;
-  while (end < lines.length && !/^###\s/.test(lines[end])) end += 1;
-  return lines.slice(start, end).join('\n');
+  const end = body.indexOf('</step>', start);
+  return end === -1 ? body.slice(start) : body.slice(start, end);
 }
 
 /** The consensus-gate block: from its heading to the line before `Counting rules:`. */
@@ -2160,7 +2176,7 @@ function markerNames2398(text) {
 function landmarks2398(text) {
   const body = lf2398(text);
   return {
-    contract: body.indexOf('IMPORTANT — CYCLE_SUMMARY contract'),
+    contract: body.indexOf('CYCLE_SUMMARY: current_high=<N> current_actionable=<M>'),
     gate: body.search(/^\s*Consensus gate\b/m),
     counting: body.indexOf('Counting rules:'),
     definitions: body.indexOf('Definitions:'),
@@ -2170,8 +2186,8 @@ function landmarks2398(text) {
 describe('#2398 — consensus gate is declared and correctly positioned', () => {
   const workflow = read2398(WORKFLOW_2398);
 
-  test('step 5a declares a consensus gate', () => {
-    assert.notEqual(consensusGate2398(step5a2398(workflow)), '', 'no Consensus gate block found in step 5a');
+  test('the cycle_summary step declares a consensus gate', () => {
+    assert.notEqual(consensusGate2398(step5a2398(workflow)), '', 'no Consensus gate block found in the cycle_summary step');
   });
 
   test('gate precedes the counting rules it constrains', () => {
@@ -2189,9 +2205,17 @@ describe('#2398 — consensus gate is declared and correctly positioned', () => 
     assert.ok(lf2398(workflow).includes('CYCLE_SUMMARY: current_high=<N> current_actionable=<M>'));
   });
 
-  test('step 5a fences stay balanced', () => {
+  test('the CYCLE_SUMMARY line is identical in gsd-review and the wrapper that parses it (#4617 parity)', () => {
+    // Two surfaces name one machine-readable line. If either is edited alone, the wrapper parses
+    // a shape gsd-review no longer emits.
+    const line = 'CYCLE_SUMMARY: current_high=<N> current_actionable=<M>';
+    assert.ok(lf2398(workflow).includes(line), 'gsd-review must emit the line');
+    assert.ok(lf2398(read2398(WRAPPER_2398)).includes(line), 'the wrapper must state the same line');
+  });
+
+  test('the cycle_summary step fences stay balanced', () => {
     const fences = (lf2398(step5a2398(workflow)).match(/^\s*```/gm) || []).length;
-    assert.equal(fences % 2, 0, `odd fence count (${fences}) in step 5a — a fence was left open`);
+    assert.equal(fences % 2, 0, `odd fence count (${fences}) in the cycle_summary step — a fence was left open`);
   });
 });
 
@@ -2367,6 +2391,201 @@ describe('#2398 — reviewer-instances cross-reference', () => {
     assert.ok(/consensus gate/.test(ref), 'the reference must name the gate');
     assert.ok(/plan-review-convergence|current_high/.test(ref),
       'and must point at where it takes effect, so a reader configuring instances finds it');
+  });
+});
+
+// ══ #4617 — CYCLE_SUMMARY is owned by gsd-review; the wrapper gains an unattended exit ═══════
+//
+// Two halves, one seam. (B) the counting contract lives once, in review.md's `cycle_summary`
+// step behind `--cycle-summary`, and the wrapper consumes it instead of carrying a second copy.
+// (A) `--on-escalation=exit` ends a non-converged run with a CONVERGENCE_STATUS line instead of
+// the AskUserQuestion at step 5c. The shell fragments that parse the flags are EXTRACTED FROM THE
+// WORKFLOW AND EXECUTED, so a regex edit that stops matching is caught by behavior, not by prose.
+//
+// See https://github.com/open-gsd/gsd-core/issues/4617
+
+const REVIEW_4617 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
+const WRAPPER_4617 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
+const CMD_REVIEW_4617 = path.join(__dirname, '..', 'commands', 'gsd', 'review.md');
+const CMD_WRAPPER_4617 = path.join(__dirname, '..', 'commands', 'gsd', 'plan-review-convergence.md');
+
+const lf4617 = (t) => String(t == null ? '' : t).replace(/\r\n/g, '\n');
+const read4617 = (p) => lf4617(fs.readFileSync(p, 'utf8'));
+
+/** The `ON_ESCALATION=ask` .. closing `fi` fragment of the wrapper's argument parsing. */
+function onEscalationBlock4617() {
+  const body = read4617(WRAPPER_4617);
+  const start = body.indexOf('ON_ESCALATION=ask');
+  assert.ok(start >= 0, 'wrapper must parse --on-escalation into ON_ESCALATION');
+  const end = body.indexOf('\nfi\n', start);
+  assert.ok(end > start, 'ON_ESCALATION parse block must close with fi');
+  return body.slice(start, end + 4);
+}
+
+/** Run the extracted parse against `args`; never throws on a non-zero exit. */
+function runOnEscalation4617(args) {
+  const script = `GSD_ARGS="$1"\n${onEscalationBlock4617()}\nprintf '%s' "$ON_ESCALATION"`;
+  try {
+    const out = execFileSync('bash', ['-c', script, '_', args], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: PROBE_TIMEOUT_MS,
+    });
+    return { status: 0, out, err: '' };
+  } catch (e) {
+    return { status: e.status, out: String(e.stdout || ''), err: String(e.stderr || '') };
+  }
+}
+
+/** The token-anchored `--cycle-summary` regex literal exactly as review.md states it. */
+function cycleSummaryRegex4617() {
+  const m = /\(\^\|\[\[:space:\]\]\)--cycle-summary\(\[\[:space:\]\]\|\$\)/.exec(read4617(REVIEW_4617));
+  assert.ok(m, 'review.md must state the token-anchored --cycle-summary match');
+  return m[0];
+}
+
+function cycleSummaryEnabled4617(args) {
+  try {
+    execFileSync('bash', ['-c', 'echo " $1" | grep -qE "$2"', '_', args, cycleSummaryRegex4617()], {
+      stdio: 'ignore', timeout: PROBE_TIMEOUT_MS,
+    });
+    return true;
+  } catch (e) {
+    if (e.status === 1) return false;
+    throw e;
+  }
+}
+
+/** The step 5c body, from its heading to the next `### ` heading. */
+function step5c4617() {
+  const body = read4617(WRAPPER_4617);
+  const start = body.search(/^###\s+5c[.\s]/m);
+  assert.ok(start >= 0, 'step 5c must exist');
+  const rest = body.slice(start + 1);
+  const next = rest.search(/^###\s/m);
+  return next === -1 ? body.slice(start) : body.slice(start, start + 1 + next);
+}
+
+describe('#4617 half B — gsd-review owns the CYCLE_SUMMARY contract', () => {
+  test('cycle_summary step is gated on a token-anchored --cycle-summary', () => {
+    const body = read4617(REVIEW_4617);
+    const step = step5a2398(body);
+    assert.notEqual(step, '', 'review.md must have a cycle_summary step');
+    assert.ok(/without the flag, skip this step entirely/i.test(step), 'the step must say it is inert without the flag');
+    assert.ok(cycleSummaryRegex4617().length > 0);
+  });
+
+  test('--cycle-summary token match: bare and trailing token enable it; lookalikes do not (executed)', () => {
+    assert.equal(cycleSummaryEnabled4617('--phase 3 --cycle-summary'), true);
+    assert.equal(cycleSummaryEnabled4617('--cycle-summary --phase 3'), true);
+    assert.equal(cycleSummaryEnabled4617('--phase 3 --codex'), false);
+    assert.equal(cycleSummaryEnabled4617('--phase 3 --cycle-summary-x'), false);
+    assert.equal(cycleSummaryEnabled4617('--phase 3 x--cycle-summary'), false);
+    assert.equal(cycleSummaryEnabled4617('--phase 3 --cycle-summaryX --ws a'), false);
+  });
+
+  test('no review run means no CYCLE_SUMMARY line, never zero counts', () => {
+    const step = lf4617(step5a2398(read4617(REVIEW_4617)));
+    assert.ok(/TOTAL_LANE_FAILURE=true/.test(step) && /ALL_LANES_SKIPPED=true/.test(step));
+    assert.ok(/emit no\s+CYCLE_SUMMARY line/i.test(step));
+    assert.ok(/Never emit `current_high=0 current_actionable=0`/.test(step));
+  });
+
+  test('the step runs after present_results, inside the process block', () => {
+    const body = read4617(REVIEW_4617);
+    const at = {
+      present: body.indexOf('<step name="present_results">'),
+      summary: body.indexOf('<step name="cycle_summary">'),
+      end: body.indexOf('</process>'),
+    };
+    assert.ok(at.present >= 0 && at.present < at.summary && at.summary < at.end, JSON.stringify(at));
+  });
+
+  test('the wrapper carries no copy of the counting rules (moved, not copied)', () => {
+    const wrapper = read4617(WRAPPER_4617);
+    const review = read4617(REVIEW_4617);
+    for (const needle of ['Counting rules:', 'Consensus gate (applies', 'EXISTENCE-CLASS', 'JUDGMENT-CLASS',
+      'PARTIALLY RESOLVED', 'FULLY RESOLVED', 'FAIL OPEN']) {
+      assert.ok(!wrapper.includes(needle), `wrapper must not restate "${needle}" — gsd-review owns it`);
+      assert.ok(review.includes(needle), `gsd-review must define "${needle}"`);
+    }
+  });
+
+  test('the wrapper passes --cycle-summary to gsd-review', () => {
+    assert.match(read4617(WRAPPER_4617),
+      /Skill\(skill='gsd-review', args='--phase \{PHASE\} \{REVIEWER_FLAGS\} \{GSD_WS\} --cycle-summary'\)/);
+  });
+
+  test('both commands advertise their new flag', () => {
+    const review = read4617(CMD_REVIEW_4617);
+    assert.match(review, /argument-hint:.*\[--cycle-summary\]/);
+    assert.ok(review.includes('- `--cycle-summary` —'));
+    const wrapper = read4617(CMD_WRAPPER_4617);
+    assert.match(wrapper, /argument-hint:.*\[--on-escalation ask\|exit\]/);
+    assert.ok(wrapper.includes('- `--on-escalation ask|exit` —'));
+  });
+});
+
+describe('#4617 half A — --on-escalation=exit ends the run with a status instead of a question', () => {
+  test('absent flag defaults to ask', () => {
+    assert.deepEqual(runOnEscalation4617('3 --codex'), { status: 0, out: 'ask', err: '' });
+  });
+
+  test('both forms select exit; ask is accepted explicitly', () => {
+    assert.equal(runOnEscalation4617('3 --on-escalation=exit --max-cycles 2').out, 'exit');
+    assert.equal(runOnEscalation4617('3 --on-escalation exit').out, 'exit');
+    assert.equal(runOnEscalation4617('3 --on-escalation=ask').out, 'ask');
+  });
+
+  test('a lookalike flag does not enable it', () => {
+    assert.equal(runOnEscalation4617('3 --x-on-escalation=exit').out, 'ask');
+  });
+
+  test('any other value is refused before cycle 1 with a message naming both values (executed)', () => {
+    for (const args of ['3 --on-escalation=proceed', '3 --on-escalation', '3 --on-escalation=EXIT', '3 --on-escalation=']) {
+      const r = runOnEscalation4617(args);
+      assert.equal(r.status, 1, `"${args}" must exit 1, got ${r.status}`);
+      assert.ok(r.err.includes("'ask' or 'exit'"), `message must name both accepted values for "${args}": ${r.err}`);
+    }
+  });
+
+  test('the exit branch precedes the interactive escalation and never asks, writes state or replans', () => {
+    const step = step5c4617();
+    const exitAt = step.indexOf('`ON_ESCALATION` is `exit`');
+    const askAt = step.indexOf('AskUserQuestion([');
+    const proceedAt = step.indexOf('1. Proceed anyway');
+    assert.ok(exitAt >= 0 && exitAt < askAt && exitAt < proceedAt, JSON.stringify({ exitAt, askAt, proceedAt }));
+    const branch = step.slice(exitAt, step.indexOf('**Otherwise (`ON_ESCALATION` is `ask`)'));
+    assert.ok(/ask nothing and write no state/.test(branch));
+    assert.ok(/do not offer "Proceed anyway"/i.test(branch));
+    assert.ok(/do not call `state planned-phase`/.test(branch));
+    assert.ok(/do not\s+replan/.test(branch));
+  });
+
+  test('status precedence is open_conflicts, then stalled, then max_cycles', () => {
+    const branch = step5c4617();
+    const at = ['`open_conflicts`', '`stalled`', '`max_cycles`'].map((s) => branch.indexOf(`| ${s} |`));
+    assert.ok(at.every((i) => i >= 0), `status table rows missing: ${JSON.stringify(at)}`);
+    assert.ok(at[0] < at[1] && at[1] < at[2], `precedence order wrong: ${JSON.stringify(at)}`);
+    assert.ok(/first match wins/.test(branch));
+  });
+
+  test('CONVERGENCE_STATUS lines carry every counter and only the four documented statuses', () => {
+    const wrapper = read4617(WRAPPER_4617);
+    const lines = [...wrapper.matchAll(/^CONVERGENCE_STATUS: (\S+) (.*)$/gm)];
+    assert.equal(lines.length, 2, 'one line for the exit path, one for the converged path');
+    const statuses = new Set(['converged', 'open_conflicts', 'stalled', 'max_cycles', '{status}']);
+    for (const [, status, rest] of lines) {
+      assert.ok(statuses.has(status), `unexpected status ${status}`);
+      for (const key of ['cycles=', 'current_high=', 'current_actionable=', 'open_conflicts=']) {
+        assert.ok(rest.includes(key), `status line must carry ${key}`);
+      }
+    }
+  });
+
+  test('the default interactive escalation is unchanged', () => {
+    const step = step5c4617();
+    assert.ok(step.includes('1. Proceed anyway'));
+    assert.ok(step.includes('2. Manual review'));
+    assert.ok(step.includes('"Proceed anyway" is never offered'), 'open-conflict manual-only rule must survive');
   });
 });
 
