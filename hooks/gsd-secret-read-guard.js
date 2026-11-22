@@ -2905,6 +2905,50 @@ function findDebuggerCliSpawn(command, depth) {
   return spawn;
 }
 
+// #6439: bash expands `{a,b}` and `{a..z}` before `claude` reads its argv, so `claude --agent {gsd-debugger,x}` hands
+// the CLI `gsd-debugger` and `claude {--agent,gsd-debugger}` hands it `--agent gsd-debugger`. Every operand is expanded
+// (expandBraces, the expander the Grep glob arm uses, plus letter ranges) into the words bash would produce before the
+// `--agent` scan. A quoted word is expanded too: the tokenizer drops the quote marks, so `{"gsd-debugger",x}` (which
+// bash does expand) cannot be told from `"{gsd-debugger,x}"` (which it does not), and no real agent name holds a brace.
+// A list too long to expand cannot be ruled out, so it counts as a launch. Returns the words, or null when too long.
+const BRACE_LETTER_RANGE_RE = /\{([A-Za-z])\.\.([A-Za-z])(?:\.\.-?\d+)?\}/;
+
+function expandOperandWord(text) {
+  const range = BRACE_LETTER_RANGE_RE.exec(text);
+  if (range === null) return expandBraces(text);
+  // Every letter between the ends, whatever the step: a superset only ever over-denies.
+  const from = range[1].charCodeAt(0);
+  const to = range[2].charCodeAt(0);
+  const out = [];
+  for (let c = Math.min(from, to); c <= Math.max(from, to); c++) {
+    const expanded = expandOperandWord(text.slice(0, range.index) + String.fromCharCode(c) + text.slice(range.index + range[0].length));
+    if (expanded === null) return null;
+    out.push(...expanded);
+    if (out.length > MAX_GLOB_ALTERNATIVES) return null;
+  }
+  return out;
+}
+
+// The `--agent` value text of a debugger launch among the expanded operands, or null. The value is the next word of the
+// same operand's expansion when there is one (`{--agent,x}`), otherwise any word of the next operand's expansion (the
+// superset the issue asks for: `--agent {x,gsd-debugger}` is denied although bash passes only `x` as the value).
+function debuggerAgentInOperands(expandedOperands) {
+  for (let i = 0; i < expandedOperands.length; i++) {
+    const words = expandedOperands[i];
+    for (let j = 0; j < words.length; j++) {
+      const text = words[j];
+      if (text === '--agent') {
+        const candidates = j + 1 < words.length ? [words[j + 1]] : (expandedOperands[i + 1] || []);
+        const hit = candidates.find(isDebuggerAgent);
+        if (hit !== undefined) return hit;
+      } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
+        return text.slice('--agent='.length);
+      }
+    }
+  }
+  return null;
+}
+
 // One reading of findDebuggerCliSpawn: `reading` is false for the plain
 // reading, or the shell whose reading it is (scanCommand).
 function findDebuggerCliSpawnUnder(command, depth, reading) {
@@ -2959,15 +3003,14 @@ function findDebuggerCliSpawnUnder(command, depth, reading) {
     }
 
     if (!CLAUDE_BINARY_RE.test(base)) continue;
-    for (let k = 0; k < operands.length; k++) {
-      const text = operands[k].text;
-      if (text === '--agent') {
-        const value = operands[k + 1];
-        if (value && isDebuggerAgent(value.text)) return value.text;
-      } else if (text.startsWith('--agent=') && isDebuggerAgent(text.slice('--agent='.length))) {
-        return text.slice('--agent='.length);
-      }
+    const expandedOperands = [];
+    for (const operand of operands) {
+      const expanded = expandOperandWord(operand.text);
+      if (expanded === null) return operand.text;
+      expandedOperands.push(expanded);
     }
+    const spawnedAgent = debuggerAgentInOperands(expandedOperands);
+    if (spawnedAgent !== null) return spawnedAgent;
   }
   return null;
 }
