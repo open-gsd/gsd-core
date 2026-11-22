@@ -50,7 +50,7 @@ gsd_run query worktree.cleanup-wave --manifest "<manifest-path>"
 
 `cleanup-wave` reconciles executor worktrees, removes finished worktrees, and unlinks the manifest file upon successful completion (`manifest_unlinked: true`).
 
-**If `cleanup-wave` blocks:** When worktree branches conflict, contain uncommitted modifications, or residual worktrees fail to remove, `cleanup-wave` exits non-zero and retains the manifest on disk for investigation. Once the underlying blocking condition is addressed, re-running `cleanup-wave` completes the process and removes the manifest.
+**If `cleanup-wave` blocks:** When worktree branches conflict, contain uncommitted modifications, or residual worktrees fail to remove, `cleanup-wave` exits non-zero and retains the manifest on disk for investigation. Once the underlying blocking condition is addressed, rerun `cleanup-wave`. It skips entries whose directories, Git registrations, and branch refs are already gone, then removes the manifest once all entries are reconciled.
 
 **Agents the manifest does not list:** An executor that was still running when the wave was interrupted was never recorded. `cleanup-wave` does not touch its worktree or branch. Check for leftovers before and after cleanup:
 

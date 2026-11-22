@@ -491,8 +491,8 @@ describe('worktree cleanup after executor completes (#1496)', () => {
       'execute-phase should have a worktree cleanup step');
     assert.ok(content.includes('git worktree remove'),
       'cleanup should remove worktrees');
-    assert.ok(content.includes('git branch -D'),
-      'cleanup should delete temporary branches');
+    assert.ok(content.includes('git branch -d'),
+      'cleanup should delete only merged temporary branches');
   });
 
   test('execute-phase.md merges worktree branch before removing', () => {
@@ -2033,6 +2033,80 @@ describe('durable wave worktree manifest contract (#4853)', () => {
     assert.equal(fs.existsSync(manifestPath), true);
   });
 
+  for (const retryWith of ['tail', 'cleanup-wave']) {
+    test(`partial tail cleanup can resume with ${retryWith} after the second worktree is clean`, (t) => {
+      const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-tail-retry-', { detach: false });
+      const second = path.join(repo, '.claude', 'worktrees', 'agent-second');
+      const branch = 'worktree-agent-second';
+      gitOrThrow(['worktree', 'add', '-q', '-b', branch, second], { cwd: repo });
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.worktrees.push({ ...manifest.worktrees[0], agent_id: 'second', worktree_path: second, branch });
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      const dirty = path.join(second, 'local.txt');
+      fs.writeFileSync(dirty, 'local work');
+      const tail = extractCleanupTailBash();
+      const first = runCleanupTail(root, repo, manifestPath, tail);
+      assert.notEqual(first.status, 0);
+      assert.match(first.stderr, /dirty or unreadable/);
+      assert.equal(fs.existsSync(agent), false);
+      assert.equal(fs.readFileSync(dirty, 'utf8'), 'local work');
+      assert.equal(fs.existsSync(manifestPath), true);
+
+      fs.unlinkSync(dirty);
+      let retry = tail;
+      if (retryWith === 'cleanup-wave') retry = 'gsd_run query worktree.cleanup-wave --manifest "$WAVE_WORKTREE_MANIFEST"';
+      const secondRun = runCleanupTail(root, repo, manifestPath, retry);
+      assert.equal(secondRun.status, 0, secondRun.stderr || secondRun.stdout);
+      assert.equal(fs.existsSync(second), false);
+      assert.equal(fs.existsSync(manifestPath), false);
+    });
+  }
+
+  for (const kind of ['tracked', 'symlink', 'empty']) {
+    test(`cleanup-tail rejects a ${kind} manifest before removing a clean worktree`, (t) => {
+      const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-tail-guard-', { detach: false });
+      if (kind === 'tracked') gitOrThrow(['add', '--', manifestPath], { cwd: repo });
+      else if (kind === 'symlink') {
+        const target = path.join(root, 'target.json');
+        fs.renameSync(manifestPath, target);
+        try { fs.symlinkSync(target, manifestPath); }
+        catch (err) {
+          if (process.platform === 'win32' && err.code === 'EPERM') return t.skip('symlink privileges required');
+          throw err;
+        }
+      } else fs.writeFileSync(manifestPath, '');
+      const result = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /BLOCKED:/);
+      assert.equal(fs.existsSync(agent), true);
+      assert.equal(fs.existsSync(manifestPath), true);
+    });
+  }
+
+  test('cleanup-tail keeps a clean worktree whose recorded branch is not an agent branch', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-tail-user-branch-', { detach: false });
+    const branch = 'feature-user-work';
+    gitOrThrow(['checkout', '-b', branch], { cwd: agent });
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.worktrees[0].branch = branch;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const result = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /does not name a recorded agent branch/);
+    assert.equal(gitOrThrow(['branch', '--show-current'], { cwd: agent }).trim(), branch);
+  });
+
+  test('cleanup-tail preserves a clean worktree with unmerged commits', (t) => {
+    const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-tail-unmerged-', { detach: false });
+    gitOrThrow(['commit', '--allow-empty', '-qm', 'local executor commit'], { cwd: agent });
+    const tip = gitOrThrow(['rev-parse', 'HEAD'], { cwd: agent }).trim();
+    const result = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /is unmerged or unreadable/);
+    assert.equal(gitOrThrow(['rev-parse', 'HEAD'], { cwd: agent }).trim(), tip);
+    assert.equal(fs.existsSync(manifestPath), true);
+  });
+
   test('cleanup-tail removes a listed worktree on its branch and then the manifest (#4853)', (t) => {
     const { root, repo, agent, manifestPath } = tailFixture(t, 'gsd-4853-tail-branch-', { detach: false });
     const res = runCleanupTail(root, repo, manifestPath, extractCleanupTailBash());
@@ -2105,10 +2179,16 @@ ${creationBash}
 
     // Run the exact extracted command from execute-phase.md
     const scriptPath = path.join(root, 'test-wx.sh');
-    fs.writeFileSync(scriptPath, `ORCH_ROOT="${root}" MANIFEST="${manifestPath}" ${nodeLine}\n`);
-    const writeRes = runBashFile(scriptPath, { cwd: root });
+    fs.writeFileSync(scriptPath, `${nodeLine}\n`);
+    const options = { cwd: root, env: { ...process.env, ORCH_ROOT: root, WAVE_WORKTREE_MANIFEST: manifestPath } };
+    const writeRes = runBashFile(scriptPath, options);
     assert.notEqual(writeRes.status, 0, 'write with flag wx must fail non-zero when file already exists');
     assert.equal(fs.readFileSync(manifestPath, 'utf8'), 'pre-existing', 'file content must remain untouched');
+    assert.match(writeRes.stderr, /EEXIST/);
+    fs.unlinkSync(manifestPath);
+    const created = runBashFile(scriptPath, options);
+    assert.equal(created.status, 0, created.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(manifestPath, 'utf8')).worktrees, []);
   });
 
   test('dispatch refuses a manifest path that is a directory or a symlink', (t) => {

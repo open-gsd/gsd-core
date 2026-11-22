@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execGit as execGitSeam, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
+import { execGit as execGitSeam, platformWriteSync, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
 import { isContainedIn, tryWithinRoot, PathAcceptance } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #4941 io.cts is an `export =` module, which only `import x = require` can name
 import ioMod = require('./io.cjs');
@@ -1435,6 +1435,18 @@ function executeWorktreeWaveCleanupPlan(plan: WaveCleanupPlan | null, deps: Work
       // something git has no record of; and a path that stats, or that fails to stat
       // for any reason other than ENOENT, is a checkout that is present or merely
       // unreadable — which blocked before this PR and must keep blocking.
+      const currentList = snapshotWorktreeList();
+      if (currentList.ok && !findRegistered(currentList, resolveAgainstRepoRoot(entry.worktree_path)) &&
+          !currentList.entries.some((listed) => listed.branch === entry.branch) &&
+          confirmedGone(entry.worktree_path)) {
+        const ref = execGit(['show-ref', '--verify', '--quiet', `refs/heads/${entry.branch}`], { cwd: plan.repoRoot });
+        if (ref.exitCode === 1 && !ref.timedOut && !ref.error) {
+          result.status = 'merged_removed';
+          result.reason = 'already_clean';
+          results.push(result);
+          continue;
+        }
+      }
       if (!absentAndIdentified(entry.worktree_path, entry.branch)) {
         blockEntry(result, 'branch_mismatch', branchCheck?.stderr || '');
         // #2852: isolate — this entry's problem does not touch repoRoot's git state,
@@ -2243,8 +2255,16 @@ function cmdWorktreeRecordAgent(cwd: string, args: string[] = [], deps: RecordAg
     return { ok: false, reason: plan.reason, hint: plan.hint, entry: null };
   }
 
-  const writeFile = deps.writeFile || ((p: string, content: string) => fs.writeFileSync(p, content, 'utf8'));
-  writeFile(resolved, plan.manifest);
+  const writeFile = deps.writeFile || ((p: string, content: string) => platformWriteSync(p, content, { atomic: true }));
+  try {
+    writeFile(resolved, plan.manifest);
+  } catch (err) {
+    const hint = (err as Error).message;
+    writeErr(`[gsd] worktree.record-agent: manifest_write_failed — ${hint}\n`);
+    write(`${JSON.stringify({ ok: false, reason: 'manifest_write_failed', hint }, null, 2)}\n`);
+    process.exitCode = 1;
+    return { ok: false, reason: 'manifest_write_failed', hint, entry: null };
+  }
   write(`${JSON.stringify({ ok: true, reason: 'ok', entry: plan.entry, manifest_path: resolved }, null, 2)}\n`);
   return { ok: true, reason: 'ok', entry: plan.entry, manifest_path: resolved };
 }
@@ -2679,7 +2699,7 @@ function cmdWorktreeCreate(cwd: string, args: string[] = [], deps: RecordAgentCm
   //    means a REAL worktree now exists with NO manifest entry — roll it back
   //    (best-effort) rather than leaving an orphan cleanup-wave/reap-orphans
   //    can never reach (#2584 FIX 1). Never throws past this function.
-  const writeFile = deps.writeFile || ((p: string, content: string) => fs.writeFileSync(p, content, 'utf8'));
+  const writeFile = deps.writeFile || ((p: string, content: string) => platformWriteSync(p, content, { atomic: true }));
   try {
     writeFile(resolved, manifestToWrite);
   } catch (err) {

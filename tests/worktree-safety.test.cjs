@@ -1251,6 +1251,7 @@ describe('worktree record-agent — real CLI dispatch (#1298)', () => {
     try {
       const manifest = path.join(dir, 'wave-manifest.json');
       fs.writeFileSync(manifest, `${JSON.stringify({ orchestrator_root: dir, worktrees: [] })}\n`);
+      const before = fs.statSync(manifest);
       const out = runGsdToolsOrThrow([
         GSD_TOOLS, 'query', 'worktree.record-agent',
         '--manifest', manifest,
@@ -1260,6 +1261,7 @@ describe('worktree record-agent — real CLI dispatch (#1298)', () => {
         '--base', 'abc123',
       ], { timeoutMs: SUBPROCESS_TIMEOUT_MS });
       assert.match(out, /"ok": true/);
+      assert.notEqual(fs.statSync(manifest).ino, before.ino, 'recording replaces the manifest inode');
       const written = JSON.parse(fs.readFileSync(manifest, 'utf8'));
       assert.equal(written.worktrees.length, 1);
       assert.equal(written.worktrees[0].agent_id, 'a1');
@@ -2058,6 +2060,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
         statSync: statGone,
         execGit: (args) => {
           calls.push(args.join(' '));
+          if (args[0] === 'show-ref') return { exitCode: 0, stdout: '', stderr: '' };
           return absentWorktreeGit({}, { registered: false })(args);
         },
       });
@@ -2358,6 +2361,7 @@ describe('executeWorktreeWaveCleanupPlan', () => {
               stderr: '',
             };
           }
+          if (key === `show-ref --verify --quiet refs/heads/${BR}`) return { exitCode: 0, stdout: '', stderr: '' };
           if (key === `merge-base HEAD ${e2.branch}`) return { exitCode: 0, stdout: 'abc123', stderr: '' };
           if (key === `diff --diff-filter=D --name-only HEAD...${e2.branch}`) {
             return { exitCode: 0, stdout: '', stderr: '' };
@@ -9540,19 +9544,18 @@ describe('durable wave worktree manifests (#4853)', () => {
         { numRuns: 100 },
       );
 
-      // Verify that strings not matching /^\d+$/ or above MAX_SAFE_INTEGER are rejected
-      const invalidCandidates = [
-        '0', '-1', '1.5', '1e5', 'abc', '', '   ', '01a', '1/2',
-        '1000', '1001', 'Infinity', 'NaN', '9007199254740992', '999999999999999999999999999999',
-        0, -1, 1.5, 1000, 1001, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1,
-      ];
-      for (const invalid of invalidCandidates) {
-        assert.throws(
+      fc.assert(fc.property(
+        fc.oneof(
+          fc.integer({ min: -10000, max: 0 }),
+          fc.integer({ min: 1000, max: Number.MAX_SAFE_INTEGER }),
+          fc.integer({ min: 1, max: 999 }).map((wave) => `${wave}.5`),
+          fc.string().map((suffix) => `bad-${suffix}`),
+        ),
+        (invalid) => assert.throws(
           () => resolveWaveManifestPath('/test/phase', invalid),
           /must be a positive integer/,
-          `invalid wave candidate "${invalid}" must be rejected`,
-        );
-      }
+        ),
+      ));
     });
   });
 
