@@ -444,7 +444,9 @@ called the seam, and a test that calls the seam on a STATE.md fixture is test
 code. A recorded write is one of three kinds:
 
 - a **seam write**: `platformWriteSync`, or the byte-exact restore
-  `platformRestoreFileSync`, is on the stack;
+  `platformRestoreFileSync`, is on the stack (the seam is these functions, not
+  their module: another export of it, such as `retryRenameSync` renaming a
+  file not named `STATE.md` onto STATE.md, is a raw write);
 - a **relocation**: a rename or copy whose source is itself a file named
   `STATE.md` (a workstream migration, an archive), which moves bytes rather
   than authoring them;
@@ -538,7 +540,17 @@ Limits:
   unguarded and leaves no sentinel and no record. The test-file comparison
   covers test-file children only, not the subprocesses they spawn.
 - A write made under a JS mock of an fs function is attributed to the mock's
-  frame.
+  frame, and product code that hands a STATE.md path to a helper outside
+  `gsd-core/bin/` is attributed to that helper; neither write is recorded.
+- A child built with `tests/helpers/isolated-env.cjs` keeps the check but loses
+  the test-file attribution, so its violation reads `test: unknown`.
+- Without a ledger path (outside the runner) the module installs nothing.
+- Node resolves a `--require` preload against the working directory's package
+  scope, so under the runner a node process whose nearest `package.json` does
+  not parse fails to start (`ERR_INVALID_PACKAGE_CONFIG`), which it does not do
+  without the preload. On a machine whose git config runs node hooks, a test
+  that runs git in such a directory fails that way
+  (`tests/gate-ui-safety-frontend-evidence-5646.test.cjs`).
 - The lock counts as held when the destination's `STATE.md.lock` file names
   this process's pid, which is what `withStateLock` writes.
 - The basename match is case-sensitive.

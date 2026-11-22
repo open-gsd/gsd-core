@@ -1,104 +1,14 @@
 'use strict';
 
-// Raw STATE.md write check, installed for the whole suite by scripts/run-tests.cjs (#5120).
-//
-// Why this exists. ADR-4629's guard roster row "No raw STATE.md write outside the seam" was
-// enforced only by the Axis-2 string match in scripts/lint-state-write-path-drift.cjs, which
-// reads variable names, not values. A target held in a Map key filled in another function (the
-// roadmap-upgrade cross-reference loop, #5104 miss 3) is invisible to it. A raw write skips the
-// STATE.md lock, and ADR-3473 section 8.6's amendment names the cost: "That is not a preservation
-// bypass, it is a lock bypass", the #500/#905/#1230 lost-update family. This module checks the
-// VALUE at run time instead: the destination's basename, whatever the variable is called.
-//
-// What it enforces. A write whose destination basename is `STATE.md` is recorded, in the shapes the
-// limits below list, when the caller is product code (a `.cjs` file in a `gsd-core/bin/` directory:
-// the compiled `gsd-core/bin/lib/*.cjs`, `gsd-tools.cjs`, or an installed copy of either; the
-// repo-root `bin/*.js` launchers are not payload). The caller is the nearest frame outside node
-// internals, this file and the seam module `shell-command-projection.cjs`, so a seam write is
-// attributed to the code that called the seam. A recorded write is one of three kinds:
-// - a seam write: `platformWriteSync` (it writes a tmp file and renames it, and falls back to a
-//   direct write) or `platformRestoreFileSync` (#5831, the byte-exact restore of a file's prior
-//   bytes, through the same tmp-and-rename path) is on the stack. The seam is the function on the
-//   stack, not the module: its other exports, such as `retryRenameSync`, can land raw bytes on
-//   STATE.md too. Both functions are the seam (maintainer ruling on #6111, 2026-11-14), and ADR-3408
-//   section 8.3's list of seam writes that run no pipeline (Amendment 4) names the writes this PR
-//   put on them.
-// - a relocation: a rename or copy whose source is itself a file named `STATE.md` (a workstream
-//   migration, an archive). It authors no bytes.
-// - a raw write: anything else. It is a violation.
-// A seam write or a relocation is a violation unless this process holds the STATE.md lock on the
-// destination and, for a relocation, on the source too (#5120 review Major 1 and Major 3): it is the
-// same lost update as a raw write. The lock counts as held when `<path>.lock` names this process's
-// pid, which is what withStateLock writes. Test code writing STATE.md fixtures, or calling the seam
-// on one, is not product code and is never recorded. There is no allowlist (ADR-4629 Decision 5).
-//
-// How it is installed. run-tests.cjs writes a one-line preload shim into its run directory that
-// sets GSD_STATE_WRITE_LEDGER to the run's ledger file and requires this file, and puts
-// `--require "<shim>"` into NODE_OPTIONS, so the gsd-tools subprocesses a test spawns load it too,
-// not only the test-file children. The ledger path rides inside the shim because the repo's child
-// environment helper (tests/helpers/isolated-env.cjs) strips every GSD_* variable; NODE_OPTIONS
-// survives it. Each recorded write appends one JSON line; after the last
-// chunk the runner reads the ledger and fails the run on any violation. Seam writes are recorded
-// as well, with whether this process held the STATE.md lock, so the report never states the zero
-// alone (ADR-3408 Decision 5). Each process that installs the wrappers also appends one install
-// sentinel line, marked as a preload only when the runner's shim (preloadShimSource) set its
-// marker before requiring this file; every chunk the runner spawns is itself a node process that
-// loads the shim, so the runner fails a run whose ledger holds fewer preload sentinels than
-// chunks spawned: a chunk whose preload never loaded leaves no preload sentinel, and an empty
-// ledger alone would otherwise read as zero violations. A test file that requires this file
-// directly (the guard's own tests) installs too, on the ledger the runner also passes in the
-// env, but its sentinel is not a preload and cannot vouch for its chunk.
-//
-// Limits, stated plainly.
-// - It sees only code paths the suite executes.
-// - What it records: a call to one of the fs functions in WRAPPED or WRAPPED_PROMISES, made in a
-//   process where this file installed, at the outermost wrapped call, whose destination argument is
-//   a string, a Buffer or a `URL` instance with the basename STATE.md, and whose caller (above) is
-//   product code. The caller is looked for on the stack V8 captures for the call, which holds an
-//   async caller only while that caller awaits the call. So fs.promises.cp is seen, through the
-//   fs.promises.copyFile it calls, when the product awaits it inside an async function (not in the
-//   ES module case below), and not when the product chains .then on it or returns it unawaited.
-// - Examples of what is therefore not seen: a URL-like object that is not a `URL` instance, an
-//   fs.promises.cp the product does not await (above), a write through a descriptor (fs.openSync +
-//   fs.writeSync, writeFileSync(fd)), a FileHandle, a write stream, a native addon, truncation
-//   (fs.truncateSync, fs.ftruncateSync, fs.truncate), a rename or copy of a DIRECTORY that holds a
-//   STATE.md (its destination's basename is the directory's), a rename of STATE.md onto another
-//   name, fs.linkSync or fs.symlinkSync onto STATE.md, a write made inside a cp/cpSync filter
-//   callback (only the outermost wrapped call is observed), a write through another name for the
-//   same file (a hard link or a case-insensitive alias), and a write by a non-node subprocess such
-//   as git. The seam's own direct fallback writes through a descriptor, so a fallback write is not
-//   counted among the seam writes.
-// - The promise functions are wrapped on first reach: through fs.promises, a CommonJS require of
-//   `fs/promises` or `node:fs/promises`, or process.getBuiltinModule of either, so loading the check
-//   does not load node:os (whose tmpdir branch is fixed at load).
-// - An ES module import of `fs/promises` is not such a reach. A write through that import is not
-//   seen until one of those routes has run in the process; a named binding taken from it before
-//   then stays unwrapped after; and if a cp runs through it before then, node's cp module keeps the
-//   unwrapped copyFile it took when it loaded, so a later fs.promises.cp in that process is not seen
-//   (fs.cp, wrapped itself, still is).
-// - Those hold when the runner's shim is the first preload, which run-tests.cjs arranges by
-//   prepending it to NODE_OPTIONS (nodeOptionsWithRequire). A preload ordered before the shim that
-//   keeps the fs.promises object or a promise function holds an unwrapped reference, and a write
-//   through it is not seen.
-// - A test that replaces NODE_OPTIONS, or spawns node with an env that drops it, runs its child
-//   unguarded; that child leaves no sentinel and no record. The runner compares preload sentinels
-//   with the chunks it spawned and with the test files it passed them, so a chunk or a test-file
-//   child that lost the shim fails the run; a subprocess a test-file child spawns is not compared.
-// - A child built with isolated-env.cjs keeps the guard but loses the test-file attribution
-//   (GSD_STATE_WRITE_TEST_FILE is stripped), so its violation reads `test: unknown`.
-// - The caller is the nearest JS frame outside the seam module, so product code that hands a
-//   STATE.md path to a helper outside `gsd-core/bin/` is attributed to that helper, and a test that
-//   mocks an fs function with a JS wrapper (mock.method) puts its own frame nearest, so a product
-//   write made under that mock is not recorded.
-// - The basename match is case-sensitive.
-// - The lock is checked when a callback or promise rename, copy or write is CALLED, not when it
-//   lands: one called under the lock that lands after the lock is released reads as locked.
-// - A write the seam module makes on its own behalf from a frame of its own (a deferred callback
-//   with no caller outside the module on its stack) has no caller to attribute and is not recorded.
-// - Without a ledger path the module installs nothing.
-// - A ledger line that does not parse, or parses to anything but one of the two record shapes
-//   the guard writes (checked by keys and value types; a process killed while appending), fails
-//   the run, as an unreadable ledger does: it can be a violation record cut off.
+// Raw STATE.md write check, installed for the whole suite by scripts/run-tests.cjs (#5120; ADR-4629
+// guard roster, Amendment 2). The Axis-2 lint (scripts/lint-state-write-path-drift.cjs) reads names;
+// this checks the value at run time: a product write whose destination basename is STATE.md. A raw
+// write it records fails the run, and so does a seam write (platformWriteSync or
+// platformRestoreFileSync on the stack) or a relocation (a rename or copy from a file named STATE.md)
+// made without the STATE.md lock: a lock bypass is the #500/#905/#1230 lost update (ADR-3473 section
+// 8.6). classifyStateWrite is the rule. What is recorded, how the runner installs it, the report and
+// the limits are stated in docs/TESTING-SUITES.md, "The raw STATE.md write check"; change that
+// section with this file.
 
 const fs = require('fs');
 const path = require('path');
