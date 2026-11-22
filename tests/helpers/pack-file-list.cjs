@@ -22,20 +22,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const EXCLUDED_NAMES = new Set(['.git', '.svn', '.hg', 'cvs', '.npmrc', '.ds_store', '.lock-wscript', 'npm-debug.log']);
+// ASCII-only lower-casing: String.toLowerCase also folds characters such as the Kelvin sign into ASCII letters.
+const lower = (s) => s.replace(/[A-Z]/g, (c) => c.toLowerCase());
 const ROOT_EXCLUDED_FILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb']);
 
 // Name-based defaults, applied to a file or a directory name at any depth (a directory so named is
 // pruned with its contents); the lock files are excluded at the root only.
 // npm matches every name rule case-insensitively (ignore-walk sets nocase), so each is compared lower-cased.
 const isExcludedName = (rawName, rawRel, isDirectory = true) => {
-  const name = rawName.toLowerCase();
-  const rel = rawRel.toLowerCase();
+  const name = lower(rawName);
+  const rel = lower(rawRel);
   // npm's `/archived-packages/**` matches a directory of that name only, never a file.
   return EXCLUDED_NAMES.has(name) || (isDirectory && name === 'archived-packages') || rel === 'build/config.gypi' || rel.endsWith('/build/config.gypi')
     || name.startsWith('._') || name.startsWith('.wafpickle-') || name.endsWith('.orig') || /^\.[^/]{0,255}\.swp$/.test(name);
 };
 // npm's strict rules (/.git, /node_modules, the lock files) are plain rules: they drop a root file or directory of that name.
-const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel.toLowerCase()) || ['.git', 'node_modules'].includes(rel.toLowerCase());
+const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(lower(rel)) || ['.git', 'node_modules'].includes(lower(rel));
 
 // npm's '!/readme{,.*[^~$]}': the stem alone, or a dot, then at least one more character, the last not ~ or $.
 const isAlwaysIncludedFile = (rel) => rel === 'package.json' || /^(README|LICEN[CS]E|COPYING)(\.[^/]{0,255}[^~$/])?$/i.test(rel);
@@ -79,7 +81,7 @@ function listPackedFiles(root) {
       throw new Error(`${root}: files entry "${f}" follows an exclusion inside it or around it; npm applies entries by position and this list needs the inclusion first`);
     }
     if (f.startsWith('!')) exclusionsSoFar.push(here);
-    if (bare.includes('\\')) throw new Error(`${root}: files entry "${f}" has a backslash, which npm reads differently on each platform`);
+    if (bare.includes('\\') && !path.isAbsolute(bare)) throw new Error(`${root}: files entry "${f}" has a backslash, which npm reads differently on each platform`);
     const key = `${f.startsWith('!')}:${normalise(bare).toLowerCase()}`;
     if (seen.has(`${!f.startsWith('!')}:${normalise(bare).toLowerCase()}`)) {
       throw new Error(`${root}: files entry "${normalise(bare)}" is both included and excluded; npm resolves that by position and this list does not`);
@@ -100,6 +102,9 @@ function listPackedFiles(root) {
   }
   // npm normalises `bin` first (a string needs the package name, an array keeps one target per base name, keys
   // become base names); this list reads only the object form with plain keys.
+  if (manifest.main !== undefined && typeof manifest.main !== 'string') {
+    throw new Error(`${root}: package.json "main" is not a string; npm forces any truthy value as a file name and this list does not`);
+  }
   if (manifest.bin !== undefined) {
     const plainKey = (k) => /^[\w.-]{1,255}$/.test(k) && k !== '.' && k !== '..';
     if (typeof manifest.bin !== 'object' || manifest.bin === null || Array.isArray(manifest.bin) || !Object.keys(manifest.bin).every(plainKey)) {
@@ -123,8 +128,15 @@ function listPackedFiles(root) {
         throw err;
       }
       // npm lists names as the directory spells them; on a case-insensitive disk an entry may spell one differently.
-      if (spelled && !fs.readdirSync(path.dirname(dir)).includes(parts[i])) {
-        throw new Error(`${dir}: "${rel}" spells a name differently from the directory (a case-insensitive match); this list needs the exact spelling`);
+      if (spelled) {
+        const siblings = fs.readdirSync(path.dirname(dir));
+        if (!siblings.includes(parts[i])) {
+          throw new Error(`${dir}: "${rel}" spells a name differently from the directory (a case-insensitive match); this list needs the exact spelling`);
+        }
+        // npm matches names case-insensitively, so on a case-sensitive disk a sibling spelled in another case is packed too.
+        if (siblings.some((n) => n !== parts[i] && lower(n) === lower(parts[i]))) {
+          throw new Error(`${dir}: a sibling of "${parts[i]}" differs from it only in case; npm packs both and this list does not`);
+        }
       }
       if (i === parts.length - 1) return;
       if (stat.isSymbolicLink()) throw new Error(`${dir}: a symlinked directory on the path of "${rel}"; the walk does not follow links`);
@@ -166,10 +178,15 @@ function listPackedFiles(root) {
     if (rel.includes('/') && isExcludedName(rel.split('/').pop(), rel, false)) {
       throw new Error(`${root}: main or bin target "${rel}" is nested and matches a default exclusion; this list does not model that`);
     }
+    // A slash-less entry matches by base name, so under a directory no entry covers npm can re-include a same-named
+    // file next to the main or bin target; this list needs every such directory to be an entry itself.
+    if (rel.includes('/') && positive.some((p) => !p.includes('/')) && !positive.includes(rel.split('/')[0])) {
+      throw new Error(`${root}: main or bin target "${rel}" is under a directory no files entry covers; this list does not model base-name matches there`);
+    }
   }
   const covers = (entry, rel) => {
-    const e = entry.toLowerCase();
-    const r = rel.toLowerCase();
+    const e = lower(entry);
+    const r = lower(rel);
     return r === e || r.startsWith(`${e}/`);
   };
   // An entry under a directory npm prunes (node_modules at the root, an excluded directory name) is not packed.

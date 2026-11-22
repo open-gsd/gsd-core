@@ -275,11 +275,11 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
 
   test('package.json, README*, LICENSE* and the main and bin files ship without a files entry', () => {
     planted(
-      { files: ['hooks'], main: 'lib/main.js', bin: { tool: 'bin/tool.js' } },
-      ['README.md', 'LICENSE', 'licence.txt', 'lib/main.js', 'bin/tool.js', 'lib/other.js', 'CHANGELOG.md'],
+      { files: ['hooks'], main: 'main.js', bin: { tool: 'tool.js' } },
+      ['README.md', 'LICENSE', 'licence.txt', 'main.js', 'tool.js', 'other.js', 'CHANGELOG.md'],
       (tmp) => {
         assert.deepEqual(sorted(listPackedFiles(tmp)),
-          ['LICENSE', 'README.md', 'bin/tool.js', 'lib/main.js', 'licence.txt', 'package.json']);
+          ['LICENSE', 'README.md', 'licence.txt', 'main.js', 'package.json', 'tool.js']);
       },
     );
   });
@@ -396,15 +396,14 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
       });
     }
     planted({ files: ['Hooks'] }, ['hooks/a.js'], (tmp) => {
-      // On a case-sensitive disk `Hooks` matches nothing and packs nothing; on a case-insensitive one it matches
-      // `hooks` under another spelling, which throws.
-      const outcome = (() => { try { return [...listPackedFiles(tmp)].sort(); } catch (err) { return err.message; } })();
-      assert.ok(Array.isArray(outcome) ? outcome.join() === 'package.json' : /spells a name differently/.test(outcome), String(outcome));
+      // A case-sensitive disk reaches the unmatched-entry sibling check; a case-insensitive one finds `hooks` under
+      // another spelling and reaches the spelling check. Both throw.
+      assert.throws(() => listPackedFiles(tmp), /another case|spells a name differently/);
     });
   });
 
   test('a main file spelled with ./ is not packed by npm, a bin file spelled with ./ is', () => {
-    planted({ files: ['hooks'], main: './lib/m.js', bin: { t: './bin/t.js' } }, ['lib/m.js', 'bin/t.js'], (tmp) => {
+    planted({ files: ['hooks', 'bin'], main: './lib/m.js', bin: { t: './bin/t.js' } }, ['lib/m.js', 'bin/t.js'], (tmp) => {
       assert.deepEqual(sorted(listPackedFiles(tmp)), ['bin/t.js', 'package.json']);
     });
   });
@@ -520,6 +519,24 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     planted({ files: ['gemini.md'] }, ['GEMINI.md'], (tmp) => {
       // A case-sensitive disk reaches the sibling check; a case-insensitive one finds the file and reaches the spelling check.
       assert.throws(() => listPackedFiles(tmp), /another case|spells a name differently/);
+    });
+  });
+
+  test('a main or bin under a directory no root entry covers, a non-string main, and a sibling differing only in case throw', (t) => {
+    planted({ files: ['hooks', 'GEMINI.md'], main: 'lib/main.js' }, ['lib/main.js'], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /no files entry covers/);
+    });
+    planted({ files: ['hooks', 'lib'], main: 'lib/main.js' }, ['lib/main.js'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['lib/main.js', 'package.json']);
+    });
+    planted({ files: ['hooks'], main: 5 }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /"main" is not a string/));
+    planted({ files: ['scripts'] }, ['scripts/a.js', 'Scripts/b.js'], (tmp) => {
+      // The two spellings can only coexist on a case-sensitive disk, so a case-insensitive one has nothing to check.
+      if (fs.readdirSync(tmp).filter((n) => n.toLowerCase() === 'scripts').length < 2) {
+        t.skip('this disk is case-insensitive');
+        return;
+      }
+      assert.throws(() => listPackedFiles(tmp), /differs from it only in case/);
     });
   });
 
