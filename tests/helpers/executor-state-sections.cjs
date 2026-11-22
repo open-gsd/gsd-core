@@ -43,7 +43,8 @@ const SECTION_NAMES = Object.freeze({
 
 /** The rules the reference states after the block, word for word. */
 const RULES = Object.freeze([
-  '- `STATE_STATUS=missing`: STATE.md does not exist. If `.planning/` exists, offer to reconstruct STATE.md or continue without it; if `.planning/` is missing, stop with an error: the project is not initialized.',
+  '- `STATE_STATUS=missing`: STATE.md is missing or empty. If `.planning/` exists, offer to reconstruct STATE.md or continue without it; if `.planning/` is missing, stop with an error: the project is not initialized.',
+  '- `STATE_STATUS=unchecked`: the existence check failed, so use the sections that came back. If all three are `(empty)`, run `gsd_run query state.load --raw` without `2>/dev/null` and report its error.',
   '- Blockers `(empty)`: none are recorded.',
   '- Decisions `(empty)`: STATE.md may keep its decisions under another heading the state writers accept (such as `### Accumulated Decisions`), which `state.get` cannot name. Read STATE.md and use only its decisions section.',
   '- Read the whole STATE.md only when a task\'s `<read_first>` or action names it, or names a STATE.md section other than these three.',

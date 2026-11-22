@@ -92,7 +92,7 @@ describe('#6388: executor state loading contract', () => {
     test('the agent runs the block in load_project_state', () => {
       const step = /<step name="load_project_state" priority="first">([\s\S]*?)<\/step>/.exec(text.agent);
       assert.ok(step, 'gsd-executor.md has a load_project_state step');
-      assert.ok(step[1].includes(REFERENCE_INCLUDE), 'load_project_state references the block');
+      assert.ok(step[1].split('\n').includes(REFERENCE_INCLUDE), 'load_project_state references the block on its own line');
     });
 
     test('execute-plan.md runs the block in init_context, after GSD_WS is parsed', () => {
@@ -100,6 +100,7 @@ describe('#6388: executor state loading contract', () => {
       assert.ok(step, 'execute-plan.md has an init_context step');
       const wsParse = step[1].indexOf('GSD_WS=$(echo " $GSD_ARGS"');
       assert.notEqual(wsParse, -1, 'init_context parses --ws into GSD_WS');
+      assert.ok(step[1].split('\n').includes(REFERENCE_INCLUDE), 'init_context references the block on its own line');
       assert.ok(step[1].indexOf(REFERENCE_INCLUDE) > wsParse, 'init_context references the block after GSD_WS is set');
     });
 

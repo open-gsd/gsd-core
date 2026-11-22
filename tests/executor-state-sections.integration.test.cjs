@@ -171,6 +171,17 @@ describe('#6388: plan execution reads only Current Position, Decisions and Block
       assert.deepEqual(runReads(t, dir), { ...READ, position: 'Phase: 1 of 1 (Root)' });
     });
 
+    test('GSD_PROJECT selects that project\'s STATE.md, as it does for state.load', (t) => {
+      const dir = project(t, stateDoc({ position: 'Phase: 1 of 1 (Root)' }));
+      const scoped = path.join(dir, '.planning', 'api');
+      fs.mkdirSync(scoped, { recursive: true });
+      fs.writeFileSync(path.join(scoped, 'STATE.md'), stateDoc({ decisions: '- [Phase 1]: API only' }));
+      const loaded = runGsdTools(['state', 'load'], dir, { GSD_PROJECT: 'api' });
+      assert.ok(loaded.success, loaded.error);
+      assert.equal(JSON.parse(loaded.output).state_raw, fs.readFileSync(path.join(scoped, 'STATE.md'), 'utf8'));
+      assert.deepEqual(runReads(t, dir, { env: { GSD_PROJECT: 'api' } }), { ...READ, decisions: '- [Phase 1]: API only' });
+    });
+
     test('agent: with GSD_WS unset the reads resolve the same STATE.md as state.load', (t) => {
       const dir = workstreamProject(t);
       const env = { GSD_WORKSTREAM: 'alpha' };
@@ -196,12 +207,22 @@ describe('#6388: plan execution reads only Current Position, Decisions and Block
       assert.deepEqual(runReads(t, dir), { status: 'missing', position: '', decisions: '', blockers: '' });
     });
 
-    test('a failing existence check still attempts the reads (fail open toward reading)', (t) => {
+    test('a failing existence check reports unchecked and still attempts the reads (fail open toward reading)', (t) => {
       const dir = project(t, stateDoc());
       const node = JSON.stringify(process.execPath);
       const tools = JSON.stringify(TOOLS);
       const gsdRun = `gsd_run() { if [ "$2" = "state.load" ]; then return 1; fi; ${node} ${tools} "$@"; }`;
-      assert.deepEqual(runReads(t, dir, { gsdRun }), READ);
+      assert.deepEqual(runReads(t, dir, { gsdRun }), { ...READ, status: 'unchecked' });
+    });
+
+    test('a workstream name that traverses out of .planning/ is refused: unchecked, nothing read', (t) => {
+      const dir = project(t, stateDoc());
+      // A STATE.md the traversal would reach if it were honored.
+      fs.writeFileSync(path.join(dir, 'STATE.md'), stateDoc({ decisions: '- escaped' }));
+      assert.deepEqual(
+        runReads(t, dir, { env: { GSD_WORKSTREAM: '../..' } }),
+        { status: 'unchecked', position: '', decisions: '', blockers: '' },
+      );
     });
 
     test('a malformed VERIFICATION.md status elsewhere in the project does not affect the reads', (t) => {
