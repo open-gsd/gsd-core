@@ -1056,6 +1056,20 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['inside $( )', 'out=$(claude --agent gsd-debugger -p hi); echo "$out"'],
     ['inside bash -c', "bash -c 'claude --agent gsd-debugger -p hi'"],
     ['inside eval', 'eval "claude --agent gsd-debugger -p hi"'],
+    ['brace alternatives in the value (#6439)', 'claude --agent {gsd-debugger,x} -p x'],
+    ['brace alternative after a prefix (#6439)', 'claude --agent gsd-{debugger,x} -p x'],
+    ['brace alternatives in the --agent= form (#6439)', 'claude -p x --agent={x,gsd-debugger}'],
+    ['plugin-namespaced brace alternative (#6439)', 'claude --agent {gsd:gsd-debugger,x} -p x'],
+    ['nested brace alternatives (#6439)', 'claude --agent {x,{y,gsd-debugger}} -p x'],
+    ['a brace that spans the flag and its value (#6439)', 'claude {--agent,gsd-debugger} -p x'],
+    ['a brace that builds an equals-form flag word (#6439)', 'claude --{agent,x}=gsd-debugger -p x'],
+    ['a brace that appends the equals form (#6439)', 'claude --agent{,=gsd-debugger} -p x'],
+    ['double-quoted alternatives inside the braces (#6439)', 'claude --agent {"gsd-debugger",x} -p x'],
+    ['single-quoted alternatives inside the braces (#6439)', "claude --agent {'gsd-debugger',x} -p x"],
+    ['a quoted prefix before a brace group (#6439)', 'claude --agent "gsd-"{debugger,x} -p x'],
+    ['a letter range that includes the missing letter (#6439)', 'claude --agent gsd-debugge{a..z} -p x'],
+    ['a degenerate letter range (#6439)', 'claude --agent gsd-debugge{r..r} -p x'],
+    ['65 alternatives, past the expansion limit (#6439)', `claude --agent {${Array.from({ length: 65 }, (_, i) => `a${i}`).join(',')}} -p x`],
     ['piped', 'echo go | claude --agent gsd-debugger -p'],
   ];
 
@@ -1076,6 +1090,11 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
     ['reading the agent file', 'cat agents/gsd-debugger.md'],
     ['the name in a heredoc body', "cat <<'EOF'\nclaude --agent gsd-debugger\nEOF"],
     ['a different binary that ends in claude', 'myclaude --agent gsd-debugger -p hi'],
+    ['brace alternatives that name other agents (#6439)', 'claude --agent {gsd-planner,gsd-executor} -p x'],
+    ['a brace word that only starts with the name (#6439)', 'claude --agent gsd-debugger{-extra,-more} -p x'],
+    ['a letter range that cannot reach the name (#6439)', 'claude --agent gsd-debugge{a..q} -p x'],
+    ['64 alternatives, at the expansion limit (#6439)', `claude --agent {${Array.from({ length: 64 }, (_, i) => `a${i}`).join(',')}} -p x`],
+    ['63 alternatives, under the expansion limit (#6439)', `claude --agent {${Array.from({ length: 63 }, (_, i) => `a${i}`).join(',')}} -p x`],
     ['the gsd-tools model lookup the manager really runs', 'gsd_run query resolve-model gsd-debugger'],
   ];
 
@@ -1084,6 +1103,25 @@ describe('gsd-secret-read-guard: gsd-debugger CLI spawn (#5214)', () => {
       assertAllowed(runHook(bash(command)), label);
     });
   }
+
+  test('property: a brace list after --agent is denied exactly when an alternative is the debugger agent (#6439)', () => {
+    const fc = require('fast-check');
+    const NAMES = ['gsd-debugger', 'gsd:gsd-debugger', 'gsd-planner', 'gsd-executor', 'x', 'gsd-debugger-extra'];
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom(...NAMES), { minLength: 2, maxLength: 4 }),
+      fc.boolean(),
+      (alts, equalsForm) => {
+        const list = `{${alts.join(',')}}`;
+        const command = equalsForm ? `claude -p x --agent=${list}` : `claude --agent ${list} -p x`;
+        const r = runHook(bash(command));
+        if (alts.some((a) => a === 'gsd-debugger' || a === 'gsd:gsd-debugger')) {
+          assertBlocked(r, command, { code: 'debugger-cli-spawn', tool: 'Bash' });
+        } else {
+          assertAllowed(r, command);
+        }
+      },
+    ), { numRuns: 20 });
+  });
 
   test('the Kimi Shell vocabulary is covered too', () => {
     assertBlocked(

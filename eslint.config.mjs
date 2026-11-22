@@ -122,6 +122,9 @@ export default tseslint.config(
       '.stryker-tmp/**',
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
+      'gsd-core/bin/lib/config-value-resolver.cjs',
+      'gsd-core/bin/lib/config-schema-defaults.cjs',
+      'gsd-core/bin/lib/settings-jsonc.cjs',
       'gsd-core/bin/lib/claude-orchestration.cjs',
       'gsd-core/bin/lib/claude-orchestration-command-router.cjs',
       'gsd-core/bin/lib/semver-compare.cjs',
@@ -313,6 +316,8 @@ export default tseslint.config(
       // #2873 (epic #2866 Phase 4): tsc-generated runtime artifact — lint the
       // src/health-diagnostic-rules/install-surface-shadowing.cts source.
       'gsd-core/bin/lib/health-diagnostic-rules/install-surface-shadowing.cjs',
+      // #6430: tsc-generated runtime artifact — lint src/health-diagnostic-rules/context-bridge.cts, not this.
+      'gsd-core/bin/lib/health-diagnostic-rules/context-bridge.cjs',
       'gsd-core/bin/lib/shell-command-projection.cjs',
       'gsd-core/bin/lib/security.cjs',
       'gsd-core/bin/lib/command-aliases.cjs',
@@ -354,6 +359,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/worktree-safety.cjs',
       'gsd-core/bin/lib/worktree-base-ref.cjs',
       'gsd-core/bin/lib/gsd-tool-dir.cjs',
+      'gsd-core/bin/lib/dispatch-isolation.cjs',
       'gsd-core/bin/lib/planning-workspace.cjs',
       'gsd-core/bin/lib/planning-scope.cjs',
       'gsd-core/bin/lib/command-roster.cjs',

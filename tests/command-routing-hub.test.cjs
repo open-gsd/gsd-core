@@ -1762,6 +1762,36 @@ describe('dispatch-should-flatten query — behavioral', () => {
     }
   });
 
+  // #6119: under `claude -p`, background work is killed 10 minutes after the last turn
+  // (CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS) and the process still exits 0, so a backgrounded
+  // plan agent loses its work silently. Claude Code documents no signal a hook or gsd-tools
+  // child can read to tell `-p` from an interactive session (the #6119 spike record, dated
+  // 2026-11-19, under the research docs). The verdict therefore stays
+  // fail-closed `true` for every session shape. The variables below are the host's
+  // UNDOCUMENTED markers, with the values measured for each shape: if one of them ever moves the
+  // verdict, an env-var heuristic was added without a documented host signal.
+  for (const [shape, markers] of [
+    ['interactive (cli, attended)', { CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SESSION_ATTENDED: '1' }],
+    ['one-shot -p (sdk-cli, unattended)', { CLAUDE_CODE_ENTRYPOINT: 'sdk-cli', CLAUDE_CODE_SESSION_ATTENDED: '0' }],
+  ]) {
+    test(`runtime=claude, ${shape} session → shouldFlatten=true (#6119: fail-closed, no documented survivability signal)`, async () => {
+      const tmpDir = createTempProject();
+      try {
+        const result = await runGsdToolsAsync(['query', 'dispatch-should-flatten', '--json'], tmpDir, {
+          GSD_RUNTIME: 'claude',
+          ...markers,
+        });
+        assert.ok(result.success, `Expected success, got error: ${result.error}`);
+        const parsed = JSON.parse(result.output);
+        assert.strictEqual(parsed.runtime, 'claude');
+        assert.strictEqual(parsed.shouldFlatten, true,
+          `#6119: claude must stay flattened whatever the session shape, got: ${parsed.shouldFlatten}`);
+      } finally {
+        cleanupDir(tmpDir);
+      }
+    });
+  }
+
   test('runtime=cursor → shouldFlatten=false (background dispatch safe)', async () => {
     const tmpDir = createTempProject();
     try {

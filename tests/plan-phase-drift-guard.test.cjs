@@ -1834,3 +1834,131 @@ test('§8.5.2 crash-resume (non-reviews) still skips written plans (#2762 negati
 });
   });
 }
+
+// ─── #6257: step 13b passes real values to `state planned-phase` ──────────────────
+
+describe('plan-phase step 13b records the phase name and plan count (#6257)', () => {
+  const fs13 = require('fs');
+  const os13 = require('os');
+  const path13 = require('path');
+  const { runHook: runBash, assertSeamExit } = require('./helpers/process-seam.cjs');
+  const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+  const { cleanup: cleanup13 } = require('./helpers.cjs');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+
+  const GSD_TOOLS = path13.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+  const HAS_BASH = runBash('-c', ['command -v bash'], { interpreter: 'bash' }).exitCode === 0;
+
+  // The fence that calls state.planned-phase, exactly as shipped; the placeholder is what the runtime fills in.
+  function step13bFence() {
+    const lines = splitLines(workflow);
+    const hit = scanFencedBlocks(lines).find((b) => b.closeLineIdx !== -1
+      && lines.slice(b.openLineIdx + 1, b.closeLineIdx).join('\n').includes('state.planned-phase'));
+    assert.ok(hit, 'step 13b must still call state.planned-phase in a fence');
+    return lines.slice(hit.openLineIdx + 1, hit.closeLineIdx).join('\n').replaceAll('{phase_number}', '01');
+  }
+
+  // `gsd_run` is a stub that answers the lookups by their --pick field and logs every call. `set -u`: a variable
+  // the fence uses without assigning it is an error, which is the defect (each fence is its own shell, #4915).
+  function run13b({ name = 'Foundation Setup', nameRc = 0, count = '2', ws = '' }) {
+    const dir = fs13.mkdtempSync(path13.join(os13.tmpdir(), 'gsd-6257-'));
+    const log = path13.join(dir, 'calls.log');
+    const script = [
+      'set -u',
+      'gsd_run() { printf "%s\\n" "$*" >> "$CALL_LOG"; case "$2:$*" in',
+      '  roadmap.get-phase:*"--pick phase_name") printf %s "$NAME_OUT"; return "$NAME_RC";;',
+      '  find-phase:*"--pick plan_count") printf %s "$COUNT_OUT";;',
+      'esac; }',
+      step13bFence(),
+    ].join('\n');
+    try {
+      const env = { ...process.env, NAME_OUT: name, NAME_RC: String(nameRc), COUNT_OUT: count, CALL_LOG: log };
+      if (ws) env.GSD_WS = ws; else delete env.GSD_WS;
+      const res = runBash('-c', [script], { interpreter: 'bash', env });
+      const calls = fs13.existsSync(log) ? splitLines(fs13.readFileSync(log, 'utf8')).filter(Boolean) : [];
+      return { res, calls, planned: calls.filter((c) => c.includes('state.planned-phase')) };
+    } finally {
+      cleanup13(dir);
+    }
+  }
+
+  test('a found phase passes its number, curated display name and plan count to state.planned-phase', { skip: !HAS_BASH }, () => {
+    const { res, calls, planned } = run13b({});
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.strictEqual(planned.length, 1);
+    assert.match(planned[0], /--phase 01 --name Foundation Setup --plans 2$/);
+    assert.match(calls[0], /roadmap\.get-phase .* --pick phase_name$/, 'the name is the ROADMAP display name');
+    assert.match(calls[1], /find-phase .* --pick plan_count$/);
+  });
+
+  test('the plan count is checked at limit-1, limit and limit+1', { skip: !HAS_BASH }, () => {
+    assert.strictEqual(run13b({ count: '-1' }).planned.length, 0, 'limit-1 stops');
+    assert.match(run13b({ count: '0' }).planned[0], /--plans 0$/, 'limit passes');
+    assert.match(run13b({ count: '1' }).planned[0], /--plans 1$/, 'limit+1 passes');
+  });
+
+  for (const [label, count] of [['an empty', ''], ['a non-numeric', 'null'], ['a decimal', '1.5']]) {
+    test(`${label} plan count stops the step and records nothing`, { skip: !HAS_BASH }, () => {
+      const { res, planned } = run13b({ count });
+      assert.notStrictEqual(res.exitCode, 0, 'the step must stop');
+      assert.match(res.stderr, /phase 01 not found/);
+      assert.strictEqual(planned.length, 0, 'state.planned-phase must not run');
+    });
+  }
+
+  test('a phase the ROADMAP does not name still records its plan count, with an empty name (the curated name is kept)', { skip: !HAS_BASH }, () => {
+    const { res, planned } = run13b({ name: '', nameRc: 1 });
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.match(planned[0], /--name\s+--plans 2$/);
+  });
+
+  test('a workstream scope reaches every lookup and the write', { skip: !HAS_BASH }, () => {
+    const { res, calls } = run13b({ ws: '--ws alpha' });
+    assert.strictEqual(res.exitCode, 0, res.stderr);
+    assert.strictEqual(calls.length, 3);
+    for (const c of calls) assert.ok(c.includes('--ws=alpha'), `missing --ws=alpha in: ${c}`);
+  });
+
+  // The acceptance criterion: run the REAL commands against a fixture project and read STATE.md back.
+  function realStep({ roadmap }) {
+    const proj = fs13.mkdtempSync(path13.join(os13.tmpdir(), 'gsd-6257-real-'));
+    try {
+      gitOrThrow(['init', '-q'], { cwd: proj, timeoutMs: PROBE_TIMEOUT_MS });
+      const phaseDir = path13.join(proj, '.planning', 'phases', '01-foundation-setup');
+      fs13.mkdirSync(phaseDir, { recursive: true });
+      fs13.writeFileSync(path13.join(proj, '.planning', 'ROADMAP.md'), roadmap);
+      fs13.writeFileSync(path13.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+      fs13.writeFileSync(path13.join(phaseDir, '01-02-PLAN.md'), '# Plan\n');
+      fs13.writeFileSync(path13.join(proj, '.planning', 'STATE.md'), [
+        '---', "gsd_state_version: '1.0'", 'status: planning', 'current_phase_name: Curated Previous', '---', '',
+        '# Project State', '', '## Current Position', '', 'Phase: 1 of 8 (Curated Previous)', 'Plan: 0 of 0 in current phase',
+        'Status: Planning', 'Last activity: 2026-08-09 — fixture', '', 'Progress: [░░░░░░░░░░] 0%', '',
+      ].join('\n'));
+      const env = { ...process.env, GSD_TOOLS };
+      for (const k of ['GSD_WS', 'GSD_WORKSTREAM', 'GSD_PROJECT']) delete env[k];
+      const script = `set -u\ngsd_run() { node "$GSD_TOOLS" "$@"; }\n${step13bFence()}`;
+      const res = runBash('-c', [script], { interpreter: 'bash', cwd: proj, env, timeoutMs: PROBE_TIMEOUT_MS });
+      return { res, state: fs13.readFileSync(path13.join(proj, '.planning', 'STATE.md'), 'utf8') };
+    } finally {
+      cleanup13(proj);
+    }
+  }
+
+  test('[end to end] STATE.md records the phase as ready to execute with its curated name and plan count', { skip: !HAS_BASH }, () => {
+    const { res, state } = realStep({ roadmap: '# Roadmap\n\n### Phase 1: Foundation Setup\n- [ ] w\n' });
+    assertSeamExit(assert, res, 0, 'the real commands must succeed');
+    assert.match(state, /^Phase: 0?1 \(Foundation Setup\) — READY TO EXECUTE$/m);
+    assert.match(state, /^current_phase_name: Foundation Setup$/m);
+    assert.match(state, /^ {2}total_plans: 2$/m);
+  });
+
+  test('[end to end] a phase the ROADMAP does not describe keeps the curated name and still records the plan count', { skip: !HAS_BASH }, () => {
+    const { res, state } = realStep({ roadmap: '# Roadmap\n' });
+    assertSeamExit(assert, res, 0, 'the real commands must succeed');
+    assert.match(state, /^current_phase_name: Curated Previous$/m);
+    assert.match(state, /^ {2}total_plans: 2$/m);
+    assert.match(state, /^Status: Ready to execute$/m);
+  });
+});

@@ -59,7 +59,7 @@ for the plan-checker gate to be meaningful.
 
 ## 0. Git Branch Invariant
 
-**Do not create, rename, or switch git branches during plan-phase.** Branch identity is established at discuss-phase and is owned by the user's git workflow. A phase rename in ROADMAP.md is a plan-level change only — it does not mutate git branch names. If `phase_slug` in the init JSON differs from the current branch name, that is expected and correct; leave the branch unchanged.
+**Do not create, rename, or switch git branches during plan-phase.** Branch identity is established at discuss-phase and is owned by the user's git workflow. A ROADMAP.md phase rename never mutates branch names; if `phase_slug` in the init JSON differs from the current branch name, that is expected — leave the branch unchanged.
 
 ## 0.5. Compact Content Gate
 
@@ -123,7 +123,7 @@ Read and execute `gsd-core/workflows/plan-phase/steps/closed-phase-gate.md` — 
 
 Extract from $ARGUMENTS: phase number (integer or decimal like `2.1`), flags (`--research`, `--skip-research`, `--research-phase <N>`, `--gaps`, `--skip-verify`, `--skip-ui`, `--prd <filepath>`, `--ingest <path-or-glob>`, `--ingest-format <auto|nygard|madr|narrative>`, `--reviews`, `--text`, `--bounce`, `--skip-bounce`, `--chunked`, `--mvp`, `--no-tracer`, `--no-reversibility-gates`, `--tdd`, `--granularity <coarse|standard|fine>`, `--force` (override closed-phase gate, see §1.5)).
 
-**`--research-phase <N>` — research-only mode (#3042 + #3044).** When this flag is present, parse `<N>` as the phase number (overrides any positional phase argument), set `RESEARCH_ONLY=true`, and treat the rest of this workflow as a research-dispatch only — the planner spawn (step 8), plan-checker, verification, gaps, bounce, and post-planning-gaps blocks all skip on `RESEARCH_ONLY`. Use this for cross-phase research, doc review before committing to a planning approach, and correction-without-replanning loops. Replaces the deleted `/gsd-research-phase` command.
+**`--research-phase <N>` — research-only mode (#3042 + #3044).** When this flag is present, parse `<N>` as the phase number, set `RESEARCH_ONLY=true`, and treat the rest of this workflow as a research-dispatch only — the planner spawn (step 8), plan-checker, verification, gaps, bounce, and post-planning-gaps blocks all skip on `RESEARCH_ONLY`. Use it for cross-phase research and doc review before planning. Replaces the deleted `/gsd-research-phase` command.
 
 In research-only mode, two modifiers control behavior when `RESEARCH.md` already exists:
 
@@ -793,7 +793,7 @@ ${prior_verify_commands.length > 0 ? `
 are the `<automated>` commands from the nearest prior phase that had any. They resolved from
 the executor's cwd in a real run, so a path here is grounded evidence, not a guess. When this
 phase's build/test story is the same, **copy the command verbatim**; do not re-derive a
-directory. Surfaced at every context window — not part of the 1M enrichment above.
+directory.
 
 {For each entry in \`prior_verify_commands\`: \`- Phase {phase} · {task}: \\\`{command}\\\`\`}
 </proven_verify_commands>
@@ -855,6 +855,7 @@ it has no failure mode to state. Ask yourself: if this command were silently
 doing nothing, what in its output would tell me? If you cannot answer, fix the
 command — do not invent a statement for it.
 Rules + worked examples: @gsd-core/references/planner-failing-direction.md
+Validate before shipping (#4586): @gsd-core/references/planner-verify-command-validation.md
 </failing_direction_contract>
 <!-- gsd:protected:end -->
 
@@ -995,7 +996,7 @@ If `section_manifest` is `null` or `"chunked-planning-mode"` is in its `included
 **Triggered when:** Agent() returns but the return contains no recognized marker (`## PLANNING COMPLETE`, `## PHASE SPLIT RECOMMENDED`, `## ⚠ Source Audit`, `## CHECKPOINT REACHED`, `## PLANNING INCONCLUSIVE`).
 
 ```bash
-DISK_PLANS=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r '.plan_count_all // 0')
+DISK_PLANS=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" | jq -r '.plan_count_all // 0')
 ```
 
 If `DISK_PLANS` is greater than 0 (a known Windows stdio hang pattern — the planner wrote plans to disk but the return never arrived), offer: 1) Accept plans (treat as `## PLANNING COMPLETE`), 2) Retry planner (return to step 8), 3) Stop. If it is 0 and no marker, treat as `## PLANNING INCONCLUSIVE`. Full banner text: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 9a.
@@ -1128,7 +1129,7 @@ Agent(
 **Triggered when:** Checker Agent() returns but the return contains neither `## VERIFICATION PASSED` nor `## ISSUES FOUND`.
 
 ```bash
-DISK_PLANS=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r '.plan_count_all // 0')
+DISK_PLANS=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" | jq -r '.plan_count_all // 0')
 ```
 
 If `DISK_PLANS` is greater than 0 (plans exist on disk; a known Windows stdio hang pattern), offer: 1) Accept verification (treat as `## VERIFICATION PASSED`, continue to step 13), 2) Retry checker (return to step 10), 3) Stop. If it is 0, something is seriously wrong — display error and stop. Full banner text: `gsd-core/workflows/plan-phase/detail/elaboration.md` § 11a.
@@ -1412,20 +1413,21 @@ If `TEXT_MODE` is true, present as a plain-text numbered list. Otherwise use
 AskUserQuestion. Selecting "Proceed anyway" continues to step 13b but
 records the override in STATE.md so verify-phase can re-surface it.
 
-**Why this gate blocks:** failing here is cheap. The plans are the contract
-between discuss-phase and execute-phase; if a decision isn't visible in any
-plan, no executor will implement it.
+**Why this gate blocks:** failing here is cheap; a decision absent from the plans is never implemented.
 
 ## 13b. Record Planning Completion in STATE.md
 
-After plans pass all gates, record that planning is complete so STATE.md reflects the new phase status:
+Record planning completion in STATE.md:
 
 ```bash
-PLAN_COUNT=$(gsd_run query find-phase "${PHASE_NUMBER}" | jq -r '.plan_count // 0')
+PHASE_NUMBER="{phase_number}"
+PHASE_NAME=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name 2>/dev/null)
+PLAN_COUNT=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick plan_count)
+[[ "$PLAN_COUNT" =~ ^[0-9]+$ ]] || { echo "phase ${PHASE_NUMBER} not found" >&2; exit 1; }
 gsd_run query state.planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
 
-This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity.
+This sets STATUS "Ready to execute", the plan count, Last Activity.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 
