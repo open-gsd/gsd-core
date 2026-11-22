@@ -101,7 +101,7 @@ IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
 $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 AGENT_SKILLS_DEBUGGER=$(gsd_run query agent-skills gsd-debugger ${GSD_WS:+--ws=${GSD_WS##* }})
 EXPECTED_BASE=$(git rev-parse HEAD)
 ```
@@ -282,7 +282,9 @@ Update status in frontmatter to "diagnosed".
 
 Commit the updated UAT.md:
 ```bash
-gsd_run query commit "docs({phase_num}): add root causes from diagnosis" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
+PLANNING_ROOT=$(gsd_run query planning.inspect ${GSD_WS:+--ws=${GSD_WS##* }} --pick generated_from.planning_root)
+: "${PLANNING_ROOT:?}"
+gsd_run query commit "docs({phase_num}): add root causes from diagnosis" --files "${PLANNING_ROOT}/phases/XX-name/{phase_num}-UAT.md"
 ```
 </step>
 

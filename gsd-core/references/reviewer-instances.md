@@ -76,7 +76,7 @@ substitutions:
 gsd_run query review-lane invoke \
   --slug "$INSTANCE_CLI" \
   --run-dir "$RUN_DIR" --repo-root "$REPO_ROOT" \
-  --model "$INSTANCE_MODEL" ${INSTANCE_AGENT:+--agent "$INSTANCE_AGENT"} \
+  --model "$INSTANCE_MODEL" ${INSTANCE_AGENT:+--agent} ${INSTANCE_AGENT:+"$INSTANCE_AGENT"} \
   --as "$INSTANCE_NAME"
 ```
 

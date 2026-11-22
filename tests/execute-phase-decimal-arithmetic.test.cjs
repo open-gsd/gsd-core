@@ -25,6 +25,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { planSubjectPattern } = require('../gsd-core/bin/lib/gate-evaluation-scope.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 const EXECUTE_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 const COMPLETION_RECONCILIATION = path.join(__dirname, '..', 'gsd-core', 'workflows',
@@ -182,6 +183,11 @@ describe('#4619 — execute-phase decimal/N-segment phase-number arithmetic', ()
         ['01-03', 'feat(011-03):', false],
         ['03A-02', 'feat(3A-2):', true],
         ['03A-02', 'feat(3-2):', false],
+        // #6120: the breaking-change marker `!` is part of the plan subject grammar
+        ['01-03', 'feat(01-03)!:', true],
+        ['01-03', 'test(1-3)!:', true],
+        ['01-03', 'feat(01-04)!:', false],
+        ['01-03', 'feat(01-03)!', false],
       ];
       for (const [planId, subject, expected] of cases) {
         const resolver = new RegExp(planSubjectPattern(planId)).test(subject);
@@ -189,8 +195,29 @@ describe('#4619 — execute-phase decimal/N-segment phase-number arithmetic', ()
         const [phase, plan] = planId.split('-');
         const phaseN = runFixed(phase);
         const planN = String(Number(plan.replace(/\D+$/, '')));
-        const shellRe = `^[a-z]+\\((0*${phaseN})-(0*${planN})\\):`;
+        const shellRe = `^[a-z]+\\((0*${phaseN})-(0*${planN})\\)!?:`;
         assert.equal(matchAll(shellRe, [[subject, expected]])[0], expected, `shell: ${planId} vs ${subject}`);
+      }
+    });
+
+    // #6120: the lookups the executor actually runs, read from the shipped reference, must credit a
+    // breaking-change subject exactly as the gate does, for every kind each lookup names.
+    test('the executor\'s shipped RED/GREEN/REFACTOR lookups find a `!:` subject for every kind and still reject another plan', () => {
+      const ref = fs.readFileSync(TDD_REF, 'utf8');
+      const lookups = splitLines(ref).filter((line) => line.includes('--grep="^') && line.includes('${PHASE_N}'))
+        .map((line) => line.slice(line.indexOf('--grep="^') + '--grep="'.length, line.indexOf('"', line.indexOf('--grep="^') + '--grep="'.length)));
+      const kindGroup = (lookup) => lookup.slice(1, lookup.indexOf('\\'));
+      assert.deepEqual(lookups.map(kindGroup), ['test', '(feat|fix)', 'refactor'], 'the three gate lookups ship in tdd.md');
+      const phaseN = runFixed('01');
+      for (const lookup of lookups) {
+        const ere = new RegExp(lookup.replace('${PHASE_N}', phaseN).replace('${PLAN_N}', '3'));
+        for (const kind of kindGroup(lookup).replace(/[()]/g, '').split('|')) {
+          const cases = [
+            [`${kind}(01-03):`, true], [`${kind}(01-03)!:`, true], [`${kind}(1-3)!:`, true],
+            [`${kind}(01-04)!:`, false], [`${kind}(011-03)!:`, false], [`${kind}(01-30)!:`, false], [`${kind}(01-03)!!:`, false], [`${kind}(01-03)!`, false],
+          ];
+          for (const [subject, expected] of cases) assert.equal(ere.test(subject), expected, `${lookup} vs ${subject}`);
+        }
       }
     });
   });

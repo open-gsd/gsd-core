@@ -29,8 +29,7 @@ Output: Test files committed with message `test(phase-{N}): add unit and E2E tes
 <context>
 Phase: the `<arguments>` block
 
-@.planning/STATE.md
-@.planning/ROADMAP.md
+Read `{planning_root}/STATE.md` and `{planning_root}/ROADMAP.md` (`{planning_root}`: the active scope's root, from `planning.inspect`).
 </context>
 
 <process>

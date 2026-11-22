@@ -47,7 +47,7 @@ const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // #3642: hasMilestoneSectioning no longer consumed here — its >=2 semantics answered sibling conflation, but this branch asks asserted-vs-section (>=1). It stays exported from roadmap-parser.cjs for its unit pins.
-const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar } = roadmapParserMod;
+const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar, describeUnscopedMilestone } = roadmapParserMod;
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit, normalizeContent, platformRestoreFileSync, platformReadBytesSync, type FileIdentity } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -472,6 +472,12 @@ const _diskScanCache = new Map<string, {
   totalPlans: number | null;
   completedPlans: number | null;
   milestoneBounded: boolean;
+  // #6279: false only when the milestone-scoped walk found no phase dir AND
+  // `.planning/milestones/<asserted milestone>-phases/` exists (the shape
+  // `milestone complete` leaves: an empty `.planning/phases/`). The plans
+  // were moved, not measured, so the caller keeps stored total_plans /
+  // completed_plans when it has them, as an absent phases directory does.
+  plansMeasured: boolean;
   // #3217 (ADR-3180 §7.6 rule 4, finding 1): the real `listMilestonePhaseDirs`
   // scope for `allMatchingDirs` below, threaded through the cache so the
   // percent computation at the bottom of buildStateFrontmatter can gate on it
@@ -479,6 +485,12 @@ const _diskScanCache = new Map<string, {
   // (a heading-existence guard, #1761) — this one is disk-readability.
   phaseDirScope: Scope;
 }>();
+
+// #6332: the cache is per invocation. The binary gets that for free from its
+// one-call process; an in-process caller gets it from this reset.
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- invocation-scope.cjs is an export= CommonJS module
+import invocationScopeMod = require('./invocation-scope.cjs');
+invocationScopeMod.registerInvocationReset('state.diskScanCache', () => { _diskScanCache.clear(); });
 
 // Track all lock files held by this process so they can be removed on exit.
 // process.on('exit') fires even on process.exit(1), unlike try/finally which is
@@ -1701,11 +1713,17 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
     // (stateReplaceFieldWithFallback above) for a comparable silent no-op —
     // now routed through the shared `declineNoOp` helper (#3957) so the
     // pairing is structural rather than hand-written per arm.
+    // #6271: UNSCOPED is the one non-COMPLETE scope an operator can fix by hand, and the bare message named neither
+    // cause nor fix, so every call declined and the counters drifted for the life of the project. The
+    // classification itself (ADR-3180 rows 4/5) is unchanged: it keeps a destructive consumer from acting on a
+    // window it could not find. One describer owns the wording (roadmap-parser.cts), shared with `state sync`.
+    const unscopedHint = phaseScope === SCOPE.UNSCOPED && cwd ? describeUnscopedMilestone(cwd) : '';
     declineNoOp(
       raw,
       'updated',
       `phase scope is ${phaseScope}, not complete`,
-      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.`,
+      `state update-progress skipped — phase scope is ${phaseScope}, not complete. STATE.md's Progress field was left unchanged.${unscopedHint ? ` ${unscopedHint}` : ''}`,
+      unscopedHint ? { hint: unscopedHint } : {},
     );
     return;
   }
@@ -3113,11 +3131,17 @@ function countRoadmapPhaseHeadings(
     }
     return count;
   }
-  // LEGACY stays on the pre-round-4 raw exec loop. #3185 owns the read-path
-  // sentinel predicate; sync deliberately preserves its prior behavior.
-  const phaseHeadingPattern = new RegExp(`#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, true)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'gi');
-  let m: RegExpExecArray | null;
-  while ((m = phaseHeadingPattern.exec(scope)) !== null) {
+  // LEGACY keeps its own sentinel rules (#3185 owns the read-path sentinel
+  // predicate; sync deliberately preserves its prior behavior). #5880: the
+  // headings themselves come from the one tokenizer the bracket branch uses, so
+  // only real ATX headings (levels 2-4, outside fences, at line start) count.
+  // A raw scan over the scope text also counted a heading quoted in a code span,
+  // a blockquote, a sentence, or the tail of a `#####` line.
+  const phaseHeadingPattern = new RegExp(`^${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention, true)}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'i');
+  for (const h of tokenizeHeadings(scope)) {
+    if (h.level < 2 || h.level > 4) continue;
+    const m = phaseHeadingPattern.exec(h.text);
+    if (!m) continue;
     const token = m[1];
     if (!/\d/.test(token)) continue;
     if (applyConventionTokenSentinelRules && isSentinelPhaseId(token)) continue;
@@ -3578,6 +3602,16 @@ function buildStateFrontmatter(
             const flooredCompletedPhases = roadmapCompletedPhases !== null
               ? Math.max(diskCompletedPhases, roadmapCompletedPhases)
               : diskCompletedPhases;
+            // #6279: the walk found no phase dir AND the asserted milestone's
+            // phases sit in its `milestone complete` archive, so its plans
+            // were moved, not deleted. Gated on that archive so a milestone
+            // that has no archive (a later one, or never closed) still takes
+            // the disk count, zero included.
+            const archiveVersion = String(assertedMilestoneVersion ?? (milestoneExplicitlyNull ? '' : storedMilestone ?? '')).trim();
+            const archivedPhasesExist = phaseDirs.length === 0
+              && archiveVersion !== ''
+              && path.basename(archiveVersion) === archiveVersion
+              && fs.existsSync(path.join(planningPaths(cwd).planning, 'milestones', `${archiveVersion}-phases`));
             return {
               // The two WITHHOLD shapes (#3354 milestoned-but-unbounded, #3573
               // roadmap-absent-with-asserted-milestone) must be evaluated BEFORE
@@ -3591,6 +3625,7 @@ function buildStateFrontmatter(
               completedPhases: diskCountsWithheld ? null : flooredCompletedPhases,
               totalPlans: diskCountsWithheld ? null : diskTotalPlans,
               completedPlans: diskCountsWithheld ? null : diskTotalSummaries,
+              plansMeasured: phaseDirs.length > 0 || !archivedPhasesExist,
               phaseDirScope,
             };
           })();
@@ -3619,14 +3654,20 @@ function buildStateFrontmatter(
         } else if (storedCompletedPhases !== null && storedCompletedPhases !== undefined) {
           completedPhases = storedCompletedPhases;
         }
-        if (cached.totalPlans !== null) {
+        // #6279: when the asserted milestone's phases were archived and the
+        // walk found none (plansMeasured false), a stored plan counter wins
+        // over the disk 0. Without a stored value the disk 0 stands.
+        // total_phases is unaffected: it comes from the ROADMAP headings.
+        const hasStoredTotalPlans = storedTotalPlans !== null && storedTotalPlans !== undefined;
+        const hasStoredCompletedPlans = storedCompletedPlans !== null && storedCompletedPlans !== undefined;
+        if (cached.totalPlans !== null && (cached.plansMeasured || !hasStoredTotalPlans)) {
           totalPlans = cached.totalPlans;
-        } else if (storedTotalPlans !== null && storedTotalPlans !== undefined) {
+        } else if (hasStoredTotalPlans) {
           totalPlans = storedTotalPlans;
         }
-        if (cached.completedPlans !== null) {
+        if (cached.completedPlans !== null && (cached.plansMeasured || !hasStoredCompletedPlans)) {
           completedPlans = cached.completedPlans;
-        } else if (storedCompletedPlans !== null && storedCompletedPlans !== undefined) {
+        } else if (hasStoredCompletedPlans) {
           completedPlans = storedCompletedPlans;
         }
         milestoneUnbounded = cached.milestoneBounded === false;
@@ -7255,7 +7296,9 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     // consume `.value`.
     const syncScope: Scope = listMilestonePhaseDirs(phasesDir, { cwd, versionOverride: versionStr }).scope;
     if (syncScope !== SCOPE.COMPLETE) {
-      changes.push(`Progress: skipped — milestone phase scope is "${syncScope}", not COMPLETE (#3217)`);
+      // #6271: the same cause-and-fix as `update-progress`, from the one describer.
+      const syncHint = syncScope === SCOPE.UNSCOPED ? describeUnscopedMilestone(cwd) : '';
+      changes.push(`Progress: skipped — milestone phase scope is "${syncScope}", not COMPLETE (#3217)${syncHint ? `. ${syncHint}` : ''}`);
     } else {
       const p = computeProgressPercent(totalDiskSummaries, totalDiskPlans, diskCompletedPhases, syncTotalPhases, syncScope);
       percent = p !== null ? p : 0;

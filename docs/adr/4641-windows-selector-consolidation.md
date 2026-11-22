@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-11
+- **Amended by:** [ADR-6315](6315-ci-redesign.md) (Proposed; the amendment takes effect when that ADR is ratified)
 - **Issue:** [#4641](https://github.com/open-gsd/gsd-core/issues/4641)
 - **Twin of:** [ADR-4593](./4593-macos-conformance-tier-architecture.md) (macOS conformance tier) — that ADR
   applied evidence-first sizing to the macOS signal set; this one applies the same discipline to the

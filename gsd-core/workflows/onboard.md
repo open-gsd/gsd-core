@@ -256,7 +256,7 @@ Summary template:
 If `commit_docs` is true, commit only the summary path from the onboarding root:
 
 ```bash
-gsd_run --cwd "$ONBOARDING_ROOT" query commit "docs: create onboarding summary" --files .planning/onboarding/SUMMARY.md
+cd "$ONBOARDING_ROOT" && gsd_run query commit "docs: create onboarding summary" --files .planning/onboarding/SUMMARY.md
 ```
 
 Continue to final status.

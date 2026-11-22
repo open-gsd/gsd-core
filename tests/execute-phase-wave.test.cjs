@@ -123,8 +123,8 @@ describe('execute-phase workflow: #2868 stranded-phase resume on discover_and_gr
       'discover_and_group_plans should consult VERIFY_STATUS before exiting on all-filtered'
     );
     assert.ok(
-      content.includes('verification status'),
-      'discover_and_group_plans should call the verification status query'
+      content.includes('verification all-summarized'),
+      'discover_and_group_plans should call the verification all-summarized decision (#6096)'
     );
   });
 
@@ -153,8 +153,8 @@ describe('execute-phase workflow: #2868 stranded-phase resume on discover_and_gr
     assert.ok(discoverIdx >= 0, 'discover_and_group_plans step should exist');
     const discoverSection = content.substring(discoverIdx, discoverEnd);
 
-    const filterIdx = discoverSection.indexOf('A filter is active');
-    assert.ok(filterIdx >= 0, 'discover_and_group_plans should describe a filter-active branch');
+    const filterIdx = discoverSection.indexOf('**`exit-filtered`**');
+    assert.ok(filterIdx >= 0, 'discover_and_group_plans should describe a filter-active branch (#6096: the exit-filtered decision)');
     // Both flags must be mentioned near the filter-active branch, not merely
     // anywhere in the step (e.g. in the pre-existing filtering prose above).
     const filterClause = discoverSection.substring(filterIdx, filterIdx + 200);
@@ -293,7 +293,8 @@ describe('execute-phase workflow: #5843 phase-start STATE write follows plan dis
   test('#5843 row 6: the call keeps its --phase, --name and --plans arguments', () => {
     assert.ok(
       workflow().includes(
-        'state.begin-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"'
+        // #5861: the verb carries the workstream token so the phase-start write lands in the scoped STATE.md
+        'state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"'
       ),
       'the begin-phase arguments are unchanged by the move'
     );
@@ -1080,8 +1081,10 @@ describe('execute-phase workflow: #3684 verified-unmarked resume', () => {
     const step = stepText();
     // #5118: the arm is keyed on `passed` — the old `≠ missing` arm collapsed
     // gaps_found / human_needed / unparseable into "verified" (#4765).
-    const anchor = 'VERIFY_STATUS == passed` + `PHASE_MARKED` not `true`';
-    assert.ok(step.includes(anchor), 'the verified-unmarked arm must be keyed on VERIFY_STATUS == passed');
+    // #6096: the arm is the `update-roadmap` decision, which the code computes from a fresh `passed` report and
+    // an unmarked phase (the #6096 block of tests/verification-status.test.cjs pins the computation).
+    const anchor = '**`update-roadmap`**';
+    assert.ok(step.includes(anchor), 'the verified-unmarked arm must be the update-roadmap decision');
     const branch = step.slice(step.indexOf(anchor));
     assert.ok(
       branch.includes('update_roadmap'),
@@ -1364,3 +1367,304 @@ describe('execute-phase: stall surveillance must not steer a working executor (#
     }
   });
 });
+
+// ─── #6102 — shared requirements in a parallel worktree wave are marked after the merge ───────────────────
+//
+// A worktree executor's `update_requirements` gate sees only its own SUMMARY, so a requirement ID declared by two
+// plans of one wave is blocked in every executor and none marks it. The orchestrator's post-wave step evaluates
+// the same gate once on the merged tree. The real fence of the step fragment runs here against a real project,
+// real `requirements ready-ids` / `mark-complete` / `commit`, with only `jq` replaced (the Tester Image has none).
+{
+const { spawnSync: spawnPostWave } = require('node:child_process');
+const { createTempGitProject: postWaveProject, cleanup: postWaveCleanup, TOOLS_PATH: POST_WAVE_TOOLS } = require('./helpers.cjs');
+const { HOOK_FANOUT_TIMEOUT_MS: POST_WAVE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { splitLines: postWaveSplitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+const FRAGMENT = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'post-wave-requirements.md');
+
+// The two filters the fence uses, with jq's semantics for them; any other filter fails loudly.
+const JQ_STUB = [
+  'const f = process.argv[process.argv.length - 1];',
+  "let s = ''; process.stdin.on('data', (d) => { s += d; }).on('end', () => {",
+  '  const doc = JSON.parse(s);',
+  "  const table = { '.requirements[]?': doc.requirements, '.ready[]': doc.ready };",
+  '  if (!Object.prototype.hasOwnProperty.call(table, f)) { process.stderr.write("jq stub: unsupported filter " + f); process.exit(3); }',
+  "  for (const v of table[f] || []) process.stdout.write(v + '\\n');",
+  '});',
+].join('\n');
+
+function fenceOf() {
+  const text = fs.readFileSync(FRAGMENT, 'utf8');
+  const open = text.indexOf('```bash\n');
+  assert.ok(open >= 0, 'the fragment must carry its bash fence');
+  const close = text.indexOf('\n```', open + 8);
+  // the launcher preamble `sync-runtime-launcher` prepends defines the real `gsd_run`; the test supplies its own
+  return postWaveSplitLines(text.slice(open + 8, close)).filter((line) => !line.startsWith('_GSD_SHIM_NAME=')).join('\n');
+}
+
+// Plan layouts the orchestrator meets: root plans named by stem, and a slug id plus a nested `plans/PLAN-<n>.md`.
+const POST_WAVE_LAYOUTS = {
+  root: { one: { id: '01-01', plan: '01-01-PLAN.md', summary: '01-01-SUMMARY.md' }, two: { id: '01-02', plan: '01-02-PLAN.md', summary: '01-02-SUMMARY.md' } },
+  slugAndNested: {
+    one: { id: '01-01-api', plan: '01-01-api-PLAN.md', summary: '01-01-api-SUMMARY.md' },
+    two: { id: 'plans/PLAN-2.md', plan: 'plans/PLAN-2.md', summary: 'plans/SUMMARY-2.md' },
+  },
+};
+
+function waveFixture(t, { summaries, layout = 'root' }) {
+  const proj = postWaveProject();
+  t.after(() => postWaveCleanup(proj));
+  const phaseDir = path.join(proj, '.planning', 'phases', '01-alpha');
+  fs.mkdirSync(path.join(phaseDir, 'plans'), { recursive: true });
+  const { one, two } = POST_WAVE_LAYOUTS[layout];
+  const plan = (n, reqs) => `---\nphase: 01-alpha\nplan: ${n}\nwave: 1\nrequirements: [${reqs}]\n---\n# Plan ${n}\n`;
+  fs.writeFileSync(path.join(phaseDir, one.plan), plan('01', 'REQ-01, REQ-02'));
+  fs.writeFileSync(path.join(phaseDir, two.plan), plan('02', 'REQ-01'));
+  for (const n of summaries) fs.writeFileSync(path.join(phaseDir, n === '01' ? one.summary : two.summary), '# Summary\n');
+  fs.writeFileSync(path.join(proj, '.planning', 'REQUIREMENTS.md'), [
+    '# Requirements', '', '- [ ] **REQ-01**: shared by both plans', '- [ ] **REQ-02**: plan one only', '',
+    '## Traceability', '', '| Requirement | Phase | Status |', '|---|---|---|',
+    '| REQ-01 | Phase 1 | Pending |', '| REQ-02 | Phase 1 | Pending |', '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(proj, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Alpha\n\n**Goal**: g\n');
+  fs.writeFileSync(path.join(proj, '.planning', 'config.json'), '{}');
+  gitInProject(proj, ['add', '-A']);
+  gitInProject(proj, ['commit', '-q', '-m', 'seed']);
+  return { proj, phaseDir };
+}
+function gitInProject(proj, args) {
+  const r = spawnPostWave('git', args, { cwd: proj, encoding: 'utf8', timeout: POST_WAVE_TIMEOUT_MS });
+  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout;
+}
+
+function runFence(proj, phaseDir, testExit, wavePlanIds = '01-01 01-02') {
+  // the fence loops over `{completed_plan_ids}`: the orchestrator writes the completed plans out as a literal list
+  const requirementsPath = path.join(proj, '.planning', 'REQUIREMENTS.md');
+  const script = [
+    `gsd_run() { node '${POST_WAVE_TOOLS}' "$@"; }`,
+    `jq() { node -e '${JQ_STUB.replace(/'/g, "'\\''")}' -- "$@"; }`,
+    `TEST_EXIT=${testExit} PHASE_DIR='${phaseDir}' PHASE_NUMBER=1 N=1`,
+    fenceOf().split('{requirements_path}').join(requirementsPath).split('{completed_plan_ids}').join(wavePlanIds),
+  ].join('\n');
+  const r = spawnPostWave('bash', ['-c', script], { cwd: proj, encoding: 'utf8', timeout: POST_WAVE_TIMEOUT_MS });
+  assert.equal(r.status, 0, `the fence must run clean: ${r.stderr}`);
+  const text = fs.readFileSync(requirementsPath, 'utf8');
+  return (id) => new RegExp(`- \\[x\\] \\*\\*${id}\\*\\*`).test(text);
+}
+
+describe('#6102: the orchestrator marks shared requirements complete once the wave has merged', () => {
+  test('two plans declaring the same ID, both summarized: the shared ID and the single-plan ID are marked and committed', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+    const marked = runFence(proj, phaseDir, 0);
+    assert.equal(marked('REQ-01'), true, 'the shared ID is complete');
+    assert.equal(marked('REQ-02'), true, 'the single-plan ID is complete');
+    assert.match(gitInProject(proj, ['log', '-1', '--format=%s']), /mark shared requirements complete after wave 1/);
+    assert.equal(gitInProject(proj, ['status', '--porcelain', '--', '.planning/REQUIREMENTS.md']).trim(), '', 'the marked file is committed');
+  });
+
+  test('an ID with a declaring plan that has no summary is not marked; the ready ID still is', (t) => {
+    // WAVE_PLAN_IDS lists the plans that COMPLETED in the wave: plan 02 produced no summary, so it is not in it
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01'] });
+    const marked = runFence(proj, phaseDir, 0, '01-01');
+    assert.equal(marked('REQ-01'), false, 'plan 02 has no summary yet');
+    assert.equal(marked('REQ-02'), true);
+  });
+
+  test('a slug plan id and a nested plan path resolve to their plan files: the shared ID is marked', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'], layout: 'slugAndNested' });
+    const marked = runFence(proj, phaseDir, 0, '01-01-api plans/PLAN-2.md');
+    assert.equal(marked('REQ-01'), true, 'the shared ID is complete');
+    assert.equal(marked('REQ-02'), true, 'the single-plan ID is complete');
+  });
+
+  test('a completed plan whose file cannot be found is skipped, never aborting the pass', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+    const marked = runFence(proj, phaseDir, 0, '09-99 01-01 01-02');
+    assert.equal(marked('REQ-01'), true, 'the plans that exist are still settled');
+    assert.equal(marked('REQ-02'), true);
+  });
+
+  test('nothing is marked when the post-merge tests failed or timed out', (t) => {
+    for (const testExit of [1, 124]) {
+      const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+      const marked = runFence(proj, phaseDir, testExit);
+      assert.equal(marked('REQ-01') || marked('REQ-02'), false, `TEST_EXIT=${testExit}`);
+      assert.equal(gitInProject(proj, ['log', '-1', '--format=%s']).trim(), 'seed', 'no commit either');
+    }
+  });
+
+  test('a gaps_found revert still reverts what the post-wave pass marked', (t) => {
+    const { proj, phaseDir } = waveFixture(t, { summaries: ['01', '02'] });
+    runFence(proj, phaseDir, 0);
+    const revert = spawnPostWave('node', [POST_WAVE_TOOLS, 'query', 'requirements.revert-phase', 'REQ-01', 'REQ-02'], { cwd: proj, encoding: 'utf8', timeout: POST_WAVE_TIMEOUT_MS });
+    assert.equal(revert.status, 0, revert.stderr);
+    const text = fs.readFileSync(path.join(proj, '.planning', 'REQUIREMENTS.md'), 'utf8');
+    assert.equal(/- \[x\] \*\*REQ-0[12]\*\*/.test(text), false, 'both IDs are unchecked again');
+  });
+
+  test('the host step and execute-plan point at the fragment, and execute-plan no longer promises a worktree re-evaluation', () => {
+    const host = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(host.includes('execute-phase/steps/post-wave-requirements.md'), 'step 5.7 must read the fragment');
+    const executePlan = fs.readFileSync(path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-plan.md'), 'utf-8');
+    assert.ok(executePlan.includes('in the same tree'), 'the re-evaluation claim is qualified to one tree');
+    assert.ok(executePlan.includes('post-wave-requirements.md'), 'execute-plan names the orchestrator pass that settles worktree-mode shared IDs');
+  });
+});
+}
+
+// ─── #6117 — the stall check sees a worktree executor's commits before the wave merges ──────────────────────
+//
+// An `isolation="worktree"` executor commits to its own unmerged agent branch, so the `${EXPECTED_BRANCH}` probe read
+// no progress from a working executor and the stall pause fired. The progress policy asks the evaluation-scope
+// resolver for the plan's commits across every local branch. The real fence runs here against a real git repository
+// with the variables the ORCHESTRATOR has (`PHASE_NUMBER`, `DISPATCH_TS`, and the `{plan_padded}` placeholder it
+// substitutes): an executor that has committed on an agent branch after dispatch is progress; one that has not, one
+// whose only commits predate dispatch, and a different plan's commits are not. Every date is fixed, so no assertion
+// depends on the clock.
+{
+const { spawnSync: spawnStall } = require('node:child_process');
+const { createTempGitProject: stallProject, cleanup: stallCleanup, TOOLS_PATH: STALL_TOOLS } = require('./helpers.cjs');
+const { HOOK_FANOUT_TIMEOUT_MS: STALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+const { splitLines: stallSplitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+const POLICY = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'executor-progress-policy.md');
+const POLICY_HEADING = "## A `harness-worktree` executor's commits are not on the expected branch (#6117)";
+
+function probeFence() {
+  const text = fs.readFileSync(POLICY, 'utf8');
+  const heading = text.indexOf(POLICY_HEADING);
+  assert.ok(heading >= 0, 'the progress policy must carry the #6117 section');
+  const open = text.indexOf('```bash\n', heading);
+  assert.ok(open >= 0, 'the #6117 section must carry the probe fence');
+  // the launcher preamble `sync-runtime-launcher` prepends defines the real `gsd_run`; the test supplies its own
+  return stallSplitLines(text.slice(open + 8, text.indexOf('\n```', open + 8))).filter((line) => !line.startsWith('_GSD_SHIM_NAME=')).join('\n');
+}
+
+function stallGit(proj, args, env = {}) {
+  const r = spawnStall('git', args, { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS, env: { ...process.env, ...env } });
+  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout;
+}
+
+/** A commit on `branch` (created off the current HEAD when new) with `subject`, dated `iso` (always explicit). */
+function commitOn(proj, branch, subject, iso) {
+  const exists = spawnStall('git', ['rev-parse', '--verify', '-q', branch], { cwd: proj, timeout: STALL_TIMEOUT_MS }).status === 0;
+  stallGit(proj, exists ? ['checkout', '-q', branch] : ['checkout', '-q', '-b', branch]);
+  stallGit(proj, ['commit', '-q', '--allow-empty', '-m', subject], { GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso });
+}
+
+const epoch = (iso) => Math.floor(Date.parse(iso) / 1000);
+const DISPATCH = '2026-03-10T10:00:00Z';
+const AFTER = '2026-03-10T10:07:00Z';
+const LATER = '2026-03-10T10:09:30Z';
+const BEFORE = '2026-03-10T09:00:00Z';
+
+/** The fence as the orchestrator runs it: `{plan_padded}` substituted, the orchestrator's own variables set. */
+function runProbe(proj, { dispatchTs = DISPATCH, plan = '01', phase = '08', gsdRun = null, fence = probeFence() } = {}) {
+  const run = gsdRun ?? `gsd_run() { node '${STALL_TOOLS}' "$@"; }`;
+  const script = [run, `DISPATCH_TS='${dispatchTs}' PHASE_NUMBER='${phase}'`, fence.split('{plan_padded}').join(plan), 'printf "%s" "$LAST_PLAN_COMMIT"'].join('\n');
+  const r = spawnStall('bash', ['-c', script], { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS });
+  assert.equal(r.status, 0, `the probe must run clean: ${r.stderr}`);
+  return r.stdout.trim();
+}
+
+describe('#6117: the stall probe counts a worktree executor\'s unmerged commits as progress', () => {
+  function repo(t) {
+    const proj = stallProject();
+    t.after(() => stallCleanup(proj));
+    stallGit(proj, ['checkout', '-q', '-b', 'orchestrator']);
+    return proj;
+  }
+
+  test('a commit for the plan on an unmerged agent branch after dispatch is progress, at exactly its commit time', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'test(08-01): add failing tests', AFTER);
+    stallGit(proj, ['checkout', '-q', 'orchestrator']);
+    assert.equal(runProbe(proj), String(epoch(AFTER)));
+    assert.equal(stallGit(proj, ['log', 'orchestrator', `--since=${DISPATCH}`, '--grep=(08-01)', '-F', '--oneline']).trim(), '', 'the expected-branch probe alone reads nothing');
+  });
+
+  test('the latest of several commits, on several agent branches, wins', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'test(08-01): first', AFTER);
+    commitOn(proj, 'worktree-agent-def', 'feat(08-01): second', LATER);
+    stallGit(proj, ['checkout', '-q', 'orchestrator']);
+    assert.equal(runProbe(proj), String(epoch(LATER)));
+  });
+
+  test('no commit for the plan on any branch is no progress', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-02): a different plan', AFTER);
+    assert.equal(runProbe(proj), '');
+  });
+
+  test('commits that predate dispatch are no progress', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): earlier work', BEFORE);
+    assert.equal(runProbe(proj), '');
+  });
+
+  test('a commit made after dispatch is progress and one made before it is not, across the dispatch instant', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): one second before', '2026-03-10T09:59:59Z');
+    assert.equal(runProbe(proj), '', 'one second before dispatch');
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): one second after', '2026-03-10T10:00:01Z');
+    assert.equal(runProbe(proj), String(epoch('2026-03-10T10:00:01Z')), 'one second after dispatch');
+  });
+
+  test('the plan token is matched as the whole plan: another phase and a longer plan number are not progress', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(18-01): another phase', AFTER);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-011): a longer plan number', AFTER);
+    assert.equal(runProbe(proj), '', 'only `(08-01)` itself counts');
+  });
+
+  test('an unpadded phase number finds the padded subject', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): padded subject', AFTER);
+    assert.equal(runProbe(proj, { phase: '8' }), String(epoch(AFTER)), 'phase 8 finds the (08-01) subject');
+  });
+
+  test('a scope the resolver cannot read is no progress and never an error exit', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'feat(08-01): work', AFTER);
+    assert.equal(runProbe(proj, { gsdRun: 'gsd_run() { return 69; }' }), '', 'the resolver reports unavailable');
+    assert.equal(runProbe(proj, { gsdRun: 'gsd_run() { echo not-json; }' }), '', 'a non-JSON answer');
+    assert.equal(runProbe(proj, { gsdRun: 'gsd_run() { return 127; }' }), '', 'a missing gsd_run');
+    assert.equal(runProbe(proj, { dispatchTs: '$(touch injected)' }), '', 'an unsafe dispatch timestamp is refused by the resolver, not executed');
+    assert.equal(fs.existsSync(path.join(proj, 'injected')), false, 'nothing was executed');
+  });
+
+  test('the resolver keeps the reachable-from-ref contract without --all-branches, and the flag is for plan and quick units only', (t) => {
+    const proj = repo(t);
+    commitOn(proj, 'worktree-agent-abc', 'test(08-01): add failing tests', AFTER);
+    stallGit(proj, ['checkout', '-q', 'orchestrator']);
+    const scope = (...args) => {
+      const r = spawnStall('node', [STALL_TOOLS, 'check', 'evaluation-scope', ...args, '--raw'], { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS });
+      return { status: r.status, json: r.stdout.trim() === '' ? null : JSON.parse(r.stdout) };
+    };
+    const plain = scope('--plan', '08-01', '--commits-only');
+    assert.equal(plain.json.commits.length, 0, 'the unmerged agent branch is not reachable from the orchestrator ref (#5164 contract)');
+    assert.equal('latestCommitTime' in plain.json, false, 'the field exists only with --all-branches');
+    const wide = scope('--plan', '08-01', '--commits-only', '--all-branches');
+    assert.equal(wide.json.commits.length, 1);
+    assert.equal(wide.json.latestCommitTime, epoch(AFTER));
+    assert.equal(scope('--plan', '08-02', '--commits-only', '--all-branches').json.latestCommitTime, null, 'null when nothing matched');
+    const quick = scope('--quick', '260310-abc', '--commits-only', '--all-branches');
+    assert.equal(quick.json.latestCommitTime, null, 'quick units take the flag too');
+    for (const args of [['--phase', '08', '--all-branches'], ['--plan', '08-01', '--all-branches', '--milestone-bound']]) {
+      const r = spawnStall('node', [STALL_TOOLS, 'check', 'evaluation-scope', ...args, '--raw'], { cwd: proj, encoding: 'utf8', timeout: STALL_TIMEOUT_MS });
+      assert.notEqual(r.status, 0, `${args.join(' ')} is a usage failure`);
+    }
+  });
+
+  test('the step names the probe and the policy keeps the sequential probe and the three-option pause', () => {
+    const host = fs.readFileSync(WORKFLOW_PATH, 'utf-8');
+    assert.ok(host.includes('`harness-worktree` plan: plan commits on any branch, #6117'), 'step 4 names the worktree-isolation probe');
+    assert.ok(host.includes('`continue waiting`, `kill and retry`, or'), 'the three-option pause is unchanged');
+    const policy = fs.readFileSync(POLICY, 'utf8');
+    assert.ok(policy.includes('plans on `none` (sequential) keep the `${EXPECTED_BRANCH}` probe'), 'sequential and none isolation keep the expected-branch probe');
+  });
+});
+}

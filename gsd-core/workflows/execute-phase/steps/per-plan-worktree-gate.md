@@ -134,7 +134,13 @@ if [ "${USE_WORKTREES_FOR_PLAN:-}" = "false" ]; then
 elif [ -n "${USE_WORKTREES_FOR_PLAN:-}" ]; then
   # No plan-level override — re-resolve normally, still scoped to this plan,
   # so the sentinel's `plan` field always matches the plan about to dispatch.
-  gsd_run query dispatch-isolation --raw --phase "${PHASE_NUMBER:-}" --plan "$plan_id" >/dev/null 2>&1 || true
+  # #6303: this call is also the plan's cross-runtime decision. A plan declaring `executor_runtime` with
+  # the gate on and every precondition met comes back `isolation: orchestrator-worktree` with a non-null
+  # `executorRuntime` and a null `fallback`; the orchestrator then dispatches THIS plan through the
+  # orchestrator-worktree block of executor-isolation-dispatch.md (see cross-runtime-executor-dispatch.md)
+  # whatever the phase-level ISOLATION is. Otherwise the plan's isolation is the host's, unchanged.
+  PLAN_DISPATCH_JSON=$(gsd_run query dispatch-isolation --json --phase "${PHASE_NUMBER:-}" --plan "$plan_id" 2>/dev/null) || PLAN_DISPATCH_JSON=""
+  printf 'PLAN_DISPATCH=%s\n' "$PLAN_DISPATCH_JSON"
 fi
 # An EMPTY value (the plan state was lost with an earlier tool call's shell) writes
 # nothing, so a recorded phase-level degrade is never re-persisted as harness-worktree (#5479).

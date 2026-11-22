@@ -20,7 +20,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempDir, cleanup, captureFdSync } = require('./helpers.cjs');
+const { createTempDir, createTempProject, cleanup, captureFdSync, runGsdTools } = require('./helpers.cjs');
 
 const AGENT_INSTALL_CHECK_PATH = path.join(
   __dirname, '..', 'gsd-core', 'bin', 'lib', 'agent-install-check.cjs'
@@ -265,18 +265,18 @@ describe('getAgentsDir', () => {
     const projectRoot = createTempDir('gsd-local-codex-');
     const globalHome = createTempDir('gsd-global-codex-');
     const localAgentsDir = path.join(projectRoot, '.codex', 'agents');
-    const realLstatSync = fs.lstatSync;
+    const realStatSync = fs.statSync;
     t.after(() => cleanup(projectRoot));
     t.after(() => cleanup(globalHome));
     fs.mkdirSync(localAgentsDir, { recursive: true });
     markLocalGsdInstall(path.dirname(localAgentsDir));
     createCompleteAgents(path.join(globalHome, 'agents'));
     process.env['CODEX_HOME'] = globalHome;
-    t.mock.method(fs, 'lstatSync', function injectedLocalProbeFailure(target, ...args) {
+    t.mock.method(fs, 'statSync', function injectedLocalProbeFailure(target, ...args) {
       if (target === localAgentsDir) {
         throw Object.assign(new Error('injected EACCES'), { code: 'EACCES' });
       }
-      return realLstatSync.call(fs, target, ...args);
+      return realStatSync.call(fs, target, ...args);
     });
 
     const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
@@ -284,7 +284,22 @@ describe('getAgentsDir', () => {
     assert.strictEqual(result.agents_installed, true);
   });
 
-  test('Codex does not follow a symlinked local agents directory', (t) => {
+  // #5911: a project that links one shared GSD install (a symlink, or a directory junction on
+  // Windows) resolves to the linked local agents dir; the manifest requirement (#2602) stays.
+  function symlinkOrSkip(t, target, linkPath, type) {
+    try {
+      fs.symlinkSync(target, linkPath, type === 'dir' && process.platform === 'win32' ? 'junction' : type);
+      return true;
+    } catch (error) {
+      if (error && ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
+        t.skip('symlink creation is not available on this platform');
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  test('Codex follows a symlinked local agents directory when a real manifest is present (#5911)', (t) => {
     const projectRoot = createTempDir('gsd-local-codex-');
     const globalHome = createTempDir('gsd-global-codex-');
     const localConfigDir = path.join(projectRoot, '.codex');
@@ -297,15 +312,64 @@ describe('getAgentsDir', () => {
     markLocalGsdInstall(localConfigDir);
     createCompleteAgents(path.join(globalHome, 'agents'));
     process.env['CODEX_HOME'] = globalHome;
-    try {
-      fs.symlinkSync(symlinkTarget, localAgentsDir, process.platform === 'win32' ? 'junction' : 'dir');
-    } catch (error) {
-      if (error && ['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
-        t.skip('symlink creation is not available on this platform');
-        return;
-      }
-      throw error;
-    }
+    if (!symlinkOrSkip(t, symlinkTarget, localAgentsDir, 'dir')) return;
+
+    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
+    assert.strictEqual(result.agents_dir, localAgentsDir);
+    assert.strictEqual(result.agents_installed, true);
+  });
+
+  test('Codex follows a symlinked agents directory and a symlinked manifest together (#5911)', (t) => {
+    const projectRoot = createTempDir('gsd-local-codex-');
+    const sharedRoot = createTempDir('gsd-shared-codex-');
+    const globalHome = createTempDir('gsd-global-codex-');
+    const localConfigDir = path.join(projectRoot, '.codex');
+    const localAgentsDir = path.join(localConfigDir, 'agents');
+    t.after(() => cleanup(projectRoot));
+    t.after(() => cleanup(sharedRoot));
+    t.after(() => cleanup(globalHome));
+    createCompleteAgents(path.join(sharedRoot, 'agents'));
+    markLocalGsdInstall(sharedRoot);
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    createCompleteAgents(path.join(globalHome, 'agents'));
+    process.env['CODEX_HOME'] = globalHome;
+    if (!symlinkOrSkip(t, path.join(sharedRoot, 'agents'), localAgentsDir, 'dir')) return;
+    if (!symlinkOrSkip(t, path.join(sharedRoot, 'gsd-file-manifest.json'), path.join(localConfigDir, 'gsd-file-manifest.json'), 'file')) return;
+
+    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
+    assert.strictEqual(result.agents_dir, localAgentsDir);
+    assert.strictEqual(result.agents_installed, true);
+  });
+
+  test('a symlinked local agents directory without a manifest still does not override global agents (#2602)', (t) => {
+    const projectRoot = createTempDir('gsd-local-codex-');
+    const globalHome = createTempDir('gsd-global-codex-');
+    const localConfigDir = path.join(projectRoot, '.codex');
+    const symlinkTarget = path.join(projectRoot, 'shared-agents');
+    t.after(() => cleanup(projectRoot));
+    t.after(() => cleanup(globalHome));
+    createCompleteAgents(symlinkTarget);
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    createCompleteAgents(path.join(globalHome, 'agents'));
+    process.env['CODEX_HOME'] = globalHome;
+    if (!symlinkOrSkip(t, symlinkTarget, path.join(localConfigDir, 'agents'), 'dir')) return;
+
+    const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
+    assert.strictEqual(result.agents_dir, path.join(globalHome, 'agents'));
+    assert.strictEqual(result.agents_installed, true);
+  });
+
+  test('a dangling local agents symlink falls back to global agents (#5911)', (t) => {
+    const projectRoot = createTempDir('gsd-local-codex-');
+    const globalHome = createTempDir('gsd-global-codex-');
+    const localConfigDir = path.join(projectRoot, '.codex');
+    t.after(() => cleanup(projectRoot));
+    t.after(() => cleanup(globalHome));
+    fs.mkdirSync(localConfigDir, { recursive: true });
+    markLocalGsdInstall(localConfigDir);
+    createCompleteAgents(path.join(globalHome, 'agents'));
+    process.env['CODEX_HOME'] = globalHome;
+    if (!symlinkOrSkip(t, path.join(projectRoot, 'does-not-exist'), path.join(localConfigDir, 'agents'), 'dir')) return;
 
     const result = agentInstallCheck.checkAgentsInstalled('codex', projectRoot);
     assert.strictEqual(result.agents_dir, path.join(globalHome, 'agents'));
@@ -1326,11 +1390,12 @@ describe('checkAgentsInstalled — unchanged by the manifest-reader substitution
   });
 
   // A5 — getAgentsDir's local-install probe is deliberately NOT rewired to
-  // readInstallManifest: it stays an lstat-based (symlink-unaware) presence
-  // check (agent-install-check.cts:123, "Not touched" in 40-design.md's
-  // blast-radius table), so a manifest path that is itself a SYMLINK is
-  // still ignored, exactly as before the substitution.
-  test('A5: getAgentsDir still ignores a symlinked manifest', (t) => {
+  // readInstallManifest: it stays a stat-based presence check
+  // (agent-install-check.cts:123, "Not touched" in 40-design.md's
+  // blast-radius table). Since #5911 that probe follows links, so a manifest
+  // path that is itself a SYMLINK to a regular file counts as present, like a
+  // symlinked agents directory.
+  test('A5: getAgentsDir follows a symlinked manifest (#5911)', (t) => {
     const projectRoot = createTempDir('gsd-local-codex-schema-');
     const globalHome = createTempDir('gsd-global-codex-schema-');
     const localConfigDir = path.join(projectRoot, '.codex');
@@ -1356,12 +1421,11 @@ describe('checkAgentsInstalled — unchanged by the manifest-reader substitution
       throw error;
     }
 
-    // getAgentsDir's own probe (`fs.lstatSync(manifestPath).isFile()`) sees
-    // the manifest path as a symlink, not a regular file — isFile() is false
-    // for the link itself even though its target is a regular file — so the
-    // local install is NOT selected; the global fallback wins instead.
-    assert.strictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), path.join(globalHome, 'agents'));
-    assert.notStrictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), localAgentsDir);
+    // getAgentsDir's own probe (`fs.statSync(manifestPath).isFile()`) follows
+    // the link to its regular-file target, so the local install is selected
+    // and the global fallback does not win.
+    assert.strictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), localAgentsDir);
+    assert.notStrictEqual(agentInstallCheck.getAgentsDir('codex', projectRoot), path.join(globalHome, 'agents'));
   });
 });
 
@@ -1600,3 +1664,156 @@ describe('canonicalAgentSourceDir (#5496)', () => {
   });
 });
 
+
+// ─── #5236: an unregistered runtime id degrades the reporting paths instead of throwing ───────────────────────
+
+describe('#5236: the agents check and the init verbs under a runtime id GSD does not resolve', () => {
+  const { UnknownRuntimeError } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
+  const UNREGISTERED = 'example-host';
+  let tmpDir;
+  let savedAgentsDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-5236-');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: X\n- [ ] w\n');
+    savedAgentsDir = process.env['GSD_AGENTS_DIR'];
+    delete process.env['GSD_AGENTS_DIR'];
+  });
+
+  afterEach(() => {
+    if (savedAgentsDir === undefined) delete process.env['GSD_AGENTS_DIR']; else process.env['GSD_AGENTS_DIR'] = savedAgentsDir;
+    cleanup(tmpDir);
+  });
+
+  function initJson(args, env) {
+    const r = runGsdTools(args, tmpDir, env);
+    assert.ok(r.success, `${args.join(' ')}: ${r.error}`);
+    const out = r.output.startsWith('@file:') ? fs.readFileSync(r.output.slice('@file:'.length).trim(), 'utf8') : r.output;
+    return JSON.parse(out);
+  }
+
+  test('[regression] checkAgentsInstalled reports "could not check" for an unregistered id: null, no directory, a reason, no throw', () => {
+    assert.deepStrictEqual(agentInstallCheck.checkAgentsInstalled(UNREGISTERED, tmpDir), {
+      agents_installed: null,
+      missing_agents: [],
+      installed_agents: [],
+      incomplete_agents: [],
+      agents_dir: null,
+      agent_runtime: UNREGISTERED,
+      agents_check_reason: 'unknown_runtime',
+    });
+  });
+
+  test('[independence] a GSD_AGENTS_DIR override does not turn an unregistered id into a checked one', () => {
+    const dir = createTempDir('gsd-5236-agents-');
+    try {
+      process.env['GSD_AGENTS_DIR'] = dir;
+      const result = agentInstallCheck.checkAgentsInstalled(UNREGISTERED, tmpDir);
+      assert.strictEqual(result.agents_installed, null);
+      assert.strictEqual(result.agents_check_reason, 'unknown_runtime');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('[independence] a registered id is unchanged: a boolean answer and no reason key', () => {
+    process.env['GSD_AGENTS_DIR'] = path.join(tmpDir, 'no-agents-here');
+    const result = agentInstallCheck.checkAgentsInstalled('claude', tmpDir);
+    assert.strictEqual(result.agents_installed, false);
+    assert.deepStrictEqual(result.missing_agents, EXPECTED_AGENTS);
+    assert.ok(!('agents_check_reason' in result));
+  });
+
+  test('[property] the reason enum is frozen and has exactly the wire value the callers assert on', () => {
+    assert.ok(Object.isFrozen(agentInstallCheck.AGENTS_CHECK_REASON));
+    assert.deepStrictEqual({ ...agentInstallCheck.AGENTS_CHECK_REASON }, { UNKNOWN_RUNTIME: 'unknown_runtime' });
+  });
+
+  test('[security] the install-side accessors still refuse an unregistered id: the refusal is not weakened', () => {
+    assert.throws(() => getGlobalConfigDir(UNREGISTERED), UnknownRuntimeError);
+    assert.throws(() => getDirName(UNREGISTERED), UnknownRuntimeError);
+    assert.throws(() => agentInstallCheck.getAgentsDir(UNREGISTERED), UnknownRuntimeError);
+  });
+
+  for (const args of [['query', 'init.new-project'], ['query', 'init.plan-phase', '1'], ['query', 'init.execute-phase', '1'], ['query', 'init.quick', 'x'], ['query', 'init.progress']]) {
+    test(`[regression] ${args.slice(1).join(' ')} exits 0 under GSD_RUNTIME=${UNREGISTERED} and says the agents were not checked`, () => {
+      const json = initJson(args, { GSD_RUNTIME: UNREGISTERED });
+      assert.strictEqual(json.agents_installed, null);
+      assert.strictEqual(json.agents_dir, null);
+      assert.strictEqual(json.agents_check_reason, 'unknown_runtime');
+      assert.strictEqual(json.agent_runtime, UNREGISTERED);
+    });
+  }
+
+  test('[regression] init under a registered id keeps a boolean agents_installed and carries no reason', () => {
+    const json = initJson(['query', 'init.progress'], { GSD_RUNTIME: 'claude', GSD_AGENTS_DIR: path.join(tmpDir, 'no-agents-here') });
+    assert.strictEqual(json.agents_installed, false);
+    assert.ok(!('agents_check_reason' in json));
+  });
+
+  test('[security] a retired runtime spelling is still refused by the check: only an UNKNOWN id degrades', () => {
+    const { RetiredRuntimeError } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
+    assert.throws(() => agentInstallCheck.checkAgentsInstalled('gemini', tmpDir), RetiredRuntimeError);
+  });
+
+  test('[property] for any id the registry does not know, the check never throws and always says not-checkable', () => {
+    const fc = require('./helpers/fast-check-setup.cjs');
+    fc.assert(fc.property(fc.stringMatching(/^[a-z][a-z0-9-]{2,14}$/), (suffix) => {
+      const id = `zz-${suffix}`;
+      const result = agentInstallCheck.checkAgentsInstalled(id, tmpDir);
+      assert.strictEqual(result.agents_installed, null, id);
+      assert.strictEqual(result.agents_dir, null, id);
+      assert.strictEqual(result.agents_check_reason, 'unknown_runtime', id);
+      assert.strictEqual(result.agent_runtime, id);
+    }), { numRuns: 100 });
+  });
+
+  test('[regression] init reads the unregistered id from config.runtime and from the install marker the same way it reads GSD_RUNTIME', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: UNREGISTERED }));
+    const fromConfig = initJson(['query', 'init.new-milestone'], { GSD_RUNTIME: '' });
+    assert.strictEqual(fromConfig.agents_installed, null);
+    assert.strictEqual(fromConfig.agents_check_reason, 'unknown_runtime');
+    assert.strictEqual(fromConfig.agent_runtime, UNREGISTERED);
+  });
+
+  test('[regression] docs-init exits 0 under an unregistered id and carries the reason', () => {
+    const r = runGsdTools(['docs-init'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    const json = JSON.parse(r.output);
+    assert.strictEqual(json.agents_installed, null);
+    assert.strictEqual(json.agents_check_reason, 'unknown_runtime');
+  });
+
+  test('[regression] a project-relative skill entry works under an unregistered id, and a global: entry is skipped with the existing no-skills-directory warning', () => {
+    fs.mkdirSync(path.join(tmpDir, 'skills', 'foo'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'foo', 'SKILL.md'), '# foo\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: UNREGISTERED, agent_skills: { 'gsd-planner': ['skills/foo', 'global:bar'] } }));
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    assert.match(r.output, /skills\/foo\/SKILL\.md/);
+  });
+
+  test('[independence] config.runtime is read through the shared resolver: an alias spelling resolves like init does', () => {
+    fs.mkdirSync(path.join(tmpDir, 'skills', 'foo'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'skills', 'foo', 'SKILL.md'), '# foo\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: 'Claude-Code', agent_skills: { 'gsd-planner': ['skills/foo'] } }));
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner'], tmpDir, { GSD_RUNTIME: '' });
+    assert.ok(r.success, r.error);
+    assert.match(r.output, /skills\/foo\/SKILL\.md/);
+  });
+
+  test('[regression] agent-skills exits 0 with empty output when config.runtime is unregistered and no agent_skills is set', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ runtime: UNREGISTERED }));
+    const r = runGsdTools(['query', 'agent-skills', 'gsd-planner'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    assert.strictEqual(r.output.trim(), '');
+  });
+
+  test('[boundary] validate agents under an unregistered id reports agents_found null with the reason, and exits 0', () => {
+    const r = runGsdTools(['validate', 'agents'], tmpDir, { GSD_RUNTIME: UNREGISTERED });
+    assert.ok(r.success, r.error);
+    const json = JSON.parse(r.output);
+    assert.strictEqual(json.agents_found, null);
+    assert.strictEqual(json.agents_check_reason, 'unknown_runtime');
+  });
+});

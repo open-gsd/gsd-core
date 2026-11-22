@@ -323,13 +323,43 @@ function extractBaselineTree(ref, repoRoot, subdir = '', { execFileSyncImpl = ex
 const NULL_SHA = '0000000000000000000000000000000000000000';
 
 /**
+ * On a pull_request run (GITHUB_BASE_REF set) the pin `pull_request.base.sha` can be OLDER than the
+ * base commit the tested merge ref actually contains (#5797, #5897): the baseline lockfile then
+ * predates part of `next`, and packages `next` itself made vulnerable read as introduced by the PR.
+ * Advance the pin to `merge-base(origin/<GITHUB_BASE_REF>, HEAD)` -- fixed for a given HEAD, since the
+ * base tip only gains commits HEAD lacks -- but only when the pin is an ancestor of it, so the result
+ * is never below the pin. Every other case returns the pin unchanged: no GITHUB_BASE_REF (push,
+ * merge_group, release lanes), a base ref or merge-base git cannot resolve (shallow clone), or a pin
+ * that is not an ancestor. A PR's own lockfile change is in HEAD only, so it still diffs as introduced.
+ */
+function advancePinToMergedBase(pin, repoRoot, { execFileSyncImpl = execFileSync } = {}) {
+  const baseBranch = process.env.GITHUB_BASE_REF;
+  if (!baseBranch) return pin;
+  const git = (args) => execFileSyncImpl('git', [...safeDirectoryArgs(repoRoot), ...args], {
+    cwd: repoRoot,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  try {
+    const mergeBase = String(git(['merge-base', `origin/${baseBranch}`, 'HEAD'])).trim();
+    if (!mergeBase || mergeBase === pin) return pin;
+    git(['merge-base', '--is-ancestor', pin, mergeBase]); // throws (exit 1) when the pin is not an ancestor
+    return mergeBase;
+  } catch {
+    return pin;
+  }
+}
+
+/**
  * Resolves the git ref to diff against, in priority order:
  *   1. AUDIT_BASELINE_REF env var -- the primary mechanism. CI sets this
  *      explicitly (see .github/workflows/test.yml) to github.event.pull_
  *      request.base.sha on a pull_request event, or github.event.before on
  *      a push event -- both pinned, race-free values Git/GitHub track for
  *      exactly this purpose. Prefer this over anything below whenever the
- *      caller can provide it.
+ *      caller can provide it. On a pull_request event the pin is a FLOOR,
+ *      not the answer: it is advanced to merge-base(origin/<GITHUB_BASE_REF>,
+ *      HEAD) when that is a descendant of the pin (see advancePinToMergedBase).
  *   2. GITHUB_BASE_REF (GitHub Actions sets this on pull_request events)
  *      resolved against the LIVE origin/<branch> tip. Only reached if
  *      AUDIT_BASELINE_REF wasn't set -- e.g. a workflow that forgot to
@@ -356,7 +386,9 @@ const NULL_SHA = '0000000000000000000000000000000000000000';
  * rather than silently skipping the gate.
  */
 function resolveBaselineRef(repoRoot, { execFileSyncImpl = execFileSync } = {}) {
-  if (process.env.AUDIT_BASELINE_REF) return process.env.AUDIT_BASELINE_REF;
+  if (process.env.AUDIT_BASELINE_REF) {
+    return advancePinToMergedBase(process.env.AUDIT_BASELINE_REF, repoRoot, { execFileSyncImpl });
+  }
   if (process.env.GITHUB_BASE_REF) return `origin/${process.env.GITHUB_BASE_REF}`;
   if (process.env.GITHUB_EVENT_NAME === 'push') {
     try {

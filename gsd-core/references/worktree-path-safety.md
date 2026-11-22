@@ -199,11 +199,13 @@ MAIN_ROOT=$(cd "$(git rev-parse --git-common-dir)/.." 2>/dev/null && pwd -P)
 # symlinked file through its link target first), so a symlink or `..` hop inside the worktree that
 # lands in the main checkout is seen for what it is; a path that does not exist yet — a Wave-0
 # scaffold — is normalized lexically and must still PASS when it sits under the worktree. Never
-# `readlink -m` / `realpath -m` — GNU-only. `_norm` splits with `read -ra` (no glob expansion) and
-# expands the array with the `${a[@]+"${a[@]}"}` idiom (bash < 4.4 errors on an empty array under -u).
-_norm(){ local -a out=() seg; local s; IFS=/ read -ra seg <<<"$1"
-  for s in ${seg[@]+"${seg[@]}"}; do case "$s" in ''|.) ;; ..) [ ${#out[@]} -gt 0 ] && unset 'out[${#out[@]}-1]' ;; *) out+=("$s") ;; esac; done
-  printf '/%s' ${out[@]+"${out[@]}"}; [ ${#out[@]} -gt 0 ] || printf '/'; }
+# `readlink -m` / `realpath -m` — GNU-only. `_norm` walks the segments with parameter expansion and
+# builds the result as a string: no `read -a` (bash-only: zsh rejects it) and no array (bash arrays
+# are 0-based, zsh's 1-based), so it behaves the same in bash 3.2 and zsh. The root is `/`, never `//`.
+_norm(){ local rest="$1/" out='' s
+  while [ -n "$rest" ]; do s=${rest%%/*}; rest=${rest#*/}
+    case "$s" in ''|.) ;; ..) out=${out%/*} ;; *) out="$out/$s" ;; esac
+  done; printf '%s' "${out:-/}"; }
 _resolve(){ local p t; case "$1" in /*) p=$1 ;; *) p="${2:-$WT_ROOT}/$1" ;; esac
   if [ -L "$p" ] && ! [ -d "$p" ]; then t=$(readlink "$p"); case "$t" in /*) p=$t ;; *) p="$(dirname -- "$p")/$t" ;; esac; fi
   ( cd -- "$p" 2>/dev/null && pwd -P ) \
@@ -214,18 +216,19 @@ _outside_wt(){ case "$1" in "$WT_ROOT"|"$WT_ROOT"/*) return 1 ;; *) return 0 ;; 
 # escapes, in any mix (`"/x"/y`, `"O'Reilly"`, `path\ with\ space`, `release=main`). `_unquote`
 # walks it with the shell's own three quoting states and returns the string the shell would pass.
 _TOK='("[^"]*"|'"'"'[^'"'"']*'"'"'|\\.|[^[:space:]"'"'"';|&()])+'
+# Characters are taken with `${s:$i:1}`: zsh reads `${s:i:1}` as the `:i` history modifier.
 _unquote(){ local s=$1 out='' q='' c i
-  for ((i=0; i<${#s}; i++)); do c=${s:i:1}
-    if [ -z "$q" ]; then case "$c" in '"'|"'") q=$c ;; '\') i=$((i+1)); out+=${s:i:1} ;; *) out+=$c ;; esac
-    elif [ "$q" = '"' ]; then case "$c" in '"') q='' ;; '\') i=$((i+1)); out+=${s:i:1} ;; *) out+=$c ;; esac
+  for ((i=0; i<${#s}; i++)); do c=${s:$i:1}
+    if [ -z "$q" ]; then case "$c" in '"'|"'") q=$c ;; '\') i=$((i+1)); out+=${s:$i:1} ;; *) out+=$c ;; esac
+    elif [ "$q" = '"' ]; then case "$c" in '"') q='' ;; '\') i=$((i+1)); out+=${s:$i:1} ;; *) out+=$c ;; esac
     else case "$c" in "'") q='' ;; *) out+=$c ;; esac; fi
   done; printf '%s' "$out"; }
 # True when raw shell text contains an unquoted single `&` or `|`. `&&` and
 # `||` keep the current shell's cwd; the single forms cross a process boundary.
-_resets_cwd(){ local s=$1 q='' i c p n; for ((i=0;i<${#s};i++)); do c=${s:i:1}
+_resets_cwd(){ local s=$1 q='' i c p n; for ((i=0;i<${#s};i++)); do c=${s:$i:1}
     if [ -z "$q" ]; then case "$c" in
       "'"|'"') q=$c ;; '\') i=$((i+1)) ;;
-      '&'|'|') p=''; n=''; [ "$i" -gt 0 ] && p=${s:i-1:1}; [ "$i" -lt $((${#s}-1)) ] && n=${s:i+1:1};
+      '&'|'|') p=''; n=''; [ "$i" -gt 0 ] && p=${s:$((i-1)):1}; [ "$i" -lt $((${#s}-1)) ] && n=${s:$((i+1)):1};
         [ "$p" = "$c" ] || [ "$n" = "$c" ] || return 0 ;;
     esac
     elif [ "$q" = '"' ]; then case "$c" in '"') q='' ;; '\') i=$((i+1)) ;; esac

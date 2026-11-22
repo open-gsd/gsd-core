@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-10
+- **Amended by:** [ADR-6315](6315-ci-redesign.md) (Proposed; the amendment takes effect when that ADR is ratified)
 - **Issue:** [#4593](https://github.com/open-gsd/gsd-core/issues/4593) — Phase 4 (final) of epic [#4589](https://github.com/open-gsd/gsd-core/issues/4589)
 - **Twin of:** [ADR-1703](./1703-portability-enforcement-architecture.md) (Windows portability enforcement architecture) — this ADR
   applies ADR-1703's evidence-first, static-classifier discipline to a second, macOS-specific surface,
