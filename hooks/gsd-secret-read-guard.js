@@ -78,7 +78,7 @@
 //   (`echo cat .env | bash`) or a bare `cat` printing a heredoc / here-string
 //   (`cat <<'EOF' | bash`, `bash <(cat <<< 'cat .env')`, #6182); `eval` scans
 //   its joined operands; `source`/`.` scans a `<( )` operand; and `find … | xargs cat` infers the upstream
-//   segment's names as the sub-command's read operands.
+//   segment's names as the sub-command's read operands, as `xargs cat <<< .env` does a here-string's words.
 //
 // Dollar-quoting (#5255): a command holding `$'…'` or `$"…"`, a run of `$`
 // before `{` or `(`, or a quote and zsh's arithmetic (`((`, `$[`), is scanned under
@@ -4206,6 +4206,8 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   // The exemption stays keyed on the word as written: a wrapper in front (`xargs sudo ls`) does not make a
   // command that reads nothing exempt where it was not before, so nothing denied earlier is allowed now.
   if (curl === null && NON_READING_COMMANDS.has(writtenBase)) return null;
+  const fed = xargsFedReadsSecret(operands, subIdx, subIsShell ? subOperands : null, s, bySeg, sepAfter, curl, depth);
+  if (fed) return fed;
 
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
@@ -4289,6 +4291,59 @@ function pipedWordsReadSecret(words, toCurl, certPiped) {
   return null;
 }
 
+// The text an xargs in segment `s` reads on stdin from a here-string or a
+// heredoc: its own (`xargs cat <<< .env`, `xargs curl x <<EOF`), or one that a
+// bare `cat` upstream prints, through any `tee` or bare `cat` that passes it
+// on (`cat <<EOF | xargs curl x`); null for any other stdin. A pipe from
+// printf or echo is read as printedWords reads it, and a file
+// (`xargs cat < list`) is not read.
+// It is found once per segment (xargsFedTextBySegMap): `find` runs many xargs
+// in one segment, and each would walk the same tokens again.
+const xargsFedTextBySegMap = new WeakMap();
+function xargsFedText(s, bySeg, sepAfter) {
+  let found = xargsFedTextBySegMap.get(bySeg);
+  if (!found) xargsFedTextBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(s)) found.set(s, findXargsFedText(s, bySeg, sepAfter));
+  return found.get(s);
+}
+function findXargsFedText(s, bySeg, sepAfter) {
+  const own = segmentFedText(s, bySeg);
+  if (own !== null) return own;
+  let seg = s;
+  for (;;) {
+    const { op, prevSeg } = precedingOp(seg, bySeg, sepAfter);
+    if (!((op === '|' || op === '|&') && prevSeg >= 0)) return null;
+    const cmd = resolveCommand(commandWords(bySeg.get(prevSeg) || []));
+    if (!cmd || (cmd.base !== 'cat' && cmd.base !== 'tee')) return null;
+    const fed = segmentFedText(prevSeg, bySeg);
+    if (fed !== null) return cmd.base === 'tee' || catPrintedText(cmd, { heredocs: [fed], hereStrings: [] }) !== null ? fed : null;
+    if (cmd.base === 'cat' && !cmd.operands.every((w) => w.text.startsWith('-'))) return null;
+    seg = prevSeg;
+  }
+}
+
+// The heredoc bodies and here-string words given to segment `s`, joined, or
+// null. Each token walked is charged to the reader budget.
+function segmentFedText(s, bySeg) {
+  chargeReader((bySeg.get(s) || []).length);
+  const heredocs = ((heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []).map((h) => h.text);
+  return fedText({ heredocs, hereStrings: hereStringTargets(bySeg.get(s) || []) });
+}
+
+// The block for a word xargs reads from the text xargsFedText finds, read as
+// a piped word is (xargsPipedReadsSecret), and as a shell's script when xargs
+// runs a shell (`shellOperands`, else null); null when there is no such text.
+// Each character is charged to the reader budget for the words cut from it,
+// as printed text is (PRINTED_WORD_COST).
+function xargsFedReadsSecret(operands, subIdx, shellOperands, s, bySeg, sepAfter, curl, depth) {
+  const text = xargsFedText(s, bySeg, sepAfter);
+  if (text === null) return null;
+  chargeReader(text.length * PRINTED_WORD_COST);
+  const words = xargsReadWords(text, operands, curl !== null ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
+  const hit = shellOperands === null ? null : scanXargsShellScripts(shellOperands, xargsReplaceStr(operands, subIdx), words, depth);
+  return hit || xargsPipedReadsSecret(operands, { base: '', operands: words }, curl);
+}
+
 // What a knowable `printf` or `echo` upstream of xargs prints, cut into the
 // words xargs could read from it, as { text } objects; [] for any other
 // command. The words as written miss what only the printing makes: the
@@ -4309,6 +4364,13 @@ function printedWords(prev, operands, runs) {
   else if (prev.base === 'echo') text = echoOutput(prev.operands);
   else return [];
   if (text === null) return [];
+  return xargsReadWords(text, operands, runs);
+}
+
+// The words xargs could read from `text` on its stdin, cut as printedWords
+// describes, as { text } objects. `runs` is the index of the command xargs
+// runs in `operands`, or -1.
+function xargsReadWords(text, operands, runs) {
   const to = runs === -1 ? operands.length : runs;
   const delimiter = xargsDelimiter(operands, to);
   const lines = xargsReplaceString(operands, 0, to) !== null;
