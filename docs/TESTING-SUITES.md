@@ -438,8 +438,8 @@ strips every `GSD_*` variable). It records a write whose destination is a file
 named `STATE.md` when the caller is product code (a `.cjs` file under a
 `gsd-core/bin/` directory: the compiled `gsd-core/bin/lib`, `gsd-tools.cjs`, or
 an installed copy), in the shapes listed under Limits below. The caller is the
-nearest frame outside the STATE.md write seam's module
-(`shell-command-projection.cjs`), so a seam write is attributed to the code that
+nearest frame outside node internals, the check's own file and the STATE.md
+write seam's module (`shell-command-projection.cjs`), so a seam write is attributed to the code that
 called the seam, and a test that calls the seam on a STATE.md fixture is test
 code. A recorded write is one of three kinds:
 
@@ -534,8 +534,8 @@ Limits:
   seen (`fs.cp`, wrapped itself, still is).
 - Those hold when the runner's shim is the first preload, which the runner
   arranges by prepending it to `NODE_OPTIONS`. A preload ordered before the
-  shim that keeps the `fs.promises` object or a promise function holds an
-  unwrapped reference whose writes are not seen.
+  shim that keeps a promise function holds an unwrapped function whose writes
+  are not seen.
 - A subprocess a test spawns with an env that replaces `NODE_OPTIONS` runs
   unguarded and leaves no sentinel and no record. The test-file comparison
   covers test-file children only, not the subprocesses they spawn.
