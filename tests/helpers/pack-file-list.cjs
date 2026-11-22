@@ -107,7 +107,8 @@ function listPackedFiles(root) {
   }
   if (manifest.bin !== undefined) {
     const plainKey = (k) => /^[\w.-]{1,255}$/.test(k) && k !== '.' && k !== '..';
-    if (typeof manifest.bin !== 'object' || manifest.bin === null || Array.isArray(manifest.bin) || !Object.keys(manifest.bin).every(plainKey)) {
+    if (typeof manifest.bin !== 'object' || manifest.bin === null || Array.isArray(manifest.bin) || !Object.keys(manifest.bin).every(plainKey)
+      || !Object.values(manifest.bin).every((v) => typeof v === 'string')) {
       throw new Error(`${root}: package.json "bin" is not an object with plain keys; this list does not model npm's normalisation of it`);
     }
   }
@@ -170,6 +171,11 @@ function listPackedFiles(root) {
   const bins = typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin || {});
   // npm builds its rule for `main` from the text as written, so a "./main.js" spelling is not packed by it.
   const mainFile = typeof manifest.main === 'string' && !manifest.main.startsWith('./') ? [manifest.main] : [];
+  const covers = (entry, rel) => {
+    const e = lower(entry);
+    const r = lower(rel);
+    return r === e || r.startsWith(`${e}/`);
+  };
   const forced = new Set([...mainFile, ...bins].filter((f) => typeof f === 'string').map(normalise));
   for (const rel of [...mainFile, ...bins]) {
     if (typeof rel === 'string' && (path.isAbsolute(rel) || normalise(rel).split('/').includes('..'))) {
@@ -188,15 +194,21 @@ function listPackedFiles(root) {
     }
     // A slash-less entry matches by base name, so under a directory no entry covers npm can re-include a same-named
     // file next to the main or bin target; this list needs every such directory to be an entry itself.
-    if (rel.includes('/') && positive.some((p) => !p.includes('/')) && !positive.includes(rel.split('/')[0])) {
+    if (rel.includes('/') && !positive.some((p) => covers(p, rel))) {
       throw new Error(`${root}: main or bin target "${rel}" is under a directory no files entry covers; this list does not model base-name matches there`);
     }
+    // The forced add below skips the name rules and the `!` exclusions that apply to walked files; npm's order for
+    // those is not modelled, so a target any of them could touch throws instead.
+    const base = rel.split('/').pop();
+    if (isRootExcluded(base) || lower(base) === '.npmrc' || isExcludedName(base, rel, false) || negative.some((n) => covers(n, rel))) {
+      throw new Error(`${root}: main or bin target "${rel}" is a name a default, a lock-file rule or an exclusion could drop; this list does not model that`);
+    }
+    let targetStat = null;
+    try { targetStat = fs.lstatSync(path.join(root, rel)); } catch (err) { if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err; }
+    if (targetStat && (targetStat.isSymbolicLink() || targetStat.isDirectory())) {
+      throw new Error(`${path.join(root, rel)}: a main or bin target that is a symlink or a directory; this list reads regular files only`);
+    }
   }
-  const covers = (entry, rel) => {
-    const e = lower(entry);
-    const r = lower(rel);
-    return r === e || r.startsWith(`${e}/`);
-  };
   // An entry under a directory npm prunes (node_modules at the root, an excluded directory name) is not packed.
   const underPrunedDirectory = (rel) => {
     const parts = rel.split('/');
@@ -214,7 +226,11 @@ function listPackedFiles(root) {
     if (isRootExcluded(rel)) return;
     if (isDirectory) {
       if (rel === 'node_modules' || isExcludedName(name, rel) || negative.some((n) => covers(n, rel))) return;
-      for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
+      const children = fs.readdirSync(path.join(root, rel), { withFileTypes: true });
+      if (new Set(children.map((c) => lower(c.name))).size !== children.length) {
+        throw new Error(`${path.join(root, rel)}: names that differ only in case; npm treats them alike and this list does not`);
+      }
+      for (const entry of children) {
         const where = path.join(root, rel, entry.name);
         if (entry.name === '.npmignore' || entry.name === '.gitignore') {
           throw new Error(`${where}: a nested ignore file; this list does not apply them`);
@@ -268,6 +284,7 @@ function listPackedFiles(root) {
     if (!isAlwaysIncludedFile(rel) || rel.includes('*')) continue;
     const rootStat = fs.lstatSync(path.join(root, rel));
     if (rootStat.isSymbolicLink()) throw new Error(`${path.join(root, rel)}: a symlinked root file npm always includes; the walk does not follow links`);
+    if (rootStat.isDirectory()) throw new Error(`${path.join(root, rel)}: a root directory named like a file npm always includes; this list does not model that`);
     if (rootStat.isFile()) packed.add(rel);
   }
   for (const rel of forced) {

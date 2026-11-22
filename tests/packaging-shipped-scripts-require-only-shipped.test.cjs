@@ -565,6 +565,37 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
+  test('a main or bin target a rule could drop, a symlink or directory target, an uncovered nested target, a non-string bin value, a README directory and case-variant children throw', (t) => {
+    for (const main of ['.npmrc', 'yarn.lock', 'package-lock.json', '.DS_Store', 'x.orig', '.x.swp']) {
+      planted({ files: ['hooks'], main }, [main], (tmp) => assert.throws(() => listPackedFiles(tmp), /could drop/));
+    }
+    planted({ files: ['scripts', '!scripts/x.js'], bin: { x: 'scripts/x.js' } }, ['scripts/x.js'], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /could drop/);
+    });
+    planted({ files: ['gsd-core/bin'], bin: { x: 'scripts/x.js' } }, ['gsd-core/bin/a.js', 'scripts/x.js'], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /no files entry covers/);
+    });
+    planted({ files: ['hooks'], bin: { x: 5 } }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /not an object with plain keys/));
+    planted({ files: ['hooks'], main: 'lib' }, ['lib/a.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /no files entry covers|symlink or a directory/));
+    planted({ files: ['hooks', 'lib'], main: 'lib' }, ['lib/a.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /symlink or a directory/));
+    planted({ files: ['hooks'] }, ['README.d/x.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /root directory named like a file/));
+    planted({ files: ['hooks'], main: 'main.js' }, ['real.js'], (tmp) => {
+      try { fs.symlinkSync(path.join(tmp, 'real.js'), path.join(tmp, 'main.js')); } catch (err) {
+        t.skip(`symlinks are not available here (${err.code})`);
+        return;
+      }
+      assert.throws(() => listPackedFiles(tmp), /symlink or a directory/);
+    });
+    planted({ files: ['hooks'] }, ['hooks/a.js', 'hooks/Dup.js', 'hooks/dup.js'], (tmp) => {
+      // Two names that differ only in case coexist only on a case-sensitive disk.
+      if (fs.readdirSync(path.join(tmp, 'hooks')).length < 3) {
+        t.skip('this disk is case-insensitive');
+        return;
+      }
+      assert.throws(() => listPackedFiles(tmp), /differ only in case/);
+    });
+  });
+
   test('a root COPYING file ships without a files entry', () => {
     planted({ files: ['hooks'] }, ['COPYING', 'COPYING.txt', 'copying-notes'], (tmp) => {
       assert.deepEqual(sorted(listPackedFiles(tmp)), ['COPYING', 'COPYING.txt', 'package.json']);
