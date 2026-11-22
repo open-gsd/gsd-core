@@ -111,7 +111,7 @@ describe('roadmap upgrade rollback (#1542)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Directory renames NOT reversed: phases/' + renamedPhase.newDir),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Renames NOT reversed: phases/' + renamedPhase.newDir),
     );
     mock.restoreAll();
     assert.equal(reverseAttempts, 1, 'precondition: the rollback tried to reverse the rename once');
@@ -150,7 +150,7 @@ describe('roadmap upgrade rollback (#1542)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Directory renames NOT reversed: phases/' + renamedPhase.oldDir + ' (missing)'),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Renames NOT reversed: phases/' + renamedPhase.oldDir + ' (missing)'),
     );
     mock.restoreAll();
     assert.equal(movedAside, true, 'precondition: the renamed directory was moved away before the rollback');
@@ -188,12 +188,41 @@ describe('roadmap upgrade rollback (#1542)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Directory renames NOT reversed: phases/' + renamedPhase.newDir),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Renames NOT reversed: phases/' + renamedPhase.newDir),
     );
     mock.restoreAll();
     assert.equal(recreated, true, 'precondition: the old path was recreated before the rollback');
     assert.ok(fs.existsSync(oldPath) && fs.existsSync(newPath), 'both paths exist after the rollback');
     assert.ok(fs.existsSync(path.join(newPath, 'PLAN.md')), 'the renamed directory is still at the path the error names');
+  });
+
+  test('a rewritten plan file whose phase directory was not moved back is named there, not as removed by another writer (#5120 pre-push review R4-m5)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    fs.writeFileSync(path.join(planning, 'phases', '01-foo', '01-01-PLAN.md'), 'content at plan time\n');
+    fs.mkdirSync(path.join(planning, 'config.json'));
+    // A plan with one directory rename and a depends_on rewrite inside it; the directory's reverse fails.
+    const plan = {
+      alreadyMigrated: false,
+      phases: [{ oldId: '1', newId: '1-01', oldDir: '01-foo', newDir: '1-01-foo',
+        dependsOnRewrites: [{ oldName: '01-01-PLAN.md', finalName: '01-01-PLAN.md', from: 'content at plan time\n', to: 'rewritten\n' }] }],
+      roadmapEdits: [], crossRefEdits: [],
+    };
+    const oldPath = path.join(planning, 'phases', '01-foo');
+    const realRename = fs.renameSync;
+    mock.method(fs, 'renameSync', function (from, to, ...rest) {
+      if (String(to) === oldPath) throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+      return realRename.call(this, from, to, ...rest);
+    });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(
+      () => applyMigration(dir, plan, { dryRun: false }),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored: phases/1-01-foo/01-01-PLAN.md (its directory was not moved back). Renames NOT reversed: phases/1-01-foo',
+    );
+    mock.restoreAll();
+    assert.equal(fs.readFileSync(path.join(planning, 'phases', '1-01-foo', '01-01-PLAN.md'), 'utf8'), 'rewritten\n', 'the file is where the error names it');
   });
 
   test('a file rename inside a renamed phase directory that fails to reverse is named where it is left (#5120 pre-push review R3-m4)', (t) => {
@@ -229,7 +258,7 @@ describe('roadmap upgrade rollback (#1542)', () => {
     const leftAt = `phases/${phase.oldDir}/${fileRename.newName}`;
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message === `Migration failed and rolled back: EIO: i/o error, write. Directory renames NOT reversed: ${leftAt}`,
+      (err) => err.message === `Migration failed and rolled back: EIO: i/o error, write. Renames NOT reversed: ${leftAt}`,
     );
     mock.restoreAll();
     assert.equal(failedReverse, true, 'precondition: the file rename\'s reverse failed');
@@ -464,7 +493,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (the restore failed): STATE.md',
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored: STATE.md (the restore failed)',
     );
     mock.restoreAll();
     assert.equal(lockOpens, 2, 'the restore attempted the lock');
@@ -647,7 +676,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (the restore failed): ROADMAP.md',
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored: ROADMAP.md (the restore failed)',
     );
     mock.restoreAll();
     assert.equal(refused, 1, 'precondition: the ROADMAP.md restore was attempted and failed');
@@ -802,7 +831,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified). NOT restored (the restore failed): ROADMAP.md',
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified). NOT restored: ROADMAP.md (the restore failed)',
     );
     mock.restoreAll();
     assert.equal(refused, 1, 'precondition: the ROADMAP.md restore was attempted and failed');

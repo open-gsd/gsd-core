@@ -2562,14 +2562,14 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // first, so when it fails and its directory's reverse succeeds, the file is under the directory's old path
     // (#5120 pre-push review R3-m4). An entry gone from both paths is named at its old path, marked missing.
     const reversed: Array<{ oldPath: string; newPath: string }> = [];
-    const leftBehind: Array<{ at: string; missing: boolean }> = [];
+    const leftBehind: Array<{ at: string; missing: boolean; oldPath: string; newPath: string }> = [];
     for (let i = performedRenames.length - 1; i >= 0; i--) {
       const { oldPath, newPath } = performedRenames[i];
       try {
         if (fs.existsSync(newPath)) retryRenameSync(newPath, oldPath);
       } catch { /* checked below */ }
       if (fs.existsSync(oldPath) && !fs.existsSync(newPath)) reversed.push({ oldPath, newPath });
-      else leftBehind.push({ at: fs.existsSync(newPath) ? newPath : oldPath, missing: !fs.existsSync(newPath) });
+      else leftBehind.push({ at: fs.existsSync(newPath) ? newPath : oldPath, missing: !fs.existsSync(newPath), oldPath, newPath });
     }
     const whereNow = (p: string): string => {
       for (const r of reversed) {
@@ -2585,8 +2585,16 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // told apart from the migration, so that file is restored over (#5120 pre-push review R3-n4).
     const notRestored: string[] = [];
     // #5120 review Minor 7: a restore that was due but did not leave the file holding its prior bytes (the restore
-    // threw, or STATE.md's lock could not be taken) is named, never reported as rolled back (#1542).
+    // threw, or STATE.md's lock could not be taken) is named with its reason, never reported as rolled back (#1542).
     const restoreFailed: string[] = [];
+    // Pre-push review R4-m5: a snapshotted file whose directory rename was not reversed is still under the renamed
+    // directory; it is named there, not reported as removed by another writer.
+    const stillMoved = (filePath: string): string | null => {
+      for (const r of leftBehind) {
+        if (!r.missing && filePath.startsWith(r.oldPath + path.sep)) return r.newPath + filePath.slice(r.oldPath.length); // allow-handrolled-containment: maps a snapshot key under a renamed directory to where that directory is; not a containment decision
+      }
+      return null;
+    };
     // STATE.md is read under its lock through the non-blocking seam (pre-push review R4-m2), so a FIFO
     // swapped in there fails with ENXIO instead of blocking while the lock is held.
     const readNow = (filePath: string): { current: Buffer | null; readFailure: string | null } => {
@@ -2629,9 +2637,11 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
             outcome = 'restored';
           });
         } catch { /* outcome stays failed */ }
-        if (outcome === 'failed') restoreFailed.push('STATE.md');
+        if (outcome === 'failed') restoreFailed.push('STATE.md (the restore failed)');
         continue;
       }
+      const movedTo = stillMoved(filePath);
+      if (movedTo !== null) { restoreFailed.push(`${planningName(movedTo)} (its directory was not moved back)`); continue; }
       const { current, readFailure } = readNow(filePath);
       if (backup.existed ? current !== null && current.equals(backup.content) : readFailure === 'removed') continue;
       const wrote = migrationWrote.get(filePath);
@@ -2644,14 +2654,14 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
         if (backup.existed) fs.writeFileSync(filePath, backup.content);
         else if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       } catch { /* checked below */ }
-      if (!holdsBackup(filePath, backup)) restoreFailed.push(planningName(filePath));
+      if (!holdsBackup(filePath, backup)) restoreFailed.push(`${planningName(filePath)} (the restore failed)`);
     }
     const conflicts = (notRestored.length > 0
       ? `. NOT restored (changed by another writer after the migration wrote them, left as found): ${notRestored.join(', ')}`
       : '') + (restoreFailed.length > 0
-      ? `. NOT restored (the restore failed): ${restoreFailed.join(', ')}`
+      ? `. NOT restored: ${restoreFailed.join(', ')}`
       : '') + (notReversed.length > 0
-      ? `. Directory renames NOT reversed: ${notReversed.join(', ')}`
+      ? `. Renames NOT reversed: ${notReversed.join(', ')}`
       : '');
     throw new Error(`Migration failed and rolled back: ${(err as Error).message}${conflicts}`);
   }
