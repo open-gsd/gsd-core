@@ -438,8 +438,8 @@ strips every `GSD_*` variable). It records a write whose destination is a file
 named `STATE.md` when the caller is product code (a `.cjs` file under a
 `gsd-core/bin/` directory: the compiled `gsd-core/bin/lib`, `gsd-tools.cjs`, or
 an installed copy), in the shapes listed under Limits below. The caller is the
-nearest frame outside node internals, the check's own file and the STATE.md
-write seam's module (`shell-command-projection.cjs`), so a seam write is attributed to the code that
+nearest frame outside node internals, frames with no file name, the check's own
+file and the STATE.md write seam's module (`shell-command-projection.cjs`), so a seam write is attributed to the code that
 called the seam, and a test that calls the seam on a STATE.md fixture is test
 code. A recorded write is one of three kinds:
 
@@ -516,8 +516,7 @@ Limits:
   (`fs.openSync` + `fs.writeSync`, `writeFileSync(fd)`), a file handle, a write
   stream, a native addon, truncation (`fs.truncateSync`, `fs.ftruncateSync`,
   `fs.truncate`), a rename or a `cpSync` of a directory that holds a `STATE.md`
-  (the destination's basename is the directory's; an awaited `fs.promises.cp`
-  of such a directory is recorded, through the `copyFile` it calls), a rename of `STATE.md` onto another name, a link onto
+  (the destination's basename is the directory's), a rename of `STATE.md` onto another name, a link onto
   `STATE.md` (`fs.linkSync`, `fs.symlinkSync`), a write made inside a
   `cp`/`cpSync` filter callback, a write through another name for the same file
   (a hard link or a case-insensitive alias), and a write by a non-node
@@ -533,21 +532,20 @@ Limits:
   runs through it before then, a later `fs.promises.cp` in that process is not
   seen (`fs.cp`, wrapped itself, still is).
 - Those hold when the runner's shim is the first preload, which the runner
-  arranges by prepending it to `NODE_OPTIONS`. A preload ordered before the
-  shim that keeps a promise function holds an unwrapped function whose writes
-  are not seen.
+  arranges by prepending it to `NODE_OPTIONS`.
 - A subprocess a test spawns with an env that replaces `NODE_OPTIONS` runs
   unguarded and leaves no sentinel and no record. The test-file comparison
   covers test-file children only, not the subprocesses they spawn.
-- A write made under a JS mock of an fs function is attributed to the mock's
-  frame, and product code that hands a STATE.md path to a helper outside
-  `gsd-core/bin/` is attributed to that helper; neither write is recorded.
+- A write made under a JS mock whose implementation is a test-file function is
+  attributed to that function, and product code that hands a STATE.md path to a
+  helper outside `gsd-core/bin/` is attributed to that helper; neither write is
+  recorded.
 - A child built with `tests/helpers/isolated-env.cjs` keeps the check but loses
   the test-file attribution, so its violation reads `test: unknown`.
 - Without a ledger path (outside the runner) the module installs nothing.
 - Node resolves a `--require` preload against the working directory's package
-  scope, so under the runner a node process whose nearest `package.json` does
-  not parse fails to start (`ERR_INVALID_PACKAGE_CONFIG`), which it does not do
+  scope, so under the runner a node process whose nearest `package.json` node
+  rejects as a package config (for example one that does not parse) fails to start (`ERR_INVALID_PACKAGE_CONFIG`), which it does not do
   without the preload. On a machine whose git config runs node hooks, a test
   that runs git in such a directory fails that way
   (`tests/gate-ui-safety-frontend-evidence-5646.test.cjs`).
