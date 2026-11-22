@@ -3873,6 +3873,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     '{ printf %s .e; printf %s nv; } | xargs cat',
     '{ echo -n .e; echo -n nv; } | xargs cat',
     '{ printf %s .e; echo nv; echo x; } | xargs cat',
+    '{ printf %s .e; printf %s x >&2; printf %s nv; } | xargs cat',
     '{ printf %s .e; printf %s x >/dev/null; printf %s nv; } | xargs cat',
     '{ printf %s .e | cat; printf %s nv; } | xargs cat',
     // ... and a name one output holds is still read where the join is not built (blocked at the parent too).
@@ -3979,6 +3980,13 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['{ printf %s .e; false && printf %s x; printf %s nv; } | xargs cat', '&&'],
     ['{ printf %s .e; if false; then printf %s x; fi; printf %s nv; } | xargs cat', 'if'],
     [`{ ${"echo '\\t'; ".repeat(7)}} | xargs cat`, 'echo'],
+    // ... also a skip before the first output, a `&`, which leaves the order unknown, and a redirect that may still
+    // be stdout.
+    ['{ false && printf %s x; printf %s .e; printf %s nv; } | xargs cat', '&&'],
+    ['{ printf %s nv & printf %s .e; } | xargs cat', '&'],
+    ['{ printf %s .e >/dev/stdout; printf %s nv; } | xargs cat', '>'],
+    ['{ printf %s .e >&1; printf %s nv; } | xargs cat', '>'],
+    ['{ printf %s .e >"$OUT"; printf %s nv; } | xargs cat', '>'],
     ["printf '.env\\n' | sort | xargs cat", 'sort'],
     ["printf '.env' | xargs echo | xargs cat", 'xargs'],
     ['echo .env | tee >(xargs cat)', '>( )'],
