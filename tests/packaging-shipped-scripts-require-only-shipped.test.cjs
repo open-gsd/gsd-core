@@ -423,8 +423,8 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
 
   test('a directory entry under node_modules or an excluded directory does not pack', () => {
     planted(
-      { files: ['node_modules/x', '.git/sub', 'hooks/._d/sub', 'ok/dir'] },
-      ['node_modules/x/a.js', '.git/sub/b.js', 'hooks/._d/sub/c.js', 'ok/dir/d.js'],
+      { files: ['.git/sub', 'hooks/._d/sub', 'ok/dir'] },
+      ['.git/sub/b.js', 'hooks/._d/sub/c.js', 'ok/dir/d.js'],
       (tmp) => {
         assert.deepEqual(sorted(listPackedFiles(tmp)), ['ok/dir/d.js', 'package.json']);
       },
@@ -546,6 +546,22 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
         return;
       }
       assert.throws(() => listPackedFiles(tmp), /differs from it only in case/);
+    });
+  });
+
+  test('a node_modules segment in a nested entry, in any case, and a symlinked root README throw', (t) => {
+    for (const entry of ['a/node_modules', 'a/node_modules/x', 'node_modules/x', 'Node_Modules/x']) {
+      planted({ files: [entry] }, [`${entry}/f.js`], (tmp) => assert.throws(() => listPackedFiles(tmp), /nested node_modules|another case|spells a name differently/));
+    }
+    planted({ files: ['hooks'] }, ['hooks/a.js', 'hooks/Node_Modules/p/i.js'], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /nested node_modules/);
+    });
+    planted({ files: ['hooks'] }, ['real.md'], (tmp) => {
+      try { fs.symlinkSync(path.join(tmp, 'real.md'), path.join(tmp, 'README.md')); } catch (err) {
+        t.skip(`symlinks are not available here (${err.code})`);
+        return;
+      }
+      assert.throws(() => listPackedFiles(tmp), /symlinked root file/);
     });
   });
 

@@ -220,7 +220,7 @@ function listPackedFiles(root) {
           throw new Error(`${where}: a nested ignore file; this list does not apply them`);
         }
         if (entry.isSymbolicLink()) throw new Error(`${where}: a symlink in a packed directory; the walk does not follow links`);
-        if (entry.name === 'node_modules') throw new Error(`${where}: a nested node_modules directory; this list does not model bundled dependencies`);
+        if (lower(entry.name) === 'node_modules') throw new Error(`${where}: a nested node_modules directory; this list does not model bundled dependencies`);
         if (entry.isDirectory() || entry.isFile()) visit(`${rel}/${entry.name}`, entry.isDirectory());
       }
     } else if (isRootExcluded(rel)) {
@@ -231,6 +231,9 @@ function listPackedFiles(root) {
   };
 
   for (const entry of positive) {
+    if (entry.includes('/') && entry.split('/').some((s) => lower(s) === 'node_modules')) {
+      throw new Error(`${path.join(root, entry)}: a files entry inside a nested node_modules directory; this list does not model bundled dependencies`);
+    }
     assertPlainAncestors(entry);
     let stat;
     try { stat = fs.lstatSync(path.join(root, entry)); } catch (err) {
@@ -262,7 +265,10 @@ function listPackedFiles(root) {
     if (stat.isDirectory() || stat.isFile()) visit(entry, stat.isDirectory(), stat.isFile());
   }
   for (const rel of fs.readdirSync(root)) {
-    if (isAlwaysIncludedFile(rel) && !rel.includes('*') && fs.lstatSync(path.join(root, rel)).isFile()) packed.add(rel);
+    if (!isAlwaysIncludedFile(rel) || rel.includes('*')) continue;
+    const rootStat = fs.lstatSync(path.join(root, rel));
+    if (rootStat.isSymbolicLink()) throw new Error(`${path.join(root, rel)}: a symlinked root file npm always includes; the walk does not follow links`);
+    if (rootStat.isFile()) packed.add(rel);
   }
   for (const rel of forced) {
     if (fs.existsSync(path.join(root, rel)) && fs.lstatSync(path.join(root, rel)).isFile()) packed.add(rel);
