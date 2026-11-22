@@ -1102,7 +1102,7 @@ describe('normalizeLineEndings', () => {
 // ─── 5. Registry shape from multiple capabilities ────────────────────────────
 
 describe('registry structure', () => {
-  test('byLoopPoint contains all 12 valid points', () => {
+  test('byLoopPoint contains all 13 valid points', () => {
     const capDir = makeTempCapDir({ ui: UI_CAP });
     const { capMap } = loadAndValidate(new Set(), capDir);
     const registry = buildRegistry(capMap);
@@ -1113,6 +1113,7 @@ describe('registry structure', () => {
       'execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post',
       'verify:pre', 'verify:post',
       'ship:pre', 'ship:post',
+      'review:pre',
     ];
     for (const point of expectedPoints) {
       assert.ok(

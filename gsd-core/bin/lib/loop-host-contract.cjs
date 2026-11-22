@@ -110,9 +110,7 @@ const LOOP_HOST_CONTRACT = [
       "reviewer"
     ],
     "coreArtifacts": {
-      "produces": [
-        "REVIEWS.md"
-      ],
+      "produces": [],
       "consumes": [
         "PLAN.md"
       ]

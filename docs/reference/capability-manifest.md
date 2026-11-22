@@ -124,7 +124,7 @@ Declares that this capability resolves per-task content (`<action>`/`<verify>`/
 `<acceptance_criteria>`/`<read_first>`/`<done>`) from an external issue tracker instead of
 `execute-plan.md`'s per-task loop reading it inline from a task's `PLAN.md` body. This is **not**
 one of `steps` / `contributions` / `gates`, and it does not use a `point` value from the closed
-12-point vocabulary above — it is dispatched directly, once per task, by `execute-plan.md` before
+loop-point vocabulary above — it is dispatched directly, once per task, by `execute-plan.md` before
 that task's `read_first` gate, documented separately in
 [`loop-hook-dispatch.md`](../../gsd-core/references/loop-hook-dispatch.md#the-executetask-point-a-different-shape).
 See [ADR-3646](../adr/3646-per-task-content-resolution-seam.md) for the full design and

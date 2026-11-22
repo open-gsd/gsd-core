@@ -4,7 +4,7 @@
 step: review
 points: review:pre
 agent-roles: reviewer
-produces: REVIEWS.md
+produces:
 consumes: PLAN.md
 -->
 
@@ -313,9 +313,9 @@ RUN_DIR="{run_dir}"   # from gather_context
 REVIEW_HOOKS_JSON=$(gsd_run loop render-hooks review:pre --raw 2>/dev/null) || REVIEW_HOOKS_JSON=""
 if [[ "$REVIEW_HOOKS_JSON" == @file:* ]]; then REVIEW_HOOKS_JSON=$(cat "${REVIEW_HOOKS_JSON#@file:}" 2>/dev/null || true); fi
 # A literal closing tag inside a fragment is escaped so third-party text cannot end the block early.
-REVIEWER_RULES=$(printf '%s' "$REVIEW_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.split("</capability_reviewer_rules>").join("<"+String.fromCharCode(92)+"/capability_reviewer_rules>"));if(h.length)process.stdout.write("<capability_reviewer_rules>\n"+h.join("\n\n")+"\n</capability_reviewer_rules>")}catch(e){}})' 2>/dev/null || true)
+REVIEWER_RULES=$(printf '%s' "$REVIEW_HOOKS_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const h=(JSON.parse(s).activeHooks||[]).filter(x=>x&&x.kind==="contribution"&&x.into==="reviewer"&&x.fragment&&typeof x.fragment.inline==="string"&&x.fragment.inline!=="").map(x=>x.fragment.inline.replace(/<(\s{0,20}\/\s{0,20}capability_reviewer_rules)/gi,(m,g)=>"<"+String.fromCharCode(92)+g));if(h.length)process.stdout.write("<capability_reviewer_rules>\n"+h.join("\n\n")+"\n</capability_reviewer_rules>")}catch(e){}})' 2>/dev/null || true)
 if [ -n "$REVIEWER_RULES" ]; then
-  printf '\n\n%s\n' "$REVIEWER_RULES" >> "${RUN_DIR}/gsd-review-prompt.md"
+  printf '\n\n%s\n' "$REVIEWER_RULES" >> "${RUN_DIR}/gsd-review-prompt.md" || true
 fi
 ```
 

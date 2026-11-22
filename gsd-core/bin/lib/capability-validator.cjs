@@ -38,6 +38,7 @@ const POINT_ORDER = [
   'verify:post',
   'ship:pre',
   'ship:post',
+  'review:pre', // #3997 — pinned to the generated contract by tests/review-capability-contributions.test.cjs
 ];
 
 // C1: Artifact availability — host-produced artifacts become available at their step's :post
@@ -3237,20 +3238,16 @@ function validateAgainstContract(cap, capId) {
  */
 function validateEngineForNewerPoints(cap, prefix) {
   const hooks = [].concat(cap.steps || [], cap.contributions || [], cap.gates || []);
-  const gated = [...new Set(hooks.map((h) => h && h.point).filter((p) => typeof p === 'string' && p in POINT_MIN_ENGINE))];
+  const gated = [...new Set(hooks.map((h) => h && h.point).filter((p) => typeof p === 'string' && Object.prototype.hasOwnProperty.call(POINT_MIN_ENGINE, p)))];
   if (gated.length === 0) return [];
-  const minVersion = gated.map((p) => POINT_MIN_ENGINE[p]).sort((a, b) => {
-    const [a1, a2] = a.split('.').map(Number);
-    const [b1, b2] = b.split('.').map(Number);
-    return a1 - b1 || a2 - b2;
-  }).pop();
+  const { semverSatisfies, compareSemverCore } = require('./semver-compare.cjs');
+  const minVersion = gated.map((p) => POINT_MIN_ENGINE[p]).sort(compareSemverCore).pop();
   const range = cap.engines && cap.engines.gsd;
-  const need = prefix + ' declares a hook at ' + gated.join(', ') + ' (introduced in GSD ' + minVersion + ') so engines.gsd must exclude older cores, e.g. ">=' + minVersion + '"';
-  if (typeof range !== 'string' || range.trim() === '') return [need + '; engines.gsd is absent'];
-  const { semverSatisfies } = require('./semver-compare.cjs');
+  const message = prefix + ' declares a hook at ' + gated.join(', ') + ' (introduced in GSD ' + minVersion + ') so engines.gsd must exclude older cores, e.g. ">=' + minVersion + '"';
+  if (typeof range !== 'string' || range.trim() === '') return [message + '; engines.gsd is absent'];
   const admitted = olderCoreProbes(minVersion).find((v) => semverSatisfies(v, range));
   if (admitted !== undefined) {
-    return [need + '; engines.gsd ' + JSON.stringify(range) + ' still admits ' + admitted];
+    return [message + '; engines.gsd ' + JSON.stringify(range) + ' still admits ' + admitted];
   }
   return [];
 }

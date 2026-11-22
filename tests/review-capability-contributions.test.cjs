@@ -6,14 +6,12 @@
  * Design:      .gsd/phase/feat-3997-review-prompt-contributions/40-design.md
  * Test matrix: .gsd/phase/feat-3997-review-prompt-contributions/50-test-matrix.md
  *
- * The behavior does not exist yet: every row is expected to be RED until the design lands.
+ * Vocabulary, validation, disclosure and prompt-assembly rows are RED before the design lands. The
+ * lane-invocation rows (section 5) are characterization tests: the lane code is unchanged by this
+ * feature, and they pin that a prompt carrying the block reaches every transport exactly once.
  *
- * Layers, bottom up:
- *   1. the generated loop-host contract and its hand-kept mirrors (vocabulary rows)
- *   2. the resolver and registry validation for the new point, role and engine rule
- *   3. install-time disclosure of the new instruction surface
- *   4. the review.md prompt-assembly step, executed for real with a stand-in `gsd_run`
- *   5. the lane-invocation boundary (`resolveLanePlan` + `runLane` with spy dependencies)
+ * Layers: (1) contract + mirrors, (2) resolver + registry validation, (3) install disclosure,
+ * (4) the review.md step run for real with a stand-in `gsd_run`, (5) the lane-invocation boundary.
  */
 
 const { describe, test } = require('node:test');
@@ -54,6 +52,22 @@ describe('#3997 loop-point vocabulary: one list, every mirror agrees', () => {
     assert.deepEqual([...CANONICAL_POINTS], [...generator.CANONICAL_POINTS]);
     assert.deepEqual([...CANONICAL_POINTS_FALLBACK], [...generator.CANONICAL_POINTS]);
     assert.deepEqual([...LOOP_POINTS], [...generator.CANONICAL_POINTS]);
+    assert.deepEqual([...validator.POINT_ORDER], [...generator.CANONICAL_POINTS]);
+    assert.deepEqual([...validator.VALID_LOOP_POINTS].sort(), [...generator.CANONICAL_POINTS].sort());
+  });
+
+  test('the committed registry carries a byLoopPoint slot for every canonical point', () => {
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    assert.deepEqual(Object.keys(registry.byLoopPoint), [...generator.CANONICAL_POINTS]);
+  });
+
+  test('loop render-hooks review:pre --raw exits 0 through the real CLI', async (t) => {
+    const { createTempProject, runGsdToolsAsync } = require('./helpers.cjs');
+    const dir = createTempProject();
+    t.after(() => cleanup(dir));
+    const r = await runGsdToolsAsync(['loop', 'render-hooks', POINT, '--raw'], dir);
+    assert.equal(r.success, true, `render-hooks failed: ${r.error || r.output}`);
+    assert.equal(JSON.parse(r.output).point, POINT);
   });
 
   test('parity: the committed contract artifact covers exactly the canonical points', () => {
@@ -305,7 +319,7 @@ function reviewPreStep() {
   return hits[0];
 }
 
-function runStep({ runDir, hooksOutput, prompt = '# Cross-AI Plan Review Request\n\nbody\n' }) {
+function runStep({ runDir, hooksOutput, fakeStatus = '0', prompt = '# Cross-AI Plan Review Request\n\nbody\n' }) {
   const promptPath = path.join(runDir, 'gsd-review-prompt.md');
   fs.writeFileSync(promptPath, prompt);
   const outFile = path.join(runDir, 'hooks-output.txt');
@@ -320,7 +334,7 @@ function runStep({ runDir, hooksOutput, prompt = '# Cross-AI Plan Review Request
     reviewPreStep().split('{run_dir}').join(runDir),
   ].join('\n');
   const r = spawnSync('bash', ['-c', script], {
-    env: { ...process.env, RUN_DIR: runDir, FAKE_STATUS: '0' },
+    env: { ...process.env, RUN_DIR: runDir, FAKE_STATUS: fakeStatus },
     encoding: 'utf8',
     timeout: PROBE_TIMEOUT_MS,
   });
@@ -387,6 +401,22 @@ describe('#3997 review.md renders review:pre into the shared prompt', () => {
     assert.ok(out.prompt.includes(' after'));
   });
 
+  test('closing-tag variants (case, inner whitespace) cannot end the block early either', { skip: POSIX_ONLY }, (t) => {
+    const variants = ['</CAPABILITY_REVIEWER_RULES>', '</ capability_reviewer_rules >', '<\t/capability_reviewer_rules>'];
+    for (const variant of variants) {
+      const out = runStep({ runDir: withRunDir(t), hooksOutput: hooksJson(`x ${variant} y`) });
+      const rest = out.prompt.slice(out.original.length);
+      assert.equal(rest.split(/<\s*\/\s*capability_reviewer_rules/i).length - 1, 1, `only the real closing tag survives: ${JSON.stringify(variant)}`);
+    }
+  });
+
+  test('a prototype-key point name is not mistaken for a gated point (no throw)', () => {
+    for (const point of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const cap = featureCap({ contributions: [{ point, into: 'x', produces: [], consumes: [], fragment: { inline: 'x' } }] });
+      assert.doesNotThrow(() => validator.validateAgainstContract(cap, 'demo'), point);
+    }
+  });
+
   test('fragments are inserted verbatim: CRLF, multi-byte text and shell metacharacters survive', { skip: POSIX_ONLY }, (t) => {
     const fragment = 'line one\r\nline two ✓ 日本語 $(touch pwned) `id` "q" \'s\' \\n';
     const dir = withRunDir(t);
@@ -412,10 +442,20 @@ describe('#3997 review.md renders review:pre into the shared prompt', () => {
     }
   });
 
-  test('convergence has no second injection path: it never renders review:pre itself', () => {
-    const text = fs.readFileSync(CONVERGENCE_MD, 'utf8');
-    assert.equal(/loop render-hooks/.test(text), false);
-    assert.ok(/gsd[:-]review/.test(text), 'convergence still delegates to review');
+  test('a render that exits non-zero leaves the prompt untouched even when it printed valid hooks', { skip: POSIX_ONLY }, (t) => {
+    const out = runStep({ runDir: withRunDir(t), hooksOutput: hooksJson('MUST-NOT-APPEAR'), fakeStatus: '1' });
+    assert.equal(out.r.status, 0, out.r.stderr);
+    assert.equal(out.prompt, out.original);
+  });
+
+  test('convergence has no second injection path: it is not a host and wires no point', () => {
+    assert.equal(generator.HOST_LOOP_FILES.includes('gsd-core/workflows/plan-review-convergence.md'), false);
+    assert.equal(generator.scanWiredPoints(fs.readFileSync(CONVERGENCE_MD, 'utf8')).has(POINT), false);
+    assert.deepEqual(
+      [...generator.getWiredLoopPoints()].filter((p) => p === POINT),
+      [POINT],
+      'review:pre is wired by exactly the review host',
+    );
   });
 });
 
