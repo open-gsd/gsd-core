@@ -84,7 +84,7 @@ const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { clampPercent, renderProgressBar } from './phase-lifecycle.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #4853 until manifest policy has named exports
 import worktreeSafety = require('./worktree-safety.cjs');
 const {
   WAVE_MANIFEST_BASENAME_RE,

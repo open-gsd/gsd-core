@@ -3957,7 +3957,7 @@ function cmdWorktreeManifestPath(cwd: string, args: string[] = [], deps: Record<
 
   if (!phaseDir && phaseArg) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- internal circular-safe lazy load
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- #4853 lazy load until the phase-locator cycle is removed
       const phaseLocator = require('./phase-locator.cjs') as { findPhaseInternal: (cwd: string, phase: unknown) => { directory?: string } | null };
       const phaseInfo = phaseLocator.findPhaseInternal(cwd, phaseArg);
       if (phaseInfo && phaseInfo.directory) {
@@ -3984,7 +3984,7 @@ function cmdWorktreeManifestPath(cwd: string, args: string[] = [], deps: Record<
   }
 
   const resolvedPhaseDir = posixNormalize(phaseDir);
-  // eslint-disable-next-line @typescript-eslint/no-require-imports -- load only for manifest path resolution
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- #4853 lazy load until startup can load planning-workspace safely
   const { planningRoot } = require('./planning-workspace.cjs') as typeof import('./planning-workspace.cjs');
   const planningTreeRoot = planningRoot(cwd);
   const contained = tryWithinRoot(phaseDir, planningTreeRoot, PathAcceptance.AbsoluteInsideRoot);
