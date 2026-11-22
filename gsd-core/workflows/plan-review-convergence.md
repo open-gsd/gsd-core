@@ -242,7 +242,7 @@ The `--cycle-summary` flag above makes gsd-review end its response with a machin
 
 immediately followed by the `## Current HIGH Concerns` and `## Current Actionable Non-HIGH Concerns` sections. The counting rules (the consensus gate, the existence/judgment classification, the evidence-quality markers, fail-open, and the include/exclude lists) live in gsd-review's `cycle_summary` step and are applied there — they are deliberately not restated in this prompt, so a second copy cannot drift from the first.
 
-Your final response MUST end with that line and those two sections exactly as gsd-review produced them, in that order, with no additional "## " headings after them (the source-grounding "Verification coverage" block is appended to REVIEWS.md, not to this return message).",
+Your final response MUST end with that line and those two sections exactly as gsd-review produced them. These two sections MUST be the final content of your response, in this exact order, with no additional "## " headings after them (the source-grounding "Verification coverage" block is appended to REVIEWS.md, not to this return message).",
   mode="auto"
 )
 ```
@@ -606,7 +606,7 @@ After plan-phase completes → go back to **step 5a** (review again).
 - [ ] Replan via inline Skill("gsd-plan-phase --reviews") — NOT wrapped in Agent(); inline lets plan-phase spawn gsd-planner/gsd-plan-checker at depth 1
 - [ ] Orchestrator only does: init, config gate, loop control, parse CYCLE_SUMMARY for HIGH and actionable non-HIGH counts, stall detection, escalation
 - [ ] HIGH and actionable non-HIGH counts extracted from review agent's CYCLE_SUMMARY return message (not by grepping REVIEWS.md)
-- [ ] Review agent prompt passes `--cycle-summary` to gsd-review and states the `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` return shape; the counting rules (PARTIALLY/FULLY RESOLVED/ACTIONABLE, consensus gate) are owned by gsd-review's `cycle_summary` step and are not restated here (#4617)
+- [ ] Review agent prompt passes `--cycle-summary` to gsd-review and states the `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` return shape; the counting rules (the resolved/unresolved definitions, the actionable classification and the consensus gate) are owned by gsd-review's `cycle_summary` step and are not restated here (#4617)
 - [ ] `--on-escalation` accepts only `ask` (default) or `exit`; any other value is refused before cycle 1 (#4617)
 - [ ] With `--on-escalation=exit`: at max cycles nothing is asked, no state is written, and the run ends with the CYCLE_SUMMARY line, both concern sections and `CONVERGENCE_STATUS: open_conflicts|stalled|max_cycles`; a converged run ends with `CONVERGENCE_STATUS: converged` (#4617)
 - [ ] Abort with clear error if CYCLE_SUMMARY is absent; distinguish malformed from absent

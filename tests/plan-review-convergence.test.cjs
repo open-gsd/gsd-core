@@ -2427,14 +2427,10 @@ function onEscalationBlock4617() {
 /** Run the extracted parse against `args`; never throws on a non-zero exit. */
 function runOnEscalation4617(args) {
   const script = `GSD_ARGS="$1"\n${onEscalationBlock4617()}\nprintf '%s' "$ON_ESCALATION"`;
-  try {
-    const out = execFileSync('bash', ['-c', script, '_', args], {
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: PROBE_TIMEOUT_MS,
-    });
-    return { status: 0, out, err: '' };
-  } catch (e) {
-    return { status: e.status, out: String(e.stdout || ''), err: String(e.stderr || '') };
-  }
+  // Through the process seam (not raw execFileSync): the seam resolves Git Bash on win32 and keeps
+  // this spawn out of the raw-site census that tests/helpers/timeouts.cjs TIMEOUT_EVIDENCE counts.
+  const r = runHook('-c', [script, '_', args], { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+  return { status: r.exitCode, out: r.stdout, err: r.stderr };
 }
 
 /** The token-anchored `--cycle-summary` regex literal exactly as review.md states it. */
@@ -2445,15 +2441,11 @@ function cycleSummaryRegex4617() {
 }
 
 function cycleSummaryEnabled4617(args) {
-  try {
-    execFileSync('bash', ['-c', 'echo " $1" | grep -qE "$2"', '_', args, cycleSummaryRegex4617()], {
-      stdio: 'ignore', timeout: PROBE_TIMEOUT_MS,
-    });
-    return true;
-  } catch (e) {
-    if (e.status === 1) return false;
-    throw e;
-  }
+  const r = runHook('-c', ['echo " $1" | grep -qE "$2"', '_', args, cycleSummaryRegex4617()],
+    { interpreter: 'bash', timeoutMs: PROBE_TIMEOUT_MS });
+  if (r.exitCode === 0) return true;
+  if (r.exitCode === 1) return false;
+  throw new Error(`token-match probe failed: ${r.summary}`);
 }
 
 /** The step 5c body, from its heading to the next `### ` heading. */
