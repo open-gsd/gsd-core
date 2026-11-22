@@ -102,6 +102,7 @@ These hold for every item in the epic.
 - **I8 — Checks on code shape are ESLint rules, and a new rule ships at `error`.** `npm run lint` runs with `--max-warnings 0`, so a `warn` rule already fails CI; the cleanup lands in the PR that adds the rule (I9). Workflow YAML is checked by actionlint and zizmor, and other non-JavaScript content by the static content lane (item 19).
 - **I9 — First-run findings are fixed in the PR that adds the check.** A new linter does not land with a backlog. A false positive is suppressed in the tool's config with a recorded reason.
 - **I10 — Every new third-party binary or action is pinned** to a version and a checksum or commit SHA.
+- **I11 — The testing standards change in the PR that changes the rules.** When an item adds or changes a requirement on test authors, or on product code for the sake of testability, the same PR states it in `TESTING-STANDARDS.md`, under "Test architecture policies (ADR 6315)", and, for placement and naming, in `docs/TESTING-SUITES.md`: the rule, its reason, and what enforces it. `CONTRIBUTING.md` ("Testing Standards") keeps the helper tables and setup patterns and points there. A rule known only from a PR description or a review thread is not a rule the next contributor can follow (maintainer instruction, 2026-11-19; [#6367](https://github.com/open-gsd/gsd-core/issues/6367); the file named here was corrected by [#6383](https://github.com/open-gsd/gsd-core/issues/6383)).
 
 ### 3. Phases
 
@@ -239,6 +240,7 @@ Every item starts now. The phases are a priority order, not a queue. Sections 5 
 | 17 | [#6335](https://github.com/open-gsd/gsd-core/issues/6335) | 23 | [#6341](https://github.com/open-gsd/gsd-core/issues/6341) |
 | 18 | [#6336](https://github.com/open-gsd/gsd-core/issues/6336) | 24 | [#6342](https://github.com/open-gsd/gsd-core/issues/6342) |
 | 19 | [#6337](https://github.com/open-gsd/gsd-core/issues/6337) | 14b | [#6354](https://github.com/open-gsd/gsd-core/issues/6354) |
+| 25 | [#6355](https://github.com/open-gsd/gsd-core/issues/6355) | 26 | [#6369](https://github.com/open-gsd/gsd-core/issues/6369) |
 
 - **Real dependencies:** item 15 needs item 14's entry point; item 16 needs item 15; item 20 needs items 15 and 19; the second half of item 24 needs item 19; the macOS concurrency measurement in item 5b needs the sharded lane from item 5a, which has merged.
 - **Item 5a is done:** PR #5053 merged on 2026-11-18. Its review findings are tracked in [#6329](https://github.com/open-gsd/gsd-core/issues/6329).
@@ -292,13 +294,22 @@ Files: `tests/state.test.cjs`, `tests/phase.test.cjs`, `tests/roadmap.test.cjs`,
 - AC3: no case is deleted without a replacement, and each module's mutation score does not drop.
 - AC4: the six files' summed Linux time, 974 s today, is under 200 s.
 
+**Item 25 — No git process to resolve the project context.** Depends on: nothing. It pays off fully once item 15 has landed.
+Files: `src/project-context.cts`, a new process-contract parity test.
+Every CLI call spawns `git rev-parse --show-toplevel --git-dir --git-common-dir`, and a second spawn in a linked worktree. Measured in-process on macOS, a call takes about 10 ms, of which about 9 ms is that spawn and under 1 ms is the CLI's own work (2026-11-18 entry below).
+
+- AC1: `resolveProjectContext` answers the three questions by reading `.git`, `gitdir` and `commondir`. It stays the one resolver ([ADR-4908](4908-project-context.md)).
+- AC2: a layout the reader does not recognise still resolves through `git`, and the context's provenance says which path answered.
+- AC3: a parity test compares the reader with real `git rev-parse` over built fixtures: plain repo, subdirectory, linked worktree, worktree of a bare repo, submodule, `GIT_DIR` and `GIT_WORK_TREE` set, a relative `gitdir`, a symlinked checkout, and no repo.
+- AC4: a test counts subprocesses and finds none for context resolution in a plain repo, a linked worktree and a directory with no repo.
+
 #### Phase B — installer and fixtures
 
 **Item 17 — One install per runtime per run.** Depends on: nothing.
 Files: `tests/helpers/install-shared.cjs`, the `*.install.test.cjs` files, `bin/install.js` (generated from its source).
 79 files run the installer and hold 26.8% of Linux time. On Windows a single installer spawn averages at least 2.8 s.
 
-- AC1: emitted-content tests call `install()` in-process (it is already exported) into a fixture built once per runtime and scope and shared through `createRuntimeFixtureCache`. A test that needs a changed tree copies the fixture.
+- AC1: emitted-content tests read a fixture built once per runtime and scope for the whole run. A test that needs a changed tree copies the fixture. (As first written this said the fixture is built by calling `install()` in-process; measurement replaced that, see "Item 17: the saving is in not installing again" under Decision-rule outcomes.)
 - AC2: the real-process installer runs once per runtime in one install-contract file, plus the tarball smoke test.
 - AC3: `fragment-single-edit-propagation.install.test.cjs` (575 s) builds its 18-runtime install once and derives each row from it.
 - AC4: summed Linux time of the install class drops from 33.2 min to under 10 min, and the count of installer spawns of 2 s or more on a Windows shard drops by at least 80%.
@@ -445,3 +456,168 @@ Item 14 is split in two.
 - **Item 14b ([#6354](https://github.com/open-gsd/gsd-core/issues/6354)) delivers AC3.** The process-context object, the `local/no-process-global-outside-context` ratchet, and a second ratchet, `local/no-unregistered-module-state`, over the 162 module-level state declarations a scan of `src/` finds.
 
 Two consequences of the swap hold until item 14b lands: in-process calls run one at a time (concurrent calls queue), and a module-level cache that no module registered can carry from one call to the next. Item 15's parity suite is the check on the second.
+
+### 2026-11-18 — Item 15: the helper is synchronous, so the CLI gets a synchronous path
+
+`runGsdTools` is called synchronously at 4,658 sites in 239 test files, and none of them awaits it. `runCli` is asynchronous. Only 7 of the 98 top-level routers are declared `async`. Maintainer ruling: the dispatch chain returns a plain value for a synchronous command and a promise only for an asynchronous one; `runCliSync` serves the former; `runGsdTools` stays synchronous with no call-site change. The alternative, a codemod that makes all 239 files asynchronous, was not taken.
+
+### 2026-11-19 — Item 15: three helpers, none of which spawns unasked; what it saved and what it did not
+
+**The helper.** The first version of the in-process helper spawned a process whenever it could not serve a call. Running the whole suite found that this hides defects: a command refused after its work had started was run a second time in the child (`uat.complete-session` restored its file in the first run and reported nothing to restore in the second). The helper now has three explicit forms and no fallback between them:
+
+| Helper | Runs | Refuses, naming the helper to use |
+|---|---|---|
+| `runGsdTools` | in the test process, synchronously | a command that finishes asynchronously; a `NODE_OPTIONS`-class variable in the per-call `env`; a working directory that does not exist |
+| `await runGsdToolsAsync` | in the test process, any command | the last two of those |
+| `runGsdToolsCaptured` (item 16) | in the test process, synchronously; returns `{ exitCode, stdout, stderr }` as written, where `runGsdTools` keeps stderr only for a failed command and trims stdout | the same three as `runGsdTools` |
+| `runGsdToolsProcess` | a spawned `node gsd-tools.cjs` | nothing; for `*.process.test.cjs` files |
+
+Sixteen test files that called asynchronous commands (`capability`, `review-lane`, `detect-custom-files`, `prompt-budget`, `classify-confidence`, `package-legitimacy`, `extract-messages`, `profile-sample`) moved to `runGsdToolsAsync`. Three tests that injected a failure by preloading a patch into a child with `NODE_OPTIONS=--require` now mock the function in the test process, which is what running in-process makes possible.
+
+**Defects the in-process suite found in shipped code.** Each was invisible while every call had its own process:
+
+- `extract-messages` and `profile-sample` dropped their router's promise, so their output bypassed `--pick` and `@file:` resolution (fixed in item 14, PR #6359).
+- `uat.complete-session` awaited a capture of a synchronous commit and so was asynchronous for no reason.
+- The learnings store directory and the GSD temp directory were computed once at module load from `os.homedir()` and `os.tmpdir()`.
+
+**The measurement.** Whole-suite runs on the Linux bench (plex2), one run at a time, wall clock from launch to verdict:
+
+| Head | `runGsdTools` | Wall clock | Tests |
+|---|---|---|---|
+| item 14 (`ae3010ffa4`) | spawns | 8 min 51 s | 61,549 |
+| item 15, fallback-spawn version (`3a78d0e5a2`) | in-process, async commands spawned | 8 min 45 s | 61,670 |
+| item 15, three helpers (`30898f1006`) | in-process, async commands in-process | 7 min 19 s | 61,673 |
+| item 15, three helpers (`d2c23caf43`) | in-process, async commands in-process | 7 min 08 s | 61,675 |
+| item 15, three helpers (`1101be3c0b`) | in-process, async commands in-process | 7 min 05 s | 61,675 |
+
+Summed per-file time, first row against the last:
+
+| | Files | Before | After | |
+|---|---|---|---|---|
+| Call `runGsdTools` | 238 | 1,988 s | 652 s | −67% |
+| Reach `gsd-tools.cjs` by any route | 344 | 2,840 s | 1,368 s | −52% |
+| All test files | 1,221 | 5,234 s | 3,408 s | −35% |
+
+These are single runs per head on a shared bench, so they are an indication and not a measurement with a known error. One run in the series showed the files that never call the helper 38% slower and the next showed them 15% faster; that spread is the noise.
+
+What the series does show: moving the synchronous calls in-process did not move the wall clock (rows one and two), and moving the asynchronous commands in-process as well took about a minute and a half off it. On Linux the wall clock is set by the install-class tests, which never call the helper (class E in `docs/research/data/2026-11-18-test-file-classification.tsv`) and are the slowest files in every run. **Item 17 (one install per runtime) is where the Linux wall clock is.** Item 15's larger effect was expected on Windows, where a process spawn costs several times more and the spawning files are 94% of the conformance tier. The merge queue measured it, and the expectation was wrong:
+
+| Windows conformance lane (six shards, job time) | Sum | Slowest shard |
+|---|---|---|
+| item 14's merge-group run (`44470893686`) | 77 min 10 s | 17 min 37 s |
+| item 15's merge-group run that merged it (`44552501419`) | 72 min 55 s | 15 min 34 s |
+
+Single runs, and job time includes checkout, install and build. The difference is a few percent. The helper's spawns are not what makes the Windows lanes slow either; the installer tests are, on every platform.
+
+**What the merge queue taught.** Item 15 was ejected from the queue four times before it merged. None of the four was a defect in the shipped code:
+
+1. Its parity test canonicalised temp directories with `fs.realpathSync`, which keeps a Windows 8.3 short name; the CLI prints the long name.
+2. The same test masked a run directory in two spellings of its path; four commands print a third (forward slashes on Windows). The mask now replaces the directory's name.
+3. Another PR merged while it was queued and added a synchronous helper call to an asynchronous command, which the new helper refuses.
+4. `next`'s own last Tests run was not green at that moment (a cancelled Windows shard), so the base-branch health gate refused every merge.
+
+The first two are Windows-only mistakes in test code, and the Windows lanes run only in the queue, so each cost a full queue cycle to find. Rule 6 of "In-process CLI tests: the rules" in `TESTING-STANDARDS.md` and the mask's own test exist because of them. Nothing in this ADR would have caught them earlier, so item 26 is added ([#6369](https://github.com/open-gsd/gsd-core/issues/6369)): a PR runs the test files it adds or changes on Windows before it can be queued.
+
+### 2026-11-18 — Item 25 added: the git probe is 90% of an in-process call
+
+Profiling 100 in-process calls per case, with every subprocess call timed, on macOS:
+
+| Command | Working directory | Per call | Git spawns | In git | CLI's own work |
+|---|---|---|---|---|---|
+| `generate-slug` | a linked worktree | 25.0 ms | 2 | 24.0 ms | 1.0 ms |
+| `generate-slug` | temp dir, no git | 9.8 ms | 1 | 9.1 ms | 0.7 ms |
+| `config-get` | temp dir, no git | 10.3 ms | 1 | 9.4 ms | 0.9 ms |
+| `state json` | temp dir, no git | 9.9 ms | 1 | 9.0 ms | 0.9 ms |
+
+A spawned call of the same command takes about 147 ms on the same machine. Item 15 removes the Node spawn; item 25 removes what is left.
+
+### 2026-11-19 — Item 17: the saving is in not installing again
+
+Item 17's first acceptance criterion named a mechanism: call `install()` in-process. Measurement before any code changed the mechanism and kept the goal.
+
+**What was measured.** A commit that logged every installer call (process-seam spawns of `bin/install.js`, and in-process `install()`) ran once on the Linux bench.
+
+| | |
+|---|---|
+| Installer calls in one run | 1,553 (1,181 spawned, 372 in-process), in 89 test files |
+| Time in those calls | 1,568 s of 5,201 s summed file time |
+| One call, median | 1.07 s spawned, 0.86 s in-process |
+| Distinct configurations (runtime, scope, flags) | 187 |
+| Time spent on a repeat of a configuration already installed in that run | 1,383 s |
+| A load-only installer process (local) | 0.12 s of a 0.48 to 0.71 s install |
+| A copy of an installed tree (local) | 0.11 s against 0.46 s for an install |
+
+**Decision.**
+
+1. An in-process install is still an install. It saves the process start, about a fifth. `bin/install.js` also reads its flags from `process.argv` when the module loads, so one process cannot run two installs with different flags without loading the module again. The in-process route is not taken.
+2. The installed tree for a configuration is built once per run by a real spawned install, and every test file reads that tree. `installRuntimeFixture` already did this within one file; it now does it across the run, under the run's temp root. No process waits on another: a process that finds no tree builds one and publishes it with a hard link, and the loser of a race discards its own.
+3. A test that changes its tree copies the shared one (`copyRuntimeFixture`). A copy is held equal to a fresh install by a test over every runtime family.
+4. A shared tree is read-only, and that is checked: a test process that leaves one changed fails at exit, and a file that starts later and finds it changed fails before reading it. The check is a digest of paths, permission bits, modification times and sizes, not a rule in prose.
+5. A shared tree holds the same thing whichever file built it: the helper completes the hooks build first (`ensureHooksDist`), since the installer installs no hooks, or only some, without it.
+6. The store adds about 20 MB on disk per shared configuration to the run's temp root for the whole run (410 MB measured for the 19 families; a private copy or a tree that lost a build race is extra until its test or the run ends). The runner's between-chunk sweep spares it and the end-of-run removal takes it. Sharing all 187 configurations would hold about 4 GB, on benches whose temp filesystem has filled before (#4020), so a configuration is shared only when several files read it. The count of shared configurations is a number to watch as files are converted.
+
+**The first conversions, measured.** Every `runMinimalInstall({ runtime, scope })` with no other option became `copyRuntimeFixture` in 36 test files, and two helpers that only read their trees took the shared ones. Two bench runs under different load (the untouched files took 1.51 times as long in the second) put the 38 affected files at 15.8% of summed file time before and 12.2% after: about 147 s at the first run's load. A copy still costs about a third of an install, and the file that happens to build a shared tree first pays for the build. Sharing and copying do not by themselves bring the install class under ten minutes.
+
+**What it does not cover.** A test that puts files in place before installing, or that asserts on the installer's own run, still installs. Those are the upgrade and configuration-merge suites, and they are most of the 372 in-process calls (156 of them `codex` global, in nine files). Converting each remaining file is per-file work that follows this change, measured against the table above.
+
+**Part 3, the sweep suites (#6413).** Two files repeated installs whose result another row already held. `fragment-single-edit-propagation.install.test.cjs` rows 1, 2, 3 and 18 each built an overlay of the same fragment edit and installed it into all 18 runtimes, then only read the emitted step or workflow: 72 installs for one answer. They now read one lazily built install (the shared edit carries both the ASCII and the unicode sentinel), which is read into memory and removed per runtime, so one tree is on disk at a time and a failed install is rethrown to every row. The negative control of `agent-fragments-emission.install.test.cjs` (an identity composer must leak a marker) ended after a full runtime-and-scope sweep although one leaking install proves it; it now stops at the first leak, and row 5 keeps the full sweep. Titles and assertions are unchanged. Still open under #6335: the in-process installs over pre-seeded state (`codex` global), flagged variants used by one file, and the converted sites that only read.
+
+### 2026-11-19 — Item 18: a git fixture is a copy of a template
+
+Measured locally before the change: `createFixture({ git: true })` took 66 ms, six `git` processes; a copy of the 28-file result took 5 ms. Twenty fixtures in one process went from about 1,320 ms to 189 ms including the one template build, and to 96 ms in a second process that found the templates already built.
+
+**Decision.**
+
+1. The four fixture shapes are each built once per run by the same six git commands, into the run-wide store item 17 added, and a fixture is `fs.cpSync` of the template with timestamps kept.
+2. A copied repository has new inode numbers and change times, so git's plumbing reads every tracked file as possibly changed: `git diff-files --quiet` exits 1 on a clean copy. The template sets `core.trustctime = false` and `core.checkStat = minimal`, which limits git's comparison to modification time and size. A copy then reads as clean with no refresh, and an edited file still reads as modified. Both are tested.
+3. The template is built under a fixed environment (no inherited `GIT_*`, no system config, an empty global config, an empty init template) so its content does not depend on the machine or on which test file built it. The first version kept the machine's init template; review pointed out that its `info/exclude` can ignore `.planning` (#5470), which the tests that isolate their git config had been guarding against by building their fixture after isolating.
+4. A fixture needs no `git` on `PATH`: a test makes fixtures with `PATH` emptied.
+
+**What it saves, measured.** A bench run that logged each fixture counted 1,478 git fixtures in 81 test files, so 8,868 `git` processes a run are gone. On Linux that is about 80 s of summed file time at 55 ms a fixture, which two runs on the same bench could not tell from noise (5,117 s before, 5,180 s after). The research note's "about 7,200 git spawn sites" counted call sites in the source, six for each fixture call, and most git calls in tests are not fixture builds. The Windows lanes pay more for each process, and what this saves there is not measured yet: it shows only in the merge queue's shard times.
+
+**Not in this change.** Acceptance criterion 3 of item 18, the ESLint rule against building a fixture inside a test body, with its 3,939 sites. Copying made each of those builds cheap; whether the rule is still worth its churn is to be measured after this lands.
+
+### 2026-11-19 — Item 16: the six suites were already in-process; what was left was spawn wrappers and the tier line
+
+**What the measurement said.** A full run of `next` at `2bb91a8250` (after item 15; `gsd-test`, holodeck, linux-node24, 62,219 passed) put the six suites at 180.4 s of file time: state 56.7, phase 69.1, init 33.7, custom-phase-readers 10.3, roadmap 7.5, config 3.2. The 974 s in the issue was measured before item 15 made `runGsdTools` in-process, so acceptance criterion 4 (under 200 s) already held when item 16 started. The suites had few direct spawn sites (19 `runNode` or `runHook` calls) but they hid behind wrappers that many cases called: `recordSession` 61, `runTool` 30, `run` and `run2853` 47, `gsd` 18, `runSectionManifestCli` 16, `runPhaseComplete` 8. Each wrapper existed because `runGsdTools` keeps stderr only for a failed command, and these cases assert on a warning a successful command writes to stderr, or on stdout's exact bytes.
+
+**Decision.**
+
+1. `runGsdToolsCaptured(args, cwd, env)` returns `{ exitCode, stdout, stderr }` from the same in-process call as `runGsdTools`, with the same refusals. The spawn wrappers in the six suites call it. `GSD_TEST_CLI_MODE=process` runs it through the spawned CLI, so a suspected in-process difference can still be checked.
+2. A case moves to a `.process.test.cjs` sibling only when its subject is a process or git: an `ExitError` becoming an exit code with a JSON error on stderr, a reader meeting a named pipe (a hang a timeout isolates), the commit a STATE.md was written against, and phase allocation across linked worktrees. Titles and assertions did not change; the multiset of titles across each file and its sibling is 2,394 before and after.
+3. ESLint holds the six unit files to this: they cannot import `tests/helpers/process-seam.cjs` or call `runGsdToolsProcess`. The rule is a block of `no-restricted-syntax` in `eslint.config.mjs`. Git used only to build a repository a case needs stays allowed.
+4. The fixture template of criterion 1 was not applied. `createFixture()` measures 0.22 ms and a git fixture 4 to 7 ms since item 18; a copy of a template cannot be cheaper than the build it replaces.
+
+**Not in this change.** Criterion 2's "the only part in the Windows and macOS tiers": the conformance tier lists are chosen by content signals (`realpath`, case sensitivity, `process.platform`), which the unit files keep, so the OS lanes still run them until item 20 chooses tiers by filename. The cost of the 380 phase and state tests that take 100 to 1000 ms each in the container is not explained by a local measurement (a command is about 3 ms, with no fsync).
+
+**What it saved, measured.** The same run on the branch (`gsd-test`, holodeck, linux-node24, 62,286 passed) puts the six files and their siblings at 95.5 s against 180.4 s: state 56.7 to 17.2 plus 5.0 for `state.process`, phase 69.1 to 44.9 plus 3.7, init 33.7 to 5.8, roadmap 7.5 to 5.9, custom-phase-readers 10.3 to 9.2 plus 0.6, config 3.2 unchanged. The six unit files alone take 86.2 s. The wrappers' processes were the saving; the fixtures were not.
+
+### 2026-11-20 — Item 24: two comment rules, held by a baseline that can only shrink
+
+Item 24 asks that an exemption directive name an issue and that a comment block stay at 15 lines, both at `error` with no allowlist. Measured on `next`: 1,114 exemption directives (`eslint-disable*`, `allow-test-rule:`, `allow-unbounded-subprocess:`) name no `#NNN`, and 2,673 comment blocks exceed 15 lines, in 1,166 files. Naming an issue on each of those sites would be inventing references, and moving each long block means reading each one; neither is one reviewable change.
+
+**Decision.** `local/directive-names-issue` and `local/max-comment-block-lines` are live at `error` for every `.cjs`, `.js`, `.mjs` and `src/*.cts` file, held by `eslint-rules/comment-ratchet.baseline.json`: for each file, how many sites of each kind it already has. A file may carry up to its baseline and no more; a file with fewer sites than its entry is not an error (the first version failed it until the entry was lowered, and a PR that merged first and removed a site then ejected #6427 from the merge queue: a shared file cannot require every concurrent PR to regenerate it), so the entry is lowered by running the generator and an empty file is the end state the item names. `scripts/gen-comment-ratchet-baseline.cjs` writes the file from a lint of the whole tree with an empty baseline (`--check` reports an entry above its file's count). A directive is a comment that begins with one of the directive names; a prose mention is not one.
+
+**What is not done here.** Converting the baselined sites (each file converted lowers its entry), removing `RULESET.TESTS.no-source-grep.exemption` from `CONTEXT.md` once item 19 has converted the files that use it, and the ADR-456 amendment. #6342 stays open for them.
+
+**Limits of the item 24 rules.** ESLint applies a directive to the rule's own report, so a bare `eslint-disable` (all rules) and a directive that names `local/directive-names-issue` or `local/max-comment-block-lines` hide their own finding and are not counted by the baseline generator; a test pins the first. The portability static check (item 19) bans blanket and protected-rule disables in tests, `src` and the build files; adding the two rule ids to its `PROTECTED_RULES` follows once that check is on `next`. The baseline is count-only per file: it forgives the first N sites by position, so swapping an old bare directive for a new one passes. The three tsc-emitted files that carried baseline entries are now in the ESLint ignores, so the baseline does not depend on whether the build ran.
+
+### 2026-11-19 — Item 19: the static check runner, and the first check moved into it
+
+`scripts/run-static-checks.cjs` loads every module in `scripts/static-checks/` (each exports `{ name, run({ root }) }` returning findings), runs them all in one process and prints every finding; it exits 1 if any check reports one, and a check that throws is a finding of its own, so a broken check cannot pass silently. It is the last step of `npm run lint:ci` and runs alone as `npm run lint:static` (#6414).
+
+The first check is the ADR-1703 disable-ban. As a test it parsed every test, `src` and build file with espree and took 76 s of Linux test time (`tests/test-timings.json`). As a check it parses only files whose text holds an `eslint-disable` keyword, since a directive is a comment that spells it: 1.4 s on the whole tree locally. A file that holds the keyword and does not parse still fails the run (fail closed). `tests/portability-rule-disable-ban.test.cjs` now holds the detection cases against temporary trees, each with a seeded violation, and no longer reads the repository; `tests/run-static-checks.test.cjs` covers the runner with stub checks.
+
+**Part 2: `fold-helper-shadowing` (#6434).** The 23 s test that parsed every file under `tests/` is `scripts/static-checks/fold-helper-shadowing.cjs`, with its three rows as findings (the reported subject has no shadow; the shadowed set equals the recorded baseline exactly, so a stale entry fails too; every `extractShellBlocks` splits on `/\r?\n/`) and the same minimum corpus size. The corpus scan takes about 3 s with the runner's other check. `tests/fold-helper-shadowing.test.cjs` keeps detection cases on temporary trees: a seeded shadow, a stale baseline entry, a corpus below the minimum, an unparseable file, and each shape of a non-CRLF-safe split.
+
+**What the measurement says about the rest of class A.** `emitted-provenance` (26 s) is not a repo-content check: 29 s is one test, `totality`, whose input is the 19 installed trees (16 s to build them through the run's shared install store, 16 ms to check them), so converting it would move the install cost and not remove it; it belongs with item 17. The other 186 class-A files sum to about 4 s of Linux time, so the time criterion is met by the two conversions above; what remains of "no class-A test file remains" is a long tail, which the owner chose to convert in batches (2026-11-20).
+
+**Part 3: the text-contracts check (#6337, batch 1).** Most of the long tail asserts on the text of command and workflow markdown and docs, each in its own file with its own `read` helper. `scripts/static-checks/text-contracts.cjs` is one check that loads the contracts in `scripts/static-checks/text-contracts/`; a contract is a module that states, through a small context, what a file must say (`doc.has`), must not say (`doc.lacks`), the body of a `<step>` (`doc.step`) and an ordering (`doc.before`). A missing, empty, symlinked or out-of-tree file, a missing marker, a contract that throws, is asynchronous or makes no assertion, an unknown `only` id, and fewer contracts than the pinned count are findings, so nothing passes by absence. Batch 1 converts `tests/adr-15-progress-converge.test.cjs` and `tests/autonomous-converge.test.cjs` (23 cases, both `allow-test-rule` product-text exemptions gone). Their one process case, `gsd-tools review-lane flags` yielding the flags the workflows used to hand-list, stays a test in `tests/review-lane-flags-roster.test.cjs`. `tests/text-contracts.test.cjs` covers the engine on temporary trees and runs each shipped contract against a copy of its files with one contracted phrase removed, to show it fails. The docs-guard registry loses the two entries (the contracts run on every PR in `lint:ci`, not only on docs changes) and the `allow-test-rule` allowlist loses the autonomous-converge entry.
+
+**Part 4: the four `autonomous-*` files (#6337, batch 2, #6460).** `tests/autonomous-allowed-tools.test.cjs`, `autonomous-decomposition`, `autonomous-interactive` and `autonomous-to-flag` become contracts of the same check (their `allow-test-rule` product-text exemptions, allowlist entries and timing entries go). The engine gains three assertions for them: `doc.slice(from, [to…])` ends at the earliest of several closing markers, searched after the opening marker (the `INTERACTIVE` branch of the workflow), `doc.shorterThan(n)` states an exclusive size ceiling (the 40K-character limit on `autonomous.md`), and `doc.frontmatter()` returns the closed frontmatter block through `locateFrontmatterFence`, the one owner of the fence rules (`allowed-tools` of the command). Four assertions were tightened to what the file says: a `--to` grep that must carry the literal `\-\-to\s+[0-9]`, the startup banner line and the already-completed exit message themselves (the success-criteria checklist also names both, so a whole-file phrase would pass with either deleted), and `argument-hint` carrying the flag on its own line; and a missing `<step name="iterate">` marker, which the original test read as "the whole file" (`substring(-1)`), is now a finding. `autonomous.md` is 40,954 characters against the 40,960 ceiling, so the next line added to it fails the contract by design.
+
+**Part 5: five more class-A files (#6337, batch 3, #6478).** `tests/chain-flag-plan-phase.test.cjs` (with the bug-2388 test folded into it), `discuss-checkpoint`, `agent-skills-awareness`, `scan-command` and `analyze-dependencies` become contracts (their product-text exemptions, allowlist entries, timing entries and the `analyze-dependencies` docs-guard registry entry go; `docs/COMMANDS.md` stays covered through the `text-contracts` entry). The engine gains `ctx.docs([rel…])`, one document that is the union of several files and fails as a whole when any of them is missing (a workflow split across a main file and its step files or modes), and `ctx.exists(rel, why)` and `ctx.absent(rel, why)` for file presence, both confined to the repository and counted as assertions. Path confinement now also resolves the parent directory, so a symlinked directory in the middle of a path cannot redirect a read out of the tree (the earlier check looked only at the last component). `analyze-dependencies` is the first contract whose subject is a file that must not exist (the standalone command removed in #2790). The assertions are carried over without tightening, except that a missing optional-looking file is now a finding: the original `analyze-dependencies` test returned silently when `docs/COMMANDS.md` was absent.
+
+**Part 6: five more class-A files (#6337, batch 4, #6481).** `tests/cline-support.test.cjs` (`.clinerules`), `inventory-headings-countfree` (`docs/INVENTORY.md` carries no `(N shipped)` heading), `policy-release-no-npm-self-upgrade` (`release.yml` never self-upgrades npm at runtime, #318), `phase6-capability-docs` (the Capability developer manual and its index link) and `playwright-ui-verify` (the Playwright UI verification step, `ui-review.md` and the ui-auditor agent) become contracts; the engine needs nothing new. The exemptions, allowlist entries, timing entries, two docs-guard registry entries and the `ci-test-scope` entry go, and `tests/text-contracts.test.cjs` takes the `ci-test-scope` workflow-contract slot (a `release.yml` edit reruns its self-upgrade mutation cases) and the docs-guard entries for the three docs it now copies. Two assertions are not carried over verbatim. The `release.yml` pattern is matched against whole-file text with spaces and tabs between the words, which is what the original's per-line matching meant, and its unbounded `[^\r\n]*` is bounded at 2000 characters (the `no-unbounded-quantifier` rule forbids the original; a 300-character bound let a long-flag line past, which the security pass caught, so tests pin 1999, 2000 and 2001); the count-heading pattern bounds its title at 300 characters and its digits at six, and uses spaces and tabs where the original used `\s` (so a no-break space or form feed between `##` and the title, or inside `(N shipped)`, no longer matches); the test file states that a longer heading is outside the bound (the longest `##` line in INVENTORY is 23 characters). The `phase6-capability-docs` regexes whose text is literal (`fragment\.path`, `plan:pre`, `research` and the others) became string assertions, which differ from the original only where its unescaped `.` matched any character. The original `playwright-ui-verify` cases accepted `playwright` or an unrelated phrase (the test's own comment calls the step-file case vacuous); the contracts require `playwright` (case-insensitive), which all three real files carry. The regex self-test of the policy test (sample lines it must and must not match) becomes mutation cases: three self-upgrade spellings added to a copy of `release.yml` fail, four allowed lines pass.
+
+Still open under #6337: the remaining class-A files (batches), the 29 duplicated real-tree cases, and the ADR-452 amendment.

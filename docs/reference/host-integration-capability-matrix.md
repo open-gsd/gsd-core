@@ -88,8 +88,13 @@ Module entry and `.gsd/phase/feat-2871-trigger-resolution/40-design.md`.
 | dispatch.isolation | harness-worktree | https://code.claude.com/docs/en/sub-agents ; Claude Code Agent tool (`Agent(isolation="worktree")`) | The Claude Code Agent tool accepts an `isolation="worktree"` harness primitive — the host's own harness creates + binds a git worktree per executor; GSD passes the flag and calls no git itself (#2584) |
 | dispatch.maxConcurrency | 20 | https://code.claude.com/docs/en/sub-agents | The subagent documentation states a default concurrent-subagent limit of 20, configurable via the `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` environment variable (#3673). |
 
+**One-shot sessions and the background-wait ceiling (#6119).** Under `claude -p`, background subagents and workflows do not outlive the run. The env-vars page documents `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS` as the "Ceiling in milliseconds on idle waiting for background work, such as subagents and workflows, after the final turn in non-interactive mode with the `-p` flag. … Default: `600000`, or 10 minutes … Set to `0` to wait indefinitely." At the ceiling, Claude Code "stops whatever is still running … and drops its partial result" (headless, "Background tasks at exit"). On 2.1.322 a background plan agent was killed this way at 644 s, and the process exited 0. Claude Code documents no signal that a hook or a `gsd-tools` child can read to tell a `-p` session from an interactive one, so `dispatch-should-flatten` cannot separate the two, and nothing here changes its verdict: `claude` stays flattened (`true`) in every session shape, which is the fail-closed default. Mechanically that `true` follows the `dispatch.backgroundDispatch | false` row above, and that row's quoted evidence (and the `dispatch.maxDepth | 5` row's) no longer appears on the live sub-agents page, which now says nesting goes "up to three layers below the main conversation". The verdict rests on that row until #6007 corrects it; when it does, the verdict must stay `true` for `claude` because of the ceiling recorded here. A launcher that backgrounds work under `-p` can set the knob to `0`, or set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`. Spike record: [2026-11-19-claude-code-survivability-signal.md](../research/2026-11-19-claude-code-survivability-signal.md).
+
 Sources consulted:
 - https://code.claude.com/docs/en/sub-agents
+- https://code.claude.com/docs/en/env-vars
+- https://code.claude.com/docs/en/headless
+- https://code.claude.com/docs/en/hooks
 - https://code.claude.com/docs/en/agent-sdk/slash-commands
 - https://code.claude.com/docs/en/agent-sdk/subagents
 - https://code.claude.com/docs/en/agent-sdk/python

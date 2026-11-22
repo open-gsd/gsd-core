@@ -117,8 +117,7 @@ if [ -f .git ]; then
 fi
 node -e 'process.stdout.write(JSON.stringify({worktree_path:process.argv[1],branch:process.argv[2],expected_base:process.argv[3]})+"\n")' "$GSD_WORKTREE_PATH" "$GSD_WORKTREE_BRANCH" "$GSD_WORKTREE_EXPECTED_BASE"
 ```
-Retain the printed JSON as return data. Every checkpoint/final return copies these
-printed fields; a later shell must not expand the capture variables again.
+Copy the printed JSON into every checkpoint/final return; never re-expand these variables later.
 </worktree_metadata_capture>
 
 <step name="determine_execution_pattern">
@@ -381,12 +380,13 @@ When hitting checkpoint or auth gate, return this structure:
 </worktree_metadata>
 ```
 
-Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point. The worktree block gives the orchestrator the cwd holding the code to resume; empty means the main checkout.
+Completed Tasks table gives continuation agent context. Commit hashes verify work was committed. Current Task provides precise continuation point. Its worktree block is the cwd to resume in; empty means the main checkout.
 </checkpoint_return_format>
 
 <continuation_handling>
 If spawned as continuation agent (`<completed_tasks>` in prompt):
 
+0. If the prompt carries `<paused_branch>` (a `harness-worktree` continuation, #6118): after the `worktree_branch_check` passes and before anything else, capture `GSD_WORKTREE_EXPECTED_BASE` first (the `worktree_metadata_capture` rule), then run `git merge --ff-only <paused_branch>`. If it fails, HALT and return blocked; never reset, cherry-pick or rewrite.
 1. Verify previous commits exist: `git log --oneline -5`
 2. DO NOT redo completed tasks
 3. Start from resume point in prompt
@@ -597,7 +597,7 @@ back, those deletions appear on the main branch, destroying prior-wave work (#20
 - `git clean` (any flags — `-f`, `-fd`, `-fdx`, `-n`, etc.)
 - `git rm` on files not explicitly created by the current task
 - `git checkout -- .` or `git restore .` (blanket working-tree resets that discard files)
-- `git reset --hard` except inside the `<worktree_branch_check>` step at agent startup
+- `git reset --hard` (no exception: `<worktree_branch_check>` is verify-only, #48)
 - `git update-ref refs/heads/<protected>` (resolved protected branch, #2924, #3819). Prohibited.
   If you discover that your worktree HEAD is attached to a protected branch and your
   commits landed there, **DO NOT** "recover" by force-rewinding the protected ref —
@@ -667,7 +667,7 @@ This file is the canonical output of this step. The orchestrator reads `{phase_d
 
 **Frontmatter:** phase, plan, subsystem, tags, dependency graph (requires/provides/affects), tech-stack (added/patterns), key-files (created/modified), decisions, metrics (duration, completed date), status (`status: complete` — required so the audit-open scanner recognises the summary as done), and `actuals` (#2632).
 
-**Duration:** copy `record_completion_time`'s printed `duration` to SUMMARY `metrics.duration` and the completion report. State rereads the same result; never estimate (`~` or free text).
+**Duration:** copy `record_completion_time`'s printed `duration` to SUMMARY `metrics.duration` and the completion report; never estimate it.
 
 **`actuals` (required when the plan carried an `estimate`):** record what the phase ACTUALLY cost, on the SAME scale the estimate used — `estimateTokens` (chars/4) over the realized diff, NOT a harness token count. Mixing scales measures the measurement methods, not the miss.
 ```yaml
@@ -851,8 +851,7 @@ into the user's project history.
 </final_commit>
 
 <step name="clear_plan_timing">
-On successful close-out remove markers; retain them for checkpoint/failure continuation.
-Read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/clear-plan-timing.md`.
+Only after a successful close-out (checkpoints keep the marker), read and execute `__GSD_PI_ENGINE_ROOT__/gsd-core/workflows/execute-plan/steps/clear-plan-timing.md`.
 </step>
 
 <completion_format>

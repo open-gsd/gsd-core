@@ -30,6 +30,7 @@ const {
   EXPECTED_POINTS_BY_STEP,
   ROLE_TO_AGENT,
   ROLE_FAMILY,
+  ROLES_WITHOUT_AGENT_FILE,
 } = require('../scripts/gen-loop-host-contract.cjs');
 
 const { LOOP_HOST_CONTRACT } = require('../gsd-core/bin/lib/loop-host-contract.cjs');
@@ -111,10 +112,17 @@ function makeValidWorkflowFiles() {
       'EXECUTE_POST_HOOKS_JSON=$(gsd_run loop render-hooks execute:post --raw)',
       'For each active entry where `kind == "step"`: dispatch.',
       'For each active entry where `kind == "gate"`: evaluate.',
+      // #5984: the verifier's landing site, asserted by the generator's contribution/verifier auxiliary entry.
+      'For each active entry where `kind == "contribution"` and `into == "verifier"`: inject.',
       '',
     ].join('\n'),
     'verify-work.md': makeWorkflow('verify', ['verify:pre', 'verify:post'], ['orchestrator'], ['UAT.md'], ['SUMMARY.md']),
     'ship.md': makeWorkflow('ship', ['ship:pre', 'ship:post'], ['orchestrator'], [], ['UAT.md']),
+    // #3997: the review host is its own landing site for `into: reviewer` contributions.
+    'review.md': makeWorkflow(
+      'review', ['review:pre'], ['reviewer'], [], ['PLAN.md'],
+      'For each active entry where `kind == "contribution"` and `into == "reviewer"`: insert.\n',
+    ),
   };
 }
 
@@ -333,12 +341,24 @@ describe('crossCheckRoleFamilies (#4740)', () => {
     // orchestrator which is family-only). Exact set equality both directions —
     // not a subset check — so adding a role to only one map is caught here.
     const familyKeys = new Set(Object.keys(ROLE_FAMILY));
-    const expectedKeys = new Set([...Object.keys(ROLE_TO_AGENT), 'orchestrator']);
+    // Roles with no gsd agent file (the host itself, the external review lanes) are family-only.
+    const expectedKeys = new Set([...Object.keys(ROLE_TO_AGENT), ...ROLES_WITHOUT_AGENT_FILE]);
     assert.deepEqual(
       [...familyKeys].sort(),
       [...expectedKeys].sort(),
-      'ROLE_FAMILY keys must equal ROLE_TO_AGENT keys plus "orchestrator", exactly',
+      'ROLE_FAMILY keys must equal ROLE_TO_AGENT keys plus ROLES_WITHOUT_AGENT_FILE, exactly',
     );
+    assert.deepEqual(
+      Object.keys(ROLE_TO_AGENT).filter((r) => ROLES_WITHOUT_AGENT_FILE.has(r)),
+      [],
+      'a role cannot be both agent-mapped and exempt from the agent-file check',
+    );
+  });
+
+  test('accepts reviewer at review and only there (#3997)', () => {
+    assert.deepEqual(crossCheckRoleFamilies('review', ['reviewer'], 'review.md'), []);
+    assert.strictEqual(crossCheckRoleFamilies('execute', ['reviewer'], 'execute-phase.md').length, 1);
+    assert.strictEqual(crossCheckRoleFamilies('review', ['orchestrator'], 'review.md').length, 1);
   });
 
   test('property: in-family subsets pass, any foreign role fails', () => {
@@ -385,13 +405,14 @@ describe('crossCheckRoleFamilies (#4740)', () => {
 // ─── 3. assertPointsCoverage ─────────────────────────────────────────────────
 
 describe('assertPointsCoverage', () => {
-  test('passes when all 12 canonical points are covered', () => {
+  test('passes when all 13 canonical points are covered', () => {
     const entries = [
       { step: 'discuss', points: ['discuss:pre', 'discuss:post'] },
       { step: 'plan', points: ['plan:pre', 'plan:post'] },
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.deepEqual(errors, []);
@@ -404,6 +425,7 @@ describe('assertPointsCoverage', () => {
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.ok(errors.some((e) => e.includes('discuss:post') && e.includes('not declared')));
@@ -416,6 +438,7 @@ describe('assertPointsCoverage', () => {
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.ok(errors.some((e) => e.includes('discuss:extra') && e.includes('not in the canonical')));
@@ -428,6 +451,7 @@ describe('assertPointsCoverage', () => {
       { step: 'execute', points: ['execute:pre', 'execute:wave:pre', 'execute:wave:post', 'execute:post'] },
       { step: 'verify', points: ['verify:pre', 'verify:post'] },
       { step: 'ship', points: ['ship:pre', 'ship:post'] },
+      { step: 'review', points: ['review:pre'] },
     ];
     const errors = assertPointsCoverage(entries);
     assert.ok(errors.some((e) => e.includes('discuss:pre') && e.includes('more than once')));
@@ -440,8 +464,8 @@ describe('buildContract from real workflows', () => {
   test('produces a contract matching the inline LOOP_HOST_CONTRACT shape', () => {
     const contract = buildContract(); // reads real gsd-core/workflows/
 
-    // Must be an array of 5 entries
-    assert.strictEqual(contract.length, 5, 'contract must have 5 step entries');
+    // Five lifecycle steps plus the review step (#3997)
+    assert.strictEqual(contract.length, 6, 'contract must have 6 step entries');
 
     // Each entry must have step, points, agentRoles, coreArtifacts
     for (const entry of contract) {
@@ -457,12 +481,12 @@ describe('buildContract from real workflows', () => {
     assert.deepEqual(contract, LOOP_HOST_CONTRACT, 'built contract must match committed LOOP_HOST_CONTRACT');
   });
 
-  test('covers exactly the 12 canonical points', () => {
+  test('covers exactly the 13 canonical points', () => {
     const contract = buildContract();
     const allPoints = contract.flatMap((e) => e.points);
-    assert.strictEqual(allPoints.length, 12, 'must cover exactly 12 points');
+    assert.strictEqual(allPoints.length, 13, 'must cover exactly 13 points');
     const pointSet = new Set(allPoints);
-    assert.strictEqual(pointSet.size, 12, 'all 12 points must be distinct');
+    assert.strictEqual(pointSet.size, 13, 'all 13 points must be distinct');
     for (const p of CANONICAL_POINTS) {
       assert.ok(pointSet.has(p), 'canonical point "' + p + '" must be declared');
     }
@@ -602,23 +626,24 @@ describe('normalizeLineEndings', () => {
 // ─── 7. STEP_WORKFLOWS and CANONICAL_POINTS exported constants ────────────────
 
 describe('module exports', () => {
-  test('STEP_WORKFLOWS has 5 entries in pipeline order', () => {
-    assert.strictEqual(STEP_WORKFLOWS.length, 5);
+  test('STEP_WORKFLOWS has 6 entries in pipeline order (the review step last, #3997)', () => {
+    assert.strictEqual(STEP_WORKFLOWS.length, 6);
     assert.strictEqual(STEP_WORKFLOWS[0].step, 'discuss');
     assert.strictEqual(STEP_WORKFLOWS[1].step, 'plan');
     assert.strictEqual(STEP_WORKFLOWS[2].step, 'execute');
     assert.strictEqual(STEP_WORKFLOWS[3].step, 'verify');
     assert.strictEqual(STEP_WORKFLOWS[4].step, 'ship');
+    assert.strictEqual(STEP_WORKFLOWS[5].step, 'review');
   });
 
-  test('CANONICAL_POINTS has exactly 12 entries', () => {
-    assert.strictEqual(CANONICAL_POINTS.length, 12);
+  test('CANONICAL_POINTS has exactly 13 entries', () => {
+    assert.strictEqual(CANONICAL_POINTS.length, 13);
   });
 
   test('ROLE_TO_AGENT covers all non-orchestrator roles', () => {
     // All non-orchestrator roles from the real contract
     const allRoles = new Set(
-      LOOP_HOST_CONTRACT.flatMap((e) => e.agentRoles).filter((r) => r !== 'orchestrator'),
+      LOOP_HOST_CONTRACT.flatMap((e) => e.agentRoles).filter((r) => !ROLES_WITHOUT_AGENT_FILE.has(r)),
     );
     for (const role of allRoles) {
       assert.ok(
@@ -628,9 +653,9 @@ describe('module exports', () => {
     }
   });
 
-  test('EXPECTED_POINTS_BY_STEP covers all 5 steps', () => {
+  test('EXPECTED_POINTS_BY_STEP covers all 6 steps', () => {
     assert.ok(EXPECTED_POINTS_BY_STEP, 'EXPECTED_POINTS_BY_STEP must be exported');
-    assert.strictEqual(Object.keys(EXPECTED_POINTS_BY_STEP).length, 5);
+    assert.strictEqual(Object.keys(EXPECTED_POINTS_BY_STEP).length, 6);
     assert.ok(Array.isArray(EXPECTED_POINTS_BY_STEP.execute));
     assert.strictEqual(EXPECTED_POINTS_BY_STEP.execute.length, 4);
   });
@@ -659,10 +684,10 @@ describe('Quick auxiliary loop-host contract (#3778)', () => {
     const tmpDir = makeTempWorkflowsDir(files);
     try {
       const contract = buildContract(tmpDir);
-      assert.strictEqual(contract.length, 5, 'auxiliary hosts must not create a sixth serialized step');
+      assert.strictEqual(contract.length, 6, 'auxiliary hosts must not create a seventh serialized step');
       assert.strictEqual(
         new Set(contract.flatMap((entry) => entry.points)).size,
-        12,
+        13,
         'auxiliary hosts must not create a duplicate lifecycle point',
       );
     } finally {

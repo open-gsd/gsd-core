@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { setImmediate: yieldToReporter } = require('node:timers/promises');
 const { cleanup, createTempDir, runGsdTools } = require('./helpers.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { throwIfFailed } = require('./helpers/git-fixture.cjs');
 const { classifyRedEvidence, buildRedEvidenceRecord } = require('../gsd-core/bin/lib/tdd-red-evidence.cjs');
@@ -51,6 +51,23 @@ for (const [format, targetTest, verdict, reason] of [
     assert.equal(result.reason, reason);
     assert.deepEqual(result.evidence.report_errors, []);
     assert.deepEqual([result.evidence.tests, result.evidence.pass, result.evidence.fail], [tests, pass, fail]);
+  });
+}
+
+// #5819: node:test repeats error/stack in an assert.throws(fn, /re/) diagnostic
+// block; strict YAML rejected the duplicates and a genuine RED was refused.
+// Captures: node-throws-regexp.tap (root assert.throws), node-rejects-regexp.tap
+// (root await assert.rejects), node-throws-regexp-nested.tap (describe/it, the
+// block arrives indented). The captures normalize absolute source paths (README).
+for (const capture of ['node-throws-regexp.tap', 'node-rejects-regexp.tap', 'node-throws-regexp-nested.tap']) {
+  test(`#5819: a real node:test RegExp-assertion RED (${capture}) proves the target failure`, () => {
+    const result = classifyRedEvidence(
+      input(fixture(capture), { targetTest: 'rejects a malformed token', targetFile: undefined }));
+    assert.equal(result.verdict, 'RED_EVIDENCE_OK');
+    assert.equal(result.reason, 'target_test_failed');
+    assert.equal(result.evidence.matched_test, 'rejects a malformed token');
+    assert.deepEqual(result.evidence.report_errors, []);
+    assert.deepEqual([result.evidence.tests, result.evidence.pass, result.evidence.fail], [1, 0, 1]);
   });
 }
 
@@ -229,7 +246,7 @@ test('#4692: the CLI accepts Vitest TAP and returns the same blocking verdict wi
 
 for (const runtime of ['claude', 'codex', 'antigravity']) {
   test(`#4692: ${runtime} installed runtime validates TAP and XML without node_modules`, (t) => {
-    const { root, configDir } = runMinimalInstall({ runtime, scope: 'global' });
+    const { root, configDir } = copyRuntimeFixture({ runtime, scope: 'global' });
     t.after(async () => {
       cleanup(root);
       // The test runner uses --test-force-exit. Let its reporter drain between

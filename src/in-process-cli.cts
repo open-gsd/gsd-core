@@ -41,8 +41,17 @@
  *   - module-level state that no module has registered;
  *   - work `main` schedules that runs after its promise settles (a timer that
  *     calls `process.exit` later reaches the real one);
- *   - output a child process writes straight to an inherited descriptor;
- *   - stdin: a command that reads it reads the real one;
+ *   - a child process `main` starts with an inherited descriptor: its output
+ *     goes straight to the real stream, and it reads the host's real stdin;
+ *   - stdin read through the `process.stdin` stream or by path
+ *     (`/dev/stdin`), and `process.stdin.isTTY`, which is the host's.
+ *     Synchronous reads of fd 0 (`fs.readFileSync(0)`, `fs.readSync(0, …)`)
+ *     are served from `options.stdin`, which is empty by default: end of
+ *     input at once, as a child spawned with its stdin closed sees. No
+ *     gsd-tools command reads stdin any other way;
+ *   - a `main` that never returns. A spawned child can be killed; a
+ *     synchronous in-process call that loops holds the whole process, and
+ *     only whatever bounds the process (the test lane's cap) ends it;
  *   - `process.on('exit')` handlers, which run when this process exits and
  *     not at the end of a call.
  *
@@ -62,7 +71,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import cliExitModule = require('./cli-exit.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import invocationScopeModule = require('./invocation-scope.cjs');
-const { ExitError, runMainAsync } = cliExitModule;
+const { ExitError, runMainAsync, runMainSync } = cliExitModule;
 const { resetInvocationState } = invocationScopeModule;
 
 type CliMain = () => number | string | void | Promise<number | string | void>;
@@ -78,6 +87,13 @@ interface RunInProcessOptions {
   scriptPath?: string;
   /** Most bytes either stream may capture before the call is refused. */
   maxBufferBytes?: number;
+  /** What synchronous reads of fd 0 return. Defaults to nothing: end of input at once. */
+  stdin?: string;
+}
+
+interface RunInProcessSyncOptions extends RunInProcessOptions {
+  /** A `gsd.*` cell `main` sets to a command name when it refuses to run asynchronously. */
+  asyncRefusalKey?: symbol;
 }
 
 interface InProcessResult {
@@ -94,7 +110,11 @@ const IN_PROCESS_REASON = Object.freeze({
   REENTRANT: 'in_process_reentrant',
   INVALID_ARGV: 'in_process_invalid_argv',
   INVALID_MAX_BUFFER: 'in_process_invalid_max_buffer',
+  INVALID_OPTION: 'in_process_invalid_option',
   OUTPUT_OVERFLOW: 'in_process_output_overflow',
+  BUSY: 'in_process_busy',
+  ASYNC_COMMAND: 'in_process_async_command',
+  ASYNC_STARTED: 'in_process_async_started',
   RESET_FAILED: 'in_process_reset_failed',
   RESTORE_FAILED: 'in_process_restore_failed',
 } as const);
@@ -326,8 +346,23 @@ function validateOptions(options: RunInProcessOptions): { argv: string[]; maxBuf
       'maxBufferBytes must be a non-negative integer',
     );
   }
+  // A wrong type here would be applied to the process before anything could
+  // notice: `env: 5` has no entries, so it would empty the environment.
+  const env: unknown = options.env;
+  if (env !== undefined && (env === null || typeof env !== 'object' || Array.isArray(env))) {
+    throw new InProcessCliError(IN_PROCESS_REASON.INVALID_OPTION, 'env must be an object of strings');
+  }
+  for (const name of ['cwd', 'scriptPath', 'stdin'] as const) {
+    const value: unknown = options[name];
+    if (value !== undefined && typeof value !== 'string') {
+      throw new InProcessCliError(IN_PROCESS_REASON.INVALID_OPTION, `${name} must be a string`);
+    }
+  }
   return { argv: requestedArgv, maxBufferBytes };
 }
+
+/** True while a call is between installing its swaps and finishing its restore. */
+let busy = false;
 
 async function runInProcess(main: CliMain, options: RunInProcessOptions = {}): Promise<InProcessResult> {
   const validated = validateOptions(options);
@@ -344,20 +379,121 @@ async function runInProcess(main: CliMain, options: RunInProcessOptions = {}): P
   queue = new Promise<void>((resolve) => { release = resolve; });
   await ahead;
   const call = { active: true };
+  busy = true;
   try {
-    return await insideCall.run(call, () => runOne(main, options, validated, () => call.active && insideCall.getStore() === call));
+    return await insideCall.run(call, async () => {
+      const frame = openCall(options, validated, () => call.active && insideCall.getStore() === call);
+      if (frame.install()) {
+        try {
+          await runMainAsync(main);
+          frame.settle();
+        } catch (error) {
+          frame.fail(error);
+        }
+      }
+      return frame.close();
+    });
   } finally {
     call.active = false;
+    busy = false;
     release();
   }
 }
 
-async function runOne(
-  main: CliMain,
+/**
+ * runInProcess for a `main` that finishes synchronously (#6333): returns the
+ * result directly. Nothing else can run during a synchronous call, so every
+ * write in it belongs to it. It cannot wait, so it is refused
+ * (`in_process_busy`) while any other in-process call is running, including
+ * from inside one.
+ *
+ * A main that cannot finish synchronously fails the call, after everything is
+ * restored, in one of two ways that callers must tell apart:
+ *
+ * - `in_process_async_command`: main refused itself BEFORE doing the work. It
+ *   set the `gsd.*` cell named by `options.asyncRefusalKey` to the command's
+ *   name and ended. Nothing ran, so running the command another way is safe.
+ * - `in_process_async_started`: main returned a promise, or set that cell to
+ *   `{ started: <name> }`. Work has begun and was not waited for; it may have
+ *   written files. Running the command again would do that work twice.
+ *
+ * Both errors carry the name as `command` when main gave one.
+ */
+function runInProcessSync(main: CliMain, options: RunInProcessSyncOptions = {}): InProcessResult {
+  const validated = validateOptions(options);
+  if (busy) {
+    throw new InProcessCliError(
+      IN_PROCESS_REASON.BUSY,
+      'runInProcessSync was called while another in-process call is running; a synchronous call cannot wait for it',
+    );
+  }
+
+  const call = { active: true };
+  busy = true;
+  try {
+    const frame = openCall(options, validated, () => call.active);
+    let asyncCommand: { command: unknown; started: boolean } | undefined;
+    if (frame.install()) {
+      try {
+        const settled = runMainSync(main);
+        const refused: unknown = options.asyncRefusalKey === undefined
+          ? undefined
+          : (globalThis as unknown as Globals)[options.asyncRefusalKey];
+        if (!settled) asyncCommand = { command: undefined, started: true };
+        else if (typeof refused === 'object' && refused !== null) {
+          asyncCommand = { command: (refused as { started?: unknown }).started, started: true };
+        } else if (refused !== undefined) asyncCommand = { command: refused, started: false };
+        else frame.settle();
+      } catch (error) {
+        frame.fail(error);
+      }
+    }
+    const result = frame.close(asyncCommand !== undefined);
+    if (asyncCommand !== undefined) {
+      const named = typeof asyncCommand.command === 'string' ? ` (command: ${asyncCommand.command})` : '';
+      throw Object.assign(asyncCommand.started
+        ? new InProcessCliError(
+          IN_PROCESS_REASON.ASYNC_STARTED,
+          'main started asynchronous work and the synchronous call did not wait for it; the work may already have '
+          + `changed files, so do not run the command again to recover${named}`,
+        )
+        : new InProcessCliError(
+          IN_PROCESS_REASON.ASYNC_COMMAND,
+          `the command does not finish synchronously and was not run; use the asynchronous form${named}`,
+        ), { command: asyncCommand.command });
+    }
+    if (result === undefined) throw new Error('runInProcessSync: no result and no failure');
+    return result;
+  } finally {
+    call.active = false;
+    busy = false;
+  }
+}
+
+interface CallFrame {
+  /** Save process state and install the swaps. False when that failed; `close` then reports it. */
+  install(): boolean;
+  /** Record what main ended with and what it wrote. */
+  settle(): void;
+  /** Record a failure of the call itself (not of main, which settles as an exit code). */
+  fail(error: unknown): void;
+  /**
+   * Restore everything and return the result, or throw the call's error.
+   * With `discard`, a settled result is not required and `undefined` is returned.
+   */
+  close(discard?: boolean): InProcessResult | undefined;
+}
+
+/**
+ * One call's saved state, stand-ins and capture. `ownsCurrentContext` says
+ * whether the code running right now belongs to this call; a stand-in acts
+ * only then and passes everything else through.
+ */
+function openCall(
   options: RunInProcessOptions,
   { argv, maxBufferBytes }: { argv: string[]; maxBufferBytes: number },
   ownsCurrentContext: () => boolean,
-): Promise<InProcessResult> {
+): CallFrame & { close(discard?: false): InProcessResult } {
   // Each entry undoes one change. They run in reverse, each in its own
   // try/catch, so one failing restore cannot leave the others undone.
   const undo: Array<() => void> = [];
@@ -404,114 +540,170 @@ async function runOne(
   let result: InProcessResult | undefined;
   let failure: { error: unknown } | undefined;
 
-  try {
-    const savedArgv = process.argv;
-    const savedCwd = process.cwd();
-    const savedEnv = { ...process.env };
-    const savedExitCode = process.exitCode;
-    const savedCells = takeCells();
-    undo.push(() => { restoreCells(savedCells); });
-    undo.push(() => { process.exitCode = savedExitCode; });
-    undo.push(() => { replaceEnv(savedEnv); });
-    undo.push(() => { process.chdir(savedCwd); });
-    undo.push(() => { process.argv = savedArgv; });
-
+  function install(): boolean {
     try {
-      resetInvocationState();
+      const savedArgv = process.argv;
+      const savedCwd = process.cwd();
+      const savedEnv = { ...process.env };
+      const savedExitCode = process.exitCode;
+      const savedCells = takeCells();
+      undo.push(() => { restoreCells(savedCells); });
+      undo.push(() => { process.exitCode = savedExitCode; });
+      undo.push(() => { replaceEnv(savedEnv); });
+      undo.push(() => { process.chdir(savedCwd); });
+      undo.push(() => { process.argv = savedArgv; });
+
+      try {
+        resetInvocationState();
+      } catch (error) {
+        throw new InProcessCliError(
+          IN_PROCESS_REASON.RESET_FAILED,
+          `a registered per-invocation reset failed before main ran: ${String(error)}`,
+          { cause: error },
+        );
+      }
+      // Registered only once the resets are known to work: after a reset that
+      // failed here, running them again in the undo would fail the same way and
+      // report a restore failure for a call that changed nothing.
+      undo.push(() => { resetInvocationState(); });
+      process.argv = [savedArgv[0] ?? process.execPath, options.scriptPath ?? savedArgv[1] ?? '', ...argv];
+      if (options.env !== undefined) replaceEnv(options.env);
+      if (options.cwd !== undefined) process.chdir(options.cwd);
+      process.exitCode = undefined;
+
+      // The streams are touched and swapped BEFORE fs.writeSync. process.stdout
+      // and process.stderr are created lazily, and when one is a file its
+      // stream captures fs.writeSync at creation; created under the stand-in,
+      // it would keep writing into this call's buffer for the rest of the
+      // process.
+      openHandlers = handlers;
+      undo.push(() => { if (openHandlers === handlers) openHandlers = undefined; });
+      const stdoutWrite = swapProperty(process.stdout, 'write', streamWrite(1, () => stdoutWrite.original));
+      undo.push(stdoutWrite.restore);
+      const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, () => stderrWrite.original));
+      undo.push(stderrWrite.restore);
+      const writeSync = swapProperty(fs, 'writeSync', standInFor('fs.writeSync', (args) => {
+        const [fd, data, offsetOrOptions, length] = args;
+        if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) return undefined;
+        const bytes = writeSyncBytes(data, offsetOrOptions, length);
+        capture(fd, bytes);
+        return { value: bytes.byteLength };
+      }, () => writeSync.original));
+      undo.push(writeSync.restore);
+
+      // Synchronous reads of fd 0 come from options.stdin. Without this a
+      // command that reads its input would block on the host process's stdin.
+      const stdinBytes = Buffer.from(options.stdin ?? '', 'utf-8');
+      let stdinRead = 0;
+      const readFileSync = swapProperty(fs, 'readFileSync', standInFor('fs.readFileSync', (args) => {
+        const [target, readOptions] = args;
+        if (target !== 0 || !ownsCurrentContext()) return undefined;
+        const rest = stdinBytes.subarray(stdinRead);
+        stdinRead = stdinBytes.byteLength;
+        const encoding = typeof readOptions === 'string'
+          ? readOptions
+          : (readOptions as { encoding?: unknown } | null | undefined)?.encoding;
+        return { value: typeof encoding === 'string' && Buffer.isEncoding(encoding) ? rest.toString(encoding) : Buffer.from(rest) };
+      }, () => readFileSync.original));
+      undo.push(readFileSync.restore);
+      const readSync = swapProperty(fs, 'readSync', standInFor('fs.readSync', (args) => {
+        const [fd, target, ...rest] = args;
+        if (fd !== 0 || !ArrayBuffer.isView(target) || !ownsCurrentContext()) return undefined;
+        const into = viewBytes(target);
+        const opts = typeof rest[0] === 'object' && rest[0] !== null
+          ? rest[0] as { offset?: unknown; length?: unknown }
+          : { offset: rest[0], length: rest[1] };
+        // Node's own bounds: an offset or length outside the buffer is refused,
+        // never clamped. A negative length here would move the cursor back.
+        const offset = opts.offset === undefined || opts.offset === null ? 0 : opts.offset;
+        if (typeof offset !== 'number' || !Number.isInteger(offset) || offset < 0 || offset > into.byteLength) {
+          throw nodeError(RangeError, 'ERR_OUT_OF_RANGE',
+            `The value of "offset" is out of range. It must be >= 0 && <= ${into.byteLength}. Received ${typeof offset === 'number' ? offset : typeof offset}`);
+        }
+        const room = into.byteLength - offset;
+        const wanted = opts.length === undefined || opts.length === null ? room : opts.length;
+        if (typeof wanted !== 'number' || !Number.isInteger(wanted) || wanted < 0 || wanted > room) {
+          throw nodeError(RangeError, 'ERR_OUT_OF_RANGE',
+            `The value of "length" is out of range. It must be >= 0 && <= ${room}. Received ${typeof wanted === 'number' ? wanted : typeof wanted}`);
+        }
+        const count = Math.min(wanted, stdinBytes.byteLength - stdinRead);
+        stdinBytes.copy(into, offset, stdinRead, stdinRead + count);
+        stdinRead += count;
+        return { value: count };
+      }, () => readSync.original));
+      undo.push(readSync.restore);
+
+      // As the real one does: an argument, even `undefined`, replaces
+      // process.exitCode first. The assignment goes through Node's own setter,
+      // so a code Node refuses is refused here with Node's own error.
+      const exit = swapProperty(process, 'exit', standInFor('process.exit', (args) => {
+        if (!ownsCurrentContext()) return undefined;
+        if (args.length > 0) process.exitCode = args[0] as number | undefined;
+        const requested = exitStatus(process.exitCode);
+        if (firstExit === undefined) firstExit = requested;
+        throw new InProcessExit(requested);
+      }, () => exit.original));
+      undo.push(exit.restore);
+      return true;
     } catch (error) {
-      throw new InProcessCliError(
-        IN_PROCESS_REASON.RESET_FAILED,
-        `a registered per-invocation reset failed before main ran: ${String(error)}`,
-        { cause: error },
-      );
+      failure = { error };
+      return false;
     }
-    // Registered only once the resets are known to work: after a reset that
-    // failed here, running them again in the undo would fail the same way and
-    // report a restore failure for a call that changed nothing.
-    undo.push(() => { resetInvocationState(); });
-    process.argv = [savedArgv[0] ?? process.execPath, options.scriptPath ?? savedArgv[1] ?? '', ...argv];
-    if (options.env !== undefined) replaceEnv(options.env);
-    if (options.cwd !== undefined) process.chdir(options.cwd);
-    process.exitCode = undefined;
+  }
 
-    // The streams are touched and swapped BEFORE fs.writeSync. process.stdout
-    // and process.stderr are created lazily, and when one is a file its
-    // stream captures fs.writeSync at creation; created under the stand-in,
-    // it would keep writing into this call's buffer for the rest of the
-    // process.
-    openHandlers = handlers;
-    undo.push(() => { if (openHandlers === handlers) openHandlers = undefined; });
-    const stdoutWrite = swapProperty(process.stdout, 'write', streamWrite(1, () => stdoutWrite.original));
-    undo.push(stdoutWrite.restore);
-    const stderrWrite = swapProperty(process.stderr, 'write', streamWrite(2, () => stderrWrite.original));
-    undo.push(stderrWrite.restore);
-    const writeSync = swapProperty(fs, 'writeSync', standInFor('fs.writeSync', (args) => {
-      const [fd, data, offsetOrOptions, length] = args;
-      if ((fd !== 1 && fd !== 2) || !ownsCurrentContext()) return undefined;
-      const bytes = writeSyncBytes(data, offsetOrOptions, length);
-      capture(fd, bytes);
-      return { value: bytes.byteLength };
-    }, () => writeSync.original));
-    undo.push(writeSync.restore);
-    // As the real one does: an argument, even `undefined`, replaces
-    // process.exitCode first. The assignment goes through Node's own setter,
-    // so a code Node refuses is refused here with Node's own error.
-    const exit = swapProperty(process, 'exit', standInFor('process.exit', (args) => {
-      if (!ownsCurrentContext()) return undefined;
-      if (args.length > 0) process.exitCode = args[0] as number | undefined;
-      const requested = exitStatus(process.exitCode);
-      if (firstExit === undefined) firstExit = requested;
-      throw new InProcessExit(requested);
-    }, () => exit.original));
-    undo.push(exit.restore);
-
-    await runMainAsync(main);
-
-    const settled = firstExit ?? exitStatus(process.exitCode);
+  function settle(): void {
     result = {
-      exitCode: settled,
+      exitCode: firstExit ?? exitStatus(process.exitCode),
       stdout: Buffer.concat(captured[1]).toString('utf-8'),
       stderr: Buffer.concat(captured[2]).toString('utf-8'),
     };
-  } catch (error) {
+  }
+
+  function fail(error: unknown): void {
     failure = { error };
   }
 
-  open = false;
-  const restoreErrors: unknown[] = [];
-  for (const step of undo.reverse()) {
-    try {
-      step();
-    } catch (error) {
-      restoreErrors.push(error);
+  function close(discard = false): InProcessResult | undefined {
+    open = false;
+    const restoreErrors: unknown[] = [];
+    for (const step of undo.reverse()) {
+      try {
+        step();
+      } catch (error) {
+        restoreErrors.push(error);
+      }
     }
+
+    // A failed restore outranks everything: the process may no longer be in the
+    // state the caller left it in. What it displaced travels as the cause.
+    if (restoreErrors.length > 0) {
+      const displaced = failure === undefined ? [] : [failure.error];
+      throw new InProcessCliError(
+        IN_PROCESS_REASON.RESTORE_FAILED,
+        `${restoreErrors.length} process-state restore step(s) failed; the first: ${String(restoreErrors[0])}`,
+        { cause: new AggregateError([...restoreErrors, ...displaced], 'restore failures, then any earlier failure') },
+      );
+    }
+    if (failure !== undefined) throw failure.error;
+    if (discard) return undefined;
+    // An overflow outranks main's own exit code: the captured output is
+    // incomplete, so no result can be returned. The code is on the error.
+    if (overflowed !== undefined) {
+      throw Object.assign(new InProcessCliError(
+        IN_PROCESS_REASON.OUTPUT_OVERFLOW,
+        `${overflowed === 1 ? 'stdout' : 'stderr'} exceeded maxBufferBytes (${maxBufferBytes})`,
+      ), { exitCode: result?.exitCode });
+    }
+    if (result === undefined) throw new Error('runInProcess: no result and no failure');
+    return result;
   }
 
-  // A failed restore outranks everything: the process may no longer be in the
-  // state the caller left it in. What it displaced travels as the cause.
-  if (restoreErrors.length > 0) {
-    const displaced = failure === undefined ? [] : [failure.error];
-    throw new InProcessCliError(
-      IN_PROCESS_REASON.RESTORE_FAILED,
-      `${restoreErrors.length} process-state restore step(s) failed; the first: ${String(restoreErrors[0])}`,
-      { cause: new AggregateError([...restoreErrors, ...displaced], 'restore failures, then any earlier failure') },
-    );
-  }
-  if (failure !== undefined) throw failure.error;
-  // An overflow outranks main's own exit code: the captured output is
-  // incomplete, so no result can be returned. The code is on the error.
-  if (overflowed !== undefined) {
-    throw Object.assign(new InProcessCliError(
-      IN_PROCESS_REASON.OUTPUT_OVERFLOW,
-      `${overflowed === 1 ? 'stdout' : 'stderr'} exceeded maxBufferBytes (${maxBufferBytes})`,
-    ), { exitCode: result?.exitCode });
-  }
-  if (result === undefined) throw new Error('runInProcess: no result and no failure');
-  return result;
+  return { install, settle, fail, close } as CallFrame & { close(discard?: false): InProcessResult };
 }
 
 export = {
   runInProcess,
+  runInProcessSync,
   IN_PROCESS_REASON,
   InProcessCliError,
   DEFAULT_MAX_BUFFER_BYTES,

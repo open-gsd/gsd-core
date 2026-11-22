@@ -29,6 +29,23 @@ when no capability has registered an active hook at this point — treat that as
 Inject `fragment.inline` verbatim into the context for the role named in `into`
 (e.g. `orchestrator`, `planner`). Do not paraphrase — the text is the product.
 
+**Where `into: code-reviewer` and `into: verifier` are delivered (#4790, #5984).** `into` is validated per
+step, not per point, so a contribution is admitted at every point its step publishes but is delivered
+only where a landing site reads it:
+
+| `into` | Delivered at | Landing site | Not delivered at |
+|---|---|---|---|
+| `code-reviewer` | the review step's loop point (`execute:post`, or `execute:wave:post` per `workflow.code_review_point`) | `code-review.md`, appended to the `gsd-code-reviewer` prompt | `execute:pre`, `execute:wave:pre` |
+| `verifier` | `execute:post` | `execute-phase/steps/verify-phase-goal.md` `verifier_dispatch`, appended to the `gsd-verifier` prompt after `${VERIFIER_SKILLS}` inside `<capability_verifier_rules>` | `execute:pre`, `execute:wave:pre`, `execute:wave:post` |
+| `reviewer` | `review:pre` | `review.md` `build_prompt`, appended once to the shared prompt file every external reviewer lane reads, inside `<capability_reviewer_rules>` (#3997) | (the point is wired for contributions only; a `step` or `gate` there fails the registry build) |
+
+
+A `verifier` contribution declared at a point not listed as delivered installs and renders in
+`activeHooks` but is never inlined into a prompt; declare it at `execute:post`. Delivery is advisory: a failure
+to render the point or parse the envelope leaves the prompt without the fragments and never blocks verification,
+and a literal closing tag inside a fragment is escaped so it cannot end the block early. The verify step
+(`verify:pre` / `verify:post`) stays orchestrator-only.
+
 ### `step`
 
 Dispatch the referenced unit. Exactly one of `ref.skill`, `ref.agent`, or `ref.command` is set.

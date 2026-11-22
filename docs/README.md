@@ -34,6 +34,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Resolve baseline-notation findings](how-to/resolve-baseline-notation-findings.md) — fix plan criteria that `verify plan-structure` flags as already true at HEAD (B1), legacy `# baseline at HEAD:` comments (B2), and unreadable notations
 - [Resolve edge-coverage findings](how-to/resolve-edge-coverage-findings.md) — turn the spec phase's surfaced domain-boundary edges into covered, dismissed, or backstopped spec decisions
 - [Probe edges in a non-English project](how-to/probe-edges-in-a-non-english-project.md) — get real edge coverage on a spec written in another language, and tell "no edges here" apart from "the probe could not read it"
+- [Guide external reviewers with a capability](how-to/guide-external-reviewers-with-a-capability.md) — add `review:pre` reviewer guidance so `/gsd-review` and convergence cycles judge plans under your capability's constraints
 - [Resolve prohibition findings](how-to/resolve-prohibition-findings.md) — turn the spec phase's surfaced must-NOT constraints into resolved, dismissed, or deferred spec decisions
 - [Resolve CI/CD pipeline findings](how-to/resolve-cicd-pipeline-findings.md) — act on what `/gsd-code-review` reports for workflow files, Dockerfiles and deploy scripts, and tell a real finding from a false one
 - [Resolve necessity findings](how-to/resolve-necessity-findings.md) — decide whether to keep, simplify, or delete code that `/gsd-code-review` flags as guarding a problem that cannot occur
@@ -42,6 +43,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Change the STATE.md schema](how-to/change-the-state-md-schema.md) — add, change or remove a STATE.md frontmatter key and keep the template and all five reference documents in step
 - [Resolve verify-command path findings](how-to/resolve-verify-command-path-findings.md) — fix an `<automated>` verify command whose target directory does not resolve from the executor's cwd
 - [State a failing direction](how-to/state-a-failing-direction.md) — say what output constitutes failure for an `<automated>` verify command, and migrate a phase planned before the rule
+- [Validate an automated command](how-to/validate-an-automated-command.md) — run a validate-only mode against an `<automated>` verify command at plan time, record the result, and read check 8g's verdicts
 - [Resolve a contract-drift finding](how-to/resolve-contract-drift-findings.md) — bring an agent's completion contract, read-tag gate, or deleted-file test reference back into agreement with the registry
 - [Resolve unreachable-guard findings](how-to/resolve-unreachable-guard-findings.md) — fix shell guards whose fallback arm cannot run, and tell "nothing to report" apart from "could not look"
 - [Declare a hook's crash policy](how-to/declare-a-hook-crash-policy.md) — terminate a GSD hook with `allow`/`deny`/`crash`, declare its `ON_CRASH` policy, and tell a hook's own crash apart from a check that could not run at all
@@ -87,6 +89,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [Spike and sketch](how-to/spike-and-sketch.md) — use `/gsd-spike` and `/gsd-sketch` for exploratory work before committing to a plan
 - [Design a UI phase](how-to/design-a-ui-phase.md) — use the UI phase loop for frontend and visual work
 - [Enable live-DOM verification](how-to/enable-live-dom-verification.md) — opt a project into browser-backed UI acceptance checks during execution, handle the browser-profile lock, and tell "nothing to report" apart from "could not look"
+- [Enable deep verification](how-to/enable-deep-verification.md) — opt a project into agent-driven behavior enumeration and browser execution before UAT, widen it beyond UI phases, and read what is left for you to confirm
 - [Enable UI interaction capture](how-to/enable-ui-interaction-capture.md) — let `/gsd-ui-review`'s auditor capture hover, focus, open-menu and filled-form states through the `chrome-devtools` CLI from Bash, with no MCP server
 - [Develop a Capability for GSD 1.5+](how-to/develop-a-capability.md) — add feature Capabilities, hook fragments, and registry entries
 - [Develop a task-content resolver capability](how-to/develop-a-task-content-resolver-capability.md) — declare a `taskContentResolver` so `execute-plan.md` resolves per-task content from your external issue tracker instead of `PLAN.md`
