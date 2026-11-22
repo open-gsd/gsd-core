@@ -831,11 +831,12 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
       }
       if (fence) { out.push({ skip: true, line: l }); continue; }
       const m = l.match(ID_RE);
-      out.push(m ? { id: m[1], title: m[2].trim(), line: l } : { line: l });
+      const pm = m ? null : l.match(/^###\s+([A-Za-z0-9_.-]+?-(?:CR|BL|WR|IN)-\d+)\s*:/);
+      out.push(m ? { id: m[1], title: m[2].trim(), line: l } : pm ? { prefixed: pm[1], line: l } : { line: l });
     }
     return out;
   };
-  const order = [], title = new Map();
+  const order = [], title = new Map(), prefixedIds = [];
   // An ABSENT review still has a ledger to reconcile: the step's own guard proceeds when
   // one exists, and throwing here would send that run to the trailing non-blocking fallback
   // with the
@@ -849,6 +850,7 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
       const hit = SECTION_SEV.find(([re]) => re.test(h.line));
       curSection = hit ? hit[1] : null;   // an unrecognized ## section falls back to the prefix
     }
+    if (h.prefixed && prefixedIds.indexOf(h.prefixed) === -1) prefixedIds.push(h.prefixed);
     if (h.id && order.indexOf(h.id) === -1) {
       order.push(h.id); title.set(h.id, h.title);
       if (curSection) sectionSev.set(h.id, curSection);
@@ -875,8 +877,10 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const declaredTotal = /^[0-9]+\$/.test(process.env.REVIEW_TOTAL || '') ? Number(process.env.REVIEW_TOTAL) : null;
   // Against order.length -- the CURRENT review's findings -- never rows.length, which also counts
   // rows carried from earlier reviews and would understate the shortfall or invent one.
-  const unparsed = declaredTotal !== null && declaredTotal > order.length ? declaredTotal - order.length : 0;
-  const unparsedNote = unparsed ? ' (' + unparsed + ' finding(s) recorded NOWHERE: the review reports ' + declaredTotal + ', but only ' + order.length + ' matched the expected heading shape \`### <CR|BL|WR|IN>-NN: <title>\`)' : '';
+  const shortfall = declaredTotal !== null && declaredTotal > order.length ? declaredTotal - order.length : 0;
+  // A heading with a review-scoped prefix (W6-CR-01) is a finding the grammar does not read: counted and named, never skipped.
+  const unparsed = Math.max(shortfall, prefixedIds.length);
+  const unparsedNote = unparsed ? ' (' + unparsed + ' finding(s) recorded NOWHERE: ' + (shortfall ? 'the review reports ' + declaredTotal + ', but only ' + order.length + ' matched the expected heading shape \`### <CR|BL|WR|IN>-NN: <title>\`' : '') + (shortfall && prefixedIds.length ? '; ' : '') + (prefixedIds.length ? prefixedIds.length + ' heading(s) carry a prefix before the id (' + prefixedIds.slice(0, 3).join(', ') + (prefixedIds.length > 3 ? ', ...' : '') + ') and are not recognised, so write the id with no prefix' : '') + ')' : '';
   if (order.length === 0 && !unparsed && !fs.existsSync(process.env.DISPOSITION_FILE) && fixReports.length === 0) return;
   const prior = new Map();
   // TITLES, IN THE FRONTMATTER. Ids are reused across re-reviews (--auto renumbers), so an id alone
@@ -888,26 +892,31 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   // Ids whose decision could not be carried: the id now names a DIFFERENT finding. REPORTED, not
   // re-homed -- rows key on the id, and two under one id is an ambiguity. The note does NOT claim the
   // old row is in git: committing is gated on commit_docs. See docs/features/code-review-pipeline.md.
-  const reused = [];
+  const reused = [], badRows = [], dupIds = [];
   var _fmId = null, _fmSec = null;
   // Set when the ledger declares JSON scalars; without it they are bare. Load-bearing: a legacy title
   // that merely LOOKED like JSON was parsed, lost its quotes, and flipped to open.
   var _fmJson = false;
   if (fs.existsSync(process.env.DISPOSITION_FILE)) {
     for (const l of norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')).split('\n')) {
-      const m = l.match(/^\|\s*((?:CR|BL|WR|IN)-\d+)\s*\|\s*([^|]*?)\s*\|\s*(open|fixed|skipped|deferred)\s*\|\s*(.*?)\s*\|?\s*\$/);
+      const m0 = l.match(/^\|\s*((?:CR|BL|WR|IN)-\d+)\s*\|\s*([^|]*?)\s*\|\s*([A-Za-z]+)\s*\|\s*(.*?)\s*\|?\s*\$/);
+      // The disposition is read case-insensitively: a hand-set 'Deferred' is a decision, not an unparseable row.
+      const m = m0 && ['open', 'fixed', 'skipped', 'deferred'].indexOf(m0[3].toLowerCase()) !== -1 ? m0 : null;
       if (m) {
-        prior.set(m[1], { d: m[3], src: m[4].replace(/\s*\(not in the current review\)\s*\$/, '') });
+        // Two rows for one id: the last wins, and the loss is NAMED below.
+        if (prior.has(m[1]) && dupIds.indexOf(m[1]) === -1) dupIds.push(m[1]);
+        prior.set(m[1], { d: m[3].toLowerCase(), src: m[4].replace(/\s*\(not in the current review\)\s*\$/, '') });
         // The table wins over the frontmatter (set unconditionally here, only-if-absent below),
         // whichever order the two appear in the file.
         if (SEV_VOCAB.indexOf(m[2]) !== -1) priorSev.set(m[1], m[2]);
-      }
+      } else if (/^\s*\|/.test(l) && !/^\s*\|\s*(?:Finding\s*\||[-:|\s]+\$)/.test(l)) badRows.push(l);
       // Frontmatter is walked in the same pass, as a SECTIONED list rather than by one line shape.
       if (/^titles: json\s*\$/.test(l)) { _fmJson = true; continue; }
       var msec = l.match(/^(findings):\s*\$/);
       if (msec) { _fmSec = msec[1]; _fmId = null; continue; }
-      var mi = l.match(/^  - id: ((?:CR|BL|WR|IN)-\d+)\s*\$/);
-      if (mi && _fmSec) { _fmId = mi[1]; continue; }
+      // An id outside the grammar still ENDS the previous entry: left on the earlier id, the next title: line overwrote its title.
+      var mi = l.match(/^  - id: (.*?)\s*\$/);
+      if (mi && _fmSec) { _fmId = /^(?:CR|BL|WR|IN)-\d+\$/.test(mi[1]) ? mi[1] : null; continue; }
       // The frontmatter's own copy of the severity -- the fallback when the table cell is unusable.
       var msv = l.match(/^    severity: (critical|warning|info)\s*\$/);
       if (msv && _fmId && _fmSec === 'findings') { if (!priorSev.has(_fmId)) priorSev.set(_fmId, msv[1]); continue; }
@@ -924,11 +933,12 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
                            === String(b === undefined ? '' : b).replace(/\s+/g, ' ').trim();
   // Section headings are matched WHOLE: a prefix match would let '## Fixed Issues Verification'
   // classify every finding under it as fixed.
-  const applied = new Map(), staleFix = [], orphaned = [];
+  const applied = new Map(), staleFix = [], orphaned = [], fixPrefixed = [];
   for (const fixPath of fixReports) {
     let sect = null;
     for (const h of headings(fs.readFileSync(fixPath, 'utf-8'))) {
       if (h.fence || h.skip) continue;
+      if (h.prefixed && fixPrefixed.indexOf(h.prefixed) === -1) fixPrefixed.push(h.prefixed);
       if (/^##\s+Fixed(\s+Issues)?\s*\$/.test(h.line)) { sect = 'fixed'; continue; }
       if (/^##\s+Skipped(\s+Issues)?\s*\$/.test(h.line)) { sect = 'skipped'; continue; }
       if (/^##\s+/.test(h.line)) { sect = null; continue; }
@@ -952,7 +962,11 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const sameFinding = (id) => !priorTitle.has(id) || !title.has(id) || sameTitle(priorTitle.get(id), title.get(id));
   const sev = (id) => sectionSev.get(id) || (priorSev.has(id) && sameFinding(id) ? priorSev.get(id) : prefixSev(id));
   const row = (id) => {
-    if (applied.has(id)) { const a = applied.get(id); return { id, sev: sev(id), d: a.d, src: a.src, t: title.has(id) ? title.get(id) : a.t }; }
+    if (applied.has(id)) {
+      const a = applied.get(id), pw = prior.get(id);
+      if (pw && pw.d !== 'open' && !sameFinding(id) && reused.indexOf(id + '=' + pw.d) === -1) reused.push(id + '=' + pw.d);
+      return { id, sev: sev(id), d: a.d, src: a.src, t: title.has(id) ? title.get(id) : a.t };
+    }
     const was = prior.get(id);
     if (was && was.d !== 'open' && sameFinding(id)) return { id, sev: sev(id), d: was.d, src: was.src || 'recorded', t: title.get(id) };
     // Reused id: the NEW finding is untriaged and renders 'open'; the prior decision loses its row,
@@ -963,11 +977,13 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const rows = order.map(row);
   const orphanedLeft = orphaned.filter((o, i) => !applied.has(o.id) && orphaned.findIndex((q) => q.id === o.id && q.src === o.src) === i);
   const orphanNote = orphanedLeft.length ? ' (' + orphanedLeft.length + ' fix-report finding heading(s) sit under no recognised section (## Fixed Issues, ## Skipped Issues, ## Fixed, ## Skipped), so they were not reconciled: ' + orphanedLeft.map((o) => o.id + ' in ' + o.src).join(', ') + ')' : '';
+  const prefNote = fixPrefixed.length ? ' (' + fixPrefixed.length + ' fix-report heading(s) carry a prefix before the id (' + fixPrefixed.slice(0, 3).join(', ') + (fixPrefixed.length > 3 ? ', ...' : '') + ') and were not reconciled)' : '';
   const carriedIds = [];
   for (const id of prior.keys()) if (order.indexOf(id) === -1 && carriedIds.indexOf(id) === -1) carriedIds.push(id);
   for (const id of applied.keys()) if (order.indexOf(id) === -1 && carriedIds.indexOf(id) === -1) carriedIds.push(id);
   for (const id of carriedIds) {
     const act = applied.get(id), was = prior.get(id);
+    if (act && was && was.d !== 'open' && priorTitle.has(id) && !sameTitle(priorTitle.get(id), act.t) && reused.indexOf(id + '=' + was.d) === -1) reused.push(id + '=' + was.d);
     const d = act ? act.d : (was ? was.d : 'open');
     const src = act ? act.src : (was && was.src) || (d === 'open' ? '-' : 'recorded');
     // Title precedence: the report that DECIDED it, then the prior ledger. A carried row is absent
@@ -978,12 +994,26 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
     rows.push({ id, sev: sev(id), d: d, src: src, t: kt, carried: true });
   }
   const open = rows.filter((r) => r.d === 'open').length;
+  const cell0 = (l) => (l.split('|')[1] || '').trim();
+  // Ledger text reaches the console: control characters are masked and the list is capped, as the prefixed ids are.
+  const msk = (x) => String(x).replace(/[\x00-\x1f\x7f-\x9f]/g, '?').slice(0, 40);
+  const nm = (l) => msk(cell0(l)) || '?';
+  const names = (a) => a.slice(0, 3).join(', ') + (a.length > 3 ? ', ...' : '');
+  // A row outside the grammar whose id a regenerated row now owns is reset to open (a value outside the enum is
+  // coerced to the safe default, ADR-227); it is NAMED with what it held, never replaced silently.
+  const resetRows = badRows.filter((l) => rows.some((r) => r.id === cell0(l)));
+  const keptBad = badRows.filter((l) => resetRows.indexOf(l) === -1);
+  const cellAt = (l, i) => msk((l.split('|')[i] || '').trim());
+  const resetNote = resetRows.length ? ' (' + resetRows.length + ' ledger row(s) not in the id | severity | disposition | source shape were reset to open and their text is not kept: ' + names(resetRows.map((l) => nm(l) + ' was ' + cellAt(l, 3) + ' / ' + cellAt(l, 4))) + ')' : '';
+  const badNote = keptBad.length ? ' (' + keptBad.length + ' ledger row(s) not in the id | severity | disposition | source shape: ' + names(keptBad.map(nm)) + '; kept verbatim, not counted)' : '';
+  const dupNote = dupIds.length ? ' (' + dupIds.length + ' finding id(s) have more than one ledger row, and the last row of each was used: ' + names(dupIds) + ')' : '';
   const reusedNote = reused.length ? ' (' + reused.length + ' recorded decision(s) DROPPED -- the id now names a different finding, so the decision no longer has a row: ' + reused.join(', ') + ')' : '';
   const staleNote = staleFix.length ? ' (' + staleFix.length + ' fix-report entr' + (staleFix.length === 1 ? 'y titles its' : 'ies title their') + ' finding differently from the review, so ' + (staleFix.length === 1 ? 'it was' : 'they were') + ' not reconciled -- a stale report, or a re-titled one: ' + staleFix.join(', ') + ')' : '';
-  if (rows.length === 0 && !unparsed && !orphanedLeft.length && !fs.existsSync(process.env.DISPOSITION_FILE)) return;
+  if (rows.length === 0 && !unparsed && !orphanedLeft.length && !fixPrefixed.length && !fs.existsSync(process.env.DISPOSITION_FILE)) return;
   const escapePipes = (t) => t.replace(/\\\\.|\|/g, (m) => (m === '|' ? '\\\\|' : m));
   const body = ['# Phase ' + process.env.PADDED + ': Code Review Disposition', '', '| Finding | Severity | Disposition | Source |', '|---------|----------|-------------|--------|']
     .concat(rows.map((r) => { const src = escapePipes(r.src || '-'); const mark = r.carried && !/\(not in the current review\)\s*\$/.test(src) ? ' (not in the current review)' : ''; return '| ' + r.id + ' | ' + r.sev + ' | ' + r.d + ' | ' + src + mark + ' |'; }))
+    .concat(keptBad)
     .concat(['', 'Dispositions: \`open\` (recorded, not yet triaged), \`fixed\`, \`skipped\`, \`deferred\`.', 'Set \`deferred\` by hand and put the reason in the Source cell; both are preserved. A \`|\` in the reason is kept as prose and escaped on the next run.', 'Re-running the gate keeps every row it can. A row the current review no longer reports is kept and its Source cell flagged, so a finding does not leave this record silently. ONE exception: when a finding id is REUSED by a different finding, the earlier decision cannot keep a row — the id is taken — and it is dropped. A RECORDED decision (anything but \`open\`) is named on the console when that happens; a row still at \`open\` is replaced silently, because \`open\` records no decision to lose.', '']).join('\n');
   // One line: the value feeds a line-oriented record a regex re-reads.
   const oneLine = (t) => String(t === undefined || t === null ? '' : t).replace(/[\r\n]+/g, ' ').trim();
@@ -1006,11 +1036,11 @@ FIX_REPORT_FILE="${FIX_REPORT_FILE}" node -e "
   const stripTs = (t) => t.replace(/^recorded:.*\$/m, 'recorded:');
   const prev = fs.existsSync(process.env.DISPOSITION_FILE) ? norm(fs.readFileSync(process.env.DISPOSITION_FILE, 'utf-8')) : '';
   if (prev && stripTs(prev) === stripTs(render(''))) {
-    console.log('Code review disposition unchanged: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote);
+    console.log('Code review disposition unchanged: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + prefNote + dupNote + resetNote + badNote);
     return;
   }
   fs.writeFileSync(process.env.DISPOSITION_FILE, render(new Date().toISOString()));
-  console.log('Code review disposition recorded: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + ' — ' + process.env.DISPOSITION_FILE);
+  console.log('Code review disposition recorded: ' + open + ' of ' + rows.length + ' finding(s) open' + staleNote + unparsedNote + reusedNote + orphanNote + prefNote + dupNote + resetNote + badNote + ' — ' + process.env.DISPOSITION_FILE);
   })();
 " || echo "Code review disposition record skipped (non-blocking)."
 

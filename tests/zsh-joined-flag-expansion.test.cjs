@@ -331,3 +331,126 @@ describe('/gsd-code-review --files resolves the listed files under bash and zsh,
     });
   }
 });
+
+// ─── 6. the executor path guard under zsh and bash (#6153) ────────────────────────────────────────────────────
+//
+// `_norm` split with bash-only `read -ra` and popped a 0-based array, and `_unquote` / `_resets_cwd` took characters
+// with `${s:i:1}`, which zsh reads as the `:i` history modifier, so under zsh every command the guard tokenized
+// errored and no violation was ever reported. The whole shipped guard block is run here from a real linked worktree,
+// under each installed shell, and the verdicts and output must be the same.
+
+describe('the executor path guard gives the same verdicts under zsh and bash (#6153)', () => {
+  const { createTempDir, cleanup } = require('./helpers.cjs');
+  const { runGit } = require('./helpers/process-seam.cjs');
+  const GUARD = path.join(ROOT, 'gsd-core', 'references', 'worktree-path-safety.md');
+
+  /** The bash fence that defines `_norm`, as written. */
+  function guardBlock() {
+    const lines = splitLines(fs.readFileSync(GUARD, 'utf8'));
+    const at = lines.findIndex((line) => line.startsWith('_norm()'));
+    assert.ok(at >= 0, 'the guard must define _norm');
+    const open = lines.map((line, i) => [line, i]).filter(([line, i]) => line === '```bash' && i < at).pop()[1];
+    const close = lines.findIndex((line, i) => i > at && line === '```');
+    return lines.slice(open + 1, close).join('\n');
+  }
+
+  /** A repository with src/ and `has space/`, and a linked worktree of it; the guard runs from the worktree. */
+  function linkedWorktree(t) {
+    const parent = createTempDir('gsd-6153-');
+    t.after(() => cleanup(parent));
+    const main = path.join(parent, 'repo');
+    fs.mkdirSync(path.join(main, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(main, 'has space'), { recursive: true });
+    fs.writeFileSync(path.join(main, 'src', '.keep'), '');
+    fs.writeFileSync(path.join(main, 'has space', '.keep'), '');
+    const git = (args) => assert.equal(runGit(['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: main }).exitCode, 0, args.join(' '));
+    git(['init', '-q', '-b', 'main']);
+    git(['add', '-A']);
+    git(['commit', '-q', '-m', 'init']);
+    const wt = path.join(parent, 'wt');
+    git(['worktree', 'add', '-q', '-b', 'wt', wt]);
+    return { main: fs.realpathSync(main), wt: fs.realpathSync(wt) };
+  }
+
+  function runGuard(shell, fx, cmd) {
+    const script = `${guardBlock()}\necho PASSED`;
+    const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
+    const r = runHook(args[0], args.slice(1), { interpreter: shell, timeoutMs: PROBE_TIMEOUT_MS, cwd: fx.wt, env: { ...process.env, AUTOMATED_CMD: cmd } });
+    assert.equal(r.outcome, OUTCOME.EXITED, `${shell} did not complete: ${r.summary}`);
+    return { status: r.exitCode, out: `${r.stdout}${r.stderr}` };
+  }
+
+  // The guard targets POSIX shells (zsh, bash 3.2); a Windows lane's 8.3 temp paths are a separate path-form concern.
+  const POSIX_ONLY = { skip: process.platform === 'win32' && 'the executor guard targets POSIX shells' };
+  const PASSES = ['cd src && npm test', 'cd "has space"', 'npm --prefix ./src'];
+  const HALTS = (fx) => [`cd ${fx.main}/src`, 'cd ../repo', 'cd src & cd ../..', 'cd ./src/../..', 'cd nope/../../repo'];
+
+  for (const shell of SHELLS) {
+    test(`${shell}: the commands that stay inside the worktree pass without a shell error`, POSIX_ONLY, (t) => {
+      const fx = linkedWorktree(t);
+      for (const cmd of PASSES) {
+        const r = runGuard(shell, fx, cmd);
+        assert.equal(r.status, 0, `${cmd}: ${r.out}`);
+        assert.doesNotMatch(r.out, /unrecognized modifier|bad option|syntax error|bad substitution/i, cmd);
+        assert.match(r.out, /PASSED/);
+      }
+    });
+
+    test(`${shell}: the commands that leave the worktree halt with the FATAL message`, POSIX_ONLY, (t) => {
+      const fx = linkedWorktree(t);
+      for (const cmd of HALTS(fx)) {
+        const r = runGuard(shell, fx, cmd);
+        assert.equal(r.status, 1, `${cmd}: ${r.out}`);
+        assert.match(r.out, /FATAL: <automated> command (relocates|names)/, cmd);
+        assert.doesNotMatch(r.out, /unrecognized modifier|bad option|syntax error|bad substitution/i, cmd);
+      }
+    });
+
+    test(`${shell}: _norm gives / for the root and for ..-only results, and drops empty and . segments`, () => {
+      const norm = guardBlock().split('\n').filter((line, i, all) => {
+        const start = all.findIndex((l) => l.startsWith('_norm()'));
+        const end = all.findIndex((l, j) => j > start && l.startsWith('  done; printf'));
+        return i >= start && i <= end;
+      }).join('\n');
+      const cases = [['/', '/'], ['/..', '/'], ['/a/../..', '/'], ['/a/b/../c', '/a/c'], ['//a///b/./c/', '/a/b/c']];
+      const script = `${norm}\n${cases.map(([input]) => `printf '%s\\n' "$(_norm '${input}')"`).join('\n')}`;
+      const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
+      const r = runHook(args[0], args.slice(1), { interpreter: shell, timeoutMs: PROBE_TIMEOUT_MS });
+      assert.equal(r.exitCode, 0, r.stderr);
+      assert.deepEqual(splitLines(r.stdout).filter(Boolean), cases.map(([, expected]) => expected));
+    });
+
+    test(`${shell}: property: _norm equals the POSIX normalization of the path, with the root as /`, () => {
+      const norm = guardBlock().split('\n').filter((line, i, all) => {
+        const start = all.findIndex((l) => l.startsWith('_norm()'));
+        const end = all.findIndex((l, j) => j > start && l.startsWith('  done; printf'));
+        return i >= start && i <= end;
+      }).join('\n');
+      const segment = fc.constantFrom('a', 'b', '..', '.', '', 'c d', 'x*', '...', '-n');
+      fc.assert(
+        fc.property(fc.array(fc.array(segment, { minLength: 0, maxLength: 8 }), { minLength: 1, maxLength: 6 }), (paths) => {
+          const inputs = paths.map((segments) => `/${segments.join('/')}`);
+          const expected = inputs.map((input) => { const n = path.posix.normalize(input); return n.length > 1 ? n.replace(/\/$/, '') : n; });
+          const script = `${norm}\n${inputs.map((input) => `printf '%s\\n' "$(_norm '${input}')"`).join('\n')}`;
+          const args = shell === 'bash' ? ['--noprofile', '--norc', '-c', script] : ['-f', '-c', script];
+          const r = runHook(args[0], args.slice(1), { interpreter: shell, timeoutMs: PROBE_TIMEOUT_MS });
+          assert.equal(r.exitCode, 0, r.stderr);
+          assert.deepEqual(splitLines(r.stdout).slice(0, inputs.length), expected, `${shell}: ${JSON.stringify(inputs)}`);
+        }),
+        { numRuns: 12 },
+      );
+    });
+  }
+
+  test('the verdict and the message are identical in every installed shell', { skip: (SHELLS.length < 2 && 'zsh is not installed, so there is nothing to compare bash with') || (process.platform === 'win32' && 'the executor guard targets POSIX shells') }, (t) => {
+    const fx = linkedWorktree(t);
+    const norm = (out) => out.split(fx.main).join('<MAIN>').split(fx.wt).join('<WT>');
+    for (const cmd of [...PASSES, ...HALTS(fx)]) {
+      const results = SHELLS.map((shell) => runGuard(shell, fx, cmd));
+      for (const r of results.slice(1)) {
+        assert.equal(r.status, results[0].status, `${cmd}: exit status`);
+        assert.equal(norm(r.out), norm(results[0].out), `${cmd}: output`);
+      }
+    }
+  });
+});

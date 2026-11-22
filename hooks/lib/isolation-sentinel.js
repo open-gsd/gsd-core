@@ -64,8 +64,15 @@ const fs = require('fs');
 const path = require('path');
 const { parseDispatchIdentity } = require('./dispatch-identity.js');
 
-// Isolation modes ADR-1239 declares (mirrors gsd-tools.cjs
-// routeDispatchIsolation / routeRecordDispatchIsolation).
+// Isolation modes ADR-1239 declares. #4561: the OWNER of this vocabulary is
+// src/dispatch-isolation.cts (compiled to gsd-core/bin/lib/dispatch-isolation.cjs),
+// which gsd-tools.cjs, capability-validator.cjs, host-integration.cts and
+// worktree-base-ref.cts all consume. This file keeps a literal MIRROR on
+// purpose: the guard hooks must load on a raw plugin-marketplace install where
+// the compiled lib is absent and the self-healing build seam has not yet run,
+// and a hook that dies at module load is worse than one carrying a mirror. The
+// mirror is pinned to the owner by tests/host-integration-validator-parity.test.cjs
+// — add a mode there and this line fails a test until it is updated here too.
 const VALID_ISOLATION = new Set(['harness-worktree', 'orchestrator-worktree', 'none']);
 
 const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.json');
@@ -73,6 +80,18 @@ const SENTINEL_RELATIVE_PATH = path.join('.gsd', 'dispatch-isolation-sentinel.js
 // #5682: per-dispatch records, one file per `<phase>--<plan>` under this directory.
 const KEYED_SENTINEL_DIR = path.join('.gsd', 'dispatch-isolation');
 const SAFE_SENTINEL_KEY_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+// #4904 (option (c), ADR-4630): executor-identity records, one file per query scope, written by a plain
+// `dispatch-isolation` query that holds a caller's `none` (it writes no decision record). Read for
+// classification only (`isExecutorDispatch`), never for enforcement. A sibling of KEYED_SENTINEL_DIR, not
+// inside it: the keyed scan treats a file there that does not match its own phase/plan key as unusable.
+// Literal mirrors of the writer's owner, src/executor-type.cts (EXECUTOR_IDENTITY_DIR, MAX_EXECUTOR_TYPES,
+// EXECUTOR_IDENTITY_MAX_BYTES), kept so this hook needs no gsd-core/bin/lib require;
+// tests/held-query-executor-identity.test.cjs asserts the two sides agree.
+const IDENTITY_RECORD_DIR = path.join('.gsd', 'dispatch-isolation-identity');
+const IDENTITY_MAX_EXECUTOR_TYPES = 64;
+const IDENTITY_RECORD_MAX_BYTES = 4096;
+const IDENTITY_RECORD_SCHEMA = 1;
 
 // #5758: a real sentinel payload is under 300 bytes. Anything larger is not one, and the cap bounds
 // the read so a hostile or runaway record cannot be pulled into the hook.
@@ -199,6 +218,20 @@ function phaseSentinelPath(root, phase) {
   return path.join(root, KEYED_SENTINEL_DIR, `${phase}.json`);
 }
 
+/**
+ * #4904: the file name of the executor-identity record for one query scope, or null when a phase or plan the
+ * scope names is not a safe key (nothing is written or read for it). `+` is outside the safe-key alphabet, so
+ * no two scopes share a name: a plan scope is `plan+<phase>+<plan>.json` (the phase empty when the query named
+ * none), a phase scope `phase+<phase>.json`, and a query naming neither `all.json`.
+ */
+function identityRecordName(phase, plan) {
+  if (phase !== null && !isSafeSentinelKey(phase)) return null;
+  if (plan !== null && !isSafeSentinelKey(plan)) return null;
+  if (plan !== null) return `plan+${phase === null ? '' : phase}+${plan}.json`;
+  if (phase !== null) return `phase+${phase}.json`;
+  return 'all.json';
+}
+
 // #3045 SECURITY F2 fix: how long a written sentinel is trusted as "this
 // dispatch's decision" before a reader falls back to the conservative
 // registry+config check.
@@ -298,8 +331,8 @@ function resolveSentinelRoot(cwd) {
  * Returns one of:
  *   { present: false }
  *   { present: true, stale: true,  malformed: true }
- *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, writtenAt, executorType, executorTypes, executorTypesTruncated }
- *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, writtenAt, executorType, executorTypes, executorTypesTruncated }
+ *   { present: true, stale: true,  malformed: false, isolation, harnessFlag, phase, plan, decidedBy, writtenAt, decidedAt, holdExpired, executorType, executorTypes, executorTypesTruncated }
+ *   { present: true, stale: false, malformed: false, isolation, harnessFlag, phase, plan, decidedBy, writtenAt, decidedAt, holdExpired, executorType, executorTypes, executorTypesTruncated }
  *
  * A malformed/unparseable sentinel is treated as STALE, never fatal — the
  * caller's conservative fallback path covers both "absent" and "stale"
@@ -310,12 +343,28 @@ function resolveSentinelRoot(cwd) {
  * asserting on wall-clock time.
  */
 function readSentinel(cwd, { clock = Date, dispatchIds = null, subagentType = null, readText = readSentinelText } = {}) {
-  const root = resolveSentinelRoot(cwd);
+  return readSentinelAt(resolveSentinelRoot(cwd), { clock, dispatchIds, subagentType, readText });
+}
+
+/**
+ * #4561: `readSentinel` minus the root resolution. Reads the records under exactly
+ * `<root>/.gsd/` with the same return shape, staleness and shape rules and injectable
+ * `clock`; never throws. gsd-tools.cjs's `routeDispatchIsolation` reads the files it
+ * is about to write through it, so the resolver and the guards share one definition
+ * of fresh, well-formed and applicable. `ownScope` narrows the candidates to records
+ * at `dispatchIds`' own scope, for the resolver's hold: each identifier it names must
+ * equal the record's, a phase with no plan also reads that phase's plan records, and a
+ * query naming neither reads only the legacy slot, whatever scope it carries. Without
+ * it another orchestrator's newer unscoped write would win `latestWritten` and hide
+ * the query's own record (ADR-4630 Decision 2).
+ */
+function readSentinelAt(root, { clock = Date, dispatchIds = null, ownScope = false, subagentType = null, readText = readSentinelText } = {}) {
   // #6213: the executor-identity scan feeds only `isExecutorDispatch`, which answers true for gsd-executor
   // before it looks at any record, so a gsd-executor dispatch skips the scan; its enforcement read is the
   // pre-#6213 read plus one bounded retry of a refused file. `readText` is a seam for tests (a replacement for `readSentinelText`).
-  const classify = !EXECUTOR_SUBAGENT_TYPES.has(subagentType);
-
+  // The resolver's own-scope hold read (`ownScope`, gsd-tools.cjs `heldDegradeRecord`) classifies no
+  // dispatch, so it skips the scan too: its answer is the record at its own scope, nothing else.
+  const classify = !ownScope && !EXECUTOR_SUBAGENT_TYPES.has(subagentType);
   // #5682: candidates are the record keyed by this dispatch's own phase/plan, the phase-level
   // record for its phase, and the single legacy slot. A keyed candidate counts only when it is
   // well-formed and its contents agree with its own filename key; the legacy slot only when it
@@ -330,10 +379,20 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null, subagentType = nu
       const c = parseSentinelFileRetrying(planFile, clock, keyedDirs, readText);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === dispatchIds.plan) keyedCandidates.push(c);
     }
-    const phaseFile = phaseSentinelPath(root, dispatchIds.phase);
+    const phaseFile = ownScope && dispatchIds.plan ? null : phaseSentinelPath(root, dispatchIds.phase);
     if (phaseFile) {
       const c = parseSentinelFileRetrying(phaseFile, clock, keyedDirs, readText);
       if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan === null) keyedCandidates.push(c);
+    }
+    if (ownScope && !dispatchIds.plan) {
+      const planFiles = planRecordsOfPhase(root, dispatchIds.phase);
+      // More entries than the bound: the hold cannot see every plan record of the phase, so it holds nothing.
+      if (planFiles === null) return { present: false };
+      for (const planFile of planFiles) {
+        const c = parseSentinelFileRetrying(planFile, clock, keyedDirs, readText);
+        if (c.present && !c.malformed && c.phase === dispatchIds.phase && c.plan &&
+            keyedSentinelPath(root, c.phase, c.plan) === planFile) keyedCandidates.push(c);
+      }
     }
   }
 
@@ -342,17 +401,27 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null, subagentType = nu
   // type: ENOENT is absent, anything else cannot be ruled out.
   const legacyFuture = legacy.present && !legacy.malformed && legacy.writtenAt - clock.now() > CLOCK_SKEW_MS;
   const legacyUnusable = classify && (!legacy.present || legacy.malformed || legacyFuture) && recentEntryExists(sentinelPath(root), clock);
-  const legacyApplies = legacy.present && !legacy.malformed && sentinelAppliesToDispatch(legacy, dispatchIds);
+  const legacyApplies = legacy.present && !legacy.malformed &&
+    (ownScope ? recordIsAtScope(legacy, dispatchIds) : sentinelAppliesToDispatch(legacy, dispatchIds));
   // #6213: executor-identity classification looks at EVERY recent well-formed record in the project,
-  // whatever its phase or plan: the keyed records under `.gsd/dispatch-isolation/` plus the legacy slot.
+  // whatever its phase or plan: the keyed records under `.gsd/dispatch-isolation/` plus the legacy slot,
+  // and (#4904) the identity records under `.gsd/dispatch-isolation-identity/`.
   // Enforcement (below) is unaffected and still uses the record picked for this dispatch's identity.
   const scanned = classify ? scanRecentKeyedRecords(root, clock, keyedDirs, readText) : [];
-  const scanOverflow = scanned.scanOverflow === true || legacyUnusable;
+  // #4904: the executor-identity records a held query writes, read on this classify path only. They join the
+  // candidates `isExecutorDispatch` reads and nothing else: they carry no decision and never win enforcement.
+  const identities = classify ? scanIdentityRecords(root, clock, readText) : [];
+  // #4904: while a hold is possible (a hold-eligible record among those read), a state in which a held query
+  // cannot write its identity record fails classification closed. A project with no such record reads as
+  // before, however its `.gsd` is set up.
+  const holdPossible = classify && [legacy, ...keyedCandidates, ...scanned].some(isHoldEligible);
+  const writeBlocked = holdPossible && (heldScopeHasNoIdentityName(legacy) || identityWriteBlocked(root));
+  const scanOverflow = scanned.scanOverflow === true || identities.scanOverflow === true || legacyUnusable || writeBlocked;
 
   const fresh = keyedCandidates.filter((c) => !c.stale);
   if (legacyApplies && !legacy.stale) fresh.push(legacy);
   // #6213: every well-formed candidate considered, for executor-identity classification only.
-  const considered = [...keyedCandidates, ...scanned, ...(legacy.present && !legacy.malformed ? [legacy] : [])];
+  const considered = [...keyedCandidates, ...scanned, ...identities, ...(legacy.present && !legacy.malformed ? [legacy] : [])];
   if (fresh.length > 0) return withCandidates(latestWritten(fresh), considered, scanOverflow);
 
   // Nothing fresh: a stale keyed record still feeds the aged-none path; otherwise the legacy
@@ -382,8 +451,47 @@ function readSentinel(cwd, { clock = Date, dispatchIds = null, subagentType = nu
  */
 function scanRecentKeyedRecords(root, clock, keyedDirs, readText = readSentinelText) {
   const out = [];
-  const setOverflow = () => Object.defineProperty(out, 'scanOverflow', { value: true, enumerable: false, configurable: true });
   const dir = path.join(root, KEYED_SENTINEL_DIR);
+  const listing = listRecentRecordFiles(root, dir, clock);
+  let overflow = listing.overflow;
+  for (const name of listing.names) {
+    const file = path.join(dir, name);
+    const c = parseSentinelFileRetrying(file, clock, keyedDirs, readText);
+    if (!c.present) {
+      // An entry renamed or removed since the directory read is gone, not unusable; a refusal of one that
+      // is still there (after the retry) cannot be ruled out.
+      if (!entryIsGone(file)) overflow = true;
+      continue;
+    }
+    if (c.malformed || !c.phase) { overflow = true; continue; }
+    const expected = c.plan ? keyedSentinelPath(root, c.phase, c.plan) : phaseSentinelPath(root, c.phase);
+    if (expected && sameKeyedRecord(file, expected)) {
+      out.push(c);
+      // A recent file claiming a `written_at` beyond the skew allowance is not a usable recent record
+      // (`isRecentRecord` skips it), yet it may name the type: it cannot be ruled out.
+      if (c.writtenAt - clock.now() > CLOCK_SKEW_MS) overflow = true;
+    } else overflow = true;
+  }
+  if (overflow) markScanOverflow(out);
+  return out;
+}
+
+/** Mark a scan's result array with the non-enumerable `scanOverflow: true`. */
+function markScanOverflow(out) {
+  Object.defineProperty(out, 'scanOverflow', { value: true, enumerable: false, configurable: true });
+}
+
+/**
+ * #6213 / #4904: the bounded directory enumeration both record scans share. Returns `{ names, overflow }`:
+ * the `.json` regular-file names under `dir` whose mtime is inside the recency window, newest mtime first, at
+ * most MAX_SCANNED_RECORDS of them, and whether the enumeration could not rule a record out. `.gsd` and `dir`
+ * must be real directories: either missing (ENOENT) is no records, not overflow; a link, a non-directory, or
+ * one that cannot be opened or read is overflow. At most MAX_SCANNED_DIR_ENTRIES entries are iterated (every
+ * entry counts) and hitting that bound is overflow. A recent link, FIFO or device named `.json`, or an entry
+ * whose lstat fails other than ENOENT, is overflow; non-`.json` entries, directories and mtime-aged entries
+ * are ignored. Never throws.
+ */
+function listRecentRecordFiles(root, dir, clock) {
   const survivors = [];
   let overflow = false;
   let handle = null;
@@ -395,14 +503,10 @@ function scanRecentKeyedRecords(root, clock, keyedDirs, readText = readSentinelT
         st = fs.lstatSync(target);
       } catch (err) {
         // An absent directory has no records (empty, not overflow); any other failure cannot be enumerated.
-        if (err && err.code === 'ENOENT') return out;
-        setOverflow();
-        return out;
+        if (err && err.code === 'ENOENT') return { names: [], overflow: false };
+        return { names: [], overflow: true };
       }
-      if (!st.isDirectory() || st.isSymbolicLink()) {
-        setOverflow();
-        return out;
-      }
+      if (!st.isDirectory() || st.isSymbolicLink()) return { names: [], overflow: true };
     }
     handle = fs.opendirSync(dir);
     const now = clock.now();
@@ -430,8 +534,7 @@ function scanRecentKeyedRecords(root, clock, keyedDirs, readText = readSentinelT
     }
   } catch {
     // opendir/read failed (unreadable directory): the records cannot be ruled out, so fail closed.
-    setOverflow();
-    return out;
+    return { names: [], overflow: true };
   } finally {
     if (handle) {
       try { handle.closeSync(); } catch { /* nothing left to release */ }
@@ -440,26 +543,162 @@ function scanRecentKeyedRecords(root, clock, keyedDirs, readText = readSentinelT
   survivors.sort((a, b) => b.mtimeMs - a.mtimeMs || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   // At most MAX_SCANNED_DIR_ENTRIES entries are iterated and MAX_SCANNED_RECORDS equals it, so the survivors
   // never exceed MAX_SCANNED_RECORDS; the slice keeps the parse bound explicit.
-  for (const { name } of survivors.slice(0, MAX_SCANNED_RECORDS)) {
+  return { names: survivors.slice(0, MAX_SCANNED_RECORDS).map((e) => e.name), overflow };
+}
+
+/**
+ * #4904: every usable recent executor-identity record under `.gsd/dispatch-isolation-identity/`, as
+ * classification candidates (`identity: true`, `executorType`, `executorTypes`, `executorTypesTruncated`,
+ * `writtenAt`). The enumeration and its bounds are `listRecentRecordFiles`'. Fails closed like the keyed scan:
+ * a recent `.json` entry that is refused (oversize, a link, a hard link, not a regular file), not a well-formed
+ * identity record (`parseIdentityRecordFile`), stored under a name other than its own scope's, or stamped
+ * more than CLOCK_SKEW_MS in the future sets the non-enumerable `scanOverflow`, and `isExecutorDispatch` then
+ * treats a valid non-role name as an executor. The states in which a held query cannot write a record are
+ * judged separately, and only while a hold is possible (`identityWriteBlocked`). Never throws.
+ */
+function scanIdentityRecords(root, clock, readText = readSentinelText) {
+  const out = [];
+  const dir = path.join(root, IDENTITY_RECORD_DIR);
+  const parentDirs = [path.join(root, '.gsd'), dir];
+  const listing = listRecentRecordFiles(root, dir, clock);
+  let overflow = listing.overflow;
+  for (const name of listing.names) {
     const file = path.join(dir, name);
-    const c = parseSentinelFileRetrying(file, clock, keyedDirs, readText);
+    let c = parseIdentityRecordFile(file, parentDirs, readText);
+    if (!c.present && !entryIsGone(file)) c = parseIdentityRecordFile(file, parentDirs, readText);
     if (!c.present) {
-      // An entry renamed or removed since the directory read is gone, not unusable; a refusal of one that
-      // is still there (after the retry) cannot be ruled out.
       if (!entryIsGone(file)) overflow = true;
       continue;
     }
-    if (c.malformed || !c.phase) { overflow = true; continue; }
-    const expected = c.plan ? keyedSentinelPath(root, c.phase, c.plan) : phaseSentinelPath(root, c.phase);
-    if (expected && sameKeyedRecord(file, expected)) {
-      out.push(c);
-      // A recent file claiming a `written_at` beyond the skew allowance is not a usable recent record
-      // (`isRecentRecord` skips it), yet it may name the type: it cannot be ruled out.
-      if (c.writtenAt - clock.now() > CLOCK_SKEW_MS) overflow = true;
-    } else overflow = true;
+    if (c.malformed) { overflow = true; continue; }
+    const expected = identityRecordName(c.phase, c.plan);
+    if (!expected || !sameKeyedRecord(file, path.join(dir, expected))) { overflow = true; continue; }
+    if (c.writtenAt - clock.now() > CLOCK_SKEW_MS) { overflow = true; continue; }
+    out.push(c);
   }
-  if (overflow) setOverflow();
+  if (overflow) markScanOverflow(out);
   return out;
+}
+
+/**
+ * #4904: the record-level conditions under which the resolver holds a record (gsd-tools.cjs `heldDegradeRecord`,
+ * minus the scope match): present, well-formed, fresh, inside its hold window, `none`, decided by the caller.
+ */
+function isHoldEligible(record) {
+  return !!record && record.present === true && !record.malformed && !record.stale && !record.holdExpired &&
+    record.isolation === 'none' && record.decidedBy === 'caller';
+}
+
+/**
+ * #4904: a hold-eligible record whose phase or plan is not a safe key. Only the legacy slot can carry one (keyed
+ * paths need safe keys), and a held query at that scope has no identity record name, so it writes nothing the
+ * guards can read.
+ */
+function heldScopeHasNoIdentityName(record) {
+  if (!isHoldEligible(record)) return false;
+  return (record.phase !== null && !isSafeSentinelKey(record.phase)) || (record.plan !== null && !isSafeSentinelKey(record.plan));
+}
+
+/** #4904: an identity record name in the writer's grammar (`identityRecordName`): `all.json`, `phase+…`, `plan+…`. */
+function isIdentityRecordName(name) {
+  if (!hasJsonSuffix(name)) return false;
+  const upper = name.toUpperCase();
+  return upper === 'ALL.JSON' || upper.startsWith('PHASE+') || upper.startsWith('PLAN+');
+}
+
+/**
+ * #4904: does a state stand in which a held query cannot write its executor-identity record? A held query that
+ * cannot keeps its hold and writes no decision record, so the guards cannot learn the names it derived; the
+ * caller (`readSentinelAt`, only while a hold is possible) fails classification closed instead. True when:
+ * the identity directory, or with none `.gsd`, cannot be written and searched by this process (an access check
+ * for W_OK and X_OK, what an exclusive create needs); `.gsd/.gitignore` is a link (the tool-owned `.gsd` owner
+ * refuses to write); or a directory sits at a name in the writer's grammar, whatever its age (a rename cannot
+ * replace it and the prune cannot remove it). Entries past MAX_SCANNED_DIR_ENTRIES, or a directory that cannot
+ * be listed, count as blocked. A link or non-directory identity path is already overflow in the identity scan.
+ * Never throws.
+ */
+function identityWriteBlocked(root) {
+  const gsdDir = path.join(root, '.gsd');
+  const dir = path.join(root, IDENTITY_RECORD_DIR);
+  let dirExists = false;
+  for (const target of [dir, gsdDir]) {
+    try {
+      fs.accessSync(target, fs.constants.W_OK | fs.constants.X_OK);
+      dirExists = target === dir;
+      break;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      return true;
+    }
+  }
+  try {
+    if (fs.lstatSync(path.join(gsdDir, '.gitignore')).isSymbolicLink()) return true;
+  } catch { /* absent: the owner creates it */ }
+  if (!dirExists) return false;
+  let handle = null;
+  try {
+    handle = fs.opendirSync(dir);
+    let seen = 0;
+    for (let ent = handle.readSync(); ent !== null; ent = handle.readSync()) {
+      seen += 1;
+      if (seen > MAX_SCANNED_DIR_ENTRIES) return true;
+      if (!isIdentityRecordName(ent.name)) continue;
+      try {
+        if (fs.lstatSync(path.join(dir, ent.name)).isDirectory()) return true;
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') return true;
+      }
+    }
+  } catch {
+    return true;
+  } finally {
+    if (handle) {
+      try { handle.closeSync(); } catch { /* nothing left to release */ }
+    }
+  }
+  return false;
+}
+
+/**
+ * #4904: parse one executor-identity record. `{ present: false }` when the bounded read refuses it (the same
+ * refusals as a decision record, at IDENTITY_RECORD_MAX_BYTES); `{ present: true, malformed: true }` unless it
+ * is a JSON object with exactly these types: `schema` 1, `phase` and `plan` each null or a safe key,
+ * `executor_type` null or a valid executor type, `executor_types` an array of valid executor types,
+ * `executor_types_truncated` a boolean and `written_at` a finite number. More than
+ * IDENTITY_MAX_EXECUTOR_TYPES names reads as truncated, keeping the first that many. Never throws.
+ */
+function parseIdentityRecordFile(file, parentDirs, readText = readSentinelText) {
+  const raw = readText(file, parentDirs, IDENTITY_RECORD_MAX_BYTES);
+  if (raw === null) return { present: false };
+  let p;
+  try {
+    p = JSON.parse(raw);
+  } catch {
+    return { present: true, malformed: true };
+  }
+  const keyOrNull = (v) => v === null || isSafeSentinelKey(v);
+  if (
+    !p || typeof p !== 'object' || Array.isArray(p) ||
+    p.schema !== IDENTITY_RECORD_SCHEMA ||
+    !keyOrNull(p.phase) || !keyOrNull(p.plan) ||
+    !(p.executor_type === null || isValidExecutorType(p.executor_type)) ||
+    !Array.isArray(p.executor_types) || !p.executor_types.every(isValidExecutorType) ||
+    typeof p.executor_types_truncated !== 'boolean' ||
+    typeof p.written_at !== 'number' || !Number.isFinite(p.written_at)
+  ) {
+    return { present: true, malformed: true };
+  }
+  return {
+    present: true,
+    malformed: false,
+    identity: true,
+    phase: p.phase,
+    plan: p.plan,
+    writtenAt: p.written_at,
+    executorType: p.executor_type,
+    executorTypes: p.executor_types.slice(0, IDENTITY_MAX_EXECUTOR_TYPES),
+    executorTypesTruncated: p.executor_types_truncated || p.executor_types.length > IDENTITY_MAX_EXECUTOR_TYPES,
+  };
 }
 
 /**
@@ -529,6 +768,42 @@ function withCandidates(winner, considered, scanOverflow = false) {
   return winner;
 }
 
+/**
+ * Paths of the `<phase>--<plan>.json` records under `root`, or none unless the phase is a safe key. Bounded
+ * like `scanRecentKeyedRecords`: the directory is iterated for at most MAX_SCANNED_DIR_ENTRIES entries (every
+ * entry counts) and at most MAX_SCANNED_RECORDS paths are returned. A directory past the entry bound returns
+ * null, which the resolver's hold read answers with "no hold": it could not read every plan record of the
+ * phase. An absent or unreadable directory lists no records, as before. Never throws.
+ */
+function planRecordsOfPhase(root, phase) {
+  if (!isSafeSentinelKey(phase)) return [];
+  const dir = path.join(root, KEYED_SENTINEL_DIR);
+  const out = [];
+  let handle = null;
+  try {
+    handle = fs.opendirSync(dir);
+    let seen = 0;
+    for (let ent = handle.readSync(); ent !== null; ent = handle.readSync()) {
+      seen += 1;
+      if (seen > MAX_SCANNED_DIR_ENTRIES) return null;
+      if (ent.name.startsWith(`${phase}--`) && ent.name.endsWith('.json')) out.push(path.join(dir, ent.name));
+    }
+  } catch {
+    return [];
+  } finally {
+    if (handle) {
+      try { handle.closeSync(); } catch { /* nothing left to release */ }
+    }
+  }
+  return out.slice(0, MAX_SCANNED_RECORDS);
+}
+
+/** Does `record` carry every identifier `ids` names? An omitted identifier is unconstrained. */
+function recordIsAtScope(record, ids) {
+  if (!ids) return true;
+  return (!ids.phase || record.phase === ids.phase) && (!ids.plan || record.plan === ids.plan);
+}
+
 /** The candidate with the greatest `writtenAt` (ties keep the earlier-listed, i.e. most specific). */
 function latestWritten(candidates) {
   return candidates.reduce((best, c) => (c.writtenAt > best.writtenAt ? c : best));
@@ -568,7 +843,7 @@ function sameObject(a, b) {
  * openat, so this NARROWS the window for a parent swapped to a link between check and open; it does
  * not close it.
  */
-function readSentinelText(file, parentDirs) {
+function readSentinelText(file, parentDirs, maxBytes = SENTINEL_MAX_BYTES) {
   const parents = [];
   for (const dir of parentDirs) {
     const st = lstatRealDirectory(dir);
@@ -578,12 +853,12 @@ function readSentinelText(file, parentDirs) {
   let fd;
   try {
     const before = fs.lstatSync(file, { bigint: true });
-    if (!before.isFile() || before.size > BigInt(SENTINEL_MAX_BYTES)) return null;
+    if (!before.isFile() || before.size > BigInt(maxBytes)) return null;
     // O_NONBLOCK makes an open of a FIFO swapped in after the lstat return at once; O_NOFOLLOW
     // refuses a link swapped in. Windows lacks both flags (`|| 0`); lstat/fstat still guard.
     fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) | (fs.constants.O_NONBLOCK || 0));
     const st = fs.fstatSync(fd, { bigint: true });
-    if (!st.isFile() || st.nlink !== 1n || st.size > BigInt(SENTINEL_MAX_BYTES)) return null;
+    if (!st.isFile() || st.nlink !== 1n || st.size > BigInt(maxBytes)) return null;
     if (!sameObject(before, st)) return null;
     const size = Number(st.size);
     for (const p of parents) {
@@ -641,6 +916,27 @@ function parseSentinelFile(file, clock, parentDirs = [], readText = readSentinel
   // treats a plan/phase MISMATCH (both sides present and disagreeing) as "no
   // applicable sentinel", not an allow.
   const plan = typeof parsed.plan === 'string' && parsed.plan.length > 0 ? parsed.plan : null;
+  // #4630 ADR Phase 2: WHO decided this isolation, so a re-query can tell a
+  // decision it may re-derive (`resolver`) from one it must honour
+  // (`caller` — a --force-isolation degrade computed at a dispatch site the
+  // resolver cannot see into). Anything that is not exactly `resolver` reads
+  // as `caller`, which covers a record written by a pre-#4630 gsd-tools. That
+  // default is the safe direction, not the lenient one: holding a degrade that
+  // could have been re-derived costs one sequential run, while clobbering one
+  // the caller owns makes the guard refuse the dispatch entirely (#4222).
+  const decidedBy = parsed.decided_by === 'resolver' ? 'resolver' : 'caller';
+  // #4904: WHEN the decision was first made. A gate that follows a
+  // held `none` re-records it (the guard judges the dispatch against the
+  // record present at that instant), which refreshes `written_at`; the
+  // re-record carries `decided_at` forward unchanged, so the hold below is
+  // bounded by the degrade's own age rather than renewed by every gate that
+  // follows it. Absent or not a finite number reads as `written_at` (a record
+  // from before this field). Never later than `written_at`: no record can
+  // have been decided after it was written, so a larger value cannot extend
+  // the hold.
+  const decidedAt = typeof parsed.decided_at === 'number' && Number.isFinite(parsed.decided_at)
+    ? Math.min(parsed.decided_at, parsed.written_at)
+    : parsed.written_at;
 
   const validTypes = Array.isArray(parsed.executor_types) ? parsed.executor_types.filter(isValidExecutorType) : [];
 
@@ -650,6 +946,10 @@ function parseSentinelFile(file, clock, parentDirs = [], readText = readSentinel
   // written in the future — never trust it, but still surface the parsed
   // fields so callers can log an actionable reason.
   const stale = age >= SENTINEL_STALE_MS || age < -CLOCK_SKEW_MS;
+  // The resolver's hold (gsd-tools.cjs `heldDegradeRecord`) lapses on the
+  // same window as `stale`, measured from `decided_at`. The guards keep
+  // reading `stale`, which a re-record refreshes.
+  const holdExpired = stale || now - decidedAt >= SENTINEL_STALE_MS;
 
   return {
     present: true,
@@ -659,7 +959,10 @@ function parseSentinelFile(file, clock, parentDirs = [], readText = readSentinel
     harnessFlag,
     phase,
     plan,
+    decidedBy,
     writtenAt: parsed.written_at,
+    decidedAt,
+    holdExpired,
     // #6213: invalid or absent means "no recorded executor", never a malformed record.
     executorType: isValidExecutorType(parsed.executor_type) ? parsed.executor_type : null,
     // #6213: phase-level record; a non-array is empty, invalid entries are dropped, at most
@@ -752,7 +1055,8 @@ function isRecentRecord(r, clock) {
  * #6213: is this an executor dispatch (both isolation guards ask this one question)? True when ANY of:
  *   (a) `subagentType` is gsd-executor;
  *   (b) ANY well-formed dispatch record in the project (the candidates `readSentinel` considered: keyed
- *       records under `.gsd/dispatch-isolation/` and the legacy slot), at most `AGED_NONE_MAX_MS` old by
+ *       records under `.gsd/dispatch-isolation/`, the legacy slot, and the executor-identity records a held
+ *       query writes under `.gsd/dispatch-isolation-identity/` (#4904)), at most `AGED_NONE_MAX_MS` old by
  *       `written_at` (a record future-dated beyond `CLOCK_SKEW_MS` is not recent), whatever its phase or
  *       plan, names the type in `executor_type` / `executor_types`;
  *   (c) the dispatch's own prompt carries the canonical `[gsd:dispatch ...]` marker (not the prose
@@ -762,7 +1066,10 @@ function isRecentRecord(r, clock) {
  * as an executor) when the scan overflowed (`scanOverflow`: too many directory entries, a recent `.json`
  * record that cannot be used (refused, malformed, key-mismatched), a recent legacy slot that cannot be used
  * (checked in `readSentinel`, not in the scan), or a `.gsd` / record directory that is a link, not a
- * directory or unreadable), or when any recent record has `executor_types_truncated: true` (names were dropped, by the
+ * directory or unreadable; the identity-record scan fails closed on the same cases, on a record of the wrong
+ * shape or under another scope's name, and, while a hold-eligible caller `none` is among the records read, on
+ * the states in which a held query cannot write its identity record (`identityWriteBlocked`, or that record's
+ * phase or plan not being a safe key)), or when any recent record has `executor_types_truncated: true` (names were dropped, by the
  * writer or by the reader's MAX_EXECUTOR_TYPES cap, so its list cannot rule a type out).
  * Once true, the dispatch follows gsd-executor's enforcement path unchanged.
  */
@@ -844,6 +1151,11 @@ module.exports = {
   VALID_ISOLATION,
   SENTINEL_RELATIVE_PATH,
   KEYED_SENTINEL_DIR,
+  IDENTITY_RECORD_DIR,
+  IDENTITY_MAX_EXECUTOR_TYPES,
+  IDENTITY_RECORD_MAX_BYTES,
+  IDENTITY_RECORD_SCHEMA,
+  identityRecordName,
   isSafeSentinelKey,
   isValidExecutorType,
   GSD_ROLE_NAMES,
@@ -863,6 +1175,7 @@ module.exports = {
   sentinelPath,
   resolveSentinelRoot,
   readSentinel,
+  readSentinelAt,
   extractDispatchIdentifiers,
   sentinelAppliesToDispatch,
   agedNoneGovernsDispatch,

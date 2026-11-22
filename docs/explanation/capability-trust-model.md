@@ -282,6 +282,37 @@ Two things worth stating so you do not infer them:
   disclosing the boundary honestly does not fire a spurious re-consent prompt
   on every skill-bearing capability you have installed.
 
+### Reviewer contributions cross the external-review boundary
+
+A capability can declare a `contribution` addressed `into: reviewer` at
+`review:pre` ([#3997](https://github.com/open-gsd/gsd-core/issues/3997)). Its
+fragment is a **trusted, unscanned instruction surface** for the same reason a
+skill is: the body reaches an agent's instruction context and nobody inspects it
+([ADR-2363](../adr/2363-capability-instruction-surface-trust.md)). It differs in
+where it goes. The fragment is appended to the one prompt every external reviewer
+lane reads, so it is sent to every reviewer lane you have consented to, together
+with the plan under review. That is **cross-capability egress**: capability A's
+text is delivered to the destination of lane B.
+
+What stays the same:
+
+- **Lane consent and destination pinning are untouched.** A contribution cannot
+  enable a lane, change where a lane sends data, or skip the egress-host check.
+- **The consent prompt names it.** The install summary lists
+  `reviewer-contribution: review:pre (reviewer)` under instruction surfaces and
+  says the text goes to your consented reviewer lanes. It names the surface; it
+  does not assert anything about what the fragment says.
+- **Project installs are bound to the exact bytes.** The full-bundle
+  `contentHash` covers the fragment, so changing it deactivates consent until you
+  approve the changed bundle. Global installs keep ADR-2363's trusted-home posture.
+- **No re-consent was triggered.** The surface is not part of the v1
+  `disclosureSignature` or `hasExecutable`; changing that encoding needs the
+  versioned-v2 migration ADR-2363 already requires.
+
+What to weigh before you install one: it speaks to reviewers you may have chosen
+precisely because they are independent of your own agent, using text its author
+chose.
+
 ### Integrity pinning
 
 An `integrity` field in `capability.json` carries a `sha512-<base64>` digest

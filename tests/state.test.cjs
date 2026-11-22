@@ -4358,6 +4358,7 @@ Progress: [..........] 0%
 ## Current Position
 
 Phase: 1 (Setup) — EXECUTING
+Total Plans in Phase: 0
 Status: Executing Phase 1
 
 ### Notes
@@ -8830,7 +8831,7 @@ describe('ADR-3408 §8.5 Matrix (#3471): stale-but-present, and the report resid
     test('E3: cmdStateBeginPhase — `updated` names only the fields whose persisted value actually changed (happy path)', () => {
       const content = [
         '---', 'gsd_state_version: 1.0', '---', '',
-        '# Project State', '', '## Current Position', '', 'Status: Not started', '', '## Session', '',
+        '# Project State', '', '## Current Position', '', 'Plan: 0 of 0', 'Status: Not started', '', '## Session', '',
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
 
@@ -8849,7 +8850,7 @@ describe('ADR-3408 §8.5 Matrix (#3471): stale-but-present, and the report resid
     test('E3 (preservation): cmdStateBeginPhase — a curated field round-tripped to its ORIGINAL value is not reported', () => {
       const content = [
         '---', 'gsd_state_version: 1.0', 'stopped_at: "curated stop must survive"', '---', '',
-        '# Project State', '', '## Current Position', '', 'Status: Not started', '', '## Session', '',
+        '# Project State', '', '## Current Position', '', 'Plan: 0 of 0', 'Status: Not started', '', '## Session', '',
       ].join('\n');
       fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
 
@@ -12087,12 +12088,27 @@ describe('T6 section-splice characterization — begin-phase', () => {
     const d = createTempProject();
     try {
       fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_NO_CURRENT_POS);
-      const result = runGsdTools(['state', 'begin-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], d);
+      const result = runGsdTools(['state', 'begin-phase', '--phase', '1', '--name', 'Setup'], d);
       assert.ok(result.success, `Command failed: ${result.error}`);
       const output = JSON.parse(result.output);
-      // Expect phase, phase_name and plan_count in response even if fields weren't updated
+      // Expect phase and phase_name in the response even if fields weren't updated
       assert.strictEqual(output.phase, '1', 'phase must be reported in response');
-      assert.strictEqual(output.plan_count, 3, 'plan_count must be reported in response');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  // #6399: with --plans the count has to land somewhere; a STATE.md with no Current Position section and no
+  // `Total Plans in Phase` field refuses with the typed reason instead of reporting a count it did not record.
+  test('begin-phase --plans on a STATE.md with no Current Position and no total field refuses (#6399)', () => {
+    const d = createTempProject();
+    try {
+      const statePath = path.join(d, '.planning', 'STATE.md');
+      fs.writeFileSync(statePath, STATE_NO_CURRENT_POS);
+      const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', '1', '--name', 'Setup', '--plans', '3'], d);
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(JSON.parse(result.error).reason, 'plans_no_line');
+      assert.strictEqual(fs.readFileSync(statePath, 'utf-8'), STATE_NO_CURRENT_POS, 'nothing is written');
     } finally {
       cleanup(d);
     }
@@ -23370,7 +23386,7 @@ Last activity: 2026-10-01 -- done
   });
 
   test('CONTROL: a phase directory that cannot be found starts at plan 1, as before', () => {
-    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# Project State\n\n**Status:** Ready\n**Current Plan:** 0\n');
+    fs.writeFileSync(path.join(tmp, '.planning', 'STATE.md'), '# Project State\n\n**Status:** Ready\n**Current Plan:** 0\n**Total Plans in Phase:** 0\n');
     const r = runGsdTools(['state', 'begin-phase', '--phase', '77', '--name', 'ghost', '--plans', '3'], tmp);
     assert.ok(r.success, r.error);
     assert.match(read(), /^\*\*Current Plan:\*\* 1$/m);
@@ -23640,5 +23656,116 @@ describe('legacy phase-heading counting reads real headings only (#5880)', () =>
 
   test('sentinel phases 0 and 999.1 stay excluded', (t) => {
     assert.strictEqual(totalPhasesFor(t, `${HEAD}${REAL}\n### Phase 0: Sentinel\n\n### Phase 999.1: Icebox\n`), 2);
+  });
+});
+
+// ─── #6271: an unscoped update-progress decline names its cause and its fix ──────────────────────────────────
+
+describe('state update-progress: an unscoped decline names the cause and the fix (#6271)', () => {
+  const { isolateWorkstreamEnv, restoreWorkstreamEnv } = require('./helpers.cjs');
+  let proj;
+
+  beforeEach(() => {
+    // The host suite forces GSD_WORKSTREAM, which runGsdTools propagates and which redirects the project lookup.
+    isolateWorkstreamEnv();
+    proj = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(proj);
+    restoreWorkstreamEnv();
+  });
+
+  const FLAT_ROADMAP = '# Roadmap\n\n## Phases\n\n- [ ] Phase 1: Alpha\n\n## Phase Details\n\n### Phase 1: Alpha\n**Goal:** x\n';
+  const OTHER_MILESTONE_ROADMAP = '# Roadmap\n\n## v0.2.0 Next\n\n### Phase 1: Alpha\n**Goal:** x\n';
+  const PHASE_TITLE_ROADMAP = '# Roadmap\n\n## Phases\n\n### Phase 1: Migrate to v2.0 API\n**Goal:** x\n';
+
+  function seed(milestoneLine, roadmap) {
+    const phaseDir = path.join(proj, '.planning', 'phases', '01-alpha');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    for (const f of ['01-01-PLAN.md', '01-01-SUMMARY.md', '01-02-PLAN.md']) fs.writeFileSync(path.join(phaseDir, f), '# x\n');
+    if (roadmap !== null) fs.writeFileSync(path.join(proj, '.planning', 'ROADMAP.md'), roadmap);
+    fs.writeFileSync(path.join(proj, '.planning', 'STATE.md'), [
+      '---', "gsd_state_version: '1.0'", milestoneLine, 'status: executing', 'progress:', '  total_plans: 9', '---', '',
+      '# Project State', '', '## Current Position', '', 'Phase: 1 (Alpha) — EXECUTING', 'Plan: 1 of 2', 'Status: Executing',
+      'Progress: [░░░░░░░░░░] 0%', '',
+    ].join('\n'));
+  }
+
+  const run = (args = 'state update-progress') => {
+    const r = runGsdTools(args, proj);
+    assert.ok(r.success, r.error);
+    return JSON.parse(r.output);
+  };
+
+  test('row 5, a flat ROADMAP: the decline names the version and offers milestone: null, the reason unchanged', () => {
+    seed('milestone: v0.1.0', FLAT_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, 'phase scope is unscoped, not complete');
+    assert.match(out.hint, /STATE\.md names milestone "v0\.1\.0", but ROADMAP\.md has no milestone headings at all/);
+    assert.match(out.hint, /set the milestone field in STATE\.md to null/);
+    assert.match(out.hint, /add a heading for "v0\.1\.0" above its phases/);
+  });
+
+  test('the named fix works: milestone: null on the same roadmap refreshes the counters, on every run', () => {
+    seed('milestone: null', FLAT_ROADMAP);
+    for (let i = 0; i < 2; i += 1) {
+      const out = run();
+      assert.strictEqual(out.updated, true);
+      assert.strictEqual(out.completed, 1);
+      assert.strictEqual(out.total, 2);
+      assert.ok(!('hint' in out));
+    }
+  });
+
+  test('row 5, a ROADMAP with other milestone headings: the version, and the heading goes above its phases', () => {
+    seed('milestone: v0.1.0', OTHER_MILESTONE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, 'phase scope is unscoped, not complete');
+    assert.match(out.hint, /STATE\.md names milestone "v0\.1\.0", but ROADMAP\.md has no milestone heading for it/);
+    assert.match(out.hint, /add a heading for "v0\.1\.0" above its phases/);
+    assert.doesNotMatch(out.hint, /to null/, 'milestone: null is not the fix for a ROADMAP that has milestone headings');
+  });
+
+  test('row 4, STATE names no milestone and the ROADMAP has milestone headings: name one in STATE', () => {
+    seed('milestone: null', OTHER_MILESTONE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.match(out.hint, /STATE\.md names no milestone, but ROADMAP\.md has milestone headings/);
+    assert.match(out.hint, /set the milestone field in STATE\.md to one of them/);
+  });
+
+  test('row 4 on a Phase title that contains a version: the title is the cause, and milestone: null is not offered', () => {
+    seed('milestone: null', PHASE_TITLE_ROADMAP);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.match(out.hint, /a Phase title contains a version \(vX\.Y\), which reads as one/);
+    assert.match(out.hint, /reword that Phase title/);
+    assert.doesNotMatch(out.hint, /to null/);
+  });
+
+  test('state sync names the same cause where it skips Progress on an unscoped scope', () => {
+    seed('milestone: null', PHASE_TITLE_ROADMAP);
+    const out = run('state sync');
+    const skipped = out.changes.find((c) => c.startsWith('Progress: skipped'));
+    assert.ok(skipped, `a skipped Progress change expected; got: ${JSON.stringify(out.changes)}`);
+    assert.match(skipped, /phase scope is "unscoped", not COMPLETE \(#3217\)\. Cause: ROADMAP\.md has no milestone heading, but a Phase title contains a version/);
+  });
+
+  test('STATE.md text echoed in the hint is escaped: a control character in the milestone cannot reach the terminal', () => {
+    seed('milestone: "v0.1.0\\u001b[31mX"', FLAT_ROADMAP);
+    const out = run();
+    assert.ok(!out.hint.includes('\u001b'), 'no raw escape character');
+    assert.match(out.hint, /v0\.1\.0\\u001b\[31mX/);
+  });
+
+  test('a decline for another scope (no ROADMAP.md: unreadable) carries no unscoped hint', () => {
+    seed('milestone: v0.1.0', null);
+    const out = run();
+    assert.strictEqual(out.updated, false);
+    assert.strictEqual(out.reason, `phase scope is ${SCOPE.UNREADABLE}, not complete`);
+    assert.ok(!('hint' in out));
   });
 });

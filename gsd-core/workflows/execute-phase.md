@@ -92,7 +92,7 @@ $ARGUMENTS
 GSD_ARGS_END
 GSD_ARGS=${GSD_ARGS%$'\n'}
 WAVE_PARAM=""; if [[ "$GSD_ARGS" =~ (^|[[:space:]])--wave[[:space:]]+([^[:space:]-][^[:space:]]*) ]]; then WAVE_PARAM="--wave ${BASH_REMATCH[2]}"; fi
-GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 INIT=$(gsd_run query init.execute-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_ARG}" $WAVE_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
@@ -424,11 +424,16 @@ Report:
 
 **execute:pre (#5848):** read and execute `execute-phase/steps/pre-execute-gate-hooks.md`; a gate block HALTS here.
 
-**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** Every all-filtered arm above has already exited or jumped to `aggregate_results` / `update_roadmap`; reaching here means the post-filter list is non-empty. A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
+**Update STATE.md for phase start — only now that at least one plan will be dispatched (#5843).** A run that dispatches nothing must leave STATE.md Current Position, Status and Last activity unchanged.
 ```bash
+PHASE_NUMBER="{phase_number}"
+PHASE_NAME=$(gsd_run query roadmap.get-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
+PLAN_COUNT=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick plan_count)
+[[ "$PLAN_COUNT" =~ ^[0-9]+$ ]] || { echo "phase ${PHASE_NUMBER} not found" >&2; exit 1; }
+[ -n "$PHASE_NAME" ] || PHASE_NAME=$(gsd_run query find-phase ${GSD_WS:+--ws=${GSD_WS##* }} "${PHASE_NUMBER}" --pick phase_name)
 gsd_run query state.begin-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
 ```
-This updates Status, Last Activity, Current focus, Current Position, and plan counts in STATE.md so frontmatter and body text reflect the active phase immediately.
+This records the active phase and plan counts in STATE.md.
 </step>
 
 <step name="cross_ai_delegation">
@@ -631,7 +636,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **Substitute `{plan_id}` in the prompt below with this plan's `id` field** from the `phase-plan-index` JSON loaded in step 1 (the same field referred to elsewhere in this workflow as `plan.id`) — unmodified and un-truncated, never a paraphrase. The guard hooks compare this value verbatim against the sentinel the per-plan gate wrote (`per-plan-worktree-gate.md`'s `plan_id`); a paraphrase or an omission costs the dispatch its recorded isolation decision.
 
-   **Record this plan's isolation immediately before its dispatch (#5516).** Restore the dispatched plan's **stored decision** from step 2.5 (`plan_id` := this plan's `id`, `USE_WORKTREES_FOR_PLAN` := the value stored for that plan, and `PLAN_FILES` / `PLAN_DELETIONS` re-extracted from this plan's JSON, since the later plans' decisions overwrote them) and run **Part 2** of `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md`, so the single-slot sentinel names the plan being dispatched. Do not run it for any other plan, and do not batch it ahead of the dispatches.
+   **Record this plan's isolation immediately before its dispatch (#5516).** Restore the dispatched plan's **stored decision** from step 2.5 (every value **Part 2** of `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md` lists, `_RENEW_HELD` included) and run that Part 2, so the single-slot sentinel names the plan being dispatched. Do not run it for any other plan, and do not batch it ahead of the dispatches.
 
    **Executor routing (#1689/#3370).** Per plan, run `gsd-core/workflows/execute-phase/steps/per-plan-executor-routing.md` to set `EXECUTOR_TYPE`, `EXECUTOR_MODEL` for `subagent_type="{EXECUTOR_TYPE}"`.
 
@@ -677,7 +682,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
      # Claude Code inherits the orchestrator model automatically.
      model="{executor_model}",  # omit this line when executor_model == "inherit"
      # The host's OWN declared isolation flag (`harnessFlag` from
-     # `dispatch-isolation --json`; see the isolation-dispatch fragment).
+     # `inspect-dispatch-isolation --json`; see the isolation-dispatch fragment).
      # Emit the declared token — do NOT hardcode a runtime's flag.
      {harnessFlag},
      prompt="

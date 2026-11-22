@@ -210,8 +210,9 @@
         "force-isolation": "value",
         "json": "boolean",
         "phase": "value",
-        "plan": "value",
-        "prompt": "value"
+        "plan": "value-or-bare",
+        "prompt": "value",
+        "renew-held": "value"
       },
       "required": [],
       "workstreamScoped": false

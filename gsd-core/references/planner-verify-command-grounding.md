@@ -1,6 +1,10 @@
 # Verify Command Grounding (#2401)
 
 > Reference file for gsd-planner agent. Loaded on-demand via `@` reference.
+>
+> **Scope.** The grounding rules below are npm / `cd` / `package.json` shaped: they ground directory and
+> script targets. They say nothing about a command's syntax or about other stacks (T-SQL, Rust, Python,
+> shell). For whether a command parses, see `planner-verify-command-validation.md` (#4586).
 
 **Inherit the command that already worked.** The planning context carries
 `prior_verify_commands` — the `<automated>` commands from the most recent prior phase that had
