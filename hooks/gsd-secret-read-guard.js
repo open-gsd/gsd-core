@@ -4201,8 +4201,16 @@ function dashCScriptReadsSecret(operands, cIdx, depth) {
 }
 
 // The statically-knowable text piped into segment `s`: the nearest upstream segment's, looking through `tee` and a bare
-// `cat` that only pass their own stdin along (#6182). Each hop moves to an earlier segment, so the walk ends.
+// `cat` that only pass their own stdin along (#6182). Each hop moves to an earlier segment, so the walk ends. It is
+// found once per segment: `find` can run a shell reading it once per action.
+const pipeSourceTextBySegMap = new WeakMap();
 function pipeSourceText(s, bySeg, sepAfter) {
+  let found = pipeSourceTextBySegMap.get(bySeg);
+  if (!found) pipeSourceTextBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(s)) found.set(s, findPipeSourceText(s, bySeg, sepAfter));
+  return found.get(s);
+}
+function findPipeSourceText(s, bySeg, sepAfter) {
   let seg = s;
   for (;;) {
     const { op, prevSeg } = precedingOp(seg, bySeg, sepAfter);
@@ -4340,7 +4348,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   const fed = xargsFedReadsSecret(operands, subIdx, subIsShell ? subOperands : null, s, bySeg, sepAfter, curl, depth);
   if (fed) return fed;
 
-  const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
+  const { op, prevSeg } = xargsPrecedingOp(s, bySeg, sepAfter);
   if (op !== '|' && op !== '|&') return null;
   if (prevSeg < 0) return null;
 
@@ -4356,6 +4364,16 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     if (hit) return hit;
   }
   return xargsPipedReadsSecret(operands, prevCmd, curl);
+}
+
+// precedingOp for an xargs segment, found once per segment: `find` runs many
+// xargs in one segment, and precedingOp walks every wordless segment before it.
+const xargsPrecedingOpBySegMap = new WeakMap();
+function xargsPrecedingOp(s, bySeg, sepAfter) {
+  let found = xargsPrecedingOpBySegMap.get(bySeg);
+  if (!found) xargsPrecedingOpBySegMap.set(bySeg, (found = new Map()));
+  if (!found.has(s)) found.set(s, precedingOp(s, bySeg, sepAfter));
+  return found.get(s);
 }
 
 // The command of segment `prevSeg`, resolved once per segment: `find` runs
@@ -4513,10 +4531,8 @@ function segmentFedText(s, bySeg) {
 // Each character is charged to the reader budget for the words cut from it,
 // as printed text is (PRINTED_WORD_COST).
 function xargsFedReadsSecret(operands, subIdx, shellOperands, s, bySeg, sepAfter, curl, depth) {
-  const text = xargsFedText(s, bySeg, sepAfter);
-  if (text === null) return null;
-  chargeReader(text.length * PRINTED_WORD_COST);
-  const words = xargsReadWords(text, operands, curl !== null ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
+  const words = xargsFedWords(operands, s, bySeg, sepAfter, curl !== null ? curl.runs : xargsCommandIndex(operands, 0, operands.length));
+  if (words === null) return null;
   const hit = shellOperands === null ? null : scanXargsShellScripts(shellOperands, xargsReplaceStr(operands, subIdx), words, depth);
   return hit || xargsPipedReadsSecret(operands, { base: '', operands: words }, curl);
 }
@@ -4535,13 +4551,23 @@ function xargsFedReadsSecret(operands, subIdx, shellOperands, s, bySeg, sepAfter
 // and bash's under `xpg_echo` decode them without `-e`. The printed text is
 // charged to the reader budget (chargeReader), since printf repeats its format
 // while arguments are left.
+const printedWordsByPrev = new WeakMap();
 function printedWords(prev, operands, runs) {
-  let text;
-  if (prev.base === 'printf') text = printfOutput(prev.operands);
-  else if (prev.base === 'echo') text = echoOutput(prev.operands);
-  else return [];
-  if (text === null) return [];
-  return xargsReadWords(text, operands, runs);
+  if (prev.base !== 'printf' && prev.base !== 'echo') return [];
+  let found = printedWordsByPrev.get(prev);
+  if (!found) {
+    found = { text: prev.base === 'printf' ? printfOutput(prev.operands) : echoOutput(prev.operands), cuts: new Map() };
+    printedWordsByPrev.set(prev, found);
+  }
+  if (found.text === null) return [];
+  const to = runs === -1 ? operands.length : runs;
+  const key = JSON.stringify([xargsDelimiter(operands, to), xargsReplaceString(operands, 0, to) !== null]);
+  if (!found.cuts.has(key)) {
+    // Each cut after the first is charged as the first was when it was printed.
+    if (found.cuts.size > 0) chargeReader(found.text.length * (1 + PRINTED_WORD_COST));
+    found.cuts.set(key, xargsReadWords(found.text, operands, runs));
+  }
+  return found.cuts.get(key);
 }
 
 // The words xargs could read from `text` on its stdin, cut as printedWords
@@ -4771,6 +4797,27 @@ function xargsReplaceStr(operands, subIdx) {
   return null;
 }
 
+// The words xargsReadWords cuts from the fed text of segment `s`, kept per
+// segment and cut (delimiter, -I) and charged per cut, or null with no fed
+// text: `find` can run many xargs in one segment. They are marked `fed`, so a
+// shell reads one as its whole script and does not put it into one.
+const xargsFedWordsBySegMap = new WeakMap();
+function xargsFedWords(operands, s, bySeg, sepAfter, runs) {
+  const text = xargsFedText(s, bySeg, sepAfter);
+  if (text === null) return null;
+  let bySegCuts = xargsFedWordsBySegMap.get(bySeg);
+  if (!bySegCuts) xargsFedWordsBySegMap.set(bySeg, (bySegCuts = new Map()));
+  const to = runs === -1 ? operands.length : runs;
+  const key = JSON.stringify([s, xargsDelimiter(operands, to), xargsReplaceString(operands, 0, to) !== null]);
+  if (!bySegCuts.has(key)) {
+    chargeReader(text.length * PRINTED_WORD_COST);
+    const words = xargsReadWords(text, operands, runs);
+    words.fed = true;
+    bySegCuts.set(key, words);
+  }
+  return bySegCuts.get(key);
+}
+
 // `… | xargs [-I STR] SHELL -c [SCRIPT]` where the script is the piped word itself (no operand after -c, or the
 // operand is the replace string) or contains the replace string: each upstream operand, as xargs hands it on
 // (quotes and backslashes removed), is read as the script, or substituted into it.
@@ -4784,19 +4831,32 @@ function scanXargsShellScripts(shellOperands, replaceStr, upstream, depth) {
   return k === cIdx + 1 ? first : xargsShellScriptsRead(shellOperands[k], replaceStr, upstream, depth);
 }
 
-// scanXargsShellScripts for one `script` operand (undefined: none).
+// scanXargsShellScripts for one `script` operand (undefined: none). The
+// script is tested for the replace string once, not once per word, and the
+// verdict is kept per word list, script and replace string, since `find` can
+// run the same xargs once per action. A word that is the whole script is
+// charged as printed text is; a script the word is put into is read as next
+// reads it.
+const xargsShellScriptVerdicts = new WeakMap();
 function xargsShellScriptsRead(script, replaceStr, upstream, depth) {
+  let found = xargsShellScriptVerdicts.get(upstream);
+  if (!found) xargsShellScriptVerdicts.set(upstream, (found = new Map()));
+  const key = JSON.stringify([depth, replaceStr, script ? script.text : null]);
+  if (!found.has(key)) found.set(key, findXargsShellScriptRead(script, replaceStr, upstream, depth));
+  return found.get(key);
+}
+function findXargsShellScriptRead(script, replaceStr, upstream, depth) {
+  const whole = !script || (replaceStr !== null && script.text === replaceStr);
+  const parts = whole || replaceStr === null || replaceStr === '' ? null : script.text.split(replaceStr);
+  if (!whole && (parts === null || parts.length < 2 || upstream.fed)) return null;
+  const seen = new Set();
   for (const w of upstream) {
     const word = xargsUnquoted(w.text);
-    let text = null;
-    if (!script || (replaceStr !== null && script.text === replaceStr)) text = word;
-    else if (replaceStr !== null && replaceStr !== '' && script.text.includes(replaceStr)) text = script.text.split(replaceStr).join(word);
-    if (text !== null) {
-      // Charged as printed text is: `find` can run this once per action.
-      chargeReader((text.length + 1) * PRINTED_WORD_COST);
-      const hit = findSecretRead(text, depth + 1);
-      if (hit) return hit;
-    }
+    if (seen.has(word)) continue;
+    seen.add(word);
+    if (whole) chargeReader((word.length + 1) * PRINTED_WORD_COST);
+    const hit = findSecretRead(whole ? word : parts.join(word), depth + 1);
+    if (hit) return hit;
   }
   return null;
 }
