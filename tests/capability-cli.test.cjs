@@ -1190,6 +1190,7 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
   const SKILL_V2 = `---\nname: ${STEM}\ndescription: v2\n---\n\n# v2, new text\n`;
   const MANIFEST = 'gsd-file-manifest.json';
   const SKILL_KEY = `skills/gsd-${STEM}/SKILL.md`;
+  const { MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE } = require('../gsd-core/bin/lib/capability-writer.cjs');
 
   function sha256File(p) {
     return require('node:crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
@@ -1217,7 +1218,9 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
         cwd, scopeEnv(home),
       );
       assert.equal(r.success, true, `capability set failed: ${r.error || r.output}`);
-      assert.deepEqual(parse(r.output).errors, []);
+      const out = parse(r.output);
+      assert.deepEqual(out.errors, []);
+      return out;
     };
     await set();
     const skillPath = path.join(rcd, 'skills', `gsd-${STEM}`, 'SKILL.md');
@@ -1277,7 +1280,9 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     const { rcd, skillPath, set } = await installedAtV1();
     const manifestPath = path.join(rcd, MANIFEST);
     fs.writeFileSync(manifestPath, '{ not json');
-    await set();
+    const out = await set();
+    // A source the installed manifest does not have to vouch for (the checkout marker) still stages.
+    assert.equal(out.warnings.includes(MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE), false, 'materialization was not skipped');
     assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'the skill is still re-staged');
     assert.equal(fs.readFileSync(manifestPath, 'utf8'), '{ not json', 'the unparseable manifest is not rewritten');
   });
@@ -1285,7 +1290,8 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
   test('a missing manifest does not make capability set fail and is not created', async () => {
     const { rcd, skillPath, set } = await installedAtV1();
     fs.unlinkSync(path.join(rcd, MANIFEST));
-    await set();
+    const out = await set();
+    assert.equal(out.warnings.includes(MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE), false, 'materialization was not skipped');
     assert.match(fs.readFileSync(skillPath, 'utf8'), /v2, new text/, 'the skill is still re-staged');
     assert.equal(fs.existsSync(path.join(rcd, MANIFEST)), false, 'no manifest is invented');
   });
@@ -1340,6 +1346,24 @@ describe('#6331: capability set --runtime re-records the install manifest hashes
     const { stdout } = install();
     assert.doesNotMatch(stdout, /locally modified GSD file/, 'the next real install reports no local patches (#6331)');
     assert.equal(fs.existsSync(path.join(configDir, 'gsd-local-patches', SKILL_KEY)), false, 'and backs nothing up');
+  });
+
+  test('a sync that fails for another reason is still an error when the manifest is missing', async () => {
+    const { rcd, home, cwd } = await installedAtV1();
+    fs.unlinkSync(path.join(rcd, MANIFEST));
+    // The source is available (the checkout marker), so the apply reaches the sync, which cannot
+    // write a skills directory that is a regular file.
+    cleanup(path.join(rcd, 'skills'));
+    fs.writeFileSync(path.join(rcd, 'skills'), 'not a directory\n');
+    const r = await runGsdToolsAsync(
+      ['capability', 'set', STEM, '--runtime', 'claude', '--scope', 'global', '--config-dir', rcd, '--raw'],
+      cwd, scopeEnv(home),
+    );
+    const out = parse(r.output);
+    assert.equal(r.success, false, 'capability set fails');
+    assert.ok(out.errors.length > 0, 'the failure is reported');
+    assert.equal(out.warnings.includes(MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE), false, 'and is not turned into a skip');
+    assert.equal(fs.readFileSync(path.join(rcd, 'skills'), 'utf8'), 'not a directory\n', 'the blocking file is left as it was');
   });
 });
 
