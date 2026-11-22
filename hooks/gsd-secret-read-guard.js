@@ -1529,6 +1529,48 @@ function tokenize(str, reading) {
     quoted = 'none';
     hasWord = false;
   };
+  // #6438: `{` and `}` are reserved words, which open or close a group only where a command may start. Anywhere else they
+  // are ordinary words (`printf '%s|' cat { x }` prints `cat|{|x|}|`; `cat { .env` runs cat on `{` and `.env`), so the word
+  // after one is an operand, not a new command. A command may start at the start of a segment and past what can stand
+  // before a command: the reserved words that precede one (`then { cat .env; }`, `! {`), a redirection with its target
+  // (zsh runs `>out { cat .env; }`), an assignment (zsh runs `A=1 { cat .env; }`), and the heads that take a compound
+  // body after their own words (`function f {`, `coproc P {`, `time -p {`). Whatever is unclear is a group: the cost of a
+  // wrong group is a false positive, the cost of a wrong word is a secret read the guard no longer sees.
+  // The segment's first command word is found once, incrementally, so a run of lone braces is read in linear time.
+  let headSeg = -1;
+  let headScanned = 0;
+  let headWord = null;
+  let headSkipTarget = false;
+  let headCondition = false;
+  // Groups opened and not yet closed: a `}` inside one closes it wherever it stands (zsh: `{ echo x } always { … }`), so it
+  // is a word only at depth 0 (`cat } .env`, `echo } done`).
+  let groupDepth = 0;
+  const braceStartsGroup = () => {
+    if (headSeg !== seg) {
+      headSeg = seg;
+      headWord = null;
+      headCondition = false;
+      headScanned = tokens.length;
+      while (headScanned > 0 && tokens[headScanned - 1].seg === seg) headScanned--;
+      // `>&out`: the `&` after a redirection ends a segment here, and the word after it is that redirection's target.
+      headSkipTarget = headScanned >= 2 && tokens[headScanned - 1].kind === 'sep' && tokens[headScanned - 1].text === '&' &&
+        tokens[headScanned - 2].kind === 'op' && !tokens[headScanned - 2].dup;
+    }
+    while (headWord === null && headScanned < tokens.length) {
+      const token = tokens[headScanned++];
+      if (token.kind === 'op') {
+        headSkipTarget = !token.dup;
+      } else if (token.kind === 'word') {
+        if (headSkipTarget) headSkipTarget = false;
+        else if (token.quoted === 'none' && RESERVED_BEFORE_COMMAND.has(token.text)) {
+          if (CONDITION_WORDS.has(token.text)) headCondition = true;
+        } else if (ASSIGNMENT_PREFIX_RE.test(token.text)) continue;
+        else headWord = token;
+      }
+    }
+    // zsh also takes a `{` body after a condition (`if true { … }`) or after a compound head's own words.
+    return headWord === null || headCondition || (headWord.quoted === 'none' && COMPOUND_BODY_HEADS.has(headWord.text));
+  };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
   const sep = (text) => {
@@ -1814,11 +1856,15 @@ function tokenize(str, reading) {
     if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
       if (expectTag && heredocTagsAsWords && heredocBraceTags) {
         braceTagRead = true;
-      } else {
+      } else if (expectTag || (ch === '}' && groupDepth > 0) || braceStartsGroup()) {
+        if (ch === '{') groupDepth++;
+        else if (groupDepth > 0) groupDepth--;
+        // Where a heredoc tag is due the earlier reading keeps the brace a group (`: <<} E` read as `}` closing), so nothing denied before is allowed.
         sep(ch);
         i++;
         continue;
       }
+      // else: a brace among a command's arguments is an ordinary word (#6438), read below like any other.
     }
 
     hasWord = true;
@@ -1944,6 +1990,16 @@ const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const DASH_C_RE = /^-[A-Za-z]*c$/;
 
 const GROUPING_SEPS = new Set(['(', ')', '{', '}']);
+
+// Reserved words that may stand before a command (and so before a `{` group) in the same segment.
+const RESERVED_BEFORE_COMMAND = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!']);
+// Command words that take a compound body after words of their own, so a `{` after them may still open a group.
+// A compound command's closer (`esac`, `fi`, `done`, `end`) at the head of a segment ends a zsh `while` condition, so a `{` after it is the body.
+const COMPOUND_BODY_HEADS = new Set(['function', 'coproc', 'time', 'for', 'foreach', 'select', 'repeat', 'case', 'always', '[[', 'esac', 'fi', 'done', 'end']);
+// Reserved words that introduce a condition, after which zsh takes a `{` body instead of `then`/`do`.
+const CONDITION_WORDS = new Set(['if', 'elif', 'while', 'until']);
+// A word that sets a variable before a command (`A=1`, `a[0]+=x`).
+const ASSIGNMENT_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
 
 // How many words the option `word` occupies for wrapper `spec`: 2 when it
 // takes a separate value word, else 1.
