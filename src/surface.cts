@@ -388,6 +388,19 @@ function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]
 // ---------------------------------------------------------------------------
 
 /**
+ * What applySurface writes to stderr when re-recording install-manifest hashes fails (#6331),
+ * so the next install may report the re-staged files as local patches.
+ */
+const MANIFEST_RECORD_WARNINGS = Object.freeze({
+  conflict: 'surface: gsd-file-manifest.json changed while skills were re-staged (a concurrent install?), '
+    + 'so their hashes were not re-recorded. The next install may report those skills as locally '
+    + 'modified and back them up to gsd-local-patches/.\n',
+  unavailable: 'surface: gsd-file-manifest.json could not be read or written after skills were re-staged, '
+    + 'so their hashes were not re-recorded. The next install may report those skills as locally '
+    + 'modified and back them up to gsd-local-patches/.\n',
+});
+
+/**
  * #6331: the install manifest entries for files under the destinations a
  * surface apply is about to sync, each with its pre-sync hash, for
  * recordManifestFileHashes. Keys resolve through resolveManifestKeyPath, the
@@ -555,28 +568,28 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
     // (a capability's new skill text after `capability set`). Re-record the
     // ones GSD still owned, as `effort sync --apply` does (#5683), or the next
     // install reports them as local patches.
-    // Recorded in a finally: a sync that fails part-way has already rewritten
-    // files, and an entry whose file the sync did not reach re-records the
-    // hash it already has.
+    // Recorded in a finally, so a sync that fails part-way still records the
+    // destinations it finished. An entry under a destination the sync failed
+    // in or never reached keeps its entry: its file may have been edited
+    // meanwhile, and recording that edit would hide it from the next install.
     const recordedBeforeSync = manifestEntriesUnder(layout, stagedKinds);
+    const finished = new Set<string>();
     try {
       for (const item of stagedKinds) {
         _syncGsdDir(item.staged, item.dest, item.kind, skillManifest, layout.runtime);
+        finished.add(path.resolve(item.dest));
       }
     } finally {
-      const recorded = recordManifestFileHashesResult(layout.configDir, recordedBeforeSync);
+      const dests = stagedKinds.map((item) => path.resolve(item.dest));
+      const reached = recordedBeforeSync.filter((entry) => {
+        // An entry outside every destination has no pre-apply hash and is never written.
+        return dests.filter((d) => tryWithinRootLexical(entry.path, d) !== null).every((d) => finished.has(d));
+      });
+      const recorded = recordManifestFileHashesResult(layout.configDir, reached);
       if (recorded === 'conflict') {
-        process.stderr.write(
-          'surface: gsd-file-manifest.json changed while skills were re-staged (a concurrent install?), '
-          + 'so their hashes were not re-recorded. The next install may report those skills as locally '
-          + 'modified and back them up to gsd-local-patches/.\n',
-        );
-      } else if (recorded === 'unavailable' && recordedBeforeSync.length > 0) {
-        process.stderr.write(
-          'surface: gsd-file-manifest.json could not be read or written after skills were re-staged, '
-          + 'so their hashes were not re-recorded. The next install may report those skills as locally '
-          + 'modified and back them up to gsd-local-patches/.\n',
-        );
+        process.stderr.write(MANIFEST_RECORD_WARNINGS.conflict);
+      } else if (recorded === 'unavailable' && reached.length > 0) {
+        process.stderr.write(MANIFEST_RECORD_WARNINGS.unavailable);
       }
     }
 
@@ -899,4 +912,5 @@ export = {
   // Exported for testing and for callers that need stand-alone pruning
   pruneSkillDirs,
   _syncGsdDir,
+  MANIFEST_RECORD_WARNINGS,
 };
