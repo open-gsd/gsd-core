@@ -129,6 +129,7 @@ module.exports = {
   "tests/gsd-validate-commit-sigpipe.test.cjs",
   "tests/gsd-write-guard.test.cjs",
   "tests/health-diagnostic-rules/worktree-health.test.cjs",
+  "tests/held-query-executor-identity.test.cjs",
   "tests/helpers-cleanup.test.cjs",
   "tests/helpers-process-isolation.test.cjs",
   "tests/hinted-executor-isolation.test.cjs",
