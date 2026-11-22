@@ -320,7 +320,7 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
 
   test('a files entry that names a file packs it despite a default or a "!" directory rule', () => {
     planted(
-      { files: ['hooks', '!hooks/sub', 'hooks/sub/keep.js', 'foo.orig', '.DS_Store'] },
+      { files: ['hooks', 'hooks/sub/keep.js', 'foo.orig', '.DS_Store', '!hooks/sub'] },
       ['hooks/a.js', 'hooks/sub/keep.js', 'hooks/sub/other.js', 'foo.orig', '.DS_Store'],
       (tmp) => {
         assert.deepEqual(sorted(listPackedFiles(tmp)), ['.DS_Store', 'foo.orig', 'hooks/a.js', 'hooks/sub/keep.js', 'package.json']);
@@ -402,12 +402,23 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
   });
 
   test('a path both included and excluded, a backslash, and a manifest key the list does not model throw', () => {
-    planted({ files: ['!a/x.js', 'a/x.js'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /both included and excluded/));
+    planted({ files: ['!a/x.js', 'a/x.js'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /follows an exclusion inside it/));
     planted({ files: ['a/x.js', '!a/X.js'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /both included and excluded/));
     planted({ files: ['a\\b'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /backslash/));
     for (const extra of [{ browser: 'b.js' }, { bundleDependencies: ['x'] }, { bundledDependencies: true }, { workspaces: ['p'] }]) {
       planted({ files: ['hooks'], ...extra }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /does not model/));
     }
+  });
+
+  test('an inclusion after an exclusion, a repeated "!", a root file sharing a base name with an exclusion, odd spellings and a nested excluded main throw', () => {
+    planted({ files: ['!a/b', 'a'] }, ['a/b/c.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /follows an exclusion inside it/));
+    planted({ files: ['!hooks/sub', 'pi'] }, [], (tmp) => assert.doesNotThrow(() => listPackedFiles(tmp)));
+    planted({ files: ['hooks', '!!a/b'] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /repeated "!"/));
+    planted({ files: ['a', 'c.js', '!a/b/c.js'] }, ['c.js'], (tmp) => assert.throws(() => listPackedFiles(tmp), /shares a base name/));
+    for (const files of [[' hooks'], ['hooks '], ['ho\nks'], ['#hooks']]) {
+      planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /plain paths only/));
+    }
+    planted({ files: ['hooks'], main: 'lib/a.orig' }, ['lib/a.orig'], (tmp) => assert.throws(() => listPackedFiles(tmp), /nested and matches a default exclusion/));
   });
 
   test('a files entry naming the package root throws', () => {

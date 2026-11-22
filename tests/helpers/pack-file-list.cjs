@@ -53,8 +53,19 @@ function listPackedFiles(root) {
     if (manifest[key] !== undefined) throw new Error(`${root}: package.json sets "${key}", which this list does not model`);
   }
   const seen = new Set();
+  const exclusionsSoFar = [];
   for (const f of manifest.files) {
     const bare = f.startsWith('!') ? f.slice(1) : f;
+    // npm applies the entries by position, with repeated `!` stripped and each rule trimmed and split on
+    // newlines; this list models single `!path` exclusions, none of which precedes an inclusion covering it.
+    if (bare.startsWith('!') || bare !== bare.trim() || /[\r\n]/.test(bare) || bare.startsWith('#')) {
+      throw new Error(`${root}: files entry "${f}" has a repeated "!", surrounding whitespace, a newline or a leading "#"; this list reads plain paths only`);
+    }
+    const here = normalise(bare).toLowerCase();
+    if (!f.startsWith('!') && exclusionsSoFar.some((n) => n === here || n.startsWith(`${here}/`))) {
+      throw new Error(`${root}: files entry "${f}" follows an exclusion inside it; npm applies entries by position and this list needs the inclusion first`);
+    }
+    if (f.startsWith('!')) exclusionsSoFar.push(here);
     if (bare.includes('\\')) throw new Error(`${root}: files entry "${f}" has a backslash, which npm reads differently on each platform`);
     const key = `${f.startsWith('!')}:${normalise(bare).toLowerCase()}`;
     if (seen.has(`${!f.startsWith('!')}:${normalise(bare).toLowerCase()}`)) {
@@ -72,10 +83,22 @@ function listPackedFiles(root) {
   }
   const positive = manifest.files.filter((f) => !f.startsWith('!')).map(normalise);
   const negative = manifest.files.filter((f) => f.startsWith('!')).map((f) => normalise(f.slice(1)));
+  // npm matches a root file entry by base name, so an exclusion of a nested file with that base name can be undone.
+  const baseName = (entry) => entry.split('/').pop().toLowerCase();
+  for (const entry of positive) {
+    if (negative.some((n) => baseName(n) === baseName(entry) && n.toLowerCase() !== entry.toLowerCase() && !entry.includes('/'))) {
+      throw new Error(`${root}: files entry "${entry}" shares a base name with an exclusion; npm resolves that by position and this list does not`);
+    }
+  }
   const bins = typeof manifest.bin === 'string' ? [manifest.bin] : Object.values(manifest.bin || {});
   // npm builds its rule for `main` from the text as written, so a "./main.js" spelling is not packed by it.
   const mainFile = typeof manifest.main === 'string' && !manifest.main.startsWith('./') ? [manifest.main] : [];
   const forced = new Set([...mainFile, ...bins].filter((f) => typeof f === 'string').map(normalise));
+  for (const rel of forced) {
+    if (rel.includes('/') && isExcludedName(rel.split('/').pop(), rel)) {
+      throw new Error(`${root}: main or bin target "${rel}" is nested and matches a default exclusion; this list does not model that`);
+    }
+  }
   const covers = (entry, rel) => {
     const e = entry.toLowerCase();
     const r = rel.toLowerCase();
