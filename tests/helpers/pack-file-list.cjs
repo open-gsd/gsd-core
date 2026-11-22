@@ -3,30 +3,35 @@
 // The files `npm pack` would put in the tarball for a repository root, computed by reading the tree:
 // no process is spawned, so a slow runner cannot fail a test whose subject is which files ship (#6498).
 // It reads the tree as it is, so a built tree (npm run build:lib) is a precondition: the compiled
-// gsd-core/bin/lib files are gitignored and exist only after the build. Rules (verified against npm 11):
+// gsd-core/bin/lib files are gitignored and exist only after the build. Rules (checked against npm 11):
 // - an entry of `files` is a plain file or directory path (everything under it); `!dir/entry` removes
 //   a path or directory from what the positive entries added;
+// - a files entry that names a file packs it even when a default or a `!` rule would exclude it;
 // - always included: root package.json, README*, LICENSE*, LICENCE*, COPYING*, and the main/bin files;
-// - excluded at any depth: .git, .svn, .hg, CVS, .npmrc, .DS_Store, ._*, *.orig, .*.swp, .wafpickle-*,
-//   .lock-wscript, npm-debug.log; excluded at the root only: node_modules and the lock files
-//   (package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lockb), which npm packs when nested.
+// - excluded at any depth, as a file or a directory: .git, .svn, .hg, CVS, .npmrc, .DS_Store, ._*,
+//   *.orig, .*.swp, .wafpickle-*, .lock-wscript, npm-debug.log, archived-packages, build/config.gypi;
+// - excluded at the root only: node_modules and the lock files (package-lock.json, yarn.lock,
+//   pnpm-lock.yaml, bun.lockb), which npm packs when nested.
 // It fails closed where npm's behaviour is not reproduced: a package.json that is not JSON or has no
-// `files` array, a glob in an entry or a slash-less `!` entry, an unreadable directory, a symlink, a
-// nested ignore file and a nested node_modules directory in a packed directory all throw.
+// `files` array, a glob or a path leaving the root in an entry, a slash-less `!` entry, an unreadable
+// directory, a symlink, a nested ignore file and a nested node_modules directory in a packed
+// directory all throw.
 
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ALWAYS_EXCLUDED_DIRS = new Set(['.git', '.svn', '.hg', 'CVS']);
-const ALWAYS_EXCLUDED_FILES = new Set(['.npmrc', '.DS_Store', '.lock-wscript', 'npm-debug.log']);
+const EXCLUDED_NAMES = new Set(['.git', '.svn', '.hg', 'CVS', 'archived-packages', '.npmrc', '.DS_Store', '.lock-wscript', 'npm-debug.log']);
 const ROOT_EXCLUDED_FILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb']);
 
-const isExcludedFile = (name, rel) =>
-  ALWAYS_EXCLUDED_FILES.has(name) || name.startsWith('._') || name.startsWith('.wafpickle-')
-  || name.endsWith('.orig') || /^\.[^/]{1,255}\.swp$/.test(name)
-  || (!rel.includes('/') && ROOT_EXCLUDED_FILES.has(name));
+// Name-based defaults, applied to a file or a directory name at any depth (a directory so named is
+// pruned with its contents); the lock files are excluded at the root only.
+const isExcludedName = (name, rel) =>
+  EXCLUDED_NAMES.has(name) || rel.endsWith('build/config.gypi')
+  || name.startsWith('._') || name.startsWith('.wafpickle-') || name.endsWith('.orig') || /^\.[^/]{1,255}\.swp$/.test(name);
+const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel);
 
-const isAlwaysIncludedFile = (rel) => rel === 'package.json' || /^(README|LICEN[CS]E|COPYING)(\.[^/]{0,255})?$/i.test(rel);
+// npm's '!/readme{,.*[^~$]}': the stem alone, or a dot, then at least one more character, the last not ~ or $.
+const isAlwaysIncludedFile = (rel) => rel === 'package.json' || /^(README|LICEN[CS]E|COPYING)(\.[^/]{0,255}[^~$/])?$/i.test(rel);
 
 const GLOB_CHARACTERS = /[*?[\]{}()]/;
 const normalise = (entry) => entry.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
@@ -41,6 +46,9 @@ function listPackedFiles(root) {
   }
   for (const f of manifest.files) {
     const bare = f.startsWith('!') ? f.slice(1) : f;
+    if (path.isAbsolute(bare) || normalise(bare).split('/').includes('..')) {
+      throw new Error(`${root}: files entry "${f}" leaves the package root; this list reads paths below it only`);
+    }
     if (GLOB_CHARACTERS.test(bare)) throw new Error(`${root}: files entry "${f}" is a glob; this list reads plain paths only`);
     if (f.startsWith('!') && !normalise(bare).includes('/')) {
       throw new Error(`${root}: files entry "${f}" is a slash-less exclusion, which npm applies at any depth; this list needs a path`);
@@ -53,10 +61,11 @@ function listPackedFiles(root) {
   const covers = (entry, rel) => rel === entry || rel.startsWith(`${entry}/`);
 
   const packed = new Set();
-  const visit = (rel, isDirectory) => {
+  // `required` is a files entry that names this file itself.
+  const visit = (rel, isDirectory, required = false) => {
     const name = rel.split('/').pop();
     if (isDirectory) {
-      if (rel === 'node_modules' || ALWAYS_EXCLUDED_DIRS.has(name) || negative.some((n) => covers(n, rel))) return;
+      if (rel === 'node_modules' || isExcludedName(name, rel) || negative.some((n) => covers(n, rel))) return;
       for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
         const where = path.join(root, rel, entry.name);
         if (entry.name === '.npmignore' || entry.name === '.gitignore') {
@@ -64,9 +73,11 @@ function listPackedFiles(root) {
         }
         if (entry.isSymbolicLink()) throw new Error(`${where}: a symlink in a packed directory; the walk does not follow links`);
         if (entry.name === 'node_modules') throw new Error(`${where}: a nested node_modules directory; this list does not model bundled dependencies`);
-        visit(`${rel}/${entry.name}`, entry.isDirectory());
+        if (entry.isDirectory() || entry.isFile()) visit(`${rel}/${entry.name}`, entry.isDirectory());
       }
-    } else if (!isExcludedFile(name, rel) && !negative.some((n) => covers(n, rel))) {
+    } else if (isRootExcluded(rel)) {
+      // npm's strict rules beat even a files entry that names the file
+    } else if (required || (!isExcludedName(name, rel) && !negative.some((n) => covers(n, rel)))) {
       packed.add(rel);
     }
   };
@@ -78,7 +89,7 @@ function listPackedFiles(root) {
       throw err;
     }
     if (stat.isSymbolicLink()) throw new Error(`${path.join(root, entry)}: a symlinked files entry; the walk does not follow links`);
-    visit(entry, stat.isDirectory());
+    if (stat.isDirectory() || stat.isFile()) visit(entry, stat.isDirectory(), stat.isFile());
   }
   for (const rel of fs.readdirSync(root)) {
     if (isAlwaysIncludedFile(rel) && fs.lstatSync(path.join(root, rel)).isFile()) packed.add(rel);

@@ -308,7 +308,7 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     );
   });
 
-  test('a root lock file or node_modules named in files does not pack', () => {
+  test('a root lock file or node_modules named in files does not pack, even though a named file otherwise does', () => {
     planted(
       { files: ['package-lock.json', 'yarn.lock', 'node_modules', 'keep.js'] },
       ['package-lock.json', 'yarn.lock', 'node_modules/dep/index.js', 'keep.js'],
@@ -316,6 +316,39 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
         assert.deepEqual(sorted(listPackedFiles(tmp)), ['keep.js', 'package.json']);
       },
     );
+  });
+
+  test('a files entry that names a file packs it despite a default or a "!" directory rule', () => {
+    planted(
+      { files: ['hooks', '!hooks/sub', 'hooks/sub/keep.js', 'foo.orig', '.DS_Store'] },
+      ['hooks/a.js', 'hooks/sub/keep.js', 'hooks/sub/other.js', 'foo.orig', '.DS_Store'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['.DS_Store', 'foo.orig', 'hooks/a.js', 'hooks/sub/keep.js', 'package.json']);
+      },
+    );
+  });
+
+  test('a directory named like an excluded file, build/config.gypi and archived-packages are pruned at any depth', () => {
+    planted(
+      { files: ['hooks'] },
+      ['hooks/a.js', 'hooks/._d/x.js', 'hooks/b.orig/x.js', 'hooks/.npmrc/x.js', 'hooks/npm-debug.log/x.js',
+        'hooks/.DS_Store/x.js', 'hooks/.x.swp/y.js', 'hooks/build/config.gypi', 'hooks/archived-packages/x.js', 'hooks/.git', 'hooks/CVS'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['hooks/a.js', 'package.json']);
+      },
+    );
+  });
+
+  test('README and LICENSE need a dot and a last character other than ~ or $ after the stem, as npm requires', () => {
+    planted({ files: ['hooks'] }, ['README.', 'README.md~', 'README.md$', 'LICENSE.bak~', 'README.m', 'LICENSE.x', 'README'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['LICENSE.x', 'README', 'README.m', 'package.json']);
+    });
+  });
+
+  test('a files entry that leaves the package root throws', () => {
+    for (const files of [['../x'], ['hooks/../../x'], ['!../x'], [path.resolve(os.tmpdir(), 'x')]]) {
+      planted({ files }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /leaves the package root/));
+    }
   });
 
   test('a root COPYING file ships without a files entry', () => {
