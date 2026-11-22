@@ -21,7 +21,7 @@ const { CONFIG_DEFAULTS, resolvePlannerStallDetectionEnabled } = configLoader;
 import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
+const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
@@ -1577,6 +1577,25 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
  * active, because `planningDir === planningRoot` and the caller already read
  * that file directly.
  */
+function resolveUndeclaredFromRoot(cwd: string, kp: string): { found: boolean; value: unknown } {
+  if (!resolveEnvWorkstream()) return { found: false, value: undefined };
+  let current: unknown;
+  try {
+    // Bounded read (#5759): null is an absent root config; a FIFO/device/oversized one throws.
+    const rawRoot = configLoader.readConfigFileBounded(path.join(planningRoot(cwd), 'config.json'));
+    if (rawRoot === null) return { found: false, value: undefined };
+    current = JSON.parse(rawRoot) as unknown;
+  } catch {
+    // An unusable root config is not inherited: it must not change config-get's verdict.
+    return { found: false, value: undefined };
+  }
+  for (const key of kp.split('.')) {
+    if (current === undefined || current === null || typeof current !== 'object') return { found: false, value: undefined };
+    current = Object.prototype.hasOwnProperty.call(current, key) ? (current as Record<string, unknown>)[key] : undefined;
+  }
+  return current === undefined ? { found: false, value: undefined } : { found: true, value: current };
+}
+
 function resolveInheritedValue(cwd: string, kp: string): { found: boolean; value: unknown } {
   // #6030 (ADR-1411 Decision 5): the resolver owns the walk; this rung keeps only the layers
   // below the file `cmdConfigGet` already read. The root layer counts only when a workstream is
@@ -1584,6 +1603,10 @@ function resolveInheritedValue(cwd: string, kp: string): { found: boolean; value
   // neither does config-get. The global defaults layer counts everywhere, as the documented
   // precedence says (#4071). An ineligible key reports not-configured, as before this rung read it.
   const resolved = resolveConfigValue(kp, { cwd, family: 'A', honorGlobal: configLoader.honorsGlobalDefaults });
+  if (!resolved.found && resolved.reason === configLoader.CONFIG_REASON.NOT_CONFIGURED) {
+    // A key the resolver does not declare keeps the root-config walk this rung always had.
+    return resolveUndeclaredFromRoot(cwd, kp);
+  }
   if (!resolved.found) return { found: false, value: undefined };
   const inherited = resolved.layer === 'global-defaults' || (resolved.layer === 'root' && Boolean(resolveEnvWorkstream()));
   return inherited ? { found: true, value: resolved.value } : { found: false, value: undefined };

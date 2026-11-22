@@ -11,7 +11,9 @@
 import path from 'node:path';
 import { CONFIG_DEFAULTS, normalizeLegacyKeys, isConfigSection } from './configuration.cjs';
 import { getGlobalConfigDir, resolveGsdHome } from './runtime-homes.cjs';
-import { platformReadSync } from './shell-command-projection.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 config-file-read.cjs is an export= CommonJS module
+import configFileRead = require('./config-file-read.cjs');
+const { readConfigFileBounded } = configFileRead;
 import { parseJsonc } from './settings-jsonc.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import loader = require('./config-loader.cjs');
@@ -68,7 +70,9 @@ type LayerRead = { kind: 'ok'; data: Record<string, unknown> }
 function readConfigLayer(file: string, family: ConfigFamily): LayerRead {
   let raw: string | null;
   try {
-    raw = platformReadSync(file);
+    // Bounded regular-file read (#5759): a FIFO, device or oversized layer is a fault here, never a
+    // blocking open. Migrated readers inherit this guarantee from the resolver.
+    raw = readConfigFileBounded(file);
   } catch (err) {
     return { kind: 'fault', fault: {
       reason: CONFIG_REASON.CONFIG_UNREADABLE,
