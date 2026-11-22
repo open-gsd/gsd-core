@@ -878,6 +878,19 @@ describe('#5491 — antigravity proves it read each plan', () => {
     assert.equal(r.readCheck, undefined);
   });
 
+  test('a prompt that names no plan, with no readable agy session, is not stamped (#6286 round 5 Minor 1)', async () => {
+    // No SESSION: the conversation cache is missing, so compaction is 'unknown'. With no plan named
+    // there was nothing to restate, so there is nothing to check.
+    const p = plan('antigravity');
+    const d = deps({
+      files: { [PROMPT]: 'Review this diff.\n' },
+      spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }),
+    });
+    const r = await runLane(p, d, { repoRoot: ROOT });
+    assert.equal(r.readCheck, undefined);
+    assert.ok(!d.files[p.reviewPath].includes('[incomplete-read]'), d.files[p.reviewPath]);
+  });
+
   test('no restatement → review stamped [incomplete-read] and readCheck in the result', async () => {
     const p = plan('antigravity');
     const d = deps({ files: { ...laneFiles(), ...SESSION }, spawn: () => ({ status: 0, stdout: 'Looks fine. see src/a.ts:3', stderr: '' }) });

@@ -989,3 +989,19 @@ describe('#5491 the real review-lane invoke reads plans through the bounded read
     assert.match(fs.readFileSync(path.join(run, 'gsd-review-antigravity.md'), 'utf8'), /^> \[incomplete-read\]/);
   });
 });
+
+describe('#5491 a prompt that names no plan reports no compaction (#6286 round 5 Minor 1)', () => {
+  test('no plan header: compaction known or unknown returns undefined; a truncation marker still reports', () => {
+    const d = memDeps('Review this diff.', {});
+    assert.equal(runReadCheck('review', d.PROMPT, '/repo', d, { compacted: 'unknown' }), undefined);
+    assert.equal(runReadCheck('review', d.PROMPT, '/repo', d, { compacted: true }), undefined);
+    const t = runReadCheck('<truncated 9 bytes>', d.PROMPT, '/repo', d, { compacted: 'unknown' });
+    assert.deepEqual({ truncated: t.truncated, compacted: t.compacted }, { truncated: true, compacted: false });
+    assert.doesNotMatch(stampIncompleteRead('body', t), /compacted/);
+  });
+
+  test('a header naming a missing plan file still reports an unknown compaction: the prompt asked for READ-CHECK lines', () => {
+    const d = memDeps('#### p/absent-01-PLAN.md', {});
+    assert.equal(runReadCheck('review', d.PROMPT, '/repo', d, { compacted: 'unknown' }).compacted, 'unknown');
+  });
+});
