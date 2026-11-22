@@ -5,7 +5,8 @@
 // at load time in a published install.
 //
 // This test statically checks each shipped .cjs's require() calls against the
-// resolved tarball file list (npm pack --dry-run --json), so adding a new entry
+// resolved tarball file list (the files npm pack would pack, read from the tree by
+// tests/helpers/pack-file-list.cjs; no process is spawned, #6498), so adding a new entry
 // to `files` cannot silently opt out. It does NOT execute the scripts — it parses
 // their require() calls and resolves them against the shipped set.
 
@@ -17,41 +18,13 @@ const { describe, test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const os = require('node:os');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.join(__dirname, '..');
 
 const { extractRequires } = require('./helpers/copy-script-fixture.cjs');
-
-/**
- * package.json's `prepack`/`prepare` runs a full `npm run build:lib` (tsc)
- * before `npm pack` computes the file list — a bounded but non-trivial
- * subprocess (~2s in isolation). Under the full parallel 28,000+-test CI
- * matrix this has been observed to take 60.6s and trip a 60_000ms bound
- * (#2931 gsd-test run d52d2ee4, linux-node24, duration_ms 60637.56),
- * aborting this file's `before()` hook and cascading every sibling test to
- * "cancelled". 120s keeps the bound finite (never unbounded, per the
- * subprocess-timeout convention) while giving real headroom for a
- * contended CI box.
- */
-const NPM_PACK_TIMEOUT_MS = 120_000;
-
-/**
- * Resolve the tarball file list via `npm pack --dry-run --json`.
- * This is the ACTUAL set of files that ship — not a hardcoded list — so adding
- * a new entry to package.json `files` cannot silently bypass the guard.
- */
-function resolveTarballFiles() {
-  const raw = execFileSync('npm', ['pack', '--dry-run', '--json'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf-8',
-    shell: true, // Windows: npm is npm.cmd and needs a shell
-    stdio: ['pipe', 'pipe', 'pipe'],
-    timeout: NPM_PACK_TIMEOUT_MS,
-  });
-  const parsed = JSON.parse(raw);
-  return packListToPathSet(parsed);
-}
+const { listPackedFiles } = require('./helpers/pack-file-list.cjs');
 
 /**
  * Pure projection from `npm pack --json` output to the tarball path set —
@@ -140,7 +113,7 @@ describe('#2858 — shipped scripts require only shipped paths', () => {
   let shippedScripts;
 
   before(() => {
-    shippedFiles = resolveTarballFiles();
+    shippedFiles = listPackedFiles(REPO_ROOT);
     // Filter to scripts/**/*.{cjs,js} (the shipped script surface — both .cjs
     // and .js files ship under scripts/, e.g. build-hooks.js is required by
     // bin/install.js). Both extensions are checked so a broken require() in a
@@ -263,5 +236,100 @@ describe('#3902 packListToPathSet resolves both npm pack --json shapes', () => {
       'pkg-a': { files: FILES },
       'pkg-b': { files: FILES },
     }), /exactly 1/);
+  });
+});
+
+// ─── #6498: the in-process file list, planted trees ──────────────────────────
+
+describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
+  const planted = (manifest, paths, fn) => {
+    const tmp = createTempDir('gsd-pack-list-');
+    try {
+      fs.writeFileSync(path.join(tmp, 'package.json'), typeof manifest === 'string' ? manifest : JSON.stringify(manifest));
+      for (const rel of paths) {
+        fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true });
+        fs.writeFileSync(path.join(tmp, rel), 'x');
+      }
+      fn(tmp);
+    } finally {
+      cleanup(tmp);
+    }
+  };
+  const sorted = (set) => [...set].sort();
+
+  test('a directory entry packs everything under it, a "!" entry removes a file from it, and a planted file under an excluded path stays out', () => {
+    planted(
+      { files: ['scripts', '!scripts/repo-only.cjs', '!scripts/private'] },
+      ['scripts/a.cjs', 'scripts/lib/b.cjs', 'scripts/repo-only.cjs', 'scripts/private/c.cjs', 'tests/t.cjs'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['package.json', 'scripts/a.cjs', 'scripts/lib/b.cjs']);
+      },
+    );
+  });
+
+  test('a file entry packs that file only; an entry that matches nothing is skipped', () => {
+    planted({ files: ['GEMINI.md', 'missing-dir'] }, ['GEMINI.md', 'other.md'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['GEMINI.md', 'package.json']);
+    });
+  });
+
+  test('package.json, README*, LICENSE* and the main and bin files ship without a files entry', () => {
+    planted(
+      { files: ['hooks'], main: 'lib/main.js', bin: { tool: 'bin/tool.js' } },
+      ['README.md', 'LICENSE', 'licence.txt', 'lib/main.js', 'bin/tool.js', 'lib/other.js', 'CHANGELOG.md'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)),
+          ['LICENSE', 'README.md', 'bin/tool.js', 'lib/main.js', 'licence.txt', 'package.json']);
+      },
+    );
+  });
+
+  test('the always-excluded names never pack, even inside a packed directory', () => {
+    planted(
+      { files: ['hooks'] },
+      ['hooks/keep.js', 'hooks/.DS_Store', 'hooks/._keep.js', 'hooks/a.orig', 'hooks/a.swp', 'hooks/package-lock.json',
+        'hooks/yarn.lock', 'hooks/.npmrc', 'hooks/node_modules/dep/index.js', 'hooks/.git/config'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['hooks/keep.js', 'package.json']);
+      },
+    );
+  });
+
+  test('a package.json that is not JSON, or has no files array, throws', () => {
+    planted('{not json', [], (tmp) => assert.throws(() => listPackedFiles(tmp), /cannot be read as JSON/));
+    planted({ name: 'x' }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /no files array/));
+    planted({ files: ['a', 7] }, [], (tmp) => assert.throws(() => listPackedFiles(tmp), /no files array/));
+    assert.throws(() => listPackedFiles(path.join(os.tmpdir(), 'gsd-pack-list-no-such-root')), /cannot be read as JSON/);
+  });
+
+  test('a nested ignore file in a packed directory throws instead of being ignored', () => {
+    for (const name of ['.npmignore', '.gitignore']) {
+      planted({ files: ['hooks'] }, [`hooks/${name}`, 'hooks/a.js'], (tmp) => {
+        assert.throws(() => listPackedFiles(tmp), /nested ignore file/);
+      });
+    }
+  });
+
+  test('a symlink in a packed directory, or as a files entry, throws', (t) => {
+    planted({ files: ['hooks', 'linked'] }, ['hooks/a.js', 'target/x.js'], (tmp) => {
+      try { fs.symlinkSync(path.join(tmp, 'target'), path.join(tmp, 'hooks', 'link')); } catch (err) {
+        t.skip(`symlinks are not available here (${err.code})`);
+        return;
+      }
+      assert.throws(() => listPackedFiles(tmp), /symlink in a packed directory/);
+      fs.unlinkSync(path.join(tmp, 'hooks', 'link'));
+      fs.symlinkSync(path.join(tmp, 'target'), path.join(tmp, 'linked'));
+      assert.throws(() => listPackedFiles(tmp), /symlinked files entry/);
+    });
+  });
+
+  test('on this repository the list keeps the instrumentation chain out and the shipped scripts in', () => {
+    const list = listPackedFiles(REPO_ROOT);
+    for (const f of ['scripts/run-tests.cjs', 'scripts/live-config-guard.cjs', 'tests/helpers.cjs', 'package-lock.json']) {
+      assert.ok(!list.has(f), `${f} must not ship`);
+    }
+    for (const f of ['package.json', 'bin/install.js', 'scripts/lib/cli-exit.cjs', 'LICENSE']) {
+      assert.ok(list.has(f), `${f} must ship`);
+    }
   });
 });
