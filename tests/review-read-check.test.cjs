@@ -1041,3 +1041,12 @@ describe('#5491 a comment opener inside code hides no task (#6286 round 5 Minor 
     });
   }
 });
+
+describe('#5491 the stored unchecked list is capped (#6286 round 5 Nit 1)', () => {
+  test('ten ids are kept and the total is carried', () => {
+    const ids = Array.from({ length: 12 }, (_, k) => `z-${k}`);
+    const r = checkRead('', [], false, ids);
+    assert.deepEqual({ unchecked: r.unchecked, uncheckedTotal: r.uncheckedTotal }, { unchecked: ids.slice(0, 10), uncheckedTotal: 12 });
+    assert.match(stampIncompleteRead('body', r), /z-9 and 2 more could not be checked/);
+  });
+});
