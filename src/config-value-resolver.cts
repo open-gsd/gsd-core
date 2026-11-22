@@ -13,25 +13,25 @@ import { CONFIG_DEFAULTS, normalizeLegacyKeys, isConfigSection } from './configu
 import { getGlobalConfigDir, resolveGsdHome } from './runtime-homes.cjs';
 import { platformReadSync } from './shell-command-projection.cjs';
 import { parseJsonc } from './settings-jsonc.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import loader = require('./config-loader.cjs');
 const { CONFIG_REASON } = loader;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import schema = require('./config-schema.cjs');
 const { isCentralConfigKey, getCapabilityConfigSchema } = schema;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import federatedConfig = require('./federated-config.cjs');
 const { isWellFormedSlice, typeMatchesSlice } = federatedConfig;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import coreUtils = require('./core-utils.cjs');
 const { detectSubRepos } = coreUtils;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import schemaDefaults = require('./config-schema-defaults.cjs');
 const { resolveSchemaDefault } = schemaDefaults;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import planning = require('./planning-workspace.cjs');
 const { planningDir, planningRoot, resolveEnvWorkstream } = planning;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import unusableInput = require('./unusable-input.cjs');
 const { warnUnusableInput, UNUSABLE_REASON } = unusableInput;
 

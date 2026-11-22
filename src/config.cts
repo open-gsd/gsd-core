@@ -25,7 +25,7 @@ const { planningDir, planningRoot, resolveEnvWorkstream, withPlanningLock } = pl
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
 const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import schemaDefaults = require('./config-schema-defaults.cjs');
 const { resolveSchemaDefault } = schemaDefaults;
 // eslint-disable-next-line @typescript-eslint/no-require-imports

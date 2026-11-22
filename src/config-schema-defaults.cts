@@ -1,9 +1,9 @@
 /** Shared schema defaults for CLI queries and per-key resolution. */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import configLoader = require('./config-loader.cjs');
 const { CONFIG_DEFAULTS } = configLoader;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #5096 CJS interop import, as in the sibling config modules
 import configSchema = require('./config-schema.cjs');
 const { getCapabilityConfigSchema } = configSchema;
 
@@ -47,22 +47,14 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   'workflow.inline_plan_threshold': CONFIG_DEFAULTS.inline_plan_threshold,
   // #4285 review: an absent threshold resolved to "Key not found" while the
   // hook silently used 35/25 — the query surface disagreeing with the reader.
-  //
   // Restated here rather than derived: `CONFIG_DEFAULTS` is re-exported with a
   // FLATTENED shape that drops the manifest's nested blocks, so
-  // `CONFIG_DEFAULTS.hooks` is undefined at runtime and the manifest cannot
-  // feed these two rows the way `workflow.smart_zone_tokens` above is fed.
-  //
-  // Not added to `buildNewProjectConfig` either, and that one is deliberate
-  // rather than incidental: it writes a `hooks` object into every NEW project's
-  // config.json, which would freeze today's fire-points as an explicit
-  // per-project override everywhere — the opposite of this PR's premise that an
-  // absent key tracks the shipped default. (The manifest alone would NOT have
-  // that effect; `buildNewProjectConfig` builds its own literal. Correcting an
-  // earlier version of this comment that ran the two together.)
-  //
-  // That leaves ONE copy of 35/25 outside the hook — these two rows — and
-  // `tests/config.test.cjs` pins them against the hook's exported
+  // `CONFIG_DEFAULTS.hooks` is undefined at runtime.
+  // Not added to `buildNewProjectConfig` on purpose: it writes a `hooks` object
+  // into every NEW project's config.json, which would freeze today's fire-points
+  // as an explicit per-project override, the opposite of an absent key tracking
+  // the shipped default. That leaves ONE copy of 35/25 outside the hook (these
+  // two rows), and `tests/config.test.cjs` pins them against the hook's exported
   // WARNING_THRESHOLD/CRITICAL_THRESHOLD so the copies cannot drift.
   'hooks.context_warning_threshold': 35,
   'hooks.context_critical_threshold': 25,
