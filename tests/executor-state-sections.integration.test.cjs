@@ -1,6 +1,7 @@
 // #6388: the STATE.md section reads that plan execution runs instead of loading the whole file,
-// run in real bash exactly as shipped in agents/gsd-executor.md (load_project_state) and
-// gsd-core/workflows/execute-plan.md (init_context). The text checks that no shell run can show
+// run in real bash exactly as shipped in gsd-core/references/executor-state-sections.md, the block
+// both agents/gsd-executor.md (load_project_state) and gsd-core/workflows/execute-plan.md
+// (init_context) run. The text checks that no shell run can show
 // stay in tests/executor-state-sections-contract.test.cjs.
 // Integration suite: the Linux lane; the generator's suffix rule keeps *.integration.test.cjs out of the Windows and macOS tiers.
 'use strict';
@@ -13,12 +14,11 @@ const { cleanup, createTempDir, createTempProject, readFileNormalized, runGsdToo
 const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { HOOK_FANOUT_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
-const { stateSectionBlock } = require('./helpers/executor-state-sections.cjs');
+const { REFERENCE_PATH, stateSectionBlock } = require('./helpers/executor-state-sections.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const TOOLS = path.join(ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
-const AGENT_PATH = path.join(ROOT, 'agents', 'gsd-executor.md');
-const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'execute-plan.md');
+const BLOCK_PATH = path.join(ROOT, REFERENCE_PATH);
 
 const POSITION = ['Phase: 2 of 3 (Build)', 'Plan: 1 of 2 in current phase', 'Status: Executing'].join('\n');
 const DECISIONS = ['- [Phase 1]: Use SQLite for local state', '- [Phase 2]: Keep the CLI synchronous'].join('\n');
@@ -64,12 +64,12 @@ function project(t, content) {
 }
 
 /**
- * Run the read block shipped in `file` in a fresh bash under `set -euo pipefail`, with `gsd_run`
+ * Run the shipped read block in a fresh bash under `set -euo pipefail`, with `gsd_run`
  * bound to this checkout's CLI, and return the four variables it sets as typed values.
  */
-function runReads(t, cwd, { file = AGENT_PATH, env = {}, gsdRun } = {}) {
-  const block = stateSectionBlock(readFileNormalized(file));
-  assert.ok(block, `${path.basename(file)} carries the #6388 section-read block`);
+function runReads(t, cwd, { env = {}, gsdRun } = {}) {
+  const block = stateSectionBlock(readFileNormalized(BLOCK_PATH));
+  assert.ok(block, `${REFERENCE_PATH} carries the #6388 section-read block`);
   const work = createTempDir('gsd-6388-run-');
   t.after(() => cleanup(work));
   const out = path.join(work, 'out.json');
@@ -98,12 +98,10 @@ function runReads(t, cwd, { file = AGENT_PATH, env = {}, gsdRun } = {}) {
 const READ = { status: 'read', position: POSITION, decisions: DECISIONS, blockers: BLOCKERS };
 
 describe('#6388: plan execution reads only Current Position, Decisions and Blockers from STATE.md', () => {
-  for (const [label, file] of [['agent load_project_state', AGENT_PATH], ['execute-plan init_context', WORKFLOW_PATH]]) {
-    test(`${label}: the template headings give the three sections exactly, and no quick-task row`, (t) => {
-      const dir = project(t, stateDoc());
-      assert.deepEqual(runReads(t, dir, { file }), READ);
-    });
-  }
+  test('the template headings give the three sections exactly, and no quick-task row', (t) => {
+    const dir = project(t, stateDoc());
+    assert.deepEqual(runReads(t, dir), READ);
+  });
 
   test('both exit contracts give the same values (an absent section exits 80 under v2)', (t) => {
     const dir = project(t, stateDoc({ decisionsHeading: '### Decisions Made', blockersHeading: null }));
@@ -167,13 +165,13 @@ describe('#6388: plan execution reads only Current Position, Decisions and Block
     test('execute-plan: --ws parsed into GSD_WS selects the workstream STATE.md', (t) => {
       const dir = workstreamProject(t);
       assert.deepEqual(
-        runReads(t, dir, { file: WORKFLOW_PATH, env: { GSD_WS: '--ws alpha' } }),
+        runReads(t, dir, { env: { GSD_WS: '--ws alpha' } }),
         { ...READ, decisions: '- [Phase 1]: Alpha only' },
       );
-      assert.deepEqual(runReads(t, dir, { file: WORKFLOW_PATH }), { ...READ, position: 'Phase: 1 of 1 (Root)' });
+      assert.deepEqual(runReads(t, dir), { ...READ, position: 'Phase: 1 of 1 (Root)' });
     });
 
-    test('agent: the reads resolve the same STATE.md as state.load', (t) => {
+    test('agent: with GSD_WS unset the reads resolve the same STATE.md as state.load', (t) => {
       const dir = workstreamProject(t);
       const env = { GSD_WORKSTREAM: 'alpha' };
       const loaded = runGsdTools(['state', 'load'], dir, env);

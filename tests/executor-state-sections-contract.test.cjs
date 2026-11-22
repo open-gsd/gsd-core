@@ -8,19 +8,19 @@
  * These are source-text-is-the-product assertions: the agent and workflow markdown IS what the
  * runtime loads. The read block itself runs in real bash in
  * tests/executor-state-sections.integration.test.cjs; only what no shell run can show stays here —
- * that both execution paths carry the same block and rules, and that no executor spawn prompt
- * hands the executor STATE.md as required reading any more.
+ * that both execution paths run the one shared block with its rules, and that no executor spawn
+ * prompt hands the executor STATE.md as required reading any more.
  */
 
 const { describe, test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { readFileNormalized } = require('./helpers.cjs');
-const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
-const { BLOCK_START, stateSectionBlock, SECTION_NAMES, RULES, AT_REFERENCE_RULE } = require('./helpers/executor-state-sections.cjs');
+const { REFERENCE_PATH, REFERENCE_INCLUDE, stateSectionBlock, SECTION_NAMES, RULES, AT_REFERENCE_RULE } = require('./helpers/executor-state-sections.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const FILES = Object.freeze({
+  reference: REFERENCE_PATH,
   agent: 'agents/gsd-executor.md',
   executePlan: 'gsd-core/workflows/execute-plan.md',
   executePhase: 'gsd-core/workflows/execute-phase.md',
@@ -52,22 +52,20 @@ describe('#6388: executor state loading contract', () => {
   const text = {};
   before(() => {
     for (const [key, rel] of Object.entries(FILES)) {
-      // allow-test-rule: source-text-is-the-product the executor agent and execution workflows are runtime-loaded text (#6388)
+      // allow-test-rule: source-text-is-the-product the executor agent, execution workflows and their reference are runtime-loaded text (#6388)
       text[key] = readFileNormalized(path.join(ROOT, rel));
     }
   });
 
   describe('one read block for agent and inline execution', () => {
-    test('gsd-executor.md and execute-plan.md carry the same block, once each', () => {
-      const agentBlock = stateSectionBlock(text.agent);
-      const workflowBlock = stateSectionBlock(text.executePlan);
-      assert.ok(agentBlock, 'gsd-executor.md carries the block');
-      assert.ok(workflowBlock, 'execute-plan.md carries the block');
-      assert.equal(workflowBlock, agentBlock);
+    test('the block lives once, in the reference', () => {
+      assert.ok(stateSectionBlock(text.reference), `${REFERENCE_PATH} carries the block exactly once`);
+      assert.equal(stateSectionBlock(text.agent), null, 'gsd-executor.md does not carry its own copy');
+      assert.equal(stateSectionBlock(text.executePlan), null, 'execute-plan.md does not carry its own copy');
     });
 
     test('the block reads exactly the writer-accepted names, grouped and ordered per section', () => {
-      const block = stateSectionBlock(text.agent);
+      const block = stateSectionBlock(text.reference);
       const groups = {};
       for (const [key, variable] of [['position', 'STATE_POSITION'], ['decisions', 'STATE_DECISIONS'], ['blockers', 'STATE_BLOCKERS']]) {
         const call = new RegExp(`^\\s*${variable}=\\$\\(_state_section ((?:"[^"]+" ?)+)\\)$`, 'm').exec(block);
@@ -77,47 +75,47 @@ describe('#6388: executor state loading contract', () => {
       assert.deepEqual(groups, { ...SECTION_NAMES });
     });
 
-    test('every state.get read is raw and every existence check is state.load --raw, never the full state_raw payload', () => {
-      const block = stateSectionBlock(text.agent);
+    test('every read is --raw: state.get for the sections, state.load --raw only for existence', () => {
+      const block = stateSectionBlock(text.reference);
       const reads = block.split('\n').filter((l) => l.includes('gsd_run query state.'));
       assert.deepEqual(reads.map((l) => /gsd_run query (state\.[a-z]+)/.exec(l)[1]).sort(), ['state.get', 'state.load']);
       for (const line of reads) assert.ok(line.includes(' --raw '), `raw read: ${line.trim()}`);
-      // Nowhere in the agent definition is the whole STATE.md loaded any more.
-      for (const line of text.agent.split('\n').filter((l) => l.includes('state.load'))) {
-        assert.ok(line.includes('--raw'), `state.load only with --raw: ${line.trim()}`);
-      }
+      // Nowhere in the agent definition is the whole STATE.md (state.load's state_raw) loaded any more.
+      assert.equal(text.agent.includes('state.load'), false);
     });
 
-    test('the rules beside the block are stated word for word in both files', () => {
-      for (const key of ['agent', 'executePlan']) {
-        const lines = new Set(text[key].split('\n'));
-        for (const rule of RULES) assert.ok(lines.has(rule), `${FILES[key]} states: ${rule}`);
-      }
+    test('the rules after the block are stated word for word', () => {
+      const lines = new Set(text.reference.split('\n'));
+      for (const rule of RULES) assert.ok(lines.has(rule), `${REFERENCE_PATH} states: ${rule}`);
     });
 
-    test('execute-plan.md runs the block inside init_context\'s fence, after GSD_WS is parsed', () => {
-      const lines = text.executePlan.split('\n');
-      const startLine = lines.indexOf(BLOCK_START);
-      const fence = scanFencedBlocks(lines).find((b) => b.openLineIdx < startLine && startLine < b.closeLineIdx);
-      assert.ok(fence, 'the block sits inside a fence');
-      const fenceLines = lines.slice(fence.openLineIdx + 1, fence.closeLineIdx);
-      const wsParse = fenceLines.findIndex((l) => l.startsWith('GSD_WS=$(echo " $GSD_ARGS"'));
-      assert.notEqual(wsParse, -1, 'the same fence parses --ws into GSD_WS');
-      assert.ok(wsParse < fenceLines.indexOf(BLOCK_START), 'GSD_WS is set before the reads');
-      const stepOpen = lines.slice(0, startLine).filter((l) => l.startsWith('<step name=')).pop();
-      assert.equal(stepOpen, '<step name="init_context" priority="first">', 'the fence belongs to init_context');
+    test('the agent runs the block in load_project_state', () => {
+      const step = /<step name="load_project_state" priority="first">([\s\S]*?)<\/step>/.exec(text.agent);
+      assert.ok(step, 'gsd-executor.md has a load_project_state step');
+      assert.ok(step[1].includes(REFERENCE_INCLUDE), 'load_project_state references the block');
+    });
+
+    test('execute-plan.md runs the block in init_context, after GSD_WS is parsed', () => {
+      const step = /<step name="init_context" priority="first">([\s\S]*?)<\/step>/.exec(text.executePlan);
+      assert.ok(step, 'execute-plan.md has an init_context step');
+      const wsParse = step[1].indexOf('GSD_WS=$(echo " $GSD_ARGS"');
+      assert.notEqual(wsParse, -1, 'init_context parses --ws into GSD_WS');
+      assert.ok(step[1].indexOf(REFERENCE_INCLUDE) > wsParse, 'init_context references the block after GSD_WS is set');
     });
 
     test('execute-plan.md no longer tells the executor to read STATE.md before any operation', () => {
       assert.equal(text.executePlan.includes('Read STATE.md before any operation'), false);
+      const requiredReading = /<required_reading>([\s\S]*?)<\/required_reading>/.exec(text.executePlan);
+      assert.ok(requiredReading, 'execute-plan.md has a required_reading block');
+      assert.ok(requiredReading[1].includes("`init_context`'s STATE.md section reads"), 'required reading points at the section reads');
     });
   });
 
   describe('a plan\'s own STATE.md @-reference goes through the section reads', () => {
-    test('gsd-executor.md load_plan and execute-plan.md execute step 1 both state the rule', () => {
+    test('gsd-executor.md load_plan and execute-plan.md execute step 1 both point at the rule', () => {
       const loadPlan = /<step name="load_plan">([\s\S]*?)<\/step>/.exec(text.agent);
       assert.ok(loadPlan, 'gsd-executor.md has a load_plan step');
-      assert.ok(loadPlan[1].split('\n').some((l) => l.includes(AT_REFERENCE_RULE)), 'load_plan states the @-reference rule');
+      assert.ok(loadPlan[1].includes(AT_REFERENCE_RULE), 'load_plan states the @-reference rule');
       const execute = /<step name="execute">([\s\S]*?)<\/step>/.exec(text.executePlan);
       assert.ok(execute, 'execute-plan.md has an execute step');
       const contextLine = execute[1].split('\n').find((l) => l.startsWith('1. Read @context files from prompt'));
