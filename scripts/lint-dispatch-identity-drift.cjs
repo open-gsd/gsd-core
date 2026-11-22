@@ -11,6 +11,7 @@
  * Membership: every `--force-isolation` producer is in
  * `scripts/lib/dispatch-isolation-producer-sites.cjs`, and every entry has one;
  * sanction a doc example with `<!-- dispatch-isolation-site: <reason> -->`.
+ * A scan root that is missing is a finding, never a silent pass.
  * Usage: node scripts/lint-dispatch-identity-drift.cjs [--root <dir>]
  */
 
@@ -22,10 +23,21 @@ const { PRODUCER_SITES } = require('./lib/dispatch-isolation-producer-sites.cjs'
 
 const MARKDOWN_ROOTS = ['gsd-core/workflows', 'gsd-core/references'];
 const HOOK_ROOT = 'hooks';
+const HOOK_EXTENSIONS = ['.js', '.cjs', '.mjs'];
 const OWNER_FILE = 'hooks/lib/dispatch-identity.js';
 
 const HOOK_SANCTION_RE = /^\s*\/\/\s*dispatch-identity-owner:\s*\S/;
-const SITE_SANCTION_RE = /^\s*<!--\s*dispatch-isolation-site:\s*\S[^]*-->\s*$/;
+const SITE_SANCTION_RE = /^\s*<!--\s*dispatch-isolation-site:\s*\S(?:(?!-->).)*-->\s*$/;
+
+function splitLines(text) {
+  return String(text).split(/\r\n|\r|\n/);
+}
+
+function previousNonBlank(lines, i) {
+  let prev = i - 1;
+  while (prev >= 0 && lines[prev].trim() === '') prev -= 1;
+  return prev >= 0 ? lines[prev] : null;
+}
 
 // A marker is canonical when the owner parses it and renders the same text
 // back: the accepted shapes are whatever the owner emits, never restated here.
@@ -35,98 +47,126 @@ function isCanonicalMarker(found) {
   return owner.renderDispatchIdentityMarker({ phase: parsed.phase, plan: parsed.plan }) === found;
 }
 
-const NEAR_MARKER_RE = /\[\s*gsd[:\- _]dispatch\b[^\]\n]*\]?/gi;
+// A bracketed `gsd` marker, including near-miss spellings and a marker whose
+// word is assembled by a format placeholder (`[gsd:%s …]`, `[gsd:${WORD} …]`).
+const NEAR_MARKER_RE = /\[\s*gsd[:\- _](?:dispatch\b|%s|\$\{?[A-Za-z_]\w*\}?)[^\]\n]*\]?/gi;
 
 function findTemplateDrift(text) {
   const out = [];
-  const lines = String(text).split(/\r\n|\r|\n/);
-  lines.forEach((line, i) => {
+  splitLines(text).forEach((line, i) => {
     NEAR_MARKER_RE.lastIndex = 0;
     let m;
     while ((m = NEAR_MARKER_RE.exec(line)) !== null) {
-      const found = m[0];
-      if (!isCanonicalMarker(found)) {
-        out.push({ kind: 'template-drift', line: i + 1, found: found.trim() });
-      }
+      if (!isCanonicalMarker(m[0])) out.push({ kind: 'template-drift', line: i + 1, found: m[0].trim() });
     }
   });
   return out;
 }
 
-// A line that names the marker or the prose frame inside something that looks
-// like a regex: a literal (`/…/`) or a `RegExp(` construction.
-const PARSER_SIGNATURE_RE = /gsd:dispatch|execute\\{1,2}s[+*]plan|of\\{1,2}s[+*]phase/i;
+// Code with comments and same-quote string concatenation removed, one entry
+// per original line, so a regex assembled as `'\\[gsd:' + 'dispatch'` reads as
+// the text it builds and line numbers stay the file's.
+function codeLines(text) {
+  const noBlock = String(text).replace(/\/\*[^]*?\*\//g, (m) => m.replace(/[^\r\n]/g, ' '));
+  return splitLines(noBlock).map((line) => {
+    const joined = line.replace(/(['"`])\s*\+\s*\1/g, '');
+    return /^\s*\/\//.test(joined) ? '' : joined.replace(/\s\/\/.*$/, '');
+  });
+}
+
+// Spellings of "one or more whitespace" a hand-written regex can use.
+const SPACE_ALTERNATIVES_RE = /\\{1,2}s[+*]?|\[ \]\+?|\[\\{1,2}s\]\+?| +/g;
+const MARKER_SIGNATURE_RE = /gsd:dispatch/i;
+const PROSE_SIGNATURE_RE = /execute plan\b.*\bof phase\b|\bexecute plan\b/i;
 const REGEX_CONTEXT_RE = /\/(?:[^/\\\n]|\\.)+\/[a-z]*|RegExp\(/;
 
-function literalSources(line) {
-  const sources = [];
+function literalRegexes(window) {
+  const found = [];
   const lit = /\/((?:[^/\\\n]|\\.)+)\/([a-z]*)/g;
   let m;
-  while ((m = lit.exec(line)) !== null) sources.push(m[1]);
-  const str = /RegExp\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g;
-  while ((m = str.exec(line)) !== null) {
+  while ((m = lit.exec(window)) !== null) found.push({ source: m[1], flags: m[2] });
+  const str = /RegExp\(\s*(['"`])((?:\\.|(?!\1).)*)\1(?:\s*,\s*(['"`])([a-z]*)\3)?/g;
+  while ((m = str.exec(window)) !== null) {
+    let source = m[2];
     try {
-      sources.push(JSON.parse(`"${m[2].replace(/\\\\/g, '\\\\').replace(/"/g, '\\"')}"`));
+      source = JSON.parse(`"${m[2].replace(/\\\\/g, '\\\\').replace(/"/g, '\\"')}"`);
     } catch {
-      sources.push(m[2]);
+      /* keep the raw text */
     }
+    found.push({ source, flags: m[4] || '' });
   }
-  return sources;
+  return found;
 }
 
 function findParserDrift(text, ownerSources) {
-  const canon = new Set([ownerSources.marker, ownerSources.prose]);
+  const rawLines = splitLines(text);
+  const code = codeLines(text);
   const out = [];
-  const lines = String(text).split(/\r\n|\r|\n/);
-  lines.forEach((line, i) => {
-    if (!PARSER_SIGNATURE_RE.test(line) || !REGEX_CONTEXT_RE.test(line)) return;
-    let prev = i - 1;
-    while (prev >= 0 && lines[prev].trim() === '') prev -= 1;
-    if (prev >= 0 && HOOK_SANCTION_RE.test(lines[prev])) return;
-    const verbatim = literalSources(line).some((src) => canon.has(src));
-    out.push({
-      kind: 'parser-drift',
-      variant: verbatim ? 'verbatim-copy' : 'divergent-parser',
-      line: i + 1,
-      found: line.trim().slice(0, 160),
-    });
+  let coveredThrough = -1;
+  code.forEach((line, i) => {
+    if (line.trim() === '' || i <= coveredThrough) return;
+    // A `RegExp(` call may continue over the next lines; one finding covers them all.
+    const isCall = /RegExp\(/.test(line);
+    const window = isCall ? code.slice(i, i + 4).join(' ') : line;
+    const spaced = window.replace(SPACE_ALTERNATIVES_RE, ' ');
+    const names = MARKER_SIGNATURE_RE.test(window)
+      || (PROSE_SIGNATURE_RE.test(spaced) && REGEX_CONTEXT_RE.test(window));
+    if (!names) return;
+    const prev = previousNonBlank(rawLines, i);
+    if (prev !== null && HOOK_SANCTION_RE.test(prev)) return;
+    const copies = literalRegexes(window).filter((r) => r.source === ownerSources.marker || r.source === ownerSources.prose);
+    let variant = 'divergent-parser';
+    if (copies.length > 0) {
+      const same = copies.some((r) => [...r.flags].sort().join('') === [...(r.source === ownerSources.marker ? ownerSources.markerFlags : ownerSources.proseFlags)].sort().join(''));
+      variant = same ? 'verbatim-copy' : 'verbatim-source-other-flags';
+    }
+    if (isCall) coveredThrough = i + 3;
+    out.push({ kind: 'parser-drift', variant, line: i + 1, found: rawLines[i].trim().slice(0, 160) });
   });
   return out;
 }
 
-const PRODUCER_RE = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=\$\(\s*)?gsd_run\s+query\s+dispatch-isolation\b/;
+// A producer is a command that runs `query dispatch-isolation` with
+// `--force-isolation`, under any runner or wrapper. Prose that quotes the
+// command inside backticks, and shell comments, are not producers.
+const QUERY_RE = /\bquery\s+dispatch-isolation\b/;
 
 function findProducerSites(text) {
-  const raw = String(text).split(/\r\n|\r|\n/);
+  const raw = splitLines(text);
   const out = [];
   for (let i = 0; i < raw.length; i += 1) {
-    if (!PRODUCER_RE.test(raw[i])) continue;
-    let joined = raw[i];
+    const head = raw[i];
+    const at = head.search(QUERY_RE);
+    if (at < 0 || head.slice(0, at).includes('`') || /^\s*#/.test(head)) continue;
+    let joined = head;
     let j = i;
     while (/\\\s*$/.test(joined) && j + 1 < raw.length) {
       j += 1;
       joined = `${joined.replace(/\\\s*$/, ' ')}${raw[j]}`;
     }
     if (!/--force-isolation\b/.test(joined)) continue;
-    let prev = i - 1;
-    while (prev >= 0 && raw[prev].trim() === '') prev -= 1;
-    out.push({ line: i + 1, sanctioned: prev >= 0 && SITE_SANCTION_RE.test(raw[prev]) });
+    const prev = previousNonBlank(raw, i);
+    out.push({ line: i + 1, sanctioned: prev !== null && SITE_SANCTION_RE.test(prev) });
   }
   return out;
 }
 
-function listFiles(dir, ext) {
+function listFiles(dir, extensions) {
   const found = [];
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return found;
+    return null;
   }
   for (const e of entries) {
     const abs = path.join(dir, e.name);
-    if (e.isDirectory()) found.push(...listFiles(abs, ext));
-    else if (e.isFile() && e.name.endsWith(ext)) found.push(abs);
+    if (e.isDirectory()) {
+      const inner = listFiles(abs, extensions);
+      if (inner !== null) found.push(...inner);
+    } else if (e.isFile() && extensions.some((ext) => e.name.endsWith(ext))) {
+      found.push(abs);
+    }
   }
   return found;
 }
@@ -146,9 +186,15 @@ function rel(root, abs) {
 function scanDispatchIdentityDrift({ root, membership = PRODUCER_SITES } = {}) {
   const findings = [];
   const siteFiles = new Set();
+  const unlisted = new Set();
 
   for (const mdRoot of MARKDOWN_ROOTS) {
-    for (const abs of listFiles(path.join(root, mdRoot), '.md')) {
+    const files = listFiles(path.join(root, mdRoot), ['.md']);
+    if (files === null) {
+      findings.push({ kind: 'scan-root-missing', file: mdRoot, line: 0, found: 'the markdown scan root cannot be read' });
+      continue;
+    }
+    for (const abs of files) {
       const text = readOrNull(abs);
       if (text === null) continue;
       const file = rel(root, abs);
@@ -156,35 +202,35 @@ function scanDispatchIdentityDrift({ root, membership = PRODUCER_SITES } = {}) {
       for (const site of findProducerSites(text)) {
         if (site.sanctioned) continue;
         siteFiles.add(file);
-        if (!membership.includes(file)) {
-          findings.push({ kind: 'unlisted-producer-site', file, line: site.line, found: 'gsd_run query dispatch-isolation … --force-isolation' });
+        if (!membership.includes(file) && !unlisted.has(file)) {
+          unlisted.add(file);
+          findings.push({ kind: 'unlisted-producer-site', file, line: site.line, found: 'query dispatch-isolation … --force-isolation' });
         }
       }
     }
   }
-  // Report each unlisted file once.
-  const seen = new Set();
-  const deduped = findings.filter((f) => {
-    if (f.kind !== 'unlisted-producer-site') return true;
-    if (seen.has(f.file)) return false;
-    seen.add(f.file);
-    return true;
-  });
-
   for (const entry of membership) {
     if (!siteFiles.has(entry)) {
-      deduped.push({ kind: 'stale-membership-entry', file: entry, line: 0, found: 'no producer site remains in this file' });
+      findings.push({ kind: 'stale-membership-entry', file: entry, line: 0, found: 'no unsanctioned producer site remains in this file' });
     }
   }
 
-  for (const abs of listFiles(path.join(root, HOOK_ROOT), '.js')) {
-    const file = rel(root, abs);
-    if (file === OWNER_FILE) continue;
-    const text = readOrNull(abs);
-    if (text === null) continue;
-    for (const f of findParserDrift(text, owner.DISPATCH_PARSE_SOURCES)) deduped.push({ ...f, file });
+  const hookFiles = listFiles(path.join(root, HOOK_ROOT), HOOK_EXTENSIONS);
+  if (hookFiles === null) {
+    findings.push({ kind: 'scan-root-missing', file: HOOK_ROOT, line: 0, found: 'the hook scan root cannot be read' });
+  } else {
+    if (!hookFiles.some((abs) => rel(root, abs) === OWNER_FILE)) {
+      findings.push({ kind: 'scan-root-missing', file: OWNER_FILE, line: 0, found: 'the dispatch-identity owner is not where the lint expects it' });
+    }
+    for (const abs of hookFiles) {
+      const file = rel(root, abs);
+      if (file === OWNER_FILE) continue;
+      const text = readOrNull(abs);
+      if (text === null) continue;
+      for (const f of findParserDrift(text, owner.DISPATCH_PARSE_SOURCES)) findings.push({ ...f, file });
+    }
   }
-  return deduped;
+  return findings;
 }
 
 function main() {

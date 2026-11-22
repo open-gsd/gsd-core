@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const fc = require('fast-check');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
@@ -24,9 +25,17 @@ const owner = require('../hooks/lib/dispatch-identity.js');
 const REPO = path.join(__dirname, '..');
 const LINT = path.join(REPO, 'scripts', 'lint-dispatch-identity-drift.cjs');
 
-function fixture(files) {
+// The minimal tree the lint expects: both markdown roots and the hook owner.
+// `bare: true` leaves it out, to test a missing scan root.
+const SKELETON = {
+  'gsd-core/workflows/_.md': 'x\n',
+  'gsd-core/references/_.md': 'x\n',
+  'hooks/lib/dispatch-identity.js': '// owner\n',
+};
+
+function fixture(files, { bare = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'did-drift-'));
-  for (const [rel, text] of Object.entries(files)) {
+  for (const [rel, text] of Object.entries({ ...(bare ? {} : SKELETON), ...files })) {
     const abs = path.join(root, rel);
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, text);
@@ -150,9 +159,90 @@ test('scan: template drift in a reference and parser drift in a hook are both re
   ]);
 });
 
-test('scan: a missing scan root degrades to no findings without throwing', () => {
-  const root = fixture({ 'unrelated.txt': 'x' });
-  assert.deepEqual(scanDispatchIdentityDrift({ root, membership: [] }), []);
+test('scan: a missing scan root is a finding, not a silent pass, and never throws', () => {
+  const root = fixture({ 'unrelated.txt': 'x' }, { bare: true });
+  const findings = scanDispatchIdentityDrift({ root, membership: [] });
+  assert.deepEqual(
+    findings.map((f) => [f.kind, f.file]).sort(),
+    [
+      ['scan-root-missing', 'gsd-core/references'],
+      ['scan-root-missing', 'gsd-core/workflows'],
+      ['scan-root-missing', 'hooks'],
+    ],
+  );
+});
+
+test('scan: a hooks tree without the owner file is a finding', () => {
+  const root = fixture({ 'hooks/g.js': 'const x = 1;\n' }, { bare: true });
+  for (const dir of ['gsd-core/workflows', 'gsd-core/references']) {
+    fs.mkdirSync(path.join(root, dir), { recursive: true });
+  }
+  const findings = scanDispatchIdentityDrift({ root, membership: [] });
+  assert.deepEqual(findings.map((f) => [f.kind, f.file]), [['scan-root-missing', 'hooks/lib/dispatch-identity.js']]);
+});
+
+test('producers: every wrapper or runner around the command is still a site', () => {
+  for (const line of [
+    'R=$(gsd-tools query dispatch-isolation --force-isolation x)',
+    'ISO="$(gsd_run query dispatch-isolation --force-isolation x)"',
+    'if ! ISO=$(gsd_run query dispatch-isolation --force-isolation x); then',
+    'export ISO=$(gsd_run query dispatch-isolation --force-isolation x)',
+    'cd x && gsd_run query dispatch-isolation --force-isolation x',
+    '>/dev/null gsd_run query dispatch-isolation --force-isolation x',
+    'node gsd-tools.cjs query dispatch-isolation --force-isolation x',
+  ]) {
+    assert.equal(findProducerSites(`${line}\n`).length, 1, line);
+  }
+});
+
+test('producers: a backslash continuation joins the flag; prose in backticks and shell comments are not sites', () => {
+  assert.equal(findProducerSites('gsd_run query dispatch-isolation --raw \\\n  --force-isolation none\n').length, 1);
+  assert.equal(findProducerSites('Run `gsd_run query dispatch-isolation --force-isolation none` to record it.\n').length, 0);
+  assert.equal(findProducerSites('# gsd_run query dispatch-isolation --force-isolation none\n').length, 0);
+});
+
+test('producers: the site sanction is one comment, not a line holding two', () => {
+  const two = `<!-- a --> text <!-- dispatch-isolation-site: reason -->\n${PRODUCER}\n`;
+  assert.equal(findProducerSites(two)[0].sanctioned, false);
+});
+
+test('parsers: a regex built from fragments, a literal-space frame, or a multi-line RegExp call is still drift', () => {
+  for (const code of [
+    "const A = 'gsd:dispatch'; const r = new RegExp(A + '\\\\s+phase');",
+    "const r = new RegExp('\\\\[gsd:' + 'dispatch');",
+    'const r = /execute plan (\\d+)/;',
+    'const r = /execute[ ]plan/;',
+    "const r = new RegExp(\n  '\\\\[gsd:dispatch phase'\n);",
+  ]) {
+    const found = findParserDrift(`${code}\n`, owner.DISPATCH_PARSE_SOURCES);
+    assert.equal(found.length, 1, code);
+    assert.equal(found[0].kind, 'parser-drift');
+  }
+});
+
+test('parsers: comments naming the marker are not drift, and the owner source with other flags is named as such', () => {
+  assert.deepEqual(findParserDrift('// the marker is [gsd:dispatch phase="1"]\n/* of phase and execute plan */\n', owner.DISPATCH_PARSE_SOURCES), []);
+  const s = owner.DISPATCH_PARSE_SOURCES;
+  const found = findParserDrift(`const r = new RegExp(${JSON.stringify(s.prose)}, 'g');\n`, s);
+  assert.equal(found[0].variant, 'verbatim-source-other-flags');
+  const same = findParserDrift(`const r = new RegExp(${JSON.stringify(s.prose)}, ${JSON.stringify(s.proseFlags)});\n`, s);
+  assert.equal(same[0].variant, 'verbatim-copy');
+});
+
+test('templates: a marker whose word is assembled by a format placeholder is drift', () => {
+  assert.equal(findTemplateDrift('printf "[gsd:%s phase=%s plan=%s]" dispatch 1 2\n').length, 1);
+  assert.equal(findTemplateDrift('echo "[gsd:${WORD} phase=1]"\n').length, 1);
+});
+
+test('property: any marker the owner renders is canonical to the lint (render, then lint, is empty)', () => {
+  const value = fc.stringMatching(/^[A-Za-z0-9._{}-]{1,40}$/);
+  fc.assert(
+    fc.property(value, value, (phase, plan) => {
+      const marker = owner.renderDispatchIdentityMarker({ phase, plan });
+      return findTemplateDrift(`  ${marker}\n`).length === 0;
+    }),
+    { seed: 6027, numRuns: 200 },
+  );
 });
 
 test('the real tree is clean: the lint exits 0 with no args (the shape lint:ci uses)', () => {
