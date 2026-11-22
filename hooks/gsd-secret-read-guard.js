@@ -2826,9 +2826,11 @@ const PARSING_VARS_RE = /GREP_OPTIONS|RIPGREP_CONFIG_PATH|POSIXLY_CORRECT/;
 const PARSING_VAR_NAMES = ['GREP_OPTIONS', 'RIPGREP_CONFIG_PATH', 'POSIXLY_CORRECT'];
 function namesParsingVar(text) {
   const plain = text.replace(/["'\\]/g, '');
-  if (PARSING_VARS_RE.test(plain) || globMaySetParsingVar(plain)) return true;
+  return PARSING_VARS_RE.test(plain) || globMaySetParsingVar(plain) || bracesMaySpell(plain, PARSING_VAR_NAMES);
+}
+function bracesMaySpell(plain, names) {
   if (!plain.includes('{')) return false;
-  return plain.split(/\s+/).some((piece) => piece.includes('{') && (piece.includes('..') || PARSING_VAR_NAMES.some((name) => {
+  return plain.split(/\s+/).some((piece) => piece.includes('{') && (piece.includes('..') || names.some((name) => {
     let at = 0;
     for (let i = 0; i < piece.length && at < name.length; i++) if (piece[i] === name[at]) at++;
     return at === name.length;
@@ -2881,7 +2883,8 @@ function scanCommand(command, depth, reading) {
   // Tested with `\<newline>` removed, as the shell reads a body: `"$\<newline>@"` is `"$@"`.
   const joined = command.includes('\\\n') ? command.replace(/\\\n/g, '') : command;
   const plain = joined.replace(/["'\\]/g, '');
-  homeMaySet = inheritedHome || plain.includes('HOME') || globMaySetParsingVar(plain, ['HOME']);
+  // A brace group can build the name as well (`export HO{M,}ME=-e`, #6408 Major 3).
+  homeMaySet = inheritedHome || plain.includes('HOME') || globMaySetParsingVar(plain, ['HOME']) || bracesMaySpell(plain, ['HOME']);
   const unseenAt = inherited ? 0 : unseenWordsAt(command, joined);
   // The bodies it holds are scanned under the whole text's verdict; its segments by unseenAt (scanSegments).
   noSearchCarveOut = unseenAt >= 0;
@@ -2927,12 +2930,14 @@ function setsAllexport(operands) {
     || (/^[-+]o$/.test(w.text) && k + 1 < operands.length && operands[k + 1].text.startsWith('a')));
 }
 
-// Whether a segment's command is eval, source or `.` (also behind reserved words or `builtin`), or defines a function.
-function rereadsText(heads) {
-  return heads.some((head) => head !== null && (head.reserved.some((w) => DEFINING_BASES.has(w)) || (head.cmd !== null
-    && (DEFINING_BASES.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
-      && DEFINING_BASES.has(head.cmd.operands[0].text))))));
+// Whether a segment's command is eval, source or `.` (also behind reserved words or `builtin`), or defines a function;
+// with `bases`, one of those.
+function rereadsText(heads, bases = DEFINING_BASES) {
+  return heads.some((head) => head !== null && (head.reserved.some((w) => bases.has(w)) || (head.cmd !== null
+    && (bases.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
+      && bases.has(head.cmd.operands[0].text))))));
 }
+const SOURCING_BASES = new Set(['source', '.']);
 
 // #6282: where in `command` the first word the guard does not see may come from, or -1 for nowhere: an expansion
 // outside single quotes, which keep a `$` literal (`grep '$HOME'`). 0, the whole command, unless the text is plain
@@ -3064,7 +3069,9 @@ function scanSegments(command, depth, reading, unseenAt, joined) {
   heredocBodiesBySegMap.set(bySeg, heredocsBySeg);
   const heads = segmentHeads(bySeg, maxSeg);
   const rereads = rereadsText(heads);
-  if (unseenAt !== 0 && (setsParsingWords(heads, bySeg, maxSeg, rereads ? joined : null)
+  // A file that source or `.` runs is text the guard does not see, which may set a parsing variable with no `$` in
+  // the command (`. ./x.sh; grep .env y`, #6408 Minor 1).
+  if (unseenAt !== 0 && (rereadsText(heads, SOURCING_BASES) || setsParsingWords(heads, bySeg, maxSeg, rereads ? joined : null)
     || ((unseenAt > 0 || unseenAt === LITERAL_DOLLAR_ONLY) && runsWordsAgain(heads, tokens)))) {
     unseenAt = 0;
     noSearchCarveOut = true;
@@ -3424,6 +3431,18 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     const holder = holders.find((w) => startsSecretName(w.text.split(replaceStr)[0]) || completesSecretName(w.text, replaceStr));
     if (holder) return { code: 'xargs-input-unseen', text: holder.text };
   }
+  // The same for a shell's `-c` script holding the replace string (#6408 Nit 1): the script filled with each piece of
+  // a protected name is scanned as the script it becomes (`sh -c 'cat {}nv'` filled with `.e`).
+  if (stdin.texts.length === 0 && replaceStr !== null && replaceStr !== '' && subIsShell) {
+    const cIdx = subOperands.findIndex((w) => DASH_C_RE.test(w.text));
+    const script = cIdx === -1 ? undefined : subOperands[cIdx + 1];
+    if (script && script.text.includes(replaceStr)) {
+      chargeScan(NAME_FRAGMENTS.length * (script.text.length + XARGS_WORD_WORK));
+      if (scanXargsShellScripts(subOperands, replaceStr, NAME_FRAGMENTS.map((text) => ({ text })), depth)) {
+        return { code: 'xargs-input-unseen', text: script.text };
+      }
+    }
+  }
   // The words of a here-string, heredoc or knowable pipe source, as xargs may split them.
   const stdinWords = xargsStdinWords(stdin.texts, split);
   for (const w of stdinWords) if (operandNamesSecret(w.text)) return secretRead(w.text);
@@ -3433,16 +3452,23 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     const hit = scanXargsShellScripts(subOperands, replaceStr, stdinWords, depth);
     if (hit) return hit;
   }
+  // A compound's joined output the guard may have missed (#6408 Major 1) is unseen, but only where every check above
+  // and below finds nothing, so a command its flat texts or upstream operands block stays blocked.
+  const unjoined = () => {
+    if (!stdin.unjoined || !xargsSubTakesWords(subIsShell, subOperands, replaceStr)) return null;
+    for (const w of operands.slice(0, subIdx)) if (operandNamesSecret(w.text)) return secretRead(w.text);
+    return { code: 'xargs-input-unseen', text: stdin.unjoined };
+  };
 
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if (op !== '|' && op !== '|&') return null;
-  if (prevSeg < 0) return null;
+  if (op !== '|' && op !== '|&') return unjoined();
+  if (prevSeg < 0) return unjoined();
 
   // Every upstream operand is a candidate file name — the NON_READING
   // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
-  if (!prevCmd) return null;
+  if (!prevCmd) return unjoined();
   if (subIsShell) {
     // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
     // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
@@ -3458,7 +3484,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     const received = xargsUnquoted(w.text);
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
   }
-  return null;
+  return unjoined();
 }
 
 // Whether filling every replace string in `text` with one piece of a protected name (`.`, `.e`, `nv`, …, or one led
@@ -3570,6 +3596,9 @@ function segmentFeeds(s, bySeg) {
   for (const h of (heredocBodiesBySegMap.get(bySeg) || new Map()).get(s) || []) {
     if (!h.quoted && EXPANDS_RE.test(h.text)) return unseenStdin(h.text);
     texts.push(h.text);
+    // The body as the shell hands it on as well (#6408 Major 2): unquoted, `\<newline>` is removed and `\\` read as
+    // `\`, so `.e\<newline>nv` is `.env`. `\$` and `` \` `` cannot reach here: the test above denies the raw text.
+    if (!h.quoted && h.text.includes('\\')) texts.push(h.text.replace(/\\([\\\n])/g, (m, c) => (c === '\n' ? '' : '\\')));
   }
   return texts.length > 0 ? { texts, unseen: null } : null;
 }
@@ -3652,10 +3681,71 @@ function compoundOutput(range, ctx) {
   chargeScan(XARGS_WORD_WORK * (range.to - range.from + 1));
   const compoundIn = mergedStdin([ownStdin(range.redirectSeg, ctx.bySeg), pipedStdin(range.from, ctx)]);
   const outs = [];
-  for (let k = range.from; k <= range.to; k++) if (commandWords(ctx.bySeg.get(k) || []).length > 0) outs.push(stageWrites(k, ctx, compoundIn));
-  const result = mergedStdin(outs) || NO_TEXTS;
+  const staged = [];
+  for (let k = range.from; k <= range.to; k++) {
+    if (commandWords(ctx.bySeg.get(k) || []).length === 0) continue;
+    const out = stageWrites(k, ctx, compoundIn);
+    outs.push(out);
+    if (out.unseen === null && out.texts.length > 0) staged.push({ seg: k, texts: out.texts });
+  }
+  let result = mergedStdin(outs) || NO_TEXTS;
+  if (result.unseen === null) {
+    const joins = sequenceJoins(range, ctx, staged);
+    if (joins !== null) result = { texts: [...result.texts, ...joins.texts], unseen: null, unjoined: joins.unjoined || result.unjoined };
+  }
   ctx.compoundOut.set(range, result);
   return result;
+}
+
+// #6408 Major 1: a compound writes its commands' outputs one after another, so a name may span them (`{ printf %s
+// .e; printf %s nv; }` writes `.env`). The texts its stages may write in order, each echo ending its line, joined with
+// nothing and with a newline, one text per choice of each stage's texts; a stage that pipes on or redirects its
+// output writes none of it. `unjoined` names why the join may miss what is written: a stage between two others that
+// may be skipped (`&&`, `||`, a conditional or a loop), a group whose redirect or pipe may take its output, or more
+// choices than MAX_JOINED_TEXTS. The flat texts stay; scanXargsPipe treats `unjoined` as unseen only after them.
+const MAX_JOINED_TEXTS = 64;
+const STDOUT_REDIRECT_RE = /^(?:1?>[>|]?|&>>?|1?>&.+)$/;
+const MAY_SKIP_WORDS = new Set([...OPENING_WORDS, ...CLOSING_WORDS, 'then', 'else', 'elif', 'do']);
+function sequenceJoins(range, ctx, staged) {
+  const pieces = staged.filter(({ seg }) => ctx.sepAfter.get(seg) !== '|' && ctx.sepAfter.get(seg) !== '|&'
+    && !(ctx.bySeg.get(seg) || []).some((t) => t.kind === 'op' && !t.read && STDOUT_REDIRECT_RE.test(t.text)));
+  if (pieces.length < 2) return null;
+  const first = pieces[0].seg;
+  const last = pieces[pieces.length - 1].seg;
+  for (let k = first; k <= last; k++) {
+    const sep = ctx.sepAfter.get(k);
+    if (k < last && (sep === '&&' || sep === '||')) return { texts: [], unjoined: sep };
+    if (k === first) continue;
+    for (const w of commandWords(ctx.bySeg.get(k) || [])) {
+      if (MAY_SKIP_WORDS.has(w.text)) return { texts: [], unjoined: w.text };
+      if (!LEADING_RESERVED.has(w.text)) break;
+    }
+  }
+  const inner = ctx.compounds.ranges.find((r) => r !== range && !r.exec && r.from >= range.from && r.to <= range.to
+    && ((r.from > first && r.from <= last) || (r.to >= first && r.to < last)));
+  if (inner) return { texts: [], unjoined: ctx.sepAfter.get(inner.to) || '{ }' };
+  const choices = pieces.map(({ seg, texts }) => {
+    const ends = echoEndsLine(stageCommandWords(seg, ctx));
+    return [...new Set(texts)].map((text) => (ends ? `${text}\n` : text));
+  });
+  let count = 1;
+  for (const c of choices) {
+    count *= c.length;
+    if (count > MAX_JOINED_TEXTS) return { texts: [], unjoined: stageCommandWords(first, ctx).base };
+  }
+  // Charged before any text is built: every choice is joined twice.
+  chargeScan(2 * count * choices.reduce((n, c) => n + Math.max(...c.map((text) => text.length)) + 1, 0));
+  let combos = [[]];
+  for (const c of choices) combos = combos.flatMap((combo) => c.map((text) => [...combo, text]));
+  return { texts: combos.flatMap((combo) => [combo.join(''), combo.join('\n')]), unjoined: null };
+}
+
+// Whether `cmd` is an echo that ends its output with a newline: no `-n` among its flags and no `\c` in its operands.
+function echoEndsLine(cmd) {
+  if (cmd.base !== 'echo') return false;
+  let k = 0;
+  while (k < cmd.operands.length && /^-[neE]+$/.test(cmd.operands[k].text)) k++;
+  return !cmd.operands.slice(0, k).some((w) => w.text.includes('n')) && !cmd.operands.some((w) => w.text.includes('\\c'));
 }
 
 // What segment `seg`'s command writes, as far as the guard knows: an echo or printf as printedText renders it
@@ -3803,11 +3893,14 @@ function overlapping(ranges) {
   return false;
 }
 
-// Several stdins as one, failing closed: the first one the guard cannot read, else all their texts; null for none.
+// Several stdins as one, failing closed: the first one the guard cannot read, else all their texts, and the first
+// `unjoined` among them (sequenceJoins); null for none.
 function mergedStdin(stdins) {
   const given = stdins.filter((stdin) => stdin !== null);
   if (given.length === 0) return null;
-  return given.find((stdin) => stdin.unseen !== null) || { texts: given.flatMap((stdin) => stdin.texts), unseen: null };
+  return given.find((stdin) => stdin.unseen !== null) || {
+    texts: given.flatMap((stdin) => stdin.texts), unseen: null, unjoined: (given.find((stdin) => stdin.unjoined) || {}).unjoined,
+  };
 }
 
 // What an echo or printf writes, for xargs to read (#6282), as a list of the texts it may be. echo prints its
