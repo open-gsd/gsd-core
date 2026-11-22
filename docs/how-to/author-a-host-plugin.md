@@ -44,8 +44,10 @@ const hookBus = SDK.createHookBus({ bus: 'engine' });
 // Active model via a host provider (e.g. vscode.lm); or 'passive' for CLIs:
 const model = SDK.createModelAdapter({ modelMode: 'active' }, { sendRequest: hostSendRequest });
 
-// State IO — filesystem for CLIs, sandboxed-storage for IDEs/web:
-const stateIO = SDK.createStateIO({ io: 'filesystem' });
+// State IO — filesystem for CLIs, sandboxed-storage for IDEs/web. The filesystem
+// adapter is confined to the `.planning/` root you bind (#6146); without `root`
+// every read and write fails closed:
+const stateIO = SDK.createStateIO({ io: 'filesystem' }, { root: '/abs/path/to/project/.planning' });
 
 // The engine-as-library adapter bound to your runtime id:
 const adapter = SDK.createImperativeAdapter({ runtime: 'my-host' });

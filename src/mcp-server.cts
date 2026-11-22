@@ -43,11 +43,9 @@ import {
   REASON,
   type Catalog,
 } from './mcp-catalog.cjs';
-import {
-  PathAcceptance,
-  assertWithinRootLexical,
-  requireSafePath,
-} from './security.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspace = require('./planning-workspace.cjs');
+const { planningRoot } = planningWorkspace;
 
 export const PROTOCOL_VERSION = '2024-11-05';
 export const SERVER_NAME = 'gsd-core';
@@ -139,20 +137,20 @@ const TOOLS = [
   },
   {
     name: 'gsd_read_state',
-    description: 'Read a state file confined to the project .planning/ root (interface point 5).',
+    description: 'Read a state file inside the project .planning/ root (interface point 5).',
     inputSchema: {
       type: 'object',
-      properties: { path: { type: 'string', description: 'Path under the project .planning/ root (absolute or relative).' } },
+      properties: { path: { type: 'string', description: 'Absolute path inside the project .planning/ root. Relative paths, paths that leave the root (including through a symbolic link), a symlinked .planning/ and hard-linked files are refused.' } },
       required: ['path'],
     },
   },
   {
     name: 'gsd_write_state',
-    description: 'Write a state file confined to the project .planning/ root (interface point 5).',
+    description: 'Write an existing or new state file inside the project .planning/ root (interface point 5).',
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path under the project .planning/ root (absolute or relative).' },
+        path: { type: 'string', description: 'Absolute path inside the project .planning/ root. Relative paths, paths that leave the root (including through a symbolic link), a symlinked .planning/ and hard-linked files are refused.' },
         content: { type: 'string', description: 'File content.' },
       },
       required: ['path', 'content'],
@@ -205,30 +203,12 @@ function wirePrompt(entry: { name: string; title: string; description: string })
   return { name: entry.name, title: entry.title, description: entry.description };
 }
 
-
-function planningRoot(ctx: McpContext): string {
-  const cwd = asString(ctx.cwd) || process.cwd();
-  return path.resolve(cwd, '.planning');
-}
-
 /**
- * Confine gsd_read_state / gsd_write_state paths to the project's `.planning/`
- * root (#6146, ADR-4650). Lexical containment is used first because a write
- * may create a file that does not exist yet. If the path or its parent already
- * exists, a realpath check also runs so a symlink cannot walk out of the root.
+ * The `.planning/` root a state tool call is confined to (#6146): the shared
+ * `planningRoot` owner from planning-workspace.cts, for the call's project cwd.
  */
-function confineStatePath(rawPath: string, ctx: McpContext, label: string): string {
-  const root = planningRoot(ctx);
-  const contained = assertWithinRootLexical(rawPath, root, label);
-  if (fs.existsSync(contained)) {
-    return requireSafePath(contained, root, label, PathAcceptance.AbsoluteInsideRoot);
-  }
-  const parent = path.dirname(contained);
-  if (parent !== contained && fs.existsSync(parent)) {
-    const parentReal = requireSafePath(parent, root, label, PathAcceptance.AbsoluteInsideRoot);
-    return path.join(parentReal, path.basename(contained));
-  }
-  return contained;
+function stateRoot(cwd: string): string {
+  return path.resolve(planningRoot(cwd));
 }
 
 function callTool(name: string, args: unknown, ctx: McpContext): { content: Array<{ type: string; text: string }>; isError?: boolean } {
@@ -253,18 +233,22 @@ function callTool(name: string, args: unknown, ctx: McpContext): { content: Arra
     if (name === 'gsd_read_state') {
       const p = asString(a.path);
       if (!p) return { isError: true, content: [{ type: 'text', text: 'gsd_read_state requires string "path".' }] };
-      const confined = confineStatePath(p, ctx, 'gsd_read_state path');
-      const io = stateIo.createStateIO({ io: 'filesystem' });
-      return { content: [{ type: 'text', text: io.read(confined) }] };
+      const root = stateRoot(cwd);
+      // #6146: checked here at the dispatch, and again inside the adapter.
+      stateIo.confineStatePath(p, root, 'gsd_read_state path');
+      const io = stateIo.createStateIO({ io: 'filesystem' }, { root });
+      return { content: [{ type: 'text', text: io.read(p) }] };
     }
     if (name === 'gsd_write_state') {
       const p = asString(a.path);
       const content = asString(a.content);
       if (!p || content === null) return { isError: true, content: [{ type: 'text', text: 'gsd_write_state requires string "path" and "content".' }] };
-      const confined = confineStatePath(p, ctx, 'gsd_write_state path');
-      const io = stateIo.createStateIO({ io: 'filesystem' });
-      io.write(confined, content);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, path: confined }) }] };
+      const root = stateRoot(cwd);
+      // #6146: checked here at the dispatch, and again inside the adapter.
+      stateIo.confineStatePath(p, root, 'gsd_write_state path');
+      const io = stateIo.createStateIO({ io: 'filesystem' }, { root });
+      io.write(p, content);
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, path: p }) }] };
     }
     return { isError: true, content: [{ type: 'text', text: `Unknown tool: ${name}` }] };
   } catch (e) {

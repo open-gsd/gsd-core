@@ -34,7 +34,7 @@ const profile = SDK.profileOf({ embeddingMode: 'imperative', runtime: 'node' });
 ```js
 const hookBus = SDK.createHookBus({ bus: 'host' });     // your host fires events
 const model   = SDK.createModelAdapter({ modelMode: 'passive' });
-const stateIO = SDK.createStateIO({ io: 'filesystem' });
+const stateIO = SDK.createStateIO({ io: 'filesystem' }, { root: '/abs/path/to/project/.planning' }); // confined to .planning/ (#6146)
 const adapter = SDK.createImperativeAdapter({ runtime: 'my-cli' });
 ```
 

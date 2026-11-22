@@ -164,8 +164,16 @@ rather than a real marker.
 
 - **`command not found: gsd-mcp-server`** — invoke via `npx` as shown above, or
   install the package globally first (`npm i -g @opengsd/gsd-core`).
-- **`gsd_read_state` fails with ENOENT** — the path is resolved literally; pass
-  an absolute path under the project's `.planning/`.
+- **`gsd_read_state` or `gsd_write_state` returns `… refused: …; state paths must
+  resolve inside the project .planning/ root`** — both tools accept only an
+  absolute path inside `<cwd>/.planning/` (the `cwd` the server was registered
+  with). Relative paths are refused, not resolved; so are paths that leave the
+  root through `..` or a symbolic link, a `.planning` that is itself a symbolic
+  link, hard-linked files, and a write whose parent directory does not exist.
+  Before #6146 a relative path resolved against the server process's working
+  directory and any path outside `.planning/` was read or written.
+- **`gsd_read_state` fails with `… failed: ENOENT`** — the file does not exist;
+  the path is used as given (never rewritten into the root).
 - **The host lists no GSD tools** — confirm the server starts in isolation:
   `npx @opengsd/gsd-core gsd-mcp-server` then send an `initialize` request on
   stdin; it writes a `protocolVersion` response and exits on EOF.
@@ -177,8 +185,8 @@ rather than a real marker.
 | Tool | Arguments | Returns |
 |------|-----------|---------|
 | `gsd_invoke_command` | `{family: string, subcommand?: string, args?: unknown[]}` | the command's stdout as text |
-| `gsd_read_state` | `{path: string}` | the file contents as text |
-| `gsd_write_state` | `{path: string, content: string}` | `{ok: true, path}` as JSON text |
+| `gsd_read_state` | `{path: string}` — absolute, inside `<cwd>/.planning/` | the file contents as text; a path outside the root is refused with a tool error naming the `.planning/` root |
+| `gsd_write_state` | `{path: string, content: string}` — absolute, inside `<cwd>/.planning/` | `{ok: true, path}` as JSON text, `path` echoing the input; a path outside the root is refused the same way |
 
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.

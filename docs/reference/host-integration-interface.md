@@ -68,7 +68,7 @@ constructed fail-closed (they throw if a required host primitive is absent):
 | Embedding (imperative) | `createImperativeAdapter({runtime})` | `embeddingMode: 'imperative'` (also exposes the composed `registry`) |
 | Model | `createModelAdapter({modelMode}, {sendRequest?})` | `modelMode` (`'active'` needs a host `sendRequest`) |
 | Hook bus | `createHookBus({bus}, {hostEmit?})` | `hookBus` (`'host'` needs a host `hostEmit`) |
-| State IO | `createStateIO({io}, {backend?})` | `stateIO` (`'sandboxed-storage'`/`'session-log-append'` need a host `backend`) |
+| State IO | `createStateIO({io}, {backend?, root?})` | `stateIO` (`'sandboxed-storage'`/`'session-log-append'` need a host `backend`; `'filesystem'` needs the absolute `.planning/` `root` it is confined to, and fails closed without it — #6146) |
 
 The declarative + imperative adapters delegate install/uninstall in-process to
 the **same** `installRuntimeArtifacts` engine function `bin/install.js` uses, so
