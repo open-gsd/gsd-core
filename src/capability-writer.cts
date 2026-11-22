@@ -118,6 +118,16 @@ interface SetCapabilityStateResult {
   errors: string[];
 }
 
+/**
+ * The warning `setCapabilityState` returns, with no error, when materialization was requested
+ * but gsd-file-manifest.json is missing or unparseable, so the installed gsd-core source cannot
+ * be verified (#6331). Static text: it names no path.
+ */
+const MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE =
+  'materialize skipped: gsd-file-manifest.json is missing or unparseable, so the installed gsd-core '
+  + 'source cannot be verified. The capability state is saved, but no runtime artifact was re-staged; '
+  + 'run the gsd-core installer to re-stage them.';
+
 // ─── Implementation ───────────────────────────────────────────────────────────
 
 /**
@@ -364,12 +374,14 @@ function setCapabilityState(
   // ── Materialize (optional) ────────────────────────────────────────────────
   if (opts?.materialize) {
     const { runtime, scope } = opts.materialize;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const runtimeArtifactLayout = require('./runtime-artifact-layout.cjs') as {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      resolveRuntimeArtifactLayout: (runtime: string, configDir: string, scope: string, capabilityRegistry?: unknown) => any;
+      RUNTIME_SURFACE_SOURCE_UNAVAILABLE: { MANIFEST_UNREADABLE: string };
+      runtimeSurfaceSourceUnavailableReason: (error: unknown) => string | null;
+    };
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const runtimeArtifactLayout = require('./runtime-artifact-layout.cjs') as {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        resolveRuntimeArtifactLayout: (runtime: string, configDir: string, scope: string, capabilityRegistry?: unknown) => any;
-      };
       // #2322: thread the SAME composed registry (loaded above, includeInstalled:true)
       // into layout resolution so the skills kind's stage() closure can bind a
       // third-party capability skill to its declaring capId at staging time —
@@ -397,9 +409,25 @@ function setCapabilityState(
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Fix C: materialise was explicitly requested — a failure is an error (non-zero exit),
-      // not merely advisory.
-      errors.push(`materialize failed: ${msg}`);
+      // MANIFEST_UNREADABLE is only ever the reason of a global-scope resolution.
+      const unverified = runtimeArtifactLayout.runtimeSurfaceSourceUnavailableReason(err) ===
+        runtimeArtifactLayout.RUNTIME_SURFACE_SOURCE_UNAVAILABLE.MANIFEST_UNREADABLE;
+      if (unverified) {
+        // #6331: a missing or unparseable manifest must not fail `capability set`. Nothing was
+        // staged (sources resolve before any sync), so save the state as the no-`--runtime`
+        // path does and say that the next install re-stages it.
+        try {
+          if (pendingSurfaceForCommit) writeSurface(resolvedConfigDir, pendingSurfaceForCommit);
+          warnings.push(MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE);
+        } catch (writeErr: unknown) {
+          const writeMsg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+          errors.push(`materialize skipped, and the capability state could not be saved: ${writeMsg}`);
+        }
+      } else {
+        // Fix C: materialise was explicitly requested — a failure is an error (non-zero exit),
+        // not merely advisory.
+        errors.push(`materialize failed: ${msg}`);
+      }
     }
   }
 
@@ -530,4 +558,5 @@ function cmdCapabilitySet(
 export = {
   setCapabilityState,
   cmdCapabilitySet,
+  MATERIALIZE_SKIPPED_UNVERIFIED_SOURCE,
 };
