@@ -764,32 +764,39 @@ describe('W031 — STATE.md far over its documented line target (#5830)', () => 
     assert.match(diagnostics[0].message, new RegExp(`\\b${STATE_MD_LINE_TARGET}\\b`));
     assert.equal(diagnostics[0].remedy.action, REMEDY_ACTION.ADVISE);
     assert.equal(diagnostics[0].remedy.risk, REMEDY_RISK.NONE);
-    assert.match(diagnostics[0].remedy.args.command, /state prune/);
-    assert.match(diagnostics[0].remedy.args.command, /milestone archive-quick <version>/);
     // The remedy must not promise more than the tools do (#5830 review):
-    // state prune never touches Quick Tasks; archive-quick resets the table
-    // whenever ANY directory exists under .planning/quick/ (rows linking to it
-    // or not), and its reset drops EVERY data row (resetQuickTaskRows never
-    // reads the Directory cell), so directory-less /gsd-fast rows must be
-    // copied out before it runs (#5882 review). The behavior these sentences
-    // describe is pinned in tests/milestone-archive.test.cjs
-    // (quickArchiveResetDependsOnDirectoriesNotRows).
-    const remedy = diagnostics[0].remedy.args.command;
-    assert.match(remedy, /does not touch the Quick Tasks table/);
-    assert.ok(
-      remedy.includes(
-        'The reset runs whenever at least one directory exists under .planning/quick/, whether or not a row links to it, ' +
-        'and it deletes every row, including rows without a task directory (logged by /gsd-fast), ' +
-        'so copy them out (or trim them) before running archive-quick.',
-      ),
-      'remedy states the directory-on-disk trigger and that directory-less rows are deleted',
-    );
-    assert.ok(
-      remedy.includes('When .planning/quick/ holds no directory, archive-quick leaves the table alone'),
-      'remedy states the no-op case in terms of directories on disk',
-    );
-    assert.doesNotMatch(remedy, /have no archive command/);
-    assert.doesNotMatch(remedy, /no row has a task directory/);
+    // state prune touches the Quick Tasks table only with --keep-recent-quick
+    // (#6389), which moves rows to STATE-ARCHIVE.md; archive-quick resets the
+    // table whenever ANY directory exists under .planning/quick/ (rows linking
+    // to it or not), and its reset drops EVERY data row (resetQuickTaskRows
+    // never reads the Directory cell), so directory-less /gsd-fast rows must
+    // be archived (state prune --keep-recent-quick 0) or copied out before it
+    // runs (#5882 review). The behavior these sentences describe is pinned in
+    // tests/milestone-archive.test.cjs (quickArchiveResetDependsOnDirectoriesNotRows)
+    // and tests/state-prune.test.cjs (#6389).
+    // #6389: the remedy is rendered from a typed IR, so the claims are
+    // asserted on the IR's fields and the emitted string is its rendering.
+    const { W031_REMEDY, renderW031Remedy } = require('../../gsd-core/bin/lib/health-diagnostic-rules/state-consistency.cjs');
+    assert.deepEqual(W031_REMEDY, {
+      prune: {
+        command: 'gsd-tools state prune',
+        phaseSections: ['Decisions', 'Recently Completed'],
+        quickOption: '--keep-recent-quick N',
+        quickArchive: 'STATE-ARCHIVE.md',
+        quickRowsWithoutDirectory: 'archived',
+      },
+      archiveQuick: {
+        command: 'gsd-tools milestone archive-quick <version>',
+        moves: '.planning/quick/*',
+        resetTrigger: 'any_quick_directory',
+        resetScope: 'all_rows',
+        runFirst: 'gsd-tools state prune --keep-recent-quick 0',
+        withoutDirectories: 'table_untouched',
+      },
+    });
+    assert.ok(Object.isFrozen(W031_REMEDY) && Object.isFrozen(W031_REMEDY.prune) && Object.isFrozen(W031_REMEDY.archiveQuick));
+    // The writer check from CONTRIBUTING: the emitted remedy is the rendering of that IR (size, content not compared).
+    assert.equal(Buffer.byteLength(diagnostics[0].remedy.args.command), Buffer.byteLength(renderW031Remedy(W031_REMEDY)));
   });
 
   test('W031 counts CRLF lines the same as LF lines', (t) => {

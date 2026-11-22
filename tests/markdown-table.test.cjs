@@ -1976,3 +1976,264 @@ describe('quick-tasks-migrate CLI and workflow wiring (#3730)', () => {
       'quick.md documents and invokes the migration path (#3730)');
   });
 });
+
+// ─── pruneQuickTaskRows (#6389) ──────────────────────────────────────────────
+
+describe('pruneQuickTaskRows (#6389)', () => {
+  const { pruneQuickTaskRows } = require('../gsd-core/bin/lib/markdown-table.cjs');
+
+  const HEADER_5 = '| # | Description | Date | Commit | Directory |';
+  const DELIM_5 = '|---|-------------|------|--------|-----------|';
+  const HEADER_6 = '| # | Description | Date | Commit | Status | Directory |';
+  const DELIM_6 = '|---|-------------|------|--------|--------|-----------|';
+
+  /** `n` rows in append order: directory-less ordinal rows (the `/gsd-fast` shape). */
+  function rows5(n, from = 1) {
+    return Array.from({ length: n }, (_, i) => `| ${from + i} | task ${from + i} | 2026-10-01 | c${from + i} | — |`);
+  }
+
+  function stateWith(header, delim, rows, eol = '\n') {
+    return [
+      '# STATE', '', 'Intro prose.', '',
+      '### Quick Tasks Completed', '', 'Prose before the table.', '',
+      header, delim, ...rows, '',
+      'Prose after the table.', '',
+      '### Blockers/Concerns', 'None', '',
+    ].join(eol);
+  }
+
+  test('keeps the last N rows in table order and returns the older ones verbatim with the header and delimiter', () => {
+    const rows = rows5(5);
+    const state = stateWith(HEADER_5, DELIM_5, rows);
+    const result = pruneQuickTaskRows(state, 2);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value, {
+      content: stateWith(HEADER_5, DELIM_5, rows.slice(3)),
+      archived: rows.slice(0, 3),
+      header: HEADER_5,
+      delimiter: DELIM_5,
+      variant: 'no-status',
+      kept: 2,
+    });
+  });
+
+  test('with-status variant: rows and header move verbatim, the kept table still parses as with-status', () => {
+    const rows = [
+      '| 260101-abc | quick one | 2026-01-01 | a1 | Pass | [dir](./quick/260101-abc-one/) |',
+      '| 2 | fast two   | 2026-01-02 | a2 | — | — |',
+      '|  260103-xyz  |  spaced  | 2026-01-03 | a3 | Pass | — |',
+    ];
+    const state = stateWith(HEADER_6, DELIM_6, rows);
+    const result = pruneQuickTaskRows(state, 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.value.variant, 'with-status');
+    assert.deepEqual(result.value.archived, rows.slice(0, 2), 'cell spacing and links are kept byte for byte');
+    const table = findTableBySchema(result.value.content, 'QuickTasks');
+    assert.deepEqual(table.columns, TABLE_SCHEMAS.QuickTasks.find((v) => v.label === 'with-status').columns);
+    assert.deepEqual(table.rows.map((r) => r['#']), ['260103-xyz']);
+  });
+
+  test('N = 0 moves every row and leaves the header and delimiter', () => {
+    const rows = rows5(3);
+    const result = pruneQuickTaskRows(stateWith(HEADER_5, DELIM_5, rows), 0);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.archived, rows);
+    assert.equal(result.value.kept, 0);
+    assert.equal(result.value.content, stateWith(HEADER_5, DELIM_5, []));
+  });
+
+  for (const n of [3, 4, 1000]) {
+    test(`N = ${n} with 3 rows moves nothing and returns the same content`, () => {
+      const state = stateWith(HEADER_5, DELIM_5, rows5(3));
+      const result = pruneQuickTaskRows(state, n);
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.value.archived, []);
+      assert.equal(result.value.kept, 3);
+      assert.equal(result.value.content, state);
+    });
+  }
+
+  test('an empty table moves nothing', () => {
+    const state = stateWith(HEADER_5, DELIM_5, []);
+    const result = pruneQuickTaskRows(state, 0);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.archived, []);
+    assert.equal(result.value.content, state);
+  });
+
+  test('CRLF: the rest of the file keeps its CRLF bytes and every returned line keeps its own CR', () => {
+    const rows = rows5(4);
+    const result = pruneQuickTaskRows(stateWith(HEADER_5, DELIM_5, rows, '\r\n'), 1);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.archived, rows.slice(0, 3).map((r) => `${r}\r`));
+    assert.equal(result.value.header, `${HEADER_5}\r`);
+    assert.equal(result.value.delimiter, `${DELIM_5}\r`);
+    assert.equal(result.value.content, stateWith(HEADER_5, DELIM_5, rows.slice(3), '\r\n'));
+  });
+
+  test('mixed EOLs: every byte outside the moved lines is kept, each moved line keeps its own ending', () => {
+    const state = [
+      '# STATE\r\n', '### Quick Tasks Completed\n', '\r\n',
+      `${HEADER_5}\r\n`, `${DELIM_5}\n`, '| 1 | a | d | c | — |\r\n', '| 2 | b | d | c | — |\n', '| 3 | c | d | c | — |\r\n',
+      '\n', 'tail\r\n',
+    ].join('');
+    const result = pruneQuickTaskRows(state, 1);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.archived, ['| 1 | a | d | c | — |\r', '| 2 | b | d | c | — |']);
+    assert.equal(result.value.content, state.replace('| 1 | a | d | c | — |\r\n| 2 | b | d | c | — |\n', ''));
+  });
+
+  test('a table at the very end of the file whose last row has no EOL: the delimiter keeps its own terminator', () => {
+    for (const eol of ['\n', '\r\n']) {
+      const head = ['### Quick Tasks Completed', '', HEADER_5, DELIM_5];
+      const state = [...head, '| 1 | a | d | c | — |', '| 2 | b | d | c | — |'].join(eol);
+      const all = pruneQuickTaskRows(state, 0);
+      assert.equal(all.ok, true);
+      assert.equal(all.value.content, head.join(eol) + eol, 'only the row bytes are removed');
+      assert.equal(all.value.archived[1], '| 2 | b | d | c | — |', 'the last row has no EOL to keep');
+      const some = pruneQuickTaskRows(state, 1);
+      assert.equal(some.value.content, [...head, '| 2 | b | d | c | — |'].join(eol));
+    }
+  });
+
+  test('a terminated last row: its line break goes with it, at the end of the file and before prose', () => {
+    for (const eol of ['\n', '\r\n']) {
+      const head = ['### Quick Tasks Completed', '', HEADER_5, DELIM_5];
+      const atEof = [...head, '| 1 | a | d | c | — |'].join(eol) + eol;
+      assert.equal(pruneQuickTaskRows(atEof, 0).value.content, head.join(eol) + eol, 'no blank line is left behind');
+      const beforeProse = [...head, '| 1 | a | d | c | — |', 'prose right after'].join(eol);
+      assert.equal(pruneQuickTaskRows(beforeProse, 0).value.content, [...head, 'prose right after'].join(eol));
+    }
+  });
+
+  test('a second table later in the same section is not touched', () => {
+    const tail = ['', '| Note | Value |', '|---|---|', '| keep | me |', ''];
+    const state = ['### Quick Tasks Completed', '', HEADER_5, DELIM_5, ...rows5(3), ...tail].join('\n');
+    const result = pruneQuickTaskRows(state, 1);
+    assert.equal(result.ok, true);
+    assert.equal(result.value.content, ['### Quick Tasks Completed', '', HEADER_5, DELIM_5, ...rows5(1, 3), ...tail].join('\n'));
+  });
+
+  test('suffixed sections: only the first recognized table is pruned, an older (v1.0) table is left alone', () => {
+    const legacy = ['### Quick Tasks Completed (v1.0)', '', HEADER_5, DELIM_5, ...rows5(3, 100), ''];
+    const state = ['# STATE', '', '### Quick Tasks Completed (v1.1+)', '', HEADER_5, DELIM_5, ...rows5(3), '', ...legacy].join('\n');
+    const result = pruneQuickTaskRows(state, 1);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.archived, rows5(2));
+    assert.equal(result.value.content,
+      ['# STATE', '', '### Quick Tasks Completed (v1.1+)', '', HEADER_5, DELIM_5, ...rows5(1, 3), '', ...legacy].join('\n'));
+  });
+
+  test('a legacy unrecognized table first in document order does not shadow a recognized one below it', () => {
+    const state = [
+      '### Quick Tasks Completed (v1.0)', '', '| # | Task | When |', '|---|---|---|', '| 1 | old | x |', '',
+      '### Quick Tasks Completed (v1.1+)', '', HEADER_5, DELIM_5, ...rows5(2), '',
+    ].join('\n');
+    const result = pruneQuickTaskRows(state, 0);
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.value.archived, rows5(2));
+  });
+
+  test('no Quick Tasks section: QUICK_TASKS_SECTION_ABSENT', () => {
+    assert.deepEqual(pruneQuickTaskRows('# STATE\n\n### Blockers/Concerns\nNone\n', 0), { ok: false, reason: QUICK_TASKS_SECTION_ABSENT });
+  });
+
+  test('a Quick Tasks heading inside a fenced code block is not a section', () => {
+    const state = ['```', '### Quick Tasks Completed', '', HEADER_5, DELIM_5, ...rows5(2), '```', ''].join('\n');
+    assert.deepEqual(pruneQuickTaskRows(state, 0), { ok: false, reason: QUICK_TASKS_SECTION_ABSENT });
+  });
+
+  for (const [label, body] of [
+    ['an unknown schema', ['| # | Thing | When |', '|---|---|---|', '| 1 | a | b |']],
+    ['a ragged row', [HEADER_5, DELIM_5, '| 1 | only | three |']],
+    ['no table', ['just prose']],
+    ['a missing delimiter', [HEADER_5, '| 1 | a | d | c | — |']],
+  ]) {
+    test(`${label}: fails loud, never the absent sentinel, returns no content`, () => {
+      const result = pruneQuickTaskRows(['### Quick Tasks Completed', '', ...body, ''].join('\n'), 0);
+      assert.equal(result.ok, false);
+      assert.equal(typeof result.reason, 'string');
+      assert.notEqual(result.reason, QUICK_TASKS_SECTION_ABSENT);
+      assert.equal('value' in result, false);
+    });
+  }
+
+  for (const bad of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '2', null, undefined]) {
+    test(`an invalid keep count (${String(bad)}) is refused`, () => {
+      const result = pruneQuickTaskRows(stateWith(HEADER_5, DELIM_5, rows5(3)), bad);
+      assert.equal(result.ok, false);
+      assert.equal('value' in result, false);
+    });
+  }
+
+  test('empty or non-string content is refused', () => {
+    assert.equal(pruneQuickTaskRows(undefined, 0).ok, false);
+    assert.equal(pruneQuickTaskRows('', 0).ok, false);
+    assert.equal(pruneQuickTaskRows('   \n', 0).ok, false);
+  });
+
+  test('property: kept + moved rows are the original rows in order, and the rest of the file is unchanged', () => {
+    const cell = fc.string({ unit: fc.constantFrom('a', 'Z', '0', ' ', '-', '[', ']', 'é', '\\|'), maxLength: 8 });
+    const row = fc.tuple(cell, cell).map(([a, b]) => `| ${a.trim() || 'x'} | ${b} | d | c | — |`);
+    fc.assert(fc.property(fc.array(row, { maxLength: 12 }), fc.nat(15), fc.constantFrom('\n', '\r\n'), (rows, keep, eol) => {
+      const result = pruneQuickTaskRows(stateWith(HEADER_5, DELIM_5, rows, eol), keep);
+      assert.equal(result.ok, true);
+      const moved = Math.max(0, rows.length - keep);
+      const cr = eol === '\r\n' ? '\r' : '';
+      assert.deepEqual(result.value.archived, rows.slice(0, moved).map((r) => r + cr));
+      assert.equal(result.value.content, stateWith(HEADER_5, DELIM_5, rows.slice(moved), eol));
+    }), { seed: 6389 });
+  });
+});
+
+describe('appendQuickTaskRow numbering after rows were pruned (#6389)', () => {
+  const { pruneQuickTaskRows } = require('../gsd-core/bin/lib/markdown-table.cjs');
+
+  const table = (rows) => ['### Quick Tasks Completed', '', '| # | Description | Date | Commit | Directory |',
+    '|---|-------------|------|--------|-----------|', ...rows, ''].join('\n');
+  const ordinal = (n) => `| ${n} | task ${n} | 2026-10-01 | c${n} | — |`;
+  const other = (id) => `| ${id} | q | d | c | x |`;
+  const firstCell = (row) => {
+    const parsed = parseMarkdownTable(['| # | Description | Date | Commit | Directory |', '|---|---|---|---|---|', row].join('\n'));
+    assert.equal(parsed.ok, true);
+    return parsed.value.rows[0]['#'];
+  };
+  const append = (state, extra = {}) => appendQuickTaskRow(state, { description: 'n', date: 'd', commit: 'c', ...extra });
+
+  test('rows 1-30, keep 20, append: the new row is 31, not 21 (which is already in the table)', () => {
+    const pruned = pruneQuickTaskRows(table(Array.from({ length: 30 }, (_, i) => ordinal(i + 1))), 20);
+    assert.equal(pruned.ok, true);
+    const appended = append(pruned.value.content);
+    assert.equal(appended.ok, true);
+    assert.equal(firstCell(appended.value.row), '31');
+  });
+
+  test('a never-pruned table keeps today\'s rows.length + 1', () => {
+    assert.equal(firstCell(append(table([ordinal(1), ordinal(2)])).value.row), '3');
+  });
+
+  test('quick-id rows count toward the row count but are not read as numbers', () => {
+    assert.equal(firstCell(append(table([other('260101-abc'), other('260102-def'), ordinal(1)])).value.row), '4');
+  });
+
+  test('the highest number wins over the row count when rows were removed', () => {
+    assert.equal(firstCell(append(table([ordinal(7), ordinal(9)])).value.row), '10');
+  });
+
+  test('only cells made of ASCII digits are numbers', () => {
+    const rows = ['12a', '-40', '4.5', '+9', ' ', '٣٣', '0x99', '1e9'].map(other);
+    assert.equal(firstCell(append(table([...rows, ordinal(2)])).value.row), '10', 'max(9 rows, highest number 2) + 1');
+  });
+
+  test('numbers past Number.MAX_SAFE_INTEGER stay exact, and two successive appends never repeat one', () => {
+    const first = append(table([ordinal('9007199254740992')]));
+    assert.equal(firstCell(first.value.row), '9007199254740993');
+    const second = append(first.value.content);
+    assert.equal(firstCell(second.value.row), '9007199254740994');
+    assert.equal(firstCell(append(table([ordinal('99999999999999999999')])).value.row), '100000000000000000000');
+  });
+
+  test('an explicit quick id is still used verbatim', () => {
+    assert.equal(firstCell(append(table([ordinal(9)]), { quickId: '261122-zzz' }).value.row), '261122-zzz');
+  });
+});

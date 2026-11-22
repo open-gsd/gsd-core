@@ -1628,3 +1628,136 @@ describe("resumeBatch accepts the batch's own recorded HEAD (#6203)", () => {
     });
   });
 });
+
+// ─── #6389: rows can leave the table (state prune --keep-recent-quick) ─────────
+
+describe('quick-batch: a row pruned from the Quick Tasks table (#6389)', () => {
+  const { findUnfinishedBatchItems } = require('../gsd-core/bin/lib/quick-batch.cjs');
+
+  test('completing an already-complete item whose row was pruned does not append the row again', (t) => {
+    const dir = mkTmpProject();
+    t.after(() => cleanupDir(dir));
+    writeState(dir, stateWithQuickTasksSection());
+    const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+    const item = created.value.manifest.items[0];
+    const fields = { description: item.description, date: '2026-01-01', commit: 'sha1' };
+    assert.equal(completeQuickItem(dir, created.value.batchId, item.quick_id, fields).value.appended, true);
+
+    writeState(dir, stateWithQuickTasksSection()); // the row was moved to STATE-ARCHIVE.md
+    const manifestBefore = fs.readFileSync(path.join(dir, '.planning', 'quick-batches', created.value.batchId, 'BATCH.json'));
+    const again = completeQuickItem(dir, created.value.batchId, item.quick_id, fields);
+    assert.equal(again.ok, true);
+    assert.equal(again.value.appended, false);
+    assert.equal(hasQuickTaskRow(readState(dir), item.quick_id), false, 'the pruned row stays out of STATE.md');
+    assert.deepEqual(fs.readFileSync(path.join(dir, '.planning', 'quick-batches', created.value.batchId, 'BATCH.json')), manifestBefore,
+      'BATCH.json is not rewritten');
+  });
+
+  test('a not-yet-complete item still appends its row and is marked complete', (t) => {
+    const dir = mkTmpProject();
+    t.after(() => cleanupDir(dir));
+    writeState(dir, stateWithQuickTasksSection());
+    const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+    const item = created.value.manifest.items[1];
+    const done = completeQuickItem(dir, created.value.batchId, item.quick_id, { description: 'b', date: '2026-01-01', commit: 's' });
+    assert.equal(done.value.appended, true);
+    assert.equal(hasQuickTaskRow(readState(dir), item.quick_id), true);
+    assert.equal(loadBatch(dir, created.value.batchId).value.items[1].status, 'complete');
+  });
+
+  test('a not-complete item whose row already exists is still completed without a second row (crash window)', (t) => {
+    const dir = mkTmpProject();
+    t.after(() => cleanupDir(dir));
+    writeState(dir, stateWithQuickTasksSection());
+    const created = createBatch(dir, [{ description: 'a' }, { description: 'b' }]);
+    const item = created.value.manifest.items[0];
+    const appended = appendQuickTaskRow(readState(dir), { description: 'a', date: 'd', commit: 'c', quickId: item.quick_id });
+    writeState(dir, appended.value.content);
+    const done = completeQuickItem(dir, created.value.batchId, item.quick_id, { description: 'a', date: 'd', commit: 'c' });
+    assert.equal(done.value.appended, false);
+    assert.equal(readState(dir).split(item.quick_id).length - 1, 1);
+    assert.equal(loadBatch(dir, created.value.batchId).value.items[0].status, 'complete');
+  });
+
+  describe('findUnfinishedBatchItems', () => {
+    function setStatuses(dir, batchId, statuses) {
+      const p = path.join(dir, '.planning', 'quick-batches', batchId, 'BATCH.json');
+      const m = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      m.items.forEach((it, i) => { it.status = statuses[i]; });
+      fs.writeFileSync(p, JSON.stringify(m, null, 2) + '\n');
+      return p;
+    }
+
+    test('no quick-batches directory: nothing unfinished', (t) => {
+      const dir = mkTmpProject();
+      t.after(() => cleanupDir(dir));
+      assert.deepEqual(findUnfinishedBatchItems(dir), { ok: true, value: [] });
+    });
+
+    test('lists every item that is not complete, across batches, with its status', (t) => {
+      const dir = mkTmpProject();
+      t.after(() => cleanupDir(dir));
+      const one = createBatch(dir, [{ description: 'a' }, { description: 'b' }]).value;
+      const two = createBatch(dir, [{ description: 'c' }, { description: 'd' }, { description: 'e' }]).value;
+      setStatuses(dir, one.batchId, ['complete', 'complete']);
+      setStatuses(dir, two.batchId, ['failed', 'complete', 'blocked']);
+      const found = findUnfinishedBatchItems(dir);
+      assert.equal(found.ok, true);
+      assert.deepEqual(found.value, [
+        { batchId: two.batchId, quickId: two.manifest.items[0].quick_id, status: 'failed' },
+        { batchId: two.batchId, quickId: two.manifest.items[2].quick_id, status: 'blocked' },
+      ]);
+    });
+
+    test('a directory without BATCH.json and a stray file are skipped', (t) => {
+      const dir = mkTmpProject();
+      t.after(() => cleanupDir(dir));
+      fs.mkdirSync(path.join(dir, '.planning', 'quick-batches', 'empty'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.planning', 'quick-batches', 'README.md'), 'notes\n');
+      assert.deepEqual(findUnfinishedBatchItems(dir), { ok: true, value: [] });
+    });
+
+    for (const [label, content] of [
+      ['not JSON', '{ nope'],
+      ['no items array', '{"batch_id":"x"}'],
+      ['an item without a string status', '{"items":[{"quick_id":"260101-aaa"}]}'],
+      ['a JSON array', '[]'],
+    ]) {
+      test(`a manifest that is ${label} fails closed`, (t) => {
+        const dir = mkTmpProject();
+        t.after(() => cleanupDir(dir));
+        fs.mkdirSync(path.join(dir, '.planning', 'quick-batches', 'b1'), { recursive: true });
+        fs.writeFileSync(path.join(dir, '.planning', 'quick-batches', 'b1', 'BATCH.json'), content);
+        assert.equal(findUnfinishedBatchItems(dir).ok, false);
+      });
+    }
+
+    test('a BATCH.json that is a directory fails closed', (t) => {
+      const dir = mkTmpProject();
+      t.after(() => cleanupDir(dir));
+      fs.mkdirSync(path.join(dir, '.planning', 'quick-batches', 'b1', 'BATCH.json'), { recursive: true });
+      assert.equal(findUnfinishedBatchItems(dir).ok, false);
+    });
+
+    test('quick-batches as a file (not a directory) fails closed', (t) => {
+      const dir = mkTmpProject();
+      t.after(() => cleanupDir(dir));
+      fs.writeFileSync(path.join(dir, '.planning', 'quick-batches'), 'x');
+      assert.equal(findUnfinishedBatchItems(dir).ok, false);
+    });
+
+    test('a workstream reads its own quick-batches directory', (t) => {
+      const dir = mkTmpProject();
+      t.after(() => cleanupDir(dir));
+      fs.mkdirSync(path.join(dir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+      const prev = process.env.GSD_WORKSTREAM;
+      process.env.GSD_WORKSTREAM = 'alpha';
+      t.after(() => { if (prev === undefined) delete process.env.GSD_WORKSTREAM; else process.env.GSD_WORKSTREAM = prev; });
+      const batch = createBatch(dir, [{ description: 'a' }, { description: 'b' }]).value;
+      assert.ok(fs.existsSync(path.join(dir, '.planning', 'workstreams', 'alpha', 'quick-batches', batch.batchId, 'BATCH.json')));
+      assert.equal(findUnfinishedBatchItems(dir).value.length, 2);
+      delete process.env.GSD_WORKSTREAM;
+      assert.deepEqual(findUnfinishedBatchItems(dir), { ok: true, value: [] }, 'the root sees no batch');
+    });
+  });
+});
