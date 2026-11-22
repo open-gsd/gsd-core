@@ -635,7 +635,7 @@ output: reviewers do not own blocking state. Restore the captured bytes at the e
 
 After all reviewers complete, collect the lanes that were refused for their prompt cap (#4559): each dispatched lane whose `${RUN_DIR}/gsd-review-lane-result-<slug>.json` has `"reason": "prompt_exceeds_context"`. For each, include a `refused_reviewers` entry in the frontmatter with `estimated_tokens`, `cap` and `cap_source` copied from that file's `refusal` object (`estimatedTokens`, `cap`, `capSource`). Omit the key entirely if no lane was refused. A refused lane's section in the body renders its `review did not run: prompt exceeds` stub, never an empty section.
 
-Collect the proof-of-reading results (#5491): each lane whose result file has a `readCheck` object with `"complete": false` (antigravity only today) gets a `read_check` frontmatter entry, keyed like `reviewers:` (the instance name for an ADR-1517 instance, so same-cli instances never share an entry), copying its `truncated`, `compacted` (`true`, `false` or `"unknown"`), `missing`, `mismatched` and `unchecked` (plans whose file could not be read within bounds). Omit the key entirely if no lane failed the check.
+Collect the proof-of-reading results (#5491): each lane whose result file has a `readCheck` object with `"complete": false` (antigravity only today) gets a `read_check` frontmatter entry, keyed like `reviewers:` (the instance name for an ADR-1517 instance, so same-cli instances never share an entry), copying its `truncated`, `compacted` (`true`, `false` or `"unknown"`), `missing`, `mismatched` and `unchecked` (plans whose file could not be read within bounds; the first ten), and `uncheckedTotal` as `unchecked_total`. Omit the key entirely if no lane failed the check.
 
 **Reviewer instances (#1517, optional):** when instances ran, frontmatter records their
 names, each gets its own `## <Adapter> Review (<instance>)` section, and ≥2 same-cli
@@ -683,6 +683,7 @@ read_check:               # only present if a lane failed its proof-of-reading c
     missing: ["12.6-03"]
     mismatched: {"12.6-01": [wave, tasks]}
     unchecked: ["12.6-04"]
+    unchecked_total: 1
 ---
 
 # Cross-AI Plan Review — Phase {N}
