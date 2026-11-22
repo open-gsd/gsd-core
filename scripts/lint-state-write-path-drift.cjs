@@ -1175,9 +1175,9 @@ function boundaryAfterLine(write, index) {
  * This axis's zero is not proof that no raw writer exists (ADR-3408
  * Decision 5). Verified misses, each with a test row (a known gap beside its
  * correct verdict, or the hop-bound row); the syntax-tree follow-up is #5279:
- *   - A file name built in another function (a `Map` value, a return value)
- *     or held in a module-level constant: resolution stops at a line
- *     matching `FUNCTION_DECL_LINE_RE`.
+ *   - A file name set above the writer's function (a `Map` value, a
+ *     module-level constant, a return value): for a function declaration that
+ *     `FUNCTION_DECL_LINE_RE` matches, resolution stops at its header.
  *   - A one-line function that assigns and writes, its line matching
  *     `FUNCTION_DECL_LINE_RE`: that line is dropped from the scan.
  *   - Two assignments of a chain on one line (`const d = …; const p = d;`):
