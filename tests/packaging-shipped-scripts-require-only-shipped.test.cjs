@@ -362,6 +362,12 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
+  test('a file named archived-packages packs, only a directory of that name is pruned', () => {
+    planted({ files: ['hooks'] }, ['hooks/archived-packages', 'hooks/a.js', 'hooks/sub/archived-packages', 'hooks/dir/archived-packages/x.js'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['hooks/a.js', 'hooks/archived-packages', 'hooks/sub/archived-packages', 'package.json']);
+    });
+  });
+
   test('a named .npmrc does not pack, and a named root file does', () => {
     planted({ files: ['.npmrc', 'keep.js'] }, ['.npmrc', 'keep.js'], (tmp) => {
       assert.deepEqual(sorted(listPackedFiles(tmp)), ['keep.js', 'package.json']);

@@ -21,16 +21,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const EXCLUDED_NAMES = new Set(['.git', '.svn', '.hg', 'cvs', 'archived-packages', '.npmrc', '.ds_store', '.lock-wscript', 'npm-debug.log']);
+const EXCLUDED_NAMES = new Set(['.git', '.svn', '.hg', 'cvs', '.npmrc', '.ds_store', '.lock-wscript', 'npm-debug.log']);
 const ROOT_EXCLUDED_FILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb']);
 
 // Name-based defaults, applied to a file or a directory name at any depth (a directory so named is
 // pruned with its contents); the lock files are excluded at the root only.
 // npm matches every name rule case-insensitively (ignore-walk sets nocase), so each is compared lower-cased.
-const isExcludedName = (rawName, rawRel) => {
+const isExcludedName = (rawName, rawRel, isDirectory = true) => {
   const name = rawName.toLowerCase();
   const rel = rawRel.toLowerCase();
-  return EXCLUDED_NAMES.has(name) || rel === 'build/config.gypi' || rel.endsWith('/build/config.gypi')
+  // npm's `/archived-packages/**` matches a directory of that name only, never a file.
+  return EXCLUDED_NAMES.has(name) || (isDirectory && name === 'archived-packages') || rel === 'build/config.gypi' || rel.endsWith('/build/config.gypi')
     || name.startsWith('._') || name.startsWith('.wafpickle-') || name.endsWith('.orig') || /^\.[^/]{0,255}\.swp$/.test(name);
 };
 const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel.toLowerCase());
@@ -153,7 +154,7 @@ function listPackedFiles(root) {
     if (dirs.some((d, i) => isExcludedName(d, dirs.slice(0, i + 1).join('/')) || d.toLowerCase() === 'node_modules')) {
       throw new Error(`${root}: main or bin target "${rel}" is under a directory a default exclusion matches; this list does not model that`);
     }
-    if (rel.includes('/') && isExcludedName(rel.split('/').pop(), rel)) {
+    if (rel.includes('/') && isExcludedName(rel.split('/').pop(), rel, false)) {
       throw new Error(`${root}: main or bin target "${rel}" is nested and matches a default exclusion; this list does not model that`);
     }
   }
@@ -189,7 +190,7 @@ function listPackedFiles(root) {
       }
     } else if (isRootExcluded(rel)) {
       // npm's strict rules beat even a files entry that names the file
-    } else if ((required && requiredAllowed(rel)) || (!required && !isExcludedName(name, rel) && !negative.some((n) => covers(n, rel)))) {
+    } else if ((required && requiredAllowed(rel)) || (!required && !isExcludedName(name, rel, false) && !negative.some((n) => covers(n, rel)))) {
       packed.add(rel);
     }
   };
