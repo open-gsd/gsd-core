@@ -63,19 +63,10 @@ interface MigrateResult {
 const { withStateLock } = stateMod;
 
 /**
- * #5120 (ADR-4629 guard roster: no raw or unlocked STATE.md write; review Major 3): a move of a
- * workstream's files runs inside ONE scope that holds the STATE.md lock on both the source and the
- * destination directory's STATE.md, taken before the first rename and released after the last
- * (rollback renames included). A STATE.md rename inside it cannot land between a locked writer's
- * read and its publish (readModifyWriteStateMd), a lock that cannot be taken fails the operation
- * before anything has moved, and the rollback never needs a lock of its own. Both locks are taken
- * whether or not a STATE.md exists, so a dead holder's lock is always stolen and removed here. They
- * are taken in one fixed order (by path), so two moves between the same pair of directories cannot
- * each hold the lock the other waits for. withStateLock is not re-entrant: fn must not take either.
- * Not covered (pre-push review R3-m1): a writer waiting on the old path's STATE.md lock takes it when
- * the scope releases it, and readModifyWriteStateMd reads the moved-away file as empty; a transform
- * that makes content from that empty input writes a new STATE.md at the old path, and the moved
- * STATE.md does not get that writer's update.
+ * #5120 (ADR-4629 guard roster; review Major 3): a move of a workstream's files runs inside ONE
+ * scope that holds the STATE.md lock on both the source and the destination directory's STATE.md,
+ * taken before the first rename and released after the last (rollback renames included). They are
+ * taken in one fixed order (by path).
  */
 function withBothStateLocks<T>(dirA: string, dirB: string, fn: () => T): T {
   const [first, second] = [path.join(dirA, 'STATE.md'), path.join(dirB, 'STATE.md')].sort();
@@ -83,10 +74,7 @@ function withBothStateLocks<T>(dirA: string, dirB: string, fn: () => T): T {
 }
 
 /**
- * The error a failed move reports: the cause, and any entry the rollback could not return. A
- * destination directory still there with every entry returned (for example the release of this
- * process's own lock failed, so the lock file is left in it; pre-push review R4-m3) is named, and
- * for a failed migrate .planning/workstreams too, whose presence refuses a retry.
+ * The error a failed move reports (pre-push review R4-m3).
  */
 function moveFailure(cause: unknown, notReturned: string[], leftIn: string, dirsLeft: string[]): Error {
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -150,12 +138,9 @@ function migrateToWorkstreams(cwd: string, workstreamName: string): MigrateResul
       }
     });
   } catch (lockErr) {
-    // A lock that could not be taken: nothing has moved.
     failure = failure ?? lockErr;
   }
   if (failure !== null) {
-    // After the locks are released, so the directories hold no lock file. rmdir removes only an
-    // empty directory: one that still holds an entry the rollback could not return is kept.
     try { fs.rmdirSync(wsDir); } catch { /* not empty, or already gone */ }
     try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch { /* not empty, or already gone */ }
     // Pre-push review R5-m1: .planning/workstreams is named too, since its presence refuses a retry.
@@ -264,7 +249,7 @@ function cmdWorkstreamCreate(cwd: string, name: string | null | undefined, optio
   ].join('\n');
 
   // #5120 review Major 1: written under the STATE.md lock, and the existence check is made under
-  // it too, so a STATE.md another writer creates meanwhile is never overwritten.
+  // it too.
   const statePath = path.join(wsDir, 'STATE.md');
   withStateLock(statePath, () => {
     if (!fs.existsSync(statePath)) platformWriteSync(statePath, stateContent);
@@ -401,12 +386,9 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
       }
     });
   } catch (lockErr) {
-    // A lock that could not be taken: nothing has moved.
     failure = failure ?? lockErr;
   }
   if (failure !== null) {
-    // After the locks are released; rmdir keeps an archive that still holds an entry the
-    // rollback could not return.
     try { fs.rmdirSync(archivePath); } catch { /* not empty, or already gone */ }
     if (active === name) setActiveWorkstream(cwd, name!);
     const err = moveFailure(failure, notReturned, toPosixPath(path.relative(cwd, archivePath)), fs.existsSync(archivePath) ? [toPosixPath(path.relative(cwd, archivePath))] : []);
@@ -415,9 +397,8 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
   }
 
   try { fs.rmdirSync(wsDir); } catch { /* ignore */ }
-  // #5120 pre-push review R3-m2: a workstream directory still there after the move (for example the
-  // release of this process's own lock failed, so its lock file is left in it) is named, so
-  // `completed: true` is not read as "the directory is gone". It is still counted below.
+  // #5120 pre-push review R3-m2: a workstream directory still there after the move is named. It is
+  // still counted below.
   const dirLeft = fs.existsSync(wsDir) ? toPosixPath(path.relative(cwd, wsDir)) : null;
 
   let remainingWs = 0;
