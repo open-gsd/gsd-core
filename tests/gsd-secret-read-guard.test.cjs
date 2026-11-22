@@ -3893,7 +3893,7 @@ describe('gsd-secret-read-guard: constructs the tokenizer read differently from 
     ['the same inside `$( )` (bash, dash, zsh)', 'echo $(cat <<E\nx\\\nE\ncat <<F\nE\ncat .env\nF\n)'],
     // Only the joined-line reading on its own reaches this one: the bash 3.2 reading, which also joins,
     // ends the `<( )` at the `)` line in the body, and nothing here calls for the other joining reading.
-    ['the same inside `<( )`, after a `)` line in the body (bash)', 'cat <(cat <<E\n)\nx\\\nE\ncat <<F\nE\ncat .env\nF\n)'],
+    ['the same inside `<( )`, after a `)` line in the body (bash, zsh)', 'cat <(cat <<E\n)\nx\\\nE\ncat <<F\nE\ncat .env\nF\n)'],
     ['the same, assembled by eval from `\\\'\'` and a newline (bash, dash, zsh)', "eval 'cat <<E\nx\\''\nE\ncat <<F\nE\ncat .env\nF'"],
     ['`$$` assembled by eval from `$\'\'$` (bash, dash)', "eval '$''${x; cat .env'"],
   ];
