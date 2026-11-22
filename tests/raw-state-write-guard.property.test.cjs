@@ -1,32 +1,16 @@
 'use strict';
 
 /**
- * Property-based tests for the raw STATE.md write check's rule (#5120).
- *
- * Module: scripts/raw-state-write-guard.cjs
- * Rule:   classifyStateWrite({ destination, source, callerFile, viaSeam, lockHeld, sourceLockHeld })
- *
- * The rule is a classification surface (TESTING-STANDARDS "Property-based
- * testing tier"): three predicates over paths decide whether a write is
- * recorded at all and, when it is, whether it is a violation. The example
- * rows in tests/raw-state-write-guard.test.cjs pin named cases; the
- * properties below state the contract over generated paths, with POSIX and
- * Windows separators mixed freely inside one path.
- *
- * Properties:
- *   (a) basename: a destination whose last segment is not exactly `STATE.md`
- *       is never recorded, whatever the caller, source or viaSeam
- *   (b) caller: a STATE.md destination from a caller that is not product code
- *       (no `gsd-core` segment directly followed by `bin`, or a file that does
- *       not end in `.cjs`, or no caller at all) is never recorded
- *   (c) verdict: for a product caller and a STATE.md destination whose source
- *       is absent or is not itself a STATE.md, the write is recorded, and it
- *       passes only when it is a seam write AND the destination lock is held
- *       (`lockHeld === true`); otherwise it is `raw` (no seam) or `unlocked`
- *   (d) relocation: the same product write whose source basename is
- *       `STATE.md` and that no seam function made is recorded as a
- *       relocation, and passes only when both `lockHeld` and `sourceLockHeld`
- *       are exactly `true` (#5120 review Major 3)
+ * Property-based tests for classifyStateWrite, the raw STATE.md write check's rule (#5120;
+ * scripts/raw-state-write-guard.cjs). The rule is a classification surface (TESTING-STANDARDS
+ * "Property-based testing tier"); tests/raw-state-write-guard.test.cjs pins named cases, and the
+ * properties below state the contract over generated paths, POSIX and Windows separators mixed:
+ *   (a) a destination whose last segment is not exactly STATE.md is not recorded;
+ *   (b) a STATE.md destination from a caller that is not product code is not recorded;
+ *   (c) a product write onto STATE.md from no source or a non-STATE.md source passes only as a
+ *       seam write with the destination lock held (lockHeld === true); else raw or unlocked;
+ *   (d) the same write from a STATE.md source made by no seam function is a relocation that
+ *       passes only when lockHeld and sourceLockHeld are both exactly true (#5120 review Major 3).
  */
 
 const { describe, test } = require('node:test');

@@ -526,9 +526,8 @@ module.exports = async (early, late) => {
   });
 
   test('known limits, pinned as they stand: these example shapes land their bytes on STATE.md and are not recorded (#5120 pre-push review R2-n3, R3-n2)', async (t) => {
-    // The guard's header states these limits. If a change makes a shape below record, update that
-    // header, the limits list in TESTING-SUITES.md, the limits predicate in CONTEXT.md and this row
-    // together. Each child asserts the bytes landed, so an empty ledger is an unseen real write, not
+    // TESTING-SUITES.md states these limits. If a change makes a shape below record, update its
+    // limits list, the limits predicate in CONTEXT.md and this row together. Each child asserts the bytes landed, so an empty ledger is an unseen real write, not
     // a dead child. Every body is product code (under gsd-core/bin/lib) and uses node alone.
     const shapes = [
       {

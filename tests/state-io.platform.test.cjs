@@ -1,28 +1,18 @@
 'use strict';
 /**
- * Platform-sensitive tests split out of tests/state-io.test.cjs (#5120).
+ * Platform-sensitive tests split out of tests/state-io.test.cjs (#5120), so that
+ * scripts/gen-platform-conformance-tier.cjs selects this whole file for the Windows/macOS tier.
  *
- * scripts/gen-platform-conformance-tier.cjs selects whole files for the real-OS
- * (Windows/macOS) conformance tier. The rows below carry the platform signal, so they
- * live here; tests/state-io.test.cjs stays signal-free.
+ * #5120 review (M1): the filesystem stateIO adapter refuses an existing STATE.md that is not a
+ * regular file (a symlink, a FIFO, a device), under the STATE.md lock, and writes nothing; the
+ * seam alone would replace it by rename while a link's real target kept its old bytes.
  *
- * #5120 review (M1): the filesystem stateIO adapter's STATE.md branch is documented
- * (the src/state-io.cts header and the connect-gsd-mcp-server how-to) to refuse a
- * STATE.md that is a symlink, a FIFO or a device with a tool error. The write seam
- * it calls does not: its atomic path replaces whatever sits at the target by rename,
- * so a symlinked STATE.md was silently replaced by a regular file while the link's
- * real target kept its old bytes, and a FIFO was replaced the same way. The adapter
- * now refuses any existing STATE.md that is not a regular file, under the STATE.md
- * lock, and writes nothing.
- *
- * Rows and why each lives here:
- * - the symlink rows: `fs.symlinkSync` needs privileges on Windows (process-platform).
- *   Without them the row records a skip and asserts the platform is win32.
- * - the case row: the STATE.md match is case-sensitive, and whether `state.md` is a different
- *   file from STATE.md depends on the filesystem (case-sensitivity; macOS and Windows fold case).
- * - the FIFO row: there is no FIFO on Windows; `mkfifo` is a child process
- *   (process-platform, raw-child-process). On win32 it skips with a counted assertion
- *   that the platform is win32, so it can never pass on POSIX with zero assertions.
+ * Why each row lives here:
+ * - symlink rows: fs.symlinkSync needs privileges on Windows; without them the row skips and
+ *   asserts the platform is win32.
+ * - case row: whether state.md is a different file from STATE.md depends on the filesystem.
+ * - FIFO row: no FIFO on Windows; mkfifo is a child process. On win32 it skips with a counted
+ *   assertion that the platform is win32, so it can never pass on POSIX with zero assertions.
  */
 
 const { test } = require('node:test');

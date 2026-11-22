@@ -422,16 +422,14 @@ const HARNESS_WINDOW = 'run 2026-11-08: darwin node v26.13.0; linux node v24.22.
 
 /**
  * One `scripts/run-tests.cjs` invocation over a one-file GSD_TEST_DIR fixture, spawned
- * through the process seam: the runner's incremental tsc build, one node --test chunk
- * and the post-run reports. A heavier class than `PROBE_TIMEOUT_MS` (the build alone is
- * seconds) and a different operation from `INSTALL_TIMEOUT_MS`. tests/run-tests-harness.test.cjs
- * and tests/raw-state-write-guard.process.test.cjs both time their runner spawns with it.
+ * through the process seam: the runner's incremental tsc build, one node --test chunk and
+ * the post-run reports, heavier than `PROBE_TIMEOUT_MS` and unlike `INSTALL_TIMEOUT_MS`.
+ * tests/run-tests-harness.test.cjs and tests/raw-state-write-guard.process.test.cjs time
+ * their runner spawns with it.
  *
- * The value is the one the harness test used for the same spawn before it moved onto this
- * constant (#5120 review Minor 3); it must stay above that file's longest chunk-timeout
- * override (30000ms) so the runner's own timeout diagnostic fires first. It is kept wide
- * because CI's win32 lane runs the runner's build and chunk several times slower than
- * the linux harness that measured it; the margin is stated, not hidden.
+ * The harness test's own value before it moved here (#5120 review Minor 3); it stays above
+ * that file's longest chunk-timeout override (30000ms) so the runner's timeout diagnostic fires
+ * first, and wide because CI's win32 lane runs the build and chunk several times slower.
  *
  * Evidence (TIMEOUT_EVIDENCE.RUN_TESTS_HARNESS_TIMEOUT_MS): worst observed 1510ms on linux (p50 1283ms, p99 1510ms of 15 harness spawns),
  * margin 79.47x; local harness on linux (WSL2, node v24), 15 spawns; win32 and darwin not measured.
