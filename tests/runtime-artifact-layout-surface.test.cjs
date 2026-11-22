@@ -2295,7 +2295,7 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
   });
 
   test('a global layout without a manifest: the source error says unverified only while the corpus is present', (t) => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-reason-'));
+    const root = createTempDir('gsd-6331-reason-');
     t.after(() => cleanup(root));
     const { RUNTIME_SURFACE_SOURCE_UNAVAILABLE: R, runtimeSurfaceSourceUnavailableReason: reasonOf } =
       require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
@@ -2317,7 +2317,7 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
 
   /** A file over one hash chunk, so tryFileHash reads it in more than one readSync call. */
   function multiChunkFile(t, prefix, fill) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    const dir = createTempDir(prefix);
     t.after(() => cleanup(dir));
     const file = path.join(dir, 'a.md');
     fs.writeFileSync(file, Buffer.alloc(2 * 1024 * 1024 + 5, fill));
