@@ -3875,6 +3875,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     '{ printf %s .e; echo nv; echo x; } | xargs cat',
     '{ printf %s .e; printf %s x >&2; printf %s nv; } | xargs cat',
     '{ printf %s .e; printf %s x >/dev/null; printf %s nv; } | xargs cat',
+    '{ printf %s .e; printf %s x >log; printf %s nv; } | xargs cat',
     '{ printf %s .e | cat; printf %s nv; } | xargs cat',
     // ... and a name one output holds is still read where the join is not built (blocked at the parent too).
     `{ echo .env; ${"echo '\\t'; ".repeat(7)}} | xargs sh -c 'echo hi'`,
@@ -3992,6 +3993,12 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['{ printf %s .e >/dev/stdout; printf %s nv; } | xargs cat', '>'],
     ['{ printf %s .e >&1; printf %s nv; } | xargs cat', '>'],
     ['{ printf %s .e >"$OUT"; printf %s nv; } | xargs cat', '>'],
+    // ... and one to a descriptor or a device that a group's own redirect, `|&` or an `exec` may send back to the pipe.
+    ['{ printf %s .e >&2; printf %s nv; } 2>&1 | xargs cat', '>'],
+    ['{ printf %s .e >/dev/stderr; printf %s nv; } |& xargs cat', '>'],
+    ['{ printf %s .e >/dev/./stdout; printf %s nv; } | xargs cat', '>'],
+    ['{ printf %s .e >//dev/stdout; printf %s nv; } | xargs cat', '>'],
+    ['{ exec 3>&1 >/dev/null; printf %s .e >&3; printf %s nv >&3; } | xargs cat', 'exec'],
     ["printf '.env\\n' | sort | xargs cat", 'sort'],
     ["printf '.env' | xargs echo | xargs cat", 'xargs'],
     ['echo .env | tee >(xargs cat)', '>( )'],
