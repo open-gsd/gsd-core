@@ -146,9 +146,79 @@ describe('execute-mvp-tdd.md — load condition decoupled from MVP (#4011)', () 
 // #4715 and the router never did, so a task listing only `placement_test.go` was classified
 // behavior-adding and asked for a RED commit for the task that IS the RED commit.
 
+// ─── #5766: the gate folds case the way the router does ──────────────────────
+// The router treats `Tests/foo.rs` and `Foo.TEST.js` as test files; the gate's RED-commit pathspec was a plain
+// (case-sensitive) git pathspec, so a RED commit made only of such files was invisible to it. The workflow's exact
+// pathspec flags are run over a real repository and must find what the router calls a test file, whatever the case,
+// for the paths the gate already matches (a nested `src/Tests/` directory is the nested-directory change, #5181).
+describe('#5766: the RED-commit pathspec and the router agree on letter case', () => {
+  const os = require('node:os');
+  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { isTestFilePath, gitPathspec } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+  const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+
+  const IDENTITY = { GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t.io', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t.io' };
+  const FILES = [
+    'tests/lower.rs', 'Tests/Upper.rs', 'TESTS/Shout.rs', 'Foo.TEST.js', 'foo.test.js', 'Bar.Spec.ts',
+    'pkg/Foo_Test.go', 'pkg/foo_test.go', 'Test_User.py', 'test_user.py', 'User_Test.PY', 'src/prod.js', 'src/Contest.py', 'lib/testing_utils.go',
+  ];
+
+  function workflowPathspecs() {
+    const line = splitLines(fs.readFileSync(WORKFLOW, 'utf8')).find(l => l.includes('check evaluation-scope') && l.includes('--commits-only') && l.includes('--pathspec'));
+    assert.ok(line, 'execute-phase.md has no RED-commit evaluation-scope line');
+    return [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
+  }
+
+  test('for every path, `git log -- <the workflow flags>` finds the commit exactly when the router calls it a test file', (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5766-'));
+    t.after(() => cleanup(dir));
+    // No user or system git config reaches the fixture (a global `commit.gpgsign` would break it).
+    const env = { ...process.env, ...IDENTITY, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' };
+    const git = (...args) => gitOrThrow(args, { cwd: dir, env }).trim();
+    git('init', '--initial-branch=main');
+    git('config', 'core.ignorecase', 'false');
+    // Git plumbing, not files on disk: `Tests/` and `tests/` are one directory on a case-insensitive filesystem
+    // (macOS, Windows), which would fold the fixture. The index holds every path exactly as spelled.
+    const blobs = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-5766-blobs-'));
+    t.after(() => cleanup(blobs));
+    const shaOf = {};
+    FILES.forEach((file, i) => {
+      const blobFile = path.join(blobs, `blob-${i}`);
+      fs.writeFileSync(blobFile, `${file}\n`);
+      const blob = git('hash-object', '-w', blobFile);
+      git('update-index', '--add', '--cacheinfo', `100644,${blob},${file}`);
+      git('commit', '-m', `add ${file}`);
+      shaOf[file] = git('rev-parse', 'HEAD');
+    });
+    const specs = workflowPathspecs();
+    const found = new Set(git('log', '--format=%H', '--', ...specs).split('\n').filter(Boolean));
+    for (const file of FILES) {
+      assert.equal(found.has(shaOf[file]), isTestFilePath(file),
+        `${file}: the gate (git log over the workflow pathspecs) and the router must agree (router says ${isTestFilePath(file)})`);
+    }
+    for (const file of ['Tests/Upper.rs', 'TESTS/Shout.rs', 'Foo.TEST.js', 'Bar.Spec.ts', 'pkg/Foo_Test.go', 'Test_User.py', 'User_Test.PY']) {
+      assert.equal(found.has(shaOf[file]), true, `${file} differs from the lowercase convention only by case and must be found`);
+    }
+    for (const file of ['src/prod.js', 'src/Contest.py', 'lib/testing_utils.go']) {
+      assert.equal(found.has(shaOf[file]), false, `${file} is production source and must not match`);
+    }
+  });
+
+  test('the magic is spelled in one place, and a second magic word combines inside the same parentheses', () => {
+    assert.equal(gitPathspec('tests/'), ':(icase)tests/');
+    assert.equal(gitPathspec('**/tests/**', ['icase', 'glob']), ':(icase,glob)**/tests/**');
+  });
+
+  test('the gate pathspecs fold case with git\'s own magic on every entry', () => {
+    for (const spec of workflowPathspecs()) {
+      assert.match(spec, /^:\(icase\)/, `${spec} must be case-insensitive`);
+    }
+  });
+});
+
 describe('#5106: test-file conventions are one definition', () => {
   const { isBehaviorAddingTaskContent } = require('../gsd-core/bin/lib/task-command-router.cjs');
-  const { TEST_FILE_PATHSPECS, isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
+  const { TEST_FILE_PATHSPECS, TEST_FILE_GIT_PATHSPECS, isTestFilePath } = require('../gsd-core/bin/lib/tdd-test-files.cjs');
   const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
   const task = (...files) => `<task tdd="true"><behavior>It does the thing</behavior><files>\n${files.map(f => `- ${f}`).join('\n')}\n</files></task>`;
@@ -176,8 +246,10 @@ describe('#5106: test-file conventions are one definition', () => {
     const line = splitLines(src).find(l => l.includes('check evaluation-scope') && l.includes('--commits-only') && l.includes('--pathspec'));
     assert.ok(line, 'execute-phase.md has no RED-commit evaluation-scope line');
     const workflowSpecs = [...line.matchAll(/--pathspec "([^"]{1,80})"/g)].map(m => m[1]);
-    assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_PATHSPECS].sort(),
-      'the workflow pathspec list and TEST_FILE_PATHSPECS must be the same set');
+    assert.deepEqual([...workflowSpecs].sort(), [...TEST_FILE_GIT_PATHSPECS].sort(),
+      'the workflow pathspec list and TEST_FILE_GIT_PATHSPECS must be the same set');
+    assert.deepEqual(workflowSpecs.map(s => s.replace(/^:\(icase\)/, '')).sort(), [...TEST_FILE_PATHSPECS].sort(),
+      'behind the :(icase) magic the workflow list is exactly TEST_FILE_PATHSPECS');
     // And every entry means the same thing to the router: a path built from the spec is a test file.
     for (const spec of TEST_FILE_PATHSPECS) {
       const sample = spec.endsWith('/') ? `${spec}x.js` : spec.replace(/\*/g, 'sample');

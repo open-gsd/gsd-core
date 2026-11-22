@@ -1,0 +1,3692 @@
+{
+  ".kilo/plugins/gsd-core.js": {
+    "block": 3
+  },
+  ".opencode/plugins/gsd-core.js": {
+    "block": 3
+  },
+  "bin/gsd-mcp-server.js": {
+    "block": 1
+  },
+  "bin/install.js": {
+    "block": 56
+  },
+  "eslint-rules/lib/comment-ratchet.cjs": {
+    "block": 1
+  },
+  "eslint-rules/lib/platform-guard.cjs": {
+    "block": 4
+  },
+  "eslint-rules/lib/portability-vocab.cjs": {
+    "block": 3
+  },
+  "eslint-rules/lib/readfilesync-trace.cjs": {
+    "block": 1
+  },
+  "eslint-rules/named-args-spec-from-registry.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-adhoc-markdown-parsing.cjs": {
+    "block": 6
+  },
+  "eslint-rules/no-adhoc-regex-escape.cjs": {
+    "block": 2
+  },
+  "eslint-rules/no-adhoc-timeout-literal.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-bare-npm-exec.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-crlf-fragile-split.cjs": {
+    "block": 2
+  },
+  "eslint-rules/no-duplicate-fold-marker.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-exact-case-env-access.cjs": {
+    "block": 3
+  },
+  "eslint-rules/no-external-require-in-bin.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-hardcoded-tmp.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-path-literal-in-assert.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-posix-mode-bit-assert.cjs": {
+    "block": 3
+  },
+  "eslint-rules/no-private-binary-resolution.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-raw-rmsync-in-tests.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-rendered-text-length-assert.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-runtime-name-literal.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-source-grep.cjs": {
+    "block": 2
+  },
+  "eslint-rules/no-swallowed-precondition.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-tautological-assert.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-unbounded-dirname-walk.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-unbounded-quantifier.cjs": {
+    "block": 2
+  },
+  "eslint-rules/no-unbounded-spawn.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-unconfined-path-join.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-unguarded-nonportable-exec.cjs": {
+    "block": 1
+  },
+  "eslint-rules/no-verification-status-literal.cjs": {
+    "block": 1
+  },
+  "eslint-rules/normalize-path-in-content.cjs": {
+    "block": 2
+  },
+  "eslint-rules/require-fs-op-fallback.cjs": {
+    "block": 2
+  },
+  "eslint-rules/require-full-tmpdir-triad.cjs": {
+    "block": 1
+  },
+  "eslint-rules/require-read-only-git-env.cjs": {
+    "block": 1
+  },
+  "eslint-rules/require-registered-exit.cjs": {
+    "block": 1
+  },
+  "eslint-rules/require-subprocess-timeout.cjs": {
+    "block": 1
+  },
+  "eslint-rules/require-userprofile-with-home.cjs": {
+    "block": 1
+  },
+  "eslint.config.mjs": {
+    "block": 1
+  },
+  "examples/dynamic-context-management/context-predicates.cjs": {
+    "block": 2
+  },
+  "examples/dynamic-context-management/gen-context-index.cjs": {
+    "block": 1
+  },
+  "gsd-core/bin/check-latest-version.cjs": {
+    "block": 1
+  },
+  "gsd-core/bin/ensure-runtime-build.cjs": {
+    "block": 2
+  },
+  "gsd-core/bin/gsd-tools.cjs": {
+    "block": 24,
+    "directive": 11
+  },
+  "gsd-core/bin/lib/capability-command-router.cjs": {
+    "block": 1
+  },
+  "gsd-core/bin/lib/capability-validator.cjs": {
+    "block": 13,
+    "directive": 1
+  },
+  "gsd-core/bin/lib/legacy-cleanup.cjs": {
+    "block": 2
+  },
+  "gsd-core/bin/lib/profile-pipeline-command-router.cjs": {
+    "block": 2
+  },
+  "gsd-core/bin/lib/stale-bake-guard.cjs": {
+    "block": 1
+  },
+  "gsd-core/bin/verify-reapply-patches.cjs": {
+    "block": 3
+  },
+  "hooks/gsd-agent-isolation-guard.js": {
+    "block": 5
+  },
+  "hooks/gsd-check-update-worker.js": {
+    "block": 1
+  },
+  "hooks/gsd-config-reload.js": {
+    "block": 1
+  },
+  "hooks/gsd-context-monitor.js": {
+    "block": 5
+  },
+  "hooks/gsd-cursor-post-tool.js": {
+    "block": 1
+  },
+  "hooks/gsd-cursor-pre-tool.js": {
+    "block": 1
+  },
+  "hooks/gsd-cursor-session-start.js": {
+    "block": 1
+  },
+  "hooks/gsd-cursor-stop.js": {
+    "block": 1
+  },
+  "hooks/gsd-cursor-subagent-start.js": {
+    "block": 5
+  },
+  "hooks/gsd-cursor-subagent-stop.js": {
+    "block": 1
+  },
+  "hooks/gsd-ensure-canonical-path.js": {
+    "block": 2
+  },
+  "hooks/gsd-prompt-guard.js": {
+    "block": 2
+  },
+  "hooks/gsd-read-guard.js": {
+    "block": 3
+  },
+  "hooks/gsd-read-injection-scanner.js": {
+    "block": 3
+  },
+  "hooks/gsd-secret-read-guard.js": {
+    "block": 10
+  },
+  "hooks/gsd-statusline.js": {
+    "block": 8
+  },
+  "hooks/gsd-windsurf-pre-command.js": {
+    "block": 1
+  },
+  "hooks/gsd-windsurf-pre-write.js": {
+    "block": 2
+  },
+  "hooks/gsd-workflow-guard.js": {
+    "block": 3
+  },
+  "hooks/gsd-worktree-path-guard.js": {
+    "block": 4
+  },
+  "hooks/gsd-write-guard.js": {
+    "block": 3
+  },
+  "hooks/lib/cursor-workspace.js": {
+    "block": 2
+  },
+  "hooks/lib/dispatch-identity.js": {
+    "block": 2
+  },
+  "hooks/lib/filename-classification.js": {
+    "block": 1
+  },
+  "hooks/lib/git-cmd.js": {
+    "block": 3
+  },
+  "hooks/lib/git-head-tree.js": {
+    "block": 1
+  },
+  "hooks/lib/git-probe.js": {
+    "block": 1
+  },
+  "hooks/lib/hook-exit.js": {
+    "block": 1
+  },
+  "hooks/lib/injection-patterns.js": {
+    "block": 2
+  },
+  "hooks/lib/isolation-deny-reason.js": {
+    "directive": 1
+  },
+  "hooks/lib/isolation-sentinel.js": {
+    "block": 8
+  },
+  "hooks/lib/secret-read-exemptions.js": {
+    "block": 1
+  },
+  "pi/gsd.cjs": {
+    "block": 3,
+    "directive": 1
+  },
+  "scripts/affected-tests-lib.cjs": {
+    "block": 1
+  },
+  "scripts/benchmark-compact-content-variants.cjs": {
+    "block": 1
+  },
+  "scripts/benchmark-compact-content.cjs": {
+    "block": 2
+  },
+  "scripts/build-hooks.js": {
+    "block": 1
+  },
+  "scripts/changeset/lint.cjs": {
+    "block": 1
+  },
+  "scripts/changeset/parse.cjs": {
+    "block": 3
+  },
+  "scripts/changeset/serialize.cjs": {
+    "block": 1
+  },
+  "scripts/check-contract-drift.cjs": {
+    "block": 3
+  },
+  "scripts/check-env.cjs": {
+    "block": 1
+  },
+  "scripts/check-glossary-refs.cjs": {
+    "block": 3
+  },
+  "scripts/check-mutation-score-ratchet.cjs": {
+    "block": 1
+  },
+  "scripts/ci-compact-v8-coverage.cjs": {
+    "block": 1
+  },
+  "scripts/ci-next-health.cjs": {
+    "block": 1
+  },
+  "scripts/ci-pr-mergeability.cjs": {
+    "block": 1
+  },
+  "scripts/ci-rebase-check.cjs": {
+    "block": 1
+  },
+  "scripts/ci-test-scope.cjs": {
+    "block": 2
+  },
+  "scripts/ci-timeout-report.cjs": {
+    "block": 3
+  },
+  "scripts/command-contract-helpers.cjs": {
+    "block": 8
+  },
+  "scripts/diagnose-windows-spawn-watcher.cjs": {
+    "block": 1
+  },
+  "scripts/diff-touches-shipped-paths.cjs": {
+    "block": 1
+  },
+  "scripts/docs-guard-registry.cjs": {
+    "block": 2
+  },
+  "scripts/gen-adr-index.cjs": {
+    "block": 6
+  },
+  "scripts/gen-capability-matrix.cjs": {
+    "block": 1
+  },
+  "scripts/gen-capability-registry.cjs": {
+    "block": 3
+  },
+  "scripts/gen-context-index.cjs": {
+    "block": 2
+  },
+  "scripts/gen-emitted-baseline.cjs": {
+    "block": 1
+  },
+  "scripts/gen-exit-code-docs.cjs": {
+    "block": 1
+  },
+  "scripts/gen-exit-code-registry.cjs": {
+    "block": 3
+  },
+  "scripts/gen-features.cjs": {
+    "block": 3
+  },
+  "scripts/gen-health-docs.cjs": {
+    "block": 1
+  },
+  "scripts/gen-hooks-cli-exit.cjs": {
+    "block": 1
+  },
+  "scripts/gen-inventory-manifest.cjs": {
+    "block": 1
+  },
+  "scripts/gen-loop-host-contract.cjs": {
+    "block": 3
+  },
+  "scripts/gen-pi-package-skills.cjs": {
+    "block": 1
+  },
+  "scripts/gen-platform-conformance-tier.cjs": {
+    "block": 6
+  },
+  "scripts/gen-plugin-skills.cjs": {
+    "block": 2
+  },
+  "scripts/gen-prompt-budget-parity-corpus.cjs": {
+    "block": 1
+  },
+  "scripts/gen-registry.cjs": {
+    "block": 2
+  },
+  "scripts/gen-research-agents.cjs": {
+    "block": 1
+  },
+  "scripts/gen-scripts-cli-exit.cjs": {
+    "block": 1
+  },
+  "scripts/gen-section-manifest.cjs": {
+    "block": 1
+  },
+  "scripts/gen-state-md-docs.cjs": {
+    "block": 3
+  },
+  "scripts/gen-test-timings.cjs": {
+    "block": 2
+  },
+  "scripts/lib/allowlist-ratchet.cjs": {
+    "block": 4
+  },
+  "scripts/lib/drift-scan.cjs": {
+    "block": 3,
+    "directive": 1
+  },
+  "scripts/lib/ndjson-reporter.cjs": {
+    "block": 1
+  },
+  "scripts/lib/npm-version-check-diagnosis.cjs": {
+    "block": 1
+  },
+  "scripts/lib/registration-ledger-preload.cjs": {
+    "block": 1
+  },
+  "scripts/lib/shellcheck-fetch.cjs": {
+    "block": 1
+  },
+  "scripts/lint-allow-test-rule-refs.cjs": {
+    "block": 8
+  },
+  "scripts/lint-allowed-tools-parity.cjs": {
+    "block": 3
+  },
+  "scripts/lint-canary-version-leak.cjs": {
+    "block": 1
+  },
+  "scripts/lint-command-contract.cjs": {
+    "block": 1
+  },
+  "scripts/lint-compiled-artifact-sync.cjs": {
+    "block": 1
+  },
+  "scripts/lint-completion-predicate-drift.cjs": {
+    "block": 4
+  },
+  "scripts/lint-completion-ratio-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-default-flip-documentation.cjs": {
+    "block": 1
+  },
+  "scripts/lint-docs-command-form.cjs": {
+    "block": 1
+  },
+  "scripts/lint-docs-guard-registration.cjs": {
+    "block": 3
+  },
+  "scripts/lint-docs-guard-registration.exempt-baseline.cjs": {
+    "block": 1
+  },
+  "scripts/lint-docs-required.cjs": {
+    "block": 1
+  },
+  "scripts/lint-eslint-glob-coverage.cjs": {
+    "block": 2
+  },
+  "scripts/lint-evaluation-scope-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-example-parser-parity.cjs": {
+    "block": 1
+  },
+  "scripts/lint-fix-has-regression-tests.cjs": {
+    "block": 1
+  },
+  "scripts/lint-frontmatter-fence-drift.cjs": {
+    "block": 2
+  },
+  "scripts/lint-frontmatter-scalar-broad-grep.cjs": {
+    "block": 1
+  },
+  "scripts/lint-gate-evidence-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-gate-positive-control.cjs": {
+    "block": 1
+  },
+  "scripts/lint-health-diagnostic-rule-table.cjs": {
+    "block": 1
+  },
+  "scripts/lint-hooks-runtime-build-seam.cjs": {
+    "block": 1
+  },
+  "scripts/lint-legacy-dir-name.cjs": {
+    "block": 1
+  },
+  "scripts/lint-milestone-window-drift.cjs": {
+    "block": 3
+  },
+  "scripts/lint-mutation-test-derivation-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-no-adhoc-regex-escape.cjs": {
+    "block": 2
+  },
+  "scripts/lint-package-identity-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-phase-arg-assignment.cjs": {
+    "block": 1
+  },
+  "scripts/lint-phase-enumeration-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-phase-id-drift.cjs": {
+    "block": 4
+  },
+  "scripts/lint-plan-count-drift.cjs": {
+    "block": 3
+  },
+  "scripts/lint-planning-artifact-writer-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-planning-document-positive-control.cjs": {
+    "block": 3
+  },
+  "scripts/lint-planning-prompt-drift.cjs": {
+    "block": 4
+  },
+  "scripts/lint-planning-snapshot-bypass-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-portable-grep.cjs": {
+    "block": 1
+  },
+  "scripts/lint-portable-timeout.cjs": {
+    "block": 1
+  },
+  "scripts/lint-pr-branch-pattern-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-regression-test-names.cjs": {
+    "block": 1
+  },
+  "scripts/lint-removed-but-needed.cjs": {
+    "block": 4
+  },
+  "scripts/lint-resolution-provenance.cjs": {
+    "block": 1
+  },
+  "scripts/lint-response-language-coverage.cjs": {
+    "block": 5
+  },
+  "scripts/lint-retired-runtime-name.cjs": {
+    "block": 1
+  },
+  "scripts/lint-roadmap-progress-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-skill-deps.cjs": {
+    "block": 1
+  },
+  "scripts/lint-slug-derivation-drift.cjs": {
+    "block": 2
+  },
+  "scripts/lint-source-test-name-collision.cjs": {
+    "block": 1
+  },
+  "scripts/lint-state-field-drift.cjs": {
+    "block": 5
+  },
+  "scripts/lint-state-write-path-drift.cjs": {
+    "block": 8
+  },
+  "scripts/lint-table-schema-drift.cjs": {
+    "block": 1
+  },
+  "scripts/lint-unreachable-guard-drift.cjs": {
+    "block": 4
+  },
+  "scripts/lint-vendored-deps.cjs": {
+    "block": 3
+  },
+  "scripts/lint-verify-lifecycle-writes.cjs": {
+    "block": 1
+  },
+  "scripts/lint-workflow-shellcheck.cjs": {
+    "block": 3
+  },
+  "scripts/live-config-guard.cjs": {
+    "block": 5
+  },
+  "scripts/merge-commit-pr.cjs": {
+    "block": 1
+  },
+  "scripts/mutation-matrix.cjs": {
+    "block": 11
+  },
+  "scripts/npm-audit-baseline.cjs": {
+    "block": 4
+  },
+  "scripts/pr-changed-files.cjs": {
+    "block": 2
+  },
+  "scripts/publish-plugin-ref.cjs": {
+    "block": 1
+  },
+  "scripts/qa-smell-ratchet.cjs": {
+    "block": 5,
+    "directive": 1
+  },
+  "scripts/registry-schema.cjs": {
+    "block": 2
+  },
+  "scripts/release-pipeline-pr.cjs": {
+    "block": 1
+  },
+  "scripts/release-tarball-smoke.cjs": {
+    "block": 6
+  },
+  "scripts/require-issue-link-policy.cjs": {
+    "block": 1
+  },
+  "scripts/reviewed-or-maintainer-policy.cjs": {
+    "block": 1
+  },
+  "scripts/run-tests.cjs": {
+    "block": 20
+  },
+  "scripts/select-docs-guards.cjs": {
+    "block": 1
+  },
+  "scripts/self-test-report-policy.cjs": {
+    "block": 1
+  },
+  "scripts/slurm-adapter.cjs": {
+    "block": 1
+  },
+  "scripts/static-checks/portability-rule-disable-ban.cjs": {
+    "block": 1
+  },
+  "scripts/static-checks/text-contracts.cjs": {
+    "block": 1
+  },
+  "scripts/strip-prose-atrefs.cjs": {
+    "block": 1
+  },
+  "scripts/sync-next-version.cjs": {
+    "block": 1
+  },
+  "scripts/sync-runtime-launcher.cjs": {
+    "block": 2
+  },
+  "scripts/timeout-evidence-from-ci.cjs": {
+    "block": 1
+  },
+  "scripts/validate-registry.cjs": {
+    "block": 1
+  },
+  "scripts/workflow-size.cjs": {
+    "block": 2
+  },
+  "src/active-workstream-store.cts": {
+    "block": 2
+  },
+  "src/adapter-declarative.cts": {
+    "directive": 1
+  },
+  "src/adapter-imperative.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/adr-parser.cts": {
+    "directive": 1
+  },
+  "src/agent-command-router.cts": {
+    "directive": 3
+  },
+  "src/agent-install-check.cts": {
+    "directive": 3,
+    "block": 5
+  },
+  "src/api-coverage.cts": {
+    "block": 7,
+    "directive": 1
+  },
+  "src/args-terminator.cts": {
+    "block": 1
+  },
+  "src/assumption-delta.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/audit-command-router.cts": {
+    "block": 1,
+    "directive": 4
+  },
+  "src/audit.cts": {
+    "directive": 10,
+    "block": 9
+  },
+  "src/broken-windows.cts": {
+    "block": 5,
+    "directive": 2
+  },
+  "src/capability-activation.cts": {
+    "directive": 3,
+    "block": 2
+  },
+  "src/capability-consent.cts": {
+    "block": 4,
+    "directive": 1
+  },
+  "src/capability-ledger.cts": {
+    "block": 4
+  },
+  "src/capability-lifecycle.cts": {
+    "block": 4,
+    "directive": 4
+  },
+  "src/capability-loader.cts": {
+    "block": 5,
+    "directive": 13
+  },
+  "src/capability-lock.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/capability-source.cts": {
+    "block": 6,
+    "directive": 7
+  },
+  "src/capability-state.cts": {
+    "block": 6,
+    "directive": 11
+  },
+  "src/capability-trust.cts": {
+    "block": 8,
+    "directive": 1
+  },
+  "src/capability-writer.cts": {
+    "block": 2,
+    "directive": 14
+  },
+  "src/check-command-router.cts": {
+    "directive": 1
+  },
+  "src/cjs-command-router-adapter.cts": {
+    "directive": 3
+  },
+  "src/claude-orchestration-command-router.cts": {
+    "block": 1,
+    "directive": 6
+  },
+  "src/claude-orchestration.cts": {
+    "block": 6,
+    "directive": 1
+  },
+  "src/cli-exit.cts": {
+    "directive": 1,
+    "block": 7
+  },
+  "src/cli-surface.cts": {
+    "block": 1,
+    "directive": 4
+  },
+  "src/clock.cts": {
+    "block": 1
+  },
+  "src/clusters.cts": {
+    "block": 1
+  },
+  "src/codex-agent-toml.cts": {
+    "block": 14
+  },
+  "src/command-arg-projection.cts": {
+    "directive": 1,
+    "block": 1
+  },
+  "src/command-roster.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/command-routing-hub.cts": {
+    "block": 1,
+    "directive": 4
+  },
+  "src/commands.cts": {
+    "directive": 27,
+    "block": 10
+  },
+  "src/commonjs-marker.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/complexity-trigger.cts": {
+    "block": 1
+  },
+  "src/config-file-read.cts": {
+    "directive": 1
+  },
+  "src/config-loader.cts": {
+    "block": 4,
+    "directive": 9
+  },
+  "src/config-schema.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/config-types.cts": {
+    "block": 1
+  },
+  "src/config.cts": {
+    "directive": 7,
+    "block": 5
+  },
+  "src/configuration.cts": {
+    "block": 1
+  },
+  "src/context-composer.cts": {
+    "block": 1
+  },
+  "src/context-predicates.cts": {
+    "block": 4
+  },
+  "src/context-utilization.cts": {
+    "block": 1
+  },
+  "src/core-utils.cts": {
+    "block": 5,
+    "directive": 5
+  },
+  "src/coverage.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/criterion-baseline.cts": {
+    "block": 1
+  },
+  "src/decision-coverage-support.cts": {
+    "block": 1,
+    "directive": 6
+  },
+  "src/decisions.cts": {
+    "block": 10
+  },
+  "src/docs.cts": {
+    "directive": 5
+  },
+  "src/drift.cts": {
+    "block": 1
+  },
+  "src/edge-probe.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/embedding-adapter.cts": {
+    "block": 1
+  },
+  "src/estimate-cli.cts": {
+    "block": 3,
+    "directive": 6
+  },
+  "src/eval-command-router.cts": {
+    "directive": 1
+  },
+  "src/exit-code-registry.d.cts": {
+    "block": 1
+  },
+  "src/external-descriptor-trust.cts": {
+    "block": 2
+  },
+  "src/external-job.cts": {
+    "block": 1
+  },
+  "src/fallow-runner.cts": {
+    "block": 1
+  },
+  "src/federated-config.cts": {
+    "block": 1
+  },
+  "src/file-overlap-partitioner.cts": {
+    "block": 2
+  },
+  "src/frontmatter-fence.cts": {
+    "block": 3
+  },
+  "src/frontmatter-splice.cts": {
+    "block": 3,
+    "directive": 2
+  },
+  "src/frontmatter.cts": {
+    "block": 17,
+    "directive": 5
+  },
+  "src/gap-checker.cts": {
+    "block": 3,
+    "directive": 6
+  },
+  "src/gate-api-coverage-verify-pre.cts": {
+    "block": 1,
+    "directive": 6
+  },
+  "src/gate-codebase-drift.cts": {
+    "block": 2,
+    "directive": 4
+  },
+  "src/gate-config.cts": {
+    "directive": 1
+  },
+  "src/gate-context-drift.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/gate-decision-coverage-plan.cts": {
+    "block": 1
+  },
+  "src/gate-evaluation-scope.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/gate-evidence.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/gate-exit.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/gate-gap-analysis-plan-post.cts": {
+    "directive": 1
+  },
+  "src/gate-phase-context.cts": {
+    "directive": 3,
+    "block": 1
+  },
+  "src/gate-predicate-evaluator.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/gate-predicate.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/gate-prohibition-enforcement.cts": {
+    "block": 1
+  },
+  "src/gate-schema-drift.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/gate-tdd-red-evidence.cts": {
+    "block": 1
+  },
+  "src/gate-tdd-review-checkpoint.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/gate-ui-plan.cts": {
+    "block": 1
+  },
+  "src/gate-verdict.cts": {
+    "block": 1
+  },
+  "src/gate-verify-command-paths.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/gate-verify-failure-directions.cts": {
+    "directive": 1
+  },
+  "src/git-base-branch.cts": {
+    "block": 4,
+    "directive": 2
+  },
+  "src/graphify-command-router.cts": {
+    "block": 1,
+    "directive": 4
+  },
+  "src/graphify.cts": {
+    "directive": 4
+  },
+  "src/gsd-tool-dir.cts": {
+    "block": 1
+  },
+  "src/gsd2-import.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/handshake-serialized.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/health-diagnostic-rules/agent-install.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/health-diagnostic-rules/config-validation.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/health-diagnostic-rules/consistency.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/health-diagnostic-rules/install-surface-shadowing.cts": {
+    "block": 1,
+    "directive": 4
+  },
+  "src/health-diagnostic-rules/milestone-archive-hygiene.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/health-diagnostic-rules/phase-structure.cts": {
+    "block": 1,
+    "directive": 4
+  },
+  "src/health-diagnostic-rules/roadmap-disk-consistency.cts": {
+    "block": 3,
+    "directive": 5
+  },
+  "src/health-diagnostic-rules/root-existence.cts": {
+    "block": 3,
+    "directive": 3
+  },
+  "src/health-diagnostic-rules/state-consistency.cts": {
+    "block": 6,
+    "directive": 4
+  },
+  "src/health-diagnostic-rules/worktree-health.cts": {
+    "block": 1,
+    "directive": 4
+  },
+  "src/health-diagnostic-types.cts": {
+    "block": 2,
+    "directive": 2
+  },
+  "src/health-diagnostic.cts": {
+    "block": 2,
+    "directive": 20
+  },
+  "src/hook-bus.cts": {
+    "block": 1
+  },
+  "src/host-integration-adapters/cline-sdk-binding.cts": {
+    "block": 2
+  },
+  "src/host-integration-adapters/imperative-hook-bus.cts": {
+    "block": 1
+  },
+  "src/host-integration-sdk.cts": {
+    "directive": 7
+  },
+  "src/host-integration.cts": {
+    "block": 3
+  },
+  "src/host-runtime-detection.cts": {
+    "block": 1
+  },
+  "src/in-process-cli.cts": {
+    "block": 2,
+    "directive": 2
+  },
+  "src/init-command-router.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/init.cts": {
+    "directive": 26,
+    "block": 16
+  },
+  "src/install-effort-resolver.cts": {
+    "block": 3,
+    "directive": 5
+  },
+  "src/install-engine.cts": {
+    "directive": 1,
+    "block": 20
+  },
+  "src/install-fs-adapter.cts": {
+    "block": 2
+  },
+  "src/install-model-override-resolver.cts": {
+    "block": 2,
+    "directive": 5
+  },
+  "src/install-profiles.cts": {
+    "directive": 5,
+    "block": 8
+  },
+  "src/install-scope.cts": {
+    "block": 3
+  },
+  "src/install-shadow-report.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/installed-surface-resolver.cts": {
+    "block": 3,
+    "directive": 2
+  },
+  "src/installer-migrations.cts": {
+    "directive": 2,
+    "block": 4
+  },
+  "src/installer-migrations/003-rename-get-shit-done-to-gsd-core.cts": {
+    "block": 1
+  },
+  "src/installer-migrations/004-prune-stale-pristine-snapshots.cts": {
+    "block": 1
+  },
+  "src/installer-migrations/005-opencode-baseline-commands-dir.cts": {
+    "block": 1
+  },
+  "src/installer-migrations/006-pi-extension-cjs-to-js.cts": {
+    "block": 1
+  },
+  "src/installer-migrations/007-retire-config-root-commonjs-marker.cts": {
+    "block": 1
+  },
+  "src/installer-migrations/009-pi-retire-reserved-hooks-dir.cts": {
+    "block": 1
+  },
+  "src/installer-migrations/010-antigravity-retire-confighome-artifacts.cts": {
+    "block": 1
+  },
+  "src/installer-migrations/011-opencode-mcp-no-prompts.cts": {
+    "block": 1
+  },
+  "src/intel-command-router.cts": {
+    "block": 1,
+    "directive": 6
+  },
+  "src/intel.cts": {
+    "directive": 2,
+    "block": 1
+  },
+  "src/invocation-scope.cts": {
+    "block": 1
+  },
+  "src/io.cts": {
+    "directive": 2,
+    "block": 5
+  },
+  "src/learnings.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/loop-resolver.cts": {
+    "block": 3,
+    "directive": 7
+  },
+  "src/markdown-sectionizer.cts": {
+    "block": 12
+  },
+  "src/markdown-table.cts": {
+    "block": 8
+  },
+  "src/mcp-catalog.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/mcp-server.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/milestone-lock.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/milestone-release-tags.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/milestone.cts": {
+    "directive": 14,
+    "block": 16
+  },
+  "src/model-adapter.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/model-catalog.cts": {
+    "block": 2
+  },
+  "src/model-resolver.cts": {
+    "block": 7,
+    "directive": 6
+  },
+  "src/normalize-test-command.cts": {
+    "block": 1
+  },
+  "src/observability/event.cts": {
+    "block": 1
+  },
+  "src/observability/logger.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/onboard-projection.cts": {
+    "directive": 2
+  },
+  "src/opencode-version.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/package-legitimacy.cts": {
+    "block": 1
+  },
+  "src/pattern.cts": {
+    "block": 2
+  },
+  "src/phase-command-router.cts": {
+    "block": 1,
+    "directive": 2
+  },
+  "src/phase-entry-grammar.cts": {
+    "block": 1
+  },
+  "src/phase-estimation.cts": {
+    "block": 3,
+    "directive": 1
+  },
+  "src/phase-id-display.cts": {
+    "directive": 1
+  },
+  "src/phase-id.cts": {
+    "block": 19,
+    "directive": 3
+  },
+  "src/phase-lifecycle.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/phase-locator.cts": {
+    "block": 5,
+    "directive": 10
+  },
+  "src/phase-status.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/phase.cts": {
+    "block": 46,
+    "directive": 22
+  },
+  "src/phases-command-router.cts": {
+    "directive": 1
+  },
+  "src/plan-dependency-graph.cts": {
+    "block": 3,
+    "directive": 1
+  },
+  "src/plan-document.cts": {
+    "block": 5,
+    "directive": 6
+  },
+  "src/plan-drift-guard.cts": {
+    "block": 3
+  },
+  "src/plan-scan.cts": {
+    "directive": 4,
+    "block": 3
+  },
+  "src/planning-command-router.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/planning-document.cts": {
+    "block": 7
+  },
+  "src/planning-inspect.cts": {
+    "block": 8,
+    "directive": 17
+  },
+  "src/planning-scope.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/planning-snapshot.cts": {
+    "block": 18,
+    "directive": 14
+  },
+  "src/planning-workspace.cts": {
+    "directive": 3,
+    "block": 4
+  },
+  "src/pr-branch-patterns.cts": {
+    "block": 1
+  },
+  "src/pristine-baseline.cts": {
+    "block": 2
+  },
+  "src/probe-core.cts": {
+    "block": 3,
+    "directive": 1
+  },
+  "src/profile-output.cts": {
+    "directive": 2
+  },
+  "src/profile-pipeline.cts": {
+    "directive": 3
+  },
+  "src/prohibition-enforcement.cts": {
+    "block": 8
+  },
+  "src/project-context.cts": {
+    "block": 2,
+    "directive": 2
+  },
+  "src/prompt-budget.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/quick-batch-command-router.cts": {
+    "block": 1,
+    "directive": 7
+  },
+  "src/quick-batch-dispatch.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/quick-batch.cts": {
+    "block": 3,
+    "directive": 2
+  },
+  "src/read-only-git-env.cts": {
+    "block": 1
+  },
+  "src/real-home-guard.cts": {
+    "block": 6
+  },
+  "src/refactor-trigger-command-router.cts": {
+    "block": 2,
+    "directive": 13
+  },
+  "src/research-provider.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/retired-artifact-cleanup.cts": {
+    "directive": 3
+  },
+  "src/review-lane-descriptor.cts": {
+    "block": 8
+  },
+  "src/review-lane-invocation.cts": {
+    "block": 5
+  },
+  "src/review-lane-runner.cts": {
+    "block": 10
+  },
+  "src/review-reviewer-selection.cts": {
+    "block": 3,
+    "directive": 2
+  },
+  "src/reviewer-step-dispatch.cts": {
+    "block": 1
+  },
+  "src/roadmap-command-router.cts": {
+    "directive": 8
+  },
+  "src/roadmap-parser.cts": {
+    "block": 26,
+    "directive": 5
+  },
+  "src/roadmap-progress.cts": {
+    "block": 1
+  },
+  "src/roadmap-upgrade.cts": {
+    "directive": 12,
+    "block": 11
+  },
+  "src/roadmap.cts": {
+    "directive": 11,
+    "block": 13
+  },
+  "src/runtime-artifact-conversion.cts": {
+    "directive": 1,
+    "block": 24
+  },
+  "src/runtime-artifact-layout.cts": {
+    "directive": 8,
+    "block": 10
+  },
+  "src/runtime-config-adapter-registry.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/runtime-homes.cts": {
+    "block": 6,
+    "directive": 1
+  },
+  "src/runtime-hooks-surface.cts": {
+    "block": 13,
+    "directive": 4
+  },
+  "src/runtime-identity.cts": {
+    "block": 2
+  },
+  "src/runtime-name-policy.cts": {
+    "block": 8,
+    "directive": 4
+  },
+  "src/runtime-slash.cts": {
+    "block": 2,
+    "directive": 2
+  },
+  "src/section-manifest.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/security.cts": {
+    "block": 4
+  },
+  "src/shell-command-projection.cts": {
+    "block": 9
+  },
+  "src/smart-entry.cts": {
+    "block": 2,
+    "directive": 11
+  },
+  "src/spec-section.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/state-command-router.cts": {
+    "directive": 2
+  },
+  "src/state-contract.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/state-document.cts": {
+    "directive": 1,
+    "block": 13
+  },
+  "src/state-io.cts": {
+    "block": 1
+  },
+  "src/state-md-schema.cts": {
+    "block": 4
+  },
+  "src/state-transition.cts": {
+    "directive": 4,
+    "block": 24
+  },
+  "src/state.cts": {
+    "directive": 24,
+    "block": 57
+  },
+  "src/surface.cts": {
+    "block": 4,
+    "directive": 6
+  },
+  "src/task-command-router.cts": {
+    "directive": 3
+  },
+  "src/task-content-resolution.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/teams-status.cts": {
+    "block": 1,
+    "directive": 3
+  },
+  "src/template.cts": {
+    "directive": 6
+  },
+  "src/text-lines.cts": {
+    "block": 1
+  },
+  "src/token-scanner.cts": {
+    "block": 1
+  },
+  "src/uat-predicate.cts": {
+    "directive": 6,
+    "block": 2
+  },
+  "src/uat.cts": {
+    "directive": 13,
+    "block": 53
+  },
+  "src/ui-consideration-probe.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/ui-frontend-evidence.cts": {
+    "block": 1
+  },
+  "src/ui-safety-gate.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/undo-commit-selection.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/unusable-input.cts": {
+    "block": 3,
+    "directive": 1
+  },
+  "src/user-artifact-staging.cts": {
+    "block": 5,
+    "directive": 4
+  },
+  "src/validate-command-router.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/validate.cts": {
+    "block": 5,
+    "directive": 1
+  },
+  "src/verification-command-router.cts": {
+    "directive": 1
+  },
+  "src/verification.cts": {
+    "block": 23,
+    "directive": 7
+  },
+  "src/verify-command-grounding.cts": {
+    "block": 5,
+    "directive": 1
+  },
+  "src/verify-command-router.cts": {
+    "directive": 2
+  },
+  "src/verify.cts": {
+    "directive": 15,
+    "block": 8
+  },
+  "src/workflow-fragments.cts": {
+    "block": 2,
+    "directive": 1
+  },
+  "src/workstream-inventory-builder.cts": {
+    "directive": 1,
+    "block": 3
+  },
+  "src/workstream-inventory.cts": {
+    "directive": 8,
+    "block": 4
+  },
+  "src/workstream-name-policy.cts": {
+    "block": 1,
+    "directive": 1
+  },
+  "src/workstream.cts": {
+    "directive": 5
+  },
+  "src/worktree-base-ref.cts": {
+    "block": 5
+  },
+  "src/worktree-safety.cts": {
+    "block": 18
+  },
+  "src/write-set.cts": {
+    "block": 1
+  },
+  "stryker.config.mjs": {
+    "block": 2
+  },
+  "tests/4213-progress-helpers.property.test.cjs": {
+    "block": 1
+  },
+  "tests/5100-win32-bare-bash-sentinel.property.test.cjs": {
+    "block": 1
+  },
+  "tests/_ff_lint_clean.cjs": {
+    "block": 1
+  },
+  "tests/_ff_lint_violation.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/active-workstream-store.unit.test.cjs": {
+    "block": 3
+  },
+  "tests/adapter-declarative-equivalence.test.cjs": {
+    "block": 1
+  },
+  "tests/adapter-imperative.test.cjs": {
+    "block": 1
+  },
+  "tests/adr-218-release-version-validation.test.cjs": {
+    "block": 1
+  },
+  "tests/adr-612-bracket-coherence.test.cjs": {
+    "block": 1
+  },
+  "tests/adr-612-bracket-grammar.test.cjs": {
+    "block": 1
+  },
+  "tests/adr-612-bracket-heading-selection.test.cjs": {
+    "block": 3
+  },
+  "tests/adr-612-bracket-phase-counting.test.cjs": {
+    "block": 16,
+    "directive": 3
+  },
+  "tests/adr-612-bracket-phase-remove.test.cjs": {
+    "directive": 4
+  },
+  "tests/adr-612-bracket-read-tolerance.test.cjs": {
+    "block": 5
+  },
+  "tests/adr-612-bracket-roundtrip.property.test.cjs": {
+    "block": 1
+  },
+  "tests/adr-612-bracket-selection.property.test.cjs": {
+    "block": 1
+  },
+  "tests/adr-612-collision-characterization.test.cjs": {
+    "block": 2
+  },
+  "tests/adr-index-gate.test.cjs": {
+    "block": 4
+  },
+  "tests/adr-parser.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/adr857-core-without-capabilities.test.cjs": {
+    "block": 1
+  },
+  "tests/adr857-predicate-boundary.test.cjs": {
+    "block": 1
+  },
+  "tests/agent-classification-parity.test.cjs": {
+    "directive": 2,
+    "block": 2
+  },
+  "tests/agent-descriptor-parity.install.test.cjs": {
+    "block": 2
+  },
+  "tests/agent-fragments-emission.install.test.cjs": {
+    "block": 1
+  },
+  "tests/agent-frontmatter.test.cjs": {
+    "directive": 6,
+    "block": 2
+  },
+  "tests/agent-hint-routing-1689.test.cjs": {
+    "block": 1
+  },
+  "tests/agent-install-check.test.cjs": {
+    "block": 1
+  },
+  "tests/agent-required-reading-consistency.test.cjs": {
+    "directive": 3
+  },
+  "tests/agent-size-budget.test.cjs": {
+    "block": 2
+  },
+  "tests/agent-skills-compact-variant.test.cjs": {
+    "block": 1
+  },
+  "tests/agent-tracked-source-rule.test.cjs": {
+    "block": 1
+  },
+  "tests/ai-evals.test.cjs": {
+    "directive": 1
+  },
+  "tests/anti-pattern-enforcement.test.cjs": {
+    "directive": 1
+  },
+  "tests/antigravity-reviewer.test.cjs": {
+    "block": 1
+  },
+  "tests/antigravity-upgrades.test.cjs": {
+    "block": 1
+  },
+  "tests/ask-user-questions-fallback.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/atomic-write-coverage.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/audit-command-cutover.test.cjs": {
+    "block": 3
+  },
+  "tests/audit-fix-command.test.cjs": {
+    "directive": 1
+  },
+  "tests/backwards-compat-phase-id.test.cjs": {
+    "block": 1
+  },
+  "tests/broken-windows.test.cjs": {
+    "block": 3
+  },
+  "tests/c8-merge-async-flag.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-consent.test.cjs": {
+    "block": 2
+  },
+  "tests/capability-consumption.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-lifecycle.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-loader.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-lock-lazy-self-probe-5327.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-lock-mkdir-failure-3987.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-manifest-version.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-precedence-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-probe-fallback.test.cjs": {
+    "block": 1
+  },
+  "tests/capability-registry.test.cjs": {
+    "block": 3
+  },
+  "tests/capability-source.test.cjs": {
+    "directive": 1
+  },
+  "tests/capability-state.test.cjs": {
+    "block": 1
+  },
+  "tests/changeset-cli.test.cjs": {
+    "directive": 3
+  },
+  "tests/check-contract-drift.test.cjs": {
+    "block": 1
+  },
+  "tests/check-decision-coverage-config.test.cjs": {
+    "block": 1
+  },
+  "tests/check-decision-coverage-frontmatter-evidence.test.cjs": {
+    "block": 1
+  },
+  "tests/check-gap-analysis-plan-post-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/check-router-cutover-equivalence.test.cjs": {
+    "block": 1
+  },
+  "tests/check-router-gate-boundaries.test.cjs": {
+    "block": 1
+  },
+  "tests/check-tdd-review-checkpoint-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/check-ui-plan-gate.test.cjs": {
+    "block": 1
+  },
+  "tests/check-ui-safety-gate.test.cjs": {
+    "block": 2
+  },
+  "tests/check-update-config-dir.test.cjs": {
+    "block": 1
+  },
+  "tests/ci-docs-guard-registry.test.cjs": {
+    "block": 2
+  },
+  "tests/ci-full-lane-sharding.test.cjs": {
+    "block": 2
+  },
+  "tests/ci-job-timing.test.cjs": {
+    "directive": 2
+  },
+  "tests/ci-pr-mergeability.test.cjs": {
+    "block": 1
+  },
+  "tests/ci-test-job-timeout-budget.test.cjs": {
+    "block": 5
+  },
+  "tests/ci-test-scope.test.cjs": {
+    "block": 1
+  },
+  "tests/ci-timeout-report-rolling-pr.test.cjs": {
+    "block": 1
+  },
+  "tests/cjs-command-router-adapter.test.cjs": {
+    "block": 1
+  },
+  "tests/claude-imperative-reference.test.cjs": {
+    "directive": 3
+  },
+  "tests/claude-md.test.cjs": {
+    "directive": 1
+  },
+  "tests/claude-orchestration-4747.test.cjs": {
+    "block": 1
+  },
+  "tests/claude-orchestration.test.cjs": {
+    "directive": 1,
+    "block": 3
+  },
+  "tests/cleanup-branch-pruning.test.cjs": {
+    "directive": 1
+  },
+  "tests/cli-exit.test.cjs": {
+    "block": 3,
+    "directive": 1
+  },
+  "tests/cline-beforetool-upgrade.test.cjs": {
+    "block": 1
+  },
+  "tests/cline-dispatch-degradation.test.cjs": {
+    "block": 1
+  },
+  "tests/cline-imperative-reference.test.cjs": {
+    "block": 1
+  },
+  "tests/cline-install.test.cjs": {
+    "directive": 1
+  },
+  "tests/cline-model-override-upgrade.test.cjs": {
+    "block": 1
+  },
+  "tests/clock-seam.test.cjs": {
+    "block": 2
+  },
+  "tests/clock.test.cjs": {
+    "block": 1
+  },
+  "tests/code-review-agent-skills.test.cjs": {
+    "directive": 1
+  },
+  "tests/code-review-command.test.cjs": {
+    "directive": 1
+  },
+  "tests/code-review-depth.test.cjs": {
+    "block": 1
+  },
+  "tests/code-review-disposition.property.test.cjs": {
+    "block": 2
+  },
+  "tests/code-review-pipeline-regression.test.cjs": {
+    "block": 14,
+    "directive": 1
+  },
+  "tests/code-review-tier3-files-override-scoping.test.cjs": {
+    "block": 1
+  },
+  "tests/code-review.test.cjs": {
+    "directive": 15,
+    "block": 2
+  },
+  "tests/code-reviewer-contribution.test.cjs": {
+    "block": 1
+  },
+  "tests/codebuddy-install.test.cjs": {
+    "directive": 1
+  },
+  "tests/codebuddy-upgrades.test.cjs": {
+    "block": 1
+  },
+  "tests/codex-agent-toml.test.cjs": {
+    "block": 1
+  },
+  "tests/codex-config-agents.test.cjs": {
+    "block": 4
+  },
+  "tests/codex-config-hooks.test.cjs": {
+    "block": 6
+  },
+  "tests/codex-config-install.test.cjs": {
+    "block": 7,
+    "directive": 1
+  },
+  "tests/codex-config.test.cjs": {
+    "block": 1
+  },
+  "tests/codex-inherit-smoke.test.cjs": {
+    "block": 1
+  },
+  "tests/command-arg-projection.test.cjs": {
+    "block": 2
+  },
+  "tests/command-contract.test.cjs": {
+    "directive": 1
+  },
+  "tests/command-routing-hub.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/commands.platform.test.cjs": {
+    "block": 1
+  },
+  "tests/commands.test.cjs": {
+    "directive": 2,
+    "block": 4
+  },
+  "tests/commit-docs-bypass.test.cjs": {
+    "block": 2
+  },
+  "tests/commit-files-deletion.test.cjs": {
+    "block": 1
+  },
+  "tests/commit-files-pathspec.test.cjs": {
+    "block": 10,
+    "directive": 2
+  },
+  "tests/commonjs-marker.test.cjs": {
+    "block": 2
+  },
+  "tests/compact-content-4139.test.cjs": {
+    "block": 1
+  },
+  "tests/compact-content-partition-guard.test.cjs": {
+    "block": 2
+  },
+  "tests/compact-content-template-variant-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/compact-content-variant-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/completion-ratio-scope-withholding.test.cjs": {
+    "block": 4,
+    "directive": 1
+  },
+  "tests/completion-ratio-single-owner.test.cjs": {
+    "block": 2
+  },
+  "tests/complexity-trigger.test.cjs": {
+    "block": 1
+  },
+  "tests/config-field-docs.test.cjs": {
+    "directive": 1
+  },
+  "tests/config-get-default.test.cjs": {
+    "block": 2
+  },
+  "tests/config-loader-bounded-read.platform.test.cjs": {
+    "block": 1
+  },
+  "tests/config-loader.test.cjs": {
+    "block": 3
+  },
+  "tests/config-schema.property.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/config.platform.test.cjs": {
+    "block": 1
+  },
+  "tests/config.test.cjs": {
+    "block": 3
+  },
+  "tests/configuration-migrate-config.test.cjs": {
+    "block": 1
+  },
+  "tests/context-composer.property.test.cjs": {
+    "block": 1
+  },
+  "tests/context-enrichment.test.cjs": {
+    "directive": 1
+  },
+  "tests/context-index-sync.test.cjs": {
+    "block": 1
+  },
+  "tests/context-predicates-query.test.cjs": {
+    "block": 1
+  },
+  "tests/context-predicates.property.test.cjs": {
+    "block": 1
+  },
+  "tests/context-predicates.test.cjs": {
+    "block": 1
+  },
+  "tests/context-utilization.property.test.cjs": {
+    "block": 1
+  },
+  "tests/context7-tool-name-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/continuation-grammar-parity.test.cjs": {
+    "block": 2
+  },
+  "tests/contributor-standards.test.cjs": {
+    "directive": 1
+  },
+  "tests/copilot-install.test.cjs": {
+    "directive": 2
+  },
+  "tests/copilot-upgrades.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/core-utils.test.cjs": {
+    "block": 3
+  },
+  "tests/cursor-hook-workspace-roots.test.cjs": {
+    "block": 1
+  },
+  "tests/cursor-hooks.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/cursor-reviewer.test.cjs": {
+    "directive": 1
+  },
+  "tests/cursor-subagent-isolation.test.cjs": {
+    "block": 2
+  },
+  "tests/debug-session-management.test.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/decisions.test.cjs": {
+    "block": 5
+  },
+  "tests/declarative-reference-antigravity.test.cjs": {
+    "block": 2,
+    "directive": 2
+  },
+  "tests/declarative-reference-augment.test.cjs": {
+    "block": 1
+  },
+  "tests/declarative-reference-codebuddy.test.cjs": {
+    "block": 1
+  },
+  "tests/declarative-reference-copilot.test.cjs": {
+    "block": 1
+  },
+  "tests/declarative-reference-windsurf.test.cjs": {
+    "block": 1
+  },
+  "tests/declarative-reference-zcode.test.cjs": {
+    "block": 1
+  },
+  "tests/deep-verify.test.cjs": {
+    "block": 1
+  },
+  "tests/default-flip-documentation-lint.test.cjs": {
+    "block": 1
+  },
+  "tests/derive-progress.property.test.cjs": {
+    "block": 1
+  },
+  "tests/discuss-mode.test.cjs": {
+    "directive": 1
+  },
+  "tests/discuss-phase-power.test.cjs": {
+    "directive": 1
+  },
+  "tests/dispatch-identity.test.cjs": {
+    "block": 1
+  },
+  "tests/dispatch-model-pin.test.cjs": {
+    "block": 1
+  },
+  "tests/dispatcher.test.cjs": {
+    "block": 1
+  },
+  "tests/do-routing-specificity.test.cjs": {
+    "block": 1
+  },
+  "tests/docs-hooks-table-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/docs-parity-live-registry.test.cjs": {
+    "directive": 1,
+    "block": 5
+  },
+  "tests/docs-state-md-locale-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/drift-detection.test.cjs": {
+    "directive": 1
+  },
+  "tests/edge-probe-docs-fixtures.test.cjs": {
+    "directive": 1
+  },
+  "tests/edge-probe-planner-contract.test.cjs": {
+    "directive": 1
+  },
+  "tests/edge-probe-spec-phase-contract.test.cjs": {
+    "directive": 1
+  },
+  "tests/edit-phase-milestone-scope-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/edit-phase.test.cjs": {
+    "directive": 5
+  },
+  "tests/effort-surface-axis.test.cjs": {
+    "block": 1
+  },
+  "tests/effort-sync-installed-runtime.test.cjs": {
+    "block": 1
+  },
+  "tests/emitted-ack-trailer.test.cjs": {
+    "block": 2
+  },
+  "tests/emitted-attribution.test.cjs": {
+    "block": 4
+  },
+  "tests/emitted-caps-gate.test.cjs": {
+    "block": 1
+  },
+  "tests/emitted-provenance.test.cjs": {
+    "block": 3
+  },
+  "tests/ensure-runtime-build.test.cjs": {
+    "directive": 1
+  },
+  "tests/enumeration-single-owner.test.cjs": {
+    "block": 2
+  },
+  "tests/eslint-no-adhoc-regex-escape.test.cjs": {
+    "block": 1
+  },
+  "tests/eslint-no-runtime-name-literal.test.cjs": {
+    "block": 1
+  },
+  "tests/eslint-no-verification-status-literal.test.cjs": {
+    "block": 1
+  },
+  "tests/eslint-rules.test.cjs": {
+    "block": 3
+  },
+  "tests/estimate-calibrate.test.cjs": {
+    "block": 3
+  },
+  "tests/estimate-loop-convergence.test.cjs": {
+    "block": 1
+  },
+  "tests/eval.property.test.cjs": {
+    "block": 1
+  },
+  "tests/execute-phase-active-flags.test.cjs": {
+    "directive": 3
+  },
+  "tests/execute-phase-cross-block-state.test.cjs": {
+    "block": 1
+  },
+  "tests/execute-phase-decimal-arithmetic.test.cjs": {
+    "block": 1
+  },
+  "tests/execute-phase-step-5-5-deviation-doc.test.cjs": {
+    "directive": 1
+  },
+  "tests/execute-phase-wave.test.cjs": {
+    "directive": 11
+  },
+  "tests/execute-phase-worktree-artifacts.test.cjs": {
+    "directive": 6
+  },
+  "tests/execute-plan-update-codebase-map-diff-base.test.cjs": {
+    "block": 1
+  },
+  "tests/execute-wave-post-gate-pipeline-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/executed-plan.test.cjs": {
+    "block": 2,
+    "directive": 2
+  },
+  "tests/executor-isolation-prompt-contract.test.cjs": {
+    "block": 1
+  },
+  "tests/executor-mvp-tdd-section.test.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/executor-sequential-linked-worktree.test.cjs": {
+    "block": 1
+  },
+  "tests/exit-code-registry.test.cjs": {
+    "block": 2
+  },
+  "tests/explore-command.test.cjs": {
+    "directive": 1
+  },
+  "tests/extract-learnings.test.cjs": {
+    "directive": 1
+  },
+  "tests/failing-direction.test.cjs": {
+    "block": 1
+  },
+  "tests/feat-2296-provider-escalation.test.cjs": {
+    "block": 1
+  },
+  "tests/feat-2483-review-claude-mds-guard.test.cjs": {
+    "block": 2
+  },
+  "tests/feat-2646-deferred-items-audit-scanner.test.cjs": {
+    "block": 1
+  },
+  "tests/features-index-gate.test.cjs": {
+    "block": 2
+  },
+  "tests/file-overlap-partitioner.property.test.cjs": {
+    "block": 1
+  },
+  "tests/file-overlap-partitioner.test.cjs": {
+    "block": 1
+  },
+  "tests/fixtures/deny-network.cjs": {
+    "block": 1
+  },
+  "tests/fixtures/gate-cutover/arms.cjs": {
+    "block": 1
+  },
+  "tests/fixtures/pi-host-plugin.cjs": {
+    "block": 1
+  },
+  "tests/fixtures/secret-read-guard-base-scanner.cjs": {
+    "directive": 1
+  },
+  "tests/forensics.test.cjs": {
+    "directive": 1
+  },
+  "tests/fragment-single-edit-propagation.install.test.cjs": {
+    "block": 8
+  },
+  "tests/frontmatter-cli.test.cjs": {
+    "directive": 1
+  },
+  "tests/frontmatter-fence.test.cjs": {
+    "block": 1
+  },
+  "tests/frontmatter-golden-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/frontmatter-roundtrip.property.test.cjs": {
+    "block": 1
+  },
+  "tests/frontmatter-splice.property.test.cjs": {
+    "block": 1
+  },
+  "tests/frontmatter.property.test.cjs": {
+    "block": 1
+  },
+  "tests/frontmatter.test.cjs": {
+    "block": 5
+  },
+  "tests/gap-checker.property.test.cjs": {
+    "block": 5
+  },
+  "tests/gate-api-coverage-verify-pre.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-decision-coverage-plan.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-decision-coverage-verify.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-gap-analysis-plan-post.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-predicate.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-tdd-red-evidence.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-tdd-review-checkpoint.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-ui-plan.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-ui-safety.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-verify-command-paths.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gate-verify-failure-directions.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/gates-confirmation-toggle-config.test.cjs": {
+    "block": 1
+  },
+  "tests/gemini-runtime-removed.test.cjs": {
+    "block": 4
+  },
+  "tests/gen-context-index.test.cjs": {
+    "block": 1,
+    "directive": 2
+  },
+  "tests/gen-state-md-docs.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/getdirname-registry-derivation.test.cjs": {
+    "block": 1
+  },
+  "tests/git-base-branch.test.cjs": {
+    "block": 4,
+    "directive": 2
+  },
+  "tests/git-fixture.test.cjs": {
+    "block": 1
+  },
+  "tests/git-optional-locks-parity.test.cjs": {
+    "block": 4,
+    "directive": 2
+  },
+  "tests/global-config-home-fragment.test.cjs": {
+    "block": 1
+  },
+  "tests/golden-install-tree.test.cjs": {
+    "block": 1
+  },
+  "tests/golden-parity-single-source.test.cjs": {
+    "block": 1
+  },
+  "tests/graphify-command-cutover.test.cjs": {
+    "block": 1
+  },
+  "tests/graphify.test.cjs": {
+    "block": 2
+  },
+  "tests/gsd-agent-isolation-guard.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/gsd-check-update-worker-atomic-cache.test.cjs": {
+    "block": 1,
+    "directive": 2
+  },
+  "tests/gsd-check-update-worker-platform-gate.test.cjs": {
+    "block": 3,
+    "directive": 7
+  },
+  "tests/gsd-quick-batch-merge-integration.test.cjs": {
+    "block": 2
+  },
+  "tests/gsd-quick-batch-quick-regression.test.cjs": {
+    "block": 3
+  },
+  "tests/gsd-quick-batch-workflow.test.cjs": {
+    "block": 1
+  },
+  "tests/gsd-researcher-app-aware.test.cjs": {
+    "directive": 2
+  },
+  "tests/gsd-secret-read-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/gsd-settings-advanced.test.cjs": {
+    "directive": 2,
+    "block": 3
+  },
+  "tests/gsd-statusline-git.property.test.cjs": {
+    "block": 1
+  },
+  "tests/gsd-statusline.test.cjs": {
+    "directive": 6,
+    "block": 2
+  },
+  "tests/gsd-tools-path-refs.test.cjs": {
+    "block": 1
+  },
+  "tests/gsd-validate-commit-crash-policy.test.cjs": {
+    "block": 1
+  },
+  "tests/gsd-validate-commit-sigpipe.test.cjs": {
+    "block": 4
+  },
+  "tests/gsd-write-guard.property.test.cjs": {
+    "block": 1
+  },
+  "tests/gsd-write-guard.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/hardcoded-paths.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/agent-install.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/config-validation.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/consistency.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/milestone-archive-hygiene.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/phase-structure.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/roadmap-disk-consistency.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/root-existence.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/state-consistency.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic-rules/worktree-health.test.cjs": {
+    "block": 1
+  },
+  "tests/health-diagnostic.test.cjs": {
+    "block": 3
+  },
+  "tests/health-validation.test.cjs": {
+    "block": 5
+  },
+  "tests/helpers-process-isolation.test.cjs": {
+    "block": 1
+  },
+  "tests/helpers.cjs": {
+    "block": 16
+  },
+  "tests/helpers/agent-roster.cjs": {
+    "block": 1
+  },
+  "tests/helpers/cli-negative.cjs": {
+    "block": 2
+  },
+  "tests/helpers/clock.cjs": {
+    "block": 1
+  },
+  "tests/helpers/cold-runtime-lib-fixture.cjs": {
+    "block": 2
+  },
+  "tests/helpers/compact-content-split.cjs": {
+    "block": 8
+  },
+  "tests/helpers/compact-content-variant.cjs": {
+    "block": 2
+  },
+  "tests/helpers/context-monitor-fixed-now-preload.cjs": {
+    "block": 1
+  },
+  "tests/helpers/context-monitor-unlink-eperm-preload.cjs": {
+    "block": 1
+  },
+  "tests/helpers/copy-script-fixture.cjs": {
+    "block": 3
+  },
+  "tests/helpers/count-self-start-time-probes-preload.cjs": {
+    "block": 1
+  },
+  "tests/helpers/emitted-baseline.cjs": {
+    "block": 3
+  },
+  "tests/helpers/emitted-caps.cjs": {
+    "block": 2
+  },
+  "tests/helpers/emitted-diff.cjs": {
+    "block": 5
+  },
+  "tests/helpers/emitted-provenance.cjs": {
+    "block": 8
+  },
+  "tests/helpers/emitted-runtime.cjs": {
+    "block": 14
+  },
+  "tests/helpers/exit-code-artifact-flags.cjs": {
+    "block": 1
+  },
+  "tests/helpers/faulty-deps.cjs": {
+    "block": 3
+  },
+  "tests/helpers/frontmatter-golden-serializer.cjs": {
+    "block": 1
+  },
+  "tests/helpers/gate-positive-control.cjs": {
+    "block": 1
+  },
+  "tests/helpers/git-fixture.cjs": {
+    "block": 4
+  },
+  "tests/helpers/git-optional-locks-probe.cjs": {
+    "block": 1
+  },
+  "tests/helpers/hooks-dist.cjs": {
+    "block": 2
+  },
+  "tests/helpers/inject-stdin-error.cjs": {
+    "block": 1
+  },
+  "tests/helpers/install-shared.cjs": {
+    "block": 7
+  },
+  "tests/helpers/inventory-roster.cjs": {
+    "block": 2
+  },
+  "tests/helpers/isolated-env.cjs": {
+    "block": 3
+  },
+  "tests/helpers/jq-subset-stub.cjs": {
+    "block": 1
+  },
+  "tests/helpers/live-command-registry.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/helpers/overlay-repo.cjs": {
+    "block": 3
+  },
+  "tests/helpers/pack-file-list.cjs": {
+    "block": 1
+  },
+  "tests/helpers/planning-add-guard.cjs": {
+    "block": 2
+  },
+  "tests/helpers/pr-branch-filter.cjs": {
+    "block": 2
+  },
+  "tests/helpers/process-seam.cjs": {
+    "block": 4
+  },
+  "tests/helpers/shadow-report-throws-preload.cjs": {
+    "block": 1
+  },
+  "tests/helpers/shared-install-fixture.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/helpers/shipped-command-scan.cjs": {
+    "block": 4
+  },
+  "tests/helpers/spawn-timeout-recorder.cjs": {
+    "block": 1
+  },
+  "tests/helpers/timeout-evidence.cjs": {
+    "block": 1
+  },
+  "tests/helpers/timeouts.cjs": {
+    "block": 10
+  },
+  "tests/helpers/trim-safety.cjs": {
+    "block": 1
+  },
+  "tests/hermes-skills-migration.test.cjs": {
+    "directive": 2,
+    "block": 2
+  },
+  "tests/hook-activation-probe.test.cjs": {
+    "block": 1
+  },
+  "tests/hooks-crash-policy.test.cjs": {
+    "block": 1
+  },
+  "tests/hooks-opt-in.test.cjs": {
+    "directive": 1,
+    "block": 4
+  },
+  "tests/host-integration.test.cjs": {
+    "block": 4,
+    "directive": 2
+  },
+  "tests/in-tier-msys-fork-stress.test.cjs": {
+    "block": 1
+  },
+  "tests/in-tier-sh-pipeline-timing.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/ingest-docs.test.cjs": {
+    "directive": 2
+  },
+  "tests/init-debug-workflow-contract.test.cjs": {
+    "directive": 1
+  },
+  "tests/init-debug.test.cjs": {
+    "block": 1
+  },
+  "tests/init.test.cjs": {
+    "directive": 2,
+    "block": 5
+  },
+  "tests/injection-patterns-parity.security.test.cjs": {
+    "block": 1
+  },
+  "tests/inline-plan-threshold.test.cjs": {
+    "directive": 2
+  },
+  "tests/insert-phase-chain-placeholder.test.cjs": {
+    "block": 1
+  },
+  "tests/install-fs-adapter-seam.test.cjs": {
+    "block": 1
+  },
+  "tests/install-minimal-hooks.test.cjs": {
+    "block": 8,
+    "directive": 1
+  },
+  "tests/install-nested-layout.test.cjs": {
+    "directive": 1
+  },
+  "tests/install-path-detection.test.cjs": {
+    "directive": 1
+  },
+  "tests/install-regressions.test.cjs": {
+    "block": 3,
+    "directive": 1
+  },
+  "tests/install-runtime-artifacts.test.cjs": {
+    "directive": 5,
+    "block": 16
+  },
+  "tests/install-scope.test.cjs": {
+    "block": 1
+  },
+  "tests/install-write-confinement.test.cjs": {
+    "block": 6
+  },
+  "tests/install.test.cjs": {
+    "block": 12,
+    "directive": 2
+  },
+  "tests/installed-surface-resolver.test.cjs": {
+    "block": 1
+  },
+  "tests/installer-first-install-user-skill-5522.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/installer-migration-antigravity-retire-confighome-artifacts.test.cjs": {
+    "block": 1
+  },
+  "tests/installer-migration-config-root-marker.test.cjs": {
+    "block": 1
+  },
+  "tests/installer-migration-install.integration.test.cjs": {
+    "directive": 1
+  },
+  "tests/installer-migration-pi-extension-ext.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/installer-migration-pi-retire-hooks-dir.test.cjs": {
+    "block": 1
+  },
+  "tests/installer-migration-prune-stale-pristine.test.cjs": {
+    "directive": 1
+  },
+  "tests/installer-migration-rename-gsd-core.test.cjs": {
+    "directive": 1
+  },
+  "tests/installer-migration-report.test.cjs": {
+    "block": 3
+  },
+  "tests/installer-migrations-manifest-schema.test.cjs": {
+    "block": 1
+  },
+  "tests/installer-migrations.test.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/instruction-surface-disclosure.security.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/intel-command-cutover.test.cjs": {
+    "block": 1
+  },
+  "tests/intel.test.cjs": {
+    "directive": 2,
+    "block": 4
+  },
+  "tests/inventory-manifest-sync.test.cjs": {
+    "block": 1
+  },
+  "tests/isolation-sentinel.test.cjs": {
+    "block": 1
+  },
+  "tests/kilo-imperative-reference.test.cjs": {
+    "block": 1
+  },
+  "tests/kilo-upgrades.test.cjs": {
+    "block": 1
+  },
+  "tests/kimi-guard-normalization-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/kimi-guard-typed-payload-reads.test.cjs": {
+    "block": 1
+  },
+  "tests/kimi-imperative-reference.test.cjs": {
+    "block": 1
+  },
+  "tests/kimi-normalize-payload.property.test.cjs": {
+    "block": 2
+  },
+  "tests/kimi-payload-field-shadowing.security.test.cjs": {
+    "block": 1
+  },
+  "tests/kimi-upgrades.test.cjs": {
+    "block": 1
+  },
+  "tests/lint-allow-test-rule-refs.test.cjs": {
+    "block": 4
+  },
+  "tests/lint-compiled-artifact-sync.test.cjs": {
+    "block": 2
+  },
+  "tests/lint-docs-command-form.test.cjs": {
+    "directive": 1
+  },
+  "tests/lint-legacy-dir-name.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/lint-retired-runtime-name.test.cjs": {
+    "directive": 1
+  },
+  "tests/lint-state-field-drift-retained.test.cjs": {
+    "block": 1
+  },
+  "tests/lint-vendored-deps-manifest.test.cjs": {
+    "block": 1
+  },
+  "tests/lint-workflow-shellcheck-fetch.test.cjs": {
+    "block": 1
+  },
+  "tests/lint-workflow-shellcheck.test.cjs": {
+    "block": 1
+  },
+  "tests/list-seeds.property.test.cjs": {
+    "block": 1
+  },
+  "tests/live-dom-uat.test.cjs": {
+    "block": 1
+  },
+  "tests/load-bearing-contract-gate.test.cjs": {
+    "block": 1
+  },
+  "tests/lockfile-cve-audit.test.cjs": {
+    "block": 1
+  },
+  "tests/locking-bugs-1909-1916-1925-1927.test.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/loop-hooks-empty-points-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/loop-hooks-ship-pre-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/loop-hooks-verify-post-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/loop-walk.qa.test.cjs": {
+    "block": 2
+  },
+  "tests/m8-writestatemd-scan-after-lock.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/m9-statelock-write-error-orphan.test.cjs": {
+    "block": 1
+  },
+  "tests/managed-hooks.test.cjs": {
+    "block": 4,
+    "directive": 2
+  },
+  "tests/markdown-sectionizer-xml-tags.property.test.cjs": {
+    "block": 1
+  },
+  "tests/markdown-sectionizer.test.cjs": {
+    "block": 2
+  },
+  "tests/markdown-table.test.cjs": {
+    "block": 2
+  },
+  "tests/mcp-catalog-parity.install.test.cjs": {
+    "block": 1
+  },
+  "tests/mcp-catalog.property.test.cjs": {
+    "block": 1
+  },
+  "tests/mcp-catalog.test.cjs": {
+    "block": 1
+  },
+  "tests/mcp-server-catalog.test.cjs": {
+    "block": 1
+  },
+  "tests/mcp-tool-inheritance.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/milestone-archive.test.cjs": {
+    "directive": 3,
+    "block": 1
+  },
+  "tests/milestone-lock.test.cjs": {
+    "block": 1
+  },
+  "tests/milestone-summary.test.cjs": {
+    "directive": 1
+  },
+  "tests/milestone-window-single-owner.test.cjs": {
+    "block": 2
+  },
+  "tests/milestone.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/model-catalog-runtime-defaults.test.cjs": {
+    "directive": 1
+  },
+  "tests/model-catalog-valid-tiers.test.cjs": {
+    "block": 1
+  },
+  "tests/model-catalog.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/model-omit-when-inherit-guard.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/model-profiles.test.cjs": {
+    "block": 2
+  },
+  "tests/model-resolver-attempt-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/model-resolver.test.cjs": {
+    "block": 10,
+    "directive": 1
+  },
+  "tests/multi-runtime-select.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/mutation-matrix-ratchet.test.cjs": {
+    "block": 1
+  },
+  "tests/mutation-tap-runner-wiring.test.cjs": {
+    "block": 1
+  },
+  "tests/mutation-workflow-base-ref.test.cjs": {
+    "block": 3
+  },
+  "tests/new-milestone-clear-phases.test.cjs": {
+    "directive": 2
+  },
+  "tests/next-decimal-roadmap-scan.test.cjs": {
+    "directive": 1
+  },
+  "tests/next-safety-gates.test.cjs": {
+    "directive": 1
+  },
+  "tests/next-up-clear-order.test.cjs": {
+    "directive": 1
+  },
+  "tests/no-bare-gsd-tools-command-position.test.cjs": {
+    "block": 3
+  },
+  "tests/no-dead-sdk-refs.test.cjs": {
+    "block": 2
+  },
+  "tests/no-hardcoded-home-gsd-tools.test.cjs": {
+    "directive": 1
+  },
+  "tests/no-path-literal-in-assert.rule.test.cjs": {
+    "block": 1
+  },
+  "tests/no-phantom-issue-refs.test.cjs": {
+    "block": 1,
+    "directive": 2
+  },
+  "tests/no-posix-mode-bit-assert.rule.test.cjs": {
+    "block": 1
+  },
+  "tests/no-swallowed-precondition.rule.test.cjs": {
+    "block": 1
+  },
+  "tests/no-unbounded-quantifier.rule.test.cjs": {
+    "block": 1
+  },
+  "tests/no-unbounded-spawn-allowlist.test.cjs": {
+    "block": 1,
+    "directive": 2
+  },
+  "tests/no-unbounded-spawn.test.cjs": {
+    "block": 1
+  },
+  "tests/non-claude-runtimes-registry-derivation.test.cjs": {
+    "block": 1
+  },
+  "tests/normalize-path-in-content.rule.test.cjs": {
+    "block": 2
+  },
+  "tests/npm-integrity-gate.test.cjs": {
+    "block": 2
+  },
+  "tests/npm-version-check-diagnosis.test.cjs": {
+    "block": 1
+  },
+  "tests/nsegment-phase-grammar.test.cjs": {
+    "block": 2
+  },
+  "tests/opencode-command-dir-plural.test.cjs": {
+    "block": 2
+  },
+  "tests/opencode-plugin-adapter.test.cjs": {
+    "block": 1
+  },
+  "tests/opencode-review-reconstruction.property.test.cjs": {
+    "block": 1
+  },
+  "tests/opencode-statusline-plugin.test.cjs": {
+    "directive": 1
+  },
+  "tests/overlay-repo-helpers.test.cjs": {
+    "block": 1
+  },
+  "tests/package-legitimacy-gate.test.cjs": {
+    "directive": 1
+  },
+  "tests/package-name-single-source.test.cjs": {
+    "block": 1
+  },
+  "tests/parallel-dependent-plans.test.cjs": {
+    "directive": 3
+  },
+  "tests/partial-init-routing.test.cjs": {
+    "block": 1
+  },
+  "tests/path-replacement.test.cjs": {
+    "directive": 1,
+    "block": 3
+  },
+  "tests/pause-work-context-detection.test.cjs": {
+    "block": 1
+  },
+  "tests/pause-work-improvements.test.cjs": {
+    "block": 1
+  },
+  "tests/perf-315-loadconfig-subrepo-scan.test.cjs": {
+    "block": 1
+  },
+  "tests/perf-316-state-lock-buffer-alloc.test.cjs": {
+    "block": 1
+  },
+  "tests/perf-317-context-monitor-fs.test.cjs": {
+    "block": 10,
+    "directive": 1
+  },
+  "tests/perf-407-planning-lock-buffer-alloc.test.cjs": {
+    "block": 1
+  },
+  "tests/phase-command-router.test.cjs": {
+    "block": 1
+  },
+  "tests/phase-completion-single-owner.test.cjs": {
+    "block": 1
+  },
+  "tests/phase-dependency-levels.test.cjs": {
+    "block": 2
+  },
+  "tests/phase-estimation.test.cjs": {
+    "block": 1
+  },
+  "tests/phase-id-drift-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/phase-id.test.cjs": {
+    "block": 2
+  },
+  "tests/phase-lifecycle.test.cjs": {
+    "block": 1
+  },
+  "tests/phase-locator.test.cjs": {
+    "block": 3
+  },
+  "tests/phase-resolution-parity.test.cjs": {
+    "block": 2
+  },
+  "tests/phase.platform.test.cjs": {
+    "block": 1
+  },
+  "tests/phase.process.test.cjs": {
+    "directive": 3
+  },
+  "tests/phase.test.cjs": {
+    "directive": 9,
+    "block": 12
+  },
+  "tests/phase6-capstone-conformance.test.cjs": {
+    "block": 1
+  },
+  "tests/phase6-planning-capabilities.test.cjs": {
+    "directive": 1
+  },
+  "tests/pi-config-dir-env-override.test.cjs": {
+    "block": 1
+  },
+  "tests/pi-extension-reachability.test.cjs": {
+    "block": 1
+  },
+  "tests/pi-package.test.cjs": {
+    "directive": 1
+  },
+  "tests/pi-upgrades.test.cjs": {
+    "block": 2
+  },
+  "tests/pi-workflow-handoff.test.cjs": {
+    "block": 1
+  },
+  "tests/pick-flag.test.cjs": {
+    "block": 1
+  },
+  "tests/plan-authoring-verification-gaps.test.cjs": {
+    "block": 1
+  },
+  "tests/plan-bounce.test.cjs": {
+    "directive": 1
+  },
+  "tests/plan-checker-coupling.test.cjs": {
+    "block": 1
+  },
+  "tests/plan-count-single-owner.test.cjs": {
+    "block": 4
+  },
+  "tests/plan-phase-background-wait-wakeup.test.cjs": {
+    "block": 1
+  },
+  "tests/plan-phase-drift-guard.test.cjs": {
+    "directive": 7,
+    "block": 2
+  },
+  "tests/plan-phase-stall-detection.test.cjs": {
+    "block": 6
+  },
+  "tests/plan-phase-ui-redirect.test.cjs": {
+    "directive": 1
+  },
+  "tests/plan-pre-hook-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/plan-review-convergence.test.cjs": {
+    "block": 3,
+    "directive": 3
+  },
+  "tests/planner-decomposition.test.cjs": {
+    "directive": 2
+  },
+  "tests/planner-language-regression.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/planning-document.test.cjs": {
+    "block": 1
+  },
+  "tests/planning-inspect.test.cjs": {
+    "block": 6
+  },
+  "tests/planning-inspect.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/planning-lock-mkdir-failure-1884.test.cjs": {
+    "block": 1
+  },
+  "tests/planning-prompt-drift.test.cjs": {
+    "block": 2
+  },
+  "tests/planning-snapshot-bypass-drift.test.cjs": {
+    "block": 1
+  },
+  "tests/planning-snapshot.test.cjs": {
+    "block": 1
+  },
+  "tests/planning-workspace.test.cjs": {
+    "block": 2
+  },
+  "tests/plant-seed-id.test.cjs": {
+    "block": 1
+  },
+  "tests/platform-conformance-tier.test.cjs": {
+    "block": 1
+  },
+  "tests/plugin-manifest.test.cjs": {
+    "block": 5,
+    "directive": 3
+  },
+  "tests/policy-160-route0-resume.test.cjs": {
+    "directive": 1
+  },
+  "tests/post-planning-gaps-2493.test.cjs": {
+    "block": 1
+  },
+  "tests/pr-branch-planning-filter.test.cjs": {
+    "block": 2
+  },
+  "tests/probe-core.property.test.cjs": {
+    "block": 1
+  },
+  "tests/probe-core.test.cjs": {
+    "block": 1
+  },
+  "tests/product-name-purity.test.cjs": {
+    "directive": 1
+  },
+  "tests/profile-output.test.cjs": {
+    "directive": 1
+  },
+  "tests/profile-pipeline.test.cjs": {
+    "block": 1
+  },
+  "tests/progress-forensic.test.cjs": {
+    "directive": 1
+  },
+  "tests/progress-mvp-display.test.cjs": {
+    "directive": 1
+  },
+  "tests/project-instruction-file-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/prompt-budget-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/prompt-injection-scan.security.test.cjs": {
+    "block": 2
+  },
+  "tests/prompt-thinning.test.cjs": {
+    "directive": 1
+  },
+  "tests/prune-orphaned-worktrees.test.cjs": {
+    "directive": 1
+  },
+  "tests/qa/loop-walk.cjs": {
+    "block": 3
+  },
+  "tests/qa/mutations.cjs": {
+    "block": 3
+  },
+  "tests/qa/oracles.cjs": {
+    "block": 4
+  },
+  "tests/qa/paths.cjs": {
+    "block": 5
+  },
+  "tests/qa/report.cjs": {
+    "block": 2
+  },
+  "tests/qa/result.cjs": {
+    "block": 2
+  },
+  "tests/qa/run-report.cjs": {
+    "block": 2
+  },
+  "tests/qa/scenario.cjs": {
+    "block": 2
+  },
+  "tests/qa/smell-fingerprint.cjs": {
+    "block": 3
+  },
+  "tests/qa/tdd-walk.cjs": {
+    "block": 1
+  },
+  "tests/quick-batch-dispatch.property.test.cjs": {
+    "block": 1
+  },
+  "tests/quick-batch-dispatch.test.cjs": {
+    "block": 1
+  },
+  "tests/quick-batch.property.test.cjs": {
+    "block": 1
+  },
+  "tests/quick-commit-boundary-context-research.test.cjs": {
+    "block": 2
+  },
+  "tests/qwen-imperative-reference.test.cjs": {
+    "block": 1
+  },
+  "tests/qwen-skills-migration.test.cjs": {
+    "directive": 1
+  },
+  "tests/qwen-upgrades.test.cjs": {
+    "block": 1
+  },
+  "tests/read-guard.test.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/read-injection-scanner.property.test.cjs": {
+    "block": 2
+  },
+  "tests/read-injection-scanner.security.test.cjs": {
+    "block": 1
+  },
+  "tests/readfilesync-trace-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/reapply-patches.test.cjs": {
+    "directive": 2,
+    "block": 2
+  },
+  "tests/reapply-verify-hunks.test.cjs": {
+    "directive": 1,
+    "block": 3
+  },
+  "tests/refactor-trigger-cli.test.cjs": {
+    "block": 1
+  },
+  "tests/registry-axes-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/registry-reviewer-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/release-shard-lane-sharding.test.cjs": {
+    "block": 1
+  },
+  "tests/release-tarball-smoke-workflow.test.cjs": {
+    "directive": 1
+  },
+  "tests/release-tarball-smoke.install.test.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/repo-invariants.test.cjs": {
+    "block": 4
+  },
+  "tests/representative-corpus.test.cjs": {
+    "block": 1
+  },
+  "tests/require-fs-op-fallback.rule.test.cjs": {
+    "block": 1
+  },
+  "tests/research-agent-profiles.test.cjs": {
+    "directive": 3,
+    "block": 1
+  },
+  "tests/resolve-execution-dynamic-routing.test.cjs": {
+    "block": 1
+  },
+  "tests/resolver-hoist-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/response-language-coverage.test.cjs": {
+    "block": 2
+  },
+  "tests/responsive-separators.test.cjs": {
+    "block": 1
+  },
+  "tests/retired-artifact-cleanup.test.cjs": {
+    "directive": 1
+  },
+  "tests/review-build-prompt-optional-sections.test.cjs": {
+    "block": 1
+  },
+  "tests/review-lane-descriptor.test.cjs": {
+    "block": 2
+  },
+  "tests/review-lane-invocation.test.cjs": {
+    "directive": 1
+  },
+  "tests/review-lane-windows-spawn-resolution.test.cjs": {
+    "block": 1
+  },
+  "tests/review-parallel-lanes.test.cjs": {
+    "block": 2
+  },
+  "tests/review-plan-coverage-manifest.test.cjs": {
+    "block": 1
+  },
+  "tests/review-timeout-guidance.test.cjs": {
+    "block": 1
+  },
+  "tests/reviewer-config-federation.test.cjs": {
+    "block": 3
+  },
+  "tests/reviewer-lane-declarations.test.cjs": {
+    "block": 2
+  },
+  "tests/reviewer-manifest-body.test.cjs": {
+    "block": 2,
+    "directive": 2
+  },
+  "tests/reviewer-step-dispatch.test.cjs": {
+    "directive": 1
+  },
+  "tests/reviewer-trust-disclosure.test.cjs": {
+    "block": 1
+  },
+  "tests/revision-remediation-binding.test.cjs": {
+    "block": 1
+  },
+  "tests/roadmap-parser.test.cjs": {
+    "block": 4
+  },
+  "tests/roadmap-upgrade-bracket.test.cjs": {
+    "block": 4
+  },
+  "tests/roadmap.test.cjs": {
+    "directive": 3,
+    "block": 7
+  },
+  "tests/roadmapper-granularity.test.cjs": {
+    "block": 1
+  },
+  "tests/run-tests-accounting.test.cjs": {
+    "block": 1
+  },
+  "tests/run-tests-harness.test.cjs": {
+    "block": 9
+  },
+  "tests/run-with-timeout.test.cjs": {
+    "block": 2
+  },
+  "tests/runtime-artifact-layout-descriptor-drive.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-artifact-layout-install-profiles.test.cjs": {
+    "block": 2
+  },
+  "tests/runtime-artifact-layout-surface.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-artifact-layout-trigger-surface.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-artifact-layout.test.cjs": {
+    "block": 2
+  },
+  "tests/runtime-brand-swap-parity.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-config-adapter-registry.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-converters.test.cjs": {
+    "block": 6
+  },
+  "tests/runtime-descriptor-owner.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-home-hermeticity.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-homes-descriptor-drive.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-homes-legacy-ids-drift-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-homes.property.test.cjs": {
+    "block": 2
+  },
+  "tests/runtime-label-policy.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-launcher-parity.test.cjs": {
+    "block": 3,
+    "directive": 1
+  },
+  "tests/runtime-marker-resolution.test.cjs": {
+    "block": 1
+  },
+  "tests/runtime-name-policy.test.cjs": {
+    "directive": 2,
+    "block": 1
+  },
+  "tests/safe-resume-gate-anchoring.test.cjs": {
+    "block": 1
+  },
+  "tests/secret-scan-lint.security.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/section-manifest-init-facts.test.cjs": {
+    "block": 1
+  },
+  "tests/section-manifest.property.test.cjs": {
+    "block": 1
+  },
+  "tests/section-marker-inversion-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/secure-phase.test.cjs": {
+    "directive": 1
+  },
+  "tests/security-dead-exports.regression.test.cjs": {
+    "directive": 2
+  },
+  "tests/security-prompt-injection.security.test.cjs": {
+    "directive": 1,
+    "block": 2
+  },
+  "tests/security-scan.security.test.cjs": {
+    "block": 2,
+    "directive": 2
+  },
+  "tests/seed-scan-new-milestone.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/settings-integrations.test.cjs": {
+    "directive": 3,
+    "block": 1
+  },
+  "tests/sh-hook-paths.test.cjs": {
+    "block": 1
+  },
+  "tests/shadow-report.security.test.cjs": {
+    "block": 1
+  },
+  "tests/shadow-report.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/shared-hooks-dir-resolution.test.cjs": {
+    "block": 2
+  },
+  "tests/shared-install-fixture.test.cjs": {
+    "directive": 1
+  },
+  "tests/shell-command-projection-dispatch.test.cjs": {
+    "block": 2
+  },
+  "tests/shell-command-projection-md-normalize.test.cjs": {
+    "block": 1
+  },
+  "tests/shipped-reference-cites.test.cjs": {
+    "block": 6
+  },
+  "tests/skill-frontmatter-contract.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/skill-manifest.test.cjs": {
+    "directive": 1
+  },
+  "tests/slash-command-namespace.test.cjs": {
+    "block": 6
+  },
+  "tests/smart-entry.property.test.cjs": {
+    "block": 1
+  },
+  "tests/smart-entry.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/spawn-liveness-banner.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/spec-phase-probe-reachability.test.cjs": {
+    "block": 1
+  },
+  "tests/spike-manifest-scoping.test.cjs": {
+    "block": 1
+  },
+  "tests/stale-bake-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/state-acquirestatelock-non-eexist.test.cjs": {
+    "block": 2
+  },
+  "tests/state-command-cutover.test.cjs": {
+    "block": 1
+  },
+  "tests/state-contract.test.cjs": {
+    "block": 2
+  },
+  "tests/state-contract.unit.test.cjs": {
+    "block": 1
+  },
+  "tests/state-document.test.cjs": {
+    "block": 1,
+    "directive": 1
+  },
+  "tests/state-field-drift.test.cjs": {
+    "block": 1
+  },
+  "tests/state-rebuild-cli.test.cjs": {
+    "directive": 1
+  },
+  "tests/state-transition.test.cjs": {
+    "block": 4
+  },
+  "tests/state-write-path-drift-guard.test.cjs": {
+    "block": 1
+  },
+  "tests/state.platform.test.cjs": {
+    "block": 1
+  },
+  "tests/state.test.cjs": {
+    "directive": 10,
+    "block": 22
+  },
+  "tests/subagent-timeout.test.cjs": {
+    "directive": 1
+  },
+  "tests/subject-first-line.platform.test.cjs": {
+    "block": 1
+  },
+  "tests/summary-status-blocked-3345.test.cjs": {
+    "block": 1
+  },
+  "tests/table-schema-drift-lint.test.cjs": {
+    "block": 1
+  },
+  "tests/tdd-backend-wiring.test.cjs": {
+    "block": 1
+  },
+  "tests/tdd-mode.platform.test.cjs": {
+    "block": 1
+  },
+  "tests/tdd-red-evidence.test.cjs": {
+    "block": 1
+  },
+  "tests/tdd-reference-correctness.test.cjs": {
+    "block": 1
+  },
+  "tests/tdd-single-statement.test.cjs": {
+    "block": 2
+  },
+  "tests/temp-subdir.test.cjs": {
+    "directive": 1
+  },
+  "tests/template.test.cjs": {
+    "directive": 1
+  },
+  "tests/thinking-partner.test.cjs": {
+    "directive": 1
+  },
+  "tests/todos-workstream-scope.test.cjs": {
+    "block": 1
+  },
+  "tests/token-scanner.test.cjs": {
+    "block": 1
+  },
+  "tests/tracer-bullet.test.cjs": {
+    "block": 1
+  },
+  "tests/trae-imperative-reference.test.cjs": {
+    "block": 2,
+    "directive": 3
+  },
+  "tests/trae-upgrades.test.cjs": {
+    "block": 1
+  },
+  "tests/uat.test.cjs": {
+    "block": 11
+  },
+  "tests/ui-consideration-probe.test.cjs": {
+    "block": 1
+  },
+  "tests/ui-interaction-capture.test.cjs": {
+    "block": 1
+  },
+  "tests/ui-researcher-inventory-self-check.test.cjs": {
+    "block": 1
+  },
+  "tests/ui-spec-inventory-provenance.test.cjs": {
+    "block": 2
+  },
+  "tests/ultraplan-phase.test.cjs": {
+    "directive": 1
+  },
+  "tests/undo-commit-selection-4465.test.cjs": {
+    "block": 1
+  },
+  "tests/undo-commit-selection.test.cjs": {
+    "block": 1
+  },
+  "tests/unreachable-guard-drift.test.cjs": {
+    "block": 1
+  },
+  "tests/unreachable-shell-guard.test.cjs": {
+    "block": 2
+  },
+  "tests/update-custom-backup.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/update-workflow.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/user-artifact-staging.test.cjs": {
+    "block": 1
+  },
+  "tests/verification-status.test.cjs": {
+    "block": 7
+  },
+  "tests/verifier-coincidental-reliance.test.cjs": {
+    "block": 1
+  },
+  "tests/verifier-contribution.test.cjs": {
+    "block": 1
+  },
+  "tests/verify-command-grounding.test.cjs": {
+    "block": 1
+  },
+  "tests/verify-health.test.cjs": {
+    "directive": 3,
+    "block": 1
+  },
+  "tests/verify-lifecycle-writes-e2e.test.cjs": {
+    "block": 1
+  },
+  "tests/verify-test-quality.test.cjs": {
+    "directive": 1
+  },
+  "tests/verify-work-auto-transition.test.cjs": {
+    "directive": 1
+  },
+  "tests/verify-work-deferred-promotion.test.cjs": {
+    "block": 1
+  },
+  "tests/verify.test.cjs": {
+    "directive": 1
+  },
+  "tests/vscode-browser-no-node-api.test.cjs": {
+    "block": 1
+  },
+  "tests/vscode-extension-reachability.test.cjs": {
+    "block": 1
+  },
+  "tests/vscode-ide-reference.test.cjs": {
+    "block": 1
+  },
+  "tests/vscode-lm-tools.test.cjs": {
+    "block": 1
+  },
+  "tests/vscode-subagent-dispatch.test.cjs": {
+    "block": 1
+  },
+  "tests/windows-robustness.test.cjs": {
+    "directive": 1
+  },
+  "tests/windsurf-hooks-bridge.test.cjs": {
+    "block": 1
+  },
+  "tests/workflow-compat.test.cjs": {
+    "directive": 1
+  },
+  "tests/workflow-fragments-emission.install.test.cjs": {
+    "block": 2
+  },
+  "tests/workflow-fragments.property.test.cjs": {
+    "block": 1
+  },
+  "tests/workflow-fragments.test.cjs": {
+    "directive": 1,
+    "block": 1
+  },
+  "tests/workflow-guard-registration.test.cjs": {
+    "directive": 1
+  },
+  "tests/workflow-jq-dependency.test.cjs": {
+    "block": 1
+  },
+  "tests/workflow-maintainer-skip.test.cjs": {
+    "directive": 1
+  },
+  "tests/workflow-shell-pinning.test.cjs": {
+    "block": 2,
+    "directive": 1
+  },
+  "tests/workflow-size-budget.test.cjs": {
+    "directive": 3,
+    "block": 2
+  },
+  "tests/workspace.test.cjs": {
+    "directive": 2
+  },
+  "tests/workstream-inventory.test.cjs": {
+    "block": 3
+  },
+  "tests/workstream-scoped-paths.test.cjs": {
+    "block": 1
+  },
+  "tests/workstream.test.cjs": {
+    "directive": 2
+  },
+  "tests/worktree-base-ref.test.cjs": {
+    "block": 1
+  },
+  "tests/worktree-cleanup.test.cjs": {
+    "directive": 2,
+    "block": 4
+  },
+  "tests/worktree-safety-reap.test.cjs": {
+    "block": 1
+  },
+  "tests/worktree-safety.test.cjs": {
+    "block": 10,
+    "directive": 1
+  },
+  "tests/worktree-worker-log.test.cjs": {
+    "block": 1
+  },
+  "tests/worktree.test.cjs": {
+    "directive": 9
+  },
+  "tests/zsh-joined-flag-expansion.test.cjs": {
+    "block": 1
+  },
+  "vscode/browser.js": {
+    "block": 1
+  },
+  "vscode/extension.js": {
+    "block": 3
+  },
+  "vscode/host-binding.js": {
+    "block": 1
+  }
+}

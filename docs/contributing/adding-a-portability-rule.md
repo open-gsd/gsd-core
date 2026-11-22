@@ -61,17 +61,20 @@ legitimately POSIX-only code is *structured* behind a recognized guard, never an
 (Postel's Law mitigation). If a legitimate shape isn't recognized, **teach the helper** — never add
 an opt-out.
 
-### 4. The disable ban — `tests/portability-rule-disable-ban.test.cjs`
+### 4. The disable ban — `scripts/static-checks/portability-rule-disable-ban.cjs`
 
 Because there is no opt-out, an `eslint-disable` of a portability rule would silently bypass it.
-This test runs **outside ESLint** (so it cannot itself be eslint-disabled) and fails the build on
-any `eslint-disable[-next-line|-line]` that names a protected portability rule, or any blanket
-disable. **Every new rule MUST be appended to `PROTECTED_RULES`** here, and if the rule covers a
-new surface (e.g. `bin/install.js`), that surface MUST be added to `collectTestFiles()`.
+This static check runs **outside ESLint** (so it cannot itself be eslint-disabled), in
+`scripts/run-static-checks.cjs` (part of `npm run lint:ci`; `npm run lint:static` runs it alone), and
+fails the build on any `eslint-disable[-next-line|-line]` that names a protected portability rule, or
+any blanket disable. **Every new rule MUST be appended to `PROTECTED_RULES`** there, and if the rule
+covers a new surface (e.g. `bin/install.js`), that surface MUST be added to `collectFiles()`. Its
+detection cases are `tests/portability-rule-disable-ban.test.cjs`, which run the check on temporary
+trees and no longer scan the repository.
 
 ### 5. CI test selection — `scripts/ci-test-scope.cjs`
 
-The `portability lint rules (ADR-1703)` rule selects the rule suites + disable-ban when
+The `portability lint rules (ADR-1703)` rule selects the rule suites + the disable-ban's detection cases when
 `eslint-rules/`, `eslint.config.mjs`, or a covered production surface changes. Add new test files
 to its `tests:` list.
 
@@ -112,7 +115,7 @@ Run the full engineering directive (rubber-duck → software laws → architectu
    `bin/install.js`), add a config block for it — apply ONLY the portability rules to generated
    code, not the full recommended set.
 5. **Disable ban** — append the rule name to `PROTECTED_RULES` in
-   `tests/portability-rule-disable-ban.test.cjs`; add any new surface to `collectTestFiles()`.
+   `scripts/static-checks/portability-rule-disable-ban.cjs`; add any new surface to `collectFiles()`.
 6. **CI selection** — add the new test file to the `portability lint rules (ADR-1703)` rule in
    `scripts/ci-test-scope.cjs`.
 7. **Fix every violation** — no ratchet, no grandfathering. Every existing + grandfathered offender

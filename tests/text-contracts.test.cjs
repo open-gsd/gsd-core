@@ -1,0 +1,1250 @@
+'use strict';
+
+/**
+ * text-contracts.test.cjs
+ *
+ * Detection cases for scripts/static-checks/text-contracts.cjs (ADR-6315 item 19, #6337): the engine
+ * on temporary trees, and each shipped contract against a copy of the files it reads with one phrase
+ * removed. The real files are checked once, in scripts/run-static-checks.cjs.
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { cleanup } = require('./helpers.cjs');
+const textContracts = require('../scripts/static-checks/text-contracts.cjs');
+
+const REPO_ROOT = path.join(__dirname, '..');
+
+function tempDir(t, prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  t.after(() => cleanup(dir));
+  return dir;
+}
+
+function write(root, rel, text) {
+  const abs = path.join(root, ...rel.split('/'));
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, text);
+}
+
+/** A tree with the files under `files`, and a contracts directory holding `contracts` (id -> source). */
+function makeTree(t, files, contracts) {
+  const root = tempDir(t, 'gsd-text-contracts-');
+  const dir = path.join(root, 'contracts');
+  fs.mkdirSync(dir);
+  for (const [rel, text] of Object.entries(files)) write(root, rel, text);
+  for (const [id, body] of Object.entries(contracts)) {
+    fs.writeFileSync(path.join(dir, `${id}.cjs`), `module.exports = { id: ${JSON.stringify(id)}, check(ctx) { ${body} } };\n`);
+  }
+  return { root, dir };
+}
+
+// The temporary trees hold one or two contracts, not the shipped set; the minimum has its own tests.
+const runTree = ({ root, dir }, extra = {}) => textContracts.run({ root, dir, minContracts: 0, ...extra });
+
+describe('doc.has and doc.lacks', () => {
+  test('a satisfied contract reports nothing', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha beta\n' }, {
+      ok: "ctx.doc('a.md').has(/alpha/, 'needs alpha').has('beta', 'needs beta').lacks(/gamma/, 'no gamma');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a missing phrase is one finding naming the file, the contract and the pattern', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n' }, { c1: "ctx.doc('a.md').has(/beta/, 'needs beta');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'a.md');
+    assert.match(findings[0].message, /^c1: needs beta \(expected \/beta\/\)$/);
+  });
+
+  test('a forbidden phrase is a finding, for a regular expression and for a string', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha gamma\n' }, {
+      c2: "ctx.doc('a.md').lacks(/gamma/, 'no gamma').lacks('alpha', 'no alpha');",
+    });
+    assert.equal(runTree(tree).length, 2);
+  });
+
+  test('CRLF text is read as LF, so a line-bound pattern behaves the same', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\r\ntwo\r\n' }, { c3: "ctx.doc('a.md').has(/^one\\ntwo/m, 'LF-normalised');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a missing file is a finding and its assertions do not also pass vacuously', (t) => {
+    const tree = makeTree(t, {}, { c4: "ctx.doc('nope.md').lacks(/anything/, 'never reached as a pass');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /cannot read the file: ENOENT/);
+  });
+});
+
+describe('ctx.list', () => {
+  const listAndRead = "for (const rel of ctx.list('wf', '.md', 'workflows')) ctx.doc(rel).has(/ok/, 'needs ok');";
+
+  test('lists nested files by suffix, sorted, and reads each; a satisfied scan reports nothing', (t) => {
+    const tree = makeTree(t, { 'wf/b.md': 'ok\n', 'wf/a.md': 'ok\n', 'wf/sub/c.md': 'ok\n', 'wf/skip.txt': 'no\n' }, { l1: listAndRead });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a file in a subdirectory that breaks the contract is found and named by its path', (t) => {
+    const tree = makeTree(t, { 'wf/a.md': 'ok\n', 'wf/sub/deep/c.md': 'bad\n' }, { l2: listAndRead });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'wf/sub/deep/c.md');
+  });
+
+  test('the order is sorted whatever the directory order', (t) => {
+    const tree = makeTree(t, { 'wf/z.md': 'ok\n', 'wf/a.md': 'ok\n', 'wf/m/b.md': 'ok\n' }, {
+      l3: "const seen = ctx.list('wf', '.md', 'w'); ctx.doc('wf/a.md').satisfies(() => JSON.stringify(seen) === JSON.stringify(['wf/a.md', 'wf/m/b.md', 'wf/z.md']) || JSON.stringify(seen), 'sorted');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a missing directory is one finding and the scan has nothing to pass vacuously', (t) => {
+    const findings = runTree(makeTree(t, {}, { l4: listAndRead }));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^l4: cannot read the directory: ENOENT$/);
+  });
+
+  test('a directory with no file of the suffix is a finding', (t) => {
+    const findings = runTree(makeTree(t, { 'wf/a.txt': 'x\n' }, { l5: listAndRead }));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^l5: workflows \(no \.md file under wf\)$/);
+  });
+
+  test('a trailing slash on the directory is the same directory', (t) => {
+    const tree = makeTree(t, { 'wf/a.md': 'ok\n' }, { l6: "for (const rel of ctx.list('wf/', '.md', 'workflows')) ctx.doc(rel).has(/ok/, 'needs ok');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a path that leaves the tree is a finding and lists nothing', (t) => {
+    const tree = makeTree(t, {}, { l7: "ctx.list('../outside', '.md', 'escape');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /not a repo-relative path inside the repository/);
+  });
+
+  test('a directory that is itself a symlink is a finding and is not listed', (t) => {
+    const tree = makeTree(t, { 'elsewhere/b.md': 'ok\n' }, { l9: listAndRead });
+    fs.symlinkSync(path.join(tree.root, 'elsewhere'), path.join(tree.root, 'wf'), 'dir');
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^l9: workflows \(wf is a symlink, expected a directory\)$/);
+  });
+
+  test('a regular file where the directory should be is a finding', (t) => {
+    const findings = runTree(makeTree(t, { 'wf': 'not a directory\n' }, { l10: listAndRead }));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /wf is not a directory, expected a directory/);
+  });
+
+  test('a symlink is not followed: a linked file is neither listed nor read', (t) => {
+    const tree = makeTree(t, { 'wf/a.md': 'ok\n', 'elsewhere/b.md': 'bad\n' }, { l8: listAndRead });
+    fs.symlinkSync(path.join(tree.root, 'elsewhere', 'b.md'), path.join(tree.root, 'wf', 'link.md'));
+    fs.symlinkSync(path.join(tree.root, 'elsewhere'), path.join(tree.root, 'wf', 'linkdir'), 'dir');
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
+describe('doc.satisfies', () => {
+  test('a predicate returning true reports nothing and counts as an assertion', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\ntwo\n' }, { sat1: "ctx.doc('a.md').satisfies((text) => text.split('\\n').length === 3, 'two lines');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a predicate returning a string is one finding carrying the reason', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\n' }, { sat2: "ctx.doc('a.md').satisfies(() => '1 line, expected 2', 'needs two lines');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'a.md');
+    assert.match(findings[0].message, /^sat2: needs two lines \(1 line, expected 2\)$/);
+  });
+
+  test('a predicate returning false is one finding without a reason', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\n' }, { sat3: "ctx.doc('a.md').satisfies(() => false, 'never holds');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^sat3: never holds$/);
+  });
+
+  test('a predicate returning anything but true is a finding, so a truthy non-boolean cannot pass', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\n' }, { sat4: "ctx.doc('a.md').satisfies(() => 1, 'needs exactly true');" });
+    assert.equal(runTree(tree).length, 1);
+  });
+
+  test('on a missing file the predicate is not run and only the read failure is reported', (t) => {
+    const tree = makeTree(t, {}, { sat5: "ctx.doc('nope.md').satisfies(() => { throw new Error('ran'); }, 'unreached');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /cannot read the file: ENOENT/);
+  });
+
+  test('the predicate sees the LF text of the document', (t) => {
+    const tree = makeTree(t, { 'a.md': 'one\r\ntwo\r\n' }, { sat6: "ctx.doc('a.md').satisfies((text) => !text.includes('\\r'), 'LF only');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
+describe('doc.slice, doc.step and doc.before', () => {
+  const workflow = 'intro\n<step name="one">\nuse A\n</step>\n<step name="two">\nuse B\n</step>\n';
+
+  test('a step is checked on its own body, not on the whole file', (t) => {
+    const tree = makeTree(t, { 'w.md': workflow }, {
+      s1: "ctx.doc('w.md').step('one').has(/use A/, 'one uses A').lacks(/use B/, 'one does not use B');",
+      s2: "ctx.doc('w.md').step('two').has(/use B/, 'two uses B').lacks(/use A/, 'two does not use A');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a phrase that appears only in the other step is caught', (t) => {
+    const tree = makeTree(t, { 'w.md': workflow }, { s3: "ctx.doc('w.md').step('one').has(/use B/, 'one uses B');" });
+    assert.equal(runTree(tree).length, 1);
+  });
+
+  test('a missing step marker, and a step that never closes, are findings', (t) => {
+    const tree = makeTree(t, { 'w.md': workflow, 'u.md': '<step name="open">\nno end\n' }, {
+      s4: "ctx.doc('w.md').step('absent').lacks(/x/, 'unused');",
+      s5: "ctx.doc('u.md').step('open').lacks(/x/, 'unused');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /marker .*absent.* not found/);
+    assert.match(messages[1], /closing marker .*<\/step>.* not found/);
+  });
+
+  test('before requires both markers, in that order', (t) => {
+    const tree = makeTree(t, { 'o.md': 'first ... second\n' }, {
+      good: "ctx.doc('o.md').before('first', 'second', 'first then second');",
+      reversed: "ctx.doc('o.md').before('second', 'first', 'reversed');",
+      absent: "ctx.doc('o.md').before('first', 'third', 'third missing');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /^absent: third missing/);
+    assert.match(messages[1], /^reversed: reversed/);
+  });
+});
+
+describe('doc.slice with several closing markers, and doc.shorterThan', () => {
+  const branch = 'head\nOPEN\nbody A\n**If `x`:** sibling one\n**If `y`:** sibling two\ntail\n</step>\n';
+
+  test('the slice ends at the earliest closing marker present, searched after the opening marker', (t) => {
+    const tree = makeTree(t, { 'b.md': branch }, {
+      early: "ctx.doc('b.md').slice('OPEN', ['</step>', '**If `']).has(/body A/, 'inside').lacks(/sibling/, 'cut at the sibling marker');",
+      // An end marker that begins like the start marker must end the slice at the NEXT one.
+      overlapping: "ctx.doc('b.md').slice('**If `x`:**', ['**If `', '</step>']).has(/sibling one/, 'inside').lacks(/sibling two/, 'cut at the next marker');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a closing marker missing from the list is skipped, and none present at all is a finding', (t) => {
+    const tree = makeTree(t, { 'b.md': branch }, {
+      some: "ctx.doc('b.md').slice('OPEN', ['absent', '</step>']).has(/tail/, 'ends at the one that exists');",
+      none: "ctx.doc('b.md').slice('OPEN', ['absent', 'also absent']).lacks(/x/, 'dead document');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /^none: closing marker .*absent.* not found after "OPEN"/);
+  });
+
+  test('shorterThan is exclusive at the limit: limit - 1 passes, limit and limit + 1 fail', (t) => {
+    for (const [length, fails] of [[9, false], [10, true], [11, true]]) {
+      const tree = makeTree(t, { 's.md': `${'x'.repeat(length - 1)}\n` }, { size: "ctx.doc('s.md').shorterThan(10, 'under ten');" });
+      const findings = runTree(tree);
+      assert.equal(findings.length, fails ? 1 : 0, `length ${length}`);
+      if (fails) assert.match(findings[0].message, new RegExp(`^size: under ten \\(${length} characters, expected fewer than 10\\)$`));
+    }
+  });
+
+  test('an empty list of closing markers, and an empty marker in the list, are findings, not a slice to the end', (t) => {
+    const tree = makeTree(t, { 'b.md': branch }, {
+      none: "ctx.doc('b.md').slice('OPEN', []).has(/tail/, 'dead document');",
+      blank: "ctx.doc('b.md').slice('OPEN', ['</step>', '']).has(/tail/, 'dead document');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    for (const message of messages) assert.match(message, /must be a non-empty list of non-empty markers/);
+  });
+
+  test('frontmatter reads a BOM document at the right offsets, and an empty block is an empty document', (t) => {
+    const tree = makeTree(t, {
+      'bom.md': '\uFEFF---\nname: x\ntools:\n  - A\n---\nbody\n  - B\n',
+      'empty.md': '---\n---\nbody\n',
+    }, {
+      bom: "ctx.doc('bom.md').frontmatter().has(/^[ \\t]+-[ \\t]+A$/m, 'A is listed').lacks(/B|body/, 'the body is excluded');",
+      empty: "ctx.doc('empty.md').frontmatter().has(/A/, 'an empty block holds nothing');",
+    });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^empty: an empty block holds nothing/);
+  });
+
+  test('frontmatter is the closed block only; a body list item is outside it and a missing or unclosed block is a finding', (t) => {
+    const tree = makeTree(t, {
+      'f.md': '---\nname: x\ntools:\n  - A\n---\nbody\n  - B\n',
+      'n.md': 'no block\n  - A\n',
+      'u.md': '---\nname: x\n  - A\n',
+    }, {
+      inside: "ctx.doc('f.md').frontmatter().has(/^[ \\t]+-[ \\t]+A$/m, 'A is listed').lacks(/B/, 'the body is excluded');",
+      none: "ctx.doc('n.md').frontmatter().has(/A/, 'dead document');",
+      open: "ctx.doc('u.md').frontmatter().has(/A/, 'dead document');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /^none: no closed YAML frontmatter block/);
+    assert.match(messages[1], /^open: no closed YAML frontmatter block/);
+  });
+});
+
+describe('ctx.doc reads only regular, non-empty files inside the repository', () => {
+  test('a path that climbs out of the root, an absolute path and an empty path are findings', (t) => {
+    const tree = makeTree(t, { 'a.md': 'x\n' }, {
+      climb: "ctx.doc('../outside.md').lacks(/x/, 'never a pass');",
+      absolute: "ctx.doc('/etc/hosts').lacks(/x/, 'never a pass');",
+      empty_path: "ctx.doc('').lacks(/x/, 'never a pass');",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 3);
+    for (const message of messages) assert.match(message, /not a repo-relative path inside the repository/);
+  });
+
+  test('a symlink and a directory are refused, even when the symlink points at a real file', (t) => {
+    const tree = makeTree(t, { 'real.md': 'content\n', 'dir/inner.md': 'x\n' }, {
+      linked: "ctx.doc('link.md').has(/content/, 'follows nothing');",
+      directory: "ctx.doc('dir').has(/x/, 'a directory is not a document');",
+    });
+    try {
+      fs.symlinkSync(path.join(tree.root, 'real.md'), path.join(tree.root, 'link.md'));
+    } catch (err) {
+      t.skip(`symlinks are unavailable here: ${err.code}`);
+      return;
+    }
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.match(messages.find((m) => m.startsWith('linked:')), /a symlink/);
+    assert.match(messages.find((m) => m.startsWith('directory:')), /not a file/);
+  });
+
+  test('an empty file is a finding, so a lacks-only contract cannot pass on it', (t) => {
+    const tree = makeTree(t, { 'empty.md': '  \n' }, { blank: "ctx.doc('empty.md').lacks(/anything/, 'nothing to find');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /the file is empty/);
+  });
+
+  test('a contract that makes no assertion, and one that is asynchronous, are findings', (t) => {
+    const tree = makeTree(t, { 'a.md': 'x\n' }, {
+      idle: "ctx.doc('a.md');",
+      later: "return Promise.resolve().then(() => ctx.doc('a.md').has(/never collected/, 'dropped'));",
+    });
+    const messages = runTree(tree).map((f) => f.message);
+    assert.equal(messages.length, 2);
+    assert.ok(messages.some((m) => /^idle: the contract made no assertion/.test(m)));
+    assert.ok(messages.some((m) => /^later: check must be synchronous/.test(m)));
+  });
+
+  test('ctx.fail counts as an assertion and is reported', (t) => {
+    const tree = makeTree(t, {}, { explicit: "ctx.fail('x.md', 'stated failure');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^explicit: stated failure/);
+  });
+});
+
+describe('doc.before is first-to-first; doc.followedBy looks for b after a', () => {
+  test('before fails when a stray b comes before a, even if a later b follows it', (t) => {
+    const tree = makeTree(t, { 'o.md': 'b stray ... a ... b later\n' }, {
+      strict: "ctx.doc('o.md').before('a ', 'b ', 'the first a before the first b');",
+      loose: "ctx.doc('o.md').followedBy('a ', 'b ', 'a b exists after a');",
+    });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^strict:/);
+  });
+
+  test('followedBy passes when b appears after the first a, and fails when only an earlier b exists', (t) => {
+    const tree = makeTree(t, { 'o.md': 'b first, then a\n' }, { only_before: "ctx.doc('o.md').followedBy('a', 'b', 'b after a');" });
+    assert.equal(runTree(tree).length, 1);
+    const ok = makeTree(t, { 'o.md': 'a then b\n' }, { fine: "ctx.doc('o.md').followedBy('a', 'b', 'b after a');" });
+    assert.deepEqual(runTree(ok), []);
+  });
+
+  test('a slice that misses is one finding, and the assertions chained on it add none', (t) => {
+    const tree = makeTree(t, { 'w.md': 'no steps here\n' }, {
+      miss: "ctx.doc('w.md').step('absent').has(/x/, 'h1').has(/y/, 'h2').lacks(/z/, 'l').before('a', 'b', 'o').followedBy('a', 'b', 'f').slice('q');",
+    });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /marker .*absent.* not found/);
+  });
+
+  test('a global or sticky pattern gives the same answer on every call', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha alpha\n' }, {
+      stateful: "const doc = ctx.doc('a.md'); const re = /alpha/g; doc.has(re, 'first').has(re, 'second').has(re, 'third');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
+describe('the run itself fails closed', () => {
+  test('a contract that throws is a finding of its own, and the others still run', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n' }, {
+      a_boom: "throw new Error('exploded');",
+      b_real: "ctx.doc('a.md').has(/missing/, 'real contract still runs');",
+    });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 2);
+    assert.match(findings[0].message, /a_boom: the contract threw: exploded/);
+    assert.match(findings[1].message, /^b_real:/);
+  });
+
+  test('a directory with fewer contracts than the minimum fails, at the limit and one under', (t) => {
+    const tree = makeTree(t, { 'a.md': 'x\n' }, { only: "ctx.doc('a.md').has(/x/, 'ok');" });
+    assert.deepEqual(runTree(tree, { minContracts: 1 }), []);
+    const findings = runTree(tree, { minContracts: 2 });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /expected at least 2 contract\(s\), found 1/);
+  });
+
+  test('an id in only that matches no contract is a finding, not an empty pass', (t) => {
+    const tree = makeTree(t, { 'a.md': 'x\n' }, { real: "ctx.doc('a.md').has(/x/, 'ok');" });
+    const findings = runTree(tree, { only: ['typo'] });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /no such contract: typo/);
+  });
+
+  test('a module without id and check is reported, not skipped', (t) => {
+    const root = tempDir(t, 'gsd-text-contracts-bad-');
+    const dir = path.join(root, 'contracts');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'bad.cjs'), 'module.exports = { id: "bad" };\n');
+    const findings = textContracts.run({ root, dir });
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /bad\.cjs must export/);
+  });
+
+  test('the shipped contracts load, with unique ids, and their number is the pinned minimum', () => {
+    const ids = textContracts.loadContracts().map((c) => c.id);
+    assert.deepEqual([...ids].sort(), [...SHIPPED].sort());
+    assert.equal(new Set(ids).size, ids.length);
+    // Deleting a contract file, or adding one without raising MIN_CONTRACTS, fails here.
+    assert.equal(ids.length, textContracts.MIN_CONTRACTS);
+  });
+});
+
+describe('ctx.docs, ctx.exists and ctx.absent', () => {
+  test('docs() joins the files into one document an assertion can match in any of them', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'b.md': 'beta\n' }, {
+      ok: "ctx.docs(['a.md', 'b.md']).has('alpha', 'in a').has('beta', 'in b').lacks('gamma', 'in neither');",
+    });
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('docs() fails on a phrase that is in none of the files, naming every file', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'b.md': 'beta\n' }, { c: "ctx.docs(['a.md', 'b.md']).has('gamma', 'needs gamma');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'a.md + b.md');
+  });
+
+  test('docs() with one missing file is one finding for that file and no noise from the assertions after it', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n' }, { c: "ctx.docs(['a.md', 'gone.md']).has('alpha', 'in a').has('zzz', 'in none');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].file, 'gone.md');
+    assert.match(findings[0].message, /cannot read the file/);
+  });
+
+  test('docs() with no files is a finding, not a vacuous pass', (t) => {
+    const tree = makeTree(t, {}, { c: "ctx.docs([]).has('x', 'needs x');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /docs\(\) needs at least one repo-relative path/);
+  });
+
+  test('exists() passes for a file and fails for a missing path and for a directory', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'dir/x.md': 'x\n' }, {
+      ok: "ctx.exists('a.md', 'a is there');",
+      gone: "ctx.exists('gone.md', 'gone is there');",
+      dir: "ctx.exists('dir', 'dir is a file');",
+    });
+    const findings = runTree(tree);
+    assert.deepEqual(findings.map((f) => f.file).sort(), ['dir', 'gone.md']);
+    assert.ok(findings.every((f) => /expected a regular file at /.test(f.message)));
+  });
+
+  test('absent() passes for a missing path and fails for a file, a directory and a symlink', (t) => {
+    const tree = makeTree(t, { 'a.md': 'alpha\n', 'dir/x.md': 'x\n' }, {
+      ok: "ctx.absent('gone.md', 'gone is gone');",
+      file: "ctx.absent('a.md', 'a must go');",
+      dir: "ctx.absent('dir', 'dir must go');",
+      link: "ctx.absent('link.md', 'link must go');",
+    });
+    fs.symlinkSync(path.join(tree.root, 'a.md'), path.join(tree.root, 'link.md'));
+    const findings = runTree(tree);
+    assert.deepEqual(findings.map((f) => f.file).sort(), ['a.md', 'dir', 'link.md']);
+    assert.ok(findings.every((f) => /expected no file at /.test(f.message)));
+  });
+
+  test('exists() and absent() refuse a path outside the repository and count as assertions', (t) => {
+    const tree = makeTree(t, {}, { out: "ctx.exists('../escape.md', 'x'); ctx.absent('/etc/hosts', 'y');" });
+    const findings = runTree(tree);
+    assert.equal(findings.length, 2);
+    assert.ok(findings.every((f) => /not a repo-relative path inside the repository/.test(f.message)));
+  });
+
+  test('a symlinked directory in the path cannot redirect doc, docs, exists or absent out of the tree', (t) => {
+    const outside = tempDir(t, 'gsd-text-contracts-outside-');
+    write(outside, 'secret.md', 'secret\n');
+    const tree = makeTree(t, {}, {
+      d: "ctx.doc('link/secret.md').has('secret', 's');",
+      ds: "ctx.docs(['link/secret.md']).has('secret', 's');",
+      e: "ctx.exists('link/secret.md', 'x');",
+      a: "ctx.absent('link/secret.md', 'y');",
+    });
+    fs.symlinkSync(outside, path.join(tree.root, 'link'), 'dir');
+    const findings = runTree(tree);
+    assert.equal(findings.length, 4, JSON.stringify(findings));
+    assert.ok(findings.every((f) => /resolves outside the repository through a symlinked directory/.test(f.message)));
+  });
+
+  test('a symlinked directory that stays inside the tree is still read', (t) => {
+    const tree = makeTree(t, { 'real/a.md': 'alpha\n' }, { ok: "ctx.doc('alias/a.md').has('alpha', 'a');" });
+    fs.symlinkSync(path.join(tree.root, 'real'), path.join(tree.root, 'alias'), 'dir');
+    assert.deepEqual(runTree(tree), []);
+  });
+
+  test('a contract whose only assertion is absent() is not "made no assertion"', (t) => {
+    const tree = makeTree(t, {}, { only: "ctx.absent('gone.md', 'gone');" });
+    assert.deepEqual(runTree(tree), []);
+  });
+});
+
+const SHIPPED = [
+  'adr-15-progress-converge', 'autonomous-converge',
+  'autonomous-allowed-tools', 'autonomous-decomposition', 'autonomous-interactive', 'autonomous-to-flag',
+  'chain-flag-plan-phase', 'discuss-checkpoint', 'agent-skills-awareness', 'scan-command', 'analyze-dependencies',
+  'cline-support', 'inventory-headings-countfree', 'policy-release-no-npm-self-upgrade', 'phase6-capability-docs',
+  'playwright-ui-verify',
+  'release-coverage-scope', 'gsd-researcher-flow-diagram', 'import-command', 'gates-taxonomy', 'ios-scaffold-safety',
+  'audit-milestone-filename-guard', 'branch-no-track-guard', 'execute-plan-interrupted-agent-guard', 'handoff-next-step',
+  'transition-verification-gate',
+];
+
+describe('the shipped contracts hold on the real files, and fail when a contracted phrase goes', () => {
+  // The files each contract reads, copied into a temporary root so one phrase can be removed.
+  const FILES = [
+    'commands/gsd/progress.md', 'gsd-core/workflows/next.md', 'gsd-core/workflows/help/modes/full.md',
+    'docs/COMMANDS.md', 'docs/how-to/run-phases-autonomously.md',
+    'commands/gsd/autonomous.md', 'gsd-core/workflows/autonomous.md', 'gsd-core/workflows/plan-review-convergence.md',
+    'gsd-core/workflows/autonomous/steps/converge-fail-fast.md', 'gsd-core/workflows/autonomous/steps/converge-dispatch-bg.md',
+    'gsd-core/workflows/autonomous/steps/converge-dispatch-inline.md', 'gsd-core/workflows/autonomous/steps/converge-loop.md',
+    'gsd-core/references/autonomous-smart-discuss.md',
+    'gsd-core/workflows/plan-phase.md', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+    'gsd-core/workflows/discuss-phase.md', 'gsd-core/workflows/discuss-phase/modes/chain.md',
+    'gsd-core/workflows/discuss-phase/modes/default.md', 'gsd-core/workflows/discuss-phase/templates/checkpoint.json',
+    'commands/gsd/map-codebase.md', 'gsd-core/workflows/scan.md', 'gsd-core/workflows/analyze-dependencies.md',
+    ...[
+      'gsd-debugger', 'gsd-integration-checker', 'gsd-security-auditor', 'gsd-nyquist-auditor', 'gsd-codebase-mapper',
+      'gsd-roadmapper', 'gsd-eval-auditor', 'gsd-intel-updater', 'gsd-doc-writer',
+    ].map((name) => `agents/${name}.md`),
+    '.clinerules', 'docs/INVENTORY.md', '.github/workflows/release.yml', 'docs/how-to/develop-a-capability.md', 'docs/README.md',
+    'gsd-core/workflows/verify-work/steps/automated-ui-verification.md', 'gsd-core/workflows/ui-review.md', 'agents/gsd-ui-auditor.md',
+    'agents/gsd-phase-researcher.md', 'gsd-core/templates/research.md', 'commands/gsd/import.md', 'gsd-core/workflows/import.md',
+    'gsd-core/references/gates.md', 'gsd-core/workflows/execute-phase.md', 'agents/gsd-plan-checker.md', 'agents/gsd-verifier.md',
+    'gsd-core/references/ios-scaffold.md', 'agents/gsd-executor.md', 'gsd-core/references/universal-anti-patterns.md',
+    'gsd-core/workflows/audit-milestone.md', 'gsd-core/workflows/execute-plan.md', 'gsd-core/workflows/transition.md',
+    'commands/gsd/new-project.md', 'skills/gsd-new-project/SKILL.md', 'pi/package-skills/gsd-new-project/SKILL.md',
+    'commands/gsd/new-milestone.md', 'skills/gsd-new-milestone/SKILL.md', 'pi/package-skills/gsd-new-milestone/SKILL.md',
+  ];
+
+  function copyOfRepoFiles(t) {
+    const root = tempDir(t, 'gsd-text-contracts-copy-');
+    for (const rel of FILES) write(root, rel, fs.readFileSync(path.join(REPO_ROOT, ...rel.split('/')), 'utf8'));
+    return root;
+  }
+
+  // The pinned minimum counts the whole directory; a run limited to some contracts must find those.
+  const runShipped = (root, only = SHIPPED) => textContracts.run({ root, only, minContracts: only.length });
+
+  test('an untouched copy of the files satisfies every shipped contract', (t) => {
+    assert.deepEqual(runShipped(copyOfRepoFiles(t)), []);
+  });
+
+  for (const [rel, phrase, contract] of [
+    ['gsd-core/workflows/autonomous.md', '--override-gate', 'autonomous-converge'],
+    ['gsd-core/workflows/next.md', 'PLAN_STRATEGY="converge"', 'adr-15-progress-converge'],
+    ['commands/gsd/progress.md', '--cross-ai', 'adr-15-progress-converge'],
+    ['gsd-core/workflows/autonomous/steps/converge-fail-fast.md', 'OVERRIDES the `workflow.plan_review_convergence` config gate', 'autonomous-converge'],
+  ]) {
+    test(`removing ${JSON.stringify(phrase)} from ${rel} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      assert.ok(before.includes(phrase), 'the phrase is present to start with');
+      fs.writeFileSync(abs, before.split(phrase).join(''));
+      const findings = runShipped(root);
+      assert.ok(findings.length > 0, 'a finding is reported');
+      assert.ok(findings.every((f) => f.message.startsWith(`${contract}:`) || f.message.includes(`${contract}:`)), 'and it names the contract');
+    });
+  }
+
+  // Regressions the contracts exist to catch, introduced into a copy by editing one file.
+  for (const [title, rel, edit, expected] of [
+    ['a stray "Proceed to iterate step" before transition.md in the passed branch (#1526)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('**If `passed`:**', '**If `passed`:** Proceed to iterate step'), /passed verification must invoke transition\.md/],
+    ['a hardcoded .planning/STATE.md read back in discover_phases (#4455)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('<step name="discover_phases">', '<step name="discover_phases">\nSTATE_CONTENT=$(cat .planning/STATE.md 2>/dev/null || true)'), /hardcoded root \.planning\/STATE\.md read/],
+    ['disk_status !== "complete" back in discover_phases', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('<step name="discover_phases">', '<step name="discover_phases">\ndisk_status !== "complete"'), /must not filter on disk_status/],
+    ['`exit 1` back in the converge-fail-fast step (#4600)', 'gsd-core/workflows/autonomous/steps/converge-fail-fast.md',
+      (text) => `${text}\nexit 1\n`, /must not stop an explicit-flag run/],
+    ['the override-gate conditional removed from the host workflow (#4600)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.split('if [ "${PLAN_STRATEGY}" = "converge" ]; then').join('if [ "${PLAN_STRATEGY}" = "never" ]; then'), /conditional must exist and append --override-gate/],
+    ['a raw-frontmatter grep back in the human_needed read (#1522)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('After execute, read canonical verification', 'After execute, read canonical verification grep "^status:"'), /must not route stale human_needed reports from raw frontmatter/],
+  ]) {
+    test(`mutation: ${title} fails autonomous-converge`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The four autonomous-* contracts: each asserts on the command, the workflow or the smart-discuss reference.
+  const SIZE_LIMIT = 40 * 1024;
+  const dropLine = (line) => (text) => text.split('\n').filter((l) => l.trim() !== line).join('\n');
+  for (const [title, rel, edit, contract, expected] of [
+    ['Agent dropped from the command allowed-tools (#2043)', 'commands/gsd/autonomous.md',
+      dropLine('- Agent'), 'autonomous-allowed-tools', /allowed-tools must include "Agent"/],
+    ['Agent dropped from allowed-tools but listed in the body, outside the frontmatter (#2043)', 'commands/gsd/autonomous.md',
+      (text) => `${dropLine('- Agent')(text)}\n  - Agent\n`, 'autonomous-allowed-tools', /allowed-tools must include "Agent"/],
+    ['the workflow no longer references autonomous-smart-discuss.md (#2196)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.split('autonomous-smart-discuss.md').join('the-extracted-file'), 'autonomous-decomposition', /must reference autonomous-smart-discuss\.md/],
+    ['CONTEXT.md gone from the smart-discuss reference (#2196)', 'gsd-core/references/autonomous-smart-discuss.md',
+      (text) => text.split('CONTEXT.md').join('the context file'), 'autonomous-decomposition', /instructions for writing CONTEXT\.md/],
+    ['--interactive gone from the command argument-hint (#1413)', 'commands/gsd/autonomous.md',
+      (text) => text.replace('[--interactive] ', ''), 'autonomous-interactive', /argument-hint should include --interactive/],
+    ['a sibling **If branch opened straight after the INTERACTIVE marker, so the Skill call falls outside it (#1413)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('**If `INTERACTIVE` is set:**', '**If `INTERACTIVE` is set:**\n**If `other`:**'), 'autonomous-interactive', /INTERACTIVE branch must invoke Skill/],
+    ['the success criteria lose "discuss inline" (#1413)', 'gsd-core/workflows/autonomous.md',
+      (text) => {
+        const at = text.indexOf('discuss inline', text.indexOf('<success_criteria>'));
+        return `${text.slice(0, at)}discuss${text.slice(at + 'discuss inline'.length)}`;
+      }, 'autonomous-interactive', /success criteria should mention discuss inline/],
+    ['TO_PHASE no longer defaults to empty (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.split('TO_PHASE=""').join('TO_PHASE=0'), 'autonomous-to-flag', /TO_PHASE should default to empty/],
+    ['the startup banner line stops naming the --to target, the success-criteria checklist still does (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('If `TO_PHASE` is set, display: `Stopping after', 'If `TO_PHASE` is set, display: `Ending'), 'autonomous-to-flag', /startup banner should display the --to target/],
+    ['the already-completed exit message goes, the success-criteria checklist still names it (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('already completed. Nothing to do.', 'done.'), 'autonomous-to-flag', /exit with a message when the --to target is already completed/],
+    ['the iterate step renamed, so its section cannot be found (#1644)', 'gsd-core/workflows/autonomous.md',
+      (text) => text.replace('<step name="iterate">', '<step name="advance">'), 'autonomous-to-flag', /marker .*iterate.* not found/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The five batch-3 contracts: workflows split across files, agent blocks, a consolidated command, a removed one.
+  const without = (phrase) => (text) => text.split(phrase).join('');
+  const AUTO_GUARD_TAIL = ' && [[ ! "$GSD_ARGS" =~ --chain ]]';
+  for (const [title, rel, edit, contract, expected] of [
+    ['the --chain half of the dual-flag guard dropped from the plan-phase step file (#1620)', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+      without(AUTO_GUARD_TAIL), 'chain-flag-plan-phase', /plan-phase should check for both --auto and --chain/],
+    ['the --chain half of the dual-flag guard dropped from discuss-phase chain mode (#1620)', 'gsd-core/workflows/discuss-phase/modes/chain.md',
+      without(AUTO_GUARD_TAIL), 'chain-flag-plan-phase', /discuss-phase .* should use the same dual-flag guard/],
+    ['the chain flag no longer persisted by plan-phase (#1620)', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+      without('config-set workflow._auto_chain_active true'), 'chain-flag-plan-phase', /should persist chain flag/],
+    ['git checkout -b added to plan-phase (#2388)', 'gsd-core/workflows/plan-phase.md',
+      (text) => `${text}\ngit checkout -b gsd/new\n`, 'chain-flag-plan-phase', /must not instruct LLM to create a new branch/],
+    ['plan-phase deleted, so its step file is not enough (#2388)', 'gsd-core/workflows/plan-phase.md',
+      () => '', 'chain-flag-plan-phase', /the file is empty/],
+    ['areas_remaining gone from the checkpoint template (#1485)', 'gsd-core/workflows/discuss-phase/templates/checkpoint.json',
+      without('areas_remaining'), 'discuss-checkpoint', /checkpoint should track remaining areas/],
+    ['rm -f gone from the discuss-phase workflow, so the checkpoint is never cleaned up (#1485)', 'gsd-core/workflows/discuss-phase.md',
+      without('rm -f'), 'discuss-checkpoint', /checkpoint file should be deleted/],
+    ['the success criteria lose the resume requirement (#1485)', 'gsd-core/workflows/discuss-phase.md',
+      (text) => {
+        const at = text.indexOf('<success_criteria>');
+        const close = text.indexOf('</success_criteria>');
+        return text.slice(0, at) + text.slice(at, close).replace(/resume|Resume/g, 'continue') + text.slice(close);
+      }, 'discuss-checkpoint', /success criteria should mention session resume/],
+    ['the Project skills block gone from an agent', 'agents/gsd-roadmapper.md',
+      without('Project skills'), 'agent-skills-awareness', /gsd-roadmapper missing Project skills block/],
+    ['an agent told to load the whole AGENTS.md', 'agents/gsd-debugger.md',
+      (text) => `${text}\nRead AGENTS.md first.\n`, 'agent-skills-awareness', /gsd-debugger should not instruct loading full AGENTS\.md/],
+    ['the doc writer loses its SECURITY note', 'agents/gsd-doc-writer.md',
+      without('SECURITY'), 'agent-skills-awareness', /gsd-doc-writer missing security note/],
+    ['--fast gone from map-codebase', 'commands/gsd/map-codebase.md',
+      without('--fast'), 'scan-command', /must document --fast flag/],
+    ['one focus area gone from the scan workflow', 'gsd-core/workflows/scan.md',
+      without('`concerns`'), 'scan-command', /should document the "concerns" focus area/],
+    ['the scan workflow no longer names the mapper agent', 'gsd-core/workflows/scan.md',
+      without('gsd-codebase-mapper'), 'scan-command', /should reference the gsd-codebase-mapper agent/],
+    ['overlap detection gone from the analyze-dependencies workflow', 'gsd-core/workflows/analyze-dependencies.md',
+      (text) => text.replace(/overlap|conflict/g, 'clash'), 'analyze-dependencies', /should mention file overlap\/conflict detection/],
+    ['the removed command documented again in COMMANDS.md (#2790)', 'docs/COMMANDS.md',
+      (text) => `${text}\n### \`/gsd-analyze-dependencies\`\n`, 'analyze-dependencies', /should not document the removed \/gsd-analyze-dependencies command/],
+    ['the removed command file restored (#2790)', 'commands/gsd/analyze-dependencies.md',
+      () => '---\nname: x\n---\n', 'analyze-dependencies', /should have been deleted in #2790/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const exists = fs.existsSync(abs);
+      const before = exists ? fs.readFileSync(abs, 'utf8') : '';
+      const after = edit(before);
+      assert.ok(!exists || after !== before, 'the mutation changed the file');
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The five batch-4 contracts.
+  const dropAll = (phrase) => (text) => text.split(phrase).join('');
+  const append = (line) => (text) => `${text}\n${line}\n`;
+  for (const [title, rel, edit, contract, expected] of [
+    ['.clinerules loses its test framework mention', '.clinerules',
+      (text) => text.replace(/node:test|node:assert/g, 'a runner'), 'cline-support', /should mention test framework/],
+    ['.clinerules loses its GSD workflow mention', '.clinerules',
+      (text) => text.replace(/gsd|GSD|workflow/g, 'x'), 'cline-support', /should mention GSD workflows/],
+    ['.clinerules loses its CommonJS standard', '.clinerules',
+      (text) => text.replace(/CommonJS|require/g, 'x'), 'cline-support', /should mention CommonJS standard/],
+    ['.clinerules loses its architecture overview', '.clinerules',
+      (text) => text.replace(/bin\/lib|workflows|agents/g, 'x'), 'cline-support', /should describe project architecture/],
+    ['.clinerules emptied, so the contract has nothing to read', '.clinerules',
+      () => '', 'cline-support', /the file is empty/],
+    ['a "(12 shipped)" count back in an INVENTORY heading', 'docs/INVENTORY.md',
+      append('## Hooks (12 shipped)'), 'inventory-headings-countfree', /still has a hard-count "\(N shipped\)" heading/],
+    ['a count on a heading whose title is 298 characters (one under the pattern bound)', 'docs/INVENTORY.md',
+      append(`## ${'t'.repeat(298)} (3 shipped)`), 'inventory-headings-countfree', /still has a hard-count/],
+    ['a count on a heading whose title is 299 characters (the pattern bound)', 'docs/INVENTORY.md',
+      append(`## ${'t'.repeat(299)} (3 shipped)`), 'inventory-headings-countfree', /still has a hard-count/],
+    ['npm install -g npm@latest added to release.yml (#318)', '.github/workflows/release.yml',
+      append('      - run: npm install -g npm@latest'), 'policy-release-no-npm-self-upgrade', /must not contain a runtime global npm self-upgrade step/],
+    ['npm i -g npm added to release.yml (#318)', '.github/workflows/release.yml',
+      append('      - run: npm i -g npm'), 'policy-release-no-npm-self-upgrade', /must not contain a runtime global npm self-upgrade step/],
+    ['npm install --global npm@11 added to release.yml (#318)', '.github/workflows/release.yml',
+      append('  run: npm install --global npm@11'), 'policy-release-no-npm-self-upgrade', /must not contain a runtime global npm self-upgrade step/],
+    ['the capability manual loses the registry --check step', 'docs/how-to/develop-a-capability.md',
+      dropAll('node scripts/gen-capability-registry.cjs --check'), 'phase6-capability-docs', /manual documents the registry --check step/],
+    ['the capability manual loses the render-hooks verification', 'docs/how-to/develop-a-capability.md',
+      dropAll('gsd-tools loop render-hooks plan:pre'), 'phase6-capability-docs', /manual documents render-hooks verification/],
+    ['the docs index no longer links the capability manual', 'docs/README.md',
+      dropAll('how-to/develop-a-capability.md'), 'phase6-capability-docs', /docs index links the Capability developer manual/],
+    ['the capability manual loses its ADR-857 citation', 'docs/how-to/develop-a-capability.md',
+      dropAll('ADR-857'), 'phase6-capability-docs', /manual cites ADR-857/],
+    ['the capability manual loses the GSD 1.5 loop', 'docs/how-to/develop-a-capability.md',
+      dropAll('GSD 1.5'), 'phase6-capability-docs', /GSD 1\.5 capability development loop/],
+    ['the capability manual loses fragment.inline', 'docs/how-to/develop-a-capability.md',
+      dropAll('fragment.inline'), 'phase6-capability-docs', /manual documents fragment\.inline/],
+    ['the capability manual loses the ai-integration cutover', 'docs/how-to/develop-a-capability.md',
+      dropAll('ai-integration'), 'phase6-capability-docs', /ai-integration planning capability cutover/],
+    ['the capability manual loses the pattern-mapper cutover', 'docs/how-to/develop-a-capability.md',
+      dropAll('pattern-mapper'), 'phase6-capability-docs', /pattern-mapper planning capability cutover/],
+    ['the capability manual emptied, so the contract has nothing to read', 'docs/how-to/develop-a-capability.md',
+      () => '', 'phase6-capability-docs', /the file is empty/],
+    ['Playwright gone from the automated UI verification step (#2994)', 'gsd-core/workflows/verify-work/steps/automated-ui-verification.md',
+      (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /should mention Playwright/],
+    ['the fallback wording gone from the automated UI verification step (#2994)', 'gsd-core/workflows/verify-work/steps/automated-ui-verification.md',
+      (text) => text.replace(/if available|when available|if Playwright|fall back/g, 'always'), 'playwright-ui-verify', /must be conditional with manual fallback/],
+    ['Playwright gone from ui-review.md', 'gsd-core/workflows/ui-review.md',
+      (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /ui-review\.md should reference Playwright-MCP/],
+    ['Playwright gone from the ui-auditor agent', 'agents/gsd-ui-auditor.md',
+      (text) => text.replace(/playwright/gi, 'the browser tool'), 'playwright-ui-verify', /gsd-ui-auditor\.md should mention/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The five batch-5 contracts.
+  const swap = (from, to) => (text) => text.split(from).join(to);
+  const dropFirst = (phrase) => (text) => text.replace(phrase, '');
+  const RAW_SHARD_STEP = '          npm run test:coverage:unit:raw -- --shard ${{ matrix.shard }}';
+  // The text between `<required_reading>` on its own line and its closing tag, edited and put back.
+  const inRequiredReading = (edit) => (text) => {
+    const open = '<required_reading>\n';
+    const at = text.indexOf(open) + open.length;
+    const close = text.indexOf('\n</required_reading>', at);
+    return text.slice(0, at) + edit(text.slice(at, close)) + text.slice(close);
+  };
+  // Sets the first job-cap line after the job's own line in release.yml.
+  const setJobCap = (job, minutes) => (text) => {
+    const cap = text.indexOf('    timeout-minutes: ', text.indexOf(`\n  ${job}:\n`));
+    return `${text.slice(0, cap)}    timeout-minutes: ${minutes}${text.slice(text.indexOf('\n', cap))}`;
+  };
+  for (const [title, rel, edit, contract, expected] of [
+    ['a bare full-suite coverage line added to release.yml (#4335)', '.github/workflows/release.yml',
+      append('      - run: npm run test:coverage'), 'release-coverage-scope', /1 bare 'npm run test:coverage' line\(s\), expected 0/],
+    ['an unsharded unit-coverage line added to release.yml (#4335)', '.github/workflows/release.yml',
+      append('        run: npm run test:coverage:unit'), 'release-coverage-scope', /1 unsharded 'npm run test:coverage:unit' line\(s\), expected 0/],
+    ['an unsharded unit-coverage line as a `- run:` list item added to release.yml (#4335)', '.github/workflows/release.yml',
+      append('      - run: npm run test:coverage:unit'), 'release-coverage-scope', /1 unsharded 'npm run test:coverage:unit' line\(s\), expected 0/],
+    ['one sharded raw-coverage step gone from release.yml (#4335)', '.github/workflows/release.yml',
+      dropFirst(`${RAW_SHARD_STEP}\n`), 'release-coverage-scope', /1 sharded raw-coverage line\(s\), expected 2/],
+    ['a third sharded raw-coverage line added to release.yml (#4335)', '.github/workflows/release.yml',
+      append(RAW_SHARD_STEP.trim()), 'release-coverage-scope', /3 sharded raw-coverage line\(s\), expected 2/],
+    ['one merged-coverage report step gone from release.yml (#4335)', '.github/workflows/release.yml',
+      dropFirst('        run: npm run test:coverage:report'), 'release-coverage-scope', /1 'npm run test:coverage:report' line\(s\), expected 2/],
+    ['one shard step stops pinning AUDIT_BASELINE_REF (#4196)', '.github/workflows/release.yml',
+      dropFirst('          AUDIT_BASELINE_REF: ${{ github.sha }}\n'), 'release-coverage-scope', /must pin AUDIT_BASELINE_REF to github\.sha/],
+    ['rc-test loses its job cap (#5421)', '.github/workflows/release.yml',
+      (text) => {
+        const cap = text.indexOf('    timeout-minutes: ', text.indexOf('\n  rc-test:\n'));
+        return `${text.slice(0, cap)}    # none${text.slice(text.indexOf('\n', cap))}`;
+      }, 'release-coverage-scope', /rc-test must set the job cap/],
+    ['the Component Responsibilities table redirect gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('Component Responsibilities table', 'table'), 'gsd-researcher-flow-diagram', /redirect file mapping to the Component Responsibilities table/],
+    ['the System Architecture Diagram section gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('### System Architecture Diagram', '### Diagram'), 'gsd-researcher-flow-diagram', /gsd-phase-researcher\.md must contain "### System Architecture Diagram"/],
+    ['"not file listings" gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('not file listings', 'listings'), 'gsd-researcher-flow-diagram', /must explicitly state "not file listings"/],
+    ['"data flow through conceptual components" gone from the researcher (#2139)', 'agents/gsd-phase-researcher.md',
+      swap('data flow through conceptual components', 'data flow'), 'gsd-researcher-flow-diagram', /must require "data flow through conceptual components"/],
+    ['"entry points" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/entry points/gi, 'inputs'), 'gsd-researcher-flow-diagram', /must mention "entry points"/],
+    ['"processing stages" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/processing stages/gi, 'steps'), 'gsd-researcher-flow-diagram', /must mention "processing stages"/],
+    ['"decision points" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/decision points/gi, 'branches'), 'gsd-researcher-flow-diagram', /must mention "decision points"/],
+    ['"external dependencies" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/external dependencies/gi, 'services'), 'gsd-researcher-flow-diagram', /must mention "external dependencies"/],
+    ['"data flow through conceptual components" gone from the research template (#2139)', 'gsd-core/templates/research.md',
+      swap('data flow through conceptual components', 'data flow'), 'gsd-researcher-flow-diagram', /research template must include the flow diagram directive/],
+    ['plan-phase gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('plan-phase', 'planning'), 'gates-taxonomy', /must reference plan-phase/],
+    ['execute-phase gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('execute-phase', 'execution'), 'gates-taxonomy', /must reference execute-phase/],
+    ['Package.swift no longer named by ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('Package.swift', 'the package file'), 'ios-scaffold-safety', /must name Package\.swift/],
+    ['executableTarget no longer named by ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('executableTarget', 'target kind'), 'ios-scaffold-safety', /must name \.executableTarget/],
+    ['"arrows" gone from the researcher directive (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => text.replace(/arrows/gi, 'lines'), 'gsd-researcher-flow-diagram', /must mention "arrows"/],
+    ['a Recommended Project Structure heading ahead of the diagram section (#2139)', 'agents/gsd-phase-researcher.md',
+      (text) => `### Recommended Project Structure\n${text}`, 'gsd-researcher-flow-diagram', /must come before Recommended Project Structure/],
+    ['the System Architecture Diagram section gone from the research template (#2139)', 'gsd-core/templates/research.md',
+      swap('### System Architecture Diagram', '### Diagram'), 'gsd-researcher-flow-diagram', /research template must contain "### System Architecture Diagram"/],
+    ['"not file listings" gone from the research template (#2139)', 'gsd-core/templates/research.md',
+      swap('not file listings', 'listings'), 'gsd-researcher-flow-diagram', /research template must prohibit file listings/],
+    ['the import command renamed', 'commands/gsd/import.md',
+      swap('name: gsd:import', 'name: gsd:other'), 'import-command', /should have a name field of gsd:import/],
+    ['the import command description emptied', 'commands/gsd/import.md',
+      (text) => text.replace(/^description:.*$/m, 'description:'), 'import-command', /should have a description field with a value/],
+    ['--from gone from the import argument-hint', 'commands/gsd/import.md',
+      (text) => text.replace(/^argument-hint:.*$/m, 'argument-hint: "<filepath>"'), 'import-command', /should have an argument-hint with --from/],
+    ['the import command no longer references its workflow', 'commands/gsd/import.md',
+      dropAll('@~/.claude/gsd-core/workflows/import.md'), 'import-command', /should reference the workflow via @~\/\.claude\/gsd-core\/workflows\/import\.md/],
+    ['--from gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('--from', '--source'), 'import-command', /should contain --from mode handling/],
+    ['--prd no longer mentioned by the import workflow', 'gsd-core/workflows/import.md',
+      swap('--prd', '--plan'), 'import-command', /should mention --prd exists/],
+    ['the --prd deferral wording gone from the import workflow', 'gsd-core/workflows/import.md',
+      (text) => text.replace(/not yet implemented|follow-up PR|future release/g, 'later'), 'import-command', /should defer --prd to a future release/],
+    ['a Path B implementation for --prd added to the import workflow', 'gsd-core/workflows/import.md',
+      append('## Path B: MODE=prd'), 'import-command', /should NOT have a Path B implementation for --prd/],
+    ['the traversal check gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('traversal', 'walk'), 'import-command', /should validate the --from file path against traversal/],
+    ['REQUIREMENTS.md gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('REQUIREMENTS.md', 'the requirements file'), 'import-command', /should load REQUIREMENTS\.md for conflict detection/],
+    ['[BLOCKER] gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('[BLOCKER]', 'blocker'), 'import-command', /should include BLOCKER severity/],
+    ['[WARNING] gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('[WARNING]', 'warning'), 'import-command', /should include WARNING severity/],
+    ['[INFO] gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('[INFO]', 'info'), 'import-command', /should include INFO severity/],
+    ['gsd-plan-checker gone from the import workflow', 'gsd-core/workflows/import.md',
+      swap('gsd-plan-checker', 'the checker'), 'import-command', /should delegate validation to gsd-plan-checker/],
+    ['the usage line gone from the import workflow', 'gsd-core/workflows/import.md',
+      (text) => text.replace(/Usage: \/gsd[:-]import/g, 'Help'), 'import-command', /should display usage when no arguments are provided/],
+    ['the Abort Gate heading gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('### Abort Gate', '### Abort'), 'gates-taxonomy', /must define "Abort Gate" as an h3 heading/],
+    ['the Revision Gate loses its Recovery field (#1715)', 'gsd-core/references/gates.md',
+      (text) => text.replace('**Recovery:**', '**Fix:**'), 'gates-taxonomy', /Gate "(Pre-flight|Revision) Gate" must include \*\*Recovery:\*\*/],
+    ['the Escalation Gate loses its Examples field (#1715)', 'gsd-core/references/gates.md',
+      (text) => {
+        const at = text.indexOf('### Escalation Gate');
+        return text.slice(0, at) + text.slice(at).replace('**Examples:**', '**Cases:**');
+      }, 'gates-taxonomy', /Gate "Escalation Gate" must include \*\*Examples:\*\*/],
+    ['the Gate Matrix section gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('## Gate Matrix', '## Matrix'), 'gates-taxonomy', /must include a "Gate Matrix" section/],
+    ['the Workflow column gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('| Workflow |', '| Flow |'), 'gates-taxonomy', /table with a Workflow column/],
+    ['verify-work gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('verify-work', 'verification'), 'gates-taxonomy', /must reference verify-work/],
+    ['the next row gone from the Gate Matrix (#1715)', 'gsd-core/references/gates.md',
+      swap('| next |', '| other |'), 'gates-taxonomy', /must reference the next workflow/],
+    ['stall detection gone from gates.md (#1715)', 'gsd-core/references/gates.md',
+      swap('stall detection', 'looping'), 'gates-taxonomy', /must mention stall detection/],
+    ['plan-phase no longer references gates.md (#1715)', 'gsd-core/workflows/plan-phase.md',
+      dropAll('references/gates.md'), 'gates-taxonomy', /plan-phase\.md must reference gates\.md/],
+    ['execute-phase no longer references gates.md (#1715)', 'gsd-core/workflows/execute-phase.md',
+      dropAll('references/gates.md'), 'gates-taxonomy', /execute-phase\.md must reference gates\.md/],
+    ['gsd-verifier loses gates.md from its required_reading block (#1715)', 'agents/gsd-verifier.md',
+      inRequiredReading(dropAll('references/gates.md')), 'gates-taxonomy', /gsd-verifier\.md must reference gates\.md inside <required_reading>/],
+    ['gsd-plan-checker loses gates.md from its required_reading block (#1715)', 'agents/gsd-plan-checker.md',
+      inRequiredReading(dropAll('references/gates.md')), 'gates-taxonomy', /gsd-plan-checker\.md must reference gates\.md inside <required_reading>/],
+    ['gsd-plan-checker names gates.md only outside its required_reading block (#1715)', 'agents/gsd-plan-checker.md',
+      (text) => `${inRequiredReading(dropAll('references/gates.md'))(text)}\nSee references/gates.md\n`, 'gates-taxonomy', /gsd-plan-checker\.md must reference gates\.md inside <required_reading>/],
+    ['the Package.swift prohibition gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('NEVER use `Package.swift`', 'Use `Package.swift`'), 'ios-scaffold-safety', /must explicitly prohibit Package\.swift as the primary build system/],
+    ['the .executableTarget prohibition gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('NEVER', 'Always'), 'ios-scaffold-safety', /must explicitly prohibit \.executableTarget for iOS app targets/],
+    ['project.yml gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('project.yml', 'the project file'), 'ios-scaffold-safety', /must require project\.yml as the XcodeGen spec file/],
+    ['xcodegen generate gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('xcodegen generate', 'xcodegen run'), 'ios-scaffold-safety', /must require the xcodegen generate command/],
+    ['SwiftUI API availability gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('SwiftUI API availability', 'SwiftUI notes'), 'ios-scaffold-safety', /must document SwiftUI API availability/],
+    ['IPHONEOS_DEPLOYMENT_TARGET gone from ios-scaffold.md (#2023)', 'gsd-core/references/ios-scaffold.md',
+      swap('IPHONEOS_DEPLOYMENT_TARGET', 'the target'), 'ios-scaffold-safety', /must document iOS deployment target compatibility/],
+    ['the executor no longer references ios-scaffold.md (#2023)', 'agents/gsd-executor.md',
+      dropAll('ios-scaffold.md'), 'ios-scaffold-safety', /gsd-executor\.md must reference ios-scaffold\.md/],
+    ['the Package.swift anti-pattern gone from universal-anti-patterns.md (#2023)', 'gsd-core/references/universal-anti-patterns.md',
+      swap('`Package.swift` + `.executableTarget`', 'a build file'), 'ios-scaffold-safety', /must document the Package\.swift misuse anti-pattern/],
+    ['the iOS scope gone from the universal anti-pattern (#2023)', 'gsd-core/references/universal-anti-patterns.md',
+      swap('primary build system for iOS apps', 'primary build system'), 'ios-scaffold-safety', /must say the misuse is for iOS apps/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The job-cap floor of rc-test and finalize-test is inclusive: 29 fails, 30 and 31 pass.
+  for (const job of ['rc-test', 'finalize-test']) {
+    for (const [minutes, fails] of [[29, true], [30, false], [31, false]]) {
+      test(`${job} with a job cap of ${minutes} minutes ${fails ? 'fails' : 'satisfies'} release-coverage-scope`, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, '.github', 'workflows', 'release.yml');
+        fs.writeFileSync(abs, setJobCap(job, minutes)(fs.readFileSync(abs, 'utf8')));
+        const findings = runShipped(root, ['release-coverage-scope']);
+        assert.equal(findings.length, fails ? 1 : 0, JSON.stringify(findings));
+        if (fails) assert.match(findings[0].message, new RegExp(`${job} job cap must be at least 30 \\(was 29\\)`));
+      });
+    }
+  }
+
+  // The five batch-6 contracts.
+  const AUDIT_READER = 'v{version}-MILESTONE-AUDIT.md';
+  const WRITER_LINE = 'Create `${PLANNING_ROOT}/v{version}-MILESTONE-AUDIT.md` with:';
+  const PROBE = '[ -f .planning/current-agent-id.txt ]';
+  const CLEAR = 'rm -f .planning/current-agent-id.txt';
+  // The text of the init_agent_tracking step, edited and put back.
+  const inTrackingStep = (edit) => (text) => {
+    const open = '<step name="init_agent_tracking">';
+    const at = text.indexOf(open);
+    const close = text.indexOf('</step>', at);
+    return text.slice(0, at) + edit(text.slice(at, close)) + text.slice(close);
+  };
+  // The file with only `keep` readers of the report filename left outside the writer line.
+  const withReaders = (keep) => (text) => {
+    let total = text.split(AUDIT_READER).length - 1;
+    return text.split('\n').map((line) => {
+      if (line === WRITER_LINE) return line;
+      let out = line;
+      while (total > keep && out.includes(AUDIT_READER)) {
+        out = out.replace(AUDIT_READER, 'v{version}-AUDIT.md');
+        total -= 1;
+      }
+      return out;
+    }).join('\n');
+  };
+  const HANDOFF_FILES = [
+    ['commands/gsd/new-project.md', '/gsd:'], ['skills/gsd-new-project/SKILL.md', '/gsd-'],
+    ['pi/package-skills/gsd-new-project/SKILL.md', '/skill:gsd-'], ['commands/gsd/new-milestone.md', '/gsd:'],
+    ['skills/gsd-new-milestone/SKILL.md', '/gsd-'], ['pi/package-skills/gsd-new-milestone/SKILL.md', '/skill:gsd-'],
+  ];
+  for (const [title, rel, edit, contract, expected] of [
+    ['a doubled version segment back in audit-milestone (#3796)', 'gsd-core/workflows/audit-milestone.md',
+      append('v{version}-v{version}-MILESTONE-AUDIT.md'), 'audit-milestone-filename-guard', /no doubled version segment may appear/],
+    ['the writer line back at a root .planning/ path (#5861)', 'gsd-core/workflows/audit-milestone.md',
+      swap(WRITER_LINE, 'Create `.planning/v{version}-MILESTONE-AUDIT.md` with:'), 'audit-milestone-filename-guard', /the writer line must create exactly/],
+    ['the audit-milestone readers gone (#3796)', 'gsd-core/workflows/audit-milestone.md',
+      withReaders(0), 'audit-milestone-filename-guard', /found 1, expected at least 5/],
+    ['git checkout -b from origin/$DEFAULT_BRANCH without --no-track added to plan-phase (#2498)', 'gsd-core/workflows/plan-phase.md',
+      append('git checkout -b gsd/new origin/$DEFAULT_BRANCH'), 'branch-no-track-guard', /needs --no-track/],
+    ['a tab-separated git checkout -b from origin/$BASE_BRANCH added to execute-plan (#2498)', 'gsd-core/workflows/execute-plan.md',
+      append('git\tcheckout\t-b gsd/new origin/$BASE_BRANCH'), 'branch-no-track-guard', /needs --no-track/],
+    ['a git checkout -b from origin/$MAIN_BRANCH added to a nested workflow file (#2498)', 'gsd-core/workflows/plan-phase/steps/auto-advance-check.md',
+      append('git checkout -b gsd/new origin/$MAIN_BRANCH'), 'branch-no-track-guard', /line \d+: git checkout -b gsd\/new origin\/\$MAIN_BRANCH/],
+    ['the interrupted-agent probe gone from the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      dropAll(PROBE), 'execute-plan-interrupted-agent-guard', /must probe for a surviving current-agent-id\.txt/],
+    ['the stale-id clear gone from the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      dropAll(CLEAR), 'execute-plan-interrupted-agent-guard', /must clear the stale id for the fresh run/],
+    ['the clear ahead of the probe in the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      (text) => text.split(PROBE).join('@@').split(CLEAR).join(PROBE).split('@@').join(CLEAR), 'execute-plan-interrupted-agent-guard', /existence check must run BEFORE the rm/],
+    ['INTERRUPTED_ID no longer captured (#3795)', 'gsd-core/workflows/execute-plan.md',
+      swap('INTERRUPTED_ID=$(', 'SEEN=$('), 'execute-plan-interrupted-agent-guard', /surviving id must be captured/],
+    ['the resume prompt gone from the tracking step (#3795)', 'gsd-core/workflows/execute-plan.md',
+      inTrackingStep((block) => block.split('resume').join('restart')), 'execute-plan-interrupted-agent-guard', /resume-or-fresh prompt/],
+    ['the tracking step renamed (#3795)', 'gsd-core/workflows/execute-plan.md',
+      swap('<step name="init_agent_tracking">', '<step name="track">'), 'execute-plan-interrupted-agent-guard', /marker .*init_agent_tracking.* not found/],
+    ['the preliminary verification check gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/preliminary check blocks obviously unresolved verification/gi, 'a check'), 'transition-verification-gate', /preliminary check must block obviously unresolved verification/],
+    ['fail-closes gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/fail-closes/gi, 'fails'), 'transition-verification-gate', /phase\.complete must fail-close/],
+    ['the authoritative stale-aware gate gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/authoritative stale-aware gate/gi, 'gate'), 'transition-verification-gate', /authoritative stale-aware gate must be named/],
+    ['the canonical `passed` requirement gone from transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => text.replace(/canonical verification\s+status is `passed`/gi, 'verification is fine'), 'transition-verification-gate', /canonical verification status must be required/],
+    ['"does NOT block transition" back in transition (#1522)', 'gsd-core/workflows/transition.md',
+      append('Unresolved verification does NOT block transition.'), 'transition-verification-gate', /must not be described as not blocking/],
+    ['"carry forward as debt" back in transition (#1522)', 'gsd-core/workflows/transition.md',
+      append('Unresolved items carry forward as debt.'), 'transition-verification-gate', /must not be carried forward as debt/],
+    ...HANDOFF_FILES.map(([rel, prefix]) => [`${prefix}execute-phase gone from the hand-off of ${rel} (#5723)`, rel,
+      swap(`${prefix}execute-phase`, `${prefix}run-phase`), 'handoff-next-step', /execute-phase does not follow/]),
+    ['the hand-off of new-project no longer names discuss-phase (#5723)', 'commands/gsd/new-project.md',
+      swap('/gsd:discuss-phase', '/gsd:zzz-phase'), 'handoff-next-step', /does not name \/gsd:discuss-phase/],
+    ['the hand-off of new-project no longer names plan-phase after discuss-phase (#5723)', 'commands/gsd/new-project.md',
+      swap('/gsd:plan-phase', '/gsd:zzz-phase'), 'handoff-next-step', /\/gsd:plan-phase does not follow \/gsd:discuss-phase/],
+    ['fail-closes only ahead of the first phase.complete in transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => `fail-closes\n${text.replace(/fail-closes/gi, 'fails')}`, 'transition-verification-gate', /expected "fail-closes" after "phase\.complete"/],
+    ['the hand-off of new-project says it starts execution (#5723)', 'commands/gsd/new-project.md',
+      (text) => text.replace('**After this command:**', '**After this command:** This starts execution.'), 'handoff-next-step', /says it starts execution/],
+    ['the hand-off of new-project loses "to execute." (#5723)', 'commands/gsd/new-project.md',
+      swap(' to execute.', ' now.'), 'handoff-next-step', /is not followed by "to execute\."/],
+    ['a second hand-off line in new-milestone (#5723)', 'commands/gsd/new-milestone.md',
+      append('**After:** also run something'), 'handoff-next-step', /2 hand-off lines, expected exactly one/],
+    ['the hand-off of new-milestone gone (#5723)', 'commands/gsd/new-milestone.md',
+      (text) => text.replace('**After:**', '**Next:**'), 'handoff-next-step', /0 hand-off lines, expected exactly one/],
+  ]) {
+    test(`mutation: ${title} fails ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      const before = fs.readFileSync(abs, 'utf8');
+      const after = edit(before);
+      assert.notEqual(after, before, 'the mutation changed the file');
+      fs.writeFileSync(abs, after);
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => expected.test(f.message)), `expected a finding matching ${expected}, got ${JSON.stringify(findings.map((f) => f.message))}`);
+    });
+  }
+
+  // The audit-milestone readers are a floor of five: four fails, five passes.
+  for (const [keep, fails] of [[4, true], [5, false]]) {
+    test(`audit-milestone with ${keep} readers of the report filename ${fails ? 'fails' : 'satisfies'} audit-milestone-filename-guard`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'audit-milestone.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      assert.ok(text.split(AUDIT_READER).length - 1 > keep, 'the real file has more readers than the boundary, so the mutation removes some');
+      fs.writeFileSync(abs, withReaders(keep)(text));
+      const findings = runShipped(root, ['audit-milestone-filename-guard']);
+      assert.equal(findings.length, fails ? 1 : 0, JSON.stringify(findings));
+      if (fails) assert.match(findings[0].message, new RegExp(`found ${keep}, expected at least 5`));
+    });
+  }
+
+  // Lines that are not a branch created from a remote-tracking ref stay clean.
+  for (const line of [
+    'git checkout -b gsd/new --no-track origin/$DEFAULT_BRANCH',
+    'git checkout -b gsd/new origin/$BASE_BRANCH --no-track',
+    'git checkout -b gsd/new "$LOCAL_BRANCH"',
+    'git checkout origin/$DEFAULT_BRANCH',
+    'git switch -c gsd/new origin/$DEFAULT_BRANCH',
+  ]) {
+    test(`a workflow with the line ${JSON.stringify(line)} still satisfies branch-no-track-guard`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'plan-phase.md');
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${line}\n`);
+      assert.deepEqual(runShipped(root, ['branch-no-track-guard']), []);
+    });
+  }
+
+  // The bounds of the batch-6 patterns: limit - 1 and limit are scanned, limit + 1 is the stated edge.
+  const boundaryCases = [
+    ['git and checkout separated by 199 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(199)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', true],
+    ['git and checkout separated by 200 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(200)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', true],
+    ['git and checkout separated by 201 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(201)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', false],
+    ['a remote ref variable with 199 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(199)}BRANCH`, 'branch-no-track-guard', true],
+    ['a remote ref variable with 200 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(200)}BRANCH`, 'branch-no-track-guard', true],
+    ['a remote ref variable with 201 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(201)}BRANCH`, 'branch-no-track-guard', false],
+  ];
+  for (const [title, rel, line, contract, caught] of boundaryCases) {
+    test(`${title} ${caught ? 'fails' : 'is past the bound of'} ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${line}\n`);
+      assert.equal(runShipped(root, [contract]).length, caught ? 1 : 0);
+    });
+  }
+
+  // The hand-off's execute-phase span up to its closing backtick is bounded at 500 characters.
+  for (const [span, ok] of [[499, true], [500, true], [501, false]]) {
+    test(`a hand-off execute-phase span of ${span} characters ${ok ? 'satisfies' : 'is past the bound of'} handoff-next-step`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'commands', 'gsd', 'new-project.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      const tail = '/gsd:execute-phase 1`';
+      assert.ok(text.includes(tail), 'the real hand-off ends its execute step this way');
+      fs.writeFileSync(abs, text.replace(tail, `/gsd:execute-phase${'x'.repeat(span - '/gsd:execute-phase'.length)}\``));
+      const findings = runShipped(root, ['handoff-next-step']);
+      assert.equal(findings.length, ok ? 0 : 1, JSON.stringify(findings));
+    });
+  }
+
+  // The whitespace in "canonical verification status" is bounded at 20 characters.
+  for (const [gap, ok] of [[19, true], [20, true], [21, false]]) {
+    test(`${gap} whitespace characters inside "canonical verification status" ${ok ? 'satisfy' : 'are past the bound of'} transition-verification-gate`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'transition.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      const phrase = /canonical verification\s+status is `passed`/i;
+      assert.ok(phrase.test(text), 'the real file carries the phrase');
+      fs.writeFileSync(abs, text.replace(phrase, `canonical verification${' '.repeat(gap)}status is \`passed\``));
+      const findings = runShipped(root, ['transition-verification-gate']);
+      assert.equal(findings.length, ok ? 0 : 1, JSON.stringify(findings));
+    });
+  }
+
+  test('branch-no-track-guard with no workflow file under gsd-core/workflows is a finding, not a pass over nothing', (t) => {
+    const root = copyOfRepoFiles(t);
+    cleanup(path.join(root, 'gsd-core', 'workflows'));
+    const findings = runShipped(root, ['branch-no-track-guard']);
+    assert.ok(findings.some((f) => /cannot read the directory|no \.md file under gsd-core\/workflows/.test(f.message)), JSON.stringify(findings));
+  });
+
+  // A file one of the batch-6 contracts reads that is gone from the tree is one finding for that file.
+  for (const [rel, contract] of [
+    ['gsd-core/workflows/audit-milestone.md', 'audit-milestone-filename-guard'],
+    ['gsd-core/workflows/execute-plan.md', 'execute-plan-interrupted-agent-guard'],
+    ['gsd-core/workflows/transition.md', 'transition-verification-gate'],
+    ['skills/gsd-new-project/SKILL.md', 'handoff-next-step'],
+    ['pi/package-skills/gsd-new-milestone/SKILL.md', 'handoff-next-step'],
+  ]) {
+    test(`${rel} removed from the tree is a finding for ${contract} (batch 6)`, (t) => {
+      const root = copyOfRepoFiles(t);
+      fs.unlinkSync(path.join(root, ...rel.split('/')));
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => f.file === rel && /cannot read the file/.test(f.message)), JSON.stringify(findings));
+    });
+  }
+
+  // A file one of the batch-5 contracts reads that is gone from the tree is one finding for that file.
+  for (const [rel, contract] of [
+    ['.github/workflows/release.yml', 'release-coverage-scope'],
+    ['agents/gsd-phase-researcher.md', 'gsd-researcher-flow-diagram'],
+    ['gsd-core/workflows/import.md', 'import-command'],
+    ['commands/gsd/import.md', 'import-command'],
+    ['gsd-core/references/gates.md', 'gates-taxonomy'],
+    ['gsd-core/references/ios-scaffold.md', 'ios-scaffold-safety'],
+  ]) {
+    test(`${rel} removed from the tree is a finding for ${contract} (batch 5)`, (t) => {
+      const root = copyOfRepoFiles(t);
+      fs.unlinkSync(path.join(root, ...rel.split('/')));
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => f.file === rel && /cannot read the file/.test(f.message)), JSON.stringify(findings));
+    });
+  }
+
+  test('a count on a heading whose title is 300 characters is past the stated 300-character bound of the pattern', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'docs', 'INVENTORY.md');
+    fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n## ${'t'.repeat(300)} (3 shipped)\n`);
+    assert.deepEqual(runShipped(root, ['inventory-headings-countfree']), []);
+  });
+
+  // A file the contract reads that is gone from the tree is one finding for that file.
+  for (const [rel, contract] of [
+    ['.clinerules', 'cline-support'],
+    ['docs/how-to/develop-a-capability.md', 'phase6-capability-docs'],
+    ['docs/INVENTORY.md', 'inventory-headings-countfree'],
+    ['.github/workflows/release.yml', 'policy-release-no-npm-self-upgrade'],
+    ['agents/gsd-ui-auditor.md', 'playwright-ui-verify'],
+  ]) {
+    test(`${rel} removed from the tree is a finding for ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      fs.unlinkSync(path.join(root, ...rel.split('/')));
+      const findings = runShipped(root, [contract]);
+      assert.ok(findings.some((f) => f.file === rel && /cannot read the file/.test(f.message)), JSON.stringify(findings));
+    });
+  }
+
+  // `npm install -g` and `npm` on separate lines is not a self-upgrade: the original matched line by line.
+  test('npm install -g and npm on separate lines still satisfy policy-release-no-npm-self-upgrade', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, '.github', 'workflows', 'release.yml');
+    fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n      - run: npm install -g\n        npm@latest\n`);
+    assert.deepEqual(runShipped(root, ['policy-release-no-npm-self-upgrade']), []);
+  });
+
+  // The gap between `-g` and the second `npm` is bounded at 2000 characters: limit - 1 and limit are caught,
+  // limit + 1 is the stated edge of the pattern.
+  for (const [gap, caught] of [[1999, true], [2000, true], [2001, false]]) {
+    test(`a self-upgrade line with a ${gap}-character gap after -g ${caught ? 'fails' : 'is past the bound of'} policy-release-no-npm-self-upgrade`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, '.github', 'workflows', 'release.yml');
+      const filler = ` ${'a'.repeat(gap - 2)} `;
+      assert.equal(filler.length, gap);
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n      - run: npm install -g${filler}npm@latest\n`);
+      const findings = runShipped(root, ['policy-release-no-npm-self-upgrade']);
+      assert.equal(findings.length, caught ? 1 : 0, JSON.stringify(findings));
+    });
+  }
+
+  // The release.yml self-upgrade pattern: lines it must not match stay clean (it was a unit test of its own regex).
+  for (const line of ['npm ci', 'npm install', 'npm install -g some-other-tool', 'npm run build']) {
+    test(`release.yml with the allowed line ${JSON.stringify(line)} still satisfies policy-release-no-npm-self-upgrade`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, '.github', 'workflows', 'release.yml');
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n      - run: ${line}\n`);
+      assert.deepEqual(runShipped(root, ['policy-release-no-npm-self-upgrade']), []);
+    });
+  }
+
+  // The size ceiling is exclusive: SIZE_LIMIT - 1 characters pass, SIZE_LIMIT and SIZE_LIMIT + 1 fail.
+  for (const [delta, fails] of [[-1, false], [0, true], [1, true]]) {
+    test(`autonomous.md of ${SIZE_LIMIT + delta} characters ${fails ? 'fails' : 'satisfies'} autonomous-decomposition`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'autonomous.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      assert.ok(text.length <= SIZE_LIMIT - 1, 'the real file leaves room to pad up to the boundary');
+      fs.writeFileSync(abs, text + 'x'.repeat(SIZE_LIMIT + delta - text.length));
+      const findings = runShipped(root, ['autonomous-decomposition']);
+      assert.equal(findings.length, fails ? 1 : 0, JSON.stringify(findings));
+      if (fails) assert.match(findings[0].message, /must stay under the 10K-token Read limit/);
+    });
+  }
+
+  test('adding a hand-listed reviewer lane flag back to the next workflow fails the anti-parity guard', (t) => {
+    const root = copyOfRepoFiles(t);
+    const abs = path.join(root, 'gsd-core', 'workflows', 'next.md');
+    fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\nPass --codex to review.\n`);
+    const findings = runShipped(root);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /should NOT hand-enumerate reviewer lane flag --codex/);
+  });
+});

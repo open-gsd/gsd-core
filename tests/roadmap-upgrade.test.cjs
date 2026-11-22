@@ -85,7 +85,7 @@ describe('roadmap upgrade rollback (#1542)', () => {
     assert.equal(after.hasConfig, false, 'config.json created during migration must be removed on rollback');
   });
 
-  test('a phase directory rename the rollback cannot reverse is named, never reported as rolled back (#5120 pre-push review m2)', (t) => {
+  test('a phase directory rename the rollback cannot reverse is named as NOT reversed (#5120 pre-push review m2)', (t) => {
     const dir = makeGitignoredPlanningProject();
     t.after(() => cleanup(dir));
     const planning = path.join(dir, '.planning');
@@ -111,7 +111,7 @@ describe('roadmap upgrade rollback (#1542)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and was NOT fully rolled back (not restored: phases/' + renamedPhase.oldDir + '): '),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Directory renames NOT reversed: phases/' + renamedPhase.newDir),
     );
     mock.restoreAll();
     assert.equal(reverseAttempts, 1, 'precondition: the rollback tried to reverse the rename once');
@@ -119,7 +119,7 @@ describe('roadmap upgrade rollback (#1542)', () => {
     assert.ok(fs.existsSync(newPath), 'the renamed directory is still at its new path');
   });
 
-  test('a renamed phase directory that is gone from both paths when the rollback runs is named, never reported as rolled back (#5120 pre-push review R2-m3)', (t) => {
+  test('a renamed phase directory that is gone from both paths when the rollback runs is named as NOT reversed and missing (#5120 pre-push review R2-m3)', (t) => {
     const dir = makeGitignoredPlanningProject();
     t.after(() => cleanup(dir));
     const planning = path.join(dir, '.planning');
@@ -150,7 +150,7 @@ describe('roadmap upgrade rollback (#1542)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and was NOT fully rolled back (not restored: phases/' + renamedPhase.oldDir),
+      (err) => err.message.startsWith('Migration failed and rolled back: ') && err.message.endsWith('. Directory renames NOT reversed: phases/' + renamedPhase.oldDir + ' (missing)'),
     );
     mock.restoreAll();
     assert.equal(movedAside, true, 'precondition: the renamed directory was moved away before the rollback');
@@ -363,7 +363,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.equal(fs.existsSync(`${state}.lock`), false, 'the lock is released after the restore');
   });
 
-  test('a STATE.md restore that cannot take the lock is named, never reported as rolled back', (t) => {
+  test('a STATE.md restore that cannot take the lock is named as NOT restored', (t) => {
     const dir = setup('m13-state-restore-nolock-', ROADMAP);
     t.after(() => cleanup(dir));
     const state = path.join(dir, '.planning', 'STATE.md');
@@ -385,7 +385,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and was NOT fully rolled back (not restored: STATE.md): config.json cannot be updated'),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (the restore failed): STATE.md',
     );
     mock.restoreAll();
     assert.equal(lockOpens, 2, 'the restore attempted the lock');
@@ -429,7 +429,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and rolled back, except STATE.md: it no longer holds what this migration wrote, or that could not be read, so it is left as found: config.json cannot be updated'),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified)',
     );
     mock.restoreAll();
     assert.equal(injected, true, 'precondition: the other writer ran');
@@ -463,7 +463,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and rolled back, except STATE.md: it no longer holds what this migration wrote, or that could not be read, so it is left as found: config.json cannot be updated'),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified)',
     );
     mock.restoreAll();
     assert.ok(releases >= 1, 'precondition: the forward write released the lock');
@@ -501,7 +501,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and rolled back, except STATE.md: it no longer holds what this migration wrote, or that could not be read, so it is left as found: config.json cannot be updated'),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (unverified)',
     );
     mock.restoreAll();
     assert.equal(failedReads, 1, 'precondition: the read-back failed');
@@ -509,7 +509,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
   });
 
   // #5120 review Minor 7: every file whose restore fails is named, not only STATE.md.
-  test('a failed restore of a file other than STATE.md is named, never reported as rolled back (#5120 review Minor 7)', (t) => {
+  test('a failed restore of a file other than STATE.md is named as NOT restored (#5120 review Minor 7)', (t) => {
     const dir = setup('m13-roadmap-restore-fail-', ROADMAP);
     t.after(() => cleanup(dir));
     const roadmap = path.join(dir, '.planning', 'ROADMAP.md');
@@ -530,16 +530,16 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and was NOT fully rolled back (not restored: ROADMAP.md): config.json cannot be updated'),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (the restore failed): ROADMAP.md',
     );
     mock.restoreAll();
     assert.equal(refused, 1, 'precondition: the ROADMAP.md restore was attempted and failed');
   });
 
-  // #5120 pre-push review Mi3: a file whose restore fails is named only when it no longer holds
-  // its prior bytes. A forward write that failed left ROADMAP.md as it was, so the failed restore
-  // of that unchanged file is no loss and the rollback is reported as complete.
-  test('a file whose restore fails but still holds its prior bytes is not named (#5120 pre-push review Mi3)', (t) => {
+  // #5120 pre-push review Mi3: a file is named only when it does not end the rollback holding its
+  // prior bytes. A forward write that failed left ROADMAP.md as it was, so the rollback has nothing
+  // to put back there (#6351: a file already at its snapshot needs no write) and names nothing.
+  test('a file whose forward write failed and that still holds its prior bytes is not restored and not named (#5120 pre-push review Mi3)', (t) => {
     const dir = setup('m13-roadmap-unchanged-', ROADMAP);
     t.after(() => cleanup(dir));
     const roadmap = path.join(dir, '.planning', 'ROADMAP.md');
@@ -548,7 +548,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     assert.ok(plan.roadmapEdits.length > 0, 'precondition: the migration rewrites ROADMAP.md');
 
     // Every write onto ROADMAP.md fails: the forward string write (so the file stays unchanged and
-    // the migration fails at that step) and the rollback's Buffer restore.
+    // the migration fails at that step) and any Buffer restore the rollback would attempt.
     const failed = { forward: 0, restore: 0 };
     const realWrite = fs.writeFileSync;
     mock.method(fs, 'writeFileSync', function (file, data, ...rest) {
@@ -565,7 +565,8 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
       (err) => err.message === 'Migration failed and rolled back: EIO: i/o error, write',
     );
     mock.restoreAll();
-    assert.deepEqual(failed, { forward: 1, restore: 1 }, 'precondition: both the forward write and the restore failed');
+    // #6351 (merged from next): a file already back at its snapshot needs no write, so no restore is attempted.
+    assert.deepEqual(failed, { forward: 1, restore: 0 }, 'precondition: the forward write failed and no restore was attempted');
     assert.ok(fs.readFileSync(roadmap).equals(before), 'ROADMAP.md still holds its prior bytes');
   });
 
@@ -617,7 +618,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message.startsWith('Migration failed and rolled back, except STATE.md: it no longer holds what this migration wrote, or that could not be read, so it is left as found: config.json cannot be updated'),
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (unreadable (EIO))',
     );
     mock.restoreAll();
     assert.equal(failedReads, 1, 'precondition: the rollback read of STATE.md failed');
@@ -653,7 +654,7 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
 
     assert.throws(
       () => applyMigration(dir, plan, { dryRun: false }),
-      (err) => err.message === 'Migration failed and was NOT fully rolled back (not restored: ROADMAP.md; STATE.md left as found: it no longer holds what this migration wrote, or that could not be read): config.json cannot be updated: it is not a regular file within the size limit (EISDIR)',
+      (err) => err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (modified). NOT restored (the restore failed): ROADMAP.md',
     );
     mock.restoreAll();
     assert.equal(refused, 1, 'precondition: the ROADMAP.md restore was attempted and failed');

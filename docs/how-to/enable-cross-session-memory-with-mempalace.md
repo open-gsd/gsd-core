@@ -16,7 +16,7 @@ mempalace init          # creates the local palace (ChromaDB + SQLite)
 mempalace status        # verify the server is reachable
 ```
 
-For interactive use (Claude Code), MemPalace's MCP server must be running so `mempalace_*` tool calls resolve. For headless or cron runs, the CLI path (`mempalace wake-up`, `mempalace search`, etc.) is used automatically — no MCP server needed.
+For interactive use (Claude Code), MemPalace's MCP server must be running so `mempalace_*` tool calls resolve. For headless or cron runs, the CLI path (`mempalace wake-up`, `mempalace search`, etc.) is used automatically — no MCP server needed. A headless capture uses `mempalace mine --daemon --background` only when a daemon is already running, and otherwise a `--direct` mine; it never starts the daemon, because a running daemon holds the palace writer lock and every MCP write tool is refused until `mempalace daemon stop` (#6266), so do not start it from an interactive session either.
 
 ---
 

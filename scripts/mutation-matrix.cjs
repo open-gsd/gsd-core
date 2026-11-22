@@ -681,6 +681,21 @@ const COVERED = {
     // about 3 minutes. Floor = floor(75.14) - 1 = 74.
     minScore: 74,
   },
+  // dispatch-isolation: net-new module from #4904 (ADR-4630 Phase 2), the owner of the
+  // dispatch-isolation vocabulary; without this entry the gate reports has_work: "false".
+  // No test file both requires the module's artifact and matches the "dispatch-isolation*"
+  // naming rule, so the parity file that holds its guards' rows and fast-check properties
+  // is declared via extraTests (a global trigger; it changed in 2 commits on next since
+  // 2026-07-01). Floor: CI run 40947108766, job 123705480087 (PR #5126),
+  // 87.18% (34 killed, 0 timeout, 5 survived, all equivalent here: the three __esModule
+  // interop mutants, as no consumer uses a default or namespace import, and
+  // `typeof value === 'string' &&` -> `true &&` in both guards, whose Sets hold only the
+  // string tuples). Floor = floor(87.18) - 1 = 86.
+  'dispatch-isolation': {
+    cjs: 'gsd-core/bin/lib/dispatch-isolation.cjs',
+    extraTests: ['host-integration-validator-parity.test.cjs'],
+    minScore: 86,
+  },
 };
 
 // Compute the final, derived `tests` array for every COVERED entry. Done once, after the
