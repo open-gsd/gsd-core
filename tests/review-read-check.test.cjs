@@ -1026,3 +1026,18 @@ describe('#5491 a fence left open in one plan hides no later plan (#6286 round 5
     assert.equal(runReadCheck('Looks fine.', d.PROMPT, '/repo', d), undefined);
   });
 });
+
+describe('#5491 a comment opener inside code hides no task (#6286 round 5 Minor 3)', () => {
+  const TAIL = '<task type="auto">three</task>\n<task type="auto">four</task>';
+  const cases = {
+    'a <!-- in a fenced example whose --> is far below': ['```html', '<!-- an example', '```', TAIL, '<!-- a note -->'],
+    'a <!-- in inline code': ['Write `<!--` to open a comment.', TAIL, '<!-- a note -->'],
+    'an unclosed <!-- in a fence': ['```html', '<!-- never closed', '```', TAIL],
+    'a bare unclosed <!-- in prose': ['<!-- never closed', TAIL],
+  };
+  for (const [name, lines] of Object.entries(cases)) {
+    test(`${name} keeps the tasks after it`, () => {
+      assert.equal(planFacts('12.6-01-PLAN.md', [PLAN_A, ...lines].join('\n')).tasks, 4);
+    });
+  }
+});
