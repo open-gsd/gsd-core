@@ -19,10 +19,13 @@ const WORKFLOW = '.github/workflows/auto-close-unsolicited-prs.yml';
 const README = 'docs/registries/README.md';
 const ENTRY = '.github/PULL_REQUEST_TEMPLATE/registry-entry.md';
 const LANE = 'docs/how-to/list-your-reviewer-lane.md';
+// #6109: the page that points an author at the lane registry must name the gate too.
+const SHIP = 'docs/how-to/ship-a-reviewer-lane.md';
 const DOCS = [
   README,
   ENTRY,
   LANE,
+  SHIP,
   'docs/how-to/take-over-a-capability-or-eos.md',
 ];
 // README steps and template items are found by their text, not their number,
@@ -41,6 +44,7 @@ const CHANGESET_TYPES = '`Added`,`Changed`,`Removed`';
 const PR_STEP = {
   [LANE]: '## Open the PR',
   'docs/how-to/take-over-a-capability-or-eos.md': 'open one PR',
+  [SHIP]: 'open a PR',
 };
 
 function parseApprovalLabels(yamlText) {
@@ -98,7 +102,7 @@ function checkReadmeSteps(files) {
 
 function checkLabels(files, labels) {
   const out = [];
-  for (const [p, item] of [[README, ISSUE_STEP], [ENTRY, LABEL_ITEM]]) {
+  for (const [p, item] of [[README, ISSUE_STEP], [ENTRY, LABEL_ITEM], [SHIP, 'get an approved issue first']]) {
     const text = files[p];
     if (typeof text !== 'string') continue;
     const span = lineWith(text, item);
@@ -195,6 +199,26 @@ describe('registry submission docs: approved issue first (#5299)', () => {
     const files = readDocs();
     files[README] = editLine(files[README], PR_STEP_TITLE, (l) => `${l} Or \`Fixed\`.`);
     assert.ok(checkApprovedIssueParity(files, readLabels()).includes(`${README}: PR step changeset types are not exactly Added, Changed, Removed`));
+  });
+
+  test('[regression #6109] negative control: a ship-a-reviewer-lane page without the gate is reported', () => {
+    const files = readDocs();
+    files[SHIP] = files[SHIP].replaceAll(/approved issue/gi, 'issue');
+    assert.ok(checkGate(files).includes(`${SHIP}: no approved-issue-first requirement`));
+  });
+
+  test('[regression #6109] negative control: a gate that comes after the ship page PR step is reported', () => {
+    const files = readDocs();
+    files[SHIP] = `${files[SHIP].replaceAll(/approved issue/gi, 'issue')}\nGet an approved issue later.`;
+    assert.ok(checkGate(files).includes(`${SHIP}: approved issue not required before the PR step`));
+  });
+
+  test('[regression #6109] negative control: a label the ship page names that APPROVAL_LABELS lacks is reported, and so is a missing one', () => {
+    const files = readDocs();
+    files[SHIP] = files[SHIP].replaceAll('approved-feature', 'approved-idea');
+    const failures = checkLabels(files, readLabels());
+    assert.ok(failures.includes(`${SHIP}: label approved-feature not named`));
+    assert.ok(failures.includes(`${SHIP}: label approved-idea is outside APPROVAL_LABELS`));
   });
 
   test('negative control: a README without the gate is reported', () => {

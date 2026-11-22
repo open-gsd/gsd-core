@@ -22,7 +22,7 @@ const path = require('node:path');
 
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { runNode } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
@@ -73,7 +73,7 @@ function pluginTimeouts() {
 }
 
 function installerTimeouts(t) {
-  const { configDir, root } = runMinimalInstall({ runtime: 'claude', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'claude', scope: 'global' });
   t.after(() => cleanup(root));
   const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
   return collect(settings.hooks);
@@ -115,7 +115,7 @@ describe('blocking guard host budgets agree with the installer (#5180)', () => {
   });
 
   test('kimi config.toml registers every blocking guard at exactly the installer budget', (t) => {
-    const { root } = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
+    const { root } = copyRuntimeFixture({ runtime: 'kimi', scope: 'global' });
     t.after(() => cleanup(root));
     const toml = fs.readFileSync(path.join(root, '.kimi', 'config.toml'), 'utf8');
     const seen = new Map();

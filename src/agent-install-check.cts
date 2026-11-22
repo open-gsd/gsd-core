@@ -15,7 +15,7 @@ import path from 'node:path';
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES } = modelProfiles;
 import { getGlobalConfigDir } from './runtime-homes.cjs';
-import { getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL } from './runtime-name-policy.cjs';
+import { assertKnownRuntime, getDirName, hostBehaviorsFor, NO_LOCAL_CONFIG_DIR_SENTINEL, UnknownRuntimeError } from './runtime-name-policy.cjs';
 // #3242 — model-catalog is a genuine leaf (only node:path + its own JSON), which is
 // exactly why Phase 1 (#3241) moved isAnthropicFlavoredModel there: this module can
 // consume it without dragging model-resolver's config-loader chain into a
@@ -42,13 +42,37 @@ import { isAnthropicFlavoredModel } from './model-catalog.cjs';
 // added.
 import { stripBOM, scanTomlLines, deriveCodexSandboxMode, extractToolsValue } from './codex-agent-toml.cjs';
 
+/**
+ * Frozen reason enum for an agents check that could not run (#5236): callers and tests assert on these wire values,
+ * never on prose. Adding a member is a deliberate coordinated change (enum, emitting site, the enum-lock test).
+ */
+const AGENTS_CHECK_REASON = Object.freeze({
+  /** The runtime id is not one GSD resolves (an out-of-tree host plugin, or any unregistered id): there is no agents directory to look in. */
+  UNKNOWN_RUNTIME: 'unknown_runtime',
+} as const);
+
 interface AgentsInstalledResult {
-  agents_installed: boolean;
+  /** `null` when the check could not run (see `agents_check_reason`): not "installed", and not "missing" either. */
+  agents_installed: boolean | null;
   missing_agents: string[];
   installed_agents: string[];
   incomplete_agents: string[];
-  agents_dir: string;
+  /** `null` when the runtime id resolves to no agents directory. */
+  agents_dir: string | null;
   agent_runtime: string;
+  /** Why `agents_installed` is `null`; absent when the check ran. */
+  agents_check_reason?: typeof AGENTS_CHECK_REASON[keyof typeof AGENTS_CHECK_REASON];
+}
+
+/** Whether `runtime` is an id GSD cannot resolve. A retired spelling still throws: that refusal is not this case. */
+function isUnresolvableRuntime(runtime: string): boolean {
+  try {
+    assertKnownRuntime(runtime);
+    return false;
+  } catch (err) {
+    if (err instanceof UnknownRuntimeError) return true;
+    throw err;
+  }
 }
 
 /**
@@ -201,6 +225,20 @@ function getAgentsDir(runtime?: string, projectRoot?: string): string {
  */
 function checkAgentsInstalled(runtime?: string, projectRoot?: string): AgentsInstalledResult {
   const resolvedRuntime = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
+  // #5236: this is a reporting path (every `init` bundle carries its result). For an id GSD cannot resolve there is
+  // no agents directory to read, and throwing would stop GSD on any out-of-tree host; say it could not be checked.
+  // The installers keep refusing an unknown id through the accessors themselves.
+  if (isUnresolvableRuntime(resolvedRuntime)) {
+    return {
+      agents_installed: null,
+      missing_agents: [],
+      installed_agents: [],
+      incomplete_agents: [],
+      agents_dir: null,
+      agent_runtime: resolvedRuntime,
+      agents_check_reason: AGENTS_CHECK_REASON.UNKNOWN_RUNTIME,
+    };
+  }
   const agentsDir = getAgentsDir(resolvedRuntime, projectRoot);
   const expectedAgents = Object.keys(MODEL_PROFILES);
   const installed: string[] = [];
@@ -637,6 +675,7 @@ function resolveAgentHint(name: string, runtime?: string, projectRoot?: string):
 export = {
   getAgentsDir,
   checkAgentsInstalled,
+  AGENTS_CHECK_REASON,
   checkCodexModelPosture,
   checkCodexSandboxPosture,
   canonicalAgentSourceDir,

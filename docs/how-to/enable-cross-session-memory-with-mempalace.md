@@ -16,7 +16,7 @@ mempalace init          # creates the local palace (ChromaDB + SQLite)
 mempalace status        # verify the server is reachable
 ```
 
-For interactive use (Claude Code), MemPalace's MCP server must be running so `mempalace_*` tool calls resolve. For headless or cron runs, the CLI path (`mempalace wake-up`, `mempalace search`, etc.) is used automatically — no MCP server needed.
+For interactive use (Claude Code), MemPalace's MCP server must be running so `mempalace_*` tool calls resolve. For headless or cron runs, the CLI path (`mempalace wake-up`, `mempalace search`, etc.) is used automatically — no MCP server needed. A headless capture uses `mempalace mine --daemon --background` only when a daemon is already running, and otherwise a `--direct` mine; it never starts the daemon, because a running daemon holds the palace writer lock and every MCP write tool is refused until `mempalace daemon stop` (#6266), so do not start it from an interactive session either.
 
 ---
 
@@ -71,8 +71,8 @@ With `mempalace.enabled: true`, here is what you will see at each loop point:
 **Ship phase (`/gsd-ship`):**
 6. At `ship:post` — the `gsd-mempalace-curator` agent writes a diary entry and (if enabled) proposes cross-project tunnels.
 
-**Execute phase (`/gsd-execute-phase`, each wave):**
-7. At `execute:wave:post` — confirmed problem→fix pairs are captured into the `problems` room via the `capture-problems` fragment.
+**Execute phase (`/gsd-execute-phase`, at verification):**
+7. At `execute:post` — confirmed problem→fix pairs are captured into the `problems` room via the `capture-problems` fragment.
 
 If MemPalace is unreachable at any step, a skip-notice is written and the loop continues normally.
 

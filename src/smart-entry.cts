@@ -445,6 +445,10 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
   const hasPlanning = fs.existsSync(paths.planning);
   const hasRoadmap = fs.existsSync(paths.roadmap);
   const git = readGitSignals(cwd);
+  // #6431: `/gsd-pause-work` never writes `paused_at`; what it always writes is the ROOT `.planning/HANDOFF.json` (whatever scope
+  // the human-readable `.continue-here.md` lands in, and under a workstream too), and `/gsd-resume-work` consumes it. That file
+  // IS the recorded pause, so it classifies as paused alongside the STATE.md field, and a resume routes forward again.
+  const handoffPresent = hasPlanning && fs.existsSync(path.join(cwd, '.planning', 'HANDOFF.json'));
 
   const empty: SmartEntrySignals = {
     current_phase: null,
@@ -455,7 +459,7 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
     has_roadmap: hasRoadmap,
     git_dirty: git.dirty,
     git_unpushed: git.unpushed,
-    paused: false,
+    paused: handoffPresent,
     blockers: [],
     has_git: git.has_git,
     verify_failed: false,
@@ -516,7 +520,7 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
     for (const item of items) blockers.push(item.replace(/^-\s+/, '').trim());
   }
 
-  const paused = Boolean(pausedAtRaw && pausedAtRaw.trim());
+  const paused = Boolean(pausedAtRaw && pausedAtRaw.trim()) || handoffPresent;
 
   // Stale = no recorded activity for IDLE_STALE_MS. Used only by idle-stranded.
   // Computed here (with the clock seam) so the pure classify() stays a function

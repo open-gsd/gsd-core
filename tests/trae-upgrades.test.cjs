@@ -4,7 +4,7 @@
  * trae capability UPGRADE — ADR-1239 Phase D / #2094 (EoS/trae).
  *
  * Drives the user-reachable surface (spawned `bin/install.js` via
- * `runMinimalInstall`) to prove the one real upgrade Trae contributes beyond
+ * `copyRuntimeFixture`, a copy of a real install) to prove the one real upgrade Trae contributes beyond
  * the base imperative migration (tests/trae-imperative-reference.test.cjs):
  *
  *   UPGRADE — SOLO stage/trigger metadata: every emitted `SKILL.md` carries a
@@ -23,7 +23,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { runMinimalInstall, walk } = require('./helpers/install-shared.cjs');
+const { copyRuntimeFixture, walk } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 const TRAE_CAP = JSON.parse(
@@ -40,7 +40,7 @@ function parseFrontmatter(content) {
 
 for (const scope of ['global', 'local']) {
   test(`trae --${scope}: emitted SKILL.md frontmatter carries stage: workflow (UPGRADE)`, (t) => {
-    const { configDir, root } = runMinimalInstall({ runtime: 'trae', scope });
+    const { configDir, root } = copyRuntimeFixture({ runtime: 'trae', scope });
     t.after(() => cleanup(root));
 
     const skillsDir = path.join(configDir, 'skills');
@@ -90,7 +90,7 @@ test('capabilities/trae/capability.json runtime.hostBehaviors.soloStageMetadata 
 //    no stage: line at all -------------------------------------------------
 
 test('qwen (no soloStageMetadata declared) does NOT get a stage: line — proves the field is descriptor-gated, not global', (t) => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'qwen', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'qwen', scope: 'global' });
   t.after(() => cleanup(root));
 
   const skillsDir = path.join(configDir, 'skills');
