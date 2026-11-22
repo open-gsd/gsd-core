@@ -72,6 +72,7 @@ Parse flags from `$ARGUMENTS`:
 - `--lm-studio` → include LM Studio (local server, OpenAI-compatible)
 - `--llama-cpp` → include llama.cpp (local server, OpenAI-compatible)
 - `--all` → include all available (CLIs + running local servers)
+- `--cycle-summary` → not a reviewer: end the run with the machine-readable `CYCLE_SUMMARY` counters (step `cycle_summary`, #4617); it never changes which lanes run
 - No flags → if `review.default_reviewers` is set, include only configured reviewers that are detected; otherwise include all available
 
 Reviewer-selection precedence:
@@ -848,6 +849,103 @@ fi
 ```
 </step>
 
+<step name="cycle_summary">
+**Runs only when `--cycle-summary` is present in `$ARGUMENTS`** (#4617). Match it as a whole,
+space-delimited token (`(^|[[:space:]])--cycle-summary([[:space:]]|$)`), the way `--override-gate`
+is matched — `--cycle-summary-x`, or the text inside another argument's value, does not enable it.
+Without the flag, skip this step entirely: `/gsd:review` output is unchanged.
+
+This step is the single owner of the CYCLE_SUMMARY contract. A caller that drives
+`/gsd:review` + `/gsd:plan-phase --reviews` itself (a board worker, a CI job) and
+`/gsd:plan-review-convergence` (which passes this flag to its review agent) all read the same
+counters, produced by the same rules, from this one place. Do not copy these rules into another
+workflow.
+
+**If `write_reviews` set `TOTAL_LANE_FAILURE=true` or `ALL_LANES_SKIPPED=true`, emit no
+CYCLE_SUMMARY line.** Nothing was reviewed, so there is nothing to count; the REVIEW FAILED report
+above stands, and the caller's "did not honor the CYCLE_SUMMARY contract" abort is the correct
+outcome. Never emit `current_high=0 current_actionable=0` for a cycle in which no review ran.
+
+Otherwise, after `present_results` completes:
+
+Your final response MUST include a machine-readable line of exactly this form:
+
+  CYCLE_SUMMARY: current_high=<N> current_actionable=<M>
+
+Where <N> is the integer count of HIGH-severity concerns that REMAIN UNRESOLVED in this cycle's findings.
+Where <M> is the integer count of actionable MEDIUM/LOW concerns that REMAIN UNRESOLVED because the latest PLAN.md files do not yet incorporate them or explicitly defer/reject them.
+
+Consensus gate (applies to NEWLY RAISED HIGHs only; evaluate before the counting rules below):
+  This gate engages ONLY when 2 or more reviewers actually ran and produced a review section this
+  cycle. With exactly one reviewer, skip this entire gate — a single reviewer's HIGH always counts,
+  exactly as before.
+
+  Classify each newly raised HIGH by what the claim ASSERTS, not by whether it happens to contain a
+  file:line citation:
+    - EXISTENCE-CLASS — asserts that a named symbol, file, path, flag, commit, or ID exists,
+      is absent, or says something specific ("X does not exist", "the plan cites Y which is missing
+      "file Z contains Q").
+    - JUDGMENT-CLASS — asserts a design or correctness property ("no idempotency on retried writes
+      "race between A and B", "missing rate limit"). A judgment-class HIGH stays judgment-class even
+      when it cites a file for context.
+
+  A HIGH raised by 2+ reviewers is corroborated and always counts.
+
+  For a HIGH raised by exactly ONE reviewer:
+    - EXISTENCE-CLASS — counts only if the source-grounding pass independently confirms it against
+      real project source, or another reviewer raised the same or a materially overlapping concern
+      (i.e. it lands in REVIEWS.md's Consensus Summary "Agreed Concerns").
+    - JUDGMENT-CLASS — counts UNLESS that reviewer's own section OPENS with an evidence-quality
+      discount marker blockquote: `[reviewed-without-source-citations]` or
+      `[reviewed-without-repo-access]`, or the reviewer is a diff-only lane (CodeRabbit). The marker
+      must be the LEADING blockquote of that reviewer's section — a review that merely quotes a
+      marker while discussing it is NOT marked. Corroboration by another reviewer overrides the
+      marker and the HIGH counts.
+
+  Judgment-class findings are deliberately NOT subject to corroboration. Different reviewers catch
+  materially different classes of issue, so requiring two of them to independently raise the same
+  architectural concern would suppress exactly the findings a multi-reviewer setup exists to surface.
+
+  FAIL OPEN: if EVERY reviewer that ran this cycle carries a discount marker, this gate does not
+  apply at all — count as if it were absent. A gate must never manufacture convergence out of a
+  cycle in which nothing was verified.
+
+  A HIGH suppressed by this gate is still listed under "## Current HIGH Concerns", tagged
+  `(single-reviewer, unconfirmed)`. It is excluded from current_high only — never silently dropped,
+  and never removed from the report.
+
+  This gate governs current_high only. current_actionable is unaffected.
+
+Counting rules:
+  INCLUDE in the count:
+    - Newly raised HIGHs in this cycle (subject to the consensus gate above)
+    - PARTIALLY RESOLVED HIGHs: concern acknowledged and a mitigation is in progress, but not yet verified/completed
+    - Previously raised HIGHs that are still unresolved
+
+  EXCLUDE from the count:
+    - FULLY RESOLVED HIGHs: concern addressed with verification complete (closed ticket, verification log, or reviewer sign-off)
+    - HIGH mentions in retrospective/summary tables comparing cycles
+    - Quoted excerpts from prior reviews referencing past HIGH items
+    - MEDIUM/LOW concerns that are already incorporated into a PLAN.md task, action, acceptance_criteria, verify command, must_haves item, threat model, artifact list, or explicit deferral/rejection rationale
+
+Definitions:
+  PARTIALLY RESOLVED — concern acknowledged and mitigation is in progress but not yet verified/completed (e.g., open ticket exists but fix not landed).
+  FULLY RESOLVED — concern addressed with verification complete (closed ticket, verification log, or explicit reviewer sign-off confirming closure).
+  ACTIONABLE — a non-HIGH review finding that would be invisible to /gsd:execute-phase unless it is incorporated into PLAN.md or explicitly deferred/rejected in PLAN.md.
+
+Your final response MUST also include this section immediately after the CYCLE_SUMMARY line:
+
+## Current HIGH Concerns
+[List each unresolved HIGH with a brief description, one per bullet]
+[If none: write exactly 'None.']
+
+## Current Actionable Non-HIGH Concerns
+[List each unresolved actionable MEDIUM/LOW with a brief description and the PLAN.md change still needed, one per bullet]
+[If none: write exactly 'None.']
+These two sections MUST be the final content of your response, in this exact order, with no additional "## " headings after them (the source-grounding "Verification coverage" block is appended to REVIEWS.md, not to this return message).
+
+</step>
+
 </process>
 
 <success_criteria>
@@ -856,4 +954,6 @@ fi
 - [ ] Consensus summary synthesized from multiple reviewers
 - [ ] Temp files cleaned up
 - [ ] User knows how to use feedback (/gsd:plan-phase --reviews)
+- [ ] With `--cycle-summary`: the final response ends with `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` followed by the two `## Current ...` sections, counted by the rules in step `cycle_summary`; without the flag, none of that is emitted
+- [ ] With `--cycle-summary` and no review run (every lane failed or skipped): no CYCLE_SUMMARY line at all, never zero counts
 </success_criteria>
