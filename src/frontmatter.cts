@@ -25,7 +25,7 @@ import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
-import { platformReadSync as safeReadFile, platformWriteSync } from './shell-command-projection.cjs';
+import { platformReadSync as safeReadFile, platformReadBytesSync, platformWriteSync } from './shell-command-projection.cjs';
 import { textEncodingError } from './validate.cjs';
 import { splitLines } from './text-lines.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
@@ -1528,17 +1528,35 @@ function spliceOrReportRefusal(content: string, fm: Frontmatter, filePath: strin
  * inside one STATE.md lock scope, so the write cannot land between a locked writer's read and its
  * publish (readModifyWriteStateMd), the #500/#905/#1230 lost update. The write runs no sync or
  * preservation pipeline: ADR-3408 section 8.3's list of seam writes that run no pipeline names it
- * (Amendment 4). The lock wait is acquireStateLock's: a live holder makes the command wait, a dead
- * holder's lock is taken over, and a lock that cannot be taken throws before anything is read. Any
- * other target runs `fn` with no lock, as before. The basename match is case-sensitive, as the
- * #5120 guard's and the stateIO adapter's are. state.cjs is loaded lazily because it imports this
- * module.
+ * (Amendment 4). The lock wait is acquireStateLock's: a live holder makes the command wait (until
+ * its lock is 60 s old), a dead holder's lock is taken over, and a lock that cannot be taken throws
+ * before anything is read. Any other target runs `fn` with no lock, as before. The basename match is
+ * case-sensitive, as the #5120 guard's and the stateIO adapter's are. state.cjs is loaded lazily
+ * because it imports this module.
  */
 function underStateMdLock(fullPath: string, fn: () => void): void {
   if (path.basename(fullPath) !== 'STATE.md') { fn(); return; }
   // eslint-disable-next-line @typescript-eslint/no-require-imports -- #5120: state.cjs imports this module, so it is loaded here, on first use
   const { withStateLock } = require('./state.cjs') as { withStateLock: <T>(statePath: string, fn: () => T) => T };
   withStateLock(fullPath, fn);
+}
+
+/**
+ * The target's content for set and merge, or null when it is gone. A STATE.md target is read under
+ * its lock (pre-push review R4-m2): lstat first, so a STATE.md that is not a regular file (a FIFO, a
+ * device, a socket, a directory or a symlink) is refused before it is opened, then the non-blocking
+ * read readModifyWriteStateMd uses, so the lock is never held across a read that blocks.
+ */
+function readTarget(fullPath: string): string | null {
+  if (path.basename(fullPath) !== 'STATE.md') return fs.existsSync(fullPath) ? fs.readFileSync(fullPath, 'utf-8') : null;
+  let st: fs.Stats;
+  try { st = fs.lstatSync(fullPath); } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  if (!st.isFile()) error(`${fullPath} is not a regular file (a STATE.md that is a FIFO, device, socket, directory or symlink is refused)`);
+  const bytes = platformReadBytesSync(fullPath, { noFollow: true });
+  return bytes === null ? null : bytes.toString('utf-8');
 }
 
 function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefined, value: string | undefined, raw: boolean): void {
@@ -1552,8 +1570,8 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   const reportMissing = (): void => { output({ error: 'File not found', path: filePath }, raw, undefined); };
   if (!fs.existsSync(fullPath)) { reportMissing(); return; }
   underStateMdLock(fullPath, () => {
-    if (!fs.existsSync(fullPath)) { reportMissing(); return; }
-    const content = fs.readFileSync(fullPath, 'utf-8');
+    const content = readTarget(fullPath);
+    if (content === null) { reportMissing(); return; }
     // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
     // per file rather than per content digest (#1882, ADR-1411 wiring clause).
     const fm = extractFrontmatter(content, fullPath);
@@ -1676,8 +1694,8 @@ function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undef
   for (const key of Object.keys(mergeData)) rejectControlCharacterFieldName(key);
   const fields = mergeData;
   underStateMdLock(fullPath, () => {
-    if (!fs.existsSync(fullPath)) { reportMissing(); return; }
-    const content = fs.readFileSync(fullPath, 'utf-8');
+    const content = readTarget(fullPath);
+    if (content === null) { reportMissing(); return; }
     // Pass the resolved path so a truncated file is named in the diagnostic and deduplicated
     // per file rather than per content digest (#1882, ADR-1411 wiring clause).
     const fm = extractFrontmatter(content, fullPath);

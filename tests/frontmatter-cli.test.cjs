@@ -1241,13 +1241,18 @@ describe('#5120: frontmatter set/merge on a STATE.md target take the STATE.md lo
       assert.strictEqual(fs.existsSync(lock), false, 'the lock is released after the write');
     });
 
-    test(`${cmd} waits for a live holder of STATE.md.lock and writes after it releases`, (t) => {
+    test(`${cmd} waits for a live holder of STATE.md.lock, then reads and writes what the holder left`, (t) => {
       const dir = planningWith(t, { 'STATE.md': DOC, 'STATE.md.lock': String(LIVE_PID) });
       const state = path.join(dir, 'STATE.md');
       const duringWait = [];
       const seen = watchLocks(t, ({ iteration }) => {
         duringWait.push(fs.readFileSync(state, 'utf-8'));
-        if (iteration >= 1) { try { fs.unlinkSync(`${state}.lock`); } catch { /* already gone */ } }
+        // The holder saves its own change, then releases (pre-push review R4-m1): a command that read
+        // STATE.md before the lock would write that change away.
+        if (iteration >= 1 && fs.existsSync(`${state}.lock`)) {
+          fs.writeFileSync(state, DOC.replace('milestone: v1.0', 'milestone: v1.1'));
+          fs.unlinkSync(`${state}.lock`);
+        }
       });
 
       const result = runGsdTools(argsFor(state), dir);
@@ -1256,7 +1261,71 @@ describe('#5120: frontmatter set/merge on a STATE.md target take the STATE.md lo
       assert.ok(seen.iterations >= 2, 'the command waited on the held lock');
       assert.deepStrictEqual([...new Set(duringWait)], [DOC], 'STATE.md was not written while another process held the lock');
       assert.deepStrictEqual(seen.steals, [], 'a live holder\'s lock is not taken over');
-      assert.match(fs.readFileSync(state, 'utf-8'), /^status: executing$/m);
+      const after = fs.readFileSync(state, 'utf-8');
+      assert.match(after, /^status: executing$/m);
+      assert.match(after, /^milestone: v1\.1$/m, 'the holder\'s change is kept');
+    });
+
+    test(`${cmd} reports File not found when STATE.md is removed while it waits for the lock`, (t) => {
+      const dir = planningWith(t, { 'STATE.md': DOC, 'STATE.md.lock': String(LIVE_PID) });
+      const state = path.join(dir, 'STATE.md');
+      watchLocks(t, ({ iteration }) => {
+        if (iteration >= 1 && fs.existsSync(`${state}.lock`)) { fs.unlinkSync(state); fs.unlinkSync(`${state}.lock`); }
+      });
+
+      const result = runGsdTools(argsFor(state), dir);
+
+      assert.ok(result.success, `command failed: ${result.error}`);
+      assert.strictEqual(JSON.parse(result.output).error, 'File not found');
+      assert.strictEqual(fs.existsSync(state), false, 'nothing is written');
+    });
+
+    for (const name of ['state.md', 'MY-STATE.md']) {
+      test(`${cmd} on ${name} takes no STATE.md lock (the match is the exact, case-sensitive basename)`, (t) => {
+        const dir = planningWith(t, { [name]: DOC, [`${name}.lock`]: String(LIVE_PID), 'STATE.md.lock': String(LIVE_PID) });
+        const seen = watchLocks(t);
+
+        const result = runGsdTools(argsFor(path.join(dir, name)), dir);
+
+        assert.ok(result.success, `command failed: ${result.error}`);
+        assert.deepStrictEqual(seen, { iterations: 0, steals: [] }, 'no STATE.md lock was attempted');
+        assert.match(fs.readFileSync(path.join(dir, name), 'utf-8'), /^status: executing$/m);
+      });
+    }
+
+    test(`${cmd} refuses a STATE.md that is a symlink, writes nothing and releases the lock`, (t) => {
+      const dir = planningWith(t, { 'REAL.md': DOC });
+      const state = path.join(dir, 'STATE.md');
+      try { fs.symlinkSync(path.join(dir, 'REAL.md'), state); } catch (err) {
+        // fs.symlinkSync needs a privilege on Windows; anywhere else a failure fails the row.
+        if (process.platform === 'win32' && err.code === 'EPERM') { assert.strictEqual(process.platform, 'win32'); t.skip('no symlink privilege'); return; }
+        throw err;
+      }
+      const seen = watchLocks(t);
+
+      const result = runGsdTools(argsFor(state), dir);
+
+      assert.strictEqual(result.success, false, 'the command refuses');
+      assert.match(result.error, /is not a regular file/);
+      assert.ok(seen.iterations >= 1, 'the refusal is made under the lock');
+      assert.ok(fs.lstatSync(state).isSymbolicLink(), 'the link is left in place');
+      assert.strictEqual(fs.readFileSync(path.join(dir, 'REAL.md'), 'utf-8'), DOC, 'the target is unchanged');
+      assert.strictEqual(fs.existsSync(`${state}.lock`), false, 'the lock is released');
+    });
+
+    test(`${cmd} refuses a STATE.md that is a FIFO without blocking, and releases the lock (pre-push review R4-m2)`, (t) => {
+      if (process.platform === 'win32') { assert.strictEqual(process.platform, 'win32'); t.skip('no FIFO on win32'); return; }
+      const dir = planningWith(t, {});
+      const state = path.join(dir, 'STATE.md');
+      const made = runNode(['-e', "require('child_process').execFileSync('mkfifo', [process.argv[1]])", state], { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
+      if (made.exitCode !== 0) throw new Error(`mkfifo failed (exit ${made.exitCode}): ${made.stderr}`);
+
+      const result = runGsdTools(argsFor(state), dir);
+
+      assert.strictEqual(result.success, false, 'the command refuses');
+      assert.match(result.error, /is not a regular file/);
+      assert.ok(fs.lstatSync(state).isFIFO(), 'the FIFO is left in place');
+      assert.strictEqual(fs.existsSync(`${state}.lock`), false, 'the lock is released');
     });
 
     test(`${cmd} takes over a STATE.md.lock left by a dead process`, (t) => {
