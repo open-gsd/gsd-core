@@ -19,7 +19,7 @@ group: v1.7.0 Features
 | `converged` | No HIGH, no actionable non-HIGH, no open plan-revision conflict. State was written as usual. |
 | `open_conflicts` | A `## Plan-Revision Conflicts` entry is unresolved. A blocker; outranks the other two. |
 | `stalled` | Cycles ran out and the unresolved count did not decrease in the last cycle. |
-| `max_cycles` | Cycles ran out with concerns still open, and the count was still falling. |
+| `max_cycles` | Cycles ran out with concerns still open and neither of the above applies (this includes a run of one cycle, which has no earlier count to compare against). |
 
 The exit path asks nothing, writes no `STATE.md`, and does not replan, so the plans are left as the last cycle left them. The caller decides what a person should do next through its own channel. `--on-escalation` accepts only `ask` (the default, unchanged) and `exit`; any other value is refused before cycle 1, because falling back to the question would hang the very caller that asked for the exit.
 

@@ -35,9 +35,9 @@ CONVERGENCE_STATUS: <status> cycles=<n> current_high=<N> current_actionable=<M> 
 | `converged` | Nothing open. State was written. | Run `/gsd-execute-phase 3`. |
 | `open_conflicts` | A plan-revision conflict in `REVIEWS.md` is unresolved. | Route to a person; replanning cannot resolve it on its own. |
 | `stalled` | Cycles ran out and the unresolved count did not fall. | Route to a person; more cycles are unlikely to help. |
-| `max_cycles` | Cycles ran out while the count was still falling. | Re-run with a higher `--max-cycles`, or route to a person. |
+| `max_cycles` | Cycles ran out and neither of the above applies (a one-cycle run lands here, since it has no earlier count to compare). | Re-run with a higher `--max-cycles`, or route to a person. |
 
-Everything above that line is for the person: the final `CYCLE_SUMMARY` line, then `## Current HIGH Concerns` and `## Current Actionable Non-HIGH Concerns`. A non-`converged` exit writes no state and leaves the plans as the last cycle left them.
+On a non-`converged` exit, everything above that line is for the person: the final `CYCLE_SUMMARY` line, then `## Current HIGH Concerns` and `## Current Actionable Non-HIGH Concerns`. (A converged run prints the usual banner and `Next:` line first.) A non-`converged` exit writes no state and leaves the plans as the last cycle left them.
 
 **A missing `CONVERGENCE_STATUS` line is not success.** If the run died earlier (for example a bad `--on-escalation` value, which is refused before cycle 1 with `'ask' or 'exit'`), treat the absence as "could not look", not "nothing to report".
 
@@ -55,4 +55,7 @@ The response ends with `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` 
 
 ---
 
-**Related:** [Commands](../COMMANDS.md#gsd-plan-review-convergence) · [Unattended Plan-Review Convergence](../FEATURES.md#4617-unattended-plan-review-convergence)
+## Related
+
+- [Commands](../COMMANDS.md#gsd-plan-review-convergence)
+- [Unattended Plan-Review Convergence](../FEATURES.md#4617-unattended-plan-review-convergence)

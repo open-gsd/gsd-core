@@ -73,7 +73,7 @@ Parse flags from `$ARGUMENTS`:
 - `--llama-cpp` → include llama.cpp (local server, OpenAI-compatible)
 - `--all` → include all available (CLIs + running local servers)
 - `--cycle-summary` → not a reviewer: end the run with the machine-readable `CYCLE_SUMMARY` counters (step `cycle_summary`, #4617); it never changes which lanes run
-- No flags → if `review.default_reviewers` is set, include only configured reviewers that are detected; otherwise include all available
+- No flags (a lone `--cycle-summary` still counts as no reviewer flags) → if `review.default_reviewers` is set, include only configured reviewers that are detected; otherwise include all available
 
 Reviewer-selection precedence:
 1. Individual reviewer flags (`--claude`, `--codex`, etc.)
@@ -852,7 +852,7 @@ fi
 <step name="cycle_summary">
 **Runs only when `--cycle-summary` is present in `$ARGUMENTS`** (#4617). Match it as a whole,
 space-delimited token (`(^|[[:space:]])--cycle-summary([[:space:]]|$)`), the way `--override-gate`
-is matched — `--cycle-summary-x`, or the text inside another argument's value, does not enable it.
+is matched in `plan-review-convergence.md` — `--cycle-summary-x`, or the text inside another argument's value, does not enable it.
 Without the flag, skip this step entirely: `/gsd:review` output is unchanged.
 
 This step is the single owner of the CYCLE_SUMMARY contract. A caller that drives
@@ -877,15 +877,14 @@ Where <M> is the integer count of actionable MEDIUM/LOW concerns that REMAIN UNR
 
 Consensus gate (applies to NEWLY RAISED HIGHs only; evaluate before the counting rules below):
   This gate engages ONLY when 2 or more reviewers actually ran and produced a review section this
-  cycle. With exactly one reviewer, skip this entire gate — a single reviewer's HIGH always counts,
-  exactly as before.
+  cycle. With exactly one reviewer, skip this entire gate — a single reviewer's HIGH always counts.
 
   Classify each newly raised HIGH by what the claim ASSERTS, not by whether it happens to contain a
   file:line citation:
     - EXISTENCE-CLASS — asserts that a named symbol, file, path, flag, commit, or ID exists,
-      is absent, or says something specific ("X does not exist", "the plan cites Y which is missing
+      is absent, or says something specific ("X does not exist", "the plan cites Y which is missing",
       "file Z contains Q").
-    - JUDGMENT-CLASS — asserts a design or correctness property ("no idempotency on retried writes
+    - JUDGMENT-CLASS — asserts a design or correctness property ("no idempotency on retried writes",
       "race between A and B", "missing rate limit"). A judgment-class HIGH stays judgment-class even
       when it cites a file for context.
 

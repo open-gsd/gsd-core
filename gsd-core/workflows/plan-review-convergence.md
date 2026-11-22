@@ -42,6 +42,11 @@ if [ -z "$MAX_CYCLES" ]; then MAX_CYCLES=3; fi
 # (a board worker, a CI job) that passed the flag because it cannot answer a question.
 ON_ESCALATION=ask
 if echo "$GSD_ARGS" | grep -qE '(^|[[:space:]])--on-escalation([=[:space:]]|$)'; then
+  # A repeated flag is refused, not resolved by position: `exit ... --on-escalation=ask` would
+  # otherwise silently pick `ask` for the caller that cannot answer.
+  if [ "$(echo "$GSD_ARGS" | grep -oE '(^|[[:space:]])--on-escalation([=[:space:]]|$)' | wc -l | tr -d ' ')" -gt 1 ]; then
+    echo "ERROR: --on-escalation may be given once." >&2; exit 1
+  fi
   ON_ESCALATION=$(echo "$GSD_ARGS" | sed -nE 's/(^|.*[[:space:]])--on-escalation[=[:space:]]+([^[:space:]]+).*/\2/p' | head -1)
   case "$ON_ESCALATION" in
     ask|exit) ;;
@@ -453,7 +458,9 @@ Display:
 ```
 
 If `ON_ESCALATION` is `exit` (#4617), also end the response with the final line below, so an
-unattended caller reads one status line for every outcome:
+unattended caller reads one status line for every outcome that reaches the end of the loop (a
+disabled gate, a missing or malformed CYCLE_SUMMARY, or an unreadable REVIEWS.md aborts earlier
+and emits none):
 
 ```text
 CONVERGENCE_STATUS: converged cycles={cycle} current_high=0 current_actionable=0 open_conflicts=0

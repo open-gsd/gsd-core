@@ -734,8 +734,10 @@ describe('plan-review-convergence workflow: CYCLE_SUMMARY contract definition (#
       reviewWorkflow.includes('CYCLE_SUMMARY: current_high=<N> current_actionable=<M>'),
       'review.md must define the CYCLE_SUMMARY line (#4617)'
     );
-    assert.ok(reviewWorkflow.includes('## Current HIGH Concerns'));
-    assert.ok(reviewWorkflow.includes('## Current Actionable Non-HIGH Concerns'));
+    assert.ok(reviewWorkflow.includes('## Current HIGH Concerns'),
+      'review.md must define the ## Current HIGH Concerns section (#4617)');
+    assert.ok(reviewWorkflow.includes('## Current Actionable Non-HIGH Concerns'),
+      'review.md must define the ## Current Actionable Non-HIGH Concerns section (#4617)');
   });
 
   test('CYCLE_SUMMARY contract defines PARTIALLY RESOLVED (acknowledged, mitigation incomplete)', () => {
@@ -2138,7 +2140,7 @@ describe('plan-review-convergence: cross-artifact fact-drift pass (#1956)', () =
 // #4617: the counting contract (and the consensus gate inside it) moved from the wrapper's step 5a
 // spawn prompt into gsd-review's `cycle_summary` step, so these tests read review.md. The wrapper
 // is still read for the return-shape parity check.
-const WORKFLOW_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
+const REVIEW_WORKFLOW_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
 const WRAPPER_2398 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
 const REVIEWER_INSTANCES_2398 = path.join(__dirname, '..', 'gsd-core', 'references', 'reviewer-instances.md');
 const runner2398 = require('../gsd-core/bin/lib/review-lane-runner.cjs');
@@ -2150,7 +2152,7 @@ function read2398(p) {
 }
 
 /** The `cycle_summary` step body in review.md, from its opening tag to its closing `</step>`. */
-function step5a2398(text) {
+function cycleSummaryStep2398(text) {
   const body = lf2398(text);
   const start = body.indexOf('<step name="cycle_summary">');
   if (start === -1) return '';
@@ -2184,14 +2186,14 @@ function landmarks2398(text) {
 }
 
 describe('#2398 — consensus gate is declared and correctly positioned', () => {
-  const workflow = read2398(WORKFLOW_2398);
+  const workflow = read2398(REVIEW_WORKFLOW_2398);
 
   test('the cycle_summary step declares a consensus gate', () => {
-    assert.notEqual(consensusGate2398(step5a2398(workflow)), '', 'no Consensus gate block found in the cycle_summary step');
+    assert.notEqual(consensusGate2398(cycleSummaryStep2398(workflow)), '', 'no Consensus gate block found in the cycle_summary step');
   });
 
   test('gate precedes the counting rules it constrains', () => {
-    const at = landmarks2398(step5a2398(workflow));
+    const at = landmarks2398(cycleSummaryStep2398(workflow));
     assert.ok(at.contract >= 0 && at.gate >= 0 && at.counting >= 0 && at.definitions >= 0,
       `missing landmark: ${JSON.stringify(at)}`);
     assert.ok(at.contract < at.gate, 'gate must sit inside the CYCLE_SUMMARY contract');
@@ -2214,13 +2216,13 @@ describe('#2398 — consensus gate is declared and correctly positioned', () => 
   });
 
   test('the cycle_summary step fences stay balanced', () => {
-    const fences = (lf2398(step5a2398(workflow)).match(/^\s*```/gm) || []).length;
+    const fences = (lf2398(cycleSummaryStep2398(workflow)).match(/^\s*```/gm) || []).length;
     assert.equal(fences % 2, 0, `odd fence count (${fences}) in the cycle_summary step — a fence was left open`);
   });
 });
 
 describe('#2398 — gate semantics: the clauses that make it correct', () => {
-  const gate = () => lf2398(consensusGate2398(step5a2398(read2398(WORKFLOW_2398)))).toLowerCase();
+  const gate = () => lf2398(consensusGate2398(cycleSummaryStep2398(read2398(REVIEW_WORKFLOW_2398)))).toLowerCase();
 
   test('gate engages only when 2+ reviewers actually ran', () => {
     const g = gate();
@@ -2335,7 +2337,7 @@ describe('#2398 — marker parity: the gate names markers the runner actually PR
 
   test('gate names only markers the runner actually produces', () => {
     const emitted = emittedMarkers2398();
-    const named = markerNames2398(consensusGate2398(step5a2398(read2398(WORKFLOW_2398))));
+    const named = markerNames2398(consensusGate2398(cycleSummaryStep2398(read2398(REVIEW_WORKFLOW_2398))));
     assert.deepEqual(emitted, ['[reviewed-without-repo-access]', '[reviewed-without-source-citations]'],
       'runner must produce both markers when invoked');
     assert.ok(named.length >= 1, 'the gate must name at least one concrete marker literal');
@@ -2352,17 +2354,17 @@ describe('#2398 — marker parity: the gate names markers the runner actually PR
 
   test('parsers are total on empty, whitespace-only and absent input', () => {
     for (const input of ['', '   \n\t\n ', null, undefined, read2398('/nonexistent/2398.md')]) {
-      assert.equal(step5a2398(input), '');
+      assert.equal(cycleSummaryStep2398(input), '');
       assert.equal(consensusGate2398(input), '');
       assert.deepEqual(markerNames2398(input), []);
     }
   });
 
   test('parsers are newline-agnostic (CRLF === LF)', () => {
-    for (const p of [WORKFLOW_2398, REVIEWER_INSTANCES_2398]) {
+    for (const p of [REVIEW_WORKFLOW_2398, REVIEWER_INSTANCES_2398]) {
       const lfText = lf2398(read2398(p));
       const crlf = lfText.replace(/\n/g, '\r\n');
-      assert.equal(step5a2398(crlf), step5a2398(lfText));
+      assert.equal(cycleSummaryStep2398(crlf), cycleSummaryStep2398(lfText));
       assert.deepEqual(markerNames2398(crlf), markerNames2398(lfText));
     }
   });
@@ -2404,12 +2406,12 @@ describe('#2398 — reviewer-instances cross-reference', () => {
 //
 // See https://github.com/open-gsd/gsd-core/issues/4617
 
-const REVIEW_4617 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
-const WRAPPER_4617 = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
+const REVIEW_4617 = WORKFLOW_REVIEW_PATH;
+const WRAPPER_4617 = WORKFLOW_PATH;
 const CMD_REVIEW_4617 = path.join(__dirname, '..', 'commands', 'gsd', 'review.md');
 const CMD_WRAPPER_4617 = path.join(__dirname, '..', 'commands', 'gsd', 'plan-review-convergence.md');
 
-const lf4617 = (t) => String(t == null ? '' : t).replace(/\r\n/g, '\n');
+const lf4617 = lf2398;
 const read4617 = (p) => lf4617(fs.readFileSync(p, 'utf8'));
 
 /** The `ON_ESCALATION=ask` .. closing `fi` fragment of the wrapper's argument parsing. */
@@ -2467,10 +2469,10 @@ function step5c4617() {
 describe('#4617 half B — gsd-review owns the CYCLE_SUMMARY contract', () => {
   test('cycle_summary step is gated on a token-anchored --cycle-summary', () => {
     const body = read4617(REVIEW_4617);
-    const step = step5a2398(body);
+    const step = cycleSummaryStep2398(body);
     assert.notEqual(step, '', 'review.md must have a cycle_summary step');
     assert.ok(/without the flag, skip this step entirely/i.test(step), 'the step must say it is inert without the flag');
-    assert.ok(cycleSummaryRegex4617().length > 0);
+    cycleSummaryRegex4617(); // asserts review.md states the token-anchored match
   });
 
   test('--cycle-summary token match: bare and trailing token enable it; lookalikes do not (executed)', () => {
@@ -2483,7 +2485,7 @@ describe('#4617 half B — gsd-review owns the CYCLE_SUMMARY contract', () => {
   });
 
   test('no review run means no CYCLE_SUMMARY line, never zero counts', () => {
-    const step = lf4617(step5a2398(read4617(REVIEW_4617)));
+    const step = lf4617(cycleSummaryStep2398(read4617(REVIEW_4617)));
     assert.ok(/TOTAL_LANE_FAILURE=true/.test(step) && /ALL_LANES_SKIPPED=true/.test(step));
     assert.ok(/emit no\s+CYCLE_SUMMARY line/i.test(step));
     assert.ok(/Never emit `current_high=0 current_actionable=0`/.test(step));
@@ -2533,6 +2535,14 @@ describe('#4617 half A — --on-escalation=exit ends the run with a status inste
     assert.equal(runOnEscalation4617('3 --on-escalation=exit --max-cycles 2').out, 'exit');
     assert.equal(runOnEscalation4617('3 --on-escalation exit').out, 'exit');
     assert.equal(runOnEscalation4617('3 --on-escalation=ask').out, 'ask');
+  });
+
+  test('a repeated flag is refused instead of resolved by position (executed)', () => {
+    for (const args of ['3 --on-escalation=exit --on-escalation=ask', '3 --on-escalation exit --on-escalation=exit']) {
+      const r = runOnEscalation4617(args);
+      assert.equal(r.status, 1, `"${args}" must exit 1, got ${r.status}`);
+      assert.ok(r.err.includes('may be given once'), `message must say the flag is single-use: ${r.err}`);
+    }
   });
 
   test('a lookalike flag does not enable it', () => {
