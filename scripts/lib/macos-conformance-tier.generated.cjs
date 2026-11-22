@@ -96,6 +96,7 @@ module.exports = {
   "tests/feat-2483-review-claude-mds-guard.test.cjs",
   "tests/features-index-gate.test.cjs",
   "tests/fixture-builder.test.cjs",
+  "tests/frontmatter-cli.test.cjs",
   "tests/frontmatter.unit.test.cjs",
   "tests/gate-api-coverage-verify-pre.unit.test.cjs",
   "tests/gate-codebase-drift.unit.test.cjs",
