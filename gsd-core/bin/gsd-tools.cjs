@@ -2639,7 +2639,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     // file can hold another plan's record, whose time is not this hold's.
     // Honoured only for a caller-owned forced `none` and a non-negative
     // integer; anything else is a fresh decision. The reader clamps it to the
-    // write time, so it can shorten a hold but never extend one.
+    // write time, so it cannot run past the write time (a forced `none`).
     const decidedAt = decidedBy === 'caller' && recordedIsolation === 'none'
       ? dispatchIsolationOwner().parseRenewHeldMs(parsed['renew-held'])
       : null;

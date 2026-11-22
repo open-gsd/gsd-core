@@ -133,9 +133,10 @@ EXEC_CONCURRENCY=$(printf '%s' "$QB_EXEC_CONC_JSON" | node -e 'let s="";process.
    **`isolation == "orchestrator-worktree"`:** GSD creates the worktree
    (`gsd_run query worktree.create --manifest "$QUICK_BATCH_WORKTREE_MANIFEST" --agent-id ... --path ... --branch ... --base ... --files "$PLAN_FILES" --deletions "$PLAN_DELETIONS"`) then
    process-spawns the executor via `inspect-dispatch-isolation --json
-   --cwd-target --prompt`, exactly as `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`'s
+   --cwd-target --prompt` (a read that records nothing, after the forced `none`
+   above), following `gsd-core/workflows/execute-phase/steps/executor-isolation-dispatch.md`'s
    "orchestrator-worktree" section
-   describes — reuse that mechanism verbatim, substituting this item's values
+   — reuse that mechanism verbatim, substituting this item's values
    for the placeholders that fragment's compose step lists (#5934). A quick
    item has no phase and no phase-plan-index `id`, so each one has a value below
    or is not applicable, and no literal `{...}` placeholder may reach the
