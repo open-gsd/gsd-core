@@ -176,6 +176,14 @@ describe('applyWorktreeBaseRef', () => {
   });
 });
 
+// Pre-#6031 shape of the cascade: a claudeDir, an optional user directory, and a bare string
+// (or null). The ladder is read through the family-B resolver; these cases pin that the same
+// files still resolve to the same strings (no user layer unless one is named).
+function legacyBaseRef(claudeDir, deps, userClaudeDir) {
+  const r = resolveEffectiveBaseRef(path.dirname(claudeDir), { ...deps, userClaudeDir: userClaudeDir ?? null });
+  return r.found ? r.value : null;
+}
+
 // ─── resolveEffectiveBaseRef ──────────────────────────────────────────────────
 
 describe('resolveEffectiveBaseRef', () => {
@@ -1180,7 +1188,7 @@ describe('resolveEffectiveBaseRef — JSONC (FIX 2)', () => {
         [path.join(claudeDir, 'settings.local.json')]: jsonc,
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps), 'head');
   });
 
   test('returns baseRef from settings.local.json with /* */ block comments', () => {
@@ -1197,7 +1205,7 @@ describe('resolveEffectiveBaseRef — JSONC (FIX 2)', () => {
         [path.join(claudeDir, 'settings.local.json')]: jsonc,
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps), 'fresh');
   });
 });
 
@@ -1349,7 +1357,7 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'head');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'head');
   });
 
   test('(b) project local "fresh" OVERRIDES user/global "head" → returns "fresh"', () => {
@@ -1359,7 +1367,7 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
   });
 
   test('(c) project shared "fresh" (no local) OVERRIDES user/global "head" → returns "fresh"', () => {
@@ -1369,17 +1377,17 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), 'fresh');
   });
 
   test('(d) userClaudeDir undefined → behaves as before, returns null when both project files absent', () => {
     const deps = { readFile: () => null };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, undefined), null);
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, undefined), null);
   });
 
   test('(d) userClaudeDir null → behaves as before, returns null when both project files absent', () => {
     const deps = { readFile: () => null };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, null), null);
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, null), null);
   });
 
   test('user/global settings.json absent → returns null (no fallback beyond user layer)', () => {
@@ -1389,7 +1397,7 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         [path.join(USER_CLAUDE_DIR, 'settings.json')]: JSON.stringify({ other: 'value' }),
       }),
     };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps, USER_CLAUDE_DIR), null);
+    assert.strictEqual(legacyBaseRef(claudeDir, deps, USER_CLAUDE_DIR), null);
   });
 
   test('userClaudeDir === claudeDir → does not double-read (avoids re-reading shared settings.json)', () => {
@@ -1405,8 +1413,8 @@ describe('resolveEffectiveBaseRef — user/global layer (#1013)', () => {
         return null;
       },
     };
-    // resolveEffectiveBaseRef(sameDir, deps, sameDir) — userClaudeDir === claudeDir
-    const result = resolveEffectiveBaseRef(sameDir, deps, sameDir);
+    // legacyBaseRef(sameDir, deps, sameDir) — userClaudeDir === claudeDir
+    const result = legacyBaseRef(sameDir, deps, sameDir);
     assert.strictEqual(result, 'head'); // still reads shared settings.json (the project layer)
     // The shared settings.json should have been read exactly once (project layer), not twice
     assert.strictEqual(readCount, 2, 'only local + shared should be read; user layer skipped when same dir');
