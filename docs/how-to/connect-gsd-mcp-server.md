@@ -187,10 +187,8 @@ are the seam's rather than the exact `content`: line endings become LF and
 the file ends in one newline; the seam's other spacing rules (a blank line
 after a heading, a list or a closing fence that text follows; blank-line runs
 collapsed) apply only where the write changed the document relative to the
-file it replaces, and to the whole document when the file is new; the
-frontmatter block is kept exactly. No sync or preservation pipeline runs on
-the host's content. A STATE.md held by another live writer
-makes the write wait for the lock (up to 30 seconds), and the server answers
+file it replaces, and to the whole document when the file is new. A STATE.md
+held by another live writer makes the write wait for the lock (up to 30 seconds), and the server answers
 no other request while it waits, since each tool call is handled
 synchronously; a lock that cannot be taken returns a tool error and writes
 nothing. An existing `STATE.md` that is not a regular file with a single
@@ -200,11 +198,9 @@ through it nor over it (the raw write followed a symlink, wrote into a hard
 link or a device, blocked on a FIFO, and failed on a directory or a socket). A
 `STATE.md` path whose directory is missing or is not a directory, or that
 ends in a path separator, returns a tool error at once, before any lock
-wait. The name match is exact and case-sensitive: on a case-insensitive file
-system (the macOS and Windows defaults) a `path` ending in `state.md` or
-`State.md` names the same file but is written exactly as given, without the
-lock and the seam, so name it `STATE.md`. Every other `path` is written
-exactly as given.
+wait. The name match is case-sensitive: on a case-insensitive file system a
+`path` ending in `state.md` is written without the lock and the seam, so name
+it `STATE.md`. Every other `path` is written exactly as given.
 
 Errors from a tool are returned as MCP tool errors (`isError: true`), not as
 JSON-RPC protocol errors — the host surfaces them in its normal tool-failure UX.
