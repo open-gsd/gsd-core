@@ -434,8 +434,8 @@ An annotated hook accepts this contract. That is the meaning of listing `"quick"
 quick-batch dispatches hooks from its coordinator through the same shared primitives, never by
 running `/gsd-quick` per item. [ADR-1239](1239-gsd-embeddable-orchestration-engine.md)'s single-writer
 ownership of `BATCH.json`, STATE.md and worktree merges is unchanged. This section decides what a
-hook can rely on in a batch. Three pieces it relies on are proposed separately, and increment 3
-merges only after all three:
+hook can rely on in a batch. It relies on two separate proposals, #B and #C, and on the storage
+spec in #T3, the tracker that implements increment 3 once #B and #C have merged:
 
 - **#B, recovery records:** the merged record that tells the coordinator an item's work is in the
   checkout, the rule that resolves an interrupted merge by ancestry, the persisted verifier status,
@@ -473,8 +473,9 @@ merges only after all three:
   follows its `onError`: `error-skipped` under `skip`, `held` under `halt`.
 - **What is scheduled.** For an item or a planning invocation, the scheduled hooks are every frozen
   entry at the cells that apply to it under the batch's stored modes (#C), active or not. An entry
-  whose activation was false at freeze is recorded `skipped` when the set is frozen, and that
-  outcome is sticky.
+  whose activation was false at freeze is recorded `skipped`, and that outcome is sticky: for an
+  item when the set is frozen, for a planning invocation's `plan:pre` entries when the invocation
+  is created (its id does not exist before). Activation itself is never re-evaluated.
 - **Contributions are snapshots, not checkpoints.** A contribution is prompt content, not a side
   effect. Its resolved fragment is stored with the frozen set and injected into every spawn of the
   target agent, including replacement and revision spawns after a resume. It is never marked done.
@@ -522,8 +523,9 @@ invocation and is never replayed.
 
 **Planning invocations.** Planners for an invocation spawn only after every `plan:pre` step and gate
 of that invocation has a sticky outcome. A `held` gate holds the invocation and its items unplanned,
-and resume re-evaluates it like any `held` gate. When an item counts as planned is #B's rule (once
-its `quick-batch update` has persisted, not when a `PLAN.md` exists). On that basis:
+and resume re-evaluates it like any `held` gate. When an item counts as planned is #B's rule (a
+persisted per-item `planned` mark, set by the `quick-batch update` that records its plan, not the
+presence of a `PLAN.md`). On that basis:
 
 - **Items still unplanned.** Items of invocation N that are not planned and have no `PLAN.md` are
   planned under a new invocation N+1 with only those items, and its `plan:pre` steps and gates run
@@ -606,7 +608,7 @@ the existing one is left as it is:
   the repository already has, cover how the mode reaches that file:
   - **Section loading** (process tests in the style of `tests/section-manifest-init-facts.test.cjs`,
     which drive the real CLI): `query init.quick` with and without `--discuss` and `--validate`,
-    and with `--full` (folded into the three flags at `src/init.cts:1882-1884`), and
+    and with `--full` (folded into the three flags at `src/init.cts:1892-1894`), and
     `query init.quick-batch` with and without `--validate`, include the `gsd:section` that loads the
     cell's step file in `section_manifest.included` only when the mode is set.
   - **The step file's own guard** (a text contract, as above): each gated step file keeps its
