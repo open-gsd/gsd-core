@@ -44,8 +44,13 @@ export interface ReadCheck {
   missing: string[];
   /** Plan id → the fields whose restated value disagrees with the plan. */
   mismatched: Record<string, string[]>;
-  /** Plan ids named in the prompt whose file could not be read within bounds, so went unchecked (#6286 Minor 2). */
+  /**
+   * Plan ids named in the prompt whose file could not be read within bounds, so went unchecked
+   * (#6286 Minor 2): the first ten, as a prompt can name any number (#6286 round 5 Nit 1).
+   */
   unchecked: string[];
+  /** How many plans went unchecked in all. */
+  uncheckedTotal: number;
 }
 
 export const READ_CHECK_MARKER = '[incomplete-read]';
@@ -65,22 +70,42 @@ export function readCheckInstruction(): string {
 
 /**
  * Repo-relative plan paths from the prompt's `#### <path>-PLAN.md` headers (review.md build_prompt).
- * A header inside a closed code fence is a plan's own content, not a plan (#6286 Nit 1). An unclosed
- * fence is not honoured: it would hide every later header, and so skip those plans' checks.
+ * A header inside a closed code fence is left out (#6286 Nit 1): it is a plan's own content, or a
+ * plan whose header a fence left open above hid, which only the plan files tell apart (see
+ * `fencedPlanPaths`). An unclosed fence is not honoured: it would hide every later header.
  */
 export function planPathsFromPrompt(prompt: string): string[] {
+  return planHeaders(prompt, false);
+}
+
+/**
+ * The plan headers inside a closed fence. The prompt alone cannot tell a plan quoting a header in
+ * a fence from a fence left open in one plan and closed by the next plan's first bare fence, which
+ * hides that plan's header; `runReadCheck` tells them apart by the plan files (#6286 round 5 Minor 2).
+ */
+function fencedPlanPaths(prompt: string): string[] {
+  return planHeaders(prompt, true);
+}
+
+function planHeaders(prompt: string, inFence: boolean): string[] {
   const lines = String(prompt ?? '').split(/\r?\n/);
   const fenced = closedFenceLines(lines);
   const paths = new Set<string>();
   lines.forEach((line, i) => {
-    const m = /^#### (\S+)\s*$/.exec(line);
-    if (!m || fenced[i] || m[1].includes('\0')) return; // no file name holds a NUL (#6286 Nit 3)
-    // plan-scan owns which filenames are plans (lint-plan-count-drift). review.md's glob is
-    // `*-PLAN.md`, so a bare PLAN.md, which has no id to restate, is not one of its plans.
-    const base = m[1].split(/[\\/]/).pop() ?? '';
-    if (planScan.isCanonicalPlanFile(base) && planIdOf(base) !== base.normalize('NFC')) paths.add(m[1]);
+    const p = planHeaderPath(line);
+    if (p !== null && Boolean(fenced[i]) === inFence) paths.add(p);
   });
   return [...paths];
+}
+
+/** The path a `#### <path>-PLAN.md` header line names, or null. */
+function planHeaderPath(line: string): string | null {
+  const m = /^#### (\S+)\s*$/.exec(line);
+  if (!m || m[1].includes('\0')) return null; // no file name holds a NUL (#6286 Nit 3)
+  // plan-scan owns which filenames are plans (lint-plan-count-drift). review.md's glob is
+  // `*-PLAN.md`, so a bare PLAN.md, which has no id to restate, is not one of its plans.
+  const base = m[1].split(/[\\/]/).pop() ?? '';
+  return planScan.isCanonicalPlanFile(base) && planIdOf(base) !== base.normalize('NFC') ? m[1] : null;
 }
 
 /** Which lines sit inside a closed code fence; an unclosed fence marks nothing. */
@@ -157,16 +182,19 @@ function restatedInt(raw: string): number | null | 'invalid' {
   return /^\d+$/.test(text) ? Number(text) : 'invalid';
 }
 
-/** The plan with its HTML comments removed (a bounded scan, not a regex). */
+/**
+ * The plan with its HTML comments removed (a bounded scan, not a regex). An unclosed `<!--` removes
+ * nothing: dropping the rest of the plan would drop its tasks (#6286 round 5 Minor 3).
+ */
 function stripHtmlComments(content: string): string {
   let out = '';
   let at = 0;
   for (;;) {
     const open = content.indexOf('<!--', at);
     if (open === -1) return out + content.slice(at);
-    out += content.slice(at, open);
     const close = content.indexOf('-->', open + 4);
-    if (close === -1) return out;
+    if (close === -1) return out + content.slice(at);
+    out += content.slice(at, open);
     at = close + 3;
   }
 }
@@ -197,8 +225,16 @@ export function planFacts(planPath: string, content: string): PlanFacts {
   // `<task>` is not a task a reader would count (#6286 Minor 5a). Counted here rather than by
   // parsePlanDocument, whose task and objective regexes are quadratic on hostile plans (#6286
   // Minor 6); plan-document itself stays fence-blind for plan-index.
-  const prose = stripInlineCode(stripFencedCode(stripHtmlComments(content)).text);
-  const openings = countTaskOpenings(prose);
+  // Stripping only removes text, so each order can only undercount: code first misses a fence
+  // opener inside a comment, comments first lets a `<!--` in a fenced example or in inline code
+  // swallow the real tasks after it (#6286 round 5 Minor 3). The larger count is the one neither
+  // order over-stripped.
+  const codeFirst = stripHtmlComments(stripInlineCode(stripFencedCode(content).text));
+  const commentsFirst = stripInlineCode(stripFencedCode(stripHtmlComments(content)).text);
+  const a = countTaskOpenings(codeFirst);
+  const b = countTaskOpenings(commentsFirst);
+  const prose = a >= b ? codeFirst : commentsFirst;
+  const openings = Math.max(a, b);
   return {
     id: planIdOf(planPath),
     requirements: toList(fm.requirements),
@@ -387,6 +423,9 @@ function hasTruncationMarker(review: string): boolean {
   return /<truncated(?![a-z])/i.test(stripInlineCode(lines.filter((_, i) => !fenced[i]).join('\n')));
 }
 
+// How many unchecked plan ids a check keeps, and so the stamp names, before it counts the rest.
+const UNCHECKED_SHOWN = 10;
+
 /** Compare a review's restatements with the plans it was given; `unchecked` are plans that could not be read. */
 export function checkRead(
   review: string,
@@ -427,7 +466,8 @@ export function checkRead(
     compacted,
     missing,
     mismatched,
-    unchecked,
+    unchecked: unchecked.slice(0, UNCHECKED_SHOWN),
+    uncheckedTotal: unchecked.length,
   };
 }
 
@@ -452,8 +492,6 @@ function leadingMarkers(review: string): { end: number; markers: string } {
   }
 }
 
-// How many unchecked plan ids the stamp names before it counts the rest.
-const UNCHECKED_SHOWN = 10;
 
 /**
  * Stamp the down-weight marker on a review that failed the check. It goes after any leading
@@ -475,7 +513,8 @@ export function stampIncompleteRead(review: string, check: ReadCheck): string {
   if (check.unchecked.length) {
     // A hostile prompt can name any number of plans; the list stays readable (#6286 Minor 1).
     const shown = check.unchecked.slice(0, UNCHECKED_SHOWN).join(', ');
-    const more = check.unchecked.length > UNCHECKED_SHOWN ? ` and ${check.unchecked.length - UNCHECKED_SHOWN} more` : '';
+    const total = Math.max(check.uncheckedTotal, check.unchecked.length);
+    const more = total > UNCHECKED_SHOWN ? ` and ${total - UNCHECKED_SHOWN} more` : '';
     why.push(`the plan file for ${shown}${more} could not be checked`);
   }
   const stamp =
@@ -532,8 +571,11 @@ export function readPlanBounded(p: string, maxBytes: number): string | null {
  * Run the check for one lane's review. Plans come from the prompt's plan headers and are read from
  * the repo, so the expected facts are the plans themselves. `compacted` comes from the lane's own
  * session log, which only its handler can read. A header naming no file in the repo is skipped; a
- * plan file that cannot be read within bounds is recorded as unchecked (#6286 Minor 2). Returns
- * `undefined` only when there is nothing to report: no plan, no truncation marker, no compaction.
+ * plan file that cannot be read within bounds is recorded as unchecked (#6286 Minor 2). A prompt
+ * that names no plan was asked for no restatement, so its compaction is not checked; it returns
+ * `undefined` unless the output carries a truncation marker (#6286 round 5 Minor 1). A prompt that
+ * names a plan returns `undefined` only when there is nothing to report: no plan file, no
+ * truncation marker, no compaction.
  */
 export function runReadCheck(
   review: string,
@@ -557,36 +599,49 @@ export function runReadCheck(
   let budget = MAX_TOTAL_PLAN_BYTES;
   const root = String(repoRoot).replace(/[\\/]+$/, '');
   const headers = planPathsFromPrompt(prompt);
+  if (headers.length === 0) {
+    const check = checkRead(review, [], false);
+    return check.truncated ? check : undefined;
+  }
   const realRoot = tryWithinRoot('.', root, PathAcceptance.RelativeOnly);
-  for (let i = 0; i < headers.length; i += 1) {
-    const rel = headers[i];
+  // Every `#### …` line of the plans read: a fenced header one of them holds is that plan's own
+  // content; any other fenced header is a plan whose header a fence left open above hid (#6286
+  // round 5 Minor 2).
+  const quotedHeaders = new Set<string>();
+  let considered = 0;
+  const readPlan = (rel: string): void => {
     // Past the header cap nothing is resolved or read (#6286 Minor 1).
-    if (i >= MAX_PLAN_HEADERS) {
+    if (considered >= MAX_PLAN_HEADERS) {
       unchecked.add(planIdOf(rel));
-      continue;
+      return;
     }
+    considered += 1;
     // Read only a file inside the repo: relative, no `..` segment, and still inside after symlinks
     // resolve (#6286 Minor 1). The resolved path dedupes spellings of one plan, and is the path
     // read, so a symlink the check followed is not followed again: the repo root as given plus
     // the resolved path below it, the spelling the deps seam is keyed by.
-    if (rel.split(/[\\/]/).includes('..')) continue;
+    if (rel.split(/[\\/]/).includes('..')) return;
     const resolved = tryWithinRoot(rel, root, PathAcceptance.RelativeOnly);
-    if (resolved === null || realRoot === null || seen.has(resolved)) continue;
+    if (resolved === null || realRoot === null || seen.has(resolved)) return;
     seen.add(resolved);
     const abs = `${root}/${path.relative(realRoot, resolved).split(path.sep).join('/')}`;
     try {
-      if (!deps.exists(abs)) continue;
+      if (!deps.exists(abs)) return;
       const content = budget > 0 ? deps.readPlanBounded(abs, Math.min(MAX_PLAN_BYTES, budget)) : null;
       if (content === null) {
         unchecked.add(planIdOf(rel));
-        continue;
+        return;
       }
       budget -= Buffer.byteLength(content, 'utf8');
       expected.push(planFacts(rel, content));
+      for (const line of content.split(/\r?\n/)) if (line.startsWith('#### ')) quotedHeaders.add(line.replace(/\s+$/, ''));
     } catch {
       unchecked.add(planIdOf(rel));
     }
-  }
+  };
+  for (const rel of headers) readPlan(rel);
+  const named = new Set(headers);
+  for (const rel of fencedPlanPaths(prompt)) if (!named.has(rel) && !quotedHeaders.has(`#### ${rel}`)) readPlan(rel);
   const compacted = opts.compacted === 'unknown' ? 'unknown' : opts.compacted === true;
   const check = checkRead(review, expected, compacted, [...unchecked]);
   if (expected.length === 0 && unchecked.size === 0 && !check.truncated && check.compacted === false) return undefined;
