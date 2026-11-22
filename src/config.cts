@@ -29,7 +29,7 @@ const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTab
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskIfSecret, maskSecret } from './secrets.cjs';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- model-resolver exports through `export =` (#5329)
 import modelResolver = require('./model-resolver.cjs');
 const { hasNativeModelAliases } = modelResolver;
 import { resolveActiveRuntime } from './runtime-slash.cjs';
