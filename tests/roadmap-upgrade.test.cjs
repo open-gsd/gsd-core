@@ -225,6 +225,76 @@ describe('roadmap upgrade rollback (#1542)', () => {
     assert.equal(fs.readFileSync(path.join(planning, 'phases', '1-01-foo', '01-01-PLAN.md'), 'utf8'), 'rewritten\n', 'the file is where the error names it');
   });
 
+  // A hand-built plan: phase 01-foo -> 1-01-foo, its plan file renamed 01-01-PLAN.md -> 1-01-01-PLAN.md and
+  // rewritten (depends_on) at that final name; config.json is a directory, so the migration rolls back.
+  function renamedAndRewrittenPlan(dir) {
+    const planning = path.join(dir, '.planning');
+    fs.writeFileSync(path.join(planning, 'phases', '01-foo', '01-01-PLAN.md'), 'content at plan time\n');
+    fs.mkdirSync(path.join(planning, 'config.json'));
+    return {
+      alreadyMigrated: false,
+      phases: [{ oldId: '1', newId: '1-01', oldDir: '01-foo', newDir: '1-01-foo',
+        fileRenames: [{ oldName: '01-01-PLAN.md', newName: '1-01-01-PLAN.md' }],
+        dependsOnRewrites: [{ oldName: '01-01-PLAN.md', finalName: '1-01-01-PLAN.md', from: 'content at plan time\n', to: 'rewritten\n' }] }],
+      roadmapEdits: [], crossRefEdits: [],
+    };
+  }
+  const CONFIG_EISDIR = 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR)';
+
+  for (const [label, failDir, expected, at] of [
+    ['and its directory both fail to reverse', true,
+      `${CONFIG_EISDIR}. NOT restored: phases/1-01-foo/1-01-01-PLAN.md (its rename was not reversed). Renames NOT reversed: phases/1-01-foo/1-01-01-PLAN.md, phases/1-01-foo`, ['1-01-foo', '1-01-01-PLAN.md']],
+    ['fails to reverse while its directory is moved back', false,
+      `${CONFIG_EISDIR}. NOT restored: phases/01-foo/1-01-01-PLAN.md (its rename was not reversed). Renames NOT reversed: phases/01-foo/1-01-01-PLAN.md`, ['01-foo', '1-01-01-PLAN.md']],
+  ]) {
+    test(`a rewritten plan file whose own rename ${label} is named where it is (#5120 pre-push review R5-m2, R5-m3)`, (t) => {
+      const dir = makeGitignoredPlanningProject();
+      t.after(() => cleanup(dir));
+      const planning = path.join(dir, '.planning');
+      const plan = renamedAndRewrittenPlan(dir);
+      const realRename = fs.renameSync;
+      mock.method(fs, 'renameSync', function (from, to, ...rest) {
+        const reverseOfFile = path.basename(String(from)) === '1-01-01-PLAN.md' && path.basename(String(to)) === '01-01-PLAN.md';
+        const reverseOfDir = String(to) === path.join(planning, 'phases', '01-foo');
+        if (reverseOfFile || (failDir && reverseOfDir)) throw Object.assign(new Error('EACCES: permission denied, rename'), { code: 'EACCES' });
+        return realRename.call(this, from, to, ...rest);
+      });
+      t.after(() => mock.restoreAll());
+
+      assert.throws(() => applyMigration(dir, plan, { dryRun: false }), (err) => err.message === expected);
+      mock.restoreAll();
+      assert.equal(fs.readFileSync(path.join(planning, 'phases', ...at), 'utf8'), 'rewritten\n', 'the file is where the error names it');
+    });
+  }
+
+  test('a rewritten plan file under a renamed directory gone from both paths is reported removed, not as not moved back (#5120 pre-push review R5-n6)', (t) => {
+    const dir = makeGitignoredPlanningProject();
+    t.after(() => cleanup(dir));
+    const planning = path.join(dir, '.planning');
+    const plan = renamedAndRewrittenPlan(dir);
+    plan.phases[0].fileRenames = [];
+    plan.phases[0].dependsOnRewrites[0].finalName = '01-01-PLAN.md';
+    const newPath = path.join(planning, 'phases', '1-01-foo');
+    const realRename = fs.renameSync;
+    const realOpen = fs.openSync;
+    const realStat = fs.statSync;
+    let movedAside = false;
+    const arm = (file) => {
+      if (!movedAside && String(file) === path.join(planning, 'config.json') && fs.existsSync(newPath)) {
+        movedAside = true;
+        realRename.call(fs, newPath, path.join(dir, 'moved-aside'));
+      }
+    };
+    mock.method(fs, 'openSync', function (file, ...rest) { arm(file); return realOpen.call(this, file, ...rest); });
+    mock.method(fs, 'statSync', function (file, ...rest) { arm(file); return realStat.call(this, file, ...rest); });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), (err) =>
+      err.message === `${CONFIG_EISDIR}. NOT restored (changed by another writer after the migration wrote them, left as found): phases/01-foo/01-01-PLAN.md (removed). Renames NOT reversed: phases/01-foo (missing)`);
+    mock.restoreAll();
+    assert.equal(movedAside, true, 'precondition: the renamed directory was moved away before the rollback');
+  });
+
   test('a file rename inside a renamed phase directory that fails to reverse is named where it is left (#5120 pre-push review R3-m4)', (t) => {
     const dir = makeGitignoredPlanningProject();
     t.after(() => cleanup(dir));
@@ -765,6 +835,23 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
     const underLock = opens.filter((o) => o.lockHeld);
     assert.ok(underLock.length >= 1, 'precondition: the rollback opened STATE.md under its lock');
     assert.deepEqual(underLock.filter((o) => !o.nonBlocking), [], 'every open of STATE.md under the lock is non-blocking');
+  });
+
+  test('a STATE.md another writer removed after the migration wrote it is named as removed (#5120 pre-push review R5-n6)', (t) => {
+    const dir = setup('m13-state-removed-', ROADMAP);
+    t.after(() => cleanup(dir));
+    const state = path.join(dir, '.planning', 'STATE.md');
+    fs.writeFileSync(state, '# Project State\n\n**Current Phase:** Phase 2: Bar\n');
+    const plan = computeMigrationPlan(dir);
+    fs.mkdirSync(path.join(dir, '.planning', 'config.json'));
+    const original = fs.readFileSync(state, 'utf8');
+    armAfterStateWrite(dir, original, () => { fs.unlinkSync(state); });
+    t.after(() => mock.restoreAll());
+
+    assert.throws(() => applyMigration(dir, plan, { dryRun: false }), (err) =>
+      err.message === 'Migration failed and rolled back: config.json cannot be updated: it is not a regular file within the size limit (EISDIR). NOT restored (changed by another writer after the migration wrote them, left as found): STATE.md (removed)');
+    mock.restoreAll();
+    assert.equal(fs.existsSync(state), false, 'STATE.md is left as found (removed)');
   });
 
   test('a STATE.md the rollback cannot read is left as found and named (#5120 pre-push review Mi3)', (t) => {

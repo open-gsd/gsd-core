@@ -2587,11 +2587,21 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     // #5120 review Minor 7: a restore that was due but did not leave the file holding its prior bytes (the restore
     // threw, or STATE.md's lock could not be taken) is named with its reason, never reported as rolled back (#1542).
     const restoreFailed: string[] = [];
-    // Pre-push review R4-m5: a snapshotted file whose directory rename was not reversed is still under the renamed
-    // directory; it is named there, not reported as removed by another writer.
-    const stillMoved = (filePath: string): string | null => {
+    // Pre-push review R4-m5, R5-m2, R5-m3: a snapshotted file that a rename left behind is named where it is, not
+    // reported as removed by another writer. Snapshot keys are pre-migration paths, so a file rename's old path is
+    // mapped back through the directory renames before it is compared.
+    const preMigration = (p: string): string => {
+      for (const d of performedRenames) {
+        if (p.startsWith(d.newPath + path.sep)) p = d.oldPath + p.slice(d.newPath.length); // allow-handrolled-containment: maps a path under a renamed directory back to its pre-migration name; not a containment decision
+      }
+      return p;
+    };
+    const stillMoved = (filePath: string): { where: string; reason: string } | null => {
       for (const r of leftBehind) {
-        if (!r.missing && filePath.startsWith(r.oldPath + path.sep)) return r.newPath + filePath.slice(r.oldPath.length); // allow-handrolled-containment: maps a snapshot key under a renamed directory to where that directory is; not a containment decision
+        if (!r.missing && preMigration(r.oldPath) === filePath) return { where: whereNow(r.at), reason: 'its rename was not reversed' };
+      }
+      for (const r of leftBehind) {
+        if (!r.missing && filePath.startsWith(r.oldPath + path.sep)) return { where: r.newPath + filePath.slice(r.oldPath.length), reason: 'its directory was not moved back' }; // allow-handrolled-containment: maps a snapshot key under a renamed directory to where that directory is; not a containment decision
       }
       return null;
     };
@@ -2641,7 +2651,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
         continue;
       }
       const movedTo = stillMoved(filePath);
-      if (movedTo !== null) { restoreFailed.push(`${planningName(movedTo)} (its directory was not moved back)`); continue; }
+      if (movedTo !== null) { restoreFailed.push(`${planningName(movedTo.where)} (${movedTo.reason})`); continue; }
       const { current, readFailure } = readNow(filePath);
       if (backup.existed ? current !== null && current.equals(backup.content) : readFailure === 'removed') continue;
       const wrote = migrationWrote.get(filePath);
