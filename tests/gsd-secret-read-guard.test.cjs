@@ -3825,6 +3825,9 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     // #6408 Major 2: the shell removes `\<newline>` from an unquoted heredoc body before xargs reads it, as it does
     // from a here-string word, an echo or printf operand and a shell's heredoc script (blocked at the parent too).
     'xargs cat <<EOF\n.e\\\nnv\nEOF',
+    // ... before it looks for the terminator, so a line `EOF` after `x\` is body (second security review).
+    'xargs cat <<EOF\nx\\\nEOF\n.env\nEOF',
+    'cat <<EOF | xargs cat\nx\\\nEOF\n.env\nEOF',
     'xargs cat <<< .e\\\nnv',
     'echo .e\\\nnv | xargs cat',
     "printf '%s' .e\\\nnv | xargs cat",
