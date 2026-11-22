@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { ERROR_REASON, formatDiagnosticToken } = require('../gsd-core/bin/lib/io.cjs');
 const { VALID_PROFILES } = require('../gsd-core/bin/lib/model-profiles.cjs');
-const { runGsdTools, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, mockPartialWriteThenThrow, suppressFdAsync } = require('./helpers.cjs');
+const { runGsdTools, runGsdToolsAsync, createTempDir, createTempProject, cleanup, delay, withIsolatedProcessState, homeSandboxEnv, mockPartialWriteThenThrow, suppressFdAsync } = require('./helpers.cjs');
 const fc = require('./helpers/fast-check-setup.cjs');
 const configLib = require('../gsd-core/bin/lib/config.cjs');
 const { ExitError } = require('../gsd-core/bin/lib/cli-exit.cjs');
@@ -1605,7 +1605,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
     { command: 'config-set-model-profile', positionals: ['quality'] },
     { command: 'migrate-config', positionals: [] },
   ];
-  test('the registry declares the actual guarded mutation routes', () => {
+  test('the registry declares the actual guarded mutation routes', async () => {
     const { CLI_SURFACE } = require('../gsd-core/bin/lib/cli-surface.cjs');
     assert.deepEqual(Object.keys(CLI_SURFACE).filter((verb) => CLI_SURFACE[verb].rejectedGlobalFlags).sort(), verbs.map(({ command }) => command).sort());
     for (const { command, positionals } of verbs) {
@@ -1652,10 +1652,10 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
       const invocation = [...prefix, command].join(' ');
       for (const existing of [false, true]) {
         for (const flag of unsupportedFlags) {
-          test(`${invocation} ${flag} preserves ${existing ? 'existing' : 'absent'} config`, (t) => {
+          test(`${invocation} ${flag} preserves ${existing ? 'existing' : 'absent'} config`, async (t) => {
             const f = fixture(existing);
             t.after(() => cleanup(f.dir));
-            const result = runGsdTools(
+            const result = await runGsdToolsAsync(
               [...prefix, command, ...positionals, flag, '--json-errors'],
               f.dir,
               homeSandboxEnv(f.dir),
@@ -1665,10 +1665,10 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
           });
 
           if (positionals.length > 0) {
-            test(`${invocation} ${flag} before the profile is a usage error with ${existing ? 'existing' : 'absent'} config`, (t) => {
+            test(`${invocation} ${flag} before the profile is a usage error with ${existing ? 'existing' : 'absent'} config`, async (t) => {
               const f = fixture(existing);
               t.after(() => cleanup(f.dir));
-              const result = runGsdTools(
+              const result = await runGsdToolsAsync(
                 [...prefix, command, flag, ...positionals, '--json-errors'],
                 f.dir,
                 homeSandboxEnv(f.dir),
@@ -1681,10 +1681,10 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
       }
 
       for (const raw of [false, true]) {
-        test(`${invocation} ${raw ? '--raw' : 'without flags'} still performs its mutation`, (t) => {
+        test(`${invocation} ${raw ? '--raw' : 'without flags'} still performs its mutation`, async (t) => {
           const f = fixture(command === 'migrate-config');
           t.after(() => cleanup(f.dir));
-          const result = runGsdTools(
+          const result = await runGsdToolsAsync(
             [...prefix, command, ...(raw ? ['--raw'] : []), ...positionals],
             f.dir,
             homeSandboxEnv(f.dir),
@@ -1710,30 +1710,30 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
       for (const existing of [false, true]) {
         for (const globalFlag of ['--default', '--pick']) {
           for (const flag of ['--dry-run', '-n']) {
-            test(`${invocation} ${globalFlag} ${flag} refuses before mutation with existing=${existing}`, (t) => {
+            test(`${invocation} ${globalFlag} ${flag} refuses before mutation with existing=${existing}`, async (t) => {
               const f = fixture(existing);
               t.after(() => cleanup(f.dir));
-              const result = runGsdTools([...prefix, command, ...positionals, globalFlag, flag, '--json-errors'], f.dir, homeSandboxEnv(f.dir));
+              const result = await runGsdToolsAsync([...prefix, command, ...positionals, globalFlag, flag, '--json-errors'], f.dir, homeSandboxEnv(f.dir));
               assertUnchanged(f);
               assertUsage(result, command, globalFlag);
             });
           }
         }
         for (const globalFlag of ['--cwd', '--project-dir']) {
-          test(`${invocation} refuses repeated ${globalFlag} with existing=${existing}`, (t) => {
+          test(`${invocation} refuses repeated ${globalFlag} with existing=${existing}`, async (t) => {
             const f = fixture(existing);
             t.after(() => cleanup(f.dir));
-            const result = runGsdTools([...prefix, command, ...positionals, globalFlag, f.dir, globalFlag, f.dir, '--json-errors'], f.dir, homeSandboxEnv(f.dir));
+            const result = await runGsdToolsAsync([...prefix, command, ...positionals, globalFlag, f.dir, globalFlag, f.dir, '--json-errors'], f.dir, homeSandboxEnv(f.dir));
             assertUnchanged(f);
             assertUsage(result, command, globalFlag);
           });
         }
       }
 
-      test(`${invocation} accepts a repeated --raw without changing the mutation`, (t) => {
+      test(`${invocation} accepts a repeated --raw without changing the mutation`, async (t) => {
         const f = fixture(command === 'migrate-config');
         t.after(() => cleanup(f.dir));
-        const result = runGsdTools(
+        const result = await runGsdToolsAsync(
           [...prefix, command, ...positionals, '--raw', '--raw'],
           f.dir,
           homeSandboxEnv(f.dir),
@@ -1750,11 +1750,11 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         }
       });
 
-      test(`${invocation} refuses an extra positional before writing`, (t) => {
+      test(`${invocation} refuses an extra positional before writing`, async (t) => {
         const f = fixture(false);
         t.after(() => cleanup(f.dir));
         const extra = command === 'config-set-model-profile' ? 'extra-profile' : 'extra';
-        const result = runGsdTools(
+        const result = await runGsdToolsAsync(
           [...prefix, command, ...positionals, extra, '--json-errors'],
           f.dir,
           homeSandboxEnv(f.dir),
@@ -1772,10 +1772,10 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
   }
 
   for (const profile of [undefined, '', '   ']) {
-    test(`config-set-model-profile refuses ${profile === undefined ? 'a missing' : JSON.stringify(profile)} profile before writing`, (t) => {
+    test(`config-set-model-profile refuses ${profile === undefined ? 'a missing' : JSON.stringify(profile)} profile before writing`, async (t) => {
       const f = fixture(false);
       t.after(() => cleanup(f.dir));
-      const result = runGsdTools(
+      const result = await runGsdToolsAsync(
         ['config-set-model-profile', ...(profile === undefined ? [] : [profile]), '--json-errors'],
         f.dir,
         homeSandboxEnv(f.dir),
@@ -1795,7 +1795,7 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
   test('unknown flag spelling and placement cannot bypass refusal on any of the three routes', async (t) => {
     const fixtures = [];
     t.after(() => fixtures.forEach((dir) => cleanup(dir)));
-    await fc.assert(fc.property(
+    await fc.assert(fc.asyncProperty(
       fc.record({
         suffix: fc.array(fc.constantFrom('a', 'b', 'c', '0', '1', '='), { minLength: 1, maxLength: 12 }),
         short: fc.boolean(),
@@ -1806,13 +1806,13 @@ describe('#5286: config mutation routes reject unsupported flags before writing'
         adjacent: fc.constantFrom(null, '--default', '--pick'),
         beforeCommand: fc.boolean(),
       }),
-      ({ suffix, short, leading, query, raw, existing, adjacent, beforeCommand }) => {
+      async ({ suffix, short, leading, query, raw, existing, adjacent, beforeCommand }) => {
         const flag = `${short ? '-' : '--'}unknown-${suffix.join('')}`;
         const globalPrefix = adjacent !== null && beforeCommand;
         for (const { command, positionals } of verbs) {
           const f = fixture(existing);
           fixtures.push(f.dir);
-          const result = runGsdTools([
+          const result = await runGsdToolsAsync([
             ...(globalPrefix ? [adjacent, flag] : []), ...(query ? ['query'] : []), command,
             ...(leading && !globalPrefix ? [...(adjacent ? [adjacent] : []), flag] : []), ...positionals,
             ...(raw ? ['--raw'] : []), ...(leading || globalPrefix ? [] : [...(adjacent ? [adjacent] : []), flag]), '--json-errors',
