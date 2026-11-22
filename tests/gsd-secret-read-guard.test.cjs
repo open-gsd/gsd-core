@@ -3873,7 +3873,6 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     '{ printf %s .e; printf %s nv; } | xargs cat',
     '{ echo -n .e; echo -n nv; } | xargs cat',
     '{ printf %s .e; echo nv; echo x; } | xargs cat',
-    '{ printf %s .e; printf %s x >&2; printf %s nv; } | xargs cat',
     '{ printf %s .e; printf %s x >/dev/null; printf %s nv; } | xargs cat',
     '{ printf %s .e; printf %s x >log; printf %s nv; } | xargs cat',
     '{ printf %s .e | cat; printf %s nv; } | xargs cat',
@@ -3995,6 +3994,7 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     ['{ printf %s .e >"$OUT"; printf %s nv; } | xargs cat', '>'],
     // ... and one to a descriptor or a device that a group's own redirect, `|&` or an `exec` may send back to the pipe.
     ['{ printf %s .e >&2; printf %s nv; } 2>&1 | xargs cat', '>'],
+    ['{ printf %s .e; printf %s x >&2; printf %s nv; } | xargs cat', '>'],
     ['{ printf %s .e >/dev/stderr; printf %s nv; } |& xargs cat', '>'],
     ['{ printf %s .e >/dev/./stdout; printf %s nv; } | xargs cat', '>'],
     ['{ printf %s .e >//dev/stdout; printf %s nv; } | xargs cat', '>'],
