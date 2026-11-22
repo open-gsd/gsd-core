@@ -276,6 +276,9 @@ function resolveConfigValue(
     // workstream therefore outranks a root non-object at the same prefix; no other layer
     // pair is merged by the loader, so no other pair gets this rule.
     let blocked = resolved.blockedAt > 0;
+    // A typed family-B read (#6031) keeps the bare-string cascade it replaces: a layer whose
+    // `worktree` parent is not an object is skipped, not a barrier to the layers below.
+    if (blocked && family === 'B' && opts.valueType !== undefined) blocked = false;
     if (blocked && layer === 'root' && resolved.blockedAt <= workstreamObjectPrefixes) blocked = false;
     if (layer === 'workstream') workstreamObjectPrefixes = resolved.objectPrefixes;
     if (blocked) {

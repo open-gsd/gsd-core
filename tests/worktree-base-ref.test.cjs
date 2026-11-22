@@ -251,6 +251,16 @@ describe('resolveEffectiveBaseRef', () => {
     assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'fresh', 'runtime-shared']);
   });
 
+  test('a non-object worktree parent at a layer is skipped like the bare-string cascade did', () => {
+    for (const parent of [null, 'x', 7, []]) {
+      const r = resolve({
+        [LOCAL]: JSON.stringify({ worktree: parent }),
+        [SHARED]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      });
+      assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-shared'], JSON.stringify(parent));
+    }
+  });
+
   test('a non-string baseRef at a layer is skipped like a null one', () => {
     for (const bad of [7, true, {}, []]) {
       const r = resolve({
