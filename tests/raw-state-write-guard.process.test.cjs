@@ -92,7 +92,7 @@ module.exports = async (target) => {
     const entries = runGuarded(dir, main);
     assert.deepEqual(
       entries.map((e) => e.fn),
-      // fs.promises.cp is recorded once, as the fs.promises.copyFile it calls.
+      // fs.promises.cp, awaited here, is recorded once, as the fs.promises.copyFile it calls.
       ['writeFileSync', 'writeFileSync', 'appendFileSync', 'renameSync', 'copyFileSync', 'cpSync', 'promises.writeFile', 'promises.copyFile', 'writeFile', 'writeFileSync'],
     );
     assert.ok(entries.every((e) => e.violation === true && e.lockHeld === false), JSON.stringify(entries));
@@ -675,7 +675,7 @@ module.exports = (target) => fs.writeFileSync(target, 'raw');
   }
 
   test('the runner puts its shim ahead of a preload already in NODE_OPTIONS, so the check installs first in every process that received it (#5120 review Nit 1, Nit 2)', (t) => {
-    // The header's limits hold only when the shim is the first preload: a preload ordered before it
+    // The stated limits hold only when the shim is the first preload: a preload ordered before it
     // could keep an unwrapped fs.promises. This preload, handed to the runner in NODE_OPTIONS,
     // records whether the check had installed by the time it ran, in each process it ran in.
     const dir = createTempDir('rswg-runner-order-');

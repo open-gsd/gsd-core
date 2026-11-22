@@ -1182,8 +1182,8 @@ describe('frontmatter set/merge — write refusal', () => {
 // Pre-push review R3-m5: `frontmatter set` and `frontmatter merge` wrote a target named STATE.md
 // through the seam without the STATE.md lock, so a write could land between a locked writer's read
 // and its publish (readModifyWriteStateMd), the #500/#905/#1230 lost update. Under `npm test` the
-// #5120 guard records each STATE.md write these rows make and fails the run on one made without the
-// lock. The rows run in-process, so the CLI shares this file's state.cjs and its lock seams.
+// #5120 guard records the STATE.md writes of the rows that do not mock fs (a mock's frame hides the
+// product caller) and fails the run on one made without the lock. The rows run in-process, so the CLI shares this file's state.cjs and its lock seams.
 describe('#5120: frontmatter set/merge on a STATE.md target take the STATE.md lock', () => {
   const stateMod = require('../gsd-core/bin/lib/state.cjs');
   const LIVE_PID = 424242;
