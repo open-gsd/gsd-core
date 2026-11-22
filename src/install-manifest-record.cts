@@ -42,8 +42,10 @@ const HASH_CHUNK_BYTES = 1024 * 1024;
  * manifest key can name a FIFO, whose blocking read never returns (#6331), so
  * the open is non-blocking, the type is checked on the descriptor, and only a
  * regular file is read: exactly the size fstat reported, in chunks, with no
- * size cap, so it matches the installer's fileHash. A file whose size changed
- * while it was read gets null, so no partial hash is ever recorded.
+ * size cap, so it matches the installer's fileHash. It returns null when the
+ * size, mtime or ctime (ns) changed during the read, or the path no longer
+ * names the file read. A same-size rewrite inside one timestamp tick of the
+ * filesystem changes none of them, which no stat comparison can detect.
  *
  * The open follows a leaf symlink on purpose: the key resolver already refuses
  * a symlinked component unless the user opted into symlinked destinations,
@@ -54,18 +56,22 @@ export function tryFileHash(filePath: string): string | null {
   let fd: number | undefined;
   try {
     fd = openSync(filePath, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
-    const st = fstatSync(fd);
+    const st = fstatSync(fd, { bigint: true });
     if (!st.isFile()) return null;
+    const size = Number(st.size);
     const hash = createHash('sha256');
-    const buf = Buffer.allocUnsafe(Math.max(1, Math.min(st.size, HASH_CHUNK_BYTES)));
-    let left = st.size;
+    const buf = Buffer.allocUnsafe(Math.max(1, Math.min(size, HASH_CHUNK_BYTES)));
+    let left = size;
     while (left > 0) {
       const n = readSync(fd, buf, 0, Math.min(buf.length, left), null);
       if (n === 0) return null; // the file shrank while it was read: no partial hash
       hash.update(buf.subarray(0, n));
       left -= n;
     }
-    if (fstatSync(fd).size !== st.size) return null; // it grew while it was read
+    const after = fstatSync(fd, { bigint: true });
+    if (after.size !== st.size || after.mtimeNs !== st.mtimeNs || after.ctimeNs !== st.ctimeNs) return null;
+    const named = statSync(filePath, { bigint: true }); // follows a leaf symlink, as the open did
+    if (named.dev !== st.dev || named.ino !== st.ino) return null; // replaced while it was read
     return hash.digest('hex');
   } catch {
     return null;
