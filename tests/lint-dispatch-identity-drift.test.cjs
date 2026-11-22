@@ -252,14 +252,14 @@ test('property: any marker the owner renders is canonical to the lint (render, t
 
 test('the real tree is clean: the lint exits 0 with no args (the shape lint:ci uses)', () => {
   const r = runNode([LINT], { cwd: REPO });
-  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.exitCode, 0, r.stderr);
   assert.match(r.stdout, /ok dispatch-identity-drift/);
 });
 
 test('the CLI exits 1 and names each finding on a drifted root', () => {
   const root = fixture({ 'gsd-core/workflows/a.md': `${PRODUCER}\n[gsd-dispatch phase="1"]\n` });
   const r = runNode([LINT, '--root', root]);
-  assert.equal(r.status, 1);
+  assert.equal(r.exitCode, 1);
   assert.match(r.stderr, /template-drift/);
   assert.match(r.stderr, /unlisted-producer-site/);
 });
