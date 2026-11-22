@@ -5,11 +5,9 @@
  * activation uses one precedence chain and one prototype-pollution guard.
  */
 
-import path from 'node:path';
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import planningWorkspaceMod = require('./planning-workspace.cjs');
-const { planningDir, planningRoot } = planningWorkspaceMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configValueResolver = require('./config-value-resolver.cjs');
+const { resolveConfigValue } = configValueResolver;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
 const { readConfigFileBounded } = configFileReadMod;
@@ -101,17 +99,21 @@ function resolveConfigKey(
   const fromConfig = _getNestedConfigValue(config, dotKey);
   if (fromConfig.found) return { found: true, value: fromConfig.value };
 
-  // Level 2 + 3: raw config.json files (only when cwd is available)
+  // Level 2 + 3 (+ the global defaults layer, #4071): the Config Value Resolution Module walks the
+  // workstream, root and global-defaults files (#6030, ADR-1411 Decision 5). Only a file layer
+  // counts here: a built-in or schema default must not make an unset switch look configured, and
+  // the injected registry below stays the schema-default source.
   if (cwd) {
-    const wsConfigPath = path.join(planningDir(cwd), 'config.json');
-    const rootConfigPath = path.join(planningRoot(cwd), 'config.json');
-
-    const fromWs = _readRawConfigKey(wsConfigPath, dotKey, quiet);
-    if (fromWs.found) return { found: true, value: fromWs.value };
-
-    if (wsConfigPath !== rootConfigPath) {
-      const fromRoot = _readRawConfigKey(rootConfigPath, dotKey, quiet);
-      if (fromRoot.found) return { found: true, value: fromRoot.value };
+    const rawSchema = registry['configSchema'];
+    const resolved = resolveConfigValue(dotKey, {
+      cwd,
+      quiet,
+      ...(rawSchema && typeof rawSchema === 'object' && !Array.isArray(rawSchema)
+        ? { configSchema: rawSchema as Record<string, unknown> }
+        : {}),
+    });
+    if (resolved.found && (resolved.layer === 'workstream' || resolved.layer === 'root' || resolved.layer === 'global-defaults')) {
+      return { found: true, value: resolved.value };
     }
   }
 

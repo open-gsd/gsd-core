@@ -197,11 +197,15 @@ function fileLayers(cwd: string, family: ConfigFamily): Array<{ layer: ConfigLay
 /** Resolve one eligible key without ever rewriting a configuration layer. */
 function resolveConfigValue(
   key: string,
-  opts: { cwd: string; family?: ConfigFamily },
+  opts: { cwd: string; family?: ConfigFamily; configSchema?: Record<string, unknown>; quiet?: boolean },
 ): ConfigValueResolution {
+  // `configSchema` lets a caller that already holds a capability registry snapshot resolve
+  // against it; `quiet` keeps a read that must never write to stderr (an activation gate, #5139)
+  // from reporting an unusable layer. Neither changes which layer wins.
+  const warn: typeof warnUnusableInput = opts.quiet === true ? () => false : warnUnusableInput;
   let cachedSchema: Record<string, unknown> | undefined;
   const capabilitySchema = (): Record<string, unknown> =>
-    cachedSchema ??= getCapabilityConfigSchema(opts.cwd);
+    cachedSchema ??= opts.configSchema ?? getCapabilityConfigSchema(opts.cwd);
   const family = keyFamily(key, capabilitySchema);
   const missing = (reason: ConfigReason): ConfigValueResolution => ({
     found: false, value: undefined, layer: null, reason,
@@ -233,7 +237,7 @@ function resolveConfigValue(
     if (Object.keys(read.data).length === 0) emptyFile = true;
     const data = family === 'A' ? normalizeLegacyKeys(read.data) : null;
     if (data?.skipped.length) {
-      warnUnusableInput({ reason: UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: file });
+      warn({ reason: UNUSABLE_REASON.CONFIG_SECTION_NOT_OBJECT, source: file });
     }
     if (data?.normalizations.some((normalization) => normalization.requiresFilesystem)) {
       const planningSection = data.parsed['planning'];
@@ -283,7 +287,7 @@ function resolveConfigValue(
   const relevant = faults.filter(({ rank }) => rank < winnerRank);
   const hasRelevantTypeMismatch = typeMismatchRanks.some((rank) => rank < winnerRank);
   for (const { fault } of relevant) {
-    warnUnusableInput({ reason: UNUSABLE_REASON.CONFIG_UNREADABLE, source: fault.path });
+    warn({ reason: UNUSABLE_REASON.CONFIG_UNREADABLE, source: fault.path });
   }
   const faultReason = relevant.length > 0 ? relevant[0].fault.reason : null;
   const mismatchReason = hasRelevantTypeMismatch ? CONFIG_REASON.CONFIG_TYPE_MISMATCH : null;

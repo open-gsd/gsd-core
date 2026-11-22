@@ -28,9 +28,11 @@
  * injected via `withInstallFs`/`installRuntimeArtifacts(..., { fs })`,
  * exactly the class of bug those two modules were fixed for.
  */
-import path from 'node:path';
 import os from 'node:os';
 import { resolveGsdHome } from './runtime-homes.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configLoader = require('./config-loader.cjs');
+const { _deepMergeConfig, globalDefaultsPath } = configLoader;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
 const { unboundedConfigFileReason, printablePath, readConfigFileBounded } = configFileReadMod;
@@ -95,7 +97,7 @@ interface RuntimeProfileResolver {
 function readGsdGlobalModelOverrides(options: ReadOptions = {}): Record<string, string> | null {
   try {
     const home = resolveGsdHome(options.homedir ? options.homedir() : os.homedir());
-    const defaultsPath = path.join(home, '.gsd', 'defaults.json');
+    const defaultsPath = globalDefaultsPath(home);
     if (!installFs().existsSync(defaultsPath)) return null;
     const raw = readInstallConfigText(defaultsPath, 'global defaults'); // #5759: never block on a planted FIFO
     if (raw === null) return null;
@@ -151,7 +153,7 @@ function readGsdEffectiveModelOverrides(targetDir: string | null = null, options
 
   if (!global && !projectOverrides) return null;
   // Per-project wins on conflict; preserve non-conflicting global keys.
-  return { ...(global || {}), ...(projectOverrides || {}) };
+  return _deepMergeConfig(global || {}, projectOverrides || {}) as Record<string, string>;
 }
 
 type AgentTools = Record<string, string[]>;
@@ -183,7 +185,7 @@ function readGsdAgentTools(config: Record<string, unknown> | null): AgentTools |
  */
 function readGsdEffectiveAgentTools(targetDir: string | null = null, options: ReadOptions = {}): AgentTools | null {
   const home = resolveGsdHome(options.homedir ? options.homedir() : os.homedir());
-  const globalConfig = _readGsdConfigFile(path.join(home, '.gsd', 'defaults.json'), 'global defaults');
+  const globalConfig = _readGsdConfigFile(globalDefaultsPath(home), 'global defaults');
 
   let projectConfig: Record<string, unknown> | null = null;
   if (targetDir) {
@@ -199,7 +201,7 @@ function readGsdEffectiveAgentTools(targetDir: string | null = null, options: Re
     && Object.prototype.hasOwnProperty.call(projectConfig, 'agent_tools')
     && project === null) return {};
   if (!global && !project) return null;
-  return { ...(global || {}), ...(project || {}) };
+  return _deepMergeConfig(global || {}, project || {}) as AgentTools;
 }
 
 interface RuntimeProfileMergedConfig {
@@ -229,7 +231,7 @@ interface RuntimeProfileMergedConfig {
  */
 function readGsdRuntimeProfileResolver(targetDir: string | null = null): RuntimeProfileResolver | null {
   const homeDefaults = _readGsdConfigFile(
-    path.join(resolveGsdHome(), '.gsd', 'defaults.json'),
+    globalDefaultsPath(resolveGsdHome()),
     '~/.gsd/defaults.json',
   );
 
@@ -241,24 +243,15 @@ function readGsdRuntimeProfileResolver(targetDir: string | null = null): Runtime
     if (candidate) projectConfig = _readGsdConfigFile(candidate, '.planning/config.json');
   }
 
+  // One merge owner (#6030): the project layer over the home layer through the loader's deep merge,
+  // then each key read from that view with its own absent default. #3705: model_policy follows the
+  // same project-wins-over-home precedence as every other key here.
+  const view = _deepMergeConfig(homeDefaults || {}, projectConfig || {}) ?? {};
   const merged: RuntimeProfileMergedConfig = {
-    runtime:
-      (projectConfig && (projectConfig.runtime as string | undefined)) ||
-      (homeDefaults && (homeDefaults.runtime as string | undefined)) ||
-      null,
-    model_profile:
-      (projectConfig && (projectConfig.model_profile as string | undefined)) ||
-      (homeDefaults && (homeDefaults.model_profile as string | undefined)) ||
-      'balanced',
-    model_profile_overrides:
-      (projectConfig && projectConfig.model_profile_overrides) ||
-      (homeDefaults && homeDefaults.model_profile_overrides) ||
-      null,
-    // #3705: same project-wins-over-home precedence as every other key here.
-    model_policy:
-      (projectConfig && projectConfig.model_policy) ||
-      (homeDefaults && homeDefaults.model_policy) ||
-      null,
+    runtime: (view['runtime'] as string | undefined) || null,
+    model_profile: (view['model_profile'] as string | undefined) || 'balanced',
+    model_profile_overrides: view['model_profile_overrides'] || null,
+    model_policy: view['model_policy'] || null,
   };
 
   if (!merged.runtime) return null;

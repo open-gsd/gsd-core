@@ -600,10 +600,19 @@ function _globalDefaultsLayer(globalDefaults: Record<string, unknown>): Record<s
   return layer;
 }
 
+/**
+ * The one place that names the global defaults file (ADR-1411 Decision 5, #6030): seeding a new
+ * project and the install-time readers resolve it here instead of each building the path.
+ * `home` defaults to the GSD home the loader itself reads.
+ */
+function globalDefaultsPath(home: string = resolveGsdHome()): string {
+  return path.join(home, '.gsd', 'defaults.json');
+}
+
 /** Project config over the global defaults layer, per key. A faulty or absent global file adds nothing. */
 function _underGlobalDefaults(projectParsed: ParsedConfig): ParsedConfig {
   try {
-    const read = _readConfigFile(path.join(resolveGsdHome(), '.gsd', 'defaults.json'));
+    const read = _readConfigFile(globalDefaultsPath());
     if (read.kind !== 'ok') return projectParsed;
     return (_deepMergeConfig(_globalDefaultsLayer(read.data), projectParsed) as ParsedConfig | null) ?? projectParsed;
   } catch {
@@ -1275,9 +1284,7 @@ function loadConfigResolvedInternal(cwd: string, options: Record<string, unknown
     }
     // Branch D or E: no .planning/
     try {
-      const home = resolveGsdHome();
-      const globalDefaultsPath = path.join(home, '.gsd', 'defaults.json');
-      const globalRead = _readConfigFile(globalDefaultsPath);
+      const globalRead = _readConfigFile(globalDefaultsPath());
       if (globalRead.kind === 'fault') {
         // ~/.gsd/defaults.json is present but unusable. Only report it when the
         // project config did not already fail — the nearer file is the one the
@@ -1424,6 +1431,7 @@ export = {
   _getConfigNested,
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
+  globalDefaultsPath,
   _warnedUnknownConfigKeys,
   GLOBAL_DEFAULTS_RESOLUTION_KEYS,
   _warnUnknownProfileOverrides,
