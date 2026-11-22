@@ -777,7 +777,7 @@
     "package-legitimacy.test.cjs": 43,
     "package-manifest.test.cjs": 8,
     "package-name-single-source.test.cjs": 113,
-    "packaging-shipped-scripts-require-only-shipped.test.cjs": 17550,
+    "packaging-shipped-scripts-require-only-shipped.test.cjs": 100,
     "parallel-dependent-plans.test.cjs": 29,
     "partial-init-routing.test.cjs": 10,
     "path-replacement.test.cjs": 7399,
