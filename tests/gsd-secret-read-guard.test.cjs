@@ -3882,6 +3882,11 @@ describe('gsd-secret-read-guard: xargs words from a here-string, a printf or an 
     "echo -e '\\x2eenv' | cat | xargs cat",
     "printf '.env\\n' | tee | xargs cat",
     "builtin echo -e '\\x2eenv' | xargs cat",
+    // #6408 Minor 2: a generator's literal operands are judged as files where it stands, behind a filter too
+    // (blocked at e74c2d2e8).
+    'yes .env | head -n1 | xargs cat',
+    'jot -b .env 1 | head -n1 | xargs cat',
+    'seq -f .env 1 | head -n1 | xargs cat',
     // Own adversarial pass: `cat /dev/stdin`, a group's output behind its redirect, a substitution run in a piped
     // command, and a group's here-string read through a `cat` in it.
     "printf '.env' | cat /dev/stdin | xargs cat",
