@@ -19,7 +19,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { runHook } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
@@ -333,11 +333,15 @@ function runStep({ runDir, hooksOutput, fakeStatus = '0', prompt = '# Cross-AI P
     '}',
     reviewPreStep().split('{run_dir}').join(runDir),
   ].join('\n');
-  const r = spawnSync('bash', ['-c', script], {
+  const scriptPath = path.join(runDir, 'review-pre-step.sh');
+  fs.writeFileSync(scriptPath, script);
+  const res = runHook(scriptPath, [], {
+    interpreter: 'bash',
     env: { ...process.env, RUN_DIR: runDir, FAKE_STATUS: fakeStatus },
-    encoding: 'utf8',
-    timeout: PROBE_TIMEOUT_MS,
+    timeoutMs: PROBE_TIMEOUT_MS,
   });
+  // Same fields the assertions below read; `status` is the child's exit code.
+  const r = { status: res.exitCode, stdout: res.stdout, stderr: res.stderr };
   return { r, prompt: fs.readFileSync(promptPath, 'utf8'), original: prompt };
 }
 
@@ -521,7 +525,7 @@ describe('#3997 the contribution reaches every prompt transport exactly once', (
 
   test('argv-file-ref (kimi-code): argv names the prompt file once and that file carries the block once', async () => {
     const { deps, plan, files } = await runThrough(laneOf('kimi-code'));
-    const argv = deps.spawns[0].argv;
+    const argv = deps.spawns[deps.spawns.length - 1].argv; // earlier spawns are the availability probe
     assert.equal(argv.filter((a) => a.includes(plan.promptPath)).length, 1);
     assert.equal(count(files[plan.promptPath], 'USE-RULE-ALPHA'), 1);
   });
