@@ -183,77 +183,82 @@ describe('resolveEffectiveBaseRef', () => {
   function makeReadFile(files) {
     return (p) => (Object.prototype.hasOwnProperty.call(files, p) ? files[p] : null);
   }
+  const cwd = '/repo';
+  const claudeDir = path.join(cwd, '.claude');
+  const LOCAL = path.join(claudeDir, 'settings.local.json');
+  const SHARED = path.join(claudeDir, 'settings.json');
+  // The ladder is read through the family-B resolver (#6031): no user layer unless one is named.
+  const resolve = (files, userClaudeDir = null) => resolveEffectiveBaseRef(cwd, { readFile: makeReadFile(files), userClaudeDir });
+  const quiet = (fn) => {
+    const original = process.stderr.write;
+    process.stderr.write = () => true;
+    try { return fn(); } finally { process.stderr.write = original; }
+  };
 
-  test('returns baseRef from settings.local.json when present', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
+  test('returns the settings.local.json baseRef with its layer when present', () => {
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+    });
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-local']);
   });
 
   test('falls back to settings.json when settings.local.json has no baseRef', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ other: 'value' }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ other: 'value' }),
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+    });
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'fresh', 'runtime-shared']);
   });
 
-  test('returns null when both files are missing', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = { readFile: () => null };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
+  test('reads the user layer last and reports it', () => {
+    const user = '/home/user/.claude';
+    const r = resolve({ [path.join(user, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }) }, user);
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-user']);
   });
 
-  test('returns null when both files exist but have no baseRef', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ other: 'value' }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ other: 'value2' }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
+  test('returns an unfound resolution when both files are missing', () => {
+    const r = resolve({});
+    assert.deepStrictEqual([r.found, r.value, r.layer], [false, undefined, null]);
+  });
+
+  test('returns an unfound resolution when both files exist but have no baseRef', () => {
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ other: 'value' }),
+      [SHARED]: JSON.stringify({ other: 'value2' }),
+    });
+    assert.equal(r.found, false);
   });
 
   test('ignores malformed JSON in settings.local.json and falls back', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: 'not valid json {{{',
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'head' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'head');
+    const r = quiet(() => resolve({
+      [LOCAL]: 'not valid json {{{',
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+    }));
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-shared']);
   });
 
   test('ignores malformed JSON in settings.json', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: null,
-        [path.join(claudeDir, 'settings.json')]: 'not valid json',
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), null);
+    const r = quiet(() => resolve({ [LOCAL]: null, [SHARED]: 'not valid json' }));
+    assert.equal(r.found, false);
   });
 
-  test('settings.local.json null baseRef falls back to settings.json', () => {
-    const claudeDir = '/repo/.claude';
-    const deps = {
-      readFile: makeReadFile({
-        [path.join(claudeDir, 'settings.local.json')]: JSON.stringify({ worktree: { baseRef: null } }),
-        [path.join(claudeDir, 'settings.json')]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
-      }),
-    };
-    assert.strictEqual(resolveEffectiveBaseRef(claudeDir, deps), 'fresh');
+  test('a null baseRef in settings.local.json falls back to settings.json', () => {
+    const r = resolve({
+      [LOCAL]: JSON.stringify({ worktree: { baseRef: null } }),
+      [SHARED]: JSON.stringify({ worktree: { baseRef: 'fresh' } }),
+    });
+    assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'fresh', 'runtime-shared']);
+  });
+
+  test('a non-string baseRef at a layer is skipped like a null one', () => {
+    for (const bad of [7, true, {}, []]) {
+      const r = resolve({
+        [LOCAL]: JSON.stringify({ worktree: { baseRef: bad } }),
+        [SHARED]: JSON.stringify({ worktree: { baseRef: 'head' } }),
+      });
+      assert.deepStrictEqual([r.found, r.value, r.layer], [true, 'head', 'runtime-shared'], JSON.stringify(bad));
+    }
   });
 });
 
