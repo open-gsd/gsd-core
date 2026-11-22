@@ -1845,7 +1845,8 @@ describe('extractTaskCommitRefs — TDD task shapes (#6215)', () => {
 });
 
 describe('resolveEvaluationScope — TDD rows and unparsed SUMMARYs (#6215)', () => {
-  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', () => {
+  // A file name with a newline cannot exist on Windows (the write below is ENOENT there), so the case is POSIX-only.
+  test('[security] a SUMMARY file name carrying control characters is reported with them replaced, so the printed field stays one line per name', { skip: process.platform === 'win32' && 'a file name with a newline cannot exist on Windows' }, () => {
     const repo = makeRepo();
     const a = commit(repo, 'src/a.js', 'feat(03-01): a');
     summarize(repo, [a], '03-01-SUMMARY.md');
