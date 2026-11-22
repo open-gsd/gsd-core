@@ -197,11 +197,16 @@ function fileLayers(cwd: string, family: ConfigFamily): Array<{ layer: ConfigLay
 /** Resolve one eligible key without ever rewriting a configuration layer. */
 function resolveConfigValue(
   key: string,
-  opts: { cwd: string; family?: ConfigFamily; configSchema?: Record<string, unknown>; quiet?: boolean },
+  opts: {
+    cwd: string; family?: ConfigFamily; configSchema?: Record<string, unknown>; quiet?: boolean;
+    honorGlobal?: (key: string) => boolean;
+  },
 ): ConfigValueResolution {
   // `configSchema` lets a caller that already holds a capability registry snapshot resolve
   // against it; `quiet` keeps a read that must never write to stderr (an activation gate, #5139)
-  // from reporting an unusable layer. Neither changes which layer wins.
+  // from reporting an unusable layer. `honorGlobal` lets a caller that must stay inside what the
+  // loader reads from the global defaults file (`honorsGlobalDefaults`) skip that layer for a key
+  // outside it. None of the three changes which of the remaining layers wins.
   const warn: typeof warnUnusableInput = opts.quiet === true ? () => false : warnUnusableInput;
   let cachedSchema: Record<string, unknown> | undefined;
   const capabilitySchema = (): Record<string, unknown> =>
@@ -224,6 +229,7 @@ function resolveConfigValue(
   let detected: string[] | undefined;
   const layers = fileLayers(opts.cwd, family);
   for (const [rank, { layer, file }] of layers.entries()) {
+    if (layer === 'global-defaults' && opts.honorGlobal && !opts.honorGlobal(key)) continue;
     const read = readConfigLayer(file, family);
     if (read.kind === 'fault') {
       faults.push({ rank, fault: read.fault });

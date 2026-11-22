@@ -8,6 +8,9 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
 import configValueResolver = require('./config-value-resolver.cjs');
 const { resolveConfigValue } = configValueResolver;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- #6030 CJS interop import, as in the sibling config modules
+import configLoader = require('./config-loader.cjs');
+const { honorsGlobalDefaults } = configLoader;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-file-read.cjs is an export= CommonJS module
 import configFileReadMod = require('./config-file-read.cjs');
 const { readConfigFileBounded } = configFileReadMod;
@@ -108,6 +111,7 @@ function resolveConfigKey(
     const resolved = resolveConfigValue(dotKey, {
       cwd,
       quiet,
+      honorGlobal: honorsGlobalDefaults,
       ...(rawSchema && typeof rawSchema === 'object' && !Array.isArray(rawSchema)
         ? { configSchema: rawSchema as Record<string, unknown> }
         : {}),

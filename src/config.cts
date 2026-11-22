@@ -1583,7 +1583,7 @@ function resolveInheritedValue(cwd: string, kp: string): { found: boolean; value
   // active (GSD_WORKSTREAM set): under GSD_PROJECT alone the loader does not inherit root, so
   // neither does config-get. The global defaults layer counts everywhere, as the documented
   // precedence says (#4071). An ineligible key reports not-configured, as before this rung read it.
-  const resolved = resolveConfigValue(kp, { cwd, family: 'A' });
+  const resolved = resolveConfigValue(kp, { cwd, family: 'A', honorGlobal: configLoader.honorsGlobalDefaults });
   if (!resolved.found) return { found: false, value: undefined };
   const inherited = resolved.layer === 'global-defaults' || (resolved.layer === 'root' && Boolean(resolveEnvWorkstream()));
   return inherited ? { found: true, value: resolved.value } : { found: false, value: undefined };

@@ -1922,4 +1922,58 @@ describe('#4071: global defaults merge per key inside a project', () => {
       if (saved === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = saved;
     }
   });
+
+  test('config-get answers an unset key from the global defaults before the declared default', () => {
+    writeGlobal({ granularity: 'fine' });
+    writeProject({ model_profile: 'quality' });
+    const result = runGsdTools(['config-get', 'granularity', '--raw'], proj, hermeticEnv());
+    assert.equal(result.success, true, result.error || result.output);
+    assert.equal(result.output.trim(), 'fine');
+  });
+
+  test('a capability gate switch set only in the global defaults reaches resolveConfigKey', () => {
+    const { resolveConfigKey } = require('../gsd-core/bin/lib/capability-activation.cjs');
+    writeGlobal({ workflow: { research: false } });
+    writeProject({ model_profile: 'quality' });
+    const saved = process.env.GSD_HOME;
+    process.env.GSD_HOME = home;
+    try {
+      assert.deepEqual(resolveConfigKey('workflow.research', { config: {}, cwd: proj, registry: {}, quiet: true }),
+        { found: true, value: false });
+    } finally {
+      if (saved === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = saved;
+    }
+  });
+
+  test('a key outside the loader global set stays project-scoped for an adopting reader (no expansion)', () => {
+    const { readSmartZoneBudget } = require('../gsd-core/bin/lib/estimate-cli.cjs');
+    writeGlobal({ workflow: { smart_zone_tokens: 54321 }, git: { base_branch: 'trunk' } });
+    writeProject({ workflow: { smart_zone_tokens: 77777 } });
+    const saved = process.env.GSD_HOME;
+    process.env.GSD_HOME = home;
+    try {
+      assert.equal(readSmartZoneBudget(proj), 77777, 'the project value still wins');
+      writeProject({ model_profile: 'quality' });
+      assert.equal(readSmartZoneBudget(proj), 100000, 'the global file does not supply workflow.smart_zone_tokens');
+      const result = runGsdTools(['config-get', 'git.base_branch', '--default', 'none', '--raw'], proj, hermeticEnv());
+      assert.equal(result.output.trim(), 'none', 'the git namespace never resolves from the global file');
+    } finally {
+      if (saved === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = saved;
+    }
+  });
+
+  test('the install-time effort merge keeps a global tier the project block does not name', () => {
+    const { readGsdEffectiveEffortConfig } = require('../gsd-core/bin/lib/install-effort-resolver.cjs');
+    writeGlobal({ effort: { routing_tier_defaults: { light: 'low', heavy: 'max' }, default: 'medium' } });
+    writeProject({ effort: { routing_tier_defaults: { heavy: 'xhigh' } } });
+    const saved = process.env.GSD_HOME;
+    process.env.GSD_HOME = home;
+    try {
+      const merged = readGsdEffectiveEffortConfig(proj);
+      assert.deepEqual(merged.routing_tier_defaults, { light: 'low', heavy: 'xhigh' });
+      assert.equal(merged.default, 'medium');
+    } finally {
+      if (saved === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = saved;
+    }
+  });
 });

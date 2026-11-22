@@ -609,6 +609,22 @@ function globalDefaultsPath(home: string = resolveGsdHome()): string {
   return path.join(home, '.gsd', 'defaults.json');
 }
 
+/**
+ * Does the global defaults file supply this dotted key at runtime? The same set the loader merges
+ * (GLOBAL_DEFAULTS_RESOLUTION_KEYS and the spellings it reads for them). Everything else, the whole
+ * `git.*` namespace included, is project-scoped and never resolves from the global file. A reader
+ * that adopts the Config Value Resolution Module passes this as `honorGlobal` so it never reads the
+ * global layer further than the loader does (#6030).
+ */
+function honorsGlobalDefaults(dottedKey: string): boolean {
+  const top = dottedKey.split('.')[0];
+  if ((GLOBAL_DEFAULTS_RESOLUTION_KEYS as readonly string[]).includes(top)) return true;
+  const spelledAs = (entry: { key: string; section: string; field: string }): boolean =>
+    `${entry.section}.${entry.field}` === dottedKey && (GLOBAL_DEFAULTS_RESOLUTION_KEYS as readonly string[]).includes(entry.key);
+  return CONFIG_KEY_ALIASES.some(spelledAs) || Object.entries(_NESTED_ONLY_GLOBAL_KEYS)
+    .some(([key, spelling]) => spelledAs({ key, ...spelling }));
+}
+
 /** Project config over the global defaults layer, per key. A faulty or absent global file adds nothing. */
 function _underGlobalDefaults(projectParsed: ParsedConfig): ParsedConfig {
   try {
@@ -1432,6 +1448,7 @@ export = {
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   globalDefaultsPath,
+  honorsGlobalDefaults,
   _warnedUnknownConfigKeys,
   GLOBAL_DEFAULTS_RESOLUTION_KEYS,
   _warnUnknownProfileOverrides,
