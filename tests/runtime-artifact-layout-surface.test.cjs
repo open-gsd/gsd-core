@@ -2270,7 +2270,9 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     fs.fstatSync = (fd, ...rest) => {
       const st = realFstat(fd, ...rest);
       if (++calls > 1) return st;
-      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: st.size - 100 });
+      // tryFileHash may ask for bigint stats; a number-only stub would throw and pass vacuously.
+      const size = typeof st.size === 'bigint' ? st.size - 100n : st.size - 100;
+      return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size });
     };
     try {
       assert.equal(tryFileHash(file), null);
@@ -2278,6 +2280,113 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
       fs.fstatSync = realFstat;
     }
   });
+
+  test('runtimeSurfaceSourceUnavailableReason reads the reason of a tagged source error only', () => {
+    const { RUNTIME_SURFACE_SOURCE_UNAVAILABLE: R, runtimeSurfaceSourceUnavailableReason: reasonOf } =
+      require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+    const tagged = (props) => Object.assign(new Error('x'), props);
+    assert.equal(reasonOf(tagged({ code: R.CODE, reason: R.MANIFEST_UNREADABLE })), R.MANIFEST_UNREADABLE);
+    assert.equal(reasonOf(tagged({ code: R.CODE, reason: R.SOURCE_UNAVAILABLE })), R.SOURCE_UNAVAILABLE);
+    assert.equal(reasonOf(tagged({ reason: R.MANIFEST_UNREADABLE })), null, 'an untagged error with the same reason');
+    assert.equal(reasonOf(tagged({ code: 'ENOENT', reason: R.MANIFEST_UNREADABLE })), null, 'another code');
+    assert.equal(reasonOf(tagged({ code: R.CODE, reason: 7 })), null, 'a non-string reason');
+    assert.equal(reasonOf({ code: R.CODE, reason: R.MANIFEST_UNREADABLE }), null, 'a plain object is not an error');
+    assert.equal(reasonOf(null), null);
+  });
+
+  test('a global layout without a manifest: the source error says unverified only while the corpus is present', (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-reason-'));
+    t.after(() => cleanup(root));
+    const { RUNTIME_SURFACE_SOURCE_UNAVAILABLE: R, runtimeSurfaceSourceUnavailableReason: reasonOf } =
+      require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+    const configDir = path.join(root, '.claude');
+    for (const sub of [['commands', 'gsd'], ['agents']]) {
+      fs.mkdirSync(path.join(configDir, 'gsd-core', ...sub), { recursive: true });
+      fs.writeFileSync(path.join(configDir, 'gsd-core', ...sub, 'a.md'), 'x\n');
+    }
+    const reason = (scope) => {
+      const layout = resolveRuntimeArtifactLayout('claude', configDir, scope);
+      const agents = layout.kinds.find((k) => k.kind === 'agents');
+      try { agents.stage({ skills: '*', agents: new Set() }); } catch (err) { return reasonOf(err); }
+      return 'staged';
+    };
+    assert.equal(reason('global'), R.MANIFEST_UNREADABLE, 'a present corpus without a manifest is unverified');
+    cleanup(path.join(configDir, 'gsd-core', 'agents'));
+    assert.equal(reason('global'), R.SOURCE_UNAVAILABLE, 'a missing corpus is unavailable, manifest or not');
+  });
+
+  /** A file over one hash chunk, so tryFileHash reads it in more than one readSync call. */
+  function multiChunkFile(t, prefix, fill) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    t.after(() => cleanup(dir));
+    const file = path.join(dir, 'a.md');
+    fs.writeFileSync(file, Buffer.alloc(2 * 1024 * 1024 + 5, fill));
+    // A modification time in the past, so a rewrite now moves it on any filesystem clock.
+    const past = new Date(Date.now() - 3600 * 1000);
+    fs.utimesSync(file, past, past);
+    return file;
+  }
+
+  /** Run `onFirstRead` once, right after tryFileHash's first chunk read. */
+  function afterFirstRead(t, onFirstRead) {
+    const realRead = fs.readSync;
+    let calls = 0;
+    fs.readSync = (...args) => {
+      const n = realRead(...args);
+      if (++calls === 1) onFirstRead();
+      return n;
+    };
+    t.after(() => { fs.readSync = realRead; });
+  }
+
+  test('a same-size rewrite while tryFileHash reads the file is not hashed', (t) => {
+    const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const file = multiChunkFile(t, 'gsd-6331-rewrite-', 'a');
+    const size = fs.statSync(file).size;
+    afterFirstRead(t, () => fs.writeFileSync(file, Buffer.alloc(size, 'b')));
+    const h = tryFileHash(file);
+    assert.equal(fs.statSync(file).size, size, 'sanity: the rewrite kept the size');
+    assert.equal(fs.readFileSync(file).subarray(0, 1).toString(), 'b', 'sanity: the rewrite happened during the read');
+    assert.equal(h, null, 'a hash mixing the old head and the new tail is not returned');
+  });
+
+  test('a file renamed over the path while tryFileHash reads it is not hashed', (t) => {
+    const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+    const file = multiChunkFile(t, 'gsd-6331-rename-', 'a');
+    const { ino, size } = fs.statSync(file, { bigint: true });
+    afterFirstRead(t, () => {
+      fs.writeFileSync(`${file}.new`, Buffer.alloc(Number(size), 'b'));
+      fs.renameSync(`${file}.new`, file);
+    });
+    const h = tryFileHash(file);
+    if (process.platform !== 'win32') assert.notEqual(fs.statSync(file, { bigint: true }).ino, ino, 'sanity: the path names another file');
+    assert.equal(fs.readFileSync(file).subarray(0, 1).toString(), 'b', 'sanity: the rename happened during the read');
+    assert.equal(h, null, 'the hash of a file the path no longer names is not returned');
+  });
+
+  // Each comparison on its own: the descriptor's size, mtime and ctime after the read, and the
+  // identity of the file the path names. Removing any one of them fails its row.
+  for (const [field, via] of [['size', 'fstat'], ['mtimeNs', 'fstat'], ['ctimeNs', 'fstat'], ['ino', 'stat'], ['dev', 'stat']]) {
+    test(`a change in ${field} (${via} after the read) means tryFileHash returns no hash`, (t) => {
+      const { tryFileHash, fileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
+      const file = multiChunkFile(t, `gsd-6331-${field}-`, 'c');
+      const bump = (v) => (typeof v === 'bigint' ? v + 1n : (typeof v === 'number' ? v : 0) + 1);
+      const name = via === 'fstat' ? 'fstatSync' : 'statSync';
+      const real = fs[name];
+      let calls = 0;
+      fs[name] = (...args) => {
+        const st = real(...args);
+        // fstat: the call after the read; stat: tryFileHash's only stat, of the path.
+        if (via === 'fstat' && ++calls === 1) return st;
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { [field]: bump(st[field]) });
+      };
+      t.after(() => { fs[name] = real; });
+      const h = tryFileHash(file);
+      fs[name] = real;
+      assert.equal(fileHash(file).length, 64, 'sanity: the file itself hashes');
+      assert.equal(h, null);
+    });
+  }
 
   test('a file that is shorter than fstat reports ends the read and is not hashed', (t) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-6331-shrink-'));
@@ -2292,7 +2401,8 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
       const realFstat = fs.fstatSync;
       fs.fstatSync = (fd, ...rest) => {
         const st = realFstat(fd, ...rest);
-        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: st.size + 10 });
+        const size = typeof st.size === 'bigint' ? st.size + 10n : st.size + 10;
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size });
       };
       const { tryFileHash } = require(${JSON.stringify(lib)});
       const h = tryFileHash(${JSON.stringify(file)});
