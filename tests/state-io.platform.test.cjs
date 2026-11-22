@@ -9,7 +9,6 @@
  * - symlink rows: fs.symlinkSync needs privileges on Windows; without them the row skips and
  *   asserts the platform is win32.
  * - case row: whether state.md is a different file from STATE.md depends on the filesystem.
- * - FIFO row: mkfifo is a child process, and Windows has no mkfifo.
  */
 
 const { test } = require('node:test');
