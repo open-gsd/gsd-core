@@ -220,6 +220,8 @@
   - [Project Exemptions for the Secret-Read Guard](#4432-project-exemptions-for-the-secret-read-guard)
   - [Graphify CLI Preferred for Planner and Researcher Graph Queries](#4836-graphify-cli-preferred-for-planner-and-researcher-graph-queries)
   - [Gate Evidence and Verdict-Driven Exit Status](#5170-gate-evidence-and-verdict-driven-exit-status)
+- [v1.23.0 Features](#v1230-features)
+  - [Review-Prompt Capability Contributions](#3997-review-prompt-capability-contributions)
 
 ---
 
@@ -4943,6 +4945,29 @@ default location.
 **Known limits:** `checkUiPresence` is a vocabulary check over prose and reads nothing; it stays outside the evidence type. Gates whose accepted-evidence model is narrower than GSD's producers (#4692, #4867, #4957) are out of scope.
 
 **Reference:** [Gate verb exit statuses](CLI-TOOLS.md#gate-verb-exit-statuses-5170) · [Exit code reference](reference/exit-codes.md) · [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md)
+
+
+---
+
+## v1.23.0 Features
+
+### 3997. Review-Prompt Capability Contributions
+
+**Purpose:** An enabled capability's constraints reach the external reviewers `/gsd-review` invokes, the way they already reach the planner, checker, executor and verifier. Without it, the plan can obey a capability's guidance while reviewers judge it without that guidance and recommend changes that conflict with it.
+
+**Seam:** A thirteenth loop point, `review:pre`, publishes the `reviewer` role. `/gsd-review` renders the point once while assembling the shared reviewer prompt and appends every active, runtime-compatible `contribution` addressed `into: reviewer` inside one `<capability_reviewer_rules>` block. Every prompt-bearing lane receives the same block exactly once; a lane with `promptChannel: none` is unchanged; `/gsd-plan-review-convergence` inherits it through its existing `/gsd-review` calls.
+
+**Requirements:**
+- REQ-REVIEW-PRE-01: `loop render-hooks review:pre --raw` resolves; the point is part of the generated host contract.
+- REQ-REVIEW-PRE-02: Only `kind: "contribution"` entries with `into: "reviewer"` and an inline fragment are inserted, in registry order; disabled, inactive and incompatible capabilities are excluded.
+- REQ-REVIEW-PRE-03: With no matching contribution the shared prompt is byte-identical and the step is silent.
+- REQ-REVIEW-PRE-04: The block counts toward each lane's prompt cap; an over-cap lane is refused (`prompt_exceeds_context`), never trimmed.
+- REQ-REVIEW-PRE-05: A capability declaring a hook at `review:pre` must declare an `engines.gsd` range that excludes older cores; the registry build enforces it.
+- REQ-REVIEW-PRE-06: The install summary discloses the contribution by point and target as an instruction surface and names the cross-capability egress; the v1 disclosure signature is unchanged.
+
+**Out of scope:** reviewer selection, lane descriptors and consent, the `REVIEWS.md` format, and any first-party capability shipping a reviewer contribution.
+
+See [ADR-3997](adr/3997-review-prompt-capability-contributions.md), the [capability manifest reference](reference/capability-manifest.md#review-pre--reviewer-contributions-3997) and the [trust model](explanation/capability-trust-model.md#reviewer-contributions-cross-the-external-review-boundary).
 
 ---
 

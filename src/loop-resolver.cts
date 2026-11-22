@@ -1,7 +1,7 @@
 /**
  * Loop Resolver — ADR-857 phase 3c registry-consuming query
  *
- * Given a loop point (one of the 12 canonical points from loop-host-contract.cjs),
+ * Given a loop point (one of the 13 canonical points from loop-host-contract.cjs),
  * filters the materialized Capability Registry by config activation and returns
  * the active hooks as a JSON envelope with a rendered-markdown field.
  *
@@ -86,6 +86,7 @@ const CANONICAL_POINTS: ReadonlyArray<string> = (() => {
     'verify:post',
     'ship:pre',
     'ship:post',
+    'review:pre',
   ];
 })();
 
@@ -178,7 +179,7 @@ interface ResolveLoopHooksResult {
 /**
  * Pure resolver: given a point, registry, and config, returns the active hooks.
  *
- * Throws if `point` is not one of the 12 canonical points (caller converts to
+ * Throws if `point` is not one of the 13 canonical points (caller converts to
  * io.error). Never throws for malformed registry/hook entries — skips and
  * continues.
  *

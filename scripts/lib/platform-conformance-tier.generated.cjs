@@ -279,6 +279,7 @@ module.exports = {
   "tests/response-language-coverage.test.cjs",
   "tests/retired-artifact-cleanup.test.cjs",
   "tests/review-build-prompt-optional-sections.test.cjs",
+  "tests/review-capability-contributions.test.cjs",
   "tests/review-default-reviewers-config.test.cjs",
   "tests/review-lane-availability.test.cjs",
   "tests/review-lane-invocation.test.cjs",
