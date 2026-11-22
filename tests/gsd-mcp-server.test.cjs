@@ -6,7 +6,7 @@
  * runServer, and a full injectable-stream round-trip.
  */
 
-const { test } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { Readable } = require('node:stream');
 const fs = require('node:fs');
@@ -143,79 +143,113 @@ test('tools/call gsd_read_state + gsd_write_state: round-trip through the stateI
   }
 });
 
-test('tools/call gsd_read_state + gsd_write_state: REGRESSION #6146 — paths must stay under .planning/', (t) => {
-  const dir = createTempDir();
-  const strayRel = path.join(process.cwd(), 'gsd-6146-rel-notes.md');
-  t.after(() => {
-    cleanup(dir);
-    if (fs.existsSync(strayRel)) fs.rmSync(strayRel);
+// #6146 — gsd_read_state / gsd_write_state are confined to <cwd>/.planning/.
+// One row per shape, each with negative proof; the same shapes are pinned at
+// the adapter in tests/state-io.test.cjs.
+const stateShapes = require('./helpers/state-path-shapes.cjs');
+
+function callState(name, args, cwd) {
+  return handleMessage({ jsonrpc: '2.0', id: 6146, method: 'tools/call', params: { name, arguments: args } }, { cwd }).result;
+}
+
+describe('REGRESSION #6146: MCP state tools stay inside the project .planning/ root', () => {
+  test('an absolute in-root path still reads, writes and creates; the response echoes the input path', (t) => {
+    const fx = stateShapes.buildFixture(t);
+    const read = callState('gsd_read_state', { path: fx.state }, fx.proj);
+    assert.equal(read.isError, undefined);
+    assert.equal(read.content[0].text, stateShapes.IN);
+    const fresh = path.join(fx.planning, 'sub', 'NEW.md');
+    const write = callState('gsd_write_state', { path: fresh, content: stateShapes.PAYLOAD }, fx.proj);
+    assert.equal(write.isError, undefined);
+    assert.deepEqual(JSON.parse(write.content[0].text), { ok: true, path: fresh });
+    assert.equal(fs.readFileSync(fresh, 'utf8'), stateShapes.PAYLOAD);
+    const over = callState('gsd_write_state', { path: fx.state, content: 'x' }, fx.proj);
+    assert.equal(over.isError, undefined);
+    assert.equal(fs.readFileSync(fx.state, 'utf8'), 'x', 'an existing file is overwritten, not appended');
   });
-  const planningDir = path.join(dir, '.planning');
-  fs.mkdirSync(planningDir, { recursive: true });
-  const ctx = { cwd: dir };
 
-  const inside = path.join(planningDir, 'STATE.md');
-  const writeInside = handleMessage({
-    jsonrpc: '2.0', id: 61460, method: 'tools/call',
-    params: { name: 'gsd_write_state', arguments: { path: inside, content: '# ok\n' } },
-  }, ctx);
-  assert.notEqual(writeInside.result.isError, true, 'a path under .planning/ must still be writable');
-  assert.equal(fs.readFileSync(inside, 'utf8'), '# ok\n');
+  test('a symlink that stays inside the root is followed', (t) => {
+    const fx = stateShapes.buildFixture(t);
+    const inlink = path.join(fx.planning, 'inlink.md');
+    if (!stateShapes.link(t, 'file', fx.state, inlink)) return;
+    assert.equal(callState('gsd_read_state', { path: inlink }, fx.proj).content[0].text, stateShapes.IN);
+    assert.equal(callState('gsd_write_state', { path: inlink, content: 'y' }, fx.proj).isError, undefined);
+    assert.equal(fs.readFileSync(fx.state, 'utf8'), 'y');
+  });
 
-  const readInside = handleMessage({
-    jsonrpc: '2.0', id: 61461, method: 'tools/call',
-    params: { name: 'gsd_read_state', arguments: { path: inside } },
-  }, ctx);
-  assert.notEqual(readInside.result.isError, true, 'a path under .planning/ must still be readable');
-  assert.equal(readInside.result.content[0].text, '# ok\n');
+  test('the root is <ctx.cwd>/.planning, not <process.cwd()>/.planning', (t) => {
+    const fx = stateShapes.buildFixture(t);
+    const other = stateShapes.buildFixture(t);
+    const res = callState('gsd_read_state', { path: other.state }, fx.proj);
+    assert.equal(res.isError, true, "another project's .planning/ is outside this call's root");
+    stateShapes.assertRefusalText(res.content[0].text, fx);
+  });
 
-  const relativeInside = handleMessage({
-    jsonrpc: '2.0', id: 61462, method: 'tools/call',
-    params: { name: 'gsd_write_state', arguments: { path: 'gsd-6146-rel-notes.md', content: '# rel\n' } },
-  }, ctx);
-  assert.notEqual(relativeInside.result.isError, true, 'a relative path must resolve under .planning/');
-  assert.equal(fs.readFileSync(path.join(planningDir, 'gsd-6146-rel-notes.md'), 'utf8'), '# rel\n');
-
-  const escaped = path.join(dir, 'escaped.md');
-  const cases = [
-    escaped,
-    path.join(planningDir, '..', 'escaped.md'),
-    path.join(planningDir, 'sub', '..', '..', 'escaped.md'),
-    '/etc/passwd',
-    path.join(planningDir, '..', '..', 'passwd'),
-  ];
-  for (const [i, target] of cases.entries()) {
-    const marker = `escape-${i}\n`;
-    if (fs.existsSync(escaped)) fs.rmSync(escaped);
-    const writeRes = handleMessage({
-      jsonrpc: '2.0', id: 61470 + i, method: 'tools/call',
-      params: { name: 'gsd_write_state', arguments: { path: target, content: marker } },
-    }, ctx);
-    assert.equal(writeRes.result.isError, true, `write must refuse ${target}`);
-    assert.equal(fs.existsSync(escaped), false, `must not create ${escaped} via ${target}`);
-    if (target === '/etc/passwd') {
-      // never try to assert we did not write /etc/passwd; just that the tool errored
-    } else if (path.resolve(target) !== path.resolve(inside) && fs.existsSync(target) && !target.startsWith(planningDir)) {
-      const text = fs.readFileSync(target, 'utf8');
-      assert.notEqual(text, marker, `must not write escape payload to ${target}`);
+  for (const shape of stateShapes.REFUSAL_SHAPES) {
+    for (const op of shape.ops) {
+      test(`${op} refuses: ${shape.name}`, (t) => {
+        const fx = stateShapes.buildFixture(t);
+        const target = shape.setup(fx, t);
+        if (target === null) return;
+        const res = op === 'read'
+          ? callState('gsd_read_state', { path: target }, fx.proj)
+          : callState('gsd_write_state', { path: target, content: stateShapes.PAYLOAD }, fx.proj);
+        assert.equal(res.isError, true, `${op} must be refused`);
+        // Refused at the dispatch (its label), before the adapter is reached.
+        assert.ok(res.content[0].text.startsWith(`Tool error: gsd_${op}_state path refused: `), res.content[0].text);
+        stateShapes.assertRefusalText(res.content[0].text, fx, shape.reason);
+        stateShapes.unchanged(fx);
+        if (shape.proof) shape.proof(fx);
+      });
     }
-    const readRes = handleMessage({
-      jsonrpc: '2.0', id: 61480 + i, method: 'tools/call',
-      params: { name: 'gsd_read_state', arguments: { path: target } },
-    }, ctx);
-    assert.equal(readRes.result.isError, true, `read must refuse ${target}`);
   }
 
-  // Sibling-prefix: ".planning-evil" must not be treated as inside ".planning/"
-  const siblingDir = path.join(dir, '.planning-evil');
-  fs.mkdirSync(siblingDir, { recursive: true });
-  const sibling = path.join(siblingDir, 'STATE.md');
-  const siblingWrite = handleMessage({
-    jsonrpc: '2.0', id: 61490, method: 'tools/call',
-    params: { name: 'gsd_write_state', arguments: { path: sibling, content: '# sibling\n' } },
-  }, ctx);
-  assert.equal(siblingWrite.result.isError, true, 'sibling-prefix directory must be refused');
-  assert.equal(fs.existsSync(sibling), false);
+  for (const op of ['read', 'write']) {
+    test(`${op} refuses: a symlinked .planning root`, (t) => {
+      const fx = stateShapes.buildFixture(t);
+      const sr = stateShapes.symlinkedRootFixture(t, fx);
+      if (sr === null) return;
+      const res = op === 'read'
+        ? callState('gsd_read_state', { path: path.join(sr.planning, 'secret.md') }, sr.proj)
+        : callState('gsd_write_state', { path: path.join(sr.planning, 'new2.md'), content: stateShapes.PAYLOAD }, sr.proj);
+      assert.equal(res.isError, true);
+      assert.ok(res.content[0].text.startsWith(`Tool error: gsd_${op}_state path refused: `), res.content[0].text);
+      stateShapes.assertRefusalText(res.content[0].text, fx, stateShapes.SYMLINKED_ROOT_REASON);
+      stateShapes.unchanged(fx);
+    });
+  }
+
+  test('the dispatch binds the adapter to <ctx.cwd>/.planning and routes IO through it', (t) => {
+    const fx = stateShapes.buildFixture(t);
+    const stateIoMod = require('../gsd-core/bin/lib/state-io.cjs');
+    const original = stateIoMod.createStateIO;
+    const calls = [];
+    stateIoMod.createStateIO = (mode, options) => {
+      const io = original(mode, options);
+      calls.push({ mode, root: options && options.root });
+      return {
+        io: io.io,
+        read: (p) => { calls.push({ read: p }); return io.read(p); },
+        write: (p, c) => { calls.push({ write: p }); io.write(p, c); },
+      };
+    };
+    t.after(() => { stateIoMod.createStateIO = original; });
+    callState('gsd_write_state', { path: fx.state, content: 'z' }, fx.proj);
+    callState('gsd_read_state', { path: fx.state }, fx.proj);
+    assert.deepEqual(calls, [
+      { mode: { io: 'filesystem' }, root: fx.planning }, { write: fx.state },
+      { mode: { io: 'filesystem' }, root: fx.planning }, { read: fx.state },
+    ]);
+  });
+
+  test('tool schemas describe the enforced contract (absolute, inside .planning/, refusals)', () => {
+    const { tools } = handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' }).result;
+    for (const name of ['gsd_read_state', 'gsd_write_state']) {
+      const tool = tools.find((x) => x.name === name);
+      assert.match(tool.description, /inside the project \.planning\/ root/);
+      assert.match(tool.inputSchema.properties.path.description, /^Absolute path inside the project \.planning\/ root\. Relative paths.*are refused\.$/);
+    }
+  });
 });
 
 test('tools/call gsd_invoke_command: dispatches to the command hub (point 1); unknown family returns a hub error, not a crash', () => {
