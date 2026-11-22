@@ -1529,6 +1529,48 @@ function tokenize(str, reading) {
     quoted = 'none';
     hasWord = false;
   };
+  // #6438: `{` and `}` are reserved words, which open or close a group only where a command may start. Anywhere else they
+  // are ordinary words (`printf '%s|' cat { x }` prints `cat|{|x|}|`; `cat { .env` runs cat on `{` and `.env`), so the word
+  // after one is an operand, not a new command. A command may start at the start of a segment and past what can stand
+  // before a command: the reserved words that precede one (`then { cat .env; }`, `! {`), a redirection with its target
+  // (zsh runs `>out { cat .env; }`), an assignment (zsh runs `A=1 { cat .env; }`), and the heads that take a compound
+  // body after their own words (`function f {`, `coproc P {`, `time -p {`). Whatever is unclear is a group: the cost of a
+  // wrong group is a false positive, the cost of a wrong word is a secret read the guard no longer sees.
+  // The segment's first command word is found once, incrementally, so a run of lone braces is read in linear time.
+  let headSeg = -1;
+  let headScanned = 0;
+  let headWord = null;
+  let headSkipTarget = false;
+  let headCondition = false;
+  // Groups opened and not yet closed: a `}` inside one closes it wherever it stands (zsh: `{ echo x } always { … }`), so it
+  // is a word only at depth 0 (`cat } .env`, `echo } done`).
+  let groupDepth = 0;
+  const braceStartsGroup = () => {
+    if (headSeg !== seg) {
+      headSeg = seg;
+      headWord = null;
+      headCondition = false;
+      headScanned = tokens.length;
+      while (headScanned > 0 && tokens[headScanned - 1].seg === seg) headScanned--;
+      // `>&out`: the `&` after a redirection ends a segment here, and the word after it is that redirection's target.
+      headSkipTarget = headScanned >= 2 && tokens[headScanned - 1].kind === 'sep' && tokens[headScanned - 1].text === '&' &&
+        tokens[headScanned - 2].kind === 'op' && !tokens[headScanned - 2].dup;
+    }
+    while (headWord === null && headScanned < tokens.length) {
+      const token = tokens[headScanned++];
+      if (token.kind === 'op') {
+        headSkipTarget = !token.dup;
+      } else if (token.kind === 'word') {
+        if (headSkipTarget) headSkipTarget = false;
+        else if (token.quoted === 'none' && RESERVED_BEFORE_COMMAND.has(token.text)) {
+          if (CONDITION_WORDS.has(token.text)) headCondition = true;
+        } else if (ASSIGNMENT_PREFIX_RE.test(token.text)) continue;
+        else headWord = token;
+      }
+    }
+    // zsh also takes a `{` body after a condition (`if true { … }`) or after a compound head's own words.
+    return headWord === null || headCondition || (headWord.quoted === 'none' && COMPOUND_BODY_HEADS.has(headWord.text));
+  };
   // The operator text ends segment `seg`; pass 2 reads it to tell `a | bash`
   // (pipe inference) from `a || bash` and to skip grouping seps.
   const sep = (text) => {
@@ -1814,11 +1856,15 @@ function tokenize(str, reading) {
     if ((ch === '{' || ch === '}') && !hasWord && (i + 1 >= str.length || /[\s;&|)]/.test(str[i + 1]))) {
       if (expectTag && heredocTagsAsWords && heredocBraceTags) {
         braceTagRead = true;
-      } else {
+      } else if (expectTag || (ch === '}' && groupDepth > 0) || braceStartsGroup()) {
+        if (ch === '{') groupDepth++;
+        else if (groupDepth > 0) groupDepth--;
+        // Where a heredoc tag is due the earlier reading keeps the brace a group (`: <<} E` read as `}` closing), so nothing denied before is allowed.
         sep(ch);
         i++;
         continue;
       }
+      // else: a brace among a command's arguments is an ordinary word (#6438), read below like any other.
     }
 
     hasWord = true;
@@ -1862,12 +1908,98 @@ function operandNamesSecret(text) {
   return v[end] === '=' && namesSecretOperand(v.slice(end + 1));
 }
 
+// #5825: request tools that open a file named after an `@` in a field or request item and send its contents.
+//   gh api -F/--field key=@path   (`-f`/`--raw-field` never reads a file; `@-` is stdin)
+//   http / https (httpie) items   key=@path  key:=@path  key==@path  Header:@path  key@path[;type=…]
+// An httpie item splits at its first separator, so only an `@` form that comes first reads a file, and a key may
+// escape a separator with a backslash. Linear in the word: the key run stops at the first separator character.
+const HTTPIE_FILE_ITEM_RE = /^(?:[^=:@\\]|\\.)*(?:==@|:=@|=@|:@|@)([\s\S]+)$/;
+// gh api short options that take a value: in a cluster the rest of the word is that option's value, not more flags.
+const GH_VALUE_SHORT_FLAGS = 'HXqtpf';
+const SHELL_KEYWORDS = new Set(['do', 'then', 'else', 'elif', '!', 'while', 'until', 'if']);
+
+// `do gh api …`, `then http …`, `! gh api …`: the command word follows the shell keyword, so it is resolved again.
+function skipShellKeywords(cmd) {
+  let current = cmd;
+  while (SHELL_KEYWORDS.has(current.base) && current.operands.length > 0) {
+    const next = resolveCommand(current.operands);
+    if (!next) break;
+    current = next;
+  }
+  return current;
+}
+
+// How `-F` reaches a gh word: `{ value }` attached (`-Fk=v`, `-F=k=v`, a cluster `-iFk=v`), `{ value: null }` when the
+// value is the next word (`-F`, `-iF`), or null when the word carries no `-F`. A manual scan, not a regex: the first
+// `F` of a letter run decides, whatever follows it (a lazy pattern backtracked quadratically on a long run).
+function ghFieldOption(text) {
+  if (!text.startsWith('-') || text.startsWith('--')) return null;
+  for (let i = 1; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === 'F') {
+      const rest = text.slice(i + 1);
+      if (rest === '') return { value: null };
+      return { value: rest.startsWith('=') ? rest.slice(1) : rest };
+    }
+    if (!CLUSTER_FLAG_CHAR_RE.test(ch) || GH_VALUE_SHORT_FLAGS.includes(ch)) return null;
+  }
+  return null;
+}
+
+// The text of the operand whose `@path` names a secret for `gh api` / httpie, or null. `base` is the resolved command word.
+function requestItemSecretRead(base, operands) {
+  const command = base.replace(/\.exe$/i, '');
+  if (command === 'gh' && operands.length > 0 && operands[0].text === 'api') {
+    for (let k = 1; k < operands.length; k++) {
+      const text = operands[k].text;
+      let field = null;
+      if (text === '--field') field = operands[k + 1] ? operands[k + 1].text : null;
+      else if (text.startsWith('--field=')) field = text.slice('--field='.length);
+      else {
+        const option = ghFieldOption(text);
+        if (option) field = option.value !== null ? option.value : (operands[k + 1] ? operands[k + 1].text : null);
+      }
+      if (field === null) continue;
+      const eq = field.indexOf('=');
+      if (eq === -1) continue;
+      const value = field.slice(eq + 1);
+      if (value.startsWith('@') && value !== '@-' && namesSecretOperand(value.slice(1))) return text;
+    }
+    return null;
+  }
+  if (command === 'http' || command === 'https') {
+    // `http [METHOD] URL [ITEM…]`: the URL is not an item (`http example.com/a@.env` reads nothing).
+    const positionals = operands.filter((operand) => !operand.text.startsWith('-'));
+    const urlIndex = positionals.length > 0 && /^[A-Za-z]+$/.test(positionals[0].text) ? 1 : 0;
+    positionals.forEach((operand, index) => {
+      if (index === urlIndex) operand.isUrl = true;
+    });
+    for (const operand of positionals) {
+      if (operand.isUrl) continue;
+      const item = HTTPIE_FILE_ITEM_RE.exec(operand.text);
+      // `file@path;type=mime` and `;filename=` follow the path after a `;`: both readings are judged.
+      if (item && (namesSecretOperand(item[1]) || namesSecretOperand(item[1].split(';')[0]))) return operand.text;
+    }
+  }
+  return null;
+}
+
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 // `-c`, or a combined short flag ending in `c` (`-lc`, `-ec`, `-euc`): mode c.
 const DASH_C_RE = /^-[A-Za-z]*c$/;
 
 const GROUPING_SEPS = new Set(['(', ')', '{', '}']);
+
+// Reserved words that may stand before a command (and so before a `{` group) in the same segment.
+const RESERVED_BEFORE_COMMAND = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!']);
+// Command words that take a compound body after words of their own, so a `{` after them may still open a group.
+// A compound command's closer (`esac`, `fi`, `done`, `end`) at the head of a segment ends a zsh `while` condition, so a `{` after it is the body.
+const COMPOUND_BODY_HEADS = new Set(['function', 'coproc', 'time', 'for', 'foreach', 'select', 'repeat', 'case', 'always', '[[', 'esac', 'fi', 'done', 'end']);
+// Reserved words that introduce a condition, after which zsh takes a `{` body instead of `then`/`do`.
+const CONDITION_WORDS = new Set(['if', 'elif', 'while', 'until']);
+// A word that sets a variable before a command (`A=1`, `a[0]+=x`).
+const ASSIGNMENT_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=/;
 
 // How many words the option `word` occupies for wrapper `spec`: 2 when it
 // takes a separate value word, else 1.
@@ -2840,6 +2972,11 @@ function scanCommand(command, depth, reading) {
       const hit = scanGitConfig(operands, depth);
       if (hit) return hit;
     }
+
+    // `gh api -F key=@.env` and httpie request items read the file named after `@` (#5825).
+    const requestCommand = skipShellKeywords({ base, operands });
+    const requestItem = requestItemSecretRead(requestCommand.base, requestCommand.operands);
+    if (requestItem !== null) return secretRead(requestItem);
 
     if (NON_READING_COMMANDS.has(base)) continue;
 
