@@ -1201,7 +1201,8 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
     assert.deepStrictEqual(lines(W(outer, '  if (x) {', inner, '    use(p);', '  }', '  fs.writeFileSync(p, c);')), [7]);
     assert.deepStrictEqual(lines(W(outer, "  if (x) { const p = 'ROADMAP.md'; use(p); }", '  fs.writeFileSync(p, c);')), [4]);
     assert.deepStrictEqual(lines(W(outer, '  const g = () => {', inner, '    return p;', '  };', '  fs.writeFileSync(p, c);')), [7]);
-    assert.deepStrictEqual(lines(W(outer, "  p = 'x';", '  if (d) { fs.writeFileSync(p, c); }')), [4]);
+    // Reported though `p` is 'x' at the write: the boundary rule only adds reports.
+    assert.deepStrictEqual(lines(W("  let p = path.join(dir, 'STATE.md');", "  p = 'x';", '  if (d) { fs.writeFileSync(p, c); }')), [4]);
   });
 
   test('boundary control: with no boundary between them, the nearest assignment decides', () => {
@@ -1370,21 +1371,28 @@ describe('F4 — the raw-write axis sees wrapped calls and same-function variabl
       currentBuggyOutput: [],
     },
     {
-      // Missed: a module-level constant sits behind the function boundary.
+      // Missed: the scan stops at the writer's multi-line function header, above the constant.
       shape: 'module-level STATE.md file-name constant used inside a function',
       text: ["const STATE_FILENAME = 'STATE.md';", 'function f(d, c) {', '  fs.writeFileSync(path.join(d, STATE_FILENAME), c);', '}'].join('\n'),
       expected: [3],
       currentBuggyOutput: [],
     },
     {
-      // Missed: a file name built in another function is not resolved.
+      // Missed: the scan stops at the nearest line matching FUNCTION_DECL_LINE_RE, here a nested declaration.
+      shape: 'nested function declaration between a STATE.md assignment and the write',
+      text: W("  const p = path.join(dir, 'STATE.md');", '  function helper() {', '    return 1;', '  }', '  fs.writeFileSync(p, c);'),
+      expected: [6],
+      currentBuggyOutput: [],
+    },
+    {
+      // Missed: a name returned by a function declaration is not resolved.
       shape: 'STATE.md file name returned by another function',
       text: ['function stateName() {', "  return 'STATE.md';", '}', 'function f(d, c) {', '  fs.writeFileSync(path.join(d, stateName()), c);', '}'].join('\n'),
       expected: [5],
       currentBuggyOutput: [],
     },
     {
-      // Missed: a Map built in another function is not resolved, and the key string is dropped.
+      // Missed: a Map built in a function declaration is not resolved, and the key string is dropped.
       shape: 'STATE.md file name held as a Map value built in another function',
       text: ['function names() {', '  const m = new Map();', "  m.set('state', 'STATE.md');", '  return m;', '}', 'function f(d, c) {', '  const m = names();', "  fs.writeFileSync(path.join(d, m.get('state')), c);", '}'].join('\n'),
       expected: [8],
