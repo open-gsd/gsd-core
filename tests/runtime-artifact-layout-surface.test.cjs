@@ -2350,16 +2350,22 @@ describe('#6331: applySurface re-records the install manifest (also the /gsd-sur
     assert.equal(h, null, 'a hash mixing the old head and the new tail is not returned');
   });
 
-  test('a file renamed over the path while tryFileHash reads it is not hashed', (t) => {
+  test('a file renamed over the path while tryFileHash reads it is not hashed', {
+    skip: process.platform === 'win32' &&
+      "Node's renameSync on Windows (MoveFileEx) cannot replace a file another handle holds open, so this row cannot stage the race there",
+  }, (t) => {
     const { tryFileHash } = require('../gsd-core/bin/lib/install-manifest-record.cjs');
     const file = multiChunkFile(t, 'gsd-6331-rename-', 'a');
     const { ino, size } = fs.statSync(file, { bigint: true });
+    // Kept here: inside the read stub, tryFileHash's own catch would swallow it.
+    let renameError = null;
     afterFirstRead(t, () => {
       fs.writeFileSync(`${file}.new`, Buffer.alloc(Number(size), 'b'));
-      fs.renameSync(`${file}.new`, file);
+      try { fs.renameSync(`${file}.new`, file); } catch (err) { renameError = err; }
     });
     const h = tryFileHash(file);
-    if (process.platform !== 'win32') assert.notEqual(fs.statSync(file, { bigint: true }).ino, ino, 'sanity: the path names another file');
+    assert.equal(renameError, null, 'sanity: the rename succeeded');
+    assert.notEqual(fs.statSync(file, { bigint: true }).ino, ino, 'sanity: the path names another file');
     assert.equal(fs.readFileSync(file).subarray(0, 1).toString(), 'b', 'sanity: the rename happened during the read');
     assert.equal(h, null, 'the hash of a file the path no longer names is not returned');
   });
