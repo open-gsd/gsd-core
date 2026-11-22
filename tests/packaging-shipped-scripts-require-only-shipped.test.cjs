@@ -501,6 +501,19 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     }
   });
 
+  test('a root .git or node_modules file, and a root directory named like a lock file, do not pack', () => {
+    planted({ files: ['.git', 'node_modules', 'keep.js'] }, ['.git', 'node_modules', 'keep.js'], (tmp) => {
+      assert.deepEqual(sorted(listPackedFiles(tmp)), ['keep.js', 'package.json']);
+    });
+    planted(
+      { files: ['yarn.lock', 'package-lock.json', 'bun.lockb', 'pnpm-lock.yaml', 'keep.js'] },
+      ['yarn.lock/x.js', 'package-lock.json/y.js', 'bun.lockb/z.js', 'pnpm-lock.yaml/w.js', 'keep.js'],
+      (tmp) => {
+        assert.deepEqual(sorted(listPackedFiles(tmp)), ['keep.js', 'package.json']);
+      },
+    );
+  });
+
   test('a root COPYING file ships without a files entry', () => {
     planted({ files: ['hooks'] }, ['COPYING', 'COPYING.txt', 'copying-notes'], (tmp) => {
       assert.deepEqual(sorted(listPackedFiles(tmp)), ['COPYING', 'COPYING.txt', 'package.json']);

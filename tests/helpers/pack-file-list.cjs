@@ -34,7 +34,8 @@ const isExcludedName = (rawName, rawRel, isDirectory = true) => {
   return EXCLUDED_NAMES.has(name) || (isDirectory && name === 'archived-packages') || rel === 'build/config.gypi' || rel.endsWith('/build/config.gypi')
     || name.startsWith('._') || name.startsWith('.wafpickle-') || name.endsWith('.orig') || /^\.[^/]{0,255}\.swp$/.test(name);
 };
-const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel.toLowerCase());
+// npm's strict rules (/.git, /node_modules, the lock files) are plain rules: they drop a root file or directory of that name.
+const isRootExcluded = (rel) => ROOT_EXCLUDED_FILES.has(rel.toLowerCase()) || ['.git', 'node_modules'].includes(rel.toLowerCase());
 
 // npm's '!/readme{,.*[^~$]}': the stem alone, or a dot, then at least one more character, the last not ~ or $.
 const isAlwaysIncludedFile = (rel) => rel === 'package.json' || /^(README|LICEN[CS]E|COPYING)(\.[^/]{0,255}[^~$/])?$/i.test(rel);
@@ -177,6 +178,7 @@ function listPackedFiles(root) {
   const visit = (rel, isDirectory, required = false) => {
     const name = rel.split('/').pop();
     if (name.includes('*')) return; // npm drops a file or directory whose name contains `*`
+    if (isRootExcluded(rel)) return;
     if (isDirectory) {
       if (rel === 'node_modules' || isExcludedName(name, rel) || negative.some((n) => covers(n, rel))) return;
       for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
