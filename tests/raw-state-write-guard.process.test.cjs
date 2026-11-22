@@ -1,17 +1,9 @@
 'use strict';
 
 /**
- * #5120 (epic #4629, ADR-4629 guard roster "No raw STATE.md write outside the
- * seam"): the rows of the test-time value check that need a real process
- * (TESTING-STANDARDS.md "In-process CLI tests: the rules", rule 2).
- *
- * Why these rows spawn: the guard is a NODE_OPTIONS --require preload, and a preload only acts
- * in a fresh node process: nothing in-process can load it, wrap that process's fs, or show what
- * a child that inherited it does. So the "preload in a real child process" rows run a script
- * under the preload and read its ledger, and the "scripts/run-tests.cjs runs the check" rows run
- * the runner itself (scripts/run-tests.cjs), the thing that installs the preload for the suite,
- * end to end. The pure rows (classification, report formatting) are in
- * raw-state-write-guard.test.cjs.
+ * #5120 (epic #4629, ADR-4629 guard roster): the rows of the test-time value check that need a
+ * real process (TESTING-STANDARDS.md "In-process CLI tests: the rules", rule 2). The pure rows
+ * (classification, report formatting) are in raw-state-write-guard.test.cjs.
  */
 
 const { test, describe } = require('node:test');
@@ -37,9 +29,7 @@ const {
 } = require(GUARD_PATH);
 
 /**
- * Lay out a fake install: `<dir>/gsd-core/bin/lib/<name>` holds `body`. A
- * frame in this tree is product code to the guard, exactly as the compiled
- * `gsd-core/bin/lib/*.cjs` (or an installed copy of it) is.
+ * Lay out a fake install: `<dir>/gsd-core/bin/lib/<name>` holds `body`.
  */
 function writeModule(dir, rel, body) {
   const file = path.join(dir, rel);
@@ -49,10 +39,6 @@ function writeModule(dir, rel, body) {
 }
 
 /**
- * Run `script` in a child that loads the guard the way the runner does. The child's
- * env is built with isolatedEnv (CONTRIBUTING: never a spread of the parent's env); it
- * strips every GSD_* variable, so the ledger path is opted back in through `override`,
- * the same opt-in the runner's preload shim makes for the suite.
  */
 function runGuardedLedger(dir, script, extraEnv = {}) {
   const ledger = path.join(dir, 'ledger.ndjson');
@@ -164,7 +150,6 @@ module.exports = (target, pid) => {
 `);
     const main = writeModule(dir, 'tests/main.cjs', `require(${JSON.stringify(path.join(dir, 'gsd-core/bin/lib/writer.cjs'))})(${JSON.stringify(target)}, process.pid + 1);`);
     const entries = runGuarded(dir, main);
-    // A lock body naming another pid is not this process's lock, and no lock file is no lock.
     assert.deepEqual(
       entries.map((e) => [e.fn, e.seam, e.lockHeld, e.violation, e.reason, path.basename(e.callerFile), e.callerLine]),
       [['renameSync', true, false, true, 'unlocked', 'writer.cjs', 6], ['renameSync', true, false, true, 'unlocked', 'writer.cjs', 7]],
@@ -182,7 +167,6 @@ module.exports = (target, pid) => {
     const target = path.join(dir, 'STATE.md');
     // mkfifo runs through the process seam: a node child that runs it.
     const made = runNode(['-e', "require('child_process').execFileSync('mkfifo', [process.argv[1]])", path.join(dir, 'STATE.md.lock')], { cwd: dir, timeoutMs: PROBE_TIMEOUT_MS });
-    // On POSIX a mkfifo failure fails the row (repo precedent: a fixture that cannot be built is an error, not a skip).
     if (made.exitCode !== 0) throw new Error(`mkfifo failed (exit ${made.exitCode}): ${made.stderr}`);
     assert.ok(fs.lstatSync(`${target}.lock`).isFIFO(), 'precondition: the lock path is a FIFO');
     writeModule(dir, 'gsd-core/bin/lib/shell-command-projection.cjs', `'use strict';
@@ -296,7 +280,6 @@ ws.cmdWorkstreamComplete(dir, 'alpha', {}, true);
     );
     assert.ok(entries.every((e) => e.lockHeld === true && (e.relocation ? e.sourceLockHeld === true : true)), JSON.stringify(entries, null, 1));
     assert.ok(path.basename(path.dirname(entries[2].destination)).startsWith('ws-alpha-'), 'the archive move');
-    // No lock file is left behind in any directory the STATE.md moved through.
     const leftover = [];
     const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name.endsWith('.lock')) leftover.push(rel(p)); } };
     walk(planning);
@@ -360,8 +343,6 @@ process.exitCode = r.status;`);
     assert.equal(entries.length, 1);
     assert.equal(entries[0].violation, true);
     assert.equal(entries[0].testFile, main, 'the violation names the test file whose subprocess wrote');
-    // One install sentinel per process that loaded the preload: the parent and its child
-    // (#5120 audit: a guard that never loaded must not read as zero violations).
     assert.equal(read.installs, 2, JSON.stringify(read));
     // Loaded by --require of the guard file itself, not through the runner's shim: not a preload.
     assert.equal(read.preloadInstalls, 0, JSON.stringify(read));
@@ -371,7 +352,6 @@ process.exitCode = r.status;`);
     const dir = createTempDir('rswg-preload-');
     t.after(() => cleanup(dir));
     const main = writeModule(dir, 'tests/main.cjs', `process.stdout.write('ok');`);
-    // The real path: the shim the runner writes, in NODE_OPTIONS, nothing else in the env.
     const viaShim = path.join(dir, 'via-shim.ndjson');
     const shim = writeModule(dir, 'ev/raw-state-write-preload.cjs', preloadShimSource(viaShim));
     let r = runNode([main], { cwd: dir, env: isolatedEnv({ home: dir, override: { NODE_OPTIONS: nodeOptionsWithRequire(undefined, shim) } }), timeoutMs: PROBE_TIMEOUT_MS });
@@ -379,8 +359,6 @@ process.exitCode = r.status;`);
     const preloaded = readStateWriteLedger(viaShim);
     assert.deepEqual([preloaded.installs, preloaded.preloadInstalls], [1, 1], JSON.stringify(preloaded));
     assert.equal(formatStateWriteReport(preloaded, { chunksRun: 1 }).failed, false);
-    // The masking case: the chunk's NODE_OPTIONS is empty (its preload never loaded) and a
-    // test file requires the guard directly with the ledger variable the runner also passes.
     const direct = path.join(dir, 'direct.ndjson');
     const requirer = writeModule(dir, 'tests/requirer.cjs', `require(${JSON.stringify(GUARD_PATH)}); process.stdout.write('ok');`);
     r = runNode([requirer], { cwd: dir, env: isolatedEnv({ home: dir, override: { NODE_OPTIONS: '', GSD_STATE_WRITE_LEDGER: direct } }), timeoutMs: PROBE_TIMEOUT_MS });
@@ -406,12 +384,6 @@ process.stdout.write(String(fs.writeFileSync === before && !fs.writeFileSync.nam
   });
 
   test('loading the shim leaves os.tmpdir() to the child: a child that presents itself as win32 reads its TEMP/TMP, not the TMPDIR it inherited (#5120, #5848)', (t) => {
-    // node:os picks its win32 or POSIX tmpdir branch once, when it first loads. A preload that
-    // loads it (reading fs.promises does, through internal/fs/promises) fixes the POSIX branch
-    // before the child's own code runs, so a child that spoofs process.platform, as the #5848
-    // install probe does, reads TMPDIR (the runner's run root) instead of the TEMP/TMP it was
-    // handed. TMPDIR differs from TEMP/TMP so the two branches give different answers. On a real
-    // win32 host the spoof is a no-op and the row is green either way; it discriminates on POSIX.
     const dir = createTempDir('rswg-tmpdir-');
     t.after(() => cleanup(dir));
     const given = path.join(dir, 'given-temp');
@@ -432,9 +404,6 @@ process.stdout.write(require('node:os').tmpdir());`);
     assert.equal(r.stdout, given, 'os.tmpdir() under the shim must be the TEMP/TMP the child was given');
   });
 
-  // One row per spelling, each in a fresh child where nothing reads fs.promises or requires the
-  // other spelling first: both return the one shared object, so a row that used both would stay
-  // green with either spelling dropped from the require hook (#5120 review Minor 3).
   for (const spec of ['fs/promises', 'node:fs/promises']) {
     test(`a product write onto STATE.md through require('${spec}') alone, never through fs.promises, is still a violation (#5120)`, (t) => {
       const dir = createTempDir('rswg-fsp-');
@@ -455,8 +424,6 @@ module.exports = async (target) => { await fsp.writeFile(target, 'a'); await fsp
       t.after(() => cleanup(dir));
       const target = path.join(dir, '.planning', 'STATE.md');
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      // The cp onto a non-STATE.md file loads node's cp module, which takes copyFile from the
-      // promises object once; unwrapped at that moment, every later fs.promises.cp is unseen.
       writeModule(dir, 'gsd-core/bin/lib/writer.cjs', `'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -476,9 +443,6 @@ module.exports = async (target) => {
   }
 
   test('known limit, pinned as it stands: an ES module import of fs/promises is not a reach that wraps the promise API (#5120 review Minor 1, Minor 2)', (t) => {
-    // TESTING-SUITES.md states this limit. If a change makes either child below record, update its
-    // limits list and this row together. Each child
-    // asserts the bytes landed, so an empty ledger is an unseen real write, not a dead child.
     const dir = createTempDir('rswg-esm-');
     t.after(() => cleanup(dir));
     // 1. Test code runs a cp through the import first; a later product fs.promises.cp onto STATE.md
@@ -526,9 +490,6 @@ module.exports = async (early, late) => {
   });
 
   test('known limits, pinned as they stand: these example shapes land their bytes on STATE.md and are not recorded (#5120 pre-push review R2-n3, R3-n2)', async (t) => {
-    // TESTING-SUITES.md states these limits. If a change makes a shape below record, update its
-    // limits list, the limits predicate in CONTEXT.md and this row together. Each child asserts the bytes landed, so an empty ledger is an unseen real write, not
-    // a dead child. Every body is product code (under gsd-core/bin/lib) and uses node alone.
     const shapes = [
       {
         name: 'writeFileSync on a descriptor from openSync',
@@ -558,7 +519,6 @@ module.exports = async (root) => {
       {
         name: 'renameSync of a directory that holds a STATE.md',
         file: 'moved/STATE.md', bytes: 'moved',
-        // The fixture STATE.md is laid down by test code (main.cjs), which is never recorded.
         seed: `fs.mkdirSync(path.join(root, 'ws'), { recursive: true }); fs.writeFileSync(path.join(root, 'ws', 'STATE.md'), 'moved');`,
         body: `const fs = require('node:fs'); const path = require('node:path');
 module.exports = async (root) => {
@@ -597,8 +557,6 @@ module.exports = async (root) => {
 };`,
       },
       {
-        // Pre-push review R3-m6: the internal copyFile runs after cp's own awaits, when no product
-        // frame is on the stack, because nothing awaits the cp call itself.
         name: 'fs.promises.cp onto STATE.md chained with .then, not awaited',
         file: '.planning/STATE.md', bytes: 'by promises.cp',
         body: `const fs = require('node:fs'); const path = require('node:path');
@@ -633,7 +591,6 @@ const root = ${JSON.stringify(dir)};
 ${shape.seed || ''}
 require(${JSON.stringify(mod)})(root).catch((e) => { console.error(e); process.exitCode = 1; });`);
         const entries = runGuarded(dir, main);
-        // A link fixture that cannot be built fails the row, as the mkfifo row does (pre-push review R3-n2).
         if (shape.linkSupportMarker && fs.existsSync(path.join(dir, shape.linkSupportMarker))) {
           throw new Error(`the hard-link fixture could not be built: ${fs.readFileSync(path.join(dir, shape.linkSupportMarker), 'utf8')}`);
         }
@@ -647,8 +604,7 @@ require(${JSON.stringify(mod)})(root).catch((e) => { console.error(e); process.e
 describe('nodeOptionsWithRequire in a real child process (real process: node parses NODE_OPTIONS itself)', () => {
   test('a path with spaces and backslashes reaches node intact (Windows paths)', (t) => {
     // Node's NODE_OPTIONS parser treats a backslash inside quotes as an escape,
-    // so an unescaped `D:\a\x` would load `D:ax`. A literal backslash is a legal
-    // POSIX file-name byte, so this pins the escaping on every platform.
+    // so an unescaped `D:\a\x` would load `D:ax`.
     const dir = createTempDir('rswg-quote-');
     t.after(() => cleanup(dir));
     const odd = path.join(dir, process.platform === 'win32' ? 'a b' : 'a\\b c');
@@ -668,16 +624,11 @@ module.exports = (target) => fs.writeFileSync(target, 'raw');
     writeModule(dir, 'a.test.cjs', testBody);
   }
   function runRunner(dir, extra = {}) {
-    // isolatedEnv strips NODE_TEST_CONTEXT, every RUN_TESTS_* and every GSD_* variable; the
-    // runner's own input directory is opted back in.
     const env = isolatedEnv({ home: dir, override: { GSD_TEST_DIR: dir, ...extra } });
     return runNode([RUNNER], { cwd: path.join(__dirname, '..'), env, timeoutMs: RUN_TESTS_HARNESS_TIMEOUT_MS });
   }
 
   test('the runner puts its shim ahead of a preload already in NODE_OPTIONS, so the check installs first in every process that received it (#5120 review Nit 1, Nit 2)', (t) => {
-    // The stated limits hold only when the shim is the first preload: a preload ordered before it
-    // could keep an unwrapped fs.promises. This preload, handed to the runner in NODE_OPTIONS,
-    // records whether the check had installed by the time it ran, in each process it ran in.
     const dir = createTempDir('rswg-runner-order-');
     t.after(() => cleanup(dir));
     const record = path.join(dir, 'order.ndjson');
@@ -691,8 +642,6 @@ test('passes', () => {});
 `);
     const r = runRunner(dir, { NODE_OPTIONS: nodeOptionsWithRequire(undefined, early) });
     assert.equal(r.exitCode, 0, r.stderr);
-    // The runner process itself received only this preload; every process the runner gave its
-    // shim to must have run the shim first.
     const shimmed = splitLines(fs.readFileSync(record, 'utf8')).filter(Boolean).map((l) => JSON.parse(l))
       .filter((rec) => rec.nodeOptions.includes('raw-state-write-preload.cjs'));
     assert.ok(shimmed.length >= 1, `a process that received the shim ran the early preload: ${fs.readFileSync(record, 'utf8')}`);
@@ -752,20 +701,14 @@ test('passes', () => { fs.writeFileSync(path.join(${JSON.stringify(dir)}, 'STATE
     const r = runRunner(dir);
     assert.equal(r.exitCode, 0, r.stderr);
     assert.match(r.stderr, /run-tests: raw STATE\.md writes in product code: 0; /);
-    // The install sentinels survived the runner end to end: the preload loaded in the chunk
-    // process and in the test file's child, whose sentinel names a.test.cjs, so no "left no
-    // preload sentinel" line is printed (#5120 audit, review Minor 6).
     assert.match(r.stderr, /unreadable ledger lines: 0; the check loaded in [2-9]\d* processes\b/);
     assert.doesNotMatch(r.stderr, /left no preload sentinel/);
   });
 
   test('a chunk killed on its timeout leaves a test file that never started, and the runner prints it as having no preload sentinel (#5120 pre-push review Mi5)', (t) => {
-    // The wiring under test is the runner passing the test files it spawned to formatStateWriteReport
-    // (testFilesRun). Two fixture files both park a promise for HANG_PARK_MS, far past the 2000 ms
+    // Two fixture files both park a promise for HANG_PARK_MS, far past the 2000 ms
     // chunk bound (the pattern of tests/run-tests-harness.test.cjs: parked, not a busy loop, and
-    // self-terminating if a kill orphans it). With TEST_CONCURRENCY 1 the first file hangs until the
-    // chunk is killed and the second never starts, so exactly one of the two leaves no preload
-    // sentinel. RUN_TESTS_NO_FORCE_EXIT keeps the kill on the timeout path.
+    // self-terminating if a kill orphans it).
     const HANG_PARK_MS = 10_000;
     const HANGS_BODY = `'use strict';
 const { test } = require('node:test');
@@ -781,8 +724,6 @@ test('hangs', () => new Promise((resolve) => { setTimeout(resolve, ${HANG_PARK_M
     });
     assert.equal(typeof r.exitCode, 'number', 'the runner exited on its own');
     assert.notEqual(r.exitCode, 0, `the run fails: ${r.stderr}`);
-    // Whether the second file starts before the 2000 ms chunk bound can vary on a slow machine, so one
-    // or two files may be printed; either way the line must be there and name only these fixtures.
     const line = splitLines(r.stderr).find((l) => /^run-tests: raw STATE\.md write check: [12] test files? left no preload sentinel/.test(l));
     assert.ok(line, `the runner printed the unguarded-file line: ${r.stderr}`);
     const count = Number(/check: (\d) test file/.exec(line)[1]);
