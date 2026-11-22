@@ -192,9 +192,11 @@
       "files": [
         "host-integration.test.cjs",
         "host-integration-validator-parity.test.cjs",
-        "host-integration-descriptors.test.cjs"
+        "host-integration-descriptors.test.cjs",
+        "host-integration-validator-parity.process.test.cjs"
       ],
-      "issue": "1684"
+      "issue": "1684",
+      "justification": "ADR-6315 item 15 (#6333): runGsdTools runs in the test's process and refuses a per-call NODE_OPTIONS preload, so the #4561 stale-lib case, which needs a process that loads gsd-tools fresh, is a separate .process.test.cjs file (TESTING-STANDARDS.md, tests rule 2)."
     },
     "prompt-budget": {
       "files": [
