@@ -3598,7 +3598,7 @@ function segmentFeeds(s, bySeg) {
     texts.push(h.text);
     // The body as the shell hands it on as well (#6408 Major 2): unquoted, `\<newline>` is removed and `\\` read as
     // `\`, so `.e\<newline>nv` is `.env`. `\$` and `` \` `` cannot reach here: the test above denies the raw text.
-    if (!h.quoted && h.text.includes('\\')) texts.push(h.text.replace(/\\([\\\n])/g, (m, c) => (c === '\n' ? '' : '\\')));
+    if (!h.quoted && h.text.includes('\\')) texts.push(h.text.replace(/\\([\\\n])/g, (_, c) => (c === '\n' ? '' : '\\')));
   }
   return texts.length > 0 ? { texts, unseen: null } : null;
 }
@@ -3699,23 +3699,33 @@ function compoundOutput(range, ctx) {
 
 // #6408 Major 1: a compound writes its commands' outputs one after another, so a name may span them (`{ printf %s
 // .e; printf %s nv; }` writes `.env`). The texts its stages may write in order, each echo ending its line, joined with
-// nothing and with a newline, one text per choice of each stage's texts; a stage that pipes on or redirects its
-// output writes none of it. `unjoined` names why the join may miss what is written: a stage between two others that
-// may be skipped (`&&`, `||`, a conditional or a loop), a group whose redirect or pipe may take its output, or more
-// choices than MAX_JOINED_TEXTS. The flat texts stay; scanXargsPipe treats `unjoined` as unseen only after them.
+// nothing and with a newline, one text per choice of each stage's texts; a stage that pipes on, or redirects its
+// output to a known other place, writes none of it. `unjoined` names why the join may miss what is written: a stage
+// that may be skipped (`&&`, `||`, a conditional or a loop word from the range's start), a `&`, a redirect that may
+// still be stdout, a group whose redirect or pipe may take its output, or more choices than MAX_JOINED_TEXTS. The flat texts stay; scanXargsPipe treats `unjoined` as unseen only after them.
 const MAX_JOINED_TEXTS = 64;
-const STDOUT_REDIRECT_RE = /^(?:1?>[>|]?|&>>?|1?>&.+)$/;
+const STDOUT_REDIRECT_RE = /^(?:1?>[>|]?|&>>?|1?>&.*)$/;
 const MAY_SKIP_WORDS = new Set([...OPENING_WORDS, ...CLOSING_WORDS, 'then', 'else', 'elif', 'do']);
 function sequenceJoins(range, ctx, staged) {
-  const pieces = staged.filter(({ seg }) => ctx.sepAfter.get(seg) !== '|' && ctx.sepAfter.get(seg) !== '|&'
-    && !(ctx.bySeg.get(seg) || []).some((t) => t.kind === 'op' && !t.read && STDOUT_REDIRECT_RE.test(t.text)));
+  if (staged.length < 2) return null;
+  const pieces = [];
+  for (const piece of staged) {
+    const sep = ctx.sepAfter.get(piece.seg);
+    if (sep === '|' || sep === '|&') continue;
+    const goes = stdoutGoes(ctx.bySeg.get(piece.seg) || []);
+    if (goes === 'unsure') return { texts: [], unjoined: '>' };
+    if (goes === null) pieces.push(piece);
+  }
   if (pieces.length < 2) return null;
   const first = pieces[0].seg;
   const last = pieces[pieces.length - 1].seg;
-  for (let k = first; k <= last; k++) {
+  // From the range's start, so a skip that heads the first piece (`then printf …`, `false && printf …`) counts, and
+  // through its end for `&`, which leaves the order of the outputs unknown.
+  for (let k = range.from; k <= range.to; k++) {
     const sep = ctx.sepAfter.get(k);
+    if (sep === '&') return { texts: [], unjoined: sep };
+    if (k > last) continue;
     if (k < last && (sep === '&&' || sep === '||')) return { texts: [], unjoined: sep };
-    if (k === first) continue;
     for (const w of commandWords(ctx.bySeg.get(k) || [])) {
       if (MAY_SKIP_WORDS.has(w.text)) return { texts: [], unjoined: w.text };
       if (!LEADING_RESERVED.has(w.text)) break;
@@ -3738,6 +3748,23 @@ function sequenceJoins(range, ctx, staged) {
   let combos = [[]];
   for (const c of choices) combos = combos.flatMap((combo) => c.map((text) => [...combo, text]));
   return { texts: combos.flatMap((combo) => [combo.join(''), combo.join('\n')]), unjoined: null };
+}
+
+// Where a stage's stdout redirects send it: null for none, 'away' when every one goes to a known other place (a file,
+// /dev/null, `>&2`, `>&-`), 'unsure' when one may still be stdout (`/dev/stdout`, `/dev/fd/1`, `>&1`, an expansion).
+const STDOUT_PATHS = new Set(['/dev/stdout', '/dev/fd/1', '/proc/self/fd/1']);
+function stdoutGoes(segTokens) {
+  let away = null;
+  for (let k = 0; k < segTokens.length; k++) {
+    const t = segTokens[k];
+    if (t.kind !== 'op' || t.read || !STDOUT_REDIRECT_RE.test(t.text)) continue;
+    const dup = /^1?>&(.+)$/.exec(t.text);
+    const target = dup || !segTokens[k + 1] || segTokens[k + 1].kind !== 'word' ? null : segTokens[k + 1];
+    const text = dup ? dup[1] : target && target.text;
+    if (!text || text === '1' || STDOUT_PATHS.has(text) || EXPANDS_RE.test(text) || (target && expands(target))) return 'unsure';
+    away = 'away';
+  }
+  return away;
 }
 
 // Whether `cmd` is an echo that ends its output with a newline: no `-n` among its flags and no `\c` in its operands.
