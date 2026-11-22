@@ -128,6 +128,20 @@ describe('ctx.list', () => {
     assert.match(findings[0].message, /not a repo-relative path inside the repository/);
   });
 
+  test('a directory that is itself a symlink is a finding and is not listed', (t) => {
+    const tree = makeTree(t, { 'elsewhere/b.md': 'ok\n' }, { l9: listAndRead });
+    fs.symlinkSync(path.join(tree.root, 'elsewhere'), path.join(tree.root, 'wf'), 'dir');
+    const findings = runTree(tree);
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /^l9: workflows \(wf is a symlink, expected a directory\)$/);
+  });
+
+  test('a regular file where the directory should be is a finding', (t) => {
+    const findings = runTree(makeTree(t, { 'wf': 'not a directory\n' }, { l10: listAndRead }));
+    assert.equal(findings.length, 1);
+    assert.match(findings[0].message, /wf is not a directory, expected a directory/);
+  });
+
   test('a symlink is not followed: a linked file is neither listed nor read', (t) => {
     const tree = makeTree(t, { 'wf/a.md': 'ok\n', 'elsewhere/b.md': 'bad\n' }, { l8: listAndRead });
     fs.symlinkSync(path.join(tree.root, 'elsewhere', 'b.md'), path.join(tree.root, 'wf', 'link.md'));
@@ -1013,8 +1027,12 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       append('Unresolved items carry forward as debt.'), 'transition-verification-gate', /must not be carried forward as debt/],
     ...HANDOFF_FILES.map(([rel, prefix]) => [`${prefix}execute-phase gone from the hand-off of ${rel} (#5723)`, rel,
       swap(`${prefix}execute-phase`, `${prefix}run-phase`), 'handoff-next-step', /execute-phase does not follow/]),
-    ['the hand-off of new-project names plan-phase before discuss-phase (#5723)', 'commands/gsd/new-project.md',
+    ['the hand-off of new-project no longer names discuss-phase (#5723)', 'commands/gsd/new-project.md',
       swap('/gsd:discuss-phase', '/gsd:zzz-phase'), 'handoff-next-step', /does not name \/gsd:discuss-phase/],
+    ['the hand-off of new-project no longer names plan-phase after discuss-phase (#5723)', 'commands/gsd/new-project.md',
+      swap('/gsd:plan-phase', '/gsd:zzz-phase'), 'handoff-next-step', /\/gsd:plan-phase does not follow \/gsd:discuss-phase/],
+    ['fail-closes only ahead of the first phase.complete in transition (#1522)', 'gsd-core/workflows/transition.md',
+      (text) => `fail-closes\n${text.replace(/fail-closes/gi, 'fails')}`, 'transition-verification-gate', /expected "fail-closes" after "phase\.complete"/],
     ['the hand-off of new-project says it starts execution (#5723)', 'commands/gsd/new-project.md',
       (text) => text.replace('**After this command:**', '**After this command:** This starts execution.'), 'handoff-next-step', /says it starts execution/],
     ['the hand-off of new-project loses "to execute." (#5723)', 'commands/gsd/new-project.md',
@@ -1063,6 +1081,52 @@ describe('the shipped contracts hold on the real files, and fail when a contract
       const abs = path.join(root, 'gsd-core', 'workflows', 'plan-phase.md');
       fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${line}\n`);
       assert.deepEqual(runShipped(root, ['branch-no-track-guard']), []);
+    });
+  }
+
+  // The bounds of the batch-6 patterns: limit - 1 and limit are scanned, limit + 1 is the stated edge.
+  const boundaryCases = [
+    ['git and checkout separated by 199 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(199)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', true],
+    ['git and checkout separated by 200 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(200)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', true],
+    ['git and checkout separated by 201 spaces', 'gsd-core/workflows/plan-phase.md', `git${' '.repeat(201)}checkout -b gsd/new origin/$DEFAULT_BRANCH`, 'branch-no-track-guard', false],
+    ['a remote ref variable with 199 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(199)}BRANCH`, 'branch-no-track-guard', true],
+    ['a remote ref variable with 200 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(200)}BRANCH`, 'branch-no-track-guard', true],
+    ['a remote ref variable with 201 characters before BRANCH', 'gsd-core/workflows/plan-phase.md', `git checkout -b gsd/new origin/$${'A'.repeat(201)}BRANCH`, 'branch-no-track-guard', false],
+  ];
+  for (const [title, rel, line, contract, caught] of boundaryCases) {
+    test(`${title} ${caught ? 'fails' : 'is past the bound of'} ${contract}`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, ...rel.split('/'));
+      fs.writeFileSync(abs, `${fs.readFileSync(abs, 'utf8')}\n${line}\n`);
+      assert.equal(runShipped(root, [contract]).length, caught ? 1 : 0);
+    });
+  }
+
+  // The hand-off's execute-phase span up to its closing backtick is bounded at 500 characters.
+  for (const [span, ok] of [[499, true], [500, true], [501, false]]) {
+    test(`a hand-off execute-phase span of ${span} characters ${ok ? 'satisfies' : 'is past the bound of'} handoff-next-step`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'commands', 'gsd', 'new-project.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      const tail = '/gsd:execute-phase 1`';
+      assert.ok(text.includes(tail), 'the real hand-off ends its execute step this way');
+      fs.writeFileSync(abs, text.replace(tail, `/gsd:execute-phase${'x'.repeat(span - '/gsd:execute-phase'.length)}\``));
+      const findings = runShipped(root, ['handoff-next-step']);
+      assert.equal(findings.length, ok ? 0 : 1, JSON.stringify(findings));
+    });
+  }
+
+  // The whitespace in "canonical verification status" is bounded at 20 characters.
+  for (const [gap, ok] of [[19, true], [20, true], [21, false]]) {
+    test(`${gap} whitespace characters inside "canonical verification status" ${ok ? 'satisfy' : 'are past the bound of'} transition-verification-gate`, (t) => {
+      const root = copyOfRepoFiles(t);
+      const abs = path.join(root, 'gsd-core', 'workflows', 'transition.md');
+      const text = fs.readFileSync(abs, 'utf8');
+      const phrase = /canonical verification\s+status is `passed`/i;
+      assert.ok(phrase.test(text), 'the real file carries the phrase');
+      fs.writeFileSync(abs, text.replace(phrase, `canonical verification${' '.repeat(gap)}status is \`passed\``));
+      const findings = runShipped(root, ['transition-verification-gate']);
+      assert.equal(findings.length, ok ? 0 : 1, JSON.stringify(findings));
     });
   }
 

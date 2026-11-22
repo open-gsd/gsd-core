@@ -229,6 +229,13 @@ function makeContext(root, id, findings) {
         return [];
       }
       const base = String(relDir).split('/').filter(Boolean).join('/');
+      // The directory itself is not a symlink: readdir would follow it out of the tree.
+      let top = null;
+      try { top = fs.lstatSync(at.abs); } catch { /* reported by the walk below */ }
+      if (top && !top.isDirectory()) {
+        report(base, `${why} (${base} is ${top.isSymbolicLink() ? 'a symlink' : 'not a directory'}, expected a directory)`);
+        return [];
+      }
       const files = [];
       let unreadable = false;
       const walk = (abs, rel) => {

@@ -6,8 +6,10 @@
 // origin/$DEFAULT_BRANCH and bypasses PR review. Scans every workflow .md so a newly added workflow that
 // reintroduces the pattern is caught. Was tests/branch-no-track-guard.test.cjs.
 
-const CHECKOUT_NEW_BRANCH = /git[ \t]{1,20}checkout[ \t]{1,20}-b\b/;
-const REMOTE_REF = /origin\/\$[A-Z_]{1,40}_?BRANCH|origin\/\$DEFAULT_BRANCH/;
+// Bounded (no-unbounded-quantifier) well past any real line: 200 spaces between the words, 200 characters of
+// variable name before BRANCH. Tests pin 199, 200 and 201 of each; a longer one is outside the stated bound.
+const CHECKOUT_NEW_BRANCH = /git[ \t]{1,200}checkout[ \t]{1,200}-b\b/;
+const REMOTE_REF = /origin\/\$[A-Z_]{1,200}_?BRANCH|origin\/\$DEFAULT_BRANCH/;
 
 module.exports = {
   id: 'branch-no-track-guard',
