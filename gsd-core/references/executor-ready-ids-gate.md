@@ -92,27 +92,34 @@ else
 fi
 if [ -n "$PLAN_PATH" ] && [ -f "$PLAN_PATH" ] && [ -n "$(printf '%s' "${REQ_IDS:-}" | tr -d '[:space:]')" ]; then
   _ef=$(mktemp 2>/dev/null || mktemp -t gsd.XXXXXX 2>/dev/null || echo "/tmp/gsd.$$.$RANDOM")
+  _ready_ws_name=${GSD_WS:-}
+  _ready_ws_name=${_ready_ws_name##* }
   # zsh set -f is NO_RCS, not noglob. Bracketed IDs need noglob on both shells.
   if [ -n "${ZSH_VERSION:-}" ]; then setopt SH_WORD_SPLIT; setopt noglob; else set -f; fi
   _ready_ids() {
-    for _id in "$@"; do
-      case "$_id" in
-        --*) echo "Invalid requirement ID: $_id" >&2; return 1 ;;
-      esac
+    local _id
+    # Check the same list separators that ready-ids accepts.
+    for _id in $(printf '%s\n' "$@" | sed 's/[][]//g; s/,/ /g'); do
+      if ! [[ $_id =~ ^[A-Z][A-Z0-9]*-[A-Za-z0-9_-]+$ ]]; then
+        echo "Invalid requirement ID: $_id" >&2
+        return 1
+      fi
     done
-    gsd_run query requirements.ready-ids ${GSD_WS:+--ws=${GSD_WS##* }} "${PLAN_PATH}" "$@"
+    gsd_run query requirements.ready-ids ${GSD_WS:+--ws=${_ready_ws_name}} "${PLAN_PATH}" "$@"
   }
   READY=$(_ready_ids ${REQ_IDS} 2>|"$_ef" || true)
+  unset -f _ready_ids
   READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>>"$_ef" | tr '\n' ' ' || true)
   _mc=0
   if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
     # Keep a mark-complete failure visible, but restore shell options first.
-    gsd_run query requirements.mark-complete ${GSD_WS:+--ws=${GSD_WS##* }} ${READY_IDS} || _mc=$?
+    gsd_run query requirements.mark-complete ${GSD_WS:+--ws=${_ready_ws_name}} ${READY_IDS} || _mc=$?
   else
     _em=$(tr '\n' ' ' <"$_ef" 2>/dev/null || true)
     echo "WARN: No requirement IDs ready to mark complete for ${PLAN_PATH} (blocked or query failed)${_em:+: $_em}" >&2
   fi
   rm -f "$_ef"
+  unset _ready_ws_name
   [ -n "${ZSH_VERSION:-}" ] && { [ "$_ws" = 1 ] || unsetopt SH_WORD_SPLIT; }
 fi
 _mc=${_mc:-0}

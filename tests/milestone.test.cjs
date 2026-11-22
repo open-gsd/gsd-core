@@ -2444,8 +2444,9 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
     assert.ok(!refContent.includes('--raw'), 'executor-ready-ids-gate.md must not pass --raw');
 
     const workstreamArg = `\${GSD_WS:+--ws=\${GSD_WS##* }}`;
+    const executorWorkstreamArg = `\${GSD_WS:+--ws=\${_ready_ws_name}}`;
     assert.ok(workflowContent.includes('requirements.ready-ids ' + workstreamArg + ' "${PLAN_PATH}" ${REQ_IDS}'));
-    assert.ok(refContent.includes('requirements.ready-ids ' + workstreamArg + ' "${PLAN_PATH}" "$@"'));
+    assert.ok(refContent.includes('requirements.ready-ids ' + executorWorkstreamArg + ' "${PLAN_PATH}" "$@"'));
 
     // Both surfaces must extract ready IDs using jq -r '.ready[]'
     const jqExtractionPattern = /jq\s+-r\s+['"]\.ready\[\]['"]/;
@@ -2459,39 +2460,60 @@ describe('gsd-executor.md requirements ready-ids gate (#4944)', () => {
 
     const markComplete = 'requirements.mark-complete ' + workstreamArg + ' ${READY_IDS}';
     assert.ok(workflowContent.includes(markComplete));
-    assert.ok(refContent.includes(markComplete));
+    assert.ok(refContent.includes('requirements.mark-complete ' + executorWorkstreamArg + ' ${READY_IDS}'));
   });
 
-  test('executor ready-ids forwards the active workstream to both calls', (t) => {
-    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
-    const dir = makePhaseDir(tmpDir);
-    const planPath = path.join(dir, '05-01-PLAN.md');
-    fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
-    const result = runExtractedExecutorBash(tmpDir, {
-      PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
-      REQ_IDS: 'ONLY1-01', GSD_WS: 'workspace stream-a',
-    }, `gsd_run() {
-      case "$2:$3" in
-        requirements.ready-ids:--ws=stream-a) printf '%s' '{"ready":["ONLY1-01"]}' ;;
-        requirements.mark-complete:--ws=stream-a) printf '%s\\n' "$4" ;;
-        *) return 1 ;;
-      esac
-    }`);
-    assertShellExit(result, result.stderr);
-    assert.match(result.stdout, /^ONLY1-01$/m);
-  });
-
-  test('executor ready-ids rejects IDs that resemble global flags', (t) => {
-    const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
-    const dir = makePhaseDir(tmpDir);
-    const planPath = path.join(dir, '05-01-PLAN.md');
-    fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
-    const result = runExtractedExecutorBash(tmpDir, {
-      PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
-      REQ_IDS: 'ONLY1-01 --raw',
+  for (const shell of ['bash', 'zsh']) {
+    test(`executor ready-ids forwards the active workstream to both calls under ${shell}`, (t) => {
+      const skipReason = skipUnless(shell, 'jq'); if (skipReason) return t.skip(skipReason);
+      const dir = makePhaseDir(tmpDir);
+      const planPath = path.join(dir, '05-01-PLAN.md');
+      fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
+      const result = runExtractedExecutorBash(tmpDir, {
+        PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
+        REQ_IDS: 'ONLY1-01', GSD_WS: '--ws stream-a',
+      }, `gsd_run() {
+        case "$2:$3" in
+          requirements.ready-ids:--ws=stream-a) printf '%s' '{"ready":["ONLY1-01"]}' ;;
+          requirements.mark-complete:--ws=stream-a) printf '%s\\n' "$4" ;;
+          *) return 1 ;;
+        esac
+      }`, shell);
+      assertShellExit(result, result.stderr);
+      assert.match(result.stdout, /^ONLY1-01$/m);
     });
-    assert.match(result.stderr, /Invalid requirement ID: --raw/);
-  });
+
+    test(`a failed ready-ids query preserves an errexit caller under ${shell}`, (t) => {
+      const skipReason = skipUnless(shell, 'jq'); if (skipReason) return t.skip(skipReason);
+      const dir = makePhaseDir(tmpDir);
+      const planPath = path.join(dir, '05-01-PLAN.md');
+      fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
+      const result = runExtractedExecutorBash(tmpDir, {
+        PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath, REQ_IDS: 'ONLY1-01',
+      }, `set -e
+      gsd_run() { echo "CALL:$2" >&2; return 3; }`, shell, 'echo CALLER_SURVIVED');
+      assertShellExit(result, result.stderr);
+      assert.match(result.stdout, /^CALLER_SURVIVED$/m);
+      assert.match(result.stderr, /CALL:requirements\.ready-ids/);
+      assert.doesNotMatch(result.stderr, /CALL:requirements\.mark-complete/);
+    });
+  }
+
+  for (const [input, flag] of [['--raw', '--raw'], ['-h', '-h'], ['-r', '-r'], ['[ONLY1-01,-r]', '-r'], ['REQ-', 'REQ-'], ['not-an-id', 'not-an-id']]) {
+    test(`executor rejects ${input} before calling the requirement tools`, (t) => {
+      const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
+      const dir = makePhaseDir(tmpDir);
+      const planPath = path.join(dir, '05-01-PLAN.md');
+      fs.writeFileSync(planPath, '---\nplan: 01\nrequirements: [ONLY1-01]\n---\n');
+      const result = runExtractedExecutorBash(tmpDir, {
+        PHASE: '05', PHASE_DIR: dir, PLAN: '01', PLAN_PATH: planPath,
+        REQ_IDS: `ONLY1-01 ${input}`,
+      }, 'gsd_run() { echo "UNEXPECTED_REQUIREMENTS_CALL:$*" >&2; }');
+      assertShellExit(result, result.stderr);
+      assert.doesNotMatch(result.stderr, /UNEXPECTED_REQUIREMENTS_CALL/);
+      assert.ok(result.stderr.includes(`Invalid requirement ID: ${flag}`));
+    });
+  }
 
   test('negative control: preset PLAN_PATH with missing or empty plan frontmatter fails closed (#4944)', (t) => {
     const skipReason = skipUnless('bash', 'jq'); if (skipReason) return t.skip(skipReason);
