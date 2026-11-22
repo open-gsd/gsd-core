@@ -177,6 +177,7 @@
   - [UAT-Passed Predicate](#143-uat-passed-predicate)
   - [Spec-Phase Edge-Completeness Probe](#144-spec-phase-edge-completeness-probe)
   - [Deep Verify Capability](#3858-deep-verify-capability)
+  - [Validate-Only Verify Commands](#4586-validate-only-verify-commands)
 - [v1.43.0 Features](#v1430-features)
   - [MemPalace Memory Capability](#145-mempalace-memory-capability)
   - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
@@ -219,6 +220,8 @@
   - [Project Exemptions for the Secret-Read Guard](#4432-project-exemptions-for-the-secret-read-guard)
   - [Graphify CLI Preferred for Planner and Researcher Graph Queries](#4836-graphify-cli-preferred-for-planner-and-researcher-graph-queries)
   - [Gate Evidence and Verdict-Driven Exit Status](#5170-gate-evidence-and-verdict-driven-exit-status)
+- [v1.23.0 Features](#v1230-features)
+  - [Review-Prompt Capability Contributions](#3997-review-prompt-capability-contributions)
 
 ---
 
@@ -3721,6 +3724,39 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 
 **Reference:** [Configuration](CONFIGURATION.md) · [Enable deep verification](how-to/enable-deep-verification.md) · [Agents](reference/agents.md)
 
+---
+
+### 4586. Validate-Only Verify Commands
+
+**Command:** `/gsd-plan-phase` (automatic) (#4586)
+
+**Behavior:** A stated `<fails_when>` (#3172) shows the planner understands what a check should detect. It cannot show that the command parses. In the motivating T-SQL phase every plan satisfied the `<fails_when>` contract and three still shipped commands that could not run: an unaliased derived-table column (`Msg 8155`), `CONCAT()` with one argument, and a batched query that never returned. Each executor then had to decide whether the check or the deliverable was wrong, and the wrong answer, adjusting the deliverable until the check passes, silently corrupts the thing being verified.
+
+Where a validate-only mode exists for an `<automated>` command's language or tool, `gsd-planner` now runs it against the authored body and records the result inside the task's `<verify>`, after `<fails_when>`:
+
+```xml
+<verify>
+  <automated>bash scripts/check-release.sh</automated>
+  <fails_when>non-zero exit</fails_when>
+  [VALIDATED: bash -n exit 0]
+</verify>
+```
+
+A body that fails its validator blocks the plan. Where no validate-only mode applies, behavior is unchanged: the planner states the failing direction and writes `[UNVALIDATABLE: <reason>]`, so `gsd-plan-checker` can tell a considered answer from a skipped one. Check 8g raises a command with no record as a WARNING, and a record that does not hold up as a BLOCKER.
+
+**The sanctioned set is closed, and it is smaller than it looks.** Validate-only means the form does not run the body, does not write to the tree, does not need the command's targets to exist, and needs no network or install. `bash -n`, `node --check`, a `python3` `ast.parse` one-liner, `SET PARSEONLY ON` (T-SQL, with a live session) and `cargo metadata --no-deps` (target shape) qualify. Four forms that read like validators do not, and the reference names them so the planner never reaches for them: `python -m py_compile` writes a `.pyc`; `cargo check` runs the crate's build scripts and procedural macros; `npm run <script> --dry-run` is ignored by `npm run` and executes the script; `terraform validate` needs an initialized directory.
+
+**No schema change.** The record is a plain-text line inside `<verify>`. The `<automated>` and `<fails_when>` elements and the #2401 and #3172 probes are unchanged, and a test pins that.
+
+**Known limits:**
+- A command that hangs has no exit code and is not parse-detectable. The #4586 field case (eight correlated subqueries batched into one plan) is not caught by this tier.
+- Enforcement is prompt-level. The checker reads the record and re-runs only the read-only forms; there is no deterministic CLI probe, and `SET PARSEONLY ON` cannot be re-run by the checker.
+- A pass on an outer layer says nothing about an embedded payload in another language, so each layer is validated separately.
+- A project cannot declare its own validate-only command; the sanctioned set is the closed table in the reference.
+- Plans written before this shipped carry no record and draw a WARNING, never a BLOCKER.
+
+See [Validate an automated command](how-to/validate-an-automated-command.md).
+
 
 ---
 
@@ -4910,6 +4946,29 @@ default location.
 **Known limits:** `checkUiPresence` is a vocabulary check over prose and reads nothing; it stays outside the evidence type. Gates whose accepted-evidence model is narrower than GSD's producers (#4692, #4867, #4957) are out of scope.
 
 **Reference:** [Gate verb exit statuses](CLI-TOOLS.md#gate-verb-exit-statuses-5170) · [Exit code reference](reference/exit-codes.md) · [Handle gate verb exit statuses](how-to/handle-gate-verb-exit-statuses.md)
+
+
+---
+
+## v1.23.0 Features
+
+### 3997. Review-Prompt Capability Contributions
+
+**Purpose:** An enabled capability's constraints reach the external reviewers `/gsd-review` invokes, the way they already reach the planner, checker, executor and verifier. Without it, the plan can obey a capability's guidance while reviewers judge it without that guidance and recommend changes that conflict with it.
+
+**Seam:** A thirteenth loop point, `review:pre`, publishes the `reviewer` role. `/gsd-review` renders the point once while assembling the shared reviewer prompt and appends every active, runtime-compatible `contribution` addressed `into: reviewer` inside one `<capability_reviewer_rules>` block. Every prompt-bearing lane receives the same block exactly once; a lane with `promptChannel: none` is unchanged; `/gsd-plan-review-convergence` inherits it through its existing `/gsd-review` calls.
+
+**Requirements:**
+- REQ-REVIEW-PRE-01: `loop render-hooks review:pre --raw` resolves; the point is part of the generated host contract.
+- REQ-REVIEW-PRE-02: Only `kind: "contribution"` entries with `into: "reviewer"` and an inline fragment are inserted, in registry order; disabled, inactive and incompatible capabilities are excluded.
+- REQ-REVIEW-PRE-03: With no matching contribution the shared prompt is byte-identical and the step is silent.
+- REQ-REVIEW-PRE-04: The block counts toward each lane's prompt cap; an over-cap lane is refused (`prompt_exceeds_context`), never trimmed.
+- REQ-REVIEW-PRE-05: A capability declaring a hook at `review:pre` must declare an `engines.gsd` range that excludes older cores; the registry build enforces it.
+- REQ-REVIEW-PRE-06: The install summary discloses the contribution by point and target as an instruction surface and names the cross-capability egress; the v1 disclosure signature is unchanged.
+
+**Out of scope:** reviewer selection, lane descriptors and consent, the `REVIEWS.md` format, and any first-party capability shipping a reviewer contribution.
+
+See [ADR-3997](adr/3997-review-prompt-capability-contributions.md), the [capability manifest reference](reference/capability-manifest.md#review-pre--reviewer-contributions-3997) and the [trust model](explanation/capability-trust-model.md#reviewer-contributions-cross-the-external-review-boundary).
 
 ---
 
