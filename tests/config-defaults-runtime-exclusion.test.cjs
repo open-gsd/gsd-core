@@ -16,7 +16,6 @@ const {
   _setInstallRuntimeMarkerForTests,
   _resetInstallRuntimeMarkerCacheForTests,
 } = require('../gsd-core/bin/lib/model-resolver.cjs');
-const configCommands = require('../gsd-core/bin/lib/config.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
@@ -102,12 +101,45 @@ describe('#5329 — shared omit must not become explicit project model intent', 
   });
   afterEach(() => cleanup(root));
 
+  function creationArgs(command, choices = {}) {
+    if (command === 'config-new-project') return [command, JSON.stringify(choices)];
+    return command === 'config-set-model-profile' ? [command, 'balanced'] : [command];
+  }
+
+  // The in-process rows share process.env and the install-marker seam with
+  // runGsdTools; snapshot, apply and restore them in one place.
+  const ENV_KEYS = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
+  function useProcessEnv(t, runtime) {
+    const original = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+    t.after(() => {
+      _setInstallRuntimeMarkerForTests(null);
+      _resetInstallRuntimeMarkerCacheForTests();
+      for (const key of ENV_KEYS) {
+        if (original[key] === undefined) delete process.env[key];
+        else process.env[key] = original[key];
+      }
+    });
+    Object.assign(process.env, env);
+    delete process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_PROJECT;
+    if (runtime === null) delete process.env.GSD_RUNTIME;
+    else process.env.GSD_RUNTIME = runtime;
+    _setInstallRuntimeMarkerForTests(null);
+  }
+
+  // Creates the project through the CLI in this process, so the command's JSON
+  // result is captured instead of written to the test reporter's stdout. The
+  // helper blanks config-location variables by default, so pass the fixture's.
+  function createProject(command, cwd, choices = {}) {
+    const fixtureEnv = Object.fromEntries(ENV_KEYS.filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
+    const result = runGsdTools(creationArgs(command, choices), cwd, fixtureEnv);
+    assert.equal(result.exitCode, 0, result.error);
+    return JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
+  }
+
   function seed(defaults, command, choices = {}, cwd = project, activeRuntime = 'claude') {
     fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify(defaults));
-    const args = command === 'config-new-project'
-      ? [command, JSON.stringify(choices)]
-      : command === 'config-set-model-profile' ? [command, 'balanced'] : [command];
-    const result = runGsdTools(args, cwd, { ...env, GSD_RUNTIME: activeRuntime });
+    const result = runGsdTools(creationArgs(command, choices), cwd, { ...env, GSD_RUNTIME: activeRuntime });
     assert.equal(result.exitCode, 0, result.error);
     assert.equal(result.error ?? '', '', 'project creation must not write to stderr');
     const response = JSON.parse(result.output);
@@ -155,20 +187,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
   }
 
   test('the install runtime marker determines shared omit with hermetic in-process defaults', (t) => {
-    const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE'];
-    const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-    t.after(() => {
-      _setInstallRuntimeMarkerForTests(null);
-      _resetInstallRuntimeMarkerCacheForTests();
-      for (const key of keys) {
-        if (original[key] === undefined) delete process.env[key];
-        else process.env[key] = original[key];
-      }
-    });
-    delete process.env.GSD_RUNTIME;
-    process.env.GSD_HOME = store;
-    process.env.HOME = home;
-    process.env.USERPROFILE = home;
+    useProcessEnv(t, null);
     fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({
       resolve_model_ids: 'omit', model_profile: 'balanced',
     }));
@@ -178,10 +197,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
         const cwd = path.join(root, `marker-${runtime}-${command}`);
         fs.mkdirSync(cwd);
         const before = ['gsd-executor', 'my-custom-agent'].map((agent) => resolveModelInternal(cwd, agent));
-        if (command === 'config-new-project') configCommands.cmdConfigNewProject(cwd, '{}', false);
-        else if (command === 'config-ensure-section') configCommands.cmdConfigEnsureSection(cwd, false);
-        else configCommands.cmdConfigSetModelProfile(cwd, 'balanced', false);
-        const config = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
+        const config = createProject(command, cwd);
         assert.equal(Object.hasOwn(config, 'resolve_model_ids'), runtime !== 'claude', command);
         assert.deepEqual(['gsd-executor', 'my-custom-agent'].map((agent) => resolveModelInternal(cwd, agent)), before, command);
       }
@@ -192,21 +208,7 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     for (const profile of ['balanced', 'inherit']) {
       for (const rung of ['environment', 'choice', 'marker']) {
         test(`${runtime} ${profile} ${rung}: known and unknown agent resolution survive seeding`, (t) => {
-          const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
-          const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-          t.after(() => {
-            _setInstallRuntimeMarkerForTests(null);
-            _resetInstallRuntimeMarkerCacheForTests();
-            for (const key of keys) {
-              if (original[key] === undefined) delete process.env[key];
-              else process.env[key] = original[key];
-            }
-          });
-          Object.assign(process.env, env);
-          delete process.env.GSD_WORKSTREAM;
-          delete process.env.GSD_PROJECT;
-          delete process.env.GSD_RUNTIME;
-          _setInstallRuntimeMarkerForTests(null);
+          useProcessEnv(t, null);
           const defaults = { resolve_model_ids: 'omit', model_profile: profile };
           const choices = {};
           if (rung === 'environment') process.env.GSD_RUNTIME = runtime;
@@ -220,39 +222,26 @@ describe('#5329 — shared omit must not become explicit project model intent', 
           fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify(defaults));
           const agents = ['gsd-executor', 'my-custom-agent'];
           const before = agents.map((agent) => resolveModelInternal(project, agent));
-          configCommands.cmdConfigNewProject(project, JSON.stringify(choices), false);
-          assert.ok(fs.existsSync(path.join(project, '.planning', 'config.json')));
+          createProject('config-new-project', project, choices);
           assert.deepEqual(agents.map((agent) => resolveModelInternal(project, agent)), before);
         });
       }
     }
   }
 
-  for (const [choice, runtime] of [
-    ['claude', 'claude'], ['cline', 'claude'], ['codex', 'cline'],
-    [null, 'claude'], ['', 'claude'], ['foo', 'claude'],
+  for (const [choice, runtime, expected] of [
+    ['claude', 'claude', 'sonnet'], ['cline', 'claude', 'sonnet'], ['codex', 'cline', ''],
+    [null, 'claude', 'sonnet'], ['', 'claude', 'sonnet'], ['foo', 'claude', 'sonnet'],
   ]) {
     test(`runtime choice ${JSON.stringify(choice)} and environment ${runtime} preserve resolution across seeding`, (t) => {
-      const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
-      const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-      t.after(() => {
-        for (const key of keys) {
-          if (original[key] === undefined) delete process.env[key];
-          else process.env[key] = original[key];
-        }
-      });
-      Object.assign(process.env, env, { GSD_RUNTIME: runtime });
-      delete process.env.GSD_WORKSTREAM;
-      delete process.env.GSD_PROJECT;
+      useProcessEnv(t, runtime);
       fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({ resolve_model_ids: 'omit' }));
       const before = resolveModelInternal(project, 'gsd-executor');
-      configCommands.cmdConfigNewProject(project, JSON.stringify({ runtime: choice }), false);
-      const config = JSON.parse(fs.readFileSync(path.join(project, '.planning', 'config.json'), 'utf8'));
+      assert.equal(before, expected);
+      const config = createProject('config-new-project', project, { runtime: choice });
       if (choice === null) assert.equal(Object.hasOwn(config, 'runtime'), false);
       else assert.equal(config.runtime, choice);
-      assert.equal(resolveModelInternal(project, 'gsd-executor'), before);
-      if (runtime === 'claude') assert.equal(before, 'sonnet');
-      else assert.equal(before, '');
+      assert.equal(resolveModelInternal(project, 'gsd-executor'), expected);
     });
   }
 
@@ -267,24 +256,13 @@ describe('#5329 — shared omit must not become explicit project model intent', 
     }],
   ]) {
     test(`Claude ${route} survives seeding under a shared omit`, (t) => {
-      const keys = ['GSD_RUNTIME', 'GSD_HOME', 'HOME', 'USERPROFILE', 'GSD_WORKSTREAM', 'GSD_PROJECT'];
-      const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
-      t.after(() => {
-        for (const key of keys) {
-          if (original[key] === undefined) delete process.env[key];
-          else process.env[key] = original[key];
-        }
-      });
-      Object.assign(process.env, env, { GSD_RUNTIME: 'claude' });
-      delete process.env.GSD_WORKSTREAM;
-      delete process.env.GSD_PROJECT;
+      useProcessEnv(t, 'claude');
       fs.writeFileSync(path.join(store, '.gsd', 'defaults.json'), JSON.stringify({
         resolve_model_ids: 'omit', model_profile: 'balanced', ...extra,
       }));
       assert.equal(resolveModelInternal(project, 'gsd-executor'), PINNED);
-      configCommands.cmdConfigNewProject(project, '{}', false);
+      const config = createProject('config-new-project', project);
       const configPath = path.join(project, '.planning', 'config.json');
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       assert.equal(Object.hasOwn(config, 'resolve_model_ids'), false);
       assert.equal(resolveModelInternal(project, 'gsd-executor'), PINNED);
       // Control: the omit the old seeding copied would discard the route.
