@@ -5,7 +5,7 @@
 - **Issue:** [#6178](https://github.com/open-gsd/gsd-core/issues/6178) (`approved-feature`, go-with-conditions: this ADR before code, three increments, compatibility test first)
 - **Amends:** [ADR-857](857-capability-system.md) (the hook model gains an execution-context dimension next to point and kind) · [ADR-894](894-capability-declaration-format.md): the hook entry schema gains `executionContexts`, a generated quick-host contract sits beside the Loop Host Contract (D5), and the hook-activation paragraph and its own #1022 clarification section ("Runtime/mode context … is likewise **not** a hook-activation concern … It **self-gates inside the skill**") gains an exception: the execution context is applied by the host before dispatch, for annotated hooks only (D1)
 - **Builds on:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (quick-batch binding: single-writer coordinator, `BATCH.json` as the source of truth for completion) · [ADR-1244](1244-capability-ecosystem.md) (`engines.gsd` as the compatibility gate for manifests that use the field)
-- **Split out (separately proposed, each awaiting its own approval):** #A (`/gsd-quick` resume and re-entry), #B (quick-batch recovery records), #C (quick-batch stored modes). Increments are tracked in #T1, #T2 and #T3.
+- **Split out (separately proposed, each awaiting its own approval):** #6530 (`/gsd-quick` resume and re-entry), #6531 (quick-batch recovery records), #6532 (quick-batch stored modes). Increments are tracked in #6533, #6534 and #6535.
 
 ## Context
 
@@ -63,7 +63,7 @@ by both quick hosts at a fixed set of cells (D2) and receives the quick task's i
 phase (D3). quick-batch dispatches those hooks from its coordinator against a hook set frozen when the
 batch starts, with per-hook outcomes so a resume never replays a finished hook (D4). The quick hosts
 get their own generated contract, checked per host (D5). The `/gsd-quick` resume contract, the
-quick-batch recovery records and the stored batch modes are not decided here: they are #A, #B and #C,
+quick-batch recovery records and the stored batch modes are not decided here: they are #6530, #6531 and #6532,
 and the increments that need them wait for them.
 
 ## Decision
@@ -170,7 +170,7 @@ G = gate.
 | Point | `/gsd-quick` | `/gsd-quick-batch` |
 |---|---|---|
 | `plan:pre` | Always. S and G before the planner spawns; C into `planner`. | Per planning invocation (D3, D4), in `planner-wave.md` step 3 next to the legacy dispatch. |
-| `execute:post` | After every successful Step 6 executor run, **whatever the flags**: for an isolated run after the Step 6 merge-back succeeded, otherwise right after the executor returns. Always before Step 6.25. No dispatch when the executor or the merge-back fails. S and G. | Per item, serially in manifest order, once the item is recorded as merged (#B's merged record, D4), before verification and `quick-batch complete`: in `merge-wave.md` after step 5 routes the `worktree.cleanup-wave` result, and with `ISOLATION=none` in `worktree-dispatch.md` step 4, once that step has found the item's `SUMMARY.md` after every item of the round returned. So with `ISOLATION=none` an item's `execute:post` runs after the later items of its round have executed, not right after its own executor; per-item hooks assume nothing about their peers (D3). |
+| `execute:post` | After every successful Step 6 executor run, **whatever the flags**: for an isolated run after the Step 6 merge-back succeeded, otherwise right after the executor returns. Always before Step 6.25. No dispatch when the executor or the merge-back fails. S and G. | Per item, serially in manifest order, once the item is recorded as merged (#6531's merged record, D4), before verification and `quick-batch complete`: in `merge-wave.md` after step 5 routes the `worktree.cleanup-wave` result, and with `ISOLATION=none` in `worktree-dispatch.md` step 4, once that step has found the item's `SUMMARY.md` after every item of the round returned. So with `ISOLATION=none` an item's `execute:post` runs after the later items of its round have executed, not right after its own executor; per-item hooks assume nothing about their peers (D3). |
 | `verify:pre` | With `--validate`, before the verifier, in `quick/steps/quick-verification.md`. S and G; C into `orchestrator`. | Per item, with `--validate`, in `verification-wave.md`. |
 | `verify:post` | With `--validate`, after the verifier, **only when its status is `passed`**. S and G. | Same condition, per item, in `verification-wave.md`. |
 | `discuss:pre` / `discuss:post` | With `--discuss`, in `quick/steps/discussion-phase.md`. S and G; C into `orchestrator` at `discuss:pre`. | Not applicable (`--discuss` is rejected). |
@@ -235,13 +235,13 @@ commits stay in place, and nothing is reverted. The task is not recorded in STAT
 names the gate, its message, the task directory and the commits left behind, and says the task was
 not recorded. A gate at `plan:pre`, `discuss:*` or `verify:*` stops at that point in the same way,
 with whatever that point has already produced left in place. The stop report does not offer
-`/gsd-quick resume <slug>`: a resumed run dispatches no annotated hook until #A lands (below), so it
+`/gsd-quick resume <slug>`: a resumed run dispatches no annotated hook until #6530 lands (below), so it
 would continue past the gate without re-evaluating it.
 
-**A resumed `/gsd-quick` dispatches no annotated hook until #A.** Today `resume <slug>` runs `query
+**A resumed `/gsd-quick` dispatches no annotated hook until #6530.** Today `resume <slug>` runs `query
 init.quick` with no slug (`commands/gsd/quick.md:163-166`), which computes a fresh quick id from the
 clock, so the resumed run does not hold the task's own id. Giving hooks that id, re-evaluating a gate
-that stopped the task, and re-entering at the stopped point are the resume contract, which #A
+that stopped the task, and re-entering at the stopped point are the resume contract, which #6530
 proposes. Until it lands, a run started by `resume <slug>` skips every D2 call site and keeps its
 v1.21.0 path, including the `--context quick-legacy` dispatch for unannotated hooks. `quick.md` tells
 the two apart by the subcommand that started it, which the command already passes.
@@ -254,7 +254,7 @@ returned success and, when isolated, its merge-back succeeded. The annotated `ex
 then runs again, and the verifier runs again, with the annotated `verify:*` hooks around it (from
 increment 2) and `verify:post` only after `passed`. Whether Step 6.25 runs again is unchanged. Each
 pass through a point dispatches that point's annotated hooks again, which the idempotency rule (D4)
-makes safe. #A adds the record that lets a resume tell a finished re-run from an interrupted one.
+makes safe. #6530 adds the record that lets a resume tell a finished re-run from an interrupted one.
 
 Built-in code review is not part of the matrix. It stays a full-mode specialization of `/gsd-quick`,
 runs once, and quick-batch gains none.
@@ -272,10 +272,10 @@ they are passed. A quick id is never passed as a phase number.
 | quick-batch item (`execute:post`, `verify:*`) | `--quick "<quick_id>" --quick-batch "<batch_id>" --quick-modes "<set>"` |
 | quick-batch planning invocation (`plan:pre`) | `--quick-batch "<batch_id>" --planning "<invocation_id>" --quick-modes "<set>"` |
 
-In quick-batch `<set>` is the batch's modes as #C stores them at `create`, the same for every item
+In quick-batch `<set>` is the batch's modes as #6532 stores them at `create`, the same for every item
 and invocation of the batch. A planning invocation's command step gets no `--quick` and no list of
 items: it reads the invocation's membership from `BATCH.json` through the read-only
-`quick-batch planning-members` verb keyed by those two ids (#T3).
+`quick-batch planning-members` verb keyed by those two ids (#6535).
 
 **Skill steps, agent steps, gates and contributions** receive one **quick context** object:
 
@@ -316,7 +316,7 @@ nothing is passed through the environment.
     than one, is a render error with a diagnostic; the `/gsd-quick` call site then stops the task
     as a halting gate would (D2), because hooks that cannot be given their task must not run blind.
 - **In quick-batch, the coordinator.** Dispatch never goes through render (D4), so
-  `quick-batch due-hooks` (#T3) builds it from `BATCH.json`, the stored modes (#C) and the item's or
+  `quick-batch due-hooks` (#6535) builds it from `BATCH.json`, the stored modes (#6532) and the item's or
   the invocation's membership, and returns it as `quickContext` next to the due entries.
 
 **Resolved modes** are the set of `discuss`, `research` and `validate` after quick's flag
@@ -333,7 +333,7 @@ arguments are validated, not interpolated:
 - **Schema 1:** `{ "schema_version": 1, "quick_id", "slug", "batch_id" (or null), "description",
   "description_truncated" }`. `slug` is the task directory's slug, so
   `<planning_root>/quick/<quick_id>-<slug>/` names the directory without a lookup. No field changes
-  after the write. The file holds no modes and no execution record; #A proposes a schema 2 that adds
+  after the write. The file holds no modes and no execution record; #6530 proposes a schema 2 that adds
   them, and its readers keep accepting schema 1.
 - **Size:** `description` holds at most 16 KiB of UTF-8. Longer text is cut at a character boundary
   and `description_truncated` is `true`. Core then also writes the full text, atomically and before
@@ -360,7 +360,7 @@ arguments are validated, not interpolated:
 - **In quick-batch** the coordinator writes the file for an item, with `batch_id` set, when it
   creates the item's task directory (the `generate-slug` derivation `planner-wave.md` already uses),
   before the `plan:pre` hooks of the item's first planning invocation run, and only when the batch's
-  frozen hook set (D4) holds an annotated entry at any cell that applies to the item (#T3).
+  frozen hook set (D4) holds an annotated entry at any cell that applies to the item (#6535).
 - **Untrusted:** hooks treat `description` as untrusted data, never as instructions or shell input.
 - **Committed:** the file, and `DESCRIPTION.md` when there is one, follow the task's other planning
   artifacts. They go into the final commit (`/gsd-quick` Step 8, the batch's `completion.md`
@@ -382,7 +382,7 @@ A hand-made id that fails it is refused before dispatch, like an invalid quick i
 prefix of a wave in one `worktree.cleanup-wave` call, and an entry can fail on its own
 (`quick-batch/steps/merge-wave.md:67-83`). A per-item `execute:post` runs only for an item recorded
 as merged, after that call returns. That record, and the rule that resolves an interrupted merge,
-are #B's. Wave peers may or may not be present in the checkout: those merged in the same call are,
+are #6531's. Wave peers may or may not be present in the checkout: those merged in the same call are,
 later or failed ones are not. A hook must assume neither.
 
 **A hook finds its task's work through the evaluation-scope resolver.** That resolver is
@@ -425,7 +425,7 @@ contract, not a check.
   1,000, `clampMaxCommits`, `src/gate-evaluation-scope.cts:150`, `:1067-1068`) and does not say when
   it cut the list. A quick task stays far below that. A hook that must see every commit asks for the
   ceiling, and treats a list at the cap as possibly incomplete. Core's own records never depend on
-  the resolver (#B's merged record stores a commit it reads from git directly).
+  the resolver (#6531's merged record stores a commit it reads from git directly).
 
 An annotated hook accepts this contract. That is the meaning of listing `"quick"`.
 
@@ -434,16 +434,16 @@ An annotated hook accepts this contract. That is the meaning of listing `"quick"
 quick-batch dispatches hooks from its coordinator through the same shared primitives, never by
 running `/gsd-quick` per item. [ADR-1239](1239-gsd-embeddable-orchestration-engine.md)'s single-writer
 ownership of `BATCH.json`, STATE.md and worktree merges is unchanged. This section decides what a
-hook can rely on in a batch. It relies on two separate proposals, #B and #C, and on the storage
-spec in #T3, the tracker that implements increment 3 once #B and #C have merged:
+hook can rely on in a batch. It relies on two separate proposals, #6531 and #6532, and on the storage
+spec in #6535, the tracker that implements increment 3 once #6531 and #6532 have merged:
 
-- **#B, recovery records:** the merged record that tells the coordinator an item's work is in the
+- **#6531, recovery records:** the merged record that tells the coordinator an item's work is in the
   checkout, the rule that resolves an interrupted merge by ancestry, the persisted verifier status,
   and a `head_revision` that resume checks by ancestry, so a hook's own commit does not make the
   batch unresumable. It introduces `BATCH.json` schema 2.
-- **#C, stored modes:** the batch's modes, stored at `create` and used on every `--resume`, so which
+- **#6532, stored modes:** the batch's modes, stored at `create` and used on every `--resume`, so which
   cells apply to an item and the modes hooks receive cannot change mid-batch.
-- **#T3, storage and verbs:** the field layout, the size limits and the coordinator verbs below,
+- **#6535, storage and verbs:** the field layout, the size limits and the coordinator verbs below,
   under `BATCH.json` schema 3, a version a core without increment 3 refuses as an unknown schema, so
   it can never drop or ignore hook state.
 
@@ -472,7 +472,7 @@ spec in #T3, the tracker that implements increment 3 once #B and #C have merged:
   removed) counts as an error of that hook. A step gets `error` and the host continues. A gate
   follows its `onError`: `error-skipped` under `skip`, `held` under `halt`.
 - **What is scheduled.** For an item or a planning invocation, the scheduled hooks are every frozen
-  entry at the cells that apply to it under the batch's stored modes (#C), active or not. An entry
+  entry at the cells that apply to it under the batch's stored modes (#6532), active or not. An entry
   whose activation was false at freeze is recorded `skipped`, and that outcome is sticky: for an
   item when the set is frozen, for a planning invocation's `plan:pre` entries when the invocation
   is created (its id does not exist before). Activation itself is never re-evaluated.
@@ -480,7 +480,7 @@ spec in #T3, the tracker that implements increment 3 once #B and #C have merged:
   effect. Its resolved fragment is stored with the frozen set and injected into every spawn of the
   target agent, including replacement and revision spawns after a resume. It is never marked done.
 - **It is bounded.** The frozen set and its outcomes live in `BATCH.json`, which `loadBatch` parses
-  with a 1,048,576-character cap (`src/quick-batch.cts:725`). #T3 sets caps at freeze and a guard at
+  with a 1,048,576-character cap (`src/quick-batch.cts:725`). #6535 sets caps at freeze and a guard at
   every write so a batch never outgrows that cap through its own writes, and `create` refuses a batch
   whose worst case would.
 
@@ -507,12 +507,12 @@ invocation and is never replayed.
 - **Per-item order.** The item merges. Then, in manifest order among the items that merged:
   `execute:post` hooks, then with `--validate` `verify:pre`, the verifier and `verify:post`, then
   `quick-batch complete`. With `ISOLATION=none` the merge is skipped and the order is otherwise the
-  same. An item's hooks start only once #B records it as merged; an item routed to `merge_failed`
+  same. An item's hooks start only once #6531 records it as merged; an item routed to `merge_failed`
   was never merged and runs none.
 - **Completion requires the outcomes.** `quick-batch complete` refuses an item, and does not append
   its STATE row, while any scheduled step or gate of it lacks a sticky outcome. The STATE row
-  therefore exists only once its hooks are done. The verifier condition on completion is #C's (it
-  needs the stored modes) on top of #B's verifier status.
+  therefore exists only once its hooks are done. The verifier condition on completion is #6532's (it
+  needs the stored modes) on top of #6531's verifier status.
 - **A held item.** A `held` gate leaves its item `pending` and merged, with its outcome recorded as
   `held`. The rest of the batch continues, and the completion report lists held items with the
   gate's message. The item's dependents stay ineligible, because eligibility needs every dependency
@@ -523,7 +523,7 @@ invocation and is never replayed.
 
 **Planning invocations.** Planners for an invocation spawn only after every `plan:pre` step and gate
 of that invocation has a sticky outcome. A `held` gate holds the invocation and its items unplanned,
-and resume re-evaluates it like any `held` gate. When an item counts as planned is #B's rule (a
+and resume re-evaluates it like any `held` gate. When an item counts as planned is #6531's rule (a
 persisted per-item `planned` mark, set by the `quick-batch update` that records its plan, not the
 presence of a `PLAN.md`). On that basis:
 
@@ -531,7 +531,7 @@ presence of a `PLAN.md`). On that basis:
   planned under a new invocation N+1 with only those items, and its `plan:pre` steps and gates run
   again. This is accepted under the idempotency rule.
 - **Plans that survived.** An item whose `PLAN.md` survived a crash but that is not planned is
-  finished under the same invocation from that `PLAN.md` (#B), without spawning a planner and without
+  finished under the same invocation from that `PLAN.md` (#6531), without spawning a planner and without
   running its `plan:pre` hooks again.
 - **Orphaned outcomes.** Invocation N's outcomes stay valid for its items that were planned, and
   count toward nothing else. An invocation is complete when every item in its membership is planned
@@ -542,7 +542,7 @@ presence of a `PLAN.md`). On that basis:
 **No exactly-once guarantee.** A crash between a hook's side effect and its checkpoint re-runs that
 hook. Annotated steps and gates must be idempotent, and the capability how-to
 (`docs/how-to/develop-a-capability.md`) says so. A hook that commits moves HEAD before its outcome is
-recorded; #B's ancestry rule is what lets the batch resume from that HEAD.
+recorded; #6531's ancestry rule is what lets the batch resume from that HEAD.
 
 **Batches started before increment 3** have no frozen hook set. The first write a core with
 increment 3 makes to one gives it an empty set, so its hooks keep v1.21.0 dispatch, completed items
@@ -656,7 +656,7 @@ The phase hosts keep the existing union check. Converting them to per-host cover
 ## Delivery
 
 Three increments, each its own PR, each tracked by its own issue, which needs its own approval before
-code. Increments 1 and 2 depend on nothing outside this ADR. Increment 3 merges only after #B and #C.
+code. Increments 1 and 2 depend on nothing outside this ADR. Increment 3 merges only after #6531 and #6532.
 
 **The compatibility test comes first.** It is the first commit of increment 1's PR and passes on its
 own against unchanged `next`, before any other commit of that PR. It asserts that an unannotated
@@ -664,7 +664,7 @@ manifest dispatches exactly as v1.21.0 on every quick and quick-batch path and f
 <slug>` included. Increments 2 and 3 merge only with it green on their own head, and it stays in the
 suite afterwards.
 
-1. **The field and `/gsd-quick` `plan:pre` and `execute:post`** (#T1).
+1. **The field and `/gsd-quick` `plan:pre` and `execute:post`** (#6533).
    - Schema and validation: the D1 field shapes, the unsupported-shape error (point, kind and
      contribution target), the floor check, the version table and its parity test against the
      generated contract.
@@ -708,21 +708,21 @@ suite afterwards.
      - installed-overlay composition: an annotated hook that reaches the hosts through an installed
        overlay is scheduled and validated exactly as one in the base manifest, since overlays use
        the same canonical builder (the issue's test list).
-2. **`verify:*` and `discuss:*` in `/gsd-quick`** (#T2). Dispatch in
+2. **`verify:*` and `discuss:*` in `/gsd-quick`** (#6534). Dispatch in
    `quick/steps/quick-verification.md` and `quick/steps/discussion-phase.md`, contribution target
    `orchestrator` only, coverage extended to them, the section-loading process tests and the guard
    text contracts for `--discuss`, `--validate` and `--full` (D5).
-3. **quick-batch** (#T3; after #B and #C).
+3. **quick-batch** (#6535; after #6531 and #6532).
    - The logical `quick-batch` host, with the section-loading test for `init.quick-batch --validate`.
    - Per-invocation `plan:pre` in `planner-wave.md` step 3. Per-item `execute:post` in `merge-wave.md`
      after step 5, and with `ISOLATION=none` in `worktree-dispatch.md`. Per-item `verify:*` in
      `verification-wave.md`. The completion check in `completion.md`. Resume of hook outcomes in
      `resume-mode.md`.
    - The frozen hook set, the outcomes and the planning invocations (D4) under `BATCH.json` schema 3,
-     with the storage layout, the size limits and the coordinator verbs #T3 specifies, and the
+     with the storage layout, the size limits and the coordinator verbs #6535 specifies, and the
      commit-subject rule in the `worktree-dispatch.md` executor prompt.
    - Not in this increment: `batch-init.md` passing `--options`, `init.quick-batch --resume` and the
-     `quick-batch.md` mode variables are #C's delivery; the merge, verifier and HEAD records are #B's.
+     `quick-batch.md` mode variables are #6532's delivery; the merge, verifier and HEAD records are #6531's.
 
 Each increment adds its D2 cells, with their first supported version, to the cell table, so a
 manifest's `engines.gsd` floor can name the version that supports everything it annotates.
@@ -745,9 +745,9 @@ the code that makes it true, not in this ADR's PR.
   legacy quick dispatch stays until a future ADR decides to retire it; this ADR does not.
 - **Negative.** Two dispatch paths coexist in quick (legacy for unannotated hooks, the contract for
   annotated ones), and every quick render call site has to name its context. The matrix is one more
-  thing to keep in step with the workflows. Annotated hooks carry an idempotency obligation. Until #A
+  thing to keep in step with the workflows. Annotated hooks carry an idempotency obligation. Until #6530
   lands, a resumed `/gsd-quick` runs no annotated hook, so a gate stop has no in-place retry. The
-  quick-batch cells wait for #B and #C, and increment 3's schema 3 means an older core cannot resume
+  quick-batch cells wait for #6531 and #6532, and increment 3's schema 3 means an older core cannot resume
   a batch a core with increment 3 has written.
 - **Departures.** Where this differs from the issue's proposal and acceptance criteria is listed in
   Departures from #6178, below.
@@ -774,12 +774,12 @@ maintainer's acceptance:
 5. **`produces`/`consumes` per logical host, not per context** (D5), because the two quick hosts
    share a context but not their points.
 6. **The quick-batch increment depends on two separate proposals.** The issue's third increment
-   holds quick-batch hooks alone. Here increment 3 waits for #B (recovery records) and #C (stored
+   holds quick-batch hooks alone. Here increment 3 waits for #6531 (recovery records) and #6532 (stored
    modes), and it moves batches to `BATCH.json` schema 3, which an older core refuses to resume. The
    issue's breaking-changes assessment says none.
-7. **A resumed `/gsd-quick` runs no annotated hook until #A.** The issue does not address resume.
+7. **A resumed `/gsd-quick` runs no annotated hook until #6530.** The issue does not address resume.
    Its motivating case is met for a task that runs to completion in one pass, not for one stopped
-   and resumed before #A lands.
+   and resumed before #6530 lands.
 8. **`verify:post` runs only after a `passed` verdict.** The issue's matrix runs it "after the
    verifier returns", and its criterion has no passed-only condition. D2 runs it only after
    `passed`, on both hosts, so a hook at `verify:post` never acts on a failed or unresolved
@@ -801,7 +801,7 @@ maintainer's acceptance:
 
 Earlier revisions of this ADR also departed from the issue with frozen batch modes, schema 2 for
 every batch, the HEAD ancestry rule, the "planned once the update persisted" rule and the re-read of
-`human_needed` reports. Those moved with their pieces to #B and #C, which state them as their own
+`human_needed` reports. Those moved with their pieces to #6531 and #6532, which state them as their own
 proposals.
 
 ## Alternatives considered
@@ -837,6 +837,6 @@ proposals.
   `quick-legacy`), the `quickContext` envelope key and the quick context object's keys, the
   `gsd:quick-cell` marker and the `QUICK_HOST_CONTRACT` export (D5), and the `quick-tasks-task-json`
   verb (D3) are contract surface too. Each should be settled before the increment that introduces it
-  merges, since each one is a stability contract. The quick-batch verb names are #T3's.
+  merges, since each one is a stability contract. The quick-batch verb names are #6535's.
 - **`fast`.** `/gsd-fast` runs inline with no hooks at all. Whether it becomes a third context is left
   to a later issue.
