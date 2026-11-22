@@ -85,8 +85,8 @@ function withBothStateLocks<T>(dirA: string, dirB: string, fn: () => T): T {
 /**
  * The error a failed move reports: the cause, and any entry the rollback could not return. A
  * destination directory still there with every entry returned (for example the release of this
- * process's own lock failed, so the lock file is left in it; pre-push review R4-m3) is named, with
- * any parent the command created that it keeps.
+ * process's own lock failed, so the lock file is left in it; pre-push review R4-m3) is named, and
+ * for a failed migrate .planning/workstreams too, whose presence refuses a retry.
  */
 function moveFailure(cause: unknown, notReturned: string[], leftIn: string, dirsLeft: string[]): Error {
   const message = cause instanceof Error ? cause.message : String(cause);
