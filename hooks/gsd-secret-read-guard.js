@@ -1172,6 +1172,9 @@ function quoteExcerpt(str, i) {
 let heredocBodiesSkippedInSpans = true;
 let heredocTagsAsWords = true;
 let heredocBraceTags = true;
+//  - heredocJoinsLines: in an unquoted body bash joins a line ending in an odd run of `\` to the next before it looks
+//    for the tag, so `x\` then `EOF` is body (second security review of #6408). Off is the reading before it.
+let heredocJoinsLines = false;
 let braceTagRead = false;
 let inHeredocPass = false;
 
@@ -1463,19 +1466,28 @@ function consumeHeredocBodies(str, i, tags) {
   for (const t of tags) {
     let body = '';
     let terminated = false;
+    let joinsNext = false;
     while (i < str.length) {
       const nl = str.indexOf('\n', i);
       const lineEnd = nl === -1 ? str.length : nl;
       const line = str.slice(i, lineEnd);
       i = nl === -1 ? str.length : nl + 1;
       const probe = t.stripTabs ? line.replace(/^\t+/, '') : line;
-      if (probe === t.tag) { terminated = true; break; }
+      if (probe === t.tag && !joinsNext) { terminated = true; break; }
       body += line + '\n';
+      if (heredocJoinsLines && !t.quoted) joinsNext = oddTrailingBackslashes(line);
     }
     bodies.push({ body, quoted: t.quoted, seg: t.seg });
     if (!terminated) break;
   }
   return { bodies, end: i };
+}
+
+// Whether `line` ends in an odd run of backslashes, so its last one escapes the newline after it.
+function oddTrailingBackslashes(line) {
+  let n = 0;
+  while (n < line.length && line[line.length - 1 - n] === '\\') n++;
+  return n % 2 === 1;
 }
 
 // `$( )` and backtick spans inside an unquoted heredoc body.
@@ -2424,10 +2436,11 @@ function precedingOp(s, bySeg, sepAfter) {
 // read the earlier way as well: that test is the flag, not the text, because a body can
 // spell its `<<` so that only the nested scan sees it (`eval ': <''<} …'`).
 function findSecretReadUnderOtherReadings(command) {
-  const scanUnder = (bodiesSkipped, tagsAsWords, braceTags) => {
+  const scanUnder = (bodiesSkipped, tagsAsWords, braceTags, joinsLines = false) => {
     heredocBodiesSkippedInSpans = bodiesSkipped;
     heredocTagsAsWords = tagsAsWords;
     heredocBraceTags = braceTags;
+    heredocJoinsLines = joinsLines;
     inHeredocPass = true;
     try {
       return findSecretRead(command, 0);
@@ -2435,10 +2448,13 @@ function findSecretReadUnderOtherReadings(command) {
       heredocBodiesSkippedInSpans = true;
       heredocTagsAsWords = true;
       heredocBraceTags = true;
+      heredocJoinsLines = false;
       inHeredocPass = false;
     }
   };
-  const hit = command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true) : null;
+  // A body line ending in `\` can only change where a body ends when the command holds a `\<newline>`.
+  const hit = command.includes('<<') ? scanUnder(false, true, true) || scanUnder(true, false, true)
+    || (command.includes('\\\n') ? scanUnder(true, true, true, true) : null) : null;
   if (hit || !braceTagRead) return hit;
   return scanUnder(true, true, false) || scanUnder(false, true, false);
 }
@@ -2937,7 +2953,17 @@ function rereadsText(heads, bases = DEFINING_BASES) {
     && (bases.has(head.cmd.base) || (head.cmd.base === 'builtin' && head.cmd.operands.length > 0
       && bases.has(head.cmd.operands[0].text))))));
 }
-const SOURCING_BASES = new Set(['source', '.', 'eval']);
+const SOURCING_BASES = new Set(['source', '.', 'eval', 'trap']);
+
+// Whether a mapfile or readarray at a command's place (also behind `builtin`) has a `-C` callback, which runs text the
+// guard does not see as it reads (second security review of #6408).
+function runsMapfileCallback(heads) {
+  return heads.some((head) => {
+    if (head === null || head.cmd === null) return false;
+    const words = head.cmd.base === 'builtin' ? head.cmd.operands.map((w) => w.text) : [head.cmd.base, ...head.cmd.operands.map((w) => w.text)];
+    return (words[0] === 'mapfile' || words[0] === 'readarray') && words.slice(1).some((w) => /^-[A-Za-z]*C/.test(w));
+  });
+}
 
 // #6282: where in `command` the first word the guard does not see may come from, or -1 for nowhere: an expansion
 // outside single quotes, which keep a `$` literal (`grep '$HOME'`). 0, the whole command, unless the text is plain
@@ -3071,8 +3097,9 @@ function scanSegments(command, depth, reading, unseenAt, joined) {
   const rereads = rereadsText(heads);
   // A file that source or `.` runs is text the guard does not see, which may set a parsing variable with no `$` in
   // the command (`. ./x.sh; grep .env y`, #6408 Minor 1); so may one an eval's text sources, and the eval body's own
-  // scan cannot hand its withdrawal back to this one (`eval '. ./x.sh'; grep .env y`).
-  if (unseenAt !== 0 && (rereadsText(heads, SOURCING_BASES) || setsParsingWords(heads, bySeg, maxSeg, rereads ? joined : null)
+  // scan cannot hand its withdrawal back to this one (`eval '. ./x.sh'; grep .env y`); and so may a trap's or a mapfile
+  // callback's text, which run before the search with no `$` either (`trap '. ./x.sh' DEBUG`).
+  if (unseenAt !== 0 && (rereadsText(heads, SOURCING_BASES) || runsMapfileCallback(heads) || setsParsingWords(heads, bySeg, maxSeg, rereads ? joined : null)
     || ((unseenAt > 0 || unseenAt === LITERAL_DOLLAR_ONLY) && runsWordsAgain(heads, tokens)))) {
     unseenAt = 0;
     noSearchCarveOut = true;
@@ -3426,23 +3453,26 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   }
   // With no text to fill it from, a holder whose text before the replace string names a protected file or the start
   // of one may become one (`ls -A | xargs -I{} cat .env{}`).
-  if (stdin.texts.length === 0 && replaceStr !== null && !subIsShell) {
-    const holders = subOperands.filter((w) => w.text.includes(replaceStr));
-    chargeScan(holders.reduce((n, w) => n + w.text.length + XARGS_WORD_WORK, 0) * NAME_FRAGMENTS.length);
-    const holder = holders.find((w) => startsSecretName(w.text.split(replaceStr)[0]) || completesSecretName(w.text, replaceStr));
-    if (holder) return { code: 'xargs-input-unseen', text: holder.text };
-  }
-  // The same for a shell's `-c` script holding the replace string (#6408 Nit 1): the script filled with each piece of
-  // a protected name is scanned as the script it becomes (`sh -c 'cat {}nv'` filled with `.e`).
-  if (stdin.texts.length === 0 && replaceStr !== null && replaceStr !== '' && subIsShell) {
+  const holderHit = () => {
+    if (replaceStr === null) return null;
+    if (!subIsShell) {
+      const holders = subOperands.filter((w) => w.text.includes(replaceStr));
+      chargeScan(holders.reduce((n, w) => n + w.text.length + XARGS_WORD_WORK, 0) * NAME_FRAGMENTS.length);
+      const holder = holders.find((w) => startsSecretName(w.text.split(replaceStr)[0]) || completesSecretName(w.text, replaceStr));
+      return holder ? { code: 'xargs-input-unseen', text: holder.text } : null;
+    }
+    // The same for a shell's `-c` script holding the replace string (#6408 Nit 1): the script filled with each piece
+    // of a protected name is scanned as the script it becomes (`sh -c 'cat {}nv'` filled with `.e`).
     const cIdx = subOperands.findIndex((w) => DASH_C_RE.test(w.text));
     const script = cIdx === -1 ? undefined : subOperands[cIdx + 1];
-    if (script && script.text.includes(replaceStr)) {
-      chargeScan(NAME_FRAGMENTS.length * (script.text.length + XARGS_WORD_WORK));
-      if (scanXargsShellScripts(subOperands, replaceStr, NAME_FRAGMENTS.map((text) => ({ text })), depth)) {
-        return { code: 'xargs-input-unseen', text: script.text };
-      }
-    }
+    if (replaceStr === '' || !script || !script.text.includes(replaceStr)) return null;
+    chargeScan(NAME_FRAGMENTS.length * (script.text.length + XARGS_WORD_WORK));
+    const hit = scanXargsShellScripts(subOperands, replaceStr, NAME_FRAGMENTS.map((text) => ({ text })), depth);
+    return hit ? { code: 'xargs-input-unseen', text: script.text } : null;
+  };
+  if (stdin.texts.length === 0) {
+    const held = holderHit();
+    if (held) return held;
   }
   // The words of a here-string, heredoc or knowable pipe source, as xargs may split them.
   const stdinWords = xargsStdinWords(stdin.texts, split);
@@ -3455,21 +3485,25 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
   }
   // A compound's joined output the guard may have missed (#6408 Major 1) is unseen, but only where every check above
   // and below finds nothing, so a command its flat texts or upstream operands block stays blocked.
-  const unjoined = () => {
+  // A stdin with text the guard shows may also hold a stage's it cannot know (`{ echo x; ls -A; }`), so the holders
+  // are filled with name pieces here too, after every check that blocked before (second security review).
+  const lastChecks = () => {
+    const held = stdin.texts.length > 0 ? holderHit() : null;
+    if (held) return held;
     if (!stdin.unjoined || !xargsSubTakesWords(subIsShell, subOperands, replaceStr)) return null;
     for (const w of operands.slice(0, subIdx)) if (operandNamesSecret(w.text)) return secretRead(w.text);
     return { code: 'xargs-input-unseen', text: stdin.unjoined };
   };
 
   const { op, prevSeg } = precedingOp(s, bySeg, sepAfter);
-  if (op !== '|' && op !== '|&') return unjoined();
-  if (prevSeg < 0) return unjoined();
+  if (op !== '|' && op !== '|&') return lastChecks();
+  if (prevSeg < 0) return lastChecks();
 
   // Every upstream operand is a candidate file name — the NON_READING
   // exemption is bypassed for it, but the `.env.example|…` suffix exemption in
   // isSecretBasename still holds.
   const prevCmd = resolveCommand((bySeg.get(prevSeg) || []).filter((t) => t.kind === 'word'));
-  if (!prevCmd) return unjoined();
+  if (!prevCmd) return lastChecks();
   if (subIsShell) {
     // The shell's script comes from xargs itself: `… | xargs sh -c` runs each piped word (quote-removed) as the
     // script, and `xargs -I{} sh -c 'cat {}'` runs the script with the word substituted for `{}`.
@@ -3485,7 +3519,7 @@ function scanXargsPipe(operands, s, bySeg, sepAfter, depth, reading) {
     const received = xargsUnquoted(w.text);
     if (received !== w.text && operandNamesSecret(received)) return secretRead(w.text);
   }
-  return unjoined();
+  return lastChecks();
 }
 
 // Whether filling every replace string in `text` with one piece of a protected name (`.`, `.e`, `nv`, …, or one led
@@ -3702,12 +3736,25 @@ function compoundOutput(range, ctx) {
 // .e; printf %s nv; }` writes `.env`). The texts its stages may write in order, each echo ending its line, joined with
 // nothing and with a newline, one text per choice of each stage's texts; a stage that pipes on, or redirects its
 // output to a known other place, writes none of it. `unjoined` names why the join may miss what is written: a stage
-// that may be skipped (`&&`, `||`, a conditional or a loop word from the range's start), a `&`, a redirect that may
-// still be stdout, a group whose redirect or pipe may take its output, or more choices than MAX_JOINED_TEXTS. The flat texts stay; scanXargsPipe treats `unjoined` as unseen only after them.
+// that may be skipped (`&&`, `||`, a conditional or a loop word from the range's start), a loop or an `exec` at all,
+// a `&`, a redirect that may still reach the pipe, a group whose redirect or pipe may take its output, or more choices
+// than MAX_JOINED_TEXTS. The flat texts stay; scanXargsPipe treats `unjoined` as unseen only after them.
 const MAX_JOINED_TEXTS = 64;
 const STDOUT_REDIRECT_RE = /^(?:1?>[>|]?|&>>?|1?>&.*)$/;
 const MAY_SKIP_WORDS = new Set([...OPENING_WORDS, ...CLOSING_WORDS, 'then', 'else', 'elif', 'do']);
+const LOOP_WORDS = new Set(['for', 'while', 'until', 'select', 'do', 'done']);
 function sequenceJoins(range, ctx, staged) {
+  if (staged.length === 0) return null;
+  // However many stages write (second security review): a loop may write one stage's text more than once
+  // (`for i in 1 2; do printf 'nv\n.e'; done`), and an `exec` may move stdout for the stages after it.
+  for (let k = range.from; k <= range.to; k++) {
+    const words = commandWords(ctx.bySeg.get(k) || []);
+    if (execReach(words) !== null) return { texts: [], unjoined: 'exec' };
+    for (const w of words) {
+      if (LOOP_WORDS.has(w.text)) return { texts: [], unjoined: w.text };
+      if (!LEADING_RESERVED.has(w.text)) break;
+    }
+  }
   if (staged.length < 2) return null;
   const pieces = [];
   for (const piece of staged) {
@@ -3751,18 +3798,24 @@ function sequenceJoins(range, ctx, staged) {
   return { texts: combos.flatMap((combo) => [combo.join(''), combo.join('\n')]), unjoined: null };
 }
 
-// Where a stage's stdout redirects send it: null for none, 'away' when every one goes to a known other place (a file,
-// /dev/null, `>&2`, `>&-`), 'unsure' when one may still be stdout (`/dev/stdout`, `/dev/fd/1`, `>&1`, an expansion).
-const STDOUT_PATHS = new Set(['/dev/stdout', '/dev/fd/1', '/proc/self/fd/1']);
+// Where a stage's stdout redirects send it: null for none, 'away' when every one goes to a known other place, 'unsure'
+// when one may still reach the pipe. Only a plain file path, exactly /dev/null, and `>&-` are away: a descriptor
+// (`>&2`, `>&3`) may lead back through a group's `2>&1`, a `|&` or an `exec 3>&1`, and any other /dev or /proc path
+// (`/dev/./stdout`, `//dev/stderr`), a glob or an expansion may be stdout (second security review of #6408).
 function stdoutGoes(segTokens) {
   let away = null;
   for (let k = 0; k < segTokens.length; k++) {
     const t = segTokens[k];
     if (t.kind !== 'op' || t.read || !STDOUT_REDIRECT_RE.test(t.text)) continue;
-    const dup = /^1?>&(.+)$/.exec(t.text);
-    const target = dup || !segTokens[k + 1] || segTokens[k + 1].kind !== 'word' ? null : segTokens[k + 1];
-    const text = dup ? dup[1] : target && target.text;
-    if (!text || text === '1' || STDOUT_PATHS.has(text) || EXPANDS_RE.test(text) || (target && expands(target))) return 'unsure';
+    const dup = /^1?>&(.*)$/.exec(t.text);
+    if (dup && dup[1] !== '') {
+      if (dup[1] !== '-') return 'unsure';
+      away = 'away';
+      continue;
+    }
+    const target = segTokens[k + 1] && segTokens[k + 1].kind === 'word' ? segTokens[k + 1] : null;
+    if (target === null || expands(target) || /^\d+$|[*?[]/.test(target.text)) return 'unsure';
+    if (target.text !== '/dev/null' && target.text.split('/').some((p) => p === 'dev' || p === 'proc')) return 'unsure';
     away = 'away';
   }
   return away;
