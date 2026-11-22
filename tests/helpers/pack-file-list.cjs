@@ -64,7 +64,7 @@ function listPackedFiles(root) {
   if (!Array.isArray(manifest.files) || !manifest.files.every((f) => typeof f === 'string')) {
     throw new Error(`${root}: package.json has no files array of strings; this list needs one`);
   }
-  for (const key of ['browser', 'bundleDependencies', 'bundledDependencies', 'workspaces']) {
+  for (const key of ['browser', 'bundleDependencies', 'bundledDependencies', 'workspaces', 'directories']) {
     if (manifest[key] !== undefined) throw new Error(`${root}: package.json sets "${key}", which this list does not model`);
   }
   const seen = new Set();
@@ -249,6 +249,12 @@ function listPackedFiles(root) {
   for (const entry of positive) {
     if (entry.includes('/') && entry.split('/').some((s) => lower(s) === 'node_modules')) {
       throw new Error(`${path.join(root, entry)}: a files entry inside a nested node_modules directory; this list does not model bundled dependencies`);
+    }
+    // npm's package.json rules come after the root defaults, so a nested entry under a root directory a default matches
+    // is packed; only /.git and /node_modules are strict rules that still prune it.
+    const firstSegment = entry.split('/')[0];
+    if (entry.includes('/') && lower(firstSegment) !== '.git' && isExcludedName(firstSegment, firstSegment)) {
+      throw new Error(`${path.join(root, entry)}: an entry under a root directory a default exclusion matches; this list does not model that`);
     }
     assertPlainAncestors(entry);
     let stat;

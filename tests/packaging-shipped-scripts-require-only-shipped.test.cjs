@@ -596,6 +596,15 @@ describe('#6498 listPackedFiles reads the tree instead of spawning npm', () => {
     });
   });
 
+  test('a nested entry under a root directory a default matches, and a directories key, throw', () => {
+    for (const entry of ['.hg/foo', 'x.orig/sub', 'archived-packages/x', 'CVS/y', '._d/sub', 'npm-debug.log/x']) {
+      planted({ files: [entry] }, [`${entry}/a.js`], (tmp) => assert.throws(() => listPackedFiles(tmp), /under a root directory a default exclusion matches/));
+    }
+    planted({ files: ['hooks'], directories: { bin: 'tools' } }, ['tools/t.js'], (tmp) => {
+      assert.throws(() => listPackedFiles(tmp), /"directories", which this list does not model/);
+    });
+  });
+
   test('a root COPYING file ships without a files entry', () => {
     planted({ files: ['hooks'] }, ['COPYING', 'COPYING.txt', 'copying-notes'], (tmp) => {
       assert.deepEqual(sorted(listPackedFiles(tmp)), ['COPYING', 'COPYING.txt', 'package.json']);
