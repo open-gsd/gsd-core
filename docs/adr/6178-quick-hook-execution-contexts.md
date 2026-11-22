@@ -389,7 +389,7 @@ later or failed ones are not. A hook must assume neither.
 `check evaluation-scope --quick "<quick_id>"`, [ADR-5057](5057-one-owner-per-workflow-verdict.md) §4,
 the one `/gsd-quick` Step 6.25 already uses (`quick.md:602`). It returns the commits on the current
 branch whose message contains the quick id (a fixed-string `git log --grep`,
-`src/gate-evaluation-scope.cts:1246`). A hook never derives a commit range, a `BATCH.json` commit or
+`src/gate-evaluation-scope.cts:1258`). A hook never derives a commit range, a `BATCH.json` commit or
 the working-tree diff on its own. In core, `scripts/lint-evaluation-scope-drift.cjs` already fails CI
 on such derivations in the gate modules, workflows and agents it scans (its shapes S1 to S5,
 including a shell `git log --grep`). A third-party hook is outside that scan, so for it this is the
@@ -418,11 +418,11 @@ contract, not a check.
   does not rest on it. A `resolved` result with no commits to evaluate means nothing to evaluate,
   never a failure, whatever its reason: `no-matching-commits` (no commit names the task),
   `merge-only` (only merge commits do) or `empty-after-exclusions` (the matched commits touch only
-  excluded paths) (`src/gate-evaluation-scope.cts:1299-1300`). An `unresolvable` result (exit 69,
+  excluded paths) (`src/gate-evaluation-scope.cts:1311-1312`). An `unresolvable` result (exit 69,
   which `quick.md:603` already tolerates) is an error of that hook: a step gets `error` and the host
   continues, and a gate follows its `onError`.
 - **The list is capped.** The resolver returns at most `--max-commits` commits (default 200, ceiling
-  1,000, `clampMaxCommits`, `src/gate-evaluation-scope.cts:150`, `:1055-1056`) and does not say when
+  1,000, `clampMaxCommits`, `src/gate-evaluation-scope.cts:150`, `:1067-1068`) and does not say when
   it cut the list. A quick task stays far below that. A hook that must see every commit asks for the
   ceiling, and treats a list at the cap as possibly incomplete. Core's own records never depend on
   the resolver (#B's merged record stores a commit it reads from git directly).
