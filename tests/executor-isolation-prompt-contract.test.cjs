@@ -48,7 +48,10 @@ test('#3637: the executor prompt carries the required-reading contract with the 
   assert.match(body, /\{phase_dir\}\/\{plan_file\}/, 'the prompt must name the explicit plan path');
   // #5861: required reading names the scope-resolved placeholders, not root `.planning/` literals
   assert.match(body, /\{project_rel\}/, 'project context is required reading');
-  assert.match(body, /\{state_rel\}/, 'state is required reading');
+  // #6388: STATE.md is no longer required reading — the executor loads only the sections it uses.
+  const requiredReading = body.slice(body.indexOf('<required_reading>'), body.indexOf('</required_reading>'));
+  assert.doesNotMatch(requiredReading, /\{state_rel\}|STATE\.md/, 'state is not required reading (#6388)');
+  assert.doesNotMatch(body, /\{state_rel\}/, 'no {state_rel} placeholder is left to substitute (#6388)');
   assert.match(body, /\{config_rel\}/, 'config is required reading');
   assert.doesNotMatch(body, /\.planning\/(?:PROJECT|STATE)\.md|\.planning\/config\.json/, 'no root .planning/ literal in required reading');
 });
