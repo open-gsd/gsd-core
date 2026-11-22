@@ -1267,6 +1267,8 @@ describe('#5120: frontmatter set/merge on a STATE.md target take the STATE.md lo
     });
 
     test(`${cmd} reads STATE.md non-blocking and without following a link while it holds the lock (pre-push review R5-m6)`, (t) => {
+      // Where the platform has no O_NONBLOCK or O_NOFOLLOW (win32), the seam opens without them.
+      if (fs.constants.O_NONBLOCK === undefined || fs.constants.O_NOFOLLOW === undefined) { assert.equal(fs.constants.O_NONBLOCK ?? fs.constants.O_NOFOLLOW, undefined); t.skip('no O_NONBLOCK or O_NOFOLLOW on this platform'); return; }
       const dir = planningWith(t, { 'STATE.md': DOC });
       const state = path.join(dir, 'STATE.md');
       const lock = `${state}.lock`;

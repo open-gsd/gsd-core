@@ -810,6 +810,8 @@ describe('roadmap upgrade writes through the planning seams (#5217)', () => {
   // #5120 pre-push review R4-m2: the rollback reads STATE.md under its lock through the non-blocking
   // seam, so a FIFO swapped in at STATE.md fails at once instead of blocking with the lock held.
   test('the rollback opens STATE.md non-blocking while it holds the STATE.md lock', (t) => {
+    // Where the platform has no O_NONBLOCK (win32), the seam opens without it; nothing to pin there.
+    if (fs.constants.O_NONBLOCK === undefined) { assert.equal(fs.constants.O_NONBLOCK, undefined); t.skip('no O_NONBLOCK on this platform'); return; }
     const dir = setup('m13-state-nonblocking-', ROADMAP);
     t.after(() => cleanup(dir));
     const state = path.join(dir, '.planning', 'STATE.md');
