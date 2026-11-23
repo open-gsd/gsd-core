@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { cleanup, captureFdSync } = require('./helpers.cjs');
+const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 /**
  * A `config-get` CLI call with a deliberately pathological 50KB key,
@@ -1887,7 +1888,7 @@ describe('#6029 acceptance: /gsd-code-review resolve_depth in a project with no 
   afterEach(() => cleanup(tmp));
 
   test("real CLI: query config-get workflow.code_review_depth_overrides --default '[]' feeds the resolver an array", () => {
-    const r = runGsdTools(['query', 'config-get', 'workflow.code_review_depth_overrides', '--default', '[]'], tmp, { HOME: tmp });
+    const r = runGsdTools(['query', 'config-get', 'workflow.code_review_depth_overrides', '--default', '[]'], tmp, isolatedEnv({ home: tmp }));
     assert.equal(r.success, true, r.error);
     const overrides = JSON.parse(r.output);
     assert.ok(Array.isArray(overrides), `expected an array, got ${JSON.stringify(overrides)}`);
