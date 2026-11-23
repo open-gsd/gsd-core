@@ -613,6 +613,30 @@ function globalDefaultsPath(home: string = resolveGsdHome()): string {
 }
 
 /**
+ * The one place that names a project's own `config.json` (ADR-1411 Decision 5, #6032): the file
+ * the active workstream or project owns. `ws` selects a workstream the way `planningDir` does; omit
+ * it for the environment's. Readers, probes and pre-write checks take the path from here, so
+ * `local/no-adhoc-config-merge` can flag any other construction of it.
+ */
+function projectConfigPath(cwd: string, ws?: string | null): string {
+  return path.join(planningDir(cwd, ws), 'config.json');
+}
+
+/** The flat root `config.json` a workstream inherits from (the loader's second project layer). */
+function rootConfigPath(cwd: string): string {
+  return path.join(planningRoot(cwd), 'config.json');
+}
+
+/**
+ * A Claude Code settings file inside one `.claude` directory (project or user). `local` is the
+ * gitignored `settings.local.json`; the default is the shared `settings.json`. The one place that
+ * names these files besides the resolver's family-B ladder (#6032).
+ */
+function claudeSettingsPath(claudeDir: string, kind: 'shared' | 'local' = 'shared'): string {
+  return path.join(claudeDir, kind === 'local' ? 'settings.local.json' : 'settings.json');
+}
+
+/**
  * Does the global defaults file supply this dotted key at runtime? The same set the loader merges
  * (GLOBAL_DEFAULTS_RESOLUTION_KEYS and the spellings it reads for them). Everything else, the whole
  * `git.*` namespace included, is project-scoped and never resolves from the global file. A reader
@@ -1456,6 +1480,9 @@ export = {
   resolvePlannerStallDetectionEnabled,
   _deepMergeConfig,
   globalDefaultsPath,
+  projectConfigPath,
+  rootConfigPath,
+  claudeSettingsPath,
   honorsGlobalDefaults,
   _warnedUnknownConfigKeys,
   GLOBAL_DEFAULTS_RESOLUTION_KEYS,

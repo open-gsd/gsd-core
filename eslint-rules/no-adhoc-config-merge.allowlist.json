@@ -1,0 +1,8 @@
+{
+  "resolverInternal": [
+    "src/config-value-resolver.cts",
+    "src/config-loader.cts",
+    "hooks/lib/config-read.js"
+  ],
+  "temporary": []
+}
