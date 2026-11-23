@@ -35,9 +35,9 @@ const GENERIC_ROUTES = [
   ['| `/gsd:capture` |', 'note capture'],
 ];
 
-// The first `description:` value of a command file (the test read it with the same unanchored pattern).
+// The `description:` value of a command file's frontmatter (the test searched the whole file for the first one).
 const descriptionOf = (text) => {
-  const match = /description:\s{0,20}([^\n]{1,2000})/.exec(text);
+  const match = /^description:\s{0,20}([^\n]{1,2000})/m.exec(text);
   return match ? match[1] : '';
 };
 
@@ -83,12 +83,12 @@ module.exports = {
       .has(/freeform task description|freeform description/i, 'the dispatch step must carve out commands that explicitly accept a freeform task description');
 
     // The command descriptions distinguish SDD execution from multi-phase coordination.
-    ctx.doc('commands/gsd/execute-phase.md')
+    ctx.doc('commands/gsd/execute-phase.md').frontmatter()
       .satisfies((text) => /SDD|spec-driven|specification-driven/i.test(descriptionOf(text)) || `got: "${descriptionOf(text)}"`,
         'the execute-phase description must name SDD or spec-driven execution')
       .satisfies((text) => /wave|parallel|dependency/i.test(descriptionOf(text)) || `got: "${descriptionOf(text)}"`,
         'the execute-phase description must name wave, parallel or dependency-aware execution');
-    ctx.doc('commands/gsd/phase.md')
+    ctx.doc('commands/gsd/phase.md').frontmatter()
       .satisfies((text) => /multi-phase|phase management|add, insert, remove, or edit phases/i.test(descriptionOf(text)) || `got: "${descriptionOf(text)}"`,
         'the phase description must name multi-phase management');
 

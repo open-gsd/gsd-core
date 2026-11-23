@@ -17,17 +17,15 @@ const stepsOf = (job) => (Array.isArray(job.steps) ? job.steps.filter(isObject) 
 const dependsOn = (job, name) => (Array.isArray(job.needs) ? job.needs.includes(name) : job.needs === name);
 
 // The jobs mapping of release.yml, or the reason it cannot be read.
-function withJobs(check) {
-  return (text) => {
-    let workflow;
-    try {
-      workflow = require('js-yaml').load(text);
-    } catch (err) {
-      return `release.yml is not valid YAML: ${err.message}`;
-    }
-    if (!isObject(workflow) || !isObject(workflow.jobs)) return 'release.yml has no jobs mapping';
-    return check(workflow.jobs);
-  };
+function readJobs(text) {
+  let workflow;
+  try {
+    workflow = require('js-yaml').load(text);
+  } catch (err) {
+    return { error: `release.yml is not valid YAML: ${err.message}` };
+  }
+  if (!isObject(workflow) || !isObject(workflow.jobs)) return { error: 'release.yml has no jobs mapping' };
+  return { jobs: workflow.jobs };
 }
 
 module.exports = {
@@ -36,6 +34,16 @@ module.exports = {
   check(ctx) {
     const { isCompleteShardSet } = require('../../../tests/helpers/shard-spec.cjs');
     const workflow = ctx.doc(WORKFLOW);
+    // A workflow that cannot be read is one finding; the lane checks below need its jobs mapping.
+    let loadedJobs = null;
+    workflow.satisfies((text) => {
+      const read = readJobs(text);
+      if (read.error) return read.error;
+      loadedJobs = read.jobs;
+      return true;
+    }, 'release.yml must be a workflow with a jobs mapping');
+    if (loadedJobs === null) return;
+    const withJobs = (check) => () => check(loadedJobs);
     for (const lane of LANES) {
       workflow
         .satisfies(withJobs((jobs) => {

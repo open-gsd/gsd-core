@@ -16,7 +16,7 @@ const DOC = 'gsd-core/references/edge-probe.md';
 const FIXTURES = 'gsd-core/references/edge-probe-fixtures';
 const ADR = 'docs/adr/550-spec-phase-probe-contract.md';
 const SPEC_TEMPLATE = 'gsd-core/templates/spec.md';
-const TAG = /^json edge-probe:([^\r\n]{1,500})$/;
+const TAG_PREFIX = 'json edge-probe:';
 const PLAIN_REF = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/;
 const isDotSegment = (segment) => segment === '.' || segment === '..';
 
@@ -27,9 +27,9 @@ function taggedJsonBlocks(markdown) {
   const out = [];
   for (const block of scanFencedBlocks(lines)) {
     if (block.closeLineIdx === -1) continue;
-    const tag = TAG.exec(block.infoString || '');
-    if (!tag) continue;
-    out.push([tag[1].trim(), lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n')]);
+    const info = block.infoString || '';
+    if (!info.startsWith(TAG_PREFIX)) continue;
+    out.push([info.slice(TAG_PREFIX.length).trim(),lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n')]);
   }
   return out;
 }
@@ -48,6 +48,15 @@ module.exports = {
     doc.satisfies(() => blocks.length === expected.length
       || `the doc embeds ${blocks.length} tagged blocks, the fixtures carry ${expected.length}`,
     'the doc must embed one tagged fixture block for every expected-coverage.json fixture (count equality)');
+    // The set of tagged refs must be the set of fixtures: a retagged block keeps the count but leaves a fixture unchecked.
+    const expectedRefs = new Set(expected.map((rel) => rel.slice(FIXTURES.length + 1)));
+    const taggedRefs = new Set(blocks.map(([ref]) => ref));
+    for (const ref of expectedRefs) {
+      if (!taggedRefs.has(ref)) ctx.fail(DOC, `no tagged block embeds the fixture "${ref}"`);
+    }
+    for (const ref of taggedRefs) {
+      if (!expectedRefs.has(ref)) ctx.fail(DOC, `the tag "${ref}" names no expected-coverage.json fixture`);
+    }
 
     const seen = new Set();
     for (const [ref, body] of blocks) {

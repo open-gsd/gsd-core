@@ -445,7 +445,10 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
   const findsOne = (title, rel, edit, contract, expected) => test(title, (t) => {
     const root = copyOfRepoFiles(t);
     const abs = path.join(root, ...rel.split('/'));
-    fs.writeFileSync(abs, edit(fs.readFileSync(abs, 'utf8')));
+    const before = fs.readFileSync(abs, 'utf8');
+    const after = edit(before);
+    assert.notEqual(after, before, 'the edit changed the file');
+    fs.writeFileSync(abs, after);
     const findings = runShipped(root, [contract]);
     assert.equal(findings.length, 1, JSON.stringify(findings));
     // A string is matched literally (no regex is built from data); a RegExp is matched as given.
@@ -620,10 +623,6 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['Evidence gone from the reference', 'gsd-core/references/debugger-sbfl.md', erase(/evidence/gi), 'debugger-sbfl', /the reference must document that the ranking lands in the Evidence section/],
         ['every determinism wording gone from the reference', 'gsd-core/references/debugger-sbfl.md', erase(/bohrbug|deterministic|flaky|heisenbug|mandelbug/gi), 'debugger-sbfl', /the reference must note SBFL suits deterministic bugs/],
         // release-shard-lane-sharding
-        ['release.yml that is not YAML', '.github/workflows/release.yml', () => '{{{', 'release-shard-lane-sharding', /release\.yml is not valid YAML/],
-        ['release.yml that is a sequence', '.github/workflows/release.yml', () => '- a\n- b\n', 'release-shard-lane-sharding', /release\.yml has no jobs mapping/],
-        ['release.yml with no jobs', '.github/workflows/release.yml', () => 'name: x\n', 'release-shard-lane-sharding', /release\.yml has no jobs mapping/],
-        ['release.yml with a null jobs value', '.github/workflows/release.yml', () => 'jobs:\n', 'release-shard-lane-sharding', /release\.yml has no jobs mapping/],
         ['rc: a numerator missing from the shard set', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['rc-test'].strategy.matrix.shard = ['1/3', '2/3']; }), 'release-shard-lane-sharding', /are not a complete set/],
         ['rc: a duplicated numerator in the shard set', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['rc-test'].strategy.matrix.shard = ['1/3', '2/3', '2/3']; }), 'release-shard-lane-sharding', /are not a complete set/],
         ['rc: mixed denominators in the shard set', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['rc-test'].strategy.matrix.shard = ['1/3', '2/3', '3/4']; }), 'release-shard-lane-sharding', /are not a complete set/],
@@ -665,9 +664,6 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['finalize: the final job no longer needs the coverage gate', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['finalize'].needs = ['validate-version']; }), 'release-shard-lane-sharding', /finalize does not depend on finalize-coverage-gate/],
         ['finalize: the final job removed', '.github/workflows/release.yml', yamlEdit((w) => { delete w.jobs['finalize']; }), 'release-shard-lane-sharding', /release\.yml declares no finalize job/],
         // release-tarball-smoke-workflow
-        ['install-smoke.yml that is not YAML', '.github/workflows/install-smoke.yml', () => '{{{', 'release-tarball-smoke-workflow', /install-smoke\.yml is not valid YAML/],
-        ['install-smoke.yml that is a sequence', '.github/workflows/install-smoke.yml', () => '- a\n', 'release-tarball-smoke-workflow', /install-smoke\.yml is not a mapping/],
-        ['install-smoke.yml that is empty of content', '.github/workflows/install-smoke.yml', () => '# nothing\n', 'release-tarball-smoke-workflow', /install-smoke\.yml is not a mapping/],
         ['the workflow_call trigger removed', '.github/workflows/install-smoke.yml', yamlEdit((w) => { delete w.on.workflow_call; }), 'release-tarball-smoke-workflow', /must keep the workflow_call trigger/],
         ['every trigger removed', '.github/workflows/install-smoke.yml', yamlEdit((w) => { delete w.on; }), 'release-tarball-smoke-workflow', /must keep the workflow_call trigger/],
         ['the lifecycle smoke step removed', '.github/workflows/install-smoke.yml', yamlEdit((w) => { w.jobs.smoke.steps = w.jobs.smoke.steps.filter((s) => !(typeof s.run === 'string' && s.run.includes('release-tarball-smoke.cjs'))); }), 'release-tarball-smoke-workflow', /the lifecycle smoke step must call release-tarball-smoke\.cjs/],
@@ -709,6 +705,11 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['compact variant: only true flags in the spawn', 'agents/gsd-debug-session-manager.compact.md', (text) => text.replace('run_in_background=false', 'run_in_background=true\n  run_in_background=true'), 'debug-manager-blocking-spawn', /compact variant: the debugger spawn must be blocking/],
         ['compact variant: no spawn block names gsd-debugger', 'agents/gsd-debug-session-manager.compact.md', eraseAll('subagent_type="gsd-debugger"'), 'debug-manager-blocking-spawn', /compact variant: expected exactly one gsd-debugger spawn block/],
         ['the compact variant first flag differs from the full variant first flag with a later false flag', 'agents/gsd-debug-session-manager.compact.md', (text) => text.replace('run_in_background=false', 'run_in_background=true\n  run_in_background=false'), 'debug-manager-blocking-spawn', /the compact sibling must not diverge from the canonical agent on spawn semantics/],
+        // review round 2
+        ['a one-line debugger spawn with a nested call in the manager', 'agents/gsd-debug-session-manager.md', append('Agent(prompt=f(x), subagent_type="gsd-debugger")'), 'debug-manager-blocking-spawn', /full variant: expected exactly one gsd-debugger spawn block/],
+        ['a one-line debugger spawn with a parenthesis in a quoted prompt in the manager', 'agents/gsd-debug-session-manager.md', append('Agent(prompt="a ) b", subagent_type="gsd-debugger")'), 'debug-manager-blocking-spawn', /full variant: expected exactly one gsd-debugger spawn block/],
+        ['an agent file with a nested-call spawn that never states run_in_background', 'agents/gsd-executor.md', append('Agent(prompt=f(x), subagent_type="gsd-planner")'), 'debug-manager-blocking-spawn', /an agent that spawns a subagent must decide whether that spawn blocks/],
+        ['an agent file with a quoted-parenthesis spawn that never states run_in_background', 'agents/gsd-executor.md', append('Agent(prompt="a ) b", subagent_type="gsd-planner")'), 'debug-manager-blocking-spawn', /an agent that spawns a subagent must decide whether that spawn blocks/],
         // tdd-reference-correctness
         ['a cited section name gone from the execute-plan pointer (Red-Green-Refactor Cycle)', 'gsd-core/workflows/execute-plan.md', within('<tdd_plan_execution>', '</tdd_plan_execution>', swap('"Red-Green-Refactor Cycle"', '"Cycle"')), 'tdd-reference-correctness', /execute-plan\.md: the commit-scope contract must cite "Red-Green-Refactor Cycle"/],
         ['a cited section name gone from the execute-plan pointer (Fail-Fast Rules)', 'gsd-core/workflows/execute-plan.md', within('<tdd_plan_execution>', '</tdd_plan_execution>', swap('"Fail-Fast Rules"', '"Fast"')), 'tdd-reference-correctness', /execute-plan\.md: the fail-fast rule must cite "Fail-Fast Rules" by its literal section name/],
@@ -913,6 +914,10 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the AUTO_MODE resolver gone from discuss-phase-assumptions', 'gsd-core/workflows/discuss-phase-assumptions.md', eraseAll('AUTO_MODE=$(gsd_run query check auto-mode --pick active'), 'section-marker-inversion-guard', /"AUTO_MODE=\$\(gsd_run query check auto-mode --pick active" is not in the gap text/],
 
         ['tasks gone from the planner estimate block', 'agents/gsd-planner.md', erase(/^(\s+)tasks:/gm), 'planner-estimate-emission', /the estimate block must carry tokens, tasks and confidence \(missing tasks\)/],
+        ['no indent before confidence: in the planner template', 'agents/gsd-planner.md', (text) => text.replace(/^ {2}confidence:/m, 'confidence:'), 'planner-estimate-emission', /the estimate block must carry tokens, tasks and confidence \(missing confidence\)/],
+        ['no indent before confidence: leaves the confidence line unshown', 'agents/gsd-planner.md', (text) => text.replace(/^ {2}confidence:/m, 'confidence:'), 'planner-estimate-emission', /\(the template must show the confidence field\)/],
+        ['the gated section of discuss-phase-assumptions with no matching id', 'gsd-core/workflows/discuss-phase-assumptions.md', swap('id="auto-advance-dispatch"', 'id="auto-advance-other"'), 'section-marker-inversion-guard', /expected exactly one parsed section with id "auto-advance-dispatch", found 0/],
+        ['the Step 5.6 of spec-phase as the last section', 'gsd-core/workflows/spec-phase.md', (text) => text.slice(0, text.indexOf('## Step 5.6') + 12), 'prohibition-probe.spec-phase-contract', /closing marker .* not found/],
         // debugger-rca-branching
         ['the RCA reference unlinked from the debugger agent', 'agents/gsd-debugger.md', swap('@~/.claude/gsd-core/references/debugger-rca-branching.md', '@~/.claude/gsd-core/references/rca.md'), 'debugger-rca-branching', /gsd-debugger\.md must @-include the RCA-branching reference from Phase 2 \(or the reasoning checkpoint\)/],
         ['candidate_causes gone from the reasoning checkpoint', 'agents/gsd-debugger.md', swap('candidate_causes', 'candidates'), 'debugger-rca-branching', /the reasoning_checkpoint must include a candidate_causes field \(the >=2-category branches\)/],
@@ -940,6 +945,11 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the plan-checker calibration date gone from its frontmatter', 'gsd-core/references/few-shot-examples/plan-checker.md', erase(/^last_calibrated: [^\n]+\n/m), 'few-shot-calibration', /plan-checker\.md frontmatter must carry a last_calibrated date/],
         ['the plan-checker calibration date not a date', 'gsd-core/references/few-shot-examples/plan-checker.md', (text) => text.replace(/^last_calibrated: [^\n]+\n/m, 'last_calibrated: March 2026\n'), 'few-shot-calibration', /plan-checker\.md frontmatter must carry a last_calibrated date/],
         ['the verifier calibration date gone from its frontmatter', 'gsd-core/references/few-shot-examples/verifier.md', erase(/^last_calibrated: [^\n]+\n/m), 'few-shot-calibration', /verifier\.md frontmatter must carry a last_calibrated date/],
+        ['a version key renamed in the plan-checker frontmatter', 'gsd-core/references/few-shot-examples/plan-checker.md', (text) => text.replace(/^version:/m, 'calibration_version:'), 'few-shot-calibration', /plan-checker\.md frontmatter must carry a numeric version/],
+        ['a component key renamed in the plan-checker frontmatter', 'gsd-core/references/few-shot-examples/plan-checker.md', (text) => text.replace(/^component:/m, 'subcomponent:'), 'few-shot-calibration', /plan-checker\.md frontmatter must name its component/],
+        ['a component value on the line after its key', 'gsd-core/references/few-shot-examples/plan-checker.md', swap('component: plan-checker', 'component:\nplan-checker'), 'few-shot-calibration', /plan-checker\.md frontmatter must name its component/],
+        ['a version value on the line after its key', 'gsd-core/references/few-shot-examples/plan-checker.md', (text) => text.replace(/^version: /m, 'version:\n'), 'few-shot-calibration', /plan-checker\.md frontmatter must carry a numeric version/],
+        ['a date value on the line after its key', 'gsd-core/references/few-shot-examples/plan-checker.md', (text) => text.replace(/^last_calibrated: /m, 'last_calibrated:\n'), 'few-shot-calibration', /plan-checker\.md frontmatter must carry a last_calibrated date/],
         ['a fifth example in the plan-checker reference', 'gsd-core/references/few-shot-examples/plan-checker.md', append('### Example 9'), 'few-shot-calibration', /plan-checker\.md must contain exactly 4 examples/],
         ['a third example gone from the plan-checker reference', 'gsd-core/references/few-shot-examples/plan-checker.md', erase(/^### Example \d+/m), 'few-shot-calibration', /plan-checker\.md must contain exactly 4 examples/],
         ['an eighth example in the verifier reference', 'gsd-core/references/few-shot-examples/verifier.md', append('### Example 9'), 'few-shot-calibration', /verifier\.md must contain exactly 7 examples/],
@@ -967,6 +977,10 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['a tagged block naming three path parts', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:02-merge-intervals/expected-coverage.json', '```json edge-probe:fixtures/02-merge-intervals/expected-coverage.json'), 'edge-probe-docs-fixtures', /which is not a plain <dir>\/<file> fixture reference/],
         ['a doc block that differs from its fixture', 'gsd-core/references/edge-probe.md', within('```json edge-probe:02-merge-intervals/expected-coverage.json', '\n```', swap('"R1"', '"R9"')), 'edge-probe-docs-fixtures', /the doc block edge-probe:02-merge-intervals\/expected-coverage\.json must parse and deep-equal its fixture file[^]{0,60}the doc block differs from the fixture/],
         ['a doc block that is not JSON', 'gsd-core/references/edge-probe.md', within('```json edge-probe:02-merge-intervals/expected-coverage.json', '\n```', swap('{', '(')), 'edge-probe-docs-fixtures', /the doc block edge-probe:02-merge-intervals\/expected-coverage\.json must parse and deep-equal its fixture file[^]{0,60}not valid JSON/],
+        ['a block retagged to another file of its fixture directory', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', '```json edge-probe:01-round-half-even/requirements.json'), 'edge-probe-docs-fixtures', /no tagged block embeds the fixture "01-round-half-even\/expected-coverage\.json"/],
+        ['a block retagged to a file that is not an expected-coverage fixture', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', '```json edge-probe:01-round-half-even/requirements.json'), 'edge-probe-docs-fixtures', /the tag "01-round-half-even\/requirements\.json" names no expected-coverage\.json fixture/],
+        ['a block retagged to another fixture of the set', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', '```json edge-probe:02-merge-intervals/expected-coverage.json'), 'edge-probe-docs-fixtures', /no tagged block embeds the fixture "01-round-half-even\/expected-coverage\.json"/],
+        ['a tag longer than 500 characters', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', `\`\`\`json edge-probe:${'a'.repeat(501)}`), 'edge-probe-docs-fixtures', /which is not a plain <dir>\/<file> fixture reference/],
         ['covered to resolved/explicit gone from the ADR', 'docs/adr/550-spec-phase-probe-contract.md', erase(/covered\b[^.]{0,500}resolved[^.]{0,500}explicit/gi), 'edge-probe-docs-fixtures', /the ADR must document covered -> \{resolved, explicit\}/],
         ['backstop to resolved/backstop gone from the ADR', 'docs/adr/550-spec-phase-probe-contract.md', erase(/backstop\b[^.]{0,500}resolved[^.]{0,500}backstop/gi), 'edge-probe-docs-fixtures', /the ADR must document backstop -> \{resolved, backstop\}/],
         ['the count-preserved statement gone from the ADR', 'docs/adr/550-spec-phase-probe-contract.md', erase(/count-for-count|count-preserved/gi), 'edge-probe-docs-fixtures', /the ADR must state coverage\.resolved is count-preserved across the migration/],
@@ -979,6 +993,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
 
         // ci-merge-group-wiring
         ['a metadata workflow without the merge_group trigger', '.github/workflows/branch-naming.yml', yamlEdit((workflow) => { delete workflow.on.merge_group; }), 'ci-merge-group-wiring', /branch-naming\.yml must trigger on merge_group with checks_requested/],
+        ['a metadata workflow whose only merge_group type is another one', '.github/workflows/changeset-required.yml', yamlEdit((workflow) => { workflow.on.merge_group = { types: ['other'] }; }), 'ci-merge-group-wiring', /changeset-required\.yml must trigger on merge_group with checks_requested/],
         ['a metadata workflow with other merge_group types', '.github/workflows/changeset-required.yml', yamlEdit((workflow) => { workflow.on.merge_group = { types: ['checks_requested', 'other'] }; }), 'ci-merge-group-wiring', /changeset-required\.yml must trigger on merge_group with checks_requested/],
         ['a metadata workflow whose merge_group has no types', '.github/workflows/docs-required.yml', yamlEdit((workflow) => { workflow.on.merge_group = null; }), 'ci-merge-group-wiring', /docs-required\.yml must trigger on merge_group with checks_requested/],
         ['a metadata workflow with no guard on a job or its steps', '.github/workflows/docs-required.yml', yamlEdit((workflow) => { for (const job of Object.values(workflow.jobs)) { delete job.if; for (const step of job.steps || []) delete step.if; } }), 'ci-merge-group-wiring', /docs-required\.yml: every job or step must be skipped on merge_group/],
@@ -1001,6 +1016,8 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the ruleset that is not JSON', '.github/rulesets/main-protection.json', () => '{', 'ci-merge-group-wiring', /the ruleset must list required contexts[^]{0,60}not valid JSON/],
         ['the ruleset with no required_status_checks rule', '.github/rulesets/main-protection.json', swap('"required_status_checks"', '"other_checks"'), 'ci-merge-group-wiring', /the ruleset must list required contexts[^]{0,80}no required_status_checks rule/],
         ['the ruleset that is a list', '.github/rulesets/main-protection.json', () => '[]', 'ci-merge-group-wiring', /the ruleset must list required contexts[^]{0,80}no required_status_checks rule/],
+        ['the ruleset whose required_status_checks is not a list', '.github/rulesets/main-protection.json', () => JSON.stringify({ rules: [{ type: 'required_status_checks', parameters: { required_status_checks: {} } }] }), 'ci-merge-group-wiring', /the ruleset must list required contexts[^]{0,100}no required_status_checks rule with a list of checks/],
+        ['a require-issue-link step that is null names the step', '.github/workflows/require-issue-link.yml', yamlEdit((workflow) => { for (const job of Object.values(workflow.jobs)) job.steps[1] = null; }), 'ci-merge-group-wiring', /require-issue-link\.yml: every job or step must be skipped on merge_group[^]{0,60}step 2 is not a mapping/],
         ['the ruleset with no required contexts', '.github/rulesets/main-protection.json', () => JSON.stringify({ rules: [{ type: 'required_status_checks', parameters: { required_status_checks: [] } }] }), 'ci-merge-group-wiring', /the ruleset must list required contexts[^]{0,60}no required contexts/],
         ['the concurrency group of the target validator without the ref fallback', '.github/workflows/pr-target-validator.yml', yamlEdit((workflow) => { workflow.concurrency.group = '${{ github.workflow }}-${{ github.event.pull_request.number }}'; }), 'ci-merge-group-wiring', /pr-target-validator\.yml: queue runs must not share one concurrency group/],
         ['the target validator without a concurrency mapping', '.github/workflows/pr-target-validator.yml', yamlEdit((workflow) => { delete workflow.concurrency; }), 'ci-merge-group-wiring', /pr-target-validator\.yml: queue runs must not share one concurrency group/],
@@ -1021,6 +1038,11 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['a fenced resolver call in the mvp-display step', 'gsd-core/workflows/progress/steps/mvp-display.md', append('```bash\ngsd-sdk query config-get phase.mvp-mode\n```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a fenced resolver call in the mvp-uat-framing step', 'gsd-core/workflows/verify-work/steps/mvp-uat-framing.md', append('```bash\ngsd-sdk query config-get phase.mvp-mode\n```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
         ['a fenced resolver call in the ui-phase-gated step', 'gsd-core/workflows/verify-work/steps/automated-ui-verification.md', append('```bash\ngsd-sdk query render-hooks plan:pre\n```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['a tilde fenced resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('~~~bash\ngsd-sdk query config-get code_quality.fallow.enabled\n~~~'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['a four backtick fenced resolver call in the fallow-gated step', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('````bash\ngsd-sdk query config-get code_quality.fallow.enabled\n````'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['a stray fence marker in prose before a fenced resolver call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('A stray ``` in prose.\n```bash\ngsd-sdk query config-get code_quality.fallow.enabled\n```'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['an unterminated fence holding a resolver call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('```bash\ngsd-sdk query config-get code_quality.fallow.enabled'), 'resolver-hoist-guard', /must not itself call the resolver for that fact: a circular, self-disabling section/],
+        ['a duplicate section id in autonomous.md', 'gsd-core/workflows/autonomous.md', swap('id="converge-banner"', 'id="converge-fail-fast"'), 'resolver-hoist-guard', /the fragment parser failed: workflow-fragments: duplicate section id/],
         ['the default-local assignment gone from autonomous.md', 'gsd-core/workflows/autonomous.md', swap('PLAN_STRATEGY="local"', 'PLAN_STRATEGY="other"'), 'resolver-hoist-guard', /the default-local assignment must survive the converge-hoist/],
         ['the converge assignment gone from autonomous.md', 'gsd-core/workflows/autonomous.md', swap('PLAN_STRATEGY="converge"', 'PLAN_STRATEGY="other"'), 'resolver-hoist-guard', /the converge-branch assignment must survive the converge-hoist/],
         ['the local consumer text gone from autonomous.md', 'gsd-core/workflows/autonomous.md', swap('If `PLAN_STRATEGY=local`, run the regular planner:', 'Run the regular planner:'), 'resolver-hoist-guard', /the ungated local-strategy consumer text must exist in the host file/],
@@ -1033,6 +1055,8 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['a tagged block named __proto__ beside the six fixture blocks', 'gsd-core/references/edge-probe.md', append('```json edge-probe:__proto__\n{}\n```'), 'edge-probe-docs-fixtures', /which is not a plain <dir>\/<file> fixture reference/],
         ['a tagged block named __proto__ in place of a fixture block', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', '```json edge-probe:__proto__'), 'edge-probe-docs-fixtures', /a tagged block names "__proto__", which is not a plain <dir>\/<file> fixture reference/],
         ['two blocks with the same tag', 'gsd-core/references/edge-probe.md', (text) => text.replace('```json edge-probe:01-round-half-even/expected-coverage.json', '```json edge-probe:02-merge-intervals/expected-coverage.json'), 'edge-probe-docs-fixtures', /the tag "02-merge-intervals\/expected-coverage.json" is used by more than one block, so the earlier block would never be compared/],
+        ['the Good example reordered with the re-check and open before internal review', 'gsd-core/references/planner-antipatterns.md', swap('Wave 1: Run internal review\nWave 2: Apply accepted fixes\nWave 3: If applicable, re-check the open-time property; then immediately open PR', 'Wave 1: If applicable, re-check the open-time property; then immediately open PR\nWave 2: Run internal review\nWave 3: Apply accepted fixes'), 'prompt-thinning', /the example must show Good: internal review, accepted fixes, then the re-check and immediate open/],
+        ['the fixes ordered after the final open in assign_waves', 'agents/gsd-planner.md', inStepOf('assign_waves', swap('accepted internal-review fixes before the final open', 'accepted internal-review fixes after the final open')), 'prompt-thinning', /assign_waves must state internal review and its fixes come before the final open/],
         ['the sub-200K thinning conditional gone from execute-phase', 'gsd-core/workflows/execute-phase.md', erase(/CONTEXT_WINDOW ?< 200000/g), 'prompt-thinning', /execute-phase\.md must contain a CONTEXT_WINDOW < 200000 conditional for prompt thinning/],
         ['the 500K enrichment conditional gone from execute-phase', 'gsd-core/workflows/execute-phase.md', swap('CONTEXT_WINDOW >= 500000', 'CONTEXT_WINDOW >= 400000'), 'prompt-thinning', /execute-phase\.md must preserve the existing 500K enrichment conditional/],
         ['the executor-examples reference gone from execute-phase', 'gsd-core/workflows/execute-phase.md', swap('executor-examples.md', 'examples.md'), 'prompt-thinning', /the execute-phase\.md thinning block must reference executor-examples\.md/],
@@ -1105,6 +1129,8 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the freeform carve-out gone from the dispatch step', 'gsd-core/workflows/do.md', (text) => { const at = text.indexOf('<step name="dispatch">'); return text.slice(0, at) + text.slice(at).replace(/freeform task description|freeform description/gi, ''); }, 'do-routing-specificity', /the dispatch step must carve out commands that explicitly accept a freeform task description/],
         ['SDD gone from the execute-phase description', 'commands/gsd/execute-phase.md', (text) => text.replace(/description:[^\n]*/, (line) => line.replace(/SDD|spec-driven|specification-driven/gi, 'plain')), 'do-routing-specificity', /the execute-phase description must name SDD or spec-driven execution/],
         ['the wave wording gone from the execute-phase description', 'commands/gsd/execute-phase.md', (text) => text.replace(/description:[^\n]*/, (line) => line.replace(/wave|parallel|dependency/gi, 'plain')), 'do-routing-specificity', /the execute-phase description must name wave, parallel or dependency-aware execution/],
+        ['the execute-phase description key renamed in the frontmatter and written in the body', 'commands/gsd/execute-phase.md', (text) => `${text.replace(/^description:/m, 'summary:')}\ndescription: SDD wave\n`, 'do-routing-specificity', /the execute-phase description must name SDD or spec-driven execution/],
+        ['the phase description key renamed in the frontmatter and written in the body', 'commands/gsd/phase.md', (text) => `${text.replace(/^description:/m, 'summary:')}\ndescription: multi-phase\n`, 'do-routing-specificity', /the phase description must name multi-phase management/],
         ['multi-phase gone from the phase description', 'commands/gsd/phase.md', (text) => text.replace(/description:[^\n]*/, (line) => line.replace(/multi-phase|phase management|add, insert, remove, or edit phases/gi, 'plain')), 'do-routing-specificity', /the phase description must name multi-phase management/],
         ['confirm gone from the success criteria', 'gsd-core/workflows/do.md', within('<success_criteria>', '</success_criteria>', erase(/confirm/gi)), 'do-routing-specificity', /the success criteria must require confirming the route before dispatch/],
         ['argument gone from the success criteria', 'gsd-core/workflows/do.md', within('<success_criteria>', '</success_criteria>', erase(/argument/gi)), 'do-routing-specificity', /the success criteria must require argument-aware dispatch/],
@@ -1142,13 +1168,34 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['the deletion rule gone from the reference (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           erase(/delet/gi), 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
         ['the rejection words only before the first delet (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
-          (text) => `reject justif rca root cause\n${text.replace(/delet/gi, 'remov').replace(/reject|justif|rca|root cause/gi, 'x')}\ndelet\n`, 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
+          (text) => `${text.replace(/delet/gi, 'remov').replace(/reject|justif|rca|root cause/gi, 'x')}\n\nno-op: reject justif rca root cause then delet\n`, 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
         ['skipped and log split by a lone CR do not log the skip (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           (text) => `${text.replace(/skip/gi, 'drop').replace(/log/gi, 'lg').replace(/record/gi, 'rcd')}\nskipped\rlog\n`, 'debugger-fix-acceptance', /skipped signals must be logged or recorded/],
         ['mutant and surviv split by U+2028 do not state the surviving-mutant rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           (text) => `${text.replace(/surviv/gi, 'living')}\nmutant\u2028surviv\n`, 'debugger-fix-acceptance', /a surviving mutant rejects the fix/],
         ['mutant and surviv split by U+2029 do not state the surviving-mutant rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           (text) => `${text.replace(/surviv/gi, 'living')}\nmutant\u2029surviv\n`, 'debugger-fix-acceptance', /a surviving mutant rejects the fix/],
+        ['the deletion-rule words gone from the signal 3 paragraph while they remain elsewhere (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          within('3. **No-op', '4. **Adjacent', erase(/reject|justif|rca|root cause/gi)), 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
+        ['the before-accept sentence gone from the signal 5 paragraph while the words remain elsewhere (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
+          erase(/Must run \*\*before\*\* a fix is\s{1,10}accepted\./), 'debugger-fix-acceptance', /revert-and-reconfirm must run before a fix is accepted/],
+        ['the mvp-display section marker moved to a section that does not load the step', 'gsd-core/workflows/progress.md',
+          (text) => swap('<!-- gsd:section id="mvp-display" when="state:phase-mvp-mode" -->', '<!-- gsd:section id="mvp-display" when="state:other" -->')(text) + '\n<!-- gsd:section id="other" when="state:phase-mvp-mode" -->\nnothing here\n<!-- /gsd:section -->\n',
+          'progress-mvp-display', /marker .* not found/],
+        ['the mvp-display step path gone from its section', 'gsd-core/workflows/progress.md',
+          within('<!-- gsd:section id="mvp-display" when="state:phase-mvp-mode" -->', '<!-- /gsd:section -->', eraseAll('progress/steps/mvp-display.md')), 'progress-mvp-display', /must load the mvp-display step/],
+        ['phase: moved from the template block to the end of the workflow (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
+          (text) => `${swap('\nphase: {PHASE_NUMBER}', '\nnumber: {PHASE_NUMBER}')(text)}\nphase: 1\n`, 'extract-learnings', /must include phase \(no such line/],
+        ['the write_learnings step renamed, so the template block is not found (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
+          swap('<step name="write_learnings">', '<step name="write-learnings">'), 'extract-learnings', /must include phase_name \(no such line/],
+        ['the template block fence info string changed from yaml (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
+          swap('```yaml\n---\nphase:', '```text\n---\nphase:'), 'extract-learnings', /must include generated \(no such line/],
+        ['<phase-number> only in the description, not in the argument-hint (extract-learnings)', 'commands/gsd/extract-learnings.md',
+          (text) => swap('description: Extract', 'description: <phase-number> Extract')(swap('argument-hint: <phase-number>', 'argument-hint: <phase>')(text)), 'extract-learnings', /the argument-hint must reference <phase-number>/],
+        ['description: only inside another key line (extract-learnings)', 'commands/gsd/extract-learnings.md',
+          swap('\ndescription:', '\nsummary: description:'), 'extract-learnings', /the command must have description frontmatter/],
+        ['the step marker gone from the Step 1.5 line start in gsd-phase-researcher (#1988)', 'agents/gsd-phase-researcher.md',
+          swap('\n## Step 1.5:', '\n see ## Step 1.5:'), 'gsd-researcher-app-aware', /no Step 1\.5 heading names the Architectural Responsibility Map/],
         ['the rejection words gone after the deletion rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
           erase(/reject|justif|rca|root cause/gi), 'debugger-fix-acceptance', /a deletion-only diff must be rejected unless the RCA justifies removal/],
         ['every accept wording gone, so revert-and-reconfirm has no ordering rule (#1958)', 'gsd-core/references/debugger-fix-acceptance.md',
@@ -1180,7 +1227,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
           eraseAll('METHODOLOGY.md'), 'methodology-artifact', /Required Reading template must include METHODOLOGY\.md/],
         // progress-mvp-display (the folded #14 guard; the combined-file assertions are in the extras)
         ['the mvp-display section condition gone from progress.md', 'gsd-core/workflows/progress.md',
-          eraseAll('when="state:phase-mvp-mode"'), 'progress-mvp-display', /loaded only when the phase MVP mode is on/],
+          eraseAll('when="state:phase-mvp-mode"'), 'progress-mvp-display', /marker .* not found/],
         ['--auto gone from commands/gsd/progress.md (#14)', 'commands/gsd/progress.md',
           eraseAll('--auto'), 'progress-mvp-display', /progress\.md must document the --auto flag in the <flags> section/],
         ['--auto gone from the progress.md <process> block only (#14)', 'commands/gsd/progress.md',
@@ -1254,7 +1301,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         ['GlobX in allowed-tools is not Glob (extract-learnings)', 'commands/gsd/extract-learnings.md',
           swap('  - Glob\n', '  - GlobX\n'), 'extract-learnings', /allowed-tools must include Glob/],
         ['phase: after a lone CR is not a line start (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
-          swap('\nphase: {PHASE_NUMBER}', '\rphase: {PHASE_NUMBER}'), 'extract-learnings', /frontmatter must include phase$/],
+          swap('\nphase: {PHASE_NUMBER}', '\rphase: {PHASE_NUMBER}'), 'extract-learnings', /must include phase \(no such line/],
         ['phase_name: after U+2028 is not a line start (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
           swap('\nphase_name:', '\u2028phase_name:'), 'extract-learnings', /frontmatter must include phase_name/],
         ['generated: after U+2029 is not a line start (extract-learnings)', 'gsd-core/workflows/extract-learnings.md',
@@ -1439,7 +1486,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     passes('finalize: the final job needs the coverage gate written as a single string', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['finalize'].needs = 'finalize-coverage-gate'; }), 'release-shard-lane-sharding');
     passes('finalize: a fourth shard with a matching denominator', '.github/workflows/release.yml', yamlEdit((w) => { w.jobs['finalize-test'].strategy.matrix.shard = ['1/4', '2/4', '3/4', '4/4']; }), 'release-shard-lane-sharding');
     passes('the lifecycle smoke step moved to another job', '.github/workflows/install-smoke.yml', yamlEdit((w) => { const step = w.jobs.smoke.steps.find((s) => typeof s.run === 'string' && s.run.includes('release-tarball-smoke.cjs')); w.jobs.smoke.steps = w.jobs.smoke.steps.filter((s) => s !== step); w.jobs['smoke-unpacked'].steps.push(step); }), 'release-tarball-smoke-workflow');
-    passes('the triggers written as a list holding workflow_call', '.github/workflows/install-smoke.yml', yamlEdit((w) => { const paths = w.on.pull_request.paths; w.on = { workflow_call: null, pull_request: { paths } }; }), 'release-tarball-smoke-workflow');
+    passes('the triggers written as a mapping with workflow_call first', '.github/workflows/install-smoke.yml', yamlEdit((w) => { const paths = w.on.pull_request.paths; w.on = { workflow_call: null, pull_request: { paths } }; }), 'release-tarball-smoke-workflow');
     passes('an extra pull_request path and trigger', '.github/workflows/install-smoke.yml', yamlEdit((w) => { w.on.pull_request.paths.push('docs/**'); w.on.workflow_dispatch = null; }), 'release-tarball-smoke-workflow');
     findsOne('a prompt-first spawn with parentheses and a quote inside a triple-quoted prompt and no model', 'gsd-core/workflows/quick.md', append('Agent(prompt="""x ) ( "q" """, subagent_type="gsd-code-reviewer")'), 'model-routing-spawn-threading', /gsd-code-reviewer spawn missing model=/);
     findsOne('a spawn whose single-quoted prompt holds an escaped quote and a closing parenthesis and no model', 'gsd-core/workflows/quick.md', append('Agent(prompt="a \\" ) b", subagent_type="gsd-code-fixer")'), 'model-routing-spawn-threading', /gsd-code-fixer spawn missing model=/);
@@ -1458,9 +1505,11 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
         const findings = runShipped(root, ['release-tarball-smoke-workflow']);
         assert.equal(findings.length, 2, JSON.stringify(findings));
         assert.ok(findings.every((f) => /path filter must include/.test(f.message)), JSON.stringify(findings));
+        assert.ok(!findings.some((f) => /workflow_call/.test(f.message)), JSON.stringify(findings));
       });
       caseOf('triggers written as a list holding workflow_call leave only the path-filter findings', ['workflow_call']);
       caseOf('triggers written as the string workflow_call leave only the path-filter findings', 'workflow_call');
+      caseOf('triggers written as a list holding workflow_call and pull_request leave only the path-filter findings', ['workflow_call', 'pull_request']);
     }
     passes('a comment at the very start of the file holding a read', 'hooks/gsd-prompt-guard.js', (text) => '// payload.tool_input.file_path\n' + text, 'kimi-guard-typed-payload-reads');
     passes('a comment with a double slash after a non-colon holding a read', 'hooks/gsd-prompt-guard.js', append('const ok = 1; // payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads');
@@ -1511,6 +1560,39 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     passes('a heading holding a paragraph separator in the English reference is skipped', 'docs/reference/state-md.md', append('# a\u2029b'), 'docs-state-md-locale-parity');
     passes('an extra heading in a locale reference is no missing section', 'docs/ja-JP/reference/state-md.md', append('## An extra section'), 'docs-state-md-locale-parity');
     passes('a translated heading text in a locale reference is no missing section', 'docs/ja-JP/reference/state-md.md', (text) => text.replace(/^## .*$/m, '## Translated again'), 'docs-state-md-locale-parity');
+    findsOne('release.yml that is not YAML', '.github/workflows/release.yml', () => '{{{', 'release-shard-lane-sharding', /release\.yml is not valid YAML/);
+    findsOne('release.yml that is a sequence', '.github/workflows/release.yml', () => '- a\n- b\n', 'release-shard-lane-sharding', /release\.yml has no jobs mapping/);
+    findsOne('release.yml with no jobs', '.github/workflows/release.yml', () => 'name: x\n', 'release-shard-lane-sharding', /release\.yml has no jobs mapping/);
+    findsOne('release.yml with a null jobs value', '.github/workflows/release.yml', () => 'jobs:\n', 'release-shard-lane-sharding', /release\.yml has no jobs mapping/);
+    findsOne('release.yml that is only a comment', '.github/workflows/release.yml', () => '# nothing\n', 'release-shard-lane-sharding', /release\.yml has no jobs mapping/);
+    findsOne('install-smoke.yml that is not YAML', '.github/workflows/install-smoke.yml', () => '{{{', 'release-tarball-smoke-workflow', /install-smoke\.yml is not valid YAML/);
+    findsOne('install-smoke.yml that is a sequence', '.github/workflows/install-smoke.yml', () => '- a\n', 'release-tarball-smoke-workflow', /install-smoke\.yml is not a mapping/);
+    findsOne('install-smoke.yml that is only a comment', '.github/workflows/install-smoke.yml', () => '# nothing\n', 'release-tarball-smoke-workflow', /install-smoke\.yml is not a mapping/);
+    findsOne('install-smoke.yml with no jobs', '.github/workflows/install-smoke.yml', () => 'on:\n  workflow_call:\n', 'release-tarball-smoke-workflow', /install-smoke\.yml has no jobs mapping/);
+    findsOne('install-smoke.yml with a null jobs value', '.github/workflows/install-smoke.yml', () => 'on:\n  workflow_call:\njobs:\n', 'release-tarball-smoke-workflow', /install-smoke\.yml has no jobs mapping/);
+    passes('an agent file with a nested-call spawn that states run_in_background after the nested call', 'agents/gsd-executor.md', append('Agent(prompt=f(x), subagent_type="gsd-planner", run_in_background=false)'), 'debug-manager-blocking-spawn');
+    passes('an agent file with a call that holds only whitespace between its parentheses', 'agents/gsd-executor.md', append('Agent(\n\n)'), 'debug-manager-blocking-spawn');
+    {
+      const hookCase = (title, rel, swept) => test(title, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, ...rel.split('/'));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, 'const leaked = payload.tool_input.file_path;\n');
+        const findings = runShipped(root, ['kimi-guard-typed-payload-reads']);
+        assert.equal(findings.some((f) => f.file === rel), swept, JSON.stringify(findings));
+      });
+      hookCase('a new top-level hook outside the known readers is swept in', 'hooks/gsd-new-hook.js', true);
+      hookCase('a file in a nested hooks directory is not swept in', 'hooks/lib/gsd-new-nested.js', false);
+    }
+    passes('a question mark separated from the dot by whitespace is no read', 'hooks/gsd-prompt-guard.js', append('const other = payload.tool_info?  .path;'), 'kimi-guard-typed-payload-reads');
+    passes('a double slash inside a string hides the rest of its line, as the old comment stripper did', 'hooks/gsd-prompt-guard.js', append('const u = "a//b"; const leaked = payload.tool_input.file_path;'), 'kimi-guard-typed-payload-reads');
+    passes('only "replace" states the flat menu is superseded', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.replace(/replace|supersede|routed? selection/gi, 'x').replace(/append/gi, 'y') + '\nreplace\n', 'debugger-bug-taxonomy');
+    passes('only "supersede" states the flat menu is superseded', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.replace(/replace|supersede|routed? selection/gi, 'x').replace(/append/gi, 'y') + '\nsupersede\n', 'debugger-bug-taxonomy');
+    passes('only "routed selection" states the flat menu is superseded', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.replace(/replace|supersede|routed? selection/gi, 'x').replace(/append/gi, 'y') + '\nrouted selection\n', 'debugger-bug-taxonomy');
+    passes('only "route selection" states the flat menu is superseded', 'gsd-core/references/debugger-bug-taxonomy.md', (text) => text.replace(/replace|supersede|routed? selection/gi, 'x').replace(/append/gi, 'y') + '\nroute selection\n', 'debugger-bug-taxonomy');
+    passes('Heisenbug alone, with Mandelbug erased, defines the class', 'gsd-core/references/debugger-bug-taxonomy.md', erase(/mandelbug/gi), 'debugger-bug-taxonomy');
+    findsOne('a fixer spawn whose prompt names the reviewer type is labelled by the first routed agent in list order', 'gsd-core/workflows/quick.md', append('Agent(subagent_type="gsd-code-fixer", prompt="""x subagent_type="gsd-code-reviewer" y""")'), 'model-routing-spawn-threading', /gsd-code-reviewer spawn missing model=/);
+    passes('a model= written inside the prompt string satisfies the model param check, as in the old test', 'gsd-core/workflows/quick.md', append('Agent(subagent_type="gsd-code-fixer", prompt="""use model=x""")'), 'model-routing-spawn-threading');
   }
 
   {
@@ -1633,7 +1715,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     gapCases('whitespace of the given width after `estimate` in plan-md.md', PLAN_MD, 'planner-estimate-emission', (text, gap) => text.replace(/\|\s{0,20}`estimate`\s{0,20}\|/, `|\`estimate\`${' '.repeat(gap)}|`), 20, /plan-md\.md must document `estimate`/);
     for (const field of ['tokens', 'tasks', 'confidence']) {
       gapCases(`an indent of the given width before ${field}: in the planner template`, PLANNER, 'planner-estimate-emission', (text, gap) => text.replace(new RegExp(`^ {2}${field}:`, 'm'), `${' '.repeat(gap)}${field}:`), 20, new RegExp(`the estimate block must carry tokens, tasks and confidence \\(missing ${field}\\)`));
-      if (field !== 'confidence') findsOne(`no indent before ${field}: in the planner template`, PLANNER, (text) => text.replace(new RegExp(`^ {2}${field}:`, 'm'), `${field}:`), 'planner-estimate-emission', field === 'confidence' ? /\(missing confidence\)/ : new RegExp(`\\(missing ${field}\\)`));
+      if (field !== 'confidence') findsOne(`no indent before ${field}: in the planner template`, PLANNER, (text) => text.replace(new RegExp(`^ {2}${field}:`, 'm'), `${field}:`), 'planner-estimate-emission', new RegExp(`\\(missing ${field}\\)`));
     }
     const PLANNER_BLOCK = (fence, bodyExtra = '') => `---\nphase: x\nmust_haves: y\nestimate:\n  tokens: 1\n  tasks: 1\n  confidence: low           # low | med | high\n${bodyExtra}${fence}\n| \`estimate\` | No |\nestimate-calibration sample count\n`;
     const fenceFindings = (t, content) => {
@@ -1678,6 +1760,12 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     for (const phrase of ['--auto will never dismiss', '--auto may not dismiss', 'never auto dismiss']) soleBranch('auto', phrase);
     for (const phrase of ['text-mode', 'non-Claude', 'nonClaude', 'AskUserQuestion']) soleBranch('text', phrase);
     for (const phrase of ['canon of security', 'OWASP', 'GDPR']) soleBranch('canon', phrase);
+
+    gapCases('a gap of the given width after drop before engineering', 'gsd-core/workflows/spec-phase.md', 'prohibition-probe.spec-phase-contract', (text, gap) => probeBlock(['dismiss reason', 'never auto-dismiss', 'secure-phase', `drop ${'x'.repeat(gap - 1)}engineering`])(text), 500, /Step 5\.6 must describe a precision classifier that drops routine engineering items/);
+    const FENCE_CASES = [['a lone CR opening the template', '---\rphase: x\rmust_haves: y\restimate:\r---\r'], ['a U+2028 opening the template', '---\u2028phase: x\u2028must_haves: y\u2028estimate:\u2028---\u2028'], ['a lone CR closing the template', '---\nphase: x\nmust_haves: y\nestimate:\n---\r'], ['a U+2028 closing the template', '---\nphase: x\nmust_haves: y\nestimate:\n---\u2028']];
+    for (const [title, content] of FENCE_CASES) test(`${title} does not make a template (the fence owner needs LF or CRLF)`, (t) => assert.equal(fenceFindings(t, content).length > 0, true));
+    passes('the Severity word in lowercase alone satisfies the pause-work column check', 'gsd-core/workflows/pause-work.md', swap('Severity', 'Sevxrity'), 'anti-pattern-enforcement');
+    passes('the Severity word capitalised alone satisfies the pause-work column check', 'gsd-core/workflows/pause-work.md', swap('severity', 'sevxrity'), 'anti-pattern-enforcement');
   }
 
   {
@@ -1855,7 +1943,6 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
       }
     }
     passes('a forbidden resolver substring in prose of a gated step file is not a call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('The code_quality.fallow.enabled fact is resolved before this section is read.'), 'resolver-hoist-guard');
-    passes('a forbidden resolver substring in a tilde fence of a gated step file is not a backtick fenced call', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('~~~bash\ngsd-sdk query config-get code_quality.fallow.enabled\n~~~'), 'resolver-hoist-guard');
     passes('a resolver call for an atom the map does not know in a gated step file', 'gsd-core/workflows/code-review/steps/structural-pre-pass.md', append('```bash\ngsd-sdk query config-get some.other.key\n```'), 'resolver-hoist-guard');
 
     // prompt-thinning: every gap of the external review patterns is held to 500 characters without a full stop.
@@ -1962,19 +2049,19 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     // debugger-fix-acceptance: the revert-and-reconfirm gaps are bounded at 20 characters each; the surviving-mutant
     // word run is bounded at 50.
     gapCases('the first revert-and-reconfirm gap', DEBUGGER_REF, 'debugger-fix-acceptance',
-      (text, gap) => `${text.replace(REVERT_RE, 'a revert then a reconfirmation')}\nrevert${'-'.repeat(gap)}and reconfirm\n`, 20, /signal 5: revert-and-reconfirm/);
+      (text, gap) => `${text.replace(REVERT_RE, 'a revert then a reconfirmation')}\n\nrevert${'-'.repeat(gap)}and reconfirm must run before a fix is accepted\n`, 20, /signal 5: revert-and-reconfirm/);
     gapCases('the second revert-and-reconfirm gap', DEBUGGER_REF, 'debugger-fix-acceptance',
-      (text, gap) => `${text.replace(REVERT_RE, 'a revert then a reconfirmation')}\nrevert and${'-'.repeat(gap)}reconfirm\n`, 20, /signal 5: revert-and-reconfirm/);
+      (text, gap) => `${text.replace(REVERT_RE, 'a revert then a reconfirmation')}\n\nrevert and${'-'.repeat(gap)}reconfirm must run before a fix is accepted\n`, 20, /signal 5: revert-and-reconfirm/);
     gapCases('the word run after "surviv"', DEBUGGER_REF, 'debugger-fix-acceptance',
       (text, gap) => `${text.replace(/surviv/gi, 'living')}\nsurviv${'a'.repeat(gap)} mutant\n`, 50, /a surviving mutant rejects the fix/);
     passes('a mutant line before a surviv line still states the surviving-mutant rule', DEBUGGER_REF,
       (text) => `${text.replace(/surviv/gi, 'living')}\nthe mutant is surviving here\n`, 'debugger-fix-acceptance');
     passes('a deletion rule worded as justified by the RCA satisfies debugger-fix-acceptance', DEBUGGER_REF,
-      (text) => `${text.replace(/delet/gi, 'remov')}\nA deletion is justified.\n`, 'debugger-fix-acceptance');
+      (text) => `${text.replace(/delet/gi, 'remov')}\n\nno-op: A deletion is justified.\n`, 'debugger-fix-acceptance');
     passes('accept after the revert word satisfies the revert-before-accept order', DEBUGGER_REF,
-      (text) => `${text.replace(/accept/gi, 'take').replace(/before/gi, 'ahead of')}\naccept the fix after the revert\n`, 'debugger-fix-acceptance');
+      (text) => `${text.replace(/accept/gi, 'take').replace(/before/gi, 'ahead of')}\n\nrevert-and-reconfirm: accept the fix after the revert\n`, 'debugger-fix-acceptance');
     passes('a prior to accept wording satisfies the revert-before-accept order', DEBUGGER_REF,
-      (text) => `${text.replace(/accept/gi, 'take').replace(/before/gi, 'ahead of')}\nrun it prior to accept.\n`, 'debugger-fix-acceptance');
+      (text) => `${text.replace(/accept/gi, 'take').replace(/before/gi, 'ahead of')}\n\nrevert-and-reconfirm: run it prior to accept.\n`, 'debugger-fix-acceptance');
     passes('a surviving-mutant word run of one character satisfies debugger-fix-acceptance', DEBUGGER_REF,
       (text) => `${text.replace(/surviv/gi, 'living')}\nsurvivA mutant\n`, 'debugger-fix-acceptance');
     findsOne('a surviving-mutant word run of zero characters is not the surviving-mutant rule', DEBUGGER_REF,
@@ -1985,7 +2072,7 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
     }
     for (const word of ['reject', 'justif', 'rca', 'root cause']) {
       passes(`${word} after the first delet satisfies the deletion rule`, DEBUGGER_REF,
-        (text) => `${text.replace(/delet/gi, 'remov').replace(/reject|justif|rca|root cause/gi, 'x')}\ndelet then ${word}\n`, 'debugger-fix-acceptance');
+        (text) => `${text.replace(/delet/gi, 'remov').replace(/reject|justif|rca|root cause/gi, 'x')}\n\nno-op: delet then ${word}\n`, 'debugger-fix-acceptance');
     }
     findsOne('a skipped line with no log or record word is not logged for debugger-fix-acceptance', DEBUGGER_REF,
       (text) => text.replace(/skip/gi, 'drop').replace(/log/gi, 'lg').replace(/record/gi, 'rcd'), 'debugger-fix-acceptance', /skipped signals must be logged or recorded/);
@@ -2088,6 +2175,49 @@ describe('the batch 9 contracts hold on the real files, and fail when a contract
       (text) => `${text.slice(0, text.indexOf(mapHeading))}${mapHeading}\n\n### Detail\n\n| Tier | Owner |\n\n## Next\n`, 'gsd-researcher-app-aware');
     findsOne('a table after the next ## heading is outside the map section', TEMPLATE,
       (text) => `${text.slice(0, text.indexOf(mapHeading))}${mapHeading}\n\n## Next\n\n| Tier | Owner |\n`, 'gsd-researcher-app-aware', /table format with a Tier column/);
+
+    // An empty steps directory (it exists, with no .md file) is a finding as well.
+    for (const [dir, contract] of [
+      ['gsd-core/workflows/progress/steps', 'progress-mvp-display'],
+      ['gsd-core/workflows/new-project/steps', 'new-project-mvp-prompt'],
+    ]) {
+      test(`${dir} holding no .md file is a finding for ${contract}`, (t) => {
+        const root = copyOfRepoFiles(t);
+        const abs = path.join(root, ...dir.split('/'));
+        for (const name of fs.readdirSync(abs)) fs.unlinkSync(path.join(abs, name));
+        fs.writeFileSync(path.join(abs, 'notes.txt'), 'no step here\n');
+        const findings = runShipped(root, [contract]);
+        assert.ok(findings.some((f) => f.file === dir && f.message.includes('no .md file under')), JSON.stringify(findings.map((f) => [f.file, f.message])));
+      });
+    }
+
+    // progress-mvp-display: the standard-display fallback wording (any line naming the mode with null, absent or not mvp, or
+    // naming standard and display) is read across the host and the steps.
+    const fallbackLine = (line) => { const l = line.toLowerCase(); return (l.includes('mode') && (l.includes('null') || l.includes('absent') || l.includes('not mvp'))) || (l.includes('standard') && l.includes('display')); };
+    const dropFallback = (text) => text.split('\n').map((line) => (fallbackLine(line) ? 'x' : line)).join('\n');
+    editFiles('the fallback wording gone from the host and every step fails progress-mvp-display',
+      [[PROGRESS, dropFallback], ['gsd-core/workflows/progress/steps/forensic-audit.md', dropFallback]], 'progress-mvp-display', /standard-display fallback/);
+    editFiles('the fallback wording only in a step satisfies progress-mvp-display',
+      [[PROGRESS, dropFallback]], 'progress-mvp-display', null);
+
+    // extract-learnings: allowed-tools items may be quoted and the list may hold blank and comment lines.
+    passes('a single-quoted allowed-tools item still counts', 'commands/gsd/extract-learnings.md', swap('  - Read\n', "  - 'Read'\n"), 'extract-learnings');
+    passes('a double-quoted allowed-tools item still counts', 'commands/gsd/extract-learnings.md', swap('  - Write\n', '  - "Write"\n'), 'extract-learnings');
+    passes('a blank line inside the allowed-tools list does not end it', 'commands/gsd/extract-learnings.md', swap('  - Read\n', '  - Read\n\n'), 'extract-learnings');
+    passes('a comment line inside the allowed-tools list does not end it', 'commands/gsd/extract-learnings.md', swap('  - Read\n', '  - Read\n  # kept\n'), 'extract-learnings');
+    passes('a flow-style allowed-tools list with quoted items counts', 'commands/gsd/extract-learnings.md',
+      (text) => text.replace(/allowed-tools:\n(?: {2}- [A-Za-z]{1,10}\n){1,6}/, 'allowed-tools: ["Read", Write, Bash, Grep, Glob, Agent]\n'), 'extract-learnings');
+
+    // gsd-researcher-app-aware: an earlier Step 1.5 heading that does not name the map is skipped (the loop's next heading).
+    passes('a Step 1.5 heading that does not name the map before the real one is skipped', 'agents/gsd-phase-researcher.md',
+      swap('## Step 1.3:', '## Step 1.5: Something else\n\nnothing\n\n## Step 1.3:'), 'gsd-researcher-app-aware');
+    passes('a mid-line mention of Step 1.5 and the map in earlier prose does not start the section', 'agents/gsd-phase-researcher.md',
+      swap('## Step 1: ', 'see ## Step 1.5 Architectural Responsibility Map\n\n## Step 1: '), 'gsd-researcher-app-aware');
+
+    // new-project-mvp-prompt: an unclosed options array is a finding and does not hide a later one.
+    findsOne('an unclosed options array alone is a finding', NEW_PROJECT, append('options: [ { label: "a" }'), 'new-project-mvp-prompt', /is never closed/);
+    findsOne('an unclosed options array followed by a five-label array still flags the five labels', NEW_PROJECT,
+      append(`options: [ { label: "a" }\n${options(5)}`), 'new-project-mvp-prompt', /has 5 options/);
   }
 
   // A file a batch 9 contract reads that is gone from the tree is one finding for that file.

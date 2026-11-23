@@ -81,6 +81,7 @@ function threadsModel(text, agent, variable, acrossNewline = false) {
 }
 
 module.exports = {
+  agentCalls,
   id: 'model-routing-spawn-threading',
   issue: '#2072',
   check(ctx) {

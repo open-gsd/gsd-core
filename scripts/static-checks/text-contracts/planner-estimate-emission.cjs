@@ -9,7 +9,7 @@
 // smart_zone_tokens default. Was tests/planner-estimate-emission.test.cjs. The template is found by walking the
 // fenced blocks with the repo's one fence owner (locateFrontmatterFence), where the test used a lazy regex: a closing
 // fence there was `---` and nothing else, here it is `---` plus optional trailing spaces or tabs, or a `----` line
-// when no exact closer follows; a lone CR or U+2028 no longer starts a line. These are deliberate (one owner of the
+// when no exact closer follows; a lone CR or U+2028 neither opens nor closes a block (a fence line must end in LF or CRLF). These are deliberate (one owner of the
 // fence rules, ADR-5057) and are pinned by cases. The confidence values are read from the template's own enumeration
 // comment (`# low | med | high`), where the test took every low/med/high word of the line and so could never see a
 // value the parser rejects. The test accepted
@@ -29,10 +29,11 @@ const ESTIMATE_FIELDS = [
 
 // The fence rules (opening fence, whole-line closing fence) have one owner; this reads the planner's fenced
 // blocks (the PLAN.md template examples) through it, one block at a time.
-const { locateFrontmatterFence } = require('../../../gsd-core/bin/lib/frontmatter-fence.cjs');
+const FENCE_LIB = '../../../gsd-core/bin/lib/frontmatter-fence.cjs';
 
 // The first fenced block of the planner that declares both phase: and must_haves:, or null.
 function plannerFrontmatterTemplate(text) {
+  const { locateFrontmatterFence } = require(FENCE_LIB);
   let offset = 0;
   while (offset <= text.length) {
     const eol = text.indexOf('\n', offset);
@@ -56,7 +57,12 @@ function plannerFrontmatterTemplate(text) {
 }
 
 const onTemplate = (check) => (text) => {
-  const template = plannerFrontmatterTemplate(text);
+  let template;
+  try {
+    template = plannerFrontmatterTemplate(text);
+  } catch (err) {
+    return `the fence owner cannot be loaded: ${String(err.message).split('\n')[0]}`;
+  }
   return template === null ? 'the PLAN.md frontmatter template is not in the planner' : check(template);
 };
 
@@ -79,7 +85,13 @@ module.exports = {
         const comment = line.split('#')[1];
         const words = comment === undefined ? [] : comment.split('\u2014')[0].split('|').map((word) => word.trim()).filter((word) => word.length > 0);
         if (words.length === 0) return 'the confidence line must enumerate the allowed values';
-        const { CONFIDENCE_VALUES } = require(ESTIMATION_LIB);
+        let CONFIDENCE_VALUES;
+        try {
+          ({ CONFIDENCE_VALUES } = require(ESTIMATION_LIB));
+        } catch (err) {
+          return `the estimation module cannot be loaded: ${String(err.message).split('\n')[0]}`;
+        }
+        if (!Array.isArray(CONFIDENCE_VALUES)) return 'the estimation module exports no CONFIDENCE_VALUES list';
         const rejected = words.filter((word) => !CONFIDENCE_VALUES.includes(word));
         return rejected.length === 0 || `the planner offers ${rejected.join(', ')} but CONFIDENCE_VALUES does not accept it`;
       }), 'every confidence value the planner may emit must be accepted by the parser');

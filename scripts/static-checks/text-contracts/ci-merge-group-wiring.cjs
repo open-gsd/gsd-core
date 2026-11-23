@@ -128,6 +128,10 @@ module.exports = {
         for (const [id, job] of Object.entries(workflow.jobs)) {
           if (!isMapping(job)) return `job "${id}" is not a mapping`;
           const jobGuarded = guardsMergeGroup(job.if);
+          if (!jobGuarded && Array.isArray(job.steps)) {
+            const bad = job.steps.findIndex((step) => !isMapping(step));
+            if (bad !== -1) return `job "${id}" step ${bad + 1} is not a mapping`;
+          }
           const stepsGuarded = Array.isArray(job.steps) && job.steps.length > 0
             && job.steps.every((step) => isMapping(step) && guardsMergeGroup(step.if));
           if (!(jobGuarded || stepsGuarded)) return `job "${id}" can run on merge_group`;

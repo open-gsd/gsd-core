@@ -7,7 +7,7 @@
 // without a hard AskUserQuestion dependency (PROB-09), the SPEC Prohibitions section, the canon-referral
 // breadcrumb to /gsd:secure-phase (PROB-13) and the @-include of references/prohibition-probe.md. Assertions
 // scope to the Step 5.6 block. Was tests/prohibition-probe.spec-phase-contract.test.cjs. The test also found the
-// block by a bare "Step 5.6" when the "## Step 5.6" heading was missing; the heading is required here. Gaps
+// block by a bare "Step 5.6" when the "## Step 5.6" heading was missing; the heading is required here. The block also needs a following "\n## " heading (the test read to the end of the file when there was none), so Step 5.6 as the last section of spec-phase.md is a finding. Gaps
 // inside one sentence are bounded at 500 characters.
 
 module.exports = {

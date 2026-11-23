@@ -10,23 +10,46 @@
 const COMMAND = 'commands/gsd/extract-learnings.md';
 const WORKFLOW = 'gsd-core/workflows/extract-learnings.md';
 
-// The items of the frontmatter `allowed-tools:` list (a block list or a `[a, b]` flow list), exact names only.
+const path = require('node:path');
+
+const unquote = (item) => {
+  const first = item[0];
+  return item.length >= 2 && (first === '"' || first === "'") && item[item.length - 1] === first ? item.slice(1, -1) : item;
+};
+
+// The items of the frontmatter `allowed-tools:` list (a block list or a `[a, b]` flow list), exact names only; quotes
+// around an item are dropped and a blank or comment line inside the block list does not end it.
 function allowedTools(text) {
   const lines = text.split('\n');
   const at = lines.findIndex((line) => line.trimEnd().startsWith('allowed-tools:'));
   if (at === -1) return [];
   const rest = lines[at].trim().slice('allowed-tools:'.length).trim();
-  if (rest.startsWith('[') && rest.endsWith(']')) return rest.slice(1, -1).split(',').map((item) => item.trim());
+  if (rest.startsWith('[') && rest.endsWith(']')) return rest.slice(1, -1).split(',').map((item) => unquote(item.trim()));
   const items = [];
   for (const line of lines.slice(at + 1)) {
     const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
     if (!trimmed.startsWith('- ')) break;
-    items.push(trimmed.slice(2).trim());
+    items.push(unquote(trimmed.slice(2).trim()));
   }
   return items;
 }
 
-const hasLineStarting = (text, prefix) => text.split('\n').some((line) => line.startsWith(prefix));
+// The first frontmatter line that starts with the key (the value is what follows), or null.
+const keyLine = (text, prefix) => text.split('\n').find((line) => line.startsWith(prefix)) ?? null;
+
+// The lines of the first yaml fenced block inside the write_learnings step: the LEARNINGS.md frontmatter template.
+function learningsTemplate(text) {
+  const start = text.indexOf('<step name="write_learnings">');
+  const end = start === -1 ? -1 : text.indexOf('</step>', start);
+  if (end === -1) return [];
+  const lines = text.slice(start, end).split('\n');
+  const { scanFencedBlocks } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
+  const block = scanFencedBlocks(lines).find((record) => record.closeLineIdx !== -1 && record.infoString === 'yaml');
+  return block ? lines.slice(block.openLineIdx + 1, block.closeLineIdx) : [];
+}
+
+const templateHas = (field) => (text) => learningsTemplate(text).some((line) => line.startsWith(field)) || 'no such line in the yaml block of the write_learnings step';
 
 module.exports = {
   id: 'extract-learnings',
@@ -35,15 +58,15 @@ module.exports = {
     // The frontmatter fields are read from the frontmatter block (the test read the whole file, where a tool name in
     // the prose satisfied the allowed-tools check).
     const frontmatter = ctx.doc(COMMAND).frontmatter()
-      .has('name: gsd:extract-learnings', 'the command must have name: gsd:extract-learnings')
-      .has('description:', 'the command must have description frontmatter')
-      .has('argument-hint:', 'the command must have argument-hint')
-      .has('<phase-number>', 'the argument-hint must reference <phase-number>')
-      .has('allowed-tools:', 'the command must have allowed-tools');
+      .satisfies((text) => keyLine(text, 'name: gsd:extract-learnings') !== null, 'the command must have name: gsd:extract-learnings')
+      .satisfies((text) => keyLine(text, 'description:') !== null, 'the command must have description frontmatter')
+      .satisfies((text) => keyLine(text, 'argument-hint:') !== null, 'the command must have argument-hint')
+      .satisfies((text) => (keyLine(text, 'argument-hint:') ?? '').includes('<phase-number>'), 'the argument-hint must reference <phase-number>')
+      .satisfies((text) => keyLine(text, 'allowed-tools:') !== null, 'the command must have allowed-tools');
     for (const tool of ['Read', 'Write', 'Bash', 'Grep', 'Glob', 'Agent']) {
       frontmatter.satisfies((text) => allowedTools(text).includes(tool) || `the allowed-tools list is [${allowedTools(text).join(', ')}]`, `allowed-tools must include ${tool}`);
     }
-    frontmatter.has('type: prompt', 'the command must have type: prompt');
+    frontmatter.satisfies((text) => keyLine(text, 'type: prompt') !== null, 'the command must have type: prompt');
     ctx.doc(COMMAND).has('workflows/extract-learnings.md', 'the command must reference workflows/extract-learnings.md in execution_context');
 
     ctx.exists(WORKFLOW, 'workflows/extract-learnings.md should exist');
@@ -69,10 +92,10 @@ module.exports = {
       .has('LEARNINGS.md', 'the workflow must output LEARNINGS.md')
       .has('skip if not found', 'the workflow must skip missing optional artifacts')
       .has('attribution to', 'the workflow must include source attribution for extracted items')
-      .satisfies((text) => hasLineStarting(text, 'phase:'), 'the LEARNINGS.md frontmatter must include phase')
-      .satisfies((text) => hasLineStarting(text, 'phase_name:'), 'the LEARNINGS.md frontmatter must include phase_name')
-      .satisfies((text) => hasLineStarting(text, 'generated:'), 'the LEARNINGS.md frontmatter must include generated')
-      .satisfies((text) => hasLineStarting(text, 'missing_artifacts:'), 'the LEARNINGS.md frontmatter must include missing_artifacts')
+      .satisfies(templateHas('phase:'), 'the LEARNINGS.md frontmatter must include phase')
+      .satisfies(templateHas('phase_name:'), 'the LEARNINGS.md frontmatter must include phase_name')
+      .satisfies(templateHas('generated:'), 'the LEARNINGS.md frontmatter must include generated')
+      .satisfies(templateHas('missing_artifacts:'), 'the LEARNINGS.md frontmatter must include missing_artifacts')
       .has('overwrite it', 'the workflow must overwrite a previous LEARNINGS.md on re-run');
   },
 };

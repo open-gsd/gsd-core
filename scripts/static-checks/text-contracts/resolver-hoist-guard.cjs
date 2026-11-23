@@ -30,9 +30,14 @@ const ATOM_FORBIDDEN_RESOLVER_SUBSTRINGS = {
 const isMapping = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const isDotSegment = (segment) => segment === '.' || segment === '..';
 
-// The concatenated content of every ``` fenced block (fence markers excluded): a live resolver call only ever sits in one.
+// The concatenated content of every fenced block (fence markers excluded; an unterminated block runs to the end): a live
+// resolver call only ever sits in one. The fence rules (backtick or tilde, any length) have one owner, the sectionizer.
 function fencedCodeOnly(content) {
-  return content.split('```').filter((_, i) => i % 2 === 1).join('\n');
+  const { scanFencedBlocks } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'markdown-sectionizer.cjs'));
+  const lines = content.split('\n');
+  return scanFencedBlocks(lines)
+    .map((block) => lines.slice(block.openLineIdx + 1, block.closeLineIdx === -1 ? lines.length : block.closeLineIdx).join('\n'))
+    .join('\n');
 }
 
 module.exports = {
@@ -88,7 +93,7 @@ module.exports = {
       try {
         const { parseWorkflowSections } = require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'workflow-fragments.cjs'));
         const sections = parseWorkflowSections(text, AUTONOMOUS);
-        return Array.isArray(sections) ? { sections } : { error: 'the fragment parser returned no sections' };
+        return { sections };
       } catch (err) {
         return { error: `the fragment parser failed: ${err.message}` };
       }

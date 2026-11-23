@@ -60,10 +60,18 @@ function aiModelsBlocks(text) {
   return blocks;
 }
 
-// The first options array with more labels than the cap ({ index, count }) and how many options arrays there are.
+// The first options array with more labels than the cap ({ index, count }), the first one never closed (its index, or
+// null) and how many options arrays there are. Every bracket is matched once, in one pass.
 function optionsArrays(text) {
+  const closeOf = new Map();
+  const stack = [];
+  for (let k = 0; k < text.length; k += 1) {
+    if (text[k] === '[') stack.push(k);
+    else if (text[k] === ']' && stack.length > 0) closeOf.set(stack.pop(), k);
+  }
   let questions = 0;
   let offender = null;
+  let unclosed = null;
   let at = text.indexOf('options');
   while (at !== -1) {
     let next = at + 1;
@@ -72,25 +80,16 @@ function optionsArrays(text) {
       const open = text[colon] === ':' ? skipBlank(text, colon + 1) : -1;
       if (open !== -1 && text[open] === '[') {
         questions += 1;
-        let depth = 0;
-        let end = -1;
-        for (let k = open; k < text.length; k += 1) {
-          if (text[k] === '[') depth += 1;
-          else if (text[k] === ']') {
-            depth -= 1;
-            if (depth === 0) { end = k; break; }
-          }
-        }
-        const count = quotedAfter(text.slice(open, end === -1 ? open + 1 : end + 1), 'label:').length;
+        const end = closeOf.get(open);
+        if (end === undefined && unclosed === null) unclosed = questions;
+        const count = end === undefined ? 0 : quotedAfter(text.slice(open, end + 1), 'label:').length;
         if (count > OPTIONS_CAP && offender === null) offender = { index: questions, count };
-        // An unclosed array runs to the end of the text, so nothing after it is a separate array: stop (linear).
-        if (end === -1) break;
         next = open + 1;
       }
     }
     at = text.indexOf('options', next);
   }
-  return { questions, offender };
+  return { questions, offender, unclosed };
 }
 
 // The value of every `model_profile"\s*:\s*"value"` (an empty value allowed), in order.
@@ -146,9 +145,10 @@ module.exports = {
         return missing.length === 0 || `not selectable: ${missing.join(', ')}`;
       }, 'all five model profiles must be selectable options across the AI Models prompts')
       .satisfies((text) => {
-        const { questions, offender } = optionsArrays(text);
+        const { questions, offender, unclosed } = optionsArrays(text);
         if (questions === 0) return 'no AskUserQuestion options array found';
-        return offender === null || `options array #${offender.index} has ${offender.count} options`;
+        if (offender !== null) return `options array #${offender.index} has ${offender.count} options`;
+        return unclosed === null || `options array #${unclosed} is never closed`;
       }, `no options array may exceed the ${OPTIONS_CAP}-option AskUserQuestion runtime cap (split into multiple questions, as #3784 did for model_profile)`)
       .satisfies((text) => {
         const enums = modelProfileEnums(text);

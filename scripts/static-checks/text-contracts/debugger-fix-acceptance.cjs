@@ -22,8 +22,23 @@ function inOrder(text, words) {
 // A line holds one of the word sequences in order (`.` never crossed LF, CR, U+2028 or U+2029).
 const lineHasAny = (text, sequences) => text.split(/[\n\r\u2028\u2029]/).some((line) => sequences.some((words) => inOrder(line, words)));
 
-// The text with every run of whitespace as one space, built without a backtracking pattern.
-const flatten = (text) => text.split(/\s/).filter(Boolean).join(' ');
+// The paragraphs of the text (runs of lines between blank lines), each with its whitespace flattened to single spaces.
+function paragraphsOf(text) {
+  const out = [];
+  let current = [];
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') {
+      if (current.length > 0) out.push(current.join(' '));
+      current = [];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length > 0) out.push(current.join(' '));
+  return out.map((paragraph) => paragraph.split(/\s/).filter(Boolean).join(' '));
+}
+
+const REVERT_NAME = /revert[\s-]{0,20}and[\s-]{0,20}reconfirm/i;
 
 // `surviv` + 1 to 50 word characters + " mutant" (any case), found by one walk over the text.
 function survivingMutant(text) {
@@ -66,15 +81,15 @@ module.exports = {
       .has(/target_test|mutation_check|no_op_deletion|adjacent_tests|revert_and_reconfirm/, 'the reference must enumerate the per-signal verification keys')
       .satisfies((text) => survivingMutant(text) || lineHasAny(text, [['mutant', 'surviv']]),
         'the reference must state that a surviving mutant rejects the fix')
-      .satisfies((text) => {
-        const lower = flatten(text).toLowerCase();
+      .satisfies((text) => paragraphsOf(text).some((paragraph) => {
+        const lower = paragraph.toLowerCase();
+        if (!lower.includes('no-op')) return false;
         const at = lower.indexOf('delet');
         return at !== -1 && ['reject', 'justif', 'rca', 'root cause'].some((word) => lower.indexOf(word, at + 'delet'.length) !== -1);
-      }, 'a deletion-only diff must be rejected unless the RCA justifies removal')
-      .satisfies((text) => {
-        const flat = flatten(text);
-        return inOrder(flat, ['before', 'accept']) || inOrder(flat, ['accept', 'after', 'revert']) || flat.toLowerCase().includes('prior to accept');
-      }, 'revert-and-reconfirm must run before a fix is accepted')
+      }), 'a deletion-only diff must be rejected unless the RCA justifies removal (in the paragraph that states the no-op/deletion detector)')
+      .satisfies((text) => paragraphsOf(text).some((paragraph) => REVERT_NAME.test(paragraph)
+        && (inOrder(paragraph, ['before', 'accept']) || inOrder(paragraph, ['accept', 'after', 'revert']) || paragraph.toLowerCase().includes('prior to accept'))),
+      'revert-and-reconfirm must run before a fix is accepted (in the paragraph that names revert-and-reconfirm)')
       .has(/timeout/i, 'the reference must mention a timeout')
       .has(/60s|60.?second/i, 'the reference must state the 60s npm/Stryker bound')
       .has(/git/i, 'the reference must bound the git subprocess (signal 5) too');

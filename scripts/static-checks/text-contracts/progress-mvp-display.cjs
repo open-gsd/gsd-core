@@ -5,8 +5,8 @@
 // standard display when the mode is not MVP. progress.md is fragmented (#2994) into progress/steps/*.md, so the
 // host and every step file directly under that directory are read together. Also the folded #14 guard: --auto is
 // documented in commands/gsd/progress.md, passed through in its <process> block, and handled in next.md.
-// The test's fallback assertion was satisfied by two unrelated lines (a DISCUSS_MODE shell line and a forensic-audit
-// sentence); the contract asks for the conditional section marker that makes the standard display the default.
+// The old fallback-wording assertion is kept, and the contract adds that the host's mvp-display section marker
+// (when="state:phase-mvp-mode") is the one that loads the mvp-display step, so any other mode gets the standard display.
 // Was tests/progress-mvp-display.test.cjs.
 
 const HOST = 'gsd-core/workflows/progress.md';
@@ -24,9 +24,13 @@ module.exports = {
       .has(/mvp_mode/i, 'the progress workflow must declare MVP_MODE')
       .has(/phase\.mvp-mode/i, 'the progress workflow must resolve MVP mode via the centralized phase.mvp-mode verb')
       .satisfies((text) => linesOf(text).some((line) => line.includes('plan.md') && line.includes('task')), 'MVP display must source user-flow status from PLAN.md tasks')
-      .has(/user-flow|user-visible/i, 'MVP display must use user-flow framing');
+      .has(/user-flow|user-visible/i, 'MVP display must use user-flow framing')
+      .satisfies((text) => linesOf(text).some((line) => (line.includes('mode') && (line.includes('null') || line.includes('absent') || line.includes('not mvp')))
+        || (line.includes('standard') && line.includes('display'))), 'the workflow must specify the standard-display fallback when the mode is not MVP');
+    // The section that loads the mvp-display step carries the condition, so any other mode gets the standard display.
     ctx.doc(HOST)
-      .has('when="state:phase-mvp-mode"', 'the mvp-display section must be loaded only when the phase MVP mode is on, so any other mode gets the standard display');
+      .slice('<!-- gsd:section id="mvp-display" when="state:phase-mvp-mode" -->', '<!-- /gsd:section -->')
+      .has('progress/steps/mvp-display.md', 'the mvp-display section (loaded only when the phase MVP mode is on) must load the mvp-display step');
 
     ctx.doc('commands/gsd/progress.md')
       .has('--auto', 'progress.md must document the --auto flag in the <flags> section')

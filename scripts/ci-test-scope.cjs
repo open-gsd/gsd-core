@@ -53,13 +53,13 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/release-backmerge-invariants.test.cjs',
   'tests/release-hotfix-empty-cherry-pick.test.cjs',
   'tests/release-notes-real-os-5922.test.cjs',
+  'tests/require-issue-link-policy.test.cjs',
+  'tests/security-scan.security.test.cjs',
+  'tests/self-test-report-workflow.test.cjs',
   // #6573: release-shard-lane-sharding's boundary cases moved to shard-spec; ci-merge-group-wiring and
   // release-tarball-smoke-workflow are text contracts whose workflow mutation cases are in the batch 9 test.
   'tests/shard-spec.test.cjs',
   'tests/text-contracts.batch9.test.cjs',
-  'tests/require-issue-link-policy.test.cjs',
-  'tests/security-scan.security.test.cjs',
-  'tests/self-test-report-workflow.test.cjs',
   // #6566: release-finalize-notes-5922, release-finalize-syncs-next-version, reviewed-or-maintainer-workflow,
   // workflow-token-permissions and policy-lint-shallow-checkout are text contracts; their workflow mutation cases live here.
   'tests/text-contracts.batch8.test.cjs',
@@ -97,7 +97,7 @@ const RULES = [
     fullMatrix: true,
     tests: [
       ...WORKFLOW_LINT_TESTS,
-      'tests/text-contracts.batch9.test.cjs', // #6573: release-tarball-smoke-workflow is a text contract
+      'tests/text-contracts.batch9.test.cjs', // #6573: ci-merge-group-wiring (reads the ruleset JSON) is a text contract
     ],
   },
   {

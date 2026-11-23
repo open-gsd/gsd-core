@@ -10,12 +10,13 @@ const ARM = 'Architectural Responsibility Map';
 const TOOL_PATTERNS = ['```bash', 'node "$HOME', 'gsd-tools.cjs', 'WebSearch', 'Context7', 'mcp__'];
 const TIERS = ['browser', 'frontend', 'API', 'database'];
 
-// Where the `## Step 1.5` heading that names the map starts (-1 when no such heading line).
+// Where the `## Step 1.5` heading (at a line start) that names the map starts (-1 when no such heading line).
 function armStepStart(text) {
   let at = text.indexOf('## Step 1.5');
   while (at !== -1) {
     const lineEnd = text.indexOf('\n', at);
-    if (text.slice(at, lineEnd === -1 ? undefined : lineEnd).includes(ARM)) return at;
+    const atLineStart = at === 0 || text[at - 1] === '\n';
+    if (atLineStart && text.slice(at, lineEnd === -1 ? undefined : lineEnd).includes(ARM)) return at;
     at = text.indexOf('## Step 1.5', at + 1);
   }
   return -1;

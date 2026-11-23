@@ -22,8 +22,8 @@ function checkReference(ctx, name, componentPattern, examples) {
   const doc = ctx.doc(rel);
   doc.frontmatter()
     .has(componentPattern, `${name}.md frontmatter must name its component`)
-    .has(/version:\s{0,20}\d{1,9}/, `${name}.md frontmatter must carry a numeric version`)
-    .has(/last_calibrated:\s{0,20}\d{4}-\d{2}-\d{2}/, `${name}.md frontmatter must carry a last_calibrated date`);
+    .has(/^version:[ \t]{0,20}\d{1,9}[ \t]{0,20}$/m, `${name}.md frontmatter must carry a numeric version`)
+    .has(/^last_calibrated:[ \t]{0,20}\d{4}-\d{2}-\d{2}[ \t]{0,20}$/m, `${name}.md frontmatter must carry a last_calibrated date`);
   doc
     .satisfies((text) => {
       const total = countOf(text, EXAMPLE);
@@ -55,8 +55,8 @@ function checkReference(ctx, name, componentPattern, examples) {
 module.exports = {
   id: 'few-shot-calibration',
   check(ctx) {
-    checkReference(ctx, 'plan-checker', /component:\s{0,20}plan-checker/, 4);
-    checkReference(ctx, 'verifier', /component:\s{0,20}verifier/, 7)
+    checkReference(ctx, 'plan-checker', /^component:[ \t]{0,20}plan-checker[ \t]{0,20}$/m, 4);
+    checkReference(ctx, 'verifier', /^component:[ \t]{0,20}verifier[ \t]{0,20}$/m, 7)
       .has('## Calibration-Derived Gap Patterns', 'verifier.md must include the calibration-derived gap patterns table')
       .has('Missing wiring', 'the gap patterns table must name Missing wiring')
       .has('Missing tests', 'the gap patterns table must name Missing tests');

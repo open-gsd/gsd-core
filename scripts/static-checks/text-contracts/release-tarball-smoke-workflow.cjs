@@ -19,7 +19,8 @@ function parse(text) {
   } catch (err) {
     return { error: `install-smoke.yml is not valid YAML: ${err.message}` };
   }
-  return isObject(workflow) ? { workflow } : { error: 'install-smoke.yml is not a mapping' };
+  if (!isObject(workflow)) return { error: 'install-smoke.yml is not a mapping' };
+  return isObject(workflow.jobs) ? { workflow } : { error: 'install-smoke.yml has no jobs mapping' };
 }
 
 function triggers(workflow) {
@@ -42,15 +43,21 @@ function steps(workflow) {
 
 const smokeStepOf = (workflow) => steps(workflow).find((step) => typeof step.run === 'string' && step.run.includes(SMOKE_SCRIPT));
 
-const onWorkflow = (check) => (text) => {
-  const parsed = parse(text);
-  return parsed.error || check(parsed.workflow);
-};
-
 module.exports = {
   id: 'release-tarball-smoke-workflow',
   check(ctx) {
-    ctx.doc(WORKFLOW)
+    const doc = ctx.doc(WORKFLOW);
+    // A workflow that cannot be read is one finding; the structural checks below need the parsed workflow.
+    let loaded = null;
+    doc.satisfies((text) => {
+      const parsed = parse(text);
+      if (parsed.error) return parsed.error;
+      loaded = parsed.workflow;
+      return true;
+    }, 'install-smoke.yml must be a workflow with a jobs mapping');
+    if (loaded === null) return;
+    const onWorkflow = (check) => () => check(loaded);
+    doc
       .satisfies(onWorkflow((workflow) => triggers(workflow).includes('workflow_call') || `found ${JSON.stringify(triggers(workflow))}`), "install-smoke.yml must keep the workflow_call trigger (the release.yml integration)")
       .satisfies(onWorkflow((workflow) => smokeStepOf(workflow) !== undefined || 'no step'), 'the lifecycle smoke step must call release-tarball-smoke.cjs')
       .satisfies(onWorkflow((workflow) => {

@@ -12,9 +12,11 @@ const MANAGER_COMPACT = 'agents/gsd-debug-session-manager.compact.md';
 const VARIANTS = [['full', MANAGER], ['compact', MANAGER_COMPACT]];
 const DEBUG_WORKFLOW = 'gsd-core/workflows/debug.md';
 
+const { agentCalls } = require('./model-routing-spawn-threading.cjs');
+
 // The `Agent(...)` spawn blocks of a file: the multi-line form (a call whose open paren is followed only by whitespace
-// that includes a newline, up to the first line that starts with `)`) and the single-line form (`Agent(` up to the next `)`
-// with no newline or `)` between), so a one-line spawn cannot evade the class guard.
+// that includes a newline, up to the first line that starts with `)`) and every call that closes on its own line, so a
+// one-line spawn cannot evade the class guard.
 function agentSpawnBlocks(content) {
   const blocks = [];
   // Matches do not overlap: the scan resumes after a matched block, as a global regex scan does.
@@ -25,25 +27,19 @@ function agentSpawnBlocks(content) {
     let runEnd = afterParen;
     while (runEnd < content.length && /\s/.test(content[runEnd])) runEnd += 1;
     // Multi-line: the last newline of the whitespace run, then the first newline-paren after it. An earlier newline of the
-    // run can only close on the line break directly before a paren that ends the run, so it is tried only for that case.
+    // run could only close on a block that holds nothing but whitespace, which no check here can select, so it is not tried.
     const lastNewline = content.lastIndexOf('\n', runEnd - 1);
     if (lastNewline < afterParen) continue;
-    let close = content.indexOf('\n)', lastNewline + 1);
-    if (close === -1 && content[runEnd] === ')' && lastNewline === runEnd - 1 && content.lastIndexOf('\n', lastNewline - 1) >= afterParen) close = lastNewline;
+    const close = content.indexOf('\n)', lastNewline + 1);
     if (close !== -1) {
       blocks.push(content.slice(at, close + 2));
       next = close + 2;
     }
   }
-  next = 0;
-  for (let at = content.indexOf('Agent(', next); at !== -1; at = content.indexOf('Agent(', next)) {
-    next = at + 1;
-    let i = at + 'Agent('.length;
-    while (i < content.length && content[i] !== '\n' && content[i] !== ')') i += 1;
-    if (content[i] === ')') {
-      blocks.push(content.slice(at, i + 1));
-      next = i + 1;
-    }
+  // Single-line: the paren-aware call scan shared with model-routing-spawn-threading, so a nested call or a quoted
+  // parenthesis in the arguments does not end the block early.
+  for (const call of agentCalls(content)) {
+    if (!call.includes('\n') && call.endsWith(')')) blocks.push(call);
   }
   return blocks;
 }
