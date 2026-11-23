@@ -1625,9 +1625,6 @@
   "tests/agent-install-check.test.cjs": {
     "block": 1
   },
-  "tests/agent-required-reading-consistency.test.cjs": {
-    "directive": 3
-  },
   "tests/agent-size-budget.test.cjs": {
     "block": 2
   },
@@ -1641,10 +1638,6 @@
     "block": 1
   },
   "tests/antigravity-upgrades.test.cjs": {
-    "block": 1
-  },
-  "tests/ask-user-questions-fallback.test.cjs": {
-    "directive": 1,
     "block": 1
   },
   "tests/audit-command-cutover.test.cjs": {
@@ -1767,9 +1760,6 @@
   "tests/claude-orchestration.test.cjs": {
     "directive": 1,
     "block": 3
-  },
-  "tests/cleanup-branch-pruning.test.cjs": {
-    "directive": 1
   },
   "tests/cli-exit.test.cjs": {
     "block": 3,
@@ -1942,9 +1932,6 @@
   "tests/continuation-grammar-parity.test.cjs": {
     "block": 2
   },
-  "tests/contributor-standards.test.cjs": {
-    "directive": 1
-  },
   "tests/copilot-install.test.cjs": {
     "directive": 2
   },
@@ -2091,14 +2078,8 @@
   "tests/execute-phase-decimal-arithmetic.test.cjs": {
     "block": 1
   },
-  "tests/execute-phase-step-5-5-deviation-doc.test.cjs": {
-    "directive": 1
-  },
   "tests/execute-phase-wave.test.cjs": {
     "directive": 11
-  },
-  "tests/execute-phase-worktree-artifacts.test.cjs": {
-    "directive": 6
   },
   "tests/execute-plan-update-codebase-map-diff-base.test.cjs": {
     "block": 1
@@ -2780,20 +2761,11 @@
   "tests/next-decimal-roadmap-scan.test.cjs": {
     "directive": 1
   },
-  "tests/next-safety-gates.test.cjs": {
-    "directive": 1
-  },
-  "tests/next-up-clear-order.test.cjs": {
-    "directive": 1
-  },
   "tests/no-bare-gsd-tools-command-position.test.cjs": {
     "block": 3
   },
   "tests/no-dead-sdk-refs.test.cjs": {
     "block": 2
-  },
-  "tests/no-hardcoded-home-gsd-tools.test.cjs": {
-    "directive": 1
   },
   "tests/no-path-literal-in-assert.rule.test.cjs": {
     "block": 1
@@ -2973,9 +2945,6 @@
     "block": 3,
     "directive": 3
   },
-  "tests/planner-decomposition.test.cjs": {
-    "directive": 2
-  },
   "tests/planner-language-regression.test.cjs": {
     "directive": 1,
     "block": 1
@@ -3091,9 +3060,6 @@
   },
   "tests/quick-batch.property.test.cjs": {
     "block": 1
-  },
-  "tests/quick-commit-boundary-context-research.test.cjs": {
-    "block": 2
   },
   "tests/qwen-imperative-reference.test.cjs": {
     "block": 1
@@ -3302,10 +3268,6 @@
     "block": 2,
     "directive": 2
   },
-  "tests/seed-scan-new-milestone.test.cjs": {
-    "directive": 1,
-    "block": 1
-  },
   "tests/settings-integrations.test.cjs": {
     "directive": 3,
     "block": 1
@@ -3349,12 +3311,6 @@
     "block": 1
   },
   "tests/smart-entry.unit.test.cjs": {
-    "block": 1
-  },
-  "tests/spec-phase-probe-reachability.test.cjs": {
-    "block": 1
-  },
-  "tests/spike-manifest-scoping.test.cjs": {
     "block": 1
   },
   "tests/stale-bake-guard.test.cjs": {
@@ -3407,9 +3363,6 @@
   "tests/table-schema-drift-lint.test.cjs": {
     "block": 1
   },
-  "tests/tdd-backend-wiring.test.cjs": {
-    "block": 1
-  },
   "tests/tdd-mode.platform.test.cjs": {
     "block": 1
   },
@@ -3456,9 +3409,6 @@
   "tests/ui-spec-inventory-provenance.test.cjs": {
     "block": 2
   },
-  "tests/ultraplan-phase.test.cjs": {
-    "directive": 1
-  },
   "tests/undo-commit-selection-4465.test.cjs": {
     "block": 1
   },
@@ -3484,9 +3434,6 @@
   },
   "tests/verification-status.test.cjs": {
     "block": 7
-  },
-  "tests/verifier-coincidental-reliance.test.cjs": {
-    "block": 1
   },
   "tests/verifier-contribution.test.cjs": {
     "block": 1
@@ -3549,9 +3496,6 @@
   },
   "tests/workflow-guard-registration.test.cjs": {
     "directive": 1
-  },
-  "tests/workflow-jq-dependency.test.cjs": {
-    "block": 1
   },
   "tests/workflow-maintainer-skip.test.cjs": {
     "directive": 1

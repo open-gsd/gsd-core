@@ -113,12 +113,9 @@ describe('resolveCodeReviewWorkflow', () => {
 {
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-3727-code-review-fix-flag-dispatch (consolidation epic #1969 B3 #1972)", () => {
-// allow-test-rule: source-text-is-the-product (see #3727)
-// The workflow .md IS the product: its text is loaded and interpreted at
-// runtime by the agent host. Structural assertions (step existence, flag
-// references in the initialize step) verify the deployed dispatch contract.
 // Pure-function assertions on parseCodeReviewFlags / resolveCodeReviewWorkflow
-// are IR-level (not raw-text-match) per CONTRIBUTING.md L554.
+// are IR-level (not raw-text-match) per CONTRIBUTING.md L554. The structural
+// assertions on the workflow text moved to the `code-review-flags` text contract.
 
 /**
  * Regression tests for #3727 — /gsd-code-review N --fix silently no-ops.
@@ -136,12 +133,10 @@ describe('resolveCodeReviewWorkflow', () => {
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const FLAGS_LIB = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'code-review-flags.cjs');
-const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md');
 
 // ---------------------------------------------------------------------------
 // Stage 2 seam: typed IR from parseCodeReviewFlags and resolveCodeReviewWorkflow
@@ -226,66 +221,8 @@ describe('#3727 — parseCodeReviewFlags: typed IR for code-review argv', () => 
   });
 });
 
-// ---------------------------------------------------------------------------
-// Docs-parity: the workflow .md must contain the dispatch_fix step and
-// reference code-review-flags.cjs in the initialize step.
-// These are structural invariants on the deployed product text.
-// Source-text-is-the-product exemption applies (see file header).
-// ---------------------------------------------------------------------------
-
-describe('#3727 — code-review.md structural dispatch contract', () => {
-  const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
-  // #2994: dispatch_fix moved wholly into a marker-gated step file
-  // (gsd-core/workflows/code-review/steps/dispatch-fix.md, when="flag:--fix")
-  // — the host now carries only the gsd:section marker + read-or-skip stub.
-  const DISPATCH_FIX_STEP_PATH = path.join(
-    ROOT,
-    'gsd-core',
-    'workflows',
-    'code-review',
-    'steps',
-    'dispatch-fix.md',
-  );
-  const dispatchFixSrc = fs.readFileSync(DISPATCH_FIX_STEP_PATH, 'utf8');
-
-  test('initialize step references code-review-flags.cjs for flag parsing', () => {
-    const initStart = src.indexOf('<step name="initialize">');
-    const initEnd = src.indexOf('</step>', initStart);
-    assert.ok(initStart !== -1, 'workflow must have an initialize step');
-    const initSection = src.slice(initStart, initEnd);
-    assert.ok(
-      initSection.includes('code-review-flags.cjs'),
-      'initialize step must reference code-review-flags.cjs to parse --fix/--all/--auto flags'
-    );
-  });
-
-  test('workflow gates a dispatch-fix section (flag:--fix) whose step file has the dispatch_fix step', () => {
-    assert.ok(
-      src.includes('<!-- gsd:section id="dispatch-fix" when="flag:--fix" -->') &&
-        src.includes('gsd-core/workflows/code-review/steps/dispatch-fix.md'),
-      'code-review.md must gate a dispatch-fix section pointing at dispatch-fix.md (missing = --fix is silently no-op)'
-    );
-    assert.ok(
-      dispatchFixSrc.includes('<step name="dispatch_fix">'),
-      'dispatch-fix.md step file must contain the dispatch_fix step'
-    );
-  });
-
-  test('dispatch_fix step delegates to code-review-fix.md when fix flag is true', () => {
-    assert.ok(
-      dispatchFixSrc.includes('code-review-fix.md'),
-      'dispatch_fix step must reference code-review-fix.md workflow'
-    );
-  });
-
-  test('dispatch_fix step references gsd-code-fixer agent (via code-review-fix.md chain)', () => {
-    // The dispatch step must show that fixing will occur, either directly or
-    // by loading code-review-fix.md (which in turn spawns gsd-code-fixer).
-    assert.ok(
-      dispatchFixSrc.includes('gsd-code-fixer') || dispatchFixSrc.includes('code-review-fix.md'),
-      'dispatch_fix step must reference gsd-code-fixer agent or code-review-fix.md workflow'
-    );
-  });
-});
+// The structural half of #3727 (the code-review.md initialize step names code-review-flags.cjs, the gated
+// dispatch-fix section and its step file) is the `code-review-flags` text contract in
+// scripts/static-checks/text-contracts/.
   });
 }
