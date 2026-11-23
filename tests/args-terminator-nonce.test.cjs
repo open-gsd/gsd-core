@@ -300,7 +300,8 @@ describe('#5637 what an install writes', () => {
       `;
       const surfaceRun = runNode(['-e', script], {
         cwd: root,
-        env: isolatedEnv({ home: root, path: process.env.PATH, override: { GSD_HOME: root } }),
+        // `base: {}`: the child had exactly PATH, HOME, USERPROFILE and GSD_HOME before; it does not inherit the rest.
+        env: isolatedEnv({ home: root, path: process.env.PATH, base: {}, override: { GSD_HOME: root } }),
         timeoutMs: PROBE_TIMEOUT_MS * 4,
       });
       assertSeamExit(assert, surfaceRun, 0);
