@@ -590,10 +590,29 @@ function countSites(results) {
   return { counts, unparsed };
 }
 
+const LINT_TREE_ATTEMPTS = 3;
+
+/**
+ * `eslint.lintFiles(patterns)`, retried when a file the glob listed is gone before ESLint reads it (#6570).
+ * Another test file writes and removes probe files in the real tests/ tree
+ * (tests/no-unbounded-spawn-allowlist.test.cjs, #3148), and ESLint expands the glob and then reads each file, so
+ * a removal in between rejects the whole run with ENOENT. A file that is gone is not a test file: the retry lints
+ * the tree as it now is. Any other error, and an ENOENT that outlasts the attempts, still fails.
+ */
+async function lintTree(eslint, patterns) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await eslint.lintFiles(patterns);
+    } catch (err) {
+      if (err?.code !== 'ENOENT' || attempt >= LINT_TREE_ATTEMPTS) throw err;
+    }
+  }
+}
+
 /** The site count of every file under tests/. */
 async function measureSiteCounts() {
   const onDisk = cjsFilesOnDisk('tests');
-  const results = await siteCountEslint().lintFiles(['tests/**/*.cjs']);
+  const results = await lintTree(siteCountEslint(), ['tests/**/*.cjs']);
   return { ...countSites(results), unvisited: findUnvisited(onDisk, results) };
 }
 
@@ -684,13 +703,39 @@ describe('no-adhoc-env-isolation allowlist: per-file site counts', () => {
     assert.deepStrictEqual(ratchetDiff({ ...recorded, ...counts }, recorded), { ...CLEAN_DIFF, added: [rel] });
   });
 
+  // #6570: tests/no-unbounded-spawn-allowlist.test.cjs writes tests/helpers/__probe_recursion_detect_3148.cjs into
+  // the real tree and removes it. ESLint expands the glob and then reads each file, so a probe removed in between
+  // makes lintFiles reject with ENOENT. The stand-ins below fail the way ESLint does.
+  const vanishedFile = () => Object.assign(new Error("ENOENT: no such file or directory, open '/work/tests/helpers/probe.cjs'"), { code: 'ENOENT' });
+
+  test('a file removed while the tree is linted is retried over the tree as it now is, not a failure (#6570)', async () => {
+    let calls = 0;
+    const eslint = { lintFiles: async () => { calls++; if (calls === 1) throw vanishedFile(); return ['linted']; } };
+    assert.deepStrictEqual(await lintTree(eslint, ['tests/**/*.cjs']), ['linted']);
+    assert.strictEqual(calls, 2);
+  });
+
+  test('a file that keeps vanishing fails after a bounded number of attempts (#6570)', async () => {
+    let calls = 0;
+    const eslint = { lintFiles: async () => { calls++; throw vanishedFile(); } };
+    await assert.rejects(() => lintTree(eslint, ['tests/**/*.cjs']), { code: 'ENOENT' });
+    assert.strictEqual(calls, 3);
+  });
+
+  test('an error other than ENOENT is not retried (#6570)', async () => {
+    let calls = 0;
+    const eslint = { lintFiles: async () => { calls++; throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); } };
+    await assert.rejects(() => lintTree(eslint, ['tests/**/*.cjs']), { code: 'EACCES' });
+    assert.strictEqual(calls, 1);
+  });
+
   test('a global ignore over a tests/ subtree shows its files as unvisited', async () => {
     const onDisk = cjsFilesOnDisk('tests/helpers');
     assert.ok(onDisk.length > 0, 'the row needs .cjs files under tests/helpers');
     const pattern = ['tests/helpers/**/*.cjs'];
     // Control: with no extra ignore, every file under the subtree is visited.
-    assert.deepStrictEqual(findUnvisited(onDisk, await siteCountEslint().lintFiles(pattern)), []);
-    const ignored = await siteCountEslint([{ ignores: ['tests/helpers/**'] }]).lintFiles(pattern);
+    assert.deepStrictEqual(findUnvisited(onDisk, await lintTree(siteCountEslint(), pattern)), []);
+    const ignored = await lintTree(siteCountEslint([{ ignores: ['tests/helpers/**'] }]), pattern);
     assert.deepStrictEqual(findUnvisited(onDisk, ignored), onDisk);
   });
 
