@@ -48,28 +48,12 @@ const SCRIPT = path.join(ROOT, 'scripts', 'gen-platform-conformance-tier.cjs');
 const GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'platform-conformance-tier.generated.cjs');
 const MACOS_GENERATED_PATH = path.join(ROOT, 'scripts', 'lib', 'macos-conformance-tier.generated.cjs');
 
-// Policy ceilings, not derived facts — a bound like this has to be a number
-// somewhere, so it is hoisted here once (module scope, shared by every case
-// below that needs it) rather than left as a bare literal inside an
-// assertion. Measured at authoring time (2026-09-11): the Windows tier sat at
-// 264/931 eligible unit-suite files (~28.4%), the macOS tier at 197/931
-// (~21.2%). Each ceiling below leaves headroom over that measurement — enough
-// to absorb ordinary suite growth (new test files that happen to touch a real
-// platform signal) without going so loose that a regression toward
-// re-matching a removed house idiom (process-seam calls, path-call-plus-
-// slash-literal) would slip back under the ceiling undetected. If the
-// measured ratio moves, update the ratio in this comment and re-justify the
-// ceiling — do not just raise the number to make a red test green.
-
-// #6551 (ADR-4641 amendment, 2026-11-22): the ceilings above were ratios against
-// the live count of unit-suite files. ADR-6315 item 19 deletes OS-agnostic files
-// (they become static checks), which shrinks that denominator and raises the ratio
-// of a tier that did not grow. The tier is therefore bounded by its own size
-// instead: a ratchet. It may not grow past the baseline (a file joining the tier
-// is a deliberate edit of the baseline, with its reason in review) and it may not
-// sit below it (a tier that shrank lowers the baseline in the same PR, so the
-// bound only ever tightens). The 33% and 25% ceilings stay as the evidence the
-// first baselines were taken from: 366/1192 and 301/1192 at the amendment.
+// Size baselines, not derived facts: each tier is bounded by its own file count (ADR-4641, amended by #6551;
+// they replace the ratios of that ADR's section 3, which moved whenever unrelated tests were deleted). A file
+// joining a tier is a deliberate edit of the constant, with the reason in review; a tier that shrank lowers the
+// constant in the same change, so the bound only tightens. Do not raise a number to make a red test green.
+// The count is a fresh sweep of the live tree, the same one the committed generated lists carry. An equal-count
+// swap (one signal-bearing file in, one tier file out) is caught by the list-equality assertions below, not here.
 const WINDOWS_TIER_SIZE_BASELINE = 366;
 const MACOS_TIER_SIZE_BASELINE = 301;
 
