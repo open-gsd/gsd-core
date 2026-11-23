@@ -267,7 +267,9 @@ These govern the system as it stands. Cite these.
 | [ADR-3626](3626-context-md-seam-claim-gate.md) | CONTEXT.md seam claims carry a checkable enforcement pointer | Accepted | — |
 | [ADR-3628](3628-milestone-release-mapping.md) | Milestone release mapping — a GSD milestone version is not a repository release version | Accepted | — |
 | [ADR-3660](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Accepted | [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) |
+| [ADR-3711](3711-cross-runtime-plan-execution.md) | Cross-runtime plan execution — a per-plan `executor_runtime` on the `orchestrator-worktree` backend | Accepted | — |
 | [ADR-3806](3806-review-dispositions-ledger.md) | Review Dispositions Ledger canonizes where and how reviews-mode records incorporate/defer decisions in PLAN.md | Accepted | — |
+| [ADR-3997](3997-review-prompt-capability-contributions.md) | Review-prompt capability contributions — `review:pre` and the `reviewer` role | Accepted | — |
 | [ADR-4139](4139-compact-content-seam.md) | The compact-content seam — shrink the eager window, never the guarantee | Accepted | — |
 | [ADR-4309](4309-criterion-baseline-notation.md) | Criterion baseline notation for quantitative acceptance criteria | Accepted | — |
 | [ADR-4310](4310-criterion-replay.md) | Opt-in replay of recorded criterion baselines | Accepted | — |
@@ -278,6 +280,7 @@ These govern the system as it stands. Cite these.
 | [ADR-4910](4910-planning-document-seam.md) | Planning documents are read and written through one parse → mutate → serialize seam | Accepted | — |
 | [ADR-5057](5057-one-owner-per-workflow-verdict.md) | One owner per workflow verdict — phase status, verification, gates, runtime activation, planning writes | Accepted | — |
 | [ADR-5559](5559-pi-agent-role-dispatch.md) | Agent-role dispatch on Pi — a GSD-owned `gsd_dispatch` tool that runs each role in an isolated `pi` child process | Accepted | — |
+| [ADR-5812](5812-worktree-residue-removal-guards.md) | Residue-removal guard standard for `worktree.reap-orphans` | Accepted | — |
 
 ### Proposed
 
@@ -295,7 +298,6 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-1953](1953-complexity-triggered-refactor.md) | Complexity-triggered refactor — the loop measures the entropy it just added | Proposed | — |
 | [ADR-3128](3128-adaptive-runtime-evidence.md) | Adaptive runtime evidence for GSD Debug | Proposed | — |
 | [ADR-3646](3646-per-task-content-resolution-seam.md) | Per-task external-tracker content-resolution seam | Proposed | — |
-| [ADR-3711](3711-cross-runtime-plan-execution.md) | Cross-runtime plan execution — a per-plan `executor_runtime` on the `orchestrator-worktree` backend | Proposed | — |
 | [ADR-3889](3889-process-exit-contract.md) | One exit-code registry — 0 and 1 are free, everything else is allocated | Proposed | — |
 | [ADR-3942](3942-emitted-drift-ack-commit-trailer.md) | The emitted-drift acknowledgment is PR-lifetime data — it belongs in a commit trailer, not the working tree | Proposed | — |
 | [ADR-4629](4629-state-write-intent-beyond-frontmatter.md) | STATE.md write intent beyond frontmatter — bounded, verified writes | Proposed | — |
@@ -303,7 +305,6 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-4908](4908-project-context.md) | One resolved ProjectContext — which checkout a process acts in is decided once | Proposed | — |
 | [ADR-4909](4909-shipped-surface-contract-seam.md) | Shipped workflow bodies are a compiled artifact — two generated manifests and one extractor | Proposed | — |
 | [ADR-5331](5331-opencode-v2-support-and-v1-sunset.md) | OpenCode 2.x support as a version-gated target of the `opencode` runtime, and sunset of OpenCode 1.x support | Proposed | — |
-| [ADR-5812](5812-worktree-residue-removal-guards.md) | Residue-removal guard standard for `worktree.reap-orphans` | Proposed | — |
 | [ADR-6315](6315-ci-redesign.md) | CI redesign — a fast static tier, a sharded critical path, one full matrix per merge, and feedback loops that keep it fast | Proposed | — |
 
 ### Superseded, Retired, and Legacy

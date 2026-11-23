@@ -57,7 +57,7 @@ describe('gsd-path-export SessionStart hook (#5465)', () => {
     const r = run(configDir, { CLAUDE_ENV_FILE: envFile });
     assert.strictEqual(r.status, 0, r.stderr);
     // The hook writes the directory as the shell that sources the file spells it (`/c/...` on Windows).
-    const bin = require('../hooks/gsd-path-export.js').shellPath(fs.realpathSync(path.join(configDir, 'gsd-core', 'bin')));
+    const bin = require('../hooks/gsd-path-export.js').shellPath(fs.realpathSync.native(path.join(configDir, 'gsd-core', 'bin')));
     assert.strictEqual(fs.readFileSync(envFile, 'utf8'), `export PATH='${bin}':"$PATH"\n`);
   });
 
@@ -108,7 +108,7 @@ describe('gsd-path-export SessionStart hook (#5465)', () => {
     const r = run(configDir, { CLAUDE_ENV_FILE: envFile });
     assert.strictEqual(r.status, 0, r.stderr);
     const line = fs.readFileSync(envFile, 'utf8').trimEnd();
-    const bin = require('../hooks/gsd-path-export.js').shellPath(fs.realpathSync(path.join(configDir, 'gsd-core', 'bin')));
+    const bin = require('../hooks/gsd-path-export.js').shellPath(fs.realpathSync.native(path.join(configDir, 'gsd-core', 'bin')));
     if (process.platform === 'win32') {
       // No POSIX sh on the runner's PATH to execute the line; pin the escaped one-word form instead.
       assert.strictEqual(line, `export PATH='${bin.replace(/'/g, "'\\''")}':"$PATH"`);
@@ -149,6 +149,76 @@ describe('gsd-path-export SessionStart hook (#5465)', () => {
     const { isManagedHookCommand, isManagedHookBasename } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
     assert.ok(isManagedHookBasename('gsd-path-export.js'));
     assert.ok(isManagedHookCommand('node "/h/.claude/hooks/gsd-path-export.js"'));
+  });
+});
+
+// ─── #6107: two letter-case spellings of one folder resolve to one path ───────────────────────────────────
+//
+// On a case-insensitive volume `fs.realpathSync` keeps the caller's letter case while `realpathSync.native`
+// (realpath(3)) returns the spelling stored on disk. The suite also runs on case-sensitive hosts, so the volume is
+// simulated: `realpathSync` follows Node's documented behaviour (a followed symlink resolves in the target's
+// on-disk spelling, otherwise the caller's spelling is kept) and `.native` always answers the on-disk spelling.
+
+function simulateCaseInsensitiveVolume(t) {
+  const original = fs.realpathSync;
+  const native = original.native;
+  const fold = (p) => String(p).replace(/([\\/])root(?=[\\/]|$)/i, '$1Root');
+  const nativeVariant = (p, o) => native(fold(p), o);
+  const jsVariant = (p, o) => {
+    const onDisk = native(fold(p), o);
+    return onDisk === fold(p) ? String(p) : onDisk;
+  };
+  jsVariant.native = nativeVariant;
+  // plain assignment, not mock.method: the mock wrapper forwards `.native` to the ORIGINAL function, and the
+  // simulation must answer `.native` itself
+  fs.realpathSync = jsVariant;
+  t.after(() => { fs.realpathSync = original; });
+}
+const flipCase = (p) => p.replace(/([\\/])Root(?=[\\/]|$)/, '$1root');
+
+describe('#6107: gsd-path-export resolves two spellings of one install to one PATH line', () => {
+  const hook = require('../hooks/gsd-path-export.js');
+
+  function installUnder(t) {
+    // the on-disk spelling of the temp dir (macOS tmpdir is a /var -> /private/var symlink), so only `Root` differs by case
+    const base = fs.realpathSync.native(createTempDir('gsd-6107-'));
+    t.after(() => cleanup(base));
+    fs.mkdirSync(path.join(base, 'Root', 'hooks'), { recursive: true });
+    fs.mkdirSync(path.join(base, 'Root', 'gsd-core', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(base, 'Root', 'gsd-core', 'bin', 'gsd_run'), '#!/bin/sh\n', { mode: 0o755 });
+    return base;
+  }
+
+  test('the typed and the case-flipped spelling resolve to the same bin directory and persist one export line', (t) => {
+    simulateCaseInsensitiveVolume(t);
+    const base = installUnder(t);
+    const typed = hook.resolveBinDir(path.join(base, 'Root', 'hooks'));
+    const flipped = hook.resolveBinDir(flipCase(path.join(base, 'Root', 'hooks')));
+    assert.ok(typed, 'the typed spelling resolves');
+    assert.equal(flipped, typed, 'the flipped spelling resolves to the same path');
+    const envFile = path.join(base, 'env');
+    assert.equal(hook.persistPath(envFile, typed), true);
+    assert.equal(hook.persistPath(envFile, flipped), false, 'the second spelling finds the line already there');
+    assert.equal(splitLines(fs.readFileSync(envFile, 'utf8')).filter((l) => l.startsWith('export PATH=')).length, 1);
+  });
+
+  test('on a case-sensitive volume two folders that differ only by case stay distinct', (t) => {
+    const base = createTempDir('gsd-6107-cs-');
+    t.after(() => cleanup(base));
+    fs.mkdirSync(path.join(base, 'Probe'));
+    if (fs.existsSync(path.join(base, 'probe'))) {
+      t.skip('this volume is case-insensitive');
+      return;
+    }
+    for (const dir of ['Root', 'root']) {
+      fs.mkdirSync(path.join(base, dir, 'hooks'), { recursive: true });
+      fs.mkdirSync(path.join(base, dir, 'gsd-core', 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(base, dir, 'gsd-core', 'bin', 'gsd_run'), '#!/bin/sh\n', { mode: 0o755 });
+    }
+    const upper = hook.resolveBinDir(path.join(base, 'Root', 'hooks'));
+    const lower = hook.resolveBinDir(path.join(base, 'root', 'hooks'));
+    assert.ok(upper && lower);
+    assert.notEqual(upper, lower, 'paths that differ only by case are still distinct');
   });
 });
 

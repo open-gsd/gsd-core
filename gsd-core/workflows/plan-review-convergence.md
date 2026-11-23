@@ -18,7 +18,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 ## 1. Parse and Normalize Arguments
 
-Extract from $ARGUMENTS: phase number, reviewer flags (the declared reviewer lane flags, plus `--all`), `--max-cycles N`, `--text`, `--ws`.
+Extract from $ARGUMENTS: phase number, reviewer flags (the declared reviewer lane flags, plus `--all`), `--max-cycles N`, `--on-escalation ask|exit` (#4617), `--text`, `--ws`.
 
 ```bash
 IFS= read -rd '' GSD_ARGS <<'GSD_ARGS_END' || true
@@ -36,8 +36,25 @@ PHASE=$(echo "$GSD_ARGS" | grep -oE '[0-9]+[A-Z]?(\.[0-9]+)*' | head -1)
 MAX_CYCLES=$(echo "$GSD_ARGS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
 if [ -z "$MAX_CYCLES" ]; then MAX_CYCLES=3; fi
 
-GSD_WS=""
-echo "$GSD_ARGS" | grep -qE '\-\-ws\s+\S+' && GSD_WS=$(echo "$GSD_ARGS" | grep -oE '\-\-ws\s+\S+')
+# #4617: unattended escalation outcome. `ask` (the default) keeps the interactive question at
+# step 5c; `exit` ends a non-converged run with a CONVERGENCE_STATUS line instead. Any other
+# value is refused here, before cycle 1 — falling back to `ask` would hang the exact caller
+# (a board worker, a CI job) that passed the flag because it cannot answer a question.
+ON_ESCALATION=ask
+if echo "$GSD_ARGS" | grep -qE '(^|[[:space:]])--on-escalation([=[:space:]]|$)'; then
+  # A repeated flag is refused, not resolved by position: `exit ... --on-escalation=ask` would
+  # otherwise silently pick `ask` for the caller that cannot answer.
+  if [ "$(echo "$GSD_ARGS" | grep -oE '(^|[[:space:]])--on-escalation([=[:space:]]|$)' | wc -l | tr -d ' ')" -gt 1 ]; then
+    echo "ERROR: --on-escalation may be given once." >&2; exit 1
+  fi
+  ON_ESCALATION=$(echo "$GSD_ARGS" | sed -nE 's/(^|.*[[:space:]])--on-escalation[=[:space:]]+([^[:space:]]+).*/\2/p' | head -1)
+  case "$ON_ESCALATION" in
+    ask|exit) ;;
+    *) echo "ERROR: --on-escalation accepts 'ask' or 'exit'; got '${ON_ESCALATION}'." >&2; exit 1 ;;
+  esac
+fi
+
+GSD_WS=$(echo " $GSD_ARGS" | sed -nE 's/.* --ws +["'\'']?([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -1)
 ```
 
 ## 1.5. Config Gate (feature disabled by default)
@@ -214,86 +231,18 @@ Agent(
   description="Cross-AI review Phase {PHASE} cycle {cycle}",
   prompt="Run /gsd:review for Phase {PHASE}.
 
-Execute: Skill(skill='gsd-review', args='--phase {PHASE} {REVIEWER_FLAGS} {GSD_WS}')
+Execute: Skill(skill='gsd-review', args='--phase {PHASE} {REVIEWER_FLAGS} {GSD_WS} --cycle-summary')
 
 Complete the full review workflow. Do NOT return until REVIEWS.md is committed.
 
-IMPORTANT — CYCLE_SUMMARY contract (required):
-Your final response MUST include a machine-readable line of exactly this form:
+IMPORTANT — CYCLE_SUMMARY contract (required; owned by /gsd:review, #4617):
+The `--cycle-summary` flag above makes gsd-review end its response with a machine-readable line of exactly this form:
 
   CYCLE_SUMMARY: current_high=<N> current_actionable=<M>
 
-Where <N> is the integer count of HIGH-severity concerns that REMAIN UNRESOLVED in this cycle's findings.
-Where <M> is the integer count of actionable MEDIUM/LOW concerns that REMAIN UNRESOLVED because the latest PLAN.md files do not yet incorporate them or explicitly defer/reject them.
+immediately followed by the `## Current HIGH Concerns` and `## Current Actionable Non-HIGH Concerns` sections. The counting rules (the consensus gate, the existence/judgment classification, the evidence-quality markers, fail-open, and the include/exclude lists) live in gsd-review's `cycle_summary` step and are applied there — they are deliberately not restated in this prompt, so a second copy cannot drift from the first.
 
-Consensus gate (applies to NEWLY RAISED HIGHs only; evaluate before the counting rules below):
-  This gate engages ONLY when 2 or more reviewers actually ran and produced a review section this
-  cycle. With exactly one reviewer, skip this entire gate — a single reviewer's HIGH always counts,
-  exactly as before.
-
-  Classify each newly raised HIGH by what the claim ASSERTS, not by whether it happens to contain a
-  file:line citation:
-    - EXISTENCE-CLASS — asserts that a named symbol, file, path, flag, commit, or ID exists,
-      is absent, or says something specific ("X does not exist", "the plan cites Y which is missing",
-      "file Z contains Q").
-    - JUDGMENT-CLASS — asserts a design or correctness property ("no idempotency on retried writes",
-      "race between A and B", "missing rate limit"). A judgment-class HIGH stays judgment-class even
-      when it cites a file for context.
-
-  A HIGH raised by 2+ reviewers is corroborated and always counts.
-
-  For a HIGH raised by exactly ONE reviewer:
-    - EXISTENCE-CLASS — counts only if the source-grounding pass independently confirms it against
-      real project source, or another reviewer raised the same or a materially overlapping concern
-      (i.e. it lands in REVIEWS.md's Consensus Summary "Agreed Concerns").
-    - JUDGMENT-CLASS — counts UNLESS that reviewer's own section OPENS with an evidence-quality
-      discount marker blockquote: `[reviewed-without-source-citations]` or
-      `[reviewed-without-repo-access]`, or the reviewer is a diff-only lane (CodeRabbit). The marker
-      must be the LEADING blockquote of that reviewer's section — a review that merely quotes a
-      marker while discussing it is NOT marked. Corroboration by another reviewer overrides the
-      marker and the HIGH counts.
-
-  Judgment-class findings are deliberately NOT subject to corroboration. Different reviewers catch
-  materially different classes of issue, so requiring two of them to independently raise the same
-  architectural concern would suppress exactly the findings a multi-reviewer setup exists to surface.
-
-  FAIL OPEN: if EVERY reviewer that ran this cycle carries a discount marker, this gate does not
-  apply at all — count as if it were absent. A gate must never manufacture convergence out of a
-  cycle in which nothing was verified.
-
-  A HIGH suppressed by this gate is still listed under "## Current HIGH Concerns", tagged
-  `(single-reviewer, unconfirmed)`. It is excluded from current_high only — never silently dropped,
-  and never removed from the report.
-
-  This gate governs current_high only. current_actionable is unaffected.
-
-Counting rules:
-  INCLUDE in the count:
-    - Newly raised HIGHs in this cycle (subject to the consensus gate above)
-    - PARTIALLY RESOLVED HIGHs: concern acknowledged and a mitigation is in progress, but not yet verified/completed
-    - Previously raised HIGHs that are still unresolved
-
-  EXCLUDE from the count:
-    - FULLY RESOLVED HIGHs: concern addressed with verification complete (closed ticket, verification log, or reviewer sign-off)
-    - HIGH mentions in retrospective/summary tables comparing cycles
-    - Quoted excerpts from prior reviews referencing past HIGH items
-    - MEDIUM/LOW concerns that are already incorporated into a PLAN.md task, action, acceptance_criteria, verify command, must_haves item, threat model, artifact list, or explicit deferral/rejection rationale
-
-Definitions:
-  PARTIALLY RESOLVED — concern acknowledged and mitigation is in progress but not yet verified/completed (e.g., open ticket exists but fix not landed).
-  FULLY RESOLVED — concern addressed with verification complete (closed ticket, verification log, or explicit reviewer sign-off confirming closure).
-  ACTIONABLE — a non-HIGH review finding that would be invisible to /gsd:execute-phase unless it is incorporated into PLAN.md or explicitly deferred/rejected in PLAN.md.
-
-Your final response MUST also include this section immediately after the CYCLE_SUMMARY line:
-
-## Current HIGH Concerns
-[List each unresolved HIGH with a brief description, one per bullet]
-[If none: write exactly 'None.']
-
-## Current Actionable Non-HIGH Concerns
-[List each unresolved actionable MEDIUM/LOW with a brief description and the PLAN.md change still needed, one per bullet]
-[If none: write exactly 'None.']
-These two sections MUST be the final content of your response, in this exact order, with no additional "## " headings after them (the source-grounding "Verification coverage" block is appended to REVIEWS.md, not to this return message).",
+Your final response MUST end with that line and those two sections exactly as gsd-review produced them. These two sections MUST be the final content of your response, in this exact order, with no additional "## " headings after them (the source-grounding "Verification coverage" block is appended to REVIEWS.md, not to this return message).",
   mode="auto"
 )
 ```
@@ -488,8 +437,12 @@ unresolvable conflict escalates rather than deadlocking.
 
 **If HIGH_COUNT == 0 and ACTIONABLE_COUNT == 0 and OPEN_CONFLICTS == 0 (converged):**
 
+The total recorded is the LIVE plan set at this moment (`plan_count`, `status: superseded` excluded), re-read here:
+`PLAN_COUNT` above is the physical count taken before the loop revised the plans (#6122).
+
 ```bash
-gsd_run state planned-phase --phase "${PHASE}" --name "${phase_name}" --plans "${PLAN_COUNT}"
+LIVE_PLAN_COUNT=$(gsd_run query find-phase "${PHASE}" ${GSD_WS:+--ws=${GSD_WS##* }} | jq -r '.plan_count // 0')
+gsd_run state planned-phase ${GSD_WS:+--ws=${GSD_WS##* }} --phase "${PHASE}" --name "${phase_name}" --plans "${LIVE_PLAN_COUNT}"
 ```
 
 Display:
@@ -502,6 +455,15 @@ Display:
 
  REVIEWS.md: {REVIEWS_FILE}
  Next: /gsd:execute-phase {PHASE}
+```
+
+If `ON_ESCALATION` is `exit` (#4617), also end the response with the final line below, so an
+unattended caller reads one status line for every outcome that reaches the end of the loop (a
+disabled gate, a missing or malformed CYCLE_SUMMARY, or an unreadable REVIEWS.md aborts earlier
+and emits none):
+
+```text
+CONVERGENCE_STATUS: converged cycles={cycle} current_high=0 current_actionable=0 open_conflicts=0
 ```
 
 Exit — convergence achieved.
@@ -519,6 +481,40 @@ Display: `◆ Cycle {cycle}/{MAX_CYCLES} — {HIGH_COUNT} HIGH, {ACTIONABLE_COUN
 ```
 
 **Max cycles check:** If `cycle >= MAX_CYCLES`:
+
+**If `ON_ESCALATION` is `exit` (#4617): ask nothing and write no state.** An unattended caller
+cannot answer the question below, so end the run with a status it can route to a person through
+its own channel. Pick exactly one status, first match wins — open conflicts are blockers and
+outrank everything, a stall outranks plain exhaustion:
+
+| Condition | `CONVERGENCE_STATUS` |
+|---|---|
+| `OPEN_CONFLICTS` > 0 | `open_conflicts` |
+| `UNRESOLVED_COUNT >= prev_unresolved_count` (the stall condition above) | `stalled` |
+| otherwise | `max_cycles` |
+
+Print the review agent's `CYCLE_SUMMARY` line and both concern sections exactly as it returned them
+(`{HIGH_LINES}` / `{ACTIONABLE_LINES}`; `None.` when empty), then the final line, as the last
+content of the response:
+
+```text
+Plan convergence did not complete after {MAX_CYCLES} cycles.
+CYCLE_SUMMARY: current_high={HIGH_COUNT} current_actionable={ACTIONABLE_COUNT}
+
+## Current HIGH Concerns
+{HIGH_LINES}
+
+## Current Actionable Non-HIGH Concerns
+{ACTIONABLE_LINES}
+
+Review the concerns in: {REVIEWS_FILE}
+CONVERGENCE_STATUS: {status} cycles={cycle} current_high={HIGH_COUNT} current_actionable={ACTIONABLE_COUNT} open_conflicts={OPEN_CONFLICTS}
+```
+
+Exit workflow. Do not offer "Proceed anyway", do not call `state planned-phase`, and do not
+replan: the plans are left exactly as the last cycle left them.
+
+**Otherwise (`ON_ESCALATION` is `ask`), the interactive escalation below applies unchanged:**
 
 **If `OPEN_CONFLICTS` > 0 (#3771): "Proceed anyway" is never offered.** An open plan-revision
 conflict is a blocker — this loop's whole purpose is to surface it rather than let a success
@@ -610,7 +606,9 @@ After plan-phase completes → go back to **step 5a** (review again).
 - [ ] Replan via inline Skill("gsd-plan-phase --reviews") — NOT wrapped in Agent(); inline lets plan-phase spawn gsd-planner/gsd-plan-checker at depth 1
 - [ ] Orchestrator only does: init, config gate, loop control, parse CYCLE_SUMMARY for HIGH and actionable non-HIGH counts, stall detection, escalation
 - [ ] HIGH and actionable non-HIGH counts extracted from review agent's CYCLE_SUMMARY return message (not by grepping REVIEWS.md)
-- [ ] Review agent prompt defines CYCLE_SUMMARY: current_high=<N> current_actionable=<M> contract with PARTIALLY/FULLY RESOLVED/ACTIONABLE definitions
+- [ ] Review agent prompt passes `--cycle-summary` to gsd-review and states the `CYCLE_SUMMARY: current_high=<N> current_actionable=<M>` return shape; the counting rules (the resolved/unresolved definitions, the actionable classification and the consensus gate) are owned by gsd-review's `cycle_summary` step and are not restated here (#4617)
+- [ ] `--on-escalation` accepts only `ask` (default) or `exit`; any other value is refused before cycle 1 (#4617)
+- [ ] With `--on-escalation=exit`: at max cycles nothing is asked, no state is written, and the run ends with the CYCLE_SUMMARY line, both concern sections and `CONVERGENCE_STATUS: open_conflicts|stalled|max_cycles`; a converged run ends with `CONVERGENCE_STATUS: converged` (#4617)
 - [ ] Abort with clear error if CYCLE_SUMMARY is absent; distinguish malformed from absent
 - [ ] Warn if HIGH_COUNT > 0 but ## Current HIGH Concerns section is absent from return message
 - [ ] Abort with clear error if current_actionable is absent or malformed

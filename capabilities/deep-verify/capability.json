@@ -1,0 +1,57 @@
+{
+  "id": "deep-verify",
+  "role": "feature",
+  "version": "1.23.0",
+  "title": "Deep Verify",
+  "description": "Default-off agent-driven deep verification (#3858). Registers one additive step hook at verify:pre whose agent (gsd-behavior-verifier) enumerates interaction-level behaviors from the phase's PLAN must_haves / acceptance criteria, the SUMMARY \"Files Changed\" list and the files it names, executes every behavior it can against the running app through a browser MCP server, and writes two artifacts: DEEP-VERIFY.md (full run results, never consumed as checkpoints) and DEEP-VERIFY-CHECKPOINTS.md (only what a human must still confirm: judgment items, failed behaviors, anything it could not run; always written and overwritten on every run, with no entries when nothing needs a human, so a stale file can never feed UAT). Only the checkpoint artifact is declared in `produces`, so the #3866 produced-artefact seam in verify-work merges it into the UAT list while passes never reach the human; entries carry just `name` and `expected`, the two fields the seam reads. Gated by activationKey workflow.deep_verify (default false), so with the key off the capability resolves inactive and the hook does not render at all. Once on it runs only on UI phases (a phase-scoped UI-SPEC the agent finds itself); the capability-owned key workflow.deep_verify_all_phases (default false) widens it to every phase. The agent carries the browser grants on its own tools: line (the static tool list is the only control for a first-party agent, ADR-1244 D2): mcp__playwright__* is driven whenever it responds, the Chrome-family globs only while workflow.live_dom_uat is also true (an instruction the agent follows, read from .planning/config.json; the tools: line itself grants all three families), the same two-family contract as automated-ui-verification. With no browser MCP the step degrades to printing the enumerated list and routing every item to the checkpoint artifact. agents/gsd-executor.md is not widened and nothing in core changes. Advisory by construction: gates are empty, onError is skip, it can never block UAT.",
+  "tier": "full",
+  "requires": [],
+  "engines": {
+    "gsd": ">=1.22.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [],
+  "agents": [
+    "gsd-behavior-verifier"
+  ],
+  "activationKey": "workflow.deep_verify",
+  "config": {
+    "workflow.deep_verify": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable agent-driven deep verification. Default-off. When on, a gsd-behavior-verifier step runs at verify:pre on UI phases: it enumerates interaction-level behaviors from the plan, summary and changed files, executes each one it can through a browser MCP server, and hands the human only judgment items, failed behaviors and anything it could not run. When off, verify-work is unchanged."
+    },
+    "workflow.deep_verify_all_phases": {
+      "type": "boolean",
+      "default": false,
+      "description": "Widen deep verification from UI phases to every phase. Default-off. Has no effect unless workflow.deep_verify is also true; on its own it activates nothing."
+    }
+  },
+  "hooks": [],
+  "steps": [
+    {
+      "point": "verify:pre",
+      "ref": {
+        "agent": "gsd-behavior-verifier"
+      },
+      "fragment": {
+        "path": "fragments/verify-pre.md"
+      },
+      "produces": [
+        "DEEP-VERIFY-CHECKPOINTS.md"
+      ],
+      "consumes": [
+        "PLAN.md"
+      ],
+      "when": "workflow.deep_verify",
+      "onError": "skip"
+    }
+  ],
+  "contributions": [],
+  "gates": []
+}

@@ -4,7 +4,8 @@
  * #6301 (Phase 2 of #3711, ADR-3711): characterization locks for cross-runtime plan execution.
  *
  * These assertions pass on the code as it stands and pin what Phases 3 and 4 must keep true:
- * a plan that declares `executor_runtime` dispatches byte-identically while the feature is off,
+ * a plan that declares `executor_runtime` makes the same dispatch decision while the feature is off
+ * (#6303 adds the `executorRuntime` and `fallback` report keys without changing that decision),
  * the host's model has no path into a spawned argv on a harness host, and the per-runtime
  * `orchestratorExec` descriptors a foreign dispatch will reuse keep their argv shape. The
  * failing-first arms (unknown target, absent binary, checkpoint and `agent_hint` refusals) land
@@ -53,7 +54,11 @@ function dispatch(runtime, extraEnv = {}) {
   );
   assert.equal(result.success, true, result.error);
   const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+  // A fresh decision is decided as it is written (#4904), so both are the write's own clock reading:
+  // pin that, then drop both so two runs compare equal.
+  assert.equal(record.decided_at, record.written_at, 'a fresh decision is decided when it is written');
   delete record.written_at;
+  delete record.decided_at;
   return { output: JSON.parse(result.output), raw: result.output, record };
 }
 
@@ -64,7 +69,7 @@ before(() => {
 });
 after(() => { cleanup(project); });
 
-describe('#6301 a plan that declares executor_runtime dispatches byte-identically while the feature is off', () => {
+describe('#6301 a plan that declares executor_runtime dispatches identically while the feature is off', () => {
   const gateStates = [
     ['the gate key is unset', {}],
     ['the gate is false', { workflow: { cross_runtime_execution: false } }],
@@ -79,7 +84,15 @@ describe('#6301 a plan that declares executor_runtime dispatches byte-identicall
       const plain = dispatch('claude');
       writePlan({ executor_runtime: 'codex' });
       const declared = dispatch('claude');
-      assert.equal(declared.raw, plain.raw, 'stdout is byte-identical');
+      // #6303: the route now names the plan's declaration and the one reason it was not honored; the
+      // dispatch decision itself (every other field) and the recorded decision stay identical.
+      const { executorRuntime, fallback, ...declaredDecision } = declared.output;
+      // `held` / `decidedAt` (#4904) are part of the decision too.
+      assert.deepEqual(declaredDecision, { runtime: plain.output.runtime, isolation: plain.output.isolation, exec: plain.output.exec, harnessFlag: plain.output.harnessFlag, held: plain.output.held, decidedAt: plain.output.decidedAt }, 'the dispatch decision is identical');
+      assert.equal(executorRuntime, 'codex');
+      assert.equal(fallback, 'gate_off');
+      assert.equal(plain.output.executorRuntime, null);
+      assert.equal(plain.output.fallback, null);
       assert.deepEqual(declared.record, plain.record, 'the recorded decision is identical');
       assert.equal(declared.output.isolation, 'harness-worktree');
       assert.equal(declared.output.exec, null, 'no foreign process is described');
@@ -94,10 +107,14 @@ describe('#6301 a plan that declares executor_runtime dispatches byte-identicall
     assert.equal(declared.output.exec, null);
   });
 
-  test('the --json output carries exactly runtime, isolation, exec and harnessFlag', () => {
+  test('the --json output carries exactly runtime, executorRuntime, isolation, exec, harnessFlag, fallback, held and decidedAt', () => {
     writeConfig({ runtime: 'claude' });
     writePlan({ executor_runtime: 'codex' });
-    assert.deepEqual(Object.keys(dispatch('claude').output).sort(), ['exec', 'harnessFlag', 'isolation', 'runtime']);
+    // `held` / `decidedAt` report a held caller degrade (#4904); a fresh dispatch is never held.
+    const { output } = dispatch('claude');
+    assert.deepEqual(Object.keys(output).sort(), ['decidedAt', 'exec', 'executorRuntime', 'fallback', 'harnessFlag', 'held', 'isolation', 'runtime']);
+    assert.equal(output.held, false);
+    assert.equal(output.decidedAt, null);
   });
 });
 

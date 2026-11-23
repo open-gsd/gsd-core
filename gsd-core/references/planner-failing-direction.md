@@ -45,6 +45,12 @@ you have a command. Fix the command, do not invent a statement for it.
 - **The `MISSING — Wave 0 must create …` sentinel is exempt.** It is not a runnable command, so
   it has no failure mode to state. Do not attach a `<fails_when>` to one.
 
+## A statement is not a validation (#4586)
+
+Naming a command's failing direction shows you understand what the check should detect. It cannot show
+that the command parses. Where a validate-only mode exists for the command's language or tool, also run it
+and record the result: `planner-verify-command-validation.md`. The contract above is unchanged.
+
 ## Where the failing direction comes from
 
 Prefer the signal the tool actually emits over one you imagine. When

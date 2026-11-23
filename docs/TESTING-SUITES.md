@@ -16,11 +16,14 @@ This project's `tests/` directory uses **filename suffix markers** to group test
 | `qa` | `*.qa.test.cjs` | End-to-end walks that drive the real `gsd-tools` binary across multiple loop steps against one accumulating temp project, with invariant oracles after every step. Slower than `unit`; excluded from the fast lane. |
 | `all` | (any) | Explicit alias for "no filter". Equivalent to running with no `--suite` flag. |
 
+`*.process.test.cjs` is a marker, not a suite: the file still runs in `unit`. It says the tests in it start a real process on purpose, because the process boundary is what they test. See [In-process CLI tests: the rules](../TESTING-STANDARDS.md#in-process-cli-tests-the-rules).
+
 ## How to place a new test
 
 1. Pick the most specific bucket above.
 2. Name the file with the matching suffix: `tests/<feature>.<suite>.test.cjs`.
 3. If unsure, leave the suffix off — the file lands in `unit`, the default fast lane.
+4. A CLI test calls `runGsdTools` (or `await runGsdToolsAsync`), which runs the command in the test's process. A test that asserts on what a successful command wrote to stderr, or on stdout's exact bytes, calls `runGsdToolsCaptured`, which returns `{ exitCode, stdout, stderr }` in the same process. Only when the test is about a real process does it call `runGsdToolsProcess` or the process seam, and then the file is named `tests/<feature>.process.test.cjs` and each such test says in its title what it needs the process for.
 
 Examples:
 - `tests/agent-frontmatter.test.cjs` — `unit`
@@ -28,6 +31,7 @@ Examples:
 - `tests/installer-end-to-end.install.test.cjs` — `install`
 - `tests/sdk-mutation-stress.slow.test.cjs` — `slow`
 - `tests/loop-walk.qa.test.cjs` — `qa`
+- `tests/cli-parity.process.test.cjs` — `unit`, marked as starting real processes
 
 The suite-suffix convention was chosen over a directory layout (`tests/security/`) so the 545+ existing test files don't need to move. Existing files all classify as `unit` until someone explicitly retags them.
 

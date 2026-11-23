@@ -50,7 +50,7 @@ const {
 const { validateCapability } = require('../gsd-core/bin/lib/capability-validator.cjs');
 const { createDeclarativeAdapter } = require('../gsd-core/bin/lib/adapter-declarative.cjs');
 const { cleanup } = require('./helpers.cjs');
-const { walk, runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
+const { walk, copyRuntimeFixture, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 
 const DESC = path.join(__dirname, '..', 'capabilities', 'codebuddy', 'capability.json');
 const CODEBUDDY_CAP = JSON.parse(fs.readFileSync(DESC, 'utf8'));
@@ -85,7 +85,7 @@ test('the public declarative adapter classifies CodeBuddy as a declarative host'
 });
 
 test('a real CodeBuddy install emits a gsd command/skill surface (invocable)', () => {
-  const { configDir, root } = runMinimalInstall({ runtime: 'codebuddy', scope: 'global' });
+  const { configDir, root } = copyRuntimeFixture({ runtime: 'codebuddy', scope: 'global' });
   try {
     const files = walk(configDir);
     assert.ok(files.length > 0, 'install must emit artifacts');

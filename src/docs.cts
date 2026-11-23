@@ -274,7 +274,7 @@ function cmdDocsInit(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
   const result: Record<string, unknown> = {
     doc_writer_model: resolveModelInternal(cwd, 'gsd-doc-writer'),
-    commit_docs: config.commit_docs,
+    commit_docs: (config.commit_docs === undefined ? false : config.commit_docs),
     existing_docs: scanExistingDocs(cwd),
     project_type: detectProjectType(cwd),
     doc_tooling: detectDocTooling(cwd),
@@ -286,6 +286,8 @@ function cmdDocsInit(cwd: string, raw: boolean): void {
   const agentStatus = checkAgentsInstalled(resolveRuntime(cwd), cwd);
   result['agents_installed'] = agentStatus.agents_installed;
   result['missing_agents'] = agentStatus.missing_agents;
+  // #5236: null when the agents check could not run; the reason says why.
+  if (agentStatus.agents_check_reason !== undefined) result['agents_check_reason'] = agentStatus.agents_check_reason;
   // #2402: withProjectRoot injects response_language when set; cmdDocsInit predates
   // that helper and never picked it up, so docs-update's orchestrator-owned prompts
   // silently stayed English even with response_language configured.

@@ -48,11 +48,11 @@ const WORKFLOW_CONTRACT_TESTS = [
   'tests/merge-commit-pr.test.cjs',
   'tests/mutation-tap-runner-wiring.test.cjs',
   'tests/mutation-workflow-base-ref.test.cjs',
-  'tests/policy-release-no-npm-self-upgrade.test.cjs',
+  // #6481, #6536: policy-release-no-npm-self-upgrade and release-coverage-scope are now text contracts; their release.yml mutation cases live here.
+  'tests/text-contracts.test.cjs',
   'tests/policy-shell-pinning.test.cjs',
   'tests/registry-docs-approved-issue-parity.test.cjs',
   'tests/release-backmerge-invariants.test.cjs',
-  'tests/release-coverage-scope.test.cjs',
   'tests/release-finalize-notes-5922.test.cjs',
   'tests/release-finalize-syncs-next-version.test.cjs',
   'tests/release-hotfix-empty-cherry-pick.test.cjs',
@@ -135,6 +135,7 @@ const RULES = [
     fullMatrix: true,
     tests: [
       'tests/check-env.test.cjs',
+      'tests/check-env.process.test.cjs',
       'tests/npm-integrity-gate.test.cjs', // #2758: absorbs the former tests/bug-3588-npm-audit-clean.test.cjs (folded into it by consolidation epic #1969 B6 #1975; the stale filename here was a silent coverage hole this rule never actually re-selected)
       'tests/package-manifest.test.cjs',
     ],
@@ -286,7 +287,8 @@ const RULES = [
       'tests/agent-frontmatter.test.cjs',
       'tests/agent-size-budget.test.cjs',
       'tests/agent-skills.test.cjs',
-      'tests/agent-skills-awareness.test.cjs',
+      // #6478: agent-skills-awareness is now a text contract; its mutation cases live here.
+      'tests/text-contracts.test.cjs',
       'tests/agent-required-reading-consistency.test.cjs',
       'tests/docs-parity-live-registry.test.cjs',
     ],

@@ -51,7 +51,7 @@ This step is `onError: skip` at `discuss:post` / `plan:post` / `verify:post` -- 
    - `CONTEXT.md` → `decisions`
    - `PLAN.md` → `planning`
    - `SUMMARY.md` → `milestones`
-   (Confirmed problem→fix pairs go to `problems` — see the `capture-problems` fragment used at `execute:wave:post`.)
+   (Confirmed problem→fix pairs go to `problems` — see the `capture-problems` fragment used at `execute:post`.)
 3. **Wing.** `config.mempalace.wing` if non-empty, else `config.project_code`, else the repo directory name.
 4. **Mode / transport.** Read `config.mempalace.memory_mode`. Prefer MCP (`mempalace_*`) when your MemPalace MCP server is registered and your runtime permits those tools; otherwise use the `mempalace` CLI (covered by this skill's `Bash` allow-tool), as in `mempalace-recall`.
 
@@ -89,18 +89,39 @@ On any error or timeout, stop and let the phase continue -- capture is best-effo
    mkdir -p "$ROOM_DIR"
    cp "<artifact-path>" "$ROOM_DIR/<basename>"
    # Mine with --wing only — no --room flag; detect_room() assigns from the folder path.
-   # --daemon --background (#4700): MemPalace wraps every mine in a per-palace
-   # lock; a concurrent writer would make a foreground mine exit 1
-   # (MineAlreadyRunning) and this onError: skip step would silently drop the
-   # capture. The background queue defers the job until the lock frees.
-   mempalace mine "$STAGE" --wing <wing> --daemon --background
+   # #6266: use the daemon route only when a daemon is ALREADY running. --daemon
+   # auto-starts one that holds the palace writer lock for its whole life, and
+   # every MCP write tool is then refused until `mempalace daemon stop`. Never
+   # start the daemon from a capture.
+   # #4700: MemPalace wraps every mine in a per-palace lock, and a locked palace
+   # must never drop the capture silently: a running daemon queues the job
+   # (--daemon --background); otherwise a --direct mine (a plain mine follows a
+   # configured prefer/require policy, which would start the daemon) is retried
+   # with bounded backoff while it exits 1 (a held lock), and a failure is
+   # reported. Exit 2 from the probe is a CLI without the daemon subcommand
+   # (and without --direct): a plain mine. The probe-to-mine window is small
+   # and accepted: a daemon that stops in it is restarted by --daemon.
+   mempalace daemon status >/dev/null 2>&1; PROBE=$?
+   if [ "$PROBE" = 0 ]; then
+     mempalace mine "$STAGE" --wing <wing> --daemon --background
+   else
+     DIRECT=1; [ "$PROBE" = 2 ] && DIRECT=
+     MINED=0
+     for DELAY in 1 2 4; do
+       mempalace mine "$STAGE" --wing <wing> ${DIRECT:+--direct} && { MINED=1; break; }
+       MRC=$?
+       [ "$MRC" = 1 ] || break
+       [ "$DELAY" = 4 ] || sleep "$DELAY"
+     done
+     [ "$MINED" = 1 ] || { [ "$MRC" = 1 ] && echo "MemPalace capture skipped — palace locked" || echo "MemPalace capture skipped — mine failed (exit $MRC)"; }
+   fi
    ```
 3. **Mirror KG facts** unless `config.mempalace.mirror_kg === false` (registry default is true — an absent key means enabled): extract decision/delivery facts and `mempalace_kg_add` them with `valid_from` = the phase date (e.g. `(<project>, decided, <decision>)` from CONTEXT; `(<phase>, delivered, <capability>)` from SUMMARY). Under `augment` these are an *additive* mirror of GSD's native `.planning/graphs/`. Under `kg_backend`/`replace` the palace KG is the *authoritative* fact store — GSD still produces `.planning/graphs/` through its normal graphify, so an unreachable palace never loses a fact.
 4. Re-running a phase MUST NOT create duplicate drawers (deterministic ids + `check_duplicate`).
 
 ## Step 4 -- Report
 
-Print a one-line summary: `Filed <artifact> → <wing>/<room> (<n> KG facts)`, `Capture queued — palace busy; MemPalace will file it when the lock frees` (the background mine was deferred behind another writer), or `MemPalace capture skipped — <reason>` (#4700: a skipped capture is never silent).
+Print a one-line summary: `Filed <artifact> → <wing>/<room> (<n> KG facts)`, `Capture queued — palace busy; MemPalace will file it when the lock frees` (the background mine was deferred behind another writer), or `MemPalace capture skipped — <reason>` (#4700: a skipped capture is never silent). An interactive run must never start the daemon (`mempalace daemon start`, or `--daemon` with none running): it holds the palace writer lock and blocks the MCP write tools (#6266).
 
 ## Anti-Patterns
 
