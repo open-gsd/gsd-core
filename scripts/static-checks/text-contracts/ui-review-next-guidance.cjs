@@ -5,7 +5,7 @@
 // current-phase secure-phase fix and offers no next-phase plan or execute, while its post-completion block still
 // offers next-phase planning; the manager dispatches verify recommendations through their `command` field, never as
 // an inline verification fence calling the verify-work skill. The negative fence probe is two indexOf checks (the
-// test's regex spanned the gap with an unbounded `[\s\S]*`); whitespace after the label is bounded at 200.
+// test's regex spanned the gap with an unbounded `[\s\S]*`); any amount of whitespace may precede the fence.
 // Was tests/ui-review-next-guidance.test.cjs.
 
 // `Inline verification:` followed by a fence and, later, a verify-work Skill call with the phase argument.
@@ -13,7 +13,10 @@ function hasInlineVerificationSkill(text) {
   const label = 'Inline verification:';
   for (let at = text.indexOf(label); at !== -1; at = text.indexOf(label, at + 1)) {
     const rest = text.slice(at + label.length);
-    if (/^\s{0,200}```/.test(rest) && rest.includes('Skill(skill="gsd-verify-work", args="{PHASE_NUM}")')) return true;
+    // Any amount of whitespace before the fence: a bound on a negative probe would let a longer gap evade it.
+    let fence = 0;
+    while (fence < rest.length && /\s/.test(rest[fence])) fence += 1;
+    if (rest.startsWith('```', fence) && rest.includes('Skill(skill="gsd-verify-work", args="{PHASE_NUM}")')) return true;
   }
   return false;
 }

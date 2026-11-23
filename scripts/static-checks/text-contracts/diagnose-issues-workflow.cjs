@@ -18,14 +18,12 @@ module.exports = {
       .lacks(/DEBUG-\{slug\}/, 'a DEBUG-{slug}.md name contradicts the real .planning/debug/{slug}.md target')
       .has('prompt=filled_debug_prompt + ', 'Agent() does not pass filled_debug_prompt')
       .lacks('filled_debug_subagent_prompt', 'the old variable name is still used');
-    // The spawn_agents step's inline prompt: the <objective> after "fill this prompt" to the end of its <debug_file>.
-    const prompt = workflow.slice('fill this prompt', '</debug_file>')
-      .has('<objective>', 'no inline <objective> prompt block found in the workflow')
+    // The spawn_agents step's inline prompt: the first <objective> after "fill this prompt" to the end of its <debug_file>.
+    // The slice stops where </debug_file> begins, so the target pattern ending in whitespace-then-end is the closing check.
+    const prompt = workflow.slice('fill this prompt', '</debug_file>').slice('<objective>')
       .has(/symptoms_prefilled: true/, 'the inline prompt must carry symptoms_prefilled: true')
       .has(/goal: find_root_cause_only/, 'the inline prompt must carry goal: find_root_cause_only')
-      // The slice ends where </debug_file> begins, so the closing tag is asserted on the whole workflow below.
       .has(/<debug_file>\s{0,20}Create: \.planning\/debug\/\{slug\}\.md\s{0,20}$/, 'the inline prompt must carry the debug-file target');
-    workflow.has(/<debug_file>\s{0,20}Create: \.planning\/debug\/\{slug\}\.md\s{0,20}<\/debug_file>/, 'the debug-file block must close right after its target');
     for (const placeholder of PLACEHOLDERS) prompt.has(`{${placeholder}}`, `the inline prompt lacks {${placeholder}}`);
 
     // Every `fill the X template` in any workflow names a template that exists.

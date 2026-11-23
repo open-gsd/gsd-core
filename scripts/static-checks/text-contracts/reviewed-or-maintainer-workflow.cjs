@@ -38,7 +38,8 @@ module.exports = {
       }), 'the workflow must trigger on target, review and merge_group events only')
       .satisfies(onWorkflow(({ triggers }) => !Object.prototype.hasOwnProperty.call(triggers, 'pull_request')), 'the plain pull_request trigger, whose workflow file the PR controls, must never be used')
       .satisfies(onWorkflow(({ doc, job }) => {
-        for (const [scope, level] of Object.entries(doc.permissions || {})) {
+        if (!doc.permissions || typeof doc.permissions !== 'object') return 'no top-level permissions block';
+        for (const [scope, level] of Object.entries(doc.permissions)) {
           if (!['read', 'none'].includes(level)) return `${scope}: ${level} is a write scope`;
         }
         return job.permissions === undefined || 'a job-level permissions block would replace the read-only default';
@@ -94,7 +95,9 @@ module.exports = {
         } catch (err) {
           return `not valid JSON: ${err.message}`;
         }
-        for (const rule of spec.rules || []) {
+        if (!Array.isArray(spec.rules)) return 'no rules array';
+        for (const rule of spec.rules) {
+          if (rule.type === 'required_status_checks' && !(rule.parameters && Array.isArray(rule.parameters.required_status_checks))) return 'a required_status_checks rule without its checks list';
           const contexts = rule.type === 'required_status_checks' ? rule.parameters.required_status_checks.map((check) => check.context) : [];
           if (contexts.includes('Reviewed or maintainer')) return 'requires it';
         }

@@ -14,6 +14,7 @@ const DOC = 'gsd-core/references/prohibition-probe.md';
 const FIXTURES = 'gsd-core/references/prohibition-probe-fixtures';
 const TAG = /^json prohibition-probe:([^\r\n]{1,500})$/;
 const PLAIN_REF = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/;
+const isDotSegment = (segment) => segment === '.' || segment === '..';
 
 // The tagged fenced blocks of the doc, keyed by ref; the fence rules have one owner (the markdown sectionizer).
 function taggedJsonBlocks(markdown) {
@@ -38,13 +39,13 @@ module.exports = {
 
     // Fixture directories (directly under the fixtures root) that carry an expected.json.
     const expected = ctx.list(FIXTURES, 'expected.json', 'the fixtures are what the doc blocks are checked against')
-      .filter((rel) => rel.split('/').length === FIXTURES.split('/').length + 2);
+      .filter((rel) => rel.endsWith('/expected.json') && rel.split('/').length === FIXTURES.split('/').length + 2);
     doc.satisfies(() => Object.keys(blocks).length === expected.length
       || `the doc embeds ${Object.keys(blocks).length} tagged blocks, the fixtures carry ${expected.length}`,
     'the doc must embed one tagged fixture block for every expected.json fixture (count equality)');
 
     for (const [ref, body] of Object.entries(blocks)) {
-      if (!PLAIN_REF.test(ref)) {
+      if (!PLAIN_REF.test(ref) || ref.split('/').some(isDotSegment)) {
         ctx.fail(DOC, `a tagged block names "${ref}", which is not a plain <dir>/<file> fixture reference`);
         continue;
       }

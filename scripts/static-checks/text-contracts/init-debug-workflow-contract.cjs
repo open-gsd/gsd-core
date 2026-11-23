@@ -6,7 +6,7 @@
 // read-everything rule. Was tests/init-debug-workflow-contract.test.cjs.
 
 // Every `gsd_run query <name>` invocation in the workflow, in document order.
-const queryInvocations = (text) => [...text.matchAll(/gsd_run query ([\w.-]+)/g)].map((match) => match[1]);
+const queryInvocations = (text) => [...text.matchAll(/gsd_run query ([\w.-]{1,200})/g)].map((match) => match[1]);
 
 module.exports = {
   id: 'init-debug-workflow-contract',

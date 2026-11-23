@@ -6,6 +6,21 @@
 // recomputed, no write or commit when nothing is appended, an absent file still creating the template with the original
 // commit message, and no renaming of the old file aside. Was tests/execute-phase-human-needed-uat-merge.test.cjs.
 
+// A line that is, after any indent, an optional `git` and then `mv` followed by whitespace or the end of the line
+// (no bounded quantifier: a bound on a `lacks` would let a longer indent or gap evade it).
+function hasMvLine(text) {
+  const blank = (ch) => ch === ' ' || ch === '\t';
+  return text.split('\n').some((line) => {
+    let at = 0;
+    while (at < line.length && blank(line[at])) at += 1;
+    if (line.startsWith('git', at) && blank(line[at + 3] || '')) {
+      at += 3;
+      while (at < line.length && blank(line[at])) at += 1;
+    }
+    return line.startsWith('mv', at) && (at + 2 === line.length || /\s/.test(line[at + 2]));
+  });
+}
+
 module.exports = {
   id: 'execute-phase-human-needed-uat-merge',
   issue: '#5845',
@@ -25,7 +40,7 @@ module.exports = {
       .has(/nothing to append[^.]{0,500}(no write|do not write|skip)[^.]{0,500}commit/i, 'nothing to append must mean no write or commit')
       .has(/passed: 0/, 'an absent file must still create the template with passed: 0')
       .has('test({phase_num}): persist human verification items as UAT', 'an absent file must commit with the original message')
-      .lacks(/^[ \t]{0,50}(git[ \t]{1,20})?mv\s/m, 'the old file must never be renamed aside')
+      .satisfies((text) => !hasMvLine(text), 'the old file must never be renamed aside')
       .has(/do not rename/i, 'the step must say not to rename the old file');
   },
 };

@@ -18,7 +18,7 @@ module.exports = {
   check(ctx) {
     // docs/<locale>/INVENTORY.md, one level down (the test took the directories of docs/ that carry one).
     const inventories = ctx.list('docs', 'INVENTORY.md', 'the localized inventories are what the counts are checked on')
-      .filter((rel) => rel.split('/').length === 3);
+      .filter((rel) => rel.endsWith('/INVENTORY.md') && rel.split('/').length === 3);
     // The English inventory is the page the localized ones mirror, so it carries the count of how many were found.
     ctx.doc('docs/INVENTORY.md').satisfies(
       () => inventories.length >= MIN_LOCALES || `found ${inventories.length}: ${inventories.join(', ')}`,
@@ -41,13 +41,20 @@ module.exports = {
       }, `${locale}/INVENTORY.md section headings must carry no "(N shipped)" count`);
 
       // Every link to this locale's INVENTORY.md#anchor from a page of the locale resolves to a heading.
-      const slugs = new Set(inventory.text.split('\n').filter((line) => /^#{1,6}\s/.test(line)).map((line) => slugOf(line.replace(/^#+\s+/, ''))));
+      const slugs = new Set(inventory.text.split('\n').filter((line) => /^#{1,6}\s/.test(line)).map((line) => slugOf(line.replace(/^#{1,6}\s/, ''))));
       for (const rel of ctx.list(`docs/${locale}`, '.md', 'the locale pages are what the anchors are checked on')) {
         ctx.doc(rel).satisfies((text) => {
           const dead = [];
           for (const match of text.matchAll(/((?:\.\.\/|\.\/){0,8}INVENTORY\.md)#([^)\s]{1,200})/g)) {
             if (path.posix.normalize(path.posix.join(path.posix.dirname(rel), match[1])) !== inventoryRel) continue;
-            if (!slugs.has(decodeURIComponent(match[2]))) dead.push(`#${match[2]}`);
+            let anchor;
+            try {
+              anchor = decodeURIComponent(match[2]);
+            } catch {
+              dead.push(`#${match[2]} (not a decodable anchor)`);
+              continue;
+            }
+            if (!slugs.has(anchor)) dead.push(`#${match[2]}`);
           }
           return dead.length === 0 || dead.join(', ');
         }, `${locale}: a link to an INVENTORY.md anchor that matches no heading`);

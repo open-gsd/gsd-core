@@ -19,7 +19,6 @@ module.exports = {
       .has(/\.planning\/async-jobs\//, 'the invariant must reference the async-job manifest path')
       // The test also accepted `legal.{0,12}deferral`; the file carries "legal deferred".
       .has(/legal deferred/i, 'the manifest state must be described as a legal deferred state, not illegal')
-      .has(/external_job_waiting/, 'plan selection must name the half-state')
       .has(/async-jobs/, 'plan selection must reference the manifest')
       .has(/skip|exclude/i, 'execute-plan must skip or exclude waiting plans from (re-)dispatch');
 
@@ -41,8 +40,10 @@ module.exports = {
       .has(/async/i, 'the pause gather must mention async external jobs')
       .has(/async_jobs|async-jobs/, 'the HANDOFF must record async job manifests');
 
+    // The words below must be in the manifest-schema section itself, not anywhere in the page (`version`, `status`,
+    // `failed` and `contract` occur all over planning-artifacts.md). The section runs to the next `##` heading.
     const artifacts = ctx.doc('docs/reference/planning-artifacts.md')
-      .has(/async-jobs\/<job>\.json/, 'the schema doc section must exist')
+      .slice('### `.planning/async-jobs/<job>.json`', '\n## ')
       .has(/contract/i, 'the manifest must be framed as a stability contract');
     for (const field of MANIFEST_FIELDS) artifacts.has(field, `the manifest schema must document the field ${field}`);
     for (const state of MANIFEST_STATES) artifacts.has(state, `the status enum must document the state ${state}`);

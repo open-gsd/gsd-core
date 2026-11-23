@@ -12,14 +12,14 @@ const path = require('node:path');
 const taxonomyIds = () => require(path.join(__dirname, '..', '..', '..', 'gsd-core', 'bin', 'lib', 'ui-consideration-probe.cjs')).UI_TAXONOMY.map((entry) => entry.id);
 
 // The text of a `## <name>` section: after the heading line start, up to the next `## ` heading.
-function sectionOf(markdown, name) {
-  const after = markdown.split(new RegExp(`^## ${name}`, 'm'))[1];
+function sectionOf(markdown, heading) {
+  const after = markdown.split(heading)[1];
   return after === undefined ? null : after.split(/^## /m)[0];
 }
 
 // First-column ids of the `## Taxonomy` table: skips the `id` header row and the separator row.
 function docTaxonomyIds(markdown) {
-  return sectionOf(markdown, 'Taxonomy').split('\n')
+  return sectionOf(markdown, /^## Taxonomy/m).split('\n')
     .filter((line) => line.trim().startsWith('|'))
     .map((line) => line.split('|')[1].trim())
     .filter((cell) => /^[a-z][a-z0-9-]{0,100}$/.test(cell) && cell !== 'id');
@@ -36,14 +36,14 @@ module.exports = {
   check(ctx) {
     ctx.doc('gsd-core/references/ui-consideration-probe.md')
       .satisfies((text) => {
-        if (sectionOf(text, 'Taxonomy') === null) return 'no ## Taxonomy section';
+        if (sectionOf(text, /^## Taxonomy/m) === null) return 'no ## Taxonomy section';
         const fromDoc = docTaxonomyIds(text);
         const fromCode = taxonomyIds();
         return JSON.stringify(fromDoc) === JSON.stringify(fromCode) || `doc ids ${JSON.stringify(fromDoc)} against code ids ${JSON.stringify(fromCode)}`;
       }, 'the doc taxonomy ids must equal the code UI_TAXONOMY ids, in order (doc == code)')
       .has(/domain-probes\.md/, 'the doc must name domain-probes.md as the companion open-prose bank (link, do not duplicate)')
       .satisfies((text) => {
-        const inputs = sectionOf(text, 'Inputs');
+        const inputs = sectionOf(text, /^## Inputs/m);
         if (inputs === null) return 'no ## Inputs section';
         if (!/text_en/.test(inputs)) return 'the Inputs section does not mention text_en';
         return /English/.test(inputs) || 'the Inputs section does not say English';
