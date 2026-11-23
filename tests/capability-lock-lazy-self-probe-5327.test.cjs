@@ -6,7 +6,6 @@ const fs = require('fs');
 const path = require('path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
-const { isolatedEnv } = require('./helpers/isolated-env.cjs');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // #5327: capability-lock probed THIS process's start-time at module load. Every
@@ -41,7 +40,7 @@ function sandbox(t) {
 }
 
 function sandboxEnv(home) {
-  return isolatedEnv({ home, override: { GSD_HOME: path.join(home, '.gsd') } });
+  return { ...process.env, HOME: home, USERPROFILE: home, GSD_HOME: path.join(home, '.gsd') };
 }
 
 describe('#5327 regression: capability-lock probes its own start-time lazily', () => {
