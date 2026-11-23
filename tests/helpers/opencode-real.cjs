@@ -21,6 +21,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { spawnSync } = require('node:child_process');
 const { splitLines } = require('../../gsd-core/bin/lib/text-lines.cjs');
 const { runNode } = require('./process-seam.cjs');
+const { isolatedEnv } = require('./isolated-env.cjs');
 const { INSTALL_SCRIPT, installerEnv } = require('./install-shared.cjs');
 const { INSTALL_TIMEOUT_MS, GIT_TIMEOUT_MS } = require('./timeouts.cjs');
 
@@ -98,11 +99,13 @@ function realSetup(t, { bin, v2, keepMcp = false, projectFiles = {} }) {
   const binDir = path.join(home, 'bin');
   fs.mkdirSync(binDir);
   fs.symlinkSync(fs.realpathSync(bin), path.join(binDir, 'opencode'));
-  const sandboxEnv = {
-    HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
-    XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local', 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true',
-    PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
-  };
+  const sandboxEnv = isolatedEnv({
+    home, base: {}, path: `${binDir}${path.delimiter}${process.env.PATH}`,
+    override: {
+      XDG_CONFIG_HOME: path.join(home, '.config'), XDG_DATA_HOME: path.join(home, '.local', 'share'),
+      XDG_CACHE_HOME: path.join(home, '.cache'), XDG_STATE_HOME: path.join(home, '.local', 'state'), OPENCODE_DISABLE_AUTOUPDATE: 'true',
+    },
+  });
   const install = runNode([INSTALL_SCRIPT, '--opencode', '--global', '--config-dir', cfg], { env: installerEnv(sandboxEnv), timeoutMs: INSTALL_TIMEOUT_MS });
   if (install.exitCode !== 0) throw new Error(`installer failed\n${install.stdout}\n${install.stderr}`);
   for (const [rel, content] of Object.entries(projectFiles)) {
