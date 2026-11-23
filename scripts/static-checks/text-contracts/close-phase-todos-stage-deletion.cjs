@@ -20,7 +20,7 @@ function hasGitMv(text) {
   const words = [];
   let current = '';
   for (const ch of text) {
-    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f' || ch === '\v') {
+    if (/\s/.test(ch)) { // any whitespace (non-breaking space, U+2028, U+3000 included), as the old `\s` was
       if (current !== '') words.push(current);
       current = '';
     } else {

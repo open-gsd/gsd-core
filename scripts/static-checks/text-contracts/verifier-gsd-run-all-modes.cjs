@@ -14,7 +14,7 @@ function firstGsdRunCall(text) {
   let lineStart = 0;
   for (;;) {
     let i = lineStart;
-    while (text[i] === ' ' || text[i] === '\t') i++;
+    while (i < text.length && text[i] !== '\n' && /\s/.test(text[i])) i++; // any indent, form feed and vertical tab included
     let j = i;
     while (/[A-Z_]/.test(text[j] || '')) j++;
     if (j > i && text.startsWith('=$(', j)) i = j + 3;

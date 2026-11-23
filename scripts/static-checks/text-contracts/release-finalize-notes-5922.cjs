@@ -37,9 +37,11 @@ const indexOfStep = (steps, name) => steps.findIndex((step) => step.name === nam
 // The first malformed spot of the two jobs this contract reads, or true.
 const structureOf = (workflow) => {
   if (!isMapping(workflow)) return 'release.yml is not a mapping';
+  if (workflow.jobs !== undefined && !isMapping(workflow.jobs)) return 'jobs is not a mapping';
   for (const jobName of ['finalize', 'rc']) {
-    const job = jobOf(workflow, jobName);
-    if (!job) continue; // a missing job is reported by the assertions that read its steps
+    const job = isMapping(workflow.jobs) ? workflow.jobs[jobName] : undefined;
+    if (job === undefined) continue; // a missing job is reported by the assertions that read its steps
+    if (!isMapping(job)) return `${jobName} is not a mapping`;
     if (!Array.isArray(job.steps)) return `${jobName}.steps is not a list`;
     const bad = job.steps.findIndex((step) => !isMapping(step));
     if (bad > -1) return `${jobName}.steps[${bad}] is not a mapping`;

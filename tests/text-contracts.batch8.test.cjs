@@ -525,6 +525,38 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           () => '{"workflow": []}\n', 'inline-plan-threshold-default', /not registered in config-defaults\.manifest\.json/],
         ['planning-config with no parseable table (#3801)', 'gsd-core/references/planning-config.md',
           swap('|', ':'), 'inline-plan-threshold-default', /planning-config\.md must document inline_plan_threshold and agree with the manifest's 2 \(no parseable defaults table\)/],
+
+        // third round
+        ['a double-quoted --auto flag on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.quoted = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 "--auto"' }] }; }), 'workflow-token-permissions', /job "quoted" must grant contents: write/],
+        ['a single-quoted --auto flag on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.quoted = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: "gh pr merge 7 '--auto'" }] }; }), 'workflow-token-permissions', /job "quoted" must grant contents: write/],
+        ['a flag glued to merge on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.glued = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge--auto 7' }] }; }), 'workflow-token-permissions', /job "glued" must grant contents: write/],
+        ['a non-breaking space between gh and pr on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.nbsp = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh\u00a0pr merge 7 --auto' }] }; }), 'workflow-token-permissions', /job "nbsp" must grant contents: write/],
+        ['an ideographic space between pr and merge on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.wide = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr\u3000merge 7 --auto' }] }; }), 'workflow-token-permissions', /job "wide" must grant contents: write/],
+        ['a line separator before --auto on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.sep = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7\u2028--auto' }] }; }), 'workflow-token-permissions', /job "sep" must grant contents: write/],
+        ['a blank line after the continuation backslash on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.blank = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 \\\n\n  --auto' }] }; }), 'workflow-token-permissions', /job "blank" must grant contents: write/],
+        ['a command ending in a continuation backslash on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          yamlEdit((wf) => { wf.jobs.trailing = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 --auto \\' }] }; }), 'workflow-token-permissions', /job "trailing" must grant contents: write/],
+        ['a wrapped command in a CRLF workflow file on an under-permissioned job (#5136)', '.github/workflows/test.yml',
+          (text) => yamlEdit((wf) => { wf.jobs.crlf = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: 'gh pr merge 7 \\\r\n  --auto' }] }; })(text).split('\n').join('\r\n'), 'workflow-token-permissions', /job "crlf" must grant contents: write/],
+        ['a comment-only workflow file (#5136)', '.github/workflows/test.yml',
+          () => '# nothing here\n', 'workflow-token-permissions', /the workflow is not a mapping/],
+        ['form feed before a gsd_run call ahead of the resolver (#5004)', 'agents/gsd-verifier.md',
+          swap('## Resolver Bootstrap (Every Mode)\n', '## Resolver Bootstrap (Every Mode)\n\fgsd_run query state\n'), 'verifier-gsd-run-all-modes', /the first gsd_run invocation must come after the resolver include/],
+        ['vertical tab before a gsd_run call ahead of the resolver (#5004)', 'agents/gsd-verifier.md',
+          swap('## Resolver Bootstrap (Every Mode)\n', '## Resolver Bootstrap (Every Mode)\n\vgsd_run query state\n'), 'verifier-gsd-run-all-modes', /the first gsd_run invocation must come after the resolver include/],
+        ['a non-breaking space between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
+          inStepOf('close_phase_todos', (block) => `${block}\ngit\u00a0mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+        ['a line separator between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
+          inStepOf('close_phase_todos', (block) => `${block}\ngit\u2028mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
+        ['an ideographic space between git and mv in close_phase_todos (#2415)', 'gsd-core/workflows/execute-phase.md',
+          inStepOf('close_phase_todos', (block) => `${block}\ngit\u3000mv a b\n`), 'close-phase-todos-stage-deletion', /close_phase_todos must NOT use git mv as the move command/],
         // add-todo
         ['the infer_severity step gone from add-todo (#2337)', 'gsd-core/workflows/add-todo.md', eraseAll('<step name="infer_severity">'), 'add-todo', /add-todo\.md must define an infer_severity step/],
         ['create_file ahead of infer_severity in add-todo (#2337)', 'gsd-core/workflows/add-todo.md', (text) => `<step name="create_file">\n${text}`, 'add-todo', /infer_severity must precede create_file/],
@@ -684,8 +716,8 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         ['a git mv with 30 spaces after git in Step A (#5845)', 'gsd-core/workflows/execute-phase.md', within('**Step A: Persist human verification items', '**Step B: Present to user**', (step) => `${step}\ngit${' '.repeat(30)}mv old-UAT.md old-UAT.md.bak\n`), 'execute-phase-human-needed-uat-merge', /old file must never be renamed aside/],
         ['a Track outstanding_debt line with 50 spaces after Track: in step 1.6 (#3782)', 'gsd-core/workflows/progress.md', within('**Step 1.6: Cross-phase health check**', '**Step 1.7:', (step) => `${step}\nTrack:${' '.repeat(50)}\`outstanding_debt\`${' '.repeat(50)}\u2014${' '.repeat(50)}\`summary.total_items\`\n`), 'progress-debt-segmentation-guard', /outstanding_debt must not read the cross-population summary\.total_items/],
         ['an inline verification fence 300 whitespace characters after its label in the manager (#1523)', 'gsd-core/workflows/manager.md', within('### Compound Action', '### Discuss Phase N', (block) => `${block}\nInline verification:${' '.repeat(300)}\`\`\`\nSkill(skill="gsd-verify-work", args="{PHASE_NUM}")\n\`\`\`\n`), 'ui-review-next-guidance', /must not carry an inline verification fence/],
-        ['a null pull_request_review trigger (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { d.on.pull_request_review = null; }), 'reviewed-or-maintainer-workflow', /must trigger on target, review and merge_group events only/],
-        ['a null merge_group trigger (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { d.on.merge_group = null; }), 'reviewed-or-maintainer-workflow', /must trigger on target, review and merge_group events only/],
+        ['a null pull_request_review trigger (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { d.on.pull_request_review = null; }), 'reviewed-or-maintainer-workflow', /must trigger on target, review and merge_group events only \(pull_request_review has no configuration\)/],
+        ['a null merge_group trigger (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { d.on.merge_group = null; }), 'reviewed-or-maintainer-workflow', /must trigger on target, review and merge_group events only \(merge_group has no configuration\)/],
         ['a collect step with no run script (#5607)', '.github/workflows/reviewed-or-maintainer.yml', yamlEdit((d) => { delete d.jobs['reviewed-or-maintainer'].steps.find((s) => s.name === 'Collect reviews and reviewer permissions').run; }), 'reviewed-or-maintainer-workflow', /reviewer bots must never be looked up for a role/],
         ['a ruleset that is JSON null (#5607)', '.github/rulesets/next-queue.json', () => 'null', 'reviewed-or-maintainer-workflow', /no rules array/],
         ['a null rule in a ruleset (#5607)', '.github/rulesets/next-queue.json', (text) => { const spec = JSON.parse(text); spec.rules.push(null); return JSON.stringify(spec, null, 2); }, 'reviewed-or-maintainer-workflow', /a rule that is not an object/],
@@ -760,6 +792,14 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
           yamlEdit((workflow) => { workflow.jobs.finalize.steps = 'x'; }), 'release-finalize-notes-5922', /finalize\.steps is not a list/],
         ['the rc steps no longer a list in release.yml (#5922)', '.github/workflows/release.yml',
           yamlEdit((workflow) => { workflow.jobs.rc.steps = { not: 'a list' }; }), 'release-finalize-notes-5922', /rc\.steps is not a list/],
+        ['the finalize job null in release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs.finalize = null; }), 'release-finalize-notes-5922', /finalize is not a mapping/],
+        ['the rc job null in release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs.rc = null; }), 'release-finalize-notes-5922', /rc is not a mapping/],
+        ['the finalize job a list in release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs.finalize = ['x']; }), 'release-finalize-notes-5922', /finalize is not a mapping/],
+        ['the jobs key null in release.yml (#5922)', '.github/workflows/release.yml',
+          yamlEdit((workflow) => { workflow.jobs = null; }), 'release-finalize-notes-5922', /jobs is not a mapping/],
         ['release.yml a list instead of a mapping (#5922)', '.github/workflows/release.yml', () => '- a\n- b\n', 'release-finalize-notes-5922', /release\.yml is not a mapping/],
         ['release.yml a scalar instead of a mapping (#5922)', '.github/workflows/release.yml', () => 'just text\n', 'release-finalize-notes-5922', /release\.yml is not a mapping/],
         ['package.json null instead of an object (#1852)', 'package.json', () => 'null', 'package-manifest', /package\.json is not a JSON object/],
@@ -1419,6 +1459,18 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
         assert.ok(findings.some((f) => f.file === '.github/workflows/test.yml' && /the workflow does not parse/.test(f.message)), JSON.stringify(findings));
         assert.ok(findings.some((f) => f.file === '.github/workflows/x.yaml' && /job "lift" must grant contents: write/.test(f.message)), JSON.stringify(findings));
       });
+
+      // third round: continuation edge cases of the auto-merge walk
+      passes('a run ending in a continuation backslash that is not an auto-merge command is clean for workflow-token-permissions', '.github/workflows/test.yml',
+        yamlEdit((wf) => { wf.jobs.trailing = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'echo hi \\' }] }; }), 'workflow-token-permissions');
+      passes('a long chain of continuation lines that is not an auto-merge command is clean for workflow-token-permissions', '.github/workflows/test.yml',
+        yamlEdit((wf) => { wf.jobs.chain = { 'runs-on': 'ubuntu-latest', steps: [{ run: `${'echo hi \\\n'.repeat(5000)}echo done` }] }; }), 'workflow-token-permissions');
+      findsOne('a long chain of continuation lines ending in the auto-merge command is read as one command by workflow-token-permissions', '.github/workflows/test.yml',
+        yamlEdit((wf) => { wf.jobs.chain = { 'runs-on': 'ubuntu-latest', permissions: { contents: 'read' }, steps: [{ run: `${'gh \\\n'.repeat(5000)}pr merge 7 --auto` }] }; }), 'workflow-token-permissions', 'job "chain" must grant contents: write');
+      passes('a gh pr merge without a flag on its line is clean even when --auto sits on the next line of workflow-token-permissions', '.github/workflows/test.yml',
+        yamlEdit((wf) => { wf.jobs.nextline = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7\necho --auto' }] }; }), 'workflow-token-permissions');
+      passes('a word that only contains --auto before a word character is not the flag for workflow-token-permissions', '.github/workflows/test.yml',
+        yamlEdit((wf) => { wf.jobs.word = { 'runs-on': 'ubuntu-latest', steps: [{ run: 'gh pr merge 7 --automatic' }] }; }), 'workflow-token-permissions');
   }
 
   {
@@ -1518,34 +1570,6 @@ describe('the batch 8 contracts hold on the real files, and fail when a contract
       // discuss-all-flag: `argument-hint:[^\n]{0,500}--all` tolerates 500 characters between the key and the flag.
       gapCases('characters between "argument-hint:" and "--all"', 'commands/gsd/discuss-phase.md', 'discuss-all-flag',
         (text, gap) => text.replace(/^argument-hint:.*$/m, `argument-hint:${'x'.repeat(gap)}--all`), 500, /argument-hint should include --all/);
-
-      // secure-phase-single-writer: a comment line inside the tools list does not end it.
-      passes('a comment line inside the auditor tools list satisfies secure-phase-single-writer', 'agents/gsd-security-auditor.md',
-        (text) => text.replace('  - Read\n', '  - Read\n  # keep the list short\n'), 'secure-phase-single-writer');
-
-      // reviewed-or-maintainer-workflow: a ruleset requiring some other status check is fine.
-      passes('a ruleset requiring another status check satisfies reviewed-or-maintainer-workflow', '.github/rulesets/next-queue.json',
-        (text) => { const spec = JSON.parse(text); spec.rules.push({ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'some other check' }] } }); return JSON.stringify(spec, null, 2); }, 'reviewed-or-maintainer-workflow');
-
-      // add-todo: `severity:[ \t]{0,20}\[blocker|...` tolerates 20 spaces or tabs after the colon.
-      gapCases('whitespace after "severity:" in the add-todo template', 'gsd-core/workflows/add-todo.md', 'add-todo',
-        (text, gap) => text.replace(/^severity:[ \t]{0,20}\[blocker\|major\|minor\|cosmetic/gm, `severity:${' '.repeat(gap)}[blocker|major|minor|cosmetic`), 20, /frontmatter template must include a severity field/);
-
-      // progress-debt-segmentation-guard: the non-archived selection tolerates 20 whitespace characters on each side of the pipe.
-      gapCases('whitespace before the pipe of the non-archived selection', 'gsd-core/workflows/progress.md', 'progress-debt-segmentation-guard',
-        (text, gap) => within('**Step 1.6: Cross-phase health check**', '**Step 1.7:', (step) => step.replace(/select\(has\("archived_milestone"\)\s{0,20}\|\s{0,20}not\)/g, `select(has("archived_milestone")${' '.repeat(gap)}| not)`))(text), 20, /select results WITHOUT the archived_milestone stamp/);
-      gapCases('whitespace after the pipe of the non-archived selection', 'gsd-core/workflows/progress.md', 'progress-debt-segmentation-guard',
-        (text, gap) => within('**Step 1.6: Cross-phase health check**', '**Step 1.7:', (step) => step.replace(/select\(has\("archived_milestone"\)\s{0,20}\|\s{0,20}not\)/g, `select(has("archived_milestone")|${' '.repeat(gap)}not)`))(text), 20, /select results WITHOUT the archived_milestone stamp/);
-
-      // discuss-all-flag: `argument-hint:[^\n]{0,500}--all` tolerates 500 characters between the key and the flag.
-      gapCases('characters between "argument-hint:" and "--all"', 'commands/gsd/discuss-phase.md', 'discuss-all-flag',
-        (text, gap) => text.replace(/^argument-hint:.*$/m, `argument-hint:${'x'.repeat(gap)}--all`), 500, /argument-hint should include --all/);
-
-      // init-debug-workflow-contract: a query name is read up to 200 characters; a longer token never equals a replaced call, so the bound cannot change a verdict.
-      for (const length of [199, 200, 201]) {
-        passes(`a ${length}-character query name starting with state.load does not count as the replaced state.load call`, 'gsd-core/workflows/debug.md',
-          append(`gsd_run query state.load${'x'.repeat(length - 'state.load'.length)}`), 'init-debug-workflow-contract');
-      }
 
       // secure-phase-single-writer: the frontmatter is found through the shared fence rules (opening fence at byte 0, a BOM tolerated), where the test accepted a `---` pair anywhere.
       findsOne('a blank line before the auditor frontmatter leaves no tools list for secure-phase-single-writer', 'agents/gsd-security-auditor.md', (text) => `\n${text}`, 'secure-phase-single-writer', /tools list should be non-empty/);

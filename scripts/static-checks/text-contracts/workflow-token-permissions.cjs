@@ -4,34 +4,49 @@
 // GraphQL mutation, which needs BOTH `pull-requests: write` and `contents: write` on GITHUB_TOKEN (#5136). A
 // `permissions` block resets every unlisted scope to none, so the effective permissions are checked: a job-level
 // block replaces the workflow-level one. dependabot-auto-merge.yml must still be found enabling auto-merge, so the
-// check cannot go vacuous. The command is found by walking tokens, so no amount of whitespace between `gh`, `pr` and
-// `merge` hides it; a workflow that does not parse, or a job or step that is not a mapping, is a finding for that
-// file and the other files are still checked. Was tests/workflow-token-permissions.test.cjs.
+// check cannot go vacuous. The command is found by walking tokens in linear time, so no amount of whitespace between
+// `gh`, `pr` and `merge`, and no quoting of the flag, hides it; a workflow that does not parse (or is empty), or a job
+// or step that is not a mapping, is a finding for that file and the other files are still checked.
+// Was tests/workflow-token-permissions.test.cjs.
 
 const isWordChar = (ch) => ch !== undefined && /\w/.test(ch);
 const endsWithWord = (token, word) => token.endsWith(word) && (token.length === word.length || !isWordChar(token[token.length - word.length - 1]));
 const startsWithWord = (token, word) => token.startsWith(word) && (token.length === word.length || !isWordChar(token[word.length]));
 
-// A wrapped `gh pr merge \` line is one command: the backslash, the newline and the whitespace after it become one space.
+// True when `--auto` occurs in the text with a non-word character (or the end) after it, wherever it sits (a quoted flag too).
+function hasAutoFlag(text) {
+  for (let at = text.indexOf('--auto'); at !== -1; at = text.indexOf('--auto', at + 1)) {
+    if (!isWordChar(text[at + '--auto'.length])) return true;
+  }
+  return false;
+}
+
+// A wrapped `gh pr merge \` line is one command: the backslash, the newline and the whitespace after it become one
+// space. Only the end of the current line is looked at, and the parts are joined once, so the work is linear.
 function joinWrapped(run) {
   const out = [];
-  let carried = null;
+  let parts = [];
+  let carrying = false;
   for (const line of run.split('\n')) {
-    if (carried !== null && line.trim() === '') continue;
-    const text = carried === null ? line : `${carried}${line.trimStart()}`;
-    const stripped = text.trimEnd();
+    if (carrying && line.trim() === '') continue;
+    const piece = carrying ? line.trimStart() : line;
+    const stripped = piece.trimEnd();
     if (stripped.endsWith('\\')) {
-      carried = `${stripped.slice(0, -1)} `;
+      parts.push(`${stripped.slice(0, -1)} `);
+      carrying = true;
     } else {
-      out.push(text);
-      carried = null;
+      parts.push(piece);
+      out.push(parts.join(''));
+      parts = [];
+      carrying = false;
     }
   }
-  if (carried !== null) out.push(carried);
+  if (carrying) out.push(parts.join(''));
   return out.join('\n');
 }
 
-// The whitespace-separated tokens of a text, each with the line it is on.
+// The whitespace-separated tokens of a text (any `\s` character separates, as in the old pattern), each with the
+// line it is on; only `\n` ends a line.
 function tokensWithLines(text) {
   const tokens = [];
   let line = 0;
@@ -44,7 +59,7 @@ function tokensWithLines(text) {
     if (ch === '\n') {
       flush();
       line += 1;
-    } else if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\f' || ch === '\v') {
+    } else if (/\s/.test(ch)) {
       flush();
     } else {
       current += ch;
@@ -57,12 +72,17 @@ function tokensWithLines(text) {
 // `gh pr merge ... --auto`: three consecutive tokens, then `--auto` on the same line as `merge`.
 function enablesAutoMerge(run) {
   const tokens = tokensWithLines(joinWrapped(run));
+  // autoFrom[j]: a `--auto` flag in token j or in a later token on the same line, computed once from the end.
+  const autoFrom = new Array(tokens.length + 1).fill(false);
+  for (let j = tokens.length - 1; j >= 0; j--) {
+    const sameLineNext = j + 1 < tokens.length && tokens[j + 1].line === tokens[j].line;
+    autoFrom[j] = hasAutoFlag(tokens[j].text) || (sameLineNext && autoFrom[j + 1]);
+  }
   for (let i = 0; i + 2 < tokens.length; i++) {
     if (!(endsWithWord(tokens[i].text, 'gh') && tokens[i + 1].text === 'pr' && startsWithWord(tokens[i + 2].text, 'merge'))) continue;
-    const mergeLine = tokens[i + 2].line;
-    for (let j = i + 3; j < tokens.length && tokens[j].line === mergeLine; j++) {
-      if (startsWithWord(tokens[j].text, '--auto')) return true;
-    }
+    // `--auto` glued to `merge` itself, or in a later token of the same line.
+    if (hasAutoFlag(tokens[i + 2].text.slice('merge'.length))) return true;
+    if (i + 3 < tokens.length && tokens[i + 3].line === tokens[i + 2].line && autoFrom[i + 3]) return true;
   }
   return false;
 }

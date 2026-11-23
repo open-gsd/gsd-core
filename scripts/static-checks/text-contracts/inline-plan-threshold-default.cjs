@@ -50,8 +50,8 @@ module.exports = {
     ctx.doc('gsd-core/references/planning-config.md').satisfies((text) => {
       const parsed = lib('markdown-table.cjs').parseMarkdownTable(text);
       if (!parsed.ok) return 'no parseable defaults table';
-      const rows = ((parsed.value && Array.isArray(parsed.value.rows)) ? parsed.value.rows : [])
-        .filter((row) => row !== null && typeof row === 'object' && String(row['Option']).includes('inline_plan_threshold'));
+      // parseMarkdownTable never throws and an ok result always carries { columns, rows } with plain row objects.
+      const rows = parsed.value.rows.filter((row) => String(row['Option']).includes('inline_plan_threshold'));
       if (rows.length < 1) return 'no inline_plan_threshold row';
       for (const row of rows) {
         const value = String(row['Default']).replace(/`/g, '').trim();
